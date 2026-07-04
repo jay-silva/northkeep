@@ -13,6 +13,8 @@
     "northkeep": "node packages/cli/dist/index.js"
   },
   "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@northkeep/core": "workspace:*",
     "@types/node": "^24.0.0",
     "typescript": "^5.6.0",
     "vitest": "^3.0.0"
