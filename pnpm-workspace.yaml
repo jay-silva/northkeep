@@ -1,0 +1,8 @@
+packages:
+  - "packages/*"
+
+# Native modules (and esbuild for vitest) need their install scripts.
+allowBuilds:
+  better-sqlite3: true
+  sodium-native: true
+  esbuild: true

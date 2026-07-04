@@ -1,0 +1,8 @@
+{
+  "name": "@northkeep/importers",
+  "version": "0.1.0",
+  "description": "chatgpt-zip, claude-export, paste-prompt parsers (lands M2)",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "private": true
+}

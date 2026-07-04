@@ -1,0 +1,17 @@
+# Dependencies & build output
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Vaults and secrets — NEVER commit these
+*.nkv
+*.nkv.bak
+device.secret
+.env
+.env.*
+
+# OS noise
+.DS_Store
+
+# Test artifacts
+coverage/

@@ -1,0 +1,8 @@
+{
+  "name": "@northkeep/librarian",
+  "version": "0.1.0",
+  "description": "Extraction, dedupe, retrieval, budget compression (lands M1-M2)",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "private": true
+}

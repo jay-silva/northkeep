@@ -1,0 +1,8 @@
+{
+  "name": "@northkeep/mcp-server",
+  "version": "0.1.0",
+  "description": "MCP surface: remember/retrieve/list/forget/audit (lands M1)",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "private": true
+}
