@@ -73,9 +73,22 @@ master_key   = BLAKE2b-256( password_key, key = device_secret )       # libsodiu
 libsodium primitives only, via `sodium-native`. No hand-rolled crypto. Any
 change to key handling requires an adversarial review session before merge.
 
+## Background access (M1 — see ADR 0002)
+
+AI apps reach the vault through the MCP server, which Claude Desktop runs in
+the background with no terminal. Access is an explicit grant: `northkeep
+unlock` derives the master key once (passphrase + device secret) and parks it
+in the macOS Keychain behind the user's Mac login; `northkeep lock` revokes
+it. The passphrase is never stored. Plainly: **while unlocked, the vault is
+as protected as your saved browser passwords — your Mac login is the wall.**
+
+Every MCP call opens the vault fresh under a file lock and closes it before
+returning, and appends a content-free line to `~/.northkeep/mcp-calls.log`
+(tool, filters, counts — never memory content, never query text). `northkeep
+log` shows what every AI app asked of the vault.
+
 ## Roadmap sections
 
-- **(M1) MCP surface:** every retrieval visible in a local call log.
 - **(M3) Redaction tiers:** Tier 1 deterministic (always on), Tier 2
   pseudonymization (on-device), Tier 3 explicitly NOT claimed.
 - **(M4) Scope enforcement + audit log:** capability-based scope grants per

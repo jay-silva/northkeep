@@ -7,10 +7,11 @@ SQLite vault on your machine, exposed to AI apps via MCP, with tiered
 on-device PII redaction and client-side-encrypted sync. Every AI you use
 shares one memory of you — and it lives on your computer, not theirs.
 
-> Early development. M0 (vault core) is complete: `init`, `remember`,
-> `list`, `export` against an encrypted vault. MCP server, importers,
-> redaction, scoped access, and sync land next — see the milestones in
-> the project docs.
+> Early development. M0 (vault core) and M1 (MCP server) are complete:
+> encrypted vault, `init | remember | list | forget | export` CLI, and an
+> MCP server so Claude Desktop (or any MCP client) can store and retrieve
+> memories — with every call visible in `northkeep log`. Importers,
+> redaction, scoped access, and sync land next.
 
 ## Quick start
 
@@ -20,6 +21,27 @@ pnpm northkeep init
 pnpm northkeep remember "I prefer concise answers" --type semantic
 pnpm northkeep list
 pnpm northkeep export
+```
+
+## Connect an AI app (MCP)
+
+```bash
+pnpm northkeep unlock   # grants background access via your macOS Keychain
+pnpm northkeep lock     # revokes it
+pnpm northkeep log      # what every AI app asked of your vault (never content)
+```
+
+Claude Desktop config (`~/Library/Application Support/Claude/claude_desktop_config.json`):
+
+```json
+{
+  "mcpServers": {
+    "northkeep": {
+      "command": "node",
+      "args": ["<absolute path to repo>/packages/mcp-server/dist/index.js"]
+    }
+  }
+}
 ```
 
 ## The promises

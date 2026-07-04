@@ -3,7 +3,28 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
-## M0 (vault core) — current
+## M1 (MCP server) — current
+
+- **Unlocked = your Mac login is the wall.** After `northkeep unlock`, the
+  vault key sits in your macOS Keychain and anything running in your
+  logged-in session (including any MCP client you configure) can open the
+  vault. Same trust level as saved browser passwords. `northkeep lock`
+  revokes it.
+- **Retrieval is keyword matching, not semantic search.** It ranks by word
+  overlap, recency, and type priority. It will miss synonyms ("car" won't
+  find "vehicle"). Embedding-based retrieval arrives with the local-model
+  milestone (M2) — this line gets deleted then.
+- **No scope enforcement yet.** Any connected MCP client can read every
+  scope. Per-conversation scope grants are M4; until then, don't point an
+  untrusted MCP client at your vault.
+- **The call log shows traffic, not truth.** It logs what the server was
+  asked and how much came back — it cannot show what the AI *did* with the
+  content afterward. Calls rejected by input validation are answered before
+  they reach the logger, so probing/malformed attempts don't appear yet —
+  an audit-completeness gap that closes with the M4 audit log.
+- **A stale `forget` survives in `.bak`** until the next write, as below.
+
+## M0 (vault core)
 
 - **The unlocked vault lives in process memory.** While a command runs, the
   key and the decrypted database exist in RAM. Malware or an attacker with
