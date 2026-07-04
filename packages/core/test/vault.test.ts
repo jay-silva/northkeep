@@ -63,6 +63,28 @@ describe('vault lifecycle', () => {
     expect(() => openVault()).toThrow(VaultAuthError);
   });
 
+  it('rejects absurd KDF params in a tampered header without doing the work', () => {
+    createVault().close();
+    const bytes = fs.readFileSync(vaultPath);
+    // Header layout: magic 4B | salt 16B | opslimit u32LE | memlimit u32LE | ...
+    bytes.writeUInt32LE(0xffffffff, 24); // ~4 TB memlimit — must be refused pre-KDF
+    fs.writeFileSync(vaultPath, bytes);
+    const start = Date.now();
+    expect(() => openVault()).toThrow(VaultAuthError);
+    expect(Date.now() - start).toBeLessThan(1000); // rejected up front, not after Argon2id
+  });
+
+  it('fails cleanly on a truncated file', () => {
+    createVault().close();
+    const bytes = fs.readFileSync(vaultPath);
+    for (const length of [0, 3, 20, 51]) {
+      fs.writeFileSync(vaultPath, bytes.subarray(0, length));
+      expect(() => openVault()).toThrow(VaultAuthError);
+    }
+    fs.writeFileSync(vaultPath, bytes.subarray(0, 52)); // header only, no ciphertext
+    expect(() => openVault()).toThrow(VaultAuthError);
+  });
+
   it('keeps a .bak of the previous version on save', () => {
     const vault = createVault();
     vault.remember({ content: 'first', type: 'semantic' });
@@ -130,6 +152,18 @@ describe('hash chain', () => {
     expect(first.prev_hash).toBe(GENESIS_HASH);
     expect(second.prev_hash).toBe(first.entry_hash);
     expect(vault.verifyChain().ok).toBe(true);
+    vault.close();
+  });
+
+  it('detects a deleted entry (head no longer matches)', () => {
+    const vault = createVault();
+    vault.remember({ content: 'keep', type: 'semantic' });
+    const second = vault.remember({ content: 'delete me', type: 'semantic' });
+    (vault as unknown as { db: { prepare(sql: string): { run(v: string): unknown } } }).db
+      .prepare('DELETE FROM memories WHERE id = ?')
+      .run(second.id);
+    const result = vault.verifyChain();
+    expect(result.ok).toBe(false);
     vault.close();
   });
 

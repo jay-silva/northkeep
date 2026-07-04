@@ -27,6 +27,22 @@ export const KDF_INTERACTIVE: KdfParams = {
   memlimit: sodium.crypto_pwhash_MEMLIMIT_INTERACTIVE,
 };
 
+/**
+ * KDF params are read from the (unauthenticated) vault header before the key
+ * exists, so they must be bounded: a tampered header could otherwise demand
+ * terabytes of Argon2id memory and hang or OOM the process pre-authentication.
+ */
+export function kdfParamsInBounds(kdf: KdfParams): boolean {
+  return (
+    Number.isInteger(kdf.opslimit) &&
+    Number.isInteger(kdf.memlimit) &&
+    kdf.opslimit >= sodium.crypto_pwhash_OPSLIMIT_MIN &&
+    kdf.opslimit <= sodium.crypto_pwhash_OPSLIMIT_MODERATE * 4 &&
+    kdf.memlimit >= sodium.crypto_pwhash_MEMLIMIT_MIN &&
+    kdf.memlimit <= 1024 * 1024 * 1024 // 1 GiB absolute cap
+  );
+}
+
 /** Thrown when decryption fails: wrong passphrase, wrong device secret, or a tampered/corrupted file. */
 export class VaultAuthError extends Error {
   constructor(message = 'Could not unlock vault: wrong passphrase, wrong device secret, or corrupted file.') {

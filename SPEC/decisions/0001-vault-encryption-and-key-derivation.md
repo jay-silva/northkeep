@@ -73,8 +73,18 @@ anything an attacker could dictionary-test.
 
 Per CLAUDE.md invariant #3, any change to this module
 (`packages/core/src/crypto.ts`, `vault.ts` save/open paths) requires an
-adversarial review session before merge. The M0 implementation received one
-(key leakage, plaintext escapes, error paths) before this ADR was accepted.
+adversarial review session before merge.
+
+The M0 implementation received one (2026-07-04) before this ADR was accepted.
+Outcome: AEAD construction, two-secret derivation, and atomic save confirmed
+sound; no critical findings. Fixed from the review: KDF parameters from the
+unauthenticated header are now bounds-checked before any Argon2id work
+(pre-auth DoS); canonical JSON pins Unicode NFC and ECMAScript number
+rendering; metadata is hashed in its storage form; device-secret creation is
+exclusive (`wx`); the vault directory is fsynced after rename. Documented
+honestly rather than fixed (by design): the hash chain is unkeyed and does
+not stop a chain-aware forger; `.bak` retains the previous encrypted state
+(see KNOWN-LIMITS.md).
 
 ## Dependencies introduced
 

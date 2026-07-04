@@ -12,8 +12,8 @@ Honesty about limits is a product feature — see KNOWN-LIMITS.md.*
 |---|---|
 | Vault file stolen (laptop theft, backup leak, cloud-drive sync) | File is XChaCha20-Poly1305 ciphertext; useless without BOTH the passphrase and the device secret |
 | Passphrase guessed offline against a stolen file | Attacker also needs the device secret file — a random 256-bit value that makes offline guessing pointless (1Password Secret-Key pattern) |
-| Vault file tampered with | AEAD authentication fails closed: any modified byte makes the vault refuse to open |
-| History silently edited by tooling or malware with vault access | Per-entry hash chain makes after-the-fact edits detectable on verify/export |
+| Vault file tampered with | AEAD authentication fails closed: any modified byte makes the vault refuse to open. KDF parameters in the header are bounds-checked before use, so a tampered header cannot demand unbounded Argon2id work (pre-authentication DoS) |
+| History silently edited by *naive* tooling with vault access | Per-entry hash chain: edits by tools that don't rebuild the chain are detected on verify/export. The chain is unkeyed — see the limits below for what it does NOT stop |
 | Us (Northkeep the company) | Nothing to protect against yet: M0 has no network code at all. The invariant that carries forward: we never see plaintext |
 
 ## What we do NOT protect against (stated plainly)
@@ -25,6 +25,16 @@ Honesty about limits is a product feature — see KNOWN-LIMITS.md.*
   is the point: no back door for an attacker means no back door for support.
 - **Weak passphrases chosen by the user** — mitigated (Argon2id is slow to
   brute-force, and the device secret must also be stolen) but not eliminated.
+- **A chain-aware attacker with write access to the open vault.** The hash
+  chain is unkeyed BLAKE2b; anyone who can write the database and knows the
+  (open, published) algorithm can recompute every hash and the chain head
+  consistently. The chain detects naive edits, not a deliberate forger who
+  holds the same access as the user. Real tamper-proofing against a key-holder
+  would need a MAC or signature under a key the editor doesn't have — not
+  claimed, not in M0.
+- **The `.bak` file retains the immediately-previous vault state** (encrypted,
+  same keys). Content you delete is only durably gone after a *subsequent*
+  save overwrites the backup. See KNOWN-LIMITS.md.
 - **Semantic/contextual privacy** (M3+): content-level redaction cannot make
   free text anonymous. We say so in the product.
 

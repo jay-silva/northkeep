@@ -12,6 +12,7 @@ import {
   decrypt,
   deriveMasterKey,
   encryptWithNonce,
+  kdfParamsInBounds,
   memzero,
   randomBytes,
   type KdfParams,
@@ -130,8 +131,11 @@ export class Vault {
     const ciphertext = Buffer.from(file.subarray(offset));
     const header = Buffer.from(file.subarray(0, HEADER_LENGTH));
 
-    // KDF params come from the file so old vaults keep opening if defaults change.
+    // KDF params come from the file so old vaults keep opening if defaults
+    // change — but they are read BEFORE authentication, so bound them: a
+    // tampered header must not be able to demand unbounded Argon2id work.
     const kdf: KdfParams = { opslimit, memlimit };
+    if (!kdfParamsInBounds(kdf)) throw new VaultAuthError();
     const key = deriveMasterKey(options.passphrase, options.deviceSecret, salt, kdf);
     let image: Buffer;
     try {
@@ -174,6 +178,13 @@ export class Vault {
       fs.copyFileSync(this.path, `${this.path}.bak`);
     }
     fs.renameSync(tmpPath, this.path);
+    // fsync the directory so the rename itself survives power loss.
+    const dirFd = fs.openSync(dir, 'r');
+    try {
+      fs.fsyncSync(dirFd);
+    } finally {
+      fs.closeSync(dirFd);
+    }
   }
 
   remember(input: RememberInput): MemoryEntry {
@@ -205,7 +216,12 @@ export class Vault {
       superseded_by: null,
       prev_hash: this.getMeta('chain_head'),
       entry_hash: '',
-      metadata: input.metadata ?? null,
+      // Hash the storage form: a JSON round-trip applies toJSON semantics
+      // (Dates etc.) now, so the hash matches what a reopen will read back.
+      metadata:
+        input.metadata == null
+          ? null
+          : (JSON.parse(JSON.stringify(input.metadata)) as Record<string, unknown>),
     };
     entry.entry_hash = computeEntryHash(entry);
 

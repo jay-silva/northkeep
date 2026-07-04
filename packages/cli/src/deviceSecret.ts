@@ -11,7 +11,9 @@ export function ensureDeviceSecret(): { secret: Buffer; created: boolean } {
   }
   const secret = generateDeviceSecret();
   fs.mkdirSync(path.dirname(filePath), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(filePath, `${secret.toString('hex')}\n`, { mode: 0o600 });
+  // 'wx' = exclusive create: a concurrent init cannot silently clobber a
+  // secret that another process just wrote (that would orphan its vault).
+  fs.writeFileSync(filePath, `${secret.toString('hex')}\n`, { mode: 0o600, flag: 'wx' });
   return { secret, created: true };
 }
 

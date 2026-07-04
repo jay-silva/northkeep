@@ -9,6 +9,9 @@ export function canonicalJson(value: unknown): string {
 }
 
 function sortDeep(value: unknown): unknown {
+  // Strings hash in Unicode NFC so the chain survives normalization-changing
+  // round-trips (editors, exports, other conforming implementations).
+  if (typeof value === 'string') return value.normalize('NFC');
   if (Array.isArray(value)) return value.map(sortDeep);
   if (value !== null && typeof value === 'object') {
     const sorted: Record<string, unknown> = {};

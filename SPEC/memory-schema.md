@@ -71,6 +71,12 @@ entry_hash = BLAKE2b-256( canonical_json({
 
 - **Canonical JSON:** keys sorted lexicographically at every level, no
   insignificant whitespace, UTF-8, `null` for absent optional fields.
+  Strings are normalized to Unicode NFC before hashing, so
+  normalization-changing round-trips don't break the chain. Numbers are
+  rendered in ECMAScript `JSON.stringify` form — shortest round-trip decimal,
+  no trailing zeros, no exponent for values in ±2⁵³ (so `1.0` renders as `1`).
+  Independent implementations MUST match both rules or their hashes will not
+  interoperate.
 - `prev_hash` of the first entry is 64 zeros (`"0".repeat(64)`).
 - The vault stores the current chain head. Verifying the chain = replaying
   hashes over entries ordered by insertion and comparing to the head.

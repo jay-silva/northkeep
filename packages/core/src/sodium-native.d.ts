@@ -8,6 +8,8 @@ declare module 'sodium-native' {
   const sodium: {
     // constants
     readonly crypto_pwhash_SALTBYTES: number;
+    readonly crypto_pwhash_OPSLIMIT_MIN: number;
+    readonly crypto_pwhash_MEMLIMIT_MIN: number;
     readonly crypto_pwhash_OPSLIMIT_INTERACTIVE: number;
     readonly crypto_pwhash_MEMLIMIT_INTERACTIVE: number;
     readonly crypto_pwhash_OPSLIMIT_MODERATE: number;

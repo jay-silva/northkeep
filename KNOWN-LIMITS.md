@@ -19,6 +19,15 @@ every milestone; if a limit is removed, say when and how.*
 - **A crash mid-command can lose that command's write.** Saves are atomic
   (temp file + rename, previous version kept as `.nkv.bak`), so the vault
   never corrupts — but a write that never reached `save()` is not on disk.
+- **`.nkv.bak` remembers what you just deleted.** The backup holds the
+  immediately-previous vault state, encrypted with the same keys. A deletion
+  is only durably gone once a later save overwrites the backup. Delete the
+  `.bak` file yourself if that matters right now.
+- **The hash chain catches naive edits, not a determined forger.** It is
+  unkeyed: malware (or a chain-aware tool) with write access to the unlocked
+  vault can rewrite history *and* every hash consistently. It exists to catch
+  accidental corruption and unsophisticated tampering, and we won't pretend
+  otherwise (see SPEC/security-model.md).
 - **`superseded_at`/`superseded_by` are schema-only.** The fields exist per
   the spec; nothing sets them yet. Contradiction handling arrives with the
   extraction pipeline (M2).
@@ -27,7 +36,10 @@ every milestone; if a limit is removed, say when and how.*
   cannot see `client:x`) lands at M4.
 - **Passphrase via `NORTHKEEP_PASSPHRASE` env var is convenient and less
   safe** — it can end up in shell history or process listings. Interactive
-  prompt is the recommended path.
+  prompt is the recommended path. Either way, JavaScript strings are
+  immutable: the passphrase string itself lingers in process memory until
+  garbage collection (key *buffers* are actively zeroed; the source string
+  cannot be).
 - **No redaction yet.** Nothing in M0 sends anything anywhere (there is no
   network code at all), but once M1 connects AI apps, redaction is M3.
 
