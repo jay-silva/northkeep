@@ -1,0 +1,22 @@
+{
+  "name": "@northkeep/core",
+  "version": "0.1.0",
+  "description": "Northkeep vault core: encrypted store, memory schema, provenance chain",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.2.0",
+    "sodium-native": "^5.0.6"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13"
+  }
+}
