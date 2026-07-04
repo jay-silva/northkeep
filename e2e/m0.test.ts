@@ -133,7 +133,7 @@ describe('M0 acceptance', () => {
       memories: Array<Record<string, unknown>>;
     };
 
-    expect(doc.northkeep_export.schema_version).toBe('0.1');
+    expect(doc.northkeep_export.schema_version).toBe('0.2');
     expect(doc.northkeep_export.vault_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(doc.northkeep_export.chain_head).toMatch(/^[0-9a-f]{64}$/);
     expect(doc.northkeep_export.exported_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
@@ -150,7 +150,7 @@ describe('M0 acceptance', () => {
         expect(provenance).toHaveProperty(field);
       }
       const validity = memory.validity as Record<string, unknown>;
-      for (const field of ['valid_from', 'superseded_at', 'superseded_by']) {
+      for (const field of ['valid_from', 'superseded_at', 'superseded_by', 'forgotten_at']) {
         expect(validity).toHaveProperty(field);
       }
       // Export is chain-ordered and internally linked.
