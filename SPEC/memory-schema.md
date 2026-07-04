@@ -1,4 +1,4 @@
-# Northkeep Memory Schema — v0.1
+# Northkeep Memory Schema — v0.2
 
 *The open schema for portable, user-owned AI memory.*
 
@@ -47,14 +47,19 @@ Five types, adopted from the Portable Agent Memory pattern (arXiv:2605.11032):
 | `valid_from` | ISO 8601 UTC \| null | no | Start of validity window (defaults to `created_at`) |
 | `superseded_at` | ISO 8601 UTC \| null | no | When this entry stopped being current |
 | `superseded_by` | string (id) \| null | no | Entry that replaced this one |
+| `forgotten_at` | ISO 8601 UTC \| null | no | When this entry was forgotten (tombstone; see Deletion) |
 | `prev_hash` | string (64 hex) | yes | Hash of the previous entry in the chain |
 | `entry_hash` | string (64 hex) | yes | This entry's hash (see Hash chain) |
 | `metadata` | object \| null | no | Open extension point (JSON object) |
 
-Deletion is real: `forget` removes the entry. The hash chain records that
-history existed (subsequent hashes no longer verify against a silently edited
-past), but content the user deletes is gone — user ownership beats
-append-only purity.
+**Deletion is real, and visible.** `forget` irrecoverably blanks the entry's
+`content` and `metadata` and sets `forgotten_at`. The row itself — with its
+original hashes — remains as a tombstone, so (a) the provenance chain stays
+intact and verifiable, and (b) the deletion itself is auditable: "an entry in
+this scope was forgotten on this date" without revealing what it said. Chain
+verifiers MUST skip the content-hash check for entries with `forgotten_at`
+set, while still checking their `prev_hash` linkage. User ownership beats
+append-only purity: the content is gone; only the fact of deletion persists.
 
 ## Hash chain (tamper-evident provenance)
 
@@ -64,10 +69,14 @@ JSON** of the entry with `entry_hash` itself omitted:
 ```
 entry_hash = BLAKE2b-256( canonical_json({
   id, type, content, scope, source, source_model, confidence,
-  created_at, valid_from, superseded_at, superseded_by, metadata,
-  prev_hash
+  created_at, valid_from, metadata, prev_hash
 }) )
 ```
+
+Only fields that are immutable after creation are hashed. Mutable
+bookkeeping — `superseded_at`, `superseded_by`, `forgotten_at` — is
+deliberately excluded: those fields legitimately change later, and hashing
+them would break the chain on every supersede or forget.
 
 - **Canonical JSON:** keys sorted lexicographically at every level, no
   insignificant whitespace, UTF-8, `null` for absent optional fields.
@@ -130,7 +139,8 @@ A vault export is a single JSON document:
       "validity": {
         "valid_from": "2026-07-04T11:58:03.412Z",
         "superseded_at": null,
-        "superseded_by": null
+        "superseded_by": null,
+        "forgotten_at": null
       },
       "metadata": null
     }
@@ -147,3 +157,12 @@ chain verification.
 `schema_version` follows `MAJOR.MINOR`. Minor versions only add optional
 fields. Anything that changes the meaning or requiredness of an existing
 field is a major version and requires a migration note in this spec.
+
+**Changelog**
+- **0.2** (2026-07-04, pre-release): added `forgotten_at` tombstones;
+  narrowed the hash input to immutable-at-creation fields (previously it
+  included `superseded_at`/`superseded_by`, which would have broken the
+  chain on any later supersede). Implementations migrate 0.1 vaults by
+  adding the column and rehashing the chain. Made before any public release;
+  the hash rule is now considered frozen.
+- **0.1** (2026-07-04): initial schema.

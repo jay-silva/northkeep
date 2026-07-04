@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS memories (
   valid_from    TEXT,
   superseded_at TEXT,
   superseded_by TEXT REFERENCES memories(id),
+  forgotten_at  TEXT,
   prev_hash     TEXT NOT NULL,
   entry_hash    TEXT NOT NULL,
   metadata      TEXT

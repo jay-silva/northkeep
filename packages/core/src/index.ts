@@ -8,4 +8,12 @@ export {
   generateDeviceSecret,
   type KdfParams,
 } from './crypto.js';
-export { Vault, computeEntryHash, type VaultOptions } from './vault.js';
+export {
+  Vault,
+  computeEntryHash,
+  type VaultHeader,
+  type VaultOptions,
+} from './vault.js';
+export { deriveMasterKey } from './crypto.js';
+export { withFileLock } from './lock.js';
+export * from './platform.js';

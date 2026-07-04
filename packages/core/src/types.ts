@@ -24,6 +24,7 @@ export interface MemoryEntry {
   valid_from: string | null;
   superseded_at: string | null;
   superseded_by: string | null;
+  forgotten_at: string | null;
   prev_hash: string;
   entry_hash: string;
   metadata: Record<string, unknown> | null;
@@ -42,6 +43,19 @@ export interface RememberInput {
 export interface ListFilter {
   type?: MemoryType;
   scope?: string;
+  /** Include tombstoned (forgotten) entries. Default false. */
+  includeForgotten?: boolean;
+}
+
+export interface RetrieveOptions {
+  type?: MemoryType;
+  scope?: string;
+  limit?: number;
+}
+
+export interface ScoredEntry {
+  entry: MemoryEntry;
+  score: number;
 }
 
 export interface ExportedMemory {
@@ -61,6 +75,7 @@ export interface ExportedMemory {
     valid_from: string | null;
     superseded_at: string | null;
     superseded_by: string | null;
+    forgotten_at: string | null;
   };
   metadata: Record<string, unknown> | null;
 }
@@ -75,5 +90,5 @@ export interface VaultExport {
   memories: ExportedMemory[];
 }
 
-export const SCHEMA_VERSION = '0.1';
+export const SCHEMA_VERSION = '0.2';
 export const GENESIS_HASH = '0'.repeat(64);

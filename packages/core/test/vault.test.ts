@@ -2,7 +2,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { KDF_INTERACTIVE, VaultAuthError, generateDeviceSecret } from '../src/crypto.js';
+import {
+  KDF_INTERACTIVE,
+  VaultAuthError,
+  deriveMasterKey,
+  generateDeviceSecret,
+} from '../src/crypto.js';
 import { GENESIS_HASH, MEMORY_TYPES } from '../src/types.js';
 import { Vault } from '../src/vault.js';
 
@@ -181,12 +186,118 @@ describe('hash chain', () => {
   });
 });
 
+describe('openWithKey (background access)', () => {
+  it('opens with a pre-derived master key, no passphrase', () => {
+    const vault = createVault();
+    vault.remember({ content: 'background fact', type: 'semantic' });
+    vault.save();
+    vault.close();
+
+    const header = Vault.readHeader(vaultPath);
+    const key = deriveMasterKey(PASSPHRASE, deviceSecret, header.salt, header.kdf);
+    const reopened = Vault.openWithKey(vaultPath, key);
+    expect(reopened.list()).toHaveLength(1);
+    reopened.close();
+  });
+
+  it('rejects a wrong key cleanly', () => {
+    createVault().close();
+    expect(() => Vault.openWithKey(vaultPath, generateDeviceSecret())).toThrow(VaultAuthError);
+  });
+});
+
+describe('forget (tombstones)', () => {
+  it('blanks content, hides from list, keeps the chain intact', () => {
+    const vault = createVault();
+    vault.remember({ content: 'keep this', type: 'semantic' });
+    const target = vault.remember({ content: 'sensitive thing', type: 'episodic' });
+    vault.remember({ content: 'also keep', type: 'working' });
+
+    const tombstone = vault.forget(target.id.slice(0, 8)); // unique prefix works
+    expect(tombstone.id).toBe(target.id);
+    expect(tombstone.content).toBe('');
+    expect(tombstone.forgotten_at).not.toBeNull();
+
+    expect(vault.list().map((e) => e.content)).toEqual(['keep this', 'also keep']);
+    expect(vault.list({ includeForgotten: true })).toHaveLength(3);
+    expect(vault.verifyChain().ok).toBe(true);
+
+    const exported = vault.export();
+    const exportedTombstone = exported.memories.find((m) => m.id === target.id)!;
+    expect(exportedTombstone.content).toBe('');
+    expect(exportedTombstone.validity.forgotten_at).toBe(tombstone.forgotten_at);
+    expect(JSON.stringify(exported)).not.toContain('sensitive thing');
+    vault.close();
+  });
+
+  it('errors on unknown id and ambiguous prefix', () => {
+    const vault = createVault();
+    vault.remember({ content: 'a', type: 'semantic' });
+    expect(() => vault.forget('ffffffff')).toThrow(/No memory found/);
+    expect(() => vault.forget('')).toThrow(/at least 4 characters/);
+    expect(() => vault.forget('ab')).toThrow(/at least 4 characters/);
+    // LIKE metacharacters must not act as wildcards (%%%%%%%% would match
+    // any entry and irreversibly forget it).
+    expect(() => vault.forget('%%%%%%%%')).toThrow(/hex characters/);
+    expect(() => vault.forget('a__a1111')).toThrow(/hex characters/);
+    expect(vault.list()).toHaveLength(1); // nothing was forgotten by the attempts
+    vault.close();
+  });
+});
+
+describe('retrieve (keyword ranking)', () => {
+  it('ranks by term overlap and respects filters', () => {
+    const vault = createVault();
+    vault.remember({ content: 'Jay owns a short-term rental in Dartmouth', type: 'semantic' });
+    vault.remember({ content: 'Jay prefers concise answers', type: 'procedural' });
+    vault.remember({ content: 'Discussed rental financing with the lender', type: 'episodic', scope: 'work' });
+
+    const results = vault.retrieve('rental property in Dartmouth');
+    expect(results.length).toBeGreaterThan(0);
+    expect(results[0]!.entry.content).toContain('Dartmouth');
+
+    expect(vault.retrieve('rental', { scope: 'work' })).toHaveLength(1);
+    expect(vault.retrieve('zebra quantum')).toHaveLength(0);
+    expect(vault.retrieve('')).toHaveLength(0);
+    vault.close();
+  });
+
+  it('excludes forgotten entries', () => {
+    const vault = createVault();
+    const entry = vault.remember({ content: 'secret rental details', type: 'semantic' });
+    expect(vault.retrieve('rental')).toHaveLength(1);
+    vault.forget(entry.id);
+    expect(vault.retrieve('rental')).toHaveLength(0);
+    vault.close();
+  });
+});
+
+describe('schema migration 0.1 → 0.2', () => {
+  it('adds the tombstone column and rehashes the chain', () => {
+    const vault = createVault();
+    vault.remember({ content: 'pre-migration entry', type: 'semantic' });
+    // Downgrade the vault to look like a 0.1 file (no forgotten_at column).
+    const db = (vault as unknown as { db: import('better-sqlite3').Database }).db;
+    db.exec('ALTER TABLE memories DROP COLUMN forgotten_at');
+    db.prepare("UPDATE vault_meta SET value = '0.1' WHERE key = 'schema_version'").run();
+    vault.save();
+    vault.close();
+
+    const reopened = openVault(); // migration runs inside open
+    const exported = reopened.export();
+    expect(exported.northkeep_export.schema_version).toBe('0.2');
+    expect(reopened.verifyChain().ok).toBe(true);
+    expect(reopened.list()[0]!.forgotten_at).toBeNull();
+    reopened.close();
+  });
+});
+
 describe('export', () => {
   it('matches the schema spec shape and passes chain verification', () => {
     const vault = createVault();
     vault.remember({ content: 'exported fact', type: 'identity', metadata: { origin: 'test' } });
     const doc = vault.export();
-    expect(doc.northkeep_export.schema_version).toBe('0.1');
+    expect(doc.northkeep_export.schema_version).toBe('0.2');
     expect(doc.northkeep_export.vault_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(doc.northkeep_export.chain_head).toMatch(/^[0-9a-f]{64}$/);
     expect(doc.memories).toHaveLength(1);
