@@ -1,0 +1,21 @@
+{
+  "name": "@northkeep/cli",
+  "version": "0.1.0",
+  "description": "Northkeep command-line interface",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "northkeep": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@northkeep/core": "workspace:*",
+    "commander": "^14.0.0"
+  }
+}
