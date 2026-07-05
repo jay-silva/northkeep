@@ -16,12 +16,28 @@ interface Detector {
   restorable: boolean;
 }
 
+// Horizontal separators that show up between digit groups when text is
+// pasted from documents: ASCII space/dot/dash plus common Unicode spaces
+// (NBSP, thin space, narrow no-break space).
+const SEP = '[ .\\-\\u00A0\\u2009\\u202F]';
+
 const DETECTORS: Detector[] = [
   {
     kind: 'api_key',
-    // PEM private-key blocks, and common provider key shapes.
-    regex:
-      /-----BEGIN[ A-Z]*PRIVATE KEY-----[\s\S]*?-----END[ A-Z]*PRIVATE KEY-----|\b(?:sk|pk|rk)-[A-Za-z0-9_-]{16,}\b|\bAKIA[0-9A-Z]{16}\b|\bghp_[A-Za-z0-9]{36}\b|\bxox[baprs]-[A-Za-z0-9-]{10,}\b|\bAIza[0-9A-Za-z_-]{35}\b/g,
+    // PEM blocks; OpenAI sk-/sk-proj-; Stripe sk_live_/rk_live_/pk_test_;
+    // AWS; GitHub; Slack; Google; and JWTs (three base64url segments).
+    regex: new RegExp(
+      [
+        '-----BEGIN[ A-Z]*PRIVATE KEY-----[\\s\\S]*?-----END[ A-Z]*PRIVATE KEY-----',
+        '\\b(?:sk|pk|rk)[_-](?:live|test|proj)?[_-]?[A-Za-z0-9]{16,}\\b',
+        '\\bAKIA[0-9A-Z]{16}\\b',
+        '\\bghp_[A-Za-z0-9]{36}\\b',
+        '\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b',
+        '\\bAIza[0-9A-Za-z_-]{35}\\b',
+        '\\beyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\b', // JWT
+      ].join('|'),
+      'g',
+    ),
     restorable: false,
   },
   {
@@ -31,15 +47,21 @@ const DETECTORS: Detector[] = [
   },
   {
     kind: 'credit_card',
-    // 13–19 digits, optional space/dash grouping. Luhn-validated.
-    regex: /\b(?:\d[ -]?){13,19}\b/g,
+    // 13–19 digits with optional space/dot/dash/Unicode-space grouping. Luhn.
+    regex: new RegExp(`\\b(?:\\d${SEP}?){13,19}\\b`, 'g'),
     valid: luhnValid,
     restorable: false,
   },
   {
     kind: 'ssn',
-    // US SSN: 3-2-4, dashed or spaced. Excludes obviously-invalid areas.
-    regex: /\b(?!000|666|9\d\d)\d{3}[- ](?!00)\d{2}[- ](?!0000)\d{4}\b/g,
+    // US SSN 3-2-4 with -, ., space, or / separators; excludes invalid areas.
+    regex: /\b(?!000|666|9\d\d)\d{3}[-. /](?!00)\d{2}[-. /](?!0000)\d{4}\b/g,
+    restorable: false,
+  },
+  {
+    kind: 'ssn',
+    // Bare 9-digit SSN, only right after an SSN keyword (else too noisy).
+    regex: /(?<=\b(?:ssn|social security(?: number| no\.?| #)?)\b\D{0,12})(?!000|666|9\d\d)\d{9}\b/gi,
     restorable: false,
   },
   {
@@ -50,17 +72,50 @@ const DETECTORS: Detector[] = [
   },
   {
     kind: 'phone',
-    // Two shapes: North-American (optional +1, area in parens or not, 3-3-4),
-    // and international (+country then 2–5 groups of 2–4 digits, e.g. UK
+    // North-American (optional +1, area in parens or not, 3-3-4), and
+    // international (+country then 2–5 groups of 2–4 digits, e.g. UK
     // +44 20 7946 0958). Runs after card/SSN/IBAN so those win any overlap.
     regex:
       /(?:\+?1[ .-]?)?(?:\(\d{3}\)[ .-]?|\d{3}[ .-])\d{3}[ .-]\d{4}\b|\+\d{1,3}(?:[ .-]?\d{2,4}){2,5}\b/g,
     restorable: false,
   },
   {
+    kind: 'phone',
+    // Bare 10-digit number, only right after a phone keyword.
+    regex: /(?<=\b(?:phone|call|cell|tel|telephone|mobile|fax|dial|text)\b\D{0,10})\d{10}\b/gi,
+    restorable: false,
+  },
+  {
     kind: 'ip',
     regex:
-      /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b|\b(?:[0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}\b/g,
+      /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g,
+    restorable: false,
+  },
+  {
+    kind: 'ip',
+    // IPv6, full and zero-compressed (::). Branches are ordered LONGEST-FIRST
+    // (JS alternation is first-match, not longest) so a full address isn't
+    // partially eaten by the trailing-`::` branch. Requires 8 groups or a
+    // `::`, so single-colon sequences (e.g. clock times) don't false-match.
+    // A single leading boundary (?<![A-Za-z0-9:]) on the whole alternation
+    // stops mid-token matches like the `d::` inside `std::string`.
+    regex: new RegExp(
+      '(?<![A-Za-z0-9:])(?:' +
+        [
+          '(?:[0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}', // full 8 groups
+          '(?:[0-9A-Fa-f]{1,4}:){1,6}:[0-9A-Fa-f]{1,4}', // e.g. fe80::1, 2001:db8::1
+          '(?:[0-9A-Fa-f]{1,4}:){1,5}(?::[0-9A-Fa-f]{1,4}){1,2}',
+          '(?:[0-9A-Fa-f]{1,4}:){1,4}(?::[0-9A-Fa-f]{1,4}){1,3}',
+          '(?:[0-9A-Fa-f]{1,4}:){1,3}(?::[0-9A-Fa-f]{1,4}){1,4}',
+          '(?:[0-9A-Fa-f]{1,4}:){1,2}(?::[0-9A-Fa-f]{1,4}){1,5}',
+          '[0-9A-Fa-f]{1,4}:(?::[0-9A-Fa-f]{1,4}){1,6}',
+          ':(?::[0-9A-Fa-f]{1,4}){1,7}', // leading ::x
+          '(?:[0-9A-Fa-f]{1,4}:){1,7}:', // trailing x::
+          '::', // bare ::
+        ].join('|') +
+        ')',
+      'g',
+    ),
     restorable: false,
   },
 ];

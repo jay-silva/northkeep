@@ -65,4 +65,23 @@ export const LEAK_CORPUS: SeededSecret[] = [
   // IBANs (2)
   { kind: 'iban', secret: 'GB82 WEST 1234 5698 7654 32', sentence: 'Wire to GB82 WEST 1234 5698 7654 32.' },
   { kind: 'iban', secret: 'DE89370400440532013000', sentence: 'German IBAN DE89370400440532013000.' },
+
+  // --- Format-family gaps found in adversarial review (were leaking) ---
+  // SSN without dashes / with dots / slashes (keyword-anchored for the bare form)
+  { kind: 'ssn', secret: '123456789', sentence: 'SSN on file: 123456789.' },
+  { kind: 'ssn', secret: '123.45.6789', sentence: 'Applicant SSN 123.45.6789 today.' },
+  { kind: 'ssn', secret: '457/55/5462', sentence: 'Dependent 457/55/5462 listed.' },
+  // credit cards with dot and non-breaking / thin space separators (Luhn-valid)
+  { kind: 'credit_card', secret: '4111.1111.1111.1111', sentence: 'Dotted 4111.1111.1111.1111 card.' },
+  { kind: 'credit_card', secret: '4111\u00A01111\u00A01111\u00A01111', sentence: 'Pasted 4111\u00A01111\u00A01111\u00A01111 from a doc.' },
+  { kind: 'credit_card', secret: '4111\u20091111\u20091111\u20091111', sentence: 'Thin-space 4111\u20091111\u20091111\u20091111 card.' },
+  // Stripe secret keys (underscore form) + JWT
+  { kind: 'api_key', secret: 'sk_live_51HxYzAbC123dEf456GhI789', sentence: 'Key sk_live_51HxYzAbC123dEf456GhI789 leaked.' },
+  { kind: 'api_key', secret: 'rk_live_51HxYzAbC123dEf456GhI', sentence: 'Restricted rk_live_51HxYzAbC123dEf456GhI here.' },
+  { kind: 'api_key', secret: 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abc123DEF456ghi', sentence: 'Bearer eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0In0.abc123DEF456ghi used.' },
+  // compressed IPv6
+  { kind: 'ip', secret: 'fe80::1', sentence: 'Host fe80::1 pinged.' },
+  { kind: 'ip', secret: '2001:db8::1', sentence: 'Assigned 2001:db8::1 today.' },
+  // contiguous 10-digit phone (keyword-anchored)
+  { kind: 'phone', secret: '6175550182', sentence: 'Call 6175550182 now.' },
 ];

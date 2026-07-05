@@ -65,6 +65,24 @@ entity is a leak, which is why Tier 1 always backstops. Neither tier removes
 *contextual* identity ("the CFO whose wife works at the competitor") — we do
 not claim Tier 3.
 
+## Adversarial review (2026-07-05)
+
+Reviewed with this milestone — maximally adversarial about detector gaps
+since a miss is a real leak. Positive assurance: the overlap/placeholder
+logic never leaves a partial-secret fragment; `restore()` longest-first
+ordering is safe and never reintroduces a Tier-1 secret; `/api/redact` is
+genuinely stateless (no vault access, nothing persisted/logged) and uses the
+loopback-guarded Ollama client. The review found — and we fixed, each added
+to the leak corpus as a regression first — four real leak classes the
+original corpus didn't exercise: SSNs without dashes / with `.` or `/`;
+credit cards separated by dots or Unicode spaces (NBSP/thin space, i.e.
+pasted-from-document); **Stripe `sk_live_`/`rk_live_` keys** (underscore form
+— only the OpenAI hyphen form was matched); JWTs; and compressed IPv6
+(`fe80::1`, `::1`). Also fixed: Tier-2 now degrades loudly on non-JSON model
+output instead of silently passing names through (invariant #6). IPv6 branch
+ordering and a token-boundary guard prevent both partial matches and false
+positives on `std::string`/clock times. Leak gate: 63 secrets, zero misses.
+
 ## Dependencies introduced
 
 None. `@northkeep/redact` depends only on `@northkeep/librarian` (for the

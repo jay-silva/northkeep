@@ -94,10 +94,15 @@ ${text.slice(0, 6000)}`;
   try {
     parsed = JSON.parse(raw);
   } catch {
-    return [];
+    // Unparseable model output is a FAILURE, not "no entities" — throw so the
+    // caller marks Tier-2 degraded (invariant #6) rather than silently
+    // passing names through unpseudonymized.
+    throw new Error('Tier-2 model returned non-JSON output.');
   }
   const list = (parsed as { entities?: unknown }).entities;
-  if (!Array.isArray(list)) return [];
+  if (!Array.isArray(list)) {
+    throw new Error('Tier-2 model output missing an entities array.');
+  }
   const hits: EntityHit[] = [];
   const seen = new Set<string>();
   for (const item of list) {

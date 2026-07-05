@@ -86,6 +86,16 @@ describe('Tier-2 pseudonymization (mocked local model)', () => {
     expect(result.redacted).toContain('Bob Henderson');
   });
 
+  it('degrades LOUDLY when the model returns non-JSON (no silent passthrough)', async () => {
+    const babbling: OllamaClient = {
+      available: async () => true,
+      generateJson: async () => 'Sure! Here are the entities I found: Bob and Acme.',
+    };
+    const result = await redact('Meet Bob Henderson at Acme Corp.', { tier: 2 }, babbling);
+    expect(result.tier2Degraded).toBe(true); // must NOT report success
+    expect(result.redacted).toContain('Bob Henderson'); // names passed through — flagged
+  });
+
   it('ignores hallucinated spans the model did not quote from the text', async () => {
     const result = await redact(
       'A short note.',
