@@ -16,6 +16,7 @@ import {
   keychainSetMasterKey,
   readCallLog,
 } from '@northkeep/mcp-server';
+import { redact, restore, type Replacement } from '@northkeep/redact';
 import { LockedError, type UiSession } from './session.js';
 
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
@@ -175,6 +176,22 @@ async function dispatch(
 
   if (method === 'GET' && route === '/api/log') {
     return ok({ calls: readCallLog(200).reverse() });
+  }
+
+  // Redaction is stateless and doesn't touch the vault — no unlock required.
+  if (method === 'POST' && route === '/api/redact') {
+    const { text, tier } = parseJson<{ text?: string; tier?: number }>(body);
+    if (typeof text !== 'string' || text.length === 0) return bad(400, 'Text required.');
+    if (text.length > 100_000) return bad(413, 'Text too large (100 KB max).');
+    const result = await redact(text, { tier: tier === 2 ? 2 : 1 });
+    return ok(result);
+  }
+
+  if (method === 'POST' && route === '/api/restore') {
+    const { text, replacements } = parseJson<{ text?: string; replacements?: Replacement[] }>(body);
+    if (typeof text !== 'string') return bad(400, 'Text required.');
+    if (!Array.isArray(replacements)) return bad(400, 'replacements required.');
+    return ok({ restored: restore(text, replacements) });
   }
 
   if (method === 'GET' && route === '/api/export') {

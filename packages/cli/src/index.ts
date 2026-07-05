@@ -23,6 +23,7 @@ import {
   resolveMasterKey,
   startServer,
 } from '@northkeep/mcp-server';
+import { redact, restore, type Replacement } from '@northkeep/redact';
 import { getPassphrase } from './prompt.js';
 import { PASTE_PROMPT, prepareImport, writeApproved, type ImportCmdOptions } from './importCmd.js';
 
@@ -222,6 +223,46 @@ program
   });
 
 program
+  .command('redact')
+  .description('Mask secrets (and optionally pseudonymize names) in text before you paste it into any AI')
+  .argument('[text]', 'text to redact; omit to read stdin')
+  .option('--tier <n>', '1 = secrets only; 2 = also pseudonymize names/orgs (needs Ollama)', '1')
+  .option('--map <file>', 'write the restore map here (needed by "northkeep restore")')
+  .action(async (text: string | undefined, options: { tier: string; map?: string }) => {
+    const input = text ?? (await readStdin());
+    if (!input.trim()) fail('Nothing to redact. Pass text or pipe it in.');
+    const tier = options.tier === '2' ? 2 : 1;
+    const result = await redact(input, { tier });
+    if (result.tier2Degraded) {
+      console.error('⚠  Tier 2 unavailable (no Ollama) — names were NOT pseudonymized, only secrets masked.');
+      console.error('   Start Ollama for name pseudonymization: brew services start ollama');
+    }
+    process.stdout.write(result.redacted + (result.redacted.endsWith('\n') ? '' : '\n'));
+    if (options.map) {
+      fs.writeFileSync(path.resolve(options.map), JSON.stringify(result.replacements, null, 2), { mode: 0o600 });
+      console.error(`✓ Restore map written to ${options.map} (tier ${result.tierApplied}).`);
+    } else if (result.replacements.some((r) => r.restorable)) {
+      console.error('Tip: pass --map <file> to save the mapping so "northkeep restore" can put names back.');
+    }
+  });
+
+program
+  .command('restore')
+  .description('Restore an AI response by putting real names back (reverses "northkeep redact --tier 2")')
+  .argument('[text]', 'the AI response; omit to read stdin')
+  .requiredOption('--map <file>', 'the restore map from "northkeep redact --map"')
+  .action(async (text: string | undefined, options: { map: string }) => {
+    const input = text ?? (await readStdin());
+    let replacements: Replacement[];
+    try {
+      replacements = JSON.parse(fs.readFileSync(path.resolve(options.map), 'utf8')) as Replacement[];
+    } catch {
+      fail(`Could not read the restore map at ${options.map}.`);
+    }
+    process.stdout.write(restore(input, replacements!).replace(/\n?$/, '\n'));
+  });
+
+program
   .command('log')
   .description('Show the MCP call log (what AI apps asked of your vault — never content)')
   .option('-n, --count <n>', 'show the last N calls', '20')
@@ -338,6 +379,19 @@ function printEntry(entry: MemoryEntry): void {
 function fail(message: string): never {
   console.error(`✗ ${message}`);
   process.exit(1);
+}
+
+function readStdin(): Promise<string> {
+  return new Promise((resolve) => {
+    if (process.stdin.isTTY) {
+      resolve('');
+      return;
+    }
+    let data = '';
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => (data += chunk));
+    process.stdin.on('end', () => resolve(data));
+  });
 }
 
 program.parseAsync().catch((err: unknown) => {

@@ -19,6 +19,7 @@
     "@northkeep/importers": "workspace:*",
     "@northkeep/librarian": "workspace:*",
     "@northkeep/mcp-server": "workspace:*",
+    "@northkeep/redact": "workspace:*",
     "@northkeep/web": "workspace:*",
     "commander": "^14.0.0"
   }

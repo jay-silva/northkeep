@@ -16,6 +16,7 @@
     "@northkeep/core": "workspace:*",
     "@northkeep/importers": "workspace:*",
     "@northkeep/librarian": "workspace:*",
-    "@northkeep/mcp-server": "workspace:*"
+    "@northkeep/mcp-server": "workspace:*",
+    "@northkeep/redact": "workspace:*"
   }
 }

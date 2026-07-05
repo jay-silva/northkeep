@@ -93,6 +93,7 @@
 <nav>
   <button data-view="memories" class="active">Memories</button>
   <button data-view="import">Import</button>
+  <button data-view="redact">Redact</button>
   <button data-view="activity">Activity</button>
 </nav>
 <main>
@@ -133,6 +134,35 @@
         <button class="btn primary" id="commitBtn">Import selected</button>
       </div>
       <div id="candList"></div>
+    </div>
+  </section>
+  <section id="view-redact" hidden>
+    <p class="muted">Mask secrets before you paste anything into an AI. Tier 2 also swaps
+      names and companies for consistent placeholders, and can restore the AI's reply.
+      Everything here runs on this Mac.</p>
+    <div class="row" style="margin:10px 0">
+      <select id="redactTier">
+        <option value="1">Tier 1 — mask secrets (emails, SSNs, cards, keys…)</option>
+        <option value="2">Tier 2 — also pseudonymize names &amp; orgs (needs local AI)</option>
+      </select>
+      <button class="btn primary" id="redactBtn">Redact</button>
+    </div>
+    <textarea id="redactIn" placeholder="Paste the text you're about to send to an AI…"
+      style="width:100%;min-height:120px;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px"></textarea>
+    <div id="redactDegraded" class="banner" hidden style="margin-top:10px">
+      <strong>Tier 2 unavailable</strong> — local AI is off, so names were NOT pseudonymized
+      (secrets were still masked). Start Ollama to enable it.
+    </div>
+    <div id="redactOutWrap" hidden style="margin-top:12px">
+      <h3 class="sect">Redacted — safe to paste into any AI <button class="btn" id="copyRedacted" style="font-size:12px;padding:2px 10px;margin-left:8px">Copy</button></h3>
+      <div class="card content" id="redactOut" style="white-space:pre-wrap"></div>
+      <div id="restoreWrap" hidden>
+        <h3 class="sect">Paste the AI's reply to restore real names</h3>
+        <textarea id="restoreIn" placeholder="Paste the AI's response here…"
+          style="width:100%;min-height:90px;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px"></textarea>
+        <button class="btn" id="restoreBtn" style="margin-top:8px">Restore names</button>
+        <div class="card content" id="restoreOut" hidden style="white-space:pre-wrap;margin-top:10px"></div>
+      </div>
     </div>
   </section>
   <section id="view-activity" hidden>
@@ -179,13 +209,38 @@
   }
 
   // --- views
-  const views = ['memories', 'import', 'activity'];
+  const views = ['memories', 'import', 'redact', 'activity'];
   document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => {
     document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
     views.forEach((v) => { $('view-' + v).hidden = v !== b.dataset.view; });
     if (b.dataset.view === 'activity') loadLog();
     if (b.dataset.view === 'memories') loadMemories();
   }));
+
+  // --- redact
+  let lastReplacements = [];
+  $('redactBtn').addEventListener('click', async () => {
+    const text = $('redactIn').value;
+    if (!text.trim()) return;
+    $('redactBtn').disabled = true;
+    try {
+      const r = await api('/api/redact', { method: 'POST', json: { text, tier: Number($('redactTier').value) } });
+      lastReplacements = r.replacements;
+      $('redactOut').textContent = r.redacted;
+      $('redactOutWrap').hidden = false;
+      $('redactDegraded').hidden = !r.tier2Degraded;
+      const restorable = r.replacements.some((x) => x.restorable);
+      $('restoreWrap').hidden = !restorable;
+      $('restoreOut').hidden = true;
+    } finally { $('redactBtn').disabled = false; }
+  });
+  $('copyRedacted').addEventListener('click', () =>
+    navigator.clipboard.writeText($('redactOut').textContent));
+  $('restoreBtn').addEventListener('click', async () => {
+    const r = await api('/api/restore', { method: 'POST', json: { text: $('restoreIn').value, replacements: lastReplacements } });
+    $('restoreOut').textContent = r.restored;
+    $('restoreOut').hidden = false;
+  });
 
   // --- status / unlock
   let status = { unlocked: false };
