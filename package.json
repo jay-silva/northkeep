@@ -10,7 +10,8 @@
     "build": "pnpm -r build",
     "test": "vitest run",
     "test:e2e": "pnpm build && vitest run --config e2e/vitest.config.ts",
-    "northkeep": "node packages/cli/dist/index.js"
+    "northkeep": "node packages/cli/dist/index.js",
+    "tauri": "pnpm --dir apps/desktop tauri"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",

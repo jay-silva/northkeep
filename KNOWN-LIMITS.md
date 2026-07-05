@@ -3,6 +3,21 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
+## GUI — current
+
+- **The app window is a local web page with a per-session key.** While the
+  UI is unlocked, any process that can read that session's token (or your
+  Keychain, if you checked "keep unlocked") has vault access — the familiar
+  rule: your Mac login session is the wall.
+- **Closing the Tauri window kills the server and forgets the held key.**
+  A browser tab from `northkeep ui` does the same when you Ctrl-C the
+  terminal — but not if you only close the tab; the server keeps running.
+- **The desktop app currently requires this machine's dev setup** (Node on
+  PATH, the repo built). A double-clickable, signed, installable app is
+  distribution work, deliberately deferred (ADR 0004).
+- **No editing memories in the GUI yet** — forget-and-re-add until
+  supersede semantics land.
+
 ## M2 (importers) — current
 
 - **Extraction is a 3B model doing its best.** It misses facts (especially

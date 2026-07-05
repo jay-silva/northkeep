@@ -18,10 +18,24 @@ shares one memory of you — and it lives on your computer, not theirs.
 ```bash
 pnpm install && pnpm build
 pnpm northkeep init
+pnpm northkeep ui        # opens the app in your browser (this Mac only)
+```
+
+Prefer the terminal? Every action has a CLI verb:
+
+```bash
 pnpm northkeep remember "I prefer concise answers" --type semantic
 pnpm northkeep list
 pnpm northkeep export
 ```
+
+## The app
+
+`northkeep ui` opens a local page — browse and search your memories, import
+ChatGPT/Claude exports with a review screen, and see the activity log of what
+every AI asked of your vault. A native desktop window (Tauri) wraps the same
+UI: `pnpm tauri dev`. Everything is served from 127.0.0.1 behind a
+per-session token; nothing leaves the machine.
 
 ## Bring your memory with you
 
