@@ -1,0 +1,16 @@
+[package]
+name = "northkeep-desktop"
+version = "0.4.0"
+description = "Northkeep — your AI memory, in a vault you own"
+license = "AGPL-3.0-only"
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.release]
+strip = true
+lto = true
