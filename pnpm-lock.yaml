@@ -44,6 +44,9 @@ importers:
       '@northkeep/mcp-server':
         specifier: workspace:*
         version: link:../../packages/mcp-server
+      '@northkeep/redact':
+        specifier: workspace:*
+        version: link:../../packages/redact
 
   packages/cli:
     dependencies:
@@ -59,6 +62,9 @@ importers:
       '@northkeep/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
+      '@northkeep/redact':
+        specifier: workspace:*
+        version: link:../redact
       '@northkeep/web':
         specifier: workspace:*
         version: link:../../apps/web
@@ -102,7 +108,11 @@ importers:
         specifier: ^3.25.0
         version: 3.25.76
 
-  packages/redact: {}
+  packages/redact:
+    dependencies:
+      '@northkeep/librarian':
+        specifier: workspace:*
+        version: link:../librarian
 
 packages:
 

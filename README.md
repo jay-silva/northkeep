@@ -50,6 +50,21 @@ Extraction runs entirely on your machine (Ollama + llama3.2:3b — localhost
 only, enforced). Every import ends in a review step: nothing enters your
 vault unseen.
 
+## Redact before you share
+
+```bash
+echo "Call Bob Henderson, SSN 123-45-6789, at 774-555-0134" | pnpm northkeep redact --tier 2 --map /tmp/m.json
+# → Call Person-1, SSN [SSN_1], at [PHONE_1]
+#   …paste the redacted text into any AI, then restore its reply:
+echo "Dear Person-1, ..." | pnpm northkeep restore --map /tmp/m.json
+```
+
+Tier 1 masks secrets (emails, SSNs, cards, keys) deterministically; Tier 2
+swaps names and orgs for consistent placeholders using a local model and can
+restore them in the AI's reply. All on your machine. It's a tool you route
+text through — Northkeep can't scrub a prompt you type straight into a chat
+app, and doesn't pretend to.
+
 ## Connect an AI app (MCP)
 
 ```bash

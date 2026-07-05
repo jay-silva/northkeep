@@ -3,6 +3,26 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
+## M3 (redaction) — current
+
+- **We redact text you route through us — we can't scrub what a chat app
+  sends.** `northkeep redact` (and the GUI Redact panel) mask text *you*
+  paste through them. Northkeep is not a proxy between Claude Desktop and
+  Anthropic, so it cannot intercept a prompt you type directly into a chat
+  client. Honest boundary, stated plainly.
+- **Tier 1 is ~99%, not a guarantee.** It targets specific identifier
+  formats (email, phone, SSN, card, IP, API keys, IBAN). An exotic format it
+  doesn't recognize can slip through — the leak test locks in the formats we
+  claim, and we add formats as we find gaps.
+- **Tier 2 needs Ollama and is 85–95% in-domain.** A name it misses is a
+  leak; Tier 1 always runs underneath as a backstop for secrets. Without
+  Ollama, Tier 2 is skipped and you're told loudly — names are NOT masked.
+- **We do not remove contextual identity.** "The paramedic lieutenant in
+  Bourne whose partner runs compliance" survives every content-level filter.
+  We don't claim Tier 3, and we say so.
+- **Restore is one-directional for secrets.** Pseudonyms (names/orgs) come
+  back; a masked SSN or card number stays masked — by design.
+
 ## GUI — current
 
 - **The app window is a local web page with a per-session key.** While the
