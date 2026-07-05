@@ -99,7 +99,12 @@ async function run(
   tool: string,
   params: LogParams,
   vaultPath: string,
-  fn: (vault: Vault) => { payload: unknown; result_count?: number; result_id?: string },
+  fn: (vault: Vault) => {
+    payload: unknown;
+    result_count?: number;
+    result_id?: string;
+    result_ids?: string[];
+  },
 ): Promise<ToolOk> {
   const base = { ts: new Date().toISOString(), tool, params };
   try {
@@ -109,6 +114,7 @@ async function run(
       ok: true,
       result_count: outcome.result_count,
       result_id: outcome.result_id,
+      result_ids: outcome.result_ids,
     });
     return ok(outcome.payload);
   } catch (error) {
@@ -149,6 +155,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
               note: results.length === 0 ? 'No matching memories. Retrieval is keyword-based; try different words.' : undefined,
             },
             result_count: results.length,
+            result_ids: results.map((r) => r.entry.id),
           };
         },
       ),
@@ -216,7 +223,11 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           .list({ type: type as MemoryType, scope })
           .slice(-(limit ?? 50))
           .map(publicEntry);
-        return { payload: { memories: entries }, result_count: entries.length };
+        return {
+          payload: { memories: entries },
+          result_count: entries.length,
+          result_ids: entries.map((e) => e.id),
+        };
       }),
   );
 

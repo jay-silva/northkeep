@@ -240,9 +240,12 @@ program
       const outcome = entry.ok
         ? entry.result_count !== undefined
           ? `${entry.result_count} result${entry.result_count === 1 ? '' : 's'}`
-          : (entry.result_id ?? 'ok')
+          : (entry.result_id?.slice(0, 8) ?? 'ok')
         : `error: ${entry.error}`;
       console.log(`${status} ${entry.ts}  ${entry.tool}  ${params}  → ${outcome}`);
+      if (entry.result_ids && entry.result_ids.length > 0) {
+        console.log(`    disclosed: ${entry.result_ids.map((id) => id.slice(0, 8)).join(' ')}`);
+      }
     }
   });
 

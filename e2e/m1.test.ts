@@ -131,10 +131,13 @@ describe('M1 acceptance — MCP server', () => {
     expect(payload.results).toHaveLength(0);
   });
 
-  it('logs every call — without content', async () => {
+  it('logs every call — without content, with the disclosed entry ids', async () => {
     const logPath = path.join(home, 'mcp-calls.log');
     const raw = fs.readFileSync(logPath, 'utf8');
-    const lines = raw.trim().split('\n').map((l) => JSON.parse(l) as { tool: string; ok: boolean });
+    const lines = raw
+      .trim()
+      .split('\n')
+      .map((l) => JSON.parse(l) as { tool: string; ok: boolean; result_ids?: string[] });
     const tools = lines.map((l) => l.tool);
     for (const expected of ['memory_remember', 'memory_retrieve', 'memory_list', 'memory_forget']) {
       expect(tools).toContain(expected);
@@ -142,6 +145,13 @@ describe('M1 acceptance — MCP server', () => {
     // The invariant: memory content never reaches the log.
     expect(raw).not.toContain('Henderson');
     expect(raw).not.toContain('425000');
+    // The disclosure ledger: retrieve/list record exactly WHICH entries went out.
+    const retrieveWithResults = lines.find(
+      (l) => l.tool === 'memory_retrieve' && l.ok && (l.result_ids?.length ?? 0) > 0,
+    );
+    expect(retrieveWithResults?.result_ids).toContain(storedId);
+    const listCall = lines.find((l) => l.tool === 'memory_list' && l.ok);
+    expect(listCall?.result_ids).toContain(storedId);
   });
 
   it('rejects wildcard ids and content-shaped params at the schema boundary', async () => {

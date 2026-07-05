@@ -21,6 +21,9 @@ export interface CallLogEntry {
   ok: boolean;
   result_count?: number;
   result_id?: string;
+  /** Exactly which vault entries were disclosed by this call — the
+   * disclosure ledger (ids only, never content). */
+  result_ids?: string[];
   error?: string;
 }
 
