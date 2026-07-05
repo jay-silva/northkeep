@@ -205,4 +205,45 @@ describe('GUI server', () => {
     await api('/api/unlock', { method: 'POST', json: { passphrase: PASSPHRASE } });
     expect((await api('/api/memories')).status).toBe(200);
   });
+
+  it('lock is honest and effective even when an env passphrase grants access', async () => {
+    // A second server started WITH the env grant — the case the main server
+    // (no passphrase env) can't exercise.
+    const envServer = spawn(process.execPath, [serverPath], {
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: process.env.HOME ?? '',
+        NORTHKEEP_HOME: home,
+        NORTHKEEP_NO_KEYCHAIN: '1',
+        NORTHKEEP_PASSPHRASE: PASSPHRASE,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    try {
+      const line: string = await new Promise((resolve, reject) => {
+        const t = setTimeout(() => reject(new Error('no announce')), 15_000);
+        envServer.stdout!.on('data', (c: Buffer) => {
+          const m = /NORTHKEEP_UI_URL=(\S+)/.exec(c.toString('utf8'));
+          if (m) { clearTimeout(t); resolve(m[1]!); }
+        });
+      });
+      const u = new URL(line);
+      const t = u.searchParams.get('token')!;
+      const base = `${u.protocol}//${u.host}`;
+      const call = async (route: string, method = 'GET') =>
+        fetch(`${base}${route}`, { method, headers: { 'X-Northkeep-Token': t, 'content-type': 'application/json' }, body: method === 'POST' ? '{}' : undefined });
+
+      // Env grant means it starts unlocked without a passphrase POST.
+      expect((await (await call('/api/status')).json()).unlocked).toBe(true);
+      // Lock is effective within the process (explicit-lock beats the ambient
+      // env grant) AND honest about the env var that would re-open on restart.
+      const lockBody = await (await call('/api/lock', 'POST')).json();
+      expect(lockBody.envGrant).toBe(true);
+      expect(lockBody.unlocked).toBe(false);
+      // It actually takes effect: data is refused after lock.
+      expect((await call('/api/memories')).status).toBe(423);
+    } finally {
+      envServer.kill();
+    }
+  });
 });

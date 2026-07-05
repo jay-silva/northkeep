@@ -85,6 +85,7 @@
   <h1>North<span>keep</span></h1>
   <span id="countPill" class="pill">…</span>
   <span id="ollamaPill" class="pill" hidden>local AI off</span>
+  <span id="envPill" class="pill locked" hidden title="An environment variable keeps this vault open; the Lock button can't revoke it.">env override</span>
   <div class="grow"></div>
   <button class="btn" id="exportBtn">Export</button>
   <button class="btn" id="lockBtn" hidden>Lock</button>
@@ -194,6 +195,7 @@
     $('countPill').className = 'pill ' + (status.unlocked ? 'ok' : 'locked');
     $('ollamaPill').hidden = status.ollama_available;
     $('degradedBanner').hidden = status.ollama_available;
+    $('envPill').hidden = !status.env_grant;
     $('lockBtn').hidden = !status.unlocked;
     $('rememberRow').hidden = !status.keychain_available;
     if (!status.unlocked) showUnlock(); else { hideUnlock(); loadMemories(); loadScopes(); }
@@ -218,7 +220,12 @@
   $('lockBtn').addEventListener('click', async () => {
     const clear = status.keychain_available &&
       confirm('Also remove the key from your Keychain?\nOK = full lock (passphrase needed everywhere)\nCancel = lock this window only');
-    await api('/api/lock', { method: 'POST', json: { forgetKeychain: clear } });
+    const r = await api('/api/lock', { method: 'POST', json: { forgetKeychain: clear } });
+    if (r.envGrant) {
+      alert('Locked. Note: an environment variable (NORTHKEEP_PASSPHRASE or ' +
+        'NORTHKEEP_MASTER_KEY) is set — it will re-open the vault if you restart Northkeep. ' +
+        'Unset it to lock permanently.');
+    }
     location.reload();
   });
   $('exportBtn').addEventListener('click', async () => {
@@ -269,18 +276,18 @@
     $('memList').innerHTML = memories.length === 0
       ? '<p class="muted">No memories match.</p>'
       : memories.map((m) => `
-        <div class="card" id="mem-${m.id}">
+        <div class="card" id="mem-${esc(m.id)}">
           <div class="content">${esc(m.content)}</div>
           <div class="prov">
-            <span class="tag">${m.type}</span>
+            <span class="tag">${esc(m.type)}</span>
             <span>${esc(m.scope)}</span>
             <span>${esc(m.source)}</span>
-            <span>conf ${m.confidence}</span>
-            <span>${m.created_at.slice(0, 10)}</span>
-            <span>${m.id.slice(0, 8)}</span>
-            ${m.relevance !== undefined ? `<span>rel ${m.relevance}</span>` : ''}
+            <span>conf ${esc(m.confidence)}</span>
+            <span>${esc(m.created_at.slice(0, 10))}</span>
+            <span>${esc(m.id.slice(0, 8))}</span>
+            ${m.relevance !== undefined ? `<span>rel ${esc(m.relevance)}</span>` : ''}
             <span class="grow"></span>
-            <button class="btn danger" data-forget="${m.id}" style="font-size:12px;padding:2px 10px">Forget</button>
+            <button class="btn danger" data-forget="${esc(m.id)}" style="font-size:12px;padding:2px 10px">Forget</button>
           </div>
         </div>`).join('');
   }
@@ -350,10 +357,10 @@
         `<div class="conflict"><div>new: ${esc(x.candidate)}</div><div class="muted">existing: ${esc(x.existing)}</div></div>`).join('');
     $('candList').innerHTML = candidates.map((c2) => `
       <div class="card cand">
-        <input type="checkbox" checked data-i="${c2.index}">
+        <input type="checkbox" checked data-i="${esc(c2.index)}">
         <div>
           <div class="content">${esc(c2.content)}</div>
-          <div class="prov"><span class="tag">${c2.type}</span><span>conf ${c2.confidence.toFixed(1)}</span>
+          <div class="prov"><span class="tag">${esc(c2.type)}</span><span>conf ${esc(c2.confidence.toFixed(1))}</span>
           ${c2.conversation_title ? `<span>from “${esc(c2.conversation_title)}”</span>` : ''}</div>
         </div>
       </div>`).join('');
@@ -392,7 +399,7 @@
           <span class="muted">${esc(Object.entries(c.params || {}).filter(([, v]) => v !== undefined)
             .map(([k, v]) => k + '=' + v).join(' '))}</span>
           ${c.error ? `<span class="muted">${esc(c.error)}</span>` : ''}
-          ${c.result_ids && c.result_ids.length ? `<div class="prov">disclosed: ${c.result_ids.map((i) => `<span class="tag">${i.slice(0, 8)}</span>`).join(' ')}</div>` : ''}
+          ${c.result_ids && c.result_ids.length ? `<div class="prov">disclosed: ${c.result_ids.map((i) => `<span class="tag">${esc(i.slice(0, 8))}</span>`).join(' ')}</div>` : ''}
         </div>`).join('');
   }
 

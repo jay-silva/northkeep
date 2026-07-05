@@ -22,6 +22,7 @@ const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 
 interface ImportJob {
   id: string;
+  createdAt: number;
   source: 'chatgpt' | 'claude' | 'paste';
   status: 'extracting' | 'ready' | 'committed' | 'failed';
   total: number;
@@ -34,6 +35,18 @@ interface ImportJob {
 }
 
 const jobs = new Map<string, ImportJob>();
+const JOB_TTL_MS = 30 * 60 * 1000;
+
+/** Evict old jobs so extracted plaintext candidates don't linger in memory. */
+function evictStaleJobs(): void {
+  const now = Date.now();
+  for (const [id, job] of jobs) {
+    if (now - job.createdAt > JOB_TTL_MS) {
+      job.candidates = [];
+      jobs.delete(id);
+    }
+  }
+}
 
 export interface ApiResponse {
   status: number;
@@ -92,6 +105,7 @@ async function dispatch(
       ollama_available: ollama,
       extract_model: EXTRACT_MODEL,
       keychain_available: keychainAvailable(),
+      env_grant: session.hasEnvGrant(),
     });
   }
 
@@ -112,8 +126,9 @@ async function dispatch(
     if (forgetKeychain === true && keychainAvailable()) {
       keychainCleared = keychainDeleteMasterKey() === 'removed';
     }
-    const envGrant = Boolean(process.env.NORTHKEEP_MASTER_KEY || process.env.NORTHKEEP_PASSPHRASE);
-    return ok({ unlocked: false, keychainCleared, envGrant });
+    // Report the TRUE post-lock state, not a hardcoded value. An env-var grant
+    // the in-app lock cannot revoke keeps the vault open — say so.
+    return ok({ unlocked: session.isUnlocked(), keychainCleared, envGrant: session.hasEnvGrant() });
   }
 
   if (method === 'GET' && route === '/api/memories') {
@@ -234,8 +249,8 @@ async function dispatch(
         vault.save();
         return chosen.length;
       });
-      job.status = 'committed';
       job.candidates = [];
+      jobs.delete(job.id); // done — don't retain the job (or its plaintext)
       return ok({ imported: written });
     }
   }
@@ -266,8 +281,10 @@ async function startImport(
   fs.mkdirSync(northkeepHome(), { recursive: true, mode: 0o700 });
   fs.writeFileSync(tempPath, body, { mode: 0o600 });
 
+  evictStaleJobs();
   const job: ImportJob = {
     id: randomUUID(),
+    createdAt: Date.now(),
     source,
     status: 'extracting',
     total: 0,

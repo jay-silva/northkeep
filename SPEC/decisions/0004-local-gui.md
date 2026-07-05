@@ -60,6 +60,23 @@ icons/branding, Node-sidecar packaging, signing, and notarization
 (Apple Developer, $99/yr) are distribution work, deliberately deferred —
 revisit before any build leaves this machine.
 
+## Adversarial review (2026-07-05)
+
+Reviewed with this milestone. Positive assurance: token auth (constant-time,
+no pre-auth data route, token never in the served page), loopback bind +
+host-header rebinding defense, CSRF posture (token + no CORS + `form-action
+'none'`), key-buffer hygiene (fresh buffer per `resolveMasterKey`, copied
+before `openWithKey` consumes it), XSS escaping of all stored fields, and the
+temp-upload lifecycle (parsers read eagerly; `finally` delete can't race the
+async extraction; filename sanitized; 0600 under 0700). No critical/high
+findings. Fixed from the review: `/api/lock` now reports the true post-lock
+state and an explicit-lock flag makes it effective even when an env var
+grants access (previously a silent no-op) — surfaced in the UI as an "env
+override" pill and a lock warning; import jobs TTL-evict and delete on commit
+so extracted plaintext doesn't linger; the wrong-passphrase derive path zeros
+its key; `type`/`id` fields escaped for defense-in-depth. New e2e test covers
+the env-grant lock case.
+
 ## Dependencies introduced
 
 `@tauri-apps/cli` (dev-only, prebuilt), crates `tauri`/`tauri-build`
