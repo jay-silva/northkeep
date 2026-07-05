@@ -23,6 +23,19 @@ pnpm northkeep list
 pnpm northkeep export
 ```
 
+## Bring your memory with you
+
+```bash
+pnpm northkeep import chatgpt ~/Downloads/chatgpt-export.zip   # Settings → Data Controls → Export
+pnpm northkeep import claude ~/Downloads/claude-export.zip
+pnpm northkeep import prompt   # prints a prompt to paste into ANY chatbot…
+pnpm northkeep import paste its-answer.md   # …and imports what it said
+```
+
+Extraction runs entirely on your machine (Ollama + llama3.2:3b — localhost
+only, enforced). Every import ends in a review step: nothing enters your
+vault unseen.
+
 ## Connect an AI app (MCP)
 
 ```bash

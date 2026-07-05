@@ -3,7 +3,29 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
-## M1 (MCP server) — current
+## M2 (importers) — current
+
+- **Extraction is a 3B model doing its best.** It misses facts (especially
+  ones implied rather than stated), files almost everything under
+  `semantic`, and occasionally paraphrases loosely. That's why every import
+  ends in a review step — read what it extracted before you accept it.
+- **Import speed is ~5 s per conversation** with the local model. A
+  400-conversation ChatGPT history ≈ half an hour. Use `--limit 20` for a
+  first taste.
+- **Without Ollama, extraction is much rougher** (first-person pattern
+  matching, confidence 0.4) — and the CLI tells you so in a banner you
+  can't miss.
+- **Dedupe is lexical.** "Takes coffee black" and "drinks coffee without
+  milk" both survive. Conflicts are flagged for you, never auto-resolved.
+- **The paste-prompt flow trusts the chatbot.** What Gemini claims to know
+  about you imports at confidence 0.7 — review it.
+- **ZIP imports need macOS/Linux** (the OS `unzip`). An already-extracted
+  `conversations.json` works anywhere.
+- **Very large exports parse fully into memory first** (`--limit` caps the
+  extraction work, not the parse). Multi-GB exports may need a beefy
+  machine; unzip output is hard-capped at 512 MB and fails cleanly past it.
+
+## M1 (MCP server)
 
 - **Unlocked = your Mac login is the wall.** After `northkeep unlock`, the
   vault key sits in your macOS Keychain and anything running in your
