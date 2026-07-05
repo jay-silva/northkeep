@@ -1,0 +1,403 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Northkeep</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --ink: #1a2233; --muted: #66708a;
+    --line: #e3e6ee; --accent: #1f5eff; --accent-ink: #ffffff;
+    --danger: #c23a3a; --ok: #1e8e5a; --warn-bg: #fff7e0; --warn-ink: #7a5b00;
+    --chip: #eef1f7; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151c; --panel: #1a1f2a; --ink: #e8ebf2; --muted: #94a0b8;
+      --line: #2a3140; --chip: #242b3a; --accent: #4a7dff;
+      --warn-bg: #2e2a17; --warn-ink: #e3c96a; --danger: #ff7a7a; --ok: #5fd39a;
+    }
+    .pill.ok { background: #1d3a2c; }
+    .pill.locked { background: #3a2020; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px;
+    background: var(--panel); border-bottom: 1px solid var(--line);
+    position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+  header h1 span { color: var(--accent); }
+  .grow { flex: 1; }
+  .pill { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+  .pill.ok { background: #e3f4ec; color: var(--ok); }
+  .pill.locked { background: #fdeaea; color: var(--danger); }
+  nav { display: flex; gap: 4px; padding: 10px 24px 0; }
+  nav button { border: 0; background: none; padding: 8px 14px; font: inherit; color: var(--muted);
+    border-bottom: 2px solid transparent; cursor: pointer; }
+  nav button.active { color: var(--ink); border-color: var(--accent); font-weight: 600; }
+  main { max-width: 860px; margin: 0 auto; padding: 20px 24px 60px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 14px 16px; margin-bottom: 10px; }
+  .prov { font: 12px var(--mono); color: var(--muted); margin-top: 6px; display: flex; flex-wrap: wrap; gap: 10px; }
+  .content { white-space: pre-wrap; overflow-wrap: anywhere; }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+  input[type=text], input[type=password], select { font: inherit; color: inherit; background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+  input[type=text] { flex: 1; min-width: 200px; }
+  button.btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+  button.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  button.btn.danger { color: var(--danger); }
+  button.btn:disabled { opacity: .5; cursor: default; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
+  .chips button { font-size: 12px; border: 1px solid var(--line); background: var(--panel);
+    color: var(--muted); border-radius: 999px; padding: 3px 11px; cursor: pointer; }
+  .chips button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .banner { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid #eadfae;
+    border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; }
+  .muted { color: var(--muted); }
+  .overlay { position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 82%, transparent);
+    backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 10; }
+  .overlay[hidden] { display: none; } /* explicit display beats the hidden attr otherwise */
+  .dialog { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
+    padding: 28px; width: 380px; box-shadow: 0 12px 40px rgba(0,0,0,.18); }
+  .dialog h2 { margin: 0 0 6px; font-size: 18px; }
+  .dialog p { margin: 6px 0 14px; color: var(--muted); font-size: 14px; }
+  .dialog input { width: 100%; margin-bottom: 12px; }
+  .err { color: var(--danger); font-size: 13px; min-height: 18px; margin-bottom: 6px; }
+  label.check { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--muted); margin-bottom: 14px; }
+  .drop { border: 2px dashed var(--line); border-radius: 12px; padding: 34px; text-align: center;
+    color: var(--muted); cursor: pointer; }
+  .drop.hover { border-color: var(--accent); color: var(--accent); }
+  progress { width: 100%; height: 10px; }
+  .cand { display: flex; gap: 10px; align-items: flex-start; }
+  .cand input { margin-top: 5px; }
+  .conflict { border-left: 3px solid var(--warn-ink); padding-left: 10px; margin: 6px 0; font-size: 13px; }
+  .logline { border-bottom: 1px solid var(--line); padding: 9px 2px; font-size: 13px; }
+  .logline .prov { margin-top: 2px; }
+  .tag { font: 11px var(--mono); background: var(--chip); border-radius: 5px; padding: 1px 7px; }
+  h3.sect { margin: 22px 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <h1>North<span>keep</span></h1>
+  <span id="countPill" class="pill">…</span>
+  <span id="ollamaPill" class="pill" hidden>local AI off</span>
+  <div class="grow"></div>
+  <button class="btn" id="exportBtn">Export</button>
+  <button class="btn" id="lockBtn" hidden>Lock</button>
+</header>
+<nav>
+  <button data-view="memories" class="active">Memories</button>
+  <button data-view="import">Import</button>
+  <button data-view="activity">Activity</button>
+</nav>
+<main>
+  <div id="degradedBanner" class="banner" hidden>
+    <strong>Local AI is not running.</strong> Imports will use rough pattern-matching instead of
+    the on-device model. Fix: <code>brew services start ollama</code>
+  </div>
+  <section id="view-memories">
+    <div class="row">
+      <input type="text" id="q" placeholder="Search your memory… (keyword search)">
+    </div>
+    <div class="chips" id="typeChips"></div>
+    <div class="chips" id="scopeChips"></div>
+    <div id="memList"></div>
+  </section>
+  <section id="view-import" hidden>
+    <div class="row" style="margin-bottom:12px">
+      <select id="importSource">
+        <option value="chatgpt">ChatGPT export (.zip)</option>
+        <option value="claude">Claude export (.zip)</option>
+        <option value="paste">Chatbot answer (paste-prompt file)</option>
+      </select>
+      <select id="importScope"><option value="personal">scope: personal</option></select>
+    </div>
+    <div class="drop" id="drop">Drop an export file here, or click to choose</div>
+    <input type="file" id="file" hidden>
+    <div id="importProgress" hidden style="margin-top:16px">
+      <p id="importStatus" class="muted"></p>
+      <progress id="importBar" max="100" value="0"></progress>
+    </div>
+    <div id="importReview" hidden style="margin-top:16px">
+      <div id="importSummary" class="banner" style="background:var(--chip);color:var(--ink);border-color:var(--line)"></div>
+      <div id="conflictBox" hidden></div>
+      <div class="row" style="margin:10px 0">
+        <button class="btn" id="checkAll">Select all</button>
+        <button class="btn" id="checkNone">Select none</button>
+        <div class="grow"></div>
+        <button class="btn primary" id="commitBtn">Import selected</button>
+      </div>
+      <div id="candList"></div>
+    </div>
+  </section>
+  <section id="view-activity" hidden>
+    <p class="muted">Every call an AI app has made to your vault — what was asked and which
+      memories were disclosed. Never the content itself.</p>
+    <div id="logList"></div>
+  </section>
+</main>
+<div class="overlay" id="unlockOverlay" hidden>
+  <div class="dialog">
+    <h2>Unlock your vault</h2>
+    <p>Your memories are encrypted on this Mac. Enter your passphrase to open them.</p>
+    <div class="err" id="unlockErr"></div>
+    <input type="password" id="passphrase" placeholder="Passphrase" autofocus>
+    <label class="check" id="rememberRow"><input type="checkbox" id="remember"> Keep unlocked on this Mac (Keychain)</label>
+    <button class="btn primary" id="unlockBtn" style="width:100%">Unlock</button>
+  </div>
+</div>
+<script>
+(() => {
+  'use strict';
+  // --- session token: arrives once in the URL, then lives in sessionStorage
+  const params = new URLSearchParams(location.search);
+  if (params.get('token')) {
+    sessionStorage.setItem('nk_token', params.get('token'));
+    history.replaceState(null, '', location.pathname);
+  }
+  const TOKEN = sessionStorage.getItem('nk_token') || '';
+
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+    ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+  async function api(route, opts = {}) {
+    const res = await fetch(route, {
+      method: opts.method || 'GET',
+      headers: { 'X-Northkeep-Token': TOKEN, ...(opts.json ? { 'Content-Type': 'application/json' } : {}) },
+      body: opts.json ? JSON.stringify(opts.json) : (opts.body ?? undefined),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.status === 423) { showUnlock(); throw new Error('locked'); }
+    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    return data;
+  }
+
+  // --- views
+  const views = ['memories', 'import', 'activity'];
+  document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => {
+    document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
+    views.forEach((v) => { $('view-' + v).hidden = v !== b.dataset.view; });
+    if (b.dataset.view === 'activity') loadLog();
+    if (b.dataset.view === 'memories') loadMemories();
+  }));
+
+  // --- status / unlock
+  let status = { unlocked: false };
+  async function refreshStatus() {
+    status = await api('/api/status');
+    $('countPill').textContent = status.unlocked ? status.total + ' memories' : 'locked';
+    $('countPill').className = 'pill ' + (status.unlocked ? 'ok' : 'locked');
+    $('ollamaPill').hidden = status.ollama_available;
+    $('degradedBanner').hidden = status.ollama_available;
+    $('lockBtn').hidden = !status.unlocked;
+    $('rememberRow').hidden = !status.keychain_available;
+    if (!status.unlocked) showUnlock(); else { hideUnlock(); loadMemories(); loadScopes(); }
+  }
+  function showUnlock() { $('unlockOverlay').hidden = false; $('passphrase').focus(); }
+  function hideUnlock() { $('unlockOverlay').hidden = true; }
+  $('unlockBtn').addEventListener('click', doUnlock);
+  $('passphrase').addEventListener('keydown', (e) => { if (e.key === 'Enter') doUnlock(); });
+  async function doUnlock() {
+    $('unlockErr').textContent = '';
+    $('unlockBtn').disabled = true;
+    try {
+      await api('/api/unlock', { method: 'POST', json: {
+        passphrase: $('passphrase').value, remember: $('remember').checked } });
+      $('passphrase').value = '';
+      await refreshStatus();
+    } catch (e) {
+      $('unlockErr').textContent = e.message === 'locked' ? '' :
+        'Could not unlock — check your passphrase.';
+    } finally { $('unlockBtn').disabled = false; }
+  }
+  $('lockBtn').addEventListener('click', async () => {
+    const clear = status.keychain_available &&
+      confirm('Also remove the key from your Keychain?\nOK = full lock (passphrase needed everywhere)\nCancel = lock this window only');
+    await api('/api/lock', { method: 'POST', json: { forgetKeychain: clear } });
+    location.reload();
+  });
+  $('exportBtn').addEventListener('click', async () => {
+    const doc = await api('/api/export');
+    const blob = new Blob([JSON.stringify(doc, null, 2)], { type: 'application/json' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'northkeep-export.json';
+    a.click();
+    URL.revokeObjectURL(a.href);
+  });
+
+  // --- memories
+  const TYPES = ['episodic', 'semantic', 'procedural', 'working', 'identity'];
+  let filterType = '', filterScope = '', searchTimer = null;
+  $('typeChips').innerHTML = ['all', ...TYPES].map((t) =>
+    `<button data-t="${t === 'all' ? '' : t}" class="${t === 'all' ? 'on' : ''}">${t}</button>`).join('');
+  $('typeChips').addEventListener('click', (e) => {
+    if (e.target.tagName !== 'BUTTON') return;
+    filterType = e.target.dataset.t;
+    [...$('typeChips').children].forEach((c) => c.classList.toggle('on', c === e.target));
+    loadMemories();
+  });
+  async function loadScopes() {
+    const { scopes } = await api('/api/scopes');
+    $('scopeChips').innerHTML = ['all scopes', ...scopes].map((s, i) =>
+      `<button data-s="${i === 0 ? '' : esc(s)}" class="${i === 0 ? 'on' : ''}">${esc(s)}</button>`).join('');
+    const sel = $('importScope');
+    sel.innerHTML = [...new Set(['personal', ...scopes])].map((s) =>
+      `<option value="${esc(s)}">scope: ${esc(s)}</option>`).join('');
+  }
+  $('scopeChips').addEventListener('click', (e) => {
+    if (e.target.tagName !== 'BUTTON') return;
+    filterScope = e.target.dataset.s;
+    [...$('scopeChips').children].forEach((c) => c.classList.toggle('on', c === e.target));
+    loadMemories();
+  });
+  $('q').addEventListener('input', () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(loadMemories, 250);
+  });
+  async function loadMemories() {
+    const qs = new URLSearchParams();
+    if ($('q').value.trim()) qs.set('q', $('q').value.trim());
+    if (filterType) qs.set('type', filterType);
+    if (filterScope) qs.set('scope', filterScope);
+    const { memories } = await api('/api/memories?' + qs);
+    $('memList').innerHTML = memories.length === 0
+      ? '<p class="muted">No memories match.</p>'
+      : memories.map((m) => `
+        <div class="card" id="mem-${m.id}">
+          <div class="content">${esc(m.content)}</div>
+          <div class="prov">
+            <span class="tag">${m.type}</span>
+            <span>${esc(m.scope)}</span>
+            <span>${esc(m.source)}</span>
+            <span>conf ${m.confidence}</span>
+            <span>${m.created_at.slice(0, 10)}</span>
+            <span>${m.id.slice(0, 8)}</span>
+            ${m.relevance !== undefined ? `<span>rel ${m.relevance}</span>` : ''}
+            <span class="grow"></span>
+            <button class="btn danger" data-forget="${m.id}" style="font-size:12px;padding:2px 10px">Forget</button>
+          </div>
+        </div>`).join('');
+  }
+  $('memList').addEventListener('click', async (e) => {
+    const id = e.target.dataset && e.target.dataset.forget;
+    if (!id) return;
+    if (!confirm('Forget this memory?\nIts content is removed permanently; the deletion itself stays on the record.')) return;
+    await api('/api/forget', { method: 'POST', json: { id } });
+    await refreshStatus();
+  });
+
+  // --- import
+  const drop = $('drop');
+  drop.addEventListener('click', () => $('file').click());
+  drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('hover'); });
+  drop.addEventListener('dragleave', () => drop.classList.remove('hover'));
+  drop.addEventListener('drop', (e) => {
+    e.preventDefault(); drop.classList.remove('hover');
+    if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+  });
+  $('file').addEventListener('change', () => { if ($('file').files[0]) upload($('file').files[0]); });
+
+  let job = null, poller = null, candidates = [];
+  async function upload(file) {
+    $('importProgress').hidden = false;
+    $('importReview').hidden = true;
+    $('importStatus').textContent = 'Uploading ' + file.name + '…';
+    $('importBar').removeAttribute('value');
+    try {
+      const qs = new URLSearchParams({ source: $('importSource').value, filename: file.name });
+      const data = await api('/api/import/upload?' + qs, { method: 'POST', body: file });
+      if (data.status === 'failed') throw new Error(data.error);
+      job = data.job_id;
+      poller = setInterval(poll, 800);
+    } catch (e) {
+      $('importStatus').textContent = 'Import failed: ' + e.message;
+      $('importBar').value = 0;
+    }
+  }
+  async function poll() {
+    const p = await api('/api/import/' + job + '/progress');
+    if (p.status === 'extracting') {
+      $('importStatus').textContent =
+        `Extracting memories on this Mac… ${p.done}/${p.total} conversations` +
+        (p.degraded ? ' (rough mode — local AI off)' : '');
+      $('importBar').max = p.total || 1;
+      $('importBar').value = p.done;
+      return;
+    }
+    clearInterval(poller);
+    if (p.status === 'failed') {
+      $('importStatus').textContent = 'Import failed: ' + p.error;
+      return;
+    }
+    $('importProgress').hidden = true;
+    const c = await api('/api/import/' + job + '/candidates');
+    candidates = c.candidates;
+    $('importSummary').innerHTML =
+      `<strong>${c.candidates.length}</strong> memory candidates` +
+      (c.duplicates_dropped ? ` · ${c.duplicates_dropped} duplicates dropped` : '') +
+      (c.degraded ? ' · <strong>rough extraction (local AI was off)</strong>' : '') +
+      '<br>Review below — nothing is saved until you import.';
+    $('conflictBox').hidden = c.conflicts.length === 0;
+    $('conflictBox').innerHTML = c.conflicts.length === 0 ? '' :
+      '<h3 class="sect">Possible conflicts with what the vault already knows</h3>' +
+      c.conflicts.map((x) =>
+        `<div class="conflict"><div>new: ${esc(x.candidate)}</div><div class="muted">existing: ${esc(x.existing)}</div></div>`).join('');
+    $('candList').innerHTML = candidates.map((c2) => `
+      <div class="card cand">
+        <input type="checkbox" checked data-i="${c2.index}">
+        <div>
+          <div class="content">${esc(c2.content)}</div>
+          <div class="prov"><span class="tag">${c2.type}</span><span>conf ${c2.confidence.toFixed(1)}</span>
+          ${c2.conversation_title ? `<span>from “${esc(c2.conversation_title)}”</span>` : ''}</div>
+        </div>
+      </div>`).join('');
+    $('importReview').hidden = false;
+  }
+  $('checkAll').addEventListener('click', () =>
+    document.querySelectorAll('#candList input').forEach((c) => { c.checked = true; }));
+  $('checkNone').addEventListener('click', () =>
+    document.querySelectorAll('#candList input').forEach((c) => { c.checked = false; }));
+  $('commitBtn').addEventListener('click', async () => {
+    const approved = [...document.querySelectorAll('#candList input:checked')].map((c) => Number(c.dataset.i));
+    $('commitBtn').disabled = true;
+    try {
+      const r = await api('/api/import/' + job + '/commit', {
+        method: 'POST', json: { approved, scope: $('importScope').value } });
+      $('importReview').hidden = true;
+      $('importProgress').hidden = false;
+      $('importStatus').textContent = '✓ Imported ' + r.imported + ' memories.';
+      $('importBar').max = 1; $('importBar').value = 1;
+      await refreshStatus();
+    } catch (e) {
+      alert('Import failed: ' + e.message);
+    } finally { $('commitBtn').disabled = false; }
+  });
+
+  // --- activity
+  async function loadLog() {
+    const { calls } = await api('/api/log');
+    $('logList').innerHTML = calls.length === 0
+      ? '<p class="muted">No AI app has called your vault yet.</p>'
+      : calls.map((c) => `
+        <div class="logline">
+          <span>${c.ok ? '✓' : '✗'}</span>
+          <strong>${esc(c.tool)}</strong>
+          <span class="muted">${esc(c.ts.replace('T', ' ').slice(0, 19))}</span>
+          <span class="muted">${esc(Object.entries(c.params || {}).filter(([, v]) => v !== undefined)
+            .map(([k, v]) => k + '=' + v).join(' '))}</span>
+          ${c.error ? `<span class="muted">${esc(c.error)}</span>` : ''}
+          ${c.result_ids && c.result_ids.length ? `<div class="prov">disclosed: ${c.result_ids.map((i) => `<span class="tag">${i.slice(0, 8)}</span>`).join(' ')}</div>` : ''}
+        </div>`).join('');
+  }
+
+  refreshStatus().catch(() => { $('countPill').textContent = 'no connection'; });
+})();
+</script>
+</body>
+</html>
