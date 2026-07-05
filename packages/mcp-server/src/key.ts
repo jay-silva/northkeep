@@ -12,19 +12,17 @@ export interface ResolvedKey {
 /**
  * Resolves the vault master key for background (no-terminal) use, in order:
  *   1. NORTHKEEP_MASTER_KEY env (hex) — tests/CI
- *   2. macOS Keychain — populated by `northkeep unlock`
- *   3. NORTHKEEP_PASSPHRASE env — derives via Argon2id (slow path)
- * Returns null when locked. Callers get a FRESH Buffer each call because
- * Vault.openWithKey takes ownership of (and may zero) the buffer.
+ *   2. NORTHKEEP_PASSPHRASE env — derives via Argon2id (slow path)
+ *   3. macOS Keychain — populated by `northkeep unlock`
+ * Explicit input (env) outranks the ambient Keychain: a caller who set a
+ * passphrase means THAT passphrase, even when a different vault's key sits
+ * in the Keychain. Returns null when locked. Callers get a FRESH Buffer each
+ * call because Vault.openWithKey takes ownership of (and may zero) the buffer.
  */
 export function resolveMasterKey(vaultPath: string): ResolvedKey | null {
   const fromEnv = process.env.NORTHKEEP_MASTER_KEY;
   if (fromEnv && /^[0-9a-f]{64}$/i.test(fromEnv)) {
     return { key: Buffer.from(fromEnv, 'hex'), source: 'env-key' };
-  }
-  if (keychainAvailable()) {
-    const fromKeychain = keychainGetMasterKey();
-    if (fromKeychain) return { key: fromKeychain, source: 'keychain' };
   }
   const passphrase = process.env.NORTHKEEP_PASSPHRASE;
   if (passphrase) {
@@ -33,6 +31,10 @@ export function resolveMasterKey(vaultPath: string): ResolvedKey | null {
       key: deriveMasterKey(passphrase, loadDeviceSecret(), header.salt, header.kdf),
       source: 'env-passphrase',
     };
+  }
+  if (keychainAvailable()) {
+    const fromKeychain = keychainGetMasterKey();
+    if (fromKeychain) return { key: fromKeychain, source: 'keychain' };
   }
   return null;
 }

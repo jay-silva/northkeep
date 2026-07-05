@@ -16,6 +16,8 @@
   },
   "dependencies": {
     "@northkeep/core": "workspace:*",
+    "@northkeep/importers": "workspace:*",
+    "@northkeep/librarian": "workspace:*",
     "@northkeep/mcp-server": "workspace:*",
     "commander": "^14.0.0"
   }

@@ -24,6 +24,7 @@ import {
   startServer,
 } from '@northkeep/mcp-server';
 import { getPassphrase } from './prompt.js';
+import { PASTE_PROMPT, prepareImport, writeApproved, type ImportCmdOptions } from './importCmd.js';
 
 const program = new Command();
 
@@ -186,6 +187,38 @@ program
         console.log(json);
       }
     });
+  });
+
+program
+  .command('import')
+  .description('Import memories from ChatGPT/Claude exports or a paste-prompt file')
+  .argument('<source>', 'chatgpt | claude | paste | prompt')
+  .argument('[file]', 'export ZIP / JSON / text file')
+  .option('--scope <scope>', 'scope for imported memories', 'personal')
+  .option('--yes', 'skip the review step and import everything', false)
+  .option('--dry-run', 'extract and show candidates without writing anything', false)
+  .option('--limit <n>', 'process at most N conversations', (v: string) => Number(v) || 0)
+  .action(async (source: string, file: string | undefined, options: ImportCmdOptions) => {
+    if (source === 'prompt') {
+      console.log(PASTE_PROMPT);
+      return;
+    }
+    // Phase 1: brief locked read to snapshot existing entries for dedupe.
+    let existing: MemoryEntry[] = [];
+    await withVault((vault) => {
+      existing = vault.list({ includeForgotten: true });
+    });
+    // Phases 2–3: parse, extract (minutes), review (human time) — UNLOCKED.
+    const outcome = await prepareImport(source, file, existing, options);
+    if (outcome === null) return;
+    // Phase 4: short locked write.
+    await withVault((vault) => {
+      const written = writeApproved(vault, outcome, options.scope);
+      console.log(`✓ Imported ${written} memories into scope "${options.scope}".`);
+      const chain = vault.verifyChain();
+      console.log(chain.ok ? '✓ Provenance chain verified.' : `✗ CHAIN BROKEN: ${chain.error}`);
+    });
+    console.log('Inspect with: northkeep list   (remove any with: northkeep forget <id>)');
   });
 
 program

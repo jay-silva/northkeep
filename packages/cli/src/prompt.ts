@@ -17,6 +17,25 @@ export async function getPassphrase(promptText: string): Promise<string> {
   return promptHidden(promptText);
 }
 
+/** Visible single-line prompt (review flows — not for secrets). */
+export function promptLine(question: string): Promise<string> {
+  return new Promise((resolve) => {
+    const { stdin, stdout } = process;
+    stdout.write(question);
+    stdin.resume();
+    let buffer = '';
+    const onData = (chunk: Buffer) => {
+      buffer += chunk.toString('utf8');
+      const newline = buffer.indexOf('\n');
+      if (newline === -1) return;
+      stdin.removeListener('data', onData);
+      stdin.pause();
+      resolve(buffer.slice(0, newline).trim());
+    };
+    stdin.on('data', onData);
+  });
+}
+
 function promptHidden(promptText: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const { stdin, stdout } = process;

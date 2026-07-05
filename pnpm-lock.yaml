@@ -29,6 +29,12 @@ importers:
       '@northkeep/core':
         specifier: workspace:*
         version: link:../core
+      '@northkeep/importers':
+        specifier: workspace:*
+        version: link:../importers
+      '@northkeep/librarian':
+        specifier: workspace:*
+        version: link:../librarian
       '@northkeep/mcp-server':
         specifier: workspace:*
         version: link:../mcp-server
@@ -51,7 +57,14 @@ importers:
 
   packages/importers: {}
 
-  packages/librarian: {}
+  packages/librarian:
+    dependencies:
+      '@northkeep/core':
+        specifier: workspace:*
+        version: link:../core
+      '@northkeep/importers':
+        specifier: workspace:*
+        version: link:../importers
 
   packages/mcp-server:
     dependencies:

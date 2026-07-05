@@ -40,6 +40,7 @@ function cli(
         ...process.env,
         NORTHKEEP_HOME: home,
         NORTHKEEP_PASSPHRASE: options.passphrase ?? PASSPHRASE,
+        NORTHKEEP_NO_KEYCHAIN: '1', // never let the developer's real Keychain leak into tests
       },
       encoding: 'utf8',
       stdio: ['pipe', 'pipe', 'pipe'],
