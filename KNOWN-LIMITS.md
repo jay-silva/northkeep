@@ -3,6 +3,26 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
+## M4 (scopes + audit) — current
+
+- **Scope isolation binds what goes through Northkeep, not what you paste
+  yourself.** A connection granted only `client:henderson` physically can't
+  retrieve `client:acme` from the vault — but Northkeep can't stop you from
+  typing Acme's details into a Henderson conversation by hand. The boundary
+  is on the vault, not your keyboard.
+- **Scope labels are set at write time.** If a memory is saved under the
+  wrong scope, enforcement faithfully applies the wrong label. Review scopes
+  when importing.
+- **The grant is per-connection config, not per-message.** You run a scoped
+  MCP connection for a matter; you don't switch scopes mid-conversation (that
+  would let the model widen its own access).
+- **Tier-1 masking over MCP is opt-in and one-way.** `NORTHKEEP_REDACT_TIER=1`
+  masks secrets in retrieved content; full name-pseudonymization over MCP
+  needs a provider proxy that doesn't exist yet (parked).
+- **The audit log covers Northkeep's own surface.** It records what AI apps
+  asked of the vault — it can't see what a provider did with the content
+  after Northkeep handed it over.
+
 ## M3 (redaction) — current
 
 - **We redact text you route through us — we can't scrub what a chat app

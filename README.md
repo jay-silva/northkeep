@@ -50,6 +50,27 @@ Extraction runs entirely on your machine (Ollama + llama3.2:3b — localhost
 only, enforced). Every import ends in a review step: nothing enters your
 vault unseen.
 
+## Scopes & audit (for professionals)
+
+Run a Northkeep MCP connection scoped to one matter — it physically cannot
+read or write anything else:
+
+```json
+{ "mcpServers": { "northkeep-henderson": {
+  "command": "node",
+  "args": ["<repo>/packages/mcp-server/dist/index.js"],
+  "env": { "NORTHKEEP_SCOPES": "personal,client:henderson", "NORTHKEEP_REDACT_TIER": "1" }
+}}}
+```
+
+Then export the audit trail — who asked what, under which grant, what was
+disclosed (entry ids + scopes), what was denied — for an auditor:
+
+```bash
+pnpm northkeep audit --format csv --out audit.csv
+pnpm northkeep scopes   # what's in the vault, and what this session is granted
+```
+
 ## Redact before you share
 
 ```bash
