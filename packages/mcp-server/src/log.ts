@@ -10,6 +10,12 @@ import { callLogPath } from '@northkeep/core';
 export interface CallLogEntry {
   ts: string;
   tool: string;
+  /** MCP client that made the call (from its initialize handshake). */
+  provider?: string;
+  /** Scopes this connection was granted (undefined = full/owner access). */
+  granted_scopes?: string[];
+  /** Redaction tier applied to returned content (0 = none). */
+  redaction_tier?: number;
   params: {
     type?: string;
     scope?: string;
@@ -19,11 +25,15 @@ export interface CallLogEntry {
     limit?: number;
   };
   ok: boolean;
+  /** True when the call was refused by a scope grant. */
+  denied?: boolean;
   result_count?: number;
   result_id?: string;
   /** Exactly which vault entries were disclosed by this call — the
    * disclosure ledger (ids only, never content). */
   result_ids?: string[];
+  /** Distinct scopes of the disclosed entries. */
+  disclosed_scopes?: string[];
   error?: string;
 }
 

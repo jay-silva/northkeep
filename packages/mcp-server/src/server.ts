@@ -10,15 +10,39 @@ import {
   type MemoryEntry,
   type MemoryType,
 } from '@northkeep/core';
+import { applyTier1 } from '@northkeep/redact';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { appendCallLog, type CallLogEntry } from './log.js';
 
 /**
- * The MCP surface (M1). Stdio transport; stdout is protocol, so all
- * diagnostics go to stderr. Every tool call opens the vault fresh under the
- * file lock and closes it before returning — the decrypted database never
- * outlives a call, and CLI/server writes cannot clobber each other.
+ * The MCP surface. Stdio transport; stdout is protocol, so all diagnostics go
+ * to stderr. Every tool call opens the vault fresh under the file lock and
+ * closes it before returning — the decrypted database never outlives a call,
+ * and CLI/server writes cannot clobber each other.
+ *
+ * M4 adds capability enforcement: a connection is granted a set of scopes
+ * (NORTHKEEP_SCOPES; unset = full owner access), and the server physically
+ * cannot return or mutate entries outside the grant. Every call — including
+ * denials — is written to the content-free audit log.
  */
+
+/** Scopes granted to this server instance, or undefined for full access. */
+export function grantedScopes(): string[] | undefined {
+  const raw = process.env.NORTHKEEP_SCOPES;
+  if (raw === undefined) return undefined;
+  const scopes = raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+  return scopes.length > 0 ? scopes : undefined; // empty ⇒ full (must name scopes to restrict)
+}
+
+/** Optional Tier-1 masking of secrets in returned content (NORTHKEEP_REDACT_TIER=1). */
+function returnRedactionTier(): 0 | 1 {
+  return process.env.NORTHKEEP_REDACT_TIER === '1' ? 1 : 0;
+}
+
+/** Mutable connection context, filled from the MCP initialize handshake. */
+interface ConnContext {
+  provider: string;
+}
 
 const typeEnum = z.enum(MEMORY_TYPES);
 
@@ -95,37 +119,80 @@ class LockedError extends Error {
 
 type LogParams = CallLogEntry['params'];
 
+class ScopeDeniedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'ScopeDeniedError';
+  }
+}
+
+interface RunOutcome {
+  payload: unknown;
+  result_count?: number;
+  result_id?: string;
+  result_ids?: string[];
+  disclosed_scopes?: string[];
+}
+
 async function run(
+  ctx: ConnContext,
   tool: string,
   params: LogParams,
   vaultPath: string,
-  fn: (vault: Vault) => {
-    payload: unknown;
-    result_count?: number;
-    result_id?: string;
-    result_ids?: string[];
-  },
+  fn: (vault: Vault, granted: string[] | undefined) => RunOutcome,
 ): Promise<ToolOk> {
-  const base = { ts: new Date().toISOString(), tool, params };
+  const granted = grantedScopes();
+  const base = {
+    ts: new Date().toISOString(),
+    tool,
+    provider: ctx.provider,
+    granted_scopes: granted,
+    redaction_tier: returnRedactionTier(),
+    params,
+  };
   try {
-    const outcome = await withVault(vaultPath, fn);
+    const outcome = await withVault(vaultPath, (vault) => fn(vault, granted));
     appendCallLog({
       ...base,
       ok: true,
       result_count: outcome.result_count,
       result_id: outcome.result_id,
       result_ids: outcome.result_ids,
+      disclosed_scopes: outcome.disclosed_scopes,
     });
     return ok(outcome.payload);
   } catch (error) {
+    const denied = error instanceof ScopeDeniedError;
     const message = error instanceof Error ? error.message : String(error);
-    appendCallLog({ ...base, ok: false, error: message.slice(0, 200) });
+    appendCallLog({ ...base, ok: false, denied, error: message.slice(0, 200) });
     return err(message);
   }
 }
 
+/**
+ * Opt-in Tier-1 secret masking of content before it leaves the vault toward
+ * the model. Synchronous (Tier-1 is pure regex — no Ollama), so it's safe to
+ * run while the vault is open. Tier-2 pseudonymization is NOT applied over MCP
+ * because there's no response hook to restore names — that needs a proxy
+ * (parked decision).
+ */
+function maskContent<T extends { content: string }>(entries: T[]): T[] {
+  if (returnRedactionTier() === 0) return entries;
+  return entries.map((e) => ({ ...e, content: applyTier1(e.content).text }));
+}
+
+function distinctScopes(scopes: string[]): string[] {
+  return [...new Set(scopes)].sort();
+}
+
 export function createServer(vaultPath: string = defaultVaultPath()): McpServer {
-  const server = new McpServer({ name: 'northkeep', version: '0.2.0' });
+  const server = new McpServer({ name: 'northkeep', version: '0.5.0' });
+  const ctx: ConnContext = { provider: 'unknown' };
+  // Capture the calling client's name once it completes the MCP handshake.
+  server.server.oninitialized = () => {
+    const info = server.server.getClientVersion();
+    if (info?.name) ctx.provider = `${info.name}${info.version ? `@${info.version}` : ''}`;
+  };
 
   server.registerTool(
     'memory_retrieve',
@@ -144,18 +211,28 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     },
     async ({ query, type, scope, limit }) =>
       run(
+        ctx,
         'memory_retrieve',
         { query_terms: query.split(/\s+/).filter(Boolean).length, type, scope, limit },
         vaultPath,
-        (vault) => {
-          const results = vault.retrieve(query, { type: type as MemoryType, scope, limit });
+        (vault, granted) => {
+          const results = vault.retrieve(query, {
+            type: type as MemoryType,
+            scope,
+            limit,
+            allowedScopes: granted,
+          });
+          const entries = maskContent(
+            results.map((r) => ({ ...publicEntry(r.entry), relevance: Number(r.score.toFixed(3)) })),
+          );
           return {
             payload: {
-              results: results.map((r) => ({ ...publicEntry(r.entry), relevance: Number(r.score.toFixed(3)) })),
+              results: entries,
               note: results.length === 0 ? 'No matching memories. Retrieval is keyword-based; try different words.' : undefined,
             },
             result_count: results.length,
             result_ids: results.map((r) => r.entry.id),
+            disclosed_scopes: distinctScopes(results.map((r) => r.entry.scope)),
           };
         },
       ),
@@ -183,10 +260,18 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     },
     async ({ content, type, scope, confidence }) =>
       run(
+        ctx,
         'memory_remember',
         { content_chars: content.length, type, scope },
         vaultPath,
-        (vault) => {
+        (vault, granted) => {
+          const targetScope = scope ?? 'personal';
+          // Capability enforcement: can't write outside the granted scopes.
+          if (granted !== undefined && !granted.includes(targetScope)) {
+            throw new ScopeDeniedError(
+              `This connection is not granted the "${targetScope}" scope (granted: ${granted.join(', ')}).`,
+            );
+          }
           const entry = vault.remember({
             content,
             type: type as MemoryType,
@@ -199,6 +284,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           return {
             payload: { stored: publicEntry(entry) },
             result_id: entry.id,
+            disclosed_scopes: [entry.scope],
           };
         },
       ),
@@ -218,15 +304,16 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       },
     },
     async ({ type, scope, limit }) =>
-      run('memory_list', { type, scope, limit }, vaultPath, (vault) => {
-        const entries = vault
-          .list({ type: type as MemoryType, scope })
-          .slice(-(limit ?? 50))
-          .map(publicEntry);
+      run(ctx, 'memory_list', { type, scope, limit }, vaultPath, (vault, granted) => {
+        const rows = vault
+          .list({ type: type as MemoryType, scope, allowedScopes: granted })
+          .slice(-(limit ?? 50));
+        const entries = maskContent(rows.map(publicEntry));
         return {
           payload: { memories: entries },
           result_count: entries.length,
-          result_ids: entries.map((e) => e.id),
+          result_ids: rows.map((e) => e.id),
+          disclosed_scopes: distinctScopes(rows.map((e) => e.scope)),
         };
       }),
   );
@@ -243,12 +330,13 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       },
     },
     async ({ id }) =>
-      run('memory_forget', { id }, vaultPath, (vault) => {
-        const tombstone = vault.forget(id);
+      run(ctx, 'memory_forget', { id }, vaultPath, (vault, granted) => {
+        const tombstone = vault.forget(id, granted); // enforces scope: unseeable = unforgettable
         vault.save();
         return {
           payload: { forgotten: { id: tombstone.id, forgotten_at: tombstone.forgotten_at } },
           result_id: tombstone.id,
+          disclosed_scopes: [tombstone.scope],
         };
       }),
   );

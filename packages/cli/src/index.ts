@@ -16,6 +16,8 @@ import {
   type MemoryType,
 } from '@northkeep/core';
 import {
+  auditAsCsv,
+  auditAsJson,
   keychainAvailable,
   keychainDeleteMasterKey,
   keychainSetMasterKey,
@@ -288,6 +290,41 @@ program
         console.log(`    disclosed: ${entry.result_ids.map((id) => id.slice(0, 8)).join(' ')}`);
       }
     }
+  });
+
+program
+  .command('audit')
+  .description('Export the audit trail: who asked what of your vault, under which scope grant')
+  .option('--format <fmt>', 'csv | json', 'csv')
+  .option('--out <file>', 'write to a file instead of stdout')
+  .option('-n, --count <n>', 'only the last N calls', (v: string) => Number(v) || undefined)
+  .action((options: { format: string; out?: string; count?: number }) => {
+    const output =
+      options.format === 'json'
+        ? JSON.stringify(auditAsJson(options.count), null, 2) + '\n'
+        : auditAsCsv(options.count);
+    if (options.out) {
+      fs.writeFileSync(path.resolve(options.out), output, { mode: 0o600 });
+      console.error(`✓ Audit exported to ${options.out} (${options.format}).`);
+    } else {
+      process.stdout.write(output);
+    }
+  });
+
+program
+  .command('scopes')
+  .description('List the scopes in your vault, and what this session is granted')
+  .action(async () => {
+    await withVault((vault) => {
+      const scopes = vault.scopes();
+      console.log(scopes.length ? `Scopes in vault: ${scopes.join(', ')}` : 'No scopes yet.');
+      const granted = process.env.NORTHKEEP_SCOPES;
+      console.log(
+        granted
+          ? `This session is GRANTED: ${granted}`
+          : 'This session has FULL access (you are the vault owner).',
+      );
+    });
   });
 
 program

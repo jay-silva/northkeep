@@ -82,8 +82,13 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Runn
         body,
       );
       res.statusCode = result.status;
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify(result.body));
+      if (result.contentType) {
+        res.setHeader('Content-Type', result.contentType);
+        res.end(String(result.body));
+      } else {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(result.body));
+      }
       return;
     }
 

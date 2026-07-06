@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { startServer } from './server.js';
 
-export { createServer, startServer } from './server.js';
+export { createServer, startServer, grantedScopes } from './server.js';
+export { auditAsCsv, auditAsJson } from './audit.js';
 export {
   keychainAvailable,
   keychainDeleteMasterKey,

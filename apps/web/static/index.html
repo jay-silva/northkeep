@@ -166,8 +166,12 @@
     </div>
   </section>
   <section id="view-activity" hidden>
-    <p class="muted">Every call an AI app has made to your vault — what was asked and which
-      memories were disclosed. Never the content itself.</p>
+    <div class="row" style="justify-content:space-between">
+      <p class="muted" style="flex:1">Every call an AI app has made to your vault — who asked,
+        under which scope grant, and which memories were disclosed. Never the content itself.</p>
+      <button class="btn" id="auditCsv">Export CSV</button>
+      <button class="btn" id="auditJson">Export JSON</button>
+    </div>
     <div id="logList"></div>
   </section>
 </main>
@@ -441,21 +445,42 @@
     } finally { $('commitBtn').disabled = false; }
   });
 
-  // --- activity
+  // --- activity / audit
   async function loadLog() {
     const { calls } = await api('/api/log');
     $('logList').innerHTML = calls.length === 0
       ? '<p class="muted">No AI app has called your vault yet.</p>'
       : calls.map((c) => `
         <div class="logline">
-          <span>${c.ok ? '✓' : '✗'}</span>
+          <span>${c.ok ? '✓' : (c.denied ? '⛔' : '✗')}</span>
           <strong>${esc(c.tool)}</strong>
           <span class="muted">${esc(c.ts.replace('T', ' ').slice(0, 19))}</span>
+          ${c.provider ? `<span class="tag">${esc(c.provider)}</span>` : ''}
+          <span class="muted">grant: ${esc((c.granted_scopes || ['all']).join(' '))}</span>
+          ${c.redaction_tier ? `<span class="tag">tier ${esc(c.redaction_tier)}</span>` : ''}
           <span class="muted">${esc(Object.entries(c.params || {}).filter(([, v]) => v !== undefined)
             .map(([k, v]) => k + '=' + v).join(' '))}</span>
-          ${c.error ? `<span class="muted">${esc(c.error)}</span>` : ''}
+          ${c.denied ? '<span style="color:var(--danger)">DENIED</span>' : ''}
+          ${c.error && !c.denied ? `<span class="muted">${esc(c.error)}</span>` : ''}
+          ${c.disclosed_scopes && c.disclosed_scopes.length ? `<span class="muted">scopes: ${esc(c.disclosed_scopes.join(' '))}</span>` : ''}
           ${c.result_ids && c.result_ids.length ? `<div class="prov">disclosed: ${c.result_ids.map((i) => `<span class="tag">${esc(i.slice(0, 8))}</span>`).join(' ')}</div>` : ''}
         </div>`).join('');
+  }
+  $('auditCsv').addEventListener('click', async () => {
+    const res = await fetch('/api/audit.csv', { headers: { 'X-Northkeep-Token': TOKEN } });
+    const blob = await res.blob();
+    downloadBlob(blob, 'northkeep-audit.csv');
+  });
+  $('auditJson').addEventListener('click', async () => {
+    const { calls } = await api('/api/log');
+    downloadBlob(new Blob([JSON.stringify(calls, null, 2)], { type: 'application/json' }), 'northkeep-audit.json');
+  });
+  function downloadBlob(blob, name) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    URL.revokeObjectURL(a.href);
   }
 
   refreshStatus().catch(() => { $('countPill').textContent = 'no connection'; });

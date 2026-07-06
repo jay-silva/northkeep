@@ -11,6 +11,7 @@ import {
 } from '@northkeep/importers';
 import { EXTRACT_MODEL, createOllamaClient, dedupeCandidates, runImport } from '@northkeep/librarian';
 import {
+  auditAsCsv,
   keychainAvailable,
   keychainDeleteMasterKey,
   keychainSetMasterKey,
@@ -52,6 +53,8 @@ function evictStaleJobs(): void {
 export interface ApiResponse {
   status: number;
   body: unknown;
+  /** When set (e.g. text/csv), body is sent as a raw string, not JSON. */
+  contentType?: string;
 }
 
 function ok(body: unknown): ApiResponse {
@@ -176,6 +179,10 @@ async function dispatch(
 
   if (method === 'GET' && route === '/api/log') {
     return ok({ calls: readCallLog(200).reverse() });
+  }
+
+  if (method === 'GET' && route === '/api/audit.csv') {
+    return { status: 200, body: auditAsCsv(), contentType: 'text/csv' };
   }
 
   // Redaction is stateless and doesn't touch the vault — no unlock required.
