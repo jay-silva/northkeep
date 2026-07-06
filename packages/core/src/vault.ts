@@ -336,20 +336,21 @@ export class Vault {
     if (!/^[0-9a-f-]{4,36}$/i.test(prefix)) {
       throw new Error('Memory ids contain only hex characters and dashes.');
     }
-    const matches = this.db
-      .prepare(
-        "SELECT * FROM memories WHERE id LIKE ? || '%' AND forgotten_at IS NULL ORDER BY rowid ASC",
-      )
-      .all(prefix) as EntryRow[];
+    // Scope the id lookup to the grant so out-of-grant entries don't even
+    // affect the match count (no cross-scope existence/count oracle).
+    let sql = "SELECT * FROM memories WHERE id LIKE ? || '%' AND forgotten_at IS NULL";
+    const args: string[] = [prefix];
+    if (allowedScopes !== undefined) {
+      if (allowedScopes.length === 0) throw new Error(`No memory found matching id "${prefix}".`);
+      sql += ` AND scope IN (${allowedScopes.map(() => '?').join(', ')})`;
+      args.push(...allowedScopes);
+    }
+    const matches = this.db.prepare(`${sql} ORDER BY rowid ASC`).all(...args) as EntryRow[];
     if (matches.length === 0) throw new Error(`No memory found matching id "${prefix}".`);
     if (matches.length > 1) {
       throw new Error(`Id prefix "${prefix}" matches ${matches.length} memories — be more specific.`);
     }
     const row = matches[0]!;
-    // Capability enforcement: you can only forget within your granted scopes.
-    if (allowedScopes !== undefined && !allowedScopes.includes(row.scope)) {
-      throw new Error(`No memory found matching id "${prefix}".`); // don't reveal it exists
-    }
     const forgottenAt = new Date().toISOString();
     this.db
       .prepare("UPDATE memories SET content = '', metadata = NULL, forgotten_at = ? WHERE id = ?")

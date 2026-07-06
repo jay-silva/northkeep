@@ -51,8 +51,16 @@ export function auditAsCsv(lastN?: number): string {
   return lines.join('\n') + '\n';
 }
 
-/** RFC-4180 quoting: wrap in quotes if the cell has a comma, quote, or newline. */
+/**
+ * CSV cell rendering that is safe to open in a spreadsheet. Two concerns:
+ *  - RFC-4180 quoting for commas/quotes/newlines;
+ *  - formula injection: a cell starting with = + - @ (or tab/CR) is executed
+ *    as a formula by Excel/Sheets. The audit CSV is opened by an auditor and
+ *    the provider field is attacker-controlled, so any such cell is neutered
+ *    with a leading apostrophe and force-quoted.
+ */
 function csvCell(value: string | number): string {
-  const s = String(value);
+  let s = String(value);
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
   return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
 }

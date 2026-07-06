@@ -309,6 +309,8 @@ describe('scope enforcement (capability allowlist)', () => {
     expect(() => vault.forget(henderson.id, ['personal'])).toThrow(/No memory found/);
     // Still there — the denial did not delete it.
     expect(vault.list({ scope: 'client:henderson' })).toHaveLength(1);
+    // An empty grant can forget nothing.
+    expect(() => vault.forget(henderson.id, [])).toThrow(/No memory found/);
     // With the right grant it works.
     expect(vault.forget(henderson.id, ['client:henderson']).forgotten_at).not.toBeNull();
     vault.close();

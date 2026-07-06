@@ -59,6 +59,24 @@ redacted content is sent. Scope labels are chosen by whoever writes the
 entry — mis-scoping at write time is a data-entry error the boundary can't
 catch.
 
+## Adversarial review (2026-07-06)
+
+Reviewed with this milestone — maximally adversarial about scope-crossing.
+Positive assurance (verified with probes): the `list()` allowlist SQL is
+fail-closed and injection-safe (bound params, intersecting clauses);
+`retrieve` can't score an out-of-grant candidate; `forget` enforces before
+mutating and doesn't leak existence; `remember`'s default scope doesn't
+bypass; Tier-1 masking is one-way and applied to both retrieve and list while
+the disclosure ledger stays accurate; the audit is content-free and
+token-gated. **No scope bypass and no content leak found.** Fixed from the
+review: CSV formula-injection guard (a client-supplied provider like
+`=cmd|...` is neutered before an auditor opens the export); `NORTHKEEP_SCOPES`
+now fails CLOSED on a present-but-empty value (was silently granting full
+access); provider name bounded/sanitized at capture; and `forget`'s id lookup
+is scoped to the grant so out-of-grant rows can't affect the match count.
+Documented (deliberate, not bypass): the owner GUI/CLI run with full access —
+scope grants bind MCP connections.
+
 ## Dependencies introduced
 
 None new to the tree: `@northkeep/mcp-server` now also depends on the existing
