@@ -272,6 +272,55 @@ describe('retrieve (keyword ranking)', () => {
   });
 });
 
+describe('scope enforcement (capability allowlist)', () => {
+  function seeded(): Vault {
+    const vault = createVault();
+    vault.remember({ content: 'personal fact one', type: 'semantic', scope: 'personal' });
+    vault.remember({ content: 'work fact one', type: 'semantic', scope: 'work' });
+    vault.remember({ content: 'henderson matter detail', type: 'episodic', scope: 'client:henderson' });
+    vault.remember({ content: 'acme matter detail', type: 'episodic', scope: 'client:acme' });
+    return vault;
+  }
+
+  it('list caps visibility to the allowlist regardless of scope filter', () => {
+    const vault = seeded();
+    expect(vault.list({ allowedScopes: ['personal', 'work'] })).toHaveLength(2);
+    // Asking for a scope OUTSIDE the grant returns nothing (not a leak).
+    expect(vault.list({ scope: 'client:henderson', allowedScopes: ['personal'] })).toHaveLength(0);
+    // Empty allowlist = no access.
+    expect(vault.list({ allowedScopes: [] })).toHaveLength(0);
+    // Undefined allowlist = full owner access.
+    expect(vault.list()).toHaveLength(4);
+    vault.close();
+  });
+
+  it('retrieve cannot cross a scope grant', () => {
+    const vault = seeded();
+    // A connection granted only 'personal' cannot retrieve client matter.
+    expect(vault.retrieve('matter detail', { allowedScopes: ['personal'] })).toHaveLength(0);
+    expect(vault.retrieve('henderson', { allowedScopes: ['client:henderson'] })).toHaveLength(1);
+    expect(vault.retrieve('matter detail', { allowedScopes: ['client:acme'] })[0]!.entry.scope).toBe('client:acme');
+    vault.close();
+  });
+
+  it('forget refuses (as not-found) an entry outside the grant', () => {
+    const vault = seeded();
+    const henderson = vault.list({ scope: 'client:henderson' })[0]!;
+    expect(() => vault.forget(henderson.id, ['personal'])).toThrow(/No memory found/);
+    // Still there — the denial did not delete it.
+    expect(vault.list({ scope: 'client:henderson' })).toHaveLength(1);
+    // With the right grant it works.
+    expect(vault.forget(henderson.id, ['client:henderson']).forgotten_at).not.toBeNull();
+    vault.close();
+  });
+
+  it('scopes() enumerates distinct live scopes', () => {
+    const vault = seeded();
+    expect(vault.scopes()).toEqual(['client:acme', 'client:henderson', 'personal', 'work']);
+    vault.close();
+  });
+});
+
 describe('schema migration 0.1 → 0.2', () => {
   it('adds the tombstone column and rehashes the chain', () => {
     const vault = createVault();

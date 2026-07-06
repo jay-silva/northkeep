@@ -45,12 +45,23 @@ export interface ListFilter {
   scope?: string;
   /** Include tombstoned (forgotten) entries. Default false. */
   includeForgotten?: boolean;
+  /** Capability allowlist: if set, ONLY these scopes are visible, regardless
+   * of any `scope` filter. Undefined = full access (the vault owner). This is
+   * the enforcement point for scoped connections (M4). */
+  allowedScopes?: string[];
 }
 
 export interface RetrieveOptions {
   type?: MemoryType;
   scope?: string;
   limit?: number;
+  /** Capability allowlist — see ListFilter.allowedScopes. */
+  allowedScopes?: string[];
+}
+
+/** True when `scope` is permitted by an allowlist (undefined allowlist = all). */
+export function scopeAllowed(scope: string, allowedScopes: string[] | undefined): boolean {
+  return allowedScopes === undefined || allowedScopes.includes(scope);
 }
 
 export interface ScoredEntry {

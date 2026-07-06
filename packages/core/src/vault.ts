@@ -324,7 +324,7 @@ export class Vault {
    * and the deletion itself is visible ("an entry in this scope was forgotten
    * on this date"). Accepts a full id or an unambiguous prefix.
    */
-  forget(idOrPrefix: string): MemoryEntry {
+  forget(idOrPrefix: string, allowedScopes?: string[]): MemoryEntry {
     this.assertOpen();
     const prefix = idOrPrefix.trim();
     if (prefix.length < 4) {
@@ -346,6 +346,10 @@ export class Vault {
       throw new Error(`Id prefix "${prefix}" matches ${matches.length} memories — be more specific.`);
     }
     const row = matches[0]!;
+    // Capability enforcement: you can only forget within your granted scopes.
+    if (allowedScopes !== undefined && !allowedScopes.includes(row.scope)) {
+      throw new Error(`No memory found matching id "${prefix}".`); // don't reveal it exists
+    }
     const forgottenAt = new Date().toISOString();
     this.db
       .prepare("UPDATE memories SET content = '', metadata = NULL, forgotten_at = ? WHERE id = ?")
@@ -363,9 +367,11 @@ export class Vault {
     const limit = options.limit ?? 8;
     const queryTerms = tokenize(query);
     if (queryTerms.size === 0) return [];
-    const candidates = this.list({ type: options.type, scope: options.scope }).filter(
-      (entry) => entry.superseded_at === null,
-    );
+    const candidates = this.list({
+      type: options.type,
+      scope: options.scope,
+      allowedScopes: options.allowedScopes,
+    }).filter((entry) => entry.superseded_at === null);
     const now = Date.now();
     const scored: ScoredEntry[] = [];
     for (const entry of candidates) {
@@ -398,11 +404,28 @@ export class Vault {
     if (!filter.includeForgotten) {
       clauses.push('forgotten_at IS NULL');
     }
+    // Capability enforcement: an allowlist caps what's visible no matter what
+    // scope filter was requested. An empty allowlist sees nothing.
+    if (filter.allowedScopes !== undefined) {
+      if (filter.allowedScopes.length === 0) return [];
+      const names = filter.allowedScopes.map((_, i) => `@as${i}`);
+      clauses.push(`scope IN (${names.join(', ')})`);
+      filter.allowedScopes.forEach((s, i) => (params[`as${i}`] = s));
+    }
     const where = clauses.length > 0 ? `WHERE ${clauses.join(' AND ')}` : '';
     const rows = this.db
       .prepare(`SELECT * FROM memories ${where} ORDER BY rowid ASC`)
       .all(params) as EntryRow[];
     return rows.map(rowToEntry);
+  }
+
+  /** Distinct scopes present in the vault (live entries), sorted. */
+  scopes(): string[] {
+    this.assertOpen();
+    const rows = this.db
+      .prepare('SELECT DISTINCT scope FROM memories WHERE forgotten_at IS NULL ORDER BY scope')
+      .all() as Array<{ scope: string }>;
+    return rows.map((r) => r.scope);
   }
 
   /** Replays the hash chain over all entries in insertion order. */
