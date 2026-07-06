@@ -39,8 +39,16 @@ per-session token; nothing leaves the machine.
 
 ## Bring your memory with you
 
+Easiest: open the app (`northkeep ui`), go to Import, and **drop your whole
+ChatGPT or Claude export** — the folder or the .zip. Northkeep finds the
+conversation files (even when a big export is split into
+`conversations-000.json`, `-001.json`, …), ignores the rest, and figures out
+which service it came from.
+
+From the terminal:
+
 ```bash
-pnpm northkeep import chatgpt ~/Downloads/chatgpt-export.zip   # Settings → Data Controls → Export
+pnpm northkeep import chatgpt ~/Downloads/chatgpt-export-folder   # folder, .zip, or .json
 pnpm northkeep import claude ~/Downloads/claude-export.zip
 pnpm northkeep import prompt   # prints a prompt to paste into ANY chatbot…
 pnpm northkeep import paste its-answer.md   # …and imports what it said

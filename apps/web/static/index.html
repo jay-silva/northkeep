@@ -111,15 +111,16 @@
   </section>
   <section id="view-import" hidden>
     <div class="row" style="margin-bottom:12px">
-      <select id="importSource">
-        <option value="chatgpt">ChatGPT export (.zip)</option>
-        <option value="claude">Claude export (.zip)</option>
-        <option value="paste">Chatbot answer (paste-prompt file)</option>
-      </select>
       <select id="importScope"><option value="personal">scope: personal</option></select>
+      <button class="btn" id="pickFolder">Choose a folder…</button>
+      <button class="btn" id="pickFile">Choose a file…</button>
     </div>
-    <div class="drop" id="drop">Drop an export file here, or click to choose</div>
+    <div class="drop" id="drop">
+      <strong>Drop your ChatGPT or Claude export here</strong><br>
+      <span class="muted">The whole folder or the .zip — Northkeep finds the right files and figures out the rest.</span>
+    </div>
     <input type="file" id="file" hidden>
+    <input type="file" id="folder" hidden webkitdirectory>
     <div id="importProgress" hidden style="margin-top:16px">
       <p id="importStatus" class="muted"></p>
       <progress id="importBar" max="100" value="0"></progress>
@@ -360,24 +361,108 @@
 
   // --- import
   const drop = $('drop');
+  const CONV_RE = /^conversations(-\d+)?\.json$/i;
   drop.addEventListener('click', () => $('file').click());
+  $('pickFile').addEventListener('click', (e) => { e.stopPropagation(); $('file').click(); });
+  $('pickFolder').addEventListener('click', (e) => { e.stopPropagation(); $('folder').click(); });
   drop.addEventListener('dragover', (e) => { e.preventDefault(); drop.classList.add('hover'); });
   drop.addEventListener('dragleave', () => drop.classList.remove('hover'));
-  drop.addEventListener('drop', (e) => {
+  drop.addEventListener('drop', async (e) => {
     e.preventDefault(); drop.classList.remove('hover');
-    if (e.dataTransfer.files[0]) upload(e.dataTransfer.files[0]);
+    // Prefer the entry API so a dropped FOLDER can be walked; fall back to files.
+    const items = e.dataTransfer.items;
+    if (items && items.length && items[0].webkitGetAsEntry) {
+      const files = [];
+      for (const it of items) {
+        const entry = it.webkitGetAsEntry();
+        if (entry) await collectEntry(entry, files);
+      }
+      handleFiles(files);
+    } else {
+      handleFiles([...e.dataTransfer.files]);
+    }
   });
-  $('file').addEventListener('change', () => { if ($('file').files[0]) upload($('file').files[0]); });
+  $('file').addEventListener('change', () => handleFiles([...$('file').files]));
+  $('folder').addEventListener('change', () => handleFiles([...$('folder').files]));
+
+  // Recursively gather File objects from a dropped FileSystemEntry.
+  function collectEntry(entry, out) {
+    return new Promise((resolve) => {
+      if (entry.isFile) {
+        entry.file((f) => { out.push(f); resolve(); }, () => resolve());
+      } else if (entry.isDirectory) {
+        const reader = entry.createReader();
+        const readBatch = () => reader.readEntries(async (entries) => {
+          if (!entries.length) return resolve();
+          for (const e of entries) await collectEntry(e, out);
+          readBatch(); // directories are read in batches until empty
+        }, () => resolve());
+        readBatch();
+      } else resolve();
+    });
+  }
+
+  // Decide what was dropped and route it: an export folder/zip/json → merge
+  // conversation shards and auto-detect the source; a paste file → paste.
+  async function handleFiles(files) {
+    if (!files.length) return;
+    const convFiles = files.filter((f) => CONV_RE.test(f.name));
+    const zip = files.find((f) => /\.zip$/i.test(f.name));
+    const pasteFile = files.find((f) => /\.(md|txt)$/i.test(f.name));
+
+    try {
+      if (convFiles.length) {
+        $('importStatus').textContent = `Reading ${convFiles.length} conversation file${convFiles.length > 1 ? 's' : ''}…`;
+        const texts = await Promise.all(convFiles.map(readText));
+        let merged = [];
+        for (const t of texts) {
+          const arr = JSON.parse(t);
+          if (Array.isArray(arr)) merged = merged.concat(arr);
+        }
+        if (!merged.length) throw new Error('No conversations found in those files.');
+        const source = detectSource(merged[0]);
+        const blob = new Blob([JSON.stringify(merged)], { type: 'application/json' });
+        await upload(blob, 'conversations.json', source);
+      } else if (zip) {
+        await upload(zip, zip.name, 'chatgpt'); // server sniffs the zip contents
+      } else if (pasteFile) {
+        await upload(pasteFile, pasteFile.name, 'paste');
+      } else {
+        $('importStatus').textContent =
+          'Nothing importable found. Drop a ChatGPT/Claude export folder or .zip, or a paste-prompt .md file.';
+        $('importProgress').hidden = false;
+      }
+    } catch (err) {
+      $('importProgress').hidden = false;
+      $('importStatus').textContent = 'Import failed: ' + err.message;
+    }
+  }
+
+  function readText(file) {
+    return new Promise((resolve, reject) => {
+      const r = new FileReader();
+      r.onload = () => resolve(r.result);
+      r.onerror = () => reject(new Error('Could not read ' + file.name));
+      r.readAsText(file);
+    });
+  }
+
+  // ChatGPT conversations have a `mapping` tree; Claude has `chat_messages`.
+  function detectSource(conv) {
+    if (conv && conv.mapping) return 'chatgpt';
+    if (conv && conv.chat_messages) return 'claude';
+    return 'chatgpt';
+  }
 
   let job = null, poller = null, candidates = [];
-  async function upload(file) {
+  async function upload(body, filename, source) {
     $('importProgress').hidden = false;
     $('importReview').hidden = true;
-    $('importStatus').textContent = 'Uploading ' + file.name + '…';
+    $('importStatus').textContent = 'Uploading ' + filename + '…';
     $('importBar').removeAttribute('value');
     try {
-      const qs = new URLSearchParams({ source: $('importSource').value, filename: file.name });
-      const data = await api('/api/import/upload?' + qs, { method: 'POST', body: file });
+      const qs = new URLSearchParams({ source, filename });
+      const data = await api('/api/import/upload?' + qs, { method: 'POST', body });
       if (data.status === 'failed') throw new Error(data.error);
       job = data.job_id;
       poller = setInterval(poll, 800);
