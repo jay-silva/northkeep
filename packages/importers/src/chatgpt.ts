@@ -34,42 +34,87 @@ interface ChatgptConversation {
   current_node?: string | null;
 }
 
-export function parseChatgptExport(zipPath: string): ImportedConversation[] {
-  if (!fs.existsSync(zipPath)) {
-    throw new Error(`No file at ${zipPath}.`);
+/**
+ * Accepts, in order of what ChatGPT hands out:
+ *  - the export ZIP (single `conversations.json`, or sharded
+ *    `conversations-000.json` … as newer large exports produce);
+ *  - the already-extracted export FOLDER (same, unzipped);
+ *  - a single `conversations*.json` file.
+ * Shards are concatenated into one conversation list.
+ */
+export function parseChatgptExport(inputPath: string): ImportedConversation[] {
+  if (!fs.existsSync(inputPath)) {
+    throw new Error(`No file at ${inputPath}.`);
   }
-  let raw: string;
-  if (zipPath.endsWith('.json')) {
-    raw = fs.readFileSync(zipPath, 'utf8'); // already-extracted conversations.json
-  } else {
-    try {
-      // path.resolve: a filename starting with "-" must never parse as a flag
-      raw = execFileSync('unzip', ['-p', path.resolve(zipPath), 'conversations.json'], {
-        encoding: 'utf8',
-        maxBuffer: 512 * 1024 * 1024, // hard cap; a bomb inflating past this fails cleanly
-      });
-    } catch {
-      throw new Error(
-        `Could not read conversations.json from ${zipPath}. ` +
-          'Is this the ZIP from ChatGPT Settings → Data Controls → Export Data?',
-      );
-    }
-  }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    throw new Error('conversations.json is not valid JSON — the export may be corrupted.');
-  }
-  if (!Array.isArray(parsed)) {
-    throw new Error('Unexpected ChatGPT export format (expected an array of conversations).');
+  const shards = collectShardTexts(inputPath);
+  if (shards.length === 0) {
+    throw new Error(
+      `No conversations file found at ${inputPath}. Point Northkeep at the ChatGPT export ` +
+        'ZIP, the folder it unzipped to, or a conversations.json inside it.',
+    );
   }
   const conversations: ImportedConversation[] = [];
-  for (const item of parsed as ChatgptConversation[]) {
-    const conv = toConversation(item);
-    if (conv && conv.messages.length > 0) conversations.push(conv);
+  for (const raw of shards) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error('A conversations file is not valid JSON — the export may be corrupted.');
+    }
+    if (!Array.isArray(parsed)) {
+      throw new Error('Unexpected ChatGPT export format (expected an array of conversations).');
+    }
+    for (const item of parsed as ChatgptConversation[]) {
+      const conv = toConversation(item);
+      if (conv && conv.messages.length > 0) conversations.push(conv);
+    }
   }
   return conversations;
+}
+
+/** Returns the raw text of every conversations shard for the given input. */
+function collectShardTexts(inputPath: string): string[] {
+  const resolved = path.resolve(inputPath);
+  const stat = fs.statSync(resolved);
+
+  if (stat.isDirectory()) {
+    return listShardFiles(resolved).map((f) => fs.readFileSync(f, 'utf8'));
+  }
+  if (resolved.endsWith('.json')) {
+    return [fs.readFileSync(resolved, 'utf8')];
+  }
+  // A ZIP: list its members, read every conversations*.json shard.
+  let names: string[];
+  try {
+    names = execFileSync('unzip', ['-Z1', resolved], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+      .split('\n')
+      .map((n) => n.trim())
+      .filter((n) => isShardName(path.basename(n)));
+  } catch {
+    throw new Error(
+      `Could not read ${inputPath}. Is this the ZIP from ChatGPT Settings → Data Controls → Export Data?`,
+    );
+  }
+  names.sort();
+  return names.map((member) =>
+    execFileSync('unzip', ['-p', resolved, member], {
+      encoding: 'utf8',
+      maxBuffer: 512 * 1024 * 1024, // hard cap; a bomb inflating past this fails cleanly
+    }),
+  );
+}
+
+function listShardFiles(dir: string): string[] {
+  return fs
+    .readdirSync(dir)
+    .filter((name) => isShardName(name))
+    .sort()
+    .map((name) => path.join(dir, name));
+}
+
+/** `conversations.json` or `conversations-000.json`, `-001`, … */
+function isShardName(base: string): boolean {
+  return /^conversations(-\d+)?\.json$/i.test(base);
 }
 
 function toConversation(conv: ChatgptConversation): ImportedConversation | null {
