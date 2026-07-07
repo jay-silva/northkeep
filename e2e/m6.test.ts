@@ -297,6 +297,49 @@ describe('M6 acceptance — Converse', () => {
     expect(listed).not.toContain('sailing trip');
   });
 
+  it('CLI REPL runs a mediated turn: masked outbound, restored reply, provenance line', async () => {
+    outboundBodies.length = 0;
+    const output = await new Promise<string>((resolve, reject) => {
+      const child = spawn(
+        process.execPath,
+        [cliPath, 'converse', '--endpoint', endpointId, '--tier', '2'],
+        {
+          env: {
+            PATH: process.env.PATH ?? '',
+            HOME: process.env.HOME ?? '',
+            NORTHKEEP_HOME: home,
+            NORTHKEEP_PASSPHRASE: PASSPHRASE,
+            NORTHKEEP_NO_KEYCHAIN: '1',
+            NORTHKEEP_OLLAMA_URL: fakeOllamaUrl,
+          },
+          stdio: ['pipe', 'pipe', 'pipe'],
+        },
+      );
+      let out = '';
+      child.stdout!.on('data', (c: Buffer) => (out += c.toString('utf8')));
+      child.stderr!.on('data', (c: Buffer) => (out += c.toString('utf8')));
+      child.on('exit', () => resolve(out));
+      child.on('error', reject);
+      child.stdin!.write(`Tell Bob Henderson my SSN is ${FAKE_SSN}.\n`);
+      child.stdin!.end(); // EOF after the turn → REPL exits cleanly
+      setTimeout(() => {
+        child.kill();
+        reject(new Error(`REPL did not exit. Output so far:\n${out}`));
+      }, 20000);
+    });
+
+    expect(output).toContain('● private');
+    // Outbound went through the same pipeline: masked + pseudonymized.
+    const outbound = outboundBodies.join(' ');
+    expect(outbound).not.toContain(FAKE_SSN);
+    expect(outbound).toContain('[SSN_1]');
+    expect(outbound).not.toContain('Bob Henderson');
+    // The restored reply and the provenance line reached the terminal.
+    expect(output).toContain('Bob Henderson');
+    expect(output).toContain('tier 2');
+    expect(output).toContain('memory:');
+  }, 30000);
+
   it('keeps the conversation session across turns (wire history in wire space)', async () => {
     const first = await converse({
       endpoint_id: endpointId,

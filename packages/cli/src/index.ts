@@ -26,8 +26,18 @@ import {
   startServer,
 } from '@northkeep/mcp-server';
 import { redact, restore, type Replacement } from '@northkeep/redact';
+import {
+  addEndpoint,
+  classifyEndpoint,
+  createOpenAICompatibleProvider,
+  listEndpoints,
+  removeEndpoint,
+  setDefaultEndpoint,
+  getDefaultEndpoint,
+} from '@northkeep/converse';
 import { getPassphrase } from './prompt.js';
 import { PASTE_PROMPT, prepareImport, writeApproved, type ImportCmdOptions } from './importCmd.js';
+import { runConverse, type ConverseCmdOptions } from './converseCmd.js';
 
 const program = new Command();
 
@@ -327,6 +337,100 @@ program
     });
   });
 
+const providers = program
+  .command('providers')
+  .description('Manage model endpoints for "northkeep converse" (base URL + model + optional Keychain key)');
+
+providers
+  .command('list', { isDefault: true })
+  .description('List configured endpoints with their privacy badges')
+  .action(() => {
+    const endpoints = listEndpoints();
+    if (endpoints.length === 0) {
+      console.log('No endpoints configured yet. Add one:');
+      console.log('  northkeep providers add --label "Local" --base-url http://127.0.0.1:11434 --model llama3.2:3b');
+      return;
+    }
+    const defaultId = getDefaultEndpoint()?.id;
+    for (const ep of endpoints) {
+      const { tier } = classifyEndpoint(ep.baseUrl);
+      const badge = tier === 'private' ? '\x1b[32mprivate\x1b[0m' : '\x1b[33mbounded\x1b[0m';
+      console.log(
+        `${ep.id === defaultId ? '*' : ' '} ${ep.id}  ${ep.label}  ${ep.baseUrl}  ${ep.model}  [${badge}]${ep.hasKey ? '  key: stored' : ''}`,
+      );
+    }
+    console.log('\n(* = default. Set with: northkeep providers default <id>)');
+  });
+
+providers
+  .command('add')
+  .description('Add an endpoint. Any OpenAI-compatible runtime or API works; keys go to the macOS Keychain.')
+  .requiredOption('--label <label>', 'a name you will recognize')
+  .requiredOption('--base-url <url>', 'e.g. http://127.0.0.1:11434 or https://api.deepseek.com')
+  .option('--model <model>', 'model id; omit to list what the endpoint offers')
+  .option('--kind <kind>', 'openai-compatible | anthropic', 'openai-compatible')
+  .option('--api-key-stdin', 'read an API key from stdin (never from an argument — shell history)', false)
+  .action(async (options: { label: string; baseUrl: string; model?: string; kind: string; apiKeyStdin: boolean }) => {
+    if (options.kind !== 'openai-compatible' && options.kind !== 'anthropic') {
+      fail('kind must be openai-compatible or anthropic.');
+    }
+    if (!options.model) {
+      const probe = createOpenAICompatibleProvider({ baseUrl: options.baseUrl });
+      try {
+        const models = await probe.listModels();
+        console.log('Models offered by that endpoint:');
+        for (const id of models) console.log(`  ${id}`);
+        console.log('\nRe-run with --model <id> to add it.');
+      } catch {
+        fail('Could not list models from that endpoint — is it running? Pass --model explicitly if you know it.');
+      }
+      return;
+    }
+    let apiKey: string | undefined;
+    if (options.apiKeyStdin) {
+      apiKey = (await readStdin()).trim();
+      if (!apiKey) fail('No API key on stdin. Pipe it in: echo "$KEY" | northkeep providers add --api-key-stdin ...');
+    }
+    const endpoint = addEndpoint({
+      label: options.label,
+      baseUrl: options.baseUrl,
+      model: options.model,
+      kind: options.kind as 'openai-compatible' | 'anthropic',
+      ...(apiKey ? { apiKey } : {}),
+    });
+    const { tier, reason } = classifyEndpoint(endpoint.baseUrl);
+    console.log(`✓ Added ${endpoint.id} — ${endpoint.label} (${endpoint.model})`);
+    console.log(`  Privacy: ${tier} (${reason})${endpoint.hasKey ? ' · key stored in Keychain' : ''}`);
+  });
+
+providers
+  .command('remove')
+  .description('Remove an endpoint (and its Keychain key, if any)')
+  .argument('<id>', 'endpoint id from "northkeep providers list"')
+  .action((id: string) => {
+    if (!removeEndpoint(id)) fail(`No endpoint "${id}".`);
+    console.log(`✓ Removed ${id}.`);
+  });
+
+providers
+  .command('default')
+  .description('Set the default endpoint for "northkeep converse"')
+  .argument('<id>', 'endpoint id')
+  .action((id: string) => {
+    setDefaultEndpoint(id);
+    console.log(`✓ Default endpoint: ${id}`);
+  });
+
+program
+  .command('converse')
+  .description('Talk to a model through Northkeep: memory injected, secrets masked, every turn audited')
+  .option('--endpoint <id>', 'endpoint id (default: the configured default)')
+  .option('--tier <n>', 'redaction tier: 0 (private endpoints only) | 1 | 2', '1')
+  .option('--scope <scope>', 'scope for memories distilled from this conversation', 'personal')
+  .action(async (options: ConverseCmdOptions) => {
+    await runConverse(options, withVault);
+  });
+
 program
   .command('serve')
   .description('Run the MCP server on stdio (what Claude Desktop launches)')
@@ -372,13 +476,13 @@ function parseConfidence(raw: string): number {
  * (env or Keychain after `northkeep unlock`) and falling back to a
  * passphrase prompt.
  */
-async function withVault(fn: (vault: Vault) => Promise<void> | void): Promise<void> {
+async function withVault<T>(fn: (vault: Vault) => Promise<T> | T): Promise<T> {
   const vaultPath = vaultPathOpt();
   const resolved = resolveMasterKey(vaultPath);
   // Prompt BEFORE taking the file lock — a human typing must never hold the
   // lock (a concurrent MCP call would time out waiting on it).
   const passphrase = resolved === null ? await getPassphrase('Passphrase: ') : null;
-  await withFileLock(vaultPath, async () => {
+  return withFileLock(vaultPath, async () => {
     let vault: Vault;
     if (resolved !== null) {
       try {
@@ -396,7 +500,7 @@ async function withVault(fn: (vault: Vault) => Promise<void> | void): Promise<vo
       vault = Vault.open({ path: vaultPath, passphrase: passphrase!, deviceSecret: loadDeviceSecret() });
     }
     try {
-      await fn(vault);
+      return await fn(vault);
     } finally {
       vault.close();
     }
