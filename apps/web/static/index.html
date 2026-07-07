@@ -78,6 +78,33 @@
   .logline .prov { margin-top: 2px; }
   .tag { font: 11px var(--mono); background: var(--chip); border-radius: 5px; padding: 1px 7px; }
   h3.sect { margin: 22px 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
+  /* converse */
+  .badge { font-size: 11px; font-weight: 600; letter-spacing: .3px; padding: 3px 10px;
+    border-radius: 999px; white-space: nowrap; }
+  .badge.private { background: #e3f4ec; color: var(--ok); }
+  .badge.bounded { background: var(--warn-bg); color: var(--warn-ink); }
+  .thread { margin: 14px 0; }
+  .msg { display: flex; flex-direction: column; align-items: flex-start; margin: 10px 0; }
+  .msg.user { align-items: flex-end; }
+  .msg .bubble { max-width: 85%; padding: 9px 13px; border-radius: 12px;
+    white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.user .bubble { background: var(--accent); color: var(--accent-ink); }
+  .msg.assistant .bubble { background: var(--panel); border: 1px solid var(--line); }
+  .msg.error .bubble { background: #fdeaea; color: var(--danger); border: 1px solid var(--danger); }
+  .msg .prov { max-width: 85%; align-items: center; }
+  .prov details { font-size: 12px; }
+  .prov summary { cursor: pointer; }
+  .prov details div { margin: 3px 0 3px 8px; }
+  .memnew { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid #eadfae;
+    border-radius: 8px; padding: 6px 10px; margin-top: 6px; font-size: 13px; max-width: 85%; }
+  .memnew.undone { text-decoration: line-through; opacity: .65; }
+  .memnew.undone button { text-decoration: none; }
+  .epline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    border-bottom: 1px solid var(--line); padding: 9px 2px; font-size: 13px; }
+  @media (prefers-color-scheme: dark) {
+    .badge.private { background: #1d3a2c; }
+    .msg.error .bubble { background: #3a2020; }
+  }
 </style>
 </head>
 <body>
@@ -91,6 +118,7 @@
   <button class="btn" id="lockBtn" hidden>Lock</button>
 </header>
 <nav>
+  <button data-view="converse">Converse</button>
   <button data-view="memories" class="active">Memories</button>
   <button data-view="import">Import</button>
   <button data-view="redact">Redact</button>
@@ -101,6 +129,55 @@
     <strong>Local AI is not running.</strong> Imports will use rough pattern-matching instead of
     the on-device model. Fix: <code>brew services start ollama</code>
   </div>
+  <section id="view-converse" hidden>
+    <div class="row" style="margin-bottom:12px">
+      <select id="convEndpoint" title="Endpoint"></select>
+      <span id="convBadge" class="badge" hidden></span>
+      <select id="convTierSel" title="Redaction tier">
+        <option value="1" selected>Tier 1 — mask secrets</option>
+        <option value="2">Tier 2 — also pseudonymize names</option>
+        <option value="0">Off (private endpoints only)</option>
+      </select>
+      <div class="grow"></div>
+      <button class="btn" id="manageEp">Manage endpoints</button>
+    </div>
+    <div id="managePanel" hidden style="margin-bottom:14px">
+      <h3 class="sect">Endpoints</h3>
+      <div id="epList"></div>
+      <h3 class="sect">Add an endpoint</h3>
+      <div class="card">
+        <div class="row" style="margin-bottom:8px">
+          <input type="text" id="epLabel" placeholder="Label (e.g. This Mac — Ollama)" style="flex:0 1 240px;min-width:160px">
+          <input type="text" id="epBase" placeholder="Base URL (e.g. http://localhost:11434/v1)">
+        </div>
+        <div class="row" style="margin-bottom:8px">
+          <input type="text" id="epModel" placeholder="Model (e.g. llama3.2:3b)" style="flex:0 1 240px;min-width:160px">
+          <button class="btn" id="epDiscover" title="List the models this endpoint serves">Discover</button>
+          <select id="epModelSel" hidden></select>
+          <span id="epAddBadge" class="badge" hidden></span>
+        </div>
+        <div class="row" style="margin-bottom:4px">
+          <input type="password" id="epKey" placeholder="API key (optional)" style="flex:1;min-width:200px">
+        </div>
+        <p class="muted" style="margin:0 0 10px;font-size:13px">Stored in the macOS Keychain — never written to files.</p>
+        <div class="err" id="epErr"></div>
+        <div class="row"><button class="btn primary" id="epAdd">Add endpoint</button></div>
+      </div>
+    </div>
+    <div id="convEmpty" class="card" hidden>
+      <strong>No AI endpoints configured yet.</strong>
+      <p class="muted" style="margin:6px 0 10px">Point Northkeep at any OpenAI-compatible runtime —
+        Ollama, LM Studio, vLLM — or a hosted API. Your memories stay in the vault; only what you
+        send (after redaction) reaches the endpoint.</p>
+      <button class="btn primary" id="convEmptyManage">Manage endpoints</button>
+    </div>
+    <div id="convThread" class="thread"></div>
+    <div class="row" style="align-items:flex-end">
+      <textarea id="convInput" rows="2" placeholder="Message… (Enter to send, Shift+Enter for a new line)"
+        style="flex:1;min-width:200px;font:inherit;color:inherit;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px;resize:vertical"></textarea>
+      <button class="btn primary" id="convSend">Send</button>
+    </div>
+  </section>
   <section id="view-memories">
     <div class="row">
       <input type="text" id="q" placeholder="Search your memory… (keyword search)">
@@ -214,12 +291,13 @@
   }
 
   // --- views
-  const views = ['memories', 'import', 'redact', 'activity'];
+  const views = ['converse', 'memories', 'import', 'redact', 'activity'];
   document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => {
     document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
     views.forEach((v) => { $('view-' + v).hidden = v !== b.dataset.view; });
     if (b.dataset.view === 'activity') loadLog();
     if (b.dataset.view === 'memories') loadMemories();
+    if (b.dataset.view === 'converse') openConverse();
   }));
 
   // --- redact
@@ -566,6 +644,283 @@
     a.download = name;
     a.click();
     URL.revokeObjectURL(a.href);
+  }
+
+  // --- converse
+  // Everything model- or server-supplied in this view is rendered with
+  // textContent / createElement only — model replies are untrusted text.
+  let endpoints = [], convSession = null, convStreaming = false;
+
+  function el(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+  function setBadge(node, tier) {
+    const priv = tier === 'private';
+    node.className = 'badge ' + (priv ? 'private' : 'bounded');
+    node.textContent = priv ? 'PRIVATE — nothing leaves your network' : 'BOUNDED — masked before send';
+    return node;
+  }
+  const makeBadge = (tier) => setBadge(document.createElement('span'), tier);
+  const selectedEndpoint = () => endpoints.find((ep) => ep.id === $('convEndpoint').value);
+
+  async function openConverse() {
+    try { await loadProviders(); }
+    catch (e) { if (e.message !== 'locked') $('epErr').textContent = e.message; }
+  }
+
+  async function loadProviders() {
+    const prev = $('convEndpoint').value;
+    const r = await api('/api/providers');
+    endpoints = r.endpoints;
+    const sel = $('convEndpoint');
+    sel.textContent = '';
+    for (const ep of endpoints) {
+      const o = el('option', '', ep.label + ' — ' + ep.model);
+      o.value = ep.id;
+      sel.appendChild(o);
+    }
+    const keep = endpoints.some((ep) => ep.id === prev) ? prev : r.default_id;
+    if (keep) sel.value = keep;
+    sel.hidden = endpoints.length === 0;
+    $('convEmpty').hidden = endpoints.length > 0;
+    if (endpoints.length === 0) $('managePanel').hidden = false;
+    onEndpointChange();
+    renderEpList(r.default_id);
+  }
+
+  function onEndpointChange() {
+    const ep = selectedEndpoint();
+    $('convBadge').hidden = !ep;
+    if (!ep) return;
+    setBadge($('convBadge'), ep.tier);
+    // "Off" only makes sense when nothing leaves the machine.
+    const offOpt = $('convTierSel').querySelector('option[value="0"]');
+    offOpt.disabled = ep.tier !== 'private';
+    if (offOpt.disabled && $('convTierSel').value === '0') $('convTierSel').value = '1';
+  }
+  $('convEndpoint').addEventListener('change', onEndpointChange);
+  $('manageEp').addEventListener('click', () => { $('managePanel').hidden = !$('managePanel').hidden; });
+  $('convEmptyManage').addEventListener('click', () => { $('managePanel').hidden = false; });
+
+  function renderEpList(defaultId) {
+    const box = $('epList');
+    box.textContent = '';
+    if (!endpoints.length) { box.appendChild(el('p', 'muted', 'None yet — add one below.')); return; }
+    for (const ep of endpoints) {
+      const line = el('div', 'epline');
+      line.appendChild(el('strong', '', ep.label));
+      line.appendChild(el('span', 'muted', ep.base_url));
+      line.appendChild(el('span', 'tag', ep.model));
+      line.appendChild(makeBadge(ep.tier));
+      if (ep.has_key) line.appendChild(el('span', 'tag', 'key stored'));
+      if (ep.id === defaultId) line.appendChild(el('span', 'tag', 'default'));
+      line.appendChild(el('span', 'grow'));
+      const small = 'font-size:12px;padding:2px 10px';
+      if (ep.id !== defaultId) {
+        const setBtn = el('button', 'btn', 'Set default');
+        setBtn.style.cssText = small;
+        setBtn.addEventListener('click', async () => {
+          setBtn.disabled = true;
+          try { await api('/api/providers/' + encodeURIComponent(ep.id) + '/default', { method: 'POST' }); await loadProviders(); }
+          catch (e) { setBtn.disabled = false; if (e.message !== 'locked') $('epErr').textContent = e.message; }
+        });
+        line.appendChild(setBtn);
+      }
+      const rmBtn = el('button', 'btn danger', 'Remove');
+      rmBtn.style.cssText = small;
+      rmBtn.addEventListener('click', async () => {
+        if (!confirm('Remove endpoint “' + ep.label + '”?')) return;
+        rmBtn.disabled = true;
+        try { await api('/api/providers/' + encodeURIComponent(ep.id), { method: 'DELETE' }); await loadProviders(); }
+        catch (e) { rmBtn.disabled = false; if (e.message !== 'locked') $('epErr').textContent = e.message; }
+      });
+      line.appendChild(rmBtn);
+      box.appendChild(line);
+    }
+  }
+
+  $('epDiscover').addEventListener('click', async () => {
+    $('epErr').textContent = '';
+    const base = $('epBase').value.trim();
+    if (!base) { $('epErr').textContent = 'Enter a base URL first.'; return; }
+    $('epDiscover').disabled = true;
+    try {
+      const r = await api('/api/models?base=' + encodeURIComponent(base));
+      const sel = $('epModelSel');
+      sel.textContent = '';
+      const first = el('option', '', r.models.length ? 'Pick a model…' : 'No models found');
+      first.value = '';
+      sel.appendChild(first);
+      for (const m of r.models) { const o = el('option', '', m); o.value = m; sel.appendChild(o); }
+      sel.hidden = false;
+      setBadge($('epAddBadge'), r.tier).hidden = false;
+    } catch (e) {
+      if (e.message !== 'locked') $('epErr').textContent = e.message;
+    } finally { $('epDiscover').disabled = false; }
+  });
+  $('epModelSel').addEventListener('change', () => {
+    if ($('epModelSel').value) $('epModel').value = $('epModelSel').value;
+  });
+
+  $('epAdd').addEventListener('click', async () => {
+    $('epErr').textContent = '';
+    const label = $('epLabel').value.trim();
+    const base_url = $('epBase').value.trim();
+    const model = $('epModel').value.trim();
+    if (!label || !base_url || !model) { $('epErr').textContent = 'Label, base URL, and model are all required.'; return; }
+    $('epAdd').disabled = true;
+    try {
+      const json = { label, base_url, model };
+      if ($('epKey').value) json.api_key = $('epKey').value;
+      await api('/api/providers', { method: 'POST', json });
+      ['epLabel', 'epBase', 'epModel', 'epKey'].forEach((id) => { $(id).value = ''; });
+      $('epModelSel').hidden = true; $('epModelSel').textContent = '';
+      $('epAddBadge').hidden = true;
+      await loadProviders();
+    } catch (e) {
+      if (e.message !== 'locked') $('epErr').textContent = e.message;
+    } finally { $('epAdd').disabled = false; }
+  });
+
+  function addMsg(kind, text) {
+    const wrap = el('div', 'msg ' + kind);
+    const bubble = el('div', 'bubble', text);
+    wrap.appendChild(bubble);
+    $('convThread').appendChild(wrap);
+    wrap.scrollIntoView({ block: 'end' });
+    return { wrap, bubble };
+  }
+
+  // Provenance strip under each assistant reply: where it went, what came back,
+  // which redaction tier actually ran, and which memories were disclosed.
+  function provStrip(ev) {
+    const strip = el('div', 'prov');
+    strip.appendChild(makeBadge(ev.privacy));
+    strip.appendChild(el('span', '', ev.endpoint_host));
+    strip.appendChild(el('span', '', ev.model));
+    strip.appendChild(el('span', '', ev.tier2_degraded ? 'Tier 2 degraded → 1' : 'Tier ' + ev.tier_applied));
+    const used = ev.memories_used || [];
+    if (used.length) {
+      const det = document.createElement('details');
+      det.appendChild(el('summary', '', used.length + (used.length === 1 ? ' memory used' : ' memories used')));
+      for (const m of used) {
+        const line = el('div');
+        line.appendChild(el('span', 'tag', String(m.id).slice(0, 8)));
+        line.appendChild(document.createTextNode(' ' + m.content));
+        det.appendChild(line);
+      }
+      strip.appendChild(det);
+    } else {
+      strip.appendChild(el('span', '', 'no memories used'));
+    }
+    return strip;
+  }
+
+  function memNewLine(created) {
+    const box = el('div', 'memnew');
+    const head = el('div', '', '🧠 ' + created.length + (created.length === 1 ? ' memory added' : ' memories added'));
+    head.style.fontWeight = '600';
+    box.appendChild(head);
+    for (const m of created) box.appendChild(el('div', '', m.content));
+    const undo = el('button', 'btn', 'Undo');
+    undo.style.cssText = 'font-size:12px;padding:2px 10px;margin-top:4px';
+    undo.addEventListener('click', async () => {
+      undo.disabled = true;
+      try {
+        await api('/api/converse/undo', { method: 'POST', json: { ids: created.map((m) => m.id) } });
+        box.classList.add('undone');
+      } catch (e) {
+        undo.disabled = false;
+        if (e.message !== 'locked') alert('Undo failed: ' + e.message);
+      }
+    });
+    box.appendChild(undo);
+    return box;
+  }
+
+  $('convSend').addEventListener('click', sendTurn);
+  $('convInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTurn(); }
+  });
+
+  async function sendTurn() {
+    if (convStreaming) return;
+    const msg = $('convInput').value.trim();
+    if (!msg) return;
+    const ep = selectedEndpoint();
+    if (!ep) { $('convEmpty').hidden = false; $('managePanel').hidden = false; return; }
+    convStreaming = true;
+    $('convSend').disabled = true;
+    $('convInput').disabled = true;
+    addMsg('user', msg);
+    $('convInput').value = '';
+    const a = addMsg('assistant', '…');
+    let streamed = '';
+    const handle = (ev) => {
+      if (ev.type === 'start') {
+        convSession = ev.session_id;
+        if (!streamed) a.bubble.textContent = '';
+      } else if (ev.type === 'token') {
+        streamed += ev.text; // wire space: [SSN_1]-style masks, pseudonyms
+        a.bubble.textContent = streamed;
+      } else if (ev.type === 'done') {
+        convSession = ev.session_id;
+        a.bubble.textContent = ev.reply; // restored text replaces the wire-space stream
+        a.wrap.appendChild(provStrip(ev));
+        if ((ev.memories_created || []).length) a.wrap.appendChild(memNewLine(ev.memories_created));
+        a.wrap.scrollIntoView({ block: 'end' });
+      } else if (ev.type === 'error') {
+        if (!streamed) a.wrap.remove();
+        addMsg('error', ev.code === 'TIER2_UNAVAILABLE'
+          ? 'Nothing was sent to the model — ' + ev.message
+          : ev.message);
+      }
+    };
+    try {
+      const res = await fetch('/api/converse', {
+        method: 'POST',
+        headers: { 'X-Northkeep-Token': TOKEN, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...(convSession ? { session_id: convSession } : {}),
+          endpoint_id: ep.id,
+          message: msg,
+          tier: Number($('convTierSel').value),
+        }),
+      });
+      if (res.status === 423) { a.wrap.remove(); showUnlock(); return; }
+      const ctype = res.headers.get('content-type') || '';
+      if (!res.ok || !ctype.includes('ndjson')) {
+        const d = await res.json().catch(() => ({}));
+        throw new Error(d.error || ('HTTP ' + res.status));
+      }
+      const reader = res.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (line) handle(JSON.parse(line));
+        }
+      }
+      buf += dec.decode();
+      if (buf.trim()) handle(JSON.parse(buf.trim()));
+    } catch (e) {
+      if (!streamed) a.wrap.remove();
+      addMsg('error', e.message);
+    } finally {
+      convStreaming = false;
+      $('convSend').disabled = false;
+      $('convInput').disabled = false;
+      $('convInput').focus();
+    }
   }
 
   refreshStatus().catch(() => { $('countPill').textContent = 'no connection'; });
