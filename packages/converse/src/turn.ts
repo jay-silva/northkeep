@@ -2,7 +2,7 @@ import crypto from 'node:crypto';
 import type { MemoryEntry, RememberInput, RetrieveOptions, ScoredEntry, ListFilter } from '@northkeep/core';
 import type { ImportedConversation } from '@northkeep/importers';
 import { dedupeCandidates, extractFromConversation, type OllamaClient } from '@northkeep/librarian';
-import { redact, restore, type PseudonymMap, type Replacement } from '@northkeep/redact';
+import { applyTier1, redact, restore, type PseudonymMap, type Replacement } from '@northkeep/redact';
 import { appendCallLog, type CallLogEntry } from '@northkeep/mcp-server';
 import type { ChatMessage, ModelProvider, PrivacyTier } from './provider.js';
 import { classifyEndpoint } from './provider.js';
@@ -130,6 +130,8 @@ export interface TurnResult {
 
 const DEFAULT_MEMORY_LIMIT = 6;
 const DEFAULT_CHAR_BUDGET = 4000;
+/** Keep memories scoring within this fraction of the best match; drop the rest. */
+const RELEVANCE_RATIO = 0.6;
 
 export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   const {
@@ -159,13 +161,20 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
     limit: options.memoryLimit ?? DEFAULT_MEMORY_LIMIT,
   });
 
-  // 2. Compress to budget. Simple and tunable: keep score order, stop when
-  //    the character budget is spent. A small local model gets a tight
-  //    digest by lowering memoryCharBudget; a big cloud model gets more.
+  // 2. Compress to budget. Keep score order, drop the weak tail, stop when the
+  //    character budget is spent. Keyword retrieval scores the WHOLE message,
+  //    so a long message ("...my friend Bob wants to know what coffee...")
+  //    loosely matches unrelated memories; injecting all of them makes a
+  //    chatty model confabulate. The relevance floor keeps only memories
+  //    scoring within RELEVANCE_RATIO of the best match (the top match is
+  //    always kept). Tunable; semantic retrieval will make this sharper.
+  //    A small local model also wants a tighter digest — lower memoryCharBudget.
   const budget = options.memoryCharBudget ?? DEFAULT_CHAR_BUDGET;
+  const floor = (scored[0]?.score ?? 0) * RELEVANCE_RATIO;
   const used: ScoredEntry[] = [];
   let spent = 0;
   for (const s of scored) {
+    if (used.length > 0 && s.score < floor) break; // scored is sorted desc
     if (spent + s.entry.content.length > budget && used.length > 0) break;
     used.push(s);
     spent += s.entry.content.length;
@@ -350,8 +359,16 @@ async function distillExchange(args: {
     ],
   };
   const extraction = await extractFromConversation(conversation, args.ollama);
+  // Never memorize a secret. The distillation model sees the raw exchange
+  // (real SSNs, cards, keys), so any candidate that still contains a Tier-1
+  // secret is dropped — the vault stores facts about the user, not their
+  // secrets. `applyTier1` is synchronous and pure; a non-empty replacement
+  // set means the candidate carried a secret.
+  const secretFree = extraction.candidates.filter(
+    (c) => applyTier1(c.content).replacements.length === 0,
+  );
   const existing = await args.vault.list({ allowedScopes: args.allowedScopes });
-  const { unique } = dedupeCandidates(extraction.candidates, existing);
+  const { unique } = dedupeCandidates(secretFree, existing);
   const created =
     unique.length === 0
       ? []

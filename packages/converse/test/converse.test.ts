@@ -352,6 +352,85 @@ describe('runTurn', () => {
     expect(result.memoriesCreated.length).toBe(vault.remembered.length);
   });
 
+  it('never distills a Tier-1 secret into memory', async () => {
+    const provider = new FakeProvider('http://127.0.0.1:9999', 'Noted.');
+    const vault = new FakeVault([]);
+    // A distillation model that (wrongly) proposes memorizing a secret plus a
+    // benign fact. The secret candidate must be dropped; the benign one kept.
+    const ollama = {
+      async available() {
+        return true;
+      },
+      async generateJson() {
+        return JSON.stringify({
+          memories: [
+            { type: 'semantic', content: 'The user has a Social Security number of 219-09-9999.', confidence: 0.9 },
+            { type: 'semantic', content: 'The user lives in Dartmouth.', confidence: 0.8 },
+          ],
+        });
+      },
+    };
+    await runTurn({
+      message: 'My SSN is 219-09-9999 and I live in Dartmouth.',
+      session: createSession(),
+      provider,
+      model: 'fake-model',
+      vault,
+      redactTier: 1,
+      distillOllama: ollama,
+      auditFn: () => {},
+    });
+    const stored = vault.remembered.map((m) => m.content).join(' | ');
+    expect(stored).not.toContain('219-09-9999');
+    expect(stored).not.toMatch(/social security/i);
+    expect(stored).toContain('Dartmouth'); // the benign fact still lands
+  });
+
+  it('drops the weak tail of loosely-matching memories (relevance floor)', async () => {
+    // Query loosely touches many memories; only the strong match should inject.
+    const strong = makeEntry({
+      id: 'strong-00000000-0000-0000-0000-000000000000',
+      content: 'Jay takes his coffee black.',
+    });
+    const weak = makeEntry({
+      id: 'weak-000000000-0000-0000-0000-000000000000',
+      content: 'The user has a friend named Sam.',
+    });
+    // FakeVault.retrieve returns score 1 for every entry, so to exercise the
+    // floor we give a vault that scores realistically.
+    const scoredVault = {
+      commits: 0,
+      remembered: [] as RememberInput[],
+      retrieve(): ScoredEntry[] {
+        return [
+          { entry: strong, score: 1.0 },
+          { entry: weak, score: 0.3 }, // below 0.6 * top → dropped
+        ];
+      },
+      list(): MemoryEntry[] {
+        return [];
+      },
+      commit(inputs: RememberInput[]): MemoryEntry[] {
+        return inputs.map((i) => makeEntry({ id: 'n', content: i.content }));
+      },
+    };
+    const provider = new FakeProvider('http://127.0.0.1:9999', 'ok');
+    const result = await runTurn({
+      message: 'my friend wants to know what coffee I drink',
+      session: createSession(),
+      provider,
+      model: 'fake-model',
+      vault: scoredVault,
+      redactTier: 1,
+      distill: false,
+      auditFn: () => {},
+    });
+    expect(result.memoriesUsed.map((m) => m.id)).toEqual([strong.id]);
+    const outbound = JSON.stringify(provider.received[0]);
+    expect(outbound).toContain('coffee black');
+    expect(outbound).not.toContain('friend named Sam');
+  });
+
   it('audits a provider failure without leaking content', async () => {
     const failing: ModelProvider = {
       kind: 'openai-compatible',
