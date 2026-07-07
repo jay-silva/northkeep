@@ -72,6 +72,24 @@ importers:
         specifier: ^14.0.0
         version: 14.0.3
 
+  packages/converse:
+    dependencies:
+      '@northkeep/core':
+        specifier: workspace:*
+        version: link:../core
+      '@northkeep/importers':
+        specifier: workspace:*
+        version: link:../importers
+      '@northkeep/librarian':
+        specifier: workspace:*
+        version: link:../librarian
+      '@northkeep/mcp-server':
+        specifier: workspace:*
+        version: link:../mcp-server
+      '@northkeep/redact':
+        specifier: workspace:*
+        version: link:../redact
+
   packages/core:
     dependencies:
       better-sqlite3:

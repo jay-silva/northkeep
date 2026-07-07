@@ -20,6 +20,10 @@ const COLUMNS = [
   'disclosed_scopes',
   'disclosed_ids',
   'error',
+  'endpoint_host',
+  'model',
+  'privacy',
+  'created_ids',
 ] as const;
 
 export function auditAsJson(lastN?: number): CallLogEntry[] {
@@ -43,6 +47,10 @@ export function auditAsCsv(lastN?: number): string {
         (e.disclosed_scopes ?? []).join(' '),
         (e.result_ids ?? []).join(' '),
         e.error ?? '',
+        e.endpoint_host ?? '',
+        e.model ?? '',
+        e.privacy ?? '',
+        (e.created_ids ?? []).join(' '),
       ]
         .map(csvCell)
         .join(','),

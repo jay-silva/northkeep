@@ -1,0 +1,22 @@
+{
+  "name": "@northkeep/converse",
+  "version": "0.7.0",
+  "description": "The mediated private AI client: retrieve → redact → call → restore → distill → audit on every turn",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@northkeep/core": "workspace:*",
+    "@northkeep/importers": "workspace:*",
+    "@northkeep/librarian": "workspace:*",
+    "@northkeep/mcp-server": "workspace:*",
+    "@northkeep/redact": "workspace:*"
+  }
+}

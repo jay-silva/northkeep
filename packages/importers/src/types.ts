@@ -1,4 +1,4 @@
-export type ImportSource = 'chatgpt' | 'claude' | 'paste';
+export type ImportSource = 'chatgpt' | 'claude' | 'paste' | 'converse';
 
 /**
  * Strips C0/C1 control characters (incl. ANSI/OSC escape sequences' lead

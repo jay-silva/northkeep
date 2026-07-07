@@ -35,6 +35,15 @@ export interface CallLogEntry {
   /** Distinct scopes of the disclosed entries. */
   disclosed_scopes?: string[];
   error?: string;
+  /** Converse (M6): where the outbound call went — host only, never a full
+   * URL with credentials, and never content. */
+  endpoint_host?: string;
+  /** Converse (M6): model id the endpoint was asked for. */
+  model?: string;
+  /** Converse (M6): privacy badge shown to the user for this turn. */
+  privacy?: 'private' | 'bounded';
+  /** Converse (M6): vault entries distilled and stored by this turn. */
+  created_ids?: string[];
 }
 
 export function appendCallLog(entry: CallLogEntry): void {
