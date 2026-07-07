@@ -13,6 +13,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.110.0",
     "@northkeep/core": "workspace:*",
     "@northkeep/importers": "workspace:*",
     "@northkeep/librarian": "workspace:*",

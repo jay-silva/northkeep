@@ -3,6 +3,37 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
+## M6 (Converse, the mediated client) — current
+
+- **"Bounded" is bounded, not invisible.** Point Converse at a cloud
+  endpoint and your *redacted* text still reaches that provider — masked
+  before send, provable from the audit log, but on someone else's computer
+  and subject to their retention. The absolute-privacy path is a local or
+  LAN endpoint (the "private" badge), where nothing leaves your network.
+- **The privacy badge trusts the address, not the wire.** A host is
+  classified private because it's a loopback/RFC-1918/`.local` address. If
+  you deliberately tunnel that address somewhere else (SSH forward, VPN),
+  Northkeep can't tell. Unrecognized and bare hostnames classify as
+  *bounded* — we fail closed, so a LAN box by hostname may need its IP.
+- **Tier-1 masks are one-way in the conversation too.** The model sees
+  `[SSN_1]` and answers about `[SSN_1]` — your real number never comes back
+  into the transcript. That's the point, but it reads oddly the first time.
+- **Tier-2 toward a remote endpoint refuses to run degraded.** If Ollama is
+  down and you asked for pseudonymization to a bounded endpoint, the message
+  is NOT sent — start the model or explicitly drop to Tier 1. Loud, not
+  silent.
+- **Distillation quality tracks the small local model** (same as imports,
+  M2). Auto-stored memories are visible with one-click undo — glance at
+  what a turn added.
+- **Conversation logs are not stored.** The vault keeps distilled memories
+  and the content-free audit trail; the chat transcript itself lives only in
+  session memory and is gone when the session ends (sync of any kind is M5).
+- **Retrieval is still keyword-based** (M1 limit, unchanged) — memory
+  injection misses synonyms until semantic retrieval lands.
+- **API keys need the macOS Keychain.** On other platforms (or
+  `NORTHKEEP_NO_KEYCHAIN=1`) keys are env-var-only for scripting — Northkeep
+  refuses to write them to files.
+
 ## M4 (scopes + audit) — current
 
 - **Scope isolation binds what goes through Northkeep, not what you paste

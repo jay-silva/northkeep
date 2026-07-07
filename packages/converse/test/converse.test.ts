@@ -109,7 +109,7 @@ function makeEntry(partial: Partial<MemoryEntry> & { id: string; content: string
 }
 
 class FakeVault {
-  saved = 0;
+  commits = 0;
   remembered: RememberInput[] = [];
   constructor(private entries: MemoryEntry[]) {}
   retrieve(_query: string, _options?: RetrieveOptions): ScoredEntry[] {
@@ -118,12 +118,12 @@ class FakeVault {
   list(_filter?: ListFilter): MemoryEntry[] {
     return this.entries;
   }
-  remember(input: RememberInput): MemoryEntry {
-    this.remembered.push(input);
-    return makeEntry({ id: `new-${this.remembered.length}`, content: input.content });
-  }
-  save(): void {
-    this.saved += 1;
+  commit(inputs: RememberInput[]): MemoryEntry[] {
+    this.commits += 1;
+    return inputs.map((input) => {
+      this.remembered.push(input);
+      return makeEntry({ id: `new-${this.remembered.length}`, content: input.content });
+    });
   }
 }
 
@@ -305,7 +305,7 @@ describe('runTurn', () => {
     expect(result.distillMode).toBe('heuristic');
     expect(vault.remembered.length).toBeGreaterThan(0);
     expect(vault.remembered[0]!.source).toBe('converse');
-    expect(vault.saved).toBe(1);
+    expect(vault.commits).toBe(1);
     expect(result.memoriesCreated.length).toBe(vault.remembered.length);
   });
 

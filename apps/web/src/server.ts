@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { defaultVaultPath } from '@northkeep/core';
 import { handleApi } from './api.js';
+import { handleConverseStream } from './converse.js';
 import { UiSession } from './session.js';
 
 /**
@@ -74,6 +75,11 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Runn
         return;
       }
       const body = await readBody(req);
+      // Converse streams NDJSON as the model answers — it owns the response.
+      if (req.method === 'POST' && url.pathname === '/api/converse') {
+        await handleConverseStream(session, body, res);
+        return;
+      }
       const result = await handleApi(
         session,
         req.method ?? 'GET',

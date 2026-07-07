@@ -18,6 +18,18 @@ import {
   readCallLog,
 } from '@northkeep/mcp-server';
 import { redact, restore, type Replacement } from '@northkeep/redact';
+import {
+  addEndpoint,
+  classifyEndpoint,
+  createAnthropicProvider,
+  createOpenAICompatibleProvider,
+  getEndpoint,
+  getEndpointKey,
+  listEndpoints,
+  removeEndpoint,
+  setDefaultEndpoint,
+  getDefaultEndpoint,
+} from '@northkeep/converse';
 import { LockedError, type UiSession } from './session.js';
 
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
@@ -210,6 +222,104 @@ async function dispatch(
     return ok(doc);
   }
 
+  // --- Converse endpoint management (M6). API keys go straight to the
+  // Keychain and are NEVER present in any response from these routes. ---
+
+  if (method === 'GET' && route === '/api/providers') {
+    return ok({
+      endpoints: listEndpoints().map(withBadge),
+      default_id: getDefaultEndpoint()?.id ?? null,
+    });
+  }
+
+  if (method === 'POST' && route === '/api/providers') {
+    const { label, base_url, model, api_key, kind } = parseJson<{
+      label?: string;
+      base_url?: string;
+      model?: string;
+      api_key?: string;
+      kind?: string;
+    }>(body);
+    if (!label?.trim() || !base_url?.trim() || !model?.trim()) {
+      return bad(400, 'label, base_url, and model are required.');
+    }
+    if (kind !== undefined && kind !== 'openai-compatible' && kind !== 'anthropic') {
+      return bad(400, 'kind must be openai-compatible or anthropic.');
+    }
+    const endpoint = addEndpoint({
+      label,
+      baseUrl: base_url,
+      model,
+      ...(kind ? { kind } : {}),
+      ...(api_key ? { apiKey: api_key } : {}),
+    });
+    return ok({ endpoint: withBadge(endpoint) });
+  }
+
+  const providerMatch = /^\/api\/providers\/([a-z0-9-]{1,40})(\/default)?$/.exec(route);
+  if (providerMatch) {
+    const id = providerMatch[1]!;
+    if (method === 'DELETE' && !providerMatch[2]) {
+      return removeEndpoint(id) ? ok({ removed: id }) : bad(404, 'Unknown endpoint.');
+    }
+    if (method === 'POST' && providerMatch[2]) {
+      setDefaultEndpoint(id);
+      return ok({ default_id: id });
+    }
+  }
+
+  if (method === 'GET' && route === '/api/models') {
+    const endpointId = query.get('endpoint');
+    const base = query.get('base');
+    let baseUrl: string;
+    let apiKey: string | undefined;
+    let kind = 'openai-compatible';
+    if (endpointId) {
+      const endpoint = getEndpoint(endpointId);
+      if (!endpoint) return bad(404, 'Unknown endpoint.');
+      baseUrl = endpoint.baseUrl;
+      kind = endpoint.kind;
+      apiKey = getEndpointKey(endpointId) ?? undefined;
+    } else if (base) {
+      baseUrl = base; // pre-add discovery; no stored key for it yet
+    } else {
+      return bad(400, 'endpoint or base required.');
+    }
+    const provider =
+      kind === 'anthropic' && apiKey
+        ? createAnthropicProvider({ apiKey, baseUrl })
+        : createOpenAICompatibleProvider({ baseUrl, ...(apiKey ? { apiKey } : {}) });
+    try {
+      return ok({ models: await provider.listModels(), tier: classifyEndpoint(baseUrl).tier });
+    } catch {
+      return bad(502, 'Could not list models from that endpoint — is it running?');
+    }
+  }
+
+  if (method === 'POST' && route === '/api/converse/undo') {
+    const { ids } = parseJson<{ ids?: string[] }>(body);
+    if (!Array.isArray(ids) || ids.length === 0 || ids.length > 50) {
+      return bad(400, 'ids must be a non-empty array.');
+    }
+    if (!ids.every((id) => typeof id === 'string' && /^[0-9a-f-]{8,36}$/i.test(id))) {
+      return bad(400, 'Invalid memory id.');
+    }
+    return ok(
+      await session.withVault((vault) => {
+        const forgotten: string[] = [];
+        for (const id of ids) {
+          try {
+            forgotten.push(vault.forget(id).id);
+          } catch {
+            // already forgotten or unknown — undo is best-effort per id
+          }
+        }
+        if (forgotten.length > 0) vault.save();
+        return { forgotten };
+      }),
+    );
+  }
+
   if (method === 'POST' && route === '/api/import/upload') {
     return startImport(session, query, body);
   }
@@ -386,6 +496,26 @@ function publicEntry(entry: {
     source_model: entry.source_model,
     confidence: entry.confidence,
     created_at: entry.created_at,
+  };
+}
+
+/** Endpoint as sent to the GUI: config + derived privacy badge, never a key. */
+function withBadge(endpoint: {
+  id: string;
+  label: string;
+  baseUrl: string;
+  model: string;
+  kind: string;
+  hasKey: boolean;
+}): Record<string, unknown> {
+  return {
+    id: endpoint.id,
+    label: endpoint.label,
+    base_url: endpoint.baseUrl,
+    model: endpoint.model,
+    kind: endpoint.kind,
+    has_key: endpoint.hasKey,
+    tier: classifyEndpoint(endpoint.baseUrl).tier,
   };
 }
 

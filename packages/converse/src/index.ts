@@ -12,9 +12,15 @@ export {
   type OpenAICompatibleConfig,
 } from './openai.js';
 export {
+  createAnthropicProvider,
+  DEFAULT_ANTHROPIC_MODEL,
+  type AnthropicProviderConfig,
+} from './anthropic.js';
+export {
   createSession,
   runTurn,
   TurnError,
+  vaultAdapter,
   type ConverseSession,
   type ConverseVault,
   type TurnOptions,

@@ -37,6 +37,31 @@ every AI asked of your vault. A native desktop window (Tauri) wraps the same
 UI: `pnpm tauri dev`. Everything is served from 127.0.0.1 behind a
 per-session token; nothing leaves the machine.
 
+## Converse — talk to any model, privately
+
+The Converse tab (and `northkeep converse` in the terminal) is a chat
+surface where the privacy runs itself. On every message, Northkeep
+retrieves relevant memory, masks secrets *before* anything leaves the
+machine, calls the model you picked, restores names in the reply locally,
+distills what's worth remembering into the vault (visibly, with one-click
+undo), and writes a content-free audit row.
+
+Point it at **any** OpenAI-compatible endpoint — Ollama, LM Studio, vLLM,
+llama.cpp on a LAN box, or a hosted API like DeepSeek — or at Claude
+natively. An endpoint is just a base URL + model + optional key (keys go to
+your macOS Keychain, never to files):
+
+```bash
+pnpm northkeep providers add --label "Local" --base-url http://127.0.0.1:11434 --model llama3.2:3b
+pnpm northkeep converse
+```
+
+Every endpoint wears an honest badge derived from where it actually is:
+**private** (loopback or your LAN — nothing leaves your network) or
+**bounded** (a cloud host — Tier-1 masking always runs before send, and the
+audit log proves what was masked). There is no way to send unredacted text
+to a remote endpoint — not a setting, a code path that doesn't exist.
+
 ## Bring your memory with you
 
 Easiest: open the app (`northkeep ui`), go to Import, and **drop your whole

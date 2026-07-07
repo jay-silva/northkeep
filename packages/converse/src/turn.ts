@@ -19,12 +19,44 @@ import { classifyEndpoint } from './provider.js';
  * silently downgrading (invariant #6).
  */
 
-/** The slice of Vault that a turn needs — structural, so tests use fakes. */
+/**
+ * The slice of vault access that a turn needs — structural, so tests use
+ * fakes. Methods may be async: surfaces that open the encrypted vault under
+ * a file lock per operation (the GUI server, the CLI) implement each method
+ * as its own short lock window instead of holding the lock across a
+ * minutes-long model stream. `commit` persists a batch atomically.
+ */
 export interface ConverseVault {
-  retrieve(query: string, options?: RetrieveOptions): ScoredEntry[];
-  list(filter?: ListFilter): MemoryEntry[];
-  remember(input: RememberInput): MemoryEntry;
-  save(): void;
+  retrieve(query: string, options?: RetrieveOptions): ScoredEntry[] | Promise<ScoredEntry[]>;
+  list(filter?: ListFilter): MemoryEntry[] | Promise<MemoryEntry[]>;
+  /** Remember all inputs and persist, in one vault-lock window. */
+  commit(inputs: RememberInput[]): MemoryEntry[] | Promise<MemoryEntry[]>;
+}
+
+/**
+ * Adapt anything that exposes `withVault(fn)` over a real Vault (the GUI
+ * session, the CLI helper) into a ConverseVault with short lock windows.
+ */
+export function vaultAdapter(
+  withVault: <T>(
+    fn: (vault: {
+      retrieve(query: string, options?: RetrieveOptions): ScoredEntry[];
+      list(filter?: ListFilter): MemoryEntry[];
+      remember(input: RememberInput): MemoryEntry;
+      save(): void;
+    }) => T,
+  ) => Promise<T>,
+): ConverseVault {
+  return {
+    retrieve: (query, options) => withVault((v) => v.retrieve(query, options)),
+    list: (filter) => withVault((v) => v.list(filter)),
+    commit: (inputs) =>
+      withVault((v) => {
+        const created = inputs.map((input) => v.remember(input));
+        if (created.length > 0) v.save();
+        return created;
+      }),
+  };
 }
 
 /**
@@ -118,7 +150,7 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
     privacy === 'bounded' && options.redactTier === 0 ? 1 : options.redactTier;
 
   // 1. Retrieve (scope-enforced in the store, M4).
-  const scored = vault.retrieve(message, {
+  const scored = await vault.retrieve(message, {
     allowedScopes,
     limit: options.memoryLimit ?? DEFAULT_MEMORY_LIMIT,
   });
@@ -301,23 +333,22 @@ async function distillExchange(args: {
     ],
   };
   const extraction = await extractFromConversation(conversation, args.ollama);
-  const existing = args.vault.list({ allowedScopes: args.allowedScopes });
+  const existing = await args.vault.list({ allowedScopes: args.allowedScopes });
   const { unique } = dedupeCandidates(extraction.candidates, existing);
-  const created: MemoryEntry[] = [];
-  for (const candidate of unique) {
-    created.push(
-      args.vault.remember({
-        content: candidate.content,
-        type: candidate.type,
-        scope: args.memoryScope,
-        source: 'converse',
-        sourceModel: extraction.model === 'heuristic' ? null : extraction.model,
-        confidence: candidate.confidence,
-        metadata: { conversation_id: conversation.id },
-      }),
-    );
-  }
-  if (created.length > 0) args.vault.save();
+  const created =
+    unique.length === 0
+      ? []
+      : await args.vault.commit(
+          unique.map((candidate) => ({
+            content: candidate.content,
+            type: candidate.type,
+            scope: args.memoryScope,
+            source: 'converse',
+            sourceModel: extraction.model === 'heuristic' ? null : extraction.model,
+            confidence: candidate.confidence,
+            metadata: { conversation_id: conversation.id },
+          })),
+        );
   return { created, mode: extraction.mode };
 }
 
