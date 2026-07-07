@@ -60,19 +60,23 @@ export function vaultAdapter(
 }
 
 /**
- * Per-conversation state. Wire history is kept in wire space (pseudonyms and
- * masks intact) so the model sees a self-consistent conversation and past
- * turns never need re-redacting; pseudonyms/replacements accumulate so
- * "Bob Henderson" is Person-1 on every turn and restores on every reply.
+ * Per-conversation state. History is kept as PLAINTEXT (real names, with
+ * Tier-1 secrets already one-way-masked in the assistant's restored replies),
+ * and the ENTIRE prompt — system + history + new message — is re-redacted at
+ * the effective tier on every turn before it is sent. This is the security
+ * invariant that makes mid-session endpoint swapping safe: if an earlier turn
+ * ran on a private endpoint with redaction off, its plaintext is re-masked
+ * the moment the conversation moves to a bounded endpoint. Never store
+ * already-redacted "wire" text and replay it — a weaker tier would leak.
+ * `pseudonyms` persists so "Bob Henderson" is the same Person-N every turn.
  */
 export interface ConverseSession {
   pseudonyms: PseudonymMap;
-  replacements: Replacement[];
-  wireHistory: ChatMessage[];
+  plainHistory: ChatMessage[];
 }
 
 export function createSession(): ConverseSession {
-  return { pseudonyms: {}, replacements: [], wireHistory: [] };
+  return { pseudonyms: {}, plainHistory: [] };
 }
 
 export class TurnError extends Error {
@@ -185,21 +189,34 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
     .join('\n\n');
 
   // 4. Redact outbound. STRICTLY before the provider call; no path skips it
-  //    for a bounded endpoint.
-  let wireSystem = systemText;
-  let wireUser = message;
+  //    for a bounded endpoint. The WHOLE prompt is redacted every turn —
+  //    system + full history + new message — so nothing that was captured at
+  //    a weaker tier (e.g. plaintext from an earlier private-endpoint turn)
+  //    can ride along unredacted when the conversation moves to a bounded
+  //    endpoint. `replacements` is rebuilt per turn and therefore covers every
+  //    pseudonym present in this prompt, so the reply restores completely.
+  const plainPrompt: ChatMessage[] = [
+    { role: 'system', content: systemText },
+    ...session.plainHistory,
+    { role: 'user', content: message },
+  ];
+  let wirePrompt = plainPrompt;
+  const replacements: Replacement[] = [];
   let tierApplied: 0 | 1 | 2 = 0;
   let tier2Degraded = false;
-  if (effectiveTier === 1 || effectiveTier === 2) {
-    const rSystem = await redactFn(systemText, {
-      tier: effectiveTier,
-      pseudonyms: session.pseudonyms,
-    });
-    const rUser = await redactFn(message, {
-      tier: effectiveTier,
-      pseudonyms: session.pseudonyms,
-    });
-    tier2Degraded = rSystem.tier2Degraded || rUser.tier2Degraded;
+  // Fail closed: redact for anything that isn't an explicit tier-0 (the only
+  // value allowed to skip, and only ever set for a private endpoint above).
+  if (effectiveTier !== 0) {
+    const redacted: ChatMessage[] = [];
+    for (const msg of plainPrompt) {
+      const r = await redactFn(msg.content, {
+        tier: effectiveTier,
+        pseudonyms: session.pseudonyms,
+      });
+      if (r.tier2Degraded) tier2Degraded = true;
+      redacted.push({ role: msg.role, content: r.redacted });
+      replacements.push(...r.replacements);
+    }
     if (effectiveTier === 2 && tier2Degraded && privacy === 'bounded') {
       // Loud, not silent (invariant #6): the user asked for pseudonymization
       // toward a remote endpoint and it is not available — do not send.
@@ -221,18 +238,12 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
         'Tier-2 pseudonymization is unavailable (is Ollama running?) and this endpoint is not private. Nothing was sent. Start the local model, or explicitly switch this endpoint to Tier 1.',
       );
     }
-    wireSystem = rSystem.redacted;
-    wireUser = rUser.redacted;
-    session.replacements.push(...rSystem.replacements, ...rUser.replacements);
+    wirePrompt = redacted;
     tierApplied = effectiveTier === 2 && tier2Degraded ? 1 : effectiveTier;
   }
 
   // 5. Call the provider — direct client→endpoint, nothing proxies.
-  const wireMessages: ChatMessage[] = [
-    { role: 'system', content: wireSystem },
-    ...session.wireHistory,
-    { role: 'user', content: wireUser },
-  ];
+  const wireMessages: ChatMessage[] = wirePrompt;
   let wireReply: string;
   try {
     wireReply = await provider.chat(wireMessages, { model, onToken, signal });
@@ -255,13 +266,19 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
     );
   }
 
-  // 6. Restore pseudonyms locally (Tier-1 masks are one-way and stay).
-  const reply = restoreFn(wireReply, session.replacements);
+  // 6. Restore pseudonyms locally (Tier-1 masks are one-way and stay). This
+  //    turn's `replacements` covers every pseudonym in the prompt — including
+  //    ones re-introduced from history — so a name the model echoes from an
+  //    earlier turn still round-trips.
+  const reply = restoreFn(wireReply, replacements);
 
-  // Wire history stays in wire space so the next turn is self-consistent.
-  session.wireHistory.push(
-    { role: 'user', content: wireUser },
-    { role: 'assistant', content: wireReply },
+  // History is stored as PLAINTEXT (see ConverseSession): the user's real
+  // message and the restored reply. It is re-redacted at send time every
+  // turn, so it is always masked to the CURRENT endpoint's tier — never
+  // replayed at a stale, weaker tier.
+  session.plainHistory.push(
+    { role: 'user', content: message },
+    { role: 'assistant', content: reply },
   );
 
   // 8. Distill this exchange into memory — on the RESTORED plaintext, which

@@ -221,10 +221,53 @@ describe('runTurn', () => {
 
     expect(JSON.stringify(provider.received[0])).not.toContain('Bob Henderson');
     expect(result.reply).toBe('Tell Bob Henderson the closing moved.');
-    // wire history holds what the model actually saw/said, not plaintext
-    const history = JSON.stringify(session.wireHistory);
-    expect(history).toContain('Person-1');
-    expect(history).not.toContain('Bob Henderson');
+    // History is stored as PLAINTEXT (real names) so it can be re-redacted at
+    // whatever tier the NEXT turn's endpoint requires — never replayed in a
+    // stale weaker form. What went over the wire was pseudonymized.
+    const history = JSON.stringify(session.plainHistory);
+    expect(history).toContain('Bob Henderson');
+    expect(history).not.toContain('Person-1');
+  });
+
+  it('re-redacts prior plaintext history when the endpoint switches private→bounded', async () => {
+    // Regression for the M6 adversarial-review CRITICAL: a session started on a
+    // private endpoint with redaction OFF must not leak its stored plaintext
+    // when the conversation later moves to a bounded (cloud) endpoint.
+    const session = createSession();
+    const vault = new FakeVault([]);
+
+    // Turn 1 — private endpoint, tier 0: plaintext SSN is sent (fine, it's
+    // loopback) and stored in history in the clear.
+    const localProvider = new FakeProvider('http://127.0.0.1:9999', 'noted');
+    await runTurn({
+      message: 'My SSN is 219-09-9999, keep it handy.',
+      session,
+      provider: localProvider,
+      model: 'local',
+      vault,
+      redactTier: 0,
+      distill: false,
+      auditFn: () => {},
+    });
+    expect(JSON.stringify(localProvider.received[0])).toContain('219-09-9999'); // private: OK
+    expect(JSON.stringify(session.plainHistory)).toContain('219-09-9999');
+
+    // Turn 2 — swap to a bounded endpoint. The stored plaintext SSN MUST be
+    // masked before it goes out.
+    const cloudProvider = new FakeProvider('https://api.example.com', 'ok');
+    await runTurn({
+      message: 'Anything else?',
+      session,
+      provider: cloudProvider,
+      model: 'cloud',
+      vault,
+      redactTier: 1,
+      distill: false,
+      auditFn: () => {},
+    });
+    const outbound = JSON.stringify(cloudProvider.received[0]);
+    expect(outbound, 'history plaintext leaked to bounded endpoint').not.toContain('219-09-9999');
+    expect(outbound).toContain('[SSN_1]'); // the history was re-redacted
   });
 
   it('refuses to send when Tier-2 degrades toward a bounded endpoint', async () => {

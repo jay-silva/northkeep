@@ -89,8 +89,11 @@ trust problem the product guide warns about. Distillation runs on the
 used solely by the optional native `AnthropicProvider` (streaming + adaptive
 thinking; default model `claude-opus-4-8`). Jay pre-approved it in planning.
 The universal OpenAI-compatible provider is raw `fetch` — no dependency —
-and all local paths add nothing. All provider fetches set `redirect:'error'`
-so a hostile redirect cannot re-send the prompt or the key elsewhere.
+and all local paths add nothing. The universal provider's raw fetches all set
+`redirect:'error'` so a hostile redirect cannot re-send the prompt or the key
+elsewhere; the native Anthropic path delegates transport to the SDK (default
+host `api.anthropic.com`, classified bounded, so redaction runs regardless) —
+see the adversarial-review notes below.
 
 ## Honest limits (KNOWN-LIMITS.md)
 
@@ -102,9 +105,55 @@ masks are one-way by design (the model sees `[SSN_1]`, and so does the
 transcript). Conversation logs are session-memory only — the vault stores
 distilled memories, not chat transcripts.
 
-## Adversarial review
+## Adversarial review (2026-07-07)
 
-Pending — recorded here when completed (see M6 build order §7). Scope:
-unredacted-egress paths, key leakage (config/logs/audit/errors/API
-responses), classifier misclassification, loopback-guard integrity,
-content-free audit, error-path leaks.
+The most rigorous review in the project (network egress + API keys). The
+classifier was executed against 28 adversarial hosts; the turn pipeline,
+session handling, key storage, and every API route were traced.
+
+**One CRITICAL finding, fixed before tag — unredacted egress of prior-turn
+plaintext on a mid-session endpoint switch.** The original design stored
+conversation history in "wire space" (already redacted at the tier that
+applied when each turn ran) and replayed it verbatim. A session started on a
+*private* endpoint with redaction off stored plaintext; switching to a
+*bounded* endpoint mid-conversation (an ordinary picker action) then
+prepended that plaintext and sent it to the cloud provider **unredacted** —
+a direct breach of invariant #1. **Fix:** the session now stores history as
+plaintext and `runTurn` re-redacts the ENTIRE prompt (system + full history +
+new message) at the *effective* tier on every send. History can therefore
+never be replayed at a stale, weaker tier; mid-session swapping stays a
+supported feature and is now safe. Regressed by a unit test (private→bounded
+switch masks the stored secret) and re-verified in the live self-test with a
+real endpoint swap. The redaction guard was also made fail-closed
+(`effectiveTier !== 0`, not an `=== 1 || === 2` allowlist).
+
+**Positive assurance (audited clean):**
+- **No key-leak path.** No key field exists in `providers.json` (only
+  `hasKey`); `withBadge` omits keys from every `/api/providers` response;
+  `/api/models` returns model ids only; keys never appear in audit rows,
+  logs, or error messages (provider errors carry HTTP status only). The
+  `security -i` stdin path is injection-safe (id is `[a-z0-9-]`, keys reject
+  CR/LF and are shell-quoted). `addEndpoint` stores the key before persisting
+  config, so `hasKey` never lies.
+- **No classifier misclassification of a public host as private.** Integer/
+  hex/octal IPv4, `@`-userinfo, `127.0.0.1.evil.com`, `localhost.evil.com`,
+  IPv4-mapped-public IPv6, NAT64, trailing-dot FQDNs, punycode — all classify
+  bounded; every parse ambiguity fails closed to bounded.
+- **Tier-2-degraded-toward-bounded aborts before send** (the `throw` precedes
+  `provider.chat`; a denied audit row is written, nothing sent).
+- **Ollama loopback guard intact**; distillation stays local; audit is
+  content-free; `/api/converse` is behind the same token + Host-header gate
+  as every route; all raw-fetch provider calls set `redirect:'error'`.
+
+**Accepted, documented, not fixed:**
+- The native Anthropic path delegates HTTP to `@anthropic-ai/sdk`, which
+  applies its own redirect policy — so the blanket "all provider fetches set
+  `redirect:'error'`" claim (§5) holds for the universal provider but not the
+  SDK path. Real-world risk is low (default host `api.anthropic.com`,
+  classified bounded so redaction runs regardless); noted here for accuracy.
+- `/api/models?base=` fetches an arbitrary URL, but it is token- and
+  Host-gated and attaches no key on that path — no exfil beyond what a token
+  holder already has.
+- Link-local `169.254/16` (incl. the cloud metadata IP) classifies private
+  per the stated contract; harmless on a local-first desktop install, flagged
+  for any future hosted deployment.
