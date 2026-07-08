@@ -1,0 +1,19 @@
+{
+  "name": "@northkeep/sync-server",
+  "version": "0.8.0",
+  "description": "Northkeep sync server: stores client-side-encrypted vault blobs + version numbers only (ciphertext-only, invariant #2)",
+  "license": "AGPL-3.0-only",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.0"
+  }
+}

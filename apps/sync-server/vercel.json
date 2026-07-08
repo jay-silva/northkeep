@@ -1,0 +1,11 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "buildCommand": "pnpm --filter @northkeep/sync-server build",
+  "installCommand": "pnpm install --frozen-lockfile",
+  "functions": {
+    "api/[...path].ts": {
+      "runtime": "@vercel/node@5.0.0",
+      "maxDuration": 30
+    }
+  }
+}
