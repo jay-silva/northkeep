@@ -56,6 +56,9 @@ importers:
       '@northkeep/redact':
         specifier: workspace:*
         version: link:../../packages/redact
+      '@northkeep/sync':
+        specifier: workspace:*
+        version: link:../../packages/sync
 
   packages/cli:
     dependencies:
@@ -77,6 +80,9 @@ importers:
       '@northkeep/redact':
         specifier: workspace:*
         version: link:../redact
+      '@northkeep/sync':
+        specifier: workspace:*
+        version: link:../sync
       '@northkeep/web':
         specifier: workspace:*
         version: link:../../apps/web

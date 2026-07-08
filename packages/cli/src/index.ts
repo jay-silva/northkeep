@@ -38,6 +38,7 @@ import {
 import { getPassphrase } from './prompt.js';
 import { PASTE_PROMPT, prepareImport, writeApproved, type ImportCmdOptions } from './importCmd.js';
 import { runConverse, type ConverseCmdOptions } from './converseCmd.js';
+import { syncConfig, syncId, syncPull, syncPush, syncStatusCmd } from './syncCmd.js';
 
 const program = new Command();
 
@@ -429,6 +430,46 @@ program
   .option('--scope <scope>', 'scope for memories distilled from this conversation', 'personal')
   .action(async (options: ConverseCmdOptions) => {
     await runConverse(options, withVault);
+  });
+
+const sync = program
+  .command('sync')
+  .description('Sync your encrypted vault across machines (the server only ever sees ciphertext)');
+
+sync
+  .command('config')
+  .description('Point at a sync server (https, or loopback for testing)')
+  .requiredOption('--server <url>', 'sync server base URL, e.g. https://your-sync.vercel.app')
+  .action(async (options: { server: string }) => {
+    await syncConfig(options.server, fail);
+  });
+
+sync
+  .command('push')
+  .description('Upload your vault to the sync server (encrypted; conflict-safe)')
+  .action(async () => {
+    await syncPush(vaultPathOpt(), fail);
+  });
+
+sync
+  .command('pull')
+  .description('Download the vault from the sync server (verified before it replaces your local copy)')
+  .action(async () => {
+    await syncPull(vaultPathOpt(), fail);
+  });
+
+sync
+  .command('status', { isDefault: true })
+  .description('Show whether your vault is in sync, ahead, or behind')
+  .action(async () => {
+    await syncStatusCmd(vaultPathOpt(), fail);
+  });
+
+sync
+  .command('id')
+  .description('Show your sync id (a second machine needs the same device.secret)')
+  .action(() => {
+    syncId(fail);
   });
 
 program

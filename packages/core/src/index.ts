@@ -14,6 +14,6 @@ export {
   type VaultHeader,
   type VaultOptions,
 } from './vault.js';
-export { deriveMasterKey } from './crypto.js';
+export { deriveMasterKey, memzero } from './crypto.js';
 export { withFileLock } from './lock.js';
 export * from './platform.js';

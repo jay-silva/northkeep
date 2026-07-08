@@ -123,6 +123,7 @@
   <button data-view="import">Import</button>
   <button data-view="redact">Redact</button>
   <button data-view="activity">Activity</button>
+  <button data-view="sync">Sync</button>
 </nav>
 <main>
   <div id="degradedBanner" class="banner" hidden>
@@ -252,6 +253,32 @@
     </div>
     <div id="logList"></div>
   </section>
+  <section id="view-sync" hidden>
+    <p class="muted">Sync your encrypted vault across machines. The server only ever stores
+      ciphertext — it can't read your memories.</p>
+    <h3 class="sect">Sync server</h3>
+    <div class="card">
+      <div class="row" style="margin-bottom:8px">
+        <input type="text" id="syncUrl" placeholder="https://your-sync.vercel.app">
+        <button class="btn primary" id="syncSaveBtn">Save server</button>
+      </div>
+      <div class="err" id="syncConfigErr"></div>
+      <p class="muted" id="syncAccountId" hidden style="margin:0;font-size:13px"></p>
+    </div>
+    <h3 class="sect">Status</h3>
+    <div class="card">
+      <p class="muted" id="syncServerLine" hidden style="margin:0 0 6px;font-size:13px"></p>
+      <p id="syncStatusLine" style="margin:0 0 10px">Loading…</p>
+      <div class="row">
+        <button class="btn" id="syncPushBtn">Push</button>
+        <button class="btn" id="syncPullBtn">Pull</button>
+      </div>
+      <p class="muted" id="syncResult" hidden style="margin:10px 0 0;font-size:13px"></p>
+    </div>
+    <p class="muted" style="font-size:13px">A second machine needs the same
+      <code>device.secret</code> file and your passphrase. Copy <code>~/.northkeep/device.secret</code>
+      over, set the same sync server, then Pull.</p>
+  </section>
 </main>
 <div class="overlay" id="unlockOverlay" hidden>
   <div class="dialog">
@@ -291,13 +318,14 @@
   }
 
   // --- views
-  const views = ['converse', 'memories', 'import', 'redact', 'activity'];
+  const views = ['converse', 'memories', 'import', 'redact', 'activity', 'sync'];
   document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => {
     document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
     views.forEach((v) => { $('view-' + v).hidden = v !== b.dataset.view; });
     if (b.dataset.view === 'activity') loadLog();
     if (b.dataset.view === 'memories') loadMemories();
     if (b.dataset.view === 'converse') openConverse();
+    if (b.dataset.view === 'sync') loadSyncStatus();
   }));
 
   // --- redact
@@ -922,6 +950,108 @@
       $('convInput').focus();
     }
   }
+
+  // --- sync
+  // Everything server-supplied here (URLs, account id, error text) is rendered with
+  // textContent only — the sync server is untrusted.
+  function syncBusy(on) {
+    $('syncPushBtn').disabled = on;
+    $('syncPullBtn').disabled = on;
+    $('syncSaveBtn').disabled = on;
+  }
+  function syncSentence(s) {
+    switch (s.state) {
+      case 'in-sync': return '✓ In sync (version ' + s.localVersion + ').';
+      case 'behind': return '↓ The server has newer changes — Pull to update.';
+      case 'ahead': return '↑ You have local changes — Push to upload.';
+      case 'no-remote': return 'Nothing uploaded yet — Push to start.';
+      case 'no-local': return 'No local vault; Pull to download version ' + s.remoteVersion + '.';
+      case 'no-config': return 'Set a sync server above to start.';
+      default: return 'Sync status: ' + s.state;
+    }
+  }
+  async function loadSyncStatus() {
+    const line = $('syncStatusLine'), serverLine = $('syncServerLine');
+    try {
+      const s = await api('/api/sync/status');
+      if (!s.configured) {
+        serverLine.hidden = true;
+        line.textContent = 'No sync server set yet — enter one above to start.';
+        $('syncPushBtn').disabled = true;
+        $('syncPullBtn').disabled = true;
+        return;
+      }
+      if (s.server_url && !$('syncUrl').value) $('syncUrl').value = s.server_url;
+      serverLine.hidden = !s.server_url;
+      serverLine.textContent = s.server_url ? 'Server: ' + s.server_url : '';
+      line.textContent = syncSentence(s);
+      $('syncPushBtn').disabled = false;
+      $('syncPullBtn').disabled = false;
+    } catch (e) {
+      if (e.message !== 'locked') line.textContent = e.message;
+    }
+  }
+  $('syncSaveBtn').addEventListener('click', async () => {
+    const url = $('syncUrl').value.trim();
+    $('syncConfigErr').textContent = '';
+    if (!url) { $('syncConfigErr').textContent = 'Enter a sync server URL.'; return; }
+    $('syncSaveBtn').disabled = true;
+    try {
+      const r = await api('/api/sync/config', { method: 'POST', json: { server_url: url } });
+      if (r.server_url) $('syncUrl').value = r.server_url;
+      const acc = $('syncAccountId');
+      acc.hidden = false;
+      acc.textContent = 'Your sync id: ';
+      const code = el('span', 'tag', r.account_id);
+      acc.append(code);
+      await loadSyncStatus();
+    } catch (e) {
+      if (e.message !== 'locked') $('syncConfigErr').textContent = e.message;
+    } finally { $('syncSaveBtn').disabled = false; }
+  });
+  $('syncPushBtn').addEventListener('click', async () => {
+    const out = $('syncResult');
+    out.hidden = false; out.textContent = 'Pushing…';
+    syncBusy(true);
+    try {
+      const r = await api('/api/sync/push', { method: 'POST' });
+      if (!r.ok && r.conflict) {
+        out.textContent = 'The vault changed on another device — Pull first, then Push.';
+      } else if (r.ok) {
+        out.textContent = 'Pushed — server now at version ' + r.version + '.';
+      } else {
+        out.textContent = 'Push did not complete.';
+      }
+    } catch (e) {
+      out.textContent = e.message === 'locked'
+        ? 'Your vault is locked — unlock it, then Push again.' : e.message;
+    } finally {
+      syncBusy(false);
+      await loadSyncStatus();
+    }
+  });
+  $('syncPullBtn').addEventListener('click', async () => {
+    const out = $('syncResult');
+    out.hidden = false; out.textContent = 'Pulling…';
+    syncBusy(true);
+    try {
+      const r = await api('/api/sync/pull', { method: 'POST' });
+      if (r.ok) {
+        out.textContent = r.wroteVault
+          ? 'Pulled — local vault replaced with version ' + r.version + '.'
+          : 'Already up to date (version ' + r.version + ').';
+      } else {
+        out.textContent = 'Pull did not complete.';
+      }
+    } catch (e) {
+      // api() already called showUnlock() on a 423.
+      out.textContent = e.message === 'locked'
+        ? 'Your vault is locked — unlock it above, then Pull again.' : e.message;
+    } finally {
+      syncBusy(false);
+      await loadSyncStatus();
+    }
+  });
 
   refreshStatus().catch(() => { $('countPill').textContent = 'no connection'; });
 })();

@@ -37,15 +37,15 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       body,
     };
     const result = await handleSync(request, storage);
-    res.writeHead(result.status, { 'cache-control': 'no-store', ...(result.headers ?? {}) });
-    if (result.body instanceof Buffer) {
-      res.end(result.body);
-    } else if (result.body !== undefined) {
-      res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify(result.body));
-    } else {
-      res.end();
-    }
+    const isBuffer = result.body instanceof Buffer;
+    res.writeHead(result.status, {
+      'cache-control': 'no-store',
+      ...(result.headers ?? {}),
+      ...(!isBuffer && result.body !== undefined ? { 'content-type': 'application/json' } : {}),
+    });
+    if (isBuffer) res.end(result.body as Buffer);
+    else if (result.body !== undefined) res.end(JSON.stringify(result.body));
+    else res.end();
   } catch {
     res.writeHead(500, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ error: 'internal error' }));

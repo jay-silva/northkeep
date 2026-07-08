@@ -36,16 +36,16 @@ export function createSyncServer(storage: Storage): http.Server {
       body,
     };
     const result = await handleSync(request, storage);
-    const headers = { 'cache-control': 'no-store', ...(result.headers ?? {}) };
+    const isBuffer = result.body instanceof Buffer;
+    const headers: Record<string, string> = {
+      'cache-control': 'no-store',
+      ...(result.headers ?? {}),
+      ...(!isBuffer && result.body !== undefined ? { 'content-type': 'application/json' } : {}),
+    };
     res.writeHead(result.status, headers);
-    if (result.body instanceof Buffer) {
-      res.end(result.body);
-    } else if (result.body !== undefined) {
-      res.setHeader('content-type', 'application/json');
-      res.end(JSON.stringify(result.body));
-    } else {
-      res.end();
-    }
+    if (isBuffer) res.end(result.body as Buffer);
+    else if (result.body !== undefined) res.end(JSON.stringify(result.body));
+    else res.end();
   }
 }
 

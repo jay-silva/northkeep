@@ -18,6 +18,7 @@
     "@northkeep/librarian": "workspace:*",
     "@northkeep/mcp-server": "workspace:*",
     "@northkeep/redact": "workspace:*",
-    "@northkeep/converse": "workspace:*"
+    "@northkeep/converse": "workspace:*",
+    "@northkeep/sync": "workspace:*"
   }
 }

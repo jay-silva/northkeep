@@ -22,6 +22,7 @@
     "@northkeep/redact": "workspace:*",
     "@northkeep/web": "workspace:*",
     "commander": "^14.0.0",
-    "@northkeep/converse": "workspace:*"
+    "@northkeep/converse": "workspace:*",
+    "@northkeep/sync": "workspace:*"
   }
 }

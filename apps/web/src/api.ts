@@ -1,7 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { VaultAuthError, isMemoryType, northkeepHome, type MemoryType } from '@northkeep/core';
+import {
+  VaultAuthError,
+  isMemoryType,
+  loadDeviceSecret,
+  memzero,
+  northkeepHome,
+  type MemoryType,
+} from '@northkeep/core';
+import {
+  deriveSyncCreds,
+  loadSyncConfig,
+  pullVault,
+  pushVault,
+  setSyncServer,
+  syncState,
+} from '@northkeep/sync';
 import {
   parseChatgptExport,
   parseClaudeExport,
@@ -89,6 +104,7 @@ export async function handleApi(
   } catch (err) {
     if (err instanceof LockedError) return bad(423, 'Vault is locked.');
     if (err instanceof VaultAuthError) return bad(401, err.message);
+    if (err instanceof DeviceSecretError || err instanceof SyncRequestError) return bad(400, err.message);
     return bad(500, err instanceof Error ? err.message : String(err));
   }
 }
@@ -220,6 +236,54 @@ async function dispatch(
       return vault.export();
     });
     return ok(doc);
+  }
+
+  // --- Sync (M5). Outbound runs here in Node (the page CSP is connect-src
+  // 'self'). The sync token is derived from the device secret on demand and
+  // NEVER returned; the server only ever receives ciphertext. ---
+
+  if (method === 'GET' && route === '/api/sync/status') {
+    const deviceSecret = deviceSecretOrError();
+    const config = loadSyncConfig();
+    if (!config) return ok({ configured: false });
+    const s = await syncState({ vaultPath: session.vaultPath, deviceSecret });
+    return ok({ configured: true, server_url: config.serverUrl, ...s });
+  }
+
+  if (method === 'POST' && route === '/api/sync/config') {
+    const { server_url } = parseJson<{ server_url?: string }>(body);
+    if (!server_url?.trim()) return bad(400, 'server_url is required.');
+    const deviceSecret = deviceSecretOrError();
+    const { accountId } = deriveSyncCreds(deviceSecret);
+    let config;
+    try {
+      config = setSyncServer(server_url, accountId); // throws on non-https/non-loopback
+    } catch (err) {
+      throw new SyncRequestError(err instanceof Error ? err.message : 'Invalid sync server URL.');
+    }
+    return ok({ server_url: config.serverUrl, account_id: accountId });
+  }
+
+  if (method === 'POST' && route === '/api/sync/push') {
+    const deviceSecret = deviceSecretOrError();
+    if (!loadSyncConfig()) return bad(400, 'Sync is not configured.');
+    const result = await pushVault({ vaultPath: session.vaultPath, deviceSecret });
+    return ok(result);
+  }
+
+  if (method === 'POST' && route === '/api/sync/pull') {
+    const deviceSecret = deviceSecretOrError();
+    if (!loadSyncConfig()) return bad(400, 'Sync is not configured.');
+    // A local vault always exists here → the pulled blob must open with the
+    // held key before it can replace it, so the session must be unlocked.
+    if (!session.isUnlocked()) return bad(423, 'Unlock the vault before pulling (needed to verify the download).');
+    const masterKey = Buffer.from(session.keyHex(), 'hex');
+    try {
+      const result = await pullVault({ vaultPath: session.vaultPath, deviceSecret, masterKey });
+      return ok(result);
+    } finally {
+      memzero(masterKey);
+    }
   }
 
   // --- Converse endpoint management (M6). API keys go straight to the
@@ -517,6 +581,16 @@ function withBadge(endpoint: {
     has_key: endpoint.hasKey,
     tier: classifyEndpoint(endpoint.baseUrl).tier,
   };
+}
+
+class DeviceSecretError extends Error {}
+class SyncRequestError extends Error {}
+function deviceSecretOrError(): Buffer {
+  try {
+    return loadDeviceSecret();
+  } catch {
+    throw new DeviceSecretError('No device secret found. Run "northkeep init" first.');
+  }
 }
 
 function parseJson<T>(body: Buffer): T {

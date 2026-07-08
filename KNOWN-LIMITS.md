@@ -3,6 +3,28 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
+## M5 (vault sync) — current
+
+- **The sync server can't read your memories, but it does hold your
+  ciphertext.** Sync pushes the vault as its own encrypted blob; the server
+  stores opaque bytes + a version number and never gets a key. That data does
+  live on managed infrastructure (Neon Postgres) — encrypted, but hosted. Want
+  full custody? The server is self-hostable.
+- **A second machine needs your `device.secret` file, copied over by hand.**
+  It's the account root — sync derives your identity from it. Northkeep never
+  transports it for you (that would defeat the two-secret model), and losing it
+  still loses the vault. Guard it like a recovery key.
+- **Conflicts are whole-vault, last-writer-wins.** If two machines edit before
+  syncing, pulling replaces your local vault with the server's version — your
+  prior local state is kept as `vault.nkv.bak`, not merged entry-by-entry.
+  Per-entry merge is future work; for now, pull before you edit on a second
+  machine.
+- **No paywall yet.** Billing (the $10/mo gate) is a later milestone. Until
+  then the sync service is open — protected only by your device-secret-derived
+  token, a ~4 MB vault size cap, and the host's rate limiting.
+- **HTTPS only.** The client refuses a non-https sync server (except loopback
+  for testing) so your token and blob never cross the network unprotected.
+
 ## M6 (Converse, the mediated client) — current
 
 - **"Bounded" is bounded, not invisible.** Point Converse at a cloud

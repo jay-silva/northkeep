@@ -37,6 +37,36 @@ every AI asked of your vault. A native desktop window (Tauri) wraps the same
 UI: `pnpm tauri dev`. Everything is served from 127.0.0.1 behind a
 per-session token; nothing leaves the machine.
 
+## Sync it to another machine
+
+Your vault is one encrypted file, so syncing is just moving that encrypted
+file — the server only ever sees ciphertext, never a key. Point at a sync
+server and push:
+
+```bash
+pnpm northkeep sync config --server https://your-sync.example.com
+pnpm northkeep sync push
+pnpm northkeep sync status
+```
+
+On a **second machine**, copy your `~/.northkeep/device.secret` over (it's the
+account root — Northkeep won't move it for you, by design), then pull:
+
+```bash
+# after copying device.secret to ~/.northkeep/ on the new machine:
+pnpm northkeep sync config --server https://your-sync.example.com
+pnpm northkeep sync pull        # the vault appears; open it with your passphrase
+pnpm northkeep list
+```
+
+The server stores an opaque `NKV1` ciphertext blob + a version number and
+nothing else — try to read it and you'll get encrypted bytes. Conflicts are
+version-guarded: if the vault changed elsewhere, push tells you to pull first
+(your prior local copy is kept as `vault.nkv.bak`). It's self-hostable
+(`apps/sync-server`), or deploy it to Vercel + Neon. There's a Sync tab in the
+app too. Limits (open service until billing, whole-vault last-writer-wins,
+device-secret transport) are in `KNOWN-LIMITS.md`.
+
 ## Converse — talk to any model, privately
 
 The Converse tab (and `northkeep converse` in the terminal) is a chat
