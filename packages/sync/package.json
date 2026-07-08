@@ -1,0 +1,19 @@
+{
+  "name": "@northkeep/sync",
+  "version": "0.8.0",
+  "description": "Client-side encrypted vault sync: push/pull the .nkv blob to a ciphertext-only server",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@northkeep/core": "workspace:*",
+    "sodium-native": "^5.0.6"
+  }
+}

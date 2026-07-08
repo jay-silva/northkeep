@@ -144,6 +144,15 @@ importers:
         specifier: workspace:*
         version: link:../librarian
 
+  packages/sync:
+    dependencies:
+      '@northkeep/core':
+        specifier: workspace:*
+        version: link:../core
+      sodium-native:
+        specifier: ^5.0.6
+        version: 5.1.0(bare-events@2.9.1)
+
 packages:
 
   '@anthropic-ai/sdk@0.110.0':
