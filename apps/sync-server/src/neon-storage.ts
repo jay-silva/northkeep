@@ -30,16 +30,24 @@ interface Row {
 
 export class NeonStorage implements Storage {
   private sql: NeonQueryFunction<false, false>;
+  private schemaReady: Promise<void> | null = null;
 
   constructor(databaseUrl: string) {
     this.sql = neon(databaseUrl);
   }
 
+  /**
+   * Create the table if absent, once per instance. Lets a fresh deployment
+   * self-provision on the first request — no manual migration step, and the
+   * connection string never has to leave the deploy environment.
+   */
   async ensureSchema(): Promise<void> {
-    await this.sql(SCHEMA_SQL);
+    this.schemaReady ??= this.sql(SCHEMA_SQL).then(() => undefined);
+    await this.schemaReady;
   }
 
   async get(tokenHash: string): Promise<StoredBlob | null> {
+    await this.ensureSchema();
     const rows = (await this.sql`
       SELECT blob_b64, version, ciphertext_sha256, size_bytes, updated_at
       FROM sync_blobs WHERE token_hash = ${tokenHash}
@@ -56,6 +64,7 @@ export class NeonStorage implements Storage {
   }
 
   async put(tokenHash: string, blob: Buffer, sha256: string, baseVersion: number): Promise<PutResult> {
+    await this.ensureSchema();
     const b64 = blob.toString('base64');
     if (baseVersion === 0) {
       const inserted = (await this.sql`
