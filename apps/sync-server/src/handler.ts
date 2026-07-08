@@ -1,4 +1,4 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { Storage } from './storage.js';
 
 /**
@@ -36,6 +36,17 @@ export interface SyncResponse {
   headers?: Record<string, string>;
 }
 
+export interface SyncOptions {
+  /**
+   * Optional access allowlist of `sha256(token)` hashes. When set, only these
+   * accounts may use the server — the way to run a PRIVATE sync server until
+   * billing (M5b) gates access. Unset = open service (abuse protection is then
+   * the size cap + the platform's rate limiting; see ADR 0009 / KNOWN-LIMITS).
+   * Get your hash from `northkeep sync id`.
+   */
+  allowedTokenHashes?: ReadonlySet<string> | null;
+}
+
 function sha256Hex(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex');
 }
@@ -44,12 +55,22 @@ function json(status: number, body: Record<string, unknown>): SyncResponse {
   return { status, body };
 }
 
-export async function handleSync(req: SyncRequest, storage: Storage): Promise<SyncResponse> {
+export async function handleSync(
+  req: SyncRequest,
+  storage: Storage,
+  options: SyncOptions = {},
+): Promise<SyncResponse> {
   if (!req.token || req.token.length < 16) {
     return json(401, { error: 'Missing or malformed bearer token.' });
   }
   // Storage is keyed by the token hash; presenting the token is the auth.
   const tokenHash = createHash('sha256').update(req.token, 'utf8').digest('hex');
+
+  // Optional private-server allowlist (ADR 0009): the real abuse gate until
+  // billing. When configured, a non-listed account is refused outright.
+  if (options.allowedTokenHashes && !options.allowedTokenHashes.has(tokenHash)) {
+    return json(403, { error: 'This sync server is private.' });
+  }
 
   if (req.method === 'GET' && req.path === '/api/status') {
     const row = await storage.get(tokenHash);
@@ -82,9 +103,11 @@ export async function handleSync(req: SyncRequest, storage: Storage): Promise<Sy
     if (blob.length > MAX_BLOB_BYTES) {
       return json(413, { error: `Vault exceeds the ${MAX_BLOB_BYTES / 1024 / 1024} MB sync limit.` });
     }
-    // Reject anything that isn't a Northkeep vault blob — the server won't act
-    // as arbitrary free storage.
-    if (blob.length < NKV_HEADER_LENGTH || !constantTimeMagic(blob)) {
+    // Reject anything that isn't shaped like a Northkeep vault blob. NOTE: this
+    // is a sanity check, NOT abuse protection — the server can't read ciphertext
+    // and a forged NKV1 blob is indistinguishable from a real one. Real abuse
+    // protection is the allowlist above (or billing, M5b) + the size cap.
+    if (blob.length < NKV_HEADER_LENGTH || !hasVaultMagic(blob)) {
       return json(400, { error: 'Body is not a Northkeep vault blob.' });
     }
     const base = req.baseVersion;
@@ -99,7 +122,17 @@ export async function handleSync(req: SyncRequest, storage: Storage): Promise<Sy
   return json(404, { error: 'Not found.' });
 }
 
-/** Constant-time magic check (avoids leaking how many bytes matched). */
-function constantTimeMagic(blob: Buffer): boolean {
-  return timingSafeEqual(blob.subarray(0, 4), NKV_MAGIC);
+/** The 4-byte NKV1 magic (a public constant — no secret, no timing concern). */
+function hasVaultMagic(blob: Buffer): boolean {
+  return blob.subarray(0, 4).equals(NKV_MAGIC);
+}
+
+/** Parse `NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES` (comma/space separated) → set. */
+export function parseAllowlist(raw: string | undefined): ReadonlySet<string> | null {
+  if (!raw) return null;
+  const hashes = raw
+    .split(/[,\s]+/)
+    .map((h) => h.trim().toLowerCase())
+    .filter((h) => /^[0-9a-f]{64}$/.test(h));
+  return hashes.length > 0 ? new Set(hashes) : null;
 }

@@ -19,9 +19,18 @@ every milestone; if a limit is removed, say when and how.*
   prior local state is kept as `vault.nkv.bak`, not merged entry-by-entry.
   Per-entry merge is future work; for now, pull before you edit on a second
   machine.
-- **No paywall yet.** Billing (the $10/mo gate) is a later milestone. Until
-  then the sync service is open — protected only by your device-secret-derived
-  token, a ~4 MB vault size cap, and the host's rate limiting.
+- **No paywall yet — run it private.** Billing (the $10/mo gate) is a later
+  milestone. An *open* sync server (anyone can create an account) is only
+  protected by a ~4 MB size cap and the host's rate limiting — the vault-shape
+  check does NOT stop someone using it as free storage, because the server
+  can't tell real ciphertext from junk (that's the whole point). So until
+  billing, run a **private** server: `northkeep sync id` prints your allowlist
+  hash; set `NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES` to it on the server and only
+  your machines can sync. Don't expose a no-allowlist server publicly.
+- **Push before you pull on a machine you've edited.** Pulling replaces your
+  local vault with the server's copy; unpushed local edits are moved to
+  `vault.nkv.bak` (recoverable), not merged. There's no "you're ahead" warning
+  yet, so sync in one direction at a time.
 - **HTTPS only.** The client refuses a non-https sync server (except loopback
   for testing) so your token and blob never cross the network unprotected.
 

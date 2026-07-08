@@ -84,4 +84,27 @@ describe('handleSync', () => {
     const put = await handleSync(req({ method: 'PUT', path: '/api/blob', baseVersion: null, body: fakeVaultBlob() }), s);
     expect(put.status).toBe(400);
   });
+
+  it('allowlist: a private server rejects non-listed accounts with 403', async () => {
+    const s = new InMemoryStorage();
+    const { createHash } = await import('node:crypto');
+    const allowed = createHash('sha256').update(TOKEN, 'utf8').digest('hex');
+    const opts = { allowedTokenHashes: new Set([allowed]) };
+
+    // The listed token works…
+    const ok = await handleSync(req({ method: 'PUT', path: '/api/blob', baseVersion: 0, body: fakeVaultBlob() }), s, opts);
+    expect(ok.status).toBe(200);
+    // …a different token is refused outright (before any storage access).
+    const denied = await handleSync(req({ path: '/api/status', token: 'z'.repeat(64) }), s, opts);
+    expect(denied.status).toBe(403);
+  });
+
+  it('parseAllowlist parses hashes and returns null when unset', async () => {
+    const { parseAllowlist } = await import('../src/handler.js');
+    expect(parseAllowlist(undefined)).toBeNull();
+    expect(parseAllowlist('')).toBeNull();
+    const set = parseAllowlist(`${'a'.repeat(64)}, ${'b'.repeat(64)}`);
+    expect(set?.size).toBe(2);
+    expect(set?.has('a'.repeat(64))).toBe(true);
+  });
 });

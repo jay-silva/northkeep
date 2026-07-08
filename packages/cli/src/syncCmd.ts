@@ -8,6 +8,7 @@ import {
   pushVault,
   setSyncServer,
   syncState,
+  tokenHash,
 } from '@northkeep/sync';
 import { getPassphrase } from './prompt.js';
 
@@ -110,8 +111,12 @@ export async function syncStatusCmd(vaultPath: string, fail: (m: string) => neve
 
 export function syncId(fail: (m: string) => never): void {
   const deviceSecret = deviceSecretOrFail(fail);
-  const { accountId } = deriveSyncCreds(deviceSecret);
+  const { accountId, token } = deriveSyncCreds(deviceSecret);
   console.log(`Your sync id: ${accountId}`);
   console.log('This id is derived from your device secret. A second machine with the SAME');
   console.log('device.secret + passphrase gets the same id and can pull your vault.');
+  console.log('');
+  console.log(`Server allowlist hash: ${tokenHash(token)}`);
+  console.log('To run a PRIVATE sync server (until billing), set this on the server:');
+  console.log(`  NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES=${tokenHash(token)}`);
 }

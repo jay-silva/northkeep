@@ -1,6 +1,6 @@
 import type { IncomingMessage, ServerResponse } from 'node:http';
 // Imports the BUILT logic (Vercel runs the package build first — see vercel.json).
-import { handleSync, MAX_BLOB_BYTES, type SyncRequest } from '../dist/handler.js';
+import { handleSync, MAX_BLOB_BYTES, parseAllowlist, type SyncRequest } from '../dist/handler.js';
 import { NeonStorage } from '../dist/neon-storage.js';
 
 /**
@@ -36,7 +36,8 @@ export default async function handler(req: IncomingMessage, res: ServerResponse)
       baseVersion: baseVersion === null || Number.isNaN(baseVersion) ? null : baseVersion,
       body,
     };
-    const result = await handleSync(request, storage);
+    const allowedTokenHashes = parseAllowlist(process.env.NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES);
+    const result = await handleSync(request, storage, { allowedTokenHashes });
     const isBuffer = result.body instanceof Buffer;
     res.writeHead(result.status, {
       'cache-control': 'no-store',

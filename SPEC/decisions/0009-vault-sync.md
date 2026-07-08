@@ -105,11 +105,50 @@ embedding-heavy vaults), and never logs blob content.
 - `@northkeep/sync-server`: `@neondatabase/serverless` (server-side only) and
   the Vercel platform as the deploy target.
 
-## Adversarial review
+## Adversarial review (2026-07-07)
 
-Pending — recorded here when complete (M5 build order §7). Scope: ciphertext-
-only storage/logs; credential irreversibility + domain separation; constant-
-time / hash-based token handling; account isolation; pull cannot destroy a
-good local vault; HTTPS enforcement; size/rate caps; malicious-server threat
-model (withhold / serve-stale / serve-garbage — none decrypts or destroys
-local data).
+Highest-stakes review yet (crypto + network + the first public service), with
+empirical proofs against the built code. **No CRITICAL or HIGH findings.** The
+three load-bearing properties were verified:
+
+1. **The server never gets plaintext or keys, and cannot be made to.** Clients
+   transmit only the opaque `.nkv` blob and the one-way-derived token;
+   passphrase/master-key/device-secret never leave the machine; storage and
+   logs hold ciphertext + hashes + versions only. No `console.*` logs a
+   blob/token/key/`DATABASE_URL`.
+2. **No path corrupts or destroys a good local vault.** Pull open-verifies the
+   download with the caller's key BEFORE the `.bak` copy and the rename-swap,
+   fails closed without a key, and leaves the local file intact on any error or
+   mid-operation crash (temp cleaned in `finally`, whole op under the file
+   lock). A stolen token can at worst overwrite the undecryptable server copy.
+3. **Account isolation holds** — storage keyed on `sha256(token)` with distinct
+   256-bit tokens; cross-account access needs a hash collision.
+4. **No token/key/secret/DB-URL leaks** into any log, response, config file, or
+   error path.
+
+**Fixed from the review:**
+- **Abuse gate (was MEDIUM-1).** The `NKV1` body check is a sanity check, NOT
+  abuse protection — the server can't read ciphertext, so a forged `NKV1` blob
+  is indistinguishable from a real one, and an attacker could mint unlimited
+  device-secret-derived tokens and upload junk to an open service. Added an
+  optional **token allowlist** (`NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES`, a set of
+  `sha256(token)` hashes): when set, the server serves only those accounts —
+  the way to run a **private** server until billing (M5b). `northkeep sync id`
+  prints the user's allowlist hash. Misleading comments corrected (the magic
+  check is not constant-time-meaningful; the transport sha256 is honest-
+  corruption detection, not a defense against a hostile server — open-verify
+  is).
+
+**Accepted, documented, not fixed (within the ADR's stated limits):**
+- Without the allowlist the service is **open** — abuse protection is then the
+  size cap + the host's platform rate limiting, resolved properly by billing
+  (M5b). Do not expose an open (no-allowlist) server publicly.
+- The transport sha256 is not a security control; the fresh-machine path has no
+  cryptographic gate before the first passphrase open (nothing to protect —
+  there is no local vault to lose).
+- Pull is whole-vault last-writer-wins with no "you are ahead" guard: pulling
+  on a machine with unpushed local edits overwrites them (recoverable from
+  `.nkv.bak`). Guidance: push before you pull on a machine you've edited.
+- The web GUI's generic 500 handler reflects `err.message` to the same-origin
+  localhost page (pre-existing across all routes); every sync error path was
+  traced and carries no secret.

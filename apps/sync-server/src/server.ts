@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import http from 'node:http';
-import { handleSync, MAX_BLOB_BYTES, type SyncRequest } from './handler.js';
+import { handleSync, MAX_BLOB_BYTES, parseAllowlist, type SyncRequest } from './handler.js';
 import type { Storage } from './storage.js';
 
 /**
@@ -11,6 +11,7 @@ import type { Storage } from './storage.js';
  */
 
 export function createSyncServer(storage: Storage): http.Server {
+  const allowedTokenHashes = parseAllowlist(process.env.NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES);
   return http.createServer((req, res) => {
     void handle(req, res).catch(() => {
       // Never leak internals: status-only error, no body echoing.
@@ -35,7 +36,7 @@ export function createSyncServer(storage: Storage): http.Server {
       baseVersion: baseVersion === null || Number.isNaN(baseVersion) ? null : baseVersion,
       body,
     };
-    const result = await handleSync(request, storage);
+    const result = await handleSync(request, storage, { allowedTokenHashes });
     const isBuffer = result.body instanceof Buffer;
     const headers: Record<string, string> = {
       'cache-control': 'no-store',

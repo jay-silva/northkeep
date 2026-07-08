@@ -177,6 +177,10 @@ export async function pullVault(options: {
     if (!isVaultBlob(pulled.blob)) {
       throw new Error('Downloaded blob is not a Northkeep vault (corrupt download or wrong server).');
     }
+    // Transport integrity only — the server supplies this sha, so it catches a
+    // truncated/corrupted download, NOT a malicious server (which can serve a
+    // blob + matching sha). The real defense against a hostile blob is the
+    // open-verify below; the sha is a cheap early-out for honest corruption.
     if (pulled.sha256 && sha256Hex(pulled.blob) !== pulled.sha256) {
       throw new Error('Downloaded vault failed its integrity check (corrupt download). Nothing was changed.');
     }
