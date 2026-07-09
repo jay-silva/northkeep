@@ -1,9 +1,4 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "pnpm --filter @northkeep/sync-server build",
-  "functions": {
-    "api/[...path].ts": {
-      "maxDuration": 30
-    }
-  }
+  "buildCommand": "pnpm --filter @northkeep/sync-server build"
 }

@@ -17,7 +17,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = path.join(repoRoot, 'packages', 'cli', 'dist', 'index.js');
-const serverIndex = path.join(repoRoot, 'apps', 'sync-server', 'dist', 'index.js');
+const serverLib = path.join(repoRoot, 'apps', 'sync-server', 'dist', 'lib.js');
 const PASSPHRASE = 'm5 sync acceptance passphrase';
 
 let homeA: string;
@@ -49,11 +49,11 @@ function cli(home: string, args: string[]): Promise<{ stdout: string; stderr: st
 
 beforeAll(async () => {
   expect(fs.existsSync(cliPath), 'run pnpm build first').toBe(true);
-  expect(fs.existsSync(serverIndex), 'run pnpm build first').toBe(true);
+  expect(fs.existsSync(serverLib), 'run pnpm build first').toBe(true);
   homeA = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-m5A-'));
   homeB = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-m5B-'));
 
-  const { createSyncServer, InMemoryStorage } = await import(serverIndex);
+  const { createSyncServer, InMemoryStorage } = await import(serverLib);
   const store = new InMemoryStorage();
   storage = store;
   server = createSyncServer(store);

@@ -67,20 +67,3 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
     req.on('error', reject);
   });
 }
-
-// Run directly (self-host / local): Neon-backed, announces its URL on stdout.
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop() ?? '')) {
-  const { NeonStorage } = await import('./neon-storage.js');
-  const { resolveDatabaseUrl } = await import('./db-url.js');
-  const databaseUrl = resolveDatabaseUrl();
-  if (!databaseUrl) {
-    console.error('No Postgres connection string found (set DATABASE_URL).');
-    process.exit(1);
-  }
-  const storage = new NeonStorage(databaseUrl);
-  await storage.ensureSchema();
-  const port = Number(process.env.PORT ?? 8787);
-  createSyncServer(storage).listen(port, () => {
-    console.log(`NORTHKEEP_SYNC_URL=http://127.0.0.1:${port}`);
-  });
-}
