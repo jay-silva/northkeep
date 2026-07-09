@@ -71,9 +71,10 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
 // Run directly (self-host / local): Neon-backed, announces its URL on stdout.
 if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split('/').pop() ?? '')) {
   const { NeonStorage } = await import('./neon-storage.js');
-  const databaseUrl = process.env.DATABASE_URL;
+  const { resolveDatabaseUrl } = await import('./db-url.js');
+  const databaseUrl = resolveDatabaseUrl();
   if (!databaseUrl) {
-    console.error('DATABASE_URL is required.');
+    console.error('No Postgres connection string found (set DATABASE_URL).');
     process.exit(1);
   }
   const storage = new NeonStorage(databaseUrl);

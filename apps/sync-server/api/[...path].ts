@@ -2,6 +2,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 // Imports the BUILT logic (Vercel runs the package build first — see vercel.json).
 import { handleSync, MAX_BLOB_BYTES, parseAllowlist, type SyncRequest } from '../dist/handler.js';
 import { NeonStorage } from '../dist/neon-storage.js';
+import { resolveDatabaseUrl } from '../dist/db-url.js';
 
 /**
  * Vercel serverless adapter. Thin glue: parse the request, call the shared
@@ -14,7 +15,7 @@ let storage: NeonStorage | null = null;
 
 export default async function handler(req: IncomingMessage, res: ServerResponse): Promise<void> {
   try {
-    const databaseUrl = process.env.DATABASE_URL;
+    const databaseUrl = resolveDatabaseUrl();
     if (!databaseUrl) {
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: 'server not configured' }));
