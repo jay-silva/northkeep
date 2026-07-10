@@ -1,5 +1,5 @@
 import { neon, type NeonQueryFunction } from '@neondatabase/serverless';
-import type { PutResult, Storage, StoredBlob } from './storage.js';
+import type { PutResult, Storage, StoredBlob, StoredSubscription } from './storage.js';
 
 /**
  * Neon Postgres storage. Ciphertext is stored base64-encoded in a text column
@@ -17,6 +17,14 @@ CREATE TABLE IF NOT EXISTS sync_blobs (
   ciphertext_sha256 text NOT NULL,
   size_bytes        integer NOT NULL,
   updated_at        timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS subscriptions (
+  token_hash             text PRIMARY KEY,
+  stripe_customer_id     text NOT NULL,
+  stripe_subscription_id text NOT NULL UNIQUE,
+  status                 text NOT NULL,
+  current_period_end     bigint NOT NULL,
+  updated_at             timestamptz NOT NULL DEFAULT now()
 );
 `;
 
@@ -92,5 +100,58 @@ export class NeonStorage implements Storage {
       SELECT version FROM sync_blobs WHERE token_hash = ${tokenHash}
     `) as unknown as Array<{ version: number }>;
     return rows[0]?.version ?? 0;
+  }
+
+  // --- billing (M5b): stores only the token hash + Stripe ids + status.
+  // No email, no card — those live in Stripe (ADR 0010). ---
+
+  async getSubscription(tokenHash: string): Promise<StoredSubscription | null> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      SELECT token_hash, stripe_customer_id, stripe_subscription_id, status, current_period_end
+      FROM subscriptions WHERE token_hash = ${tokenHash}
+    `) as unknown as Array<{
+      token_hash: string;
+      stripe_customer_id: string;
+      stripe_subscription_id: string;
+      status: string;
+      current_period_end: number;
+    }>;
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      tokenHash: r.token_hash,
+      stripeCustomerId: r.stripe_customer_id,
+      stripeSubscriptionId: r.stripe_subscription_id,
+      status: r.status,
+      currentPeriodEnd: Number(r.current_period_end),
+    };
+  }
+
+  async upsertSubscription(sub: StoredSubscription): Promise<void> {
+    await this.ensureSchema();
+    await this.sql`
+      INSERT INTO subscriptions (token_hash, stripe_customer_id, stripe_subscription_id, status, current_period_end, updated_at)
+      VALUES (${sub.tokenHash}, ${sub.stripeCustomerId}, ${sub.stripeSubscriptionId}, ${sub.status}, ${sub.currentPeriodEnd}, now())
+      ON CONFLICT (token_hash) DO UPDATE SET
+        stripe_customer_id = EXCLUDED.stripe_customer_id,
+        stripe_subscription_id = EXCLUDED.stripe_subscription_id,
+        status = EXCLUDED.status,
+        current_period_end = EXCLUDED.current_period_end,
+        updated_at = now()
+    `;
+  }
+
+  async updateSubscriptionByStripeId(
+    stripeSubscriptionId: string,
+    status: string,
+    currentPeriodEnd: number,
+  ): Promise<void> {
+    await this.ensureSchema();
+    await this.sql`
+      UPDATE subscriptions
+      SET status = ${status}, current_period_end = ${currentPeriodEnd}, updated_at = now()
+      WHERE stripe_subscription_id = ${stripeSubscriptionId}
+    `;
   }
 }

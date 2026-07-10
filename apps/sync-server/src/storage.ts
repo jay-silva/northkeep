@@ -19,6 +19,22 @@ export interface PutResult {
   version: number;
 }
 
+/**
+ * A subscription record (M5b). Keyed by the account's `token_hash` — the SAME
+ * anonymous key the blob is stored under. We deliberately store NO email or
+ * card here (invariant #2 spirit): those live only in Stripe. This links a
+ * paying customer to an *encrypted* vault, never to its contents.
+ */
+export interface StoredSubscription {
+  tokenHash: string;
+  stripeCustomerId: string;
+  stripeSubscriptionId: string;
+  /** Stripe subscription status, e.g. 'active' | 'trialing' | 'canceled' | 'past_due'. */
+  status: string;
+  /** Unix seconds; access is allowed only while status is active/trialing and this is in the future. */
+  currentPeriodEnd: number;
+}
+
 export interface Storage {
   get(tokenHash: string): Promise<StoredBlob | null>;
   /**
@@ -27,15 +43,54 @@ export interface Storage {
    * only if the current version equals `baseVersion` (else conflict).
    */
   put(tokenHash: string, blob: Buffer, sha256: string, baseVersion: number): Promise<PutResult>;
+
+  // --- billing (M5b) ---
+  /** The subscription for this account, or null. */
+  getSubscription(tokenHash: string): Promise<StoredSubscription | null>;
+  /** Upsert from a completed Checkout (we know the token hash here). */
+  upsertSubscription(sub: StoredSubscription): Promise<void>;
+  /**
+   * Update status/period by Stripe subscription id — used by
+   * subscription.updated/deleted webhooks, which don't carry the token hash.
+   * No-op if we've never seen that subscription id.
+   */
+  updateSubscriptionByStripeId(
+    stripeSubscriptionId: string,
+    status: string,
+    currentPeriodEnd: number,
+  ): Promise<void>;
 }
 
 /** In-memory storage — tests and local/dev runs. Not durable. */
 export class InMemoryStorage implements Storage {
   private rows = new Map<string, StoredBlob>();
+  private subs = new Map<string, StoredSubscription>();
 
   async get(tokenHash: string): Promise<StoredBlob | null> {
     const row = this.rows.get(tokenHash);
     return row ? { ...row, blob: Buffer.from(row.blob) } : null;
+  }
+
+  async getSubscription(tokenHash: string): Promise<StoredSubscription | null> {
+    const s = this.subs.get(tokenHash);
+    return s ? { ...s } : null;
+  }
+
+  async upsertSubscription(sub: StoredSubscription): Promise<void> {
+    this.subs.set(sub.tokenHash, { ...sub });
+  }
+
+  async updateSubscriptionByStripeId(
+    stripeSubscriptionId: string,
+    status: string,
+    currentPeriodEnd: number,
+  ): Promise<void> {
+    for (const s of this.subs.values()) {
+      if (s.stripeSubscriptionId === stripeSubscriptionId) {
+        s.status = status;
+        s.currentPeriodEnd = currentPeriodEnd;
+      }
+    }
   }
 
   async put(tokenHash: string, blob: Buffer, sha256: string, baseVersion: number): Promise<PutResult> {

@@ -38,13 +38,17 @@ export interface SyncResponse {
 
 export interface SyncOptions {
   /**
-   * Optional access allowlist of `sha256(token)` hashes. When set, only these
-   * accounts may use the server — the way to run a PRIVATE sync server until
-   * billing (M5b) gates access. Unset = open service (abuse protection is then
-   * the size cap + the platform's rate limiting; see ADR 0009 / KNOWN-LIMITS).
-   * Get your hash from `northkeep sync id`.
+   * Access allowlist of `sha256(token)` hashes. Listed accounts sync FREE —
+   * the vault owner's own account and anyone comped, plus self-hosters who run
+   * their own private server. Get your hash from `northkeep sync id`.
    */
   allowedTokenHashes?: ReadonlySet<string> | null;
+  /**
+   * Billing gate (M5b). When provided, an account NOT on the allowlist must
+   * have an active subscription to sync (else 402). Undefined = billing off
+   * (self-host / open), and only the allowlist gates (ADR 0009/0010).
+   */
+  subscriptionActive?: (tokenHash: string) => Promise<boolean>;
 }
 
 function sha256Hex(buf: Buffer): string {
@@ -66,10 +70,22 @@ export async function handleSync(
   // Storage is keyed by the token hash; presenting the token is the auth.
   const tokenHash = createHash('sha256').update(req.token, 'utf8').digest('hex');
 
-  // Optional private-server allowlist (ADR 0009): the real abuse gate until
-  // billing. When configured, a non-listed account is refused outright.
-  if (options.allowedTokenHashes && !options.allowedTokenHashes.has(tokenHash)) {
-    return json(403, { error: 'This sync server is private.' });
+  // Access gate (ADR 0009/0010): allowlisted accounts sync FREE. Otherwise, if
+  // billing is on, an active subscription is required (402); if billing is off
+  // but an allowlist exists, a non-listed account is a private-server 403;
+  // with neither, the server is open.
+  const inAllowlist = options.allowedTokenHashes?.has(tokenHash) ?? false;
+  if (!inAllowlist) {
+    if (options.subscriptionActive) {
+      if (!(await options.subscriptionActive(tokenHash))) {
+        return json(402, {
+          error: 'A $10/month subscription is required to sync on this server.',
+          subscribe: true,
+        });
+      }
+    } else if (options.allowedTokenHashes) {
+      return json(403, { error: 'This sync server is private.' });
+    }
   }
 
   if (req.method === 'GET' && req.path === '/api/status') {

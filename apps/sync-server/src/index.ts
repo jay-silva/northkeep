@@ -9,12 +9,15 @@
 import { createSyncServer } from './server.js';
 import { NeonStorage } from './neon-storage.js';
 import { resolveDatabaseUrl } from './db-url.js';
+import { billingFromEnv } from './billing.js';
 import type { Storage } from './storage.js';
 
 const databaseUrl = resolveDatabaseUrl();
 const storage: Storage = databaseUrl ? new NeonStorage(databaseUrl) : missingDbStorage();
+// Billing is on only when Stripe env is set; otherwise self-host / open.
+const billing = billingFromEnv();
 
-createSyncServer(storage).listen(Number(process.env.PORT ?? 3000));
+createSyncServer(storage, billing).listen(Number(process.env.PORT ?? 3000));
 
 /**
  * If no Postgres URL is configured, don't crash at startup — serve, and let
@@ -25,5 +28,11 @@ function missingDbStorage(): Storage {
   const fail = async (): Promise<never> => {
     throw new Error('No database configured (set DATABASE_URL / POSTGRES_URL).');
   };
-  return { get: fail, put: fail };
+  return {
+    get: fail,
+    put: fail,
+    getSubscription: fail,
+    upsertSubscription: fail,
+    updateSubscriptionByStripeId: fail,
+  };
 }
