@@ -6,47 +6,58 @@
 <title>Northkeep</title>
 <style>
   :root {
-    --bg: #f5f6f8; --panel: #ffffff; --ink: #1a2233; --muted: #66708a;
-    --line: #e3e6ee; --accent: #1f5eff; --accent-ink: #ffffff;
-    --danger: #c23a3a; --ok: #1e8e5a; --warn-bg: #fff7e0; --warn-ink: #7a5b00;
-    --chip: #eef1f7; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* Meridian — warm editorial palette (light) */
+    --bg: #f6f4ef; --panel: #fffdf8; --ink: #24221c; --muted: #8a8477;
+    --line: #e6e0d4; --accent: #2f6a54; --accent-ink: #fdfcf7;
+    --danger: #b0402b; --ok: #2f6a54; --warn-bg: #f2ede0; --warn-ink: #6f5a2c;
+    --warn-line: #e6dcc0; --chip: #efeadd;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* Intended fonts named first; system fallbacks keep the app 100% local
+       (no external font requests — CSP + the "nothing leaves your network"
+       promise). Self-host Newsreader/Hanken Grotesk as inlined @font-face to
+       get pixel-exact type. */
+    --serif: 'Newsreader', Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Times New Roman', serif;
+    --sans: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #12151c; --panel: #1a1f2a; --ink: #e8ebf2; --muted: #94a0b8;
-      --line: #2a3140; --chip: #242b3a; --accent: #4a7dff;
-      --warn-bg: #2e2a17; --warn-ink: #e3c96a; --danger: #ff7a7a; --ok: #5fd39a;
+      /* Meridian — warm dark */
+      --bg: #1b1913; --panel: #24211a; --ink: #ece7db; --muted: #a39a88;
+      --line: #38332a; --chip: #2f2b21; --accent: #5f9d83; --accent-ink: #14170f;
+      --warn-bg: #322b1b; --warn-ink: #d8b676; --warn-line: #48401f;
+      --danger: #e08a72; --ok: #5f9d83;
     }
-    .pill.ok { background: #1d3a2c; }
-    .pill.locked { background: #3a2020; }
+    .pill.ok { background: #22382c; }
+    .pill.locked { background: #3a241d; }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
-    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  header { display: flex; align-items: center; gap: 16px; padding: 14px 24px;
+    font: 15px/1.5 var(--sans); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  header { display: flex; align-items: center; gap: 14px; padding: 16px 28px;
     background: var(--panel); border-bottom: 1px solid var(--line);
     position: sticky; top: 0; z-index: 5; }
-  header h1 { font-size: 17px; margin: 0; letter-spacing: .2px; }
+  header h1 { margin: 0; font: 500 22px/1 var(--serif); letter-spacing: -.01em; }
   header h1 span { color: var(--accent); }
   .grow { flex: 1; }
-  .pill { font-size: 12px; padding: 3px 10px; border-radius: 999px; background: var(--chip); color: var(--muted); }
-  .pill.ok { background: #e3f4ec; color: var(--ok); }
-  .pill.locked { background: #fdeaea; color: var(--danger); }
-  nav { display: flex; gap: 4px; padding: 10px 24px 0; }
-  nav button { border: 0; background: none; padding: 8px 14px; font: inherit; color: var(--muted);
-    border-bottom: 2px solid transparent; cursor: pointer; }
+  .pill { font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px; background: var(--chip); color: var(--muted); }
+  .pill.ok { background: #e6efe8; color: var(--ok); }
+  .pill.locked { background: #f6e4dd; color: var(--danger); }
+  nav { display: flex; gap: 4px; padding: 0 28px; background: var(--panel); border-bottom: 1px solid var(--line); }
+  nav button { border: 0; background: none; padding: 14px 14px 15px; font: 400 15px/1 var(--sans); color: var(--muted);
+    border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer; }
   nav button.active { color: var(--ink); border-color: var(--accent); font-weight: 600; }
-  main { max-width: 860px; margin: 0 auto; padding: 20px 24px 60px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  main { max-width: 840px; margin: 0 auto; padding: 24px 28px 64px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
     padding: 14px 16px; margin-bottom: 10px; }
-  .prov { font: 12px var(--mono); color: var(--muted); margin-top: 6px; display: flex; flex-wrap: wrap; gap: 10px; }
+  .prov { font: 500 12px/1.4 var(--sans); color: var(--muted); margin-top: 6px; display: flex; flex-wrap: wrap; gap: 9px 16px; }
   .content { white-space: pre-wrap; overflow-wrap: anywhere; }
   .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-  input[type=text], input[type=password], select { font: inherit; color: inherit; background: var(--bg);
-    border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
+  input[type=text], input[type=password], select, textarea { font: inherit; color: inherit; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 10px; padding: 9px 13px; }
   input[type=text] { flex: 1; min-width: 200px; }
-  button.btn { font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
-    border-radius: 8px; padding: 7px 14px; cursor: pointer; }
+  ::placeholder { color: #a49c8b; }
+  button.btn { font: 500 14px/1 var(--sans); border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 10px; padding: 9px 16px; cursor: pointer; }
   button.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   button.btn.danger { color: var(--danger); }
   button.btn:disabled { opacity: .5; cursor: default; }
@@ -54,8 +65,8 @@
   .chips button { font-size: 12px; border: 1px solid var(--line); background: var(--panel);
     color: var(--muted); border-radius: 999px; padding: 3px 11px; cursor: pointer; }
   .chips button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
-  .banner { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid #eadfae;
-    border-radius: 10px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; }
+  .banner { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line);
+    border-radius: 12px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; }
   .muted { color: var(--muted); }
   .overlay { position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 82%, transparent);
     backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 10; }
@@ -79,31 +90,33 @@
   .tag { font: 11px var(--mono); background: var(--chip); border-radius: 5px; padding: 1px 7px; }
   h3.sect { margin: 22px 0 10px; font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); }
   /* converse */
-  .badge { font-size: 11px; font-weight: 600; letter-spacing: .3px; padding: 3px 10px;
+  .badge { font-size: 11px; font-weight: 600; letter-spacing: .05em; padding: 5px 11px;
     border-radius: 999px; white-space: nowrap; }
-  .badge.private { background: #e3f4ec; color: var(--ok); }
+  .badge.private { background: #e6efe8; color: var(--ok); }
   .badge.bounded { background: var(--warn-bg); color: var(--warn-ink); }
   .thread { margin: 14px 0; }
-  .msg { display: flex; flex-direction: column; align-items: flex-start; margin: 10px 0; }
+  .msg { display: flex; flex-direction: column; align-items: flex-start; margin: 11px 0; }
   .msg.user { align-items: flex-end; }
-  .msg .bubble { max-width: 85%; padding: 9px 13px; border-radius: 12px;
-    white-space: pre-wrap; overflow-wrap: anywhere; }
-  .msg.user .bubble { background: var(--accent); color: var(--accent-ink); }
+  .msg .bubble { max-width: 82%; padding: 12px 16px; border-radius: 16px 16px 16px 5px;
+    line-height: 1.6; white-space: pre-wrap; overflow-wrap: anywhere; }
+  .msg.user .bubble { background: var(--accent); color: var(--accent-ink); border-radius: 16px 16px 5px 16px; }
   .msg.assistant .bubble { background: var(--panel); border: 1px solid var(--line); }
-  .msg.error .bubble { background: #fdeaea; color: var(--danger); border: 1px solid var(--danger); }
-  .msg .prov { max-width: 85%; align-items: center; }
+  .msg.error .bubble { background: #f6e4dd; color: var(--danger); border: 1px solid var(--danger); }
+  .msg .prov { max-width: 82%; align-items: center; }
   .prov details { font-size: 12px; }
-  .prov summary { cursor: pointer; }
+  .prov summary { cursor: pointer; color: var(--accent); }
   .prov details div { margin: 3px 0 3px 8px; }
-  .memnew { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid #eadfae;
-    border-radius: 8px; padding: 6px 10px; margin-top: 6px; font-size: 13px; max-width: 85%; }
+  .memnew { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line);
+    border-radius: 12px; padding: 10px 14px; margin-top: 6px; font-size: 13px; line-height: 1.5; max-width: 82%; }
   .memnew.undone { text-decoration: line-through; opacity: .65; }
   .memnew.undone button { text-decoration: none; }
   .epline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     border-bottom: 1px solid var(--line); padding: 9px 2px; font-size: 13px; }
   @media (prefers-color-scheme: dark) {
-    .badge.private { background: #1d3a2c; }
-    .msg.error .bubble { background: #3a2020; }
+    .badge.private { background: #22382c; }
+    .pill.ok { background: #22382c; }
+    .pill.locked { background: #3a241d; }
+    .msg.error .bubble { background: #3a241d; }
   }
 </style>
 </head>
