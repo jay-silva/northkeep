@@ -55,7 +55,7 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Runn
     res.setHeader('Referrer-Policy', 'no-referrer');
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; form-action 'none'; base-uri 'none'",
+      "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; img-src data:; font-src data:; form-action 'none'; base-uri 'none'",
     );
     res.setHeader('Cache-Control', 'no-store');
 
