@@ -163,6 +163,26 @@ load-bearing properties were verified empirically:
   `{type, data:{object}}` wire envelope (mirroring `createStripeGateway`), and the
   test uses `createRequire` instead of a bare `require` in the ES module.
 
+**Found in the live self-test (2026-07-11) — bugs no simulated test could catch, both fixed + regression-tested:**
+- **Neon executes ONE statement per call.** Adding the `subscriptions` table made
+  `SCHEMA_SQL` two statements; `ensureSchema` threw on every request and the
+  live server 500'd on everything that touched storage (allowlisted sync
+  included) until the hotfix. Fix: `SCHEMA_STATEMENTS` array executed
+  sequentially; a failed attempt is no longer cached (transient DB errors retry
+  instead of poisoning the instance); `test/schema.test.ts` encodes the
+  invariant. Unit/e2e run `InMemoryStorage`, so only a live deploy could
+  surface this.
+- **Webhook payloads are shaped by the webhook endpoint's API version, not our
+  SDK pin.** The M-2 fix pinned the SDK (protecting the checkout retrieve), but
+  the sandbox webhook endpoint defaulted to a newer API version where
+  `current_period_end` lives under `items.data[]` — so the live immediate-cancel
+  `customer.subscription.deleted` event parsed as malformed, was ignored, and
+  the canceled account kept syncing. Fix: `readPeriodEnd()` reads both shapes
+  (top-level or max over items), a `deleted` event is NEVER ignored for a
+  missing period (canceled ⇒ period 0 ⇒ blocked now), and `retrieveSubscription`
+  is hardened the same way. Verified live: Stripe resent the event and the
+  account was blocked while the allowlisted account stayed unaffected.
+
 **Accepted, documented, not fixed (within stated limits):**
 - **The bounded payer↔ciphertext link** (Decision 1) is the deliberate privacy
   cost of hosted billing; self-hosting stays anonymous.
