@@ -1,16 +1,22 @@
 import { randomUUID } from 'node:crypto';
 import type { ServerResponse } from 'node:http';
 import {
+  RouteError,
   TurnError,
   classifyEndpoint,
   createAnthropicProvider,
   createOpenAICompatibleProvider,
   createSession,
+  getDefaultEndpoint,
   getEndpoint,
   getEndpointKey,
+  listEndpoints,
+  loadRoutingPolicy,
+  route,
   runTurn,
   vaultAdapter,
   type ConverseSession,
+  type PrivacyCeiling,
 } from '@northkeep/converse';
 import { createOllamaClient } from '@northkeep/librarian';
 import type { UiSession } from './session.js';
@@ -46,12 +52,15 @@ function evictStaleConversations(): void {
 
 interface ConverseRequest {
   session_id?: string;
+  /** An endpoint id, or 'auto' to let the concierge route this turn (M7b). */
   endpoint_id?: string;
   message?: string;
   tier?: number;
   scope?: string;
   /** M7a quick-switch: override the endpoint's configured model for this turn. */
   model?: string;
+  /** Per-conversation privacy ceiling (M7b). Default: bounded-allowed. */
+  ceiling?: string;
 }
 
 /**
@@ -79,8 +88,44 @@ export async function handleConverseStream(
   if (message.length > MAX_MESSAGE_CHARS) return jsonError(res, 413, 'Message too long.');
   if (!uiSession.isUnlocked()) return jsonError(res, 423, 'Vault is locked.');
 
-  const endpoint = req.endpoint_id ? getEndpoint(req.endpoint_id) : null;
+  const ceiling: PrivacyCeiling =
+    req.ceiling === 'private-only' ? 'private-only' : 'bounded-allowed';
+
+  // Resolve the endpoint: explicit id, or 'auto' → the concierge picks (M7b).
+  // Routing happens strictly BEFORE the turn; the send path is unchanged.
+  let routeReason: string | undefined;
+  let routedModel: string | undefined;
+  let endpoint = null;
+  if (req.endpoint_id === 'auto') {
+    try {
+      const decision = route({
+        message,
+        endpoints: listEndpoints(),
+        policy: loadRoutingPolicy(),
+        ceiling,
+        defaultEndpointId: getDefaultEndpoint()?.id ?? null,
+      });
+      endpoint = getEndpoint(decision.endpointId);
+      routedModel = decision.model;
+      routeReason = decision.reason;
+    } catch (err) {
+      return jsonError(res, 400, err instanceof RouteError ? err.message : 'Routing failed.');
+    }
+  } else {
+    endpoint = req.endpoint_id ? getEndpoint(req.endpoint_id) : null;
+  }
   if (!endpoint) return jsonError(res, 400, 'Unknown endpoint — configure one under Providers.');
+
+  // A pinned-private conversation may not reach a bounded endpoint by ANY
+  // path — the pin is a promise, and it binds manual picks too (a user who
+  // wants to escalate unpins first, which is the explicit act ADR 0011 asks).
+  if (ceiling === 'private-only' && classifyEndpoint(endpoint.baseUrl).tier !== 'private') {
+    return jsonError(
+      res,
+      400,
+      'This conversation is pinned private — that endpoint would leave the machine. Unpin to use it.',
+    );
+  }
   const tier = req.tier === 0 || req.tier === 1 || req.tier === 2 ? req.tier : 1;
   const scope = (req.scope ?? 'personal').trim() || 'personal';
   if (!/^[a-z0-9:_.-]{1,64}$/i.test(scope)) return jsonError(res, 400, 'Invalid scope.');
@@ -108,13 +153,20 @@ export async function handleConverseStream(
       ? createAnthropicProvider({ apiKey: apiKey as string, baseUrl: endpoint.baseUrl })
       : createOpenAICompatibleProvider({ baseUrl: endpoint.baseUrl, apiKey });
   const { tier: privacy, host } = classifyEndpoint(endpoint.baseUrl);
-  const model = modelOverride || endpoint.model;
+  const model = modelOverride || routedModel || endpoint.model;
 
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson; charset=utf-8',
     'Cache-Control': 'no-store',
   });
-  send(res, { type: 'start', session_id: sessionId, privacy, endpoint_host: host, model });
+  send(res, {
+    type: 'start',
+    session_id: sessionId,
+    privacy,
+    endpoint_host: host,
+    model,
+    ...(routeReason ? { route_reason: routeReason, endpoint_label: endpoint.label } : {}),
+  });
 
   const ollama = createOllamaClient();
   const distillOllama = (await ollama.available().catch(() => false)) ? ollama : null;
@@ -129,11 +181,13 @@ export async function handleConverseStream(
       redactTier: tier,
       memoryScope: scope,
       distillOllama,
+      routeReason,
       onToken: (token) => send(res, { type: 'token', text: token }),
     });
     send(res, {
       type: 'done',
       session_id: sessionId,
+      ...(routeReason ? { route_reason: routeReason, endpoint_label: endpoint.label } : {}),
       reply: result.reply,
       privacy: result.privacy,
       endpoint_host: result.endpointHost,

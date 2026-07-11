@@ -107,6 +107,7 @@
     border-radius: 999px; white-space: nowrap; }
   .badge.private { background: #e6efe8; color: var(--ok); }
   .badge.bounded { background: var(--warn-bg); color: var(--warn-ink); }
+  .badge.auto { background: var(--chip); color: var(--ink); }
   .conv-toolbar { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin-bottom: 22px; }
   .conv-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .thread { margin: 14px 0; }
@@ -166,6 +167,9 @@
         <select id="convEndpoint" title="Endpoint"></select>
         <select id="convModel" title="Model — switch anytime, even mid-conversation" hidden></select>
         <span id="convBadge" class="badge" hidden></span>
+        <label class="muted" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;white-space:nowrap" title="Pin this conversation to local models only — nothing leaves your machine, and Auto may only pick private endpoints.">
+          <input type="checkbox" id="convPrivatePin"> Private only
+        </label>
         <select id="convTierSel" title="Redaction tier">
           <option value="1" selected>Tier 1 — mask secrets</option>
           <option value="2">Tier 2 — also pseudonymize names</option>
@@ -750,12 +754,20 @@
     endpoints = r.endpoints;
     const sel = $('convEndpoint');
     sel.textContent = '';
+    if (endpoints.length > 1) {
+      // The concierge (M7b): routes each message by task + your rules,
+      // within the privacy ceiling. Only offered with something to choose from.
+      const auto = el('option', '', '✦ Auto — concierge decides');
+      auto.value = 'auto';
+      sel.appendChild(auto);
+    }
     for (const ep of endpoints) {
       const o = el('option', '', ep.label);
       o.value = ep.id;
       sel.appendChild(o);
     }
-    const keep = endpoints.some((ep) => ep.id === prev) ? prev : r.default_id;
+    const keep = (prev === 'auto' && endpoints.length > 1) || endpoints.some((ep) => ep.id === prev)
+      ? prev : r.default_id;
     if (keep) sel.value = keep;
     sel.hidden = endpoints.length === 0;
     $('convEmpty').hidden = endpoints.length > 0;
@@ -765,17 +777,34 @@
   }
 
   function onEndpointChange() {
+    const isAuto = $('convEndpoint').value === 'auto';
     const ep = selectedEndpoint();
-    $('convBadge').hidden = !ep;
+    const badge = $('convBadge');
+    if (isAuto) {
+      // The concierge picks per message; each reply's provenance strip shows
+      // where it actually went. Tier "Off" is never safe under auto (a turn
+      // may route to a bounded endpoint), so it's disabled.
+      badge.hidden = false;
+      badge.className = 'badge auto';
+      badge.textContent = $('convPrivatePin').checked
+        ? 'AUTO — local models only (pinned)' : 'AUTO — routed per message';
+      $('convModel').hidden = true;
+      const offOpt = $('convTierSel').querySelector('option[value="0"]');
+      offOpt.disabled = true;
+      if ($('convTierSel').value === '0') $('convTierSel').value = '1';
+      return;
+    }
+    badge.hidden = !ep;
     $('convModel').hidden = !ep;
     if (!ep) return;
-    setBadge($('convBadge'), ep.tier);
+    setBadge(badge, ep.tier);
     // "Off" only makes sense when nothing leaves the machine.
     const offOpt = $('convTierSel').querySelector('option[value="0"]');
     offOpt.disabled = ep.tier !== 'private';
     if (offOpt.disabled && $('convTierSel').value === '0') $('convTierSel').value = '1';
     loadModelPicker(ep);
   }
+  $('convPrivatePin').addEventListener('change', onEndpointChange);
   $('convEndpoint').addEventListener('change', onEndpointChange);
 
   // --- model quick-switch (M7a, ADR 0011). The picker shows the endpoint's
@@ -912,6 +941,9 @@
     strip.appendChild(makeBadge(ev.privacy));
     strip.appendChild(el('span', '', ev.endpoint_host));
     strip.appendChild(el('span', '', ev.model));
+    // Concierge transparency (M7b): why this endpoint answered. textContent
+    // only — the reason includes endpoint labels, which are user config.
+    if (ev.route_reason) strip.appendChild(el('span', '', '✦ ' + ev.route_reason));
     strip.appendChild(el('span', '', ev.tier2_degraded ? 'Tier 2 degraded → 1' : 'Tier ' + ev.tier_applied));
     const used = ev.memories_used || [];
     if (used.length) {
@@ -966,8 +998,9 @@
     if (convStreaming) return;
     const msg = $('convInput').value.trim();
     if (!msg) return;
+    const isAuto = $('convEndpoint').value === 'auto';
     const ep = selectedEndpoint();
-    if (!ep) { $('convEmpty').hidden = false; $('managePanel').hidden = false; return; }
+    if (!isAuto && !ep) { $('convEmpty').hidden = false; $('managePanel').hidden = false; return; }
     convStreaming = true;
     $('convSend').disabled = true;
     $('convInput').disabled = true;
@@ -1001,12 +1034,14 @@
         headers: { 'X-Northkeep-Token': TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...(convSession ? { session_id: convSession } : {}),
-          endpoint_id: ep.id,
+          endpoint_id: isAuto ? 'auto' : ep.id,
           message: msg,
           tier: Number($('convTierSel').value),
+          // The privacy pin binds every path — auto routing AND manual picks.
+          ...($('convPrivatePin').checked ? { ceiling: 'private-only' } : {}),
           // M7a quick-switch: the picked model rides along; the reply's
           // provenance strip shows which model actually answered.
-          ...($('convModel').value && $('convModel').value !== ep.model
+          ...(!isAuto && $('convModel').value && $('convModel').value !== ep.model
             ? { model: $('convModel').value } : {}),
         }),
       });

@@ -47,6 +47,7 @@ import {
   syncStatusCmd,
   syncSubscribe,
 } from './syncCmd.js';
+import { routingClear, routingList, routingSet } from './routingCmd.js';
 
 const program = new Command();
 
@@ -436,8 +437,38 @@ program
   .option('--endpoint <id>', 'endpoint id (default: the configured default)')
   .option('--tier <n>', 'redaction tier: 0 (private endpoints only) | 1 | 2', '1')
   .option('--scope <scope>', 'scope for memories distilled from this conversation', 'personal')
+  .option('--auto', 'let the concierge route each message by task (M7b)')
   .action(async (options: ConverseCmdOptions) => {
     await runConverse(options, withVault);
+  });
+
+const routing = program
+  .command('routing')
+  .description('The concierge rule book: which endpoint answers which kind of task (Auto mode)');
+
+routing
+  .command('list', { isDefault: true })
+  .description('Show the routing rules')
+  .action(() => {
+    routingList();
+  });
+
+routing
+  .command('set')
+  .description('Route a task kind to an endpoint (code, reasoning, creative, long-context, quick, general, or * for everything)')
+  .argument('<task>', 'task kind')
+  .argument('<endpoint>', 'endpoint id or label')
+  .option('--model <model>', 'use a specific model on that endpoint')
+  .action((task: string, endpoint: string, options: { model?: string }) => {
+    routingSet(task, endpoint, options, fail);
+  });
+
+routing
+  .command('clear')
+  .description('Remove a rule (or all rules when no task is given)')
+  .argument('[task]', 'task kind to clear')
+  .action((task: string | undefined) => {
+    routingClear(task, fail);
   });
 
 const sync = program

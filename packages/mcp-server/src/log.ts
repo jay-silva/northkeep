@@ -44,6 +44,9 @@ export interface CallLogEntry {
   privacy?: 'private' | 'bounded';
   /** Converse (M6): vault entries distilled and stored by this turn. */
   created_ids?: string[];
+  /** Concierge (M7b): how auto-routing chose the endpoint/model — task kind +
+   * endpoint labels only, never content. */
+  route_reason?: string;
 }
 
 export function appendCallLog(entry: CallLogEntry): void {

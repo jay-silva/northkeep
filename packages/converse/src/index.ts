@@ -27,6 +27,20 @@ export {
   type TurnResult,
 } from './turn.js';
 export {
+  classifyTask,
+  isRoutingRule,
+  loadRoutingPolicy,
+  route,
+  RouteError,
+  routingPath,
+  saveRoutingPolicy,
+  type PrivacyCeiling,
+  type RouteDecision,
+  type RoutePolicy,
+  type RoutingRule,
+  type TaskKind,
+} from './route.js';
+export {
   addEndpoint,
   getDefaultEndpoint,
   getEndpoint,

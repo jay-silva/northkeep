@@ -44,8 +44,11 @@ import {
   createOpenAICompatibleProvider,
   getEndpoint,
   getEndpointKey,
+  isRoutingRule,
   listEndpoints,
+  loadRoutingPolicy,
   removeEndpoint,
+  saveRoutingPolicy,
   setDefaultEndpoint,
   getDefaultEndpoint,
 } from '@northkeep/converse';
@@ -329,6 +332,31 @@ async function dispatch(
     } catch {
       return bad(400, 'This sync server does not offer subscriptions.');
     }
+  }
+
+  // --- Routing policy (M7b). Rules only — no secrets, no content. ---
+
+  if (method === 'GET' && route === '/api/routing') {
+    return ok({ rules: loadRoutingPolicy().rules });
+  }
+
+  if (method === 'PUT' && route === '/api/routing') {
+    const { rules } = parseJson<{ rules?: unknown }>(body);
+    if (!Array.isArray(rules)) return bad(400, 'rules must be an array.');
+    // Reject anything the loader would silently drop — a 200 must mean every
+    // submitted rule is live (isRoutingRule is the SAME validator the loader
+    // filters with, so write and read can never disagree).
+    const endpointIds = new Set(listEndpoints().map((e) => e.id));
+    for (const r of rules) {
+      if (!isRoutingRule(r)) {
+        return bad(400, 'Each rule needs a known task kind, an endpointId, and (optionally) a string model.');
+      }
+      if (!endpointIds.has(r.endpointId)) {
+        return bad(400, `Unknown endpoint in rule: ${r.endpointId}`);
+      }
+    }
+    saveRoutingPolicy({ rules });
+    return ok({ rules: loadRoutingPolicy().rules });
   }
 
   // --- Converse endpoint management (M6). API keys go straight to the

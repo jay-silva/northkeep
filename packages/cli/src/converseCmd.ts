@@ -11,10 +11,14 @@ import {
   getEndpoint,
   getEndpointKey,
   listEndpoints,
+  loadRoutingPolicy,
+  route,
+  RouteError,
   runTurn,
   vaultAdapter,
   type EndpointConfig,
   type ModelProvider,
+  type PrivacyCeiling,
 } from '@northkeep/converse';
 
 /**
@@ -55,6 +59,8 @@ export interface ConverseCmdOptions {
   endpoint?: string;
   tier: string;
   scope: string;
+  /** Start with the concierge routing each message (M7b). */
+  auto?: boolean;
 }
 
 export async function runConverse(options: ConverseCmdOptions, withVault: WithVault): Promise<void> {
@@ -74,6 +80,12 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       'Redaction cannot be turned off toward a non-private endpoint. Use --tier 1 or --tier 2, or point at a local/LAN model.',
     );
   }
+  let auto = options.auto === true;
+  let ceiling: PrivacyCeiling = 'bounded-allowed';
+  if (auto && tier === 0) {
+    // Auto may route any message to a bounded endpoint; "off" is never safe there.
+    throw new Error('Redaction tier 0 needs a fixed private endpoint — it cannot ride --auto.');
+  }
 
   let provider = providerFor(endpoint);
   let model = endpoint.model;
@@ -91,7 +103,8 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     `Redaction tier ${tier}${tier === 2 ? ' (secrets masked + names pseudonymized)' : tier === 1 ? ' (secrets masked)' : ' (OFF — private endpoint)'}` +
       ` · memory distillation: ${distillOllama ? 'local model' : 'heuristic (Ollama not running)'}`,
   );
-  console.log(`${DIM}Commands: :model <name>  :models  :endpoint <label|id>  :endpoints  :undo  :memories  :quit${RESET}\n`);
+  if (auto) console.log(`${GREEN}✦ Auto${RESET} — the concierge routes each message (":auto" toggles).`);
+  console.log(`${DIM}Commands: :auto  :private  :model <name>  :models  :endpoint <label|id>  :endpoints  :undo  :memories  :quit${RESET}\n`);
 
   const session = createSession();
   const vault = vaultAdapter(withVault);
@@ -127,6 +140,28 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
     if (trimmed === ':quit' || trimmed === ':exit') break;
+
+    // --- concierge (M7b). :auto routes each message; :private pins the chat
+    // to local models only — a promise that binds auto AND manual sends.
+    if (trimmed === ':auto') {
+      if (!auto && tier === 0) {
+        console.log('Redaction tier 0 needs a fixed private endpoint — it cannot ride auto.');
+        continue;
+      }
+      auto = !auto;
+      console.log(auto
+        ? `${GREEN}✦ Auto on${RESET} — each message routes by task${ceiling === 'private-only' ? ' (local models only — pinned)' : ''}.`
+        : `Auto off — staying on ${endpoint.label} (${model}).`);
+      continue;
+    }
+
+    if (trimmed === ':private') {
+      ceiling = ceiling === 'private-only' ? 'bounded-allowed' : 'private-only';
+      console.log(ceiling === 'private-only'
+        ? `${GREEN}● Pinned private${RESET} — nothing in this conversation leaves your machine.`
+        : 'Unpinned — hosted endpoints are allowed again (redaction still applies).');
+      continue;
+    }
 
     // --- quick-switch (M7a, ADR 0011). Switching mid-conversation is safe by
     // design: history is plaintext and the whole prompt is re-redacted at the
@@ -184,6 +219,11 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         console.log(`${RED}✗ Not switching:${RESET} redaction is OFF (--tier 0) and "${next.label}" is not private. Restart with --tier 1 or 2 to use it.`);
         continue;
       }
+      // So does the privacy pin — the promise binds manual switches too.
+      if (ceiling === 'private-only' && classifyEndpoint(next.baseUrl).tier !== 'private') {
+        console.log(`${RED}✗ Not switching:${RESET} this conversation is pinned private and "${next.label}" would leave the machine. ":private" unpins.`);
+        continue;
+      }
       try {
         provider = providerFor(next); // may throw (e.g. missing API key)
       } catch (err) {
@@ -227,13 +267,42 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       continue;
     }
 
+    // Resolve where THIS turn goes: the concierge under :auto, else the
+    // current endpoint — with the privacy pin enforced on both paths.
+    let turnProvider = provider;
+    let turnModel = model;
+    let routeReason: string | undefined;
+    if (auto) {
+      try {
+        const decision = route({
+          message: trimmed,
+          endpoints: listEndpoints(),
+          policy: loadRoutingPolicy(),
+          ceiling,
+          defaultEndpointId: endpoint.id,
+        });
+        const chosen = getEndpoint(decision.endpointId);
+        if (!chosen) throw new RouteError('The routed endpoint disappeared — check :endpoints.');
+        turnProvider = providerFor(chosen); // may throw (e.g. missing API key)
+        turnModel = decision.model;
+        routeReason = decision.reason;
+      } catch (err) {
+        console.log(`✗ ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+    } else if (ceiling === 'private-only' && classifyEndpoint(endpoint.baseUrl).tier !== 'private') {
+      console.log(`${RED}✗ Nothing sent:${RESET} this conversation is pinned private and ${endpoint.label} would leave the machine. ":private" unpins, or ":endpoint" a local model.`);
+      continue;
+    }
+
     let streamed = '';
     try {
       const result = await runTurn({
         message: trimmed,
         session,
-        provider,
-        model,
+        provider: turnProvider,
+        model: turnModel,
+        routeReason,
         vault,
         redactTier: tier,
         memoryScope: options.scope,
@@ -255,6 +324,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
           `${result.tier2Degraded ? ' (tier 2 degraded)' : ''}` +
           ` · memory: ${result.memoriesUsed.length} used, ${result.memoriesCreated.length} added]${RESET}`,
       );
+      if (routeReason) console.log(`${DIM}[✦ ${routeReason}]${RESET}`);
       for (const m of result.memoriesCreated) console.log(`  ${DIM}+ [${m.type}] ${m.content}${RESET}`);
       if (result.memoriesCreated.length > 0) console.log(`  ${DIM}(:undo to remove them)${RESET}`);
     } catch (err) {

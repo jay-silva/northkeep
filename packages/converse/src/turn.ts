@@ -106,6 +106,12 @@ export interface TurnOptions {
   distillOllama?: OllamaClient | null;
   /** Set false to skip memory distillation for this turn. */
   distill?: boolean;
+  /**
+   * How the concierge chose this endpoint/model (M7b) — recorded in the audit
+   * row so every automatic decision is inspectable. Content-free by
+   * construction: task kind + endpoint labels only.
+   */
+  routeReason?: string;
   onToken?: (token: string) => void;
   signal?: AbortSignal;
   /** Injection points for tests. */
@@ -319,6 +325,7 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
     message,
     used: used.map((s) => s.entry),
     created: memoriesCreated,
+    routeReason: options.routeReason,
   });
 
   return {
@@ -401,6 +408,7 @@ function audit(
     message: string;
     used: MemoryEntry[];
     created: MemoryEntry[];
+    routeReason?: string;
   },
 ): void {
   const entry: CallLogEntry = {
@@ -423,6 +431,7 @@ function audit(
     model: args.model,
     privacy: args.privacy,
     ...(args.created.length > 0 ? { created_ids: args.created.map((e) => e.id) } : {}),
+    ...(args.routeReason !== undefined ? { route_reason: args.routeReason } : {}),
   };
   try {
     auditFn(entry);
