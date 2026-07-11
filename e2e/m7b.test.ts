@@ -244,6 +244,45 @@ describe('M7b acceptance — the concierge routes, the ceiling holds', () => {
     expect(JSON.stringify(events)).toContain('pinned private');
   });
 
+  it('the ceiling RATCHETS on the conversation: omitting the field keeps the pin; unpinning is explicit', async () => {
+    // Pin a conversation.
+    const first = await converse({
+      endpoint_id: epA,
+      message: 'start of a pinned chat',
+      tier: 1,
+      ceiling: 'private-only',
+    });
+    const sessionId = (first.events.find((e) => e.type === 'start') as { session_id?: string })
+      .session_id!;
+    // A later request that OMITS the ceiling must still be pinned.
+    const sneaky = await converse({
+      endpoint_id: epCloud,
+      session_id: sessionId,
+      message: 'try to leave quietly',
+      tier: 1,
+    });
+    expect(sneaky.status).toBe(400);
+    expect(JSON.stringify(sneaky.events)).toContain('pinned private');
+    // Unpinning takes the explicit value — then the bounded pick is allowed
+    // (and fails only at transport, proving it was permitted).
+    const unpinned = await converse({
+      endpoint_id: epCloud,
+      session_id: sessionId,
+      message: 'leave deliberately',
+      tier: 1,
+      ceiling: 'bounded-allowed',
+    });
+    expect(unpinned.status).toBe(200);
+    expect(unpinned.events.find((e) => e.type === 'error')).toBeDefined(); // unreachable host
+  });
+
+  it('rejects an unrecognized ceiling value loudly (400), and model cannot ride auto', async () => {
+    const badCeiling = await converse({ endpoint_id: epA, message: 'hi', tier: 1, ceiling: 'Private-Only' });
+    expect(badCeiling.status).toBe(400);
+    const override = await converse({ endpoint_id: 'auto', message: 'hi', tier: 1, model: 'x-model' });
+    expect(override.status).toBe(400);
+  });
+
   it('REPL: :auto routes by task; :private keeps the conversation home', async () => {
     // Restore rules: code → B, * → A.
     await api('/api/routing', {

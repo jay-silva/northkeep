@@ -1,8 +1,8 @@
 # ADR 0011 — M7: The model concierge (auto-routing over portable memory)
 
-- **Date:** 2026-07-10
-- **Status:** **Proposed** — design of record for M7. Not started; gated behind M5b acceptance.
-- **Deciders:** Jay (product owner; this is his consumer-side vision), Claude Code
+- **Date:** 2026-07-10 (updated 2026-07-11)
+- **Status:** **Accepted** — M7a (quick-switch) shipped v0.10.0-m7a; M7b (routing + ceiling) built, adversarially reviewed. M7c/M7d remain as designed below.
+- **Deciders:** Jay (product owner; this is his consumer-side vision; chose the `bounded-allowed` default ceiling 2026-07-11), Claude Code
 
 ## Context — the vision
 
@@ -200,6 +200,34 @@ or learned routing policies (start rule/heuristic, learn later).
   (maximally safe, but the concierge can't use frontier models until the user
   opts in)? Recommendation: `bounded-allowed` + Tier-1 minimum, with a prominent
   one-tap "make this chat private."
+
+## Adversarial review — M7b (2026-07-11)
+
+Focused on Decision 2 (the ceiling). **No CRITICAL/HIGH**: `classifyEndpoint`
+on the actual `baseUrl` is the sole oracle on every path (never a label or
+config claim); the web path double-enforces (route filter + a final check on
+the re-fetched endpoint object before anything is sent); `runTurn`
+independently re-classifies and clamps tier 0→1 toward bounded, so even a raw
+API caller cannot get unredacted content off-machine. `route_reason` is
+content-free by construction (task-kind enum + endpoint labels + fixed
+strings; the classifier returns an enum, so message text cannot reach it).
+
+**Fixed from the review:** (M-1) the CLI auto path now re-checks the ceiling
+on the re-fetched endpoint object, mirroring the web path; (M-2) an
+unrecognized `ceiling` value is a loud 400 instead of a silent fail-open to
+bounded; (M-3) the ceiling now **ratchets server-side on the conversation** —
+once pinned, an omitted field keeps the pin, and unpinning takes an explicit
+`bounded-allowed` (the GUI always sends the ceiling explicitly); PUT
+/api/routing validates with the loader's own `isRoutingRule` (a 200 means
+every rule is live), normalizes to known fields, and caps at 100 rules; the
+audit CSV now carries `route_reason`; a model override cannot ride
+`endpoint_id: 'auto'`.
+
+**Accepted (documented):** routing.json 0600 applies at creation (same
+posture as providers.json; rules only, no secrets); dangling rules after an
+endpoint removal are skipped and marked in `routing list`; duplicate labels
+resolve to the first match on `:endpoint` (classification runs on the real
+URL either way).
 
 ## Acceptance test (Jay-runnable, when M7 lands)
 

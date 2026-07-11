@@ -39,6 +39,13 @@ const MAX_MESSAGE_CHARS = 32_000;
 interface StoredConversation {
   session: ConverseSession;
   lastUsed: number;
+  /**
+   * The conversation's privacy ceiling RATCHETS server-side (ADR 0011: the
+   * ceiling is a property of the conversation, not of a request): once
+   * pinned, a request that omits the field keeps the pin — unpinning takes an
+   * explicit 'bounded-allowed', which is the deliberate act the ADR requires.
+   */
+  ceiling: PrivacyCeiling;
 }
 
 const conversations = new Map<string, StoredConversation>();
@@ -88,8 +95,25 @@ export async function handleConverseStream(
   if (message.length > MAX_MESSAGE_CHARS) return jsonError(res, 413, 'Message too long.');
   if (!uiSession.isUnlocked()) return jsonError(res, 423, 'Vault is locked.');
 
-  const ceiling: PrivacyCeiling =
-    req.ceiling === 'private-only' ? 'private-only' : 'bounded-allowed';
+  // The ceiling is load-bearing: an unrecognized value must be a LOUD 400,
+  // never a silent fail-open to bounded (adversarial review M-2).
+  if (req.ceiling !== undefined && req.ceiling !== 'private-only' && req.ceiling !== 'bounded-allowed') {
+    return jsonError(res, 400, "ceiling must be 'private-only' or 'bounded-allowed'.");
+  }
+
+  // Resolve the conversation FIRST: the ceiling is a property of the
+  // conversation and RATCHETS (adversarial review M-3) — an explicit value
+  // sets it; an omitted field keeps whatever the conversation already has.
+  evictStaleConversations();
+  const sessionId =
+    req.session_id && conversations.has(req.session_id) ? req.session_id : randomUUID();
+  const stored =
+    conversations.get(sessionId) ??
+    ({ session: createSession(), lastUsed: 0, ceiling: 'bounded-allowed' } as StoredConversation);
+  stored.lastUsed = Date.now();
+  conversations.set(sessionId, stored);
+  if (req.ceiling !== undefined) stored.ceiling = req.ceiling as PrivacyCeiling;
+  const ceiling = stored.ceiling;
 
   // Resolve the endpoint: explicit id, or 'auto' → the concierge picks (M7b).
   // Routing happens strictly BEFORE the turn; the send path is unchanged.
@@ -136,13 +160,11 @@ export async function handleConverseStream(
   if (modelOverride && !validModelId(modelOverride)) {
     return jsonError(res, 400, 'Invalid model id.');
   }
-
-  evictStaleConversations();
-  const sessionId =
-    req.session_id && conversations.has(req.session_id) ? req.session_id : randomUUID();
-  const stored = conversations.get(sessionId) ?? { session: createSession(), lastUsed: 0 };
-  stored.lastUsed = Date.now();
-  conversations.set(sessionId, stored);
+  // Under auto the concierge owns the model choice — a rider override would
+  // make route_reason lie about what was asked for (review INFO).
+  if (modelOverride && req.endpoint_id === 'auto') {
+    return jsonError(res, 400, 'model cannot be combined with endpoint_id "auto".');
+  }
 
   const apiKey = getEndpointKey(endpoint.id) ?? undefined;
   if (endpoint.kind === 'anthropic' && !apiKey) {

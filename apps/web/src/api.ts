@@ -343,10 +343,14 @@ async function dispatch(
   if (method === 'PUT' && route === '/api/routing') {
     const { rules } = parseJson<{ rules?: unknown }>(body);
     if (!Array.isArray(rules)) return bad(400, 'rules must be an array.');
+    // routing.json is re-read on every auto turn; keep it small by construction.
+    if (rules.length > 100) return bad(400, 'Too many rules (max 100).');
     // Reject anything the loader would silently drop — a 200 must mean every
     // submitted rule is live (isRoutingRule is the SAME validator the loader
-    // filters with, so write and read can never disagree).
+    // filters with, so write and read can never disagree). Persist only the
+    // known fields; extra keys are not written to disk.
     const endpointIds = new Set(listEndpoints().map((e) => e.id));
+    const normalized = [];
     for (const r of rules) {
       if (!isRoutingRule(r)) {
         return bad(400, 'Each rule needs a known task kind, an endpointId, and (optionally) a string model.');
@@ -354,8 +358,9 @@ async function dispatch(
       if (!endpointIds.has(r.endpointId)) {
         return bad(400, `Unknown endpoint in rule: ${r.endpointId}`);
       }
+      normalized.push({ task: r.task, endpointId: r.endpointId, ...(r.model ? { model: r.model } : {}) });
     }
-    saveRoutingPolicy({ rules });
+    saveRoutingPolicy({ rules: normalized });
     return ok({ rules: loadRoutingPolicy().rules });
   }
 

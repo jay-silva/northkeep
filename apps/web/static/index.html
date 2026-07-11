@@ -1038,7 +1038,9 @@
           message: msg,
           tier: Number($('convTierSel').value),
           // The privacy pin binds every path — auto routing AND manual picks.
-          ...($('convPrivatePin').checked ? { ceiling: 'private-only' } : {}),
+          // Always explicit: the server RATCHETS the conversation's ceiling,
+          // so unchecking must send the deliberate 'bounded-allowed'.
+          ceiling: $('convPrivatePin').checked ? 'private-only' : 'bounded-allowed',
           // M7a quick-switch: the picked model rides along; the reply's
           // provenance strip shows which model actually answered.
           ...(!isAuto && $('convModel').value && $('convModel').value !== ep.model

@@ -24,6 +24,7 @@ const COLUMNS = [
   'model',
   'privacy',
   'created_ids',
+  'route_reason',
 ] as const;
 
 export function auditAsJson(lastN?: number): CallLogEntry[] {
@@ -51,6 +52,7 @@ export function auditAsCsv(lastN?: number): string {
         e.model ?? '',
         e.privacy ?? '',
         (e.created_ids ?? []).join(' '),
+        e.route_reason ?? '',
       ]
         .map(csvCell)
         .join(','),

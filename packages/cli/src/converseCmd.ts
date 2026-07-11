@@ -283,6 +283,12 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         });
         const chosen = getEndpoint(decision.endpointId);
         if (!chosen) throw new RouteError('The routed endpoint disappeared — check :endpoints.');
+        // Re-check the ceiling on the OBJECT WE ACTUALLY USE: route() classified
+        // a snapshot; getEndpoint() re-read the config file. If the baseUrl
+        // changed in between, the pin must still hold (adversarial review M-1).
+        if (ceiling === 'private-only' && classifyEndpoint(chosen.baseUrl).tier !== 'private') {
+          throw new RouteError(`"${chosen.label}" is no longer private — not sending (pinned).`);
+        }
         turnProvider = providerFor(chosen); // may throw (e.g. missing API key)
         turnModel = decision.model;
         routeReason = decision.reason;
