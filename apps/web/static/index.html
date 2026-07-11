@@ -216,6 +216,28 @@
         <div class="err" id="epErr"></div>
         <div class="row"><button class="btn primary" id="epAdd">Add endpoint</button></div>
       </div>
+      <h3 class="sect">Auto-routing rules</h3>
+      <div class="card">
+        <p class="muted" style="margin:0 0 10px;font-size:13px">When <strong>✦ Auto</strong> is on,
+          these decide which endpoint answers each kind of message. No matching rule → your default
+          endpoint. A conversation pinned <em>Private only</em> skips any rule that would leave the machine.</p>
+        <div id="ruleList"></div>
+        <div class="row" style="margin-top:10px">
+          <select id="ruleTask">
+            <option value="code">code</option>
+            <option value="reasoning">reasoning</option>
+            <option value="creative">creative</option>
+            <option value="long-context">long-context</option>
+            <option value="quick">quick</option>
+            <option value="general">general</option>
+            <option value="*">everything else (*)</option>
+          </select>
+          <span class="muted">→</span>
+          <select id="ruleEndpoint"></select>
+          <button class="btn" id="ruleAdd">Add rule</button>
+        </div>
+        <div class="err" id="ruleErr"></div>
+      </div>
     </div>
     <div id="convEmpty" class="card" hidden>
       <strong>No AI endpoints configured yet.</strong>
@@ -799,6 +821,8 @@
     if (endpoints.length === 0) $('managePanel').hidden = false;
     onEndpointChange();
     renderEpList(r.default_id);
+    fillRuleEndpoints();
+    loadRules();
   }
 
   function onEndpointChange() {
@@ -908,6 +932,76 @@
       box.appendChild(line);
     }
   }
+
+  // --- auto-routing rules (M7b). The API is full-replace PUT; the editor
+  // keeps a local copy, edits it, and writes the whole set back. Endpoint
+  // labels render via textContent (user config, but stay consistent).
+  let routingRules = [];
+  function endpointLabel(id) {
+    const ep = endpoints.find((e) => e.id === id);
+    return ep ? ep.label : id + ' (removed — rule is ignored)';
+  }
+  function renderRules() {
+    const box = $('ruleList');
+    box.textContent = '';
+    if (!routingRules.length) {
+      box.appendChild(el('p', 'muted', 'No rules yet — Auto sends everything to your default endpoint.'));
+      return;
+    }
+    for (const r of routingRules) {
+      const line = el('div', 'epline');
+      line.appendChild(el('span', 'tag', r.task));
+      line.appendChild(el('span', '', '→ ' + endpointLabel(r.endpointId) + (r.model ? ' · ' + r.model : '')));
+      line.appendChild(el('span', 'grow'));
+      const rm = el('button', 'btn danger', 'Remove');
+      rm.style.cssText = 'font-size:12px;padding:2px 10px';
+      rm.addEventListener('click', async () => {
+        rm.disabled = true;
+        try { await putRules(routingRules.filter((x) => x.task !== r.task)); }
+        catch (e) { rm.disabled = false; if (e.message !== 'locked') $('ruleErr').textContent = e.message; }
+      });
+      line.appendChild(rm);
+      box.appendChild(line);
+    }
+  }
+  async function loadRules() {
+    try {
+      const r = await api('/api/routing');
+      routingRules = r.rules || [];
+      renderRules();
+    } catch (e) {
+      if (e.message !== 'locked') $('ruleErr').textContent = e.message;
+    }
+  }
+  async function putRules(rules) {
+    const r = await api('/api/routing', { method: 'PUT', json: { rules } });
+    routingRules = r.rules || [];
+    $('ruleErr').textContent = '';
+    renderRules();
+  }
+  function fillRuleEndpoints() {
+    const sel = $('ruleEndpoint');
+    const prev = sel.value;
+    sel.textContent = '';
+    for (const ep of endpoints) {
+      const o = el('option', '', ep.label);
+      o.value = ep.id;
+      sel.appendChild(o);
+    }
+    if (endpoints.some((ep) => ep.id === prev)) sel.value = prev;
+  }
+  $('ruleAdd').addEventListener('click', async () => {
+    const task = $('ruleTask').value;
+    const endpointId = $('ruleEndpoint').value;
+    if (!endpointId) { $('ruleErr').textContent = 'Add an endpoint first.'; return; }
+    $('ruleAdd').disabled = true;
+    try {
+      // Same semantics as the CLI: one rule per task — setting replaces.
+      await putRules([...routingRules.filter((r) => r.task !== task), { task, endpointId }]);
+    } catch (e) {
+      if (e.message !== 'locked') $('ruleErr').textContent = e.message;
+    } finally { $('ruleAdd').disabled = false; }
+  });
 
   $('epDiscover').addEventListener('click', async () => {
     $('epErr').textContent = '';
