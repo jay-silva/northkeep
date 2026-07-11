@@ -19,3 +19,13 @@ coverage/
 # Tauri / Rust build output
 apps/desktop/src-tauri/target/
 apps/desktop/src-tauri/gen/
+
+# Desktop bundle artifacts (regenerated at build time — NEVER commit).
+# The pinned Node runtime, its extracted binary, and the assembled server tree
+# total ~200 MB. Node is fetched and checksum-verified against nodejs.org's
+# published SHASUMS256 at build time (see scripts/desktop-bundle/), never
+# bundled into the repo — committing the binary + its checksum together would
+# defeat the integrity check, and it is platform-specific besides.
+apps/desktop/.node-cache/
+apps/desktop/src-tauri/binaries/
+apps/desktop/src-tauri/server-tree/
