@@ -116,7 +116,7 @@
      is compact (the full privacy sentence lives in its tooltip + every reply). */
   .conv-controls select { height: 38px; padding: 0 30px 0 12px; font-size: 14px;
     max-width: 220px; text-overflow: ellipsis; }
-  .conv-toolbar .btn { height: 38px; padding: 0 16px; white-space: nowrap; margin-left: auto; }
+  .conv-toolbar .btn { height: 38px; padding: 0 16px; white-space: nowrap; }
   .conv-controls .badge { height: 38px; display: inline-flex; align-items: center; }
   /* The privacy pin as a toggle chip — reads as a control, not a stray form field. */
   .pinchip { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px;
@@ -191,8 +191,8 @@
           <input type="checkbox" id="convPrivatePin"> Private only
         </label>
         <span id="convBadge" class="badge" hidden></span>
+        <button class="btn" id="manageEp">Manage endpoints</button>
       </div>
-      <button class="btn" id="manageEp">Manage endpoints</button>
     </div>
     <div id="managePanel" hidden style="margin-bottom:14px">
       <h3 class="sect">Endpoints</h3>
