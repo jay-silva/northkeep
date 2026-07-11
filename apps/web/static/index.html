@@ -108,8 +108,20 @@
   .badge.private { background: #e6efe8; color: var(--ok); }
   .badge.bounded { background: var(--warn-bg); color: var(--warn-ink); }
   .badge.auto { background: var(--chip); color: var(--ink); }
-  .conv-toolbar { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; margin-bottom: 22px; }
-  .conv-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .conv-toolbar { display: flex; align-items: center; justify-content: space-between;
+    gap: 10px 14px; flex-wrap: wrap; margin-bottom: 22px; }
+  .conv-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  /* Uniform 38px control row: selects, the pin chip, and the badge all align. */
+  .conv-controls select { height: 38px; padding: 0 32px 0 13px; font-size: 14px; }
+  .conv-toolbar .btn { height: 38px; padding: 0 16px; white-space: nowrap; }
+  .conv-controls .badge { height: 38px; display: inline-flex; align-items: center; }
+  /* The privacy pin as a toggle chip — reads as a control, not a stray form field. */
+  .pinchip { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px;
+    border: 1px solid var(--line); border-radius: 10px; background: var(--panel);
+    font: 500 14px/1 var(--sans); color: var(--muted); cursor: pointer; user-select: none;
+    white-space: nowrap; }
+  .pinchip input { accent-color: var(--ok); margin: 0; }
+  .pinchip:has(input:checked) { color: var(--ok); border-color: var(--ok); background: #e6efe8; }
   .thread { margin: 14px 0; }
   .msg { display: flex; flex-direction: column; align-items: flex-start; margin: 11px 0; }
   .msg.user { align-items: flex-end; }
@@ -135,6 +147,7 @@
     .pill.ok, #countPill { background: #22382c; }
     .pill.locked { background: #3a241d; }
     .msg.error .bubble { background: #3a241d; }
+    .pinchip:has(input:checked) { background: #22382c; }
   }
 </style>
 </head>
@@ -166,15 +179,15 @@
       <div class="conv-controls">
         <select id="convEndpoint" title="Endpoint"></select>
         <select id="convModel" title="Model — switch anytime, even mid-conversation" hidden></select>
-        <span id="convBadge" class="badge" hidden></span>
-        <label class="muted" style="display:inline-flex;align-items:center;gap:6px;font-size:13px;white-space:nowrap" title="Pin this conversation to local models only — nothing leaves your machine, and Auto may only pick private endpoints.">
-          <input type="checkbox" id="convPrivatePin"> Private only
-        </label>
         <select id="convTierSel" title="Redaction tier">
           <option value="1" selected>Tier 1 — mask secrets</option>
           <option value="2">Tier 2 — also pseudonymize names</option>
           <option value="0">Off (private endpoints only)</option>
         </select>
+        <label class="pinchip" title="Pin this conversation to local models only — nothing leaves your machine, and Auto may only pick private endpoints.">
+          <input type="checkbox" id="convPrivatePin"> Private only
+        </label>
+        <span id="convBadge" class="badge" hidden></span>
       </div>
       <button class="btn" id="manageEp">Manage endpoints</button>
     </div>
