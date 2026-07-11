@@ -296,6 +296,19 @@
       <div class="err" id="syncConfigErr"></div>
       <p class="muted" id="syncAccountId" hidden style="margin:0;font-size:13px"></p>
     </div>
+    <div id="syncBillingCard" hidden>
+      <h3 class="sect">Subscription</h3>
+      <div class="card">
+        <p id="syncBillingLine" style="margin:0 0 10px">Loading…</p>
+        <div class="row">
+          <button class="btn primary" id="syncSubscribeBtn" hidden>Subscribe — $10/month</button>
+          <button class="btn" id="syncManageBtn" hidden>Manage billing</button>
+        </div>
+        <p class="muted" style="margin:10px 0 0;font-size:13px">Your card is entered on Stripe's
+          secure checkout — it never touches Northkeep. We store only whether your subscription
+          is active, linked to your encrypted account. Never your card or the contents of your vault.</p>
+      </div>
+    </div>
     <h3 class="sect">Status</h3>
     <div class="card">
       <p class="muted" id="syncServerLine" hidden style="margin:0 0 6px;font-size:13px"></p>
@@ -344,7 +357,7 @@
     });
     const data = await res.json().catch(() => ({}));
     if (res.status === 423) { showUnlock(); throw new Error('locked'); }
-    if (!res.ok) throw new Error(data.error || ('HTTP ' + res.status));
+    if (!res.ok) { const e = new Error(data.error || ('HTTP ' + res.status)); e.status = res.status; throw e; }
     return data;
   }
 
@@ -1023,6 +1036,7 @@
       line.textContent = syncSentence(s);
       $('syncPushBtn').disabled = false;
       $('syncPullBtn').disabled = false;
+      await loadSyncBilling();
     } catch (e) {
       if (e.message !== 'locked') line.textContent = e.message;
     }
@@ -1059,8 +1073,13 @@
         out.textContent = 'Push did not complete.';
       }
     } catch (e) {
-      out.textContent = e.message === 'locked'
-        ? 'Your vault is locked — unlock it, then Push again.' : e.message;
+      if (e.status === 402) {
+        out.textContent = 'A $10/month subscription is required — subscribe below, then Push.';
+        await loadSyncBilling();
+      } else {
+        out.textContent = e.message === 'locked'
+          ? 'Your vault is locked — unlock it, then Push again.' : e.message;
+      }
     } finally {
       syncBusy(false);
       await loadSyncStatus();
@@ -1081,12 +1100,72 @@
       }
     } catch (e) {
       // api() already called showUnlock() on a 423.
-      out.textContent = e.message === 'locked'
-        ? 'Your vault is locked — unlock it above, then Pull again.' : e.message;
+      if (e.status === 402) {
+        out.textContent = 'A $10/month subscription is required — subscribe below, then Pull.';
+        await loadSyncBilling();
+      } else {
+        out.textContent = e.message === 'locked'
+          ? 'Your vault is locked — unlock it above, then Pull again.' : e.message;
+      }
     } finally {
       syncBusy(false);
       await loadSyncStatus();
     }
+  });
+
+  // --- subscription (M5b). The card shows only when the server bills; a free /
+  // allowlisted or self-hosted account sees nothing here.
+  async function loadSyncBilling() {
+    const card = $('syncBillingCard'), line = $('syncBillingLine');
+    const subBtn = $('syncSubscribeBtn'), mgBtn = $('syncManageBtn');
+    try {
+      const s = await api('/api/sync/subscription');
+      // The card shows only when THIS server bills. A self-hosted / allowlist-only
+      // server (billing off) shows nothing here. `billing` is the discriminator:
+      // a new user on a billing server has status null but billing true.
+      if (!s.configured || !s.billing) { card.hidden = true; return; }
+      card.hidden = false;
+      if (s.active) {
+        const until = s.currentPeriodEnd
+          ? ' — renews ' + new Date(s.currentPeriodEnd * 1000).toISOString().slice(0, 10) : '';
+        line.textContent = '✓ Active (' + s.status + ')' + until + '.';
+        subBtn.hidden = true; mgBtn.hidden = false;
+      } else if (s.status && s.status !== 'none') {
+        // Billing on, account inactive/lapsed.
+        line.textContent = 'Your subscription is ' + s.status + ' — resubscribe to keep syncing.';
+        subBtn.hidden = false; mgBtn.hidden = false;
+      } else {
+        // Billing on, no subscription yet — prompt to subscribe.
+        line.textContent = 'This server requires a $10/month subscription to sync.';
+        subBtn.hidden = false; mgBtn.hidden = true;
+      }
+    } catch (e) {
+      if (e.message !== 'locked') card.hidden = true;
+    }
+  }
+  // The Stripe URL comes from the (untrusted) sync server — open it only if it's
+  // a real https URL, never a javascript:/data: scheme. noopener severs the tab.
+  function openStripe(url) {
+    if (typeof url === 'string' && /^https:\/\//i.test(url)) window.open(url, '_blank', 'noopener');
+    else $('syncBillingLine').textContent = 'The server returned an unexpected checkout link — not opening it.';
+  }
+  $('syncSubscribeBtn').addEventListener('click', async () => {
+    $('syncSubscribeBtn').disabled = true;
+    try {
+      const r = await api('/api/sync/subscribe', { method: 'POST' });
+      openStripe(r.url);
+    } catch (e) {
+      if (e.message !== 'locked') $('syncBillingLine').textContent = e.message;
+    } finally { $('syncSubscribeBtn').disabled = false; }
+  });
+  $('syncManageBtn').addEventListener('click', async () => {
+    $('syncManageBtn').disabled = true;
+    try {
+      const r = await api('/api/sync/billing', { method: 'POST' });
+      openStripe(r.url);
+    } catch (e) {
+      if (e.message !== 'locked') $('syncBillingLine').textContent = e.message;
+    } finally { $('syncManageBtn').disabled = false; }
   });
 
   refreshStatus().catch(() => { $('countPill').textContent = 'no connection'; });

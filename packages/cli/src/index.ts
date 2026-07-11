@@ -38,7 +38,15 @@ import {
 import { getPassphrase } from './prompt.js';
 import { PASTE_PROMPT, prepareImport, writeApproved, type ImportCmdOptions } from './importCmd.js';
 import { runConverse, type ConverseCmdOptions } from './converseCmd.js';
-import { syncConfig, syncId, syncPull, syncPush, syncStatusCmd } from './syncCmd.js';
+import {
+  syncBilling,
+  syncConfig,
+  syncId,
+  syncPull,
+  syncPush,
+  syncStatusCmd,
+  syncSubscribe,
+} from './syncCmd.js';
 
 const program = new Command();
 
@@ -463,6 +471,20 @@ sync
   .description('Show whether your vault is in sync, ahead, or behind')
   .action(async () => {
     await syncStatusCmd(vaultPathOpt(), fail);
+  });
+
+sync
+  .command('subscribe')
+  .description('Start a $10/month subscription to sync on a hosted server (Stripe checkout)')
+  .action(async () => {
+    await syncSubscribe(fail);
+  });
+
+sync
+  .command('billing')
+  .description('Manage your subscription — update card or cancel (Stripe billing portal)')
+  .action(async () => {
+    await syncBilling(fail);
   });
 
 sync

@@ -10,11 +10,15 @@ import {
   type MemoryType,
 } from '@northkeep/core';
 import {
+  checkoutUrl,
   deriveSyncCreds,
   loadSyncConfig,
+  portalUrl,
   pullVault,
   pushVault,
   setSyncServer,
+  subscriptionStatus,
+  SubscriptionRequiredError,
   syncState,
 } from '@northkeep/sync';
 import {
@@ -104,6 +108,8 @@ export async function handleApi(
   } catch (err) {
     if (err instanceof LockedError) return bad(423, 'Vault is locked.');
     if (err instanceof VaultAuthError) return bad(401, err.message);
+    if (err instanceof SubscriptionRequiredError)
+      return bad(402, 'A $10/month subscription is required to sync on this server.');
     if (err instanceof DeviceSecretError || err instanceof SyncRequestError) return bad(400, err.message);
     return bad(500, err instanceof Error ? err.message : String(err));
   }
@@ -283,6 +289,45 @@ async function dispatch(
       return ok(result);
     } finally {
       memzero(masterKey);
+    }
+  }
+
+  // --- Billing (M5b). The web server calls the sync server in Node and returns
+  // only the Stripe-hosted URL; the card is entered on Stripe, never here. A
+  // server without billing simply reports inactive / errors on checkout. ---
+
+  if (method === 'GET' && route === '/api/sync/subscription') {
+    const deviceSecret = deviceSecretOrError();
+    if (!loadSyncConfig()) return ok({ configured: false });
+    try {
+      const sub = await subscriptionStatus({ deviceSecret });
+      return ok({ configured: true, ...sub });
+    } catch {
+      // Older/self-hosted servers may not expose the endpoint → billing off.
+      return ok({ configured: true, billing: false, active: false, status: 'none', currentPeriodEnd: null });
+    }
+  }
+
+  if (method === 'POST' && route === '/api/sync/subscribe') {
+    const deviceSecret = deviceSecretOrError();
+    if (!loadSyncConfig()) return bad(400, 'Sync is not configured.');
+    try {
+      const url = await checkoutUrl({ deviceSecret });
+      return ok({ url });
+    } catch {
+      return bad(400, 'This sync server does not offer subscriptions.');
+    }
+  }
+
+  if (method === 'POST' && route === '/api/sync/billing') {
+    const deviceSecret = deviceSecretOrError();
+    if (!loadSyncConfig()) return bad(400, 'Sync is not configured.');
+    try {
+      const url = await portalUrl({ deviceSecret });
+      if (!url) return bad(404, 'No subscription found for this account.');
+      return ok({ url });
+    } catch {
+      return bad(400, 'This sync server does not offer subscriptions.');
     }
   }
 

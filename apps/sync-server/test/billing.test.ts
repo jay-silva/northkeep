@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { handleSync, type SyncRequest } from '../src/handler.js';
 import { InMemoryStorage } from '../src/storage.js';
 import {
+  billingFromEnv,
   createCheckout,
   handleWebhook,
   subscriptionActive,
@@ -171,6 +172,31 @@ describe('handleWebhook', () => {
       expect.arrayContaining(['tokenHash', 'stripeCustomerId', 'stripeSubscriptionId', 'status', 'currentPeriodEnd']),
     );
     expect(JSON.stringify(sub)).not.toMatch(/email|card|number/i);
+  });
+});
+
+describe('billingFromEnv — fail closed on partial config (M-1)', () => {
+  const full = {
+    STRIPE_SECRET_KEY: 'sk_test_x',
+    STRIPE_WEBHOOK_SECRET: 'whsec_x',
+    STRIPE_PRICE_ID: 'price_x',
+    PUBLIC_BASE_URL: 'https://nk.test/',
+  };
+
+  it('returns null when NO Stripe env is set (self-host / open)', () => {
+    expect(billingFromEnv({})).toBeNull();
+  });
+
+  it('THROWS when only some Stripe env is set (never silently disable the paywall)', () => {
+    expect(() => billingFromEnv({ STRIPE_SECRET_KEY: 'sk_test_x' })).toThrow(/Incomplete Stripe/i);
+    const { PUBLIC_BASE_URL: _omit, ...missingOne } = full;
+    expect(() => billingFromEnv(missingOne)).toThrow(/Incomplete Stripe/i);
+  });
+
+  it('returns billing deps when all four are set, trimming a trailing slash', () => {
+    const deps = billingFromEnv(full);
+    expect(deps).not.toBeNull();
+    expect(deps!.config).toEqual({ priceId: 'price_x', publicBaseUrl: 'https://nk.test' });
   });
 });
 

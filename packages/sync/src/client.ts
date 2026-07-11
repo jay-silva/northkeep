@@ -18,6 +18,26 @@ const STATUS_TIMEOUT_MS = 15_000;
 const BLOB_TIMEOUT_MS = 120_000;
 export const MAX_BLOB_BYTES = 4 * 1024 * 1024;
 
+/** Thrown when the server requires a subscription (HTTP 402) — surfaces a subscribe prompt. */
+export class SubscriptionRequiredError extends Error {
+  constructor() {
+    super('This sync server requires a $10/month subscription. Run "northkeep sync subscribe".');
+    this.name = 'SubscriptionRequiredError';
+  }
+}
+
+export interface SubscriptionStatus {
+  /** Does this server require (and offer) a subscription at all? A 200 from the
+   * subscription endpoint means billing is on; a 404 means it isn't. This is the
+   * only signal that distinguishes "new user who must subscribe" (status null,
+   * billing true) from "self-hosted server that doesn't bill" (status null,
+   * billing false). */
+  billing: boolean;
+  active: boolean;
+  status: string | null;
+  currentPeriodEnd: number | null;
+}
+
 export interface RemoteStatus {
   version: number;
   sha256: string;
@@ -51,6 +71,7 @@ async function remoteStatus(serverUrl: string, token: string): Promise<RemoteSta
     signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
   });
   if (res.status === 404) return null;
+  if (res.status === 402) throw new SubscriptionRequiredError();
   if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on status.`);
   const body = (await res.json()) as RemoteStatus;
   return body;
@@ -66,6 +87,7 @@ async function pullBlob(
     signal: AbortSignal.timeout(BLOB_TIMEOUT_MS),
   });
   if (res.status === 404) return null;
+  if (res.status === 402) throw new SubscriptionRequiredError();
   if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on pull.`);
   const blob = Buffer.from(await res.arrayBuffer());
   const version = Number(res.headers.get('x-version') ?? '0');
@@ -94,6 +116,7 @@ async function pushBlob(
     const body = (await res.json().catch(() => ({}))) as { version?: number };
     return { ok: false, conflict: true, version: body.version ?? baseVersion };
   }
+  if (res.status === 402) throw new SubscriptionRequiredError();
   if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on push.`);
   const body = (await res.json()) as { version: number };
   return { ok: true, conflict: false, version: body.version };
@@ -236,4 +259,55 @@ export async function syncState(options: {
   const state: SyncState =
     config.lastVersion === remote.version ? 'in-sync' : config.lastVersion > remote.version ? 'ahead' : 'behind';
   return { state, localVersion: config.lastVersion, remoteVersion: remote.version };
+}
+
+// --- billing (M5b) ---
+
+/** This account's subscription status on the configured server. */
+export async function subscriptionStatus(options: { deviceSecret: Buffer }): Promise<SubscriptionStatus> {
+  const config = requireConfig();
+  const { token } = deriveSyncCreds(options.deviceSecret);
+  const res = await fetch(`${config.serverUrl}/api/subscription`, {
+    headers: authHeaders(token),
+    redirect: 'error',
+    signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
+  });
+  // 404 = this server has no billing route (self-host / open); billing is off.
+  if (res.status === 404) return { billing: false, active: false, status: null, currentPeriodEnd: null };
+  if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on subscription.`);
+  const b = (await res.json()) as { active: boolean; status: string | null; current_period_end: number | null };
+  return { billing: true, active: b.active, status: b.status, currentPeriodEnd: b.current_period_end };
+}
+
+/** A Stripe-hosted Checkout URL for this account to subscribe. Open it in a browser. */
+export async function checkoutUrl(options: { deviceSecret: Buffer }): Promise<string> {
+  const config = requireConfig();
+  const { token } = deriveSyncCreds(options.deviceSecret);
+  const res = await fetch(`${config.serverUrl}/api/checkout`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    redirect: 'error',
+    signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
+  });
+  if (res.status === 404) throw new Error('This sync server does not offer subscriptions (billing is off).');
+  if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on checkout.`);
+  const b = (await res.json()) as { url?: string };
+  if (!b.url) throw new Error('Sync server did not return a checkout URL.');
+  return b.url;
+}
+
+/** A Stripe billing-portal URL to manage/cancel, or null if there's no subscription. */
+export async function portalUrl(options: { deviceSecret: Buffer }): Promise<string | null> {
+  const config = requireConfig();
+  const { token } = deriveSyncCreds(options.deviceSecret);
+  const res = await fetch(`${config.serverUrl}/api/portal`, {
+    method: 'POST',
+    headers: authHeaders(token),
+    redirect: 'error',
+    signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
+  });
+  if (res.status === 404) return null; // no subscription to manage, or billing off
+  if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on portal.`);
+  const b = (await res.json()) as { url?: string };
+  return b.url ?? null;
 }

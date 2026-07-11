@@ -12,8 +12,13 @@ export {
   pullVault,
   pushVault,
   syncState,
+  subscriptionStatus,
+  checkoutUrl,
+  portalUrl,
+  SubscriptionRequiredError,
   type PullResult,
   type PushResult,
   type RemoteStatus,
   type SyncState,
+  type SubscriptionStatus,
 } from './client.js';

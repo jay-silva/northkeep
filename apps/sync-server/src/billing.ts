@@ -160,16 +160,33 @@ export function billingFromEnv(env: NodeJS.ProcessEnv = process.env): BillingDep
   const webhookSecret = env.STRIPE_WEBHOOK_SECRET;
   const priceId = env.STRIPE_PRICE_ID;
   const publicBaseUrl = env.PUBLIC_BASE_URL;
-  if (!secretKey || !webhookSecret || !priceId || !publicBaseUrl) return null;
+  const present = [secretKey, webhookSecret, priceId, publicBaseUrl].filter(Boolean).length;
+  // None set → billing is legitimately OFF (self-host / open server, ADR 0009).
+  if (present === 0) return null;
+  // Some but not all set → a misconfiguration. FAIL CLOSED: never silently
+  // disable the paywall (adversarial review M-1). A hosted deploy that loses one
+  // Stripe var should crash visibly, not degrade to a free-for-all.
+  if (present < 4) {
+    throw new Error(
+      'Incomplete Stripe billing configuration. Set ALL of STRIPE_SECRET_KEY, ' +
+        'STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_ID, PUBLIC_BASE_URL — or NONE (to run without billing).',
+    );
+  }
   return {
-    gateway: createStripeGateway(secretKey, webhookSecret),
-    config: { priceId, publicBaseUrl: publicBaseUrl.replace(/\/$/, '') },
+    gateway: createStripeGateway(secretKey!, webhookSecret!),
+    config: { priceId: priceId!, publicBaseUrl: publicBaseUrl!.replace(/\/$/, '') },
   };
 }
 
 /** Production gateway backed by the Stripe SDK. */
 export function createStripeGateway(secretKey: string, webhookSecret: string): StripeGateway {
-  const stripe = new Stripe(secretKey);
+  // Pin the API version to the one this SDK's types describe (adversarial review
+  // M-2). Without a pin, the account's default API version is used at runtime,
+  // which can differ from the compiled types — e.g. a newer version relocates
+  // `current_period_end` off the top-level Subscription, silently breaking the
+  // gate for real subscribers. A pinned version keeps runtime and types in sync;
+  // a future SDK upgrade must re-verify the period fields.
+  const stripe = new Stripe(secretKey, { apiVersion: '2025-02-24.acacia' });
   return {
     async createCheckoutSession({ priceId, clientReferenceId, successUrl, cancelUrl }) {
       const session = await stripe.checkout.sessions.create({

@@ -2,15 +2,22 @@ import fs from 'node:fs';
 import { Vault, deriveMasterKey, loadDeviceSecret, memzero } from '@northkeep/core';
 import { resolveMasterKey } from '@northkeep/mcp-server';
 import {
+  checkoutUrl,
   deriveSyncCreds,
   loadSyncConfig,
+  portalUrl,
   pullVault,
   pushVault,
   setSyncServer,
+  subscriptionStatus,
+  SubscriptionRequiredError,
   syncState,
   tokenHash,
 } from '@northkeep/sync';
 import { getPassphrase } from './prompt.js';
+
+const SUBSCRIBE_HINT =
+  'This sync server requires a $10/month subscription. Run "northkeep sync subscribe" to start one.';
 
 /**
  * `northkeep sync` — client-side-encrypted vault sync (ADR 0009). The vault
@@ -42,7 +49,13 @@ export async function syncConfig(
 export async function syncPush(vaultPath: string, fail: (m: string) => never): Promise<void> {
   const deviceSecret = deviceSecretOrFail(fail);
   if (!loadSyncConfig()) fail('Sync is not configured. Run: northkeep sync config --server <url>');
-  const result = await pushVault({ vaultPath, deviceSecret });
+  let result: Awaited<ReturnType<typeof pushVault>>;
+  try {
+    result = await pushVault({ vaultPath, deviceSecret });
+  } catch (err) {
+    if (err instanceof SubscriptionRequiredError) fail(SUBSCRIBE_HINT);
+    throw err;
+  }
   if (result.ok) {
     console.log(`✓ Pushed. Server is now at version ${result.version}.`);
   } else {
@@ -80,6 +93,9 @@ export async function syncPull(vaultPath: string, fail: (m: string) => never): P
     if (!localExists) {
       console.log('  Open it with your passphrase: northkeep list');
     }
+  } catch (err) {
+    if (err instanceof SubscriptionRequiredError) fail(SUBSCRIBE_HINT);
+    throw err;
   } finally {
     if (masterKey) memzero(masterKey);
   }
@@ -94,6 +110,28 @@ export async function syncStatusCmd(vaultPath: string, fail: (m: string) => neve
   }
   const { state, localVersion, remoteVersion } = await syncState({ vaultPath, deviceSecret });
   console.log(`Server: ${config.serverUrl}`);
+
+  // Billing state, when this server bills. A server without Stripe returns a
+  // subscription payload that simply reports inactive/none; only mention it when
+  // there's something to say.
+  try {
+    const sub = await subscriptionStatus({ deviceSecret });
+    if (sub.active) {
+      const until = sub.currentPeriodEnd
+        ? ` (renews ${new Date(sub.currentPeriodEnd * 1000).toISOString().slice(0, 10)})`
+        : '';
+      console.log(`Subscription: ✓ ${sub.status}${until}. Manage it: northkeep sync billing`);
+    } else if (sub.status && sub.status !== 'none') {
+      console.log(`Subscription: ${sub.status} (inactive). Run: northkeep sync subscribe`);
+    } else if (sub.billing) {
+      // Billing server, no subscription yet — allowlisted accounts sync free, so
+      // this only matters if a push/pull is refused; still, surface the option.
+      console.log('Subscription: none. This server bills $10/month — run: northkeep sync subscribe');
+    }
+  } catch {
+    // Older servers (pre-billing) may not expose /api/subscription; stay quiet.
+  }
+
   const message =
     state === 'in-sync'
       ? '✓ In sync.'
@@ -107,6 +145,53 @@ export async function syncStatusCmd(vaultPath: string, fail: (m: string) => neve
               ? `No local vault; the server has version ${remoteVersion}. Run: northkeep sync pull`
               : 'Sync is not configured.';
   console.log(message);
+}
+
+export async function syncSubscribe(fail: (m: string) => never): Promise<void> {
+  const deviceSecret = deviceSecretOrFail(fail);
+  if (!loadSyncConfig()) fail('Sync is not configured. Run: northkeep sync config --server <url>');
+
+  // Already covered? Say so instead of opening a second checkout.
+  try {
+    const sub = await subscriptionStatus({ deviceSecret });
+    if (sub.active) {
+      console.log(`✓ You already have an active subscription (${sub.status}).`);
+      console.log('  Manage or cancel it: northkeep sync billing');
+      return;
+    }
+  } catch {
+    // Fall through to checkout; a server that bills will accept the request.
+  }
+
+  let url: string;
+  try {
+    url = await checkoutUrl({ deviceSecret });
+  } catch {
+    fail('This sync server does not offer subscriptions (it may be private or self-hosted).');
+  }
+  console.log('Open this link in your browser to subscribe ($10/month, secure Stripe checkout):');
+  console.log('');
+  console.log(`  ${url}`);
+  console.log('');
+  console.log('Your card is entered on Stripe — it never touches Northkeep. After you subscribe,');
+  console.log('run "northkeep sync push" to start syncing.');
+}
+
+export async function syncBilling(fail: (m: string) => never): Promise<void> {
+  const deviceSecret = deviceSecretOrFail(fail);
+  if (!loadSyncConfig()) fail('Sync is not configured. Run: northkeep sync config --server <url>');
+  let url: string | null;
+  try {
+    url = await portalUrl({ deviceSecret });
+  } catch {
+    fail('This sync server does not offer subscriptions (it may be private or self-hosted).');
+  }
+  if (!url) {
+    fail('No subscription found for this account. Start one: northkeep sync subscribe');
+  }
+  console.log('Open this link to manage your subscription (update card, cancel):');
+  console.log('');
+  console.log(`  ${url}`);
 }
 
 export function syncId(fail: (m: string) => never): void {
