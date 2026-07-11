@@ -784,14 +784,18 @@
   // the whole prompt is re-redacted at the current endpoint's tier every turn.
   const modelCache = new Map(); // endpoint id → string[] of discovered models
   let modelLoadToken = 0;
+  let modelPickerEpId = null; // whose models the picker currently shows
   function fillModelPicker(ep, models) {
     const sel = $('convModel');
-    const prev = sel.value;
+    // Keep the user's choice only across a REFRESH of the same endpoint; a
+    // switch to another endpoint always starts at that endpoint's default
+    // (even if it happens to serve a model with the same id).
+    const prev = modelPickerEpId === ep.id ? sel.value : '';
+    modelPickerEpId = ep.id;
     const list = [...new Set([ep.model, ...models])]; // configured model always first
     sel.textContent = '';
     for (const m of list) { const o = el('option', '', m); o.value = m; sel.appendChild(o); }
-    // Keep the user's in-flight choice across a refresh; else the configured model.
-    sel.value = list.includes(prev) ? prev : ep.model;
+    sel.value = prev && list.includes(prev) ? prev : ep.model;
   }
   async function loadModelPicker(ep) {
     fillModelPicker(ep, modelCache.get(ep.id) || []);

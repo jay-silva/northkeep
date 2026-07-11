@@ -211,7 +211,7 @@ describe('M7a acceptance — quick-switch', () => {
     expect(output).toContain('Next turns use beta-model');
     expect(output).toContain('answered by beta-model'); // the switched model replied
     expect(outbound.at(-1)?.model).toBe('beta-model');
-  }, 30000);
+  }, 120000);
 
   it('REPL tier-0 guard: cannot :endpoint onto a non-private endpoint with redaction off', async () => {
     // A bounded endpoint exists (never actually called).
@@ -219,10 +219,12 @@ describe('M7a acceptance — quick-switch', () => {
       method: 'POST',
       json: { label: 'Fake Cloud', base_url: 'https://api.example.com', model: 'x' },
     });
+    const before = outbound.length;
     const output = await replSession([':endpoint Fake Cloud'], ['--endpoint', endpointId, '--tier', '0']);
     expect(output).toContain('Not switching');
     expect(output).toContain('not private');
-  }, 30000);
+    expect(outbound.length).toBe(before); // nothing was sent anywhere
+  }, 120000);
 });
 
 /** Drive the REPL: send each line, then EOF; resolve with all output. */
@@ -233,15 +235,23 @@ function replSession(lines: string[], args: string[]): Promise<string> {
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let out = '';
-    child.stdout!.on('data', (c: Buffer) => (out += c.toString('utf8')));
-    child.stderr!.on('data', (c: Buffer) => (out += c.toString('utf8')));
-    child.on('exit', () => resolve(out));
-    child.on('error', reject);
-    child.stdin!.write(lines.join('\n') + '\n');
-    child.stdin!.end();
-    setTimeout(() => {
+    // Generous: every CLI spawn pays a full production Argon2id derivation
+    // (see vitest.config.ts), so a slow CI box needs headroom.
+    const timer = setTimeout(() => {
       child.kill();
       reject(new Error(`REPL did not exit. Output:\n${out}`));
-    }, 25000);
+    }, 90000);
+    child.stdout!.on('data', (c: Buffer) => (out += c.toString('utf8')));
+    child.stderr!.on('data', (c: Buffer) => (out += c.toString('utf8')));
+    child.on('exit', () => {
+      clearTimeout(timer);
+      resolve(out);
+    });
+    child.on('error', (err) => {
+      clearTimeout(timer);
+      reject(err);
+    });
+    child.stdin!.write(lines.join('\n') + '\n');
+    child.stdin!.end();
   });
 }
