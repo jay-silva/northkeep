@@ -127,13 +127,36 @@ export async function handleWebhook(
     const sub = event.object;
     const subscriptionId = typeof sub.id === 'string' ? sub.id : null;
     const status = typeof sub.status === 'string' ? sub.status : null;
-    const periodEnd = typeof sub.current_period_end === 'number' ? sub.current_period_end : null;
+    // The event payload is shaped by the WEBHOOK ENDPOINT's API version — not
+    // our SDK pin. Newer Stripe API versions moved current_period_end off the
+    // top-level subscription into items.data[]. Read both shapes; and a
+    // `deleted` event must NEVER be ignored for a missing period (that left a
+    // canceled account syncing in the live self-test) — canceled is canceled,
+    // so default its period to 0 (already ended).
+    const periodEnd =
+      readPeriodEnd(sub) ?? (event.type === 'customer.subscription.deleted' ? 0 : null);
     if (!subscriptionId || !status || periodEnd === null) return { handled: false };
     await storage.updateSubscriptionByStripeId(subscriptionId, status, periodEnd);
     return { handled: true };
   }
 
   return { handled: false }; // ignored event type
+}
+
+/**
+ * current_period_end across Stripe API versions: top-level on the subscription
+ * (≤ early-2025 versions) or per-item under items.data[].current_period_end
+ * (newer versions). Take the max item so a multi-item subscription stays
+ * active until its longest-paid item ends.
+ */
+function readPeriodEnd(sub: Record<string, unknown>): number | null {
+  if (typeof sub.current_period_end === 'number') return sub.current_period_end;
+  const items = (sub.items as { data?: unknown } | undefined)?.data;
+  if (!Array.isArray(items)) return null;
+  const ends = items
+    .map((it) => (it as { current_period_end?: unknown }).current_period_end)
+    .filter((v): v is number => typeof v === 'number');
+  return ends.length > 0 ? Math.max(...ends) : null;
 }
 
 /** A Stripe id field may be a bare id string or an expanded object with `.id`. */
@@ -208,7 +231,9 @@ export function createStripeGateway(secretKey: string, webhookSecret: string): S
     },
     async retrieveSubscription(subscriptionId) {
       const sub = await stripe.subscriptions.retrieve(subscriptionId);
-      return { status: sub.status, currentPeriodEnd: sub.current_period_end };
+      // Version-robust: top-level on the pinned version, items.data[] on newer.
+      const periodEnd = readPeriodEnd(sub as unknown as Record<string, unknown>) ?? 0;
+      return { status: sub.status, currentPeriodEnd: periodEnd };
     },
     verifyWebhook(rawBody, signature) {
       const event = stripe.webhooks.constructEvent(rawBody, signature, webhookSecret);

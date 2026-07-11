@@ -142,6 +142,55 @@ describe('handleWebhook', () => {
     expect(await subscriptionActive(HASH, s, NOW)).toBe(false);
   });
 
+  it('handles the NEWER API shape: current_period_end under items.data[] (subscription.updated)', async () => {
+    const s = new InMemoryStorage();
+    await s.upsertSubscription({
+      tokenHash: HASH,
+      stripeCustomerId: 'cus_9',
+      stripeSubscriptionId: 'sub_9',
+      status: 'active',
+      currentPeriodEnd: nowSec + 3600,
+    });
+    const gw = fakeGateway();
+    // Newer Stripe API versions: no top-level current_period_end.
+    const event = Buffer.from(
+      JSON.stringify({
+        type: 'customer.subscription.updated',
+        object: {
+          id: 'sub_9',
+          status: 'past_due',
+          items: { data: [{ current_period_end: nowSec + 7200 }] },
+        },
+      }),
+    );
+    const out = await handleWebhook(event, 'good', gw, s);
+    expect(out.handled).toBe(true);
+    const sub = await s.getSubscription(HASH);
+    expect(sub).toMatchObject({ status: 'past_due', currentPeriodEnd: nowSec + 7200 });
+  });
+
+  it('NEVER ignores a deleted event for a missing period — canceled means blocked (live-test regression)', async () => {
+    const s = new InMemoryStorage();
+    await s.upsertSubscription({
+      tokenHash: HASH,
+      stripeCustomerId: 'cus_9',
+      stripeSubscriptionId: 'sub_9',
+      status: 'active',
+      currentPeriodEnd: nowSec + 3600,
+    });
+    const gw = fakeGateway();
+    // A deleted event with NO period field in either shape (worst case).
+    const event = Buffer.from(
+      JSON.stringify({
+        type: 'customer.subscription.deleted',
+        object: { id: 'sub_9', status: 'canceled' },
+      }),
+    );
+    const out = await handleWebhook(event, 'good', gw, s);
+    expect(out.handled).toBe(true);
+    expect(await subscriptionActive(HASH, s, NOW)).toBe(false);
+  });
+
   it('rejects a forged event (bad signature)', async () => {
     const s = new InMemoryStorage();
     const gw = fakeGateway();
