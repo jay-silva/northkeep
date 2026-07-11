@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for every binary in Northkeep.app (ADR 0012).
+  Tauri signs the whole bundle - shell, Node sidecar, .node addons - with
+  this one file.
+
+  Why JIT is allowed: the bundled Node runtime needs executable JIT memory
+  for V8, and - verified 2026-07-11 - the tighter "jitless" plan from
+  ADR 0012 is NOT viable: V8's jitless flag removes WebAssembly entirely,
+  which breaks Node's fetch() (undici parses HTTP with WASM llhttp), which
+  breaks the Ollama probe and Tier-2 redaction - a silent privacy-tier
+  degradation (invariant 6). See entitlements-jitless.plist for the
+  shelved variant. (XML comments cannot contain a double hyphen, so the
+  flag is spelled without its dashes here.)
+
+  Deliberately absent: App Sandbox (we ship outside the App Store and must
+  exec /usr/bin/security for keychain persistence), network entitlements
+  (sandbox-only concepts), and disable-library-validation (all .node addons
+  are signed with the same Developer ID by presign.sh).
+-->
+<plist version="1.0">
+<dict>
+  <!-- V8 JIT pages for the Node sidecar. -->
+  <key>com.apple.security.cs.allow-jit</key>
+  <true/>
+  <!-- Some Node builds still MAP_JIT-less-allocate executable memory;
+       ADR 0012 says start with both, then try tightening. Try removing
+       this first once a signed build exists. -->
+  <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+  <true/>
+</dict>
+</plist>

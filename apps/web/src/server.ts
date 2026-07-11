@@ -145,8 +145,24 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.a
   startUiServer({
     announce: true,
     port: portArg !== -1 ? Number(process.argv[portArg + 1]) || 0 : 0,
-  }).catch((err: unknown) => {
-    console.error(err instanceof Error ? err.message : String(err));
-    process.exit(1);
-  });
+  })
+    .then((running) => {
+      // The desktop shell (ADR 0012) sends SIGTERM on quit expecting us to
+      // zeroize the vault master key before exiting. `close()` runs
+      // session.lock() (which zeroes the key) then shuts the listener.
+      // Without this, default SIGTERM would kill the process with the key
+      // still resident. Idempotent-guarded so a SIGTERM→SIGKILL race is safe.
+      let closing = false;
+      const shutdown = (): void => {
+        if (closing) return;
+        closing = true;
+        void running.close().then(() => process.exit(0));
+      };
+      process.on('SIGTERM', shutdown);
+      process.on('SIGINT', shutdown);
+    })
+    .catch((err: unknown) => {
+      console.error(err instanceof Error ? err.message : String(err));
+      process.exit(1);
+    });
 }

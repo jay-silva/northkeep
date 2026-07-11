@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  SHELVED variant (ADR 0012's preferred experiment) - NOT wired into the
+  build. This is the no-JIT-entitlement posture that pairs with spawning
+  the sidecar with V8's jitless flag. (XML comments cannot contain a
+  double hyphen, so the flag is spelled without its dashes here.)
+
+  Verified 2026-07-11 on Node v24.14.0/darwin-arm64: jitless disables
+  WebAssembly ("WebAssembly is not defined"), and Node's global fetch()
+  (undici) parses HTTP with WASM llhttp - so every fetch() fails, the
+  Ollama availability probe returns false, and Tier-2 redaction silently
+  degrades (invariant 6 violation). Vault crypto (sodium-native) and
+  SQLite were unaffected - the addons are native, not JIT-dependent.
+
+  To revive this posture, packages/librarian's Ollama client (and any
+  other fetch() caller) would have to move to node:http first. Until
+  then, point bundle.macOS.entitlements at entitlements.plist (allow-jit).
+-->
+<plist version="1.0">
+<dict/>
+</plist>

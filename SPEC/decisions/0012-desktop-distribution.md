@@ -1,7 +1,9 @@
 # ADR 0012 — Desktop distribution: signed, notarized macOS DMG
 
 - **Date:** 2026-07-11
-- **Status:** Draft — pending review
+- **Status:** Accepted — pipeline built + empirically verified 2026-07-11
+  (scripts/desktop-bundle/, apps/desktop/src-tauri/). Only the first *signed*
+  build remains, gated on Jay's Apple credentials.
 - **Deciders:** Jay (chose "full native app" — double-clickable, no dev
   tooling), Claude Code
 - **Supersedes:** the deliberate deferral in ADR 0004, Decision 5 ("bundling,
@@ -283,6 +285,73 @@ explicitly out of scope here.
 - **Services:** Apple Developer Program (signing/notarization at build
   time). No new network access in the shipped product: the loopback listener
   of ADR 0004, nothing outbound.
+
+## Implementation notes (2026-07-11 — first build of the pipeline)
+
+The build pipeline now exists (`scripts/desktop-bundle/`, see its README) and
+produced a working unsigned `.app` + DMG on this machine. Results for the
+items marked **VERIFY** above, plus deviations:
+
+- **`--jitless` is rejected** (Decision 3's preferred experiment). Verified
+  on Node v24.14.0/darwin-arm64: `--jitless` removes `WebAssembly` entirely,
+  and Node's global `fetch()` (undici) parses HTTP with WASM llhttp — so
+  every `fetch()` throws (`WebAssembly is not defined`), the Ollama
+  availability probe returns `false`, and Tier-2 redaction silently degrades
+  even with Ollama running: an invariant-6 violation, not mere flakiness.
+  Vault crypto (sodium-native) and better-sqlite3 were unaffected, and vault
+  create/unlock latency was identical (~0.85 s) with and without the flag —
+  the JIT buys us nothing, but WASM loss disqualifies. **We ship with the
+  allow-jit entitlements** (`apps/desktop/src-tauri/entitlements.plist`);
+  the no-JIT variant is preserved as `entitlements-jitless.plist` for the
+  day `packages/librarian` talks to Ollama over `node:http` instead of
+  `fetch()` — that change would make the tighter posture viable.
+- **`pnpm deploy` carries workspace `dist/`** — confirmed with pnpm 11.9.0
+  using `pnpm --filter @northkeep/web deploy --prod --legacy
+  --config.node-linker=hoisted` (hoisted so the tree is real files, not the
+  pnpm symlink store; `--legacy` because the workspace doesn't set
+  `inject-workspace-packages`). The ADR's fallback staging script was not
+  needed. One found footgun: a filtered `--prod` deploy rewrites the root
+  `node_modules/.pnpm-workspace-state-v1.json` (records `dev:false`), after
+  which every `pnpm run` tries to purge and reinstall `--production`;
+  `stage-server.sh` snapshots and restores that file around the deploy.
+- **`minimumSystemVersion` is 13.5**, not the guessed "11+": the official
+  Node 24 darwin-arm64 binary declares `LC_BUILD_VERSION minos 13.5`.
+  Set in `tauri.bundle.conf.json`; Info.plist confirmed.
+- **Size:** unsigned DMG is **49 MB** (inside the 40–60 MB estimate);
+  `.app` is 174 MB uncompressed (Node binary 110 MB + 55 MB server tree
+  after pruning foreign-platform sodium prebuilds).
+- **Bundle config is an overlay** (`tauri.bundle.conf.json`, merged via
+  `tauri build --config`) rather than edits to `tauri.conf.json`: tauri-build
+  stages `externalBin` at compile time and fails when the sidecar file is
+  missing, so keeping it out of the base config preserves `pnpm tauri dev`
+  on a fresh checkout. Signing identity and notarization credentials come
+  from the environment only (`APPLE_SIGNING_IDENTITY`, `APPLE_ID`/
+  `APPLE_PASSWORD`/`APPLE_TEAM_ID`); nothing credential-shaped is in any
+  config file.
+- **Shell changes landed as decided:** release builds resolve the sidecar as
+  a sibling of `current_exe()` and `server/dist/server.js` via the resource
+  dir; `NORTHKEEP_SERVER_JS` and the system-node path are compiled out of
+  release (`cfg(debug_assertions)`); shutdown is SIGTERM, 2 s grace, then
+  SIGKILL (one new Rust dep: `libc`, already in tauri's tree); a child-death
+  watcher shows a native alert via `/usr/bin/osascript` (30 s auto-dismiss)
+  and exits — no dialog plugin added. Verified on the built app: graceful
+  quit kills the sidecar; killing the sidecar raises the alert and quits the
+  shell. Caveat: SIGKILL/SIGTERM of the *shell itself* bypasses Tauri's exit
+  event and orphans the sidecar — same as the pre-bundle behavior; the
+  normal quit paths (⌘Q, window close) are covered.
+- **The nodejs.org binary arrives already signed** (Node.js Foundation
+  Developer ID, hardened-runtime flag set); `presign.sh` re-signs it with
+  our identity so the bundle chains to one Developer ID.
+- **Still open, needs the signed build** (Jay's Apple checklist): keychain
+  prompt regression, notarization of externalBin (tauri#11992 contingency),
+  whether Tauri staples the DMG or only the .app. Also still to do from the
+  task list: the real app icon (task 5), KNOWN-LIMITS.md updates (task 7),
+  and the adversarial review pass (task 8).
+- **Task 1 (SIGTERM `lock()` handler) is DONE** (2026-07-11): the direct-run
+  block in `apps/web/src/server.ts` now traps SIGTERM/SIGINT and runs
+  `running.close()` → `session.lock()` (zeroizes the master key) → exit,
+  idempotent-guarded against the SIGTERM→SIGKILL race. Verified: the server
+  exits cleanly on SIGTERM instead of dying with the key resident.
 
 ## Sources
 
