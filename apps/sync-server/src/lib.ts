@@ -6,7 +6,7 @@ export {
   type StoredBlob,
   type StoredSubscription,
 } from './storage.js';
-export { NeonStorage, SCHEMA_SQL } from './neon-storage.js';
+export { NeonStorage, SCHEMA_SQL, SCHEMA_STATEMENTS } from './neon-storage.js';
 export { createSyncServer } from './server.js';
 export {
   billingFromEnv,

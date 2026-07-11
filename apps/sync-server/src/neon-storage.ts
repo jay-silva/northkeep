@@ -9,24 +9,33 @@ import type { PutResult, Storage, StoredBlob, StoredSubscription } from './stora
  * `UPDATE ... WHERE version = $base` thereafter.
  */
 
-export const SCHEMA_SQL = `
-CREATE TABLE IF NOT EXISTS sync_blobs (
+/**
+ * One statement per entry: Neon's serverless HTTP driver executes a single
+ * statement per call, so multi-statement strings throw at runtime (this took
+ * the live server down when the M5b `subscriptions` table was first added —
+ * every request 500'd on ensureSchema). Never join these for execution.
+ */
+export const SCHEMA_STATEMENTS: readonly string[] = [
+  `CREATE TABLE IF NOT EXISTS sync_blobs (
   token_hash        text PRIMARY KEY,
   blob_b64          text NOT NULL,
   version           integer NOT NULL,
   ciphertext_sha256 text NOT NULL,
   size_bytes        integer NOT NULL,
   updated_at        timestamptz NOT NULL DEFAULT now()
-);
-CREATE TABLE IF NOT EXISTS subscriptions (
+)`,
+  `CREATE TABLE IF NOT EXISTS subscriptions (
   token_hash             text PRIMARY KEY,
   stripe_customer_id     text NOT NULL,
   stripe_subscription_id text NOT NULL UNIQUE,
   status                 text NOT NULL,
   current_period_end     bigint NOT NULL,
   updated_at             timestamptz NOT NULL DEFAULT now()
-);
-`;
+)`,
+];
+
+/** Human-readable schema (for self-hosters running psql by hand). */
+export const SCHEMA_SQL = SCHEMA_STATEMENTS.map((s) => `${s};`).join('\n');
 
 interface Row {
   blob_b64: string;
@@ -45,12 +54,23 @@ export class NeonStorage implements Storage {
   }
 
   /**
-   * Create the table if absent, once per instance. Lets a fresh deployment
+   * Create the tables if absent, once per instance. Lets a fresh deployment
    * self-provision on the first request — no manual migration step, and the
-   * connection string never has to leave the deploy environment.
+   * connection string never has to leave the deploy environment. Statements
+   * run ONE per call (Neon HTTP driver limit), and a failed attempt is not
+   * cached — the next request retries instead of 500ing forever on a
+   * transient DB error.
    */
   async ensureSchema(): Promise<void> {
-    this.schemaReady ??= this.sql(SCHEMA_SQL).then(() => undefined);
+    if (!this.schemaReady) {
+      const attempt = (async () => {
+        for (const statement of SCHEMA_STATEMENTS) await this.sql(statement);
+      })();
+      this.schemaReady = attempt;
+      attempt.catch(() => {
+        if (this.schemaReady === attempt) this.schemaReady = null;
+      });
+    }
     await this.schemaReady;
   }
 
