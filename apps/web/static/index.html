@@ -386,6 +386,49 @@
     <button class="btn primary" id="unlockBtn" style="width:100%">Unlock</button>
   </div>
 </div>
+<!-- First-run setup wizard (M7d): shown when no vault exists on disk yet. -->
+<div class="overlay" id="setupOverlay" hidden>
+  <div class="dialog" style="width:440px">
+    <div id="setupStepCreate">
+      <h2>Welcome to Northkeep</h2>
+      <p>Your AI memories will live in an encrypted vault on this Mac.
+        Choose a passphrase to protect it.</p>
+      <p>Your vault opens with two secrets: your passphrase plus a device key
+        file Northkeep creates — losing either loses the vault, by design.</p>
+      <div class="err" id="setupErr"></div>
+      <input type="password" id="setupPass" placeholder="Choose a passphrase (min 8 characters)">
+      <input type="password" id="setupPass2" placeholder="Confirm passphrase">
+      <button class="btn primary" id="setupCreateBtn" style="width:100%">Create my vault</button>
+    </div>
+    <div id="setupStepBackup" hidden>
+      <h2>Vault created — back up your device key</h2>
+      <div class="banner" style="margin:12px 0">
+        <strong>Back up this file now:</strong>
+        <div class="content" id="setupSecretPath" style="font-family:var(--mono);font-size:13px;margin-top:6px"></div>
+        <div style="margin-top:6px">Copy it somewhere safe — a password manager or a printed copy.
+          Opening this vault needs <strong>both</strong> your passphrase <strong>and</strong> that file.
+          Lose either one and the vault is unrecoverable — by design.</div>
+      </div>
+      <button class="btn primary" id="setupBackupBtn" style="width:100%">I’ve backed it up — continue</button>
+    </div>
+    <div id="setupStepAi" hidden>
+      <h2>Add your first AI</h2>
+      <p id="setupAiLine">Checking for a local AI on this Mac…</p>
+      <div class="err" id="setupAiErr"></div>
+      <div id="setupOllamaBox" hidden>
+        <select id="setupOllamaModel" style="width:100%;margin-bottom:12px"></select>
+        <button class="btn primary" id="setupOllamaAdd" style="width:100%;margin-bottom:8px">Use this model</button>
+      </div>
+      <div id="setupManualBox" hidden>
+        <input type="text" id="setupEpLabel" placeholder="Label (e.g. This Mac — Ollama)">
+        <input type="text" id="setupEpBase" placeholder="Base URL (e.g. http://localhost:11434/v1)">
+        <input type="text" id="setupEpModel" placeholder="Model (e.g. llama3.2:3b)">
+        <button class="btn primary" id="setupManualAdd" style="width:100%;margin-bottom:8px">Add endpoint</button>
+      </div>
+      <button class="btn" id="setupSkip" style="width:100%">Skip — add one later under Converse → Manage endpoints</button>
+    </div>
+  </div>
+</div>
 <script>
 (() => {
   'use strict';
@@ -453,17 +496,118 @@
   let status = { unlocked: false };
   async function refreshStatus() {
     status = await api('/api/status');
-    $('countPill').textContent = status.unlocked ? status.total + ' memories' : 'locked';
+    const noVault = status.vault_exists === false;
+    $('countPill').textContent = status.unlocked ? status.total + ' memories'
+      : (noVault ? 'welcome' : 'locked');
     $('countPill').className = 'pill ' + (status.unlocked ? 'ok' : 'locked');
     $('ollamaPill').hidden = status.ollama_available;
     $('degradedBanner').hidden = status.ollama_available;
     $('envPill').hidden = !status.env_grant;
     $('lockBtn').hidden = !status.unlocked;
     $('rememberRow').hidden = !status.keychain_available;
-    if (!status.unlocked) showUnlock(); else { hideUnlock(); loadMemories(); loadScopes(); }
+    // No vault on disk → first-run wizard. Vault but locked → unlock dialog.
+    if (noVault) showSetup();
+    else if (!status.unlocked) showUnlock();
+    else { hideUnlock(); loadMemories(); loadScopes(); }
   }
   function showUnlock() { $('unlockOverlay').hidden = false; $('passphrase').focus(); }
   function hideUnlock() { $('unlockOverlay').hidden = true; }
+
+  // --- first-run setup wizard (M7d): create vault → back up the device key
+  // → add the first AI endpoint → land on Converse. Everything dynamic is
+  // rendered with el()/textContent only.
+  function showSetup() { hideUnlock(); $('setupOverlay').hidden = false; $('setupPass').focus(); }
+  function hideSetup() { $('setupOverlay').hidden = true; }
+  function setupStep(id) {
+    ['setupStepCreate', 'setupStepBackup', 'setupStepAi'].forEach((s) => { $(s).hidden = s !== id; });
+  }
+  $('setupCreateBtn').addEventListener('click', doSetupCreate);
+  $('setupPass2').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSetupCreate(); });
+  async function doSetupCreate() {
+    const pass = $('setupPass').value;
+    $('setupErr').textContent = '';
+    if (pass.length < 8) { $('setupErr').textContent = 'Passphrase must be at least 8 characters.'; return; }
+    if ($('setupPass2').value !== pass) { $('setupErr').textContent = 'Passphrases do not match.'; return; }
+    $('setupCreateBtn').disabled = true;
+    try {
+      const r = await api('/api/setup/create', { method: 'POST', json: { passphrase: pass } });
+      $('setupPass').value = ''; $('setupPass2').value = '';
+      $('setupSecretPath').textContent = r.device_secret_path;
+      setupStep('setupStepBackup');
+    } catch (e) {
+      if (e.message !== 'locked') $('setupErr').textContent = e.message;
+    } finally { $('setupCreateBtn').disabled = false; }
+  }
+  $('setupBackupBtn').addEventListener('click', () => {
+    setupStep('setupStepAi');
+    setupProbeOllama();
+  });
+  const OLLAMA_BASE = 'http://127.0.0.1:11434';
+  // The leanest chat model: skip embedding models, prefer the smallest
+  // parameter count named in the tag (3b before 8b…), else the first listed.
+  function pickChatModel(models) {
+    const chat = models.filter((m) => !/embed/i.test(m));
+    const size = (m) => { const x = /(\d+(?:\.\d+)?)b/i.exec(m); return x ? Number(x[1]) : Infinity; };
+    return chat.slice().sort((a, b) => size(a) - size(b))[0] || null;
+  }
+  async function setupProbeOllama() {
+    $('setupAiErr').textContent = '';
+    try {
+      const r = await api('/api/models?base=' + encodeURIComponent(OLLAMA_BASE));
+      const pick = pickChatModel(r.models || []);
+      if (pick) {
+        $('setupAiLine').textContent = 'Found Ollama on this Mac. Pick a model — nothing leaves your machine:';
+        const sel = $('setupOllamaModel');
+        sel.textContent = '';
+        for (const m of (r.models || []).filter((x) => !/embed/i.test(x))) {
+          const o = el('option', '', m); o.value = m; sel.appendChild(o);
+        }
+        sel.value = pick;
+        $('setupOllamaBox').hidden = false;
+        $('setupManualBox').hidden = true;
+        return;
+      }
+    } catch { /* no Ollama — fall through to the manual form */ }
+    $('setupAiLine').textContent = 'No local AI found. Point Northkeep at any OpenAI-compatible ' +
+      'runtime — Ollama, LM Studio, vLLM — or a hosted API.';
+    $('setupOllamaBox').hidden = true;
+    $('setupManualBox').hidden = false;
+  }
+  $('setupOllamaAdd').addEventListener('click', async () => {
+    $('setupAiErr').textContent = '';
+    $('setupOllamaAdd').disabled = true;
+    try {
+      await api('/api/providers', { method: 'POST', json: {
+        label: 'This Mac — Ollama', base_url: OLLAMA_BASE, model: $('setupOllamaModel').value } });
+      await finishSetup();
+    } catch (e) {
+      if (e.message !== 'locked') $('setupAiErr').textContent = e.message;
+    } finally { $('setupOllamaAdd').disabled = false; }
+  });
+  $('setupManualAdd').addEventListener('click', async () => {
+    const label = $('setupEpLabel').value.trim();
+    const base_url = $('setupEpBase').value.trim();
+    const model = $('setupEpModel').value.trim();
+    $('setupAiErr').textContent = '';
+    if (!label || !base_url || !model) {
+      $('setupAiErr').textContent = 'Label, base URL, and model are all required.';
+      return;
+    }
+    $('setupManualAdd').disabled = true;
+    try {
+      await api('/api/providers', { method: 'POST', json: { label, base_url, model } });
+      await finishSetup();
+    } catch (e) {
+      if (e.message !== 'locked') $('setupAiErr').textContent = e.message;
+    } finally { $('setupManualAdd').disabled = false; }
+  });
+  $('setupSkip').addEventListener('click', () => { finishSetup(); });
+  async function finishSetup() {
+    hideSetup();
+    await refreshStatus().catch(() => {});
+    // Done → land on Converse. loadProviders preselects Auto with 2+ endpoints.
+    document.querySelector('nav button[data-view="converse"]').click();
+  }
   $('unlockBtn').addEventListener('click', doUnlock);
   $('passphrase').addEventListener('keydown', (e) => { if (e.key === 'Enter') doUnlock(); });
   async function doUnlock() {
@@ -822,8 +966,15 @@
       o.value = ep.id;
       sel.appendChild(o);
     }
-    const keep = (prev === 'auto' && endpoints.length > 1) || endpoints.some((ep) => ep.id === prev)
-      ? prev : r.default_id;
+    // Session default (M7d): with 2+ endpoints, start on Auto — unless the
+    // user explicitly picked something this session (nk_ep_choice always
+    // wins). `prev` keeps the current selection across list refreshes.
+    const valid = (v) => v && ((v === 'auto' && endpoints.length > 1) || endpoints.some((ep) => ep.id === v));
+    const chosen = sessionStorage.getItem('nk_ep_choice');
+    const keep = valid(chosen) ? chosen
+      : valid(prev) ? prev
+      : endpoints.length > 1 ? 'auto'
+      : r.default_id;
     if (keep) sel.value = keep;
     sel.hidden = endpoints.length === 0;
     $('convEmpty').hidden = endpoints.length > 0;
@@ -866,6 +1017,12 @@
   }
   $('convPrivatePin').addEventListener('change', onEndpointChange);
   $('convEndpoint').addEventListener('change', onEndpointChange);
+  // A change EVENT only fires on user interaction (programmatic .value writes
+  // don't), so this records exactly the explicit choices the session default
+  // must never override.
+  $('convEndpoint').addEventListener('change', () => {
+    sessionStorage.setItem('nk_ep_choice', $('convEndpoint').value);
+  });
 
   // --- model quick-switch (M7a, ADR 0011). The picker shows the endpoint's
   // configured model instantly (works with the endpoint offline), then merges

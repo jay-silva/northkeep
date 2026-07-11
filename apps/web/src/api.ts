@@ -2,7 +2,10 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  Vault,
   VaultAuthError,
+  deviceSecretPath,
+  ensureDeviceSecret,
   isMemoryType,
   loadDeviceSecret,
   memzero,
@@ -142,11 +145,42 @@ async function dispatch(
       unlocked,
       total,
       counts,
+      // First-run detection (M7d): no vault on disk → the page shows the
+      // setup wizard instead of the unlock dialog.
+      vault_exists: fs.existsSync(session.vaultPath),
       vault_path: session.vaultPath,
       ollama_available: ollama,
       extract_model: EXTRACT_MODEL,
       keychain_available: keychainAvailable(),
       env_grant: session.hasEnvGrant(),
+    });
+  }
+
+  // --- First-run setup (M7d). Creates the device secret + vault exactly the
+  // way `northkeep init` does, then unlocks the session via the same derive-
+  // and-verify path as POST /api/unlock. Refuses when a vault already exists,
+  // so this route can never overwrite or re-key anything. The passphrase and
+  // derived key are never returned or logged.
+  if (method === 'POST' && route === '/api/setup/create') {
+    if (fs.existsSync(session.vaultPath)) {
+      return bad(409, 'A vault already exists — unlock it instead.');
+    }
+    const { passphrase, confirm } = parseJson<{ passphrase?: string; confirm?: string }>(body);
+    if (typeof passphrase !== 'string' || passphrase.length < 8) {
+      return bad(400, 'Passphrase must be at least 8 characters.');
+    }
+    if (confirm !== undefined && confirm !== passphrase) {
+      return bad(400, 'Passphrases do not match.');
+    }
+    const { secret, created } = ensureDeviceSecret();
+    Vault.create({ path: session.vaultPath, passphrase, deviceSecret: secret }).close();
+    await session.unlock(passphrase);
+    return ok({
+      created: true,
+      unlocked: true,
+      vault_path: session.vaultPath,
+      device_secret_path: deviceSecretPath(),
+      device_secret_created: created,
     });
   }
 
