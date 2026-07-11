@@ -19,20 +19,36 @@ every milestone; if a limit is removed, say when and how.*
   prior local state is kept as `vault.nkv.bak`, not merged entry-by-entry.
   Per-entry merge is future work; for now, pull before you edit on a second
   machine.
-- **No paywall yet — run it private.** Billing (the $10/mo gate) is a later
-  milestone. An *open* sync server (anyone can create an account) is only
-  protected by a ~4 MB size cap and the host's rate limiting — the vault-shape
-  check does NOT stop someone using it as free storage, because the server
-  can't tell real ciphertext from junk (that's the whole point). So until
-  billing, run a **private** server: `northkeep sync id` prints your allowlist
-  hash; set `NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES` to it on the server and only
-  your machines can sync. Don't expose a no-allowlist server publicly.
+- **Access is gated by subscription OR allowlist.** The hosted service (M5b)
+  requires a **$10/month Stripe subscription** for anyone not on the allowlist;
+  a non-subscribed, non-allowlisted account gets a 402 and can't sync. The
+  allowlist (`NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES`) is the free/comp list —
+  `northkeep sync id` prints your allowlist hash. A **self-hosted** server sets
+  no Stripe env, so billing is off and only the allowlist gates; the ~4 MB size
+  cap and host rate limiting are the only guards on an open (no-allowlist,
+  no-Stripe) server, so don't expose one publicly.
 - **Push before you pull on a machine you've edited.** Pulling replaces your
   local vault with the server's copy; unpushed local edits are moved to
   `vault.nkv.bak` (recoverable), not merged. There's no "you're ahead" warning
   yet, so sync in one direction at a time.
 - **HTTPS only.** The client refuses a non-https sync server (except loopback
   for testing) so your token and blob never cross the network unprotected.
+
+## M5b (billing) — current
+
+- **Paying on the hosted service creates a bounded payer↔vault link.** To bill,
+  the server stores one new fact: your encrypted account's token hash next to
+  your Stripe customer/subscription id and status. Your **email and card never
+  touch Northkeep** — they live only in Stripe, and Checkout is Stripe-hosted
+  (no card data, no PCI scope on us). The honest cost: the operator can now
+  correlate *which paying customer owns which encrypted vault* — never its
+  contents (still ciphertext-only). **Self-hosting stays fully anonymous** (no
+  Stripe, allowlist only).
+- **The gate leans on Stripe webhooks.** A cancelled subscription flips your
+  account off when Stripe delivers the `subscription.deleted` webhook; if that's
+  delayed, the `current_period_end` time check is the backstop (you keep syncing
+  until the paid period ends, then it fails closed). No dunning/retry email flow
+  beyond Stripe's defaults.
 
 ## M6 (Converse, the mediated client) — current
 

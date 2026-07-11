@@ -64,8 +64,24 @@ nothing else — try to read it and you'll get encrypted bytes. Conflicts are
 version-guarded: if the vault changed elsewhere, push tells you to pull first
 (your prior local copy is kept as `vault.nkv.bak`). It's self-hostable
 (`apps/sync-server`), or deploy it to Vercel + Neon. There's a Sync tab in the
-app too. Limits (open service until billing, whole-vault last-writer-wins,
-device-secret transport) are in `KNOWN-LIMITS.md`.
+app too. Limits (whole-vault last-writer-wins, device-secret transport) are in
+`KNOWN-LIMITS.md`.
+
+### Subscribing on a hosted server
+
+The hosted service is **$10/month** (self-hosting is free). If a server requires
+a subscription, push/pull will say so; start one with Stripe-hosted checkout —
+your card is entered on Stripe and never touches Northkeep:
+
+```bash
+pnpm northkeep sync subscribe   # prints a secure Stripe checkout link
+pnpm northkeep sync billing     # manage or cancel (Stripe billing portal)
+```
+
+We store only whether your subscription is active, linked to your **encrypted**
+account — never your card or the contents of your vault (see the bounded
+payer↔vault link note in `KNOWN-LIMITS.md`). The Sync tab has Subscribe /
+Manage-billing buttons too.
 
 ## Converse — talk to any model, privately
 
