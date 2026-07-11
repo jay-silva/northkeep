@@ -55,13 +55,21 @@ pnpm --dir "$REPO_ROOT" --filter @northkeep/web deploy --prod --legacy \
 # 1. .bin shims (symlinks; nothing in the bundle execs them, and symlinks are
 #    unwelcome inside a signed Resources tree).
 rm -rf "$STAGE/node_modules/.bin"
-# 2. Foreign-platform sodium-native prebuilds (~15 MB of android/win/linux/ios
-#    .node files we must neither ship nor sign). Keep darwin-arm64 only.
-if [ -d "$STAGE/node_modules/sodium-native/prebuilds" ]; then
-  find "$STAGE/node_modules/sodium-native/prebuilds" -mindepth 1 -maxdepth 1 \
-    -type d ! -name "darwin-arm64" -exec rm -rf {} +
-fi
-# 3. pnpm bookkeeping not needed at runtime.
+# 2. Foreign-platform prebuilds — for ANY package that ships a prebuilds/ dir
+#    (sodium-native, and its bare-* transitive deps). We ship arm64 macOS only;
+#    every other platform's binary is dead weight that ALSO fails notarization
+#    (unsigned, wrong-arch Mach-O). Keep darwin-arm64 only. Verified 2026-07-11:
+#    the first signed build was rejected for exactly these files.
+while IFS= read -r -d '' pbdir; do
+  find "$pbdir" -mindepth 1 -maxdepth 1 -type d ! -name "darwin-arm64" -exec rm -rf {} +
+done < <(find "$STAGE/node_modules" -type d -name prebuilds -print0)
+# 3. Bare-runtime binaries. sodium-native ships BOTH a .node (Node.js) and a
+#    .bare (the Bare runtime) per platform; bare-inspect/bare-type are
+#    Bare-only. We run under Node, so every .bare is unused — prune them all
+#    (confirmed: vault crypto still works). This removes the last unsignable
+#    Mach-O from the tree; only the two darwin-arm64 .node addons remain.
+find "$STAGE/node_modules" -name "*.bare" -delete
+# 4. pnpm bookkeeping not needed at runtime.
 rm -rf "$STAGE/node_modules/.pnpm" "$STAGE/node_modules/.modules.yaml" 2>/dev/null || true
 
 # ---- Verify the tree is self-contained -------------------------------------
@@ -84,6 +92,18 @@ links="$(find "$STAGE" -type l | head -20)"
 if [ -n "$links" ]; then
   echo "stage-server: symlinks remain in the staged tree:" >&2
   echo "$links" >&2
+  fail=1
+fi
+
+# No unsignable Mach-O may survive: a new dependency that ships a .bare or a
+# foreign-platform prebuild would otherwise pass staging and only blow up
+# after a multi-minute notarization upload. Catch it here instead.
+stray="$(find "$STAGE" \( -name "*.bare" -o \
+  \( -path "*/prebuilds/*" -name "*.node" ! -path "*/darwin-arm64/*" \) \) | head -20)"
+if [ -n "$stray" ]; then
+  echo "stage-server: unsignable/foreign native binaries survived pruning:" >&2
+  echo "$stray" >&2
+  echo "  → extend the prune step (a new dep ships these); notarization would reject them." >&2
   fail=1
 fi
 
