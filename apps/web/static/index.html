@@ -108,12 +108,15 @@
   .badge.private { background: #e6efe8; color: var(--ok); }
   .badge.bounded { background: var(--warn-bg); color: var(--warn-ink); }
   .badge.auto { background: var(--chip); color: var(--ink); }
-  .conv-toolbar { display: flex; align-items: center; justify-content: space-between;
-    gap: 10px 14px; flex-wrap: wrap; margin-bottom: 22px; }
+  .conv-toolbar { display: flex; align-items: center;
+    gap: 10px 8px; flex-wrap: wrap; margin-bottom: 22px; }
   .conv-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  /* Uniform 38px control row: selects, the pin chip, and the badge all align. */
-  .conv-controls select { height: 38px; padding: 0 32px 0 13px; font-size: 14px; }
-  .conv-toolbar .btn { height: 38px; padding: 0 16px; white-space: nowrap; }
+  /* Uniform 38px control row: selects, the pin chip, and the badge all align.
+     Widths are capped so the whole row fits a laptop window; the toolbar badge
+     is compact (the full privacy sentence lives in its tooltip + every reply). */
+  .conv-controls select { height: 38px; padding: 0 30px 0 12px; font-size: 14px;
+    max-width: 220px; text-overflow: ellipsis; }
+  .conv-toolbar .btn { height: 38px; padding: 0 16px; white-space: nowrap; margin-left: auto; }
   .conv-controls .badge { height: 38px; display: inline-flex; align-items: center; }
   /* The privacy pin as a toggle chip — reads as a control, not a stray form field. */
   .pinchip { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px;
@@ -754,6 +757,15 @@
     return node;
   }
   const makeBadge = (tier) => setBadge(document.createElement('span'), tier);
+  // Toolbar variant: compact label, full promise in the tooltip (the reply
+  // strips carry the full sentence on every turn).
+  function setToolbarBadge(tier) {
+    const node = $('convBadge');
+    const priv = tier === 'private';
+    node.className = 'badge ' + (priv ? 'private' : 'bounded');
+    node.textContent = priv ? 'PRIVATE' : 'BOUNDED';
+    node.title = priv ? 'Nothing leaves your network.' : 'Leaves your machine masked (redacted first), and audited.';
+  }
   const selectedEndpoint = () => endpoints.find((ep) => ep.id === $('convEndpoint').value);
 
   async function openConverse() {
@@ -799,8 +811,10 @@
       // may route to a bounded endpoint), so it's disabled.
       badge.hidden = false;
       badge.className = 'badge auto';
-      badge.textContent = $('convPrivatePin').checked
-        ? 'AUTO — local models only (pinned)' : 'AUTO — routed per message';
+      badge.textContent = $('convPrivatePin').checked ? 'AUTO · PINNED' : 'AUTO';
+      badge.title = $('convPrivatePin').checked
+        ? 'The concierge routes each message among LOCAL models only.'
+        : 'The concierge routes each message; the reply shows where it went and why.';
       $('convModel').hidden = true;
       const offOpt = $('convTierSel').querySelector('option[value="0"]');
       offOpt.disabled = true;
@@ -810,7 +824,7 @@
     badge.hidden = !ep;
     $('convModel').hidden = !ep;
     if (!ep) return;
-    setBadge(badge, ep.tier);
+    setToolbarBadge(ep.tier);
     // "Off" only makes sense when nothing leaves the machine.
     const offOpt = $('convTierSel').querySelector('option[value="0"]');
     offOpt.disabled = ep.tier !== 'private';
