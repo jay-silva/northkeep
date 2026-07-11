@@ -164,6 +164,7 @@
     <div class="conv-toolbar">
       <div class="conv-controls">
         <select id="convEndpoint" title="Endpoint"></select>
+        <select id="convModel" title="Model — switch anytime, even mid-conversation" hidden></select>
         <span id="convBadge" class="badge" hidden></span>
         <select id="convTierSel" title="Redaction tier">
           <option value="1" selected>Tier 1 — mask secrets</option>
@@ -750,7 +751,7 @@
     const sel = $('convEndpoint');
     sel.textContent = '';
     for (const ep of endpoints) {
-      const o = el('option', '', ep.label + ' — ' + ep.model);
+      const o = el('option', '', ep.label);
       o.value = ep.id;
       sel.appendChild(o);
     }
@@ -766,14 +767,48 @@
   function onEndpointChange() {
     const ep = selectedEndpoint();
     $('convBadge').hidden = !ep;
+    $('convModel').hidden = !ep;
     if (!ep) return;
     setBadge($('convBadge'), ep.tier);
     // "Off" only makes sense when nothing leaves the machine.
     const offOpt = $('convTierSel').querySelector('option[value="0"]');
     offOpt.disabled = ep.tier !== 'private';
     if (offOpt.disabled && $('convTierSel').value === '0') $('convTierSel').value = '1';
+    loadModelPicker(ep);
   }
   $('convEndpoint').addEventListener('change', onEndpointChange);
+
+  // --- model quick-switch (M7a, ADR 0011). The picker shows the endpoint's
+  // configured model instantly (works with the endpoint offline), then merges
+  // whatever discovery returns. Switching mid-conversation is safe by design:
+  // the whole prompt is re-redacted at the current endpoint's tier every turn.
+  const modelCache = new Map(); // endpoint id → string[] of discovered models
+  let modelLoadToken = 0;
+  function fillModelPicker(ep, models) {
+    const sel = $('convModel');
+    const prev = sel.value;
+    const list = [...new Set([ep.model, ...models])]; // configured model always first
+    sel.textContent = '';
+    for (const m of list) { const o = el('option', '', m); o.value = m; sel.appendChild(o); }
+    // Keep the user's in-flight choice across a refresh; else the configured model.
+    sel.value = list.includes(prev) ? prev : ep.model;
+  }
+  async function loadModelPicker(ep) {
+    fillModelPicker(ep, modelCache.get(ep.id) || []);
+    if (modelCache.has(ep.id)) return;
+    const token = ++modelLoadToken;
+    try {
+      const r = await api('/api/models?endpoint=' + encodeURIComponent(ep.id));
+      modelCache.set(ep.id, r.models || []);
+      // Ignore a stale response if the user has since switched endpoints.
+      if (token === modelLoadToken && selectedEndpoint()?.id === ep.id) {
+        fillModelPicker(ep, modelCache.get(ep.id));
+      }
+    } catch {
+      // Discovery down (endpoint offline / no list route) — the configured
+      // model stays available; nothing to nag about.
+    }
+  }
   $('manageEp').addEventListener('click', () => { $('managePanel').hidden = !$('managePanel').hidden; });
   $('convEmptyManage').addEventListener('click', () => { $('managePanel').hidden = false; });
 
@@ -965,6 +1000,10 @@
           endpoint_id: ep.id,
           message: msg,
           tier: Number($('convTierSel').value),
+          // M7a quick-switch: the picked model rides along; the reply's
+          // provenance strip shows which model actually answered.
+          ...($('convModel').value && $('convModel').value !== ep.model
+            ? { model: $('convModel').value } : {}),
         }),
       });
       if (res.status === 423) { a.wrap.remove(); showUnlock(); return; }

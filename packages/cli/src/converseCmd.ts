@@ -10,6 +10,7 @@ import {
   getDefaultEndpoint,
   getEndpoint,
   getEndpointKey,
+  listEndpoints,
   runTurn,
   vaultAdapter,
   type EndpointConfig,
@@ -57,7 +58,7 @@ export interface ConverseCmdOptions {
 }
 
 export async function runConverse(options: ConverseCmdOptions, withVault: WithVault): Promise<void> {
-  const endpoint = options.endpoint ? getEndpoint(options.endpoint) : getDefaultEndpoint();
+  let endpoint = options.endpoint ? getEndpoint(options.endpoint) : getDefaultEndpoint();
   if (!endpoint) {
     throw new Error(
       options.endpoint
@@ -74,7 +75,8 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     );
   }
 
-  const provider = providerFor(endpoint);
+  let provider = providerFor(endpoint);
+  let model = endpoint.model;
   const ollama = createOllamaClient();
   let distillOllama: OllamaClient | null = null;
   try {
@@ -89,24 +91,111 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     `Redaction tier ${tier}${tier === 2 ? ' (secrets masked + names pseudonymized)' : tier === 1 ? ' (secrets masked)' : ' (OFF — private endpoint)'}` +
       ` · memory distillation: ${distillOllama ? 'local model' : 'heuristic (Ollama not running)'}`,
   );
-  console.log(`${DIM}Commands: :undo  :memories  :quit${RESET}\n`);
+  console.log(`${DIM}Commands: :model <name>  :models  :endpoint <label|id>  :endpoints  :undo  :memories  :quit${RESET}\n`);
 
   const session = createSession();
   const vault = vaultAdapter(withVault);
   let lastCreated: string[] = [];
   let lastUsed: Array<{ id: string; type: string; content: string }> = [];
 
+  // Queue lines instead of rl.question(): while a command awaits something
+  // async (e.g. :models hitting the endpoint), readline would silently DROP
+  // lines that arrive mid-await — breaking pasted input and piped scripting.
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  const pending: string[] = [];
+  const waiters: Array<(line: string | null) => void> = [];
+  let stdinClosed = false;
+  rl.on('line', (l) => {
+    const w = waiters.shift();
+    if (w) w(l);
+    else pending.push(l);
+  });
+  rl.on('close', () => {
+    stdinClosed = true;
+    while (waiters.length) waiters.shift()!(null);
+  });
+  const nextLine = (promptText: string): Promise<string | null> => {
+    if (pending.length > 0) return Promise.resolve(pending.shift()!);
+    if (stdinClosed) return Promise.resolve(null);
+    process.stdout.write(promptText);
+    return new Promise((r) => waiters.push(r));
+  };
+
   for (;;) {
-    let line: string;
-    try {
-      line = await rl.question('you> ');
-    } catch {
-      break; // Ctrl-D / closed input
-    }
+    const line = await nextLine('you> ');
+    if (line === null) break; // Ctrl-D / closed input
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
     if (trimmed === ':quit' || trimmed === ':exit') break;
+
+    // --- quick-switch (M7a, ADR 0011). Switching mid-conversation is safe by
+    // design: history is plaintext and the whole prompt is re-redacted at the
+    // CURRENT endpoint's effective tier on every turn.
+    if (trimmed === ':model' || trimmed.startsWith(':model ')) {
+      const wanted = trimmed.slice(6).trim();
+      if (!wanted) {
+        console.log(`Current model: ${model}${model !== endpoint.model ? ` (endpoint default: ${endpoint.model})` : ''}`);
+        console.log('Switch with ":model <name>" — ":models" lists what this endpoint serves.');
+      } else if (!/^[\w.:/-]{1,128}$/.test(wanted) || wanted.includes('..')) {
+        console.log('That does not look like a model id.');
+      } else {
+        model = wanted;
+        console.log(`✓ Next turns use ${model} on ${endpoint.label}.`);
+      }
+      continue;
+    }
+
+    if (trimmed === ':models') {
+      try {
+        const models = await provider.listModels();
+        if (models.length === 0) console.log('The endpoint reported no models.');
+        for (const m of models) console.log(`  ${m}${m === model ? '  ← current' : m === endpoint.model ? '  (endpoint default)' : ''}`);
+      } catch {
+        console.log('Could not list models — is the endpoint running? (":model <name>" still works.)');
+      }
+      continue;
+    }
+
+    if (trimmed === ':endpoints') {
+      for (const ep of listEndpoints()) {
+        const { tier: epTier } = classifyEndpoint(ep.baseUrl);
+        console.log(`  ${ep.id === endpoint.id ? '→' : ' '} ${ep.label}  ${DIM}${ep.id} · ${ep.model} · ${epTier}${RESET}`);
+      }
+      continue;
+    }
+
+    if (trimmed === ':endpoint' || trimmed.startsWith(':endpoint ')) {
+      const wanted = trimmed.slice(9).trim();
+      if (!wanted) {
+        console.log(`Current endpoint: ${endpoint.label} (${endpoint.id}). ":endpoints" lists all.`);
+        continue;
+      }
+      const all = listEndpoints();
+      const next =
+        all.find((ep) => ep.id === wanted) ??
+        all.find((ep) => ep.label.toLowerCase() === wanted.toLowerCase());
+      if (!next) {
+        console.log(`No endpoint "${wanted}". ":endpoints" lists all.`);
+        continue;
+      }
+      // The tier-0 guard from startup applies to the NEW endpoint too: with
+      // redaction off, the conversation may only ever face private endpoints.
+      if (tier === 0 && classifyEndpoint(next.baseUrl).tier !== 'private') {
+        console.log(`${RED}✗ Not switching:${RESET} redaction is OFF (--tier 0) and "${next.label}" is not private. Restart with --tier 1 or 2 to use it.`);
+        continue;
+      }
+      try {
+        provider = providerFor(next); // may throw (e.g. missing API key)
+      } catch (err) {
+        console.log(`✗ ${err instanceof Error ? err.message : String(err)}`);
+        continue;
+      }
+      endpoint = next;
+      model = next.model;
+      console.log(`✓ Switched to ${endpoint.label} (${model}). Your conversation and memory come along.`);
+      console.log(badgeLine(endpoint));
+      continue;
+    }
 
     if (trimmed === ':undo') {
       if (lastCreated.length === 0) {
@@ -144,7 +233,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         message: trimmed,
         session,
         provider,
-        model: endpoint.model,
+        model,
         vault,
         redactTier: tier,
         memoryScope: options.scope,

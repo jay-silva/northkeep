@@ -50,7 +50,17 @@ interface ConverseRequest {
   message?: string;
   tier?: number;
   scope?: string;
+  /** M7a quick-switch: override the endpoint's configured model for this turn. */
+  model?: string;
 }
+
+/**
+ * Model ids across runtimes: "llama3.2:3b", "claude-opus-4-8", "org/model".
+ * `..` is rejected outright — no current code builds paths from a model id,
+ * but a traversal-shaped id must never survive validation (defense in depth).
+ */
+const MODEL_ID_RE = /^[\w.:/-]{1,128}$/;
+const validModelId = (id: string): boolean => MODEL_ID_RE.test(id) && !id.includes('..');
 
 export async function handleConverseStream(
   uiSession: UiSession,
@@ -74,6 +84,13 @@ export async function handleConverseStream(
   const tier = req.tier === 0 || req.tier === 1 || req.tier === 2 ? req.tier : 1;
   const scope = (req.scope ?? 'personal').trim() || 'personal';
   if (!/^[a-z0-9:_.-]{1,64}$/i.test(scope)) return jsonError(res, 400, 'Invalid scope.');
+  // Per-turn model override (M7a). Switching model/endpoint mid-conversation is
+  // safe by design: history is plaintext and the WHOLE prompt is re-redacted at
+  // the new endpoint's effective tier on every turn (ADR 0007).
+  const modelOverride = typeof req.model === 'string' ? req.model.trim() : '';
+  if (modelOverride && !validModelId(modelOverride)) {
+    return jsonError(res, 400, 'Invalid model id.');
+  }
 
   evictStaleConversations();
   const sessionId =
@@ -91,12 +108,13 @@ export async function handleConverseStream(
       ? createAnthropicProvider({ apiKey: apiKey as string, baseUrl: endpoint.baseUrl })
       : createOpenAICompatibleProvider({ baseUrl: endpoint.baseUrl, apiKey });
   const { tier: privacy, host } = classifyEndpoint(endpoint.baseUrl);
+  const model = modelOverride || endpoint.model;
 
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson; charset=utf-8',
     'Cache-Control': 'no-store',
   });
-  send(res, { type: 'start', session_id: sessionId, privacy, endpoint_host: host, model: endpoint.model });
+  send(res, { type: 'start', session_id: sessionId, privacy, endpoint_host: host, model });
 
   const ollama = createOllamaClient();
   const distillOllama = (await ollama.available().catch(() => false)) ? ollama : null;
@@ -106,7 +124,7 @@ export async function handleConverseStream(
       message,
       session: stored.session,
       provider,
-      model: endpoint.model,
+      model,
       vault: vaultAdapter((fn) => uiSession.withVault(fn)),
       redactTier: tier,
       memoryScope: scope,
