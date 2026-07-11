@@ -1,7 +1,7 @@
 # ADR 0011 — M7: The model concierge (auto-routing over portable memory)
 
 - **Date:** 2026-07-10 (updated 2026-07-11)
-- **Status:** **Accepted** — M7a (quick-switch) shipped v0.10.0-m7a; M7b (routing + ceiling) built, adversarially reviewed. M7c/M7d remain as designed below.
+- **Status:** **Accepted** — M7a shipped v0.10.0-m7a; M7b (routing + ceiling) shipped v0.11.0-m7b; M7c (catalog phase: rules > catalog strengths/cost/speed > default, baseline in packages/converse/src/catalog.ts + user override at ~/.northkeep/catalog.json, remote feed still deferred) built 2026-07-11. M7d in progress.
 - **Deciders:** Jay (product owner; this is his consumer-side vision; chose the `bounded-allowed` default ceiling 2026-07-11), Claude Code
 
 ## Context — the vision

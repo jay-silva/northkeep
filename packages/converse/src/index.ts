@@ -27,6 +27,13 @@ export {
   type TurnResult,
 } from './turn.js';
 export {
+  BASELINE_CATALOG,
+  catalogPath,
+  loadCatalog,
+  lookupModel,
+  type CatalogEntry,
+} from './catalog.js';
+export {
   classifyTask,
   isRoutingRule,
   loadRoutingPolicy,

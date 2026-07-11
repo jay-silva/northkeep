@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { northkeepHome } from '@northkeep/core';
+import { loadCatalog, lookupModel, type CatalogEntry } from './catalog.js';
 import { classifyEndpoint } from './provider.js';
 import type { EndpointConfig } from './settings.js';
 
@@ -122,6 +123,8 @@ export interface RouteArgs {
   ceiling: PrivacyCeiling;
   /** Where to land when no rule matches (usually the default endpoint). */
   defaultEndpointId?: string | null;
+  /** Injectable for tests; defaults to loadCatalog(). */
+  catalog?: CatalogEntry[];
 }
 
 const withinCeiling = (ep: EndpointConfig, ceiling: PrivacyCeiling): boolean =>
@@ -154,6 +157,23 @@ export function route(args: RouteArgs): RouteDecision {
     }
   }
 
+  // Catalog phase (M7c): no rule spoke — among ceiling-allowed endpoints,
+  // prefer one whose configured model the catalog marks STRONG at this task.
+  // Rules stay authoritative (explicit user intent beats curated data); the
+  // default endpoint remains the fallback when the catalog has no opinion.
+  const catalog = args.catalog ?? loadCatalog();
+  const catalogPick = pickByCatalog(task, args.endpoints, args.ceiling, catalog);
+  if (catalogPick) {
+    return {
+      endpointId: catalogPick.ep.id,
+      model: catalogPick.ep.model,
+      task,
+      reason:
+        `auto: ${task} → ${catalogPick.ep.label} (catalog: ${catalogPick.ep.model} is strong at ${task})` +
+        (skipped.length > 0 ? `; skipped ${skipped.join(', ')}: above the privacy ceiling` : ''),
+    };
+  }
+
   // No usable rule → the default endpoint, if the ceiling allows it.
   const fallback = args.defaultEndpointId ? byId.get(args.defaultEndpointId) : undefined;
   if (fallback && withinCeiling(fallback, args.ceiling)) {
@@ -183,6 +203,41 @@ export function route(args: RouteArgs): RouteDecision {
       ? 'This conversation is pinned private, and no private (local/LAN) endpoint is configured. Add one, or unpin the conversation.'
       : 'No endpoints are configured.',
   );
+}
+
+/**
+ * Deterministic catalog choice: candidates are ceiling-allowed endpoints whose
+ * configured model is catalog-known AND strong at the task. Tiebreak by what
+ * the task cares about — speed for quick, context window for long-context,
+ * cost (cheapest first, local-first ethos) otherwise; then configured order.
+ */
+function pickByCatalog(
+  task: RouteDecision['task'],
+  endpoints: EndpointConfig[],
+  ceiling: PrivacyCeiling,
+  catalog: CatalogEntry[],
+): { ep: EndpointConfig; entry: CatalogEntry } | null {
+  const COST_ORDER = { 'free-local': 0, low: 1, medium: 2, high: 3 } as const;
+  const SPEED_ORDER = { fast: 0, medium: 1, slow: 2 } as const;
+  const candidates = endpoints
+    .filter((ep) => withinCeiling(ep, ceiling))
+    .map((ep) => ({ ep, entry: lookupModel(ep.model, catalog) }))
+    .filter((c): c is { ep: EndpointConfig; entry: CatalogEntry } =>
+      c.entry !== null && c.entry.strengths.includes(task),
+    );
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => {
+    if (task === 'quick') {
+      const d = SPEED_ORDER[a.entry.speedTier] - SPEED_ORDER[b.entry.speedTier];
+      if (d !== 0) return d;
+    }
+    if (task === 'long-context') {
+      const d = (b.entry.contextWindow ?? 0) - (a.entry.contextWindow ?? 0);
+      if (d !== 0) return d;
+    }
+    return COST_ORDER[a.entry.costTier] - COST_ORDER[b.entry.costTier];
+  });
+  return candidates[0]!;
 }
 
 export class RouteError extends Error {
