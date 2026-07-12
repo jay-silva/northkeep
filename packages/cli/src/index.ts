@@ -48,6 +48,7 @@ import {
   syncSubscribe,
 } from './syncCmd.js';
 import { routingClear, routingList, routingSet } from './routingCmd.js';
+import { collectScopes, connectCmd, connectStatusCmd, disconnectCmd } from './connectCmd.js';
 
 const program = new Command();
 
@@ -524,6 +525,41 @@ sync
   .action(() => {
     syncId(fail);
   });
+
+const connectGroup = program
+  .command('connect')
+  .description('Connect an AI app to your NorthKeep memory over MCP (Claude Desktop, Claude Code)');
+
+connectGroup
+  .command('claude-desktop')
+  .description('Register NorthKeep as an MCP server in Claude Desktop')
+  .option('--scope <scope>', 'limit disclosure to these scopes (repeatable or comma-separated; omit for full access)', collectScopes, [])
+  .action((options: { scope: string[] }) => connectCmd('claude-desktop', options, fail));
+
+connectGroup
+  .command('claude-code')
+  .description('Register NorthKeep as an MCP server in Claude Code (via the claude CLI)')
+  .option('--scope <scope>', 'limit disclosure to these scopes (repeatable or comma-separated; omit for full access)', collectScopes, [])
+  .action((options: { scope: string[] }) => connectCmd('claude-code', options, fail));
+
+connectGroup
+  .command('status', { isDefault: true })
+  .description('Show which AI apps are connected to your vault')
+  .action(() => connectStatusCmd());
+
+const disconnectGroup = program
+  .command('disconnect')
+  .description('Remove NorthKeep from an AI app (leaves every other setting untouched)');
+
+disconnectGroup
+  .command('claude-desktop')
+  .description('Remove NorthKeep from Claude Desktop')
+  .action(() => disconnectCmd('claude-desktop', fail));
+
+disconnectGroup
+  .command('claude-code')
+  .description('Remove NorthKeep from Claude Code')
+  .action(() => disconnectCmd('claude-code', fail));
 
 program
   .command('serve')
