@@ -1,4 +1,4 @@
-# Northkeep — Claude Code Instructions
+# NorthKeep — Claude Code Instructions
 
 ## What this is
 A local-first, user-owned memory vault for AI. Encrypted SQLite vault on the user's

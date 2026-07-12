@@ -46,7 +46,7 @@ export async function withFileLock<T>(
       }
       if (Date.now() > deadline) {
         throw new Error(
-          `Vault is locked by another Northkeep process (${lockPath}). ` +
+          `Vault is locked by another NorthKeep process (${lockPath}). ` +
             'If nothing is running, delete the lock file and retry.',
         );
       }

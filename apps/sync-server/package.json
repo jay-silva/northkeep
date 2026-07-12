@@ -1,7 +1,7 @@
 {
   "name": "@northkeep/sync-server",
   "version": "0.9.0",
-  "description": "Northkeep sync server: stores client-side-encrypted vault blobs + version numbers only (ciphertext-only, invariant #2)",
+  "description": "NorthKeep sync server: stores client-side-encrypted vault blobs + version numbers only (ciphertext-only, invariant #2)",
   "license": "AGPL-3.0-only",
   "private": true,
   "type": "module",

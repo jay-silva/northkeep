@@ -1,7 +1,7 @@
 {
   "name": "@northkeep/core",
   "version": "0.1.0",
-  "description": "Northkeep vault core: encrypted store, memory schema, provenance chain",
+  "description": "NorthKeep vault core: encrypted store, memory schema, provenance chain",
   "license": "AGPL-3.0-only",
   "type": "module",
   "main": "dist/index.js",

@@ -9,7 +9,7 @@ import { handleConverseStream } from './converse.js';
 import { UiSession } from './session.js';
 
 /**
- * Northkeep's local GUI server. Security model (ADR 0004):
+ * NorthKeep's local GUI server. Security model (ADR 0004):
  *  - binds 127.0.0.1 only, random port by default
  *  - every /api call requires the per-session token (constant-time compare)
  *  - Host header must be loopback (DNS-rebinding defense)

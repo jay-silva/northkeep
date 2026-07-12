@@ -29,7 +29,7 @@ correlate "which paying Stripe customer owns which **encrypted** vault" — neve
 its contents (still ciphertext-only, invariant #2), but the anonymity of ADR
 0009's hosted path is reduced to a bounded payer↔ciphertext link. **Self-hosting
 stays fully anonymous**: a self-hosted server sets no Stripe env, so billing is
-off and only the allowlist gates — no Stripe account required to run Northkeep.
+off and only the allowlist gates — no Stripe account required to run NorthKeep.
 
 ## Decision 2: Subscription OR allowlist — the allowlist becomes the free/comp list
 

@@ -129,7 +129,7 @@ export class Vault {
       throw new Error(`No vault found at ${vaultPath}. Run "northkeep init" first.`);
     }
     if (file.length < HEADER_LENGTH || !file.subarray(0, MAGIC.length).equals(MAGIC)) {
-      throw new VaultAuthError(`${vaultPath} is not a Northkeep vault file.`);
+      throw new VaultAuthError(`${vaultPath} is not a NorthKeep vault file.`);
     }
     let offset = MAGIC.length;
     const salt = Buffer.from(file.subarray(offset, offset + SALT_BYTES));
@@ -223,7 +223,7 @@ export class Vault {
       return;
     }
     throw new Error(
-      `Vault schema ${version} is newer than this build understands (${SCHEMA_VERSION}). Update Northkeep.`,
+      `Vault schema ${version} is newer than this build understands (${SCHEMA_VERSION}). Update NorthKeep.`,
     );
   }
 

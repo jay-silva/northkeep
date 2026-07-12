@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Northkeep</title>
+<title>NorthKeep</title>
 <style>
   /* Self-hosted Meridian fonts (Newsreader + Hanken Grotesk, OFL), inlined as
      data URIs so the app makes ZERO external font requests (CSP: font-src data:). */
@@ -250,7 +250,7 @@
     </div>
     <div id="convEmpty" class="card" hidden>
       <strong>No AI endpoints configured yet.</strong>
-      <p class="muted" style="margin:6px 0 10px">Point Northkeep at any OpenAI-compatible runtime —
+      <p class="muted" style="margin:6px 0 10px">Point NorthKeep at any OpenAI-compatible runtime —
         Ollama, LM Studio, vLLM — or a hosted API. Your memories stay in the vault; only what you
         send (after redaction) reaches the endpoint.</p>
       <button class="btn primary" id="convEmptyManage">Manage endpoints</button>
@@ -278,7 +278,7 @@
     </div>
     <div class="drop" id="drop">
       <strong>Drop your ChatGPT or Claude export here</strong><br>
-      <span class="muted">The whole folder or the .zip — Northkeep finds the right files and figures out the rest.</span>
+      <span class="muted">The whole folder or the .zip — NorthKeep finds the right files and figures out the rest.</span>
     </div>
     <input type="file" id="file" hidden>
     <input type="file" id="folder" hidden webkitdirectory>
@@ -357,7 +357,7 @@
           <button class="btn" id="syncManageBtn" hidden>Manage billing</button>
         </div>
         <p class="muted" style="margin:10px 0 0;font-size:13px">Your card is entered on Stripe's
-          secure checkout — it never touches Northkeep. We store only whether your subscription
+          secure checkout — it never touches NorthKeep. We store only whether your subscription
           is active, linked to your encrypted account. Never your card or the contents of your vault.</p>
       </div>
     </div>
@@ -390,11 +390,11 @@
 <div class="overlay" id="setupOverlay" hidden>
   <div class="dialog" style="width:440px">
     <div id="setupStepCreate">
-      <h2>Welcome to Northkeep</h2>
+      <h2>Welcome to NorthKeep</h2>
       <p>Your AI memories will live in an encrypted vault on this Mac.
         Choose a passphrase to protect it.</p>
       <p>Your vault opens with two secrets: your passphrase plus a device key
-        file Northkeep creates — losing either loses the vault, by design.</p>
+        file NorthKeep creates — losing either loses the vault, by design.</p>
       <div class="err" id="setupErr"></div>
       <input type="password" id="setupPass" placeholder="Choose a passphrase (min 8 characters)">
       <input type="password" id="setupPass2" placeholder="Confirm passphrase">
@@ -447,7 +447,7 @@
   async function api(route, opts = {}) {
     const res = await fetch(route, {
       method: opts.method || 'GET',
-      headers: { 'X-Northkeep-Token': TOKEN, ...(opts.json ? { 'Content-Type': 'application/json' } : {}) },
+      headers: { 'X-NorthKeep-Token': TOKEN, ...(opts.json ? { 'Content-Type': 'application/json' } : {}) },
       body: opts.json ? JSON.stringify(opts.json) : (opts.body ?? undefined),
     });
     const data = await res.json().catch(() => ({}));
@@ -568,7 +568,7 @@
         return;
       }
     } catch { /* no Ollama — fall through to the manual form */ }
-    $('setupAiLine').textContent = 'No local AI found. Point Northkeep at any OpenAI-compatible ' +
+    $('setupAiLine').textContent = 'No local AI found. Point NorthKeep at any OpenAI-compatible ' +
       'runtime — Ollama, LM Studio, vLLM — or a hosted API.';
     $('setupOllamaBox').hidden = true;
     $('setupManualBox').hidden = false;
@@ -629,7 +629,7 @@
     const r = await api('/api/lock', { method: 'POST', json: { forgetKeychain: clear } });
     if (r.envGrant) {
       alert('Locked. Note: an environment variable (NORTHKEEP_PASSPHRASE or ' +
-        'NORTHKEEP_MASTER_KEY) is set — it will re-open the vault if you restart Northkeep. ' +
+        'NORTHKEEP_MASTER_KEY) is set — it will re-open the vault if you restart NorthKeep. ' +
         'Unset it to lock permanently.');
     }
     location.reload();
@@ -898,7 +898,7 @@
         </div>`).join('');
   }
   $('auditCsv').addEventListener('click', async () => {
-    const res = await fetch('/api/audit.csv', { headers: { 'X-Northkeep-Token': TOKEN } });
+    const res = await fetch('/api/audit.csv', { headers: { 'X-NorthKeep-Token': TOKEN } });
     const blob = await res.blob();
     downloadBlob(blob, 'northkeep-audit.csv');
   });
@@ -1322,7 +1322,7 @@
     try {
       const res = await fetch('/api/converse', {
         method: 'POST',
-        headers: { 'X-Northkeep-Token': TOKEN, 'Content-Type': 'application/json' },
+        headers: { 'X-NorthKeep-Token': TOKEN, 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...(convSession ? { session_id: convSession } : {}),
           endpoint_id: isAuto ? 'auto' : ep.id,

@@ -1,4 +1,4 @@
-# Northkeep Security Model — v0.1 (M0 scope)
+# NorthKeep Security Model — v0.1 (M0 scope)
 
 *Plain-language first, mechanism second. This document grows with each
 milestone; sections marked (M1+)…(M5) are placeholders with intent stated.
@@ -14,7 +14,7 @@ Honesty about limits is a product feature — see KNOWN-LIMITS.md.*
 | Passphrase guessed offline against a stolen file | Attacker also needs the device secret file — a random 256-bit value that makes offline guessing pointless (1Password Secret-Key pattern) |
 | Vault file tampered with | AEAD authentication fails closed: any modified byte makes the vault refuse to open. KDF parameters in the header are bounds-checked before use, so a tampered header cannot demand unbounded Argon2id work (pre-authentication DoS) |
 | History silently edited by *naive* tooling with vault access | Per-entry hash chain: edits by tools that don't rebuild the chain are detected on verify/export. The chain is unkeyed — see the limits below for what it does NOT stop |
-| Us (Northkeep the company) | Nothing to protect against yet: M0 has no network code at all. The invariant that carries forward: we never see plaintext |
+| Us (NorthKeep the company) | Nothing to protect against yet: M0 has no network code at all. The invariant that carries forward: we never see plaintext |
 
 ## What we do NOT protect against (stated plainly)
 

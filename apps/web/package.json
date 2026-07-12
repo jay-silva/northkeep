@@ -1,7 +1,7 @@
 {
   "name": "@northkeep/web",
   "version": "0.4.0",
-  "description": "Northkeep local GUI: token-authed loopback server + single-file web UI",
+  "description": "NorthKeep local GUI: token-authed loopback server + single-file web UI",
   "license": "AGPL-3.0-only",
   "type": "module",
   "main": "dist/server.js",

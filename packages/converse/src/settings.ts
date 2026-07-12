@@ -126,7 +126,7 @@ export function setEndpointKey(id: string, apiKey: string): void {
   if (/[\n\r]/.test(apiKey)) throw new Error('Malformed API key.');
   if (!keychainAvailable()) {
     throw new Error(
-      `No Keychain available on this system. For scripting/tests, pass the key via the ${keyEnvVar(id)} environment variable instead — Northkeep never writes API keys to files.`,
+      `No Keychain available on this system. For scripting/tests, pass the key via the ${keyEnvVar(id)} environment variable instead — NorthKeep never writes API keys to files.`,
     );
   }
   // security -i takes commands on stdin so the key never hits a command

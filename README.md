@@ -1,8 +1,8 @@
-# Northkeep
+# NorthKeep
 
 **Your AI memory belongs to you.**
 
-Northkeep is a local-first, user-owned memory vault for AI: an encrypted
+NorthKeep is a local-first, user-owned memory vault for AI: an encrypted
 SQLite vault on your machine, exposed to AI apps via MCP, with tiered
 on-device PII redaction and client-side-encrypted sync. Every AI you use
 shares one memory of you — and it lives on your computer, not theirs.
@@ -50,7 +50,7 @@ pnpm northkeep sync status
 ```
 
 On a **second machine**, copy your `~/.northkeep/device.secret` over (it's the
-account root — Northkeep won't move it for you, by design), then pull:
+account root — NorthKeep won't move it for you, by design), then pull:
 
 ```bash
 # after copying device.secret to ~/.northkeep/ on the new machine:
@@ -71,7 +71,7 @@ app too. Limits (whole-vault last-writer-wins, device-secret transport) are in
 
 The hosted service is **$10/month** (self-hosting is free). If a server requires
 a subscription, push/pull will say so; start one with Stripe-hosted checkout —
-your card is entered on Stripe and never touches Northkeep:
+your card is entered on Stripe and never touches NorthKeep:
 
 ```bash
 pnpm northkeep sync subscribe   # prints a secure Stripe checkout link
@@ -86,7 +86,7 @@ Manage-billing buttons too.
 ## Converse — talk to any model, privately
 
 The Converse tab (and `northkeep converse` in the terminal) is a chat
-surface where the privacy runs itself. On every message, Northkeep
+surface where the privacy runs itself. On every message, NorthKeep
 retrieves relevant memory, masks secrets *before* anything leaves the
 machine, calls the model you picked, restores names in the reply locally,
 distills what's worth remembering into the vault (visibly, with one-click
@@ -111,7 +111,7 @@ to a remote endpoint — not a setting, a code path that doesn't exist.
 ## Bring your memory with you
 
 Easiest: open the app (`northkeep ui`), go to Import, and **drop your whole
-ChatGPT or Claude export** — the folder or the .zip. Northkeep finds the
+ChatGPT or Claude export** — the folder or the .zip. NorthKeep finds the
 conversation files (even when a big export is split into
 `conversations-000.json`, `-001.json`, …), ignores the rest, and figures out
 which service it came from.
@@ -131,7 +131,7 @@ vault unseen.
 
 ## Scopes & audit (for professionals)
 
-Run a Northkeep MCP connection scoped to one matter — it physically cannot
+Run a NorthKeep MCP connection scoped to one matter — it physically cannot
 read or write anything else:
 
 ```json
@@ -162,7 +162,7 @@ echo "Dear Person-1, ..." | pnpm northkeep restore --map /tmp/m.json
 Tier 1 masks secrets (emails, SSNs, cards, keys) deterministically; Tier 2
 swaps names and orgs for consistent placeholders using a local model and can
 restore them in the AI's reply. All on your machine. It's a tool you route
-text through — Northkeep can't scrub a prompt you type straight into a chat
+text through — NorthKeep can't scrub a prompt you type straight into a chat
 app, and doesn't pretend to.
 
 ## Connect an AI app (MCP)

@@ -49,7 +49,7 @@ export function parseChatgptExport(inputPath: string): ImportedConversation[] {
   const shards = collectShardTexts(inputPath);
   if (shards.length === 0) {
     throw new Error(
-      `No conversations file found at ${inputPath}. Point Northkeep at the ChatGPT export ` +
+      `No conversations file found at ${inputPath}. Point NorthKeep at the ChatGPT export ` +
         'ZIP, the folder it unzipped to, or a conversations.json inside it.',
     );
   }

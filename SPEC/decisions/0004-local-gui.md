@@ -25,7 +25,7 @@ framework frontend (build chain + dependency surface for a 3-view browser).
 
 - Binds 127.0.0.1, random port.
 - Per-session bearer token (32 random bytes) delivered once in the opening
-  URL; every `/api` call needs it (`X-Northkeep-Token`, constant-time
+  URL; every `/api` call needs it (`X-NorthKeep-Token`, constant-time
   compare). The page strips the token from the URL bar and keeps it in
   sessionStorage.
 - Host-header must be loopback → DNS-rebinding attempts get 403.

@@ -1,9 +1,9 @@
-# Northkeep Memory Schema — v0.2
+# NorthKeep Memory Schema — v0.2
 
 *The open schema for portable, user-owned AI memory.*
 
 *This specification is licensed CC-BY-4.0 so the standard can spread freely,
-independent of the Northkeep implementation (which is AGPL-3.0).*
+independent of the NorthKeep implementation (which is AGPL-3.0).*
 
 ---
 

@@ -161,7 +161,7 @@ export async function pushVault(options: {
       throw new Error('No local vault to push. Run "northkeep init" first.');
     }
     const blob = fs.readFileSync(options.vaultPath);
-    if (!isVaultBlob(blob)) throw new Error('Local vault file is not a Northkeep vault.');
+    if (!isVaultBlob(blob)) throw new Error('Local vault file is not a NorthKeep vault.');
     if (blob.length > MAX_BLOB_BYTES) {
       throw new Error(
         `Vault is ${(blob.length / 1024 / 1024).toFixed(1)} MB, over the ${MAX_BLOB_BYTES / 1024 / 1024} MB sync limit.`,
@@ -198,7 +198,7 @@ export async function pullVault(options: {
     if (pulled === null) return { ok: false, reason: 'no-remote' };
 
     if (!isVaultBlob(pulled.blob)) {
-      throw new Error('Downloaded blob is not a Northkeep vault (corrupt download or wrong server).');
+      throw new Error('Downloaded blob is not a NorthKeep vault (corrupt download or wrong server).');
     }
     // Transport integrity only — the server supplies this sha, so it catches a
     // truncated/corrupted download, NOT a malicious server (which can serve a

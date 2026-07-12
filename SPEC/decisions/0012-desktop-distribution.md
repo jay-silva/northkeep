@@ -78,7 +78,7 @@ at runtime — noted here for invariant-7 transparency).
 ## Decision 2: Bundle layout and process architecture
 
 ```
-Northkeep.app/Contents/
+NorthKeep.app/Contents/
   MacOS/
     northkeep-desktop            ← Tauri shell (unchanged role: dumb window)
     northkeep-server             ← renamed stock Node binary (externalBin)
@@ -232,7 +232,7 @@ explicitly out of scope here.
   because it carries a full Node runtime. Accepted cost of the zero-new-deps
   path.
 - **We become a runtime redistributor.** Node security releases now obligate
-  a Northkeep re-release. Pin the version in one place in the build script;
+  a NorthKeep re-release. Pin the version in one place in the build script;
   check it at each Friday tag.
 - **Apple in the loop:** signing ties releases to Apple credentials; a
   revoked/expired cert (yearly-ish maintenance) blocks new builds — existing

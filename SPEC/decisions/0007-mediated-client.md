@@ -6,15 +6,15 @@
 
 ## Context
 
-Through M4, Northkeep's memory reaches an AI only when the AI decides to call
+Through M4, NorthKeep's memory reaches an AI only when the AI decides to call
 our MCP tools — *assisted* memory. MCP cannot intercept what the user types,
 so automatic redaction of outbound text ("the SSN never leaves the laptop
 without me doing anything") is impossible from inside Claude Desktop. The only
 way to put retrieval, redaction, restore, distillation, and audit on **every
-message** is for Northkeep to mediate the model call itself.
+message** is for NorthKeep to mediate the model call itself.
 
 M6 builds that: **Converse**, a purpose-built private client. The user talks
-to a model *through* Northkeep, which on each turn retrieves memory, redacts
+to a model *through* NorthKeep, which on each turn retrieves memory, redacts
 outbound text, calls the model, restores pseudonyms locally, distills new
 memory, and appends a content-free audit row (`runTurn` in
 `@northkeep/converse`). This deliberately crosses the old "memory browser,
@@ -30,7 +30,7 @@ local models.
 
 Invariant #1 says plaintext leaves the machine only "to the model provider
 the user explicitly selected, after the active redaction tier has run."
-Converse is the first surface where Northkeep itself makes that call, and it
+Converse is the first surface where NorthKeep itself makes that call, and it
 enforces the sentence structurally:
 
 - The provider call in `runTurn` sits strictly **after** the redaction step;
@@ -43,7 +43,7 @@ enforces the sentence structurally:
   #6). Degrading to Tier-1 silently would be a privacy downgrade the user
   didn't approve. On a private endpoint the same degrade proceeds but is
   flagged (`tier2Degraded`) — nothing left the machine either way.
-- Calls go **direct client → provider**. Northkeep infrastructure never
+- Calls go **direct client → provider**. NorthKeep infrastructure never
   proxies, terminates, or observes the traffic.
 - The redaction/extraction models themselves stay strictly loopback (the
   `ollamaUrl` guard from ADR 0003 is unchanged). Only the *chat* endpoint is

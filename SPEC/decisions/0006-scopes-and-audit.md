@@ -18,7 +18,7 @@ AI can request — a model asking for its own access would defeat the control.
 The grant is `NORTHKEEP_SCOPES` (comma-separated) on the server process;
 **unset = full owner access** (the consumer default, since it's your vault).
 To run a scoped connection — e.g. a lawyer working the Henderson matter — you
-launch a Northkeep MCP entry with `NORTHKEEP_SCOPES=personal,client:henderson`.
+launch a NorthKeep MCP entry with `NORTHKEEP_SCOPES=personal,client:henderson`.
 
 ## Decision 2: Enforcement is in the store, fail-closed
 
@@ -52,7 +52,7 @@ works today.
 
 ## Honest limits (KNOWN-LIMITS.md)
 
-Scope isolation binds anything that goes *through* Northkeep's grant. It can't
+Scope isolation binds anything that goes *through* NorthKeep's grant. It can't
 stop the user from pasting client B's text into a client-A conversation
 themselves, and it trusts the model provider's own retention controls once
 redacted content is sent. Scope labels are chosen by whoever writes the

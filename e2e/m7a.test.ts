@@ -58,7 +58,7 @@ async function api(
   const res = await fetch(`${baseUrl}${route}`, {
     method: options.method ?? 'GET',
     headers: {
-      'X-Northkeep-Token': token,
+      'X-NorthKeep-Token': token,
       ...(options.json !== undefined ? { 'content-type': 'application/json' } : {}),
     },
     body: options.json !== undefined ? JSON.stringify(options.json) : undefined,
@@ -69,7 +69,7 @@ async function api(
 async function converse(json: unknown): Promise<{ status: number; events: Array<Record<string, unknown>> }> {
   const res = await fetch(`${baseUrl}/api/converse`, {
     method: 'POST',
-    headers: { 'X-Northkeep-Token': token, 'content-type': 'application/json' },
+    headers: { 'X-NorthKeep-Token': token, 'content-type': 'application/json' },
     body: JSON.stringify(json),
   });
   const text = await res.text();

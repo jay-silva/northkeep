@@ -1,6 +1,6 @@
 # Desktop bundle pipeline (ADR 0012)
 
-Builds the distributable macOS app: `Northkeep.app` + DMG containing the
+Builds the distributable macOS app: `NorthKeep.app` + DMG containing the
 Tauri shell, a pinned Node runtime as sidecar, and the production server
 tree. arm64 (Apple Silicon) only; requires macOS 13.5+ at runtime.
 
@@ -28,7 +28,7 @@ scripts/desktop-bundle/build.sh --bundles app  # .app only (faster)
 
 Artifacts:
 
-- `apps/desktop/src-tauri/target/release/bundle/macos/Northkeep.app`
+- `apps/desktop/src-tauri/target/release/bundle/macos/NorthKeep.app`
 - `apps/desktop/src-tauri/target/release/bundle/dmg/Northkeep_<ver>_aarch64.dmg`
 
 The unsigned app runs fine on the build machine. On any *other* machine
@@ -37,7 +37,7 @@ Gatekeeper will refuse it — that is what signing + notarization is for.
 Quick smoke test:
 
 ```sh
-open apps/desktop/src-tauri/target/release/bundle/macos/Northkeep.app
+open apps/desktop/src-tauri/target/release/bundle/macos/NorthKeep.app
 # window opens, vault UI loads; on quit, `pgrep northkeep-server` is empty
 ```
 
@@ -68,7 +68,7 @@ scripts/desktop-bundle/build.sh
 After the first signed build, verify (these are ADR 0012's acceptance items):
 
 ```sh
-spctl -a -vv apps/desktop/src-tauri/target/release/bundle/macos/Northkeep.app
+spctl -a -vv apps/desktop/src-tauri/target/release/bundle/macos/NorthKeep.app
 xcrun stapler validate apps/desktop/src-tauri/target/release/bundle/dmg/Northkeep_*.dmg
 # if the DMG itself is not stapled (only the .app), staple it manually:
 #   xcrun notarytool submit <dmg> --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
@@ -82,7 +82,7 @@ closes.
 
 ## Updating the pinned Node
 
-Node security releases obligate a Northkeep re-release (ADR 0012). Bump
+Node security releases obligate a NorthKeep re-release (ADR 0012). Bump
 `NODE_VERSION` in `fetch-node.sh`, rebuild, done — the checksum verification
 picks up the new release's SHASUMS automatically. Check the pin at each
 Friday tag.

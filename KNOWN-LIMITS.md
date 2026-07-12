@@ -11,7 +11,7 @@ every milestone; if a limit is removed, say when and how.*
   live on managed infrastructure (Neon Postgres) — encrypted, but hosted. Want
   full custody? The server is self-hostable.
 - **A second machine needs your `device.secret` file, copied over by hand.**
-  It's the account root — sync derives your identity from it. Northkeep never
+  It's the account root — sync derives your identity from it. NorthKeep never
   transports it for you (that would defeat the two-secret model), and losing it
   still loses the vault. Guard it like a recovery key.
 - **Conflicts are whole-vault, last-writer-wins.** If two machines edit before
@@ -39,7 +39,7 @@ every milestone; if a limit is removed, say when and how.*
 - **Paying on the hosted service creates a bounded payer↔vault link.** To bill,
   the server stores one new fact: your encrypted account's token hash next to
   your Stripe customer/subscription id and status. Your **email and card never
-  touch Northkeep** — they live only in Stripe, and Checkout is Stripe-hosted
+  touch NorthKeep** — they live only in Stripe, and Checkout is Stripe-hosted
   (no card data, no PCI scope on us). The honest cost: the operator can now
   correlate *which paying customer owns which encrypted vault* — never its
   contents (still ciphertext-only). **Self-hosting stays fully anonymous** (no
@@ -60,7 +60,7 @@ every milestone; if a limit is removed, say when and how.*
 - **The privacy badge trusts the address, not the wire.** A host is
   classified private because it's a loopback/RFC-1918/`.local` address. If
   you deliberately tunnel that address somewhere else (SSH forward, VPN),
-  Northkeep can't tell. Unrecognized and bare hostnames classify as
+  NorthKeep can't tell. Unrecognized and bare hostnames classify as
   *bounded* — we fail closed, so a LAN box by hostname may need its IP.
 - **Tier-1 masks are one-way in the conversation too.** The model sees
   `[SSN_1]` and answers about `[SSN_1]` — your real number never comes back
@@ -78,14 +78,14 @@ every milestone; if a limit is removed, say when and how.*
 - **Retrieval is still keyword-based** (M1 limit, unchanged) — memory
   injection misses synonyms until semantic retrieval lands.
 - **API keys need the macOS Keychain.** On other platforms (or
-  `NORTHKEEP_NO_KEYCHAIN=1`) keys are env-var-only for scripting — Northkeep
+  `NORTHKEEP_NO_KEYCHAIN=1`) keys are env-var-only for scripting — NorthKeep
   refuses to write them to files.
 
 ## M4 (scopes + audit) — current
 
-- **Scope isolation binds what goes through Northkeep, not what you paste
+- **Scope isolation binds what goes through NorthKeep, not what you paste
   yourself.** A connection granted only `client:henderson` physically can't
-  retrieve `client:acme` from the vault — but Northkeep can't stop you from
+  retrieve `client:acme` from the vault — but NorthKeep can't stop you from
   typing Acme's details into a Henderson conversation by hand. The boundary
   is on the vault, not your keyboard.
 - **Scope labels are set at write time.** If a memory is saved under the
@@ -97,15 +97,15 @@ every milestone; if a limit is removed, say when and how.*
 - **Tier-1 masking over MCP is opt-in and one-way.** `NORTHKEEP_REDACT_TIER=1`
   masks secrets in retrieved content; full name-pseudonymization over MCP
   needs a provider proxy that doesn't exist yet (parked).
-- **The audit log covers Northkeep's own surface.** It records what AI apps
+- **The audit log covers NorthKeep's own surface.** It records what AI apps
   asked of the vault — it can't see what a provider did with the content
-  after Northkeep handed it over.
+  after NorthKeep handed it over.
 
 ## M3 (redaction) — current
 
 - **We redact text you route through us — we can't scrub what a chat app
   sends.** `northkeep redact` (and the GUI Redact panel) mask text *you*
-  paste through them. Northkeep is not a proxy between Claude Desktop and
+  paste through them. NorthKeep is not a proxy between Claude Desktop and
   Anthropic, so it cannot intercept a prompt you type directly into a chat
   client. Honest boundary, stated plainly.
 - **Tier 1 is ~99%, not a guarantee.** It targets specific identifier
@@ -130,11 +130,23 @@ every milestone; if a limit is removed, say when and how.*
 - **Closing the Tauri window kills the server and forgets the held key.**
   A browser tab from `northkeep ui` does the same when you Ctrl-C the
   terminal — but not if you only close the tab; the server keeps running.
-- **The desktop app currently requires this machine's dev setup** (Node on
-  PATH, the repo built). A double-clickable, signed, installable app is
-  distribution work, deliberately deferred (ADR 0004).
 - **No editing memories in the GUI yet** — forget-and-re-add until
   supersede semantics land.
+
+## Desktop app / distribution (M7d) — current
+
+- **Apple Silicon (arm64) only for now.** The signed DMG bundles an arm64
+  Node runtime; Intel Macs aren't built yet (ADR 0012 targets aarch64 first).
+  Running from source still works on any platform.
+- **No auto-update.** Updates are manual — download the new DMG. An in-app
+  updater would phone home, against the no-telemetry invariant (#5); if we add
+  one it'll be its own opt-in, signed, content-free decision (future ADR).
+- **The bundled Node runtime is a version we redistribute.** We pin it and
+  verify it against nodejs.org's checksums at build time; on a Node security
+  release we bump the pin and ship a new DMG.
+- **First launch may do an online Gatekeeper check.** The app and DMG are
+  notarized and stapled, so they open offline too — but an app copied out of
+  the DMG on a machine that's never seen it may do a one-time online check.
 
 ## M2 (importers) — current
 

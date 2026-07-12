@@ -53,7 +53,7 @@ const program = new Command();
 
 program
   .name('northkeep')
-  .description('Northkeep — your AI memory, in a vault you own.')
+  .description('NorthKeep — your AI memory, in a vault you own.')
   .version('0.2.0')
   .option('--vault <path>', 'vault file path', defaultVaultPath());
 
@@ -433,7 +433,7 @@ providers
 
 program
   .command('converse')
-  .description('Talk to a model through Northkeep: memory injected, secrets masked, every turn audited')
+  .description('Talk to a model through NorthKeep: memory injected, secrets masked, every turn audited')
   .option('--endpoint <id>', 'endpoint id (default: the configured default)')
   .option('--tier <n>', 'redaction tier: 0 (private endpoints only) | 1 | 2', '1')
   .option('--scope <scope>', 'scope for memories distilled from this conversation', 'personal')
@@ -534,12 +534,12 @@ program
 
 program
   .command('ui')
-  .description('Open the Northkeep app in your browser (local only)')
+  .description('Open the NorthKeep app in your browser (local only)')
   .option('--no-open', 'print the URL without opening a browser')
   .action(async (options: { open: boolean }) => {
     const { startUiServer } = await import('@northkeep/web');
     const server = await startUiServer({ vaultPath: vaultPathOpt() });
-    console.log(`Northkeep is running (this Mac only): ${server.url}`);
+    console.log(`NorthKeep is running (this Mac only): ${server.url}`);
     console.log('Press Ctrl-C to quit.');
     if (options.open) {
       const { execFile } = await import('node:child_process');

@@ -12,7 +12,7 @@ engine and exposes it where we actually control the data.
 
 ## Decision 1: Redaction is a tool the user routes text through — NOT an interceptor
 
-Northkeep hands memory to Claude Desktop over local stdio; Claude Desktop is
+NorthKeep hands memory to Claude Desktop over local stdio; Claude Desktop is
 what calls Anthropic. We are not in that wire and will not pretend to scrub a
 prompt we never see. So redaction ships as an explicit operation:
 `northkeep redact` / `restore` (CLI, stdin-friendly) and a GUI **Redact**

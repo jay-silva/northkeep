@@ -1,0 +1,47 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="lf" x1="0" y1="185" x2="0" y2="770" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#16382b"></stop><stop offset="1" stop-color="#0e2a1f"></stop>
+    </linearGradient>
+    <linearGradient id="rf" x1="0" y1="185" x2="0" y2="770" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2f6a54"></stop><stop offset="1" stop-color="#204b3a"></stop>
+    </linearGradient>
+    <clipPath id="silo">
+      <path d="M350 185 H398 V232 H442 V185 H490 V232 H534 V185 H582 V232 H626 V185 H674 V545 L512 770 L350 545 Z"></path>
+    </clipPath>
+  </defs>
+
+  <path d="M350 185 H398 V232 H442 V185 H490 V232 H512 V770 L350 545 Z" fill="url(#lf)"></path>
+  <path d="M512 232 H534 V185 H582 V232 H626 V185 H674 V545 L512 770 Z" fill="url(#rf)"></path>
+
+  <g clip-path="url(#silo)" fill="none" stroke-linecap="round" stroke-linejoin="round">
+    <g stroke="#c9a24b" stroke-width="4">
+      <path d="M384 258 V306 H424 V356"></path>
+      <path d="M384 306 H350"></path>
+      <path d="M404 474 V556 H448"></path>
+      <path d="M466 258 V220"></path>
+    </g>
+    <g stroke="#57b892" stroke-width="4">
+      <path d="M640 258 V306 H600 V356"></path>
+      <path d="M640 306 H674"></path>
+      <path d="M620 474 V556 H576"></path>
+      <path d="M558 258 V220"></path>
+    </g>
+    <g fill="#c9a24b" stroke="none">
+      <circle cx="384" cy="258" r="6"></circle><circle cx="424" cy="356" r="6"></circle>
+      <circle cx="404" cy="474" r="6"></circle><circle cx="448" cy="556" r="5"></circle>
+    </g>
+    <g fill="#57b892" stroke="none">
+      <circle cx="640" cy="258" r="6"></circle><circle cx="600" cy="356" r="6"></circle>
+      <circle cx="620" cy="474" r="6"></circle><circle cx="576" cy="556" r="5"></circle>
+    </g>
+  </g>
+
+  <circle cx="600" cy="306" r="11" fill="#c9a24b"></circle>
+
+  <g stroke="#f5f2ea" stroke-width="34" fill="none" stroke-linecap="butt" stroke-linejoin="miter">
+    <path d="M455 512 V392"></path>
+    <path d="M455 392 L569 512"></path>
+    <path d="M569 512 V392"></path>
+  </g>
+</svg>

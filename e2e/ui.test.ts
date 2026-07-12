@@ -48,7 +48,7 @@ async function api(
   const res = await fetch(`${baseUrl}${route}`, {
     method: options.method ?? 'GET',
     headers: {
-      'X-Northkeep-Token': options.token ?? token,
+      'X-NorthKeep-Token': options.token ?? token,
       ...(options.json !== undefined ? { 'content-type': 'application/json' } : {}),
       ...options.headers,
     },
@@ -104,7 +104,7 @@ describe('GUI server', () => {
   it('serves the page, but the API requires the session token', async () => {
     const page = await fetch(`${baseUrl}/`);
     expect(page.status).toBe(200);
-    expect(await page.text()).toContain('Northkeep');
+    expect(await page.text()).toContain('NorthKeep');
     expect(page.headers.get('content-security-policy')).toContain("default-src 'none'");
 
     expect((await api('/api/status', { token: '' })).status).toBe(401);
@@ -121,7 +121,7 @@ describe('GUI server', () => {
           host: '127.0.0.1',
           port,
           path: '/api/status',
-          headers: { host: 'evil.example.com', 'X-Northkeep-Token': token },
+          headers: { host: 'evil.example.com', 'X-NorthKeep-Token': token },
         },
         (res) => resolve(res.statusCode ?? 0),
       );
@@ -231,7 +231,7 @@ describe('GUI server', () => {
       const t = u.searchParams.get('token')!;
       const base = `${u.protocol}//${u.host}`;
       const call = async (route: string, method = 'GET') =>
-        fetch(`${base}${route}`, { method, headers: { 'X-Northkeep-Token': t, 'content-type': 'application/json' }, body: method === 'POST' ? '{}' : undefined });
+        fetch(`${base}${route}`, { method, headers: { 'X-NorthKeep-Token': t, 'content-type': 'application/json' }, body: method === 'POST' ? '{}' : undefined });
 
       // Env grant means it starts unlocked without a passphrase POST.
       expect((await (await call('/api/status')).json()).unlocked).toBe(true);

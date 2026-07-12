@@ -65,7 +65,7 @@ describe('handleSync', () => {
     expect(other.status).toBe(404); // no blob under the other token
   });
 
-  it('rejects a body that is not a Northkeep vault blob (400)', async () => {
+  it('rejects a body that is not a NorthKeep vault blob (400)', async () => {
     const s = new InMemoryStorage();
     const notAVault = Buffer.alloc(200, 0x00); // no NKV1 magic
     const put = await handleSync(req({ method: 'PUT', path: '/api/blob', baseVersion: 0, body: notAVault }), s);

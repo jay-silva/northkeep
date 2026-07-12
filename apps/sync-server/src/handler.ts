@@ -119,12 +119,12 @@ export async function handleSync(
     if (blob.length > MAX_BLOB_BYTES) {
       return json(413, { error: `Vault exceeds the ${MAX_BLOB_BYTES / 1024 / 1024} MB sync limit.` });
     }
-    // Reject anything that isn't shaped like a Northkeep vault blob. NOTE: this
+    // Reject anything that isn't shaped like a NorthKeep vault blob. NOTE: this
     // is a sanity check, NOT abuse protection — the server can't read ciphertext
     // and a forged NKV1 blob is indistinguishable from a real one. Real abuse
     // protection is the allowlist above (or billing, M5b) + the size cap.
     if (blob.length < NKV_HEADER_LENGTH || !hasVaultMagic(blob)) {
-      return json(400, { error: 'Body is not a Northkeep vault blob.' });
+      return json(400, { error: 'Body is not a NorthKeep vault blob.' });
     }
     const base = req.baseVersion;
     if (base === null || !Number.isInteger(base) || base < 0) {

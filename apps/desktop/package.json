@@ -1,7 +1,7 @@
 {
   "name": "@northkeep/desktop",
   "version": "0.7.0",
-  "description": "Northkeep desktop shell (Tauri): a native window around the local web UI",
+  "description": "NorthKeep desktop shell (Tauri): a native window around the local web UI",
   "license": "AGPL-3.0-only",
   "private": true,
   "scripts": {

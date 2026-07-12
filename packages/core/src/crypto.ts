@@ -1,7 +1,7 @@
 import sodium from 'sodium-native';
 
 /**
- * All cryptography in Northkeep goes through this module and uses libsodium
+ * All cryptography in NorthKeep goes through this module and uses libsodium
  * primitives only (CLAUDE.md invariant #3). Design rationale: SPEC/decisions/0001.
  */
 

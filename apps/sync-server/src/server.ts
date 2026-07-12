@@ -42,10 +42,10 @@ export function createSyncServer(storage: Storage, billing: BillingDeps | null =
       const ok = url.pathname === '/billing/success';
       res.writeHead(200, { 'content-type': 'text/html; charset=utf-8', 'cache-control': 'no-store' });
       res.end(
-        `<!doctype html><meta charset=utf-8><title>Northkeep</title>` +
+        `<!doctype html><meta charset=utf-8><title>NorthKeep</title>` +
           `<body style="font-family:system-ui;max-width:32rem;margin:15vh auto;padding:0 1.5rem;text-align:center;color:#24221c;background:#f6f4ef">` +
           `<h1 style="font-weight:600">${ok ? 'You’re subscribed.' : 'Checkout canceled.'}</h1>` +
-          `<p style="color:#8a8477">${ok ? 'Your vault can now sync. Return to Northkeep and push.' : 'No charge was made. You can subscribe anytime from the Sync tab.'}</p>` +
+          `<p style="color:#8a8477">${ok ? 'Your vault can now sync. Return to NorthKeep and push.' : 'No charge was made. You can subscribe anytime from the Sync tab.'}</p>` +
           `<p style="color:#8a8477">You can close this tab.</p></body>`,
       );
       return;

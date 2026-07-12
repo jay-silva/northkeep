@@ -11,11 +11,11 @@ flip between ChatGPT, Claude, Fable, Kimi, GLM, Grok, Perplexity's router, and
 local runtimes weekly, and the churn is the pain. A widely-shared July 2026 post
 by Jason Calacanis captured the want: an app that integrates everything and
 **"automatically swaps through these models"** (attributed, X.com). Jay sees this
-as Northkeep's consumer story.
+as NorthKeep's consumer story.
 
 The critical thing that post misses: **swapping models is worthless if your
 context doesn't come with you.** Move from Claude to Kimi mid-project and you
-normally restart from zero. Northkeep already carries a portable, encrypted
+normally restart from zero. NorthKeep already carries a portable, encrypted
 memory vault into every model, and a redaction firewall that lets you fan out to
 many providers safely. So we are not chasing a router; we are building the one
 thing that makes routing *usable* — a **concierge**: it picks the model, and
@@ -136,7 +136,7 @@ always sees **who answered and how private it was**, and can override:
   Automatic by default; never a cage.
 - The existing audit view becomes the honest ledger of every automatic decision.
 
-This is the differentiator over a black-box router: Northkeep routes *and* shows
+This is the differentiator over a black-box router: NorthKeep routes *and* shows
 its work, with your memory and PII protection intact.
 
 ## Scope
@@ -148,7 +148,7 @@ discovery; the "who answered / why / override / pin" UX in the Converse tab and
 CLI; audit `reason` field; phased rollout below.
 
 **Out (M7):** the opt-in remote catalog fetch (deferred to its own ADR under
-invariant #7); a Northkeep-hosted routing service (routing stays 100% local — no
+invariant #7); a NorthKeep-hosted routing service (routing stays 100% local — no
 new server, no query ever transits us); multi-model "ask 3, merge" ensembles;
 automatic *account/billing* provisioning for third-party providers; fine-tuned
 or learned routing policies (start rule/heuristic, learn later).
@@ -175,7 +175,7 @@ or learned routing policies (start rule/heuristic, learn later).
 - **#1 (redaction before send):** untouched — routing is strictly upstream of
   `runTurn`, which still re-redacts the whole prompt at the effective tier.
 - **#2 (server stores ciphertext only):** untouched — routing is local; no query
-  transits any Northkeep server.
+  transits any NorthKeep server.
 - **#5 (no telemetry):** the task classifier, router, and catalog emit nothing;
   a future remote catalog fetch must be content-free.
 - **#6 (degrade loudly):** no Ollama ⇒ heuristic routing, announced, never a
@@ -241,4 +241,4 @@ URL either way).
 4. Override a pick mid-chat; confirm memory + context carried across the switch
    with no re-explaining.
 5. Inspect the audit log: every turn shows model + privacy + the router's reason;
-   no query ever went to a Northkeep server.
+   no query ever went to a NorthKeep server.

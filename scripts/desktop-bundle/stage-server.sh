@@ -5,7 +5,7 @@
 # production node_modules into a self-contained folder the bundled Node
 # sidecar can run as `node dist/server.js`. Output:
 #   apps/desktop/src-tauri/server-tree/   (gitignored)
-# which tauri.bundle.conf.json maps into Northkeep.app/Contents/Resources/.
+# which tauri.bundle.conf.json maps into NorthKeep.app/Contents/Resources/.
 #
 # Uses `pnpm deploy` with node-linker=hoisted so the tree is REAL FILES
 # (npm-style flat layout, no pnpm symlink store) — required because the

@@ -173,7 +173,7 @@ export async function syncSubscribe(fail: (m: string) => never): Promise<void> {
   console.log('');
   console.log(`  ${url}`);
   console.log('');
-  console.log('Your card is entered on Stripe — it never touches Northkeep. After you subscribe,');
+  console.log('Your card is entered on Stripe — it never touches NorthKeep. After you subscribe,');
   console.log('run "northkeep sync push" to start syncing.');
 }
 

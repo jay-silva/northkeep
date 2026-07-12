@@ -610,7 +610,7 @@ async function startImport(
     if (source === 'paste') {
       const parsed = parsePasteFile(tempPath);
       if (parsed.length === 0) {
-        throw new Error('No "- [type] fact" lines found — is this the chatbot\'s answer to the Northkeep prompt?');
+        throw new Error('No "- [type] fact" lines found — is this the chatbot\'s answer to the NorthKeep prompt?');
       }
       const deduped = dedupeCandidates(parsed, existing);
       job.candidates = deduped.unique;

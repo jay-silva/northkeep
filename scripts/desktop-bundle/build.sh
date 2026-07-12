@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build the distributable Northkeep desktop app (.app + DMG) — ADR 0012.
+# Build the distributable NorthKeep desktop app (.app + DMG) — ADR 0012.
 #
 # Usage:
 #   scripts/desktop-bundle/build.sh              # .app + .dmg
@@ -79,7 +79,7 @@ if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && { [ -n "${APPLE_PASSWORD:-}" ] || [ -
     cp -R "$APP_OUT" "$STAGING/"
     ln -s /Applications "$STAGING/Applications"
     rm -f "$DMG_OUT"
-    hdiutil create -volname "Northkeep" -srcfolder "$STAGING" -ov -format UDZO "$DMG_OUT" >/dev/null
+    hdiutil create -volname "NorthKeep" -srcfolder "$STAGING" -ov -format UDZO "$DMG_OUT" >/dev/null
     rm -rf "$STAGING"
     codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$DMG_OUT"
     echo "==> notarizing the DMG"

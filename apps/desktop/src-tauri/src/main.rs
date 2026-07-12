@@ -1,4 +1,4 @@
-// Northkeep desktop shell: spawns the local Node UI server, reads the
+// NorthKeep desktop shell: spawns the local Node UI server, reads the
 // tokened URL it announces on stdout, and opens a native window there.
 // All product logic lives in the web/API layer — this stays a dumb window.
 //
@@ -48,7 +48,7 @@ fn server_command(_app: &tauri::App) -> Command {
 #[cfg(not(debug_assertions))]
 fn server_command(app: &tauri::App) -> Command {
     let sidecar = std::env::current_exe()
-        .expect("cannot locate the Northkeep executable")
+        .expect("cannot locate the NorthKeep executable")
         .parent()
         .expect("executable has no parent directory")
         .join("northkeep-server");
@@ -95,7 +95,7 @@ fn report_server_death(code: Option<i32>) {
         let _ = Command::new("/usr/bin/osascript")
             .arg("-e")
             .arg(format!(
-                "display alert \"Northkeep stopped\" message \"The Northkeep server exited unexpectedly ({detail}). Please reopen the app.\" as critical giving up after 30"
+                "display alert \"NorthKeep stopped\" message \"The NorthKeep server exited unexpectedly ({detail}). Please reopen the app.\" as critical giving up after 30"
             ))
             .status();
     }
@@ -108,7 +108,7 @@ fn main() {
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .spawn()
-                .expect("could not start the Northkeep server");
+                .expect("could not start the NorthKeep server");
 
             // The tokened URL travels only over this private pipe (ADR 0004).
             let stdout = child.stdout.take().expect("no stdout from server");
@@ -151,14 +151,14 @@ fn main() {
             });
 
             WebviewWindowBuilder::new(app, "main", WebviewUrl::External(url.parse()?))
-                .title("Northkeep")
+                .title("NorthKeep")
                 .inner_size(1020.0, 740.0)
                 .min_inner_size(560.0, 480.0)
                 .build()?;
             Ok(())
         })
         .build(tauri::generate_context!())
-        .expect("error building Northkeep")
+        .expect("error building NorthKeep")
         .run(|app, event| {
             if let RunEvent::Exit = event {
                 // The server holds the vault key in memory — take it down
