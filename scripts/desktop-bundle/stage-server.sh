@@ -95,15 +95,25 @@ if [ -n "$links" ]; then
   fail=1
 fi
 
-# No unsignable Mach-O may survive: a new dependency that ships a .bare or a
-# foreign-platform prebuild would otherwise pass staging and only blow up
-# after a multi-minute notarization upload. Catch it here instead.
-stray="$(find "$STAGE" \( -name "*.bare" -o \
-  \( -path "*/prebuilds/*" -name "*.node" ! -path "*/darwin-arm64/*" \) \) | head -20)"
+# No unsignable/foreign Mach-O may survive: anything that isn't a signable
+# arm64 .node addon (presign signs those) would fail notarization only AFTER a
+# multi-minute upload. General scan (catches .bare, foreign .node, stray
+# .dylib/.so, plain executables, and non-arm64 slices) — supersedes the old
+# class-specific check. Look only at native-binary-shaped files so we don't
+# `file` every .js. The node SIDECAR lives outside $STAGE, so every Mach-O in
+# here must be an arm64 .node.
+stray=""
+while IFS= read -r -d '' f; do
+  info="$(file -b "$f" 2>/dev/null)"
+  [[ "$info" == *Mach-O* ]] || continue
+  if [[ "$f" != *.node ]] || [[ "$info" != *arm64* ]]; then
+    stray+="  ${f#"$STAGE/"}  [$info]"$'\n'
+  fi
+done < <(find "$STAGE" -type f \( -name "*.node" -o -name "*.bare" -o -name "*.dylib" -o -name "*.so" -o -perm -u+x \) -print0)
 if [ -n "$stray" ]; then
-  echo "stage-server: unsignable/foreign native binaries survived pruning:" >&2
-  echo "$stray" >&2
-  echo "  → extend the prune step (a new dep ships these); notarization would reject them." >&2
+  echo "stage-server: unsignable/foreign Mach-O survived pruning (notarization would reject):" >&2
+  printf '%s' "$stray" >&2
+  echo "  → extend the prune step for the offending package." >&2
   fail=1
 fi
 

@@ -143,7 +143,12 @@ every milestone; if a limit is removed, say when and how.*
   one it'll be its own opt-in, signed, content-free decision (future ADR).
 - **The bundled Node runtime is a version we redistribute.** We pin it and
   verify it against nodejs.org's checksums at build time; on a Node security
-  release we bump the pin and ship a new DMG.
+  release we bump the pin and ship a new DMG. **Supply-chain residual:** the
+  checksum file is fetched over HTTPS from the same host as the binary and is
+  not yet GPG-verified against Node's release keys — so the check stops
+  accidental corruption and naive MITM, but not a compromise of nodejs.org's
+  distribution server. Adding `gpg --verify` of the signed SHASUMS is a
+  hardening step planned before wide distribution.
 - **First launch may do an online Gatekeeper check.** The app and DMG are
   notarized and stapled, so they open offline too — but an app copied out of
   the DMG on a machine that's never seen it may do a one-time online check.

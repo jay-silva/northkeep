@@ -364,3 +364,41 @@ items marked **VERIFY** above, plus deviations:
 - Local verification: addon loader mechanics read from this repo's
   `node_modules` (better-sqlite3 `bindings` call; sodium-native
   `prebuilds/darwin-arm64`).
+
+## Adversarial review (2026-07-12, post-ship of v0.12.0-m7)
+
+High-bar review of the distribution surface (it ships to other machines).
+**Verdict: sound and ship-worthy — no CRITICAL/HIGH.** Confirmed correct:
+credential handling (nothing echoes the password/identity; `.env.local`
+gitignored; sourcing is self-trust only), checksum non-bypassability (verified
+empirically under bash — a bad/missing hash aborts via `set -e`), release-mode
+hardening (`NORTHKEEP_SERVER_JS` + system-node compiled out; sidecar path
+sealed by the outer signature; token only over the private stdout pipe),
+shutdown race (lock-before-close zeroizes the key even under SIGKILL; no
+double-take, no key resident on normal quit), entitlements (jitless correctly
+rejected; `disable-library-validation` correctly absent; no App Sandbox is
+right for Developer ID + `/usr/bin/security`), and the NorthKeep rename (all
+functional strings — `NORTHKEEP_UI_URL`, `x-northkeep-token`, envs,
+`~/.northkeep`, `@northkeep/*`, bundle id — intact; 195 + 78 tests green).
+
+**Fixed from the review:**
+- **M2 — API-key notarization branch bug** (`build.sh`): `--key` was handed the
+  key id instead of the `.p8` path, and read an undocumented empty var. Now
+  `--key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY"`. Dead code for the
+  Apple-ID flow we use, but correct now if the CI key flow is ever adopted.
+- **L2 — staging guard generalized** (`stage-server.sh`): the unsignable-binary
+  check was class-specific (`.bare` + foreign `.node`). Replaced with a general
+  Mach-O scan — every Mach-O in the staged tree must be an arm64 `.node`
+  (presign signs those); `.dylib`, plain executables, and non-arm64 slices now
+  fail at staging instead of after a multi-minute notarization upload.
+
+**Documented as residual (not fixed):**
+- **M1 — Node checksum not GPG-verified.** `SHASUMS256.txt` comes over HTTPS
+  from the same host as the tarball; not checked against Node's release GPG
+  keys. Stops corruption + naive MITM, not a nodejs.org dist-server compromise.
+  Noted in `fetch-node.sh` + KNOWN-LIMITS; add `gpg --verify` before wide
+  distribution.
+- **L1** allow-unsigned-executable-memory may be removable (test on a signed
+  build); **L3** notarytool password is visible in `ps` during `--wait`
+  (keychain-profile is the cleaner path); **I1** a `kill -9`/pre-manage panic
+  can orphan the sidecar (normal quit paths are race-free). All low/accepted.

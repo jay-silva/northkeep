@@ -56,8 +56,13 @@ else
 fi
 
 # Verify against the published checksum on every run (cached or not).
+# RESIDUAL (documented in KNOWN-LIMITS): SHASUMS256.txt is fetched over HTTPS
+# from the same host as the tarball and is NOT GPG-verified against Node's
+# release keys — so this stops accidental corruption and naive MITM, but not a
+# compromise of the nodejs.org dist server serving a matching bad pair. Add
+# `gpg --verify SHASUMS256.txt.sig` before wide distribution.
 grep " ${TARBALL}\$" "$SHASUMS" | shasum -a 256 -c - >/dev/null
-echo "fetch-node: SHA-256 verified against published SHASUMS256.txt"
+echo "fetch-node: SHA-256 verified against published SHASUMS256.txt (see KNOWN-LIMITS re: GPG)"
 
 # Extract only the node binary, straight to the externalBin location.
 # (-O loses the exec bit, so restore it.)

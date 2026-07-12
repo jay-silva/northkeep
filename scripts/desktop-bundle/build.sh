@@ -95,7 +95,9 @@ if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && { [ -n "${APPLE_PASSWORD:-}" ] || [ -
     codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$DMG_OUT"
     echo "==> notarizing the DMG"
     if [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
-      xcrun notarytool submit "$DMG_OUT" --key "$APPLE_API_KEY" --key-id "${APPLE_API_KEY_ID:-}" --issuer "$APPLE_API_ISSUER" --wait
+      # notarytool: --key wants the .p8 FILE PATH, --key-id wants the key id.
+      # (Matches the README's APPLE_API_KEY_PATH/APPLE_API_KEY convention.)
+      xcrun notarytool submit "$DMG_OUT" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait
     else
       xcrun notarytool submit "$DMG_OUT" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
     fi
