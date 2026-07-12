@@ -19,6 +19,17 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 HERE="$REPO_ROOT/scripts/desktop-bundle"
 
+# Load signing credentials from a local, gitignored file if present. Env vars
+# set in a shell don't survive to a new terminal, which silently produces an
+# UNSIGNED build; a file source makes every build reproducible. `.env.local` is
+# covered by the .env.* gitignore rule — it must never be committed. Values are
+# read here and never echoed.
+ENV_LOCAL="$HERE/.env.local"
+if [ -f "$ENV_LOCAL" ]; then
+  set -a; . "$ENV_LOCAL"; set +a
+  echo "build: loaded signing credentials from scripts/desktop-bundle/.env.local"
+fi
+
 # rustup installs land in ~/.cargo/bin, which non-login shells may not have.
 if ! command -v cargo >/dev/null 2>&1 && [ -x "$HOME/.cargo/bin/cargo" ]; then
   export PATH="$HOME/.cargo/bin:$PATH"
