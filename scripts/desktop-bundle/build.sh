@@ -56,6 +56,42 @@ fi
 cd "$REPO_ROOT/apps/desktop"
 ./node_modules/.bin/tauri build --config src-tauri/tauri.bundle.conf.json "$@"
 
+# Staple the notarization tickets (verified 2026-07-11: Tauri notarizes the
+# .app but staples NEITHER the .app nor the DMG). Stapling embeds the ticket
+# so Gatekeeper accepts the app OFFLINE; without it, a downloader with no
+# network at launch is blocked. Only runs when we actually signed+notarized.
+if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && { [ -n "${APPLE_PASSWORD:-}" ] || [ -n "${APPLE_API_KEY:-}" ]; }; then
+  APP_OUT="$(ls -d "$REPO_ROOT/apps/desktop/src-tauri/target/release/bundle/macos/"*.app 2>/dev/null | head -1)"
+  DMG_OUT="$(ls "$REPO_ROOT/apps/desktop/src-tauri/target/release/bundle/dmg/"*.dmg 2>/dev/null | head -1)"
+
+  # 1. Staple the .app (Tauri already got its ticket from notarization).
+  if [ -n "$APP_OUT" ]; then
+    echo "==> stapling $(basename "$APP_OUT")"
+    xcrun stapler staple "$APP_OUT"
+  fi
+
+  # 2. The DMG was built from the unstapled .app and never notarized on its
+  #    own. Rebuild it around the now-stapled .app, then notarize + staple the
+  #    DMG itself — so both the download and the app inside verify offline.
+  if [ -n "$DMG_OUT" ] && [ -n "$APP_OUT" ]; then
+    echo "==> rebuilding the DMG around the stapled app"
+    STAGING="$(mktemp -d)"
+    cp -R "$APP_OUT" "$STAGING/"
+    ln -s /Applications "$STAGING/Applications"
+    rm -f "$DMG_OUT"
+    hdiutil create -volname "Northkeep" -srcfolder "$STAGING" -ov -format UDZO "$DMG_OUT" >/dev/null
+    rm -rf "$STAGING"
+    codesign --force --sign "$APPLE_SIGNING_IDENTITY" --timestamp "$DMG_OUT"
+    echo "==> notarizing the DMG"
+    if [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
+      xcrun notarytool submit "$DMG_OUT" --key "$APPLE_API_KEY" --key-id "${APPLE_API_KEY_ID:-}" --issuer "$APPLE_API_ISSUER" --wait
+    else
+      xcrun notarytool submit "$DMG_OUT" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+    fi
+    xcrun stapler staple "$DMG_OUT"
+  fi
+fi
+
 echo
 echo "Artifacts:"
 ls -d "$REPO_ROOT/apps/desktop/src-tauri/target/release/bundle/macos/"*.app 2>/dev/null || true
