@@ -122,3 +122,26 @@ remember about me?" surfaces NorthKeep memories, and a `work`-scoped memory is
 shows `northkeep` → a fresh `claude` session sees the memory. **Disconnect**
 both → the entries are gone and every other key in the configs is untouched
 (diff the backup). Confirm the privacy explainer is present and honest.
+
+## Adversarial review (2026-07-12)
+
+Focused review of the config-write + scope surface (it edits other apps'
+config, which can hold their secrets). **Verdict: safe to ship — no
+CRITICAL/HIGH.** Confirmed: the writer refuses an unparseable config before any
+backup/write; merges (every unrelated key + sibling server preserved); backs up
+the pristine original write-once; writes atomically (temp+rename) and
+mode-preserving so a crash can't truncate the config and a rewrite can't loosen
+perms exposing another server's `env` secrets; scope presets genuinely reach the
+spawned server via `env.NORTHKEEP_SCOPES` (Desktop) / `--env` (Code), read
+identically by the fail-closed `grantedScopes()`; all `claude` calls are
+`execFileSync` arg-arrays (no shell injection); the web `target` is allow-listed
+and `scopes` type-checked; connect/disconnect don't require an unlocked vault;
+the privacy explainer is prominent (bold banner + CLI note), never letting a
+user believe Connect firewalls their chat.
+
+**Addressed:** documented the deliberate empty-scopes asymmetry (connect fails
+*open* — owner — on an explicit empty ask, surfaced honestly, while the server
+fails *closed* on a present-but-empty env) and added temp-file cleanup on a
+failed write. Accepted non-blocking: read-modify-write TOCTOU (config files
+aren't concurrently edited) and non-atomic backup copy (the live config is never
+at risk — writeConfig is separate + atomic).

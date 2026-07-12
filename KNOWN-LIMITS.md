@@ -196,6 +196,23 @@ every milestone; if a limit is removed, say when and how.*
   an audit-completeness gap that closes with the M4 audit log.
 - **A stale `forget` survives in `.bak`** until the next write, as below.
 
+## M8 (Connect — memory into other apps) — current
+
+- **Connect is Mode 2: portable memory, NOT a chat firewall.** Connecting an
+  app (Claude Desktop, Claude Code) gives it your owned memory under the scope
+  you pick — but it does **not** redact what you type into that app; the app
+  still sends your whole chat to its provider. For a redaction firewall on your
+  messages, use Converse. This is stated plainly in the Connect UI.
+- **Connect registers the app installed at a stable path.** The entry points at
+  `NorthKeep.app` where it lives; if you move or rename the app, reconnect so
+  the path is rewritten.
+- **Restart required.** Claude Desktop reads MCP config only at launch — Connect
+  ends with a restart prompt; Claude Code picks it up in a new session.
+- **A connected app reads your vault while it's unlocked** (the Keychain grant,
+  same as any MCP client). Lock, or scope the connection down, to limit it.
+- **macOS only** for now (matches the arm64 app); the config paths are
+  macOS-specific.
+
 ## M0 (vault core)
 
 - **The unlocked vault lives in process memory.** While a command runs, the

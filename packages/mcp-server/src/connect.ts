@@ -151,11 +151,25 @@ function writeConfig(file: string, config: Record<string, unknown>): void {
     /* new file — keep the 0600 default */
   }
   const tmp = `${file}.northkeep-tmp`;
-  fs.writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { mode });
-  fs.chmodSync(tmp, mode); // writeFileSync mode is subject to umask; force it
-  fs.renameSync(tmp, file); // atomic on the same filesystem
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { mode });
+    fs.chmodSync(tmp, mode); // writeFileSync mode is subject to umask; force it
+    fs.renameSync(tmp, file); // atomic on the same filesystem
+  } finally {
+    // Never leave a stray temp behind if the rename didn't happen.
+    if (fs.existsSync(tmp)) fs.rmSync(tmp, { force: true });
+  }
 }
 
+/**
+ * Trim + drop empties. NOTE (deliberate asymmetry, adversarial review): when
+ * the result is empty we OMIT `NORTHKEEP_SCOPES` entirely → owner/full access
+ * ("no restriction requested"), whereas the server treats a *present-but-empty*
+ * `NORTHKEEP_SCOPES=` as deny-all (fail-closed). No UI path reaches this — the
+ * GUI's "Everything" sends `[]` intentionally and a real preset is never empty —
+ * and the resulting access is surfaced honestly ("full access") in both the CLI
+ * and GUI. So connect fails OPEN on empty only for an explicit "no scopes" ask.
+ */
 function normalizeScopes(scopes?: string[]): string[] {
   return (scopes ?? []).map((s) => s.trim()).filter((s) => s.length > 0);
 }
