@@ -72,9 +72,16 @@ export function mcpEntryLooksValid(entry: string): boolean {
 // Claude Desktop — we hand-edit its JSON config, so the surgical rules apply.
 // ---------------------------------------------------------------------------
 
-/** Path to Claude Desktop's config. `override` lets tests inject a temp path. */
+/**
+ * Path to Claude Desktop's config. `override` lets callers inject a path;
+ * `NORTHKEEP_CLAUDE_DESKTOP_CONFIG` does the same via the environment (used by
+ * the e2e so a full CLI round-trip never touches the real config, and available
+ * to power users with a non-standard install).
+ */
 export function claudeDesktopConfigPath(override?: string): string {
   if (override) return override;
+  const fromEnv = process.env.NORTHKEEP_CLAUDE_DESKTOP_CONFIG;
+  if (fromEnv) return fromEnv;
   return path.join(
     os.homedir(),
     'Library',

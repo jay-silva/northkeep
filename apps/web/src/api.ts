@@ -34,10 +34,15 @@ import {
 import { EXTRACT_MODEL, createOllamaClient, dedupeCandidates, runImport } from '@northkeep/librarian';
 import {
   auditAsCsv,
+  claudeCodeAvailable,
+  connect,
+  connectStatus,
+  disconnect,
   keychainAvailable,
   keychainDeleteMasterKey,
   keychainSetMasterKey,
   readCallLog,
+  type ConnectTarget,
 } from '@northkeep/mcp-server';
 import { redact, restore, type Replacement } from '@northkeep/redact';
 import {
@@ -494,6 +499,55 @@ async function dispatch(
         return { forgotten };
       }),
     );
+  }
+
+  // --- Connect (M8, ADR 0013). Register the MCP server that ships *inside*
+  // NorthKeep with the consumer Claude apps. Connect/disconnect edit files we
+  // don't own (see connect.ts) and CAN throw on an unparseable config — we
+  // surface that as a 400, never a crash. Status reads are side-effect-free and
+  // never throw. Scope presets ride NORTHKEEP_SCOPES (M4), so they're a real,
+  // enforced boundary — not a UI hint. ---
+
+  if (method === 'GET' && route === '/api/connect') {
+    // The vault yields the distinct scopes the user actually has, so the UI can
+    // offer real presets. Only readable while unlocked; locked simply omits them
+    // (Connect itself never needs the vault open — it only writes config).
+    const scopesInVault = session.isUnlocked()
+      ? await session.withVault((vault) => vault.scopes())
+      : [];
+    const target = (id: ConnectTarget, label: string, available: boolean) => {
+      const status = connectStatus(id);
+      return { id, label, available, connected: status.connected, scopes: status.scopes ?? null };
+    };
+    return ok({
+      targets: [
+        target('claude-desktop', 'Claude Desktop', true),
+        target('claude-code', 'Claude Code', claudeCodeAvailable()),
+      ],
+      scopes_in_vault: scopesInVault,
+    });
+  }
+
+  const connectMatch = /^\/api\/(connect|disconnect)\/([a-z-]+)$/.exec(route);
+  if (method === 'POST' && connectMatch) {
+    const target = connectMatch[2];
+    if (target !== 'claude-desktop' && target !== 'claude-code') {
+      return bad(400, 'Unknown target — must be claude-desktop or claude-code.');
+    }
+    try {
+      if (connectMatch[1] === 'connect') {
+        const { scopes } = parseJson<{ scopes?: string[] }>(body);
+        if (scopes !== undefined && (!Array.isArray(scopes) || !scopes.every((s) => typeof s === 'string'))) {
+          return bad(400, 'scopes must be an array of strings.');
+        }
+        return ok(connect(target, { scopes }));
+      }
+      return ok(disconnect(target));
+    } catch (err) {
+      // An unparseable target config (or a missing `claude` CLI on connect)
+      // throws here — report it to the user rather than 500.
+      return bad(400, err instanceof Error ? err.message : String(err));
+    }
   }
 
   if (method === 'POST' && route === '/api/import/upload') {

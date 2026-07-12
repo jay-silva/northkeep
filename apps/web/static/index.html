@@ -180,6 +180,7 @@
   <button data-view="redact">Redact</button>
   <button data-view="activity">Activity</button>
   <button data-view="sync">Sync</button>
+  <button data-view="connect">Connect</button>
 </nav>
 <main>
   <div id="degradedBanner" class="banner" hidden>
@@ -375,6 +376,19 @@
       <code>device.secret</code> file and your passphrase. Copy <code>~/.northkeep/device.secret</code>
       over, set the same sync server, then Pull.</p>
   </section>
+  <section id="view-connect" hidden>
+    <p class="muted">Give the Claude apps you already use access to your NorthKeep memory —
+      on your existing subscription. One click registers the memory server that ships inside
+      NorthKeep; no terminal, no config files to edit by hand.</p>
+    <div class="banner" style="margin:16px 0 22px">
+      <strong>Connect shares your memory — it does not redact your chat.</strong>
+      <div style="margin-top:6px">Connecting hands that app your <strong>owned, portable memory</strong>
+        under the scope you pick. It does <strong>not</strong> change what you type into that app —
+        the app still sends your whole chat to its provider. For a privacy firewall on your
+        <em>messages</em>, use <strong>Converse</strong>, which masks them before they leave your Mac.</div>
+    </div>
+    <div id="connectCards"></div>
+  </section>
 </main>
 <div class="overlay" id="unlockOverlay" hidden>
   <div class="dialog">
@@ -457,7 +471,7 @@
   }
 
   // --- views
-  const views = ['converse', 'memories', 'import', 'redact', 'activity', 'sync'];
+  const views = ['converse', 'memories', 'import', 'redact', 'activity', 'sync', 'connect'];
   document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => {
     document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
     views.forEach((v) => { $('view-' + v).hidden = v !== b.dataset.view; });
@@ -465,6 +479,7 @@
     if (b.dataset.view === 'memories') loadMemories();
     if (b.dataset.view === 'converse') openConverse();
     if (b.dataset.view === 'sync') loadSyncStatus();
+    if (b.dataset.view === 'connect') loadConnect();
   }));
 
   // --- redact
@@ -1538,6 +1553,121 @@
       if (e.message !== 'locked') $('syncBillingLine').textContent = e.message;
     } finally { $('syncManageBtn').disabled = false; }
   });
+
+  // --- Connect (M8, ADR 0013). Register the bundled MCP server with the Claude
+  // apps. All server-supplied text is rendered via el()/textContent — never
+  // innerHTML — so a config path or scope name can't inject markup.
+  async function loadConnect(notes) {
+    notes = notes || {};
+    const box = $('connectCards');
+    box.textContent = '';
+    let data;
+    try {
+      data = await api('/api/connect');
+    } catch (e) {
+      if (e.message !== 'locked') box.appendChild(el('p', 'muted', e.message));
+      return;
+    }
+    const scopesInVault = data.scopes_in_vault || [];
+    for (const t of data.targets || []) {
+      box.appendChild(connectCard(t, scopesInVault, notes[t.id]));
+    }
+  }
+
+  function connectCard(t, scopesInVault, note) {
+    const card = el('div', 'card');
+    const head = el('div', 'row');
+    head.style.justifyContent = 'space-between';
+    head.appendChild(el('strong', '', t.label));
+    head.appendChild(el('span', 'badge ' + (t.connected ? 'private' : 'auto'),
+      t.connected ? 'CONNECTED' : 'NOT CONNECTED'));
+    card.appendChild(head);
+
+    // Claude Code with no CLI on PATH: disabled card, honest reason.
+    if (!t.available) {
+      card.style.opacity = '.6';
+      card.appendChild(el('p', 'muted', 'Claude Code CLI not found — install it to connect.'));
+      return card;
+    }
+
+    const status = el('p', t.connected ? '' : 'muted', '');
+    status.style.margin = '12px 0';
+    if (t.connected) {
+      status.textContent = t.scopes && t.scopes.length
+        ? '✓ Connected — sharing ' + t.scopes.join(', ')
+        : '✓ Connected — full access';
+    } else {
+      status.textContent = 'Not connected.';
+    }
+    card.appendChild(status);
+
+    // Scope preset: "Everything" (no scopes) + "Personal only" + one option per
+    // other scope the vault actually holds. The chosen value maps to the scopes
+    // array we POST: '' → [] (full), otherwise → [value] (a single enforced scope).
+    const presetRow = el('div', 'row');
+    presetRow.style.margin = '0 0 12px';
+    const presetLabel = el('label', 'muted', 'Share: ');
+    const sel = el('select');
+    const opts = [['', 'Everything (full access)'], ['personal', 'Personal only']];
+    for (const s of scopesInVault) {
+      if (s === 'personal') continue;
+      opts.push([s, s + ' only']);
+    }
+    for (const [val, label] of opts) {
+      const o = el('option', '', label);
+      o.value = val;
+      sel.appendChild(o);
+    }
+    if (t.connected && t.scopes && t.scopes.length === 1) sel.value = t.scopes[0];
+    presetLabel.appendChild(sel);
+    presetRow.appendChild(presetLabel);
+    card.appendChild(presetRow);
+
+    const err = el('div', 'err');
+    const btnRow = el('div', 'row');
+    const connectBtn = el('button', 'btn primary', t.connected ? 'Reconnect' : 'Connect');
+    connectBtn.addEventListener('click', async () => {
+      err.textContent = '';
+      connectBtn.disabled = true;
+      const val = sel.value;
+      const scopes = val ? [val] : [];
+      try {
+        await api('/api/connect/' + t.id, { method: 'POST', json: { scopes } });
+        const restart = t.id === 'claude-desktop'
+          ? 'Restart Claude Desktop to load it.'
+          : 'Open a new Claude Code session to load it.';
+        await loadConnect({ [t.id]: restart });
+      } catch (e) {
+        if (e.message !== 'locked') err.textContent = e.message;
+        connectBtn.disabled = false;
+      }
+    });
+    btnRow.appendChild(connectBtn);
+    if (t.connected) {
+      const disconnectBtn = el('button', 'btn danger', 'Disconnect');
+      disconnectBtn.addEventListener('click', async () => {
+        err.textContent = '';
+        disconnectBtn.disabled = true;
+        try {
+          await api('/api/disconnect/' + t.id, { method: 'POST' });
+          await loadConnect();
+        } catch (e) {
+          if (e.message !== 'locked') err.textContent = e.message;
+          disconnectBtn.disabled = false;
+        }
+      });
+      btnRow.appendChild(disconnectBtn);
+    }
+    card.appendChild(btnRow);
+    card.appendChild(err);
+
+    if (note) {
+      const n = el('p', '', note);
+      n.style.cssText = 'margin:12px 0 0;color:var(--warn-ink);font-weight:600;font-size:13px';
+      card.appendChild(n);
+    }
+    return card;
+  }
 
   refreshStatus().catch(() => { $('countPill').textContent = 'no connection'; });
 })();
