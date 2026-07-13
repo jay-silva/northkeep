@@ -213,6 +213,28 @@ every milestone; if a limit is removed, say when and how.*
 - **macOS only** for now (matches the arm64 app); the config paths are
   macOS-specific.
 
+## M9 (effortless models) — current
+
+- **Guided providers are curated, not exhaustive.** The one-click flow covers a
+  vetted list (Anthropic, OpenAI, Google, xAI, OpenRouter, Meta-via-OpenRouter);
+  any other model still works via "Advanced — add any endpoint," it just isn't
+  walked-through or cost-labelled until catalogued.
+- **Model ids drift.** Vendor model names change often; the catalog is a
+  point-in-time snapshot, re-verified each milestone. An unknown id still works —
+  it just won't carry cost/strength metadata.
+- **Cost is approximate.** The $ / $$ / $$$ tiers are order-of-magnitude ranges,
+  not per-request accounting; always shown labelled "approx."
+- **Meta Llama routes through OpenRouter.** Meta wound down its first-party API;
+  "Meta Llama" uses an OpenRouter key scoped to `meta-llama/*`.
+- **Local install needs Ollama and the disk/RAM.** NorthKeep guides you to
+  install Ollama (it doesn't auto-install the daemon) and recommends a model your
+  Mac can run; the pull downloads several GB. Detection is macOS-shaped, and a
+  stopped-but-installed Ollama reads as "not installed" (connection-refused is
+  indistinguishable from absent).
+- **Hardware detection is RAM-based.** The recommendation maps total RAM to a
+  model size (Apple-Silicon unified memory); it doesn't measure free memory or
+  GPU specifics.
+
 ## M0 (vault core)
 
 - **The unlocked vault lives in process memory.** While a command runs, the

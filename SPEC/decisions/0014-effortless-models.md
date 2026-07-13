@@ -94,11 +94,23 @@ the guided flow shows the bounded badge honestly.
 - **Local install needs Ollama** (guided, not auto-installed) and the disk/RAM
   for the recommended model.
 
-## Provider registry — verified values
+## Provider registry — verified values (2026-07, web-checked)
 
-_(Base URLs, key-acquisition pages, and current model ids are web-verified at
-build time in `provider-catalog.ts`; the Meta/Llama endpoint decision — Meta's
-first-party Llama API vs representing Llama-hosted via OpenRouter — is recorded
-in that file's comments.)_
+Live in `provider-catalog.ts`; model ids drift — re-verify each milestone.
+
+| Provider | kind | base URL | get a key | prefix |
+|---|---|---|---|---|
+| Anthropic | anthropic | `api.anthropic.com` | console.anthropic.com/settings/keys | `sk-ant-` |
+| OpenAI | openai-compat | `api.openai.com/v1` | platform.openai.com/api-keys | `sk-` |
+| Google Gemini | openai-compat | `generativelanguage.googleapis.com/v1beta/openai` | aistudio.google.com/apikey | `AIza` |
+| xAI Grok | openai-compat | `api.x.ai/v1` | console.x.ai | `xai-` |
+| OpenRouter | openai-compat | `openrouter.ai/api/v1` | openrouter.ai/keys | `sk-or-` |
+| Meta Llama | openai-compat | via **OpenRouter** (`meta-llama/*`) | openrouter.ai/keys | `sk-or-` |
+
+**Meta/Llama decision:** Meta wound down its first-party Llama API (2026); no
+cleanly-available OpenAI-compatible `api.llama.com`. So "Meta Llama" is
+represented **hosted via OpenRouter**, scoped to `meta-llama/*` model ids
+(documented in `provider-catalog.ts`). Revisit if Meta ships a stable
+first-party endpoint.
 
 ## Acceptance test (Jay-runnable) — see the M9 ship checklist.
