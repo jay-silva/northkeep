@@ -33,18 +33,30 @@ export function parseClaudeExport(filePath: string): ImportedConversation[] {
   }
   let raw: string;
   if (filePath.endsWith('.zip')) {
+    const resolved = path.resolve(filePath); // a name starting with "-" must not parse as a flag
+    let member: string | undefined;
     try {
-      // path.resolve: a filename starting with "-" must never parse as a flag
-      raw = execFileSync('unzip', ['-p', path.resolve(filePath), 'conversations.json'], {
-        encoding: 'utf8',
-        maxBuffer: 512 * 1024 * 1024,
-      });
+      // Claude's export nests conversations.json inside a dated folder, so we
+      // can't assume it's at the ZIP root — list the members and find it
+      // wherever it lives (same robust approach as the ChatGPT importer).
+      member = execFileSync('unzip', ['-Z1', resolved], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 })
+        .split('\n')
+        .map((n) => n.trim())
+        .find((n) => path.basename(n) === 'conversations.json');
     } catch {
       throw new Error(
-        `Could not read conversations.json from ${filePath}. ` +
-          'Is this the export ZIP from claude.ai Settings → Privacy → Export data?',
+        `Could not read ${filePath}. Is this the export ZIP from claude.ai Settings → Privacy → Export data?`,
       );
     }
+    if (!member) {
+      throw new Error(
+        `No conversations.json found inside ${filePath}. Is this the claude.ai data export ZIP?`,
+      );
+    }
+    raw = execFileSync('unzip', ['-p', resolved, member], {
+      encoding: 'utf8',
+      maxBuffer: 512 * 1024 * 1024,
+    });
   } else {
     raw = fs.readFileSync(filePath, 'utf8');
   }
