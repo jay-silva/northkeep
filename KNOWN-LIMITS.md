@@ -130,8 +130,10 @@ every milestone; if a limit is removed, say when and how.*
 - **Closing the Tauri window kills the server and forgets the held key.**
   A browser tab from `northkeep ui` does the same when you Ctrl-C the
   terminal — but not if you only close the tab; the server keeps running.
-- **No editing memories in the GUI yet** — forget-and-re-add until
-  supersede semantics land.
+- **Only *scope* is editable, not content.** Each memory card has a "Move
+  scope" button (supersede semantics — see ADR 0015); editing content or other
+  fields is still forget-and-re-add. A re-scoped memory gets a new id (the old
+  version is kept as superseded history).
 
 ## Desktop app / distribution (M7d) — current
 
@@ -260,9 +262,10 @@ every milestone; if a limit is removed, say when and how.*
   vault can rewrite history *and* every hash consistently. It exists to catch
   accidental corruption and unsophisticated tampering, and we won't pretend
   otherwise (see SPEC/security-model.md).
-- **`superseded_at`/`superseded_by` are schema-only.** The fields exist per
-  the spec; nothing sets them yet. Contradiction handling arrives with the
-  extraction pipeline (M2).
+- **`superseded_at`/`superseded_by` now power scope edits (ADR 0015).**
+  `rescope` appends a new entry and marks the original superseded — the first
+  writer of these fields. General contradiction handling from the extraction
+  pipeline (auto-superseding a fact when a newer one arrives) is still future.
 - **Scopes are labels, not walls.** The `scope` field is stored and
   filterable, but access enforcement (a conversation granted `personal`
   cannot see `client:x`) lands at M4.

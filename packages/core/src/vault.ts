@@ -359,6 +359,98 @@ export class Vault {
   }
 
   /**
+   * Re-scopes a memory by supersession. `scope` is part of an entry's hash and
+   * the vault is an append-only ledger, so we never mutate the original in
+   * place — that would rewrite history and break the chain. Instead we append a
+   * new entry with the same content in the new scope and mark the original
+   * `superseded_by` it. The chain stays valid because superseded_* are excluded
+   * from the hash (like forgotten_at). The move is preserved, not erased: the
+   * old entry lingers as history (visible in export and verifyChain), and only
+   * the new one appears in list/retrieve. Accepts a full id or an unambiguous
+   * prefix; returns the new live entry. No-op (returns the original) if it is
+   * already in the target scope.
+   */
+  rescope(idOrPrefix: string, newScope: string, allowedScopes?: string[]): MemoryEntry {
+    this.assertOpen();
+    const scope = newScope.trim();
+    if (scope.length === 0) throw new Error('New scope must not be empty.');
+    const prefix = idOrPrefix.trim();
+    if (prefix.length < 4) {
+      throw new Error('Provide at least 4 characters of the memory id.');
+    }
+    if (!/^[0-9a-f-]{4,36}$/i.test(prefix)) {
+      throw new Error('Memory ids contain only hex characters and dashes.');
+    }
+    // Capability: a scoped connection cannot move a memory into a scope outside
+    // its grant (that would carry it past the allowlist). The source clause
+    // below enforces the read side — it can only touch entries it can see.
+    if (allowedScopes !== undefined && !allowedScopes.includes(scope)) {
+      throw new Error(`Scope "${scope}" is outside this connection's grant.`);
+    }
+    let sql =
+      "SELECT * FROM memories WHERE id LIKE ? || '%' AND forgotten_at IS NULL AND superseded_at IS NULL";
+    const args: string[] = [prefix];
+    if (allowedScopes !== undefined) {
+      if (allowedScopes.length === 0) throw new Error(`No memory found matching id "${prefix}".`);
+      sql += ` AND scope IN (${allowedScopes.map(() => '?').join(', ')})`;
+      args.push(...allowedScopes);
+    }
+    const matches = this.db.prepare(`${sql} ORDER BY rowid ASC`).all(...args) as EntryRow[];
+    if (matches.length === 0) throw new Error(`No memory found matching id "${prefix}".`);
+    if (matches.length > 1) {
+      throw new Error(`Id prefix "${prefix}" matches ${matches.length} memories — be more specific.`);
+    }
+    const old = rowToEntry(matches[0]!);
+    if (old.scope === scope) return old; // already there — nothing to do
+
+    const now = new Date().toISOString();
+    const next: MemoryEntry = {
+      id: randomUUID(),
+      type: old.type,
+      content: old.content,
+      scope,
+      source: old.source,
+      source_model: old.source_model,
+      confidence: old.confidence,
+      created_at: now,
+      valid_from: old.valid_from,
+      superseded_at: null,
+      superseded_by: null,
+      forgotten_at: null,
+      prev_hash: this.getMeta('chain_head'),
+      entry_hash: '',
+      metadata:
+        old.metadata == null
+          ? null
+          : (JSON.parse(JSON.stringify(old.metadata)) as Record<string, unknown>),
+    };
+    next.entry_hash = computeEntryHash(next);
+
+    const insert = this.db.prepare(
+      `INSERT INTO memories
+         (id, type, content, scope, source, source_model, confidence, created_at,
+          valid_from, superseded_at, superseded_by, forgotten_at, prev_hash, entry_hash, metadata)
+         VALUES (@id, @type, @content, @scope, @source, @source_model, @confidence,
+                 @created_at, @valid_from, @superseded_at, @superseded_by, @forgotten_at,
+                 @prev_hash, @entry_hash, @metadata)`,
+    );
+    const markSuperseded = this.db.prepare(
+      'UPDATE memories SET superseded_at = ?, superseded_by = ? WHERE id = ?',
+    );
+    // Atomic: appending the replacement and retiring the original must both
+    // land or neither, or a crash between them would leave two live copies.
+    this.db.transaction(() => {
+      insert.run({
+        ...next,
+        metadata: next.metadata === null ? null : JSON.stringify(next.metadata),
+      });
+      this.setMeta('chain_head', next.entry_hash);
+      markSuperseded.run(now, next.id, old.id);
+    })();
+    return next;
+  }
+
+  /**
    * Keyword retrieval: term overlap + recency + type priority. Honest about
    * what it is — semantic (embedding) retrieval arrives with the local-model
    * milestone. Excludes forgotten and superseded entries.
@@ -404,6 +496,9 @@ export class Vault {
     }
     if (!filter.includeForgotten) {
       clauses.push('forgotten_at IS NULL');
+    }
+    if (!filter.includeSuperseded) {
+      clauses.push('superseded_at IS NULL');
     }
     // Capability enforcement: an allowlist caps what's visible no matter what
     // scope filter was requested. An empty allowlist sees nothing.
@@ -461,7 +556,10 @@ export class Vault {
   /** Complete, human-readable export per SPEC/memory-schema.md. Embeddings are never exported. */
   export(): VaultExport {
     this.assertOpen();
-    const memories: ExportedMemory[] = this.list({ includeForgotten: true }).map((entry) => ({
+    const memories: ExportedMemory[] = this.list({
+      includeForgotten: true,
+      includeSuperseded: true,
+    }).map((entry) => ({
       id: entry.id,
       type: entry.type,
       content: entry.content,

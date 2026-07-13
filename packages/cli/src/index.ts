@@ -178,6 +178,20 @@ program
   });
 
 program
+  .command('rescope')
+  .description('Move a memory to a different scope (full id or unique prefix)')
+  .argument('<id>', 'memory id from "northkeep list"')
+  .argument('<scope>', 'new scope tag (personal, work, client:x, ...)')
+  .action(async (id: string, scope: string) => {
+    await withVault(async (vault) => {
+      const moved = vault.rescope(id, scope);
+      vault.save();
+      console.log(`✓ [${moved.type}] memory is now in scope "${moved.scope}" — ${moved.id}`);
+      console.log('  The previous version is kept as history (superseded), so the chain stays intact.');
+    });
+  });
+
+program
   .command('list')
   .description('List memories with provenance')
   .option('--type <type>', 'filter by memory type')

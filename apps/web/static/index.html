@@ -739,6 +739,7 @@
   // --- memories
   const TYPES = ['episodic', 'semantic', 'procedural', 'working', 'identity'];
   let filterType = '', filterScope = '', searchTimer = null;
+  let knownScopes = [];
   $('typeChips').innerHTML = ['all', ...TYPES].map((t) =>
     `<button data-t="${t === 'all' ? '' : t}" class="${t === 'all' ? 'on' : ''}">${t}</button>`).join('');
   $('typeChips').addEventListener('click', (e) => {
@@ -749,6 +750,7 @@
   });
   async function loadScopes() {
     const { scopes } = await api('/api/scopes');
+    knownScopes = scopes;
     $('scopeChips').innerHTML = ['all scopes', ...scopes].map((s, i) =>
       `<button data-s="${i === 0 ? '' : esc(s)}" class="${i === 0 ? 'on' : ''}">${esc(s)}</button>`).join('');
     const sel = $('importScope');
@@ -800,17 +802,62 @@
             <span>${esc(m.id.slice(0, 8))}</span>
             ${m.relevance !== undefined ? `<span>rel ${esc(m.relevance)}</span>` : ''}
             <span class="grow"></span>
+            <button class="btn" data-rescope="${esc(m.id)}" data-scope="${esc(m.scope)}" style="font-size:12px;padding:5px 12px;border-radius:8px">Move scope</button>
             <button class="btn danger" data-forget="${esc(m.id)}" style="font-size:12px;padding:5px 12px;border-radius:8px">Forget</button>
           </div>
         </div>`).join('');
   }
   $('memList').addEventListener('click', async (e) => {
-    const id = e.target.dataset && e.target.dataset.forget;
+    const d = e.target.dataset || {};
+    if (d.rescope) { openRescope(d.rescope, d.scope, e.target); return; }
+    const id = d.forget;
     if (!id) return;
     if (!confirm('Forget this memory?\nIts content is removed permanently; the deletion itself stays on the record.')) return;
     await api('/api/forget', { method: 'POST', json: { id } });
     await refreshStatus();
   });
+
+  // Edit a memory's scope inline. The vault is append-only, so this supersedes
+  // the entry with a copy in the new scope (server side) — history is kept, the
+  // chain stays valid. The editor mirrors the add-a-memory scope picker: known
+  // scopes + a "+ new scope…" sentinel. Built with createElement/textContent so
+  // a scope name can never inject markup.
+  function openRescope(id, current, btn) {
+    const card = document.getElementById('mem-' + id);
+    if (!card || card.querySelector('.rescope-editor')) return;
+    btn.disabled = true;
+    const options = [...new Set(['personal', ...knownScopes])];
+    const wrap = el('div', 'rescope-editor');
+    wrap.style.cssText = 'display:flex;gap:8px;align-items:center;margin-top:8px;flex-wrap:wrap';
+    const sel = el('select');
+    for (const s of options) { const o = el('option', undefined, s); o.value = s; sel.appendChild(o); }
+    const newOpt = el('option', undefined, '+ new scope…'); newOpt.value = NEW_SCOPE; sel.appendChild(newOpt);
+    sel.value = options.includes(current) ? current : NEW_SCOPE;
+    const txt = el('input'); txt.type = 'text'; txt.placeholder = 'new scope name';
+    txt.hidden = sel.value !== NEW_SCOPE; txt.style.maxWidth = '200px';
+    sel.addEventListener('change', () => { txt.hidden = sel.value !== NEW_SCOPE; if (!txt.hidden) txt.focus(); });
+    const save = el('button', 'btn', 'Save'); save.style.cssText = 'font-size:12px;padding:5px 12px;border-radius:8px';
+    const cancel = el('button', 'btn', 'Cancel'); cancel.style.cssText = 'font-size:12px;padding:5px 12px;border-radius:8px';
+    const err = el('span', 'muted');
+    const close = () => { wrap.remove(); btn.disabled = false; };
+    cancel.addEventListener('click', close);
+    save.addEventListener('click', async () => {
+      const scope = (sel.value === NEW_SCOPE ? txt.value.trim() : sel.value);
+      if (!scope) { err.textContent = 'Name the scope, or pick an existing one.'; return; }
+      if (scope === current) { close(); return; }
+      save.disabled = true; err.textContent = '';
+      try {
+        await api('/api/memories/rescope', { method: 'POST', json: { id, scope } });
+        await loadScopes();
+        await loadMemories();
+        await refreshStatus();
+      } catch (ex) {
+        if (ex.message !== 'locked') { err.textContent = ex.message; save.disabled = false; }
+      }
+    });
+    wrap.append(sel, txt, save, cancel, err);
+    card.appendChild(wrap);
+  }
 
   // --- add a memory (GUI-created, explicit scope). '+' isn't in the scope
   // charset, so NEW_SCOPE can never collide with a real scope value.

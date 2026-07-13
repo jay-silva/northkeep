@@ -45,6 +45,9 @@ export interface ListFilter {
   scope?: string;
   /** Include tombstoned (forgotten) entries. Default false. */
   includeForgotten?: boolean;
+  /** Include superseded entries (older versions replaced by an edit). Default
+   * false, so a re-scoped memory shows only in its current scope, not twice. */
+  includeSuperseded?: boolean;
   /** Capability allowlist: if set, ONLY these scopes are visible, regardless
    * of any `scope` filter. Undefined = full access (the vault owner). This is
    * the enforcement point for scoped connections (M4). */

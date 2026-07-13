@@ -312,6 +312,24 @@ async function dispatch(
     );
   }
 
+  // Edit a memory's scope. The vault is append-only, so this supersedes the
+  // entry with a copy in the new scope rather than mutating it in place — the
+  // new memory carries a new id, which the client swaps in. Scope is validated
+  // against the same charset as add/import.
+  if (method === 'POST' && route === '/api/memories/rescope') {
+    const { id, scope } = parseJson<{ id?: string; scope?: string }>(body);
+    if (!id || !/^[0-9a-f-]{8,36}$/i.test(id)) return bad(400, 'A memory id is required.');
+    const targetScope = typeof scope === 'string' ? scope.trim() : '';
+    if (!/^[a-z0-9:_.-]{1,64}$/i.test(targetScope)) return bad(400, 'Invalid scope.');
+    return ok(
+      await session.withVault((vault) => {
+        const moved = vault.rescope(id, targetScope);
+        vault.save();
+        return { memory: publicEntry(moved) };
+      }),
+    );
+  }
+
   if (method === 'GET' && route === '/api/log') {
     return ok({ calls: readCallLog(200).reverse() });
   }

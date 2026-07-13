@@ -245,6 +245,86 @@ describe('forget (tombstones)', () => {
   });
 });
 
+describe('rescope (edit scope by supersession)', () => {
+  it('moves a memory to a new scope, hides the old version, keeps the chain intact', () => {
+    const vault = createVault();
+    vault.remember({ content: 'keep this', type: 'semantic' });
+    const target = vault.remember({ content: 'this is really a work fact', type: 'semantic' });
+
+    const moved = vault.rescope(target.id.slice(0, 8), 'work');
+    expect(moved.id).not.toBe(target.id); // append-only: a NEW entry, not a mutation
+    expect(moved.scope).toBe('work');
+    expect(moved.content).toBe('this is really a work fact');
+    expect(moved.prev_hash).toBe(target.entry_hash); // chained onto the head
+
+    // list shows the memory once, in its new scope only.
+    expect(vault.list({ scope: 'personal' }).map((e) => e.content)).toEqual(['keep this']);
+    expect(vault.list({ scope: 'work' }).map((e) => e.content)).toEqual([
+      'this is really a work fact',
+    ]);
+    expect(vault.list()).toHaveLength(2); // not 3 — the superseded original is hidden
+
+    // The original lingers as history: superseded, linked forward, chain valid.
+    const withHistory = vault.list({ includeSuperseded: true });
+    expect(withHistory).toHaveLength(3);
+    const originalNow = withHistory.find((e) => e.id === target.id)!;
+    expect(originalNow.superseded_at).not.toBeNull();
+    expect(originalNow.superseded_by).toBe(moved.id);
+    expect(originalNow.scope).toBe('personal'); // its own hash is untouched
+    expect(vault.verifyChain().ok).toBe(true);
+    vault.close();
+  });
+
+  it('survives a reopen and stays out of retrieve in the old scope', () => {
+    const target = (() => {
+      const vault = createVault();
+      const t = vault.remember({ content: 'dartmouth rental note', type: 'semantic' });
+      vault.rescope(t.id, 'work');
+      vault.save();
+      vault.close();
+      return t;
+    })();
+    const reopened = openVault();
+    expect(reopened.retrieve('rental', { scope: 'personal' })).toHaveLength(0);
+    expect(reopened.retrieve('rental', { scope: 'work' })).toHaveLength(1);
+    expect(reopened.list()).toHaveLength(1);
+    expect(reopened.verifyChain().ok).toBe(true);
+    expect(target.scope).toBe('personal');
+    reopened.close();
+  });
+
+  it('is a no-op when already in the target scope', () => {
+    const vault = createVault();
+    const t = vault.remember({ content: 'x', type: 'semantic', scope: 'work' });
+    const same = vault.rescope(t.id, 'work');
+    expect(same.id).toBe(t.id);
+    expect(vault.list({ includeSuperseded: true })).toHaveLength(1);
+    vault.close();
+  });
+
+  it('validates the id and the new scope', () => {
+    const vault = createVault();
+    const t = vault.remember({ content: 'a', type: 'semantic' });
+    expect(() => vault.rescope('ffffffff', 'work')).toThrow(/No memory found/);
+    expect(() => vault.rescope('ab', 'work')).toThrow(/at least 4 characters/);
+    expect(() => vault.rescope('%%%%%%%%', 'work')).toThrow(/hex characters/);
+    expect(() => vault.rescope(t.id, '   ')).toThrow(/must not be empty/);
+    expect(vault.list({ includeSuperseded: true })).toHaveLength(1); // nothing changed
+    vault.close();
+  });
+
+  it('a scoped connection cannot move a memory outside its grant', () => {
+    const vault = createVault();
+    const t = vault.remember({ content: 'work thing', type: 'semantic', scope: 'work' });
+    // Grant covers work but not personal → cannot move it to personal.
+    expect(() => vault.rescope(t.id, 'personal', ['work'])).toThrow(/outside this connection's grant/);
+    // Cannot touch an entry the grant can't even see.
+    const p = vault.remember({ content: 'private', type: 'semantic', scope: 'personal' });
+    expect(() => vault.rescope(p.id, 'work', ['work'])).toThrow(/No memory found/);
+    vault.close();
+  });
+});
+
 describe('retrieve (keyword ranking)', () => {
   it('ranks by term overlap and respects filters', () => {
     const vault = createVault();
