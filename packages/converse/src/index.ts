@@ -29,10 +29,23 @@ export {
 export {
   BASELINE_CATALOG,
   catalogPath,
+  costLabel,
   loadCatalog,
   lookupModel,
   type CatalogEntry,
+  type CostTier,
 } from './catalog.js';
+export {
+  getProvider,
+  KNOWN_PROVIDERS,
+  type ProviderInfo,
+  type ProviderModel,
+} from './provider-catalog.js';
+export {
+  detectHardware,
+  recommendLocalModel,
+  type HardwareProfile,
+} from './hardware.js';
 export {
   classifyTask,
   isRoutingRule,
@@ -41,6 +54,7 @@ export {
   RouteError,
   routingPath,
   saveRoutingPolicy,
+  suggestBetterModel,
   type PrivacyCeiling,
   type RouteDecision,
   type RoutePolicy,

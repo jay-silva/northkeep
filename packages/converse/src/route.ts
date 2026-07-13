@@ -240,6 +240,72 @@ function pickByCatalog(
   return candidates[0]!;
 }
 
+/**
+ * The concierge's gentle upsell (M9d, ADR 0014). Classify the task, find the
+ * catalog's STRONGEST model for it, and — only if NONE of the user's configured
+ * endpoints already map to a model that is also strong at that task — return a
+ * non-nagging suggestion naming the better model. Otherwise null (they're
+ * already covered). Deterministic, no network; does not touch route().
+ */
+export function suggestBetterModel(
+  message: string,
+  configuredEndpoints: EndpointConfig[],
+  catalog: CatalogEntry[] = loadCatalog(),
+): { modelLabel: string; task: TaskKind; reason: string } | null {
+  const task = classifyTask(message);
+
+  // Already have a model that's strong at this task? Then say nothing.
+  const covered = configuredEndpoints.some((ep) => {
+    const entry = lookupModel(ep.model, catalog);
+    return entry?.strengths.includes(task) ?? false;
+  });
+  if (covered) return null;
+
+  // The catalog's best model for this task: highest quality (cost as a proxy),
+  // then widest context. A frontier hosted model wins the recommendation.
+  const COST_RANK = { 'free-local': 0, low: 1, medium: 2, high: 3 } as const;
+  const best = catalog
+    .filter((e) => e.strengths.includes(task))
+    .sort(
+      (a, b) =>
+        COST_RANK[b.costTier] - COST_RANK[a.costTier] ||
+        (b.contextWindow ?? 0) - (a.contextWindow ?? 0),
+    )[0];
+  if (!best) return null;
+
+  const modelLabel = prettyModelLabel(best.id);
+  return {
+    modelLabel,
+    task,
+    reason: `${taskNoun(task)} — ${modelLabel} would handle this better; connect it to route it there.`,
+  };
+}
+
+function prettyModelLabel(id: string): string {
+  return id
+    .split(/[-_./]/)
+    .filter((w) => w.length > 0)
+    .map((w) => (/^(gpt|xai|ai|llm)$/i.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+}
+
+function taskNoun(task: TaskKind): string {
+  switch (task) {
+    case 'code':
+      return 'This looks like a coding question';
+    case 'reasoning':
+      return 'This looks like a reasoning task';
+    case 'creative':
+      return 'This looks like creative writing';
+    case 'long-context':
+      return 'This looks like a long-document task';
+    case 'quick':
+      return 'This is a quick question';
+    case 'general':
+      return 'For this';
+  }
+}
+
 export class RouteError extends Error {
   constructor(message: string) {
     super(message);

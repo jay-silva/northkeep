@@ -1,4 +1,12 @@
-export { EXTRACT_MODEL, createOllamaClient, ollamaUrl, type OllamaClient } from './ollama.js';
+export {
+  EXTRACT_MODEL,
+  createOllamaClient,
+  ollamaState,
+  ollamaUrl,
+  parseOllamaProgressLine,
+  type OllamaClient,
+  type PullProgress,
+} from './ollama.js';
 export {
   extractFromConversation,
   heuristicExtract,
