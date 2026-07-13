@@ -114,3 +114,22 @@ represented **hosted via OpenRouter**, scoped to `meta-llama/*` model ids
 first-party endpoint.
 
 ## Acceptance test (Jay-runnable) — see the M9 ship checklist.
+
+## Adversarial review (2026-07-12)
+
+Focused review of API-key handling + the local-install path. **Verdict: safe to
+ship — nothing at CRITICAL/HIGH/MEDIUM.** Confirmed: no key is ever returned,
+logged, filed, put in a URL/GET, or embedded in an error — it routes only through
+the audited `addEndpoint → Keychain` (`security -i` stdin) path; `withBadge`
+carries `has_key` + a `cost_tier` enum, never a key. Local install is
+loopback-locked (`ollamaUrl()` refuses non-loopback, `redirect:'error'`), the
+`model` tag is charset-validated (no `/`, no shell/URL injection), the post-pull
+auto-add hardcodes the localhost baseUrl (an attacker tag can't steer it
+off-machine), and the job id is a server UUID. M9d suggestion is isolated
+(own try/catch) and content-free. GUI renders all provider/model/cost text via
+textContent; `keyUrl` is https-guarded before becoming an href. Transport
+hardening (loopback bind, Host check, per-request token, CSP) covers the new
+routes. **Fixed:** re-pulling a local model no longer creates a duplicate
+endpoint (one entry per model). Accepted LOW/INFO: pull jobs TTL-evict rather
+than delete-on-success (no secrets); `/api/local/status` exposes a device
+fingerprint to the token-authed local caller only.

@@ -585,12 +585,19 @@ async function dispatch(
       })
       .then(() => {
         try {
-          addEndpoint({
-            label: 'This Mac — ' + model,
-            baseUrl: 'http://127.0.0.1:11434',
-            model,
-            kind: 'openai-compatible',
-          });
+          // Don't add a duplicate endpoint if this local model is already
+          // configured (re-pull / double-click Install). One entry per model.
+          const already = listEndpoints().some(
+            (e) => e.model === model && e.baseUrl === 'http://127.0.0.1:11434',
+          );
+          if (!already) {
+            addEndpoint({
+              label: 'This Mac — ' + model,
+              baseUrl: 'http://127.0.0.1:11434',
+              model,
+              kind: 'openai-compatible',
+            });
+          }
           job.status = 'success';
         } catch (err) {
           job.error = 'Model pulled, but adding the endpoint failed: ' + (err instanceof Error ? err.message : String(err));
