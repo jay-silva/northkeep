@@ -144,13 +144,15 @@ every milestone; if a limit is removed, say when and how.*
   updater would phone home, against the no-telemetry invariant (#5); if we add
   one it'll be its own opt-in, signed, content-free decision (future ADR).
 - **The bundled Node runtime is a version we redistribute.** We pin it and
-  verify it against nodejs.org's checksums at build time; on a Node security
-  release we bump the pin and ship a new DMG. **Supply-chain residual:** the
-  checksum file is fetched over HTTPS from the same host as the binary and is
-  not yet GPG-verified against Node's release keys — so the check stops
-  accidental corruption and naive MITM, but not a compromise of nodejs.org's
-  distribution server. Adding `gpg --verify` of the signed SHASUMS is a
-  hardening step planned before wide distribution.
+  verify it at build time two ways: the tarball's SHA-256 against
+  `SHASUMS256.txt`, and a **GPG signature** over that SHASUMS file against a
+  pinned set of Node.js release-key fingerprints (`fetch-node.sh`). A signed
+  release build fails closed if the signature doesn't verify or if `gpg` isn't
+  installed; a plain source build without `gpg` warns loudly and falls back to
+  SHA-256 only. On a Node security release we bump the pin and ship a new DMG.
+  Residual: the pinned key list must track Node's release-key rotations
+  (cross-checked against nodejs.org) — an unlisted new signer fails the build
+  with instructions rather than being silently trusted.
 - **First launch may do an online Gatekeeper check.** The app and DMG are
   notarized and stapled, so they open offline too — but an app copied out of
   the DMG on a machine that's never seen it may do a one-time online check.
