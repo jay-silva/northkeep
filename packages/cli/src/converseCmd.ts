@@ -1,4 +1,5 @@
 import readline from 'node:readline/promises';
+import { DIM, GREEN, YELLOW, RED, RESET } from './ui.js';
 import type { Vault } from '@northkeep/core';
 import { createOllamaClient, type OllamaClient } from '@northkeep/librarian';
 import {
@@ -29,11 +30,6 @@ import {
 
 type WithVault = <T>(fn: (vault: Vault) => Promise<T> | T) => Promise<T>;
 
-const DIM = '\x1b[2m';
-const GREEN = '\x1b[32m';
-const YELLOW = '\x1b[33m';
-const RED = '\x1b[31m';
-const RESET = '\x1b[0m';
 
 export function badgeLine(endpoint: EndpointConfig): string {
   const { tier, host, reason } = classifyEndpoint(endpoint.baseUrl);

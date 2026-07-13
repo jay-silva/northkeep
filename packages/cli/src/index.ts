@@ -49,6 +49,7 @@ import {
 } from './syncCmd.js';
 import { routingClear, routingList, routingSet } from './routingCmd.js';
 import { collectScopes, connectCmd, connectStatusCmd, disconnectCmd } from './connectCmd.js';
+import { runLauncher } from './launcher.js';
 
 const program = new Command();
 
@@ -56,7 +57,11 @@ program
   .name('northkeep')
   .description('NorthKeep — your AI memory, in a vault you own.')
   .version('0.2.0')
-  .option('--vault <path>', 'vault file path', defaultVaultPath());
+  .option('--vault <path>', 'vault file path', defaultVaultPath())
+  // Bare `northkeep` (no subcommand) opens the branded launcher (M9a).
+  .action(async () => {
+    await runLauncher(vaultPathOpt());
+  });
 
 program
   .command('init')
