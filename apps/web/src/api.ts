@@ -7,6 +7,7 @@ import {
   deviceSecretPath,
   ensureDeviceSecret,
   isMemoryType,
+  MEMORY_TYPES,
   loadDeviceSecret,
   memzero,
   northkeepHome,
@@ -227,6 +228,36 @@ async function dispatch(
           };
         }
         return { memories: vault.list({ type, scope }).map(publicEntry).reverse() };
+      }),
+    );
+  }
+
+  // Add a memory straight from the GUI. Scope is an EXPLICIT label the user
+  // sets here — never inferred — so it's validated against the same charset the
+  // import/converse routes use. Requires the vault unlocked (withVault throws
+  // LockedError → 423). source is 'manual' to distinguish it from cli/import.
+  if (method === 'POST' && route === '/api/memories') {
+    const { content, type, scope } = parseJson<{ content?: string; type?: string; scope?: string }>(body);
+    const trimmed = typeof content === 'string' ? content.trim() : '';
+    if (trimmed.length === 0) return bad(400, 'Memory content must not be empty.');
+    if (trimmed.length > 8000) return bad(400, 'Memory content is too long (8000 characters max).');
+    if (typeof type !== 'string' || !isMemoryType(type)) {
+      return bad(400, `type must be one of: ${MEMORY_TYPES.join(', ')}.`);
+    }
+    const targetScope = (scope ?? 'personal').trim() || 'personal';
+    if (!/^[a-z0-9:_.-]{1,64}$/i.test(targetScope)) return bad(400, 'Invalid scope.');
+    return ok(
+      await session.withVault((vault) => {
+        const entry = vault.remember({
+          content: trimmed,
+          type,
+          scope: targetScope,
+          source: 'manual',
+          sourceModel: null,
+          confidence: 1.0,
+        });
+        vault.save();
+        return { memory: publicEntry(entry) };
       }),
     );
   }

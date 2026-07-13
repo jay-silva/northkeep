@@ -264,6 +264,20 @@
     </div>
   </section>
   <section id="view-memories">
+    <div class="card" id="addMemCard">
+      <h3 class="sect" style="margin-top:0">Add a memory</h3>
+      <textarea id="addMemContent" rows="3" placeholder="Something you want your vault to remember…"
+        style="width:100%;font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 13px;resize:vertical"></textarea>
+      <div class="row" style="margin-top:10px">
+        <select id="addMemType"></select>
+        <select id="addMemScope"></select>
+        <input type="text" id="addMemNewScope" placeholder="new scope name (e.g. work)" hidden style="flex:none;max-width:220px">
+        <div class="grow"></div>
+        <button class="btn primary" id="addMemBtn">Remember</button>
+      </div>
+      <div class="err" id="addMemErr"></div>
+      <div class="muted" id="addMemOk" style="font-size:13px;min-height:18px"></div>
+    </div>
     <div class="row">
       <input type="text" id="q" placeholder="Search your memory… (keyword search)">
     </div>
@@ -677,6 +691,21 @@
     const sel = $('importScope');
     sel.innerHTML = [...new Set(['personal', ...scopes])].map((s) =>
       `<option value="${esc(s)}">scope: ${esc(s)}</option>`).join('');
+    // Add-a-memory scope picker: existing scopes + "personal" + a "+ new scope…"
+    // sentinel. Options are built with createElement/textContent (never
+    // innerHTML) so a vault scope name can't inject markup.
+    const add = $('addMemScope');
+    add.textContent = '';
+    for (const s of [...new Set(['personal', ...scopes])]) {
+      const o = el('option', undefined, s);
+      o.value = s;
+      add.appendChild(o);
+    }
+    const newOpt = el('option', undefined, '+ new scope…');
+    newOpt.value = NEW_SCOPE;
+    add.appendChild(newOpt);
+    add.value = 'personal';
+    $('addMemNewScope').hidden = true;
   }
   $('scopeChips').addEventListener('click', (e) => {
     if (e.target.tagName !== 'BUTTON') return;
@@ -718,6 +747,47 @@
     if (!confirm('Forget this memory?\nIts content is removed permanently; the deletion itself stays on the record.')) return;
     await api('/api/forget', { method: 'POST', json: { id } });
     await refreshStatus();
+  });
+
+  // --- add a memory (GUI-created, explicit scope). '+' isn't in the scope
+  // charset, so NEW_SCOPE can never collide with a real scope value.
+  const NEW_SCOPE = '+new';
+  for (const t of TYPES) {
+    const o = el('option', undefined, t);
+    o.value = t;
+    $('addMemType').appendChild(o);
+  }
+  $('addMemScope').addEventListener('change', () => {
+    const isNew = $('addMemScope').value === NEW_SCOPE;
+    $('addMemNewScope').hidden = !isNew;
+    if (isNew) $('addMemNewScope').focus();
+  });
+  $('addMemBtn').addEventListener('click', async () => {
+    $('addMemErr').textContent = '';
+    $('addMemOk').textContent = '';
+    const content = $('addMemContent').value.trim();
+    if (!content) { $('addMemErr').textContent = 'Write something to remember first.'; return; }
+    const type = $('addMemType').value;
+    let scope = $('addMemScope').value;
+    if (scope === NEW_SCOPE) {
+      scope = $('addMemNewScope').value.trim();
+      if (!scope) { $('addMemErr').textContent = 'Name the new scope, or pick an existing one.'; return; }
+    }
+    $('addMemBtn').disabled = true;
+    try {
+      await api('/api/memories', { method: 'POST', json: { content, type, scope } });
+      $('addMemContent').value = '';
+      $('addMemNewScope').value = '';
+      $('addMemNewScope').hidden = true;
+      $('addMemOk').textContent = '✓ Remembered under scope “' + scope + '”.';
+      await loadScopes();      // new scope now shows in the chips + pickers
+      await loadMemories();
+      await refreshStatus();   // keep the memory count pill in sync
+    } catch (e) {
+      if (e.message !== 'locked') $('addMemErr').textContent = e.message;
+    } finally {
+      $('addMemBtn').disabled = false;
+    }
   });
 
   // --- import
