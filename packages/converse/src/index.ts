@@ -63,6 +63,7 @@ export {
 } from './route.js';
 export {
   addEndpoint,
+  EndpointExistsError,
   getDefaultEndpoint,
   getEndpoint,
   getEndpointKey,

@@ -61,6 +61,17 @@ export interface AddEndpointInput {
   apiKey?: string;
 }
 
+/** Thrown by addEndpoint when an endpoint with the same URL + model exists. */
+export class EndpointExistsError extends Error {
+  constructor(
+    message: string,
+    readonly existing: EndpointConfig,
+  ) {
+    super(message);
+    this.name = 'EndpointExistsError';
+  }
+}
+
 export function addEndpoint(input: AddEndpointInput): EndpointConfig {
   const baseUrl = normalizeBaseUrl(input.baseUrl);
   const { tier } = classifyEndpoint(baseUrl); // validates the URL shape too
@@ -68,6 +79,19 @@ export function addEndpoint(input: AddEndpointInput): EndpointConfig {
   if (hasKey && tier === 'bounded' && new URL(baseUrl).protocol !== 'https:') {
     throw new Error(
       'Refusing to store an API key for a plain-http public endpoint — the key would cross the network unencrypted. Use https.',
+    );
+  }
+  const file = load();
+  // Refuse an exact duplicate (same URL + model): every "add" path — onboarding,
+  // the guided wizard, a manual add, a re-pull — otherwise stacks a redundant
+  // pointer at the same model. Case-insensitive model match ("Qwen2.5:14B").
+  const dup = file.endpoints.find(
+    (e) => e.baseUrl === baseUrl && e.model.toLowerCase() === input.model.toLowerCase(),
+  );
+  if (dup) {
+    throw new EndpointExistsError(
+      `"${dup.label}" already points at ${input.model} on ${baseUrl}.`,
+      dup,
     );
   }
   const id = makeId(input.label);
@@ -79,7 +103,6 @@ export function addEndpoint(input: AddEndpointInput): EndpointConfig {
     kind: input.kind ?? 'openai-compatible',
     hasKey,
   };
-  const file = load();
   file.endpoints.push(endpoint);
   if (hasKey) setEndpointKey(id, input.apiKey as string);
   save(file); // after the key is stored, so hasKey never lies about a lost key

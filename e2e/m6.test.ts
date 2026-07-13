@@ -216,12 +216,13 @@ describe('M6 acceptance — Converse', () => {
     expect((bounded.body.endpoint as Record<string, unknown>).tier).toBe('bounded');
 
     // No Keychain in this environment: storing a key must refuse loudly…
+    // (distinct model so it isn't refused as a duplicate of "Fake Cloud")
     const keyed = await api('/api/providers', {
       method: 'POST',
       json: {
         label: 'Keyed',
         base_url: 'https://api.example.com',
-        model: 'x',
+        model: 'y',
         api_key: 'sk-test-not-a-real-key',
       },
     });

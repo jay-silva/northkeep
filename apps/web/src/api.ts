@@ -48,6 +48,7 @@ import {
 import { redact, restore, type Replacement } from '@northkeep/redact';
 import {
   addEndpoint,
+  EndpointExistsError,
   classifyEndpoint,
   createAnthropicProvider,
   createOpenAICompatibleProvider,
@@ -492,13 +493,19 @@ async function dispatch(
     if (kind !== undefined && kind !== 'openai-compatible' && kind !== 'anthropic') {
       return bad(400, 'kind must be openai-compatible or anthropic.');
     }
-    const endpoint = addEndpoint({
-      label,
-      baseUrl: base_url,
-      model,
-      ...(kind ? { kind } : {}),
-      ...(api_key ? { apiKey: api_key } : {}),
-    });
+    let endpoint;
+    try {
+      endpoint = addEndpoint({
+        label,
+        baseUrl: base_url,
+        model,
+        ...(kind ? { kind } : {}),
+        ...(api_key ? { apiKey: api_key } : {}),
+      });
+    } catch (err) {
+      if (err instanceof EndpointExistsError) return bad(409, err.message);
+      throw err;
+    }
     return ok({ endpoint: withBadge(endpoint) });
   }
 
