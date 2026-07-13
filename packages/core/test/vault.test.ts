@@ -293,6 +293,16 @@ describe('rescope (edit scope by supersession)', () => {
     reopened.close();
   });
 
+  it('does not leave a ghost scope after moving the last memory out of one', () => {
+    const vault = createVault();
+    const t = vault.remember({ content: 'lone client note', type: 'semantic', scope: 'client:x' });
+    expect(vault.scopes()).toContain('client:x');
+    vault.rescope(t.id, 'work');
+    expect(vault.scopes()).not.toContain('client:x'); // no live memory left there
+    expect(vault.scopes()).toContain('work');
+    vault.close();
+  });
+
   it('is a no-op when already in the target scope', () => {
     const vault = createVault();
     const t = vault.remember({ content: 'x', type: 'semantic', scope: 'work' });

@@ -515,11 +515,15 @@ export class Vault {
     return rows.map(rowToEntry);
   }
 
-  /** Distinct scopes present in the vault (live entries), sorted. */
+  /** Distinct scopes present in the vault (live entries), sorted. Excludes
+   * superseded rows so a scope you've moved your last memory out of doesn't
+   * linger as a ghost — matches the live-only default of list(). */
   scopes(): string[] {
     this.assertOpen();
     const rows = this.db
-      .prepare('SELECT DISTINCT scope FROM memories WHERE forgotten_at IS NULL ORDER BY scope')
+      .prepare(
+        'SELECT DISTINCT scope FROM memories WHERE forgotten_at IS NULL AND superseded_at IS NULL ORDER BY scope',
+      )
       .all() as Array<{ scope: string }>;
     return rows.map((r) => r.scope);
   }
