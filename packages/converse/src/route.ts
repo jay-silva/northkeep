@@ -253,17 +253,37 @@ export function suggestBetterModel(
   catalog: CatalogEntry[] = loadCatalog(),
 ): { modelLabel: string; task: TaskKind; reason: string } | null {
   const task = classifyTask(message);
-
-  // Already have a model that's strong at this task? Then say nothing.
-  const covered = configuredEndpoints.some((ep) => {
-    const entry = lookupModel(ep.model, catalog);
-    return entry?.strengths.includes(task) ?? false;
-  });
-  if (covered) return null;
-
-  // The catalog's best model for this task: highest quality (cost as a proxy),
-  // then widest context. A frontier hosted model wins the recommendation.
   const COST_RANK = { 'free-local': 0, low: 1, medium: 2, high: 3 } as const;
+
+  // Your CONFIGURED models that are strong at this task, ranked by quality
+  // (cost tier as a proxy — a frontier model outranks a local one).
+  const strong = configuredEndpoints
+    .map((ep) => ({ ep, entry: lookupModel(ep.model, catalog) }))
+    .filter((c): c is { ep: EndpointConfig; entry: CatalogEntry } =>
+      c.entry !== null && c.entry.strengths.includes(task),
+    )
+    .sort((a, b) => COST_RANK[b.entry.costTier] - COST_RANK[a.entry.costTier]);
+
+  if (strong.length > 0) {
+    // Cost-first routing lands on the CHEAPEST of these; if you also have a
+    // meaningfully STRONGER one connected, nudge you to use what you already
+    // have (a rule, or pick it) — don't suggest connecting anything new.
+    const bestOwned = strong[0]!;
+    const routed = strong[strong.length - 1]!; // cheapest ≈ what auto picks
+    if (COST_RANK[bestOwned.entry.costTier] > COST_RANK[routed.entry.costTier]) {
+      return {
+        modelLabel: bestOwned.ep.label,
+        task,
+        reason:
+          `${taskNoun(task)} — you have ${bestOwned.ep.label} connected, which is stronger here. ` +
+          `Route it there: "routing set ${task} <that endpoint>", or pick it for this chat.`,
+      };
+    }
+    return null; // covered, and what auto routes to is already your best for this task
+  }
+
+  // No configured model is strong at this task → suggest CONNECTING the
+  // catalog's best (highest quality, then widest context).
   const best = catalog
     .filter((e) => e.strengths.includes(task))
     .sort(

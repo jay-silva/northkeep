@@ -52,4 +52,16 @@ describe('suggestBetterModel', () => {
   it('stays silent when the configured hosted model covers the task', () => {
     expect(suggestBetterModel('fix this ```code```', [ep('c', 'claude-opus-4-8')])).toBeNull();
   });
+
+  it('nudges you to USE a stronger model you already have (not connect a new one)', () => {
+    // Qwen (free) + Grok (frontier) both configured & code-capable; cost-first
+    // routing lands on free Qwen, so the tip should point at the Grok you own.
+    const s = suggestBetterModel('fix this ```code```', [
+      { ...ep('q', 'qwen2.5:14b'), label: 'Qwen2.5 14B' },
+      { ...ep('g', 'grok-4.5'), label: 'Grok', baseUrl: 'https://api.x.ai', hasKey: true },
+    ]);
+    expect(s).not.toBeNull();
+    expect(s!.reason).toContain('you have Grok connected');
+    expect(s!.reason).not.toContain('connect it'); // it's a USE nudge, not a connect one
+  });
 });
