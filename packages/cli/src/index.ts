@@ -38,6 +38,7 @@ import {
 import { getPassphrase } from './prompt.js';
 import { PASTE_PROMPT, prepareImport, writeApproved, type ImportCmdOptions } from './importCmd.js';
 import { runConverse, type ConverseCmdOptions } from './converseCmd.js';
+import { modelsAdd, modelsInstall, modelsList } from './modelsCmd.js';
 import {
   syncBilling,
   syncConfig,
@@ -438,14 +439,41 @@ providers
   });
 
 program
-  .command('converse')
-  .description('Talk to a model through NorthKeep: memory injected, secrets masked, every turn audited')
+  .command('chat')
+  .alias('converse')
+  .description('Chat with a model through NorthKeep: memory injected, secrets masked, every turn audited')
   .option('--endpoint <id>', 'endpoint id (default: the configured default)')
   .option('--tier <n>', 'redaction tier: 0 (private endpoints only) | 1 | 2', '1')
   .option('--scope <scope>', 'scope for memories distilled from this conversation', 'personal')
   .option('--auto', 'let the concierge route each message by task (M7b)')
   .action(async (options: ConverseCmdOptions) => {
     await runConverse(options, withVault);
+  });
+
+const models = program
+  .command('models')
+  .description('Connect and install AI models — guided hosted setup and 1-click local install');
+
+models
+  .command('list', { isDefault: true })
+  .description('List your connected models, their cost, and local-AI status')
+  .action(async () => {
+    await modelsList();
+  });
+
+models
+  .command('add')
+  .description('Guided setup: pick a provider, paste a key (stored in your Keychain), pick a model')
+  .action(async () => {
+    await modelsAdd();
+  });
+
+models
+  .command('install')
+  .description('Install a local model on this Mac (hardware-matched by default), via Ollama')
+  .argument('[tag]', 'Ollama model tag, e.g. llama3.2:3b (omit to use the recommended one)')
+  .action(async (tag: string | undefined) => {
+    await modelsInstall(tag);
   });
 
 const routing = program

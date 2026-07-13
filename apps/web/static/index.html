@@ -154,6 +154,12 @@
   .memnew .undo { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
   .epline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     border-bottom: 1px solid var(--line); padding: 9px 2px; font-size: 13px; }
+  /* Connect-a-model wizard provider cards + the concierge suggestion tip. */
+  .cwcard { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+    margin-bottom: 8px; padding: 12px 14px; }
+  .prov .tip { color: var(--accent); }
+  .prov .tip-x { background: none; border: 0; padding: 0; margin-left: 6px; font: inherit;
+    color: var(--muted); text-decoration: underline; cursor: pointer; }
   @media (prefers-color-scheme: dark) {
     .badge.private { background: #22382c; }
     .pill.ok, #countPill { background: #22382c; }
@@ -174,7 +180,7 @@
   <button class="btn" id="lockBtn" hidden>Lock</button>
 </header>
 <nav>
-  <button data-view="converse">Converse</button>
+  <button data-view="converse">Chat</button>
   <button data-view="memories" class="active">Memories</button>
   <button data-view="import">Import</button>
   <button data-view="redact">Redact</button>
@@ -207,8 +213,23 @@
     <div id="managePanel" hidden style="margin-bottom:14px">
       <h3 class="sect">Endpoints</h3>
       <div id="epList"></div>
-      <h3 class="sect">Add an endpoint</h3>
-      <div class="card">
+      <div class="row" style="margin-top:12px">
+        <button class="btn primary" id="cwOpen">✦ Connect a model</button>
+        <span class="muted" style="font-size:13px">Guided setup for Claude, OpenAI, Gemini, Grok, and more.</span>
+      </div>
+      <h3 class="sect">Local models</h3>
+      <div class="card" id="localCard">
+        <div id="localBody" class="muted">Checking this Mac…</div>
+        <div id="localPullWrap" hidden style="margin-top:10px">
+          <p id="localPullStatus" class="muted" style="margin:0 0 6px"></p>
+          <progress id="localPullBar" max="100" value="0"></progress>
+        </div>
+        <div class="err" id="localErr"></div>
+      </div>
+      <h3 class="sect">Advanced</h3>
+      <details class="card">
+        <summary style="cursor:pointer;font-weight:600;color:var(--muted)">Add any endpoint by hand</summary>
+        <p class="muted" style="margin:8px 0 12px;font-size:13px">Point NorthKeep at any OpenAI-compatible runtime or hosted API.</p>
         <div class="row" style="margin-bottom:8px">
           <input type="text" id="epLabel" placeholder="Label (e.g. This Mac — Ollama)" style="flex:0 1 240px;min-width:160px">
           <input type="text" id="epBase" placeholder="Base URL (e.g. http://localhost:11434/v1)">
@@ -225,7 +246,7 @@
         <p class="muted" style="margin:0 0 10px;font-size:13px">Stored in the macOS Keychain — never written to files.</p>
         <div class="err" id="epErr"></div>
         <div class="row"><button class="btn primary" id="epAdd">Add endpoint</button></div>
-      </div>
+      </details>
       <h3 class="sect">Auto-routing rules</h3>
       <div class="card">
         <p class="muted" style="margin:0 0 10px;font-size:13px">When <strong>✦ Auto</strong> is on,
@@ -254,7 +275,10 @@
       <p class="muted" style="margin:6px 0 10px">Point NorthKeep at any OpenAI-compatible runtime —
         Ollama, LM Studio, vLLM — or a hosted API. Your memories stay in the vault; only what you
         send (after redaction) reaches the endpoint.</p>
-      <button class="btn primary" id="convEmptyManage">Manage endpoints</button>
+      <div class="row">
+        <button class="btn primary" id="convEmptyConnect">✦ Connect a model</button>
+        <button class="btn" id="convEmptyManage">Manage endpoints</button>
+      </div>
     </div>
     <div id="convThread" class="thread"></div>
     <div class="row" style="align-items:flex-end;gap:12px;margin-top:22px">
@@ -399,7 +423,7 @@
       <div style="margin-top:6px">Connecting hands that app your <strong>owned, portable memory</strong>
         under the scope you pick. It does <strong>not</strong> change what you type into that app —
         the app still sends your whole chat to its provider. For a privacy firewall on your
-        <em>messages</em>, use <strong>Converse</strong>, which masks them before they leave your Mac.</div>
+        <em>messages</em>, use <strong>Chat</strong>, which masks them before they leave your Mac.</div>
     </div>
     <div id="connectCards"></div>
   </section>
@@ -453,7 +477,46 @@
         <input type="text" id="setupEpModel" placeholder="Model (e.g. llama3.2:3b)">
         <button class="btn primary" id="setupManualAdd" style="width:100%;margin-bottom:8px">Add endpoint</button>
       </div>
-      <button class="btn" id="setupSkip" style="width:100%">Skip — add one later under Converse → Manage endpoints</button>
+      <button class="btn" id="setupSkip" style="width:100%">Skip — add one later under Chat → Manage endpoints</button>
+    </div>
+  </div>
+</div>
+<!-- Connect-a-model wizard (M9b): pick a provider → how to get a key → secure
+     paste + pick a model → added. All dynamic text via el()/textContent. -->
+<div class="overlay" id="connectWizard" hidden>
+  <div class="dialog" style="width:480px">
+    <div id="cwStepProvider">
+      <h2>Connect a model</h2>
+      <p>Pick a provider. NorthKeep walks you through getting a key and choosing a model — your key goes straight to the Keychain.</p>
+      <div class="err" id="cwErr"></div>
+      <div id="cwProviderCards"></div>
+      <button class="btn" id="cwCancel" style="width:100%;margin-top:6px">Cancel</button>
+    </div>
+    <div id="cwStepKey" hidden>
+      <h2 id="cwKeyTitle">How to get your key</h2>
+      <p id="cwKeyIntro"></p>
+      <ol id="cwKeySteps" style="margin:0 0 14px;padding-left:20px;font-size:14px;line-height:1.7"></ol>
+      <a id="cwKeyLink" class="btn primary" target="_blank" rel="noopener noreferrer" style="display:inline-block;text-decoration:none">Open key page</a>
+      <div class="row" style="margin-top:16px">
+        <button class="btn" id="cwKeyBack">Back</button>
+        <div class="grow"></div>
+        <button class="btn primary" id="cwKeyNext">I have my key</button>
+      </div>
+    </div>
+    <div id="cwStepPaste" hidden>
+      <h2>Paste your key</h2>
+      <p id="cwPasteProvider" class="muted"></p>
+      <div class="err" id="cwPasteErr"></div>
+      <input type="password" id="cwKeyInput" placeholder="Paste your API key">
+      <div class="muted" id="cwKeyWarn" style="font-size:13px;min-height:16px;margin-bottom:8px"></div>
+      <label class="muted" style="font-size:13px;display:block;margin-bottom:6px">Model</label>
+      <select id="cwModelSel" style="width:100%;margin-bottom:12px"></select>
+      <p class="muted" style="font-size:13px;margin:0 0 14px">Your key goes straight to the macOS Keychain — never written to files or shown again.</p>
+      <div class="row">
+        <button class="btn" id="cwPasteBack">Back</button>
+        <div class="grow"></div>
+        <button class="btn primary" id="cwSubmit">Connect model</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1010,6 +1073,27 @@
     if (text !== undefined) n.textContent = text;
     return n;
   }
+  // Cost surfacing (M9b). Mirrors @northkeep/converse costLabel() — a pure
+  // 4-case switch — so the static page can render a $/$$ hint without shipping
+  // the catalog. Keep in sync with catalog.ts if the ranges ever change.
+  const COST_LABEL = {
+    'free-local': { symbol: 'Free', range: 'runs on your Mac' },
+    low: { symbol: '$', range: '~$0.15–0.60 / 1M tokens (approx)' },
+    medium: { symbol: '$$', range: '~$1–5 / 1M tokens (approx)' },
+    high: { symbol: '$$$', range: '~$5–15+ / 1M tokens (approx)' },
+  };
+  const costLabel = (tier) => COST_LABEL[tier] || null;
+  // model id → cost tier, accumulated from the provider catalog, the endpoint
+  // list, and /api/models discovery. Lets the model pickers show a cost hint.
+  const modelCosts = new Map();
+  function mergeCosts(obj) {
+    if (obj) for (const k of Object.keys(obj)) if (obj[k]) modelCosts.set(k, obj[k]);
+  }
+  // A subtle " · $$" suffix for a picker option, when the model's cost is known.
+  function costSuffix(modelId) {
+    const cl = costLabel(modelCosts.get(modelId));
+    return cl ? ' · ' + cl.symbol : '';
+  }
   function setBadge(node, tier) {
     const priv = tier === 'private';
     node.className = 'badge ' + (priv ? 'private' : 'bounded');
@@ -1037,6 +1121,7 @@
     const prev = $('convEndpoint').value;
     const r = await api('/api/providers');
     endpoints = r.endpoints;
+    for (const ep of endpoints) if (ep.cost_tier) modelCosts.set(ep.model, ep.cost_tier);
     const sel = $('convEndpoint');
     sel.textContent = '';
     if (endpoints.length > 1) {
@@ -1068,6 +1153,7 @@
     renderEpList(r.default_id);
     fillRuleEndpoints();
     loadRules();
+    loadLocalStatus();
   }
 
   function onEndpointChange() {
@@ -1125,7 +1211,13 @@
     modelPickerEpId = ep.id;
     const list = [...new Set([ep.model, ...models])]; // configured model always first
     sel.textContent = '';
-    for (const m of list) { const o = el('option', '', m); o.value = m; sel.appendChild(o); }
+    for (const m of list) {
+      const o = el('option', '', m + costSuffix(m));
+      o.value = m;
+      const cl = costLabel(modelCosts.get(m));
+      if (cl) o.title = cl.range;
+      sel.appendChild(o);
+    }
     sel.value = prev && list.includes(prev) ? prev : ep.model;
   }
   async function loadModelPicker(ep) {
@@ -1135,6 +1227,7 @@
     try {
       const r = await api('/api/models?endpoint=' + encodeURIComponent(ep.id));
       modelCache.set(ep.id, r.models || []);
+      mergeCosts(r.costs);
       // Ignore a stale response if the user has since switched endpoints.
       if (token === modelLoadToken && selectedEndpoint()?.id === ep.id) {
         fillModelPicker(ep, modelCache.get(ep.id));
@@ -1156,6 +1249,8 @@
       line.appendChild(el('strong', '', ep.label));
       line.appendChild(el('span', 'muted', ep.base_url));
       line.appendChild(el('span', 'tag', ep.model));
+      const epCost = costLabel(ep.cost_tier);
+      if (epCost) { const c = el('span', 'tag', epCost.symbol); c.title = epCost.range; line.appendChild(c); }
       line.appendChild(makeBadge(ep.tier));
       if (ep.has_key) line.appendChild(el('span', 'tag', 'key stored'));
       if (ep.id === defaultId) line.appendChild(el('span', 'tag', 'default'));
@@ -1261,12 +1356,19 @@
     $('epDiscover').disabled = true;
     try {
       const r = await api('/api/models?base=' + encodeURIComponent(base));
+      mergeCosts(r.costs);
       const sel = $('epModelSel');
       sel.textContent = '';
       const first = el('option', '', r.models.length ? 'Pick a model…' : 'No models found');
       first.value = '';
       sel.appendChild(first);
-      for (const m of r.models) { const o = el('option', '', m); o.value = m; sel.appendChild(o); }
+      for (const m of r.models) {
+        const o = el('option', '', m + costSuffix(m));
+        o.value = m;
+        const cl = costLabel(modelCosts.get(m));
+        if (cl) o.title = cl.range;
+        sel.appendChild(o);
+      }
       sel.hidden = false;
       setBadge($('epAddBadge'), r.tier).hidden = false;
     } catch (e) {
@@ -1296,6 +1398,187 @@
       if (e.message !== 'locked') $('epErr').textContent = e.message;
     } finally { $('epAdd').disabled = false; }
   });
+
+  // --- Connect-a-model wizard (M9b). Reuses the overlay/.dialog/step-toggle
+  // pattern: pick provider → how to get a key → secure paste + pick model →
+  // POST /api/providers (key → Keychain via the audited addEndpoint path).
+  const COST_RANK = { 'free-local': 0, low: 1, medium: 2, high: 3 };
+  let cwProviders = [];
+  let cwSelected = null;
+  function connectStep(id) {
+    ['cwStepProvider', 'cwStepKey', 'cwStepPaste'].forEach((s) => { $(s).hidden = s !== id; });
+  }
+  function closeConnectWizard() { $('connectWizard').hidden = true; $('cwKeyInput').value = ''; }
+  async function openConnectWizard() {
+    $('cwErr').textContent = ''; $('cwPasteErr').textContent = '';
+    connectStep('cwStepProvider');
+    $('connectWizard').hidden = false;
+    try {
+      const r = await api('/api/provider-catalog');
+      cwProviders = r.providers || [];
+      for (const p of cwProviders) for (const m of p.models) if (m.costTier) modelCosts.set(m.id, m.costTier);
+      renderProviderCards();
+    } catch (e) { if (e.message !== 'locked') $('cwErr').textContent = e.message; }
+  }
+  function cheapestTier(p) {
+    let best = null;
+    for (const m of p.models) if (best === null || COST_RANK[m.costTier] < COST_RANK[best]) best = m.costTier;
+    return best;
+  }
+  function renderProviderCards() {
+    const box = $('cwProviderCards');
+    box.textContent = '';
+    for (const p of cwProviders) {
+      const card = el('button', 'btn cwcard');
+      card.appendChild(el('strong', '', p.name));
+      card.appendChild(el('span', 'grow'));
+      const cl = costLabel(cheapestTier(p));
+      if (cl) { const t = el('span', 'tag', 'from ' + cl.symbol); t.title = cl.range; card.appendChild(t); }
+      card.addEventListener('click', () => selectProvider(p));
+      box.appendChild(card);
+    }
+  }
+  function selectProvider(p) {
+    cwSelected = p;
+    $('cwKeyTitle').textContent = 'Get your ' + p.name + ' key';
+    $('cwKeyIntro').textContent = 'Create an API key with the provider, then come back and paste it.';
+    const ol = $('cwKeySteps');
+    ol.textContent = '';
+    for (const s of (p.keySteps || [])) ol.appendChild(el('li', '', s));
+    const link = $('cwKeyLink');
+    // Only trust an https link (catalog is ours, but keep the guard tight).
+    if (typeof p.keyUrl === 'string' && /^https:\/\//i.test(p.keyUrl)) {
+      link.href = p.keyUrl; link.textContent = 'Open ' + p.name + ' key page'; link.hidden = false;
+    } else { link.removeAttribute('href'); link.hidden = true; }
+    connectStep('cwStepKey');
+  }
+  function cwToPasteStep() {
+    const p = cwSelected;
+    $('cwPasteProvider').textContent = p.keyPrefix
+      ? p.name + ' keys usually start with "' + p.keyPrefix + '".'
+      : 'Paste your ' + p.name + ' API key.';
+    const sel = $('cwModelSel');
+    sel.textContent = '';
+    for (const m of p.models) {
+      const cl = costLabel(m.costTier);
+      const o = el('option', '', m.label + (cl ? ' · ' + cl.symbol : ''));
+      o.value = m.id;
+      if (cl) o.title = cl.range;
+      sel.appendChild(o);
+      if (m.recommended) sel.value = m.id;
+    }
+    $('cwKeyInput').value = ''; $('cwKeyWarn').textContent = ''; $('cwPasteErr').textContent = '';
+    connectStep('cwStepPaste');
+  }
+  $('cwKeyInput').addEventListener('input', () => {
+    const p = cwSelected, v = $('cwKeyInput').value.trim();
+    // Soft validation: warn on a prefix mismatch, never block (formats drift).
+    $('cwKeyWarn').textContent = (p && p.keyPrefix && v && !v.startsWith(p.keyPrefix))
+      ? 'Heads up: ' + p.name + ' keys usually start with "' + p.keyPrefix + '". Double-check you pasted the right one.'
+      : '';
+  });
+  async function cwSubmit() {
+    const p = cwSelected;
+    const api_key = $('cwKeyInput').value.trim();
+    const modelId = $('cwModelSel').value;
+    const model = (p.models.find((m) => m.id === modelId) || {});
+    $('cwPasteErr').textContent = '';
+    if (!api_key) { $('cwPasteErr').textContent = 'Paste your API key to continue.'; return; }
+    if (!modelId) { $('cwPasteErr').textContent = 'Pick a model.'; return; }
+    $('cwSubmit').disabled = true;
+    try {
+      await api('/api/providers', { method: 'POST', json: {
+        label: p.name + ' — ' + (model.label || modelId),
+        base_url: p.baseUrl,
+        model: modelId,
+        api_key,
+        kind: p.kind,
+      } });
+      $('cwKeyInput').value = '';
+      closeConnectWizard();
+      await loadProviders();
+    } catch (e) {
+      if (e.message !== 'locked') $('cwPasteErr').textContent = e.message;
+    } finally { $('cwSubmit').disabled = false; }
+  }
+  $('cwCancel').addEventListener('click', closeConnectWizard);
+  $('cwKeyBack').addEventListener('click', () => connectStep('cwStepProvider'));
+  $('cwKeyNext').addEventListener('click', cwToPasteStep);
+  $('cwPasteBack').addEventListener('click', () => connectStep('cwStepKey'));
+  $('cwSubmit').addEventListener('click', cwSubmit);
+  $('cwOpen').addEventListener('click', openConnectWizard);
+  $('convEmptyConnect').addEventListener('click', openConnectWizard);
+
+  // --- Local models (M9c). Guided Ollama install, then a hardware-matched
+  // 1-click pull with a progress bar (reuses the import poll pattern).
+  let localPoller = null;
+  async function loadLocalStatus() {
+    $('localErr').textContent = '';
+    try {
+      renderLocalStatus(await api('/api/local/status'));
+    } catch (e) { if (e.message !== 'locked') $('localBody').textContent = 'Could not check local models: ' + e.message; }
+  }
+  function renderLocalStatus(r) {
+    const body = $('localBody');
+    body.textContent = '';
+    if (r.state === 'not-installed') {
+      body.appendChild(el('strong', '', 'Install Ollama to run models on this Mac.'));
+      body.appendChild(el('p', 'muted', 'Ollama is a free local model runtime. Install it, reopen this panel, and NorthKeep offers a 1-click, hardware-matched download.'));
+      const row = el('div', 'row');
+      const link = el('a', 'btn', 'Get Ollama (ollama.com)');
+      link.href = 'https://ollama.com/download'; link.target = '_blank'; link.rel = 'noopener noreferrer';
+      link.style.textDecoration = 'none';
+      row.appendChild(link);
+      const code = el('span', 'tag', 'brew install ollama');
+      code.style.cssText = 'font-size:13px;padding:6px 10px';
+      row.appendChild(code);
+      const copy = el('button', 'btn', 'Copy');
+      copy.style.cssText = 'font-size:12px;padding:2px 10px';
+      copy.addEventListener('click', () => { navigator.clipboard.writeText('brew install ollama'); copy.textContent = 'Copied'; });
+      row.appendChild(copy);
+      body.appendChild(row);
+      return;
+    }
+    const hw = r.hardware || {}, rec = r.recommended || {};
+    body.appendChild(el('strong', '', 'Run a model privately on this Mac'));
+    body.appendChild(el('p', 'muted',
+      'Your Mac (' + (hw.chip || 'this Mac') + ', ' + (hw.totalRamGB ?? '?') + ' GB) can run ' +
+      rec.label + ' (~' + rec.sizeGB + ' GB). Nothing leaves your machine.'));
+    const btn = el('button', 'btn primary', 'Install ' + rec.label);
+    btn.addEventListener('click', () => startLocalPull(rec.tag, btn));
+    body.appendChild(btn);
+  }
+  async function startLocalPull(tag, btn) {
+    $('localErr').textContent = '';
+    btn.disabled = true;
+    $('localPullWrap').hidden = false;
+    $('localPullStatus').textContent = 'Starting download…';
+    $('localPullBar').removeAttribute('value');
+    try {
+      const r = await api('/api/local/pull', { method: 'POST', json: { model: tag } });
+      localPoller = setInterval(() => pollLocalPull(r.job_id, btn), 800);
+    } catch (e) {
+      btn.disabled = false;
+      if (e.message !== 'locked') $('localErr').textContent = e.message;
+    }
+  }
+  async function pollLocalPull(id, btn) {
+    let p;
+    try { p = await api('/api/local/pull/' + id + '/progress'); }
+    catch (e) { clearInterval(localPoller); btn.disabled = false; if (e.message !== 'locked') $('localErr').textContent = e.message; return; }
+    if (!p.done) {
+      const mb = (n) => Math.round(n / 1048576);
+      $('localPullStatus').textContent = p.status + (p.total ? ' — ' + mb(p.completed) + ' / ' + mb(p.total) + ' MB' : '');
+      if (p.total) { $('localPullBar').max = p.total; $('localPullBar').value = p.completed; }
+      else $('localPullBar').removeAttribute('value');
+      return;
+    }
+    clearInterval(localPoller);
+    if (p.error) { $('localPullStatus').textContent = 'Download failed: ' + p.error; btn.disabled = false; return; }
+    $('localPullStatus').textContent = 'Installed — added to your endpoints.';
+    $('localPullBar').max = 1; $('localPullBar').value = 1;
+    await loadProviders().catch(() => {});
+  }
 
   function addMsg(kind, text) {
     const wrap = el('div', 'msg ' + kind);
@@ -1330,6 +1613,19 @@
       strip.appendChild(det);
     } else {
       strip.appendChild(el('span', '', 'no memories used'));
+    }
+    // Concierge suggestion (M9d): when the server includes one, surface it
+    // subtly and let the user dismiss it. Server-supplied text → textContent.
+    // (The server field is wired separately; this renders it when present.)
+    if (ev.suggestion) {
+      const reason = typeof ev.suggestion === 'string' ? ev.suggestion : (ev.suggestion.reason || '');
+      if (reason) {
+        const tip = el('span', 'tip', '✦ tip: ' + reason);
+        const x = el('button', 'tip-x', 'dismiss');
+        x.addEventListener('click', () => tip.remove());
+        tip.appendChild(x);
+        strip.appendChild(tip);
+      }
     }
     return strip;
   }

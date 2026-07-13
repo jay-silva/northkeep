@@ -103,7 +103,7 @@ function renderHome(s: HomeStatus): string {
   lines.push(c.muted('  Commands'));
   const cmd = (name: string, desc: string): string =>
     `    ${c.bold(name.padEnd(18))}${c.muted(desc)}`;
-  lines.push(cmd('converse', 'chat, with memory + concierge routing'));
+  lines.push(cmd('chat', 'chat, with memory + concierge routing'));
   lines.push(cmd('models', 'add / install / list AI models'));
   lines.push(cmd('remember', 'save a memory'));
   lines.push(cmd('list', 'browse your memory'));
@@ -151,7 +151,7 @@ export async function runLauncher(vaultPath: string): Promise<void> {
       continue;
     }
     // Enter alone → chat; anything else → run it as a subcommand.
-    const args = line.length === 0 ? ['converse'] : line.split(/\s+/);
+    const args = line.length === 0 ? ['chat'] : line.split(/\s+/);
     await runSubcommand(scriptPath, vaultPath, args);
   }
   process.stdout.write(c.muted('Bye.\n'));

@@ -16,6 +16,7 @@ import {
   route,
   RouteError,
   runTurn,
+  suggestBetterModel,
   vaultAdapter,
   type EndpointConfig,
   type ModelProvider,
@@ -93,7 +94,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     distillOllama = null;
   }
 
-  console.log(`Converse — ${endpoint.label} (${endpoint.model})`);
+  console.log(`Chat — ${endpoint.label} (${endpoint.model})`);
   console.log(badgeLine(endpoint));
   console.log(
     `Redaction tier ${tier}${tier === 2 ? ' (secrets masked + names pseudonymized)' : tier === 1 ? ' (secrets masked)' : ' (OFF — private endpoint)'}` +
@@ -106,6 +107,8 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   const vault = vaultAdapter(withVault);
   let lastCreated: string[] = [];
   let lastUsed: Array<{ id: string; type: string; content: string }> = [];
+  // M9d: the last concierge tip we surfaced, so we don't nag it every turn.
+  let lastTip: string | null = null;
 
   // Queue lines instead of rl.question(): while a command awaits something
   // async (e.g. :models hitting the endpoint), readline would silently DROP
@@ -329,6 +332,20 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       if (routeReason) console.log(`${DIM}[✦ ${routeReason}]${RESET}`);
       for (const m of result.memoriesCreated) console.log(`  ${DIM}+ [${m.type}] ${m.content}${RESET}`);
       if (result.memoriesCreated.length > 0) console.log(`  ${DIM}(:undo to remove them)${RESET}`);
+      // M9d concierge: if the catalog's strongest model for this task isn't
+      // among the connected endpoints, surface a subtle one-liner — but only
+      // when the suggestion changes, never nagging the same tip every turn.
+      try {
+        const tip = suggestBetterModel(trimmed, listEndpoints());
+        if (tip && tip.reason !== lastTip) {
+          console.log(`${DIM}✦ tip: ${tip.reason}${RESET}`);
+          lastTip = tip.reason;
+        } else if (!tip) {
+          lastTip = null;
+        }
+      } catch {
+        // suggestions are best-effort; never let one break a turn.
+      }
     } catch (err) {
       if (err instanceof TurnError && err.code === 'TIER2_UNAVAILABLE') {
         console.error(`\n${RED}✗ NOTHING WAS SENT.${RESET} ${err.message}`);

@@ -32,7 +32,7 @@ import {
   type ImportedConversation,
   type MemoryCandidate,
 } from '@northkeep/importers';
-import { EXTRACT_MODEL, createOllamaClient, dedupeCandidates, runImport } from '@northkeep/librarian';
+import { EXTRACT_MODEL, createOllamaClient, dedupeCandidates, ollamaState, runImport } from '@northkeep/librarian';
 import {
   auditAsCsv,
   claudeCodeAvailable,
@@ -51,11 +51,15 @@ import {
   classifyEndpoint,
   createAnthropicProvider,
   createOpenAICompatibleProvider,
+  detectHardware,
   getEndpoint,
   getEndpointKey,
   isRoutingRule,
+  KNOWN_PROVIDERS,
   listEndpoints,
   loadRoutingPolicy,
+  lookupModel,
+  recommendLocalModel,
   removeEndpoint,
   saveRoutingPolicy,
   setDefaultEndpoint,
@@ -90,6 +94,29 @@ function evictStaleJobs(): void {
       job.candidates = [];
       jobs.delete(id);
     }
+  }
+}
+
+// --- Local-model pull jobs (M9c). Same fire-and-forget + poll shape as the
+// import jobs above: POST starts a background Ollama pull, the client polls
+// progress, and on success the model is auto-added as a loopback endpoint. No
+// secrets flow through these jobs (a local Ollama pull needs no API key).
+interface PullJob {
+  id: string;
+  createdAt: number;
+  model: string;
+  status: string;
+  completed: number;
+  total: number;
+  done: boolean;
+  error?: string;
+}
+const pullJobs = new Map<string, PullJob>();
+
+function evictStalePullJobs(): void {
+  const now = Date.now();
+  for (const [id, job] of pullJobs) {
+    if (now - job.createdAt > JOB_TTL_MS) pullJobs.delete(id);
   }
 }
 
@@ -444,6 +471,13 @@ async function dispatch(
     });
   }
 
+  // --- Guided onboarding (M9b). The curated known-provider registry that
+  // drives the "Connect a model" wizard. PUBLIC METADATA ONLY — base URLs,
+  // key-page links, curated model ids, rough cost tiers. No secrets, no keys.
+  if (method === 'GET' && route === '/api/provider-catalog') {
+    return ok({ providers: KNOWN_PROVIDERS });
+  }
+
   if (method === 'POST' && route === '/api/providers') {
     const { label, base_url, model, api_key, kind } = parseJson<{
       label?: string;
@@ -502,10 +536,86 @@ async function dispatch(
         ? createAnthropicProvider({ apiKey, baseUrl })
         : createOpenAICompatibleProvider({ baseUrl, ...(apiKey ? { apiKey } : {}) });
     try {
-      return ok({ models: await provider.listModels(), tier: classifyEndpoint(baseUrl).tier });
+      const models = await provider.listModels();
+      // Rough cost tier per catalogued model, so the GUI can show a $/$$ hint
+      // next to each option. Unknown models simply carry no cost (omitted).
+      const costs: Record<string, string> = {};
+      for (const m of models) {
+        const tier = lookupModel(m)?.costTier;
+        if (tier) costs[m] = tier;
+      }
+      return ok({ models, tier: classifyEndpoint(baseUrl).tier, costs });
     } catch {
       return bad(502, 'Could not list models from that endpoint — is it running?');
     }
+  }
+
+  // --- Local models (M9c). Guided Ollama install + a hardware-matched 1-click
+  // pull. Loopback-only (the OllamaClient reuses ollamaUrl()); carries no
+  // secrets. `status` tells the GUI whether to show "install Ollama first" or
+  // the recommended model + Install button.
+  if (method === 'GET' && route === '/api/local/status') {
+    const state = await ollamaState().catch(() => 'not-installed' as const);
+    return ok({ state, recommended: recommendLocalModel(), hardware: detectHardware() });
+  }
+
+  if (method === 'POST' && route === '/api/local/pull') {
+    const { model } = parseJson<{ model?: string }>(body);
+    if (typeof model !== 'string' || !/^[a-z0-9._:-]{1,64}$/i.test(model)) {
+      return bad(400, 'A valid Ollama model tag is required.');
+    }
+    evictStalePullJobs();
+    const job: PullJob = {
+      id: randomUUID(),
+      createdAt: Date.now(),
+      model,
+      status: 'starting',
+      completed: 0,
+      total: 0,
+      done: false,
+    };
+    pullJobs.set(job.id, job);
+    // Fire and let the client poll. On success, auto-add the pulled model as a
+    // loopback endpoint so it's immediately usable in chat.
+    void createOllamaClient()
+      .pull(model, (p) => {
+        job.status = p.status;
+        if (typeof p.completedBytes === 'number') job.completed = p.completedBytes;
+        if (typeof p.totalBytes === 'number') job.total = p.totalBytes;
+      })
+      .then(() => {
+        try {
+          addEndpoint({
+            label: 'This Mac — ' + model,
+            baseUrl: 'http://127.0.0.1:11434',
+            model,
+            kind: 'openai-compatible',
+          });
+          job.status = 'success';
+        } catch (err) {
+          job.error = 'Model pulled, but adding the endpoint failed: ' + (err instanceof Error ? err.message : String(err));
+        }
+        job.done = true;
+      })
+      .catch((err: unknown) => {
+        job.status = 'failed';
+        job.error = err instanceof Error ? err.message : String(err);
+        job.done = true;
+      });
+    return ok({ job_id: job.id });
+  }
+
+  const pullMatch = /^\/api\/local\/pull\/([0-9a-f-]{36})\/progress$/.exec(route);
+  if (method === 'GET' && pullMatch) {
+    const job = pullJobs.get(pullMatch[1]!);
+    if (!job) return bad(404, 'Unknown pull job.');
+    return ok({
+      status: job.status,
+      completed: job.completed,
+      total: job.total,
+      done: job.done,
+      error: job.error,
+    });
   }
 
   if (method === 'POST' && route === '/api/converse/undo') {
@@ -777,6 +887,9 @@ function withBadge(endpoint: {
     kind: endpoint.kind,
     has_key: endpoint.hasKey,
     tier: classifyEndpoint(endpoint.baseUrl).tier,
+    // Rough cost tier (M9b) for the $/$$ hint in the endpoint list; null for
+    // an uncatalogued model. Never a secret.
+    cost_tier: lookupModel(endpoint.model)?.costTier ?? null,
   };
 }
 

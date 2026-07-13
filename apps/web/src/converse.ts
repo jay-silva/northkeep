@@ -14,6 +14,7 @@ import {
   loadRoutingPolicy,
   route,
   runTurn,
+  suggestBetterModel,
   vaultAdapter,
   type ConverseSession,
   type PrivacyCeiling,
@@ -206,10 +207,20 @@ export async function handleConverseStream(
       routeReason,
       onToken: (token) => send(res, { type: 'token', text: token }),
     });
+    // Concierge tip (M9d): a stronger model the user hasn't connected would
+    // suit this message better. PURELY advisory — isolated in its own try so a
+    // fault here can never turn a successful turn into an error response.
+    let suggestion: string | undefined;
+    try {
+      suggestion = suggestBetterModel(message, listEndpoints())?.reason;
+    } catch {
+      suggestion = undefined;
+    }
     send(res, {
       type: 'done',
       session_id: sessionId,
       ...(routeReason ? { route_reason: routeReason, endpoint_label: endpoint.label } : {}),
+      ...(suggestion ? { suggestion } : {}),
       reply: result.reply,
       privacy: result.privacy,
       endpoint_host: result.endpointHost,
