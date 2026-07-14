@@ -324,9 +324,16 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       }
       lastCreated = result.memoriesCreated.map((m) => m.id);
       lastUsed = result.memoriesUsed;
+      // Approximate, on-device cost of this turn (token counts × catalog prices).
+      const c = result.cost;
+      const costSeg = c
+        ? c.usd > 0
+          ? ` · ≈$${c.usd < 0.01 ? c.usd.toFixed(4) : c.usd.toFixed(2)}`
+          : ' · free (local)'
+        : '';
       console.log(
         `${DIM}[${result.privacy} · ${result.endpointHost} · ${result.model} · tier ${result.tierApplied}` +
-          `${result.tier2Degraded ? ' (tier 2 degraded)' : ''}` +
+          `${result.tier2Degraded ? ' (tier 2 degraded)' : ''}${costSeg}` +
           ` · memory: ${result.memoriesUsed.length} used, ${result.memoriesCreated.length} added]${RESET}`,
       );
       if (routeReason) console.log(`${DIM}[✦ ${routeReason}]${RESET}`);

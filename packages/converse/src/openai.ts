@@ -51,6 +51,9 @@ export function createOpenAICompatibleProvider(config: OpenAICompatibleConfig): 
           model: options.model,
           messages,
           stream: true,
+          // Ask for token usage in the final SSE chunk (OpenAI + compatible
+          // servers that support it — others simply ignore it and we estimate).
+          stream_options: { include_usage: true },
           ...(options.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
         }),
         signal: AbortSignal.any(signals),
@@ -65,13 +68,15 @@ export function createOpenAICompatibleProvider(config: OpenAICompatibleConfig): 
         // Server ignored stream:true and answered plain JSON — accept it.
         const body = (await res.json()) as {
           choices?: Array<{ message?: { content?: string } }>;
+          usage?: { prompt_tokens?: number; completion_tokens?: number };
         };
         const text = body.choices?.[0]?.message?.content ?? '';
         if (text.length > 0) options.onToken?.(text);
+        reportUsage(body.usage, options.onUsage);
         return text;
       }
 
-      return readSse(res.body, options.onToken);
+      return readSse(res.body, options.onToken, options.onUsage);
     },
 
     async listModels(): Promise<string[]> {
@@ -111,11 +116,15 @@ export function createOpenAICompatibleProvider(config: OpenAICompatibleConfig): 
 async function readSse(
   body: ReadableStream<Uint8Array>,
   onToken?: (token: string) => void,
+  onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void,
 ): Promise<string> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
   let full = '';
+  // With include_usage, the LAST data chunk before [DONE] carries usage and an
+  // empty choices array; remember it and report once the stream ends.
+  let usage: { prompt_tokens?: number; completion_tokens?: number } | undefined;
   try {
     for (;;) {
       const { done, value } = await reader.read();
@@ -127,13 +136,20 @@ async function readSse(
         buffer = buffer.slice(newline + 1);
         if (!line.startsWith('data:')) continue;
         const payload = line.slice(5).trim();
-        if (payload === '[DONE]') return full;
-        let chunk: { choices?: Array<{ delta?: { content?: string } }> };
+        if (payload === '[DONE]') {
+          reportUsage(usage, onUsage);
+          return full;
+        }
+        let chunk: {
+          choices?: Array<{ delta?: { content?: string } }>;
+          usage?: { prompt_tokens?: number; completion_tokens?: number };
+        };
         try {
           chunk = JSON.parse(payload) as typeof chunk;
         } catch {
           continue; // partial or non-JSON keepalive — skip
         }
+        if (chunk.usage) usage = chunk.usage;
         const token = chunk.choices?.[0]?.delta?.content;
         if (typeof token === 'string' && token.length > 0) {
           full += token;
@@ -144,5 +160,17 @@ async function readSse(
   } finally {
     reader.releaseLock();
   }
+  reportUsage(usage, onUsage);
   return full;
+}
+
+/** Forward an OpenAI usage block to onUsage, only when both counts are present. */
+function reportUsage(
+  usage: { prompt_tokens?: number; completion_tokens?: number } | undefined,
+  onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void,
+): void {
+  if (!onUsage || !usage) return;
+  const { prompt_tokens, completion_tokens } = usage;
+  if (typeof prompt_tokens !== 'number' || typeof completion_tokens !== 'number') return;
+  onUsage({ inputTokens: prompt_tokens, outputTokens: completion_tokens });
 }

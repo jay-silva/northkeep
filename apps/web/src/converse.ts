@@ -4,6 +4,7 @@ import {
   RouteError,
   TurnError,
   classifyEndpoint,
+  compareTurnCost,
   createAnthropicProvider,
   createOpenAICompatibleProvider,
   createSession,
@@ -228,6 +229,10 @@ export async function handleConverseStream(
       tier_applied: result.tierApplied,
       tier2_degraded: result.tier2Degraded,
       distill_mode: result.distillMode,
+      // Approximate, on-device cost of this turn + what your other connected
+      // models would have cost (cheapest-first). Pure local computation.
+      ...(result.cost ? { cost: result.cost } : {}),
+      ...(result.usage ? { cost_compare: compareTurnCost(result.usage, listEndpoints()) } : {}),
       memories_used: result.memoriesUsed,
       memories_created: result.memoriesCreated.map((m) => ({
         id: m.id,

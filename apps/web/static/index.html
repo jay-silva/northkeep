@@ -1687,6 +1687,21 @@
     // only — the reason includes endpoint labels, which are user config.
     if (ev.route_reason) strip.appendChild(el('span', '', '✦ ' + ev.route_reason));
     strip.appendChild(el('span', '', ev.tier2_degraded ? 'Tier 2 degraded → 1' : 'Tier ' + ev.tier_applied));
+    // Approximate on-device cost of this turn; hover shows what your other
+    // connected models would have cost (all computed locally, never sent).
+    if (ev.cost) {
+      const fmt = (u) => '≈$' + (u < 0.01 ? u.toFixed(4) : u.toFixed(2));
+      const label = ev.cost.usd > 0 ? fmt(ev.cost.usd) : 'free (local)';
+      const span = el('span', '', label);
+      const cmp = ev.cost_compare || [];
+      if (cmp.length > 1) {
+        span.title = 'On your connected models — ' +
+          cmp.map((r) => r.label + ' ' + (r.usd > 0 ? fmt(r.usd) : 'free')).join(' · ');
+        span.style.cursor = 'help';
+        span.style.textDecoration = 'underline dotted';
+      }
+      strip.appendChild(span);
+    }
     const used = ev.memories_used || [];
     if (used.length) {
       const det = document.createElement('details');

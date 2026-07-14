@@ -6,6 +6,14 @@ import { applyTier1, redact, restore, type PseudonymMap, type Replacement } from
 import { appendCallLog, type CallLogEntry } from '@northkeep/mcp-server';
 import type { ChatMessage, ModelProvider, PrivacyTier } from './provider.js';
 import { classifyEndpoint } from './provider.js';
+import {
+  estimateTokensFromChars,
+  estimateTurnCost,
+  loadCatalog,
+  lookupModel,
+  type CatalogEntry,
+  type TokenUsage,
+} from './catalog.js';
 
 /**
  * runTurn: what happens on one message (ADR 0007). Locally and in order:
@@ -119,6 +127,8 @@ export interface TurnOptions {
   restoreFn?: typeof restore;
   auditFn?: (entry: CallLogEntry) => void;
   now?: () => Date;
+  /** Catalog used to price this turn; defaults to loadCatalog(). Injectable for tests. */
+  catalog?: CatalogEntry[];
 }
 
 export interface TurnResult {
@@ -132,6 +142,18 @@ export interface TurnResult {
   memoriesUsed: Array<{ id: string; type: string; scope: string; content: string }>;
   memoriesCreated: MemoryEntry[];
   distillMode: 'llm' | 'heuristic' | 'off';
+  /**
+   * Token counts for this turn — REAL when the provider reported usage,
+   * otherwise a chars/token estimate (usage.estimated === true). A count only;
+   * no content. Present on every successful turn.
+   */
+  usage?: TokenUsage;
+  /**
+   * APPROXIMATE local cost of this turn on the model that ran it (USD), or null
+   * when the model has no catalog price. Order-of-magnitude, never a quote —
+   * label it "approx" wherever it is shown.
+   */
+  cost?: { usd: number; approximate: boolean } | null;
 }
 
 const DEFAULT_MEMORY_LIMIT = 6;
@@ -260,8 +282,18 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   // 5. Call the provider — direct client→endpoint, nothing proxies.
   const wireMessages: ChatMessage[] = wirePrompt;
   let wireReply: string;
+  // Capture REAL token usage if the endpoint reports it (a count only, no
+  // content); we fall back to a chars/token estimate below when it doesn't.
+  let reportedUsage: { inputTokens: number; outputTokens: number } | null = null;
   try {
-    wireReply = await provider.chat(wireMessages, { model, onToken, signal });
+    wireReply = await provider.chat(wireMessages, {
+      model,
+      onToken,
+      signal,
+      onUsage: (u) => {
+        reportedUsage = u;
+      },
+    });
   } catch (err) {
     audit(auditFn, now, {
       ok: false,
@@ -328,6 +360,14 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
     routeReason: options.routeReason,
   });
 
+  // 10. Local cost metering (no network). Prefer the endpoint's REAL token
+  //     usage; otherwise estimate from the wire prompt + reply at ~4 chars/token
+  //     and mark it estimated. Cost = tokens × the routed model's APPROXIMATE
+  //     catalog price; null when that model has no price on file.
+  const usage = resolveUsage(reportedUsage, wirePrompt, wireReply);
+  const catalog = options.catalog ?? loadCatalog();
+  const cost = estimateTurnCost(usage, lookupModel(model, catalog));
+
   return {
     reply,
     privacy,
@@ -343,6 +383,29 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
     })),
     memoriesCreated,
     distillMode,
+    usage,
+    cost,
+  };
+}
+
+/**
+ * Real usage if the provider reported it; otherwise a ~4-chars/token estimate
+ * over the wire prompt (all messages) and reply, flagged `estimated`. Taking
+ * `reported` as a parameter also side-steps TS narrowing a closure-assigned
+ * `let` down to `never`.
+ */
+function resolveUsage(
+  reported: { inputTokens: number; outputTokens: number } | null,
+  wirePrompt: ChatMessage[],
+  wireReply: string,
+): TokenUsage {
+  if (reported) {
+    return { inputTokens: reported.inputTokens, outputTokens: reported.outputTokens, estimated: false };
+  }
+  return {
+    inputTokens: wirePrompt.reduce((n, m) => n + estimateTokensFromChars(m.content), 0),
+    outputTokens: estimateTokensFromChars(wireReply),
+    estimated: true,
   };
 }
 

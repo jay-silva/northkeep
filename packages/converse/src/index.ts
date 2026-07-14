@@ -29,11 +29,15 @@ export {
 export {
   BASELINE_CATALOG,
   catalogPath,
+  compareTurnCost,
   costLabel,
+  estimateTokensFromChars,
+  estimateTurnCost,
   loadCatalog,
   lookupModel,
   type CatalogEntry,
   type CostTier,
+  type TokenUsage,
 } from './catalog.js';
 export {
   getProvider,

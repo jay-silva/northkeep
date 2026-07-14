@@ -55,7 +55,17 @@ export function createAnthropicProvider(config: AnthropicProviderConfig): ModelP
           full += delta;
           options.onToken?.(delta);
         });
-        await stream.finalMessage();
+        const finalMessage = await stream.finalMessage();
+        // Real usage from the API: input_tokens / output_tokens (a count only).
+        const usage = finalMessage.usage;
+        if (
+          options.onUsage &&
+          usage &&
+          typeof usage.input_tokens === 'number' &&
+          typeof usage.output_tokens === 'number'
+        ) {
+          options.onUsage({ inputTokens: usage.input_tokens, outputTokens: usage.output_tokens });
+        }
         return full;
       } catch (err) {
         throw sanitizeError(err);

@@ -16,6 +16,13 @@ export interface ChatOptions {
   model: string;
   /** Streamed tokens, in wire space (pseudonyms/masks intact). */
   onToken?: (token: string) => void;
+  /**
+   * REAL token usage reported by the endpoint, if it exposes any. Providers
+   * call this at most once when the response carries usage; runTurn uses it for
+   * the local cost estimate and falls back to a chars/token heuristic when it
+   * never fires. Purely a count of tokens — no content leaves the machine.
+   */
+  onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void;
   signal?: AbortSignal;
   maxTokens?: number;
 }
