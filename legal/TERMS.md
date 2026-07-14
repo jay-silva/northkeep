@@ -7,7 +7,7 @@
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** [support@your-domain] · **Effective date:** [DATE]
+**Contact:** support@northkeep.ai · **Effective date:** [DATE]
 
 These Terms govern your use of the NorthKeep software and the optional hosted
 sync service (together, the "Service"). By installing the software or using the
@@ -22,7 +22,7 @@ by those licenses — nothing in these Terms restricts them. You may run NorthKe
 locally, and **self-host the sync server, for free.** If the AGPL's obligations
 (including its network-use source-sharing requirement) don't fit your
 organization, a **separate commercial license** is available — contact
-[support@your-domain].
+support@northkeep.ai.
 
 ## 2. The hosted sync service
 
@@ -42,7 +42,7 @@ your devices.
 
 A standard subscription is for an individual's personal use. **Use by a company,
 team, or organization — including multi-user or multi-seat deployment — requires
-a business/team plan or a commercial license.** Contact [support@your-domain] to
+a business/team plan or a commercial license.** Contact support@northkeep.ai to
 arrange one. (This section concerns our hosted service and commercial licensing;
 it does not limit any rights the AGPL grants you in the software itself.)
 
@@ -103,4 +103,4 @@ jurisdiction. *(Confirm venue/arbitration preference with counsel.)*
 ## 10. Contact
 
 Questions about these Terms, or to arrange a business or commercial license:
-[support@your-domain].
+support@northkeep.ai.

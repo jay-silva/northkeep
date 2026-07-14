@@ -7,7 +7,7 @@
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** [privacy@your-domain] · **Effective date:** [DATE]
+**Contact:** support@northkeep.ai · **Effective date:** [DATE]
 
 NorthKeep is built on a simple promise: **your AI memory lives on your device,
 encrypted, and we never see its contents.** This policy explains the little data
@@ -80,7 +80,7 @@ You control which providers you use and can disconnect them at any time.
 - **Local data** is under your control — delete your vault, or individual
   memories, on your device at any time.
 - **Hosted sync data:** cancel your subscription and request deletion at
-  [privacy@your-domain], and we will delete your encrypted vault blob and billing
+  support@northkeep.ai, and we will delete your encrypted vault blob and billing
   mapping. Because the stored blob is ciphertext we cannot read, deletion removes
   bytes we could never interpret in the first place.
 - Losing your passphrase or your `device.secret` file means the vault is
@@ -93,7 +93,7 @@ Depending on where you live (for example under GDPR or the CCPA), you may have
 rights to access, correct, delete, or export the personal data we hold about you.
 In practice we hold very little: a hashed account identifier, and — only if you
 subscribe — the Stripe billing mapping described above. To exercise any right, or
-to ask what we hold, contact [privacy@your-domain]. We do not sell personal
+to ask what we hold, contact support@northkeep.ai. We do not sell personal
 information.
 
 ## Children
@@ -109,4 +109,4 @@ you accept the revised policy.
 
 ## Contact
 
-Questions: [privacy@your-domain].
+Questions: support@northkeep.ai.
