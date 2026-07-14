@@ -6,7 +6,7 @@
 > licensing and SaaS terms should review before you take payment.
 
 **Provider:** Silva Peak Enterprises LLC ("we," "us"), a Massachusetts limited
-liability company. *(Confirm exact registered name.)*
+liability company.
 **Contact:** [support@your-domain] · **Effective date:** [DATE]
 
 These Terms govern your use of the NorthKeep software and the optional hosted

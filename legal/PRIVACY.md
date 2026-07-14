@@ -6,7 +6,7 @@
 > provider legal name, contact email, website, effective date.
 
 **Provider:** Silva Peak Enterprises LLC ("we," "us"), a Massachusetts limited
-liability company. *(Confirm exact registered name.)*
+liability company.
 **Contact:** [privacy@your-domain] · **Effective date:** [DATE]
 
 NorthKeep is built on a simple promise: **your AI memory lives on your device,
