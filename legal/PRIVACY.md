@@ -5,8 +5,8 @@
 > `SPEC/security-model.md`). Bracketed values need confirming before launch:
 > provider legal name, contact email, website, effective date.
 
-**Provider:** Silva Peak Enterprises LLC ("we," "us"), a Massachusetts limited
-liability company.
+**Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
+limited liability company.
 **Contact:** [privacy@your-domain] · **Effective date:** [DATE]
 
 NorthKeep is built on a simple promise: **your AI memory lives on your device,
