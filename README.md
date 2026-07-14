@@ -16,13 +16,14 @@ NorthKeep works two ways:
   those apps and you set, per app, exactly what it may read. It does **not**
   redact what you type into that app — that's ownership and portability, not a
   firewall on your keystrokes.
-- **Chat** — you talk *through* NorthKeep instead, and it masks sensitive data
-  out of your message *before* it leaves the machine, then restores it locally
-  in the reply. This is the real privacy firewall — against a local model
-  (free, nothing leaves your network) or a cloud model with your own key.
+- **Converse** — you talk *through* NorthKeep instead (the **Chat** tab in the
+  app), and it masks sensitive data out of your message *before* it leaves the
+  machine, then restores it locally in the reply. This is the real privacy
+  firewall — against a local model (free, nothing leaves your network) or a
+  cloud model with your own key.
 
 > **One-line version:** connect NorthKeep to the AI apps you already pay for,
-> or chat through NorthKeep when privacy has to be absolute.
+> or converse through NorthKeep when privacy has to be absolute.
 
 ## Install
 
@@ -66,12 +67,13 @@ northkeep log      # what every AI app asked of your vault (never the content)
 Honest boundary: while the vault is unlocked, any app you've connected can read
 it (the Keychain grant, same as saved browser passwords). Lock it, or scope the
 connection down, to limit that. And Connect can't redact what you type into
-someone else's app — for that, use Chat.
+someone else's app — for that, use Converse.
 
-## Chat — talk to any model, privately (Mode 2: the firewall)
+## Converse — talk to any model, privately (Mode 2: the firewall)
 
-The Chat tab (and `northkeep chat` in the terminal) is a chat surface where the
-privacy runs itself. On every message NorthKeep retrieves relevant memory,
+Converse — the **Chat** tab in the app, or `northkeep converse` in the terminal —
+is a chat surface where the privacy runs itself. On every message NorthKeep
+retrieves relevant memory,
 masks secrets *before* anything leaves the machine, calls the model you picked,
 restores names in the reply locally, distills what's worth keeping into the
 vault (visibly, with one-click undo), and writes a content-free audit row.
@@ -83,7 +85,7 @@ up front:
 ```bash
 northkeep models add       # guided setup for Anthropic, OpenAI, Gemini, xAI, OpenRouter…
 northkeep models install   # or pull a local model your Mac can run (via Ollama)
-northkeep chat
+northkeep converse
 ```
 
 Point it at **any** OpenAI-compatible endpoint — Ollama, LM Studio, vLLM,

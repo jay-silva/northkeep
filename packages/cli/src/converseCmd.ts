@@ -94,7 +94,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     distillOllama = null;
   }
 
-  console.log(`Chat — ${endpoint.label} (${endpoint.model})`);
+  console.log(`Converse — ${endpoint.label} (${endpoint.model})`);
   console.log(badgeLine(endpoint));
   console.log(
     `Redaction tier ${tier}${tier === 2 ? ' (secrets masked + names pseudonymized)' : tier === 1 ? ' (secrets masked)' : ' (OFF — private endpoint)'}` +

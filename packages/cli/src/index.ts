@@ -503,9 +503,9 @@ providers
   });
 
 program
-  .command('chat')
-  .alias('converse')
-  .description('Chat with a model through NorthKeep: memory injected, secrets masked, every turn audited')
+  .command('converse')
+  .alias('chat')
+  .description('Converse with a model through NorthKeep: memory injected, secrets masked, every turn audited')
   .option('--endpoint <id>', 'endpoint id (default: the configured default)')
   .option('--tier <n>', 'redaction tier: 0 (private endpoints only) | 1 | 2', '1')
   .option('--scope <scope>', 'scope for memories distilled from this conversation', 'personal')
