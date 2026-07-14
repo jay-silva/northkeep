@@ -26,6 +26,7 @@ import {
   startServer,
 } from '@northkeep/mcp-server';
 import { redact, restore, type Replacement } from '@northkeep/redact';
+import { createOllamaEmbedder } from '@northkeep/librarian';
 import {
   addEndpoint,
   classifyEndpoint,
@@ -232,6 +233,35 @@ program
       console.log(`${entries.length} memor${entries.length === 1 ? 'y' : 'ies'}.`);
       const chain = vault.verifyChain();
       console.log(chain.ok ? '✓ Provenance chain verified.' : `✗ CHAIN BROKEN: ${chain.error}`);
+    });
+  });
+
+program
+  .command('search')
+  .description('Search memories by meaning (local embeddings), with keyword fallback')
+  .argument('<query>', 'what to look for')
+  .option('--type <type>', 'filter by memory type')
+  .option('--scope <scope>', 'filter by scope')
+  .option('--limit <n>', 'max results', (v) => parseInt(v, 10), 8)
+  .action(async (queryStr: string, options: { type?: string; scope?: string; limit: number }) => {
+    await withVault(async (vault) => {
+      const r = await vault.retrieveSemantic(queryStr, createOllamaEmbedder(), {
+        type: options.type as MemoryType | undefined,
+        scope: options.scope,
+        limit: options.limit,
+      });
+      // Degrade loudly (invariant #6): say plainly when semantic wasn't available.
+      console.log(
+        r.mode === 'semantic'
+          ? '✦ semantic search (ranked by meaning)'
+          : `⚠ semantic unavailable — using keyword search (${r.reason}). Start Ollama + pull nomic-embed-text for meaning-based search.`,
+      );
+      if (r.results.length === 0) {
+        console.log('No memories found.');
+        return;
+      }
+      for (const s of r.results) printEntry(s.entry);
+      console.log(`${r.results.length} result${r.results.length === 1 ? '' : 's'}.`);
     });
   });
 
