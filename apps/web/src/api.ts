@@ -32,7 +32,7 @@ import {
   type ImportedConversation,
   type MemoryCandidate,
 } from '@northkeep/importers';
-import { EXTRACT_MODEL, createOllamaClient, dedupeCandidates, ollamaState, runImport } from '@northkeep/librarian';
+import { EXTRACT_MODEL, createOllamaClient, createOllamaEmbedder, dedupeCandidates, ollamaState, runImport } from '@northkeep/librarian';
 import {
   auditAsCsv,
   claudeCodeAvailable,
@@ -246,12 +246,22 @@ async function dispatch(
     const type = typeParam && isMemoryType(typeParam) ? (typeParam as MemoryType) : undefined;
     const scope = query.get('scope') ?? undefined;
     return ok(
-      await session.withVault((vault) => {
+      await session.withVault(async (vault) => {
         if (q.length > 0) {
+          // Semantic search when the local embedder is up; retrieveSemantic
+          // degrades to keyword on its own and tells us which happened, so the
+          // UI can say so (invariant #6 — never silently worse).
+          const r = await vault.retrieveSemantic(q, createOllamaEmbedder(), {
+            type,
+            scope,
+            limit: 50,
+          });
           return {
-            memories: vault.retrieve(q, { type, scope, limit: 50 }).map((r) => ({
-              ...publicEntry(r.entry),
-              relevance: Number(r.score.toFixed(3)),
+            search_mode: r.mode,
+            ...(r.mode === 'keyword' ? { semantic_reason: r.reason } : {}),
+            memories: r.results.map((s) => ({
+              ...publicEntry(s.entry),
+              relevance: Number(s.score.toFixed(3)),
             })),
           };
         }

@@ -787,8 +787,19 @@
     if ($('q').value.trim()) qs.set('q', $('q').value.trim());
     if (filterType) qs.set('type', filterType);
     if (filterScope) qs.set('scope', filterScope);
-    const { memories } = await api('/api/memories?' + qs);
-    $('memList').innerHTML = memories.length === 0
+    const resp = await api('/api/memories?' + qs);
+    const memories = resp.memories;
+    const q = $('q').value.trim();
+    // Search-mode note: loud when semantic degraded to keyword (invariant #6).
+    let note = '';
+    if (q && resp.search_mode === 'semantic') {
+      note = '<p class="muted" style="margin:0 0 8px">✦ searching by meaning</p>';
+    } else if (q && resp.search_mode === 'keyword') {
+      note = '<p class="muted" style="margin:0 0 8px">⚠ semantic search unavailable — using keyword'
+        + (resp.semantic_reason ? ' (' + esc(resp.semantic_reason) + ')' : '')
+        + '. Start Ollama + pull nomic-embed-text for meaning-based search.</p>';
+    }
+    $('memList').innerHTML = note + (memories.length === 0
       ? '<p class="muted">No memories match.</p>'
       : memories.map((m) => `
         <div class="card" id="mem-${esc(m.id)}">
@@ -806,7 +817,7 @@
             <button class="btn" data-rescope="${esc(m.id)}" data-scope="${esc(m.scope)}" style="font-size:12px;padding:5px 12px;border-radius:8px">Move scope</button>
             <button class="btn danger" data-forget="${esc(m.id)}" style="font-size:12px;padding:5px 12px;border-radius:8px">Forget</button>
           </div>
-        </div>`).join('');
+        </div>`).join(''));
   }
   $('memList').addEventListener('click', async (e) => {
     const d = e.target.dataset || {};

@@ -80,13 +80,16 @@ export class UiSession {
   }
 
   /** Opens the vault under the file lock, runs fn, closes. */
-  async withVault<T>(fn: (vault: Vault) => T): Promise<T> {
+  async withVault<T>(fn: (vault: Vault) => Promise<T> | T): Promise<T> {
     if (!this.isUnlocked()) throw new LockedError();
     const keyCopy = Buffer.from(this.heldKey!); // openWithKey consumes its buffer
-    return withFileLock(this.vaultPath, () => {
+    // await fn BEFORE close: an async callback (e.g. semantic retrieval awaiting
+    // the local embedder) must complete while the vault is still open. withFileLock
+    // holds the lock across the await, and sync callbacks behave identically.
+    return withFileLock(this.vaultPath, async () => {
       const vault = Vault.openWithKey(this.vaultPath, keyCopy);
       try {
-        return fn(vault);
+        return await fn(vault);
       } finally {
         vault.close();
       }
