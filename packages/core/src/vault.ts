@@ -23,6 +23,7 @@ import {
   MEMORY_TYPES,
   SCHEMA_VERSION,
   isMemoryType,
+  type Embedder,
   type ExportedMemory,
   type ListFilter,
   type MemoryEntry,
@@ -30,6 +31,7 @@ import {
   type RememberInput,
   type RetrieveOptions,
   type ScoredEntry,
+  type SemanticRetrieval,
   type VaultExport,
 } from './types.js';
 
@@ -549,6 +551,161 @@ export class Vault {
     return scored.slice(0, limit);
   }
 
+  /**
+   * Semantic retrieval: ranks by *meaning* using local embeddings, blended with
+   * the same keyword/recency/type signal as retrieve(). Additive and
+   * graceful-degrading — if `embedder` is unreachable (or the query can't be
+   * embedded) it returns the exact keyword result and reports mode 'keyword'
+   * with semanticAvailable=false, so a caller/UI can say "semantic unavailable
+   * — using keyword" (invariant #6). NEVER throws out: any embedding failure is
+   * caught and downgraded to keyword.
+   *
+   * This is a separate async method rather than a `semantic` flag on retrieve()
+   * because retrieve() is synchronous and part of the stable surface (converse,
+   * existing tests) — embedding requires awaiting the loopback Ollama call.
+   *
+   * Embeddings are DISPOSABLE CACHE (invariant #4): computed lazily, stored in
+   * the `embeddings` table, never exported, safe to drop (clearEmbeddingCache)
+   * and regenerate. They never touch any entry hash or the provenance chain.
+   */
+  async retrieveSemantic(
+    query: string,
+    embedder: Embedder,
+    options: RetrieveOptions = {},
+  ): Promise<SemanticRetrieval> {
+    this.assertOpen();
+    // Always compute the keyword baseline first: it's our guaranteed fallback
+    // and never worse than what retrieve() would have returned on its own.
+    const keyword = this.retrieve(query, options);
+    const queryTerms = tokenize(query);
+    if (queryTerms.size === 0) {
+      // Empty/token-less query — retrieve() already returns []; nothing to embed.
+      return { results: keyword, mode: 'keyword', semanticAvailable: false, reason: 'empty query' };
+    }
+    let queryVec: Float32Array;
+    try {
+      const raw = await embedder.embed(query);
+      if (!Array.isArray(raw) || raw.length === 0) {
+        return {
+          results: keyword,
+          mode: 'keyword',
+          semanticAvailable: false,
+          reason: 'embedder returned an empty vector',
+        };
+      }
+      queryVec = Float32Array.from(raw);
+    } catch (err) {
+      return {
+        results: keyword,
+        mode: 'keyword',
+        semanticAvailable: false,
+        reason: `embedder unavailable: ${errText(err)}`,
+      };
+    }
+    try {
+      const results = await this.semanticRank(queryTerms, queryVec, embedder, options);
+      return { results, mode: 'semantic', semanticAvailable: true };
+    } catch (err) {
+      // A candidate embedding failed partway through — degrade loudly, don't throw.
+      return {
+        results: keyword,
+        mode: 'keyword',
+        semanticAvailable: false,
+        reason: `semantic ranking failed: ${errText(err)}`,
+      };
+    }
+  }
+
+  /** Cosine-blended scoring over the candidate set. Assumes the query vector is
+   * in hand; may throw if a candidate embedding can't be produced (the caller
+   * turns that into a keyword fallback). */
+  private async semanticRank(
+    queryTerms: Set<string>,
+    queryVec: Float32Array,
+    embedder: Embedder,
+    options: RetrieveOptions,
+  ): Promise<ScoredEntry[]> {
+    const limit = options.limit ?? 8;
+    const candidates = this.list({
+      type: options.type,
+      scope: options.scope,
+      allowedScopes: options.allowedScopes,
+    }).filter((entry) => entry.superseded_at === null);
+    this.ensureEmbeddingsTable();
+    const now = Date.now();
+    const dim = queryVec.length;
+    const scored: ScoredEntry[] = [];
+    for (const entry of candidates) {
+      let vec = this.getCachedEmbedding(entry.id, embedder.model, dim);
+      if (vec === null) {
+        const raw = await embedder.embed(entry.content);
+        vec = Float32Array.from(raw);
+        this.putCachedEmbedding(entry.id, embedder.model, vec);
+      }
+      const sem = Math.max(0, cosineSimilarity(queryVec, vec));
+      // Keyword component: identical formula to retrieve(), but overlap may be 0
+      // (a purely-semantic hit like "car" ~ "vehicle" contributes via `sem`).
+      const entryTerms = tokenize(entry.content);
+      let matched = 0;
+      for (const term of queryTerms) if (entryTerms.has(term)) matched += 1;
+      const overlap = matched / queryTerms.size;
+      // Relevance gate: keep an entry only if it shares a keyword OR is
+      // genuinely close in meaning, so a query that matches nothing doesn't
+      // drag in unrelated filler.
+      if (overlap === 0 && sem < SEMANTIC_FLOOR) continue;
+      const ageDays = Math.max(0, now - Date.parse(entry.created_at)) / 86_400_000;
+      const recency = 0.3 * Math.exp(-ageDays / 30);
+      const typeBoost = TYPE_PRIORITY[entry.type] ?? 0;
+      const score = SEMANTIC_WEIGHT * sem + overlap + recency + typeBoost;
+      scored.push({ entry, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, limit);
+  }
+
+  /**
+   * Drops every cached embedding (the entire disposable cache). Safe at any
+   * time — the next retrieveSemantic() recreates the table and regenerates
+   * vectors on demand. Nothing about the vault's content, hashes, or export
+   * changes.
+   */
+  clearEmbeddingCache(): void {
+    this.assertOpen();
+    this.db.exec('DROP TABLE IF EXISTS embeddings');
+  }
+
+  /** Creates the disposable embeddings cache table if it's missing (e.g. an
+   * older vault, or after clearEmbeddingCache). Never part of the durable
+   * schema contract — it's cache. */
+  private ensureEmbeddingsTable(): void {
+    this.db.exec(`CREATE TABLE IF NOT EXISTS embeddings (
+      memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
+      model     TEXT NOT NULL,
+      dims      INTEGER NOT NULL,
+      vector    BLOB NOT NULL,
+      PRIMARY KEY (memory_id, model)
+    )`);
+  }
+
+  /** Reads a cached vector for (memory, model), or null on miss / dim mismatch. */
+  private getCachedEmbedding(memoryId: string, model: string, expectedDim: number): Float32Array | null {
+    const row = this.db
+      .prepare('SELECT dims, vector FROM embeddings WHERE memory_id = ? AND model = ?')
+      .get(memoryId, model) as { dims: number; vector: Buffer } | undefined;
+    if (!row || row.dims !== expectedDim) return null;
+    return blobToVector(row.vector);
+  }
+
+  /** Caches a vector for (memory, model). Pure cache write — no hash, no chain. */
+  private putCachedEmbedding(memoryId: string, model: string, vec: Float32Array): void {
+    this.db
+      .prepare(
+        `INSERT INTO embeddings (memory_id, model, dims, vector) VALUES (?, ?, ?, ?)
+         ON CONFLICT(memory_id, model) DO UPDATE SET dims = excluded.dims, vector = excluded.vector`,
+      )
+      .run(memoryId, model, vec.length, vectorToBlob(vec));
+  }
+
   list(filter: ListFilter = {}): MemoryEntry[] {
     this.assertOpen();
     const clauses: string[] = [];
@@ -726,6 +883,47 @@ const TYPE_PRIORITY: Record<string, number> = {
   semantic: 0.1,
   procedural: 0.05,
 };
+
+/** How strongly cosine similarity (0..1) counts relative to the keyword signal.
+ * Keyword overlap tops out near 1.0, recency at 0.3, type at 0.15 — a weight of
+ * 0.7 lets meaning meaningfully re-rank without steamrolling exact matches. */
+const SEMANTIC_WEIGHT = 0.7;
+/** Minimum cosine for a keyword-less entry to survive as a semantic-only hit. */
+const SEMANTIC_FLOOR = 0.6;
+
+/** Cosine similarity of two vectors; 0 on length mismatch or a zero vector. */
+export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): number {
+  if (a.length !== b.length || a.length === 0) return 0;
+  let dot = 0;
+  let na = 0;
+  let nb = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const x = a[i]!;
+    const y = b[i]!;
+    dot += x * y;
+    na += x * x;
+    nb += y * y;
+  }
+  if (na === 0 || nb === 0) return 0;
+  return dot / (Math.sqrt(na) * Math.sqrt(nb));
+}
+
+/** Pack a Float32Array as a little-endian BLOB for the cache table. */
+function vectorToBlob(vec: Float32Array): Buffer {
+  return Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
+}
+
+/** Unpack a cache BLOB into a Float32Array, copying to guarantee 4-byte
+ * alignment (SQLite BLOBs come back as pooled Buffers with arbitrary offsets). */
+function blobToVector(buf: Buffer): Float32Array {
+  const ab = new ArrayBuffer(buf.byteLength);
+  new Uint8Array(ab).set(buf);
+  return new Float32Array(ab);
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
 
 function tokenize(text: string): Set<string> {
   const terms = new Set<string>();

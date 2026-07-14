@@ -72,6 +72,30 @@ export interface ScoredEntry {
   score: number;
 }
 
+/**
+ * Produces embedding vectors for text. Injected into the vault so the core has
+ * no network dependency of its own and tests stay deterministic without Ollama.
+ * The concrete implementation lives in @northkeep/librarian (loopback-locked
+ * Ollama, nomic-embed-text). `embed` MUST reject/throw when the model is
+ * unavailable — the vault catches that and falls back to keyword ranking.
+ */
+export interface Embedder {
+  /** Model identifier. Used as the cache key so vectors from different models never mix. */
+  readonly model: string;
+  /** Embedding for `text`. Rejects if the model is unreachable. */
+  embed(text: string): Promise<number[]>;
+}
+
+/**
+ * Result of a semantic (embedding-blended) retrieval. Mirrors the loud-degrade
+ * shape of librarian's ExtractionResult: when the embedder is unreachable we
+ * fall back to keyword ranking and say so, never silently returning worse
+ * results dressed up as semantic ones (invariant #6).
+ */
+export type SemanticRetrieval =
+  | { results: ScoredEntry[]; mode: 'semantic'; semanticAvailable: true }
+  | { results: ScoredEntry[]; mode: 'keyword'; semanticAvailable: false; reason?: string };
+
 export interface ExportedMemory {
   id: string;
   type: MemoryType;

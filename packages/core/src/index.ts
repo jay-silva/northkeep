@@ -11,6 +11,7 @@ export {
 export {
   Vault,
   computeEntryHash,
+  cosineSimilarity,
   type VaultHeader,
   type VaultOptions,
 } from './vault.js';

@@ -423,6 +423,80 @@ describe('editMemory (edit content/type/scope by supersession)', () => {
   });
 });
 
+describe('retrieveSemantic (embedding-blended, graceful fallback)', () => {
+  // Deterministic fake embedder: no Ollama needed. "vehicle"/"car" texts map to
+  // one axis, "banana" to another, everything else to a third — so cosine
+  // similarity is controllable and a keyword-less match ("car" ~ "vehicle") ranks.
+  const fakeEmbedder = {
+    model: 'fake-embed-v1',
+    embed: async (t: string): Promise<number[]> => {
+      if (/vehicle|car|drive/i.test(t)) return [1, 0, 0];
+      if (/banana|fruit/i.test(t)) return [0, 1, 0];
+      return [0, 0, 1];
+    },
+  };
+
+  it('ranks a semantically-close memory that shares no keywords', async () => {
+    const vault = createVault();
+    vault.remember({ content: 'I drive a vehicle to work', type: 'semantic' });
+    vault.remember({ content: 'I like bananas', type: 'semantic' });
+
+    const r = await vault.retrieveSemantic('car', fakeEmbedder); // "car" is in neither content
+    expect(r.mode).toBe('semantic');
+    expect(r.semanticAvailable).toBe(true);
+    expect(r.results.length).toBe(1); // banana is orthogonal → gated out
+    expect(r.results[0]!.entry.content).toContain('vehicle');
+    vault.close();
+  });
+
+  it('falls back to keyword LOUDLY when the embedder is unavailable', async () => {
+    const vault = createVault();
+    vault.remember({ content: 'I drive a vehicle to work', type: 'semantic' });
+    const throwing = {
+      model: 'down',
+      embed: async (): Promise<number[]> => {
+        throw new Error('ollama refused');
+      },
+    };
+    const r = await vault.retrieveSemantic('vehicle', throwing);
+    expect(r.mode).toBe('keyword');
+    expect(r.semanticAvailable).toBe(false);
+    // Discriminated union: reason is only reachable in the keyword branch.
+    if (r.mode === 'keyword') expect(r.reason).toMatch(/unavailable/i);
+    expect(r.results.length).toBe(1); // keyword still finds it
+    vault.close();
+  });
+
+  it('keeps embeddings as disposable cache: export is unchanged, chain verifies, cache regenerates', async () => {
+    const vault = createVault();
+    vault.remember({ content: 'I drive a vehicle to work', type: 'semantic' });
+    await vault.retrieveSemantic('car', fakeEmbedder); // populates the cache
+
+    // Export must not contain any embedding data, and the chain still verifies.
+    const exported = JSON.stringify(vault.export());
+    expect(exported).not.toContain('embedding');
+    expect(exported).not.toContain('vector');
+    expect(vault.verifyChain().ok).toBe(true);
+
+    // Dropping the cache and re-querying still works (regenerates on demand).
+    vault.clearEmbeddingCache();
+    const r = await vault.retrieveSemantic('car', fakeEmbedder);
+    expect(r.mode).toBe('semantic');
+    expect(r.results[0]!.entry.content).toContain('vehicle');
+    vault.close();
+  });
+
+  it('honors the scope allowlist in semantic mode', async () => {
+    const vault = createVault();
+    vault.remember({ content: 'personal vehicle note', type: 'semantic', scope: 'personal' });
+    vault.remember({ content: 'work vehicle note', type: 'semantic', scope: 'work' });
+    const r = await vault.retrieveSemantic('car', fakeEmbedder, { allowedScopes: ['work'] });
+    expect(r.results.every((s) => s.entry.scope === 'work')).toBe(true);
+    expect(r.results.length).toBe(1);
+    vault.close();
+  });
+});
+
 describe('retrieve (keyword ranking)', () => {
   it('ranks by term overlap and respects filters', () => {
     const vault = createVault();

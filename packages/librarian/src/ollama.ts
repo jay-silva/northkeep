@@ -6,8 +6,11 @@
  * non-default ports, but any non-loopback host is refused outright — there
  * is deliberately no override.
  */
+import type { Embedder } from '@northkeep/core';
+
 const DEFAULT_URL = 'http://127.0.0.1:11434';
 export const EXTRACT_MODEL = process.env.NORTHKEEP_EXTRACT_MODEL ?? 'llama3.2:3b';
+export const EMBED_MODEL = process.env.NORTHKEEP_EMBED_MODEL ?? 'nomic-embed-text';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
@@ -34,6 +37,13 @@ export interface OllamaClient {
   available(): Promise<boolean>;
   /** Generate with format=json; returns the raw response text. */
   generateJson(prompt: string): Promise<string>;
+  /**
+   * Embed `text` with EMBED_MODEL (nomic-embed-text) via the loopback Ollama.
+   * Returns the raw vector. Throws if the server errors or returns no vector —
+   * the caller (vault semantic retrieval) treats a throw as "unavailable" and
+   * falls back to keyword ranking.
+   */
+  embed(text: string): Promise<number[]>;
   /**
    * Pull a model, streaming NDJSON progress via onProgress. Loopback-locked
    * (reuses ollamaUrl()). Throws if the server or the pull reports an error.
@@ -100,6 +110,26 @@ export function createOllamaClient(): OllamaClient {
       const body = (await res.json()) as { response?: string };
       return body.response ?? '';
     },
+    async embed(text: string): Promise<number[]> {
+      // /api/embed is the current endpoint (batch `input`); older daemons use
+      // /api/embeddings with `prompt`. We POST /api/embed and read both shapes
+      // defensively. redirect:'error' as elsewhere: a squatter must never get
+      // our plaintext re-sent to its Location.
+      const res = await fetch(`${base}/api/embed`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ model: EMBED_MODEL, input: text }),
+        signal: AbortSignal.timeout(60_000),
+        redirect: 'error',
+      });
+      if (!res.ok) throw new Error(`Ollama embeddings returned HTTP ${res.status}.`);
+      const body = (await res.json()) as { embeddings?: number[][]; embedding?: number[] };
+      const vec = body.embeddings?.[0] ?? body.embedding;
+      if (!Array.isArray(vec) || vec.length === 0) {
+        throw new Error('Ollama returned no embedding vector.');
+      }
+      return vec;
+    },
     async pull(model: string, onProgress?: (p: PullProgress) => void): Promise<void> {
       // First streaming handler in this client. redirect:'error' as elsewhere —
       // a 307 from a hostile squatter must never re-send our request body.
@@ -137,6 +167,19 @@ export function createOllamaClient(): OllamaClient {
       const tail = parseOllamaProgressLine(buffer); // final line without a newline
       if (tail) onProgress?.(tail);
     },
+  };
+}
+
+/**
+ * Adapts an OllamaClient to core's Embedder interface (loopback-locked,
+ * nomic-embed-text) so the vault can rank by meaning without depending on this
+ * package. Reuses an existing client or creates one. Kept dependency-light:
+ * the core defines the interface, librarian supplies the implementation.
+ */
+export function createOllamaEmbedder(client: OllamaClient = createOllamaClient()): Embedder {
+  return {
+    model: EMBED_MODEL,
+    embed: (text: string) => client.embed(text),
   };
 }
 

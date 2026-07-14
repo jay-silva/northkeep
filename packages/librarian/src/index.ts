@@ -1,6 +1,8 @@
 export {
   EXTRACT_MODEL,
+  EMBED_MODEL,
   createOllamaClient,
+  createOllamaEmbedder,
   ollamaState,
   ollamaUrl,
   parseOllamaProgressLine,
