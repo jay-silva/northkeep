@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NorthKeep Privacy Policy</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="./northkeep-icon.png">
+<style>
+  :root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd;--serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  @media (prefers-color-scheme:dark){:root{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820}}
+  :root[data-theme="light"]{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd}
+  :root[data-theme="dark"]{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.65;font-size:17px;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent)} a:hover{text-decoration:underline}
+  .wrap{max-width:760px;margin:0 auto;padding:0 24px}
+  header.nav{border-bottom:1px solid var(--line)}
+  .nav .wrap{display:flex;align-items:center;height:62px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--serif);font-size:20px;font-weight:600;color:var(--ink);text-decoration:none}
+  .brand img{width:30px;height:30px;border-radius:7px}
+  main{padding:40px 0 64px}
+  h1{font-family:var(--serif);font-size:clamp(28px,5vw,40px);margin:0 0 6px;line-height:1.15}
+  h2{font-family:var(--serif);font-size:22px;margin:34px 0 8px}
+  p,li{color:var(--ink)} .muted{color:var(--muted)}
+  ul{padding-left:22px} li{margin:6px 0}
+  code{background:var(--chip);padding:2px 6px;border-radius:5px;font-size:.92em}
+  .updated{color:var(--muted);font-size:15px;margin:0 0 6px}
+  footer{border-top:1px solid var(--line);padding:28px 0;color:var(--muted);font-size:14px}
+  footer .wrap{display:flex;gap:18px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<header class="nav"><div class="wrap"><a class="brand" href="./index.html"><img src="./northkeep-icon.png" alt="">NorthKeep</a></div></header>
+<main><div class="wrap">
+<p class="updated">Last updated: [DATE]</p>
+<h1>NorthKeep Privacy Policy</h1>
+<p>&gt; <strong>DRAFT for attorney review, not yet published, and not legal advice.</strong> &gt; Grounded in how NorthKeep actually handles data (see <code>KNOWN-LIMITS.md</code> and &gt; <code>SPEC/security-model.md</code>). Bracketed values need confirming before launch: &gt; provider legal name, contact email, website, effective date.</p>
+<p><strong>Provider:</strong> Silva Peak Labs, LLC d/b/a NorthKeep (&quot;we,&quot; &quot;us&quot;), a Massachusetts limited liability company. <strong>Contact:</strong> support@northkeep.ai · <strong>Effective date:</strong> [DATE]</p>
+<p>NorthKeep is built on a simple promise: <strong>your AI memory lives on your device, encrypted, and we never see its contents.</strong> This policy explains the little data that does exist, where it lives, and what we do, and don&#x27;t, do with it.</p>
+<h2>The short version</h2>
+<ul><li>The app runs on your machine. Your memories are stored in an <strong>encrypted vault on your device</strong>. We cannot read them.</li><li><strong>No telemetry. No analytics. No tracking.</strong> The app does not phone home. We do not collect usage data, and there are no third-party trackers in it.</li><li>If you use our <strong>optional hosted sync</strong>, our server stores only an <strong>encrypted blob it cannot decrypt</strong> plus a version number, never a key, never plaintext.</li><li>If you <strong>subscribe</strong>, payment is handled by Stripe; your card and email live with Stripe, not us. We store only whether your subscription is active.</li><li><strong>Self-hosting is fully anonymous</strong>, no data reaches us at all.</li></ul>
+<h2>What we collect</h2>
+<p><strong>On your device (not sent to us):</strong> your memories, their scopes, provenance, your passphrase, and your API keys (kept in your operating system&#x27;s keychain). None of this is transmitted to us. There is no account to create to use NorthKeep locally.</p>
+<p><strong>If you enable hosted sync</strong>, our sync server receives and stores:</p>
+<ul><li>an <strong>opaque, client-side-encrypted copy of your vault</strong> (ciphertext bytes we cannot decrypt, because we never receive your key), and a version number;</li><li>an <strong>account identifier derived from your device secret</strong> (a one-way hash), so your encrypted vault can be matched to your account. It is not linked to your name, email, or device unless you subscribe.</li></ul>
+<p><strong>If you subscribe to hosted sync</strong>, to operate billing we additionally store a mapping between your hashed account identifier and your <strong>Stripe customer and subscription IDs, subscription status, and current period end.</strong> Your <strong>payment card and email are collected and held by Stripe</strong>, our payment processor, not by us. Checkout is Stripe-hosted; card data never touches NorthKeep. See Stripe&#x27;s privacy policy at https://stripe.com/privacy. The honest consequence: while a subscription is active, we can tell <em>which paying customer is associated with which encrypted vault</em>, but never that vault&#x27;s contents, which remain ciphertext to us.</p>
+<h2>What we do not do</h2>
+<ul><li>We do <strong>not</strong> collect, read, store, or transmit the contents of your memories or conversations. (Chat transcripts are never stored at all; only distilled memories you can see and undo are kept, on your device.)</li><li>We do <strong>not</strong> sell, rent, or share your data with advertisers or data brokers.</li><li>We do <strong>not</strong> run analytics or embed trackers.</li><li>We do <strong>not</strong> create server-side embeddings, logs, or analytics derived from your content, the sync server only ever handles ciphertext.</li></ul>
+<h2>Data you send to AI providers you choose</h2>
+<p>NorthKeep can send text to AI models <strong>you</strong> connect:</p>
+<ul><li>In <strong>Chat</strong> mode, your message, after on-device redaction, is sent to the model provider you selected (for example a local model on your own machine, or a cloud provider using your own API key). When it&#x27;s a cloud provider, that provider receives your redacted text and handles it under <strong>their</strong> privacy policy; we are not in that path and do not receive a copy.</li><li>In <strong>Connect</strong> mode, an app you link (such as Claude Desktop) reads memory from your vault under the scope you grant and sends whatever you type in that app to <strong>its</strong> provider. NorthKeep cannot redact what you type into another app, and does not receive that traffic.</li></ul>
+<p>You control which providers you use and can disconnect them at any time.</p>
+<h2>Data retention and deletion</h2>
+<ul><li><strong>Local data</strong> is under your control, delete your vault, or individual memories, on your device at any time.</li><li><strong>Hosted sync data:</strong> cancel your subscription and request deletion at support@northkeep.ai, and we will delete your encrypted vault blob and billing mapping. Because the stored blob is ciphertext we cannot read, deletion removes bytes we could never interpret in the first place.</li><li>Losing your passphrase or your <code>device.secret</code> file means the vault is <strong>unrecoverable</strong>, by design, there is no back door, which also means we cannot access or restore your data for you.</li></ul>
+<h2>Your rights</h2>
+<p>Depending on where you live (for example under GDPR or the CCPA), you may have rights to access, correct, delete, or export the personal data we hold about you. In practice we hold very little: a hashed account identifier, and, only if you subscribe, the Stripe billing mapping described above. To exercise any right, or to ask what we hold, contact support@northkeep.ai. We do not sell personal information.</p>
+<h2>Children</h2>
+<p>NorthKeep is not directed to children under 13 (or the minimum age in your jurisdiction), and we do not knowingly collect their data.</p>
+<h2>Changes</h2>
+<p>We may update this policy; material changes will be posted at [website] with an updated effective date. Continued use of the hosted service after a change means you accept the revised policy.</p>
+<h2>Contact</h2>
+<p>Questions: support@northkeep.ai.</p>
+</div></main>
+<footer><div class="wrap">
+<a href="./index.html">Home</a><a href="./privacy.html">Privacy</a><a href="./terms.html">Terms</a><a href="mailto:support@northkeep.ai">Contact</a>
+</div></footer>
+<script>var t=new URLSearchParams(location.search).get('theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);</script>
+</body>
+</html>

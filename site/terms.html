@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NorthKeep Terms of Service</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="./northkeep-icon.png">
+<style>
+  :root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd;--serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  @media (prefers-color-scheme:dark){:root{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820}}
+  :root[data-theme="light"]{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd}
+  :root[data-theme="dark"]{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.65;font-size:17px;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent)} a:hover{text-decoration:underline}
+  .wrap{max-width:760px;margin:0 auto;padding:0 24px}
+  header.nav{border-bottom:1px solid var(--line)}
+  .nav .wrap{display:flex;align-items:center;height:62px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--serif);font-size:20px;font-weight:600;color:var(--ink);text-decoration:none}
+  .brand img{width:30px;height:30px;border-radius:7px}
+  main{padding:40px 0 64px}
+  h1{font-family:var(--serif);font-size:clamp(28px,5vw,40px);margin:0 0 6px;line-height:1.15}
+  h2{font-family:var(--serif);font-size:22px;margin:34px 0 8px}
+  p,li{color:var(--ink)} .muted{color:var(--muted)}
+  ul{padding-left:22px} li{margin:6px 0}
+  code{background:var(--chip);padding:2px 6px;border-radius:5px;font-size:.92em}
+  .updated{color:var(--muted);font-size:15px;margin:0 0 6px}
+  footer{border-top:1px solid var(--line);padding:28px 0;color:var(--muted);font-size:14px}
+  footer .wrap{display:flex;gap:18px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<header class="nav"><div class="wrap"><a class="brand" href="./index.html"><img src="./northkeep-icon.png" alt="">NorthKeep</a></div></header>
+<main><div class="wrap">
+<p class="updated">Last updated: [DATE]</p>
+<h1>NorthKeep Terms of Service</h1>
+<p>&gt; <strong>DRAFT for attorney review, not yet published, and not legal advice.</strong> &gt; Bracketed values need confirming before launch: provider legal name, contact &gt; email, website, effective date. An attorney familiar with open-source &gt; licensing and SaaS terms should review before you take payment.</p>
+<p><strong>Provider:</strong> Silva Peak Labs, LLC d/b/a NorthKeep (&quot;we,&quot; &quot;us&quot;), a Massachusetts limited liability company. <strong>Contact:</strong> support@northkeep.ai · <strong>Effective date:</strong> [DATE]</p>
+<p>These Terms govern your use of the NorthKeep software and the optional hosted sync service (together, the &quot;Service&quot;). By installing the software or using the hosted service, you agree to these Terms.</p>
+<h2>1. The software is open source</h2>
+<p>The NorthKeep application is licensed under the <strong>GNU Affero General Public License v3.0 (AGPL-3.0)</strong>, and the memory schema specification under CC-BY-4.0. Your rights to use, run, study, modify, and redistribute the software are granted by those licenses, nothing in these Terms restricts them. You may run NorthKeep locally, and <strong>self-host the sync server, for free.</strong> If the AGPL&#x27;s obligations (including its network-use source-sharing requirement) don&#x27;t fit your organization, a <strong>separate commercial license</strong> is available, contact support@northkeep.ai.</p>
+<h2>2. The hosted sync service</h2>
+<p>We offer an optional hosted sync service so your encrypted vault can move between your devices.</p>
+<ul><li><strong>Price:</strong> $10.00 USD per month, billed through Stripe. Subscriptions renew automatically until cancelled.</li><li><strong>Cancellation:</strong> cancel anytime via <code>northkeep sync billing</code> (the Stripe billing portal). Access continues until the end of the paid period; we do not provide prorated refunds for partial periods except where required by law.</li><li><strong>What it stores:</strong> an encrypted copy of your vault that we cannot decrypt, and a subscription record. See the Privacy Policy.</li><li><strong>Free alternative:</strong> you can self-host the sync server at no charge instead.</li></ul>
+<h2>3. Personal vs. business use</h2>
+<p>A standard subscription is for an individual&#x27;s personal use. <strong>Use by a company, team, or organization, including multi-user or multi-seat deployment, requires a business/team plan or a commercial license.</strong> Contact support@northkeep.ai to arrange one. (This section concerns our hosted service and commercial licensing; it does not limit any rights the AGPL grants you in the software itself.)</p>
+<h2>4. Your account, your keys, no recovery</h2>
+<p>NorthKeep secures your vault with two secrets: a <strong>passphrase</strong> you choose and a <strong>device secret</strong> file stored on your machine. <strong>You are solely responsible for safeguarding both, and for backing up your <code>device.secret</code> file.</strong></p>
+<p><strong>There is no recovery. If you lose your passphrase or device secret, your vault is permanently inaccessible, and we cannot recover it, reset it, or access your data for you.</strong> This is a deliberate security property, not a limitation we can waive. The hosted sync service is <strong>not a backup service</strong>, keep your own backups of your device secret and, if you wish, your vault file.</p>
+<h2>5. Acceptable use</h2>
+<p>You agree not to: use the Service for unlawful purposes or to store or transmit unlawful content; attempt to breach, overload, probe, or circumvent the Service&#x27;s security, rate limits, or size limits; resell or provide the hosted service to third parties without our authorization; or use the Service to infringe others&#x27; rights. We may suspend or terminate access that violates these Terms.</p>
+<h2>6. Disclaimers</h2>
+<p>The Service is provided <strong>&quot;as is&quot; and &quot;as available,&quot; without warranties of any kind</strong>, express or implied, including merchantability, fitness for a particular purpose, and non-infringement. NorthKeep is privacy-focused software that reduces exposure of sensitive data; it does <strong>not</strong> guarantee anonymity, and its on-device redaction is not perfect (see <code>KNOWN-LIMITS.md</code>). NorthKeep is a tool, not professional advice, it does not provide legal, medical, financial, or other professional advice, and you are responsible for your own compliance obligations.</p>
+<h2>7. Limitation of liability</h2>
+<p>To the maximum extent permitted by law, we will not be liable for any indirect, incidental, special, consequential, or punitive damages, or for lost data, profits, or goodwill. Our total liability arising out of or relating to the Service will not exceed the greater of the fees you paid us in the twelve months before the claim, or <strong>$100 USD</strong>. Some jurisdictions do not allow certain limitations, so parts of this section may not apply to you.</p>
+<h2>8. Changes and termination</h2>
+<p>We may modify these Terms or the Service; material changes will be posted at [website] with an updated effective date, and continued use means acceptance. You may stop using the Service at any time. We may suspend or terminate the hosted service for violations of these Terms or to comply with law; you keep your local vault regardless, since it lives on your device.</p>
+<h2>9. Governing law</h2>
+<p>These Terms are governed by the laws of the Commonwealth of Massachusetts, USA, without regard to its conflict-of-laws rules. Disputes will be resolved in the state or federal courts located in Massachusetts, and you consent to their jurisdiction.</p>
+<h2>10. Contact</h2>
+<p>Questions about these Terms, or to arrange a business or commercial license: support@northkeep.ai.</p>
+</div></main>
+<footer><div class="wrap">
+<a href="./index.html">Home</a><a href="./privacy.html">Privacy</a><a href="./terms.html">Terms</a><a href="mailto:support@northkeep.ai">Contact</a>
+</div></footer>
+<script>var t=new URLSearchParams(location.search).get('theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);</script>
+</body>
+</html>

@@ -1,6 +1,6 @@
 # NorthKeep Terms of Service
 
-> **DRAFT for attorney review — not yet published, and not legal advice.**
+> **DRAFT for attorney review, not yet published, and not legal advice.**
 > Bracketed values need confirming before launch: provider legal name, contact
 > email, website, effective date. An attorney familiar with open-source
 > licensing and SaaS terms should review before you take payment.
@@ -18,10 +18,10 @@ hosted service, you agree to these Terms.
 The NorthKeep application is licensed under the **GNU Affero General Public
 License v3.0 (AGPL-3.0)**, and the memory schema specification under CC-BY-4.0.
 Your rights to use, run, study, modify, and redistribute the software are granted
-by those licenses — nothing in these Terms restricts them. You may run NorthKeep
+by those licenses, nothing in these Terms restricts them. You may run NorthKeep
 locally, and **self-host the sync server, for free.** If the AGPL's obligations
 (including its network-use source-sharing requirement) don't fit your
-organization, a **separate commercial license** is available — contact
+organization, a **separate commercial license** is available, contact
 support@northkeep.ai.
 
 ## 2. The hosted sync service
@@ -41,7 +41,7 @@ your devices.
 ## 3. Personal vs. business use
 
 A standard subscription is for an individual's personal use. **Use by a company,
-team, or organization — including multi-user or multi-seat deployment — requires
+team, or organization, including multi-user or multi-seat deployment, requires
 a business/team plan or a commercial license.** Contact support@northkeep.ai to
 arrange one. (This section concerns our hosted service and commercial licensing;
 it does not limit any rights the AGPL grants you in the software itself.)
@@ -55,7 +55,7 @@ safeguarding both, and for backing up your `device.secret` file.**
 **There is no recovery. If you lose your passphrase or device secret, your vault
 is permanently inaccessible, and we cannot recover it, reset it, or access your
 data for you.** This is a deliberate security property, not a limitation we can
-waive. The hosted sync service is **not a backup service** — keep your own
+waive. The hosted sync service is **not a backup service**, keep your own
 backups of your device secret and, if you wish, your vault file.
 
 ## 5. Acceptable use
@@ -73,7 +73,7 @@ kind**, express or implied, including merchantability, fitness for a particular
 purpose, and non-infringement. NorthKeep is privacy-focused software that reduces
 exposure of sensitive data; it does **not** guarantee anonymity, and its
 on-device redaction is not perfect (see `KNOWN-LIMITS.md`). NorthKeep is a tool,
-not professional advice — it does not provide legal, medical, financial, or other
+not professional advice, it does not provide legal, medical, financial, or other
 professional advice, and you are responsible for your own compliance obligations.
 
 ## 7. Limitation of liability
