@@ -802,6 +802,7 @@
             <span>${esc(m.id.slice(0, 8))}</span>
             ${m.relevance !== undefined ? `<span>rel ${esc(m.relevance)}</span>` : ''}
             <span class="grow"></span>
+            <button class="btn" data-edit="${esc(m.id)}" style="font-size:12px;padding:5px 12px;border-radius:8px">Edit</button>
             <button class="btn" data-rescope="${esc(m.id)}" data-scope="${esc(m.scope)}" style="font-size:12px;padding:5px 12px;border-radius:8px">Move scope</button>
             <button class="btn danger" data-forget="${esc(m.id)}" style="font-size:12px;padding:5px 12px;border-radius:8px">Forget</button>
           </div>
@@ -809,6 +810,7 @@
   }
   $('memList').addEventListener('click', async (e) => {
     const d = e.target.dataset || {};
+    if (d.edit) { openEdit(d.edit, e.target); return; }
     if (d.rescope) { openRescope(d.rescope, d.scope, e.target); return; }
     const id = d.forget;
     if (!id) return;
@@ -816,6 +818,44 @@
     await api('/api/forget', { method: 'POST', json: { id } });
     await refreshStatus();
   });
+
+  // Edit a memory's content inline. Append-only supersession server-side (like
+  // rescope) — history is kept, the chain stays valid, the edited memory gets a
+  // new id. Built with createElement/textContent (no innerHTML).
+  function openEdit(id, btn) {
+    const card = document.getElementById('mem-' + id);
+    if (!card || card.querySelector('.edit-editor')) return;
+    btn.disabled = true;
+    const contentDiv = card.querySelector('.content');
+    const current = contentDiv ? contentDiv.textContent : '';
+    const wrap = el('div', 'edit-editor');
+    wrap.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:8px';
+    const ta = el('textarea');
+    ta.value = current;
+    ta.style.cssText = 'width:100%;min-height:70px;font:inherit;padding:8px;border-radius:8px;box-sizing:border-box';
+    const row = el('div'); row.style.cssText = 'display:flex;gap:8px;align-items:center';
+    const save = el('button', 'btn', 'Save'); save.style.cssText = 'font-size:12px;padding:5px 12px;border-radius:8px';
+    const cancel = el('button', 'btn', 'Cancel'); cancel.style.cssText = 'font-size:12px;padding:5px 12px;border-radius:8px';
+    const err = el('span', 'muted');
+    const close = () => { wrap.remove(); btn.disabled = false; };
+    cancel.addEventListener('click', close);
+    save.addEventListener('click', async () => {
+      const content = ta.value.trim();
+      if (!content) { err.textContent = 'Write something, or cancel.'; return; }
+      if (content === current.trim()) { close(); return; } // no change
+      save.disabled = true; err.textContent = '';
+      try {
+        await api('/api/memories/edit', { method: 'POST', json: { id, content } });
+        await loadMemories();
+        await refreshStatus();
+      } catch (ex) {
+        if (ex.message !== 'locked') { err.textContent = ex.message; save.disabled = false; }
+      }
+    });
+    row.append(save, cancel, err);
+    wrap.append(ta, row);
+    card.appendChild(wrap);
+  }
 
   // Edit a memory's scope inline. The vault is append-only, so this supersedes
   // the entry with a copy in the new scope (server side) — history is kept, the

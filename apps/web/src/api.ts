@@ -330,6 +330,47 @@ async function dispatch(
     );
   }
 
+  // Edit a memory's content / scope / type. Append-only supersession (like
+  // rescope) — the edited memory carries a new id, which the client swaps in.
+  // Send only the fields to change.
+  if (method === 'POST' && route === '/api/memories/edit') {
+    const { id, content, scope, type } = parseJson<{
+      id?: string;
+      content?: string;
+      scope?: string;
+      type?: string;
+    }>(body);
+    if (!id || !/^[0-9a-f-]{8,36}$/i.test(id)) return bad(400, 'A memory id is required.');
+    const patch: { content?: string; scope?: string; type?: MemoryType } = {};
+    if (content !== undefined) {
+      const trimmed = typeof content === 'string' ? content.trim() : '';
+      if (trimmed.length === 0) return bad(400, 'Memory content must not be empty.');
+      if (trimmed.length > 8000) return bad(400, 'Memory content is too long (8000 characters max).');
+      patch.content = trimmed;
+    }
+    if (scope !== undefined) {
+      const s = typeof scope === 'string' ? scope.trim() : '';
+      if (!/^[a-z0-9:_.-]{1,64}$/i.test(s)) return bad(400, 'Invalid scope.');
+      patch.scope = s;
+    }
+    if (type !== undefined) {
+      if (typeof type !== 'string' || !isMemoryType(type)) {
+        return bad(400, `type must be one of: ${MEMORY_TYPES.join(', ')}.`);
+      }
+      patch.type = type;
+    }
+    if (patch.content === undefined && patch.scope === undefined && patch.type === undefined) {
+      return bad(400, 'Provide at least one of content, scope, or type to edit.');
+    }
+    return ok(
+      await session.withVault((vault) => {
+        const edited = vault.editMemory(id, patch);
+        vault.save();
+        return { memory: publicEntry(edited) };
+      }),
+    );
+  }
+
   if (method === 'GET' && route === '/api/log') {
     return ok({ calls: readCallLog(200).reverse() });
   }

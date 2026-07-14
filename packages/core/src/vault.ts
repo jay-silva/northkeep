@@ -20,11 +20,13 @@ import {
 import { SCHEMA_DDL } from './schema.js';
 import {
   GENESIS_HASH,
+  MEMORY_TYPES,
   SCHEMA_VERSION,
   isMemoryType,
   type ExportedMemory,
   type ListFilter,
   type MemoryEntry,
+  type MemoryType,
   type RememberInput,
   type RetrieveOptions,
   type ScoredEntry,
@@ -362,30 +364,87 @@ export class Vault {
    * Re-scopes a memory by supersession. `scope` is part of an entry's hash and
    * the vault is an append-only ledger, so we never mutate the original in
    * place — that would rewrite history and break the chain. Instead we append a
-   * new entry with the same content in the new scope and mark the original
-   * `superseded_by` it. The chain stays valid because superseded_* are excluded
-   * from the hash (like forgotten_at). The move is preserved, not erased: the
-   * old entry lingers as history (visible in export and verifyChain), and only
-   * the new one appears in list/retrieve. Accepts a full id or an unambiguous
-   * prefix; returns the new live entry. No-op (returns the original) if it is
-   * already in the target scope.
+   * new entry in the new scope and mark the original `superseded_by` it. The
+   * move is preserved, not erased: the old entry lingers as history (visible in
+   * export and verifyChain), and only the new one appears in list/retrieve.
+   * Accepts a full id or an unambiguous prefix; returns the new live entry.
+   * No-op (returns the original) if it is already in the target scope.
    */
   rescope(idOrPrefix: string, newScope: string, allowedScopes?: string[]): MemoryEntry {
     this.assertOpen();
     const scope = newScope.trim();
     if (scope.length === 0) throw new Error('New scope must not be empty.');
+    // Capability: a scoped connection cannot move a memory into a scope outside
+    // its grant (that would carry it past the allowlist). resolveEditable
+    // enforces the read side — it can only touch entries it can see.
+    if (allowedScopes !== undefined && !allowedScopes.includes(scope)) {
+      throw new Error(`Scope "${scope}" is outside this connection's grant.`);
+    }
+    const old = this.resolveEditable(idOrPrefix, allowedScopes);
+    if (old.scope === scope) return old; // already there — nothing to do
+    return this.supersedeEntry(old, { scope });
+  }
+
+  /**
+   * Edits a memory's content, scope, and/or type by supersession — the same
+   * append-only mechanism as rescope. Nothing is mutated in place: the original
+   * is kept as superseded history and the provenance chain stays valid (see
+   * ADR 0015). Provide only the fields to change. Returns the new live entry, or
+   * the original unchanged if the patch is a no-op. Accepts a full id or an
+   * unambiguous prefix.
+   */
+  editMemory(
+    idOrPrefix: string,
+    patch: { content?: string; scope?: string; type?: MemoryType },
+    allowedScopes?: string[],
+  ): MemoryEntry {
+    this.assertOpen();
+    const changes: { content?: string; scope?: string; type?: MemoryType } = {};
+    if (patch.content !== undefined) {
+      if (patch.content.trim().length === 0) throw new Error('Memory content must not be empty.');
+      changes.content = patch.content;
+    }
+    if (patch.scope !== undefined) {
+      const s = patch.scope.trim();
+      if (s.length === 0) throw new Error('Scope must not be empty.');
+      // Same capability guard as rescope: can't move into an ungranted scope.
+      if (allowedScopes !== undefined && !allowedScopes.includes(s)) {
+        throw new Error(`Scope "${s}" is outside this connection's grant.`);
+      }
+      changes.scope = s;
+    }
+    if (patch.type !== undefined) {
+      if (!isMemoryType(patch.type)) {
+        throw new Error(
+          `Invalid memory type "${patch.type}". Must be one of: ${MEMORY_TYPES.join(', ')}.`,
+        );
+      }
+      changes.type = patch.type;
+    }
+    if (changes.content === undefined && changes.scope === undefined && changes.type === undefined) {
+      throw new Error('Provide at least one of content, scope, or type to edit.');
+    }
+    const old = this.resolveEditable(idOrPrefix, allowedScopes);
+    const wouldChange =
+      (changes.content !== undefined && changes.content !== old.content) ||
+      (changes.scope !== undefined && changes.scope !== old.scope) ||
+      (changes.type !== undefined && changes.type !== old.type);
+    if (!wouldChange) return old; // nothing actually differs
+    return this.supersedeEntry(old, changes);
+  }
+
+  /**
+   * Resolves the single live, non-superseded entry named by a full id or an
+   * unambiguous prefix, honoring the read-side scope allowlist. Same id guards
+   * as forget(). Shared by the supersede-based edits (rescope, editMemory).
+   */
+  private resolveEditable(idOrPrefix: string, allowedScopes?: string[]): MemoryEntry {
     const prefix = idOrPrefix.trim();
     if (prefix.length < 4) {
       throw new Error('Provide at least 4 characters of the memory id.');
     }
     if (!/^[0-9a-f-]{4,36}$/i.test(prefix)) {
       throw new Error('Memory ids contain only hex characters and dashes.');
-    }
-    // Capability: a scoped connection cannot move a memory into a scope outside
-    // its grant (that would carry it past the allowlist). The source clause
-    // below enforces the read side — it can only touch entries it can see.
-    if (allowedScopes !== undefined && !allowedScopes.includes(scope)) {
-      throw new Error(`Scope "${scope}" is outside this connection's grant.`);
     }
     let sql =
       "SELECT * FROM memories WHERE id LIKE ? || '%' AND forgotten_at IS NULL AND superseded_at IS NULL";
@@ -400,15 +459,25 @@ export class Vault {
     if (matches.length > 1) {
       throw new Error(`Id prefix "${prefix}" matches ${matches.length} memories — be more specific.`);
     }
-    const old = rowToEntry(matches[0]!);
-    if (old.scope === scope) return old; // already there — nothing to do
+    return rowToEntry(matches[0]!);
+  }
 
+  /**
+   * Appends a replacement for `old` with `patch` applied and marks the original
+   * superseded_by it — the append-only edit primitive. The chain stays valid
+   * because superseded_* are excluded from the hash (like forgotten_at). Both
+   * writes run in one transaction so a crash can't leave two live copies.
+   */
+  private supersedeEntry(
+    old: MemoryEntry,
+    patch: { content?: string; scope?: string; type?: MemoryType },
+  ): MemoryEntry {
     const now = new Date().toISOString();
     const next: MemoryEntry = {
       id: randomUUID(),
-      type: old.type,
-      content: old.content,
-      scope,
+      type: patch.type ?? old.type,
+      content: patch.content ?? old.content,
+      scope: patch.scope ?? old.scope,
       source: old.source,
       source_model: old.source_model,
       confidence: old.confidence,
@@ -437,8 +506,6 @@ export class Vault {
     const markSuperseded = this.db.prepare(
       'UPDATE memories SET superseded_at = ?, superseded_by = ? WHERE id = ?',
     );
-    // Atomic: appending the replacement and retiring the original must both
-    // land or neither, or a crash between them would leave two live copies.
     this.db.transaction(() => {
       insert.run({
         ...next,

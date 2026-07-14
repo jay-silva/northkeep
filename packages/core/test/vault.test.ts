@@ -335,6 +335,94 @@ describe('rescope (edit scope by supersession)', () => {
   });
 });
 
+describe('editMemory (edit content/type/scope by supersession)', () => {
+  it('edits content, hides the old version, keeps the chain intact', () => {
+    const vault = createVault();
+    vault.remember({ content: 'keep this', type: 'semantic' });
+    const target = vault.remember({ content: 'takes coffee with milk', type: 'semantic' });
+
+    const edited = vault.editMemory(target.id.slice(0, 8), { content: 'takes coffee black' });
+    expect(edited.id).not.toBe(target.id); // append-only: a NEW entry
+    expect(edited.content).toBe('takes coffee black');
+    expect(edited.type).toBe('semantic'); // unchanged fields carry over
+    expect(edited.prev_hash).toBe(target.entry_hash);
+
+    expect(vault.list().map((e) => e.content)).toEqual(['keep this', 'takes coffee black']);
+    expect(vault.list()).toHaveLength(2); // superseded original hidden
+    const withHistory = vault.list({ includeSuperseded: true });
+    expect(withHistory).toHaveLength(3);
+    const originalNow = withHistory.find((e) => e.id === target.id)!;
+    expect(originalNow.superseded_by).toBe(edited.id);
+    expect(originalNow.content).toBe('takes coffee with milk'); // its own hash untouched
+    expect(vault.verifyChain().ok).toBe(true);
+    vault.close();
+  });
+
+  it('can change content, type, and scope together', () => {
+    const vault = createVault();
+    const t = vault.remember({ content: 'draft note', type: 'working', scope: 'personal' });
+    const e = vault.editMemory(t.id, { content: 'final note', type: 'semantic', scope: 'work' });
+    expect(e.content).toBe('final note');
+    expect(e.type).toBe('semantic');
+    expect(e.scope).toBe('work');
+    expect(vault.list({ scope: 'work' })).toHaveLength(1);
+    expect(vault.list({ scope: 'personal' })).toHaveLength(0);
+    expect(vault.verifyChain().ok).toBe(true);
+    vault.close();
+  });
+
+  it('survives a reopen', () => {
+    const t = (() => {
+      const vault = createVault();
+      const m = vault.remember({ content: 'original text', type: 'semantic' });
+      vault.editMemory(m.id, { content: 'revised text' });
+      vault.save();
+      vault.close();
+      return m;
+    })();
+    const reopened = openVault();
+    expect(reopened.list().map((e) => e.content)).toEqual(['revised text']);
+    expect(reopened.list()).toHaveLength(1);
+    expect(reopened.verifyChain().ok).toBe(true);
+    expect(t.content).toBe('original text');
+    reopened.close();
+  });
+
+  it('is a no-op when nothing actually differs', () => {
+    const vault = createVault();
+    const t = vault.remember({ content: 'same', type: 'semantic', scope: 'work' });
+    const same = vault.editMemory(t.id, { content: 'same', scope: 'work' });
+    expect(same.id).toBe(t.id);
+    expect(vault.list({ includeSuperseded: true })).toHaveLength(1);
+    vault.close();
+  });
+
+  it('validates the patch, content, type, and id', () => {
+    const vault = createVault();
+    const t = vault.remember({ content: 'a', type: 'semantic' });
+    expect(() => vault.editMemory(t.id, {})).toThrow(/at least one of/);
+    expect(() => vault.editMemory(t.id, { content: '   ' })).toThrow(/must not be empty/);
+    expect(() => vault.editMemory(t.id, { type: 'bogus' as never })).toThrow(/Invalid memory type/);
+    expect(() => vault.editMemory('ffffffff', { content: 'x' })).toThrow(/No memory found/);
+    expect(() => vault.editMemory('ab', { content: 'x' })).toThrow(/at least 4 characters/);
+    expect(() => vault.editMemory('%%%%%%%%', { content: 'x' })).toThrow(/hex characters/);
+    expect(vault.list({ includeSuperseded: true })).toHaveLength(1); // nothing changed
+    vault.close();
+  });
+
+  it('a scoped connection cannot edit into an ungranted scope or touch unseen entries', () => {
+    const vault = createVault();
+    const w = vault.remember({ content: 'work thing', type: 'semantic', scope: 'work' });
+    expect(() => vault.editMemory(w.id, { scope: 'personal' }, ['work'])).toThrow(/outside this connection's grant/);
+    const p = vault.remember({ content: 'private', type: 'semantic', scope: 'personal' });
+    expect(() => vault.editMemory(p.id, { content: 'x' }, ['work'])).toThrow(/No memory found/);
+    // In-grant content edit is fine.
+    const e = vault.editMemory(w.id, { content: 'work thing v2' }, ['work']);
+    expect(e.content).toBe('work thing v2');
+    vault.close();
+  });
+});
+
 describe('retrieve (keyword ranking)', () => {
   it('ranks by term overlap and respects filters', () => {
     const vault = createVault();

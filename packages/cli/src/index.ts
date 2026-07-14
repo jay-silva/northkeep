@@ -192,6 +192,26 @@ program
   });
 
 program
+  .command('edit')
+  .description('Edit a memory\'s content, scope, and/or type (full id or unique prefix)')
+  .argument('<id>', 'memory id from "northkeep list"')
+  .option('--content <text>', 'new content')
+  .option('--scope <scope>', 'new scope tag')
+  .option('--type <type>', `new type: ${MEMORY_TYPES.join(' | ')}`)
+  .action(async (id: string, options: { content?: string; scope?: string; type?: string }) => {
+    await withVault(async (vault) => {
+      const patch: { content?: string; scope?: string; type?: MemoryType } = {};
+      if (options.content !== undefined) patch.content = options.content;
+      if (options.scope !== undefined) patch.scope = options.scope;
+      if (options.type !== undefined) patch.type = options.type as MemoryType; // validated in editMemory
+      const edited = vault.editMemory(id, patch);
+      vault.save();
+      console.log(`✓ Edited → [${edited.type} / ${edited.scope}] ${edited.id}`);
+      console.log('  The previous version is kept as history (superseded), so the chain stays intact.');
+    });
+  });
+
+program
   .command('list')
   .description('List memories with provenance')
   .option('--type <type>', 'filter by memory type')
