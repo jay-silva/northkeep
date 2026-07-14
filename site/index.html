@@ -1,0 +1,288 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NorthKeep — Your AI memory belongs to you</title>
+<meta name="description" content="A local-first, encrypted memory vault for AI. Set it up once and your memory follows you across the AI apps you use — owned by you, on your machine, not theirs.">
+<link rel="icon" href="./northkeep-icon.png">
+<!-- Social sharing. Set og:url / og:image to absolute URLs on your domain before launch. -->
+<meta property="og:type" content="website">
+<meta property="og:title" content="NorthKeep — Your AI memory belongs to you">
+<meta property="og:description" content="A local-first, encrypted memory vault for AI. Your memory follows you across apps — owned by you, on your machine.">
+<meta property="og:image" content="./northkeep-icon-512.png">
+<meta name="twitter:card" content="summary_large_image">
+<style>
+  :root{
+    --bg:#f6f4ef; --panel:#fffdf8; --ink:#24221c; --muted:#6f695c;
+    --line:#e6e0d4; --accent:#2f6a54; --accent-soft:#e4efe8; --gold:#b9862f;
+    --chip:#efeadd; --radius:14px;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  @media (prefers-color-scheme:dark){
+    :root{
+      --bg:#16140f; --panel:#211e17; --ink:#ece7db; --muted:#a39a88;
+      --line:#38332a; --accent:#79b394; --accent-soft:#23302a; --gold:#d8b872;
+      --chip:#2b2820;
+    }
+  }
+  :root[data-theme="light"]{
+    --bg:#f6f4ef; --panel:#fffdf8; --ink:#24221c; --muted:#6f695c; --line:#e6e0d4;
+    --accent:#2f6a54; --accent-soft:#e4efe8; --gold:#b9862f; --chip:#efeadd;
+  }
+  :root[data-theme="dark"]{
+    --bg:#16140f; --panel:#211e17; --ink:#ece7db; --muted:#a39a88; --line:#38332a;
+    --accent:#79b394; --accent-soft:#23302a; --gold:#d8b872; --chip:#2b2820;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
+    line-height:1.6;-webkit-font-smoothing:antialiased;font-size:17px}
+  h1,h2,h3{font-family:var(--serif);font-weight:600;line-height:1.15;letter-spacing:-.01em}
+  a{color:var(--accent);text-decoration:none}
+  a:hover{text-decoration:underline}
+  .wrap{max-width:960px;margin:0 auto;padding:0 24px}
+  .muted{color:var(--muted)}
+
+  /* nav */
+  header.nav{position:sticky;top:0;background:color-mix(in srgb,var(--bg) 88%,transparent);
+    backdrop-filter:blur(8px);border-bottom:1px solid var(--line);z-index:10}
+  .nav .wrap{display:flex;align-items:center;gap:12px;height:62px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--serif);
+    font-size:20px;font-weight:600}
+  .brand img{width:30px;height:30px;border-radius:7px}
+  .nav .spacer{flex:1}
+  .nav a.navlink{color:var(--ink);font-size:15px;margin-left:22px}
+  .nav a.navlink:hover{color:var(--accent);text-decoration:none}
+  @media(max-width:640px){.nav a.navlink{display:none}}
+
+  /* buttons */
+  .btn{display:inline-block;padding:12px 22px;border-radius:10px;font-weight:600;
+    font-size:16px;border:1px solid transparent;cursor:pointer}
+  .btn.primary{background:var(--accent);color:#fff}
+  .btn.primary:hover{filter:brightness(1.06);text-decoration:none}
+  .btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
+  .btn.ghost:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
+
+  /* hero */
+  .hero{text-align:center;padding:76px 0 40px}
+  .hero img.mark{width:96px;height:96px;border-radius:22px;box-shadow:0 8px 30px rgba(0,0,0,.14)}
+  .hero h1{font-size:clamp(34px,6vw,54px);margin:26px 0 10px}
+  .hero .tag{font-size:clamp(18px,2.4vw,22px);color:var(--muted);max-width:620px;margin:0 auto 30px}
+  .cta{display:flex;gap:14px;justify-content:center;flex-wrap:wrap}
+  .subtle{margin-top:14px;font-size:14px}
+
+  section{padding:44px 0;border-top:1px solid var(--line)}
+  section h2{font-size:clamp(24px,3.4vw,32px);margin:0 0 6px}
+  section > .wrap > .lede{color:var(--muted);max-width:640px;margin:0 0 26px}
+
+  /* two modes */
+  .modes{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+  @media(max-width:720px){.modes{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:24px}
+  .card h3{margin:0 0 8px;font-size:21px}
+  .card .kicker{font-size:13px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--accent)}
+  .card p{margin:.5em 0 0}
+  .card .note{margin-top:12px;font-size:14px;color:var(--muted);border-top:1px dashed var(--line);padding-top:12px}
+
+  /* feature grid */
+  .grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px}
+  @media(max-width:760px){.grid{grid-template-columns:1fr}}
+  .feat h3{font-size:18px;margin:0 0 4px}
+  .feat p{margin:0;color:var(--muted);font-size:15px}
+  .feat .dot{width:10px;height:10px;border-radius:50%;background:var(--accent);display:inline-block;margin-right:8px;vertical-align:middle}
+
+  /* honesty */
+  .honest{background:var(--accent-soft);border:1px solid var(--line);border-radius:var(--radius);padding:22px 24px}
+  .honest h3{margin:0 0 6px;font-size:19px}
+  .honest ul{margin:8px 0 0;padding-left:20px}
+  .honest li{margin:6px 0;color:var(--ink)}
+
+  /* pricing */
+  .tiers{display:grid;grid-template-columns:1fr 1fr 1fr;gap:18px}
+  @media(max-width:760px){.tiers{grid-template-columns:1fr}}
+  .tier{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:24px;display:flex;flex-direction:column}
+  .tier.hi{border-color:var(--accent);box-shadow:0 6px 24px rgba(47,106,84,.12)}
+  .tier .price{font-family:var(--serif);font-size:34px;margin:6px 0}
+  .tier .price small{font-size:15px;color:var(--muted);font-family:var(--sans)}
+  .tier ul{list-style:none;padding:0;margin:14px 0 20px;flex:1}
+  .tier li{padding:6px 0;border-bottom:1px solid var(--line);font-size:15px}
+  .tier li:last-child{border-bottom:0}
+
+  /* faq */
+  details{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:4px 18px;margin:10px 0}
+  summary{cursor:pointer;font-weight:600;padding:12px 0;list-style:none}
+  summary::-webkit-details-marker{display:none}
+  summary::after{content:"+";float:right;color:var(--muted);font-weight:400}
+  details[open] summary::after{content:"–"}
+  details p{margin:0 0 14px;color:var(--muted)}
+
+  footer{border-top:1px solid var(--line);padding:34px 0;color:var(--muted);font-size:14px}
+  footer .wrap{display:flex;flex-wrap:wrap;gap:18px;align-items:center}
+  footer .spacer{flex:1}
+  code{background:var(--chip);padding:2px 7px;border-radius:6px;font-size:.9em}
+</style>
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <span class="brand"><img src="./northkeep-icon.png" alt="">NorthKeep</span>
+    <span class="spacer"></span>
+    <a class="navlink" href="#how">How it works</a>
+    <a class="navlink" href="#pricing">Pricing</a>
+    <a class="navlink" href="https://github.com/jay-silva/northkeep">GitHub</a>
+    <a class="navlink" href="#download">Download</a>
+  </div>
+</header>
+
+<div class="hero wrap" id="download">
+  <img class="mark" src="./northkeep-icon-512.png" alt="NorthKeep">
+  <h1>Your AI memory belongs to you.</h1>
+  <p class="tag">An encrypted memory vault that lives on your Mac. Set it up once,
+    and your context, preferences, and projects follow <em>you</em> across the AI
+    apps you use — instead of being locked inside any one of them.</p>
+  <div class="cta">
+    <a class="btn primary" href="[DOWNLOAD_URL]">Download for Mac</a>
+    <a class="btn ghost" href="https://github.com/jay-silva/northkeep">View source</a>
+  </div>
+  <p class="subtle muted">Free and open source · Apple Silicon · signed &amp; notarized ·
+    nothing leaves your machine</p>
+</div>
+
+<section id="how">
+  <div class="wrap">
+    <h2>Two ways to use it</h2>
+    <p class="lede">Both start from the same encrypted vault on your machine. You
+      choose how much reaches the cloud — and NorthKeep is honest about the
+      difference.</p>
+    <div class="modes">
+      <div class="card">
+        <span class="kicker">Connect</span>
+        <h3>Your memory, in the apps you already pay for</h3>
+        <p>One click wires NorthKeep into Claude Desktop or Claude Code. Your
+          memory becomes portable across them, and you decide — per app — exactly
+          what it may read.</p>
+        <p class="note">Honest boundary: Connect gives you ownership and
+          portability, not a firewall. It can't redact what you type into someone
+          else's app.</p>
+      </div>
+      <div class="card">
+        <span class="kicker">Chat</span>
+        <h3>Talk through NorthKeep when privacy has to be absolute</h3>
+        <p>Chat runs the privacy for you: it masks sensitive data <em>before</em>
+          your message leaves the machine, calls the model, and restores the
+          details locally in the reply.</p>
+        <p class="note">The real firewall — against a local model (nothing leaves
+          your network) or a cloud model with your own key.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>What you get</h2>
+    <div class="grid">
+      <div class="feat"><h3><span class="dot"></span>Owned &amp; portable</h3><p>One encrypted file you can copy, back up, and move. Your memory lives in none of the AI apps — so switching costs nothing.</p></div>
+      <div class="feat"><h3><span class="dot"></span>On-device redaction</h3><p>Secrets and names are masked before anything leaves your machine, with an audit trail proving what was masked.</p></div>
+      <div class="feat"><h3><span class="dot"></span>Per-app scopes</h3><p>Grant one app your work memory only, another nothing sensitive. Enforced at the vault, not on trust.</p></div>
+      <div class="feat"><h3><span class="dot"></span>Bring your history</h3><p>Import your ChatGPT or Claude export — extraction runs entirely on your machine, and you review every memory before it's kept.</p></div>
+      <div class="feat"><h3><span class="dot"></span>Any model</h3><p>Local models via Ollama, or any provider with your own key. A concierge routes each question to the cheapest capable model, cost shown up front.</p></div>
+      <div class="feat"><h3><span class="dot"></span>Encrypted sync</h3><p>Move your vault between machines. The server only ever holds ciphertext it can't decrypt — never a key, never plaintext.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <div class="honest">
+      <h3>What it doesn't do — because saying so is the point</h3>
+      <ul>
+        <li>It can't scrub what you type into someone else's app. Connect is portability, not a firewall — use Chat for that.</li>
+        <li>Redaction masks identifiers and names well, but can't make free text anonymous. "The lieutenant in Bourne whose partner runs compliance" survives every filter. We never claim otherwise.</li>
+        <li>No recovery. Lose your passphrase or device secret and the vault is gone — there's no back door, which is the whole point. Back up your secret.</li>
+        <li>Apple Silicon Macs for now. Other platforms run from source.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <h2>Pricing</h2>
+    <p class="lede">Everything that runs on your machine is free. You only pay for
+      the one thing that runs on ours.</p>
+    <div class="tiers">
+      <div class="tier">
+        <h3>Free</h3>
+        <div class="price">$0</div>
+        <ul>
+          <li>The full app, on your machine</li>
+          <li>Connect to your AI apps</li>
+          <li>Chat with local or your-own-key models</li>
+          <li>Redaction, import, scopes, audit</li>
+          <li>Self-host sync yourself</li>
+        </ul>
+        <a class="btn ghost" href="[DOWNLOAD_URL]">Download</a>
+      </div>
+      <div class="tier hi">
+        <h3>Sync</h3>
+        <div class="price">$10<small> / month</small></div>
+        <ul>
+          <li>Everything in Free</li>
+          <li>Encrypted sync across your devices</li>
+          <li>Server holds ciphertext only</li>
+          <li>Card handled by Stripe, never us</li>
+          <li>Cancel anytime</li>
+        </ul>
+        <a class="btn primary" href="[DOWNLOAD_URL]">Get started</a>
+      </div>
+      <div class="tier">
+        <h3>Teams &amp; business</h3>
+        <div class="price">Let's talk</div>
+        <ul>
+          <li>Shared scopes &amp; admin</li>
+          <li>Compliance &amp; audit exports</li>
+          <li>Commercial license (no AGPL terms)</li>
+          <li>Priority support</li>
+          <li>Self-host support</li>
+        </ul>
+        <a class="btn ghost" href="mailto:[CONTACT_EMAIL]">Contact us</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <h2>Questions</h2>
+    <details><summary>Do you ever see my memories?</summary><p>No. Your vault is encrypted on your device, and we never receive your key. If you use hosted sync, our server stores only ciphertext it cannot decrypt plus a version number. There's no telemetry and no analytics in the app.</p></details>
+    <details><summary>How is this different from ChatGPT or Claude's built-in memory?</summary><p>Their memory lives on their servers and stays in their app. NorthKeep's memory lives on your machine and plugs into whichever apps you use — so it's portable, owned by you, and you set what each app can read.</p></details>
+    <details><summary>Does Connect make my chats private?</summary><p>No — and we won't pretend it does. When you type into another company's app, that company sees what you type. Connect gives you portable, owned memory with per-app scopes. For an actual redaction firewall on your messages, use Chat.</p></details>
+    <details><summary>What happens if I lose my passphrase?</summary><p>The vault is unrecoverable. There's no back door — which is exactly why no one else can get in either. Back up your <code>device.secret</code> file and keep your passphrase safe.</p></details>
+    <details><summary>Is it really open source?</summary><p>Yes — AGPL-3.0. You can read the code, run it, and self-host the sync server for free. A commercial license is available for businesses that don't want the AGPL's obligations.</p></details>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <span class="brand"><img src="./northkeep-icon.png" alt="" style="width:22px;height:22px;border-radius:5px">NorthKeep</span>
+    <span class="spacer"></span>
+    <a href="https://github.com/jay-silva/northkeep">GitHub</a>
+    <a href="./privacy.html">Privacy</a>
+    <a href="./terms.html">Terms</a>
+    <a href="mailto:[CONTACT_EMAIL]">Contact</a>
+  </div>
+  <div class="wrap" style="margin-top:14px">
+    <span>© <span id="yr"></span> Silva Peak Enterprises LLC. Your memory, on your machine.</span>
+  </div>
+</footer>
+<script>
+  document.getElementById('yr').textContent = new Date().getFullYear();
+  // Honor a ?theme=light|dark override for previews; otherwise follow the OS.
+  var t = new URLSearchParams(location.search).get('theme');
+  if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+</script>
+</body>
+</html>
