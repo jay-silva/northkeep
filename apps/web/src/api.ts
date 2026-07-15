@@ -1,3 +1,4 @@
+import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -26,12 +27,14 @@ import {
   syncState,
 } from '@northkeep/sync';
 import {
+  PASTE_PROMPT,
   parseChatgptExport,
   parseClaudeExport,
   parsePasteFile,
   type ImportedConversation,
   type MemoryCandidate,
 } from '@northkeep/importers';
+import { extractText, ExtractionError, UnsupportedFileTypeError } from '@northkeep/extract';
 import { EXTRACT_MODEL, createOllamaClient, createOllamaEmbedder, dedupeCandidates, ollamaState, runImport } from '@northkeep/librarian';
 import {
   auditAsCsv,
@@ -187,7 +190,61 @@ async function dispatch(
       extract_model: EXTRACT_MODEL,
       keychain_available: keychainAvailable(),
       env_grant: session.hasEnvGrant(),
+      // Running inside the Tauri desktop shell? The web UI needs to know so it
+      // opens external links via /api/open (WKWebView can't open a real new
+      // browser tab); in plain-browser mode it keeps native target=_blank.
+      desktop: process.env.NORTHKEEP_DESKTOP === '1',
     });
+  }
+
+  // Open an external URL in the user's real browser. Only meaningful in the
+  // desktop shell, where target=_blank / window.open silently no-op inside the
+  // WKWebView. https only, opened with `open` via execFile (no shell), so a URL
+  // can never be interpreted as a command or flag.
+  if (method === 'POST' && route === '/api/open') {
+    if (process.env.NORTHKEEP_DESKTOP !== '1') {
+      return bad(400, 'Only available in the desktop app.');
+    }
+    const { url } = parseJson<{ url?: string }>(body);
+    if (typeof url !== 'string' || !/^https:\/\/[^\s]+$/i.test(url) || /\s/.test(url)) {
+      return bad(400, 'A https:// URL is required.');
+    }
+    // The desktop app is macOS-only today and `open` is the macOS launcher.
+    // Guard the platform so a future non-Mac build reports honestly instead of
+    // silently claiming success (a cross-platform opener would be future work).
+    if (process.platform !== 'darwin') {
+      return bad(400, 'Opening links from the app is only supported on macOS right now.');
+    }
+    // Best-effort fire-and-forget: `open` returns fast and we don't block the
+    // UI on it. execFile is async, so a failing `open` surfaces in the ignored
+    // callback rather than throwing here; that's acceptable for opening a link
+    // (the worst case is nothing happens, and the user can copy the URL).
+    execFile('/usr/bin/open', [url], { timeout: 5000 }, () => {});
+    return ok({ opened: true });
+  }
+
+  // The provider-agnostic "tell me what you know about me" prompt, for importing
+  // memory from AIs without a conversation export (Gemini, Grok, …).
+  if (method === 'GET' && route === '/api/paste-prompt') {
+    return ok({ prompt: PASTE_PROMPT });
+  }
+
+  // Extract text from an uploaded file so the Chat composer can attach it. Runs
+  // entirely on this Mac (unpdf is local, no network); the returned text is then
+  // sent through /api/converse where the active redaction tier masks it before
+  // it reaches any model. No vault access — this is pure local text extraction.
+  if (method === 'POST' && route === '/api/extract') {
+    if (body.length === 0) return bad(400, 'Empty file.');
+    if (body.length > 20 * 1024 * 1024) return bad(413, 'File too large (20 MB max for a chat attachment).');
+    const filename = (query.get('filename') ?? 'file').slice(0, 200);
+    try {
+      const result = await extractText(body, filename);
+      return ok({ text: result.text, kind: result.kind, truncatedFrom: result.truncatedFrom ?? null });
+    } catch (err) {
+      if (err instanceof UnsupportedFileTypeError) return bad(415, err.message);
+      if (err instanceof ExtractionError) return bad(422, err.message);
+      return bad(500, 'Could not read that file.');
+    }
   }
 
   // --- First-run setup (M7d). Creates the device secret + vault exactly the
@@ -898,9 +955,35 @@ async function startImport(
       job.done = parsed.length;
       job.status = 'ready';
     } else {
-      const conversations: ImportedConversation[] =
-        source === 'chatgpt' ? parseChatgptExport(tempPath) : parseClaudeExport(tempPath);
-      if (conversations.length === 0) throw new Error('No conversations found in that file.');
+      // The web UI can read an unzipped folder/JSON to tell ChatGPT from Claude,
+      // but it can't see inside a .zip, so it guesses 'chatgpt' for every zip.
+      // When that guess yields nothing OR the wrong parser throws (a future
+      // export shape), fall back to the other parser so a zipped Claude export
+      // still imports. The primary error is kept for the message if both fail.
+      const parseWith = (s: 'chatgpt' | 'claude'): ImportedConversation[] =>
+        s === 'chatgpt' ? parseChatgptExport(tempPath) : parseClaudeExport(tempPath);
+      const alt: 'chatgpt' | 'claude' = source === 'chatgpt' ? 'claude' : 'chatgpt';
+      let conversations: ImportedConversation[] = [];
+      let primaryErr: unknown;
+      try {
+        conversations = parseWith(source);
+      } catch (e) {
+        primaryErr = e;
+      }
+      if (conversations.length === 0) {
+        try {
+          const altConversations = parseWith(alt);
+          if (altConversations.length > 0) {
+            conversations = altConversations;
+            job.source = alt;
+          }
+        } catch {
+          /* keep primaryErr for the message below */
+        }
+      }
+      if (conversations.length === 0) {
+        throw primaryErr instanceof Error ? primaryErr : new Error('No conversations found in that file.');
+      }
       job.total = conversations.length;
       // Fire and let the client poll; errors land on the job.
       void runImport(conversations, {

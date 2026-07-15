@@ -56,6 +56,9 @@
   nav button { border: 0; background: none; padding: 14px 14px 15px; font: 400 15px/1 var(--sans); color: var(--muted);
     border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer; }
   nav button.active { color: var(--ink); border-color: var(--accent); font-weight: 600; }
+  /* Secondary tab strip for the Settings group: quieter than the main nav. */
+  #settingsNav { background: var(--chip); padding-top: 2px; padding-bottom: 2px; }
+  #settingsNav button { font-size: 14px; padding: 10px 12px 11px; }
   main { max-width: 840px; margin: 0 auto; padding: 24px 28px 64px; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
     padding: 15px 18px; margin-bottom: 12px; }
@@ -88,6 +91,7 @@
   .dialog h2 { margin: 0 0 6px; font-size: 18px; }
   .dialog p { margin: 6px 0 14px; color: var(--muted); font-size: 14px; }
   .dialog input { width: 100%; margin-bottom: 12px; }
+  .dialog input[type=checkbox] { width: auto; margin: 0; } /* exempt the "Keep unlocked" checkbox from the full-width text-field rule */
   .err { color: var(--danger); font-size: 13px; min-height: 18px; margin-bottom: 6px; }
   label.check { display: flex; gap: 8px; align-items: center; font-size: 14px; color: var(--muted); margin-bottom: 14px; }
   .drop { border: 2px dashed var(--line); border-radius: 16px; padding: 40px 24px; text-align: center;
@@ -173,20 +177,24 @@
 <header>
   <h1>North<span>keep</span></h1>
   <span id="countPill" class="pill">…</span>
+  <span id="connectPill" class="pill" hidden></span>
   <span id="ollamaPill" class="pill" hidden>local AI off</span>
   <span id="envPill" class="pill locked" hidden title="An environment variable keeps this vault open; the Lock button can't revoke it.">env override</span>
   <div class="grow"></div>
   <button class="btn" id="exportBtn">Export</button>
   <button class="btn" id="lockBtn" hidden>Lock</button>
 </header>
-<nav>
+<nav id="mainNav">
   <button data-view="converse">Chat</button>
   <button data-view="memories" class="active">Memories</button>
-  <button data-view="import">Import</button>
   <button data-view="redact">Redact</button>
-  <button data-view="activity">Activity</button>
-  <button data-view="sync">Sync</button>
   <button data-view="connect">Connect</button>
+  <button data-view="settings">Settings</button>
+</nav>
+<nav id="settingsNav" hidden>
+  <button data-sub="import" class="active">Import</button>
+  <button data-sub="activity">Activity</button>
+  <button data-sub="sync">Sync</button>
 </nav>
 <main>
   <div id="degradedBanner" class="banner" hidden>
@@ -281,11 +289,15 @@
       </div>
     </div>
     <div id="convThread" class="thread"></div>
-    <div class="row" style="align-items:flex-end;gap:12px;margin-top:22px">
+    <div id="convAttachChip" hidden style="margin-top:16px;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"></div>
+    <div class="row" style="align-items:flex-end;gap:10px;margin-top:12px">
       <textarea id="convInput" rows="2" placeholder="Message… (Enter to send, Shift+Enter for a new line)"
         style="flex:1;min-width:200px;font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:13px 15px;resize:vertical"></textarea>
+      <input type="file" id="convFile" accept=".pdf,.txt,.md,.csv,.json,.log" hidden>
+      <button class="btn" id="convAttach" title="Attach a file (redacted before sending)" style="padding:13px 15px;border-radius:14px">📎</button>
       <button class="btn primary" id="convSend" style="padding:13px 24px;border-radius:14px">Send</button>
     </div>
+    <p class="muted" style="font-size:12px;margin:8px 2px 0">Attached files are redacted with your message at the selected tier before anything is sent.</p>
   </section>
   <section id="view-memories">
     <div class="card" id="addMemCard">
@@ -321,6 +333,16 @@
     </div>
     <input type="file" id="file" hidden>
     <input type="file" id="folder" hidden webkitdirectory>
+    <details style="margin-top:16px">
+      <summary style="cursor:pointer;font-weight:600">How to get your data out of each AI</summary>
+      <div class="muted" style="font-size:14px;margin-top:10px;line-height:1.6">
+        <p style="margin:6px 0"><strong>ChatGPT:</strong> Settings → Data Controls → Export data. OpenAI emails you a .zip within minutes. Drop the whole .zip here.</p>
+        <p style="margin:6px 0"><strong>Claude:</strong> Settings → Privacy → Export data. Anthropic emails you a .zip. Drop it here (zipped is fine).</p>
+        <p style="margin:6px 0"><strong>Gemini, Grok, or any other AI:</strong> these don't offer a conversation export NorthKeep can read, so bring your memory over with a prompt instead.
+          <button class="btn" id="copyPastePrompt" style="font-size:12px;padding:2px 10px;margin:0 4px">Copy the prompt</button>
+          Paste it into that AI, save its answer as a <code>.txt</code> or <code>.md</code> file, then drop that file here.</p>
+      </div>
+    </details>
     <div id="importProgress" hidden style="margin-top:16px">
       <p id="importStatus" class="muted"></p>
       <progress id="importBar" max="100" value="0"></progress>
@@ -338,9 +360,16 @@
     </div>
   </section>
   <section id="view-redact" hidden>
-    <p class="muted">Mask secrets before you paste anything into an AI. Tier 2 also swaps
-      names and companies for consistent placeholders, and can restore the AI's reply.
-      Everything here runs on this Mac.</p>
+    <h3 class="sect" style="margin-top:0">Scrub text before you paste it into another AI</h3>
+    <p class="muted">Use this when you're about to paste something into an AI <em>outside</em> NorthKeep
+      (the ChatGPT or Claude website, a colleague's tool). Paste your text below and NorthKeep masks
+      the sensitive parts here on this Mac, so you can safely copy the result. In NorthKeep's own Chat
+      this happens automatically, so you don't need this tab for that.</p>
+    <ul class="muted" style="margin:0 0 12px 18px;font-size:14px;line-height:1.6">
+      <li><strong>Tier 1</strong> masks secrets: emails, phone numbers, SSNs, card numbers, API keys. Always on.</li>
+      <li><strong>Tier 2</strong> also replaces names and companies with consistent placeholders
+        (e.g. Jane Doe becomes Person 1) and can restore them in the AI's reply. Needs a local AI (Ollama).</li>
+    </ul>
     <div class="row" style="margin:10px 0">
       <select id="redactTier">
         <option value="1">Tier 1 — mask secrets (emails, SSNs, cards, keys…)</option>
@@ -479,6 +508,18 @@
       </div>
       <button class="btn" id="setupSkip" style="width:100%">Skip — add one later under Chat → Manage endpoints</button>
     </div>
+    <div id="setupStepTour" hidden>
+      <h2>You're all set</h2>
+      <p>Here's where everything lives:</p>
+      <ul style="margin:0 0 16px 18px;line-height:1.9;font-size:14px;color:var(--muted)">
+        <li><strong>Memories</strong> — everything NorthKeep knows about you, on this Mac. Browse, search, edit, or add.</li>
+        <li><strong>Chat</strong> — talk to an AI with your memory and the redaction firewall in front. You can attach files safely too.</li>
+        <li><strong>Connect</strong> — plug your memory into Claude Desktop or Claude Code in one click.</li>
+        <li><strong>Redact</strong> — scrub sensitive text before pasting it into an AI outside NorthKeep.</li>
+        <li><strong>Settings</strong> — import your history from ChatGPT or Claude, review activity, and set up sync across devices.</li>
+      </ul>
+      <button class="btn primary" id="setupDone" style="width:100%">Start using NorthKeep</button>
+    </div>
   </div>
 </div>
 <!-- Connect-a-model wizard (M9b): pick a provider → how to get a key → secure
@@ -547,16 +588,55 @@
     return data;
   }
 
-  // --- views
-  const views = ['converse', 'memories', 'import', 'redact', 'activity', 'sync', 'connect'];
-  document.querySelectorAll('nav button').forEach((b) => b.addEventListener('click', () => {
-    document.querySelectorAll('nav button').forEach((x) => x.classList.toggle('active', x === b));
-    views.forEach((v) => { $('view-' + v).hidden = v !== b.dataset.view; });
-    if (b.dataset.view === 'activity') loadLog();
-    if (b.dataset.view === 'memories') loadMemories();
-    if (b.dataset.view === 'converse') openConverse();
-    if (b.dataset.view === 'sync') loadSyncStatus();
-    if (b.dataset.view === 'connect') loadConnect();
+  // Open an external link. Inside the desktop shell (Tauri/WKWebView) a plain
+  // target=_blank / window.open silently no-ops, so route through /api/open,
+  // which opens the user's real browser. In a browser, use the native new tab.
+  async function openExternal(url) {
+    if (!/^https:\/\//i.test(url)) return;
+    if (status.desktop) {
+      try { await api('/api/open', { method: 'POST', json: { url } }); return; } catch { /* fall through */ }
+    }
+    window.open(url, '_blank', 'noopener');
+  }
+  // One delegated handler fixes every external anchor (get-key, get-Ollama, …)
+  // in desktop mode without wiring each; browser mode keeps native behavior.
+  document.addEventListener('click', (e) => {
+    const a = e.target.closest && e.target.closest('a[target="_blank"]');
+    if (!a || !a.href || !status.desktop || !/^https:\/\//i.test(a.href)) return;
+    e.preventDefault();
+    openExternal(a.href);
+  });
+
+  // --- views: top-level tabs, plus a Settings group holding Import/Activity/Sync
+  const sections = ['converse', 'memories', 'redact', 'connect', 'import', 'activity', 'sync'];
+  let currentSub = 'import';
+  function runLoader(v) {
+    if (v === 'activity') loadLog();
+    else if (v === 'memories') loadMemories();
+    else if (v === 'converse') openConverse();
+    else if (v === 'sync') loadSyncStatus();
+    else if (v === 'connect') loadConnect();
+  }
+  function showSection(v) { sections.forEach((s) => { $('view-' + s).hidden = s !== v; }); }
+  function showTop(v) {
+    document.querySelectorAll('#mainNav button').forEach((x) => x.classList.toggle('active', x.dataset.view === v));
+    if (v === 'settings') {
+      $('settingsNav').hidden = false;
+      showSection(currentSub);
+      runLoader(currentSub);
+    } else {
+      $('settingsNav').hidden = true;
+      showSection(v);
+      runLoader(v);
+    }
+  }
+  document.querySelectorAll('#mainNav button').forEach((b) =>
+    b.addEventListener('click', () => showTop(b.dataset.view)));
+  document.querySelectorAll('#settingsNav button').forEach((b) => b.addEventListener('click', () => {
+    currentSub = b.dataset.sub;
+    document.querySelectorAll('#settingsNav button').forEach((x) => x.classList.toggle('active', x === b));
+    showSection(currentSub);
+    runLoader(currentSub);
   }));
 
   // --- redact
@@ -600,7 +680,26 @@
     // No vault on disk → first-run wizard. Vault but locked → unlock dialog.
     if (noVault) showSetup();
     else if (!status.unlocked) showUnlock();
-    else { hideUnlock(); loadMemories(); loadScopes(); }
+    else { hideUnlock(); loadMemories(); loadScopes(); updateConnectPill(); }
+  }
+  // Header pill: shows which AI apps NorthKeep is currently connected to, so it
+  // is clear at a glance (not only inside the Connect tab).
+  function setConnectPill(targets) {
+    const connected = (targets || []).filter((t) => t.connected).map((t) => t.label);
+    const pill = $('connectPill');
+    if (connected.length) {
+      pill.textContent = '✓ ' + connected.join(' + ');
+      pill.className = 'pill ok';
+      pill.title = 'NorthKeep is connected to ' + connected.join(' and ') +
+        '. They can read your memory under the scopes you granted.';
+      pill.hidden = false;
+    } else {
+      pill.hidden = true;
+    }
+  }
+  async function updateConnectPill() {
+    try { const c = await api('/api/connect'); setConnectPill(c.targets); }
+    catch { /* locked or transient — leave the pill as-is */ }
   }
   function showUnlock() { $('unlockOverlay').hidden = false; $('passphrase').focus(); }
   function hideUnlock() { $('unlockOverlay').hidden = true; }
@@ -611,7 +710,7 @@
   function showSetup() { hideUnlock(); $('setupOverlay').hidden = false; $('setupPass').focus(); }
   function hideSetup() { $('setupOverlay').hidden = true; }
   function setupStep(id) {
-    ['setupStepCreate', 'setupStepBackup', 'setupStepAi'].forEach((s) => { $(s).hidden = s !== id; });
+    ['setupStepCreate', 'setupStepBackup', 'setupStepAi', 'setupStepTour'].forEach((s) => { $(s).hidden = s !== id; });
   }
   $('setupCreateBtn').addEventListener('click', doSetupCreate);
   $('setupPass2').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSetupCreate(); });
@@ -671,7 +770,7 @@
     try {
       await api('/api/providers', { method: 'POST', json: {
         label: 'This Mac — Ollama', base_url: OLLAMA_BASE, model: $('setupOllamaModel').value } });
-      await finishSetup();
+      setupStep('setupStepTour');
     } catch (e) {
       if (e.message !== 'locked') $('setupAiErr').textContent = e.message;
     } finally { $('setupOllamaAdd').disabled = false; }
@@ -688,12 +787,13 @@
     $('setupManualAdd').disabled = true;
     try {
       await api('/api/providers', { method: 'POST', json: { label, base_url, model } });
-      await finishSetup();
+      setupStep('setupStepTour');
     } catch (e) {
       if (e.message !== 'locked') $('setupAiErr').textContent = e.message;
     } finally { $('setupManualAdd').disabled = false; }
   });
-  $('setupSkip').addEventListener('click', () => { finishSetup(); });
+  $('setupSkip').addEventListener('click', () => { setupStep('setupStepTour'); });
+  $('setupDone').addEventListener('click', () => { finishSetup(); });
   async function finishSetup() {
     hideSetup();
     await refreshStatus().catch(() => {});
@@ -976,6 +1076,16 @@
   });
   $('file').addEventListener('change', () => handleFiles([...$('file').files]));
   $('folder').addEventListener('change', () => handleFiles([...$('folder').files]));
+  $('copyPastePrompt').addEventListener('click', async (e) => {
+    e.preventDefault();
+    try {
+      const { prompt } = await api('/api/paste-prompt');
+      await navigator.clipboard.writeText(prompt);
+      const b = e.target; const was = b.textContent;
+      b.textContent = 'Copied ✓';
+      setTimeout(() => { b.textContent = was; }, 1500);
+    } catch { /* clipboard or fetch unavailable; no-op */ }
+  });
 
   // Recursively gather File objects from a dropped FileSystemEntry.
   function collectEntry(entry, out) {
@@ -1016,7 +1126,9 @@
         const blob = new Blob([JSON.stringify(merged)], { type: 'application/json' });
         await upload(blob, 'conversations.json', source);
       } else if (zip) {
-        await upload(zip, zip.name, 'chatgpt'); // server sniffs the zip contents
+        // We can't read inside a zip here, so guess ChatGPT; the server falls
+        // back to the Claude parser if that guess turns up no conversations.
+        await upload(zip, zip.name, 'chatgpt');
       } else if (pasteFile) {
         await upload(pasteFile, pasteFile.name, 'paste');
       } else {
@@ -1616,25 +1728,44 @@
       renderLocalStatus(await api('/api/local/status'));
     } catch (e) { if (e.message !== 'locked') $('localBody').textContent = 'Could not check local models: ' + e.message; }
   }
+  let ollamaDetectPoller = null, ollamaDetectTicks = 0;
+  function stopOllamaDetect() { if (ollamaDetectPoller) { clearInterval(ollamaDetectPoller); ollamaDetectPoller = null; } }
+  function startOllamaDetect() {
+    if (ollamaDetectPoller) return;
+    ollamaDetectTicks = 0;
+    ollamaDetectPoller = setInterval(async () => {
+      if (++ollamaDetectTicks > 200) { stopOllamaDetect(); return; } // ~10 min cap
+      try {
+        const s = await api('/api/local/status');
+        if (s.state !== 'not-installed') { stopOllamaDetect(); renderLocalStatus(s); }
+      } catch { /* locked or transient — keep waiting */ }
+    }, 3000);
+  }
   function renderLocalStatus(r) {
+    stopOllamaDetect();
     const body = $('localBody');
     body.textContent = '';
     if (r.state === 'not-installed') {
-      body.appendChild(el('strong', '', 'Install Ollama to run models on this Mac.'));
-      body.appendChild(el('p', 'muted', 'Ollama is a free local model runtime. Install it, reopen this panel, and NorthKeep offers a 1-click, hardware-matched download.'));
-      const row = el('div', 'row');
-      const link = el('a', 'btn', 'Get Ollama (ollama.com)');
+      body.appendChild(el('strong', '', 'Install Ollama to run models privately on this Mac'));
+      body.appendChild(el('p', 'muted', 'Ollama is a free, open-source runtime for local AI. It powers private Chat and Tier 2 redaction, and nothing you run through it leaves your machine.'));
+      const ol = el('ol', 'muted'); ol.style.cssText = 'margin:2px 0 12px 18px;font-size:14px;line-height:1.9';
+      const li1 = el('li'); li1.appendChild(document.createTextNode('Install it: '));
+      const link = el('a', 'btn', 'Download from ollama.com');
       link.href = 'https://ollama.com/download'; link.target = '_blank'; link.rel = 'noopener noreferrer';
-      link.style.textDecoration = 'none';
-      row.appendChild(link);
-      const code = el('span', 'tag', 'brew install ollama');
-      code.style.cssText = 'font-size:13px;padding:6px 10px';
-      row.appendChild(code);
-      const copy = el('button', 'btn', 'Copy');
-      copy.style.cssText = 'font-size:12px;padding:2px 10px';
-      copy.addEventListener('click', () => { navigator.clipboard.writeText('brew install ollama'); copy.textContent = 'Copied'; });
-      row.appendChild(copy);
-      body.appendChild(row);
+      link.style.cssText = 'text-decoration:none;font-size:12px;padding:2px 10px';
+      li1.appendChild(link);
+      li1.appendChild(document.createTextNode('  or  '));
+      li1.appendChild(el('code', '', 'brew install ollama'));
+      const copy = el('button', 'btn', 'Copy'); copy.style.cssText = 'font-size:12px;padding:2px 8px;margin-left:6px';
+      copy.addEventListener('click', () => { navigator.clipboard.writeText('brew install ollama'); copy.textContent = 'Copied ✓'; });
+      li1.appendChild(copy);
+      ol.appendChild(li1);
+      ol.appendChild(el('li', '', 'Open the Ollama app once so it starts running in the background.'));
+      body.appendChild(ol);
+      const waiting = el('p', 'muted', '○ Waiting for Ollama… this panel updates on its own once it is running, then offers a 1-click model download.');
+      waiting.style.fontSize = '13px';
+      body.appendChild(waiting);
+      startOllamaDetect();
       return;
     }
     const hw = r.hardware || {}, rec = r.recommended || {};
@@ -1775,18 +1906,74 @@
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTurn(); }
   });
 
+  // --- chat file attachment: extracted locally (no network), then redacted
+  // with the rest of the message before it reaches any model.
+  let convAttachment = null; // { name, text, truncatedFrom }
+  $('convAttach').addEventListener('click', () => $('convFile').click());
+  $('convFile').addEventListener('change', async (e) => {
+    const f = e.target.files && e.target.files[0];
+    e.target.value = ''; // let the same file be re-picked later
+    if (!f) return;
+    showAttachMsg('Reading ' + f.name + '…', false);
+    try {
+      const buf = await f.arrayBuffer();
+      const res = await fetch('/api/extract?filename=' + encodeURIComponent(f.name), {
+        method: 'POST', headers: { 'X-NorthKeep-Token': TOKEN }, body: buf });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) { convAttachment = null; showAttachMsg(data.error || 'Could not read that file.', true); return; }
+      convAttachment = { name: f.name, text: data.text, truncatedFrom: data.truncatedFrom };
+      renderAttachChip();
+    } catch { convAttachment = null; showAttachMsg('Could not read that file.', true); }
+  });
+  function showAttachMsg(text, isError) {
+    const chip = $('convAttachChip');
+    chip.hidden = false; chip.innerHTML = '';
+    chip.appendChild(el('span', isError ? 'err' : 'muted', text));
+    if (isError) setTimeout(() => { if (!convAttachment) { chip.hidden = true; chip.innerHTML = ''; } }, 5000);
+  }
+  function renderAttachChip() {
+    const chip = $('convAttachChip');
+    chip.hidden = false; chip.innerHTML = '';
+    const name = el('span', '', '📎 ' + convAttachment.name); name.style.fontWeight = '600';
+    chip.appendChild(name);
+    chip.appendChild(el('span', 'muted', 'redacted before sending'));
+    const x = el('button', 'btn', 'Remove'); x.style.padding = '2px 10px';
+    x.addEventListener('click', clearAttachment);
+    chip.appendChild(x);
+  }
+  function clearAttachment() { convAttachment = null; const c = $('convAttachChip'); c.hidden = true; c.innerHTML = ''; }
+
   async function sendTurn() {
     if (convStreaming) return;
-    const msg = $('convInput').value.trim();
-    if (!msg) return;
+    const typed = $('convInput').value.trim();
+    if (!typed && !convAttachment) return;
     const isAuto = $('convEndpoint').value === 'auto';
     const ep = selectedEndpoint();
     if (!isAuto && !ep) { $('convEmpty').hidden = false; $('managePanel').hidden = false; return; }
+    // Compose the outbound message: attached file text is prepended so the
+    // server redacts it with the rest at the selected tier. Stay under the 32k
+    // message cap by trimming the file text if needed (the typed note is kept).
+    let outbound = typed;
+    let attachNote = '';
+    if (convAttachment) {
+      const CAP = 31000;
+      const head = '[Attached file: ' + convAttachment.name + ']\n';
+      const tail = typed ? ('\n\n' + typed) : '';
+      let fileText = convAttachment.text || '';
+      let trimmed = convAttachment.truncatedFrom != null;
+      const room = CAP - head.length - tail.length;
+      if (fileText.length > room) { fileText = fileText.slice(0, Math.max(0, room)); trimmed = true; }
+      if (trimmed) fileText += '\n…[truncated]';
+      outbound = head + fileText + tail;
+      attachNote = '📎 ' + convAttachment.name + (trimmed ? ' (trimmed to fit)' : '');
+    }
     convStreaming = true;
     $('convSend').disabled = true;
     $('convInput').disabled = true;
-    addMsg('user', msg);
+    const u = addMsg('user', typed || '(attached file)');
+    if (attachNote) { const n = el('div', 'muted', attachNote); n.style.fontSize = '12px'; n.style.marginTop = '6px'; u.wrap.appendChild(n); }
     $('convInput').value = '';
+    clearAttachment();
     const a = addMsg('assistant', '');
     // Thinking animation: pulses until the FIRST token arrives (the model may
     // spend 30s+ loading into RAM). Writing textContent replaces it naturally.
@@ -1820,7 +2007,7 @@
         body: JSON.stringify({
           ...(convSession ? { session_id: convSession } : {}),
           endpoint_id: isAuto ? 'auto' : ep.id,
-          message: msg,
+          message: outbound,
           tier: Number($('convTierSel').value),
           // The privacy pin binds every path — auto routing AND manual picks.
           // Always explicit: the server RATCHETS the conversation's ceiling,
@@ -2011,7 +2198,7 @@
   // The Stripe URL comes from the (untrusted) sync server — open it only if it's
   // a real https URL, never a javascript:/data: scheme. noopener severs the tab.
   function openStripe(url) {
-    if (typeof url === 'string' && /^https:\/\//i.test(url)) window.open(url, '_blank', 'noopener');
+    if (typeof url === 'string' && /^https:\/\//i.test(url)) openExternal(url);
     else $('syncBillingLine').textContent = 'The server returned an unexpected checkout link — not opening it.';
   }
   $('syncSubscribeBtn').addEventListener('click', async () => {
@@ -2051,6 +2238,7 @@
     for (const t of data.targets || []) {
       box.appendChild(connectCard(t, scopesInVault, notes[t.id]));
     }
+    setConnectPill(data.targets); // keep the header pill in sync after connect/disconnect
   }
 
   function connectCard(t, scopesInVault, note) {
