@@ -1,0 +1,18 @@
+{
+  "name": "@northkeep/extract",
+  "version": "0.1.0",
+  "description": "Local-only text extraction (txt/md/csv/json/log + PDF) for the redaction pipeline. Zero network I/O.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "unpdf": "^1.6.2"
+  }
+}
