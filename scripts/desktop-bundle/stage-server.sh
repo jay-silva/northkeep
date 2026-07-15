@@ -25,7 +25,13 @@ if [ ! -f "$REPO_ROOT/apps/web/dist/server.js" ]; then
   exit 1
 fi
 
-rm -rf "$STAGE"
+# `rm -rf` can lose a race with Finder/mds writing a .DS_Store into the dir
+# mid-remove ("Directory not empty"); retry a few times before giving up.
+for _ in 1 2 3; do rm -rf "$STAGE" 2>/dev/null && break; sleep 1; done
+if [ -e "$STAGE" ]; then
+  echo "stage-server: could not clear $STAGE (something is writing into it)" >&2
+  exit 1
+fi
 echo "stage-server: pnpm deploy (prod, legacy, hoisted) -> $STAGE"
 
 # `pnpm deploy --prod --filter` rewrites node_modules/.pnpm-workspace-state-v1.json
