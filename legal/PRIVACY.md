@@ -1,13 +1,11 @@
 # NorthKeep Privacy Policy
 
-> **DRAFT for attorney review, not yet published, and not legal advice.**
 > Grounded in how NorthKeep actually handles data (see `KNOWN-LIMITS.md` and
-> `SPEC/security-model.md`). Bracketed values need confirming before launch:
-> provider legal name, contact email, website, effective date.
+> `SPEC/security-model.md`). Not legal advice.
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** support@northkeep.ai · **Effective date:** [DATE]
+**Contact:** support@northkeep.ai · **Effective date:** July 14, 2026
 
 NorthKeep is built on a simple promise: **your AI memory lives on your device,
 encrypted, and we never see its contents.** This policy explains the little data
@@ -103,7 +101,7 @@ jurisdiction), and we do not knowingly collect their data.
 
 ## Changes
 
-We may update this policy; material changes will be posted at [website] with an
+We may update this policy; material changes will be posted at northkeep.ai with an
 updated effective date. Continued use of the hosted service after a change means
 you accept the revised policy.
 

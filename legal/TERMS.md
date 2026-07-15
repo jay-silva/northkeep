@@ -1,13 +1,10 @@
 # NorthKeep Terms of Service
 
-> **DRAFT for attorney review, not yet published, and not legal advice.**
-> Bracketed values need confirming before launch: provider legal name, contact
-> email, website, effective date. An attorney familiar with open-source
-> licensing and SaaS terms should review before you take payment.
+> Not legal advice.
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** support@northkeep.ai · **Effective date:** [DATE]
+**Contact:** support@northkeep.ai · **Effective date:** July 14, 2026
 
 These Terms govern your use of the NorthKeep software and the optional hosted
 sync service (together, the "Service"). By installing the software or using the
@@ -88,7 +85,7 @@ limitations, so parts of this section may not apply to you.
 ## 8. Changes and termination
 
 We may modify these Terms or the Service; material changes will be posted at
-[website] with an updated effective date, and continued use means acceptance. You
+northkeep.ai with an updated effective date, and continued use means acceptance. You
 may stop using the Service at any time. We may suspend or terminate the hosted
 service for violations of these Terms or to comply with law; you keep your local
 vault regardless, since it lives on your device.
@@ -98,7 +95,7 @@ vault regardless, since it lives on your device.
 These Terms are governed by the laws of the Commonwealth of Massachusetts, USA,
 without regard to its conflict-of-laws rules. Disputes will be resolved in the
 state or federal courts located in Massachusetts, and you consent to their
-jurisdiction. *(Confirm venue/arbitration preference with counsel.)*
+jurisdiction.
 
 ## 10. Contact
 
