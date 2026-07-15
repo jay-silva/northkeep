@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import http from 'node:http';
 import { handleSync, MAX_BLOB_BYTES, parseAllowlist, type SyncRequest } from './handler.js';
+import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
 import {
   createCheckout,
   createPortal,
@@ -21,8 +22,15 @@ import type { Storage } from './storage.js';
  * billing routes are absent and only the allowlist gates.
  */
 
+/** Per-key request cap per 5-minute window (per warm instance). */
+const RATE_LIMIT_DEFAULT = 120;
+const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
+
 export function createSyncServer(storage: Storage, billing: BillingDeps | null = null): http.Server {
   const allowedTokenHashes = parseAllowlist(process.env.NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES);
+  const rateLimit = rateLimitFromEnv(process.env.NORTHKEEP_SYNC_RATE_LIMIT, RATE_LIMIT_DEFAULT);
+  const limiter: RateLimiter | null =
+    rateLimit === null ? null : createRateLimiter({ limit: rateLimit, windowMs: RATE_LIMIT_WINDOW_MS });
   return http.createServer((req, res) => {
     void handle(req, res).catch(() => {
       res.writeHead(500, { 'content-type': 'application/json' });
@@ -35,6 +43,29 @@ export function createSyncServer(storage: Storage, billing: BillingDeps | null =
     const method = req.method ?? 'GET';
     const auth = req.headers['authorization'];
     const token = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
+
+    // Throttle before reading the body or touching storage/Stripe. Keyed by
+    // the account (token hash) when a token is presented, else the client IP,
+    // which is what gates an unauthenticated webhook flood.
+    if (limiter && url.pathname.startsWith('/api/')) {
+      const key = token
+        ? createHash('sha256').update(token, 'utf8').digest('hex')
+        : `ip:${clientIp(req)}`;
+      const retryAfter = limiter.check(key);
+      if (retryAfter !== null) {
+        // 'connection: close' makes Node drop the socket after the response
+        // flushes, so a PUT body still streaming in is discarded, not read.
+        res.writeHead(429, {
+          'content-type': 'application/json',
+          'retry-after': String(retryAfter),
+          'cache-control': 'no-store',
+          connection: 'close',
+        });
+        res.end(JSON.stringify({ error: 'Too many requests. Slow down and retry.' }));
+        return;
+      }
+    }
+
     const body = method === 'PUT' || method === 'POST' ? await readBody(req) : null;
 
     // Static Checkout redirect pages (Stripe returns the browser here).
@@ -153,6 +184,13 @@ async function handleBillingRoute(
     return;
   }
   sendJson(404, { error: 'Not found.' });
+}
+
+/** Client IP: first hop of x-forwarded-for (set by Vercel), else the socket. */
+function clientIp(req: http.IncomingMessage): string {
+  const fwd = req.headers['x-forwarded-for'];
+  const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim();
+  return first || req.socket.remoteAddress || 'unknown';
 }
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {

@@ -1,4 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "pnpm --filter @northkeep/sync-server build"
+  "buildCommand": "pnpm --filter @northkeep/sync-server build",
+  "regions": ["iad1"]
 }
