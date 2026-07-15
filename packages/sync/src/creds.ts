@@ -21,6 +21,10 @@ import { getPlatform } from '@northkeep/core';
 
 const ACCOUNT_LABEL = Buffer.from('nk-sync-account-v1', 'utf8');
 const TOKEN_LABEL = Buffer.from('nk-sync-token-v1', 'utf8');
+// The hosted shareable-scope connector (ADR 0019) authenticates with a token
+// derived under its OWN label, so a stolen connector token can never be replayed
+// as the sync token (and vice versa) — different domain, different capability.
+const CONNECTOR_TOKEN_LABEL = Buffer.from('nk-connector-token-v1', 'utf8');
 
 export interface SyncCreds {
   /** Public lookup id the server keys storage on. */
@@ -40,9 +44,23 @@ export function deriveSyncCreds(deviceSecret: Buffer): SyncCreds {
 }
 
 /**
+ * The bearer token the desktop presents to the hosted connector's /pair/start
+ * (ADR 0019). Distinct label from the sync token; the connector server keys its
+ * account on tokenHash() of this, so it learns only "an account" and can decrypt
+ * nothing. Same device secret on another machine derives the same token.
+ */
+export function deriveConnectorToken(deviceSecret: Buffer): string {
+  if (deviceSecret.length !== 32) {
+    throw new Error('device secret must be 32 bytes');
+  }
+  return keyedHash(CONNECTOR_TOKEN_LABEL, deviceSecret);
+}
+
+/**
  * What the server stores and compares against — a plain SHA-256 of the token
  * (node:crypto, so the server needs no libsodium). A DB leak therefore reveals
- * only the hash, and even the token itself decrypts nothing.
+ * only the hash, and even the token itself decrypts nothing. Used for both the
+ * sync token and the connector token.
  */
 export function tokenHash(token: string): string {
   return createHash('sha256').update(token, 'utf8').digest('hex');
