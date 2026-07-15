@@ -153,9 +153,14 @@ every milestone; if a limit is removed, say when and how.*
 - **Apple Silicon (arm64) only for now.** The signed DMG bundles an arm64
   Node runtime; Intel Macs aren't built yet (ADR 0012 targets aarch64 first).
   Running from source still works on any platform.
-- **No auto-update.** Updates are manual — download the new DMG. An in-app
-  updater would phone home, against the no-telemetry invariant (#5); if we add
-  one it'll be its own opt-in, signed, content-free decision (future ADR).
+- **No auto-update; updates are manual.** There is a **manual** "Check for
+  updates" button (Settings → About, ADR 0017): it runs only when you click it,
+  does a single version lookup against the public GitHub releases page, sends no
+  vault data or identifiers, and downloads/installs nothing (it points you at the
+  release page to grab the new DMG yourself). There is no background polling, no
+  on-launch check, and no auto-install — the app still never phones home on its
+  own. A signed background auto-updater remains possible future work behind its
+  own opt-in ADR.
 - **The bundled Node runtime is a version we redistribute.** We pin it and
   verify it at build time two ways: the tarball's SHA-256 against
   `SHASUMS256.txt`, and a **GPG signature** over that SHASUMS file against a

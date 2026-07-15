@@ -73,6 +73,32 @@ import { LockedError, type UiSession } from './session.js';
 
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 
+// The shipped app version, shown in Settings → About and compared against the
+// latest GitHub release by the manual update check (ADR 0017). MUST be bumped
+// to match apps/desktop/src-tauri/tauri.conf.json on every release, or the
+// check will misreport. Kept as a constant (not read from a package.json) to
+// avoid bundle-path fragility.
+const APP_VERSION = '0.14.0';
+const RELEASES_LATEST_API = 'https://api.github.com/repos/jay-silva/northkeep/releases/latest';
+const RELEASES_PAGE = 'https://github.com/jay-silva/northkeep/releases/latest';
+
+/** Semver core of a tag, ignoring a leading `v` and any `-m9`-style suffix. */
+function versionCore(s: string): [number, number, number] {
+  const core = String(s).replace(/^v/i, '').split('-')[0] ?? '';
+  const p = core.split('.').map((n) => Number.parseInt(n, 10) || 0);
+  return [p[0] ?? 0, p[1] ?? 0, p[2] ?? 0];
+}
+/** True when `latest` is a higher version than `current`. */
+function isNewerVersion(latest: string, current: string): boolean {
+  const a = versionCore(latest);
+  const b = versionCore(current);
+  for (let i = 0; i < 3; i++) {
+    if (a[i]! > b[i]!) return true;
+    if (a[i]! < b[i]!) return false;
+  }
+  return false;
+}
+
 interface ImportJob {
   id: string;
   createdAt: number;
@@ -194,7 +220,42 @@ async function dispatch(
       // opens external links via /api/open (WKWebView can't open a real new
       // browser tab); in plain-browser mode it keeps native target=_blank.
       desktop: process.env.NORTHKEEP_DESKTOP === '1',
+      version: APP_VERSION,
     });
+  }
+
+  // Manual, user-initiated update check (ADR 0017). Fires ONLY when the user
+  // clicks "Check for updates" — never on a schedule, never in the background.
+  // A single GET to the public GitHub releases API; sends no vault data and no
+  // identifiers (just the request IP and a static User-Agent, like any HTTP
+  // call). Downloads/installs nothing; on an update it points the user at the
+  // release page. This is the only sanctioned outbound host besides the model
+  // provider the user chose and their own sync server.
+  if (method === 'GET' && route === '/api/check-update') {
+    try {
+      const res = await fetch(RELEASES_LATEST_API, {
+        headers: { 'User-Agent': 'NorthKeep-UpdateCheck', Accept: 'application/vnd.github+json' },
+        redirect: 'error',
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) return bad(502, 'Could not reach the update service. Try again later.');
+      const data = (await res.json()) as { tag_name?: unknown; html_url?: unknown; published_at?: unknown };
+      const latest = String(data.tag_name ?? '').replace(/^v/i, '');
+      if (!latest) return bad(502, 'The update service returned an unexpected response.');
+      const url =
+        typeof data.html_url === 'string' && /^https:\/\/github\.com\//.test(data.html_url)
+          ? data.html_url
+          : RELEASES_PAGE;
+      return ok({
+        current: APP_VERSION,
+        latest,
+        updateAvailable: isNewerVersion(latest, APP_VERSION),
+        url,
+        publishedAt: typeof data.published_at === 'string' ? data.published_at : null,
+      });
+    } catch {
+      return bad(502, 'Could not reach the update service. Check your connection and try again.');
+    }
   }
 
   // Open an external URL in the user's real browser. Only meaningful in the

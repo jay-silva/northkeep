@@ -195,6 +195,7 @@
   <button data-sub="import" class="active">Import</button>
   <button data-sub="activity">Activity</button>
   <button data-sub="sync">Sync</button>
+  <button data-sub="about">About</button>
 </nav>
 <main>
   <div id="degradedBanner" class="banner" hidden>
@@ -456,6 +457,13 @@
     </div>
     <div id="connectCards"></div>
   </section>
+  <section id="view-about" hidden>
+    <h3 class="sect" style="margin-top:0">About NorthKeep</h3>
+    <p class="muted">You're running NorthKeep <strong>v<span id="aboutVersion">…</span></strong>.</p>
+    <button class="btn primary" id="checkUpdateBtn">Check for updates</button>
+    <p id="updateResult" style="margin-top:12px;font-size:14px"></p>
+    <p class="muted" style="font-size:12px;margin-top:14px">This checks the public release page only when you click the button. Nothing about you or your vault is sent, and updates are never downloaded or installed automatically.</p>
+  </section>
 </main>
 <div class="overlay" id="unlockOverlay" hidden>
   <div class="dialog">
@@ -608,7 +616,7 @@
   });
 
   // --- views: top-level tabs, plus a Settings group holding Import/Activity/Sync
-  const sections = ['converse', 'memories', 'redact', 'connect', 'import', 'activity', 'sync'];
+  const sections = ['converse', 'memories', 'redact', 'connect', 'import', 'activity', 'sync', 'about'];
   let currentSub = 'import';
   function runLoader(v) {
     if (v === 'activity') loadLog();
@@ -616,7 +624,34 @@
     else if (v === 'converse') openConverse();
     else if (v === 'sync') loadSyncStatus();
     else if (v === 'connect') loadConnect();
+    else if (v === 'about') loadAbout();
   }
+  function loadAbout() {
+    $('aboutVersion').textContent = status.version || '—';
+    $('updateResult').textContent = '';
+  }
+  $('checkUpdateBtn').addEventListener('click', async () => {
+    const btn = $('checkUpdateBtn'), out = $('updateResult');
+    btn.disabled = true; out.className = 'muted'; out.textContent = 'Checking…';
+    try {
+      const r = await api('/api/check-update');
+      out.textContent = '';
+      if (r.updateAvailable) {
+        out.className = '';
+        out.appendChild(el('strong', '', 'Update available: v' + r.latest));
+        out.appendChild(document.createTextNode(' (you have v' + r.current + '). '));
+        const a = el('a', 'btn primary', 'Download'); a.href = r.url; a.target = '_blank'; a.rel = 'noopener noreferrer';
+        a.style.cssText = 'text-decoration:none;font-size:12px;padding:2px 12px;margin-left:6px';
+        out.appendChild(a);
+      } else {
+        out.className = 'muted';
+        out.textContent = "You're on the latest version (v" + r.current + ').';
+      }
+    } catch (e) {
+      out.className = 'err';
+      out.textContent = (e && e.message) || 'Could not check for updates.';
+    } finally { btn.disabled = false; }
+  });
   function showSection(v) { sections.forEach((s) => { $('view-' + s).hidden = s !== v; }); }
   function showTop(v) {
     document.querySelectorAll('#mainNav button').forEach((x) => x.classList.toggle('active', x.dataset.view === v));
