@@ -316,6 +316,7 @@
         <div class="grow"></div>
         <button class="btn primary" id="addMemBtn">Remember</button>
       </div>
+      <p class="muted" id="addMemTypeHelp" style="font-size:12px;margin:8px 2px 4px"></p>
       <div class="err" id="addMemErr"></div>
       <div class="muted" id="addMemOk" style="font-size:13px;min-height:18px"></div>
     </div>
@@ -1052,11 +1053,30 @@
   // --- add a memory (GUI-created, explicit scope). '+' isn't in the scope
   // charset, so NEW_SCOPE can never collide with a real scope value.
   const NEW_SCOPE = '+new';
+  // Plain-language glosses for the memory types (jargon otherwise). The short
+  // label shows in the dropdown; the fuller help line explains the choice.
+  const TYPE_LABELS = {
+    episodic: 'episodic — something that happened',
+    semantic: 'semantic — a durable fact',
+    procedural: 'procedural — how you like things done',
+    working: 'working — a current, temporary note',
+    identity: 'identity — who you are',
+  };
+  const TYPE_HELP = {
+    episodic: 'An event or experience. e.g. "Met the Hendersons about their filing on June 12."',
+    semantic: 'A lasting fact worth remembering. e.g. "I prefer concise answers without filler."',
+    procedural: 'A preference or how-to. e.g. "Draft my emails short and direct, no bullet points."',
+    working: 'Current context that ages out. e.g. "This week I am focused on the budget review."',
+    identity: 'A stable fact about who you are. e.g. "I am a compliance officer and EMS lieutenant."',
+  };
   for (const t of TYPES) {
-    const o = el('option', undefined, t);
+    const o = el('option', undefined, TYPE_LABELS[t] || t);
     o.value = t;
     $('addMemType').appendChild(o);
   }
+  function updateTypeHelp() { $('addMemTypeHelp').textContent = TYPE_HELP[$('addMemType').value] || ''; }
+  $('addMemType').addEventListener('change', updateTypeHelp);
+  updateTypeHelp();
   $('addMemScope').addEventListener('change', () => {
     const isNew = $('addMemScope').value === NEW_SCOPE;
     $('addMemNewScope').hidden = !isNew;
