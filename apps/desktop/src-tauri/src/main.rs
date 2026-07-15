@@ -105,6 +105,10 @@ fn main() {
     tauri::Builder::default()
         .setup(|app| {
             let mut child = server_command(app)
+                // Tell the server it is running inside the desktop shell, so the
+                // web UI opens external links via /api/open (WKWebView won't open
+                // target=_blank in a new browser) instead of a dead new-tab.
+                .env("NORTHKEEP_DESKTOP", "1")
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .spawn()
