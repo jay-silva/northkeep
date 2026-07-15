@@ -69,6 +69,15 @@ describe('sync server rate limiting (HTTP wiring)', () => {
     expect((await status('z'.repeat(64))).status).toBe(429);
   });
 
+  it('non-/api/ paths are throttled too — no unthrottled bypass (review H1)', async () => {
+    await start('2'); // account cap 2 → IP ceiling 8
+    const hit = (path: string): Promise<Response> => fetch(`${base}${path}`);
+    for (let i = 0; i < 8; i++) expect((await hit('/nope')).status).not.toBe(429);
+    expect((await hit('/nope')).status).toBe(429);
+    // The static billing pages share the same IP ceiling.
+    expect((await hit('/billing/success')).status).toBe(429);
+  });
+
   it('NORTHKEEP_SYNC_RATE_LIMIT=0 disables the throttle', async () => {
     await start('0');
     for (let i = 0; i < 10; i++) expect((await status(TOKEN_A)).status).toBe(404);

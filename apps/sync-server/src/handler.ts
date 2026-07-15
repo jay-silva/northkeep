@@ -64,6 +64,14 @@ export async function handleSync(
   storage: Storage,
   options: SyncOptions = {},
 ): Promise<SyncResponse> {
+  // Unknown routes 404 BEFORE the access gate: the subscription check costs a
+  // DB round-trip, and it must not be reachable on paths the server doesn't
+  // serve (that was a rate-limit-bypass amplifier — adversarial review H1).
+  const knownRoute =
+    (req.method === 'GET' && (req.path === '/api/status' || req.path === '/api/blob')) ||
+    (req.method === 'PUT' && req.path === '/api/blob');
+  if (!knownRoute) return json(404, { error: 'Not found.' });
+
   if (!req.token || req.token.length < 16) {
     return json(401, { error: 'Missing or malformed bearer token.' });
   }

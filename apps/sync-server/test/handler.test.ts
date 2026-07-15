@@ -99,6 +99,28 @@ describe('handleSync', () => {
     expect(denied.status).toBe(403);
   });
 
+  it('unknown routes 404 before the access gate — no subscription lookup, no auth probe (review H1)', async () => {
+    const s = new InMemoryStorage();
+    let gateCalls = 0;
+    const opts = {
+      subscriptionActive: async () => {
+        gateCalls++;
+        return false;
+      },
+    };
+    // A non-subscribed token on an unserved path must get 404, not 402, and
+    // must not cost a subscription (DB) lookup.
+    expect((await handleSync(req({ path: '/x' }), s, opts)).status).toBe(404);
+    expect((await handleSync(req({ method: 'PUT', path: '/x', body: fakeVaultBlob() }), s, opts)).status).toBe(404);
+    expect((await handleSync(req({ method: 'POST', path: '/api/status' }), s, opts)).status).toBe(404);
+    expect(gateCalls).toBe(0);
+    // Tokenless unknown path is also a plain 404 (no 401 auth oracle).
+    expect((await handleSync(req({ path: '/x', token: null }), s, opts)).status).toBe(404);
+    // Known routes still hit the gate and 402.
+    expect((await handleSync(req({ path: '/api/status' }), s, opts)).status).toBe(402);
+    expect(gateCalls).toBe(1);
+  });
+
   it('parseAllowlist parses hashes and returns null when unset', async () => {
     const { parseAllowlist } = await import('../src/handler.js');
     expect(parseAllowlist(undefined)).toBeNull();

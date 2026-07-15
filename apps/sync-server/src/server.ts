@@ -52,11 +52,13 @@ export function createSyncServer(storage: Storage, billing: BillingDeps | null =
     const auth = req.headers['authorization'];
     const token = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
 
-    // Throttle before reading the body or touching storage/Stripe. Two gates:
-    // a per-IP ceiling on everything (rotating random tokens can't mint fresh
+    // Throttle EVERY path before reading the body or touching storage/Stripe.
+    // Two gates: a per-IP ceiling (rotating random tokens can't mint fresh
     // keys past it, and it caps an unauthenticated webhook flood), plus the
-    // tighter per-account window when a token is presented.
-    if (limiter && ipLimiter && url.pathname.startsWith('/api/')) {
+    // tighter per-account window when a token is presented. No path carve-out:
+    // scoping this to /api/ left non-API paths as an unthrottled bypass
+    // (adversarial review H1).
+    if (limiter && ipLimiter) {
       let retryAfter = ipLimiter.check(`ip:${clientIp(req)}`);
       if (retryAfter === null && token) {
         const accountKey = createHash('sha256').update(token, 'utf8').digest('hex');
