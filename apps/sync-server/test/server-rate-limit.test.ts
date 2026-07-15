@@ -50,15 +50,23 @@ describe('sync server rate limiting (HTTP wiring)', () => {
     expect((await status(TOKEN_B)).status).toBe(404);
   });
 
-  it('throttles tokenless requests by IP (the webhook flood path)', async () => {
-    await start('2');
+  it('throttles tokenless requests by IP at 4x the account cap (webhook flood path)', async () => {
+    await start('2'); // account cap 2 → IP ceiling 8
     const hit = (): Promise<Response> =>
       fetch(`${base}/api/webhook`, { method: 'POST', body: 'x' });
     // Billing is off in this harness so the route 404s — what matters is the
     // limiter engages before dispatch and flips to 429.
-    expect((await hit()).status).not.toBe(429);
-    expect((await hit()).status).not.toBe(429);
+    for (let i = 0; i < 8; i++) expect((await hit()).status).not.toBe(429);
     expect((await hit()).status).toBe(429);
+  });
+
+  it('rotating random bearer tokens cannot mint fresh keys past the IP ceiling', async () => {
+    await start('2'); // account cap 2 → IP ceiling 8
+    for (let i = 0; i < 8; i++) {
+      const r = await status(String(i).repeat(64));
+      expect(r.status).not.toBe(429);
+    }
+    expect((await status('z'.repeat(64))).status).toBe(429);
   });
 
   it('NORTHKEEP_SYNC_RATE_LIMIT=0 disables the throttle', async () => {

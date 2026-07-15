@@ -28,14 +28,18 @@ every milestone; if a limit is removed, say when and how.*
   cap and rate limiting are the only guards on an open (no-allowlist,
   no-Stripe) server, so don't expose one publicly.
 - **Rate limiting is per-instance, not a precise global quota.** Every `/api/*`
-  request is throttled per account (or per client IP when no token is
-  presented, which covers the Stripe webhook path): default 120 requests per
-  5 minutes, returning 429 with `Retry-After`. Tune with
-  `NORTHKEEP_SYNC_RATE_LIMIT` (requests per 5-minute window; `0` disables).
-  The counter lives in process memory, so on serverless hosting each warm
-  instance counts separately — the effective ceiling is the limit times the
-  number of instances. It's a first line against an abusive account or a
-  webhook flood, not a metered quota.
+  request passes two throttles: a per-IP ceiling (4x the account cap — several
+  accounts can share a NAT, but rotating random tokens can't mint fresh keys
+  past it, and it caps an unauthenticated webhook flood) and, when a token is
+  presented, a per-account window (default 120 requests per 5 minutes). Over
+  either → 429 with `Retry-After`. Tune with `NORTHKEEP_SYNC_RATE_LIMIT`
+  (account requests per 5-minute window; `0` disables both). Counters live in
+  process memory, so on serverless hosting each warm instance counts
+  separately — the effective ceiling is the limit times the number of
+  instances. The client IP comes from `x-forwarded-for` (platform-set on
+  Vercel; spoofable if you self-host directly on the internet, which
+  KNOWN-LIMITS already advises against for open servers). It's a first line
+  against an abusive account or a webhook flood, not a metered quota.
 - **Push before you pull on a machine you've edited.** Pulling replaces your
   local vault with the server's copy; unpushed local edits are moved to
   `vault.nkv.bak` (recoverable), not merged. There's no "you're ahead" warning
