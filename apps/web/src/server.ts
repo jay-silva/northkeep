@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defaultVaultPath } from '@northkeep/core';
+import { defaultVaultPath, setPlatform } from '@northkeep/core';
+import { nodePlatform } from '@northkeep/platform-node';
 import { handleApi } from './api.js';
 import { handleConverseStream } from './converse.js';
 import { UiSession } from './session.js';
@@ -32,6 +33,10 @@ export interface RunningUiServer {
 }
 
 export async function startUiServer(options: UiServerOptions = {}): Promise<RunningUiServer> {
+  // Register the Node platform adapters once, before any vault operation
+  // (ADR 0017 platform seam). Covers both the Tauri shell's direct exec and
+  // `northkeep ui`; idempotent if the CLI already registered.
+  setPlatform(nodePlatform());
   const vaultPath = options.vaultPath ?? defaultVaultPath();
   const session = new UiSession(vaultPath);
   const staticDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'static');

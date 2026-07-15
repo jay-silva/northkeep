@@ -1,8 +1,8 @@
 /**
- * Minimal type declarations for the subset of sodium-native v5 that NorthKeep
- * uses. sodium-native ships no types; the DefinitelyTyped package targets an
- * older major. Keep this in lockstep with crypto.ts — adding a sodium call
- * means adding its declaration here.
+ * Minimal type declarations for the subset of sodium-native v5 that the Node
+ * crypto adapter uses. sodium-native ships no types; the DefinitelyTyped package
+ * targets an older major. Keep this in lockstep with crypto.ts — adding a sodium
+ * call means adding its declaration here.
  */
 declare module 'sodium-native' {
   const sodium: {

@@ -13,7 +13,6 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@northkeep/core": "workspace:*",
-    "sodium-native": "^5.0.6"
+    "@northkeep/core": "workspace:*"
   }
 }

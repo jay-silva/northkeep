@@ -1,15 +1,31 @@
-import sodium from 'sodium-native';
+import type { CryptoProvider } from './crypto-provider.js';
+import { getPlatform } from './platform-context.js';
 
 /**
  * All cryptography in NorthKeep goes through this module and uses libsodium
  * primitives only (CLAUDE.md invariant #3). Design rationale: SPEC/decisions/0001.
+ *
+ * The primitives themselves now live behind CryptoProvider (the platform seam,
+ * ADR 0018) so the same code runs on Node (sodium-native) and, later, on a mobile
+ * runtime — but the constants, parameters, and byte formats below are FIXED and
+ * identical across platforms. The libsodium constants are inlined as literals so
+ * core carries no native dependency; @northkeep/platform-node asserts at startup
+ * that they still match the linked libsodium.
  */
 
 export const KEY_BYTES = 32;
-export const SALT_BYTES = sodium.crypto_pwhash_SALTBYTES; // 16
-export const NONCE_BYTES = sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES; // 24
-export const AEAD_OVERHEAD = sodium.crypto_aead_xchacha20poly1305_ietf_ABYTES; // 16
+export const SALT_BYTES = 16; // crypto_pwhash_SALTBYTES
+export const NONCE_BYTES = 24; // crypto_aead_xchacha20poly1305_ietf_NPUBBYTES
+export const AEAD_OVERHEAD = 16; // crypto_aead_xchacha20poly1305_ietf_ABYTES
 export const DEVICE_SECRET_BYTES = 32;
+
+// libsodium crypto_pwhash cost-limit constants, inlined (see module note).
+const OPSLIMIT_MIN = 1; // crypto_pwhash_OPSLIMIT_MIN
+const OPSLIMIT_MODERATE = 3; // crypto_pwhash_OPSLIMIT_MODERATE
+const MEMLIMIT_MIN = 8192; // crypto_pwhash_MEMLIMIT_MIN
+const MEMLIMIT_MODERATE = 268_435_456; // crypto_pwhash_MEMLIMIT_MODERATE (256 MiB)
+const OPSLIMIT_INTERACTIVE = 2; // crypto_pwhash_OPSLIMIT_INTERACTIVE
+const MEMLIMIT_INTERACTIVE = 67_108_864; // crypto_pwhash_MEMLIMIT_INTERACTIVE (64 MiB)
 
 export interface KdfParams {
   opslimit: number;
@@ -18,13 +34,13 @@ export interface KdfParams {
 
 /** Production parameters. Tests may pass INTERACTIVE for speed. */
 export const KDF_MODERATE: KdfParams = {
-  opslimit: sodium.crypto_pwhash_OPSLIMIT_MODERATE,
-  memlimit: sodium.crypto_pwhash_MEMLIMIT_MODERATE,
+  opslimit: OPSLIMIT_MODERATE,
+  memlimit: MEMLIMIT_MODERATE,
 };
 
 export const KDF_INTERACTIVE: KdfParams = {
-  opslimit: sodium.crypto_pwhash_OPSLIMIT_INTERACTIVE,
-  memlimit: sodium.crypto_pwhash_MEMLIMIT_INTERACTIVE,
+  opslimit: OPSLIMIT_INTERACTIVE,
+  memlimit: MEMLIMIT_INTERACTIVE,
 };
 
 /**
@@ -36,9 +52,9 @@ export function kdfParamsInBounds(kdf: KdfParams): boolean {
   return (
     Number.isInteger(kdf.opslimit) &&
     Number.isInteger(kdf.memlimit) &&
-    kdf.opslimit >= sodium.crypto_pwhash_OPSLIMIT_MIN &&
-    kdf.opslimit <= sodium.crypto_pwhash_OPSLIMIT_MODERATE * 4 &&
-    kdf.memlimit >= sodium.crypto_pwhash_MEMLIMIT_MIN &&
+    kdf.opslimit >= OPSLIMIT_MIN &&
+    kdf.opslimit <= OPSLIMIT_MODERATE * 4 &&
+    kdf.memlimit >= MEMLIMIT_MIN &&
     kdf.memlimit <= 1024 * 1024 * 1024 // 1 GiB absolute cap
   );
 }
@@ -51,14 +67,12 @@ export class VaultAuthError extends Error {
   }
 }
 
-export function randomBytes(length: number): Buffer {
-  const buf = Buffer.alloc(length);
-  sodium.randombytes_buf(buf);
-  return buf;
+export function randomBytes(length: number, provider: CryptoProvider = getPlatform().crypto): Buffer {
+  return provider.randomBytes(length);
 }
 
-export function generateDeviceSecret(): Buffer {
-  return randomBytes(DEVICE_SECRET_BYTES);
+export function generateDeviceSecret(provider: CryptoProvider = getPlatform().crypto): Buffer {
+  return randomBytes(DEVICE_SECRET_BYTES, provider);
 }
 
 /**
@@ -72,38 +86,35 @@ export function deriveMasterKey(
   deviceSecret: Buffer,
   salt: Buffer,
   kdf: KdfParams = KDF_MODERATE,
+  provider: CryptoProvider = getPlatform().crypto,
 ): Buffer {
   if (salt.length !== SALT_BYTES) throw new Error(`salt must be ${SALT_BYTES} bytes`);
   if (deviceSecret.length !== DEVICE_SECRET_BYTES) {
     throw new Error(`device secret must be ${DEVICE_SECRET_BYTES} bytes`);
   }
-  const passwordKey = sodium.sodium_malloc(KEY_BYTES);
   const passphraseBuf = Buffer.from(passphrase, 'utf8');
+  // The passphrase buffer must be zeroed even if pwhash throws (e.g. OOM during
+  // Argon2id), so it is created OUTSIDE the try and the try covers pwhash too.
+  let passwordKey: Buffer | null = null;
   try {
-    sodium.crypto_pwhash(
-      passwordKey,
-      passphraseBuf,
-      salt,
-      kdf.opslimit,
-      kdf.memlimit,
-      sodium.crypto_pwhash_ALG_ARGON2ID13,
-    );
-    const masterKey = sodium.sodium_malloc(KEY_BYTES);
-    sodium.crypto_generichash(masterKey, passwordKey, deviceSecret);
-    return masterKey;
+    passwordKey = provider.pwhash(passphraseBuf, salt, kdf.opslimit, kdf.memlimit);
+    // generichashSecure: the master key is held for the whole unlock session, so
+    // it goes into guarded memory (sodium_malloc on Node), matching the original.
+    return provider.generichashSecure(passwordKey, deviceSecret);
   } finally {
-    sodium.sodium_memzero(passwordKey);
-    sodium.sodium_memzero(passphraseBuf);
+    if (passwordKey) provider.secureZero(passwordKey);
+    provider.secureZero(passphraseBuf);
   }
 }
 
 export function encrypt(
-  plaintext: Buffer,
+  plaintext: Uint8Array,
   key: Buffer,
   associatedData: Buffer,
+  provider: CryptoProvider = getPlatform().crypto,
 ): { nonce: Buffer; ciphertext: Buffer } {
-  const nonce = randomBytes(NONCE_BYTES);
-  return { nonce, ciphertext: encryptWithNonce(plaintext, key, nonce, associatedData) };
+  const nonce = randomBytes(NONCE_BYTES, provider);
+  return { nonce, ciphertext: encryptWithNonce(plaintext, key, nonce, associatedData, provider) };
 }
 
 /**
@@ -111,21 +122,13 @@ export function encrypt(
  * header). The nonce MUST be freshly random per call — reuse breaks XChaCha20.
  */
 export function encryptWithNonce(
-  plaintext: Buffer,
+  plaintext: Uint8Array,
   key: Buffer,
   nonce: Buffer,
   associatedData: Buffer,
+  provider: CryptoProvider = getPlatform().crypto,
 ): Buffer {
-  const ciphertext = Buffer.alloc(plaintext.length + AEAD_OVERHEAD);
-  sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
-    ciphertext,
-    plaintext,
-    associatedData,
-    null,
-    nonce,
-    key,
-  );
-  return ciphertext;
+  return provider.aeadEncrypt(plaintext, associatedData, nonce, key);
 }
 
 export function decrypt(
@@ -133,31 +136,25 @@ export function decrypt(
   key: Buffer,
   nonce: Buffer,
   associatedData: Buffer,
+  provider: CryptoProvider = getPlatform().crypto,
 ): Buffer {
   if (ciphertext.length < AEAD_OVERHEAD) throw new VaultAuthError();
-  const plaintext = Buffer.alloc(ciphertext.length - AEAD_OVERHEAD);
   try {
-    sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(
-      plaintext,
-      null,
-      ciphertext,
-      associatedData,
-      nonce,
-      key,
-    );
+    return provider.aeadDecrypt(ciphertext, associatedData, nonce, key);
   } catch {
     throw new VaultAuthError();
   }
-  return plaintext;
 }
 
 /** BLAKE2b-256 hex digest — the hash-chain primitive. */
-export function blake2bHex(input: string | Buffer): string {
-  const out = Buffer.alloc(KEY_BYTES);
-  sodium.crypto_generichash(out, typeof input === 'string' ? Buffer.from(input, 'utf8') : input);
-  return out.toString('hex');
+export function blake2bHex(
+  input: string | Buffer,
+  provider: CryptoProvider = getPlatform().crypto,
+): string {
+  const message = typeof input === 'string' ? Buffer.from(input, 'utf8') : input;
+  return provider.generichash(message).toString('hex');
 }
 
-export function memzero(buf: Buffer): void {
-  sodium.sodium_memzero(buf);
+export function memzero(buf: Buffer, provider: CryptoProvider = getPlatform().crypto): void {
+  provider.secureZero(buf);
 }

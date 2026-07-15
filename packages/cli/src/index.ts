@@ -11,10 +11,12 @@ import {
   deviceSecretPath,
   ensureDeviceSecret,
   loadDeviceSecret,
+  setPlatform,
   withFileLock,
   type MemoryEntry,
   type MemoryType,
 } from '@northkeep/core';
+import { nodePlatform } from '@northkeep/platform-node';
 import {
   auditAsCsv,
   auditAsJson,
@@ -52,6 +54,10 @@ import {
 import { routingClear, routingList, routingSet } from './routingCmd.js';
 import { collectScopes, connectCmd, connectStatusCmd, disconnectCmd } from './connectCmd.js';
 import { runLauncher } from './launcher.js';
+
+// Register the Node platform adapters (crypto/sqlite/storage) exactly once,
+// before any vault or crypto operation runs (ADR 0018 platform seam).
+setPlatform(nodePlatform());
 
 const program = new Command();
 

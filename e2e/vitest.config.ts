@@ -5,6 +5,7 @@ import { defineConfig } from 'vitest/config';
 export default defineConfig({
   test: {
     include: ['e2e/**/*.test.ts'],
+    setupFiles: ['./vitest.setup.ts'],
     testTimeout: 120_000,
     hookTimeout: 120_000,
   },

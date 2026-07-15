@@ -18,6 +18,7 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.17.0",
     "@northkeep/core": "workspace:*",
+    "@northkeep/platform-node": "workspace:*",
     "@northkeep/redact": "workspace:*",
     "zod": "^3.25.0"
   }

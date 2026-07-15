@@ -16,6 +16,7 @@
   },
   "dependencies": {
     "@northkeep/core": "workspace:*",
+    "@northkeep/platform-node": "workspace:*",
     "@northkeep/importers": "workspace:*",
     "@northkeep/librarian": "workspace:*",
     "@northkeep/mcp-server": "workspace:*",

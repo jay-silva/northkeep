@@ -1,7 +1,3 @@
-import Database from 'better-sqlite3';
-import { randomUUID } from 'node:crypto';
-import fs from 'node:fs';
-import path from 'node:path';
 import { canonicalJson } from './canonical.js';
 import {
   KDF_MODERATE,
@@ -17,6 +13,9 @@ import {
   randomBytes,
   type KdfParams,
 } from './crypto.js';
+import type { CryptoProvider } from './crypto-provider.js';
+import { getPlatform, type Platform } from './platform-context.js';
+import type { SqliteDb } from './sqlite-driver.js';
 import { SCHEMA_DDL } from './schema.js';
 import {
   GENESIS_HASH,
@@ -54,6 +53,9 @@ export interface VaultOptions extends VaultCredentials {
   path: string;
   /** Override KDF cost (tests only — production uses MODERATE). */
   kdf?: KdfParams;
+  /** Platform adapters to use. Defaults to the registered getPlatform(); mobile
+   * may pass one directly instead of relying on the module-level default. */
+  platform?: Platform;
 }
 
 export interface VaultHeader {
@@ -83,52 +85,56 @@ interface EntryRow {
 }
 
 export class Vault {
-  private db: Database.Database;
+  private db: SqliteDb;
   private key: Buffer;
   private readonly salt: Buffer;
   private readonly kdf: KdfParams;
+  private readonly platform: Platform;
   readonly path: string;
   private closed = false;
 
   private constructor(
     vaultPath: string,
-    db: Database.Database,
+    db: SqliteDb,
     key: Buffer,
     salt: Buffer,
     kdf: KdfParams,
+    platform: Platform,
   ) {
     this.path = vaultPath;
     this.db = db;
     this.key = key;
     this.salt = salt;
     this.kdf = kdf;
+    this.platform = platform;
   }
 
   static create(options: VaultOptions): Vault {
-    if (fs.existsSync(options.path)) {
+    const platform = options.platform ?? getPlatform();
+    if (platform.storage.exists(options.path)) {
       throw new Error(`A vault already exists at ${options.path}. Refusing to overwrite it.`);
     }
     const kdf = options.kdf ?? KDF_MODERATE;
-    const salt = randomBytes(SALT_BYTES);
-    const key = deriveMasterKey(options.passphrase, options.deviceSecret, salt, kdf);
-    const db = new Database(':memory:');
+    const salt = randomBytes(SALT_BYTES, platform.crypto);
+    const key = deriveMasterKey(options.passphrase, options.deviceSecret, salt, kdf, platform.crypto);
+    const db = platform.sqlite.createEmpty();
     db.pragma('foreign_keys = ON');
     db.exec(SCHEMA_DDL);
     const setMeta = db.prepare('INSERT INTO vault_meta (key, value) VALUES (?, ?)');
     setMeta.run('schema_version', SCHEMA_VERSION);
-    setMeta.run('vault_id', randomUUID());
+    setMeta.run('vault_id', uuidv4(platform.crypto));
     setMeta.run('chain_head', GENESIS_HASH);
     setMeta.run('created_at', new Date().toISOString());
-    const vault = new Vault(options.path, db, key, salt, kdf);
+    const vault = new Vault(options.path, db, key, salt, kdf, platform);
     vault.save();
     return vault;
   }
 
   /** Parses and bounds-checks the plaintext header without decrypting anything. */
-  static readHeader(vaultPath: string): VaultHeader {
+  static readHeader(vaultPath: string, platform: Platform = getPlatform()): VaultHeader {
     let file: Buffer;
     try {
-      file = fs.readFileSync(vaultPath);
+      file = platform.storage.readBytes(vaultPath);
     } catch {
       throw new Error(`No vault found at ${vaultPath}. Run "northkeep init" first.`);
     }
@@ -152,9 +158,16 @@ export class Vault {
   }
 
   static open(options: VaultOptions): Vault {
-    const header = Vault.readHeader(options.path);
-    const key = deriveMasterKey(options.passphrase, options.deviceSecret, header.salt, header.kdf);
-    return Vault.openDecrypting(options.path, key, header);
+    const platform = options.platform ?? getPlatform();
+    const header = Vault.readHeader(options.path, platform);
+    const key = deriveMasterKey(
+      options.passphrase,
+      options.deviceSecret,
+      header.salt,
+      header.kdf,
+      platform.crypto,
+    );
+    return Vault.openDecrypting(options.path, key, header, platform);
   }
 
   /**
@@ -162,39 +175,44 @@ export class Vault {
    * `northkeep unlock`). Skips Argon2id entirely. Takes ownership of the key
    * buffer on success AND failure — callers must pass a copy if they reuse it.
    */
-  static openWithKey(vaultPath: string, masterKey: Buffer): Vault {
+  static openWithKey(vaultPath: string, masterKey: Buffer, platform: Platform = getPlatform()): Vault {
     let header: VaultHeader;
     try {
-      header = Vault.readHeader(vaultPath);
+      header = Vault.readHeader(vaultPath, platform);
     } catch (err) {
-      memzero(masterKey); // ownership promise holds even pre-decrypt
+      memzero(masterKey, platform.crypto); // ownership promise holds even pre-decrypt
       throw err;
     }
-    return Vault.openDecrypting(vaultPath, masterKey, header);
+    return Vault.openDecrypting(vaultPath, masterKey, header, platform);
   }
 
-  private static openDecrypting(vaultPath: string, key: Buffer, header: VaultHeader): Vault {
-    const file = fs.readFileSync(vaultPath);
+  private static openDecrypting(
+    vaultPath: string,
+    key: Buffer,
+    header: VaultHeader,
+    platform: Platform,
+  ): Vault {
+    const file = platform.storage.readBytes(vaultPath);
     const ciphertext = Buffer.from(file.subarray(HEADER_LENGTH));
     let image: Buffer;
     try {
-      image = decrypt(ciphertext, key, header.nonce, header.raw);
+      image = decrypt(ciphertext, key, header.nonce, header.raw, platform.crypto);
     } catch (err) {
-      memzero(key);
+      memzero(key, platform.crypto);
       throw err;
     }
     // (The image buffer itself is left to GC — RAM-resident plaintext while
     // unlocked is an accepted, documented limit.)
-    let db: Database.Database | null = null;
+    let db: SqliteDb | null = null;
     try {
-      db = new Database(image);
+      db = platform.sqlite.openFromImage(image);
       db.pragma('foreign_keys = ON');
-      const vault = new Vault(vaultPath, db, key, header.salt, header.kdf);
+      const vault = new Vault(vaultPath, db, key, header.salt, header.kdf, platform);
       vault.migrate();
       return vault;
     } catch (err) {
       db?.close();
-      memzero(key);
+      memzero(key, platform.crypto);
       throw err;
     }
   }
@@ -216,7 +234,7 @@ export class Vault {
       for (const row of rows) {
         const entry = rowToEntry(row);
         entry.prev_hash = prev;
-        const hash = computeEntryHash(entry);
+        const hash = computeEntryHash(entry, this.platform.crypto);
         update.run(prev, hash, entry.id);
         prev = hash;
       }
@@ -234,7 +252,7 @@ export class Vault {
   /** Serialize → encrypt with a fresh nonce → atomic replace, keeping the previous file as .bak. */
   save(): void {
     this.assertOpen();
-    const image = this.db.serialize();
+    const image = this.platform.sqlite.serialize(this.db);
     const header = Buffer.alloc(HEADER_LENGTH);
     MAGIC.copy(header, 0);
     this.salt.copy(header, MAGIC.length);
@@ -242,31 +260,11 @@ export class Vault {
     header.writeUInt32LE(this.kdf.memlimit, MAGIC.length + SALT_BYTES + 4);
     // The nonce lives inside the header, and the header is the AEAD associated
     // data — so the nonce must be in place before encrypting.
-    const nonce = randomBytes(NONCE_BYTES);
+    const nonce = randomBytes(NONCE_BYTES, this.platform.crypto);
     nonce.copy(header, MAGIC.length + SALT_BYTES + 8);
-    const ciphertext = encryptWithNonce(image, this.key, nonce, header);
-    const tmpPath = `${this.path}.tmp`;
-    const dir = path.dirname(this.path);
-    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
-    const fd = fs.openSync(tmpPath, 'w', 0o600);
-    try {
-      fs.writeSync(fd, header);
-      fs.writeSync(fd, ciphertext);
-      fs.fsyncSync(fd);
-    } finally {
-      fs.closeSync(fd);
-    }
-    if (fs.existsSync(this.path)) {
-      fs.copyFileSync(this.path, `${this.path}.bak`);
-    }
-    fs.renameSync(tmpPath, this.path);
-    // fsync the directory so the rename itself survives power loss.
-    const dirFd = fs.openSync(dir, 'r');
-    try {
-      fs.fsyncSync(dirFd);
-    } finally {
-      fs.closeSync(dirFd);
-    }
+    const ciphertext = encryptWithNonce(image, this.key, nonce, header, this.platform.crypto);
+    // Atomic replace (temp + fsync + rename + .bak) lives behind the storage seam.
+    this.platform.storage.writeAtomic(this.path, Buffer.concat([header, ciphertext]));
   }
 
   remember(input: RememberInput): MemoryEntry {
@@ -285,7 +283,7 @@ export class Vault {
     }
     const now = new Date().toISOString();
     const entry: MemoryEntry = {
-      id: randomUUID(),
+      id: uuidv4(this.platform.crypto),
       type: input.type,
       content: input.content,
       scope: input.scope?.trim() || 'personal',
@@ -306,7 +304,7 @@ export class Vault {
           ? null
           : (JSON.parse(JSON.stringify(input.metadata)) as Record<string, unknown>),
     };
-    entry.entry_hash = computeEntryHash(entry);
+    entry.entry_hash = computeEntryHash(entry, this.platform.crypto);
 
     this.db
       .prepare(
@@ -476,7 +474,7 @@ export class Vault {
   ): MemoryEntry {
     const now = new Date().toISOString();
     const next: MemoryEntry = {
-      id: randomUUID(),
+      id: uuidv4(this.platform.crypto),
       type: patch.type ?? old.type,
       content: patch.content ?? old.content,
       scope: patch.scope ?? old.scope,
@@ -495,7 +493,7 @@ export class Vault {
           ? null
           : (JSON.parse(JSON.stringify(old.metadata)) as Record<string, unknown>),
     };
-    next.entry_hash = computeEntryHash(next);
+    next.entry_hash = computeEntryHash(next, this.platform.crypto);
 
     const insert = this.db.prepare(
       `INSERT INTO memories
@@ -767,7 +765,7 @@ export class Vault {
       // Forgotten entries keep their original hashes for linkage, but their
       // content is blanked so the content check no longer applies.
       if (entry.forgotten_at === null) {
-        const expected = computeEntryHash(entry);
+        const expected = computeEntryHash(entry, this.platform.crypto);
         if (entry.entry_hash !== expected) {
           return { ok: false, error: `Entry ${entry.id} hash does not match its content.` };
         }
@@ -823,7 +821,7 @@ export class Vault {
     if (this.closed) return;
     this.closed = true;
     this.db.close();
-    memzero(this.key);
+    memzero(this.key, this.platform.crypto);
   }
 
   private getMeta(key: string): string {
@@ -851,7 +849,7 @@ export class Vault {
  * deliberately excluded — those fields change after the fact, and hashing
  * them would break the chain on every legitimate supersede/forget.
  */
-export function computeEntryHash(entry: MemoryEntry): string {
+export function computeEntryHash(entry: MemoryEntry, provider?: CryptoProvider): string {
   return blake2bHex(
     canonicalJson({
       id: entry.id,
@@ -866,7 +864,21 @@ export function computeEntryHash(entry: MemoryEntry): string {
       metadata: entry.metadata,
       prev_hash: entry.prev_hash,
     }),
+    provider ?? getPlatform().crypto,
   );
+}
+
+/**
+ * RFC 4122 v4 UUID built from platform random bytes — replaces node:crypto's
+ * randomUUID so vault.ts carries no Node dependency (the ids are random; there is
+ * no byte-exact contract to preserve, only the v4 shape).
+ */
+function uuidv4(provider: CryptoProvider): string {
+  const b = provider.randomBytes(16);
+  b[6] = (b[6]! & 0x0f) | 0x40; // version 4
+  b[8] = (b[8]! & 0x3f) | 0x80; // variant 10xx
+  const hex = b.toString('hex');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }
 
 function rowToEntry(row: EntryRow): MemoryEntry {

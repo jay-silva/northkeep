@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import sodium from 'sodium-native';
+import { getPlatform } from '@northkeep/core';
 
 /**
  * Sync credentials, derived entirely from the device secret (ADR 0009).
@@ -21,7 +21,6 @@ import sodium from 'sodium-native';
 
 const ACCOUNT_LABEL = Buffer.from('nk-sync-account-v1', 'utf8');
 const TOKEN_LABEL = Buffer.from('nk-sync-token-v1', 'utf8');
-const OUT_BYTES = 32;
 
 export interface SyncCreds {
   /** Public lookup id the server keys storage on. */
@@ -50,7 +49,7 @@ export function tokenHash(token: string): string {
 }
 
 function keyedHash(message: Buffer, key: Buffer): string {
-  const out = Buffer.alloc(OUT_BYTES);
-  sodium.crypto_generichash(out, message, key);
-  return out.toString('hex');
+  // Keyed BLAKE2b-256 via the platform crypto seam — identical bytes to the
+  // previous direct sodium call, but portable to the mobile adapter.
+  return getPlatform().crypto.generichash(message, key).toString('hex');
 }

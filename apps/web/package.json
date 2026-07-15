@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@northkeep/core": "workspace:*",
+    "@northkeep/platform-node": "workspace:*",
     "@northkeep/extract": "workspace:*",
     "@northkeep/importers": "workspace:*",
     "@northkeep/librarian": "workspace:*",
