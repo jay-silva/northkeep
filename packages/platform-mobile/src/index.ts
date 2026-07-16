@@ -15,5 +15,5 @@ export {
   type Argon2idParams,
   type NodeStyleArgon2Module,
 } from './argon2.js';
-export { assertSodiumConstants, type SodiumApi } from './sodium-api.js';
+export type { SodiumApi } from './sodium-api.js';
 export { isNamedParamsObject, toExpoBindParams } from './sqlite-params.js';

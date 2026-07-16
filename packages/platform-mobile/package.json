@@ -22,6 +22,7 @@
     "react-native-quick-crypto": ">=1.0.0"
   },
   "devDependencies": {
+    "@noble/ciphers": "^2.2.0",
     "@northkeep/platform-node": "workspace:*",
     "@types/libsodium-wrappers-sumo": "^0.8.2",
     "@types/sql.js": "^1.4.11",

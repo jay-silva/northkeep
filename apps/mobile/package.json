@@ -13,6 +13,7 @@
     "eas-build-post-install": "pnpm -r build"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.2.0",
     "@northkeep/core": "workspace:*",
     "@northkeep/platform-mobile": "workspace:*",
     "@northkeep/sync": "workspace:*",

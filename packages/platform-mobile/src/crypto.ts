@@ -1,6 +1,8 @@
 import type { CryptoProvider } from '@northkeep/core';
+import { AEAD_OVERHEAD, NONCE_BYTES } from '@northkeep/core';
+import { xchacha20poly1305 } from '@noble/ciphers/chacha.js';
 import { type Argon2idFn, pwhashViaArgon2id } from './argon2.js';
-import { assertSodiumConstants, type SodiumApi } from './sodium-api.js';
+import type { SodiumApi } from './sodium-api.js';
 
 /**
  * Mobile CryptoProvider: the platform-node reference (sodium-native) rebuilt on
@@ -29,7 +31,19 @@ export interface MobileCryptoDeps {
 }
 
 export function createMobileCryptoProvider({ sodium, argon2id }: MobileCryptoDeps): CryptoProvider {
-  assertSodiumConstants(sodium);
+  // Fail closed (invariant #6 / ADR 0021): the AEAD overhead and nonce size are
+  // inlined in @northkeep/core and the vault format depends on them. noble's
+  // XChaCha requires exactly NONCE_BYTES, and an empty message encrypts to just
+  // the auth tag, so the ciphertext length IS the overhead.
+  const probe = xchacha20poly1305(new Uint8Array(32), new Uint8Array(NONCE_BYTES), new Uint8Array(0)).encrypt(
+    new Uint8Array(0),
+  );
+  if (probe.length !== AEAD_OVERHEAD) {
+    throw new Error(
+      `@northkeep/platform-mobile: AEAD overhead ${probe.length} does not match core ` +
+        `AEAD_OVERHEAD=${AEAD_OVERHEAD}; refusing to run.`,
+    );
+  }
   return {
     pwhash(passphrase, salt, opslimit, memlimit) {
       // Plain buffer (no guarded memory on RN) — contract-documented difference.
@@ -52,16 +66,15 @@ export function createMobileCryptoProvider({ sodium, argon2id }: MobileCryptoDep
     },
 
     aeadEncrypt(plaintext, aad, nonce, key) {
-      return asBuffer(
-        sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(plaintext, aad, null, nonce, key),
-      );
+      // XChaCha20-Poly1305 via @noble/ciphers (pure JS, accepts the binary AAD),
+      // NOT the native libsodium binding, whose AEAD only takes a string AAD.
+      // Byte-identical to desktop's libsodium (test/byte-exact.test.ts).
+      return asBuffer(xchacha20poly1305(key, nonce, aad).encrypt(plaintext));
     },
 
     aeadDecrypt(ciphertext, aad, nonce, key) {
-      // The backend throws on authentication failure; core wraps VaultAuthError.
-      return asBuffer(
-        sodium.crypto_aead_xchacha20poly1305_ietf_decrypt(null, ciphertext, aad, nonce, key),
-      );
+      // noble throws on authentication failure; core wraps VaultAuthError.
+      return asBuffer(xchacha20poly1305(key, nonce, aad).decrypt(ciphertext));
     },
 
     randomBytes(length) {
