@@ -44,6 +44,13 @@ export const ROW_PREFIX = 'nkc1';
 
 /** The server-environment KEK pepper must be at least this many bytes. */
 export const KEK_PEPPER_MIN_BYTES = 32;
+/**
+ * ...and at most this many: it is used as a keyed-BLAKE2b key, whose max is 64
+ * bytes (crypto_generichash_KEYBYTES_MAX). A longer pepper would pass the
+ * startup floor check then throw inside every deriveKek at request time (a total
+ * per-request outage). Reject it at parse so misconfig fails closed at boot.
+ */
+export const KEK_PEPPER_MAX_BYTES = 64;
 
 /**
  * A fixed, DEV/TEST-ONLY pepper so InMemory storage (local dev and the test
@@ -60,9 +67,9 @@ export const DEV_KEK_PEPPER: Uint8Array = new Uint8Array(KEK_PEPPER_MIN_BYTES).f
 export function parseKekPepper(raw: string | undefined): Uint8Array | null {
   if (!raw) return null;
   const bytes = new Uint8Array(Buffer.from(raw, 'base64'));
-  if (bytes.length < KEK_PEPPER_MIN_BYTES) {
+  if (bytes.length < KEK_PEPPER_MIN_BYTES || bytes.length > KEK_PEPPER_MAX_BYTES) {
     throw new Error(
-      `CONNECTOR_KEK_PEPPER must decode to at least ${KEK_PEPPER_MIN_BYTES} bytes (base64). Got ${bytes.length}.`,
+      `CONNECTOR_KEK_PEPPER must decode to between ${KEK_PEPPER_MIN_BYTES} and ${KEK_PEPPER_MAX_BYTES} bytes (base64). Got ${bytes.length}.`,
     );
   }
   return bytes;

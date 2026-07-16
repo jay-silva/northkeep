@@ -38,7 +38,7 @@ import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handle
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { OAuthError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
-import { NeonConnectorStorage } from './neon-storage.js';
+import { InMemoryConnectorStorage } from './storage.js';
 import { ConnectorOAuthProvider } from './provider.js';
 import { createMcpServer } from './mcp.js';
 import { renderConsentPage } from './consent.js';
@@ -760,19 +760,22 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
 }
 
 /**
- * Resolve the KEK pepper at construction (ADR 0020). Fail CLOSED for a real
- * database: NeonConnectorStorage with no valid CONNECTOR_KEK_PEPPER throws, so
- * the hosted deploy cannot boot without a pepper held outside the DB. InMemory
- * storage (dev/test) uses the configured pepper if present, else the fixed
- * DEV pepper. `parseKekPepper` throws if the env value is present but too short.
+ * Resolve the KEK pepper at construction (ADR 0020). Fail CLOSED by ALLOWLIST:
+ * ONLY the in-memory dev/test store may run without a real pepper. Every other
+ * storage (Neon today, or any future real DB or proxy wrapper) MUST supply a
+ * valid CONNECTOR_KEK_PEPPER held outside the DB, or the server refuses to boot,
+ * so nobody can quietly wire a new backend that silently falls back to the
+ * public DEV pepper and re-opens the DB-alone break. InMemory uses the
+ * configured pepper if present, else the fixed non-secret DEV pepper.
+ * `parseKekPepper` throws if the env value is present but out of range.
  */
 function resolveKekPepper(storage: ConnectorStorage): Uint8Array {
   const configured = parseKekPepper(process.env.CONNECTOR_KEK_PEPPER);
-  if (storage instanceof NeonConnectorStorage) {
+  if (!(storage instanceof InMemoryConnectorStorage)) {
     if (!configured) {
       throw new Error(
-        'CONNECTOR_KEK_PEPPER is required when the connector runs on a real database. ' +
-          'Set it to a 32+ byte secret (base64), held OUTSIDE the database. ' +
+        'CONNECTOR_KEK_PEPPER is required for any connector store other than the in-memory dev store. ' +
+          'Set it to a 32-64 byte secret (base64), held OUTSIDE the database. ' +
           'Refusing to start without it (ADR 0020).',
       );
     }
