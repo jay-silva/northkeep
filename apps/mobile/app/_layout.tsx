@@ -80,6 +80,7 @@ export default function RootLayout() {
           <Stack.Screen name="device-link" options={{ title: 'Link your Mac' }} />
           <Stack.Screen name="unlock" options={{ title: 'Unlock', headerBackVisible: false }} />
           <Stack.Screen name="memories" options={{ title: 'Memories', headerBackVisible: false }} />
+          <Stack.Screen name="memory/new" options={{ title: 'Add memory', presentation: 'modal' }} />
           <Stack.Screen name="memory/[id]" options={{ title: 'Memory' }} />
           <Stack.Screen name="converse" options={{ title: 'Converse' }} />
           <Stack.Screen name="settings" options={{ title: 'Settings' }} />

@@ -12,12 +12,15 @@ import { Redirect, router, Stack } from 'expo-router';
 import type { MemoryEntry } from '@northkeep/core';
 import { filterMemories } from '../src/lib/search';
 import { useVaultSession } from '../src/lib/vault-session';
-import { ErrorNote, colors } from '../src/ui';
+import { ErrorNote, SyncPill, colors } from '../src/ui';
 
 /**
- * Memories (M6-1): read-only browse + keyword search over Vault.list(),
- * newest first (mirrors the web GUI). Pull-to-refresh runs a sync pull with
- * verify-before-replace. Editing arrives in M6-2.
+ * Memories (M6-2): browse + keyword search over Vault.list(), newest first
+ * (mirrors the web GUI). Pull-to-refresh runs a sync pull with
+ * verify-before-replace. The header "+ Add" opens the compose screen; each
+ * card opens detail where it can be edited or forgotten. The loud SyncPill
+ * shows the state of the last save/push (idle / syncing / synced /
+ * conflict-recovered / error), invariant #6 style.
  */
 export default function Memories() {
   const session = useVaultSession();
@@ -52,8 +55,8 @@ export default function Memories() {
         options={{
           headerRight: () => (
             <View style={styles.headerButtons}>
-              <Pressable onPress={() => router.push('/converse')} hitSlop={8}>
-                <Text style={styles.headerLink}>Converse</Text>
+              <Pressable onPress={() => router.push('/memory/new')} hitSlop={8}>
+                <Text style={styles.headerLink}>+ Add</Text>
               </Pressable>
               <Pressable onPress={() => router.push('/settings')} hitSlop={8}>
                 <Text style={styles.headerLink}>Settings</Text>
@@ -62,6 +65,7 @@ export default function Memories() {
           ),
         }}
       />
+      <SyncPill status={session.syncState.status} detail={session.syncState.detail} />
       <TextInput
         style={styles.search}
         value={query}

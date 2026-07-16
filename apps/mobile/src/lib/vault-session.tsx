@@ -8,21 +8,37 @@ import React, {
   useState,
 } from 'react';
 import * as LocalAuthentication from 'expo-local-authentication';
-import { Vault, deriveMasterKey, getPlatform, memzero, type MemoryEntry } from '@northkeep/core';
+import {
+  Vault,
+  deriveMasterKey,
+  getPlatform,
+  memzero,
+  type MemoryEntry,
+  type RememberInput,
+} from '@northkeep/core';
 import { deriveSyncCreds } from '@northkeep/sync';
-import { deleteIfExists, vaultPath } from './paths';
+import { deleteIfExists, recoverVaultFileIfMissing, vaultPath } from './paths';
 import {
   biometricUnlockEnabled,
   cacheMasterKeyHex,
   clearCachedMasterKey,
   loadDeviceSecretHex,
+  loadLastSyncVersion,
   loadSyncServerUrl,
   readCachedMasterKeyHex,
   saveDeviceSecretHex,
   saveLastSyncVersion,
   wipeAllSecrets,
 } from './secure-store';
-import { pullVaultMobile } from './sync';
+import {
+  fetchRemoteBlob,
+  pullVaultMobile,
+  pushVaultMobile,
+  stashRecoverableBak,
+  verifyBlobOpensWithKey,
+  type VerifiedRemoteBlob,
+} from './sync';
+import { initialSyncState, reduceSync, runSyncAfterSave, type SyncState } from './sync-flow';
 
 /**
  * The unlock-session state machine for M6-1 (link, unlock, browse). Holds the
@@ -56,6 +72,19 @@ export interface VaultSession {
   lock(opts?: { clearBiometricCache?: boolean }): Promise<void>;
   /** Pull from sync and reload; requires unlocked (the key verifies the download). */
   pullAndReload(): Promise<{ pulled: boolean }>;
+  /** Loud sync-state indicator (M6-2, invariant #6 style): idle / syncing / synced / conflict-recovered / error. */
+  syncState: SyncState;
+  /**
+   * M6-2 chain-correct edits. Each mutates the open Vault (remember / editMemory /
+   * forget preserve the append-only hash chain), writes with save() (serialize ->
+   * encrypt -> atomic write + .bak), reloads the list, then pushes with
+   * X-Base-Version optimistic concurrency (409 -> last-writer-wins conflict
+   * recovery). The local save always succeeds; a sync failure is surfaced via
+   * syncState, never lost silently.
+   */
+  addMemory(input: RememberInput): Promise<MemoryEntry>;
+  editMemory(id: string, patch: { content?: string; scope?: string; type?: MemoryEntry['type'] }): Promise<MemoryEntry>;
+  forgetMemory(id: string): Promise<MemoryEntry>;
   reloadEntries(): void;
   /** Wipes SecureStore and the local vault file; returns to onboarding. */
   signOutWipe(): Promise<void>;
@@ -75,6 +104,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
   const [entries, setEntries] = useState<MemoryEntry[]>([]);
   const [biometricCacheEnabled, setBiometricCacheEnabled] = useState(false);
   const [accountIdShort, setAccountIdShort] = useState<string | null>(null);
+  const [syncState, setSyncState] = useState<SyncState>(() => initialSyncState());
   const vaultRef = useRef<Vault | null>(null);
   const masterKeyRef = useRef<Buffer | null>(null);
 
@@ -147,6 +177,11 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       const platform = getPlatform();
       const secretHex = await loadDeviceSecretHex();
       if (!secretHex) throw new Error('This phone is not linked yet. Scan the link code from your computer first.');
+
+      // Crash-recovery for the non-atomic mobile save window (ADR 0021 item 3):
+      // if a prior save was interrupted the vault may be at .tmp/.bak, not the
+      // canonical path. Restore it before deciding whether to pull.
+      recoverVaultFileIfMissing();
 
       const path = vaultPath();
       if (!platform.storage.exists(path)) {
@@ -234,13 +269,117 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     return { pulled: true };
   }, [reloadEntries]);
 
+  /**
+   * Push the just-saved local vault, resolving a two-sided conflict with the
+   * last-writer-wins policy (07-MOBILE-LAUNCH-PLAN.md M6-2; see src/lib/sync-flow.ts
+   * for the decision rules and the pure unit tests). The local save has already
+   * happened by the time this runs, so a sync failure never loses the edit; it
+   * only leaves syncState in 'error' with a recoverable local vault.
+   *
+   * NEEDS ON-DEVICE VALIDATION: the whole network sequence (push, the 409 branch,
+   * fetch+verify+stash, re-push) has never run against a real sync server; only
+   * the sync-flow decision logic is unit-tested.
+   */
+  const pushAfterSave = useCallback(async (): Promise<void> => {
+    const secretHex = await loadDeviceSecretHex();
+    const serverUrl = await loadSyncServerUrl();
+    if (!secretHex || !serverUrl) {
+      // Saved locally; there is simply nowhere to push yet. Say so, don't error loudly.
+      setSyncState((s) =>
+        reduceSync(s, {
+          type: 'error',
+          message: 'Saved on this phone. Set a sync server in Settings to push it to your other devices.',
+        }),
+      );
+      return;
+    }
+    setSyncState((s) => reduceSync(s, { type: 'start' }));
+    const path = vaultPath();
+    // The remote fetched during conflict recovery, held so verify + stash act on
+    // the SAME verified blob the fetch port returned.
+    let pendingRemote: VerifiedRemoteBlob | null = null;
+    try {
+      const event = await runSyncAfterSave({
+        hasMasterKey: () => masterKeyRef.current !== null,
+        loadBaseVersion: () => loadLastSyncVersion(),
+        push: (baseVersion) =>
+          pushVaultMobile({ serverUrl, deviceSecretHex: secretHex, vaultPath: path, baseVersion }),
+        fetchRemote: async () => {
+          pendingRemote = await fetchRemoteBlob({ serverUrl, deviceSecretHex: secretHex });
+          return pendingRemote === null ? null : { version: pendingRemote.version };
+        },
+        verifyRemoteOpens: () => {
+          const key = masterKeyRef.current;
+          return pendingRemote !== null && key !== null && verifyBlobOpensWithKey(pendingRemote.blob, key);
+        },
+        stashRemote: () => {
+          if (pendingRemote !== null) stashRecoverableBak(path, pendingRemote.blob);
+        },
+        saveBaseVersion: (version) => saveLastSyncVersion(version),
+      });
+      setSyncState((s) => reduceSync(s, event));
+    } catch (err) {
+      // A thrown transport error (network, 402, unexpected HTTP): the local
+      // save already succeeded, so surface it without losing the edit.
+      setSyncState((s) => reduceSync(s, { type: 'error', message: err instanceof Error ? err.message : String(err) }));
+    }
+  }, []);
+
+  const addMemory = useCallback(
+    async (input: RememberInput): Promise<MemoryEntry> => {
+      const vault = vaultRef.current;
+      if (!vault) throw new Error('Unlock the vault before adding a memory.');
+      const entry = vault.remember(input); // appends to the hash chain
+      vault.save(); // serialize -> encrypt -> atomic write + .bak
+      reloadEntries();
+      await pushAfterSave();
+      return entry;
+    },
+    [reloadEntries, pushAfterSave],
+  );
+
+  const editMemory = useCallback(
+    async (
+      id: string,
+      patch: { content?: string; scope?: string; type?: MemoryEntry['type'] },
+    ): Promise<MemoryEntry> => {
+      const vault = vaultRef.current;
+      if (!vault) throw new Error('Unlock the vault before editing a memory.');
+      // editMemory supersedes by appending a new entry (append-only; the chain
+      // stays valid, ADR 0015). No-op patches return the original unchanged.
+      const entry = vault.editMemory(id, patch);
+      vault.save();
+      reloadEntries();
+      await pushAfterSave();
+      return entry;
+    },
+    [reloadEntries, pushAfterSave],
+  );
+
+  const forgetMemory = useCallback(
+    async (id: string): Promise<MemoryEntry> => {
+      const vault = vaultRef.current;
+      if (!vault) throw new Error('Unlock the vault before forgetting a memory.');
+      // forget tombstones in place (content blanked, row + hashes kept so the
+      // chain and the "forgotten on this date" fact both survive).
+      const entry = vault.forget(id);
+      vault.save();
+      reloadEntries();
+      await pushAfterSave();
+      return entry;
+    },
+    [reloadEntries, pushAfterSave],
+  );
+
   const signOutWipe = useCallback(async () => {
     closeSession();
     await wipeAllSecrets();
     deleteIfExists(vaultPath());
     deleteIfExists(`${vaultPath()}.bak`);
+    deleteIfExists(`${vaultPath()}.tmp`);
     setBiometricCacheEnabled(false);
     setAccountIdShort(null);
+    setSyncState(initialSyncState());
     setStatus('unlinked');
   }, [closeSession]);
 
@@ -260,6 +399,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       unlockWithBiometrics,
       lock,
       pullAndReload,
+      syncState,
+      addMemory,
+      editMemory,
+      forgetMemory,
       reloadEntries,
       signOutWipe,
       getMemory,
@@ -274,6 +417,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       unlockWithBiometrics,
       lock,
       pullAndReload,
+      syncState,
+      addMemory,
+      editMemory,
+      forgetMemory,
       reloadEntries,
       signOutWipe,
       getMemory,

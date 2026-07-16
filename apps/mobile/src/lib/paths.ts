@@ -36,3 +36,40 @@ export function deleteIfExists(uri: string): void {
     // directory is ciphertext and the OS may purge it at will.
   }
 }
+
+/**
+ * Crash-recovery for the non-atomic mobile writeAtomic window (ADR 0021 item 3,
+ * a prerequisite for M6-2 writes). The mobile storage adapter writes `.tmp`,
+ * copies the live vault to `.bak`, DELETES the target, then moves `.tmp` into
+ * place; a crash between the delete and the move leaves NO file at the canonical
+ * path, with the new image at `.tmp` and the previous at `.bak` (both complete,
+ * never torn). core does not read either, so recover here BEFORE opening:
+ * prefer `.tmp` (the newer, in-flight write), else fall back to `.bak`.
+ *
+ * A no-op when the vault file already exists (the common case). Returns which
+ * source it recovered from, or null if nothing was needed/available.
+ *
+ * NEEDS ON-DEVICE VALIDATION: the expo-file-system File move/copy/exists calls
+ * here have never executed off a device, and the crash window itself can only be
+ * reproduced on hardware. This is reviewable recovery LOGIC, not proven behavior.
+ */
+export function recoverVaultFileIfMissing(): 'tmp' | 'bak' | null {
+  const target = new File(vaultPath());
+  if (target.exists) return null;
+  try {
+    const tmp = new File(`${target.uri}.tmp`);
+    if (tmp.exists) {
+      tmp.move(target);
+      return 'tmp';
+    }
+    const bak = new File(`${target.uri}.bak`);
+    if (bak.exists) {
+      bak.copy(target); // keep .bak in place as a second copy until the next save
+      return 'bak';
+    }
+  } catch {
+    // If recovery itself fails, fall through: the caller will report "no vault"
+    // rather than crash, and the .tmp/.bak files remain for manual recovery.
+  }
+  return null;
+}

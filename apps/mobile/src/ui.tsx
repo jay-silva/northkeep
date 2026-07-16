@@ -8,6 +8,7 @@ import {
   type StyleProp,
   type ViewStyle,
 } from 'react-native';
+import { MEMORY_TYPES, type MemoryType } from '@northkeep/core';
 
 /**
  * Minimal shared UI for the M6-1 skeleton: enough visual consistency to
@@ -84,6 +85,65 @@ export function FieldLabel({ children }: { children: React.ReactNode }) {
   return <Text style={styles.fieldLabel}>{children}</Text>;
 }
 
+/** Single-select chip row over the five memory types (shared by add + edit). */
+export function TypeChips({ value, onChange }: { value: MemoryType; onChange: (t: MemoryType) => void }) {
+  return (
+    <View style={styles.chips}>
+      {MEMORY_TYPES.map((t) => {
+        const selected = t === value;
+        return (
+          <Text
+            key={t}
+            onPress={() => onChange(t)}
+            style={[styles.chip, selected ? styles.chipSelected : styles.chipIdle]}
+            accessibilityRole="button"
+            accessibilityState={{ selected }}
+          >
+            {t}
+          </Text>
+        );
+      })}
+    </View>
+  );
+}
+
+/**
+ * Loud sync-state indicator (M6-2, invariant #6 style): the sync status is
+ * never hidden. 'error' and 'conflict-recovered' additionally show their detail
+ * line so the user always knows when an edit did not reach the server or when a
+ * two-sided conflict moved the other device's version to a recoverable .bak.
+ */
+export function SyncPill({
+  status,
+  detail,
+}: {
+  status: 'idle' | 'syncing' | 'synced' | 'conflict-recovered' | 'error';
+  detail: string | null;
+}) {
+  const map = {
+    idle: { label: 'Idle', dot: colors.muted, fg: colors.muted },
+    syncing: { label: 'Syncing...', dot: colors.accent, fg: colors.accent },
+    synced: { label: 'Synced', dot: '#4cc38a', fg: '#4cc38a' },
+    'conflict-recovered': { label: 'Conflict resolved', dot: colors.warnText, fg: colors.warnText },
+    error: { label: 'Not synced', dot: colors.danger, fg: '#ff9599' },
+  } as const;
+  const s = map[status];
+  const showDetail = detail && (status === 'error' || status === 'conflict-recovered');
+  return (
+    <View style={styles.syncWrap}>
+      <View style={styles.syncRow}>
+        {status === 'syncing' ? (
+          <ActivityIndicator size="small" color={colors.accent} />
+        ) : (
+          <View style={[styles.syncDot, { backgroundColor: s.dot }]} />
+        )}
+        <Text style={[styles.syncLabel, { color: s.fg }]}>{s.label}</Text>
+      </View>
+      {showDetail ? <Text style={styles.syncDetail}>{detail}</Text> : null}
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   button: {
     backgroundColor: colors.accent,
@@ -123,4 +183,24 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     marginTop: 16,
   },
+  syncWrap: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
+  },
+  syncRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  syncDot: { width: 8, height: 8, borderRadius: 4 },
+  syncLabel: { fontSize: 13, fontWeight: '600' },
+  syncDetail: { color: colors.muted, fontSize: 12, lineHeight: 17, marginTop: 4 },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  chip: {
+    fontSize: 13,
+    fontWeight: '600',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 999,
+    overflow: 'hidden',
+    borderWidth: 1,
+  },
+  chipIdle: { color: colors.muted, borderColor: colors.border, backgroundColor: colors.card },
+  chipSelected: { color: '#ffffff', borderColor: colors.accent, backgroundColor: colors.accent },
 });
