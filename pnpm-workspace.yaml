@@ -7,3 +7,7 @@ allowBuilds:
   better-sqlite3: true
   sodium-native: true
   esbuild: true
+  # Skipped on purpose: its native build only matters for the on-device
+  # (EAS/CocoaPods) compile, not for Metro's JS bundle or the Node test suite.
+  # Running it during a local monorepo install fails/hangs here.
+  react-native-libsodium: false

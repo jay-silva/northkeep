@@ -1,0 +1,38 @@
+{
+  "//": "EAS Build config for the NorthKeep mobile app (Track M). Owner j_silva. Run `eas init` first to create the project and write extra.eas.projectId into app.config.ts. See the M6 notes in 07-MOBILE-LAUNCH-PLAN.md.",
+  "cli": {
+    "version": ">= 16.0.0",
+    "//requireCommit": "false so EAS can build from a pnpm monorepo worktree without demanding a clean commit; the repo is uploaded as-is (respecting .gitignore/.easignore).",
+    "requireCommit": false,
+    "//appVersionSource": "version/build number come from app.config.ts (version) rather than being managed remotely.",
+    "appVersionSource": "local"
+  },
+  "build": {
+    "//base": "Shared settings. EAS auto-detects pnpm from pnpm-lock.yaml and finds the workspace root (pnpm-workspace.yaml) to install @northkeep/core, @northkeep/sync, @northkeep/platform-mobile. node is pinned for reproducible cloud installs.",
+    "base": {
+      "node": "20.18.0"
+    },
+    "development": {
+      "extends": "base",
+      "//": "Dev client on Jay's registered iPhone (internal distribution). simulator:false targets a real device so the dev provisioning profile picks up his registered device.",
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": {
+        "simulator": false
+      }
+    },
+    "preview": {
+      "extends": "base",
+      "//": "Internal ad-hoc build (no dev client) for testing a release-like binary before store submission.",
+      "distribution": "internal"
+    },
+    "production": {
+      "extends": "base",
+      "//": "Store build. autoIncrement bumps the iOS build number each submission.",
+      "autoIncrement": true
+    }
+  },
+  "submit": {
+    "production": {}
+  }
+}
