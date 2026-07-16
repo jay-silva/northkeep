@@ -38,6 +38,7 @@ import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handle
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { OAuthError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
+import { NeonConnectorStorage } from './neon-storage.js';
 import { ConnectorOAuthProvider } from './provider.js';
 import { createMcpServer } from './mcp.js';
 import { renderConsentPage } from './consent.js';
@@ -46,6 +47,7 @@ import { sha256hex, generatePairingCode } from './hash.js';
 import { connectorGateFromEnv, verifyEntitlement, ENTITLEMENT_GRACE_MS } from './entitlement.js';
 import {
   ConnectorCryptoError,
+  DEV_KEK_PEPPER,
   KEK_LABEL_CONNECTOR_TOKEN,
   KEK_LABEL_PAIRING_CODE,
   KEK_LABEL_TOKEN,
@@ -54,6 +56,7 @@ import {
   encryptRow,
   generateDek,
   isEncryptedRow,
+  parseKekPepper,
   unwrapDek,
   wrapDek,
 } from './crypto.js';
@@ -96,7 +99,21 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
   const resourceServerUrl = new URL(mcpResourceUrl);
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceServerUrl);
 
-  const provider = new ConnectorOAuthProvider(storage, mcpResourceUrl);
+  // ---- KEK pepper (ADR 0020 crypto review) -------------------------------
+  // Every KEK folds in a secret held OUTSIDE the database, so no key is
+  // derivable from DB state alone (this is what defends the ~40-bit pairing
+  // code). FAIL CLOSED in production: a real (Neon) database with no configured
+  // pepper refuses to start. InMemory storage (dev/test) falls back to the
+  // fixed, non-secret DEV pepper so local runs need no config.
+  const kekPepper = resolveKekPepper(storage);
+
+  // Legacy plaintext passthrough (rows without the nkc1: envelope) is
+  // self-host-only: without this explicit opt-in, a non-encrypted row is never
+  // served or synced (belt-and-suspenders against a DB-writer injecting chosen
+  // plaintext "memories"). The hosted deploy does NOT set this.
+  const allowLegacyPlaintext = process.env.NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT === '1';
+
+  const provider = new ConnectorOAuthProvider(storage, mcpResourceUrl, kekPepper);
 
   // ---- billing gate (C3) -------------------------------------------------
   // Gate OFF (both envs unset) ⇒ every account is allowed (self-host / the
@@ -142,7 +159,7 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
    * truth. Throws ConnectorCryptoError if a stored wrap will not open.
    */
   async function resolveAccountDek(accountHash: string, connToken: string): Promise<Uint8Array> {
-    const connKek = await deriveKek(KEK_LABEL_CONNECTOR_TOKEN, connToken);
+    const connKek = await deriveKek(KEK_LABEL_CONNECTOR_TOKEN, connToken, kekPepper);
     const existing = await storage.getAccountDekWrap(accountHash);
     if (existing) return unwrapDek(existing, connKek);
     const candidate = await wrapDek(await generateDek(), connKek);
@@ -287,7 +304,7 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
     }
     const code = generatePairingCode();
     const expiresAt = Date.now() + PAIRING_TTL_MS;
-    const pairWrap = await wrapDek(dek, await deriveKek(KEK_LABEL_PAIRING_CODE, code));
+    const pairWrap = await wrapDek(dek, await deriveKek(KEK_LABEL_PAIRING_CODE, code, kekPepper));
     await storage.putPairingCode(sha256hex(code), accountHash, expiresAt, pairWrap);
     res.status(200).json({
       pairing_code: code,
@@ -343,7 +360,7 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
     // /pair/start leg wrapped; mintAuthorizationCode re-wraps it for the code.
     let dek: Uint8Array;
     try {
-      dek = await unwrapDek(consumed.dekWrap, await deriveKek(KEK_LABEL_PAIRING_CODE, pairingCode));
+      dek = await unwrapDek(consumed.dekWrap, await deriveKek(KEK_LABEL_PAIRING_CODE, pairingCode, kekPepper));
     } catch (err) {
       if (err instanceof ConnectorCryptoError) {
         rerenderError('That pairing code could not unlock this account. Generate a fresh one in NorthKeep.');
@@ -409,7 +426,7 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
     let dek: Uint8Array | null = null;
     if (extra?.dekWrap) {
       try {
-        dek = await unwrapDek(extra.dekWrap, await deriveKek(KEK_LABEL_TOKEN, req.auth!.token));
+        dek = await unwrapDek(extra.dekWrap, await deriveKek(KEK_LABEL_TOKEN, req.auth!.token, kekPepper));
       } catch (err) {
         if (!(err instanceof ConnectorCryptoError)) throw err;
       }
@@ -422,7 +439,7 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
       });
       return;
     }
-    const server = createMcpServer(storage, accountHash, dek);
+    const server = createMcpServer(storage, accountHash, dek, allowLegacyPlaintext);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       transport.close();
@@ -627,7 +644,12 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
     // fresh entry — otherwise a forgotten-before-delivery memory would land in the
     // vault. It still rides in `forgets` so the server row is drained.
     const forgottenSet = new Set(forgets);
-    const deliverable = pending.filter((e) => !forgottenSet.has(e.entryId));
+    // Legacy gate (ADR 0020 crypto review): a non-encrypted row is served/synced
+    // ONLY when self-host opted in. On the hosted deploy it is silently dropped,
+    // so a DB-writer cannot inject a chosen-plaintext memory into a vault.
+    const deliverable = pending.filter(
+      (e) => !forgottenSet.has(e.entryId) && (isEncryptedRow(e.content) || allowLegacyPlaintext),
+    );
     // ADR 0020: decrypt each connector-born row for the desktop with the DEK
     // resolved from the presented connector token. A row that will not open is
     // a 409 — the client tells the user to re-push (vault is the source of truth).
@@ -638,6 +660,7 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
       entriesOut = await Promise.all(
         deliverable.map(async (e) => {
           if (!dek || !isEncryptedRow(e.content)) {
+            // Only reached for a legacy row when allowLegacyPlaintext is on.
             return { server_id: e.entryId, scope: e.scope, type: e.type, content: e.content };
           }
           const plain = await decryptRow(e.content, accountHash, dek);
@@ -734,6 +757,28 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
   });
 
   return app;
+}
+
+/**
+ * Resolve the KEK pepper at construction (ADR 0020). Fail CLOSED for a real
+ * database: NeonConnectorStorage with no valid CONNECTOR_KEK_PEPPER throws, so
+ * the hosted deploy cannot boot without a pepper held outside the DB. InMemory
+ * storage (dev/test) uses the configured pepper if present, else the fixed
+ * DEV pepper. `parseKekPepper` throws if the env value is present but too short.
+ */
+function resolveKekPepper(storage: ConnectorStorage): Uint8Array {
+  const configured = parseKekPepper(process.env.CONNECTOR_KEK_PEPPER);
+  if (storage instanceof NeonConnectorStorage) {
+    if (!configured) {
+      throw new Error(
+        'CONNECTOR_KEK_PEPPER is required when the connector runs on a real database. ' +
+          'Set it to a 32+ byte secret (base64), held OUTSIDE the database. ' +
+          'Refusing to start without it (ADR 0020).',
+      );
+    }
+    return configured;
+  }
+  return configured ?? DEV_KEK_PEPPER;
 }
 
 /**

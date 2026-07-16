@@ -88,25 +88,39 @@ const REENCRYPT_MSG =
  * `dek` is the per-account data-encryption key, unwrapped by the /mcp route
  * from the wrap riding on the presented access token (ADR 0020). It exists only
  * for this request; nothing here ever writes it anywhere.
+ *
+ * `allowLegacyPlaintext` gates rows without the nkc1: envelope (ADR 0020 crypto
+ * review): the hosted deploy leaves it FALSE, so a non-encrypted row is never
+ * served (a DB-writer cannot inject a chosen-plaintext memory). Self-host may
+ * opt in for pre-encryption rows.
  */
-export function createMcpServer(storage: ConnectorStorage, accountHash: string, dek: Uint8Array): McpServer {
+export function createMcpServer(
+  storage: ConnectorStorage,
+  accountHash: string,
+  dek: Uint8Array,
+  allowLegacyPlaintext = false,
+): McpServer {
   const server = new McpServer(
     { name: 'northkeep-connector', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
 
-  /** Decrypt one stored row to its plaintext view (legacy plaintext passes through). */
-  async function decryptEntry(e: SharedEntry): Promise<SharedEntry> {
-    if (!isEncryptedRow(e.content)) return e;
+  /**
+   * Decrypt one stored row to its plaintext view. A legacy (non-nkc1) row is
+   * passed through ONLY when explicitly allowed, else dropped (returns null).
+   */
+  async function decryptEntry(e: SharedEntry): Promise<SharedEntry | null> {
+    if (!isEncryptedRow(e.content)) return allowLegacyPlaintext ? e : null;
     const plain = await decryptRow(e.content, accountHash, dek);
     return { ...e, type: plain.type, content: plain.content };
   }
 
-  /** The account's non-hidden entries, decrypted for in-process scoring. */
+  /** The account's non-hidden entries, decrypted (legacy rows dropped unless allowed). */
   async function visibleEntries(): Promise<SharedEntry[]> {
     const hidden = new Set(await storage.listPendingForgets(accountHash));
     const all = (await storage.listEntries(accountHash)).filter((e) => !hidden.has(e.entryId));
-    return Promise.all(all.map(decryptEntry));
+    const decrypted = await Promise.all(all.map(decryptEntry));
+    return decrypted.filter((e): e is SharedEntry => e !== null);
   }
 
   /** Content-free failure audit + the re-encrypt guidance, for a row that will not open. */

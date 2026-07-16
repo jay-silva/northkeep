@@ -1,5 +1,6 @@
 import type { ConnectorStorage, SharedEntry } from '../src/storage.js';
 import {
+  DEV_KEK_PEPPER,
   KEK_LABEL_CONNECTOR_TOKEN,
   decryptRow,
   deriveKek,
@@ -9,6 +10,13 @@ import {
   unwrapDek,
   wrapDek,
 } from '../src/crypto.js';
+
+/**
+ * Tests run over InMemory storage with no CONNECTOR_KEK_PEPPER set, so the
+ * server falls back to DEV_KEK_PEPPER. These helpers derive KEKs with the SAME
+ * pepper so their wraps interoperate with the server's.
+ */
+const TEST_PEPPER = DEV_KEK_PEPPER;
 
 /**
  * ADR 0020 test helpers. Since encryption-at-rest, `shared_entries.content` is
@@ -24,7 +32,7 @@ export async function testAccountDek(
   accountHash: string,
   connToken: string,
 ): Promise<Uint8Array> {
-  const kek = await deriveKek(KEK_LABEL_CONNECTOR_TOKEN, connToken);
+  const kek = await deriveKek(KEK_LABEL_CONNECTOR_TOKEN, connToken, TEST_PEPPER);
   await storage.upsertAccount(accountHash);
   const existing = await storage.getAccountDekWrap(accountHash);
   if (existing) return unwrapDek(existing, kek);

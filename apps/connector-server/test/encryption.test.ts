@@ -6,7 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { deriveConnectorToken, tokenHash } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
-import { KEK_LABEL_TOKEN, deriveKek, generateDek, wrapDek } from '../src/crypto.js';
+import { DEV_KEK_PEPPER, KEK_LABEL_TOKEN, deriveKek, generateDek, wrapDek } from '../src/crypto.js';
 import { seedEncryptedEntry } from './helpers.js';
 
 /**
@@ -244,7 +244,7 @@ describe('ADR 0020 encryption at rest', () => {
     const otherToken = deriveConnectorToken(crypto.randomBytes(32));
     const otherAccount = tokenHash(otherToken);
     await storage.upsertAccount(otherAccount);
-    const garbageWrap = await wrapDek(await generateDek(), await deriveKek(KEK_LABEL_TOKEN, 'not-the-conn-token'));
+    const garbageWrap = await wrapDek(await generateDek(), await deriveKek(KEK_LABEL_TOKEN, 'not-the-conn-token', DEV_KEK_PEPPER));
     await storage.ensureAccountDekWrap(otherAccount, garbageWrap);
 
     const pair = await fetch(`${base}/pair/start`, {

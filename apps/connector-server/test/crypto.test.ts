@@ -5,50 +5,76 @@ import {
   KEK_LABEL_CONNECTOR_TOKEN,
   KEK_LABEL_PAIRING_CODE,
   KEK_LABEL_TOKEN,
+  KEK_PEPPER_MIN_BYTES,
   decryptRow,
   deriveKek,
   encryptRow,
   generateDek,
   isEncryptedRow,
+  parseKekPepper,
   unwrapDek,
   wrapDek,
 } from '../src/crypto.js';
 
 /**
  * ADR 0020 crypto module unit tests: round-trips, the failure modes that make
- * the ciphertext-only claim falsifiable (wrong KEK, wrong-account AAD), the
- * versioned formats, and legacy-plaintext detection.
+ * the ciphertext-only claim falsifiable (wrong KEK, wrong-account AAD, wrong
+ * PEPPER), the versioned formats, and legacy-plaintext detection.
  */
 
 const ACCOUNT = 'a'.repeat(64);
 const OTHER_ACCOUNT = 'b'.repeat(64);
+// Two distinct fixed test peppers (obviously non-secret).
+const PEPPER_A = new Uint8Array(KEK_PEPPER_MIN_BYTES).fill(0x11);
+const PEPPER_B = new Uint8Array(KEK_PEPPER_MIN_BYTES).fill(0x22);
 
 describe('ADR 0020 crypto module', () => {
   it('wrap/unwrap round-trips a DEK under a credential-derived KEK', async () => {
     const dek = await generateDek();
     expect(dek).toHaveLength(32);
-    const kek = await deriveKek(KEK_LABEL_CONNECTOR_TOKEN, 'the-connector-token');
+    const kek = await deriveKek(KEK_LABEL_CONNECTOR_TOKEN, 'the-connector-token', PEPPER_A);
     const wrap = await wrapDek(dek, kek);
     expect(await unwrapDek(wrap, kek)).toEqual(dek);
   });
 
   it('a wrap does NOT open under a wrong credential or a wrong domain label', async () => {
     const dek = await generateDek();
-    const kek = await deriveKek(KEK_LABEL_TOKEN, 'refresh-token-plaintext');
+    const kek = await deriveKek(KEK_LABEL_TOKEN, 'refresh-token-plaintext', PEPPER_A);
     const wrap = await wrapDek(dek, kek);
     // Same label, different credential.
-    const wrongCred = await deriveKek(KEK_LABEL_TOKEN, 'a-different-token');
+    const wrongCred = await deriveKek(KEK_LABEL_TOKEN, 'a-different-token', PEPPER_A);
     await expect(unwrapDek(wrap, wrongCred)).rejects.toBeInstanceOf(ConnectorCryptoError);
     // Same credential, different credential-class label (domain separation).
-    const wrongLabel = await deriveKek(KEK_LABEL_AUTH_CODE, 'refresh-token-plaintext');
+    const wrongLabel = await deriveKek(KEK_LABEL_AUTH_CODE, 'refresh-token-plaintext', PEPPER_A);
     await expect(unwrapDek(wrap, wrongLabel)).rejects.toBeInstanceOf(ConnectorCryptoError);
+  });
+
+  it('KEK depends on the PEPPER: same credential + label, different pepper → wrap will not open', async () => {
+    const dek = await generateDek();
+    // Wrap under pepper A; the exact same credential+label under pepper B must
+    // NOT unwrap it. This is the DB-only-theft defense: a thief lacking the
+    // server-environment pepper cannot rebuild the KEK even with the credential.
+    const kekA = await deriveKek(KEK_LABEL_PAIRING_CODE, 'ABCD2345', PEPPER_A);
+    const kekB = await deriveKek(KEK_LABEL_PAIRING_CODE, 'ABCD2345', PEPPER_B);
+    expect(Buffer.from(kekA).toString('hex')).not.toBe(Buffer.from(kekB).toString('hex'));
+    const wrap = await wrapDek(dek, kekA);
+    await expect(unwrapDek(wrap, kekB)).rejects.toBeInstanceOf(ConnectorCryptoError);
+    expect(await unwrapDek(wrap, kekA)).toEqual(dek); // right pepper still works
+  });
+
+  it('parseKekPepper: unset → null, too-short → throws, valid base64 → bytes', () => {
+    expect(parseKekPepper(undefined)).toBeNull();
+    expect(parseKekPepper('')).toBeNull();
+    expect(() => parseKekPepper(Buffer.from('short').toString('base64'))).toThrow();
+    const full = parseKekPepper(Buffer.alloc(KEK_PEPPER_MIN_BYTES, 7).toString('base64'));
+    expect(full).toHaveLength(KEK_PEPPER_MIN_BYTES);
   });
 
   it('each credential class derives a DISTINCT KEK from the same secret', async () => {
     const secret = 'one-secret';
     const keks = await Promise.all(
       [KEK_LABEL_CONNECTOR_TOKEN, KEK_LABEL_PAIRING_CODE, KEK_LABEL_AUTH_CODE, KEK_LABEL_TOKEN].map((l) =>
-        deriveKek(l, secret),
+        deriveKek(l, secret, PEPPER_A),
       ),
     );
     const hex = keks.map((k) => Buffer.from(k).toString('hex'));
@@ -79,7 +105,7 @@ describe('ADR 0020 crypto module', () => {
 
   it('versioned formats: nkw1 wraps, nkc1 rows, and malformed values are typed errors', async () => {
     const dek = await generateDek();
-    const kek = await deriveKek(KEK_LABEL_PAIRING_CODE, 'ABCD2345');
+    const kek = await deriveKek(KEK_LABEL_PAIRING_CODE, 'ABCD2345', PEPPER_A);
     const wrap = await wrapDek(dek, kek);
     expect(wrap).toMatch(/^nkw1:[A-Za-z0-9+/=]+:[A-Za-z0-9+/=]+$/);
     const row = await encryptRow({ accountHash: ACCOUNT, type: 't', content: 'c' }, dek);

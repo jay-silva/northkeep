@@ -205,8 +205,14 @@ export class NeonConnectorStorage implements ConnectorStorage {
 
   async consumePairingCode(codeHash: string): Promise<{ accountHash: string; dekWrap: string } | null> {
     await this.ensureSchema();
+    // Opportunistic GC of expired codes first: a stale unconsumed code must not
+    // linger as a brute-force oracle (ADR 0020 crypto review). One statement.
+    await this.sql`DELETE FROM pairing_codes WHERE expires_at <= now()`;
+    // DELETE-on-consume (not UPDATE consumed=true): once used, the row AND its
+    // stored KEK wrap are gone, so a consumed pairing code is no longer an
+    // offline brute-force oracle against the DB. Single atomic statement.
     const rows = (await this.sql`
-      UPDATE pairing_codes SET consumed = true
+      DELETE FROM pairing_codes
       WHERE code_hash = ${codeHash} AND consumed = false AND expires_at > now()
       RETURNING account_hash, dek_wrap
     `) as unknown as Array<{ account_hash: string; dek_wrap: string | null }>;

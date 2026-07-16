@@ -40,17 +40,52 @@ decryption key.**
   path to decrypt and re-encrypt, and it must never need a key.
 - The DEK is stored only WRAPPED (`crypto_secretbox_easy`, format
   `nkw1:<b64 nonce>:<b64 ct>`) under key-encryption keys (KEKs) derived from
-  credentials the server sees only transiently on a request. KEK derivation is
-  keyed BLAKE2b (`crypto_generichash(32, label, credential-utf8)`), the exact
-  pattern of `packages/sync/src/creds.ts`, with one domain label per credential
+  credentials the server sees only transiently on a request, AND a
+  server-environment pepper held outside the database (below). KEK derivation is
+  two-step keyed BLAKE2b: `k1 = generichash(key = credential-utf8, msg = label)`
+  (the `packages/sync/src/creds.ts` pattern), then
+  `KEK = generichash(key = pepper, msg = k1)`. One domain label per credential
   class: `nk-conn-kek-conn-v1` (connector token), `nk-conn-kek-pair-v1`
   (pairing code), `nk-conn-kek-code-v1` (authorization code),
   `nk-conn-kek-token-v1` (access and refresh tokens). Distinct labels mean a
-  KEK from one class can never unwrap a wrap made for another.
+  KEK from one class can never unwrap a wrap made for another; the pepper means
+  no KEK is derivable from database state alone.
 - All primitives are libsodium (`libsodium-wrappers`); nothing is hand-rolled
   and node:crypto contributes no cipher (invariant #3). The module is
   `apps/connector-server/src/crypto.ts`; storage never imports it (storage
   stays a dumb string store).
+
+### The pairing-code entropy floor and the pepper (ADR 0020 crypto review)
+
+The first design wrapped the account DEK under a KEK derived from the pairing
+code alone. The pairing code is only about 40 bits (8 characters over a
+32-symbol alphabet, `hash.ts`), its sha256 is stored in `pairing_codes`, and the
+first design never deleted the row. A thief with the DATABASE ALONE could
+therefore grind the 40-bit code offline against the stored hash in well under a
+minute, derive the pairing KEK, unwrap the DEK, and decrypt every one of that
+account's rows forever. That falsified the core claim. This review closes it
+three ways:
+
+- **Server-environment pepper (the real fix).** `CONNECTOR_KEK_PEPPER` is a
+  32-plus-byte secret (base64) held OUTSIDE the database and mixed into EVERY
+  KEK via the second BLAKE2b step above. A KEK now requires BOTH the
+  request-presented credential AND the pepper, so DB state alone (credential
+  hashes, wraps, ciphertext) yields no key even against the weak pairing code.
+  The pepper is uniform across all four credential classes (the 256-bit token
+  wraps do not strictly need it, but uniformity keeps the construction simple).
+  **Fail closed:** a connector constructed over the real Neon storage with the
+  pepper unset or shorter than 32 bytes THROWS at startup, so the hosted deploy
+  cannot run without it. InMemory storage (local dev and tests) falls back to a
+  fixed, non-secret DEV pepper; self-hosters set the same env, and running
+  without it is dev-only.
+- **Delete pairing codes on consume and expiry.** `consumePairingCode` now
+  DELETEs the row (single atomic
+  `DELETE ... WHERE code_hash = $1 AND consumed = false AND expires_at > now
+  RETURNING account_hash, dek_wrap`) instead of setting `consumed = true`, and
+  expired codes are refused and opportunistically GC'd. A consumed or expired
+  code, and its stored wrap, simply no longer exist to grind. The pepper covers
+  the only remaining window: a code still outstanding (issued, unconsumed,
+  unexpired).
 
 ### Chain of custody
 
@@ -123,8 +158,12 @@ Now protected (what a connector-DB-only compromise yields):
 
 - **DB theft, leaked backup, or legal process against the database alone**
   reveals ciphertext rows, wrapped DEKs, sha256 credential hashes, and
-  metadata. No stored value decrypts anything without a live credential that
-  only clients hold.
+  metadata. No stored value decrypts anything, because every KEK requires both
+  a credential (stored hash-only, held live only by clients) AND the
+  `CONNECTOR_KEK_PEPPER` secret, which lives in the server environment and is
+  never written to the database. The low-entropy pairing code is not a way in:
+  its row is deleted on consume and expiry, and while a code is outstanding the
+  pepper still gates its KEK.
 
 NOT protected (unchanged, and stated honestly):
 
@@ -140,11 +179,34 @@ Still visible in the database (accepted metadata): scope labels, entry ids,
 row counts, ciphertext lengths (which approximate content lengths), timestamps,
 `entry_hash` values, account hashes, and the content-free audit ledger.
 
-Claim wording for any public copy: we say what we do and do not STORE ("the
-connector database holds only ciphertext; we store no key that decrypts it"),
+Claim wording for any public copy. The precise, DB-scoped claim: "the connector
+DATABASE holds only ciphertext, and the key to read it is not in the database.
+It is reconstructed per request from the app's live credential together with a
+secret held in the server environment, and is exposed only under the
+already-conceded runtime-compromise case." We say what we do and do not STORE,
 and we MAY NOT claim "we cannot read your shared memories," because the running
 server necessarily decrypts per request. "We don't store," never "we can't
 read."
+
+## Legacy plaintext is self-host-only
+
+A row without the `nkc1:` envelope is legacy plaintext. Serving it verbatim
+would let anyone who can WRITE the database inject a chosen-plaintext "memory"
+that syncs into a user's vault. So passthrough is gated behind an explicit
+opt-in, `NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT=1`, which the hosted deploy
+does NOT set. Without it, a non-`nkc1:` row is SKIPPED everywhere it would be
+disclosed (`/mcp` tools and `/client/pending`), never served and never synced,
+content-free. Production wipes the DB (below) so there are no legacy rows anyway;
+this is belt-and-suspenders, and self-hosters keeping an old DB opt in knowingly.
+
+## Environment
+
+- `CONNECTOR_KEK_PEPPER` (required on the hosted deploy): base64 of a 32-plus-byte
+  secret held outside the database, mixed into every KEK. The server refuses to
+  start on a real database without it. Rotate it only with a full DB wipe and
+  re-pair, since every stored wrap is bound to the current pepper.
+- `NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT` (self-host only, default off):
+  opt in to serving pre-encryption plaintext rows.
 
 ## Dependency
 
@@ -161,14 +223,21 @@ Rows and credentials created before this change cannot be re-wrapped: pre-0020
 token, code, and pairing rows are sha256-only, so no path can ever derive their
 KEKs and attach wraps. The deployment story is wipe the connector database and
 re-pair (re-push then reconnect each AI app). Acceptable pre-beta: no design
-partner has real data in the hosted store. Legacy plaintext rows, if a
-self-hoster keeps their DB, are still readable (the `nkc1:` prefix detector
-passes them through on read) and become ciphertext on the next push.
+partner has real data in the hosted store. The same wipe provisions the new
+`CONNECTOR_KEK_PEPPER`. Legacy plaintext rows are only ever readable on a
+self-host that has opted into passthrough (above).
 
 ## Verification
 
-- `apps/connector-server/test/crypto.test.ts`: round-trips, wrong-KEK and
-  wrong-account failures, formats, legacy detection, nonce freshness.
+- `apps/connector-server/test/crypto.test.ts`: round-trips, wrong-KEK,
+  wrong-account, and wrong-PEPPER failures, `parseKekPepper` validation,
+  formats, legacy detection, nonce freshness.
+- `apps/connector-server/test/crypto-review.test.ts`: the three review fixes.
+  The production pepper guard (Neon storage with no pepper throws; too-short
+  throws; InMemory runs on the DEV pepper). Delete-on-consume (a consumed
+  pairing row and its wrap are gone; expired codes refused and GC'd).
+  Legacy-gate (the hosted server drops a non-`nkc1:` row on `/client/pending`
+  while the opt-in path serves it).
 - `apps/connector-server/test/encryption.test.ts`: the full custody chain ends
   in plaintext at `/mcp` and survives refresh rotation; the concurrent
   refresh race has exactly one winner whose tokens still decrypt; the 409 and

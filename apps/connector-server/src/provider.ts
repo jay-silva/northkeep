@@ -70,10 +70,14 @@ class ConnectorClientsStore implements OAuthRegisteredClientsStore {
 export class ConnectorOAuthProvider implements OAuthServerProvider {
   private _clientsStore: ConnectorClientsStore;
 
-  /** @param mcpResourceUrl canonical RFC 8707 resource id, e.g. https://host/mcp */
+  /**
+   * @param mcpResourceUrl canonical RFC 8707 resource id, e.g. https://host/mcp
+   * @param kekPepper server-environment pepper mixed into every KEK (ADR 0020)
+   */
   constructor(
     private storage: ConnectorStorage,
     private mcpResourceUrl: string,
+    private kekPepper: Uint8Array,
   ) {
     this._clientsStore = new ConnectorClientsStore(storage);
   }
@@ -135,7 +139,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       throw new InvalidTargetError('Resource does not match this connector (RFC 8707)');
     }
     const code = randomToken();
-    const codeKek = await deriveKek(KEK_LABEL_AUTH_CODE, code);
+    const codeKek = await deriveKek(KEK_LABEL_AUTH_CODE, code, this.kekPepper);
     await this.storage.putCode(sha256hex(code), {
       clientId: args.clientId,
       accountHash: args.accountHash,
@@ -183,7 +187,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     // token that could not decrypt.
     let dek: Uint8Array;
     try {
-      dek = await unwrapDek(rec.dekWrap, await deriveKek(KEK_LABEL_AUTH_CODE, authorizationCode));
+      dek = await unwrapDek(rec.dekWrap, await deriveKek(KEK_LABEL_AUTH_CODE, authorizationCode, this.kekPepper));
     } catch (err) {
       if (err instanceof ConnectorCryptoError) {
         throw new InvalidGrantError('Invalid or expired authorization code');
@@ -216,7 +220,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     // invalid_grant sends the client through a full re-authorization.
     let dek: Uint8Array;
     try {
-      dek = await unwrapDek(rec.dekWrap, await deriveKek(KEK_LABEL_TOKEN, refreshToken));
+      dek = await unwrapDek(rec.dekWrap, await deriveKek(KEK_LABEL_TOKEN, refreshToken, this.kekPepper));
     } catch (err) {
       if (err instanceof ConnectorCryptoError) {
         throw new InvalidGrantError('Invalid or expired refresh token');
@@ -232,8 +236,8 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     const refreshToken = randomToken();
     // Each token row carries its OWN wrap of the account DEK, under a KEK
     // derived from that token's plaintext — the DB rows alone unwrap nothing.
-    const accessWrap = await wrapDek(dek, await deriveKek(KEK_LABEL_TOKEN, accessToken));
-    const refreshWrap = await wrapDek(dek, await deriveKek(KEK_LABEL_TOKEN, refreshToken));
+    const accessWrap = await wrapDek(dek, await deriveKek(KEK_LABEL_TOKEN, accessToken, this.kekPepper));
+    const refreshWrap = await wrapDek(dek, await deriveKek(KEK_LABEL_TOKEN, refreshToken, this.kekPepper));
     await this.storage.putToken(sha256hex(accessToken), {
       clientId,
       accountHash,

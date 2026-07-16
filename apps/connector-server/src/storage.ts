@@ -285,9 +285,18 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
   }
 
   async consumePairingCode(codeHash: string): Promise<{ accountHash: string; dekWrap: string } | null> {
+    const now = Date.now();
     const row = this.pairings.get(codeHash);
-    if (!row || row.consumed || row.expiresAt <= Date.now()) return null;
-    row.consumed = true;
+    // DELETE-on-consume (ADR 0020 crypto review): the row (and its stored KEK
+    // wrap) is GONE once used, so a consumed code is no longer a brute-force
+    // oracle against the low-entropy pairing code. Opportunistically GC expired
+    // codes too — a stale unconsumed code must not linger as an oracle either.
+    for (const [k, r] of this.pairings) if (r.expiresAt <= now) this.pairings.delete(k);
+    if (!row || row.consumed || row.expiresAt <= now) {
+      this.pairings.delete(codeHash);
+      return null;
+    }
+    this.pairings.delete(codeHash);
     return { accountHash: row.accountHash, dekWrap: row.dekWrap };
   }
 

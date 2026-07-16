@@ -10,9 +10,14 @@
  * DB holds credential HASHES (sha256) plus DEK wraps; neither yields a key.
  *
  * Invariant #3: libsodium primitives ONLY —
- *   - KEK derivation: keyed BLAKE2b (crypto_generichash), the exact pattern of
- *     packages/sync/src/creds.ts, with per-credential-class domain labels so a
- *     KEK derived from one credential class can never be replayed as another.
+ *   - KEK derivation: TWO-step keyed BLAKE2b (crypto_generichash), mixing the
+ *     request-presented credential AND a server-environment pepper held OUTSIDE
+ *     the database. Per-credential-class domain labels keep the classes
+ *     separated. Both inputs are required: the pepper closes the pairing-code
+ *     brute-force (a pairing code is only ~40 bits, its sha256 is in the DB, so
+ *     a DB-only thief could otherwise grind the code offline, derive its KEK,
+ *     and unwrap the account DEK). With the pepper outside the DB, no KEK is
+ *     derivable from DB state alone.
  *   - DEK wrapping: crypto_secretbox (XSalsa20-Poly1305), versioned "nkw1:".
  *   - Row encryption: XChaCha20-Poly1305 AEAD, versioned "nkc1:", with
  *     AAD = "nk-conn-row-v1" || accountHash. The AAD binds a ciphertext to its
@@ -36,6 +41,32 @@ export const KEK_LABEL_TOKEN = 'nk-conn-kek-token-v1';
 /** Versioned format prefixes: wrapped DEKs and encrypted rows. */
 export const WRAP_PREFIX = 'nkw1';
 export const ROW_PREFIX = 'nkc1';
+
+/** The server-environment KEK pepper must be at least this many bytes. */
+export const KEK_PEPPER_MIN_BYTES = 32;
+
+/**
+ * A fixed, DEV/TEST-ONLY pepper so InMemory storage (local dev and the test
+ * suite) runs without any env config. It is deliberately non-secret and
+ * obvious. The production guard in createConnectorServer REFUSES to run a real
+ * (Neon) database with this — the hosted deploy must supply CONNECTOR_KEK_PEPPER.
+ */
+export const DEV_KEK_PEPPER: Uint8Array = new Uint8Array(KEK_PEPPER_MIN_BYTES).fill(0x6e); // 'n'
+
+/**
+ * Parse the base64 `CONNECTOR_KEK_PEPPER` env value to bytes, or null if unset.
+ * Throws (a startup config error) if it is present but shorter than the floor.
+ */
+export function parseKekPepper(raw: string | undefined): Uint8Array | null {
+  if (!raw) return null;
+  const bytes = new Uint8Array(Buffer.from(raw, 'base64'));
+  if (bytes.length < KEK_PEPPER_MIN_BYTES) {
+    throw new Error(
+      `CONNECTOR_KEK_PEPPER must decode to at least ${KEK_PEPPER_MIN_BYTES} bytes (base64). Got ${bytes.length}.`,
+    );
+  }
+  return bytes;
+}
 
 /** AAD domain label for row encryption (concatenated with the accountHash). */
 const ROW_AAD_LABEL = 'nk-conn-row-v1';
@@ -64,13 +95,20 @@ async function sodium(): Promise<typeof sodiumLib> {
 }
 
 /**
- * KEK = keyed-BLAKE2b-256(key = credential utf8 bytes, msg = domain label) —
- * byte-compatible with the creds.ts derivation pattern. One-way: the KEK never
- * reveals the credential, and the credential is required to re-derive it.
+ * Two-step KEK derivation, libsodium keyed BLAKE2b only:
+ *   k1  = generichash(key = credential utf8 bytes, msg = domain label)
+ *   KEK = generichash(key = pepper bytes,          msg = k1)
+ * The KEK depends on BOTH the request-presented credential AND the
+ * server-environment pepper. Neither alone yields it: a DB thief has the
+ * credential HASHES (not the credentials) and never the pepper, so no KEK is
+ * derivable from database state alone. This is what defends the low-entropy
+ * pairing code (ADR 0020 crypto review). Step 1 stays byte-compatible with the
+ * creds.ts pattern; step 2 folds in the pepper.
  */
-export async function deriveKek(label: string, secret: string): Promise<Uint8Array> {
+export async function deriveKek(label: string, secret: string, pepper: Uint8Array): Promise<Uint8Array> {
   const s = await sodium();
-  return s.crypto_generichash(DEK_BYTES, s.from_string(label), s.from_string(secret));
+  const k1 = s.crypto_generichash(DEK_BYTES, s.from_string(label), s.from_string(secret));
+  return s.crypto_generichash(DEK_BYTES, k1, pepper);
 }
 
 /** A fresh random 32-byte per-account data-encryption key. */
