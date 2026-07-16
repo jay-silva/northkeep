@@ -9,7 +9,8 @@
     "start": "expo start",
     "ios": "expo run:ios",
     "android": "expo run:android",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "eas-build-post-install": "pnpm -r build"
   },
   "dependencies": {
     "@northkeep/core": "workspace:*",
