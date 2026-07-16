@@ -42,6 +42,7 @@ import {
 import { nodeCryptoProvider, nodePlatform } from '@northkeep/platform-node';
 import {
   argon2ParamsFromSodium,
+  createNobleArgon2id,
   createNodeCryptoArgon2id,
   pwhashViaArgon2id,
   type NodeStyleArgon2Module,
@@ -126,6 +127,19 @@ function buildHeader(s: Buffer, opslimit: number, memlimit: number, nonce: Buffe
 
 describe('Argon2id KDF (sodium crypto_pwhash contract)', () => {
   // --- Always-on legs: no node:crypto.argon2Sync needed, so they run in CI. ---
+
+  it('the noble pure-JS Argon2id (the DEVICE backend) matches sodium-native, incl. odd memlimit', () => {
+    // @noble/hashes argon2id is what native.ts wires on device (quick-crypto's
+    // native Argon2 Nitro object fails to register). Prove the exact pwhash path
+    // the phone runs is byte-identical to the desktop reference.
+    const noble = createNobleArgon2id();
+    const oddMemlimit = KDF_INTERACTIVE.memlimit + 512; // exercises the /1024 floor
+    for (const mem of [KDF_INTERACTIVE.memlimit, oddMemlimit]) {
+      const want = reference.pwhash(passBytes(), salt, KDF_INTERACTIVE.opslimit, mem);
+      const got = pwhashViaArgon2id(noble, passBytes(), salt, KDF_INTERACTIVE.opslimit, mem);
+      expect(Buffer.from(got).equals(want)).toBe(true);
+    }
+  });
 
   it('wasm libsodium crypto_pwhash matches sodium-native (INTERACTIVE)', () => {
     const want = reference.pwhash(passBytes(), salt, KDF_INTERACTIVE.opslimit, KDF_INTERACTIVE.memlimit);

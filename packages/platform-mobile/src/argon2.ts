@@ -1,3 +1,4 @@
+import { argon2id as nobleArgon2id } from '@noble/hashes/argon2.js';
 import { SALT_BYTES } from '@northkeep/core';
 
 /**
@@ -89,4 +90,24 @@ export function pwhashViaArgon2id(
  */
 export function createNodeCryptoArgon2id(mod: NodeStyleArgon2Module): Argon2idFn {
   return (params) => mod.argon2Sync('argon2id', params);
+}
+
+/**
+ * Argon2id via @noble/hashes (pure JS) — the DEVICE backend. react-native-quick-
+ * crypto ships a native Argon2 but its Nitro HybridObject fails to register in
+ * the pnpm/CocoaPods build (createHybridObject('Argon2') throws
+ * "unordered_map::at"), so the KDF runs in pure JS instead. Proven byte-
+ * identical to libsodium crypto_pwhash(ALG_ARGON2ID13) in test/byte-exact.test.ts.
+ * NOTE: pure-JS Argon2id at 256 MiB is slow on a phone; a native Argon2 is a
+ * performance follow-up (ADR 0021), but correctness is not affected.
+ */
+export function createNobleArgon2id(): Argon2idFn {
+  return (params) =>
+    nobleArgon2id(params.message, params.nonce, {
+      t: params.passes,
+      m: params.memory,
+      p: params.parallelism,
+      dkLen: params.tagLength,
+      version: 0x13,
+    });
 }

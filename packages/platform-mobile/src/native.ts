@@ -1,11 +1,6 @@
 import sodium from 'react-native-libsodium';
-// Named import, NOT `import * as`: quick-crypto is an ESM module with a
-// getter-only `default`, and Babel's wildcard-interop helper crashes on device
-// with "Cannot assign to property 'default' which has only a getter". A named
-// import compiles to plain member access and sidesteps that helper entirely.
-import { argon2Sync } from 'react-native-quick-crypto';
 import type { CryptoProvider } from '@northkeep/core';
-import { createNodeCryptoArgon2id } from './argon2.js';
+import { createNobleArgon2id } from './argon2.js';
 import { createMobileCryptoProvider } from './crypto.js';
 
 /**
@@ -27,6 +22,8 @@ export async function mobileCryptoReady(): Promise<void> {
 export function mobileCryptoProvider(): CryptoProvider {
   return createMobileCryptoProvider({
     sodium,
-    argon2id: createNodeCryptoArgon2id({ argon2Sync }),
+    // Pure-JS Argon2id (@noble/hashes): quick-crypto's native Argon2 Nitro
+    // HybridObject fails to register in this build. Byte-identical to libsodium.
+    argon2id: createNobleArgon2id(),
   });
 }

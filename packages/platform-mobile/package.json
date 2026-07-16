@@ -10,6 +10,7 @@
     "build": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@noble/hashes": "^2.2.0",
     "@northkeep/core": "workspace:*"
   },
   "northkeepDevicePeers": {
