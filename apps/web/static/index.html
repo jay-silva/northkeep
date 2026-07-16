@@ -125,13 +125,16 @@
   .sharetoggle input { width: auto; margin: 0; }
   .conv-toolbar { display: flex; align-items: center;
     gap: 10px 8px; flex-wrap: wrap; margin-bottom: 22px; }
-  .conv-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-  /* Uniform 38px control row: selects, the pin chip, and the badge all align.
-     Widths are capped so the whole row fits a laptop window; the toolbar badge
-     is compact (the full privacy sentence lives in its tooltip + every reply). */
+  .conv-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
+  /* Uniform 38px control row: selects, the pin chip, and the badge all align on
+     ONE row when there is width, wrapping only when the window is too narrow.
+     Selects shrink (flex: 0 1 auto) so they give room rather than forcing a wrap;
+     the toolbar badge is compact (the full privacy sentence lives in its tooltip
+     + every reply), and Manage endpoints is pushed to the right edge. */
   .conv-controls select { height: 38px; padding: 0 30px 0 12px; font-size: 14px;
-    max-width: 220px; text-overflow: ellipsis; }
+    flex: 0 1 auto; min-width: 130px; max-width: 200px; text-overflow: ellipsis; }
   .conv-toolbar .btn { height: 38px; padding: 0 16px; white-space: nowrap; }
+  #manageEp { margin-left: auto; }
   .conv-controls .badge { height: 38px; display: inline-flex; align-items: center; }
   /* The privacy pin as a toggle chip — reads as a control, not a stray form field. */
   .pinchip { display: inline-flex; align-items: center; gap: 7px; height: 38px; padding: 0 14px;
@@ -197,10 +200,10 @@
 </header>
 <nav id="mainNav">
   <button data-view="converse">Chat</button>
+  <button data-view="connect">Desktop Connect</button>
+  <button data-view="sharing">Cloud Connect</button>
   <button data-view="memories" class="active">Memories</button>
   <button data-view="redact">Redact</button>
-  <button data-view="connect">Connect</button>
-  <button data-view="sharing">Sharing</button>
   <button data-view="settings">Settings</button>
 </nav>
 <nav id="settingsNav" hidden>
@@ -462,7 +465,7 @@
       on your existing subscription. One click registers the memory server that ships inside
       NorthKeep; no terminal, no config files to edit by hand.</p>
     <div class="banner" style="margin:16px 0 22px">
-      <strong>Connect shares your memory — it does not redact your chat.</strong>
+      <strong>Desktop Connect shares your memory. It does not redact your chat.</strong>
       <div style="margin-top:6px">Connecting hands that app your <strong>owned, portable memory</strong>
         under the scope you pick. It does <strong>not</strong> change what you type into that app —
         the app still sends your whole chat to its provider. For a privacy firewall on your
@@ -475,16 +478,13 @@
       (Claude, ChatGPT, and others) by copying them to NorthKeep's connector server.
       Everything is private by default. You share one scope at a time, on purpose.</p>
     <div class="banner" style="margin:16px 0 22px">
-      <strong>Sharing is different from Sync. The connector server CAN read what you share.</strong>
-      <div style="margin-top:6px">Sync stores your vault as encrypted data the server can never read.
-        Sharing copies a scope's memories in <strong>plain, readable form</strong> to NorthKeep's
-        connector server so your AI apps can reach them. Only scopes you turn on here ever leave this Mac.
-        A private scope never does. You can unshare anytime, which deletes it from the server.</div>
+      <strong>Sharing is different from Sync. What you share leaves this Mac, and the apps you connect read it in full.</strong>
+      <div style="margin-top:6px">There it is stored encrypted, and NorthKeep holds no key in the database to read it: the key is rebuilt for each request from your app's own credential plus a secret held in our server. This is not end-to-end encryption, the server briefly decrypts in memory to answer each request, and the AI app you connect reads the result. The server can still see each shared scope's name, how many memories it holds, and when they change. Only scopes you turn on here ever leave this Mac, a private scope never does. You can unshare anytime, which deletes it from the server.</div>
     </div>
     <h3 class="sect">Connector server</h3>
     <div class="card">
       <div class="row" style="margin-bottom:8px">
-        <input type="text" id="shareServerUrl" placeholder="https://your-connector.vercel.app">
+        <input type="text" id="shareServerUrl" placeholder="https://your-connector.vercel.app" value="https://northkeep-connector-server.vercel.app">
         <button class="btn primary" id="shareServerBtn">Save server</button>
       </div>
       <div class="err" id="shareServerErr"></div>
@@ -515,12 +515,25 @@
           <button class="btn" id="shareCopyCode">Copy</button>
           <span class="muted" id="sharePairCountdown" style="font-size:13px"></span>
         </div>
-        <ol class="muted" style="font-size:13px;margin:12px 0 0;padding-left:20px;line-height:1.6">
-          <li>In Claude or ChatGPT, open Settings and add a custom connector (an MCP server).</li>
-          <li>Paste the connector URL above.</li>
-          <li>When the app opens NorthKeep's consent page, type the pairing code above and approve.</li>
-          <li>Your shared scopes are now readable inside that app. Nothing else is.</li>
-        </ol>
+        <div style="margin-top:14px">
+          <p style="margin:0 0 4px;font-weight:600">In Claude:</p>
+          <ol class="muted" style="font-size:13px;margin:0;padding-left:20px;line-height:1.6">
+            <li>Open Settings, then Connectors.</li>
+            <li>Click "Add custom connector" and paste the connector URL above.</li>
+            <li>Claude opens NorthKeep's sign-in page. Type the pairing code above and approve.</li>
+            <li>Your shared scopes are now readable inside Claude. Nothing else is.</li>
+          </ol>
+        </div>
+        <div style="margin-top:14px">
+          <p style="margin:0 0 4px;font-weight:600">In ChatGPT:</p>
+          <ol class="muted" style="font-size:13px;margin:0;padding-left:20px;line-height:1.6">
+            <li>Custom connectors need Developer Mode, a beta feature in ChatGPT's Settings. Some plans need a paid subscription. Open Settings and turn Developer Mode on (look under Connectors, then Advanced; on some accounts it is under Security and login).</li>
+            <li>Go to Settings, then Connectors, and click Create (or open chatgpt.com/plugins and click the plus).</li>
+            <li>Give it a name like "NorthKeep", paste the connector URL above as the MCP server URL, set Authentication to OAuth, and click Create.</li>
+            <li>ChatGPT opens NorthKeep's sign-in page. Type the pairing code above and approve.</li>
+            <li>Start a new chat, click the plus button near the message box, choose More, and turn on the NorthKeep connector for that chat. Your shared scopes are now readable there.</li>
+          </ol>
+        </div>
       </div>
       <div class="err" id="sharePairErr"></div>
     </div>
@@ -549,8 +562,7 @@
     </div>
     <ul style="margin:0 0 16px;padding-left:18px;font-size:14px;color:var(--ink);line-height:1.65">
       <li><strong>What leaves your Mac:</strong> the memories in this scope, as plain readable text.</li>
-      <li><strong>Where it goes:</strong> NorthKeep's connector server, which can read them.
-        (Sync is different: that server only ever holds encrypted data it cannot read.)</li>
+      <li><strong>How the server stores them:</strong> encrypted. The database holds only ciphertext and no key that can read it; it is decrypted only in memory to answer your app's request. <strong>What the server can still see:</strong> this scope's name, how many memories, and when they change.</li>
       <li><strong>What stays private:</strong> every scope you have not shared never leaves this Mac.</li>
       <li><strong>You can undo this:</strong> Unshare deletes these memories from the connector server.</li>
     </ul>
@@ -677,6 +689,9 @@
   const TOKEN = sessionStorage.getItem('nk_token') || '';
 
   const $ = (id) => document.getElementById(id);
+  // NorthKeep's hosted connector, pre-filled in Cloud Connect when no server is
+  // saved yet. A server saved in the sidecar config always overrides this default.
+  const DEFAULT_CONNECTOR_SERVER = 'https://northkeep-connector-server.vercel.app';
   const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
@@ -2503,7 +2518,16 @@
       if (e.message !== 'locked') { list.textContent = ''; list.appendChild(el('p', 'err', e.message)); }
       return;
     }
-    if (s.server && !$('shareServerUrl').value) $('shareServerUrl').value = s.server;
+    // Pre-fill the connector server field: a server saved in the sidecar config
+    // always wins; otherwise default to NorthKeep's hosted connector. Never clobber
+    // a URL the user is actively typing (only replace an empty field or the default).
+    const serverInput = $('shareServerUrl');
+    const cur = serverInput.value.trim();
+    if (s.server) {
+      if (!cur || cur === DEFAULT_CONNECTOR_SERVER) serverInput.value = s.server;
+    } else if (!cur) {
+      serverInput.value = DEFAULT_CONNECTOR_SERVER;
+    }
     const sl = $('shareServerLine');
     sl.hidden = !s.server;
     sl.textContent = s.server ? 'Connector server: ' + s.server : '';
@@ -2569,8 +2593,8 @@
     $('shareConfirmTitle').textContent = "Share the '" + scope + "' scope?";
     const n = count === undefined ? 'the memories' : (count + (count === 1 ? ' memory' : ' memories'));
     $('shareConfirmLead').textContent =
-      'You are about to copy ' + n + " in the '" + scope + "' scope, in readable form, off this Mac and onto " +
-      "NorthKeep's connector server so the AI apps you connect can read them.";
+      'You are about to copy ' + n + " in the '" + scope + "' scope off this Mac to " +
+      "NorthKeep's connector server, where the AI apps you connect can read them.";
     $('shareConfirmErr').textContent = '';
     $('shareConfirmYes').disabled = false;
     $('shareConfirmOverlay').hidden = false;
@@ -2639,8 +2663,44 @@
       if (e.message !== 'locked') $('sharePairErr').textContent = e.message;
     } finally { $('sharePairBtn').disabled = false; }
   });
-  $('shareCopyUrl').addEventListener('click', () => navigator.clipboard.writeText($('shareMcpUrl').textContent));
-  $('shareCopyCode').addEventListener('click', () => navigator.clipboard.writeText($('sharePairCode').textContent));
+  // Copy helper: prefer the async Clipboard API (127.0.0.1 is a secure context),
+  // fall back to a hidden textarea + execCommand for any browser that blocks it,
+  // and always flash a brief "Copied" confirmation on the button that was clicked.
+  async function copyToClipboard(text, btn) {
+    if (!text) return;
+    let ok = false;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        // Race a short timeout: some webviews leave writeText pending forever,
+        // which would hang this handler. If it doesn't resolve fast, fall back.
+        await Promise.race([
+          navigator.clipboard.writeText(text),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('clipboard-timeout')), 400)),
+        ]);
+        ok = true;
+      }
+    } catch { /* fall through to the execCommand path */ }
+    if (!ok) {
+      try {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.setAttribute('readonly', '');
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        ok = document.execCommand('copy');
+        document.body.removeChild(ta);
+      } catch { ok = false; }
+    }
+    if (btn) {
+      const prev = btn.textContent;
+      btn.textContent = ok ? 'Copied' : 'Press Cmd+C';
+      setTimeout(() => { btn.textContent = prev; }, 1500);
+    }
+  }
+  $('shareCopyUrl').addEventListener('click', (e) => copyToClipboard($('shareMcpUrl').textContent, e.currentTarget));
+  $('shareCopyCode').addEventListener('click', (e) => copyToClipboard($('sharePairCode').textContent, e.currentTarget));
 
   function startPairCountdown(seconds) {
     if (sharePairTimer) clearInterval(sharePairTimer);
