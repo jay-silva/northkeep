@@ -49,24 +49,42 @@ export function mobileVaultStorage(): VaultStorage {
     },
 
     writeAtomic(path: string, bytes: Uint8Array): void {
+      // Hand the native module a PLAIN Uint8Array: callers pass the Metro
+      // Buffer polyfill (a Uint8Array subclass), and expo-modules-core's JSI
+      // argument conversion can fail its type lookup on it (the on-device
+      // "unordered_map::at: key not found"). A copy of ~400KB is cheap.
+      const plain = new Uint8Array(bytes);
+      // Step labels: on-device native errors are opaque one-liners, so name the
+      // failing operation in the rethrow (surfaces directly in the UI banner).
+      const step = <T>(name: string, fn: () => T): T => {
+        try {
+          return fn();
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          throw new Error(`writeAtomic[${name}] at ${path}: ${msg}`);
+        }
+      };
+
       const target = new File(path);
       const tmp = new File(`${path}.tmp`);
       const bak = new File(`${path}.bak`);
       const dir = new Directory(parentDirectoryUri(path));
-      if (!dir.exists) dir.create({ intermediates: true });
+      if (!step('dir.exists', () => dir.exists)) {
+        step('dir.create', () => dir.create({ intermediates: true }));
+      }
 
-      if (tmp.exists) tmp.delete();
-      tmp.create();
-      tmp.write(bytes);
+      if (step('tmp.exists', () => tmp.exists)) step('tmp.delete', () => tmp.delete());
+      step('tmp.create', () => tmp.create());
+      step('tmp.write', () => tmp.write(plain));
 
-      if (target.exists) {
-        if (bak.exists) bak.delete();
-        target.copy(bak);
+      if (step('target.exists', () => target.exists)) {
+        if (step('bak.exists', () => bak.exists)) step('bak.delete', () => bak.delete());
+        step('target.copy(bak)', () => target.copy(bak));
         // File.move does not overwrite; the .bak taken above covers the window
         // between this delete and the move completing.
-        target.delete();
+        step('target.delete', () => target.delete());
       }
-      tmp.move(target);
+      step('tmp.move(target)', () => tmp.move(target));
     },
   };
 }
