@@ -138,7 +138,10 @@ export class Vault {
     } catch {
       throw new Error(`No vault found at ${vaultPath}. Run "northkeep init" first.`);
     }
-    if (file.length < HEADER_LENGTH || !file.subarray(0, MAGIC.length).equals(MAGIC)) {
+    // Buffer.compare (static) instead of subarray().equals(): on Hermes the
+    // Buffer polyfill's subarray returns a plain Uint8Array (no Symbol.species),
+    // which has no .equals. Buffer.compare accepts Uint8Array; identical on Node.
+    if (file.length < HEADER_LENGTH || Buffer.compare(file.subarray(0, MAGIC.length), MAGIC) !== 0) {
       throw new VaultAuthError(`${vaultPath} is not a NorthKeep vault file.`);
     }
     let offset = MAGIC.length;
