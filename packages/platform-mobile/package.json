@@ -1,0 +1,31 @@
+{
+  "name": "@northkeep/platform-mobile",
+  "version": "0.1.0",
+  "description": "React Native / Expo platform adapters for NorthKeep core: react-native-libsodium + react-native-quick-crypto crypto, expo-sqlite driver, expo-file-system atomic storage, expo-secure-store device secret",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@northkeep/core": "workspace:*"
+  },
+  "northkeepDevicePeers": {
+    "//": "Runtime requirements of the consuming Expo app (apps/mobile declares the real versions). Deliberately NOT peerDependencies: pnpm's autoInstallPeers would drag the whole React Native / Expo native tree into the desktop monorepo install, and react-native-libsodium's build script cannot run here. Compilation is decoupled via src/rn-modules.d.ts; the Node byte-exact suite uses the wasm stand-ins below.",
+    "//buffer": "The adapters return Node Buffers (the CryptoProvider/VaultStorage contract mandates Buffer). Hermes has no global Buffer, so apps/mobile MUST install a Buffer polyfill (e.g. the one react-native-quick-crypto ships, or @craftzdog/react-native-buffer) and register it globally in the Metro entry before constructing the platform. See ADR 0021.",
+    "expo-file-system": ">=54.0.0",
+    "expo-secure-store": ">=15.0.0",
+    "expo-sqlite": ">=16.0.0",
+    "react-native-libsodium": ">=1.4.0",
+    "react-native-quick-crypto": ">=1.0.0"
+  },
+  "devDependencies": {
+    "@northkeep/platform-node": "workspace:*",
+    "@types/libsodium-wrappers-sumo": "^0.8.2",
+    "@types/sql.js": "^1.4.11",
+    "libsodium-wrappers-sumo": "^0.8.4",
+    "sql.js": "^1.14.1"
+  }
+}
