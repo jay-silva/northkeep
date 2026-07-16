@@ -32,29 +32,40 @@ export interface SodiumApi {
     publicNonce: Uint8Array,
     key: Uint8Array,
   ): Uint8Array;
-  crypto_aead_xchacha20poly1305_ietf_ABYTES: number;
-  crypto_aead_xchacha20poly1305_ietf_NPUBBYTES: number;
   randombytes_buf(length: number): Uint8Array;
 }
 
 /**
- * Fail-fast guard, mirroring platform-node's assertLibsodiumConstants: the
- * AEAD sizes are inlined as literals in @northkeep/core, so assert at provider
+ * Fail-fast guard, mirroring platform-node's assertLibsodiumConstants: the AEAD
+ * sizes are inlined as literals in @northkeep/core, so assert at provider
  * construction that the linked libsodium build still agrees. (The crypto_pwhash
  * cost constants cannot be checked here — this backend has no pwhash — so the
  * KDF limits remain pinned solely by core's literals.)
+ *
+ * We verify BEHAVIORALLY, not by reading size constants: react-native-libsodium
+ * exposes its default as a Proxy whose non-function properties (the *_ABYTES /
+ * *_NPUBBYTES constants) read back `undefined`, while the functions work. So we
+ * encrypt an empty message — the ciphertext is exactly the auth tag, so its
+ * length IS the AEAD overhead — and use a NONCE_BYTES nonce, which the cipher
+ * only accepts if the nonce size matches. This is a stronger check than reading
+ * a declared number, and the Node byte-exactness suite runs the identical guard
+ * against libsodium-wrappers-sumo.
  */
 export function assertSodiumConstants(sodium: SodiumApi): void {
-  const checks: Array<[string, number, number]> = [
-    ['AEAD_OVERHEAD', AEAD_OVERHEAD, sodium.crypto_aead_xchacha20poly1305_ietf_ABYTES],
-    ['NONCE_BYTES', NONCE_BYTES, sodium.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES],
-  ];
-  for (const [name, want, got] of checks) {
-    if (want !== got) {
-      throw new Error(
-        `@northkeep/platform-mobile: core constant ${name}=${want} does not match linked libsodium ${got}. ` +
-          'The vault format depends on these; refusing to run.',
-      );
-    }
+  const key = new Uint8Array(32);
+  const nonce = new Uint8Array(NONCE_BYTES);
+  const overhead = sodium.crypto_aead_xchacha20poly1305_ietf_encrypt(
+    new Uint8Array(0),
+    null,
+    null,
+    nonce,
+    key,
+  ).length;
+  if (overhead !== AEAD_OVERHEAD) {
+    throw new Error(
+      `@northkeep/platform-mobile: linked libsodium AEAD overhead ${overhead} does not match ` +
+        `core AEAD_OVERHEAD=${AEAD_OVERHEAD} (with a ${NONCE_BYTES}-byte nonce). ` +
+        'The vault format depends on this; refusing to run.',
+    );
   }
 }
