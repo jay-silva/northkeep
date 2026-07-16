@@ -43,7 +43,8 @@ export function mobileVaultStorage(): VaultStorage {
     readBytes(path: string): Buffer {
       const file = new File(path);
       if (!file.exists) throw new Error(`No file at ${path}`);
-      const bytes = file.bytes();
+      // bytesSync (NOT bytes(), which is async) — the seam contract is synchronous.
+      const bytes = file.bytesSync();
       return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     },
 

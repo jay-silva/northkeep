@@ -96,8 +96,11 @@ declare module 'expo-file-system' {
     constructor(...uris: Array<string | File | Directory>);
     readonly exists: boolean;
     readonly uri: string;
-    bytes(): Uint8Array;
+    /** Async in expo-file-system 55; use bytesSync() for the synchronous seam. */
+    bytes(): Promise<Uint8Array>;
+    bytesSync(): Uint8Array;
     write(content: Uint8Array | string): void;
+    writeBytes(bytes: Uint8Array): void;
     create(options?: { intermediates?: boolean; overwrite?: boolean }): void;
     copy(destination: File): void;
     move(destination: File): void;
