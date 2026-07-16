@@ -35,9 +35,16 @@ class ExpoStatement implements SqliteStatement {
     getAllSync(): unknown[];
     getFirstSync(): unknown | null;
   }) => T): T {
-    const stmt = this.db.prepareSync(this.sql);
+    let stmt;
+    try {
+      stmt = this.db.prepareSync(this.sql);
+    } catch (err) {
+      throw new Error(`sqlite[prepare] "${this.sql.slice(0, 40)}": ${err instanceof Error ? err.message : String(err)}`);
+    }
     try {
       return collect(stmt.executeSync(...toExpoBindParams(params)));
+    } catch (err) {
+      throw new Error(`sqlite[execute] "${this.sql.slice(0, 40)}": ${err instanceof Error ? err.message : String(err)}`);
     } finally {
       stmt.finalizeSync();
     }
@@ -95,16 +102,27 @@ class ExpoSqliteDb implements SqliteDb {
   }
 }
 
+function labelNative<T>(name: string, fn: () => T): T {
+  try {
+    return fn();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`sqlite[${name}]: ${msg}`);
+  }
+}
+
 export function mobileSqliteDriver(): SqliteDriver {
   return {
     createEmpty(): SqliteDb {
-      return new ExpoSqliteDb(openDatabaseSync(':memory:'));
+      return new ExpoSqliteDb(labelNative('openDatabaseSync', () => openDatabaseSync(':memory:')));
     },
     openFromImage(bytes: Uint8Array): SqliteDb {
-      return new ExpoSqliteDb(deserializeDatabaseSync(bytes));
+      // Hand the native module a plain Uint8Array (not the Buffer polyfill).
+      const plain = new Uint8Array(bytes);
+      return new ExpoSqliteDb(labelNative('deserializeDatabaseSync', () => deserializeDatabaseSync(plain)));
     },
     serialize(db: SqliteDb): Uint8Array {
-      return (db as ExpoSqliteDb).native.serializeSync();
+      return labelNative('serializeSync', () => (db as ExpoSqliteDb).native.serializeSync());
     },
   };
 }

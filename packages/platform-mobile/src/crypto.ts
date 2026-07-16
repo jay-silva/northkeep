@@ -51,18 +51,27 @@ export function createMobileCryptoProvider({ sodium, argon2id }: MobileCryptoDep
     },
 
     generichash(message, key) {
-      return asBuffer(
-        key === undefined
-          ? sodium.crypto_generichash(32, message)
-          : sodium.crypto_generichash(32, message, key),
-      );
+      try {
+        return asBuffer(
+          key === undefined
+            ? sodium.crypto_generichash(32, new Uint8Array(message))
+            : sodium.crypto_generichash(32, new Uint8Array(message), new Uint8Array(key)),
+        );
+      } catch (err) {
+        throw new Error(`generichash: ${err instanceof Error ? err.message : String(err)}`);
+      }
     },
 
     generichashSecure(message, key) {
       // Byte-identical to generichash; "secure" (guarded memory) is a Node-only
       // hardening this platform cannot provide. Kept as a separate method so
-      // core's call sites stay identical across platforms.
-      return asBuffer(sodium.crypto_generichash(32, message, key));
+      // core's call sites stay identical across platforms. Plain Uint8Array args
+      // (not the Buffer polyfill) for the native binding.
+      try {
+        return asBuffer(sodium.crypto_generichash(32, new Uint8Array(message), new Uint8Array(key)));
+      } catch (err) {
+        throw new Error(`generichashSecure: ${err instanceof Error ? err.message : String(err)}`);
+      }
     },
 
     aeadEncrypt(plaintext, aad, nonce, key) {
