@@ -88,6 +88,13 @@ const config: ExpoConfig = {
     'react-native-libsodium',
     'react-native-quick-crypto',
   ],
+  // EAS project id, created by `eas init` under owner j_silva. A public Expo
+  // identifier (it appears in the project URL), not a secret.
+  extra: {
+    eas: {
+      projectId: '2da41269-7bcd-454f-9173-9116342a0632',
+    },
+  },
 };
 
 export default config;
