@@ -44,6 +44,19 @@ import { renderConsentPage } from './consent.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
 import { sha256hex, generatePairingCode } from './hash.js';
 import { connectorGateFromEnv, verifyEntitlement, ENTITLEMENT_GRACE_MS } from './entitlement.js';
+import {
+  ConnectorCryptoError,
+  KEK_LABEL_CONNECTOR_TOKEN,
+  KEK_LABEL_PAIRING_CODE,
+  KEK_LABEL_TOKEN,
+  deriveKek,
+  decryptRow,
+  encryptRow,
+  generateDek,
+  isEncryptedRow,
+  unwrapDek,
+  wrapDek,
+} from './crypto.js';
 
 const PAIRING_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const RATE_LIMIT_DEFAULT = 120;
@@ -116,6 +129,36 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
     res.status(402).json({
       error: 'An active NorthKeep subscription is required to use the connector.',
       subscribe: true,
+    });
+  }
+
+  // ---- ADR 0020: per-account DEK, resolved from the connector token ------
+  /**
+   * The account's DEK, unwrapped with a KEK derived from the PRESENTED
+   * connector token (which the server holds only for this request). First use
+   * creates the DEK: generate → wrap → race-safe COALESCE write — and then
+   * unwrap whatever the storage RETURNED, because a concurrent first-writer may
+   * have won and its wrap (made from the same token, so the same KEK) is the
+   * truth. Throws ConnectorCryptoError if a stored wrap will not open.
+   */
+  async function resolveAccountDek(accountHash: string, connToken: string): Promise<Uint8Array> {
+    const connKek = await deriveKek(KEK_LABEL_CONNECTOR_TOKEN, connToken);
+    const existing = await storage.getAccountDekWrap(accountHash);
+    if (existing) return unwrapDek(existing, connKek);
+    const candidate = await wrapDek(await generateDek(), connKek);
+    const winner = await storage.ensureAccountDekWrap(accountHash, candidate);
+    return unwrapDek(winner, connKek);
+  }
+
+  /**
+   * The server cannot unwrap this account's key material with the presented
+   * credential. The desktop client heals this by re-pushing the shared scopes
+   * (the vault is the source of truth); see connector-client.ts.
+   */
+  function deny409(res: Response): void {
+    res.status(409).json({
+      error: 'reencrypt_required',
+      message: 'Stored data cannot be decrypted for this account. Re-push your shared scopes from NorthKeep.',
     });
   }
 
@@ -228,9 +271,24 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
       deny402(res);
       return;
     }
+    // ADR 0020 chain of custody: unwrap (or first-create) the account DEK with
+    // the connector-token KEK, then re-wrap it under a KEK derived from the
+    // pairing code so /consent can carry custody forward. The DB row gets only
+    // the wrap; the code itself is stored sha256-only as before.
+    let dek: Uint8Array;
+    try {
+      dek = await resolveAccountDek(accountHash, token);
+    } catch (err) {
+      if (err instanceof ConnectorCryptoError) {
+        deny409(res);
+        return;
+      }
+      throw err;
+    }
     const code = generatePairingCode();
     const expiresAt = Date.now() + PAIRING_TTL_MS;
-    await storage.putPairingCode(sha256hex(code), accountHash, expiresAt);
+    const pairWrap = await wrapDek(dek, await deriveKek(KEK_LABEL_PAIRING_CODE, code));
+    await storage.putPairingCode(sha256hex(code), accountHash, expiresAt, pairWrap);
     res.status(200).json({
       pairing_code: code,
       expires_in: Math.floor(PAIRING_TTL_MS / 1000),
@@ -275,15 +333,28 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
       rerenderError('That does not look like a valid pairing code. Enter the 8-character code from NorthKeep.');
       return;
     }
-    const accountHash = await storage.consumePairingCode(sha256hex(pairingCode));
-    if (!accountHash) {
+    const consumed = await storage.consumePairingCode(sha256hex(pairingCode));
+    if (!consumed) {
       rerenderError('That pairing code is wrong, already used, or expired. Generate a fresh one in NorthKeep.');
       return;
+    }
+    const accountHash = consumed.accountHash;
+    // Custody hand-off (ADR 0020): the pairing-code KEK unwraps the DEK the
+    // /pair/start leg wrapped; mintAuthorizationCode re-wraps it for the code.
+    let dek: Uint8Array;
+    try {
+      dek = await unwrapDek(consumed.dekWrap, await deriveKek(KEK_LABEL_PAIRING_CODE, pairingCode));
+    } catch (err) {
+      if (err instanceof ConnectorCryptoError) {
+        rerenderError('That pairing code could not unlock this account. Generate a fresh one in NorthKeep.');
+        return;
+      }
+      throw err;
     }
 
     let code: string;
     try {
-      code = await provider.mintAuthorizationCode({ clientId, accountHash, codeChallenge, redirectUri, resource });
+      code = await provider.mintAuthorizationCode({ clientId, accountHash, codeChallenge, redirectUri, resource, dek });
     } catch (err) {
       if (err instanceof OAuthError) {
         rerenderError('This app requested an unexpected resource and was refused.');
@@ -316,7 +387,8 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
   });
 
   app.post('/mcp', bearer, express.json({ limit: '1mb' }), async (req: Request, res: Response) => {
-    const accountHash = (req.auth?.extra as { accountHash?: string } | undefined)?.accountHash;
+    const extra = req.auth?.extra as { accountHash?: string; dekWrap?: string } | undefined;
+    const accountHash = extra?.accountHash;
     if (!accountHash) {
       res.status(401).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Token not bound to an account' }, id: null });
       return;
@@ -329,7 +401,28 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
       });
       return;
     }
-    const server = createMcpServer(storage, accountHash);
+    // ADR 0020: unwrap the account DEK with a KEK derived from the PRESENTED
+    // access token (surfaced by verifyAccessToken alongside the row's wrap —
+    // no second read). A token row without a working wrap (pre-0020, or state
+    // restored across a key wipe) cannot decrypt anything: fail closed with 401
+    // so the client re-authorizes and picks up a fresh custody chain.
+    let dek: Uint8Array | null = null;
+    if (extra?.dekWrap) {
+      try {
+        dek = await unwrapDek(extra.dekWrap, await deriveKek(KEK_LABEL_TOKEN, req.auth!.token));
+      } catch (err) {
+        if (!(err instanceof ConnectorCryptoError)) throw err;
+      }
+    }
+    if (!dek) {
+      res.status(401).json({
+        jsonrpc: '2.0',
+        error: { code: -32001, message: 'Token cannot unlock this account. Reconnect NorthKeep in this app.' },
+        id: null,
+      });
+      return;
+    }
+    const server = createMcpServer(storage, accountHash, dek);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       transport.close();
@@ -383,8 +476,9 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
   // Upserts the provided rows and deletes any server row in `scopes` not present,
   // so a forgotten/removed vault entry disappears server-side.
   app.put('/client/entries', express.json({ limit: CLIENT_BODY_LIMIT }), async (req: Request, res: Response) => {
-    const accountHash = bearerAccount(req);
-    if (!accountHash) {
+    const connToken = bearerToken(req);
+    const accountHash = connToken ? sha256hex(connToken) : null;
+    if (!connToken || !accountHash) {
       res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
       return;
     }
@@ -441,7 +535,29 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
         createdAt: now,
       });
     }
-    await storage.replaceScopes(accountHash, scopes, entries);
+    // ADR 0020: every row lands as ciphertext. Resolve the account DEK from the
+    // presented connector token (first push before any pairing CREATES the DEK
+    // via the same race-safe path as /pair/start), then encrypt each {type,
+    // content} envelope; the stored type column becomes ''. Caps above were
+    // measured on the plaintext the user actually shares.
+    let dek: Uint8Array;
+    try {
+      dek = await resolveAccountDek(accountHash, connToken);
+    } catch (err) {
+      if (err instanceof ConnectorCryptoError) {
+        deny409(res);
+        return;
+      }
+      throw err;
+    }
+    const encrypted: SharedEntry[] = await Promise.all(
+      entries.map(async (e) => ({
+        ...e,
+        type: '',
+        content: await encryptRow({ accountHash, type: e.type, content: e.content }, dek),
+      })),
+    );
+    await storage.replaceScopes(accountHash, scopes, encrypted);
     await storage.appendAudit({
       ts: now,
       accountHash,
@@ -491,8 +607,9 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
   // vault, plus the queued forgets. Content-bearing but account-scoped; the
   // desktop applies these to the OPEN vault then acks.
   app.get('/client/pending', async (req: Request, res: Response) => {
-    const accountHash = bearerAccount(req);
-    if (!accountHash) {
+    const connToken = bearerToken(req);
+    const accountHash = connToken ? sha256hex(connToken) : null;
+    if (!connToken || !accountHash) {
       res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
       return;
     }
@@ -510,10 +627,32 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
     // fresh entry — otherwise a forgotten-before-delivery memory would land in the
     // vault. It still rides in `forgets` so the server row is drained.
     const forgottenSet = new Set(forgets);
+    const deliverable = pending.filter((e) => !forgottenSet.has(e.entryId));
+    // ADR 0020: decrypt each connector-born row for the desktop with the DEK
+    // resolved from the presented connector token. A row that will not open is
+    // a 409 — the client tells the user to re-push (vault is the source of truth).
+    let entriesOut: Array<{ server_id: string; scope: string; type: string; content: string }>;
+    try {
+      const needsDek = deliverable.some((e) => isEncryptedRow(e.content));
+      const dek = needsDek ? await resolveAccountDek(accountHash, connToken) : null;
+      entriesOut = await Promise.all(
+        deliverable.map(async (e) => {
+          if (!dek || !isEncryptedRow(e.content)) {
+            return { server_id: e.entryId, scope: e.scope, type: e.type, content: e.content };
+          }
+          const plain = await decryptRow(e.content, accountHash, dek);
+          return { server_id: e.entryId, scope: e.scope, type: plain.type, content: plain.content };
+        }),
+      );
+    } catch (err) {
+      if (err instanceof ConnectorCryptoError) {
+        deny409(res);
+        return;
+      }
+      throw err;
+    }
     res.status(200).json({
-      entries: pending
-        .filter((e) => !forgottenSet.has(e.entryId))
-        .map((e) => ({ server_id: e.entryId, scope: e.scope, type: e.type, content: e.content })),
+      entries: entriesOut,
       forgets: forgets.map((entry_id) => ({ entry_id })),
     });
   });
@@ -598,14 +737,24 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
 }
 
 /**
+ * The raw Bearer connector token for a /client/* or /pair request, or null for
+ * a missing/too-short token. Content routes need the PLAINTEXT token to derive
+ * the connector-token KEK (ADR 0020); it is never stored, only hashed.
+ */
+function bearerToken(req: Request): string | null {
+  const auth = req.headers['authorization'];
+  const token = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  if (!token || token.length < 16) return null;
+  return token;
+}
+
+/**
  * The account hash for a /client/* request: sha256 of the Bearer connector
  * token, mirroring /pair/start. Returns null for a missing/too-short token.
  */
 function bearerAccount(req: Request): string | null {
-  const auth = req.headers['authorization'];
-  const token = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
-  if (!token || token.length < 16) return null;
-  return sha256hex(token);
+  const token = bearerToken(req);
+  return token ? sha256hex(token) : null;
 }
 
 /** Client IP: first hop of x-forwarded-for (set by Vercel), else the socket. */

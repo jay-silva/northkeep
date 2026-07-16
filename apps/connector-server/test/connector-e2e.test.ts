@@ -7,6 +7,7 @@ import { deriveConnectorToken, tokenHash } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
 import { sha256hex } from '../src/hash.js';
+import { seedEncryptedEntry } from './helpers.js';
 
 /**
  * C1 acceptance — the hosted shareable-scope connector against a locally-started
@@ -230,8 +231,9 @@ describe('C1 connector acceptance', () => {
   });
 
   it('full flow: pair (A) → DCR+authorize+consent (A) → token+/mcp (B, a DIFFERENT instance)', async () => {
-    // Seed a shared memory for account 1 (C1: seeded rows).
-    await storage.putEntry(account1, {
+    // Seed a shared memory for account 1 (C1: seeded rows) — encrypted at rest
+    // (ADR 0020), exactly as the server would store it.
+    await seedEncryptedEntry(storage, account1, connToken1, {
       entryId: 'e1',
       scope: 'work',
       type: 'fact',
@@ -300,7 +302,7 @@ describe('C1 connector acceptance', () => {
     const token2 = tok.json.access_token as string;
 
     // Seed a DIFFERENT secret for account 2 so we can prove the boundary both ways.
-    await storage.putEntry(account2, {
+    await seedEncryptedEntry(storage, account2, connToken2, {
       entryId: 'x1',
       scope: 'personal',
       type: 'fact',
@@ -333,7 +335,7 @@ describe('C1 connector acceptance', () => {
   it('PERSISTENCE: a token issued via instance A validates on instance B (C0 failure mode fixed)', async () => {
     // Full mint on A, then use ONLY on B (a fresh createConnectorServer over the
     // same storage — simulating a serverless cold start hitting a warm token).
-    await storage.putEntry(account1, {
+    await seedEncryptedEntry(storage, account1, connToken1, {
       entryId: 'e2',
       scope: 'work',
       type: 'fact',
@@ -439,7 +441,7 @@ describe('C1 connector acceptance', () => {
     expect(refreshed.refresh_token).not.toBe(refreshToken); // rotated
 
     // The new access token works on /mcp (B).
-    await storage.putEntry(account1, {
+    await seedEncryptedEntry(storage, account1, connToken1, {
       entryId: 'e3',
       scope: 'work',
       type: 'fact',

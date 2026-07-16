@@ -6,6 +6,7 @@ import type { AddressInfo } from 'node:net';
 import { deriveConnectorToken, tokenHash } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
+import { seedEncryptedEntry } from './helpers.js';
 
 /**
  * C4 acceptance — ChatGPT hardening (ADR 0019).
@@ -63,14 +64,15 @@ beforeAll(async () => {
   RESOURCE = `${base}/mcp`;
   [server] = await listen(createConnectorServer(storage), port);
 
-  await storage.putEntry(account1, {
+  // Seeded encrypted-at-rest (ADR 0020), exactly as the server would store them.
+  await seedEncryptedEntry(storage, account1, connToken1, {
     entryId: 'a1-e1',
     scope: 'work',
     type: 'semantic',
     content: SECRET_MEMORY,
     createdAt: new Date().toISOString(),
   });
-  await storage.putEntry(account2, {
+  await seedEncryptedEntry(storage, account2, connToken2, {
     entryId: 'a2-e1',
     scope: 'personal',
     type: 'semantic',

@@ -17,6 +17,7 @@ import {
 } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
+import { decryptedEntries, seedEncryptedEntry } from './helpers.js';
 
 /**
  * C2 acceptance — desktop marks scopes Shared and pushes REAL vault entries to
@@ -247,11 +248,16 @@ describe('C2 client push + share marking', () => {
     );
     expect(result.pushed).toBe(2); // two live work memories
 
-    // Server holds exactly the work rows, byte-faithful, with entry_hash set.
-    const rows = await storage.listEntries(account);
-    expect(rows).toHaveLength(2);
-    expect(rows.every((r) => r.scope === 'work')).toBe(true);
-    expect(rows.every((r) => /^[0-9a-f]{64}$/.test(r.entryHash ?? ''))).toBe(true);
+    // Server holds exactly the work rows with entry_hash set — and AT REST the
+    // content is ciphertext (ADR 0020: "nkc1:" envelope, type column '').
+    const raw = await storage.listEntries(account);
+    expect(raw).toHaveLength(2);
+    expect(raw.every((r) => r.scope === 'work')).toBe(true);
+    expect(raw.every((r) => /^[0-9a-f]{64}$/.test(r.entryHash ?? ''))).toBe(true);
+    expect(raw.every((r) => r.content.startsWith('nkc1:') && r.type === '')).toBe(true);
+    expect(raw.some((r) => r.content.includes(WORK_1))).toBe(false);
+    // Decrypted (with the DEK only the connector token unlocks), it is byte-faithful.
+    const rows = await decryptedEntries(storage, account, connToken);
     expect(rows.some((r) => r.content === WORK_1)).toBe(true);
     // The personal secret was NEVER pushed.
     expect(rows.some((r) => r.content.includes('lisinopril'))).toBe(false);
@@ -285,7 +291,7 @@ describe('C2 client push + share marking', () => {
 
     let manifest = await getManifest({ server: base, deviceSecret });
     expect(manifest).toHaveLength(3);
-    let serverRows = await storage.listEntries(account);
+    let serverRows = await decryptedEntries(storage, account, connToken);
     expect(serverRows.some((r) => r.content === NEW)).toBe(true);
 
     // Forget the new memory in the vault and re-push: the server row must vanish.
@@ -297,7 +303,7 @@ describe('C2 client push + share marking', () => {
 
     manifest = await getManifest({ server: base, deviceSecret });
     expect(manifest).toHaveLength(2);
-    serverRows = await storage.listEntries(account);
+    serverRows = await decryptedEntries(storage, account, connToken);
     expect(serverRows.some((r) => r.content === NEW)).toBe(false); // gone server-side
     expect(serverRows.some((r) => r.content === WORK_1)).toBe(true); // the others remain
   });
@@ -322,16 +328,17 @@ describe('C2 client push + share marking', () => {
     await withVault((vault) => pushSharedScopes({ server: base, deviceSecret, scopes: ['work'], vault }));
 
     // Account 2 pushes its own scope and reads only its own row.
-    const otherAccount = tokenHash(deriveConnectorToken(otherSecret));
+    const otherToken = deriveConnectorToken(otherSecret);
+    const otherAccount = tokenHash(otherToken);
     await storage.upsertAccount(otherAccount);
-    await storage.putEntry(otherAccount, {
+    await seedEncryptedEntry(storage, otherAccount, otherToken, {
       entryId: 'other-1',
       scope: 'work',
       type: 'semantic',
       content: 'Account two prefers oat milk.',
       createdAt: new Date().toISOString(),
     });
-    const rows = await storage.listEntries(otherAccount);
+    const rows = await decryptedEntries(storage, otherAccount, otherToken);
     expect(rows).toHaveLength(1);
     expect(rows.some((r) => r.content === WORK_1)).toBe(false);
   });

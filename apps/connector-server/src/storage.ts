@@ -10,13 +10,16 @@
  * seam; the handlers/provider are written against it and never touch a Map or a
  * SQL string directly.
  *
- * Storage discipline (invariant #2 spirit + ADR 0016 threat model):
+ * Storage discipline (invariant #2 spirit + ADR 0016/0020 threat model):
  *  - Token, authorization-code, and pairing-code values are stored as sha256 hex
  *    ONLY. The raw value lives only in the client's possession. A DB thief gets
  *    hashes, never a usable credential.
- *  - `shared_entries` holds the plaintext of scopes the user EXPLICITLY marked
- *    Shared (the opt-in carve-out) and nothing derived from it — no embeddings,
- *    no analytics.
+ *  - `shared_entries.content` holds CIPHERTEXT only (ADR 0020): the "nkc1:"
+ *    envelope encrypted under a per-account DEK. The DEK itself is stored only
+ *    WRAPPED ("nkw1:", in the `dek_wrap` column of each credential row), under
+ *    KEKs derived from credentials the server sees only transiently. Storage is
+ *    a dumb string store: it NEVER imports crypto.ts and never sees a key —
+ *    encryption/decryption happens strictly above this layer.
  *  - `connector_audit` is content-free: what was asked and how many rows came
  *    back, never what they said (mirrors packages/mcp-server/src/log.ts).
  */
@@ -35,6 +38,8 @@ export interface StoredOAuthCode {
   audience: string;
   /** ms since epoch. */
   expiresAt: number;
+  /** The account DEK wrapped under the auth-code KEK ("nkw1:...", ADR 0020). '' if absent. */
+  dekWrap: string;
 }
 
 /** An access- or refresh-token record. `expiresAt` is SECONDS since epoch (matches AuthInfo). */
@@ -45,9 +50,16 @@ export interface StoredOAuthToken {
   /** seconds since epoch. */
   expiresAt: number;
   kind: 'access' | 'refresh';
+  /** The account DEK wrapped under this token's KEK ("nkw1:...", ADR 0020). '' if absent. */
+  dekWrap: string;
 }
 
-/** One shared-scope entry, scoped to a single account. PK is (accountHash, entryId). */
+/**
+ * One shared-scope entry, scoped to a single account. PK is (accountHash, entryId).
+ * Since ADR 0020, `content` is the "nkc1:" ciphertext envelope (which also
+ * carries the encrypted `type`) and the `type` column is '' — the scope label,
+ * ids, and entry_hash stay plaintext metadata for diffing/reconciliation.
+ */
 export interface SharedEntry {
   entryId: string;
   scope: string;
@@ -104,15 +116,26 @@ export interface ConnectorStorage {
   setEntitledUntil(accountHash: string, untilMs: number): Promise<void>;
   /** The account's entitled-until stamp (ms since epoch), or null if never set. */
   getEntitledUntil(accountHash: string): Promise<number | null>;
+  /**
+   * Race-safe create of the account's DEK wrap (ADR 0020): a SINGLE statement
+   * `SET dek_wrap = COALESCE(dek_wrap, candidate) ... RETURNING dek_wrap`, so two
+   * concurrent first-writers converge — whatever comes back IS the account wrap
+   * (the loser must unwrap the RETURNED wrap, not its own candidate). The account
+   * row must already exist (call after upsertAccount); throws if it does not.
+   */
+  ensureAccountDekWrap(accountHash: string, candidateWrap: string): Promise<string>;
+  /** The account's DEK wrapped under the connector-token KEK, or null if none yet. */
+  getAccountDekWrap(accountHash: string): Promise<string | null>;
 
   // --- pairing codes (single-use, short TTL) ---
-  putPairingCode(codeHash: string, accountHash: string, expiresAt: number): Promise<void>;
+  putPairingCode(codeHash: string, accountHash: string, expiresAt: number, dekWrap: string): Promise<void>;
   /**
-   * Atomically consume a pairing code: returns the bound accountHash iff the code
-   * exists, is unconsumed, and is unexpired — and flips it consumed in the SAME
-   * statement (no read-then-write race → no double-spend). Otherwise null.
+   * Atomically consume a pairing code: returns the bound accountHash + the DEK
+   * wrap iff the code exists, is unconsumed, and is unexpired — and flips it
+   * consumed in the SAME statement (no read-then-write race → no double-spend).
+   * Otherwise null.
    */
-  consumePairingCode(codeHash: string): Promise<string | null>;
+  consumePairingCode(codeHash: string): Promise<{ accountHash: string; dekWrap: string } | null>;
 
   // --- OAuth clients (RFC 7591 DCR) ---
   getClient(clientId: string): Promise<OAuthClientInformationFull | undefined>;
@@ -135,6 +158,14 @@ export interface ConnectorStorage {
   putToken(tokenHash: string, rec: StoredOAuthToken): Promise<void>;
   getToken(tokenHash: string): Promise<StoredOAuthToken | null>;
   deleteToken(tokenHash: string): Promise<void>;
+  /**
+   * Atomically consume a REFRESH token: a single `DELETE ... WHERE kind='refresh'
+   * AND unexpired RETURNING *`. Replaces the get-then-delete rotation flow and
+   * closes the pre-existing OAuth 2.1 race where two concurrent refreshes both
+   * succeeded — the loser now finds nothing (invalid_grant). Returns the deleted
+   * row (incl. its dekWrap) or null.
+   */
+  consumeToken(tokenHash: string): Promise<StoredOAuthToken | null>;
 
   // --- shared entries (the opt-in plaintext carve-out) ---
   /** Seed/replace a single shared entry (C1 seeding + the /debug/seed route). */
@@ -189,6 +220,7 @@ interface PairingRow {
   accountHash: string;
   expiresAt: number;
   consumed: boolean;
+  dekWrap: string;
 }
 interface CodeRow extends StoredOAuthCode {
   consumed: boolean;
@@ -205,7 +237,8 @@ interface ClientRow {
  * serverless cold start hitting a warm token.
  */
 export class InMemoryConnectorStorage implements ConnectorStorage {
-  private accounts = new Set<string>();
+  /** accountHash -> DEK wrap (null until first created). */
+  private accounts = new Map<string, string | null>();
   /** accountHash -> entitled-until (ms since epoch). */
   private entitledUntil = new Map<string, number>();
   private pairings = new Map<string, PairingRow>();
@@ -221,7 +254,21 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
   private audit: ConnectorAuditEntry[] = [];
 
   async upsertAccount(accountHash: string): Promise<void> {
-    this.accounts.add(accountHash);
+    if (!this.accounts.has(accountHash)) this.accounts.set(accountHash, null);
+  }
+
+  async ensureAccountDekWrap(accountHash: string, candidateWrap: string): Promise<string> {
+    if (!this.accounts.has(accountHash)) {
+      throw new Error('ensureAccountDekWrap: unknown account (upsertAccount first)');
+    }
+    const existing = this.accounts.get(accountHash);
+    if (existing) return existing; // COALESCE semantics: first write wins
+    this.accounts.set(accountHash, candidateWrap);
+    return candidateWrap;
+  }
+
+  async getAccountDekWrap(accountHash: string): Promise<string | null> {
+    return this.accounts.get(accountHash) ?? null;
   }
 
   async setEntitledUntil(accountHash: string, untilMs: number): Promise<void> {
@@ -233,15 +280,15 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
     return this.entitledUntil.get(accountHash) ?? null;
   }
 
-  async putPairingCode(codeHash: string, accountHash: string, expiresAt: number): Promise<void> {
-    this.pairings.set(codeHash, { accountHash, expiresAt, consumed: false });
+  async putPairingCode(codeHash: string, accountHash: string, expiresAt: number, dekWrap: string): Promise<void> {
+    this.pairings.set(codeHash, { accountHash, expiresAt, consumed: false, dekWrap });
   }
 
-  async consumePairingCode(codeHash: string): Promise<string | null> {
+  async consumePairingCode(codeHash: string): Promise<{ accountHash: string; dekWrap: string } | null> {
     const row = this.pairings.get(codeHash);
     if (!row || row.consumed || row.expiresAt <= Date.now()) return null;
     row.consumed = true;
-    return row.accountHash;
+    return { accountHash: row.accountHash, dekWrap: row.dekWrap };
   }
 
   async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
@@ -282,6 +329,14 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
 
   async deleteToken(tokenHash: string): Promise<void> {
     this.tokens.delete(tokenHash);
+  }
+
+  async consumeToken(tokenHash: string): Promise<StoredOAuthToken | null> {
+    const row = this.tokens.get(tokenHash);
+    const nowSec = Math.floor(Date.now() / 1000);
+    if (!row || row.kind !== 'refresh' || row.expiresAt <= nowSec) return null;
+    this.tokens.delete(tokenHash);
+    return { ...row };
   }
 
   async putEntry(accountHash: string, entry: SharedEntry): Promise<void> {
@@ -401,5 +456,25 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
   /** Test-only accessor for the audit ledger. */
   auditRows(): ConnectorAuditEntry[] {
     return this.audit.map((e) => ({ ...e }));
+  }
+
+  /**
+   * Test-only: serialize EVERY value this store holds — accounts, wraps, codes,
+   * tokens, entries, tombstones, forgets, audit. The ADR 0020 canary test walks
+   * this after every operation to prove no plaintext ever touches storage.
+   */
+  dumpState(): string {
+    return JSON.stringify({
+      accounts: [...this.accounts.entries()],
+      entitledUntil: [...this.entitledUntil.entries()],
+      pairings: [...this.pairings.entries()],
+      clients: [...this.clients.entries()],
+      codes: [...this.codes.entries()],
+      tokens: [...this.tokens.entries()],
+      entries: [...this.entries.entries()].map(([a, m]) => [a, [...m.entries()]]),
+      tombstones: [...this.tombstones.entries()],
+      pendingForgets: [...this.pendingForgets.entries()].map(([a, s]) => [a, [...s]]),
+      audit: this.audit,
+    });
   }
 }

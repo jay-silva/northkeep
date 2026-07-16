@@ -16,6 +16,7 @@ import {
 } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
+import { decryptedEntries, decryptedPendingEntries } from './helpers.js';
 
 /**
  * C3 acceptance — write-back down-sync + the billing gate (ADR 0019).
@@ -218,9 +219,12 @@ describe('C3 write-back down-sync', () => {
     const serverId = /id: (conn_[0-9a-f]+)/.exec(rememberText)?.[1];
     expect(serverId).toBeTruthy();
 
-    // 2. It shows up as pending, connector-origin, undelivered.
-    const pending = await storage.listPendingEntries(account);
-    expect(pending).toHaveLength(1);
+    // 2. It shows up as pending, connector-origin, undelivered — ciphertext at
+    // rest (ADR 0020), plaintext once decrypted with the account DEK.
+    const pendingRaw = await storage.listPendingEntries(account);
+    expect(pendingRaw).toHaveLength(1);
+    expect(pendingRaw[0]!.content.startsWith('nkc1:')).toBe(true);
+    const pending = await decryptedPendingEntries(storage, account, connToken);
     expect(pending[0]!.content).toBe(FERRY);
     expect(pending[0]!.origin).toBe('connector');
 
@@ -240,12 +244,12 @@ describe('C3 write-back down-sync', () => {
     // After the down-sync ack, the server row is remapped to the vault id and no
     // longer pending; a re-push then rehashes it with the real vault entry_hash.
     expect(await storage.listPendingEntries(account)).toHaveLength(0);
-    let row = (await storage.listEntries(account)).find((e) => e.content === FERRY);
+    let row = (await decryptedEntries(storage, account, connToken)).find((e) => e.content === FERRY);
     expect(row!.entryId).toBe(localId);
     expect(row!.pending).toBe(false);
 
     await withVault((v) => pushSharedScopes({ server: base, deviceSecret, scopes: ['work'], vault: v }));
-    row = (await storage.listEntries(account)).find((e) => e.content === FERRY);
+    row = (await decryptedEntries(storage, account, connToken)).find((e) => e.content === FERRY);
     expect(/^[0-9a-f]{64}$/.test(row!.entryHash ?? '')).toBe(true);
 
     // 4. The AI forgets it. It is hidden immediately, then tombstoned in the
@@ -261,7 +265,7 @@ describe('C3 write-back down-sync', () => {
       expect(v.list({ scope: 'work' }).some((e) => e.content === FERRY)).toBe(false);
       expect(v.verifyChain().ok).toBe(true);
     });
-    expect((await storage.listEntries(account)).some((e) => e.content === FERRY)).toBe(false);
+    expect((await decryptedEntries(storage, account, connToken)).some((e) => e.content === FERRY)).toBe(false);
     expect(await storage.listPendingForgets(account)).toHaveLength(0);
   });
 
@@ -275,7 +279,7 @@ describe('C3 write-back down-sync', () => {
     // Push BEFORE down-sync (the desktop pushes vault-live entries; RACE isn't in
     // the vault yet). The reconcile-delete must spare the pending connector row.
     await withVault((v) => pushSharedScopes({ server: base, deviceSecret, scopes: ['work'], vault: v }));
-    const stillPending = await storage.listPendingEntries(account);
+    const stillPending = await decryptedPendingEntries(storage, account, connToken);
     expect(stillPending.some((e) => e.entryId === serverId && e.content === RACE)).toBe(true);
 
     // Now the down-sync succeeds and the memory reaches the vault.
@@ -340,12 +344,12 @@ describe('C3 write-back down-sync', () => {
       expect(tomb?.forgotten_at).toBeTruthy(); // tombstoned, chain preserved
       expect(v.verifyChain().ok).toBe(true);
     });
-    expect((await storage.listEntries(account)).some((e) => e.content === RACED)).toBe(false);
+    expect((await decryptedEntries(storage, account, connToken)).some((e) => e.content === RACED)).toBe(false);
     expect(await storage.listPendingForgets(account)).toHaveLength(0);
 
     // 6. A re-push must NOT resurrect it server-side.
     await withVault((v) => pushSharedScopes({ server: base, deviceSecret, scopes: ['work'], vault: v }));
-    expect((await storage.listEntries(account)).some((e) => e.content === RACED)).toBe(false);
+    expect((await decryptedEntries(storage, account, connToken)).some((e) => e.content === RACED)).toBe(false);
   });
 });
 

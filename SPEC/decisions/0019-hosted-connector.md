@@ -78,6 +78,15 @@ served to the user's own AI apps over spec-compliant remote MCP.
 
 ## Threat-model delta
 
+> **Amended by ADR 0020 (connector encryption at rest).** The paragraph below
+> described the store as originally built. Since ADR 0020, a breach of the
+> connector DB alone no longer reveals plaintext content or type: rows are
+> ciphertext under per-account keys the server does not store (keys are wrapped
+> under credentials held only by clients and seen by the server only
+> transiently). Scope labels, ids, counts, timestamps, entry hashes, and
+> credential hashes remain visible. See 0020 for the full delta and the exact
+> claim wording ("we don't store", never "we can't read").
+
 A breach of the connector DB reveals: plaintext content + type + scope labels +
 timestamps of SHARED entries; account hashes; OAuth client registrations; token
 and code HASHES. It does NOT reveal: private scopes; the vault ciphertext (a

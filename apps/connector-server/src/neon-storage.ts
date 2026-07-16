@@ -104,6 +104,15 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   result_ids   text NOT NULL,
   ok           boolean NOT NULL
 )`,
+  // ADR 0020 encryption at rest: each credential row carries the account DEK
+  // wrapped ("nkw1:...") under a KEK derived from THAT credential's plaintext,
+  // which the server sees only transiently. No separate wrap table: the wrap's
+  // lifecycle IS the credential's lifecycle (delete/expiry/revoke cleans it up).
+  // All idempotent single-statement ALTERs (ADR 0010).
+  `ALTER TABLE connector_accounts ADD COLUMN IF NOT EXISTS dek_wrap text`,
+  `ALTER TABLE pairing_codes ADD COLUMN IF NOT EXISTS dek_wrap text`,
+  `ALTER TABLE oauth_codes ADD COLUMN IF NOT EXISTS dek_wrap text`,
+  `ALTER TABLE oauth_tokens ADD COLUMN IF NOT EXISTS dek_wrap text`,
 ];
 
 /** Human-readable schema (for self-hosters running psql by hand). */
@@ -162,23 +171,48 @@ export class NeonConnectorStorage implements ConnectorStorage {
     return v === null || v === undefined ? null : Number(v);
   }
 
-  async putPairingCode(codeHash: string, accountHash: string, expiresAt: number): Promise<void> {
+  async ensureAccountDekWrap(accountHash: string, candidateWrap: string): Promise<string> {
+    await this.ensureSchema();
+    // Race-safe create in ONE statement: COALESCE keeps an existing wrap, so two
+    // concurrent first-writers converge on whichever landed first — the RETURNED
+    // wrap is the truth, never the caller's candidate.
+    const rows = (await this.sql`
+      UPDATE connector_accounts SET dek_wrap = COALESCE(dek_wrap, ${candidateWrap})
+      WHERE account_hash = ${accountHash}
+      RETURNING dek_wrap
+    `) as unknown as Array<{ dek_wrap: string }>;
+    const wrap = rows[0]?.dek_wrap;
+    if (!wrap) throw new Error('ensureAccountDekWrap: unknown account (upsertAccount first)');
+    return wrap;
+  }
+
+  async getAccountDekWrap(accountHash: string): Promise<string | null> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      SELECT dek_wrap FROM connector_accounts WHERE account_hash = ${accountHash}
+    `) as unknown as Array<{ dek_wrap: string | null }>;
+    return rows[0]?.dek_wrap ?? null;
+  }
+
+  async putPairingCode(codeHash: string, accountHash: string, expiresAt: number, dekWrap: string): Promise<void> {
     await this.ensureSchema();
     await this.sql`
-      INSERT INTO pairing_codes (code_hash, account_hash, expires_at)
-      VALUES (${codeHash}, ${accountHash}, ${new Date(expiresAt).toISOString()})
+      INSERT INTO pairing_codes (code_hash, account_hash, expires_at, dek_wrap)
+      VALUES (${codeHash}, ${accountHash}, ${new Date(expiresAt).toISOString()}, ${dekWrap})
       ON CONFLICT (code_hash) DO NOTHING
     `;
   }
 
-  async consumePairingCode(codeHash: string): Promise<string | null> {
+  async consumePairingCode(codeHash: string): Promise<{ accountHash: string; dekWrap: string } | null> {
     await this.ensureSchema();
     const rows = (await this.sql`
       UPDATE pairing_codes SET consumed = true
       WHERE code_hash = ${codeHash} AND consumed = false AND expires_at > now()
-      RETURNING account_hash
-    `) as unknown as Array<{ account_hash: string }>;
-    return rows[0]?.account_hash ?? null;
+      RETURNING account_hash, dek_wrap
+    `) as unknown as Array<{ account_hash: string; dek_wrap: string | null }>;
+    const row = rows[0];
+    if (!row) return null;
+    return { accountHash: row.account_hash, dekWrap: row.dek_wrap ?? '' };
   }
 
   async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
@@ -205,8 +239,8 @@ export class NeonConnectorStorage implements ConnectorStorage {
   async putCode(codeHash: string, rec: StoredOAuthCode): Promise<void> {
     await this.ensureSchema();
     await this.sql`
-      INSERT INTO oauth_codes (code_hash, client_id, account_hash, pkce_challenge, redirect_uri, audience, expires_at)
-      VALUES (${codeHash}, ${rec.clientId}, ${rec.accountHash}, ${rec.pkceChallenge}, ${rec.redirectUri}, ${rec.audience}, ${new Date(rec.expiresAt).toISOString()})
+      INSERT INTO oauth_codes (code_hash, client_id, account_hash, pkce_challenge, redirect_uri, audience, expires_at, dek_wrap)
+      VALUES (${codeHash}, ${rec.clientId}, ${rec.accountHash}, ${rec.pkceChallenge}, ${rec.redirectUri}, ${rec.audience}, ${new Date(rec.expiresAt).toISOString()}, ${rec.dekWrap})
       ON CONFLICT (code_hash) DO NOTHING
     `;
   }
@@ -214,7 +248,7 @@ export class NeonConnectorStorage implements ConnectorStorage {
   async getCode(codeHash: string): Promise<StoredOAuthCode | null> {
     await this.ensureSchema();
     const rows = (await this.sql`
-      SELECT client_id, account_hash, pkce_challenge, redirect_uri, audience, expires_at
+      SELECT client_id, account_hash, pkce_challenge, redirect_uri, audience, expires_at, dek_wrap
       FROM oauth_codes
       WHERE code_hash = ${codeHash} AND consumed = false AND expires_at > now()
     `) as unknown as Array<CodeSqlRow>;
@@ -226,7 +260,7 @@ export class NeonConnectorStorage implements ConnectorStorage {
     const rows = (await this.sql`
       UPDATE oauth_codes SET consumed = true
       WHERE code_hash = ${codeHash} AND consumed = false AND expires_at > now()
-      RETURNING client_id, account_hash, pkce_challenge, redirect_uri, audience, expires_at
+      RETURNING client_id, account_hash, pkce_challenge, redirect_uri, audience, expires_at, dek_wrap
     `) as unknown as Array<CodeSqlRow>;
     return rows[0] ? mapCodeRow(rows[0]) : null;
   }
@@ -234,8 +268,8 @@ export class NeonConnectorStorage implements ConnectorStorage {
   async putToken(tokenHash: string, rec: StoredOAuthToken): Promise<void> {
     await this.ensureSchema();
     await this.sql`
-      INSERT INTO oauth_tokens (token_hash, client_id, account_hash, audience, kind, expires_at)
-      VALUES (${tokenHash}, ${rec.clientId}, ${rec.accountHash}, ${rec.audience}, ${rec.kind}, ${rec.expiresAt})
+      INSERT INTO oauth_tokens (token_hash, client_id, account_hash, audience, kind, expires_at, dek_wrap)
+      VALUES (${tokenHash}, ${rec.clientId}, ${rec.accountHash}, ${rec.audience}, ${rec.kind}, ${rec.expiresAt}, ${rec.dekWrap})
       ON CONFLICT (token_hash) DO NOTHING
     `;
   }
@@ -243,29 +277,29 @@ export class NeonConnectorStorage implements ConnectorStorage {
   async getToken(tokenHash: string): Promise<StoredOAuthToken | null> {
     await this.ensureSchema();
     const rows = (await this.sql`
-      SELECT client_id, account_hash, audience, kind, expires_at
+      SELECT client_id, account_hash, audience, kind, expires_at, dek_wrap
       FROM oauth_tokens WHERE token_hash = ${tokenHash}
-    `) as unknown as Array<{
-      client_id: string;
-      account_hash: string;
-      audience: string;
-      kind: string;
-      expires_at: number;
-    }>;
-    const r = rows[0];
-    if (!r) return null;
-    return {
-      clientId: r.client_id,
-      accountHash: r.account_hash,
-      audience: r.audience,
-      kind: r.kind === 'refresh' ? 'refresh' : 'access',
-      expiresAt: Number(r.expires_at),
-    };
+    `) as unknown as Array<TokenSqlRow>;
+    return rows[0] ? mapTokenRow(rows[0]) : null;
   }
 
   async deleteToken(tokenHash: string): Promise<void> {
     await this.ensureSchema();
     await this.sql`DELETE FROM oauth_tokens WHERE token_hash = ${tokenHash}`;
+  }
+
+  async consumeToken(tokenHash: string): Promise<StoredOAuthToken | null> {
+    await this.ensureSchema();
+    // ONE atomic statement: two concurrent refresh exchanges cannot both win
+    // (the pre-existing get-then-delete race this replaces). expires_at is
+    // SECONDS since epoch (bigint), so compare against a JS-computed now.
+    const nowSec = Math.floor(Date.now() / 1000);
+    const rows = (await this.sql`
+      DELETE FROM oauth_tokens
+      WHERE token_hash = ${tokenHash} AND kind = 'refresh' AND expires_at > ${nowSec}
+      RETURNING client_id, account_hash, audience, kind, expires_at, dek_wrap
+    `) as unknown as Array<TokenSqlRow>;
+    return rows[0] ? mapTokenRow(rows[0]) : null;
   }
 
   async putEntry(accountHash: string, entry: SharedEntry): Promise<void> {
@@ -460,6 +494,7 @@ interface CodeSqlRow {
   redirect_uri: string;
   audience: string;
   expires_at: string;
+  dek_wrap: string | null;
 }
 
 function mapCodeRow(r: CodeSqlRow): StoredOAuthCode {
@@ -470,5 +505,26 @@ function mapCodeRow(r: CodeSqlRow): StoredOAuthCode {
     redirectUri: r.redirect_uri,
     audience: r.audience,
     expiresAt: new Date(r.expires_at).getTime(),
+    dekWrap: r.dek_wrap ?? '',
+  };
+}
+
+interface TokenSqlRow {
+  client_id: string;
+  account_hash: string;
+  audience: string;
+  kind: string;
+  expires_at: number;
+  dek_wrap: string | null;
+}
+
+function mapTokenRow(r: TokenSqlRow): StoredOAuthToken {
+  return {
+    clientId: r.client_id,
+    accountHash: r.account_hash,
+    audience: r.audience,
+    kind: r.kind === 'refresh' ? 'refresh' : 'access',
+    expiresAt: Number(r.expires_at),
+    dekWrap: r.dek_wrap ?? '',
   };
 }

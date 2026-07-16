@@ -72,6 +72,20 @@ function normalizeServer(server: string): string {
 }
 
 /**
+ * ADR 0020: HTTP 409 `reencrypt_required` means the server holds rows or key
+ * wraps it cannot open for this account (e.g. state restored across a key
+ * wipe). The vault is the source of truth: a re-push wipes and re-creates the
+ * shared scopes' rows under a fresh key chain. Status-only — never echoes the
+ * response body.
+ */
+function reencryptError(): Error {
+  return new Error(
+    'The connector server cannot decrypt this account\'s shared data (409). ' +
+      'Re-push your shared scopes (e.g. `northkeep share push`) to re-encrypt them from the vault, then retry.',
+  );
+}
+
+/**
  * "Make these scopes match": read the live (non-forgotten, non-superseded)
  * entries in each shared scope from the OPEN vault and PUT them so the server's
  * rows for those scopes become EXACTLY these. A vault entry the user forgot or
@@ -117,6 +131,7 @@ export async function pushSharedScopes(opts: {
     );
   }
   if (res.status === 401) throw new Error('The connector server rejected the connector token (401).');
+  if (res.status === 409) throw reencryptError();
   if (!res.ok) throw new Error(`Connector server returned HTTP ${res.status} on push.`);
   return { pushed: entries.length, scopes };
 }
@@ -203,6 +218,7 @@ export async function downSyncConnector(opts: {
   if (pendingRes.status === 402) {
     throw new Error('The connector server requires an active subscription (402) to down-sync.');
   }
+  if (pendingRes.status === 409) throw reencryptError();
   if (!pendingRes.ok) throw new Error(`Connector server returned HTTP ${pendingRes.status} on pending.`);
   const pending = (await pendingRes.json()) as { entries?: PendingEntry[]; forgets?: Array<{ entry_id: string }> };
   const entries = pending.entries ?? [];
@@ -283,6 +299,7 @@ export async function startPairing(opts: {
     redirect: 'error',
     signal: AbortSignal.timeout(TIMEOUT_MS),
   });
+  if (res.status === 409) throw reencryptError();
   if (!res.ok) throw new Error(`Connector server returned HTTP ${res.status} on pairing.`);
   const body = (await res.json()) as { pairing_code?: string };
   if (!body.pairing_code) throw new Error('Connector server did not return a pairing code.');

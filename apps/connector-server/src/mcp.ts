@@ -33,6 +33,7 @@ import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
+import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
 
 const MAX_RESULTS = 20;
 const MAX_REMEMBER_BYTES = 8 * 1024; // mirrors the push per-entry content cap
@@ -75,11 +76,52 @@ function snippetOf(content: string): string {
   return flat.length > SEARCH_SNIPPET_MAX ? `${flat.slice(0, SEARCH_SNIPPET_MAX - 1)}…` : flat;
 }
 
-export function createMcpServer(storage: ConnectorStorage, accountHash: string): McpServer {
+/**
+ * Shown when a stored row does not decrypt under this connection's DEK (a DB
+ * restored across a key wipe, or rows from before a re-pair). Content-free.
+ */
+const REENCRYPT_MSG =
+  'The shared memories for this account cannot be decrypted over this connection. ' +
+  'Ask the user to push their shared scopes again from NorthKeep (the vault is the source of truth), then retry.';
+
+/**
+ * `dek` is the per-account data-encryption key, unwrapped by the /mcp route
+ * from the wrap riding on the presented access token (ADR 0020). It exists only
+ * for this request; nothing here ever writes it anywhere.
+ */
+export function createMcpServer(storage: ConnectorStorage, accountHash: string, dek: Uint8Array): McpServer {
   const server = new McpServer(
     { name: 'northkeep-connector', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
+
+  /** Decrypt one stored row to its plaintext view (legacy plaintext passes through). */
+  async function decryptEntry(e: SharedEntry): Promise<SharedEntry> {
+    if (!isEncryptedRow(e.content)) return e;
+    const plain = await decryptRow(e.content, accountHash, dek);
+    return { ...e, type: plain.type, content: plain.content };
+  }
+
+  /** The account's non-hidden entries, decrypted for in-process scoring. */
+  async function visibleEntries(): Promise<SharedEntry[]> {
+    const hidden = new Set(await storage.listPendingForgets(accountHash));
+    const all = (await storage.listEntries(accountHash)).filter((e) => !hidden.has(e.entryId));
+    return Promise.all(all.map(decryptEntry));
+  }
+
+  /** Content-free failure audit + the re-encrypt guidance, for a row that will not open. */
+  async function reencryptResult(tool: string): Promise<{ content: Array<{ type: 'text'; text: string }>; isError: true }> {
+    await storage.appendAudit({
+      ts: new Date().toISOString(),
+      accountHash,
+      tool,
+      params: {},
+      ok: false,
+      resultCount: 0,
+      resultIds: [],
+    });
+    return { content: [{ type: 'text', text: REENCRYPT_MSG }], isError: true };
+  }
 
   server.registerTool(
     'memory_retrieve',
@@ -91,8 +133,13 @@ export function createMcpServer(storage: ConnectorStorage, accountHash: string):
     },
     async ({ query }) => {
       const terms = tokenize(query ?? '');
-      const hidden = new Set(await storage.listPendingForgets(accountHash));
-      const all = (await storage.listEntries(accountHash)).filter((e) => !hidden.has(e.entryId));
+      let all: SharedEntry[];
+      try {
+        all = await visibleEntries();
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError) return reencryptResult('memory_retrieve');
+        throw err;
+      }
       const ranked = all
         .map((e) => ({ e, s: scoreEntry(e, terms) }))
         .filter((x) => x.s > 0)
@@ -126,8 +173,13 @@ export function createMcpServer(storage: ConnectorStorage, accountHash: string):
       inputSchema: {},
     },
     async () => {
-      const hidden = new Set(await storage.listPendingForgets(accountHash));
-      const all = (await storage.listEntries(accountHash)).filter((e) => !hidden.has(e.entryId)).slice(0, MAX_RESULTS);
+      let all: SharedEntry[];
+      try {
+        all = (await visibleEntries()).slice(0, MAX_RESULTS);
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError) return reencryptResult('memory_list');
+        throw err;
+      }
 
       await storage.appendAudit({
         ts: new Date().toISOString(),
@@ -209,11 +261,13 @@ export function createMcpServer(storage: ConnectorStorage, accountHash: string):
         };
       }
       const entryId = `conn_${randomUUID().replace(/-/g, '')}`;
+      // ADR 0020: the row lands as ciphertext — the {type, content} envelope
+      // encrypted under this request's DEK; the stored type column is ''.
       await storage.putEntry(accountHash, {
         entryId,
         scope: targetScope,
-        type: memType,
-        content: body,
+        type: '',
+        content: await encryptRow({ accountHash, type: memType, content: body }, dek),
         entryHash: '',
         origin: 'connector',
         pending: true,
@@ -285,8 +339,13 @@ export function createMcpServer(storage: ConnectorStorage, accountHash: string):
     },
     async ({ query }) => {
       const terms = tokenize(query ?? '');
-      const hidden = new Set(await storage.listPendingForgets(accountHash));
-      const all = (await storage.listEntries(accountHash)).filter((e) => !hidden.has(e.entryId));
+      let all: SharedEntry[];
+      try {
+        all = await visibleEntries();
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError) return reencryptResult('search');
+        throw err;
+      }
       const ranked = all
         .map((e) => ({ e, s: scoreEntry(e, terms) }))
         .filter((x) => x.s > 0)
@@ -327,7 +386,14 @@ export function createMcpServer(storage: ConnectorStorage, accountHash: string):
     async ({ id }) => {
       const entryId = (id ?? '').trim();
       const hidden = new Set(await storage.listPendingForgets(accountHash));
-      const row = entryId && !hidden.has(entryId) ? await storage.getEntry(accountHash, entryId) : null;
+      const stored = entryId && !hidden.has(entryId) ? await storage.getEntry(accountHash, entryId) : null;
+      let row: SharedEntry | null;
+      try {
+        row = stored ? await decryptEntry(stored) : null;
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError) return reencryptResult('fetch');
+        throw err;
+      }
 
       await storage.appendAudit({
         ts: new Date().toISOString(),

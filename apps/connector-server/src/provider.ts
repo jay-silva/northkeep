@@ -38,6 +38,14 @@ import {
 import type { ConnectorStorage } from './storage.js';
 import { renderConsentPage } from './consent.js';
 import { sha256hex, randomToken } from './hash.js';
+import {
+  ConnectorCryptoError,
+  KEK_LABEL_AUTH_CODE,
+  KEK_LABEL_TOKEN,
+  deriveKek,
+  unwrapDek,
+  wrapDek,
+} from './crypto.js';
 
 const CODE_TTL_MS = 5 * 60 * 1000; // authorization codes live 5 min
 const ACCESS_TTL_SEC = 60 * 60; // access tokens live 1 hour
@@ -108,10 +116,12 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
   }
 
   /**
-   * Called by /consent AFTER a pairing code has been validated and resolved to
-   * an accountHash. Persists the authorization code (hashed) bound to that
-   * account and returns the raw code to redirect back to the client. RFC 8707:
-   * the requested resource must be our /mcp audience.
+   * Called by /consent AFTER a pairing code has been validated, resolved to an
+   * accountHash, and its DEK unwrapped (ADR 0020 chain of custody). Persists the
+   * authorization code (hashed) bound to that account, with the DEK re-wrapped
+   * under a KEK derived from THIS code's plaintext — the raw code exists only in
+   * the redirect; the row alone can never unwrap. Returns the raw code. RFC
+   * 8707: the requested resource must be our /mcp audience.
    */
   async mintAuthorizationCode(args: {
     clientId: string;
@@ -119,11 +129,13 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     codeChallenge: string;
     redirectUri: string;
     resource: string;
+    dek: Uint8Array;
   }): Promise<string> {
     if (!this.matchesAudience(args.resource)) {
       throw new InvalidTargetError('Resource does not match this connector (RFC 8707)');
     }
     const code = randomToken();
+    const codeKek = await deriveKek(KEK_LABEL_AUTH_CODE, code);
     await this.storage.putCode(sha256hex(code), {
       clientId: args.clientId,
       accountHash: args.accountHash,
@@ -131,6 +143,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       redirectUri: args.redirectUri,
       audience: this.mcpResourceUrl,
       expiresAt: Date.now() + CODE_TTL_MS,
+      dekWrap: await wrapDek(args.dek, codeKek),
     });
     return code;
   }
@@ -164,7 +177,20 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     if (resource && !this.matchesAudience(resource.href)) {
       throw new InvalidTargetError('Resource does not match this connector (RFC 8707)');
     }
-    return this.issueTokenPair(client.client_id, rec.accountHash);
+    // ADR 0020: unwrap the account DEK with a KEK derived from the presented
+    // code's plaintext, then re-wrap it for the new token pair. A row without a
+    // working wrap cannot carry custody forward — fail the grant, never issue a
+    // token that could not decrypt.
+    let dek: Uint8Array;
+    try {
+      dek = await unwrapDek(rec.dekWrap, await deriveKek(KEK_LABEL_AUTH_CODE, authorizationCode));
+    } catch (err) {
+      if (err instanceof ConnectorCryptoError) {
+        throw new InvalidGrantError('Invalid or expired authorization code');
+      }
+      throw err;
+    }
+    return this.issueTokenPair(client.client_id, rec.accountHash, dek);
   }
 
   // ---- refresh token rotation -------------------------------------------
@@ -174,30 +200,47 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     _scopes?: string[],
     resource?: URL,
   ): Promise<OAuthTokens> {
-    const hash = sha256hex(refreshToken);
-    const rec = await this.storage.getToken(hash);
-    const nowSec = Math.floor(Date.now() / 1000);
-    if (!rec || rec.kind !== 'refresh' || rec.clientId !== client.client_id || rec.expiresAt < nowSec) {
+    // ONE atomic consume (ADR 0020): the row is deleted in the same statement
+    // that reads it, so two concurrent exchanges of the same refresh token can
+    // never both succeed — the loser gets invalid_grant. This replaces the
+    // pre-existing get-then-delete flow (a real OAuth 2.1 rotation race).
+    const rec = await this.storage.consumeToken(sha256hex(refreshToken));
+    if (!rec || rec.clientId !== client.client_id) {
       throw new InvalidGrantError('Invalid or expired refresh token');
     }
     if (resource && !this.matchesAudience(resource.href)) {
       throw new InvalidTargetError('Resource does not match this connector (RFC 8707)');
     }
-    // Rotate: the presented refresh token is single-use.
-    await this.storage.deleteToken(hash);
-    return this.issueTokenPair(client.client_id, rec.accountHash);
+    // Custody: unwrap the DEK with the presented refresh token's KEK, re-wrap
+    // for the rotated pair. A pre-0020 row (no wrap) cannot be re-wrapped —
+    // invalid_grant sends the client through a full re-authorization.
+    let dek: Uint8Array;
+    try {
+      dek = await unwrapDek(rec.dekWrap, await deriveKek(KEK_LABEL_TOKEN, refreshToken));
+    } catch (err) {
+      if (err instanceof ConnectorCryptoError) {
+        throw new InvalidGrantError('Invalid or expired refresh token');
+      }
+      throw err;
+    }
+    return this.issueTokenPair(client.client_id, rec.accountHash, dek);
   }
 
-  private async issueTokenPair(clientId: string, accountHash: string): Promise<OAuthTokens> {
+  private async issueTokenPair(clientId: string, accountHash: string, dek: Uint8Array): Promise<OAuthTokens> {
     const nowSec = Math.floor(Date.now() / 1000);
     const accessToken = randomToken();
     const refreshToken = randomToken();
+    // Each token row carries its OWN wrap of the account DEK, under a KEK
+    // derived from that token's plaintext — the DB rows alone unwrap nothing.
+    const accessWrap = await wrapDek(dek, await deriveKek(KEK_LABEL_TOKEN, accessToken));
+    const refreshWrap = await wrapDek(dek, await deriveKek(KEK_LABEL_TOKEN, refreshToken));
     await this.storage.putToken(sha256hex(accessToken), {
       clientId,
       accountHash,
       audience: this.mcpResourceUrl,
       kind: 'access',
       expiresAt: nowSec + ACCESS_TTL_SEC,
+      dekWrap: accessWrap,
     });
     await this.storage.putToken(sha256hex(refreshToken), {
       clientId,
@@ -205,6 +248,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       audience: this.mcpResourceUrl,
       kind: 'refresh',
       expiresAt: nowSec + REFRESH_TTL_SEC,
+      dekWrap: refreshWrap,
     });
     return {
       access_token: accessToken,
@@ -233,8 +277,10 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       expiresAt: rec.expiresAt,
       resource: new URL(rec.audience),
       // The account binding rides here → the /mcp tool layer scopes every query
-      // by it. This is where cross-account isolation physically lives.
-      extra: { accountHash: rec.accountHash },
+      // by it. This is where cross-account isolation physically lives. The DEK
+      // wrap rides alongside (ADR 0020) so the /mcp handler can unwrap with the
+      // presented token's KEK without a second storage read.
+      extra: { accountHash: rec.accountHash, dekWrap: rec.dekWrap },
     };
   }
 

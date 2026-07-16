@@ -17,12 +17,14 @@
     "@modelcontextprotocol/sdk": "1.29.0",
     "@neondatabase/serverless": "^0.10.0",
     "express": "^4.21.2",
+    "libsodium-wrappers": "^0.8.4",
     "zod": "^3.23.8"
   },
   "devDependencies": {
     "@northkeep/core": "workspace:*",
     "@northkeep/platform-node": "workspace:*",
     "@northkeep/sync": "workspace:*",
-    "@types/express": "^4.17.21"
+    "@types/express": "^4.17.21",
+    "@types/libsodium-wrappers": "^0.8.2"
   }
 }
