@@ -127,6 +127,20 @@ switch masks the stored secret) and re-verified in the live self-test with a
 real endpoint swap. The redaction guard was also made fail-closed
 (`effectiveTier !== 0`, not an `=== 1 || === 2` allowlist).
 
+  **Pseudonym-map continuity (load-bearing for restore()).** Because the whole
+  plaintext transcript is re-redacted every turn, pseudonym assignment must be
+  STABLE, or a name would map to a different `Person-N` as the conversation
+  grows and `restore()` would fail (real names leaking back into the reply). The
+  session carries a single accumulating `PseudonymMap`: `runTurn` seeds every
+  `redact()` call in the per-turn loop with `session.pseudonyms`, and
+  `applyTier2` mutates that same object in place (looks up each real name, and
+  only assigns a new placeholder when absent, storing it back). So a given real
+  name resolves to the same `Person-N` across all messages within a turn AND
+  across every later turn, and this turn's `replacements` cover every pseudonym
+  in the wire prompt so `restore()` round-trips completely. Do NOT refactor
+  `redact()`/`applyTier2` to copy the map instead of mutating it, or to re-seed
+  per message, without preserving this accumulation, invariant #1 depends on it.
+
 **Positive assurance (audited clean):**
 - **No key-leak path.** No key field exists in `providers.json` (only
   `hasKey`); `withBadge` omits keys from every `/api/providers` response;
