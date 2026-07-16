@@ -3,6 +3,7 @@ import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/share
 import type {
   ConnectorAuditEntry,
   ConnectorStorage,
+  ScopeTombstone,
   SharedEntry,
   StoredOAuthCode,
   StoredOAuthToken,
@@ -64,8 +65,18 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   scope        text NOT NULL,
   type         text NOT NULL,
   content      text NOT NULL,
+  entry_hash   text NOT NULL DEFAULT '',
   created_at   timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (account_hash, entry_id)
+)`,
+  // Migrate a pre-C2 shared_entries table (C1 shipped without entry_hash).
+  // ADD COLUMN IF NOT EXISTS is idempotent and single-statement (ADR 0010).
+  `ALTER TABLE shared_entries ADD COLUMN IF NOT EXISTS entry_hash text NOT NULL DEFAULT ''`,
+  `CREATE TABLE IF NOT EXISTS scope_tombstones (
+  id           bigserial PRIMARY KEY,
+  account_hash text NOT NULL,
+  scope        text NOT NULL,
+  unshared_at  timestamptz NOT NULL DEFAULT now()
 )`,
   `CREATE TABLE IF NOT EXISTS connector_audit (
   id           bigserial PRIMARY KEY,
@@ -226,23 +237,25 @@ export class NeonConnectorStorage implements ConnectorStorage {
   async putEntry(accountHash: string, entry: SharedEntry): Promise<void> {
     await this.ensureSchema();
     await this.sql`
-      INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, created_at)
-      VALUES (${accountHash}, ${entry.entryId}, ${entry.scope}, ${entry.type}, ${entry.content}, ${entry.createdAt})
+      INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, entry_hash, created_at)
+      VALUES (${accountHash}, ${entry.entryId}, ${entry.scope}, ${entry.type}, ${entry.content}, ${entry.entryHash ?? ''}, ${entry.createdAt})
       ON CONFLICT (account_hash, entry_id) DO UPDATE SET
-        scope = EXCLUDED.scope, type = EXCLUDED.type, content = EXCLUDED.content, created_at = EXCLUDED.created_at
+        scope = EXCLUDED.scope, type = EXCLUDED.type, content = EXCLUDED.content,
+        entry_hash = EXCLUDED.entry_hash, created_at = EXCLUDED.created_at
     `;
   }
 
   async listEntries(accountHash: string): Promise<SharedEntry[]> {
     await this.ensureSchema();
     const rows = (await this.sql`
-      SELECT entry_id, scope, type, content, created_at
+      SELECT entry_id, scope, type, content, entry_hash, created_at
       FROM shared_entries WHERE account_hash = ${accountHash}
     `) as unknown as Array<{
       entry_id: string;
       scope: string;
       type: string;
       content: string;
+      entry_hash: string;
       created_at: string;
     }>;
     return rows.map((r) => ({
@@ -250,8 +263,63 @@ export class NeonConnectorStorage implements ConnectorStorage {
       scope: r.scope,
       type: r.type,
       content: r.content,
+      entryHash: r.entry_hash ?? '',
       createdAt: new Date(r.created_at).toISOString(),
     }));
+  }
+
+  async replaceScopes(accountHash: string, scopes: string[], entries: SharedEntry[]): Promise<void> {
+    await this.ensureSchema();
+    // One non-interactive transaction: N upserts + one delete-reconcile per
+    // scope. Each element is a single statement (ADR 0010); the neon driver
+    // submits them together atomically so a mid-push failure leaves no partial
+    // "make-scopes-match" state.
+    const statements = [];
+    for (const e of entries) {
+      statements.push(this.sql`
+        INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, entry_hash)
+        VALUES (${accountHash}, ${e.entryId}, ${e.scope}, ${e.type}, ${e.content}, ${e.entryHash ?? ''})
+        ON CONFLICT (account_hash, entry_id) DO UPDATE SET
+          scope = EXCLUDED.scope, type = EXCLUDED.type, content = EXCLUDED.content,
+          entry_hash = EXCLUDED.entry_hash
+      `);
+    }
+    for (const scope of scopes) {
+      const ids = entries.filter((e) => e.scope === scope).map((e) => e.entryId);
+      if (ids.length === 0) {
+        // Emptied scope: clear it entirely (an unconditional NOT-IN of nothing
+        // would be invalid SQL — guard it).
+        statements.push(this.sql`
+          DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND scope = ${scope}
+        `);
+      } else {
+        // `<> ALL(array)` is the array-safe NOT IN (no empty-list edge case).
+        statements.push(this.sql`
+          DELETE FROM shared_entries
+          WHERE account_hash = ${accountHash} AND scope = ${scope} AND entry_id <> ALL(${ids})
+        `);
+      }
+    }
+    if (statements.length > 0) await this.sql.transaction(statements);
+  }
+
+  async deleteScope(accountHash: string, scope: string): Promise<number> {
+    await this.ensureSchema();
+    const results = await this.sql.transaction([
+      this.sql`DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND scope = ${scope} RETURNING entry_id`,
+      this.sql`INSERT INTO scope_tombstones (account_hash, scope) VALUES (${accountHash}, ${scope})`,
+    ]);
+    const deleted = results[0] as unknown as unknown[];
+    return Array.isArray(deleted) ? deleted.length : 0;
+  }
+
+  async listTombstones(accountHash: string): Promise<ScopeTombstone[]> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      SELECT scope, unshared_at FROM scope_tombstones
+      WHERE account_hash = ${accountHash} ORDER BY unshared_at ASC
+    `) as unknown as Array<{ scope: string; unshared_at: string }>;
+    return rows.map((r) => ({ scope: r.scope, unsharedAt: new Date(r.unshared_at).toISOString() }));
   }
 
   async appendAudit(entry: ConnectorAuditEntry): Promise<void> {

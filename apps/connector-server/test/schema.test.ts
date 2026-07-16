@@ -25,6 +25,7 @@ describe('Neon connector schema statements', () => {
       'oauth_codes',
       'oauth_tokens',
       'shared_entries',
+      'scope_tombstones',
       'connector_audit',
     ]) {
       expect(all, table).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);

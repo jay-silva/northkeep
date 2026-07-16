@@ -53,7 +53,16 @@ export interface SharedEntry {
   scope: string;
   type: string;
   content: string;
+  /** The vault entry_hash (BLAKE2b chain hash) — lets the client diff cheaply
+   * via /client/manifest. Optional so C1 seeded rows (no hash) still typecheck. */
+  entryHash?: string;
   createdAt: string;
+}
+
+/** A content-free record that a scope was unshared (ADR 0019 retention/deletion). */
+export interface ScopeTombstone {
+  scope: string;
+  unsharedAt: string;
 }
 
 /**
@@ -108,10 +117,26 @@ export interface ConnectorStorage {
   deleteToken(tokenHash: string): Promise<void>;
 
   // --- shared entries (the opt-in plaintext carve-out) ---
-  /** Seed/replace a shared entry (C1: seeded; C2 will drive this from client push). */
+  /** Seed/replace a single shared entry (C1 seeding + the /debug/seed route). */
   putEntry(accountHash: string, entry: SharedEntry): Promise<void>;
   /** Every shared entry for exactly this account — the scope-isolation boundary. */
   listEntries(accountHash: string): Promise<SharedEntry[]>;
+  /**
+   * C2 "make these scopes match" push: upsert every entry in `entries`, then
+   * DELETE any existing row in one of `scopes` whose entryId is not in `entries`.
+   * After this call the account's rows for each scope in `scopes` are EXACTLY the
+   * provided ones (a forgotten/removed vault entry disappears server-side). A
+   * scope in `scopes` with no entries in the payload is cleared entirely. Callers
+   * must guarantee every entry.scope ∈ scopes (the server route validates this).
+   */
+  replaceScopes(accountHash: string, scopes: string[], entries: SharedEntry[]): Promise<void>;
+  /**
+   * Unshare: delete every row in `scope` for this account and write a
+   * content-free `scope_tombstones` row. Returns how many rows were deleted.
+   */
+  deleteScope(accountHash: string, scope: string): Promise<number>;
+  /** The account's unshare tombstones (audit / inspection). */
+  listTombstones(accountHash: string): Promise<ScopeTombstone[]>;
 
   // --- audit ---
   appendAudit(entry: ConnectorAuditEntry): Promise<void>;
@@ -144,6 +169,8 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
   private tokens = new Map<string, StoredOAuthToken>();
   /** accountHash -> (entryId -> entry) */
   private entries = new Map<string, Map<string, SharedEntry>>();
+  /** accountHash -> tombstones */
+  private tombstones = new Map<string, ScopeTombstone[]>();
   private audit: ConnectorAuditEntry[] = [];
 
   async upsertAccount(accountHash: string): Promise<void> {
@@ -213,6 +240,48 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
   async listEntries(accountHash: string): Promise<SharedEntry[]> {
     const byId = this.entries.get(accountHash);
     return byId ? [...byId.values()].map((e) => ({ ...e })) : [];
+  }
+
+  async replaceScopes(accountHash: string, scopes: string[], entries: SharedEntry[]): Promise<void> {
+    let byId = this.entries.get(accountHash);
+    if (!byId) {
+      byId = new Map();
+      this.entries.set(accountHash, byId);
+    }
+    // Upsert everything provided, tracking which ids should survive per scope.
+    const keepByScope = new Map<string, Set<string>>();
+    for (const s of scopes) keepByScope.set(s, new Set());
+    for (const e of entries) {
+      byId.set(e.entryId, { ...e });
+      keepByScope.get(e.scope)?.add(e.entryId);
+    }
+    // Delete any pre-existing row in a pushed scope that the payload omitted.
+    for (const [id, e] of [...byId.entries()]) {
+      if (keepByScope.has(e.scope) && !keepByScope.get(e.scope)!.has(id)) {
+        byId.delete(id);
+      }
+    }
+  }
+
+  async deleteScope(accountHash: string, scope: string): Promise<number> {
+    const byId = this.entries.get(accountHash);
+    let n = 0;
+    if (byId) {
+      for (const [id, e] of [...byId.entries()]) {
+        if (e.scope === scope) {
+          byId.delete(id);
+          n++;
+        }
+      }
+    }
+    const list = this.tombstones.get(accountHash) ?? [];
+    list.push({ scope, unsharedAt: new Date().toISOString() });
+    this.tombstones.set(accountHash, list);
+    return n;
+  }
+
+  async listTombstones(accountHash: string): Promise<ScopeTombstone[]> {
+    return (this.tombstones.get(accountHash) ?? []).map((t) => ({ ...t }));
   }
 
   async appendAudit(entry: ConnectorAuditEntry): Promise<void> {

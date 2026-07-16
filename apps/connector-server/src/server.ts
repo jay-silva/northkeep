@@ -15,10 +15,13 @@
  *     GET /.well-known/oauth-authorization-server        (RFC 8414 AS metadata)
  *     GET /.well-known/oauth-protected-resource/mcp      (RFC 9728 PRM)
  *   Ours:
- *     POST /pair/start           (Bearer connector_token -> single-use pairing code)
- *     POST /consent              (pairing code -> account binding -> auth code)
- *     POST /mcp                  (bearer-protected, stateless MCP; account-scoped tools)
- *     GET  /mcp                  (405 — stateless, no server-initiated stream)
+ *     POST   /pair/start         (Bearer connector_token -> single-use pairing code)
+ *     POST   /consent            (pairing code -> account binding -> auth code)
+ *     POST   /mcp                (bearer-protected, stateless MCP; account-scoped tools)
+ *     GET    /mcp                (405 — stateless, no server-initiated stream)
+ *     GET    /client/manifest    (Bearer connector_token -> [{entry_id,entry_hash,scope}])
+ *     PUT    /client/entries     (Bearer; "make these scopes match" batch push)
+ *     DELETE /client/scope/:scope (Bearer; unshare -> delete rows + tombstone)
  *     POST /debug/seed           (test-only, env-gated; seed shared rows)
  *     GET  /.well-known/oauth-protected-resource   (PRM root, compat)
  *     GET  /                     (health page)
@@ -42,7 +45,17 @@ const RATE_LIMIT_DEFAULT = 120;
 const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 const IP_LIMIT_MULTIPLIER = 4;
 /** Paths that must be throttled (before body read / storage / Stripe). */
-const THROTTLED_PREFIXES = ['/mcp', '/pair', '/consent', '/debug'];
+const THROTTLED_PREFIXES = ['/mcp', '/pair', '/consent', '/client', '/debug'];
+
+// Per-account sharing caps (ADR 0019). Enforced on the push payload; a precise
+// per-account TOTAL across not-pushed scopes would need an extra read (noted).
+const MAX_SHARED_ENTRIES = 5000;
+const MAX_CONTENT_BYTES = 8 * 1024; // 8 KB per entry
+const MAX_TOTAL_CONTENT_BYTES = 4 * 1024 * 1024; // ~4 MB of content per push
+// Body parser ceiling for the push: above the 4 MB content cap so a legitimate
+// max payload (JSON key/id/hash overhead per row) is measured by the real cap
+// in-handler, not silently 413'd by the parser.
+const CLIENT_BODY_LIMIT = '8mb';
 
 export function createConnectorServer(storage: ConnectorStorage): express.Express {
   const publicUrl = (process.env.PUBLIC_URL || 'http://localhost:3000').replace(/\/$/, '');
@@ -236,6 +249,123 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
     res.status(405).json({ jsonrpc: '2.0', error: { code: -32000, message: 'Method not allowed. Use POST for stateless MCP.' }, id: null });
   });
 
+  // ---- client push endpoints (C2) ---------------------------------------
+  // Bearer connector_token -> sha256 -> account_hash (upsert), exactly like
+  // /pair/start. The desktop pushes ONLY the scopes the user marked Shared.
+
+  // GET /client/manifest -> [{ entry_id, entry_hash, scope }] so the client can
+  // diff. Content-free (no `content`, no `type`), still account-scoped.
+  app.get('/client/manifest', async (req: Request, res: Response) => {
+    const accountHash = bearerAccount(req);
+    if (!accountHash) {
+      res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
+      return;
+    }
+    await storage.upsertAccount(accountHash);
+    const entries = await storage.listEntries(accountHash);
+    res.status(200).json({
+      entries: entries.map((e) => ({ entry_id: e.entryId, entry_hash: e.entryHash ?? '', scope: e.scope })),
+    });
+  });
+
+  // PUT /client/entries -> "make these scopes match". Body:
+  //   { scopes: string[], entries: [{ entry_id, entry_hash, scope, type, content }] }
+  // Upserts the provided rows and deletes any server row in `scopes` not present,
+  // so a forgotten/removed vault entry disappears server-side.
+  app.put('/client/entries', express.json({ limit: CLIENT_BODY_LIMIT }), async (req: Request, res: Response) => {
+    const accountHash = bearerAccount(req);
+    if (!accountHash) {
+      res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
+      return;
+    }
+    const body = req.body as { scopes?: unknown; entries?: unknown };
+    if (!Array.isArray(body.scopes) || !Array.isArray(body.entries)) {
+      res.status(400).json({ error: 'Provide a scopes[] array and an entries[] array.' });
+      return;
+    }
+    const scopes = body.scopes.filter((s): s is string => typeof s === 'string');
+    if (body.entries.length > MAX_SHARED_ENTRIES) {
+      res.status(413).json({ error: `Too many shared memories (${body.entries.length}). The cap is ${MAX_SHARED_ENTRIES} per account.` });
+      return;
+    }
+    const entries: SharedEntry[] = [];
+    let totalBytes = 0;
+    const now = new Date().toISOString();
+    for (const raw of body.entries) {
+      const e = raw as Record<string, unknown>;
+      if (
+        typeof e.entry_id !== 'string' ||
+        typeof e.scope !== 'string' ||
+        typeof e.type !== 'string' ||
+        typeof e.content !== 'string'
+      ) {
+        res.status(400).json({ error: 'Each entry needs string entry_id, scope, type, and content.' });
+        return;
+      }
+      if (!scopes.includes(e.scope)) {
+        res.status(400).json({ error: `Entry scope "${e.scope}" is not in the pushed scopes list.` });
+        return;
+      }
+      const bytes = Buffer.byteLength(e.content, 'utf8');
+      if (bytes > MAX_CONTENT_BYTES) {
+        res.status(413).json({ error: `A memory exceeds the ${MAX_CONTENT_BYTES}-byte per-entry content cap.` });
+        return;
+      }
+      totalBytes += bytes;
+      if (totalBytes > MAX_TOTAL_CONTENT_BYTES) {
+        res.status(413).json({ error: `The push exceeds the ${MAX_TOTAL_CONTENT_BYTES / 1024 / 1024} MB total content cap.` });
+        return;
+      }
+      entries.push({
+        entryId: e.entry_id,
+        scope: e.scope,
+        type: e.type,
+        content: e.content,
+        entryHash: typeof e.entry_hash === 'string' ? e.entry_hash : '',
+        createdAt: now,
+      });
+    }
+    await storage.upsertAccount(accountHash);
+    await storage.replaceScopes(accountHash, scopes, entries);
+    await storage.appendAudit({
+      ts: now,
+      accountHash,
+      tool: 'client_push',
+      params: { limit: scopes.length },
+      ok: true,
+      resultCount: entries.length,
+      resultIds: [],
+    });
+    res.status(200).json({ ok: true, scopes, upserted: entries.length });
+  });
+
+  // DELETE /client/scope/:scope -> unshare: delete every row in the scope and
+  // write a content-free tombstone.
+  app.delete('/client/scope/:scope', async (req: Request, res: Response) => {
+    const accountHash = bearerAccount(req);
+    if (!accountHash) {
+      res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
+      return;
+    }
+    const scope = req.params.scope ?? '';
+    if (!scope) {
+      res.status(400).json({ error: 'Provide a scope to unshare.' });
+      return;
+    }
+    await storage.upsertAccount(accountHash);
+    const deleted = await storage.deleteScope(accountHash, scope);
+    await storage.appendAudit({
+      ts: new Date().toISOString(),
+      accountHash,
+      tool: 'client_unshare',
+      params: { limit: 1 },
+      ok: true,
+      resultCount: deleted,
+      resultIds: [],
+    });
+    res.status(200).json({ ok: true, scope, deleted });
+  });
+
   // ---- test-only seed: POST /debug/seed (env-gated) ---------------------
   // Lets the lead seed shared rows against real Neon. The e2e seeds via the
   // storage method directly; this is the deploy-time equivalent. Disabled unless
@@ -277,12 +407,24 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
 <ul>
   <li><code>POST /mcp</code> — MCP streamable HTTP (bearer-protected, stateless). Tools: <code>memory_retrieve</code>, <code>memory_list</code></li>
   <li><code>POST /pair/start</code> — pairing code from a connector token</li>
+  <li><code>GET /client/manifest</code>, <code>PUT /client/entries</code>, <code>DELETE /client/scope/:scope</code> — desktop push of shared scopes</li>
   <li><code>GET /.well-known/oauth-authorization-server</code> — RFC 8414 AS metadata</li>
   <li><code>GET /.well-known/oauth-protected-resource/mcp</code> — RFC 9728 PRM</li>
 </ul>`);
   });
 
   return app;
+}
+
+/**
+ * The account hash for a /client/* request: sha256 of the Bearer connector
+ * token, mirroring /pair/start. Returns null for a missing/too-short token.
+ */
+function bearerAccount(req: Request): string | null {
+  const auth = req.headers['authorization'];
+  const token = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
+  if (!token || token.length < 16) return null;
+  return sha256hex(token);
 }
 
 /** Client IP: first hop of x-forwarded-for (set by Vercel), else the socket. */

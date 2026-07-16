@@ -48,6 +48,9 @@ function missingDbStorage(): ConnectorStorage {
     deleteToken: fail,
     putEntry: fail,
     listEntries: fail,
+    replaceScopes: fail,
+    deleteScope: fail,
+    listTombstones: fail,
     appendAudit: fail,
   };
 }

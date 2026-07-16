@@ -20,6 +20,8 @@
     "zod": "^3.23.8"
   },
   "devDependencies": {
+    "@northkeep/core": "workspace:*",
+    "@northkeep/platform-node": "workspace:*",
     "@northkeep/sync": "workspace:*",
     "@types/express": "^4.17.21"
   }

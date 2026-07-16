@@ -51,6 +51,14 @@ import {
   syncStatusCmd,
   syncSubscribe,
 } from './syncCmd.js';
+import {
+  shareAddCmd,
+  shareCodeCmd,
+  sharePushCmd,
+  shareRemoveCmd,
+  shareServerCmd,
+  shareStatusCmd,
+} from './shareCmd.js';
 import { routingClear, routingList, routingSet } from './routingCmd.js';
 import { collectScopes, connectCmd, connectStatusCmd, disconnectCmd } from './connectCmd.js';
 import { runLauncher } from './launcher.js';
@@ -627,6 +635,51 @@ sync
   .description('Show your sync id (a second machine needs the same device.secret)')
   .action(() => {
     syncId(fail);
+  });
+
+const share = program
+  .command('share')
+  .description('Share specific scopes with the hosted connector so your cloud AI apps (Claude, ChatGPT) can read them');
+
+share
+  .command('server <url>')
+  .description('Set the connector server URL (https, or loopback for testing)')
+  .action((url: string) => shareServerCmd(url, fail));
+
+share
+  .command('add <scope>')
+  .description("Mark a scope Shared — stored READABLE by the connector — and push it (private scopes are never shared)")
+  .option('--yes', 'skip the confirmation prompt (scripting)')
+  .action(async (scope: string, options: { yes?: boolean }) => {
+    await shareAddCmd(scope, options, withVault, fail);
+  });
+
+share
+  .command('remove <scope>')
+  .description('Unshare a scope: delete all its memories from the connector server')
+  .action(async (scope: string) => {
+    await shareRemoveCmd(scope, fail);
+  });
+
+share
+  .command('status', { isDefault: true })
+  .description('Show the connector server, which scopes are shared, and their counts')
+  .action(async () => {
+    await shareStatusCmd(withVault);
+  });
+
+share
+  .command('push')
+  .description('Re-push your shared scopes to the connector server (after adding memories)')
+  .action(async () => {
+    await sharePushCmd(withVault, fail);
+  });
+
+share
+  .command('code')
+  .description('Get a pairing code to connect an AI app to your shared memories')
+  .action(async () => {
+    await shareCodeCmd(fail);
   });
 
 const connectGroup = program

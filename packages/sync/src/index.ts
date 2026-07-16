@@ -22,3 +22,22 @@ export {
   type SyncState,
   type SubscriptionStatus,
 } from './client.js';
+export {
+  assertConnectorUrl,
+  addSharedScope,
+  connectorConfigPath,
+  loadConnectorConfig,
+  removeSharedScope,
+  saveConnectorConfig,
+  setConnectorServer,
+  type ConnectorConfig,
+} from './connector-config.js';
+export {
+  getManifest,
+  pushSharedScopes,
+  startPairing,
+  unshareScope,
+  type ManifestEntry,
+  type PushEntry,
+  type PushSharedResult,
+} from './connector-client.js';
