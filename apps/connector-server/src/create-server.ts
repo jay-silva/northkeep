@@ -14,10 +14,14 @@
  *     POST     /revoke
  *     GET /.well-known/oauth-authorization-server        (RFC 8414 AS metadata)
  *     GET /.well-known/oauth-protected-resource/mcp      (RFC 9728 PRM)
+ *   (C4) CORS is added for the browser-side ChatGPT connect flow: the /.well-known
+ *   discovery docs are readable by any origin; DCR/token/revoke are reflected only
+ *   for the ChatGPT web origins. No credentials mode; bearer routes are excluded.
  *   Ours:
  *     POST   /pair/start         (Bearer connector_token -> single-use pairing code)
  *     POST   /consent            (pairing code -> account binding -> auth code)
- *     POST   /mcp                (bearer-protected, stateless MCP; account-scoped tools)
+ *     POST   /mcp                (bearer-protected, stateless MCP; account-scoped tools:
+ *                                 memory_retrieve/list/remember/forget + search/fetch)
  *     GET    /mcp                (405 — stateless, no server-initiated stream)
  *     GET    /client/manifest    (Bearer connector_token -> [{entry_id,entry_hash,scope}])
  *     PUT    /client/entries     (Bearer; "make these scopes match" batch push)
@@ -39,6 +43,7 @@ import { createMcpServer } from './mcp.js';
 import { renderConsentPage } from './consent.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
 import { sha256hex, generatePairingCode } from './hash.js';
+import { connectorGateFromEnv, verifyEntitlement, ENTITLEMENT_GRACE_MS } from './entitlement.js';
 
 const PAIRING_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const RATE_LIMIT_DEFAULT = 120;
@@ -46,6 +51,20 @@ const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 const IP_LIMIT_MULTIPLIER = 4;
 /** Paths that must be throttled (before body read / storage / Stripe). */
 const THROTTLED_PREFIXES = ['/mcp', '/pair', '/consent', '/client', '/debug'];
+
+// ---- CORS for ChatGPT's browser-side connect flow (C4) -------------------
+// When a user adds this connector inside ChatGPT (web), the chatgpt.com page
+// fetch()es our OAuth discovery + DCR from the browser, so those cross-origin
+// responses need CORS headers or the browser drops them. We do NOT use cookies
+// or `Access-Control-Allow-Credentials`, so this is not a CSRF/credential
+// surface. Origins: chatgpt.com is the current ChatGPT web origin; chat.openai.com
+// is its legacy origin (still in redirects). Nothing else is allowed.
+const CHATGPT_WEB_ORIGINS = new Set(['https://chatgpt.com', 'https://chat.openai.com']);
+// OAuth endpoints a browser MIGHT call with fetch() during connect: DCR + the
+// token/revoke exchanges. ChatGPT may do these server-side instead (no CORS
+// needed then) — allowlisting is harmless either way and covers both. The
+// /.well-known/* discovery docs are handled separately (public, any origin).
+const OAUTH_BROWSER_PREFIXES = ['/register', '/token', '/revoke'];
 
 // Per-account sharing caps (ADR 0019). Enforced on the push payload; a precise
 // per-account TOTAL across not-pushed scopes would need an extra read (noted).
@@ -65,6 +84,40 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
   const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceServerUrl);
 
   const provider = new ConnectorOAuthProvider(storage, mcpResourceUrl);
+
+  // ---- billing gate (C3) -------------------------------------------------
+  // Gate OFF (both envs unset) ⇒ every account is allowed (self-host / the
+  // C1/C2 tests). Gate ON ⇒ allow an allowlisted account free, or one carrying a
+  // live entitlement grace window; otherwise 402 on the gated routes.
+  const gate = connectorGateFromEnv(process.env);
+
+  /** Stamp a grace window when the desktop forwards a valid X-NB-Entitlement. */
+  async function stampEntitlement(req: Request, accountHash: string): Promise<void> {
+    if (!gate.entitlementSecret) return;
+    const raw = req.headers['x-nb-entitlement'];
+    const token = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw[0] : null;
+    if (!token) return;
+    const claims = verifyEntitlement(gate.entitlementSecret, token);
+    if (claims) await storage.setEntitledUntil(accountHash, Date.now() + ENTITLEMENT_GRACE_MS);
+  }
+
+  /** True if the account may use the gated routes. */
+  async function isEntitled(accountHash: string): Promise<boolean> {
+    if (!gate.on) return true;
+    if (gate.allowlist?.has(accountHash)) return true;
+    if (gate.entitlementSecret) {
+      const until = await storage.getEntitledUntil(accountHash);
+      if (until !== null && until > Date.now()) return true;
+    }
+    return false;
+  }
+
+  function deny402(res: Response): void {
+    res.status(402).json({
+      error: 'An active NorthKeep subscription is required to use the connector.',
+      subscribe: true,
+    });
+  }
 
   const app = express();
   app.disable('x-powered-by');
@@ -93,6 +146,42 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
     if (retryAfter !== null) {
       res.set('retry-after', String(retryAfter));
       res.status(429).json({ error: 'Too many requests. Slow down and retry.' });
+      return;
+    }
+    next();
+  });
+
+  // ---- CORS for the ChatGPT connect flow (C4) ---------------------------
+  // Runs before the SDK router so a preflight to /register|/token|/revoke and a
+  // browser GET of the discovery docs get the right headers (and OPTIONS is
+  // answered here, not 404'd by a route that only handles GET/POST).
+  //  - /.well-known/* : public, unauthenticated RFC 8414/9728 discovery docs.
+  //    They carry no secrets and are meant to be world-readable, so any origin
+  //    may read them (Access-Control-Allow-Origin: *).
+  //  - /register,/token,/revoke : reflected ONLY for the known ChatGPT web
+  //    origins; unknown origins get no ACAO and the browser blocks the response.
+  // No Allow-Credentials anywhere. Bearer routes (/mcp, /client/*) are NOT here:
+  // /mcp keeps its own permissive reflect (below) because CORS never guards a
+  // bearer endpoint — whoever holds the token already wins — and /client/* is a
+  // desktop-to-server call with no browser origin to satisfy.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const origin = typeof req.headers.origin === 'string' ? req.headers.origin : '';
+    const path = req.path;
+    const isMetadata = path.startsWith('/.well-known/');
+    const isOAuthBrowser = OAUTH_BROWSER_PREFIXES.some((p) => path === p || path.startsWith(`${p}/`));
+    if (!isMetadata && !isOAuthBrowser) return next();
+
+    if (origin && CHATGPT_WEB_ORIGINS.has(origin)) {
+      res.set('Access-Control-Allow-Origin', origin);
+      res.set('Vary', 'Origin');
+    } else if (isMetadata) {
+      res.set('Access-Control-Allow-Origin', '*');
+    }
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization, Mcp-Protocol-Version');
+    res.set('Access-Control-Max-Age', '600');
+    if (req.method === 'OPTIONS') {
+      res.status(204).end();
       return;
     }
     next();
@@ -134,6 +223,11 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
     }
     const accountHash = sha256hex(token);
     await storage.upsertAccount(accountHash);
+    await stampEntitlement(req, accountHash);
+    if (!(await isEntitled(accountHash))) {
+      deny402(res);
+      return;
+    }
     const code = generatePairingCode();
     const expiresAt = Date.now() + PAIRING_TTL_MS;
     await storage.putPairingCode(sha256hex(code), accountHash, expiresAt);
@@ -227,6 +321,14 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
       res.status(401).json({ jsonrpc: '2.0', error: { code: -32001, message: 'Token not bound to an account' }, id: null });
       return;
     }
+    if (!(await isEntitled(accountHash))) {
+      res.status(402).json({
+        jsonrpc: '2.0',
+        error: { code: -32002, message: 'An active NorthKeep subscription is required to use the connector.' },
+        id: null,
+      });
+      return;
+    }
     const server = createMcpServer(storage, accountHash);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
@@ -237,8 +339,11 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
       await server.connect(transport);
       await transport.handleRequest(req, res, req.body);
     } catch (err) {
+      // Log only the message, never the raw error object: this is the one hot
+      // path that touches memory content, and content-free logs are a hard
+      // guarantee (invariant #5 / ADR 0019).
       // eslint-disable-next-line no-console
-      console.error('POST /mcp error:', err);
+      console.error('POST /mcp error:', err instanceof Error ? err.message : 'mcp error');
       if (!res.headersSent) {
         res.status(500).json({ jsonrpc: '2.0', error: { code: -32603, message: 'Internal server error' }, id: null });
       }
@@ -262,6 +367,11 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
       return;
     }
     await storage.upsertAccount(accountHash);
+    await stampEntitlement(req, accountHash);
+    if (!(await isEntitled(accountHash))) {
+      deny402(res);
+      return;
+    }
     const entries = await storage.listEntries(accountHash);
     res.status(200).json({
       entries: entries.map((e) => ({ entry_id: e.entryId, entry_hash: e.entryHash ?? '', scope: e.scope })),
@@ -276,6 +386,12 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
     const accountHash = bearerAccount(req);
     if (!accountHash) {
       res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
+      return;
+    }
+    await storage.upsertAccount(accountHash);
+    await stampEntitlement(req, accountHash);
+    if (!(await isEntitled(accountHash))) {
+      deny402(res);
       return;
     }
     const body = req.body as { scopes?: unknown; entries?: unknown };
@@ -325,7 +441,6 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
         createdAt: now,
       });
     }
-    await storage.upsertAccount(accountHash);
     await storage.replaceScopes(accountHash, scopes, entries);
     await storage.appendAudit({
       ts: now,
@@ -353,6 +468,11 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
       return;
     }
     await storage.upsertAccount(accountHash);
+    await stampEntitlement(req, accountHash);
+    if (!(await isEntitled(accountHash))) {
+      deny402(res);
+      return;
+    }
     const deleted = await storage.deleteScope(accountHash, scope);
     await storage.appendAudit({
       ts: new Date().toISOString(),
@@ -366,36 +486,97 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
     res.status(200).json({ ok: true, scope, deleted });
   });
 
-  // ---- test-only seed: POST /debug/seed (env-gated) ---------------------
-  // Lets the lead seed shared rows against real Neon. The e2e seeds via the
-  // storage method directly; this is the deploy-time equivalent. Disabled unless
-  // NORTHKEEP_CONNECTOR_ENABLE_DEBUG_SEED=1.
-  app.post('/debug/seed', express.json({ limit: '256kb' }), async (req: Request, res: Response) => {
-    if (process.env.NORTHKEEP_CONNECTOR_ENABLE_DEBUG_SEED !== '1') {
-      res.status(404).json({ error: 'Not found.' });
-      return;
-    }
-    const body = req.body as { connector_token?: string; account_hash?: string; entries?: Array<Partial<SharedEntry>> };
-    const accountHash = body.connector_token ? sha256hex(body.connector_token) : body.account_hash;
-    if (!accountHash || !Array.isArray(body.entries)) {
-      res.status(400).json({ error: 'Provide connector_token or account_hash, and an entries array.' });
+  // ---- write-back down-sync (C3) ----------------------------------------
+  // GET /client/pending -> the connector-born memories not yet pulled into the
+  // vault, plus the queued forgets. Content-bearing but account-scoped; the
+  // desktop applies these to the OPEN vault then acks.
+  app.get('/client/pending', async (req: Request, res: Response) => {
+    const accountHash = bearerAccount(req);
+    if (!accountHash) {
+      res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
       return;
     }
     await storage.upsertAccount(accountHash);
-    let n = 0;
-    for (const e of body.entries) {
-      if (!e.entryId || !e.scope || !e.type || typeof e.content !== 'string') continue;
-      await storage.putEntry(accountHash, {
-        entryId: e.entryId,
-        scope: e.scope,
-        type: e.type,
-        content: e.content,
-        createdAt: e.createdAt ?? new Date().toISOString(),
-      });
-      n++;
+    await stampEntitlement(req, accountHash);
+    if (!(await isEntitled(accountHash))) {
+      deny402(res);
+      return;
     }
-    res.status(200).json({ seeded: n, account_hash: accountHash });
+    const [pending, forgets] = await Promise.all([
+      storage.listPendingEntries(accountHash),
+      storage.listPendingForgets(accountHash),
+    ]);
+    // A pending row that already has a queued forget must NEVER be delivered as a
+    // fresh entry — otherwise a forgotten-before-delivery memory would land in the
+    // vault. It still rides in `forgets` so the server row is drained.
+    const forgottenSet = new Set(forgets);
+    res.status(200).json({
+      entries: pending
+        .filter((e) => !forgottenSet.has(e.entryId))
+        .map((e) => ({ server_id: e.entryId, scope: e.scope, type: e.type, content: e.content })),
+      forgets: forgets.map((entry_id) => ({ entry_id })),
+    });
   });
+
+  // POST /client/ack -> the desktop reports what it applied. Body:
+  //   { acked: [{ server_id, local_entry_id }], forgets: [entry_id] }
+  // Per acked: remap the connector row's id -> the vault-local id and clear
+  // pending (so the next push rehashes it as a normal row). Per forget: delete
+  // the queue row AND the shared_entries row.
+  app.post('/client/ack', express.json({ limit: CLIENT_BODY_LIMIT }), async (req: Request, res: Response) => {
+    const accountHash = bearerAccount(req);
+    if (!accountHash) {
+      res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
+      return;
+    }
+    await storage.upsertAccount(accountHash);
+    await stampEntitlement(req, accountHash);
+    if (!(await isEntitled(accountHash))) {
+      deny402(res);
+      return;
+    }
+    const body = req.body as { acked?: unknown; forgets?: unknown };
+    const acked = Array.isArray(body.acked) ? body.acked : [];
+    const forgets = Array.isArray(body.forgets) ? body.forgets : [];
+    // Cap the batch: each item is a multi-statement Neon transaction run in a
+    // sequential loop, so an unbounded array would amplify one authed request
+    // into tens of thousands of serial round-trips (pool exhaustion / timeout).
+    if (acked.length + forgets.length > MAX_SHARED_ENTRIES) {
+      res.status(413).json({
+        error: `Too many items in one ack (${acked.length + forgets.length}). The cap is ${MAX_SHARED_ENTRIES}.`,
+      });
+      return;
+    }
+    let ackedCount = 0;
+    for (const raw of acked) {
+      const a = raw as Record<string, unknown>;
+      if (typeof a.server_id !== 'string' || typeof a.local_entry_id !== 'string') continue;
+      await storage.ackEntry(accountHash, a.server_id, a.local_entry_id);
+      ackedCount++;
+    }
+    let forgottenCount = 0;
+    for (const raw of forgets) {
+      if (typeof raw !== 'string') continue;
+      await storage.applyForget(accountHash, raw);
+      forgottenCount++;
+    }
+    await storage.appendAudit({
+      ts: new Date().toISOString(),
+      accountHash,
+      tool: 'client_ack',
+      params: { limit: ackedCount + forgottenCount },
+      ok: true,
+      resultCount: ackedCount + forgottenCount,
+      resultIds: [],
+    });
+    res.status(200).json({ ok: true, acked: ackedCount, forgotten: forgottenCount });
+  });
+
+  // (Removed: the env-gated POST /debug/seed test helper. It trusted a
+  // caller-supplied account_hash from the body with no OAuth or entitlement
+  // check — a latent cross-account memory-poisoning write if the env flag were
+  // ever set in production. Real seeding goes through the authenticated C2 push
+  // (PUT /client/entries); the e2e seeds via the storage method directly.)
 
   // ---- health page ------------------------------------------------------
   app.get('/', (_req: Request, res: Response) => {
@@ -405,7 +586,7 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
 <p>Public origin: <code>${publicUrl}</code></p>
 <p>OAuth 2.1 authorization server + MCP resource server. Serves ONLY scopes the user marked Shared.</p>
 <ul>
-  <li><code>POST /mcp</code> — MCP streamable HTTP (bearer-protected, stateless). Tools: <code>memory_retrieve</code>, <code>memory_list</code></li>
+  <li><code>POST /mcp</code> — MCP streamable HTTP (bearer-protected, stateless). Tools: <code>memory_retrieve</code>, <code>memory_list</code>, <code>memory_remember</code>, <code>memory_forget</code>, and ChatGPT's <code>search</code> + <code>fetch</code></li>
   <li><code>POST /pair/start</code> — pairing code from a connector token</li>
   <li><code>GET /client/manifest</code>, <code>PUT /client/entries</code>, <code>DELETE /client/scope/:scope</code> — desktop push of shared scopes</li>
   <li><code>GET /.well-known/oauth-authorization-server</code> — RFC 8414 AS metadata</li>

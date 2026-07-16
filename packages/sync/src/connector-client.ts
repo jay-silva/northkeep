@@ -1,4 +1,4 @@
-import type { Vault } from '@northkeep/core';
+import type { MemoryType, Vault } from '@northkeep/core';
 import { deriveConnectorToken } from './creds.js';
 import { assertConnectorUrl } from './connector-config.js';
 
@@ -37,8 +37,34 @@ export interface PushSharedResult {
   scopes: string[];
 }
 
-function authHeaders(deviceSecret: Buffer): Record<string, string> {
-  return { authorization: `Bearer ${deriveConnectorToken(deviceSecret)}` };
+function authHeaders(deviceSecret: Buffer, entitlement?: string): Record<string, string> {
+  const headers: Record<string, string> = { authorization: `Bearer ${deriveConnectorToken(deviceSecret)}` };
+  // The billing gate (ADR 0019 C3): the desktop forwards the anonymous
+  // "active subscriber" attestation it fetched from the sync server. Absent on a
+  // self-hosted / ungated connector — the header is optional.
+  if (entitlement) headers['x-nb-entitlement'] = entitlement;
+  return headers;
+}
+
+/**
+ * Fetch an anonymous entitlement attestation from the SYNC server (authenticated
+ * with the sync token), to forward to the connector's billing gate. Returns null
+ * if the sync server has no entitlement bridge configured (404) — the connector
+ * is then either ungated or gates by its own allowlist.
+ */
+export async function fetchEntitlement(opts: { syncServer: string; syncToken: string }): Promise<string | null> {
+  const server = opts.syncServer.replace(/\/$/, '');
+  const res = await fetch(`${server}/api/entitlement`, {
+    method: 'POST',
+    headers: { authorization: `Bearer ${opts.syncToken}`, 'content-type': 'application/json' },
+    body: '{}',
+    redirect: 'error',
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on entitlement.`);
+  const body = (await res.json()) as { entitlement?: string };
+  return body.entitlement ?? null;
 }
 
 function normalizeServer(server: string): string {
@@ -60,6 +86,8 @@ export async function pushSharedScopes(opts: {
   deviceSecret: Buffer;
   scopes: string[];
   vault: Vault;
+  /** Optional entitlement attestation forwarded to the connector's billing gate. */
+  entitlement?: string;
 }): Promise<PushSharedResult> {
   const server = normalizeServer(opts.server);
   const scopes = [...new Set(opts.scopes)];
@@ -78,7 +106,7 @@ export async function pushSharedScopes(opts: {
   }
   const res = await fetch(`${server}/client/entries`, {
     method: 'PUT',
-    headers: { ...authHeaders(opts.deviceSecret), 'content-type': 'application/json' },
+    headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
     body: JSON.stringify({ scopes, entries }),
     redirect: 'error',
     signal: AbortSignal.timeout(TIMEOUT_MS),
@@ -127,16 +155,130 @@ export async function getManifest(opts: {
   return body.entries ?? [];
 }
 
+/** One connector-born memory awaiting down-sync into the vault. */
+interface PendingEntry {
+  server_id: string;
+  scope: string;
+  type: string;
+  content: string;
+}
+
+export interface DownSyncResult {
+  /** New vault entries created from connector-born memories. */
+  added: number;
+  /** Vault entries tombstoned to satisfy a queued forget. */
+  forgotten: number;
+  /** Connector-born memories skipped because an identical live vault entry existed. */
+  deduped: number;
+}
+
+/**
+ * Write-back down-sync (ADR 0019, phase C3): pull the memories the user created
+ * INSIDE an AI app (via memory_remember) and the forgets they issued there, apply
+ * them to the OPEN vault, then ack the server so it stops re-sending them.
+ *
+ * Invariants this guarantees: verifyChain() stays true (every write is a normal
+ * append/tombstone); no duplicate vault entry per server_id across re-runs (the
+ * server only lists still-pending rows, and we dedupe on identical (scope,
+ * content)); no resurrection of a forgotten entry (forget is permanent and we
+ * ack the forget so the server row is deleted). The CALLER then re-runs
+ * pushSharedScopes so each new row is rehashed server-side under its vault id.
+ */
+export async function downSyncConnector(opts: {
+  server: string;
+  deviceSecret: Buffer;
+  vault: Vault;
+  /** Optional entitlement attestation forwarded to the connector's billing gate. */
+  entitlement?: string;
+}): Promise<DownSyncResult> {
+  const server = normalizeServer(opts.server);
+  const clientLabel = new URL(server).hostname;
+
+  const pendingRes = await fetch(`${server}/client/pending`, {
+    headers: authHeaders(opts.deviceSecret, opts.entitlement),
+    redirect: 'error',
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (pendingRes.status === 401) throw new Error('The connector server rejected the connector token (401).');
+  if (pendingRes.status === 402) {
+    throw new Error('The connector server requires an active subscription (402) to down-sync.');
+  }
+  if (!pendingRes.ok) throw new Error(`Connector server returned HTTP ${pendingRes.status} on pending.`);
+  const pending = (await pendingRes.json()) as { entries?: PendingEntry[]; forgets?: Array<{ entry_id: string }> };
+  const entries = pending.entries ?? [];
+  const forgets = pending.forgets ?? [];
+
+  const acked: Array<{ server_id: string; local_entry_id: string }> = [];
+  let added = 0;
+  let deduped = 0;
+
+  for (const e of entries) {
+    if (!e.server_id || !e.content) continue;
+    // Dedupe against LIVE (non-forgotten, non-superseded) entries in the scope so
+    // a re-run never creates a second copy of the same connector memory.
+    const dup = opts.vault.list({ scope: e.scope }).find((v) => v.content === e.content);
+    if (dup) {
+      acked.push({ server_id: e.server_id, local_entry_id: dup.id });
+      deduped++;
+      continue;
+    }
+    const created = opts.vault.remember({
+      content: e.content,
+      type: e.type as MemoryType,
+      scope: e.scope,
+      source: `connector:${clientLabel}`,
+      metadata: { connector: { server_id: e.server_id } },
+    });
+    acked.push({ server_id: e.server_id, local_entry_id: created.id });
+    added++;
+  }
+
+  // Apply forgets: tombstone the vault entry if it is still live. Every forget is
+  // acked regardless so the server drains its queue and deletes the row (no
+  // resurrection on a later push).
+  let forgotten = 0;
+  const forgetIds: string[] = [];
+  for (const f of forgets) {
+    const id = f.entry_id;
+    if (!id) continue;
+    forgetIds.push(id);
+    const live = opts.vault.list().find((v) => v.id === id);
+    if (live) {
+      opts.vault.forget(id);
+      forgotten++;
+    }
+  }
+
+  // Persist BEFORE acking: if the ack (or process) fails after save, the server
+  // simply re-sends and the dedupe/forget-idempotence make the retry a no-op.
+  opts.vault.save();
+
+  const ackRes = await fetch(`${server}/client/ack`, {
+    method: 'POST',
+    headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
+    body: JSON.stringify({ acked, forgets: forgetIds }),
+    redirect: 'error',
+    signal: AbortSignal.timeout(TIMEOUT_MS),
+  });
+  if (!ackRes.ok) throw new Error(`Connector server returned HTTP ${ackRes.status} on ack.`);
+
+  return { added, forgotten, deduped };
+}
+
 /**
  * POST /pair/start -> the 8-char single-use pairing code the user types into the
  * AI app's OAuth consent page. Bearer connector_token; the server binds the
  * eventual OAuth grant to this account.
  */
-export async function startPairing(opts: { server: string; deviceSecret: Buffer }): Promise<string> {
+export async function startPairing(opts: {
+  server: string;
+  deviceSecret: Buffer;
+  entitlement?: string;
+}): Promise<string> {
   const server = normalizeServer(opts.server);
   const res = await fetch(`${server}/pair/start`, {
     method: 'POST',
-    headers: { ...authHeaders(opts.deviceSecret), 'content-type': 'application/json' },
+    headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
     body: '{}',
     redirect: 'error',
     signal: AbortSignal.timeout(TIMEOUT_MS),

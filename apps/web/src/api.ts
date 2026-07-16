@@ -25,6 +25,18 @@ import {
   subscriptionStatus,
   SubscriptionRequiredError,
   syncState,
+  // Hosted connector / sharing (ADR 0019). These CALL the already-exported
+  // @northkeep/sync client — the connector token is derived from the device
+  // secret inside them and is never returned to the page.
+  addSharedScope,
+  downSyncConnector,
+  fetchEntitlement,
+  loadConnectorConfig,
+  pushSharedScopes,
+  removeSharedScope,
+  setConnectorServer,
+  startPairing,
+  unshareScope,
 } from '@northkeep/sync';
 import {
   PASTE_PROMPT,
@@ -179,7 +191,8 @@ export async function handleApi(
     if (err instanceof VaultAuthError) return bad(401, err.message);
     if (err instanceof SubscriptionRequiredError)
       return bad(402, 'A $10/month subscription is required to sync on this server.');
-    if (err instanceof DeviceSecretError || err instanceof SyncRequestError) return bad(400, err.message);
+    if (err instanceof DeviceSecretError || err instanceof SyncRequestError || err instanceof ShareRequestError)
+      return bad(400, err.message);
     return bad(500, err instanceof Error ? err.message : String(err));
   }
 }
@@ -617,6 +630,138 @@ async function dispatch(
     } catch {
       return bad(400, 'This sync server does not offer subscriptions.');
     }
+  }
+
+  // --- Sharing / hosted connector (ADR 0019, phase C5). The opt-in, per-scope,
+  // plaintext connector. UNLIKE sync, the connector server CAN read the scopes
+  // the user marks Shared — so private is the default, sharing is explicit and
+  // loudly confirmed in the GUI, badge-visible, and reversible with server-side
+  // deletion. The connector token is derived from the device secret inside
+  // @northkeep/sync and is NEVER returned here; entitlement is forwarded to the
+  // billing gate exactly as the CLI does. ---
+
+  if (method === 'GET' && route === '/api/share/status') {
+    const config = loadConnectorConfig();
+    const unlocked = session.isUnlocked();
+    // Distinct scopes the vault actually holds, with a live count each, so the UI
+    // can offer a real Share toggle per scope. Only readable while unlocked;
+    // locked simply omits them (the shared list from config still renders, so the
+    // user always sees exactly what is shared).
+    let vaultScopes: string[] = [];
+    const counts: Record<string, number> = {};
+    if (unlocked) {
+      await session.withVault((vault) => {
+        for (const entry of vault.list()) {
+          counts[entry.scope] = (counts[entry.scope] ?? 0) + 1;
+        }
+      });
+      vaultScopes = Object.keys(counts).sort();
+    }
+    return ok({
+      configured: Boolean(config),
+      server: config?.server ?? null,
+      shared_scopes: config?.sharedScopes ?? [],
+      vault_scopes: vaultScopes,
+      counts,
+      unlocked,
+      // The URL the user pastes into Claude/ChatGPT to add the connector (the MCP
+      // mount is /mcp on the connector server — apps/connector-server).
+      mcp_url: config ? mcpUrl(config.server) : null,
+    });
+  }
+
+  if (method === 'POST' && route === '/api/share/server') {
+    const { server_url } = parseJson<{ server_url?: string }>(body);
+    if (!server_url?.trim()) return bad(400, 'server_url is required.');
+    let config;
+    try {
+      config = setConnectorServer(server_url); // throws on non-https / non-loopback
+    } catch (err) {
+      throw new ShareRequestError(err instanceof Error ? err.message : 'Invalid connector server URL.');
+    }
+    return ok({ server: config.server, mcp_url: mcpUrl(config.server) });
+  }
+
+  // Mark a scope Shared and push its live entries. The GUI shows the loud
+  // confirmation BEFORE calling this; reaching here means the user confirmed.
+  if (method === 'POST' && route === '/api/share/add') {
+    const { scope } = parseJson<{ scope?: string }>(body);
+    const targetScope = typeof scope === 'string' ? scope.trim() : '';
+    if (!/^[a-z0-9:_.-]{1,64}$/i.test(targetScope)) return bad(400, 'Invalid scope.');
+    const config = loadConnectorConfig();
+    if (!config) return bad(400, 'Set a connector server first.');
+    const deviceSecret = deviceSecretOrError();
+    const updated = addSharedScope(targetScope);
+    const entitlement = await maybeEntitlement(deviceSecret);
+    try {
+      const result = await session.withVault((vault) =>
+        pushSharedScopes({ server: updated.server, deviceSecret, scopes: updated.sharedScopes, vault, entitlement }),
+      );
+      return ok({ shared: targetScope, pushed: result.pushed, scopes: result.scopes });
+    } catch (err) {
+      // The push did not land (offline, over the sharing caps, or the billing
+      // gate refused). Roll the local mark back so a scope the server never
+      // accepted can't wear a phantom SHARED badge.
+      removeSharedScope(targetScope);
+      if (err instanceof LockedError) throw err; // → 423, prompts unlock
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/HTTP 402/.test(msg)) return bad(402, 'The connector server requires an active subscription to share.');
+      return bad(400, msg);
+    }
+  }
+
+  // Unshare: delete the scope's rows server-side, THEN drop it locally. If the
+  // server delete fails we do not touch the local mark (it stays Shared, honest).
+  if (method === 'POST' && route === '/api/share/remove') {
+    const { scope } = parseJson<{ scope?: string }>(body);
+    const targetScope = typeof scope === 'string' ? scope.trim() : '';
+    if (!targetScope) return bad(400, 'A scope is required.');
+    const config = loadConnectorConfig();
+    if (!config) return bad(400, 'Set a connector server first.');
+    const deviceSecret = deviceSecretOrError();
+    const { deleted } = await unshareScope({ server: config.server, deviceSecret, scope: targetScope });
+    removeSharedScope(targetScope);
+    return ok({ unshared: targetScope, deleted });
+  }
+
+  // Start pairing: return the single-use code the user types on the AI app's
+  // OAuth consent page, plus the /mcp URL they paste to add the connector.
+  if (method === 'POST' && route === '/api/share/pair') {
+    const config = loadConnectorConfig();
+    if (!config) return bad(400, 'Set a connector server first.');
+    const deviceSecret = deviceSecretOrError();
+    const entitlement = await maybeEntitlement(deviceSecret);
+    const code = await startPairing({ server: config.server, deviceSecret, entitlement });
+    return ok({ code, mcp_url: mcpUrl(config.server), expires_in_seconds: 600 });
+  }
+
+  // Sync now (write-back): pull the memories/forgets the user made INSIDE their
+  // AI apps back into the vault, then re-push so the server matches. One vault
+  // open handles both, so the re-push reflects the just-applied down-sync.
+  if (method === 'POST' && route === '/api/share/sync') {
+    const config = loadConnectorConfig();
+    if (!config) return bad(400, 'Set a connector server first.');
+    if (config.sharedScopes.length === 0) return bad(400, 'No scopes are shared yet.');
+    const deviceSecret = deviceSecretOrError();
+    const entitlement = await maybeEntitlement(deviceSecret);
+    const result = await session.withVault(async (vault) => {
+      const down = await downSyncConnector({ server: config.server, deviceSecret, vault, entitlement });
+      const push = await pushSharedScopes({
+        server: config.server,
+        deviceSecret,
+        scopes: config.sharedScopes,
+        vault,
+        entitlement,
+      });
+      return { down, push };
+    });
+    return ok({
+      added: result.down.added,
+      forgotten: result.down.forgotten,
+      deduped: result.down.deduped,
+      pushed: result.push.pushed,
+      scopes: result.push.scopes,
+    });
   }
 
   // --- Routing policy (M7b). Rules only — no secrets, no content. ---
@@ -1122,6 +1267,30 @@ function withBadge(endpoint: {
 
 class DeviceSecretError extends Error {}
 class SyncRequestError extends Error {}
+class ShareRequestError extends Error {}
+
+/** The URL the user pastes into an AI app to add the connector: server + /mcp. */
+function mcpUrl(server: string): string {
+  return server.replace(/\/$/, '') + '/mcp';
+}
+
+/**
+ * Best-effort entitlement attestation for the connector's billing gate, mirroring
+ * the CLI (shareCmd.ts). If a sync server is configured, fetch an anonymous
+ * "active subscriber" token to forward. Never blocks sharing — a self-hosted or
+ * ungated connector needs none, and a truly gated one returns a clear 402 on the
+ * actual request.
+ */
+async function maybeEntitlement(deviceSecret: Buffer): Promise<string | undefined> {
+  const sync = loadSyncConfig();
+  if (!sync) return undefined;
+  try {
+    const { token } = deriveSyncCreds(deviceSecret);
+    return (await fetchEntitlement({ syncServer: sync.serverUrl, syncToken: token })) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
 function deviceSecretOrError(): Buffer {
   try {
     return loadDeviceSecret();

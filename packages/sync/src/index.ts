@@ -33,10 +33,13 @@ export {
   type ConnectorConfig,
 } from './connector-config.js';
 export {
+  downSyncConnector,
+  fetchEntitlement,
   getManifest,
   pushSharedScopes,
   startPairing,
   unshareScope,
+  type DownSyncResult,
   type ManifestEntry,
   type PushEntry,
   type PushSharedResult,

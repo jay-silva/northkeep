@@ -199,6 +199,32 @@ describe('GUI server', () => {
     expect(Array.isArray(log.body.calls)).toBe(true);
   });
 
+  it('sharing: connector-server config round-trips and rejects a non-https server', async () => {
+    // Vault is unlocked here (prior tests). No connector configured yet.
+    const before = await api('/api/share/status');
+    expect(before.status).toBe(200);
+    expect(before.body.configured).toBe(false);
+    expect(before.body.shared_scopes).toEqual([]);
+
+    // Set a loopback connector server (http is allowed only for loopback).
+    const set = await api('/api/share/server', { method: 'POST', json: { server_url: 'http://127.0.0.1:8787' } });
+    expect(set.status).toBe(200);
+    expect(set.body.server).toBe('http://127.0.0.1:8787');
+    expect(set.body.mcp_url).toBe('http://127.0.0.1:8787/mcp');
+
+    // Status now reflects the server, the /mcp paste URL, and the vault's scopes.
+    const after = await api('/api/share/status');
+    expect(after.body.configured).toBe(true);
+    expect(after.body.server).toBe('http://127.0.0.1:8787');
+    expect(after.body.mcp_url).toBe('http://127.0.0.1:8787/mcp');
+    expect(after.body.shared_scopes).toEqual([]); // default private
+    expect(after.body.vault_scopes).toEqual(expect.arrayContaining(['personal', 'work']));
+
+    // A non-https, non-loopback server is refused (400), never a 500.
+    const bad = await api('/api/share/server', { method: 'POST', json: { server_url: 'http://connector.example.com' } });
+    expect(bad.status).toBe(400);
+  });
+
   it('lock revokes access until re-unlocked', async () => {
     await api('/api/lock', { method: 'POST', json: {} });
     expect((await api('/api/memories')).status).toBe(423);

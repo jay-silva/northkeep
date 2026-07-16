@@ -1,15 +1,8 @@
 /**
- * Server entry point — the deploy entrypoint for Vercel AND self-hosting.
- *
- * package.json "main" points here (a source file) so Vercel's Node.js builder
- * resolves an entrypoint during its PRE-build detection pass — pointing "main"
- * at the compiled dist/ fails, because dist/ does not exist yet at that phase.
- * The builder then serves the DEFAULT-EXPORTED Express app as a function; the
- * connector is stateless by design (all OAuth state lives in Neon), so it needs
- * no long-lived listener there. For self-hosting and local dev we still bind a
- * port — but only when NOT running on Vercel, where a listen() would be wrong.
- *
- * All request logic lives in `createConnectorServer`; this file wires storage.
+ * Server entry point — for Vercel's Node preset AND self-hosting
+ * (`node dist/index.js`). A module that creates an HTTP server and calls
+ * `listen()` at startup is auto-detected by Vercel and routed to. All request
+ * logic lives in `createConnectorServer`; this file wires storage + the port.
  * The importable, side-effect-free API lives in `./lib.js` for tests.
  *
  * Env: PUBLIC_URL (the deployed https origin, e.g. https://connector.northkeep.ai)
@@ -24,10 +17,10 @@ import type { ConnectorStorage } from './storage.js';
 const databaseUrl = resolveDatabaseUrl();
 const storage: ConnectorStorage = databaseUrl ? new NeonConnectorStorage(databaseUrl) : missingDbStorage();
 
+// The Express app is the default export so Vercel's Node builder can adopt it as
+// the serverless entry (it resolves package.json "main" to this source file in a
+// pre-build pass). For self-hosting / local dev (no VERCEL env), we bind a port.
 const app = createConnectorServer(storage);
-
-// Vercel detects and serves this default export (an Express app is a request
-// handler function). Self-host/local bind a port; Vercel sets VERCEL=1.
 export default app;
 
 if (!process.env.VERCEL) {
@@ -51,6 +44,8 @@ function missingDbStorage(): ConnectorStorage {
   };
   return {
     upsertAccount: fail,
+    setEntitledUntil: fail,
+    getEntitledUntil: fail,
     putPairingCode: fail,
     consumePairingCode: fail,
     getClient: fail,
@@ -66,6 +61,13 @@ function missingDbStorage(): ConnectorStorage {
     replaceScopes: fail,
     deleteScope: fail,
     listTombstones: fail,
+    getEntry: fail,
+    deleteEntry: fail,
+    listPendingEntries: fail,
+    enqueueForget: fail,
+    listPendingForgets: fail,
+    ackEntry: fail,
+    applyForget: fail,
     appendAudit: fail,
   };
 }

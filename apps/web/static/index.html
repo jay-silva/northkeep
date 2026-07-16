@@ -116,6 +116,13 @@
   .badge.private { background: #e6efe8; color: var(--ok); }
   .badge.bounded { background: var(--warn-bg); color: var(--warn-ink); }
   .badge.auto { background: var(--chip); color: var(--ink); }
+  .badge.shared { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line); }
+  .scoperow { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
+  .scoperow:first-child { border-top: none; }
+  .scoperow .sname { font-weight: 600; }
+  .scoperow .grow { flex: 1; }
+  .sharetoggle { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); cursor: pointer; }
+  .sharetoggle input { width: auto; margin: 0; }
   .conv-toolbar { display: flex; align-items: center;
     gap: 10px 8px; flex-wrap: wrap; margin-bottom: 22px; }
   .conv-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -193,6 +200,7 @@
   <button data-view="memories" class="active">Memories</button>
   <button data-view="redact">Redact</button>
   <button data-view="connect">Connect</button>
+  <button data-view="sharing">Sharing</button>
   <button data-view="settings">Settings</button>
 </nav>
 <nav id="settingsNav" hidden>
@@ -462,6 +470,69 @@
     </div>
     <div id="connectCards"></div>
   </section>
+  <section id="view-sharing" hidden>
+    <p class="muted">Make chosen memories usable inside the cloud AI apps you already pay for
+      (Claude, ChatGPT, and others) by copying them to NorthKeep's connector server.
+      Everything is private by default. You share one scope at a time, on purpose.</p>
+    <div class="banner" style="margin:16px 0 22px">
+      <strong>Sharing is different from Sync. The connector server CAN read what you share.</strong>
+      <div style="margin-top:6px">Sync stores your vault as encrypted data the server can never read.
+        Sharing copies a scope's memories in <strong>plain, readable form</strong> to NorthKeep's
+        connector server so your AI apps can reach them. Only scopes you turn on here ever leave this Mac.
+        A private scope never does. You can unshare anytime, which deletes it from the server.</div>
+    </div>
+    <h3 class="sect">Connector server</h3>
+    <div class="card">
+      <div class="row" style="margin-bottom:8px">
+        <input type="text" id="shareServerUrl" placeholder="https://your-connector.vercel.app">
+        <button class="btn primary" id="shareServerBtn">Save server</button>
+      </div>
+      <div class="err" id="shareServerErr"></div>
+      <p class="muted" id="shareServerLine" hidden style="margin:0;font-size:13px"></p>
+    </div>
+    <h3 class="sect">Scopes</h3>
+    <div class="card">
+      <p class="muted" style="margin:0 0 12px;font-size:13px">Every scope is <strong>private</strong> until
+        you turn Share on. Turning it on shows a confirmation first. A shared scope wears a
+        <span class="badge shared" style="vertical-align:middle">SHARED</span> badge here.</p>
+      <div id="shareScopeList"><p class="muted">Loading…</p></div>
+      <div class="err" id="shareScopeErr"></div>
+    </div>
+    <h3 class="sect">Connect an AI app</h3>
+    <div class="card">
+      <p class="muted" style="margin:0 0 10px;font-size:13px">Generate a one-time code, then add NorthKeep
+        as a connector in Claude or ChatGPT. You only need to do this once per app.</p>
+      <div class="row"><button class="btn primary" id="sharePairBtn">Get a pairing code</button></div>
+      <div id="sharePairOut" hidden style="margin-top:14px">
+        <p style="margin:0 0 6px">Connector URL to paste into the app:</p>
+        <div class="row" style="margin-bottom:12px">
+          <code id="shareMcpUrl" class="tag" style="font-size:13px;padding:6px 10px"></code>
+          <button class="btn" id="shareCopyUrl">Copy</button>
+        </div>
+        <p style="margin:0 0 6px">Pairing code (type this on the app's consent page):</p>
+        <div class="row" style="align-items:center;margin-bottom:6px">
+          <code id="sharePairCode" style="font:700 26px/1 var(--mono);letter-spacing:.12em;background:var(--chip);padding:10px 16px;border-radius:10px"></code>
+          <button class="btn" id="shareCopyCode">Copy</button>
+          <span class="muted" id="sharePairCountdown" style="font-size:13px"></span>
+        </div>
+        <ol class="muted" style="font-size:13px;margin:12px 0 0;padding-left:20px;line-height:1.6">
+          <li>In Claude or ChatGPT, open Settings and add a custom connector (an MCP server).</li>
+          <li>Paste the connector URL above.</li>
+          <li>When the app opens NorthKeep's consent page, type the pairing code above and approve.</li>
+          <li>Your shared scopes are now readable inside that app. Nothing else is.</li>
+        </ol>
+      </div>
+      <div class="err" id="sharePairErr"></div>
+    </div>
+    <h3 class="sect">Sync now</h3>
+    <div class="card">
+      <p class="muted" style="margin:0 0 10px;font-size:13px">Pull memories you created (or forgot) inside your
+        AI apps back into this vault, then re-push so the server matches. Runs only on your shared scopes.</p>
+      <div class="row"><button class="btn" id="shareSyncBtn">Sync now</button></div>
+      <p class="muted" id="shareSyncResult" hidden style="margin:10px 0 0;font-size:13px"></p>
+      <div class="err" id="shareSyncErr"></div>
+    </div>
+  </section>
   <section id="view-about" hidden>
     <h3 class="sect" style="margin-top:0">About NorthKeep</h3>
     <p class="muted">You're running NorthKeep <strong>v<span id="aboutVersion">…</span></strong>.</p>
@@ -470,6 +541,26 @@
     <p class="muted" style="font-size:12px;margin-top:14px">This checks the public release page only when you click the button. Nothing about you or your vault is sent, and updates are never downloaded or installed automatically.</p>
   </section>
 </main>
+<div class="overlay" id="shareConfirmOverlay" hidden>
+  <div class="dialog" style="width:500px">
+    <h2 id="shareConfirmTitle">Share this scope?</h2>
+    <div class="banner" style="margin:0 0 14px">
+      <div id="shareConfirmLead" style="font-weight:600"></div>
+    </div>
+    <ul style="margin:0 0 16px;padding-left:18px;font-size:14px;color:var(--ink);line-height:1.65">
+      <li><strong>What leaves your Mac:</strong> the memories in this scope, as plain readable text.</li>
+      <li><strong>Where it goes:</strong> NorthKeep's connector server, which can read them.
+        (Sync is different: that server only ever holds encrypted data it cannot read.)</li>
+      <li><strong>What stays private:</strong> every scope you have not shared never leaves this Mac.</li>
+      <li><strong>You can undo this:</strong> Unshare deletes these memories from the connector server.</li>
+    </ul>
+    <div class="err" id="shareConfirmErr"></div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn" id="shareConfirmCancel">Cancel</button>
+      <button class="btn primary" id="shareConfirmYes">Share this scope</button>
+    </div>
+  </div>
+</div>
 <div class="overlay" id="unlockOverlay" hidden>
   <div class="dialog">
     <h2>Unlock your vault</h2>
@@ -621,7 +712,7 @@
   });
 
   // --- views: top-level tabs, plus a Settings group holding Import/Activity/Sync
-  const sections = ['converse', 'memories', 'redact', 'connect', 'import', 'activity', 'sync', 'about'];
+  const sections = ['converse', 'memories', 'redact', 'connect', 'sharing', 'import', 'activity', 'sync', 'about'];
   let currentSub = 'import';
   function runLoader(v) {
     if (v === 'activity') loadLog();
@@ -629,6 +720,7 @@
     else if (v === 'converse') openConverse();
     else if (v === 'sync') loadSyncStatus();
     else if (v === 'connect') loadConnect();
+    else if (v === 'sharing') loadSharing();
     else if (v === 'about') loadAbout();
   }
   function loadAbout() {
@@ -2394,6 +2486,199 @@
     }
     return card;
   }
+
+  // --- Sharing / hosted connector (ADR 0019). Mirrors the CLI `northkeep share`
+  // flow, with a LOUD confirmation before any scope's plaintext leaves the Mac.
+  // Private is the default everywhere; a shared scope wears a SHARED badge.
+  let sharePairTimer = null;
+  let pendingShareScope = null;
+
+  async function loadSharing() {
+    const list = $('shareScopeList');
+    $('shareScopeErr').textContent = '';
+    let s;
+    try {
+      s = await api('/api/share/status');
+    } catch (e) {
+      if (e.message !== 'locked') { list.textContent = ''; list.appendChild(el('p', 'err', e.message)); }
+      return;
+    }
+    if (s.server && !$('shareServerUrl').value) $('shareServerUrl').value = s.server;
+    const sl = $('shareServerLine');
+    sl.hidden = !s.server;
+    sl.textContent = s.server ? 'Connector server: ' + s.server : '';
+    const hasServer = Boolean(s.server);
+    $('sharePairBtn').disabled = !hasServer;
+    $('shareSyncBtn').disabled = !hasServer || (s.shared_scopes || []).length === 0;
+    renderShareScopes(s);
+  }
+
+  function renderShareScopes(s) {
+    const list = $('shareScopeList');
+    list.textContent = '';
+    if (!s.configured) {
+      list.appendChild(el('p', 'muted', 'Set a connector server above to start sharing.'));
+      return;
+    }
+    const shared = new Set(s.shared_scopes || []);
+    if (!s.unlocked) {
+      list.appendChild(el('p', 'muted',
+        shared.size ? 'Your vault is locked. You can still unshare a scope; unlock to share new ones or see counts.'
+                    : 'Unlock your vault to see and share your scopes.'));
+    }
+    // Union of the vault's scopes and the shared list: a shared scope emptied of
+    // its last memory still needs a row so the user can turn it off.
+    const all = [...new Set([...(s.vault_scopes || []), ...(s.shared_scopes || [])])].sort();
+    if (all.length === 0) {
+      if (s.unlocked) list.appendChild(el('p', 'muted', 'No scopes yet. Add memories, then share a scope here.'));
+      return;
+    }
+    for (const scope of all) {
+      const row = el('div', 'scoperow');
+      row.appendChild(el('span', 'sname', scope));
+      const count = s.counts ? s.counts[scope] : undefined;
+      if (count !== undefined) row.appendChild(el('span', 'muted', count + (count === 1 ? ' memory' : ' memories')));
+      if (shared.has(scope)) row.appendChild(el('span', 'badge shared', 'SHARED'));
+      row.appendChild(el('span', 'grow'));
+      const toggle = el('label', 'sharetoggle');
+      const cb = document.createElement('input');
+      cb.type = 'checkbox';
+      cb.checked = shared.has(scope);
+      // Sharing (on) pushes vault entries, so it needs the vault unlocked.
+      // Unsharing (off) only deletes server-side (device secret, no vault), so a
+      // locked user can always REVOKE exposure, never blocked from privacy.
+      cb.disabled = !s.unlocked && !shared.has(scope);
+      const cbLabel = document.createTextNode(cb.checked ? 'Shared' : 'Share');
+      toggle.appendChild(cb);
+      toggle.appendChild(cbLabel);
+      cb.addEventListener('change', () => {
+        if (cb.checked) {
+          cb.checked = false; // the confirm dialog drives the real change
+          askShareConfirm(scope, count);
+        } else {
+          doUnshare(scope);
+        }
+      });
+      row.appendChild(toggle);
+      list.appendChild(row);
+    }
+  }
+
+  function askShareConfirm(scope, count) {
+    pendingShareScope = scope;
+    $('shareConfirmTitle').textContent = "Share the '" + scope + "' scope?";
+    const n = count === undefined ? 'the memories' : (count + (count === 1 ? ' memory' : ' memories'));
+    $('shareConfirmLead').textContent =
+      'You are about to copy ' + n + " in the '" + scope + "' scope, in readable form, off this Mac and onto " +
+      "NorthKeep's connector server so the AI apps you connect can read them.";
+    $('shareConfirmErr').textContent = '';
+    $('shareConfirmYes').disabled = false;
+    $('shareConfirmOverlay').hidden = false;
+  }
+  function closeShareConfirm() {
+    $('shareConfirmOverlay').hidden = true;
+    pendingShareScope = null;
+  }
+  $('shareConfirmCancel').addEventListener('click', () => { closeShareConfirm(); loadSharing(); });
+  $('shareConfirmYes').addEventListener('click', async () => {
+    if (!pendingShareScope) return;
+    const scope = pendingShareScope;
+    $('shareConfirmErr').textContent = '';
+    $('shareConfirmYes').disabled = true;
+    try {
+      await api('/api/share/add', { method: 'POST', json: { scope } });
+      closeShareConfirm();
+      await loadSharing();
+    } catch (e) {
+      $('shareConfirmYes').disabled = false;
+      $('shareConfirmErr').textContent =
+        e.message === 'locked' ? 'Your vault is locked. Unlock it, then share again.' : e.message;
+    }
+  });
+
+  async function doUnshare(scope) {
+    if (!confirm("Unshare '" + scope + "'?\nThis deletes its memories from the connector server. Your local vault keeps them.")) {
+      loadSharing(); // snap the toggle back to its real state
+      return;
+    }
+    $('shareScopeErr').textContent = '';
+    try {
+      await api('/api/share/remove', { method: 'POST', json: { scope } });
+    } catch (e) {
+      if (e.message !== 'locked') $('shareScopeErr').textContent = e.message;
+    } finally {
+      await loadSharing();
+    }
+  }
+
+  $('shareServerBtn').addEventListener('click', async () => {
+    const url = $('shareServerUrl').value.trim();
+    $('shareServerErr').textContent = '';
+    if (!url) { $('shareServerErr').textContent = 'Enter a connector server URL.'; return; }
+    $('shareServerBtn').disabled = true;
+    try {
+      const r = await api('/api/share/server', { method: 'POST', json: { server_url: url } });
+      if (r.server) $('shareServerUrl').value = r.server;
+      await loadSharing();
+    } catch (e) {
+      if (e.message !== 'locked') $('shareServerErr').textContent = e.message;
+    } finally { $('shareServerBtn').disabled = false; }
+  });
+
+  $('sharePairBtn').addEventListener('click', async () => {
+    $('sharePairErr').textContent = '';
+    $('sharePairBtn').disabled = true;
+    try {
+      const r = await api('/api/share/pair', { method: 'POST' });
+      $('shareMcpUrl').textContent = r.mcp_url || '';
+      $('sharePairCode').textContent = r.code || '';
+      $('sharePairCode').style.opacity = '1';
+      $('sharePairOut').hidden = false;
+      startPairCountdown(r.expires_in_seconds || 600);
+    } catch (e) {
+      if (e.message !== 'locked') $('sharePairErr').textContent = e.message;
+    } finally { $('sharePairBtn').disabled = false; }
+  });
+  $('shareCopyUrl').addEventListener('click', () => navigator.clipboard.writeText($('shareMcpUrl').textContent));
+  $('shareCopyCode').addEventListener('click', () => navigator.clipboard.writeText($('sharePairCode').textContent));
+
+  function startPairCountdown(seconds) {
+    if (sharePairTimer) clearInterval(sharePairTimer);
+    const cd = $('sharePairCountdown');
+    let left = seconds;
+    const tick = () => {
+      if (left <= 0) {
+        clearInterval(sharePairTimer); sharePairTimer = null;
+        cd.textContent = 'This code has expired. Get a new one.';
+        $('sharePairCode').style.opacity = '.4';
+        return;
+      }
+      const m = Math.floor(left / 60), sec = left % 60;
+      cd.textContent = 'Valid for ' + m + ':' + String(sec).padStart(2, '0');
+      left -= 1;
+    };
+    tick();
+    sharePairTimer = setInterval(tick, 1000);
+  }
+
+  $('shareSyncBtn').addEventListener('click', async () => {
+    const out = $('shareSyncResult'), err = $('shareSyncErr');
+    err.textContent = '';
+    out.hidden = false; out.textContent = 'Syncing…';
+    $('shareSyncBtn').disabled = true;
+    try {
+      const r = await api('/api/share/sync', { method: 'POST' });
+      out.textContent = 'Done. Pulled back ' + r.added + ' new, ' + r.forgotten + ' forgotten, ' +
+        r.deduped + ' already present. Re-pushed ' + r.pushed + ' memories to the connector server.';
+    } catch (e) {
+      out.hidden = true;
+      err.textContent = e.message === 'locked'
+        ? 'Your vault is locked. Unlock it, then Sync now again.' : e.message;
+    } finally {
+      $('shareSyncBtn').disabled = false;
+      await loadSharing();
+    }
+  });
 
   refreshStatus().catch(() => { $('countPill').textContent = 'no connection'; });
 })();

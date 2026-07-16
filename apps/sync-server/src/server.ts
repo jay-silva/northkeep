@@ -10,6 +10,7 @@ import {
   subscriptionActive,
   type BillingDeps,
 } from './billing.js';
+import { entitlementSecretFromEnv, signEntitlement } from './entitlement.js';
 import type { Storage } from './storage.js';
 
 /**
@@ -32,6 +33,10 @@ const IP_LIMIT_MULTIPLIER = 4;
 
 export function createSyncServer(storage: Storage, billing: BillingDeps | null = null): http.Server {
   const allowedTokenHashes = parseAllowlist(process.env.NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES);
+  // The connector entitlement bridge (ADR 0019 C3): when this secret is set, the
+  // sync server will mint anonymous "active subscriber" attestations the desktop
+  // forwards to the connector. Unset ⇒ the endpoint 404s (self-host / no bridge).
+  const entitlementSecret = entitlementSecretFromEnv();
   const rateLimit = rateLimitFromEnv(process.env.NORTHKEEP_SYNC_RATE_LIMIT, RATE_LIMIT_DEFAULT);
   const limiter: RateLimiter | null =
     rateLimit === null ? null : createRateLimiter({ limit: rateLimit, windowMs: RATE_LIMIT_WINDOW_MS });
@@ -91,6 +96,33 @@ export function createSyncServer(storage: Storage, billing: BillingDeps | null =
           `<p style="color:#8a8477">${ok ? 'Your vault can now sync. Return to NorthKeep and push.' : 'No charge was made. You can subscribe anytime from the Sync tab.'}</p>` +
           `<p style="color:#8a8477">You can close this tab.</p></body>`,
       );
+      return;
+    }
+
+    // Connector entitlement: mint a short-lived, anonymous "active subscriber"
+    // attestation for the desktop to forward to the connector. Independent of
+    // Stripe billing config (active is simply false when no subscription exists).
+    if (method === 'POST' && url.pathname === '/api/entitlement') {
+      const send = (status: number, obj: Record<string, unknown>): void => {
+        res.writeHead(status, { 'content-type': 'application/json', 'cache-control': 'no-store' });
+        res.end(JSON.stringify(obj));
+      };
+      if (!entitlementSecret) {
+        send(404, { error: 'Entitlement bridge is not configured on this server.' });
+        return;
+      }
+      if (!token || token.length < 16) {
+        send(401, { error: 'Missing or malformed bearer token.' });
+        return;
+      }
+      const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex');
+      const active = await subscriptionActive(tokenHash, storage);
+      const sub = await storage.getSubscription(tokenHash);
+      const entitlement = signEntitlement(entitlementSecret, {
+        active,
+        periodEnd: sub?.currentPeriodEnd ?? 0,
+      });
+      send(200, { entitlement, active });
       return;
     }
 

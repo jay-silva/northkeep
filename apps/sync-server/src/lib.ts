@@ -9,6 +9,12 @@ export {
 export { NeonStorage, SCHEMA_SQL, SCHEMA_STATEMENTS } from './neon-storage.js';
 export { createSyncServer } from './server.js';
 export {
+  signEntitlement,
+  verifyEntitlement,
+  entitlementSecretFromEnv,
+  type EntitlementClaims,
+} from './entitlement.js';
+export {
   billingFromEnv,
   createStripeGateway,
   createCheckout,

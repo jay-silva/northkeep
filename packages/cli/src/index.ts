@@ -58,6 +58,7 @@ import {
   shareRemoveCmd,
   shareServerCmd,
   shareStatusCmd,
+  shareSyncCmd,
 } from './shareCmd.js';
 import { routingClear, routingList, routingSet } from './routingCmd.js';
 import { collectScopes, connectCmd, connectStatusCmd, disconnectCmd } from './connectCmd.js';
@@ -680,6 +681,13 @@ share
   .description('Get a pairing code to connect an AI app to your shared memories')
   .action(async () => {
     await shareCodeCmd(fail);
+  });
+
+share
+  .command('sync')
+  .description('Pull memories your AI apps created (and forgot) back into your vault, then re-push')
+  .action(async () => {
+    await shareSyncCmd(withVault, fail);
   });
 
 const connectGroup = program

@@ -95,3 +95,32 @@ log` shows what every AI app asked of the vault.
   conversation; immutable audit export.
 - **(M5) Sync:** client-side-encrypted blobs; server stores ciphertext and
   version numbers only.
+
+## Shared scopes: the optional connector (ADR 0019)
+
+<!-- DRAFT (ADR 0019, phase C5): connector threat-model split. Pending Jay's
+     compliance sign-off before any design partner shares real memory. -->
+
+Everything above assumes the ciphertext-only guarantee: our servers never see
+plaintext. The hosted connector is the one deliberate, opt-in exception, and it
+is a *separate* service from vault-sync.
+
+- **Default private.** Nothing is shared until the user explicitly marks a
+  specific scope Shared, confirmed loudly, badge-visible, and reversible. A
+  private scope (a client matter, a patient) never reaches the connector.
+- **Two servers, two guarantees.** The vault-sync server (ADR 0009) holds
+  ciphertext only and cannot be made to decrypt. The connector store (ADR 0019)
+  is a physically separate service with its own database; it holds the plaintext
+  of shared scopes so the user's own AI apps can read them.
+
+| Aspect | Vault-sync server | Connector store |
+|---|---|---|
+| A breach reveals | ciphertext blobs + version numbers only | plaintext content, type, scope labels, and timestamps of SHARED entries; account hashes; OAuth client registrations; token/code HASHES |
+| A breach does NOT reveal | anything readable | private scopes; the vault ciphertext (a different database); passphrases, keys, device secrets; email or card |
+| Derived from content | nothing | nothing (no embeddings, no content logs, no analytics) |
+
+The honest non-breach disclosure: every AI app the user connects sees whatever
+it retrieves from the shared scopes, the same truth as local Connect (ADR 0013),
+now over the network. Unshare and forget delete the connector rows immediately;
+because only shared-scope plaintext is ever stored, deletion removes exactly what
+the user chose to expose.

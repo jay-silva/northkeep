@@ -12,3 +12,11 @@ export { NeonConnectorStorage, SCHEMA_SQL, SCHEMA_STATEMENTS } from './neon-stor
 export { ConnectorOAuthProvider } from './provider.js';
 export { createMcpServer } from './mcp.js';
 export { sha256hex, generatePairingCode } from './hash.js';
+export {
+  verifyEntitlement,
+  connectorGateFromEnv,
+  parseConnectorAllowlist,
+  ENTITLEMENT_GRACE_MS,
+  type ConnectorGate,
+  type EntitlementClaims,
+} from './entitlement.js';

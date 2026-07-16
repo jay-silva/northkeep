@@ -123,3 +123,29 @@ over SEEDED rows, persistence-across-instances proven. C2: desktop marks scopes
 Shared + pushes real vault entries. C3: write-back down-sync + billing gate. C4:
 ChatGPT hardening. C5: desktop GUI sharing UX + all the doc/ invariant amendments
 above + the full adversarial review — the beta does not open before C5.
+
+## C4 note — ChatGPT hardening (done)
+
+ChatGPT's deep-research and connector retrieval model call two tools by
+convention: `search({query}) -> { results: [{ id, title, url?, snippet }] }` and
+`fetch({id}) -> { id, title, text, url?, metadata? }` (OpenAI, "Building MCP
+servers for ChatGPT"). Both must echo the value as `structuredContent` AND as a
+JSON-encoded string in the `content` array. We added both as THIN adapters over
+the exact same account-scoped keyword/recency scoring and `listEntries`/`getEntry`
+the existing `memory_retrieve`/`memory_list` use — no second store, no new data
+path. `url` is omitted (a private shared memory has no user-openable web URL, and
+ChatGPT only cites when url is non-empty). Claude's `memory_*` tools stay; search/
+fetch are additive. `fetch` is account-scoped via `getEntry(accountHash,id)`, so a
+foreign or unknown id returns not-found — cross-account fetch is impossible — and
+both tools drop pending-forgotten ids. Audit stays content-free (term counts +
+disclosed ids only).
+
+CORS was added for ChatGPT's browser-side connect flow: the `/.well-known/*`
+discovery docs are world-readable (`Access-Control-Allow-Origin: *`, no secrets);
+`/register`, `/token`, `/revoke` are reflected ONLY for the ChatGPT web origins
+(`https://chatgpt.com`, legacy `https://chat.openai.com`). No credentials mode.
+The bearer-protected `/mcp` keeps its own permissive origin-reflect (CORS never
+guards a bearer endpoint); `/client/*` is a desktop-to-server call with no browser
+origin and gets none. All C1–C3 invariants (scope isolation, token/code hashing,
+PKCE + audience binding, content-free audit, entitlement gate, rate limiting) are
+preserved. Verified by `apps/connector-server/test/c4-connector.test.ts`.

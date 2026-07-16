@@ -235,6 +235,48 @@ every milestone; if a limit is removed, say when and how.*
 - **macOS only** for now (matches the arm64 app); the config paths are
   macOS-specific.
 
+## Connector for shared scopes, ADR 0019 (current)
+
+<!-- DRAFT (ADR 0019, phase C5): connector limits pending Jay's compliance
+     sign-off before the beta opens. -->
+
+- **This is the one place we hold readable memory.** Sync stays ciphertext-only,
+  but a scope you mark Shared is copied, in plaintext, to NorthKeep's connector
+  server so cloud apps can read it. If you never share a scope, nothing changes.
+- **Sharing is per-scope and opt-in; private is the default.** A scope you do not
+  turn on is never sent. Turning one on requires an explicit, loud confirmation,
+  and a shared scope shows a SHARED badge everywhere it appears.
+- **A breach of the connector exposes shared plaintext.** It would reveal the
+  content, type, scope labels, and timestamps of SHARED entries (plus account
+  hashes and OAuth registrations), but not private scopes, not the vault
+  ciphertext (a separate database), and not your keys, passphrase, or device
+  secret. See SPEC/security-model.md.
+- **Every connected AI provider sees what it retrieves.** Once an app is paired,
+  its provider receives whatever it pulls from your shared scopes, under that
+  provider's own policy. This is the same exposure as local Connect, now over the
+  network.
+- **Unshare deletes server-side, but copies already retrieved are gone.**
+  Unsharing removes the rows from the connector immediately; it cannot recall
+  anything an AI app already read while the scope was shared.
+- **Billing-gated in the beta.** Sharing rides the hosted subscription; a
+  self-hosted connector is free. An allowlist gates the beta.
+- **Caps apply.** The connector enforces limits on how many memories, and how
+  large each may be; an over-cap share is refused with a clear message, and the
+  local mark is rolled back so nothing shows as shared that the server did not
+  accept.
+- **A pairing code is a key. Only enter one on a screen you opened yourself.**
+  Connecting an AI app works by typing a one-time pairing code into that app's
+  consent page. If someone tricks you into entering your code on a page you did
+  not deliberately open, they can connect their own app to your account. The
+  blast radius is bounded: they could read, add, or forget memories only in
+  scopes you already marked Shared, never a private scope and never your keys or
+  vault. Still, only generate a code when you are actively connecting an app you
+  trust, and check the app name shown on the consent page.
+- **The paid entitlement is not per-account bound (when the paid gate ships).**
+  To keep the connector anonymous, the subscription proof carries no account id,
+  so in principle a subscription token could be shared. This is a billing
+  concern, not a memory-safety one; the beta gates on an allowlist instead.
+
 ## M9 (effortless models) — current
 
 - **Guided providers are curated, not exhaustive.** The one-click flow covers a

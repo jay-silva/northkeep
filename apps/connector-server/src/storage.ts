@@ -56,6 +56,18 @@ export interface SharedEntry {
   /** The vault entry_hash (BLAKE2b chain hash) — lets the client diff cheaply
    * via /client/manifest. Optional so C1 seeded rows (no hash) still typecheck. */
   entryHash?: string;
+  /**
+   * Where the row came from (C3 write-back). 'vault' = pushed from the desktop
+   * (the C1/C2 default). 'connector' = born INSIDE an AI flow via memory_remember,
+   * not yet in the user's vault. Optional (absent ⇒ 'vault') so pre-C3 rows read.
+   */
+  origin?: 'vault' | 'connector';
+  /**
+   * A connector-born row that has NOT yet been delivered to the client by a
+   * down-sync. It is served on /client/pending and must survive an intervening
+   * push reconcile-delete. Cleared (false) once the client acks it. Absent ⇒ false.
+   */
+  pending?: boolean;
   createdAt: string;
 }
 
@@ -84,6 +96,14 @@ export interface ConnectorStorage {
   // --- accounts ---
   /** Idempotently record that an account exists (keyed by sha256(connector_token)). */
   upsertAccount(accountHash: string): Promise<void>;
+  /**
+   * Stamp a billing grace window (C3): the ms-since-epoch until which this
+   * account is entitled, set when the desktop forwards a valid entitlement. Only
+   * ever advances (a later push refreshes it); never moves backward.
+   */
+  setEntitledUntil(accountHash: string, untilMs: number): Promise<void>;
+  /** The account's entitled-until stamp (ms since epoch), or null if never set. */
+  getEntitledUntil(accountHash: string): Promise<number | null>;
 
   // --- pairing codes (single-use, short TTL) ---
   putPairingCode(codeHash: string, accountHash: string, expiresAt: number): Promise<void>;
@@ -138,6 +158,29 @@ export interface ConnectorStorage {
   /** The account's unshare tombstones (audit / inspection). */
   listTombstones(accountHash: string): Promise<ScopeTombstone[]>;
 
+  // --- write-back down-sync (C3) ---
+  /** A single row by id, or null. memory_forget reads this to decide cancel-vs-enqueue. */
+  getEntry(accountHash: string, entryId: string): Promise<SharedEntry | null>;
+  /** Delete one row outright — cancel-before-delivery of a still-pending connector row. */
+  deleteEntry(accountHash: string, entryId: string): Promise<void>;
+  /** Connector-born rows not yet delivered to the client (origin='connector' AND pending). */
+  listPendingEntries(accountHash: string): Promise<SharedEntry[]>;
+  /**
+   * Queue a forget of an already-delivered entry so the client tombstones it on
+   * the next down-sync. Idempotent (re-queuing the same id is a no-op).
+   */
+  enqueueForget(accountHash: string, entryId: string): Promise<void>;
+  /** Entry ids with a queued forget — hidden from retrieve/list, sent on /client/pending. */
+  listPendingForgets(accountHash: string): Promise<string[]>;
+  /**
+   * Ack a delivered connector row: remap its server id → the client's local
+   * entry id and clear `pending`. Collision-safe (drops any pre-existing row
+   * already under the local id first). No-op if the server id no longer exists.
+   */
+  ackEntry(accountHash: string, serverId: string, localEntryId: string): Promise<void>;
+  /** Apply an acked forget: delete BOTH the pending_forgets row and the shared_entries row. */
+  applyForget(accountHash: string, entryId: string): Promise<void>;
+
   // --- audit ---
   appendAudit(entry: ConnectorAuditEntry): Promise<void>;
 }
@@ -163,6 +206,8 @@ interface ClientRow {
  */
 export class InMemoryConnectorStorage implements ConnectorStorage {
   private accounts = new Set<string>();
+  /** accountHash -> entitled-until (ms since epoch). */
+  private entitledUntil = new Map<string, number>();
   private pairings = new Map<string, PairingRow>();
   private clients = new Map<string, ClientRow>();
   private codes = new Map<string, CodeRow>();
@@ -171,10 +216,21 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
   private entries = new Map<string, Map<string, SharedEntry>>();
   /** accountHash -> tombstones */
   private tombstones = new Map<string, ScopeTombstone[]>();
+  /** accountHash -> set of entry ids queued to be forgotten by the client (C3). */
+  private pendingForgets = new Map<string, Set<string>>();
   private audit: ConnectorAuditEntry[] = [];
 
   async upsertAccount(accountHash: string): Promise<void> {
     this.accounts.add(accountHash);
+  }
+
+  async setEntitledUntil(accountHash: string, untilMs: number): Promise<void> {
+    const prev = this.entitledUntil.get(accountHash) ?? 0;
+    if (untilMs > prev) this.entitledUntil.set(accountHash, untilMs);
+  }
+
+  async getEntitledUntil(accountHash: string): Promise<number | null> {
+    return this.entitledUntil.get(accountHash) ?? null;
   }
 
   async putPairingCode(codeHash: string, accountHash: string, expiresAt: number): Promise<void> {
@@ -255,8 +311,12 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
       byId.set(e.entryId, { ...e });
       keepByScope.get(e.scope)?.add(e.entryId);
     }
-    // Delete any pre-existing row in a pushed scope that the payload omitted.
+    // Delete any pre-existing row in a pushed scope that the payload omitted —
+    // EXCEPT an undelivered connector-born row (origin='connector' AND pending).
+    // That row is a memory the AI created that the user hasn't pulled yet; a push
+    // racing ahead of the down-sync must not destroy it (C3 critical fix).
     for (const [id, e] of [...byId.entries()]) {
+      if (e.origin === 'connector' && e.pending === true) continue;
       if (keepByScope.has(e.scope) && !keepByScope.get(e.scope)!.has(id)) {
         byId.delete(id);
       }
@@ -282,6 +342,56 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
 
   async listTombstones(accountHash: string): Promise<ScopeTombstone[]> {
     return (this.tombstones.get(accountHash) ?? []).map((t) => ({ ...t }));
+  }
+
+  async getEntry(accountHash: string, entryId: string): Promise<SharedEntry | null> {
+    const e = this.entries.get(accountHash)?.get(entryId);
+    return e ? { ...e } : null;
+  }
+
+  async deleteEntry(accountHash: string, entryId: string): Promise<void> {
+    this.entries.get(accountHash)?.delete(entryId);
+  }
+
+  async listPendingEntries(accountHash: string): Promise<SharedEntry[]> {
+    const byId = this.entries.get(accountHash);
+    if (!byId) return [];
+    return [...byId.values()].filter((e) => e.origin === 'connector' && e.pending === true).map((e) => ({ ...e }));
+  }
+
+  async enqueueForget(accountHash: string, entryId: string): Promise<void> {
+    let set = this.pendingForgets.get(accountHash);
+    if (!set) {
+      set = new Set();
+      this.pendingForgets.set(accountHash, set);
+    }
+    set.add(entryId);
+  }
+
+  async listPendingForgets(accountHash: string): Promise<string[]> {
+    return [...(this.pendingForgets.get(accountHash) ?? [])];
+  }
+
+  async ackEntry(accountHash: string, serverId: string, localEntryId: string): Promise<void> {
+    // Re-point any forget queued against the server id onto the vault-local id,
+    // so a forget that raced in between the client's fetch and this ack still
+    // tombstones the delivered vault entry (never orphaned).
+    const forgets = this.pendingForgets.get(accountHash);
+    if (forgets?.has(serverId)) {
+      forgets.delete(serverId);
+      forgets.add(localEntryId);
+    }
+    const byId = this.entries.get(accountHash);
+    const row = byId?.get(serverId);
+    if (!byId || !row) return;
+    byId.delete(serverId);
+    // Collision-safe: overwrite any row already under the local id (the dedupe path).
+    byId.set(localEntryId, { ...row, entryId: localEntryId, pending: false });
+  }
+
+  async applyForget(accountHash: string, entryId: string): Promise<void> {
+    this.pendingForgets.get(accountHash)?.delete(entryId);
+    this.entries.get(accountHash)?.delete(entryId);
   }
 
   async appendAudit(entry: ConnectorAuditEntry): Promise<void> {

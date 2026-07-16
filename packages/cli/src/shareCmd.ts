@@ -1,7 +1,11 @@
 import { loadDeviceSecret, type Vault } from '@northkeep/core';
 import {
   addSharedScope,
+  deriveSyncCreds,
+  downSyncConnector,
+  fetchEntitlement,
   loadConnectorConfig,
+  loadSyncConfig,
   pushSharedScopes,
   removeSharedScope,
   setConnectorServer,
@@ -38,6 +42,23 @@ function requireConfig(fail: (m: string) => never): ConnectorConfig {
   return cfg;
 }
 
+/**
+ * Best-effort entitlement attestation for the connector's billing gate: if a
+ * sync server is configured, fetch an anonymous "active subscriber" token to
+ * forward. Never blocks sharing — a self-hosted / ungated connector needs none,
+ * and a truly gated one returns a clear 402 that surfaces on the actual request.
+ */
+async function maybeEntitlement(deviceSecret: Buffer): Promise<string | undefined> {
+  const sync = loadSyncConfig();
+  if (!sync) return undefined;
+  try {
+    const { token } = deriveSyncCreds(deviceSecret);
+    return (await fetchEntitlement({ syncServer: sync.serverUrl, syncToken: token })) ?? undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function shareServerCmd(url: string, fail: (m: string) => never): void {
   let cfg;
   try {
@@ -69,8 +90,9 @@ export async function shareAddCmd(
   }
 
   const updated = addSharedScope(scope);
+  const entitlement = await maybeEntitlement(deviceSecret);
   const result = await withVault((vault) =>
-    pushSharedScopes({ server: updated.server, deviceSecret, scopes: updated.sharedScopes, vault }),
+    pushSharedScopes({ server: updated.server, deviceSecret, scopes: updated.sharedScopes, vault, entitlement }),
   );
   console.log(
     `✓ Scope '${scope}' is now Shared. Pushed ${result.pushed} memories across ${result.scopes.length} shared scope(s).`,
@@ -85,11 +107,41 @@ export async function sharePushCmd(withVault: WithVault, fail: (m: string) => ne
     console.log('No scopes are shared yet. Run: northkeep share add <scope>');
     return;
   }
+  const entitlement = await maybeEntitlement(deviceSecret);
   const result = await withVault((vault) =>
-    pushSharedScopes({ server: cfg.server, deviceSecret, scopes: cfg.sharedScopes, vault }),
+    pushSharedScopes({ server: cfg.server, deviceSecret, scopes: cfg.sharedScopes, vault, entitlement }),
   );
   console.log(
     `✓ Pushed ${result.pushed} memories across ${result.scopes.length} shared scope(s) to ${cfg.server}.`,
+  );
+}
+
+/**
+ * `northkeep share sync` — pull memories/forgets created inside the AI apps back
+ * into the vault (down-sync), then re-push so the server's rows match the vault
+ * (ADR 0019, phase C3). One vault-open path handles both, so the pushed rows
+ * reflect the just-applied down-sync.
+ */
+export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => never): Promise<void> {
+  const cfg = requireConfig(fail);
+  const deviceSecret = deviceSecretOrFail(fail);
+  if (cfg.sharedScopes.length === 0) {
+    console.log('No scopes are shared yet. Run: northkeep share add <scope>');
+    return;
+  }
+  const entitlement = await maybeEntitlement(deviceSecret);
+  const result = await withVault(async (vault) => {
+    const down = await downSyncConnector({ server: cfg.server, deviceSecret, vault, entitlement });
+    // Re-push so each newly down-synced row is rehashed server-side under its
+    // vault id with pending cleared, and any forgotten row is reconciled away.
+    const push = await pushSharedScopes({ server: cfg.server, deviceSecret, scopes: cfg.sharedScopes, vault, entitlement });
+    return { down, push };
+  });
+  console.log(
+    `✓ Down-synced: ${result.down.added} added, ${result.down.forgotten} forgotten, ${result.down.deduped} already present.`,
+  );
+  console.log(
+    `✓ Re-pushed ${result.push.pushed} memories across ${result.push.scopes.length} shared scope(s) to ${cfg.server}.`,
   );
 }
 
@@ -130,9 +182,10 @@ export async function shareStatusCmd(withVault: WithVault): Promise<void> {
 export async function shareCodeCmd(fail: (m: string) => never): Promise<void> {
   const cfg = requireConfig(fail);
   const deviceSecret = deviceSecretOrFail(fail);
+  const entitlement = await maybeEntitlement(deviceSecret);
   let code: string;
   try {
-    code = await startPairing({ server: cfg.server, deviceSecret });
+    code = await startPairing({ server: cfg.server, deviceSecret, entitlement });
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
   }

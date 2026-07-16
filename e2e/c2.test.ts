@@ -26,7 +26,7 @@ const nodeRequire = createRequire(import.meta.url);
 
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const cliPath = path.join(repoRoot, 'packages', 'cli', 'dist', 'index.js');
-const connectorLib = path.join(repoRoot, 'apps', 'connector-server', 'dist', 'server.js');
+const connectorLib = path.join(repoRoot, 'apps', 'connector-server', 'dist', 'create-server.js');
 const storageLib = path.join(repoRoot, 'apps', 'connector-server', 'dist', 'storage.js');
 
 const PASSPHRASE = 'c2 cli acceptance passphrase';

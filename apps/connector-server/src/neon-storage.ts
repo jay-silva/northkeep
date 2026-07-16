@@ -26,6 +26,9 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   account_hash text PRIMARY KEY,
   created_at   timestamptz NOT NULL DEFAULT now()
 )`,
+  // C3 billing grace window: ms-since-epoch through which this account is
+  // entitled (stamped when the desktop forwards a valid entitlement). Idempotent.
+  `ALTER TABLE connector_accounts ADD COLUMN IF NOT EXISTS entitled_until bigint`,
   `CREATE TABLE IF NOT EXISTS pairing_codes (
   code_hash    text PRIMARY KEY,
   account_hash text NOT NULL,
@@ -72,6 +75,18 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   // Migrate a pre-C2 shared_entries table (C1 shipped without entry_hash).
   // ADD COLUMN IF NOT EXISTS is idempotent and single-statement (ADR 0010).
   `ALTER TABLE shared_entries ADD COLUMN IF NOT EXISTS entry_hash text NOT NULL DEFAULT ''`,
+  // C3 write-back: where a row came from and whether a connector-born row is
+  // still awaiting delivery to the client. Both idempotent single-statement ALTERs.
+  `ALTER TABLE shared_entries ADD COLUMN IF NOT EXISTS origin text NOT NULL DEFAULT 'vault'`,
+  `ALTER TABLE shared_entries ADD COLUMN IF NOT EXISTS pending boolean NOT NULL DEFAULT false`,
+  // C3 forget queue: an already-delivered entry the user forgot inside an AI
+  // flow, to be tombstoned in the vault on the next down-sync.
+  `CREATE TABLE IF NOT EXISTS pending_forgets (
+  account_hash text NOT NULL,
+  entry_id     text NOT NULL,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_hash, entry_id)
+)`,
   `CREATE TABLE IF NOT EXISTS scope_tombstones (
   id           bigserial PRIMARY KEY,
   account_hash text NOT NULL,
@@ -126,6 +141,25 @@ export class NeonConnectorStorage implements ConnectorStorage {
       INSERT INTO connector_accounts (account_hash) VALUES (${accountHash})
       ON CONFLICT (account_hash) DO NOTHING
     `;
+  }
+
+  async setEntitledUntil(accountHash: string, untilMs: number): Promise<void> {
+    await this.ensureSchema();
+    // Upsert + only ever advance the stamp (GREATEST guards a stale re-stamp).
+    await this.sql`
+      INSERT INTO connector_accounts (account_hash, entitled_until) VALUES (${accountHash}, ${untilMs})
+      ON CONFLICT (account_hash) DO UPDATE SET
+        entitled_until = GREATEST(connector_accounts.entitled_until, EXCLUDED.entitled_until)
+    `;
+  }
+
+  async getEntitledUntil(accountHash: string): Promise<number | null> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      SELECT entitled_until FROM connector_accounts WHERE account_hash = ${accountHash}
+    `) as unknown as Array<{ entitled_until: string | number | null }>;
+    const v = rows[0]?.entitled_until;
+    return v === null || v === undefined ? null : Number(v);
   }
 
   async putPairingCode(codeHash: string, accountHash: string, expiresAt: number): Promise<void> {
@@ -237,35 +271,22 @@ export class NeonConnectorStorage implements ConnectorStorage {
   async putEntry(accountHash: string, entry: SharedEntry): Promise<void> {
     await this.ensureSchema();
     await this.sql`
-      INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, entry_hash, created_at)
-      VALUES (${accountHash}, ${entry.entryId}, ${entry.scope}, ${entry.type}, ${entry.content}, ${entry.entryHash ?? ''}, ${entry.createdAt})
+      INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, entry_hash, origin, pending, created_at)
+      VALUES (${accountHash}, ${entry.entryId}, ${entry.scope}, ${entry.type}, ${entry.content}, ${entry.entryHash ?? ''}, ${entry.origin ?? 'vault'}, ${entry.pending ?? false}, ${entry.createdAt})
       ON CONFLICT (account_hash, entry_id) DO UPDATE SET
         scope = EXCLUDED.scope, type = EXCLUDED.type, content = EXCLUDED.content,
-        entry_hash = EXCLUDED.entry_hash, created_at = EXCLUDED.created_at
+        entry_hash = EXCLUDED.entry_hash, origin = EXCLUDED.origin, pending = EXCLUDED.pending,
+        created_at = EXCLUDED.created_at
     `;
   }
 
   async listEntries(accountHash: string): Promise<SharedEntry[]> {
     await this.ensureSchema();
     const rows = (await this.sql`
-      SELECT entry_id, scope, type, content, entry_hash, created_at
+      SELECT entry_id, scope, type, content, entry_hash, origin, pending, created_at
       FROM shared_entries WHERE account_hash = ${accountHash}
-    `) as unknown as Array<{
-      entry_id: string;
-      scope: string;
-      type: string;
-      content: string;
-      entry_hash: string;
-      created_at: string;
-    }>;
-    return rows.map((r) => ({
-      entryId: r.entry_id,
-      scope: r.scope,
-      type: r.type,
-      content: r.content,
-      entryHash: r.entry_hash ?? '',
-      createdAt: new Date(r.created_at).toISOString(),
-    }));
+    `) as unknown as Array<SharedEntrySqlRow>;
+    return rows.map(mapSharedEntryRow);
   }
 
   async replaceScopes(accountHash: string, scopes: string[], entries: SharedEntry[]): Promise<void> {
@@ -284,6 +305,10 @@ export class NeonConnectorStorage implements ConnectorStorage {
           entry_hash = EXCLUDED.entry_hash
       `);
     }
+    // The reconcile-delete NEVER touches an undelivered connector-born row
+    // (origin='connector' AND pending): a push racing ahead of the down-sync must
+    // not destroy a memory the AI created that the user hasn't pulled yet (C3
+    // critical fix). The `NOT (origin='connector' AND pending)` guard shields it.
     for (const scope of scopes) {
       const ids = entries.filter((e) => e.scope === scope).map((e) => e.entryId);
       if (ids.length === 0) {
@@ -291,12 +316,14 @@ export class NeonConnectorStorage implements ConnectorStorage {
         // would be invalid SQL — guard it).
         statements.push(this.sql`
           DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND scope = ${scope}
+            AND NOT (origin = 'connector' AND pending = true)
         `);
       } else {
         // `<> ALL(array)` is the array-safe NOT IN (no empty-list edge case).
         statements.push(this.sql`
           DELETE FROM shared_entries
           WHERE account_hash = ${accountHash} AND scope = ${scope} AND entry_id <> ALL(${ids})
+            AND NOT (origin = 'connector' AND pending = true)
         `);
       }
     }
@@ -322,6 +349,77 @@ export class NeonConnectorStorage implements ConnectorStorage {
     return rows.map((r) => ({ scope: r.scope, unsharedAt: new Date(r.unshared_at).toISOString() }));
   }
 
+  async getEntry(accountHash: string, entryId: string): Promise<SharedEntry | null> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      SELECT entry_id, scope, type, content, entry_hash, origin, pending, created_at
+      FROM shared_entries WHERE account_hash = ${accountHash} AND entry_id = ${entryId}
+    `) as unknown as Array<SharedEntrySqlRow>;
+    return rows[0] ? mapSharedEntryRow(rows[0]) : null;
+  }
+
+  async deleteEntry(accountHash: string, entryId: string): Promise<void> {
+    await this.ensureSchema();
+    await this.sql`DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND entry_id = ${entryId}`;
+  }
+
+  async listPendingEntries(accountHash: string): Promise<SharedEntry[]> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      SELECT entry_id, scope, type, content, entry_hash, origin, pending, created_at
+      FROM shared_entries WHERE account_hash = ${accountHash} AND origin = 'connector' AND pending = true
+    `) as unknown as Array<SharedEntrySqlRow>;
+    return rows.map(mapSharedEntryRow);
+  }
+
+  async enqueueForget(accountHash: string, entryId: string): Promise<void> {
+    await this.ensureSchema();
+    await this.sql`
+      INSERT INTO pending_forgets (account_hash, entry_id) VALUES (${accountHash}, ${entryId})
+      ON CONFLICT (account_hash, entry_id) DO NOTHING
+    `;
+  }
+
+  async listPendingForgets(accountHash: string): Promise<string[]> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      SELECT entry_id FROM pending_forgets WHERE account_hash = ${accountHash}
+    `) as unknown as Array<{ entry_id: string }>;
+    return rows.map((r) => r.entry_id);
+  }
+
+  async ackEntry(accountHash: string, serverId: string, localEntryId: string): Promise<void> {
+    await this.ensureSchema();
+    // Collision-safe remap: drop any row already under the local id (the dedupe
+    // path re-maps onto an existing vault entry), then rename the delivered
+    // connector row and clear its pending flag. Also re-point any forget queued
+    // against the server id onto the vault-local id, so a forget that raced in
+    // between the client's fetch and this ack still tombstones the delivered
+    // vault entry (never orphaned). Each element is one statement, all atomic.
+    await this.sql.transaction([
+      this.sql`DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND entry_id = ${localEntryId}`,
+      this.sql`
+        UPDATE shared_entries SET entry_id = ${localEntryId}, pending = false
+        WHERE account_hash = ${accountHash} AND entry_id = ${serverId}
+      `,
+      this.sql`
+        INSERT INTO pending_forgets (account_hash, entry_id)
+        SELECT account_hash, ${localEntryId} FROM pending_forgets
+        WHERE account_hash = ${accountHash} AND entry_id = ${serverId}
+        ON CONFLICT (account_hash, entry_id) DO NOTHING
+      `,
+      this.sql`DELETE FROM pending_forgets WHERE account_hash = ${accountHash} AND entry_id = ${serverId}`,
+    ]);
+  }
+
+  async applyForget(accountHash: string, entryId: string): Promise<void> {
+    await this.ensureSchema();
+    await this.sql.transaction([
+      this.sql`DELETE FROM pending_forgets WHERE account_hash = ${accountHash} AND entry_id = ${entryId}`,
+      this.sql`DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND entry_id = ${entryId}`,
+    ]);
+  }
+
   async appendAudit(entry: ConnectorAuditEntry): Promise<void> {
     await this.ensureSchema();
     await this.sql`
@@ -329,6 +427,30 @@ export class NeonConnectorStorage implements ConnectorStorage {
       VALUES (${entry.ts}, ${entry.accountHash}, ${entry.tool}, ${entry.params.query_terms ?? null}, ${entry.params.limit ?? null}, ${entry.resultCount}, ${JSON.stringify(entry.resultIds)}, ${entry.ok})
     `;
   }
+}
+
+interface SharedEntrySqlRow {
+  entry_id: string;
+  scope: string;
+  type: string;
+  content: string;
+  entry_hash: string;
+  origin: string;
+  pending: boolean;
+  created_at: string;
+}
+
+function mapSharedEntryRow(r: SharedEntrySqlRow): SharedEntry {
+  return {
+    entryId: r.entry_id,
+    scope: r.scope,
+    type: r.type,
+    content: r.content,
+    entryHash: r.entry_hash ?? '',
+    origin: r.origin === 'connector' ? 'connector' : 'vault',
+    pending: r.pending === true,
+    createdAt: new Date(r.created_at).toISOString(),
+  };
 }
 
 interface CodeSqlRow {

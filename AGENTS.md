@@ -1,4 +1,4 @@
-# NorthKeep — Claude Code Instructions
+# NorthKeep — Codex Instructions
 
 ## What this is
 A local-first, user-owned memory vault for AI. Encrypted SQLite vault on the user's
@@ -17,7 +17,8 @@ The founder (Jay) is a compliance professional, not an engineer. Therefore:
 ## Non-negotiable invariants (violating these is a critical bug)
 <!-- DRAFT (ADR 0019, phase C5): invariants #1 clause (b) and #2's connector
      sentence re-word the opt-in per-scope connector. Pending Jay's compliance
-     sign-off before any design partner shares real memory. -->
+     sign-off before any design partner shares real memory. Keep verbatim-in-sync
+     with CLAUDE.md. -->
 1. Plaintext memory content NEVER leaves the machine except (a) to the model
    provider the user explicitly selected, after the active redaction tier has
    run, or (b) content in scopes the user has explicitly, individually marked
