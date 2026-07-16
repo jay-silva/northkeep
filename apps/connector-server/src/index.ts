@@ -9,7 +9,7 @@
  * so OAuth metadata advertises absolute URLs that match the deploy; plus a
  * Postgres URL for the connector's SEPARATE Neon database (ADR 0016).
  */
-import { createConnectorServer } from './server.js';
+import { createConnectorServer } from './create-server.js';
 import { NeonConnectorStorage } from './neon-storage.js';
 import { resolveDatabaseUrl } from './db-url.js';
 import type { ConnectorStorage } from './storage.js';

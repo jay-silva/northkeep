@@ -1,5 +1,5 @@
 /** Side-effect-free public API for tests and self-host tooling. */
-export { createConnectorServer } from './server.js';
+export { createConnectorServer } from './create-server.js';
 export {
   InMemoryConnectorStorage,
   type ConnectorStorage,

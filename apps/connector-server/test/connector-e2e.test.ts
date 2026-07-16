@@ -4,7 +4,7 @@ import net from 'node:net';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { deriveConnectorToken, tokenHash } from '@northkeep/sync';
-import { createConnectorServer } from '../src/server.js';
+import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
 import { sha256hex } from '../src/hash.js';
 
