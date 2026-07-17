@@ -117,6 +117,11 @@
   .badge.bounded { background: var(--warn-bg); color: var(--warn-ink); }
   .badge.auto { background: var(--chip); color: var(--ink); }
   .badge.shared { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line); }
+  /* BETA marker: same warn palette as the SHARED badge, but compact enough to sit
+     inline in the nav without making the "Cloud Connect" button taller than its
+     siblings (font + padding keep its box within the 15px nav text line). */
+  .badge.beta { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line);
+    font-size: 9px; padding: 1px 5px; letter-spacing: .06em; vertical-align: middle; margin-left: 6px; }
   .scoperow { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
   .scoperow:first-child { border-top: none; }
   .scoperow .sname { font-weight: 600; }
@@ -201,7 +206,7 @@
 <nav id="mainNav">
   <button data-view="converse">Chat</button>
   <button data-view="connect">Desktop Connect</button>
-  <button data-view="sharing">Cloud Connect</button>
+  <button data-view="sharing">Cloud Connect<span class="badge beta">BETA</span></button>
   <button data-view="memories" class="active">Memories</button>
   <button data-view="redact">Redact</button>
   <button data-view="settings">Settings</button>
@@ -474,7 +479,7 @@
     <div id="connectCards"></div>
   </section>
   <section id="view-sharing" hidden>
-    <p class="muted">Make chosen memories usable inside the cloud AI apps you already pay for
+    <p class="muted"><span class="badge beta" style="margin-left:0;margin-right:8px">BETA</span>Make chosen memories usable inside the cloud AI apps you already pay for
       (Claude, ChatGPT, and others) by copying them to NorthKeep's connector server.
       Everything is private by default. You share one scope at a time, on purpose.</p>
     <div class="banner" style="margin:16px 0 22px">
@@ -2597,6 +2602,7 @@
       "NorthKeep's connector server, where the AI apps you connect can read them.";
     $('shareConfirmErr').textContent = '';
     $('shareConfirmYes').disabled = false;
+    $('shareConfirmYes').textContent = 'Share this scope'; // reset after a prior "Sharing…" run
     $('shareConfirmOverlay').hidden = false;
   }
   function closeShareConfirm() {
@@ -2607,14 +2613,18 @@
   $('shareConfirmYes').addEventListener('click', async () => {
     if (!pendingShareScope) return;
     const scope = pendingShareScope;
+    const yes = $('shareConfirmYes');
+    const yesLabel = yes.textContent;
     $('shareConfirmErr').textContent = '';
-    $('shareConfirmYes').disabled = true;
+    yes.disabled = true;
+    yes.textContent = 'Sharing…'; // pushing plaintext to the server can take a moment
     try {
       await api('/api/share/add', { method: 'POST', json: { scope } });
       closeShareConfirm();
       await loadSharing();
     } catch (e) {
-      $('shareConfirmYes').disabled = false;
+      yes.disabled = false;
+      yes.textContent = yesLabel;
       $('shareConfirmErr').textContent =
         e.message === 'locked' ? 'Your vault is locked. Unlock it, then share again.' : e.message;
     }
