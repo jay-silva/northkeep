@@ -57,6 +57,9 @@ export default function Converse() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasAudit, setHasAudit] = useState(false);
+  // Set when an on-device Tier-2 turn aborted (invariant #6: nothing was sent).
+  // Holds the message so the user can explicitly resend at Tier-1 if they choose.
+  const [tier1RetryText, setTier1RetryText] = useState<string | null>(null);
 
   const convSession = useRef<ConverseSession>(createSession());
   const abortRef = useRef<AbortController | null>(null);
@@ -101,11 +104,21 @@ export default function Converse() {
         ? 'cloud'
         : 'none';
 
-  async function onSend() {
+  function onSend() {
     const text = input.trim();
     if (text.length === 0 || busy || mode === 'none') return;
-    setError(null);
     setInput('');
+    void send(text, false);
+  }
+
+  /**
+   * One turn. `forceTier1` sends to a cloud provider with the on-device model
+   * withheld, so runTurn falls to the Tier-1 floor. Used only for the explicit
+   * "send with Tier-1 only" retry after an on-device Tier-2 abort.
+   */
+  async function send(text: string, forceTier1: boolean) {
+    setError(null);
+    setTier1RetryText(null);
     setBusy(true);
     const controller = new AbortController();
     abortRef.current = controller;
@@ -150,8 +163,9 @@ export default function Converse() {
           session: convSession.current,
           provider,
           apiKey,
-          // Enables Tier-2 pseudonymization on-device when a model is ready.
-          localModel: localReady ? resolution!.model : null,
+          // Enables Tier-2 pseudonymization on-device when a model is ready
+          // (withheld on an explicit Tier-1 retry).
+          localModel: !forceTier1 && localReady ? resolution!.model : null,
           retrieve: (q, o) => session.retrieve(q, o),
           signal: controller.signal,
           onToken,
@@ -165,14 +179,20 @@ export default function Converse() {
       });
       setHasAudit(true);
     } catch (err) {
-      const msg =
-        err instanceof TurnError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : 'The turn failed.';
-      setError(msg);
-      setMessages((prev) => (prev[prev.length - 1]?.content === '' ? prev.slice(0, -1) : prev));
+      if (err instanceof TurnError && err.code === 'TIER2_UNAVAILABLE') {
+        // On-device pseudonymization failed; runTurn aborted BEFORE sending
+        // (invariant #6, nothing left the device). Roll the turn fully back and
+        // offer an explicit Tier-1 resend, in phone-true language (no Ollama here).
+        setError(
+          'Names could not be pseudonymized on-device this turn, so nothing was sent. You can resend with Tier-1 protection (secrets are still masked, but names and places are not).',
+        );
+        setTier1RetryText(text);
+        setMessages((prev) => prev.slice(0, -2));
+      } else {
+        const msg = err instanceof Error ? err.message : 'The turn failed.';
+        setError(msg);
+        setMessages((prev) => (prev[prev.length - 1]?.content === '' ? prev.slice(0, -1) : prev));
+      }
     } finally {
       setBusy(false);
       abortRef.current = null;
@@ -246,6 +266,21 @@ export default function Converse() {
 
       <ErrorNote message={error} />
 
+      {tier1RetryText && !busy ? (
+        <Pressable
+          style={styles.retryLink}
+          onPress={() => {
+            const t = tier1RetryText;
+            setTier1RetryText(null);
+            void send(t, true);
+          }}
+          accessibilityRole="button"
+        >
+          <Ionicons name="send-outline" size={14} color={colors.warnText} />
+          <Text style={styles.retryText}>Resend with Tier-1 only</Text>
+        </Pressable>
+      ) : null}
+
       {hasAudit ? (
         <Pressable
           style={styles.auditLink}
@@ -272,7 +307,7 @@ export default function Converse() {
         ) : (
           <Button
             title="Send"
-            onPress={() => void onSend()}
+            onPress={onSend}
             disabled={mode === 'none' || input.trim().length === 0}
             style={styles.sendBtn}
           />
@@ -364,6 +399,8 @@ const styles = StyleSheet.create({
   assistantText: { color: colors.text, fontSize: 15, lineHeight: 21 },
   auditLink: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 8 },
   auditLinkText: { color: colors.accent, fontSize: 13, fontWeight: '600' },
+  retryLink: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 8 },
+  retryText: { color: colors.warnText, fontSize: 14, fontWeight: '700' },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
