@@ -13,6 +13,11 @@ device.secret
 # OS noise
 .DS_Store
 
+# Agent worktrees — transient checkouts of other branches; never commit them.
+# Without this guard a `git add -A` could stage a stale branch's files (e.g. a
+# pre-encryption invariant #2) into the repo.
+.claude/worktrees/
+
 # Test artifacts
 coverage/
 
