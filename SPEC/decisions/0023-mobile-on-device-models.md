@@ -156,27 +156,48 @@ device before it is real; the lead decides when to merge. What is in place:
   Apple Intelligence hardware; AI-SDK-based, `apple.isAvailable()`, guided
   generation via `Output`/`generateObject`). Compatible with SDK 55 / RN 0.83 /
   New Arch on paper.
-- `llama.rn@0.12.6` (Expo config plugin, New Arch, `response_format:
-  {type:'json_schema'}` grammar-constrained output). Ships a native build script
-  that is intentionally skipped in the JS checkout (`allowBuilds: llama.rn:
-  false`) — it only matters for the EAS compile.
 - `ai@^6` (Vercel AI SDK; `@ai-sdk/provider@3.x`, matches the apple provider) is
   a NEW JS dependency required to drive `@react-native-ai/apple`.
-- `expo export --platform ios` STILL bundles with all three added (iOS bundle
-  3.6 MB -> 5.5 MB; the +1.9 MB is the AI SDK). Native compile defers to EAS.
-- All 440 monorepo unit tests + mobile typecheck stay green.
+- `expo export --platform ios` bundles cleanly. Mobile typecheck and all 440
+  monorepo unit tests stay green.
 
-### New dependencies (each needs the standing ADR note + an EAS rebuild)
+### llama.rn DE-LINKED for the Apple-FM-only build (2026-07-17)
 
-`@react-native-ai/apple`, `llama.rn`, `ai`. All on-device / no network at
-inference time, so invariant #7's network trigger does not apply to inference.
-The llama GGUF DOWNLOAD remains a separate networked dependency still needing
-Jay's explicit OK (item 3 above) before LlamaRnModel ships.
+EAS build 4 failed with `XCODE_BUILD_ERROR: 'rnllama/rn-llama.h' file not found`.
+The `llama.rn` native iOS integration does not resolve under Expo + New
+Architecture: the CocoaPods header search path is broken (and skipping its build
+script, which `pnpm -r build` needs, means the native prep never runs). This is a
+REAL, UNRESOLVED native-integration problem.
+
+It is NOT on the critical path: Jay tests on an iPhone 17 Pro Max, which uses the
+Apple Foundation Models backend, not llama. llama is only the older-device
+fallback. So for build 4:
+
+- `llama.rn` is removed from `apps/mobile/package.json`, from the
+  `pnpm-workspace.yaml allowBuilds` map, and there is no app.config.ts plugin.
+- `LlamaRnModel` is now an IMPORT-FREE stub (`isReady()` returns false, generate
+  methods throw). Nothing `import`s `llama.rn`, so Xcode never tries to compile
+  it. `detectLocalModel` therefore resolves to Apple-or-none.
+- `AppleFMModel`, the `LocalModel` interface, Tier-2-on-device, the on-device
+  private provider, and the eval harness are all intact and unchanged.
+
+WEEKEND FOLLOW-UP (needs a non-Apple-Intelligence device to test anyway): fix the
+rn-llama.h / pod header search path under New Arch (or switch to a maintained fork
+/ prebuilt xcframework), then restore the real implementation preserved in git at
+commit ca4e812 (`packages/platform-mobile/src/local-model/llama-rn.ts`). The llama
+GGUF DOWNLOAD also remains a separate networked dependency needing Jay's explicit
+OK (item 3 above) before it ships.
+
+### Remaining new dependencies (need the standing ADR note + an EAS rebuild)
+
+`@react-native-ai/apple`, `ai`. Both on-device / no network at inference time, so
+invariant #7's network trigger does not apply to inference.
 
 ### Still needed to make M6-4 real
 
-- Run `runOnDeviceNerEval` on an iPhone 15 Pro (Apple FM) and on a llama GGUF;
-  the recall number selects parity / beta / private-chat-only.
+- Run `runOnDeviceNerEval` on Apple FM hardware (iPhone 15 Pro or newer); the
+  recall number selects parity / beta / private-chat-only. The llama GGUF arm of
+  the eval is blocked on the native-integration fix above.
 - Capture the desktop Ollama baseline with the same `evaluateNer` for comparison.
 - UI: on-device provider entry in the Converse picker; replace the fixed
   "Tier-1 only" banner with the three invariant-#6 states; and label the

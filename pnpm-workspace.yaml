@@ -11,8 +11,6 @@ allowBuilds:
   # (EAS/CocoaPods) compile, not for Metro's JS bundle or the Node test suite.
   # Running it during a local monorepo install fails/hangs here.
   react-native-libsodium: false
-  # Same rationale as react-native-libsodium: llama.rn's native (llama.cpp)
-  # compile only matters for the on-device EAS/CocoaPods build, never for Metro's
-  # JS bundle or the Node test suite. Skipped here so the monorepo install/build
-  # does not run (or fail on) its prebuild-install step. (M6-4 / ADR 0023.)
-  llama.rn: false
+  # llama.rn was removed as a dependency (M6-4 / ADR 0023): its native iOS
+  # integration fails to build under Expo New Arch (rn-llama.h header not found).
+  # It is a stubbed follow-up, so there is no build script to allow here.

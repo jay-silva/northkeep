@@ -155,33 +155,10 @@ declare module '@react-native-ai/apple' {
   };
 }
 
-declare module 'llama.rn' {
-  export interface LlamaCompletionResult {
-    text: string;
-  }
-  export interface LlamaContext {
-    completion(
-      params: {
-        messages?: Array<{ role: string; content: string }>;
-        prompt?: string;
-        n_predict?: number;
-        stop?: string[];
-        temperature?: number;
-        response_format?: { type: string; json_schema?: unknown };
-        grammar?: string;
-      },
-      callback?: (data: { token: string }) => void,
-    ): Promise<LlamaCompletionResult>;
-    release(): Promise<void>;
-  }
-  export function initLlama(options: {
-    model: string;
-    n_ctx?: number;
-    n_gpu_layers?: number;
-    use_mlock?: boolean;
-    embedding?: boolean;
-  }): Promise<LlamaContext>;
-}
+// NOTE: the ambient declaration for 'llama.rn' was removed with the dependency
+// (M6-4 / ADR 0023): its native iOS integration fails to build under Expo New
+// Arch. LlamaRnModel is an import-free stub. When the native issue is fixed,
+// restore both this decl and the real adapter from git commit ca4e812.
 
 declare module 'ai' {
   /** Minimal subset of the Vercel AI SDK used by AppleFMModel. */
