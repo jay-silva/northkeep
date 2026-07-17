@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { ActivityIndicator, AppState, Text, View, type AppStateStatus } from 'react-native';
+import { ActivityIndicator, AppState, StyleSheet, Text, View, type AppStateStatus } from 'react-native';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { initMobilePlatform } from '../src/platform';
@@ -27,6 +27,31 @@ function LockOnBackground({ children }: { children: React.ReactNode }) {
   }, []);
 
   return <>{children}</>;
+}
+
+/**
+ * Privacy cover for the iOS app-switcher snapshot (M6-5 security). iOS captures a
+ * snapshot of the app when it leaves the foreground and shows it in the
+ * multitasking switcher; without a cover, unlocked vault plaintext would be
+ * visible there. We paint an opaque NorthKeep screen whenever AppState is not
+ * 'active' — the snapshot is taken during 'inactive', so it captures the cover,
+ * not the memories. Complements lock-on-background (which zeroizes the key on
+ * 'background'); this closes the brief 'inactive' window before that fires.
+ */
+function PrivacyCover() {
+  const [covered, setCovered] = useState(false);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
+      setCovered(next !== 'active');
+    });
+    return () => sub.remove();
+  }, []);
+  if (!covered) return null;
+  return (
+    <View style={styles.cover} pointerEvents="none" accessibilityElementsHidden importantForAccessibility="no-hide-descendants">
+      <Text style={styles.coverMark}>NorthKeep</Text>
+    </View>
+  );
 }
 
 export default function RootLayout() {
@@ -94,8 +119,20 @@ export default function RootLayout() {
             </Stack>
           </View>
           <BottomNav />
+          <PrivacyCover />
         </View>
       </LockOnBackground>
     </VaultSessionProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  cover: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: colors.bg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 9999,
+  },
+  coverMark: { color: colors.accent, fontSize: 26, fontWeight: '700', letterSpacing: 0.5 },
+});

@@ -94,6 +94,31 @@ every milestone; if a limit is removed, say when and how.*
   `NORTHKEEP_NO_KEYCHAIN=1`) keys are env-var-only for scripting — NorthKeep
   refuses to write them to files.
 
+## Mobile app (Track M, iOS) — current
+
+- **Converse on the phone is BYOK cloud only, and only Tier-1 protects it.** The
+  mobile app runs the same `runTurn` pipeline as the desktop (inheriting ADR
+  0007/0008: mediated client, sanctioned outbound), so a turn sends redacted text
+  to the cloud model whose key you enter. But there is no Ollama on a phone, so
+  **Tier-2 NER redaction is unavailable** — only Tier-1 deterministic redaction
+  (email/phone/SSN/card/IP/keys) filters outbound text, and the app says so with a
+  persistent banner (invariant #6). On-device Tier-2 (Apple's model) is M6-4;
+  until then Tier-1 is the guaranteed floor. Provider API keys live in the iOS
+  keychain (SecureStore), never in the vault blob and never in the audit view.
+- **Mobile crypto uses audited @noble, pending invariant-#3 review.** XChaCha20-
+  Poly1305 (AEAD) and Argon2id run via `@noble/ciphers`/`@noble/hashes`;
+  libsodium (react-native-libsodium) provides BLAKE2b + randomness. This is
+  byte-identical to the desktop's sodium-native (a permanent byte-exact test
+  proves it), but it deviates from ADR 0018's libsodium-only intent and owes an
+  invariant-#3 adversarial review before the public-launch merge to main.
+- **On-device vault writes lack the desktop's fsync + atomic-rename.**
+  expo-file-system does not expose fsync or an overwriting rename, so a crash mid-
+  save falls back to the `.tmp`/`.bak` recovery-on-open path rather than a POSIX
+  atomic replace. Acceptable, documented, and on the invariant-#3 review list.
+- **Unlock is slow.** Argon2id at the production 256 MiB parameters runs in pure
+  JS on device and takes one to two minutes; a native Argon2 backend is a planned
+  performance follow-up (correctness is already proven).
+
 ## M4 (scopes + audit) — current
 
 - **Scope isolation binds what goes through NorthKeep, not what you paste
