@@ -239,20 +239,25 @@ export async function pushVaultMobile(options: {
   return { ok: true, conflict: false, version: body.version };
 }
 
+/** The durable recovery slot for a conflict-displaced remote (see below). */
+export function conflictBakPath(vaultPath: string): string {
+  return `${vaultPath}.conflict.bak`;
+}
+
 /**
- * Stash a VERIFIED remote blob as `${vaultPath}.bak` so the displaced
+ * Stash a VERIFIED remote blob at `${vaultPath}.conflict.bak` so the displaced
  * other-device version stays recoverable after the phone wins a two-sided
- * conflict (last-writer-wins). Writes the bak path directly (a plain overwrite,
- * not the atomic dance) because it IS the recovery slot, not the live vault.
+ * conflict (last-writer-wins).
  *
- * NEEDS ON-DEVICE VALIDATION: the raw bak write goes through the same storage
- * seam adapter whose expo-file-system bindings are unproven off-device.
+ * IMPORTANT: this must NOT reuse `${vaultPath}.bak`. That path is the storage
+ * seam's rolling per-save backup (writeAtomic copies the prior vault there on
+ * every write) AND the crash-recovery slot (recovery-on-open restores from it).
+ * Sharing it meant (a) the very next save clobbered the stashed remote, so the
+ * "recoverable" promise lasted only until the next edit, and (b) a crash right
+ * after a conflict could restore the OTHER device's version as the live vault.
+ * A dedicated path fixes both. Uses writeAtomic (the only write the storage
+ * seam exposes), which leaves a harmless `${vaultPath}.conflict.bak.bak`.
  */
 export function stashRecoverableBak(vaultPath: string, blob: Buffer): void {
-  // writeAtomic(target) leaves `target` = blob (its own transient .tmp is moved
-  // into place; any prior file at target is copied to target.bak first). Writing
-  // to the bak path therefore lands the remote at `${vaultPath}.bak`. We accept
-  // the minor cruft of a possible `${vaultPath}.bak.bak` (the prior bak), which
-  // the recovery-on-open path ignores.
-  getPlatform().storage.writeAtomic(`${vaultPath}.bak`, blob);
+  getPlatform().storage.writeAtomic(conflictBakPath(vaultPath), blob);
 }

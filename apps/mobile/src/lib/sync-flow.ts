@@ -81,7 +81,7 @@ export function reduceSync(state: SyncState, event: SyncEvent): SyncState {
         version: event.version,
         detail:
           'Another device had also changed this vault. Your edit was kept and pushed; ' +
-          'the other version is recoverable on this phone (.bak).',
+          "the other device's version was backed up on this phone (.conflict.bak).",
       };
     case 'error':
       return { ...state, status: 'error', detail: event.message };

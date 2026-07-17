@@ -29,6 +29,14 @@ export default function DeviceLink() {
     try {
       await session.linkDevice(deviceSecretHex);
       router.replace('/unlock');
+    } catch (err) {
+      // Surface the failure and re-arm scanning. Callers invoke this as
+      // `void completeLink(...)`, so without this catch a SecureStore write
+      // failure would reject silently while handledRef stayed true — the user
+      // would see a busy flicker, no error, and a dead scanner (re-scan is a
+      // no-op). Mirrors unlock.tsx's catch → setError behavior.
+      handledRef.current = false;
+      setError(err instanceof Error ? err.message : 'Could not link this device. Try again.');
     } finally {
       setBusy(false);
     }
