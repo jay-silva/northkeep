@@ -43,6 +43,15 @@ const config: ExpoConfig = {
     bundleIdentifier: 'com.silvapeak.northkeep',
     supportsTablet: false,
     infoPlist: {
+      // Export compliance (US EAR). NorthKeep is publicly available open-source
+      // software (AGPL, github.com/jay-silva/northkeep) that uses only standard,
+      // published cryptographic algorithms via libsodium (XChaCha20-Poly1305,
+      // Argon2id, BLAKE2b). It rests on the publicly-available / open-source
+      // exemption, so false = no per-submission compliance document is required.
+      // That basis is supported by the one-time BIS + NSA source-URL notification
+      // (EAR 742.15(b)); confirm with export counsel before the PUBLIC App Store
+      // release. Fine as-is for TestFlight testing.
+      ITSAppUsesNonExemptEncryption: false,
       // Redundant with the expo-camera / expo-local-authentication plugin
       // options below (the plugins inject these), but declared explicitly so
       // the required usage strings are visible and guaranteed present.
@@ -51,8 +60,9 @@ const config: ExpoConfig = {
       NSFaceIDUsageDescription:
         'NorthKeep can use Face ID to unlock your vault with a key that never leaves this device.',
     },
-    // App icon comes from the top-level `icon` above (brand master). Still
-    // TODO(M6-5): privacy nutrition label, export compliance answers.
+    // App icon comes from the top-level `icon` above (brand master). Export
+    // compliance answered via ITSAppUsesNonExemptEncryption above. Still
+    // TODO(M6-5): App Store privacy nutrition label.
   },
   android: {
     // Kept in lock-step with the iOS bundle identifier under Jay's rebrand.
