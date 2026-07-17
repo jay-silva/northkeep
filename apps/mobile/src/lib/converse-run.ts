@@ -77,6 +77,12 @@ export interface LastAudit {
   endpointHost: string;
   privacy: 'private' | 'bounded';
   outbound: OutboundCapture;
+  /**
+   * True when the turn ran entirely on the phone (runOnDeviceTurn): the captured
+   * payload is what the LOCAL model was given and never left the device. The
+   * audit view must say so, not present it as an egress.
+   */
+  onDevice: boolean;
 }
 
 let lastAudit: LastAudit | null = null;
@@ -142,6 +148,7 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     endpointHost: result.endpointHost,
     privacy: result.privacy,
     outbound: captured,
+    onDevice: false,
   };
 
   return {
@@ -216,6 +223,7 @@ export async function runOnDeviceTurn(input: OnDeviceTurnInput): Promise<MobileT
       model: input.localModel.label,
       messages: [],
     },
+    onDevice: true,
   };
 
   return {

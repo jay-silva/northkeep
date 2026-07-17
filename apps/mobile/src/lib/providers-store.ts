@@ -40,6 +40,16 @@ const OPTIONS: SecureStore.SecureStoreOptions = {
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-4-8';
 
+/**
+ * Reserved selection id for the on-device model (M6-4). It is NOT a stored
+ * ProviderConfig (no key, no endpoint, no metadata); it is a sentinel the
+ * selection persists, so "On-device (private)" survives app restarts like any
+ * other choice. listProviders() never returns it; Converse special-cases it and
+ * routes the turn through the local model (runOnDeviceTurn). Kept out of the
+ * `nk.converse.key.*` namespace so no key item is ever created for it.
+ */
+export const ON_DEVICE_PROVIDER_ID = 'on-device';
+
 /** Keychain keys must be alphanumeric + ".-_"; keep generated ids in that set. */
 function newId(): string {
   return `${Date.now().toString(36)}-${Math.floor(Math.random() * 1e9).toString(36)}`;

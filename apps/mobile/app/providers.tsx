@@ -19,12 +19,15 @@ import {
   getSelectedProviderId,
   hasKey,
   listProviders,
+  ON_DEVICE_PROVIDER_ID,
   removeProvider,
   saveProvider,
   setSelectedProviderId,
   type ProviderConfig,
   type ProviderKind,
 } from '../src/lib/providers-store';
+import { getLocalModel } from '../src/lib/local-model';
+import type { LocalModelResolution } from '@northkeep/platform-mobile/dist/local-model/index.js';
 
 /**
  * BYOK provider settings (M6-3). Add/edit a model provider — Anthropic (native
@@ -38,6 +41,7 @@ export default function Providers() {
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [keyed, setKeyed] = useState<Record<string, boolean>>({});
+  const [localRes, setLocalRes] = useState<LocalModelResolution | null>(null);
 
   // form
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -54,9 +58,13 @@ export default function Providers() {
     const sel = await getSelectedProviderId();
     const flags: Record<string, boolean> = {};
     for (const p of list) flags[p.id] = await hasKey(p.id);
+    // Apple-first detection; the llama fallback is never auto-probed here, so no
+    // model file can download implicitly (invariant #7).
+    const res = await getLocalModel();
     setProviders(list);
     setSelectedId(sel);
     setKeyed(flags);
+    setLocalRes(res);
   }, []);
 
   useFocusEffect(
@@ -140,6 +148,39 @@ export default function Providers() {
     <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <Stack.Screen options={{ title: 'Providers' }} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <FieldLabel>On-device</FieldLabel>
+        {(() => {
+          const available = localRes?.model != null;
+          const selected = selectedId === ON_DEVICE_PROVIDER_ID && available;
+          return (
+            <Pressable
+              style={[styles.card, { gap: 10 }, selected && styles.cardSelected, !available && styles.cardDisabled]}
+              onPress={() => available && void onSelect(ON_DEVICE_PROVIDER_ID)}
+              accessibilityRole="button"
+              accessibilityState={{ selected, disabled: !available }}
+            >
+              <Ionicons
+                name={selected ? 'radio-button-on' : 'radio-button-off'}
+                size={20}
+                color={selected ? colors.accent : colors.muted}
+              />
+              <View style={styles.cardText}>
+                <Text style={styles.cardTitle}>On-device (private)</Text>
+                <Text style={styles.cardSub} numberOfLines={2}>
+                  {available
+                    ? `${localRes?.model?.label} · fully private, no key, works in airplane mode`
+                    : 'Not available on this phone (needs Apple Intelligence on iOS 26)'}
+                </Text>
+              </View>
+            </Pressable>
+          );
+        })()}
+        <Text style={styles.hint}>
+          On-device chat runs entirely on your phone with Apple Intelligence and never sends
+          anything off the device. A downloadable local model (about 1 to 2 GB) for older phones is
+          not enabled in this build and would be an explicit, separate opt-in.
+        </Text>
+
         {providers.length > 0 ? (
           <>
             <FieldLabel>Your providers</FieldLabel>
@@ -274,6 +315,7 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   cardSelected: { borderColor: colors.accent },
+  cardDisabled: { opacity: 0.55 },
   cardMain: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 },
   cardText: { flex: 1 },
   cardTitle: { color: colors.text, fontSize: 15, fontWeight: '600' },

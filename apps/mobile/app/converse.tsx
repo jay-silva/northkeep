@@ -11,57 +11,75 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Redirect, router, useFocusEffect } from 'expo-router';
+import type { LocalModelResolution } from '@northkeep/platform-mobile/dist/local-model/index.js';
 import { useVaultSession } from '../src/lib/vault-session';
-import { Button, ErrorNote, WarningBanner, colors } from '../src/ui';
+import { Button, ErrorNote, colors } from '../src/ui';
 import {
   getSelectedProviderId,
   getProviderKey,
   listProviders,
+  ON_DEVICE_PROVIDER_ID,
   type ProviderConfig,
 } from '../src/lib/providers-store';
-import { createSession, runMobileTurn, TurnError, type ConverseSession } from '../src/lib/converse-run';
+import { getLocalModel } from '../src/lib/local-model';
+import {
+  createSession,
+  runMobileTurn,
+  runOnDeviceTurn,
+  TurnError,
+  type ConverseSession,
+} from '../src/lib/converse-run';
 
 /**
- * Converse (M6-3): BYOK chat over the REAL runTurn pipeline
- * (packages/converse/src/turn.ts), with vault memory context and the on-device
- * Tier-1 redaction firewall on everything outbound. Tier-2 (Ollama NER) does
- * not exist on the phone, so a persistent loud banner says only Tier-1 protects
- * outbound text (invariant #6, degrade loudly). "What left this device" shows
- * the actual redacted payload after a turn.
+ * Converse (M6-3 + M6-4): chat over the REAL runTurn pipeline
+ * (packages/converse/src/turn.ts) with vault memory context.
+ *
+ * Three privacy postures, shown loudly (invariant #6):
+ *  - On-device (private): the whole turn runs on the phone (runOnDeviceTurn),
+ *    no key, nothing sent off the device.
+ *  - Cloud + Tier-2 on-device: a local model pseudonymizes names/orgs/places on
+ *    the phone BEFORE the redacted prompt is sent to the chosen provider.
+ *  - Cloud + Tier-1 only: no on-device model, so only deterministic secrets are
+ *    masked; names are not pseudonymized here (the loud degradation state).
  */
 
 type UIMessage = { role: 'user' | 'assistant'; content: string };
-
-const TIER1_ONLY_BANNER =
-  'On-device firewall: Tier-1 only. Names/orgs are NOT pseudonymized on your phone (that needs the local model on your Mac). Secrets (emails, cards, SSNs, keys, phones, IPs) are masked before anything is sent.';
+type Mode = 'on-device' | 'cloud' | 'none';
 
 export default function Converse() {
   const session = useVaultSession();
-  const [provider, setProvider] = useState<ProviderConfig | null>(null);
-  const [providerLoaded, setProviderLoaded] = useState(false);
+  const [cloudProvider, setCloudProvider] = useState<ProviderConfig | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [resolution, setResolution] = useState<LocalModelResolution | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [hasAudit, setHasAudit] = useState(false);
 
-  // The pipeline session persists real-name plaintext history across turns; it
-  // is re-redacted every turn before sending (see turn.ts ConverseSession).
   const convSession = useRef<ConverseSession>(createSession());
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
 
-  // Re-read the selected provider whenever the screen regains focus (the user
-  // may have just added one on the Providers screen).
+  // On focus: re-read the selected provider AND detect the on-device model
+  // (Apple-first; memoized). The llama fallback is never auto-detected here, so
+  // no model file can be downloaded implicitly (invariant #7).
   useFocusEffect(
     useCallback(() => {
       let alive = true;
       void (async () => {
-        const id = await getSelectedProviderId();
-        const all = await listProviders();
+        const [id, all, res] = await Promise.all([
+          getSelectedProviderId(),
+          listProviders(),
+          getLocalModel(),
+        ]);
         if (!alive) return;
-        setProvider(all.find((p) => p.id === id) ?? all[0] ?? null);
-        setProviderLoaded(true);
+        setSelectedId(id);
+        setResolution(res);
+        const onDevice = id === ON_DEVICE_PROVIDER_ID && res.model !== null;
+        setCloudProvider(onDevice ? null : (all.find((p) => p.id === id) ?? all[0] ?? null));
+        setLoaded(true);
       })();
       return () => {
         alive = false;
@@ -75,9 +93,17 @@ export default function Converse() {
 
   if (session.status !== 'unlocked') return <Redirect href="/unlock" />;
 
+  const localReady = resolution?.model != null;
+  const mode: Mode =
+    selectedId === ON_DEVICE_PROVIDER_ID && localReady
+      ? 'on-device'
+      : cloudProvider
+        ? 'cloud'
+        : 'none';
+
   async function onSend() {
     const text = input.trim();
-    if (text.length === 0 || busy || !provider) return;
+    if (text.length === 0 || busy || mode === 'none') return;
     setError(null);
     setInput('');
     setBusy(true);
@@ -87,36 +113,54 @@ export default function Converse() {
     setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '' }]);
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
 
-    // Read the key immediately before the call; never hold it in React state.
-    const apiKey = await getProviderKey(provider.id);
-    if (apiKey === null) {
-      setError('No API key stored for this provider. Open Providers and re-enter it.');
-      setMessages((prev) => prev.slice(0, -2));
-      setBusy(false);
-      return;
-    }
-
-    try {
-      const result = await runMobileTurn({
-        message: text,
-        session: convSession.current,
-        provider,
-        apiKey,
-        retrieve: (q, o) => session.retrieve(q, o),
-        signal: controller.signal,
-        onToken: (token) => {
-          setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last && last.role === 'assistant') next[next.length - 1] = { ...last, content: last.content + token };
-            return next;
-          });
-        },
-      });
-      // Authoritative restored reply (identical to the streamed Tier-1 text).
+    const onToken = (token: string) => {
       setMessages((prev) => {
         const next = [...prev];
-        next[next.length - 1] = { role: 'assistant', content: result.reply };
+        const last = next[next.length - 1];
+        if (last && last.role === 'assistant') next[next.length - 1] = { ...last, content: last.content + token };
+        return next;
+      });
+    };
+
+    try {
+      let reply: string;
+      if (mode === 'on-device') {
+        const localModel = resolution!.model!;
+        const result = await runOnDeviceTurn({
+          message: text,
+          session: convSession.current,
+          localModel,
+          retrieve: (q, o) => session.retrieve(q, o),
+          signal: controller.signal,
+          onToken,
+        });
+        reply = result.reply;
+      } else {
+        const provider = cloudProvider!;
+        // Read the key immediately before the call; never hold it in React state.
+        const apiKey = await getProviderKey(provider.id);
+        if (apiKey === null) {
+          setError('No API key stored for this provider. Open Providers and re-enter it.');
+          setMessages((prev) => prev.slice(0, -2));
+          setBusy(false);
+          return;
+        }
+        const result = await runMobileTurn({
+          message: text,
+          session: convSession.current,
+          provider,
+          apiKey,
+          // Enables Tier-2 pseudonymization on-device when a model is ready.
+          localModel: localReady ? resolution!.model : null,
+          retrieve: (q, o) => session.retrieve(q, o),
+          signal: controller.signal,
+          onToken,
+        });
+        reply = result.reply;
+      }
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = { role: 'assistant', content: reply };
         return next;
       });
       setHasAudit(true);
@@ -128,7 +172,6 @@ export default function Converse() {
             ? err.message
             : 'The turn failed.';
       setError(msg);
-      // Drop the empty assistant bubble; keep the user's message visible.
       setMessages((prev) => (prev[prev.length - 1]?.content === '' ? prev.slice(0, -1) : prev));
     } finally {
       setBusy(false);
@@ -137,7 +180,16 @@ export default function Converse() {
     }
   }
 
-  const noProvider = providerLoaded && provider === null;
+  const headerLabel =
+    mode === 'on-device'
+      ? `On-device (private) · ${resolution?.model?.label ?? 'local model'}`
+      : mode === 'cloud'
+        ? `${cloudProvider!.label} · ${cloudProvider!.model}`
+        : loaded
+          ? 'No provider set'
+          : ' ';
+
+  const banner = statusBanner(mode, localReady);
 
   return (
     <KeyboardAvoidingView
@@ -145,14 +197,14 @@ export default function Converse() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={90}
     >
-      <WarningBanner message={TIER1_ONLY_BANNER} />
+      {banner ? <StatusBanner tone={banner.tone} message={banner.message} /> : null}
 
       <View style={styles.headerRow}>
         <Text style={styles.providerLabel} numberOfLines={1}>
-          {provider ? `${provider.label} · ${provider.model}` : noProvider ? 'No provider set' : ' '}
+          {headerLabel}
         </Text>
         <Pressable style={styles.headerBtn} onPress={() => router.push('/providers')} accessibilityRole="button">
-          <Ionicons name="key-outline" size={16} color={colors.accent} />
+          <Ionicons name="swap-horizontal-outline" size={16} color={colors.accent} />
           <Text style={styles.headerBtnText}>Providers</Text>
         </Pressable>
       </View>
@@ -168,12 +220,14 @@ export default function Converse() {
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>Talk to your vault</Text>
             <Text style={styles.emptyBody}>
-              {noProvider
-                ? 'Add a model provider with your own API key to begin. Your key stays on this device.'
-                : 'Ask anything. Relevant memories are added as context, and everything sent out is masked by the Tier-1 firewall first.'}
+              {mode === 'none'
+                ? 'Choose the on-device model (fully private) or add a cloud provider with your own API key to begin.'
+                : mode === 'on-device'
+                  ? 'This chat runs entirely on your phone. Relevant memories are added as context and nothing is sent off the device.'
+                  : 'Ask anything. Relevant memories are added as context, and everything sent out is masked by the on-device firewall first.'}
             </Text>
-            {noProvider ? (
-              <Button title="Add a provider" onPress={() => router.push('/providers')} style={styles.emptyBtn} />
+            {mode === 'none' ? (
+              <Button title="Choose a provider" onPress={() => router.push('/providers')} style={styles.emptyBtn} />
             ) : null}
           </View>
         ) : (
@@ -208,9 +262,9 @@ export default function Converse() {
           style={styles.input}
           value={input}
           onChangeText={setInput}
-          placeholder={provider ? 'Message' : 'Add a provider first'}
+          placeholder={mode === 'none' ? 'Choose a provider first' : 'Message'}
           placeholderTextColor={colors.muted}
-          editable={!!provider && !busy}
+          editable={mode !== 'none' && !busy}
           multiline
         />
         {busy ? (
@@ -219,7 +273,7 @@ export default function Converse() {
           <Button
             title="Send"
             onPress={() => void onSend()}
-            disabled={!provider || input.trim().length === 0}
+            disabled={mode === 'none' || input.trim().length === 0}
             style={styles.sendBtn}
           />
         )}
@@ -228,8 +282,63 @@ export default function Converse() {
   );
 }
 
+/** The invariant-#6 posture line, or null when there is nothing to show. */
+function statusBanner(mode: Mode, localReady: boolean): { tone: 'good' | 'warn'; message: string } | null {
+  if (mode === 'on-device') {
+    return {
+      tone: 'good',
+      message: 'Private chat. This runs entirely on your phone and nothing is sent off the device.',
+    };
+  }
+  if (mode === 'cloud') {
+    return localReady
+      ? {
+          tone: 'good',
+          message:
+            'Tier-2 on-device. Names, orgs, and places are pseudonymized on your phone before anything is sent.',
+        }
+      : {
+          tone: 'warn',
+          message:
+            'Tier-1 only. Secrets are masked before sending, but names and places are not pseudonymized because no on-device model is available.',
+        };
+  }
+  return null;
+}
+
+function StatusBanner({ tone, message }: { tone: 'good' | 'warn'; message: string }) {
+  return (
+    <View style={tone === 'good' ? styles.bannerGood : styles.bannerWarn}>
+      <Ionicons
+        name={tone === 'good' ? 'lock-closed' : 'alert-circle'}
+        size={15}
+        color={tone === 'good' ? colors.accent : colors.warnText}
+      />
+      <Text style={tone === 'good' ? styles.bannerGoodText : styles.bannerWarnText}>{message}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
+  bannerGood: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#1c2b23',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  bannerGoodText: { color: colors.accent, fontSize: 13, fontWeight: '600', flex: 1, lineHeight: 18 },
+  bannerWarn: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: colors.warnBg,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  bannerWarnText: { color: colors.warnText, fontSize: 13, fontWeight: '600', flex: 1, lineHeight: 18 },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
