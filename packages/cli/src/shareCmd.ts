@@ -1,6 +1,7 @@
 import { loadDeviceSecret, type Vault } from '@northkeep/core';
 import {
   addSharedScope,
+  deriveConnectorToken,
   deriveSyncCreds,
   downSyncConnector,
   fetchEntitlement,
@@ -10,6 +11,7 @@ import {
   removeSharedScope,
   setConnectorServer,
   startPairing,
+  tokenHash,
   unshareScope,
   type ConnectorConfig,
 } from '@northkeep/sync';
@@ -182,6 +184,22 @@ export async function shareStatusCmd(withVault: WithVault): Promise<void> {
       "from your app's credential plus a server-side secret, and the AI apps you connect read them in full):",
   );
   for (const c of counts) console.log(`  ${c.scope} — ${c.count} ${c.count === 1 ? 'memory' : 'memories'}`);
+}
+
+/**
+ * `northkeep share id` — print the connector account id (sha256 of the connector
+ * token). This is the value a connector operator adds to
+ * NORTHKEEP_CONNECTOR_ALLOWED_TOKEN_HASHES to comp an account (free access,
+ * bypassing the subscription gate). It is a one-way hash: it identifies "an
+ * account" but reveals nothing about the memories and decrypts nothing. The same
+ * device secret on another machine yields the same id.
+ */
+export function shareIdCmd(fail: (m: string) => never): void {
+  const deviceSecret = deviceSecretOrFail(fail);
+  const accountHash = tokenHash(deriveConnectorToken(deviceSecret));
+  console.log(`Your connector account id: ${accountHash}`);
+  console.log('  Give this to the connector operator to be added to the free/comp allowlist.');
+  console.log('  It identifies your account but reveals nothing about your memories.');
 }
 
 export async function shareCodeCmd(fail: (m: string) => never): Promise<void> {

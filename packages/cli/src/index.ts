@@ -54,6 +54,7 @@ import {
 import {
   shareAddCmd,
   shareCodeCmd,
+  shareIdCmd,
   sharePushCmd,
   shareRemoveCmd,
   shareServerCmd,
@@ -667,6 +668,13 @@ share
   .description('Show the connector server, which scopes are shared, and their counts')
   .action(async () => {
     await shareStatusCmd(withVault);
+  });
+
+share
+  .command('id')
+  .description('Print your connector account id (the hash a connector operator adds to a free/comp allowlist)')
+  .action(() => {
+    shareIdCmd(fail);
   });
 
 share
