@@ -574,6 +574,7 @@
     <div class="err" id="shareConfirmErr"></div>
     <div class="row" style="justify-content:flex-end">
       <button class="btn" id="shareConfirmCancel">Cancel</button>
+      <button class="btn primary" id="shareConfirmSubscribe" hidden>Subscribe to share</button>
       <button class="btn primary" id="shareConfirmYes">Share this scope</button>
     </div>
   </div>
@@ -2603,6 +2604,7 @@
     $('shareConfirmErr').textContent = '';
     $('shareConfirmYes').disabled = false;
     $('shareConfirmYes').textContent = 'Share this scope'; // reset after a prior "Sharing…" run
+    $('shareConfirmSubscribe').hidden = true; // reset after a prior 402 (subscription required)
     $('shareConfirmOverlay').hidden = false;
   }
   function closeShareConfirm() {
@@ -2625,8 +2627,31 @@
     } catch (e) {
       yes.disabled = false;
       yes.textContent = yesLabel;
-      $('shareConfirmErr').textContent =
-        e.message === 'locked' ? 'Your vault is locked. Unlock it, then share again.' : e.message;
+      if (e.status === 402) {
+        // Sharing rides the same $10/mo hosted subscription as Sync. Reveal a
+        // Subscribe action; leave Share visible so a retry works once the
+        // subscription is active (the desktop re-fetches its entitlement).
+        $('shareConfirmSubscribe').hidden = false;
+        $('shareConfirmErr').textContent =
+          'Sharing needs the $10/month hosted subscription (the same one that covers Sync). Subscribe, then Share again.';
+      } else {
+        $('shareConfirmErr').textContent =
+          e.message === 'locked' ? 'Your vault is locked. Unlock it, then share again.' : e.message;
+      }
+    }
+  });
+  $('shareConfirmSubscribe').addEventListener('click', async () => {
+    const btn = $('shareConfirmSubscribe');
+    btn.disabled = true;
+    try {
+      const r = await api('/api/sync/subscribe', { method: 'POST' });
+      // Same guard as openStripe(), but keep any error in THIS dialog.
+      if (typeof r.url === 'string' && /^https:\/\//i.test(r.url)) openExternal(r.url);
+      else $('shareConfirmErr').textContent = 'The server returned an unexpected checkout link. Not opening it.';
+    } catch (e) {
+      if (e.message !== 'locked') $('shareConfirmErr').textContent = e.message;
+    } finally {
+      btn.disabled = false;
     }
   });
 
