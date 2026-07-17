@@ -9,8 +9,10 @@ import React, {
 } from 'react';
 import * as LocalAuthentication from 'expo-local-authentication';
 import {
+  KDF_INTERACTIVE,
   Vault,
   deriveMasterKey,
+  generateDeviceSecret,
   getPlatform,
   memzero,
   type MemoryEntry,
@@ -19,7 +21,8 @@ import {
   type ScoredEntry,
 } from '@northkeep/core';
 import { deriveSyncCreds } from '@northkeep/sync';
-import { deleteIfExists, recoverVaultFileIfMissing, vaultPath } from './paths';
+import { DEMO_MEMORIES, DEMO_PASSPHRASE } from './demo-vault';
+import { deleteIfExists, demoVaultPath, recoverVaultFileIfMissing, vaultPath } from './paths';
 import {
   biometricUnlockEnabled,
   cacheMasterKeyHex,
@@ -66,7 +69,30 @@ export interface VaultSession {
   biometricCacheEnabled: boolean;
   /** Short account id derived from the device secret (Settings display). */
   accountIdShort: string | null;
+  /**
+   * M6-2b demo mode. True while a synthetic, throwaway demo vault is open (the
+   * "Try a demo" path). Deliberately NOT a SessionStatus value: status stays
+   * 'unlinked' so the index router and lock-on-background never treat the demo
+   * as a real vault. The /demo screen drives itself off this flag.
+   */
+  isDemo: boolean;
   linkDevice(deviceSecretHex: string): Promise<void>;
+  /**
+   * M6-2b create-on-phone: no Mac required. Generates a device secret ON DEVICE
+   * (core generateDeviceSecret = randomBytes(32) via the platform crypto
+   * provider), stores it in SecureStore, creates a brand-new empty encrypted
+   * vault via core Vault.create (same logic as desktop `northkeep init`), then
+   * unlocks it into the session. Mirrors the desktop init: create then open.
+   */
+  createVault(passphrase: string, opts?: { enableBiometricCache?: boolean }): Promise<void>;
+  /**
+   * M6-2b: open a built-in SAMPLE vault with synthetic memories, instantly, with
+   * no passphrase, no Mac, no network. Isolated from any real vault (separate
+   * cache path, ephemeral non-persisted device secret). Never syncs.
+   */
+  startDemo(): Promise<void>;
+  /** Tear down the demo vault and delete its throwaway file. */
+  exitDemo(): Promise<void>;
   unlockWithPassphrase(passphrase: string, opts?: { enableBiometricCache?: boolean }): Promise<void>;
   /** Returns false if there is no cached key or the biometric prompt was refused. */
   unlockWithBiometrics(): Promise<boolean>;
@@ -113,8 +139,12 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
   const [biometricCacheEnabled, setBiometricCacheEnabled] = useState(false);
   const [accountIdShort, setAccountIdShort] = useState<string | null>(null);
   const [syncState, setSyncState] = useState<SyncState>(() => initialSyncState());
+  const [isDemo, setIsDemo] = useState(false);
   const vaultRef = useRef<Vault | null>(null);
   const masterKeyRef = useRef<Buffer | null>(null);
+  // Ref mirror of isDemo so the memoized callbacks (lock, pushAfterSave) can read
+  // the current value without being re-created on every demo toggle.
+  const isDemoRef = useRef(false);
 
   // Bootstrap: linked or not?
   useEffect(() => {
@@ -243,6 +273,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
 
   const lock = useCallback(
     async (opts?: { clearBiometricCache?: boolean }) => {
+      // The demo vault holds no secrets and no key to zero, and lock-on-background
+      // calls this on every background transition. Leave the demo open so it
+      // survives an app-switch; exitDemo() is the only teardown for it.
+      if (isDemoRef.current) return;
       closeSession();
       if (opts?.clearBiometricCache) {
         await clearCachedMasterKey();
@@ -252,6 +286,100 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     },
     [closeSession],
   );
+
+  /**
+   * M6-2b create-on-phone. Mirrors desktop `northkeep init` through the mobile
+   * platform seam: generate the device secret on device, persist it to
+   * SecureStore, create the empty encrypted vault with core Vault.create (fresh
+   * salt -> deriveMasterKey -> platform.sqlite.createEmpty -> save via
+   * storage.writeAtomic), then unlock it into the session with the existing
+   * passphrase path. No hand-rolled crypto (invariant #3): every key operation
+   * runs inside core.
+   */
+  const createVault = useCallback(
+    async (passphrase: string, opts?: { enableBiometricCache?: boolean }) => {
+      const platform = getPlatform();
+      // A prior interrupted save may have left the vault at .tmp/.bak; restore it
+      // so the "already exists" guard sees the real state before we create.
+      recoverVaultFileIfMissing();
+      const path = vaultPath();
+      if (platform.storage.exists(path)) {
+        throw new Error(
+          'A vault already exists on this phone. Unlock it instead, or wipe this phone in Settings to start over.',
+        );
+      }
+      // randomBytes(32) from the platform crypto provider (core helper).
+      const secret = generateDeviceSecret(platform.crypto);
+      const secretHex = secret.toString('hex');
+      try {
+        // Same call the desktop init uses; defaults to KDF_MODERATE. create()
+        // derives the key, builds the empty schema, and writes the .nkv.
+        const vault = Vault.create({ path, passphrase, deviceSecret: secret });
+        vault.close();
+      } finally {
+        memzero(secret);
+      }
+      // Device secret lives only in SecureStore (WHEN_UNLOCKED_THIS_DEVICE_ONLY),
+      // never in the vault blob, never logged.
+      await saveDeviceSecretHex(secretHex);
+      setAccountIdShort(shortAccountId(secretHex));
+      setStatus('locked');
+      // Re-derive and open into the session via the verified unlock path. This is
+      // a second Argon2id derive; a one-time onboarding cost (see module note).
+      await unlockWithPassphrase(passphrase, opts);
+    },
+    [unlockWithPassphrase],
+  );
+
+  /**
+   * M6-2b demo. Builds a synthetic vault in the cache directory under an
+   * ephemeral device secret that is NEVER written to SecureStore, seeds it with
+   * the sample memories, and opens it read-only into the session. Uses
+   * KDF_INTERACTIVE so it opens near-instantly (the demo is throwaway; the heavy
+   * MODERATE cost only protects real vaults). Never persists a device secret and
+   * never sets a sync server, so bootstrap stays 'unlinked' and nothing syncs.
+   */
+  const startDemo = useCallback(async () => {
+    const platform = getPlatform();
+    const path = demoVaultPath();
+    // A prior demo may have left files behind; Vault.create refuses to overwrite.
+    deleteIfExists(path);
+    deleteIfExists(`${path}.bak`);
+    deleteIfExists(`${path}.tmp`);
+    const secret = generateDeviceSecret(platform.crypto); // ephemeral, in-memory only
+    let vault: Vault;
+    try {
+      vault = Vault.create({
+        path,
+        passphrase: DEMO_PASSPHRASE,
+        deviceSecret: secret,
+        kdf: KDF_INTERACTIVE,
+      });
+    } finally {
+      memzero(secret);
+    }
+    for (const memory of DEMO_MEMORIES) vault.remember(memory);
+    vault.save();
+    // Drop any prior session state (there should be none coming from onboarding).
+    closeSession();
+    vaultRef.current = vault;
+    masterKeyRef.current = null; // no key retained for the demo
+    isDemoRef.current = true;
+    setIsDemo(true);
+    setEntries(vault.list().reverse());
+  }, [closeSession]);
+
+  const exitDemo = useCallback(async () => {
+    isDemoRef.current = false;
+    setIsDemo(false);
+    vaultRef.current?.close();
+    vaultRef.current = null;
+    setEntries([]);
+    const path = demoVaultPath();
+    deleteIfExists(path);
+    deleteIfExists(`${path}.bak`);
+    deleteIfExists(`${path}.tmp`);
+  }, []);
 
   const pullAndReload = useCallback(async (): Promise<{ pulled: boolean }> => {
     const key = masterKeyRef.current;
@@ -289,6 +417,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
    * the sync-flow decision logic is unit-tested.
    */
   const pushAfterSave = useCallback(async (): Promise<void> => {
+    // Hard guarantee: the demo never touches the network. It has no persisted
+    // device secret anyway, but guard explicitly so no future demo edit path can
+    // reach the sync server.
+    if (isDemoRef.current) return;
     const secretHex = await loadDeviceSecretHex();
     const serverUrl = await loadSyncServerUrl();
     if (!secretHex || !serverUrl) {
@@ -408,7 +540,11 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       entries,
       biometricCacheEnabled,
       accountIdShort,
+      isDemo,
       linkDevice,
+      createVault,
+      startDemo,
+      exitDemo,
       unlockWithPassphrase,
       unlockWithBiometrics,
       lock,
@@ -427,7 +563,11 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       entries,
       biometricCacheEnabled,
       accountIdShort,
+      isDemo,
       linkDevice,
+      createVault,
+      startDemo,
+      exitDemo,
       unlockWithPassphrase,
       unlockWithBiometrics,
       lock,

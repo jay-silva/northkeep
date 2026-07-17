@@ -21,6 +21,20 @@ export function vaultPath(): string {
   return new File(Paths.document, VAULT_FILENAME).uri;
 }
 
+/**
+ * The demo vault (M6-2b "Try a demo"). Deliberately isolated from the real
+ * vault: it lives in the CACHE directory (never the document directory where the
+ * real vault.nkv lives), holds only synthetic memories, is opened with an
+ * ephemeral device secret that is NEVER written to SecureStore, and is never
+ * synced. The cache location also lets the OS purge it, reinforcing that it is
+ * throwaway and can never be mistaken for the user's real vault.
+ */
+export const DEMO_VAULT_FILENAME = 'demo.nkv';
+
+export function demoVaultPath(): string {
+  return new File(Paths.cache, DEMO_VAULT_FILENAME).uri;
+}
+
 /** Scratch path used by the pull flow for verify-before-replace. */
 export function pulledTmpPath(): string {
   return new File(Paths.cache, `${VAULT_FILENAME}.pulled.tmp`).uri;
