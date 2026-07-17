@@ -41,6 +41,10 @@ import type { LocalModelResolution } from '@northkeep/platform-mobile/dist/local
  * stored in the vault, never logged. Editing leaves the key untouched unless a
  * new one is typed.
  */
+
+/** Cap discovered-model chips (OpenRouter returns hundreds); free-text covers the rest. */
+const DISCOVER_CHIP_LIMIT = 40;
+
 export default function Providers() {
   const session = useVaultSession();
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
@@ -370,7 +374,7 @@ export default function Providers() {
               <>
                 <Text style={styles.discoverLabel}>Models on this endpoint</Text>
                 <View style={styles.modelRow}>
-                  {discovered.map((id) => {
+                  {discovered.slice(0, DISCOVER_CHIP_LIMIT).map((id) => {
                     const on = model.trim() === id;
                     return (
                       <Pressable
@@ -384,6 +388,11 @@ export default function Providers() {
                     );
                   })}
                 </View>
+                {discovered.length > DISCOVER_CHIP_LIMIT ? (
+                  <Text style={styles.modelNote}>
+                    {`Showing the first ${DISCOVER_CHIP_LIMIT} of ${discovered.length}. Type any model id below to use another.`}
+                  </Text>
+                ) : null}
               </>
             ) : null}
           </>

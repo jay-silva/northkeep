@@ -28,6 +28,8 @@ import type { ProviderConfig } from './providers-store';
  */
 
 const CHAT_TIMEOUT_MS = 300_000;
+/** Short cap for model discovery so a hung endpoint does not spin for minutes. */
+const DISCOVER_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_TOKENS = 4096;
 const ANTHROPIC_VERSION = '2023-06-01';
 
@@ -186,7 +188,7 @@ function createOpenAIProvider(
         const res = await expoFetch(`${base}/v1/models`, {
           method: 'GET',
           headers,
-          signal: withTimeout(undefined),
+          signal: shortTimeout(DISCOVER_TIMEOUT_MS),
           redirect: 'error',
         });
         if (res.ok) {
@@ -202,7 +204,7 @@ function createOpenAIProvider(
       const res = await expoFetch(`${base}/api/tags`, {
         method: 'GET',
         headers,
-        signal: withTimeout(undefined),
+        signal: shortTimeout(DISCOVER_TIMEOUT_MS),
         redirect: 'error',
       });
       if (!res.ok) throw new Error(`Model discovery failed: HTTP ${res.status}.`);
@@ -313,4 +315,11 @@ function withTimeout(signal?: AbortSignal): AbortSignal | undefined {
   const timeout = AbortSignal.timeout(CHAT_TIMEOUT_MS);
   if (!signal) return timeout;
   return hasAny ? AbortSignal.any([signal, timeout]) : signal;
+}
+
+/** A standalone timeout signal for short requests (discovery). Degrades to no
+ * signal when AbortSignal.timeout is unavailable on Hermes. */
+function shortTimeout(ms: number): AbortSignal | undefined {
+  const hasTimeout = typeof (AbortSignal as { timeout?: unknown }).timeout === 'function';
+  return hasTimeout ? AbortSignal.timeout(ms) : undefined;
 }
