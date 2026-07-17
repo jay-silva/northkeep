@@ -46,7 +46,7 @@ const config: ExpoConfig = {
     // app.config.ts (EAS only auto-bumps a static app.json), so bump this by hand
     // each TestFlight upload (2, 3, ...) or switch eas.json to appVersionSource:
     // "remote" later to have EAS track it.
-    buildNumber: '2',
+    buildNumber: '3',
     infoPlist: {
       // Export compliance (US EAR). NorthKeep is publicly available open-source
       // software (AGPL, github.com/jay-silva/northkeep) that uses only standard,
