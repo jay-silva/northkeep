@@ -118,6 +118,19 @@ every milestone; if a limit is removed, say when and how.*
 - **Unlock is slow.** Argon2id at the production 256 MiB parameters runs in pure
   JS on device and takes one to two minutes; a native Argon2 backend is a planned
   performance follow-up (correctness is already proven).
+- **The master key briefly lives as a JS string when the biometric cache is on.**
+  Caching the derived key behind Face ID round-trips it through an immutable JS
+  string (hex), which cannot be zeroed and lingers in the Hermes heap until
+  garbage collection. Buffers holding key material are zeroed; the transient hex
+  string cannot be. Same class of limit as passphrases arriving as JS strings
+  (which desktop shares). A heap dump of a compromised process could still contain
+  it. No fix exists in JS without a native secure-string type.
+- **A few crypto paths are device-edge-cases still being hardened in beta.** The
+  core crypto chain (Argon2id, keyed-BLAKE2b, XChaCha20 decrypt, SQLite image)
+  has run on a real device (a desktop vault unlocks on the phone). Being validated
+  during beta: the app-switcher snapshot-cover vs iOS snapshot timing, the
+  SecureStore Face-ID denial path, and the non-atomic-save crash window (which
+  yields "no vault" recoverable from .tmp/.bak, never a corrupt vault).
 
 ## M4 (scopes + audit) — current
 

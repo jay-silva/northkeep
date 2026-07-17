@@ -141,6 +141,20 @@ describe('Argon2id KDF (sodium crypto_pwhash contract)', () => {
     }
   });
 
+  it('the noble pure-JS Argon2id (the DEVICE backend) matches sodium-native at MODERATE (production 256 MiB params)', () => {
+    // GATING leg (invariant-#3 review, HIGH-1): the shipping device KDF backend
+    // must be byte-identical to the desktop reference at the ACTUAL production
+    // params (t=3, m=256 MiB), not just INTERACTIVE. Argon2id memory addressing is
+    // size- and pass-dependent, so a divergence that only manifested at 256 MiB
+    // would silently produce a different master key on the phone than on the Mac,
+    // breaking desktop<->phone vault interop. Slow (~seconds) because noble runs
+    // 256 MiB in pure JS; hence the raised timeout.
+    const noble = createNobleArgon2id();
+    const want = reference.pwhash(passBytes(), salt, KDF_MODERATE.opslimit, KDF_MODERATE.memlimit);
+    const got = pwhashViaArgon2id(noble, passBytes(), salt, KDF_MODERATE.opslimit, KDF_MODERATE.memlimit);
+    expect(Buffer.from(got).equals(want)).toBe(true);
+  }, 60_000);
+
   it('wasm libsodium crypto_pwhash matches sodium-native (INTERACTIVE)', () => {
     const want = reference.pwhash(passBytes(), salt, KDF_INTERACTIVE.opslimit, KDF_INTERACTIVE.memlimit);
     const got = _sumo.crypto_pwhash(
