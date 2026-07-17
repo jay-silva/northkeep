@@ -13,6 +13,7 @@
     "eas-build-post-install": "pnpm -r build"
   },
   "dependencies": {
+    "@expo/vector-icons": "^15.1.1",
     "@noble/ciphers": "^2.2.0",
     "@noble/hashes": "^2.2.0",
     "@northkeep/core": "workspace:*",

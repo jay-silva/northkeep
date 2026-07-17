@@ -8,6 +8,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
 import { Redirect, router, Stack } from 'expo-router';
 import type { MemoryEntry } from '@northkeep/core';
 import { filterMemories } from '../src/lib/search';
@@ -55,11 +56,14 @@ export default function Memories() {
         options={{
           headerRight: () => (
             <View style={styles.headerButtons}>
-              <Pressable onPress={() => router.push('/memory/new')} hitSlop={8}>
-                <Text style={styles.headerLink}>+ Add</Text>
+              <Pressable onPress={() => router.push('/converse')} hitSlop={10} accessibilityLabel="Chat">
+                <Ionicons name="chatbubble-ellipses-outline" size={22} color={colors.accent} />
               </Pressable>
-              <Pressable onPress={() => router.push('/settings')} hitSlop={8}>
-                <Text style={styles.headerLink}>Settings</Text>
+              <Pressable onPress={() => router.push('/memory/new')} hitSlop={10} accessibilityLabel="Add memory">
+                <Ionicons name="add" size={30} color={colors.accent} />
+              </Pressable>
+              <Pressable onPress={() => router.push('/settings')} hitSlop={10} accessibilityLabel="Settings">
+                <Ionicons name="settings-outline" size={21} color={colors.accent} />
               </Pressable>
             </View>
           ),
@@ -118,8 +122,7 @@ function MemoryCard({ entry }: { entry: MemoryEntry }) {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
-  headerButtons: { flexDirection: 'row', gap: 18 },
-  headerLink: { color: colors.accent, fontSize: 15, fontWeight: '600' },
+  headerButtons: { flexDirection: 'row', gap: 22, alignItems: 'center', paddingRight: 2 },
   search: {
     backgroundColor: colors.card,
     borderColor: colors.border,

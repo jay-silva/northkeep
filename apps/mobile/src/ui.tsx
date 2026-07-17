@@ -17,12 +17,18 @@ import { MEMORY_TYPES, type MemoryType } from '@northkeep/core';
  */
 
 export const colors = {
-  bg: '#0f1420',
-  card: '#1a2130',
-  border: '#2a3346',
-  text: '#e8ecf4',
-  muted: '#8b94a7',
-  accent: '#4f8cff',
+  // Matched to the desktop app's dark palette (site/index.html + web GUI): warm
+  // near-black background, cream ink, sage-green accent. Replaces the old cold
+  // navy/blue. `accent` is the light sage for text/links/badges on the dark bg;
+  // `accentStrong` is the darker green used to fill primary buttons so white
+  // button text keeps its contrast.
+  bg: '#16140f',
+  card: '#211e17',
+  border: '#38332a',
+  text: '#ece7db',
+  muted: '#a39a88',
+  accent: '#79b394',
+  accentStrong: '#2f6a54',
   danger: '#e5484d',
   warnBg: '#3b2f14',
   warnText: '#f5d90a',
@@ -146,7 +152,7 @@ export function SyncPill({
 
 const styles = StyleSheet.create({
   button: {
-    backgroundColor: colors.accent,
+    backgroundColor: colors.accentStrong,
     borderRadius: 10,
     paddingVertical: 14,
     paddingHorizontal: 18,
