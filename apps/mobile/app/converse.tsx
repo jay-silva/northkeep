@@ -151,8 +151,10 @@ export default function Converse() {
       } else {
         const provider = cloudProvider!;
         // Read the key immediately before the call; never hold it in React state.
-        const apiKey = await getProviderKey(provider.id);
-        if (apiKey === null) {
+        // Local OpenAI-compatible endpoints (e.g. Ollama) need no key, so only
+        // Anthropic hard-requires one; others send with no auth header.
+        const storedKey = await getProviderKey(provider.id);
+        if (storedKey === null && provider.kind === 'anthropic') {
           setError('No API key stored for this provider. Open Providers and re-enter it.');
           setMessages((prev) => prev.slice(0, -2));
           setBusy(false);
@@ -162,7 +164,7 @@ export default function Converse() {
           message: text,
           session: convSession.current,
           provider,
-          apiKey,
+          apiKey: storedKey ?? '',
           // Enables Tier-2 pseudonymization on-device when a model is ready
           // (withheld on an explicit Tier-1 retry).
           localModel: !forceTier1 && localReady ? resolution!.model : null,

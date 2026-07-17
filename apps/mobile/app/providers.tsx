@@ -16,6 +16,7 @@ import { Button, ErrorNote, FieldLabel, colors } from '../src/ui';
 import {
   ANTHROPIC_BASE_URL,
   DEFAULT_ANTHROPIC_MODEL,
+  getProviderKey,
   getSelectedProviderId,
   CLAUDE_MODELS,
   hasKey,
@@ -25,15 +26,18 @@ import {
   saveProvider,
   setSelectedProviderId,
   type ProviderConfig,
-  type ProviderKind,
 } from '../src/lib/providers-store';
+import { PROVIDER_PRESETS, type MobilePreset, type PresetModel } from '../src/lib/provider-presets';
+import { createMobileProvider } from '../src/lib/mobile-providers';
 import { getLocalModel } from '../src/lib/local-model';
 import type { LocalModelResolution } from '@northkeep/platform-mobile/dist/local-model/index.js';
 
 /**
- * BYOK provider settings (M6-3). Add/edit a model provider — Anthropic (native
- * Messages API) or any OpenAI-compatible endpoint. The API key is written to
- * expo-secure-store ONLY (see providers-store.ts); it is never shown back, never
+ * BYOK provider settings (M6-3 / M6-6). Pick a known provider (URLs + curated
+ * models reused from the shared @northkeep/converse catalog), or Custom for any
+ * OpenAI-compatible endpoint. Anthropic shows one-tap Claude model chips; every
+ * OpenAI-compatible provider can "Discover models" from the live endpoint. The
+ * API key is written to expo-secure-store ONLY; it is never shown back, never
  * stored in the vault, never logged. Editing leaves the key untouched unless a
  * new one is typed.
  */
@@ -46,13 +50,19 @@ export default function Providers() {
 
   // form
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [kind, setKind] = useState<ProviderKind>('anthropic');
+  const [presetKey, setPresetKey] = useState<string>('anthropic');
+  const [kind, setKind] = useState<'anthropic' | 'openai'>('anthropic');
   const [label, setLabel] = useState('');
   const [baseUrl, setBaseUrl] = useState(ANTHROPIC_BASE_URL);
   const [model, setModel] = useState(DEFAULT_ANTHROPIC_MODEL);
   const [apiKey, setApiKey] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // model discovery (openai kind)
+  const [discovering, setDiscovering] = useState(false);
+  const [discovered, setDiscovered] = useState<string[] | null>(null);
+  const [discoverMsg, setDiscoverMsg] = useState<string | null>(null);
 
   const refresh = useCallback(async () => {
     const list = await listProviders();
@@ -76,24 +86,33 @@ export default function Providers() {
 
   if (session.status !== 'unlocked') return <Redirect href="/unlock" />;
 
+  const preset = PROVIDER_PRESETS.find((p) => p.key === presetKey) ?? null;
+  const curatedModels: PresetModel[] = kind === 'anthropic' ? CLAUDE_MODELS : (preset?.models ?? []);
+  const selectedNote =
+    curatedModels.find((m) => m.id === model.trim())?.note ??
+    (discovered?.includes(model.trim()) ? 'From your endpoint' : 'Custom model id (typed below).');
+
   function resetForm() {
     setEditingId(null);
+    setPresetKey('anthropic');
     setKind('anthropic');
     setLabel('');
     setBaseUrl(ANTHROPIC_BASE_URL);
     setModel(DEFAULT_ANTHROPIC_MODEL);
     setApiKey('');
     setError(null);
+    setDiscovered(null);
+    setDiscoverMsg(null);
   }
 
-  function onPickKind(next: ProviderKind) {
-    setKind(next);
-    if (next === 'anthropic') {
-      setBaseUrl(ANTHROPIC_BASE_URL);
-      if (model.trim().length === 0) setModel(DEFAULT_ANTHROPIC_MODEL);
-    } else if (baseUrl === ANTHROPIC_BASE_URL) {
-      setBaseUrl('');
-    }
+  function onPickPreset(p: MobilePreset) {
+    setPresetKey(p.key);
+    setKind(p.kind);
+    setBaseUrl(p.baseUrl);
+    setModel(p.defaultModel);
+    setDiscovered(null);
+    setDiscoverMsg(null);
+    if (!p.custom && label.trim().length === 0) setLabel(p.name);
   }
 
   function onEdit(p: ProviderConfig) {
@@ -104,6 +123,10 @@ export default function Providers() {
     setModel(p.model);
     setApiKey(''); // blank = keep the stored key
     setError(null);
+    setDiscovered(null);
+    setDiscoverMsg(null);
+    const match = PROVIDER_PRESETS.find((pr) => pr.kind === p.kind && pr.baseUrl === p.baseUrl);
+    setPresetKey(match?.key ?? '');
   }
 
   async function onSave() {
@@ -112,7 +135,7 @@ export default function Providers() {
     if (model.trim().length === 0) return setError('Enter a model id.');
     if (kind === 'openai' && baseUrl.trim().length === 0) return setError('Enter the endpoint base URL.');
     const isNew = editingId === null;
-    if (isNew && apiKey.trim().length === 0) return setError('Enter your API key.');
+    if (isNew && apiKey.trim().length === 0 && kind === 'anthropic') return setError('Enter your API key.');
     setBusy(true);
     try {
       const saved = await saveProvider(
@@ -126,6 +149,48 @@ export default function Providers() {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
+    }
+  }
+
+  /**
+   * Query the entered endpoint for its model ids, reusing the shared converse
+   * protocol via createMobileProvider(...).listModels() (/v1/models, then Ollama
+   * /api/tags). The key travels only as the auth header inside that request; it
+   * is never logged and never placed in an error message here.
+   */
+  async function onDiscover() {
+    const url = baseUrl.trim();
+    setDiscoverMsg(null);
+    if (url.length === 0) {
+      setDiscoverMsg('Enter the base URL first, then load models.');
+      return;
+    }
+    setDiscovering(true);
+    try {
+      let key = apiKey.trim();
+      if (key.length === 0 && editingId) key = (await getProviderKey(editingId)) ?? '';
+      const cfg: ProviderConfig = {
+        id: editingId ?? 'discover',
+        label: label.trim() || 'discover',
+        kind: 'openai',
+        baseUrl: url,
+        model: model.trim(),
+      };
+      const ids = await createMobileProvider(cfg, key).listModels();
+      if (ids.length === 0) {
+        setDiscovered([]);
+        setDiscoverMsg('The endpoint returned no models. You can still type a model id below.');
+      } else {
+        setDiscovered(ids);
+      }
+    } catch {
+      // Never surface the raw error (could echo the URL); never the key.
+      setDiscovered(null);
+      setDiscoverMsg(
+        'Could not load models. Check the base URL and key, that the endpoint is reachable, then type a model id below.',
+      );
+    } finally {
+      setDiscovering(false);
     }
   }
 
@@ -217,22 +282,23 @@ export default function Providers() {
 
         <FieldLabel>{editingId ? 'Edit provider' : 'Add a provider'}</FieldLabel>
 
-        <View style={styles.kindRow}>
-          {(['anthropic', 'openai'] as ProviderKind[]).map((k) => {
-            const on = kind === k;
-            return (
-              <Text
-                key={k}
-                onPress={() => onPickKind(k)}
-                style={[styles.kindChip, on ? styles.kindChipOn : styles.kindChipOff]}
-                accessibilityRole="button"
-                accessibilityState={{ selected: on }}
-              >
-                {k === 'anthropic' ? 'Anthropic' : 'OpenAI-compatible'}
-              </Text>
-            );
-          })}
-        </View>
+        {editingId === null ? (
+          <View style={styles.modelRow}>
+            {PROVIDER_PRESETS.map((p) => {
+              const on = presetKey === p.key;
+              return (
+                <Pressable
+                  key={p.key}
+                  onPress={() => onPickPreset(p)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: on }}
+                >
+                  <Text style={[styles.kindChip, on ? styles.kindChipOn : styles.kindChipOff]}>{p.name}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
 
         <FieldLabel>Name</FieldLabel>
         <TextInput
@@ -249,44 +315,86 @@ export default function Providers() {
             <TextInput
               style={styles.input}
               value={baseUrl}
-              onChangeText={setBaseUrl}
-              placeholder="https://api.openai.com  (or http://192.168.1.5:11434)"
+              onChangeText={(v) => {
+                setBaseUrl(v);
+                setDiscovered(null);
+                setDiscoverMsg(null);
+              }}
+              placeholder="https://api.openai.com/v1  (or http://192.168.1.5:11434/v1)"
               placeholderTextColor={colors.muted}
               autoCapitalize="none"
               autoCorrect={false}
               keyboardType="url"
             />
+            {preset?.local ? (
+              <Text style={styles.modelNote}>
+                Point the host at your computer's address on your network (not localhost), for
+                example http://192.168.1.5:11434/v1. A local network address stays private.
+              </Text>
+            ) : null}
           </>
         ) : null}
 
         <FieldLabel>Model</FieldLabel>
-        {kind === 'anthropic' ? (
+        {curatedModels.length > 0 ? (
+          <View style={styles.modelRow}>
+            {curatedModels.map((m) => {
+              const on = model.trim() === m.id;
+              return (
+                <Pressable
+                  key={m.id}
+                  onPress={() => setModel(m.id)}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: on }}
+                >
+                  <Text style={[styles.kindChip, on ? styles.kindChipOn : styles.kindChipOff]}>{m.label}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : null}
+
+        {kind === 'openai' ? (
           <>
-            <View style={styles.modelRow}>
-              {CLAUDE_MODELS.map((m) => {
-                const on = model.trim() === m.id;
-                return (
-                  <Pressable
-                    key={m.id}
-                    onPress={() => setModel(m.id)}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: on }}
-                  >
-                    <Text style={[styles.kindChip, on ? styles.kindChipOn : styles.kindChipOff]}>{m.label}</Text>
-                  </Pressable>
-                );
-              })}
+            <View style={styles.discoverRow}>
+              <Button
+                title={discovering ? 'Loading models...' : 'Discover models'}
+                kind="secondary"
+                onPress={() => void onDiscover()}
+                busy={discovering}
+                style={styles.discoverBtn}
+              />
             </View>
-            <Text style={styles.modelNote}>
-              {CLAUDE_MODELS.find((m) => m.id === model.trim())?.note ?? 'Custom model id (typed below).'}
-            </Text>
+            {discoverMsg ? <Text style={styles.modelNote}>{discoverMsg}</Text> : null}
+            {discovered && discovered.length > 0 ? (
+              <>
+                <Text style={styles.discoverLabel}>Models on this endpoint</Text>
+                <View style={styles.modelRow}>
+                  {discovered.map((id) => {
+                    const on = model.trim() === id;
+                    return (
+                      <Pressable
+                        key={id}
+                        onPress={() => setModel(id)}
+                        accessibilityRole="button"
+                        accessibilityState={{ selected: on }}
+                      >
+                        <Text style={[styles.kindChip, on ? styles.kindChipOn : styles.kindChipOff]}>{id}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              </>
+            ) : null}
           </>
         ) : null}
+
+        <Text style={styles.modelNote}>{selectedNote}</Text>
         <TextInput
           style={styles.input}
           value={model}
           onChangeText={setModel}
-          placeholder={kind === 'anthropic' ? DEFAULT_ANTHROPIC_MODEL : 'gpt-4o'}
+          placeholder={kind === 'anthropic' ? DEFAULT_ANTHROPIC_MODEL : 'Type or pick a model id'}
           placeholderTextColor={colors.muted}
           autoCapitalize="none"
           autoCorrect={false}
@@ -297,7 +405,7 @@ export default function Providers() {
           style={styles.input}
           value={apiKey}
           onChangeText={setApiKey}
-          placeholder={editingId ? 'Leave blank to keep the stored key' : 'sk-…'}
+          placeholder={editingId ? 'Leave blank to keep the stored key' : preset?.local ? 'Usually not needed for a local endpoint' : 'sk-…'}
           placeholderTextColor={colors.muted}
           autoCapitalize="none"
           autoCorrect={false}
@@ -344,9 +452,18 @@ const styles = StyleSheet.create({
   cardTitle: { color: colors.text, fontSize: 15, fontWeight: '600' },
   cardSub: { color: colors.muted, fontSize: 12, marginTop: 2 },
   cardIcon: { marginLeft: 14 },
-  kindRow: { flexDirection: 'row', gap: 8 },
   modelRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 6 },
   modelNote: { color: colors.muted, fontSize: 12, marginBottom: 10 },
+  discoverRow: { flexDirection: 'row', marginTop: 4, marginBottom: 8 },
+  discoverBtn: { paddingVertical: 10, paddingHorizontal: 16 },
+  discoverLabel: {
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '600',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 6,
+  },
   kindChip: {
     fontSize: 13,
     fontWeight: '600',

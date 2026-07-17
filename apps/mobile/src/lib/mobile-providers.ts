@@ -179,10 +179,37 @@ function createOpenAIProvider(
     async listModels(): Promise<string[]> {
       const headers: Record<string, string> = {};
       if (apiKey.length > 0) headers['authorization'] = `Bearer ${apiKey}`;
-      const res = await expoFetch(`${base}/v1/models`, { method: 'GET', headers, redirect: 'error' });
+      // Mirror the desktop OpenAICompatibleProvider (packages/converse/openai.ts):
+      // standard /v1/models discovery first, then Ollama's native /api/tags for
+      // local runtimes that only offer that. redirect:'error' as elsewhere.
+      try {
+        const res = await expoFetch(`${base}/v1/models`, {
+          method: 'GET',
+          headers,
+          signal: withTimeout(undefined),
+          redirect: 'error',
+        });
+        if (res.ok) {
+          const body = (await res.json()) as { data?: Array<{ id?: string }> };
+          const ids = (body.data ?? [])
+            .map((m) => m.id)
+            .filter((id): id is string => typeof id === 'string' && id.length > 0);
+          if (ids.length > 0) return ids;
+        }
+      } catch {
+        // fall through to the Ollama-native form
+      }
+      const res = await expoFetch(`${base}/api/tags`, {
+        method: 'GET',
+        headers,
+        signal: withTimeout(undefined),
+        redirect: 'error',
+      });
       if (!res.ok) throw new Error(`Model discovery failed: HTTP ${res.status}.`);
-      const body = (await res.json()) as { data?: Array<{ id?: string }> };
-      return (body.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === 'string');
+      const body = (await res.json()) as { models?: Array<{ name?: string }> };
+      return (body.models ?? [])
+        .map((m) => m.name)
+        .filter((name): name is string => typeof name === 'string' && name.length > 0);
     },
   };
 }
