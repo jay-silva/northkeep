@@ -106,6 +106,8 @@ export default function RootLayout() {
               <Stack.Screen name="index" options={{ headerShown: false }} />
               <Stack.Screen name="onboarding" options={{ headerShown: false }} />
               <Stack.Screen name="device-link" options={{ title: 'Link your Mac' }} />
+              <Stack.Screen name="create-vault" options={{ title: 'Start a new vault' }} />
+              <Stack.Screen name="demo" options={{ title: 'Demo', headerBackVisible: false }} />
               <Stack.Screen name="unlock" options={{ title: 'Unlock', headerBackVisible: false }} />
               <Stack.Screen name="memories" options={{ title: 'Memories', headerBackVisible: false }} />
               <Stack.Screen name="memory/new" options={{ title: 'Add memory', presentation: 'modal' }} />
