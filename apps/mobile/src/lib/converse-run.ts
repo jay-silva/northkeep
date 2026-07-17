@@ -6,7 +6,10 @@ import {
   type ConverseVault,
 } from '@northkeep/converse/dist/turn.js';
 import type { RetrieveOptions, ScoredEntry } from '@northkeep/core';
+import type { LocalModel } from '@northkeep/platform-mobile/dist/local-model/index.js';
 import { createMobileProvider, type OutboundCapture } from './mobile-providers';
+import { createLocalModelProvider } from './local-provider';
+import { makeLocalTier2RedactFn } from './local-model';
 import type { ProviderConfig } from './providers-store';
 
 /**
@@ -45,6 +48,13 @@ export interface MobileTurnInput {
   apiKey: string;
   /** Scored retrieval over the unlocked vault (VaultSession.retrieve). */
   retrieve: (query: string, options?: RetrieveOptions) => ScoredEntry[];
+  /**
+   * On-device model (M6-4). When present AND ready, a CLOUD turn is upgraded to
+   * Tier-2: named entities are pseudonymized on the phone before send (desktop
+   * shape). When null/absent/not-ready, the turn stays at the Tier-1 floor.
+   * Ignored by runOnDeviceTurn, which uses the model as the provider itself.
+   */
+  localModel?: LocalModel | null;
   onToken?: (token: string) => void;
   signal?: AbortSignal;
 }
@@ -74,28 +84,44 @@ export function getLastAudit(): LastAudit | null {
   return lastAudit;
 }
 
+function vaultFrom(
+  retrieve: (query: string, options?: RetrieveOptions) => ScoredEntry[],
+): ConverseVault {
+  return {
+    // Scope-enforced scored retrieval happens inside the vault (core).
+    retrieve: (query, options) => retrieve(query, options),
+    // list/commit are only used by distillation, which we disable below.
+    list: () => [],
+    commit: () => [],
+  };
+}
+
 export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnResult> {
   let captured: OutboundCapture | null = null;
   const provider = createMobileProvider(input.provider, input.apiKey, (c) => {
     captured = c;
   });
 
-  const vault: ConverseVault = {
-    // Scope-enforced scored retrieval happens inside the vault (core).
-    retrieve: (query, options) => input.retrieve(query, options),
-    // list/commit are only used by distillation, which we disable below.
-    list: () => [],
-    commit: () => [],
-  };
+  // M6-4: upgrade to Tier-2 when an on-device model is present AND ready to
+  // pseudonymize named entities locally. Not-ready (or absent) keeps the Tier-1
+  // floor — never a silent downgrade. If the model then errors mid-turn,
+  // applyTier2 flags tier2Degraded and runTurn ABORTS the bounded-endpoint send
+  // (TurnError TIER2_UNAVAILABLE) rather than leak names (invariant #6).
+  const useTier2 = input.localModel ? await input.localModel.isReady() : false;
 
   const result = await runTurn({
     message: input.message,
     session: input.session,
     provider,
     model: input.provider.model,
-    vault,
-    redactTier: 1, // hard Tier-1 firewall — never 0 on device
-    distill: false, // no on-phone distillation (no Ollama)
+    vault: vaultFrom(input.retrieve),
+    // Bounded (cloud) endpoint: Tier-1 is the guaranteed minimum, Tier-2 when a
+    // ready local model can pseudonymize on-device first. Never 0 on a cloud turn.
+    redactTier: useTier2 ? 2 : 1,
+    ...(useTier2 && input.localModel
+      ? { redactFn: makeLocalTier2RedactFn(input.localModel) }
+      : {}),
+    distill: false, // no on-phone distillation yet
     catalog: [], // avoid loadCatalog() node:fs; cost lookup returns null
     auditFn: () => {}, // call-log file is desktop-only
     onToken: input.onToken,
@@ -125,5 +151,79 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     privacy: result.privacy,
     memoriesUsed: result.memoriesUsed.map((m) => ({ id: m.id, type: m.type, content: m.content })),
     outbound: captured,
+  };
+}
+
+/** Input for an airplane-mode turn: the on-device model IS the provider. */
+export interface OnDeviceTurnInput {
+  message: string;
+  session: ConverseSession;
+  localModel: LocalModel;
+  retrieve: (query: string, options?: RetrieveOptions) => ScoredEntry[];
+  onToken?: (token: string) => void;
+  signal?: AbortSignal;
+}
+
+/**
+ * Airplane-mode private chat (M6-4): the reply is generated on the phone by the
+ * LocalModel. The endpoint is a localhost sentinel, so runTurn classifies it
+ * 'private' and runs at redact tier 0 — correct, because nothing leaves the
+ * device to redact against. The outbound capture still records what the model
+ * was given, so "What left this device" can honestly show it never egressed.
+ */
+export async function runOnDeviceTurn(input: OnDeviceTurnInput): Promise<MobileTurnResult> {
+  let captured: OutboundCapture | null = null;
+  const provider = createLocalModelProvider(input.localModel);
+  // Wrap chat() so the same OutboundCapture the cloud providers emit is produced
+  // for the audit view (the local provider itself does not take an onOutbound).
+  const baseChat = provider.chat.bind(provider);
+  const capturingProvider = {
+    ...provider,
+    chat: (messages: Parameters<typeof baseChat>[0], options: Parameters<typeof baseChat>[1]) => {
+      captured = {
+        kind: 'openai',
+        endpoint: provider.baseUrl,
+        model: input.localModel.label,
+        messages: messages.map((m) => ({ role: m.role, content: m.content })),
+      };
+      return baseChat(messages, options);
+    },
+  };
+
+  const result = await runTurn({
+    message: input.message,
+    session: input.session,
+    provider: capturingProvider,
+    model: input.localModel.label,
+    vault: vaultFrom(input.retrieve),
+    redactTier: 0, // private endpoint: on-device, no egress to redact against
+    distill: false,
+    catalog: [],
+    auditFn: () => {},
+    onToken: input.onToken,
+    signal: input.signal,
+  });
+
+  lastAudit = {
+    at: new Date().toISOString(),
+    providerLabel: `${input.localModel.label} (on-device)`,
+    tierApplied: result.tierApplied,
+    endpointHost: result.endpointHost,
+    privacy: result.privacy,
+    outbound: captured ?? {
+      kind: 'openai',
+      endpoint: provider.baseUrl,
+      model: input.localModel.label,
+      messages: [],
+    },
+  };
+
+  return {
+    reply: result.reply,
+    tierApplied: result.tierApplied,
+    endpointHost: result.endpointHost,
+    privacy: result.privacy,
+    memoriesUsed: result.memoriesUsed.map((m) => ({ id: m.id, type: m.type, content: m.content })),
+    outbound: lastAudit.outbound,
   };
 }

@@ -122,3 +122,65 @@ schema change.
    known not to collide on older hardware.
 5. If Tier-2-on-phone is used for redaction, the invariant-#6 UI states (active,
    beta, unavailable) reviewed so the user is never misled about which tier ran.
+
+## Implementation status (M6-4 foundation, 2026-07-17)
+
+Landed on a PARALLEL branch (not track-m). Requires an EAS rebuild + a capable
+device before it is real; the lead decides when to merge. What is in place:
+
+- **LocalModel seam** in `packages/platform-mobile/src/local-model/`: the
+  `LocalModel` interface (`generateText`, `generateStructured`, `isReady`),
+  `AppleFMModel` (primary), `LlamaRnModel` (fallback), `detectLocalModel`
+  (Apple-first, degrades to `none`), and `createLocalNerClient` (adapts a
+  LocalModel to the desktop `OllamaClient` shape so `packages/redact` applyTier2
+  runs UNCHANGED). Exposed via subpath `@northkeep/platform-mobile/dist/local-model/*`
+  (kept off the package barrel so Node consumers do not load native modules).
+- **Tier-2 on device**: `runMobileTurn` upgrades a cloud turn to Tier-2 when a
+  ready LocalModel is present (a redactFn bound to the on-device NER client);
+  otherwise Tier-1 remains the floor. On a mid-turn model failure the existing
+  runTurn abort path fires (loud, invariant #6).
+- **On-device provider**: `runOnDeviceTurn` + `createLocalModelProvider` run
+  Converse fully offline; a localhost sentinel URL makes runTurn classify the
+  endpoint `private` (tier 0, no egress).
+- **Leak-corpus eval GATE**: `packages/redact/src/eval.ts` (`evaluateNer` +
+  seeded synthetic `NER_EVAL_CORPUS`) scores strict NER recall (whole span +
+  correct kind, partial catches are misses) from the structured Tier-2 output,
+  and re-checks the Tier-1 secret floor. The SAME function scores the desktop
+  Ollama baseline and the on-device model, so parity is comparable. Device runner:
+  `apps/mobile/src/lib/local-eval.ts` (`runOnDeviceNerEval`). Harness logic is
+  unit-tested (perfect / partial / wrong-kind / no-model fakes).
+
+### Verified empirically (July 2026)
+
+- `@react-native-ai/apple@0.12.0` (peer `react-native >=0.76`; needs iOS 26+ with
+  Apple Intelligence hardware; AI-SDK-based, `apple.isAvailable()`, guided
+  generation via `Output`/`generateObject`). Compatible with SDK 55 / RN 0.83 /
+  New Arch on paper.
+- `llama.rn@0.12.6` (Expo config plugin, New Arch, `response_format:
+  {type:'json_schema'}` grammar-constrained output). Ships a native build script
+  that is intentionally skipped in the JS checkout (`allowBuilds: llama.rn:
+  false`) — it only matters for the EAS compile.
+- `ai@^6` (Vercel AI SDK; `@ai-sdk/provider@3.x`, matches the apple provider) is
+  a NEW JS dependency required to drive `@react-native-ai/apple`.
+- `expo export --platform ios` STILL bundles with all three added (iOS bundle
+  3.6 MB -> 5.5 MB; the +1.9 MB is the AI SDK). Native compile defers to EAS.
+- All 440 monorepo unit tests + mobile typecheck stay green.
+
+### New dependencies (each needs the standing ADR note + an EAS rebuild)
+
+`@react-native-ai/apple`, `llama.rn`, `ai`. All on-device / no network at
+inference time, so invariant #7's network trigger does not apply to inference.
+The llama GGUF DOWNLOAD remains a separate networked dependency still needing
+Jay's explicit OK (item 3 above) before LlamaRnModel ships.
+
+### Still needed to make M6-4 real
+
+- Run `runOnDeviceNerEval` on an iPhone 15 Pro (Apple FM) and on a llama GGUF;
+  the recall number selects parity / beta / private-chat-only.
+- Capture the desktop Ollama baseline with the same `evaluateNer` for comparison.
+- UI: on-device provider entry in the Converse picker; replace the fixed
+  "Tier-1 only" banner with the three invariant-#6 states; and label the
+  on-device turn's "What left this device" view as "stayed on device, nothing
+  egressed" (it captures a tier-0 PLAINTEXT prompt, which must not read as a send).
+- Device-verify the actual `@react-native-ai/apple` / `llama.rn` / `ai` runtime
+  APIs against the adapters (written from published docs/types, not yet run).

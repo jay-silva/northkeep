@@ -134,3 +134,76 @@ declare module 'expo-secure-store' {
   ): Promise<void>;
   export function deleteItemAsync(key: string, options?: SecureStoreOptions): Promise<void>;
 }
+
+/**
+ * On-device model backends (M6-4, ADR 0020). Declared ambiently for the same
+ * reason as the crypto/sqlite modules above: the real packages are installed by
+ * apps/mobile (native code that only compiles at prebuild/EAS), not at the
+ * monorepo root, so tsc compiles packages/platform-mobile/src/local-model
+ * against these minimal declarations. Only the members the adapters use are
+ * declared; the on-device compile in apps/mobile is the second line of defense.
+ */
+declare module '@react-native-ai/apple' {
+  /** Opaque AI-SDK LanguageModel handle returned by apple(). */
+  export interface AppleLanguageModel {
+    readonly provider?: string;
+  }
+  /** Callable provider (apple()) that also exposes a sync capability probe. */
+  export const apple: {
+    (): AppleLanguageModel;
+    isAvailable(): boolean;
+  };
+}
+
+declare module 'llama.rn' {
+  export interface LlamaCompletionResult {
+    text: string;
+  }
+  export interface LlamaContext {
+    completion(
+      params: {
+        messages?: Array<{ role: string; content: string }>;
+        prompt?: string;
+        n_predict?: number;
+        stop?: string[];
+        temperature?: number;
+        response_format?: { type: string; json_schema?: unknown };
+        grammar?: string;
+      },
+      callback?: (data: { token: string }) => void,
+    ): Promise<LlamaCompletionResult>;
+    release(): Promise<void>;
+  }
+  export function initLlama(options: {
+    model: string;
+    n_ctx?: number;
+    n_gpu_layers?: number;
+    use_mlock?: boolean;
+    embedding?: boolean;
+  }): Promise<LlamaContext>;
+}
+
+declare module 'ai' {
+  /** Minimal subset of the Vercel AI SDK used by AppleFMModel. */
+  export function generateText(options: {
+    model: unknown;
+    messages?: unknown;
+    prompt?: string;
+    abortSignal?: AbortSignal;
+    maxOutputTokens?: number;
+  }): Promise<{ text: string }>;
+  export function streamText(options: {
+    model: unknown;
+    messages?: unknown;
+    prompt?: string;
+    abortSignal?: AbortSignal;
+    maxOutputTokens?: number;
+  }): { textStream: AsyncIterable<string> };
+  export function generateObject(options: {
+    model: unknown;
+    schema: unknown;
+    prompt?: string;
+    messages?: unknown;
+  }): Promise<{ object: unknown }>;
+  export function jsonSchema(schema: Record<string, unknown>): unknown;
+}
