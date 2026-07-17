@@ -1,0 +1,75 @@
+NorthKeep: App Store Additional Permission
+
+DRAFT: to be confirmed by Silva Peak Labs, LLC and its counsel before the
+public App Store release. This document is not legal advice.
+
+Copyright (C) 2026 Silva Peak Labs, LLC (d/b/a NorthKeep).
+
+NorthKeep is free software licensed under the GNU Affero General Public
+License, version 3, as set out in the accompanying LICENSE file ("the
+AGPL"). What follows is an additional permission granted under section 7 of
+the AGPL by the copyright holder, Silva Peak Labs, LLC.
+
+
+Why this exists
+---------------
+
+Distributing a binary through the Apple App Store (and through TestFlight)
+requires agreeing to Apple's Licensed Application End User License Agreement
+and App Store terms. Those terms place conditions on end users and on
+distribution (for example limits on the number of devices, digital-rights-
+management and anti-circumvention rules, and other usage restrictions) that
+conflict with the AGPL's sections 6, 7, and 10 (which forbid imposing further
+restrictions on the rights the license grants). This is the well-known
+"GPL on the App Store" conflict. Because Silva Peak Labs, LLC is the copyright
+holder, it can resolve the conflict for its own distribution by granting the
+additional permission below. Anyone else redistributing NorthKeep through an
+app store would need their own grant or their own copyright basis.
+
+
+The grant
+---------
+
+As an additional permission under section 7 of the GNU Affero General Public
+License version 3, Silva Peak Labs, LLC permits you to distribute the NorthKeep
+application through an application store or distribution service (including,
+without limitation, the Apple App Store and Apple TestFlight), even where that
+store or service imposes terms and conditions on end users or on distribution
+that are incompatible with the AGPL, provided that the complete corresponding
+source code of the distributed version is also available to every recipient
+under the AGPL (with or without this additional permission) through a channel
+that does not impose those incompatible terms.
+
+For NorthKeep, that channel is the public source repository at
+https://github.com/jay-silva/northkeep.
+
+
+Notes on scope
+--------------
+
+1. This is a permission attached to the licensed work under section 7 of the
+   AGPL. If you convey a covered work, you may keep this additional permission
+   in your copy or remove it; removing it leaves the work under the AGPL alone
+   (AGPL section 7, final paragraph).
+
+2. This permission does not reduce, waive, or otherwise affect any obligation
+   under section 13 of the AGPL (the network-use requirement: if you modify
+   NorthKeep and let users interact with it remotely over a network, you must
+   offer them the Corresponding Source of your modified version). That
+   obligation continues to apply on its own terms.
+
+3. This permission concerns the copyright license to NorthKeep only. It grants
+   no rights in Apple's software, services, or terms, and it makes no
+   representation on Apple's behalf.
+
+4. The memory schema specification under SPEC/ is separately licensed CC-BY-4.0
+   and is not affected by this permission.
+
+
+Status
+------
+
+This grant is a DRAFT prepared for review. Silva Peak Labs, LLC and its counsel
+should confirm the wording, the effective date, and the authority to grant it
+before it is relied on for the public App Store submission. It is provided as
+information, not as legal advice.

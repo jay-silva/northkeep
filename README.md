@@ -198,4 +198,8 @@ and doesn't pretend to.
 - `apps/sync-server`, the ciphertext-only sync server (self-hostable)
 - `e2e/`, milestone acceptance tests
 
-License: AGPL-3.0 (the schema spec itself is CC-BY-4.0).
+License: AGPL-3.0 (the schema spec itself is CC-BY-4.0). Because the AGPL
+conflicts with Apple's App Store terms, the copyright holder (Silva Peak Labs,
+LLC) grants an additional permission under AGPL section 7 so the iOS build can
+be distributed via the App Store and TestFlight, source stays public here. See
+`LICENSE-APPSTORE-EXCEPTION` (draft, pending counsel confirmation).
