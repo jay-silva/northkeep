@@ -16,6 +16,7 @@
     "@expo/vector-icons": "^15.1.1",
     "@noble/ciphers": "^2.2.0",
     "@noble/hashes": "^2.2.0",
+    "@northkeep/converse": "workspace:*",
     "@northkeep/core": "workspace:*",
     "@northkeep/platform-mobile": "workspace:*",
     "@northkeep/sync": "workspace:*",

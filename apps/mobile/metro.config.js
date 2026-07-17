@@ -10,6 +10,15 @@
  * Node-only path is ever reached at runtime; `buffer` maps to the npm
  * `buffer` polyfill the vault code depends on.
  *
+ * Two entries are NOT node builtins but the same resolve-time seam (M6-3
+ * Converse): `net` (converse's provider.ts uses net.isIP for endpoint tier
+ * classification — the shim implements the real isIP) and
+ * `@northkeep/mcp-server` (converse's turn.ts imports appendCallLog from it;
+ * the real package drags in platform-node -> better-sqlite3, which cannot
+ * bundle for RN, so the stub cuts that subtree — the phone injects its own
+ * in-memory auditFn instead). This lets the REAL runTurn pipeline bundle and
+ * run on device without forking the invariant-critical redaction ordering.
+ *
  * NEEDS ON-DEVICE VALIDATION: this resolver wiring has not been exercised by
  * a real Metro bundle from this environment (`npx expo export` or an EAS
  * build is the check).
@@ -32,6 +41,12 @@ const NODE_SHIMS = {
   path: path.resolve(__dirname, 'shims/node-path.js'),
   crypto: path.resolve(__dirname, 'shims/node-crypto.js'),
   buffer: require.resolve('buffer/'),
+  // node:child_process — @northkeep/importers' desktop ChatGPT-import path;
+  // transitive under Converse, never called on device (M6-3 Converse).
+  child_process: path.resolve(__dirname, 'shims/node-child_process.js'),
+  // Not a node builtin — a workspace package. See header note (M6-3 Converse).
+  net: path.resolve(__dirname, 'shims/node-net.js'),
+  '@northkeep/mcp-server': path.resolve(__dirname, 'shims/mcp-server.js'),
 };
 
 const defaultResolveRequest = config.resolver.resolveRequest;

@@ -15,6 +15,8 @@ import {
   memzero,
   type MemoryEntry,
   type RememberInput,
+  type RetrieveOptions,
+  type ScoredEntry,
 } from '@northkeep/core';
 import { deriveSyncCreds } from '@northkeep/sync';
 import { deleteIfExists, recoverVaultFileIfMissing, vaultPath } from './paths';
@@ -86,6 +88,12 @@ export interface VaultSession {
   editMemory(id: string, patch: { content?: string; scope?: string; type?: MemoryEntry['type'] }): Promise<MemoryEntry>;
   forgetMemory(id: string): Promise<MemoryEntry>;
   reloadEntries(): void;
+  /**
+   * Scored keyword retrieval over the open vault (M6-3 Converse context).
+   * Delegates to the core Vault.retrieve (term overlap + recency + type
+   * priority); returns [] when locked. Read-only — never mutates or syncs.
+   */
+  retrieve(query: string, options?: RetrieveOptions): ScoredEntry[];
   /** Wipes SecureStore and the local vault file; returns to onboarding. */
   signOutWipe(): Promise<void>;
   getMemory(id: string): MemoryEntry | undefined;
@@ -388,6 +396,12 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     [entries],
   );
 
+  const retrieve = useCallback((query: string, options?: RetrieveOptions): ScoredEntry[] => {
+    const vault = vaultRef.current;
+    if (!vault) return [];
+    return vault.retrieve(query, options);
+  }, []);
+
   const value = useMemo<VaultSession>(
     () => ({
       status,
@@ -404,6 +418,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       editMemory,
       forgetMemory,
       reloadEntries,
+      retrieve,
       signOutWipe,
       getMemory,
     }),
@@ -422,6 +437,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       editMemory,
       forgetMemory,
       reloadEntries,
+      retrieve,
       signOutWipe,
       getMemory,
     ],
