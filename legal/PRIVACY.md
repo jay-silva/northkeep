@@ -8,8 +8,14 @@ limited liability company.
 **Contact:** support@northkeep.ai · **Effective date:** July 14, 2026
 
 NorthKeep is built on a simple promise: **your AI memory lives on your device,
-encrypted, and we never see its contents.** This policy explains the little data
-that does exist, where it lives, and what we do, and don't, do with it.
+encrypted, and we never see its contents** (the one exception is a scope you
+deliberately choose to share with the optional connector, described below: those
+shared memories are stored on our server encrypted at rest, the connector
+database holds no key that can read them, and the key is rebuilt for each request
+from your app's own credential plus a secret held on our server, which briefly
+decrypts them in memory so a connected AI app can read the result). This policy
+explains the little data that does exist, where it lives, and what we do, and
+don't, do with it.
 
 ## The short version
 
@@ -47,11 +53,62 @@ subscription is active, we can tell *which paying customer is associated with
 which encrypted vault*, but never that vault's contents, which remain
 ciphertext to us.
 
+## Shared scopes (optional connector)
+
+Everything above describes hosted **sync**, where our server only ever holds
+ciphertext and never a key. The optional **connector** is different: it is the
+one place your shared memories are briefly decrypted on our server. It exists so
+the cloud AI apps you already use (such as Claude or ChatGPT) can reach the
+memories you choose.
+
+- **It is off by default and opt-in per scope.** Nothing is shared until you
+  explicitly mark a specific scope Shared, after a clear confirmation. A scope you
+  keep private is never sent to the connector at all.
+- **Shared content is encrypted at rest.** The connector database holds only
+  ciphertext of your shared memories, and NorthKeep keeps no key in that database
+  that can read them. The key is rebuilt for each request from your connected
+  app's own credential plus a secret held on our server. This is not end-to-end
+  encryption: to answer each request, the server briefly rebuilds the key and
+  decrypts your shared content in memory, and the AI app you connected reads the
+  result. The connector is a separate service from the sync server, with its own
+  database.
+- **The honest limit of that encryption.** Our server can read your shared
+  memories, but only for the moment it takes to answer one of your app's
+  requests, when it briefly rebuilds the key in memory. The database itself never
+  stores that key, so a stolen database is only ciphertext. In short: the stored
+  data cannot be read on its own, but the running server can read it while it
+  serves your app. Encryption at rest protects against theft of the database or
+  its backups, an insider with database-only access, and legal process served
+  against the database alone. It does not protect against a compromised or
+  malicious running server, which holds the server-side secret and decrypts on
+  each request, and so could capture keys and content going forward.
+- **What stays visible to us even with content encrypted:** your scope names and
+  labels (choose neutral names if a name itself is sensitive), entry identifiers,
+  how many memories each shared scope holds, the encrypted sizes (which
+  approximate content length), timestamps, and integrity hashes.
+- **What we do not derive from it:** no embeddings, no content logs, no analytics.
+  We never store your keys, your passphrase, or your device secret on the
+  connector.
+- **Who else sees it:** any AI app you connect reads whatever it retrieves from
+  your shared scopes, under that app's own privacy policy. This is the same
+  exposure as connecting a local app, now over the network, and encryption at rest
+  does not change it.
+- **Deletion:** unshare a scope (or forget a memory) and we delete those rows from
+  the connector immediately. Deletion removes exactly what you chose to expose; it
+  cannot recall copies an AI app already retrieved.
+
+Self-hosting the connector, or simply never sharing a scope, means no shared
+memory ever transits our server.
+
 ## What we do not do
 
 - We do **not** collect, read, store, or transmit the contents of your memories
-  or conversations. (Chat transcripts are never stored at all; only distilled
-  memories you can see and undo are kept, on your device.)
+  or conversations, with one exception you turn on yourself: a scope you
+  deliberately share with the optional connector (see "Shared scopes" above),
+  which is stored there encrypted at rest and briefly decrypted per request so
+  your own AI apps can read it. Everything you keep private stays on your device.
+  (Chat transcripts are never stored at all; only distilled memories you can see
+  and undo are kept, on your device.)
 - We do **not** sell, rent, or share your data with advertisers or data brokers.
 - We do **not** run analytics or embed trackers.
 - We do **not** create server-side embeddings, logs, or analytics derived from

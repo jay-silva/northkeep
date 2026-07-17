@@ -3,7 +3,8 @@
 ## What this is
 A local-first, user-owned memory vault for AI. Encrypted SQLite vault on the user's
 machine, exposed to AI apps via MCP, with tiered on-device PII redaction and
-client-side-encrypted sync. The user owns the memory; we never see plaintext.
+client-side-encrypted sync. The user owns the memory; we never see plaintext,
+except scopes the user explicitly shares to the opt-in connector (invariant #2).
 Read SPEC/memory-schema.md and SPEC/security-model.md before any structural work.
 
 ## Founder context
@@ -15,9 +16,6 @@ The founder (Jay) is a compliance professional, not an engineer. Therefore:
   crypto, dependencies with network access, licensing-relevant code).
 
 ## Non-negotiable invariants (violating these is a critical bug)
-<!-- DRAFT (ADR 0019, phase C5): invariants #1 clause (b) and #2's connector
-     sentence re-word the opt-in per-scope connector. Pending Jay's compliance
-     sign-off before any design partner shares real memory. -->
 1. Plaintext memory content NEVER leaves the machine except (a) to the model
    provider the user explicitly selected, after the active redaction tier has
    run, or (b) content in scopes the user has explicitly, individually marked
@@ -26,9 +24,14 @@ The founder (Jay) is a compliance professional, not an engineer. Therefore:
    confirmed, badge-visible, and reversible with server-side deletion.
 2. Our vault-sync server stores ciphertext only. No plaintext, no derived
    plaintext (no server-side embeddings, logs, or analytics on content). The
-   connector store is a separate opt-in service; it holds plaintext of shared
-   scopes only, never private scopes, never keys, and derives nothing from
-   content (no embeddings, no content logs, no analytics).
+   connector store is a separate opt-in service; it stores shared-scope content
+   encrypted at rest (ciphertext only, never private scopes) and keeps no key in
+   that database that can read it: the key is rebuilt for each request from the
+   connected app's own credential plus a secret held on our server. It decrypts
+   transiently to serve each legitimate request (so a compromised runtime is not
+   protected against), and it derives nothing from content (no embeddings, no
+   content logs, no analytics). Scope names, entry ids, counts, ciphertext sizes,
+   and timestamps remain visible to it.
 3. No hand-rolled crypto. libsodium primitives only. Key handling changes require
    an explicit adversarial-review session before merge.
 4. The vault file must remain portable and text-canonical: export must always

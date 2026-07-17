@@ -147,7 +147,7 @@
     <a class="btn ghost" href="https://github.com/jay-silva/northkeep">View source</a>
   </div>
   <p class="subtle muted">Free and open source · Apple Silicon · signed &amp; notarized ·
-    nothing leaves your machine</p>
+    private by default, nothing leaves your machine unless you share it</p>
 </div>
 
 <section id="how">
@@ -160,12 +160,20 @@
       <div class="card">
         <span class="kicker">Connect</span>
         <h3>Your memory, in the apps you already pay for</h3>
-        <p>One click wires NorthKeep into Claude Desktop or Claude Code. Your
-          memory becomes portable across them, and you decide, per app, exactly
-          what it may read.</p>
+        <p>One click wires NorthKeep into Claude Desktop or Claude Code on this
+          Mac. For the cloud apps you use elsewhere (ChatGPT, Claude on your
+          phone), an optional connector lets the scopes you choose reach them.
+          Either way you decide, per app and per scope, exactly what it may
+          read.</p>
         <p class="note">Honest boundary: Connect gives you ownership and
-          portability, not a firewall. It can't redact what you type into someone
-          else's app.</p>
+          portability, not a firewall, and it can't redact what you type into
+          someone else's app. The cloud connector is opt-in per scope. Shared
+          memories are encrypted at rest there: the connector database holds no
+          key that can read them, and the key is rebuilt each request from your
+          app's own credential plus a secret on our server, which briefly decrypts
+          them so the apps you connect can read the result in full. Scope names,
+          counts, and timestamps stay visible to the server. Private scopes never
+          leave your machine.</p>
       </div>
       <div class="card">
         <span class="kicker">Converse</span>
@@ -257,7 +265,7 @@
 <section>
   <div class="wrap">
     <h2>Questions</h2>
-    <details><summary>Do you ever see my memories?</summary><p>No. Your vault is encrypted on your device, and we never receive your key. If you use hosted sync, our server stores only ciphertext it cannot decrypt plus a version number. There's no telemetry and no analytics in the app.</p></details>
+    <details><summary>Do you ever see my memories?</summary><p>No, with one exception you turn on yourself. Your vault is encrypted on your device, and we never receive your key. If you use hosted sync, our server stores only ciphertext it cannot decrypt plus a version number. The exception is a scope you deliberately share with the connector (see Connect above): it is stored encrypted at rest, the connector database holds no key that can read it, and the server briefly rebuilds the key per request (from your app's credential plus a server-side secret) to decrypt it so your AI apps can read it. There's no telemetry and no analytics in the app.</p></details>
     <details><summary>How is this different from ChatGPT or Claude's built-in memory?</summary><p>Their memory lives on their servers and stays in their app. NorthKeep's memory lives on your machine and plugs into whichever apps you use, so it's portable, owned by you, and you set what each app can read.</p></details>
     <details><summary>Does Connect make my chats private?</summary><p>No, and we won't pretend it does. When you type into another company's app, that company sees what you type. Connect gives you portable, owned memory with per-app scopes. For an actual redaction firewall on your messages, use Converse.</p></details>
     <details><summary>What happens if I lose my passphrase?</summary><p>The vault is unrecoverable. There's no back door, which is exactly why no one else can get in either. Back up your <code>device.secret</code> file and keep your passphrase safe.</p></details>

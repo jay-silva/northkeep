@@ -146,6 +146,34 @@ northkeep sync billing     # manage or cancel (Stripe billing portal)
 We store only whether your subscription is active, linked to your **encrypted**
 account, never your card or the contents of your vault.
 
+## Share scopes with your AI apps (optional connector)
+
+Sync keeps the server blind. The **connector** exists so the cloud AI apps you
+already pay for (Claude, ChatGPT, and others) can read the memories you choose.
+Because those apps can only reach a server over HTTPS, a shared scope is copied to
+NorthKeep's connector server. It is stored there encrypted at rest: the database
+holds only ciphertext, and NorthKeep keeps no key in that database that can read
+it. The key is rebuilt for each request from your connected app's own credential
+plus a secret held on our server, which briefly decrypts your content in memory so
+the app can read the result. The honest limits: because the server decrypts on
+each request, this protects the database (against theft, stolen backups, and legal
+process against it alone), not a compromised running server, which holds that
+server-side secret; the apps you connect read your shared memories in full; and
+your scope names, memory counts, sizes, and timestamps stay visible to the server
+even though the content is encrypted. Private is the default; you share one scope
+at a time, after a loud confirmation, and you can unshare anytime (that deletes it
+from the server).
+
+```bash
+northkeep share server https://your-connector.example.com
+northkeep share add work        # loudly confirms, then shares the 'work' scope
+northkeep share code            # a one-time code you enter when connecting the app
+northkeep share sync            # pull memories you made inside the apps back in
+```
+
+There's a **Sharing** tab in the app that does all of this with the same loud
+confirmation and a SHARED badge on every scope that leaves your machine.
+
 ## Scopes & audit (for professionals)
 
 A NorthKeep connection scoped to one matter physically cannot read or write
@@ -177,10 +205,16 @@ and doesn't pretend to.
 - The vault is one encrypted file you can copy, back up, and take anywhere.
 - Export is always complete, human-readable JSON (`SPEC/memory-schema.md`).
   Embeddings are disposable cache, never required to rebuild a vault.
-- We never see plaintext. No telemetry, none. Crash reports would be opt-in and
-  content-free.
-- Plaintext never leaves your machine except to the model provider you chose,
-  after redaction has run.
+- We never store plaintext. Everything you keep private stays encrypted on your
+  device, and we cannot read it. A scope you explicitly mark Shared is copied to
+  the connector, where it is stored encrypted at rest with no key in that database
+  to read it (the key is rebuilt each request from your app's own credential plus a
+  secret on our server, which briefly decrypts it so your AI apps can read the
+  result), and you can pull it back. No telemetry, none. Crash reports would be
+  opt-in and content-free.
+- Plaintext never leaves your machine except (a) to the model provider you chose,
+  after redaction has run, or (b) for a scope you explicitly share with the
+  connector, so your own AI apps can read it. Private scopes never leave.
 - What it **can't** do is written down too, plainly: `KNOWN-LIMITS.md`.
 
 ## Layout
@@ -196,6 +230,7 @@ and doesn't pretend to.
 - `apps/web`, the local app (loopback server + single-file UI)
 - `apps/desktop`, the Tauri desktop shell (signed DMG)
 - `apps/sync-server`, the ciphertext-only sync server (self-hostable)
+- `apps/connector-server`, the opt-in connector for shared scopes (ADR 0019)
 - `e2e/`, milestone acceptance tests
 
 License: AGPL-3.0 (the schema spec itself is CC-BY-4.0).

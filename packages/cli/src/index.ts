@@ -649,7 +649,7 @@ share
 
 share
   .command('add <scope>')
-  .description("Mark a scope Shared — stored READABLE by the connector — and push it (private scopes are never shared)")
+  .description('Mark a scope Shared (stored encrypted on the connector, no key in its database to read it), then push it; private scopes are never shared')
   .option('--yes', 'skip the confirmation prompt (scripting)')
   .action(async (scope: string, options: { yes?: boolean }) => {
     await shareAddCmd(scope, options, withVault, fail);

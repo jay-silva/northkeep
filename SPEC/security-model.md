@@ -96,31 +96,51 @@ log` shows what every AI app asked of the vault.
 - **(M5) Sync:** client-side-encrypted blobs; server stores ciphertext and
   version numbers only.
 
-## Shared scopes: the optional connector (ADR 0019)
-
-<!-- DRAFT (ADR 0019, phase C5): connector threat-model split. Pending Jay's
-     compliance sign-off before any design partner shares real memory. -->
+## Shared scopes: the optional connector (ADR 0019 + ADR 0020)
 
 Everything above assumes the ciphertext-only guarantee: our servers never see
-plaintext. The hosted connector is the one deliberate, opt-in exception, and it
-is a *separate* service from vault-sync.
+plaintext. The hosted connector is the one deliberate, opt-in place your shared
+memory is decrypted on our infrastructure, and it is a *separate* service from
+vault-sync.
 
 - **Default private.** Nothing is shared until the user explicitly marks a
   specific scope Shared, confirmed loudly, badge-visible, and reversible. A
   private scope (a client matter, a patient) never reaches the connector.
-- **Two servers, two guarantees.** The vault-sync server (ADR 0009) holds
-  ciphertext only and cannot be made to decrypt. The connector store (ADR 0019)
-  is a physically separate service with its own database; it holds the plaintext
-  of shared scopes so the user's own AI apps can read them.
+- **Two servers, two different guarantees.** The vault-sync server (ADR 0009)
+  holds ciphertext only and cannot be made to decrypt: it never handles a key at
+  all. The connector store (ADR 0019, encryption at rest per ADR 0020) is a
+  physically separate service with its own database. Its database holds only
+  ciphertext of shared-scope content, and NorthKeep keeps no key in that database
+  that can read it: the decryption key is rebuilt per request from the connected
+  app's own credential plus a secret held in the connector's server environment (a
+  "pepper"), which is never written to the database. The difference that matters:
+  the connector *does* decrypt, per request, to serve the user's AI apps. So the
+  honest claim is "we do not store a key in the database that reads shared
+  content," never "we cannot read." A compromised connector holds the pepper and
+  could be modified to capture keys and plaintext on requests going forward.
+- **What stays visible even with content encrypted.** Scope NAMES and labels (a
+  lawyer's matter name is itself sensitive; pick neutral scope names if that
+  matters), entry ids, per-scope memory counts, ciphertext lengths (which
+  approximate content length), timestamps, `entry_hash` values, and the
+  content-free audit trail. Encryption at rest covers content, not this metadata.
 
 | Aspect | Vault-sync server | Connector store |
 |---|---|---|
-| A breach reveals | ciphertext blobs + version numbers only | plaintext content, type, scope labels, and timestamps of SHARED entries; account hashes; OAuth client registrations; token/code HASHES |
-| A breach does NOT reveal | anything readable | private scopes; the vault ciphertext (a different database); passphrases, keys, device secrets; email or card |
+| A breach of the database alone reveals | ciphertext blobs + version numbers only | ciphertext of SHARED entries (neither the app credential nor the server pepper lives in the database, so the content cannot be decrypted from the database alone); scope names and labels, entry ids, counts, ciphertext lengths, timestamps, entry hashes; account hashes; OAuth client registrations; token/code HASHES |
+| A breach of the database alone does NOT reveal | anything in the clear | shared-scope content in the clear; private scopes; the vault ciphertext (a different database); passphrases, keys, device secrets; email or card |
+| A compromised RUNNING server or runtime | still nothing in the clear (no key ever presented) | NOT protected: it holds the pepper and sees the derived key and plaintext per request, and could capture them going forward; process memory dumps are likewise not protected |
 | Derived from content | nothing | nothing (no embeddings, no content logs, no analytics) |
 
-The honest non-breach disclosure: every AI app the user connects sees whatever
-it retrieves from the shared scopes, the same truth as local Connect (ADR 0013),
-now over the network. Unshare and forget delete the connector rows immediately;
-because only shared-scope plaintext is ever stored, deletion removes exactly what
-the user chose to expose.
+Plainly, encryption at rest protects against: theft of the connector database or
+its backups, an insider with database-only access, and legal process served
+against the database alone. It does NOT protect against: a compromised or
+malicious running server (it holds the pepper and decrypts per request), memory
+dumps of the live process, or the connected AI provider, which reads whatever it
+retrieves from shared scopes in full, under that provider's own policy. That last
+exposure is the same truth as local Connect (ADR 0013), now over the network, and
+it is unchanged by ADR 0020.
+
+Unshare and forget delete the connector rows immediately; because only
+shared-scope ciphertext and its metadata are ever stored, deletion removes exactly
+what the user chose to expose. Deletion cannot recall copies an AI app already
+retrieved while the scope was shared.

@@ -82,8 +82,10 @@ export async function shareAddCmd(
   const assumeYes = options.yes === true || process.env.NORTHKEEP_ASSUME_YES === '1';
   if (!assumeYes) {
     console.log(
-      `Memories in '${scope}' will be stored READABLE by NorthKeep's connector server so your AI apps can reach them. ` +
-        'Private scopes are never shared.',
+      `Memories in '${scope}' will be copied to NorthKeep's connector server, where the AI apps you connect read them IN FULL. ` +
+        'They are stored encrypted at rest; the connector database holds no key that can read them, but the server rebuilds ' +
+        "the key each request from your app's credential plus a secret it holds and briefly decrypts them to answer. It can " +
+        "always see this scope's name, how many memories it holds, and when they change. Private scopes are never shared.",
     );
     const answer = await promptLine('Continue? [y/N] ');
     if (!/^y(es)?$/i.test(answer.trim())) fail('Cancelled. Nothing was shared.');
@@ -175,7 +177,10 @@ export async function shareStatusCmd(withVault: WithVault): Promise<void> {
   const counts = await withVault((vault) =>
     cfg.sharedScopes.map((scope) => ({ scope, count: vault.list({ scope }).length })),
   );
-  console.log('Shared scopes (readable by the connector so your AI apps can reach them):');
+  console.log(
+    'Shared scopes (stored encrypted on the connector, no key in its database to read them; the key is rebuilt per request ' +
+      "from your app's credential plus a server-side secret, and the AI apps you connect read them in full):",
+  );
   for (const c of counts) console.log(`  ${c.scope} — ${c.count} ${c.count === 1 ? 'memory' : 'memories'}`);
 }
 

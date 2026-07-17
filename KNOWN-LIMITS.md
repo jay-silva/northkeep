@@ -235,22 +235,36 @@ every milestone; if a limit is removed, say when and how.*
 - **macOS only** for now (matches the arm64 app); the config paths are
   macOS-specific.
 
-## Connector for shared scopes, ADR 0019 (current)
+## Connector for shared scopes, ADR 0019 + ADR 0020 (current)
 
-<!-- DRAFT (ADR 0019, phase C5): connector limits pending Jay's compliance
-     sign-off before the beta opens. -->
-
-- **This is the one place we hold readable memory.** Sync stays ciphertext-only,
-  but a scope you mark Shared is copied, in plaintext, to NorthKeep's connector
-  server so cloud apps can read it. If you never share a scope, nothing changes.
+- **This is the one place your shared memory is decrypted on our server.** Sync
+  stays ciphertext-only and keyless. A scope you mark Shared is copied to
+  NorthKeep's connector server, where it is stored encrypted at rest: the database
+  holds only ciphertext, and NorthKeep keeps no key in that database that can read
+  it. The key is rebuilt for each request from your connected app's own credential
+  plus a secret held on our server. Because the server rebuilds that key and
+  decrypts on every legitimate request to serve your apps, the honest claim is "we
+  do not store a key in the database that reads your content," not "we cannot
+  read." If you never share a scope, nothing changes.
 - **Sharing is per-scope and opt-in; private is the default.** A scope you do not
   turn on is never sent. Turning one on requires an explicit, loud confirmation,
   and a shared scope shows a SHARED badge everywhere it appears.
-- **A breach of the connector exposes shared plaintext.** It would reveal the
-  content, type, scope labels, and timestamps of SHARED entries (plus account
-  hashes and OAuth registrations), but not private scopes, not the vault
-  ciphertext (a separate database), and not your keys, passphrase, or device
-  secret. See SPEC/security-model.md.
+- **A breach of the connector database alone yields ciphertext, not content.**
+  Stolen database or backups, an insider with database-only access, or legal
+  process against the database alone get encrypted content they cannot read (plus
+  the metadata below, account hashes, and OAuth registrations), but not private
+  scopes, not the vault ciphertext (a separate database), and not your keys,
+  passphrase, or device secret. What encryption at rest does NOT protect against: a
+  compromised or malicious running server (it holds the server-side secret and
+  decrypts keys and content per request, and could be modified to capture them
+  going forward), memory dumps of the live process, and the AI apps you connect,
+  which read your shared content in full. See SPEC/security-model.md.
+- **Metadata stays visible even though content is encrypted.** The connector can
+  always see your scope NAMES and labels (a scope named after a client matter
+  reveals the matter; pick neutral names if that matters), entry ids, how many
+  memories each shared scope holds, ciphertext sizes (which approximate content
+  length), timestamps, entry hashes, and the content-free audit trail. Only the
+  content itself is ciphertext.
 - **Every connected AI provider sees what it retrieves.** Once an app is paired,
   its provider receives whatever it pulls from your shared scopes, under that
   provider's own policy. This is the same exposure as local Connect, now over the
