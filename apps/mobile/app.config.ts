@@ -21,6 +21,11 @@ const config: ExpoConfig = {
   // this). Required so `eas init`/`eas build` resolve the right account.
   owner: 'j_silva',
   version: '0.1.0',
+  // Brand app icon (master 1024x1024 from brand/northkeep-icon-1024.png). Expo
+  // generates every platform size from this at build; the top-level `icon` is
+  // what iOS uses (no separate ios.icon needed on SDK 55). RGB, no alpha, so the
+  // App Store's "no transparency in the marketing icon" rule is satisfied.
+  icon: './assets/icon.png',
   // The app owns the northkeep:// scheme so link QR codes can ALSO deep-link
   // straight into the app when scanned with the system camera (the in-app
   // scanner on the device-link screen is the primary path).
@@ -46,15 +51,38 @@ const config: ExpoConfig = {
       NSFaceIDUsageDescription:
         'NorthKeep can use Face ID to unlock your vault with a key that never leaves this device.',
     },
-    // TODO(M6-5): icons/splash from brand/, privacy nutrition label, export
-    // compliance answers. Deliberately not set in the M6-2 skeleton.
+    // App icon comes from the top-level `icon` above (brand master). Still
+    // TODO(M6-5): privacy nutrition label, export compliance answers.
   },
   android: {
     // Kept in lock-step with the iOS bundle identifier under Jay's rebrand.
     package: 'com.silvapeak.northkeep',
+    // Android adaptive icon: same brand master as the foreground. The art is a
+    // full-bleed white-background square, so backgroundColor is white to match
+    // (it only shows where the foreground is transparent, which here it isn't).
+    adaptiveIcon: {
+      foregroundImage: './assets/adaptive-icon.png',
+      backgroundColor: '#ffffff',
+    },
   },
   plugins: [
     'expo-router',
+    // Splash screen: centered brand mark at ~200pt from the 1024 master.
+    // The brand art has a SOLID WHITE background (RGB, no alpha), and its own
+    // fill colors (the "N" and circuit traces) are light, so it can't be keyed
+    // to transparency. The splash background is therefore white to match the
+    // art's own field — a dark bg (the app's colors.bg #0f1420) would show a
+    // white square floating around the mark. If a dark splash is wanted, supply
+    // a dark-background or alpha-cut variant of the mark and flip this to
+    // #0f1420. Rendered result is only confirmable on an EAS build / device.
+    [
+      'expo-splash-screen',
+      {
+        image: './assets/splash-icon.png',
+        backgroundColor: '#ffffff',
+        imageWidth: 200,
+      },
+    ],
     // Sets iOS min deployment target + New-Arch flags the native modules below
     // need at prebuild/compile time (react-native-quick-crypto declares this as
     // a peer). No-op for the Metro JS bundle; matters only on the EAS compile.
