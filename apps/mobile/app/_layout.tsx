@@ -88,6 +88,9 @@ export default function RootLayout() {
               {/* Section screens: no back arrow — the bottom nav switches between them. */}
               <Stack.Screen name="converse" options={{ title: 'Converse', headerBackVisible: false }} />
               <Stack.Screen name="settings" options={{ title: 'Settings', headerBackVisible: false }} />
+              {/* Pushed detail screens from Converse (keep the back arrow). */}
+              <Stack.Screen name="providers" options={{ title: 'Providers' }} />
+              <Stack.Screen name="converse-audit" options={{ title: 'What left this device' }} />
             </Stack>
           </View>
           <BottomNav />
