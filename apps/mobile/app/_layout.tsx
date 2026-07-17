@@ -5,6 +5,7 @@ import { StatusBar } from 'expo-status-bar';
 import { initMobilePlatform } from '../src/platform';
 import { VaultSessionProvider, useVaultSession } from '../src/lib/vault-session';
 import { WarningBanner, colors } from '../src/ui';
+import { BottomNav } from '../src/BottomNav';
 
 function LockOnBackground({ children }: { children: React.ReactNode }) {
   const session = useVaultSession();
@@ -61,30 +62,36 @@ export default function RootLayout() {
     <VaultSessionProvider>
       <LockOnBackground>
         <StatusBar style="light" />
-        <WarningBanner
-          message={
-            init.error
-              ? `NorthKeep cannot open vaults on this build: ${init.error}`
-              : null
-          }
-        />
-        <Stack
-          screenOptions={{
-            headerStyle: { backgroundColor: colors.bg },
-            headerTintColor: colors.text,
-            contentStyle: { backgroundColor: colors.bg },
-          }}
-        >
-          <Stack.Screen name="index" options={{ headerShown: false }} />
-          <Stack.Screen name="onboarding" options={{ headerShown: false }} />
-          <Stack.Screen name="device-link" options={{ title: 'Link your Mac' }} />
-          <Stack.Screen name="unlock" options={{ title: 'Unlock', headerBackVisible: false }} />
-          <Stack.Screen name="memories" options={{ title: 'Memories', headerBackVisible: false }} />
-          <Stack.Screen name="memory/new" options={{ title: 'Add memory', presentation: 'modal' }} />
-          <Stack.Screen name="memory/[id]" options={{ title: 'Memory' }} />
-          <Stack.Screen name="converse" options={{ title: 'Converse' }} />
-          <Stack.Screen name="settings" options={{ title: 'Settings' }} />
-        </Stack>
+        <View style={{ flex: 1, backgroundColor: colors.bg }}>
+          <WarningBanner
+            message={
+              init.error
+                ? `NorthKeep cannot open vaults on this build: ${init.error}`
+                : null
+            }
+          />
+          <View style={{ flex: 1 }}>
+            <Stack
+              screenOptions={{
+                headerStyle: { backgroundColor: colors.bg },
+                headerTintColor: colors.text,
+                contentStyle: { backgroundColor: colors.bg },
+              }}
+            >
+              <Stack.Screen name="index" options={{ headerShown: false }} />
+              <Stack.Screen name="onboarding" options={{ headerShown: false }} />
+              <Stack.Screen name="device-link" options={{ title: 'Link your Mac' }} />
+              <Stack.Screen name="unlock" options={{ title: 'Unlock', headerBackVisible: false }} />
+              <Stack.Screen name="memories" options={{ title: 'Memories', headerBackVisible: false }} />
+              <Stack.Screen name="memory/new" options={{ title: 'Add memory', presentation: 'modal' }} />
+              <Stack.Screen name="memory/[id]" options={{ title: 'Memory' }} />
+              {/* Section screens: no back arrow — the bottom nav switches between them. */}
+              <Stack.Screen name="converse" options={{ title: 'Converse', headerBackVisible: false }} />
+              <Stack.Screen name="settings" options={{ title: 'Settings', headerBackVisible: false }} />
+            </Stack>
+          </View>
+          <BottomNav />
+        </View>
       </LockOnBackground>
     </VaultSessionProvider>
   );
