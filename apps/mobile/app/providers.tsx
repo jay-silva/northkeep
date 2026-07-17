@@ -17,6 +17,7 @@ import {
   ANTHROPIC_BASE_URL,
   DEFAULT_ANTHROPIC_MODEL,
   getSelectedProviderId,
+  CLAUDE_MODELS,
   hasKey,
   listProviders,
   ON_DEVICE_PROVIDER_ID,
@@ -258,7 +259,29 @@ export default function Providers() {
           </>
         ) : null}
 
-        <FieldLabel>Model id</FieldLabel>
+        <FieldLabel>Model</FieldLabel>
+        {kind === 'anthropic' ? (
+          <>
+            <View style={styles.modelRow}>
+              {CLAUDE_MODELS.map((m) => {
+                const on = model.trim() === m.id;
+                return (
+                  <Pressable
+                    key={m.id}
+                    onPress={() => setModel(m.id)}
+                    accessibilityRole="button"
+                    accessibilityState={{ selected: on }}
+                  >
+                    <Text style={[styles.kindChip, on ? styles.kindChipOn : styles.kindChipOff]}>{m.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <Text style={styles.modelNote}>
+              {CLAUDE_MODELS.find((m) => m.id === model.trim())?.note ?? 'Custom model id (typed below).'}
+            </Text>
+          </>
+        ) : null}
         <TextInput
           style={styles.input}
           value={model}
@@ -322,6 +345,8 @@ const styles = StyleSheet.create({
   cardSub: { color: colors.muted, fontSize: 12, marginTop: 2 },
   cardIcon: { marginLeft: 14 },
   kindRow: { flexDirection: 'row', gap: 8 },
+  modelRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 6 },
+  modelNote: { color: colors.muted, fontSize: 12, marginBottom: 10 },
   kindChip: {
     fontSize: 13,
     fontWeight: '600',
@@ -331,7 +356,7 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     borderWidth: 1,
   },
-  kindChipOn: { color: '#ffffff', borderColor: colors.accent, backgroundColor: colors.accent },
+  kindChipOn: { color: colors.bg, borderColor: colors.accent, backgroundColor: colors.accent },
   kindChipOff: { color: colors.muted, borderColor: colors.border, backgroundColor: colors.card },
   input: {
     backgroundColor: colors.card,

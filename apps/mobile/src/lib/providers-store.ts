@@ -41,6 +41,19 @@ export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-4-8';
 
 /**
+ * Current Claude models offered as one-tap picks in the provider screen (a user
+ * can still type any model id). Ordered best-first within intent. Keep the ids
+ * exact — Anthropic model ids are complete as-is, never date-suffixed.
+ */
+export const CLAUDE_MODELS: { id: string; label: string; note: string }[] = [
+  { id: 'claude-opus-4-8', label: 'Opus 4.8', note: 'Most capable, best default' },
+  { id: 'claude-sonnet-5', label: 'Sonnet 5', note: 'Near-Opus quality, lower cost' },
+  { id: 'claude-haiku-4-5', label: 'Haiku 4.5', note: 'Fastest and cheapest' },
+  { id: 'claude-fable-5', label: 'Fable 5', note: 'Most capable overall, premium price' },
+  { id: 'claude-opus-4-7', label: 'Opus 4.7', note: 'Previous-generation Opus' },
+];
+
+/**
  * Reserved selection id for the on-device model (M6-4). It is NOT a stored
  * ProviderConfig (no key, no endpoint, no metadata); it is a sentinel the
  * selection persists, so "On-device (private)" survives app restarts like any
