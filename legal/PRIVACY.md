@@ -5,7 +5,7 @@
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** support@northkeep.ai · **Effective date:** July 14, 2026
+**Contact:** support@northkeep.ai · **Effective date:** July 17, 2026
 
 NorthKeep is built on a simple promise: **your AI memory lives on your device,
 encrypted, and we never see its contents** (the one exception is a scope you
@@ -15,14 +15,19 @@ database holds no key that can read them, and the key is rebuilt for each reques
 from your app's own credential plus a secret held on our server, which briefly
 decrypts them in memory so a connected AI app can read the result). This policy
 explains the little data that does exist, where it lives, and what we do, and
-don't, do with it.
+don't, do with it. The statements below describe how NorthKeep works today; if our
+practices change, we will update this policy and, for material changes, tell you
+before the change takes effect (see "Changes").
 
 ## The short version
 
 - The app runs on your machine. Your memories are stored in an **encrypted vault
   on your device**. We cannot read them.
-- **No telemetry. No analytics. No tracking.** The app does not phone home. We do
-  not collect usage data, and there are no third-party trackers in it.
+- **No telemetry. No analytics. No tracking.** The app does not phone home: it
+  makes no network connection except the ones you initiate or enable: syncing
+  your encrypted vault, reaching an AI provider you connect, or an update check if
+  you turn one on. We do not collect usage data, and there are no third-party
+  trackers in it.
 - If you use our **optional hosted sync**, our server stores only an **encrypted
   blob it cannot decrypt** plus a version number, never a key, never plaintext.
 - If you **subscribe**, payment is handled by Stripe; your card and email live
@@ -130,6 +135,22 @@ NorthKeep can send text to AI models **you** connect:
 
 You control which providers you use and can disconnect them at any time.
 
+## How we protect the little data we hold
+
+We maintain administrative, technical, and physical safeguards appropriate to the
+limited data we hold, including encryption of vault data in transit and at rest,
+the design choices described above (no stored keys, data minimization, ciphertext-
+only sync), and access controls on our servers. No system is perfectly secure, and
+we describe the honest limits of our connector design above and in
+`KNOWN-LIMITS.md`.
+
+**Breach notification.** If we discover a security incident that compromises
+personal data we hold or the shared content on the connector, we will investigate
+promptly and notify affected users, and any regulators, as and when required by
+applicable law, for example the Massachusetts data-breach statute (M.G.L.
+c. 93H), other U.S. state breach-notification laws, and, for users in the EU or
+UK, the GDPR's 72-hour notification rule, without undue delay.
+
 ## Data retention and deletion
 
 - **Local data** is under your control, delete your vault, or individual
@@ -138,6 +159,9 @@ You control which providers you use and can disconnect them at any time.
   support@northkeep.ai, and we will delete your encrypted vault blob and billing
   mapping. Because the stored blob is ciphertext we cannot read, deletion removes
   bytes we could never interpret in the first place.
+- **Consent records:** where we record your consent to subscription auto-renewal,
+  we keep that record only as long as needed to show the consent was given, as
+  required by applicable automatic-renewal laws, and then delete it.
 - Losing your passphrase or your `device.secret` file means the vault is
   **unrecoverable**, by design, there is no back door, which also means we
   cannot access or restore your data for you.
@@ -151,6 +175,15 @@ subscribe, the Stripe billing mapping described above. To exercise any right, or
 to ask what we hold, contact support@northkeep.ai. We do not sell personal
 information.
 
+**For users in the EU and UK.** Where the GDPR (or UK GDPR) applies, Silva Peak
+Labs, LLC is the **data controller** for the limited account and billing data
+described in this policy. Our lawful bases are **performance of a contract** (to
+provide the sync and connector features you request) and our **legitimate
+interests** in operating, securing, and supporting the Service. You may also have
+the right to lodge a complaint with your local supervisory authority. If you
+enable the connector, you remain in control of what content you share, and you can
+unshare or delete it at any time as described above.
+
 ## Children
 
 NorthKeep is not directed to children under 13 (or the minimum age in your
@@ -158,9 +191,11 @@ jurisdiction), and we do not knowingly collect their data.
 
 ## Changes
 
-We may update this policy; material changes will be posted at northkeep.ai with an
-updated effective date. Continued use of the hosted service after a change means
-you accept the revised policy.
+We may update this policy. For material changes, we will post the updated policy
+at northkeep.ai with a new effective date and, for hosted-service subscribers,
+give notice by email or in-app before the change takes effect. Continued use of
+the hosted service after a change takes effect means you accept the revised
+policy.
 
 ## Contact
 
