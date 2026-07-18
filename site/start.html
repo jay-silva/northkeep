@@ -119,6 +119,20 @@
 <p>Already have months of ChatGPT or Claude conversations? Request your data export from the provider, then drop the export file into NorthKeep's <strong>Import</strong> wizard. Extraction runs on your machine, and you review every proposed memory before it is kept.</p>
 </div>
 
+<div class="step">
+<h2><span class="num">9</span>Optional: let your apps keep a journal</h2>
+<p>Once Cloud Connect is paired, your AI apps can write back as well as read. That enables something no single vendor offers: a record of your conversations across every app, in a vault you own. Manus, Claude, and ChatGPT scheduled tasks can all see their own session history and push summaries automatically.</p>
+<p><strong>One-time setup:</strong></p>
+<ol>
+  <li>In the Memories tab, add one memory with a new scope named <code>journal</code>. Something like: "This scope holds automatic chat summaries from my AI apps."</li>
+  <li>In the Cloud Connect tab, share the <code>journal</code> scope.</li>
+</ol>
+<p><strong>Then, in each app, create a daily scheduled task with a prompt like:</strong></p>
+<div class="note" style="color:var(--ink)">Review my conversations from today. For each substantive one, write a two or three sentence summary. Store each summary in NorthKeep using memory_remember with type "episodic" and scope "journal". Skip small talk and anything already stored.</div>
+<p>Prefer capture as you go instead of nightly? Put a standing line in the app's custom instructions: "At the end of any substantive conversation, store a short summary in NorthKeep (type episodic, scope journal)."</p>
+<p class="tip">Honesty note: journal summaries live in a shared scope, so they sit on the connector encrypted at rest until they sync into your vault. After a Sync, you can unshare the journal scope any time; the server copies delete and your vault keeps everything.</p>
+</div>
+
 <h2>Stuck?</h2>
 <p>Email <a href="mailto:support@northkeep.ai">support@northkeep.ai</a> and a human answers. Design partners: text Jay directly, that is what the pilot is for.</p>
 
