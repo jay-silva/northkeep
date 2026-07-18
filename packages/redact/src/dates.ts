@@ -45,9 +45,17 @@ const DATE_PATTERNS: RegExp[] = [
   // 25.12.1999. Days ≤ 12 in day-first order parse as the US pattern above —
   // either way the date is masked and the trailing year kept.
   /\b(?:1[3-9]|2\d|3[01])[-/.](?:0?[1-9]|1[0-2])[-/.](?<year>\d{4}|\d{2})\b/g,
-  // Numeric M/D with no year (e.g. 03/15) — full date, year unknown.
-  /\b(?:0?[1-9]|1[0-2])[/](?:0?[1-9]|[12]\d|3[01])\b(?![/.\d])/g,
 ];
+
+/**
+ * Yearless M/D (03/15) is handled separately and only in DATE CONTEXT — the
+ * bare pattern devours clinical fractions ("7/10 pain", "5/5 strength",
+ * "2/6 murmur", GCS and SpO2 readings; field report 2026-07-17). It masks
+ * only when a date-ish word sits just before it.
+ */
+const YEARLESS_MD = /\b(?:0?[1-9]|1[0-2])[/](?:0?[1-9]|[12]\d|3[01])\b(?![/.\d])/g;
+const YEARLESS_CONTEXT =
+  /\b(?:on|date|dob|until|by|since|seen|admitted|discharged|arrived|transported|incident|onset|dispatched|recheck|follow(?:-?\s?up)?|f\/u)\b[:\s]*$/i;
 
 /** A DOB-ish label, used by mode 'dob-labeled': the date must start within
  * `DOB_REACH` characters after the end of a label match. */
@@ -80,6 +88,15 @@ function findDates(text: string): DateHit[] {
       if (hits.some((h) => start < h.end && end > h.start)) continue; // first pattern wins overlap
       hits.push({ start, end, original: m[0], year: normalizeYear(m.groups?.year) });
     }
+  }
+  // Yearless M/D: date context required (see YEARLESS_MD).
+  YEARLESS_MD.lastIndex = 0;
+  for (const m of text.matchAll(YEARLESS_MD)) {
+    const start = m.index;
+    const end = start + m[0].length;
+    if (hits.some((h) => start < h.end && end > h.start)) continue;
+    if (!YEARLESS_CONTEXT.test(text.slice(Math.max(0, start - 16), start))) continue;
+    hits.push({ start, end, original: m[0], year: null });
   }
   return hits.sort((a, b) => a.start - b.start);
 }
