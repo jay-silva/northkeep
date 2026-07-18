@@ -51,11 +51,24 @@ Types: identity (stable profile: role, family, expertise), semantic (durable
 facts and preferences), procedural (how the user likes things done),
 episodic (dated events that may matter later).
 
+WHO IS THE USER: the user is the person writing these messages. Record ONLY
+facts the user states about THEMSELF, in the first person ("I am…", "my…",
+"I work…", "I prefer…").
+
+NEVER record facts about anyone else. If the user pastes or describes a
+document, report, patient, client, colleague, or any third party, that content
+is their WORK, not facts about them. Do not turn a person named in that content
+into the user. For example, from a patient report about "Donna, a 77-year-old
+with macular degeneration," extract NOTHING — Donna is not the user. Never write
+"The user is <a name found in pasted content>."
+
 Rules:
-- Only facts about the USER that stay true or will matter later.
+- Only first-person facts the USER states about themselves that stay true or
+  will matter later. If the messages are about someone else or a task/document,
+  return {"memories":[]}.
 - One self-contained statement per memory, third person ("The user ...").
-- Skip trivia, one-off tasks, questions, and anything about the assistant.
-- confidence between 0 and 1 reflecting how clearly the user stated it.
+- Skip trivia, one-off tasks, questions, documents, and anything about the assistant.
+- confidence between 0 and 1 reflecting how clearly the user stated it about themselves.
 - At most ${MAX_CANDIDATES_PER_CONVERSATION} memories. {"memories":[]} if nothing qualifies.
 
 Conversation title: ${conversation.title}
@@ -63,7 +76,29 @@ User messages:
 ${userText}`;
 
   const raw = await ollama.generateJson(prompt);
-  return sanitizeCandidates(raw, conversation);
+  return groundIdentityClaims(sanitizeCandidates(raw, conversation), userText);
+}
+
+/** Content that asserts a fact about the user's identity/demographics — the
+ * shape a mis-read document produces ("The user is Donna, a 77-year-old…" or the
+ * possessive "The user's diagnosis is …"). Note the possessive `'s` attaches
+ * directly (no space); the verb forms carry their own leading space. */
+const ASSERTS_IDENTITY = /\bthe user(?:'s| is| was| has| lives| works| named| is a| is an)\b/i;
+
+/**
+ * Deterministic backstop (a 3B model will not always obey the prompt): a claim
+ * about WHO the user is must be grounded in the user actually speaking in the
+ * first person. Without that, pasted third-party content (a patient report, a
+ * client file) gets mis-attributed as "The user is <that person>". When the
+ * source has no first-person marker, drop identity-type and identity-asserting
+ * candidates; other memory types pass through unchanged. Exported for testing.
+ */
+export function groundIdentityClaims(
+  candidates: MemoryCandidate[],
+  userText: string,
+): MemoryCandidate[] {
+  if (FACT_PATTERN.test(userText)) return candidates;
+  return candidates.filter((c) => c.type !== 'identity' && !ASSERTS_IDENTITY.test(c.content));
 }
 
 /** Defensive parse: a 3B model's JSON is a suggestion, not a contract. */

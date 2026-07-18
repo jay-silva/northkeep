@@ -103,8 +103,8 @@ export interface TurnOptions {
   provider: ModelProvider;
   model: string;
   vault: ConverseVault;
-  /** 0 = no redaction (allowed ONLY for private endpoints), 1, or 2. */
-  redactTier: 0 | 1 | 2;
+  /** 0 = no redaction (allowed ONLY for private endpoints), 1, 2, or 3. */
+  redactTier: 0 | 1 | 2 | 3;
   allowedScopes?: string[];
   /** Scope for memories distilled from this conversation. */
   memoryScope?: string;
@@ -137,11 +137,19 @@ export interface TurnResult {
   privacy: PrivacyTier;
   endpointHost: string;
   model: string;
-  tierApplied: 0 | 1 | 2;
+  tierApplied: 0 | 1 | 2 | 3;
   tier2Degraded: boolean;
   memoriesUsed: Array<{ id: string; type: string; scope: string; content: string }>;
   memoriesCreated: MemoryEntry[];
   distillMode: 'llm' | 'heuristic' | 'off';
+  /**
+   * What was masked before this turn was sent, deduped by placeholder — the
+   * proof surface for "what actually left the machine". Carries the original so
+   * a LOCAL audit UI can show real→placeholder; it is ephemeral (never logged,
+   * never stored — the call log stays content-free). Empty when nothing was
+   * redacted (e.g. a private/Tier-0 turn, or a message with no sensitive data).
+   */
+  redactions: Array<{ placeholder: string; original: string; kind: string; tier: 1 | 2 | 3 }>;
   /**
    * Token counts for this turn — REAL when the provider reported usage,
    * otherwise a chars/token estimate (usage.estimated === true). A count only;
@@ -180,7 +188,7 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   const { tier: privacy, host: endpointHost } = classifyEndpoint(provider.baseUrl);
 
   // Bounded endpoints get Tier-1 minimum, whatever the caller asked for.
-  const effectiveTier: 0 | 1 | 2 =
+  const effectiveTier: 0 | 1 | 2 | 3 =
     privacy === 'bounded' && options.redactTier === 0 ? 1 : options.redactTier;
 
   // 1. Retrieve (scope-enforced in the store, M4).
@@ -239,7 +247,7 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   ];
   let wirePrompt = plainPrompt;
   const replacements: Replacement[] = [];
-  let tierApplied: 0 | 1 | 2 = 0;
+  let tierApplied: 0 | 1 | 2 | 3 = 0;
   let tier2Degraded = false;
   // Fail closed: redact for anything that isn't an explicit tier-0 (the only
   // value allowed to skip, and only ever set for a private endpoint above).
@@ -254,7 +262,7 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
       redacted.push({ role: msg.role, content: r.redacted });
       replacements.push(...r.replacements);
     }
-    if (effectiveTier === 2 && tier2Degraded && privacy === 'bounded') {
+    if (effectiveTier >= 2 && tier2Degraded && privacy === 'bounded') {
       // Loud, not silent (invariant #6): the user asked for pseudonymization
       // toward a remote endpoint and it is not available — do not send.
       audit(auditFn, now, {
@@ -272,11 +280,11 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
       });
       throw new TurnError(
         'TIER2_UNAVAILABLE',
-        'Tier-2 pseudonymization is unavailable (is Ollama running?) and this endpoint is not private. Nothing was sent. Start the local model, or explicitly switch this endpoint to Tier 1.',
+        'Name pseudonymization needs the local model (is Ollama running?) and this endpoint is not private. Nothing was sent. Start the local model, or explicitly switch this endpoint to Tier 1.',
       );
     }
     wirePrompt = redacted;
-    tierApplied = effectiveTier === 2 && tier2Degraded ? 1 : effectiveTier;
+    tierApplied = effectiveTier >= 2 && tier2Degraded ? 1 : effectiveTier;
   }
 
   // 5. Call the provider — direct client→endpoint, nothing proxies.
@@ -368,6 +376,20 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   const catalog = options.catalog ?? loadCatalog();
   const cost = estimateTurnCost(usage, lookupModel(model, catalog));
 
+  // Dedup the accumulated replacements by placeholder so "[EMAIL_1]" shows once
+  // even when it appeared several times across the prompt.
+  const redactionSeen = new Map<string, { placeholder: string; original: string; kind: string; tier: 1 | 2 | 3 }>();
+  for (const r of replacements) {
+    if (!redactionSeen.has(r.placeholder)) {
+      redactionSeen.set(r.placeholder, {
+        placeholder: r.placeholder,
+        original: r.original,
+        kind: r.kind,
+        tier: r.tier,
+      });
+    }
+  }
+
   return {
     reply,
     privacy,
@@ -375,6 +397,7 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
     model,
     tierApplied,
     tier2Degraded,
+    redactions: [...redactionSeen.values()],
     memoriesUsed: used.map((s) => ({
       id: s.entry.id,
       type: s.entry.type,

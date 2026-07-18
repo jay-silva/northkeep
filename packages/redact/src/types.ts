@@ -1,4 +1,4 @@
-export type Tier = 1 | 2;
+export type Tier = 1 | 2 | 3;
 
 export type SecretKind =
   | 'email'
@@ -11,14 +11,17 @@ export type SecretKind =
 
 export type EntityKind = 'person' | 'org' | 'location';
 
+/** Generalized calendar dates (ADR 0022): `[DATE-1948]` / `[DATE]`. */
+export type DateKind = 'date';
+
 /** One redaction: the placeholder that replaced a span, and what it hides. */
 export interface Replacement {
-  /** e.g. `[SSN]`, `[EMAIL_1]`, `Person-1`, `Org-2` */
+  /** e.g. `[SSN]`, `[EMAIL_1]`, `Person-1`, `Org-2`, `[DATE-1948]` */
   placeholder: string;
   /** The original text that was masked. */
   original: string;
   tier: Tier;
-  kind: SecretKind | EntityKind;
+  kind: SecretKind | EntityKind | DateKind;
   /** Whether restore() puts `original` back. Tier-1 secrets are one-way
    * (the model never needs your real SSN); Tier-2 pseudonyms round-trip. */
   restorable: boolean;
@@ -34,7 +37,9 @@ export interface RedactionResult {
 }
 
 export interface RedactOptions {
-  /** 1 = deterministic secrets only; 2 = also pseudonymize named entities. */
+  /** 1 = deterministic secrets only; 2 = + NER pseudonyms and DOB-labeled
+   * dates; 3 = + ALL dates to year, dictionary/anchor name scrubbing, and an
+   * NER verify pass (ADR 0022). */
   tier?: Tier;
   /** Reuse/extend a pseudonym map so the same entity gets the same
    * placeholder across calls (consistent pseudonyms). */

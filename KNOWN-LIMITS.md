@@ -128,9 +128,30 @@ every milestone; if a limit is removed, say when and how.*
 - **Tier 2 needs Ollama and is 85–95% in-domain.** A name it misses is a
   leak; Tier 1 always runs underneath as a backstop for secrets. Without
   Ollama, Tier 2 is skipped and you're told loudly — names are NOT masked.
+  Tier 2 also generalizes DOB-labeled dates to year-only, deterministically.
+- **Tier 3 makes dates and listed names deterministic — not "all names."**
+  Full calendar dates in every recognized format (numeric US and day-first,
+  month-name incl. "15th of March", ISO with attached timestamps) go to
+  year-only (`[DATE-1948]`) by regex. Names mask deterministically across
+  the formats that four adversarial review rounds attacked: Titlecase and
+  ALL-CAPS narratives, possessives, Mc/O'/hyphenated/accented forms,
+  multi-surname names ("MARIA GARCIA LOPEZ HERNANDEZ"), face-sheet
+  "SMITH, JOHN", mixed-casing "John SMITH", and rank-blocked common pairs
+  ("John Smith") via the FIRST→SUR pair signature — while clinical headers,
+  acronyms, med lists, and chart labels stay untouched. The enumerated
+  residuals (each falls to the NER union when Ollama is up): anchored caps
+  names that are top-300 English words ("MR MAY"); bare unanchored single
+  word-surnames ("FOUND BY SMITH", "King said…"); unanchored off-list
+  multi-token names ("Zyler Quandril arrived"); lowercase common-word names;
+  "de la Cruz"-style lowercase particles (only "Cruz" masks); and two exotic
+  date forms ("March fifteenth 1948", "19480315"). A degraded (no-Ollama)
+  Tier 3 toward a remote endpoint refuses to send, same as Tier 2 — so the
+  residual exposure with no local model is bounded to private endpoints. We
+  never claim 100% of names (ADR 0022; adversarial reviews 2026-07-17,
+  rounds 1–4).
 - **We do not remove contextual identity.** "The paramedic lieutenant in
-  Bourne whose partner runs compliance" survives every content-level filter.
-  We don't claim Tier 3, and we say so.
+  Bourne whose partner runs compliance" survives every content-level filter,
+  at every tier. Stated plainly.
 - **Restore is one-directional for secrets.** Pseudonyms (names/orgs) come
   back; a masked SSN or card number stays masked — by design.
 
