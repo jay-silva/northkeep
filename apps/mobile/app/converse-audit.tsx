@@ -35,9 +35,30 @@ export default function ConverseAudit() {
             <Row label="Sent" value={new Date(audit.at).toLocaleString()} />
           </View>
 
+          {audit.redactions.length > 0 ? (
+            <>
+              <Text style={styles.sectionTitle}>What was masked on your phone</Text>
+              <View style={styles.metaCard}>
+                {audit.redactions.map((r, i) => (
+                  <View key={i} style={styles.maskRow}>
+                    <Text style={styles.maskOriginal} numberOfLines={1}>
+                      {r.original}
+                    </Text>
+                    <Text style={styles.maskArrow}>→</Text>
+                    <Text style={styles.maskPlaceholder}>{r.placeholder}</Text>
+                    <Text style={styles.maskKind}>{KIND_LABEL[r.kind] ?? r.kind}</Text>
+                  </View>
+                ))}
+              </View>
+            </>
+          ) : (
+            <Text style={styles.note}>Nothing sensitive was found to mask in this turn.</Text>
+          )}
+
           <Text style={styles.note}>
-            This is the message body exactly as sent. Masked tokens like [EMAIL_1] or [CREDIT_CARD_1]
-            are secrets the firewall caught. Your API key is not shown — it is a request header, never
+            This is the message body exactly as sent. Masked tokens like [EMAIL_1], [DATE-1948], or
+            Person-1 replaced the real values before transmission — the list above shows each one.
+            Shown here only, never stored. Your API key is not shown — it is a request header, never
             part of this body.
           </Text>
 
@@ -55,6 +76,12 @@ export default function ConverseAudit() {
     </ScrollView>
   );
 }
+
+const KIND_LABEL: Record<string, string> = {
+  email: 'email', phone: 'phone', ssn: 'SSN', credit_card: 'card', ip: 'IP',
+  api_key: 'API key', iban: 'IBAN', person: 'name', org: 'org',
+  location: 'location', date: 'date (year kept)',
+};
 
 function Row({ label, value }: { label: string; value: string }) {
   return (
@@ -100,5 +127,10 @@ const styles = StyleSheet.create({
     marginBottom: 10,
   },
   role: { color: colors.accent, fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 6 },
+  maskRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
+  maskOriginal: { color: '#c0625a', fontSize: 13, textDecorationLine: 'line-through', flexShrink: 1 },
+  maskArrow: { color: colors.muted, fontSize: 13 },
+  maskPlaceholder: { color: colors.accent, fontSize: 13, fontWeight: '600' },
+  maskKind: { color: colors.muted, fontSize: 11 },
   body: { color: colors.text, fontSize: 14, lineHeight: 20 },
 });

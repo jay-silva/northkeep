@@ -81,6 +81,9 @@ importers:
       '@northkeep/platform-mobile':
         specifier: workspace:*
         version: link:../../packages/platform-mobile
+      '@northkeep/redact':
+        specifier: workspace:*
+        version: link:../../packages/redact
       '@northkeep/sync':
         specifier: workspace:*
         version: link:../../packages/sync

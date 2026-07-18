@@ -35,7 +35,7 @@ import { pickAttachment, type PickedAttachment } from '../src/lib/attach-file';
 type UIMessage = { role: 'user' | 'assistant'; content: string };
 
 const TIER1_ONLY_BANNER =
-  'On-device firewall: Tier-1 only. Names/orgs are NOT pseudonymized on your phone (that needs the local model on your Mac). Secrets (emails, cards, SSNs, keys, phones, IPs) are masked before anything is sent.';
+  'On-device firewall: secrets (emails, cards, SSNs, keys, phones, IPs) are masked, every full date becomes year-only, and names on the built-in dictionaries are pseudonymized before anything is sent. No AI model runs on the phone, so rare or unusual names can slip through (that safety net needs the local model on your Mac). Check "What left this device" after any sensitive message.';
 
 /**
  * Animated "Thinking…" indicator shown in the assistant bubble until the first

@@ -5,6 +5,7 @@ import {
   type ConverseSession,
   type ConverseVault,
 } from '@northkeep/converse/dist/turn.js';
+import { redactDeterministic } from '@northkeep/redact';
 import type { RetrieveOptions, ScoredEntry } from '@northkeep/core';
 import { createMobileProvider, type OutboundCapture } from './mobile-providers';
 import type { ProviderConfig } from './providers-store';
@@ -19,10 +20,15 @@ import type { ProviderConfig } from './providers-store';
  *
  *   - provider : an expo/fetch ModelProvider (mobile-providers.ts)
  *   - vault    : a ConverseVault backed by the unlocked vault's scored retrieve
- *   - redactTier: 1 — the HARD outbound firewall. Tier-2 (Ollama NER) does not
- *                 exist on the phone; the UI shows a loud persistent banner
+ *   - redactTier: 1 + redactFn: redactDeterministic — the HARD outbound
+ *                 firewall, upgraded (ADR 0022 mobile mirror): Tier-1 secrets
+ *                 PLUS deterministic date generalization and name scrubbing
+ *                 (census/SSA dictionaries, anchors, caps runs, pairs) run on
+ *                 the WHOLE prompt every turn. Tier-2/3 NER (Ollama) does not
+ *                 exist on the phone — the deterministic layers never degrade
+ *                 and never refuse; the UI banner states the boundary
  *                 (invariant #6). We never pass tier 0, so nothing outbound
- *                 ever skips Tier-1.
+ *                 ever skips the firewall.
  *   - distill  : false — no on-device distillation (no local model; and we do
  *                 not want a chat turn silently writing/syncing new memories).
  *                 Deferred; see the report.
@@ -49,24 +55,30 @@ export interface MobileTurnInput {
   signal?: AbortSignal;
 }
 
+export type MaskedItem = { placeholder: string; original: string; kind: string };
+
 export interface MobileTurnResult {
   reply: string;
-  tierApplied: 0 | 1 | 2;
+  tierApplied: 0 | 1 | 2 | 3;
   endpointHost: string;
   privacy: 'private' | 'bounded';
   memoriesUsed: Array<{ id: string; type: string; content: string }>;
   /** Exactly what left the device this turn (redacted; no key). */
   outbound: OutboundCapture;
+  /** What was masked (real → placeholder), for the audit view. Ephemeral. */
+  redactions: MaskedItem[];
 }
 
 /** The most recent outbound payload, for the "What left this device" screen. */
 export interface LastAudit {
   at: string;
   providerLabel: string;
-  tierApplied: 0 | 1 | 2;
+  tierApplied: 0 | 1 | 2 | 3;
   endpointHost: string;
   privacy: 'private' | 'bounded';
   outbound: OutboundCapture;
+  /** What was masked on this turn (real → placeholder). Never persisted. */
+  redactions: MaskedItem[];
 }
 
 let lastAudit: LastAudit | null = null;
@@ -94,7 +106,10 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     provider,
     model: input.provider.model,
     vault,
-    redactTier: 1, // hard Tier-1 firewall — never 0 on device
+    redactTier: 1, // hard floor — never 0 on device
+    // Deterministic PHI shield (ADR 0022 mobile mirror): Tier-1 + all dates
+    // to year + dictionary/anchor/caps/pair name scrubbing, no model needed.
+    redactFn: (text, opts) => redactDeterministic(text, opts),
     distill: false, // no on-phone distillation (no Ollama)
     catalog: [], // avoid loadCatalog() node:fs; cost lookup returns null
     auditFn: () => {}, // call-log file is desktop-only
@@ -109,6 +124,12 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     throw new Error('Internal: outbound payload was not captured for the audit view.');
   }
 
+  const redactions: MaskedItem[] = (result.redactions ?? []).map((r) => ({
+    placeholder: r.placeholder,
+    original: r.original,
+    kind: r.kind,
+  }));
+
   lastAudit = {
     at: new Date().toISOString(),
     providerLabel: input.provider.label,
@@ -116,6 +137,7 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     endpointHost: result.endpointHost,
     privacy: result.privacy,
     outbound: captured,
+    redactions,
   };
 
   return {
@@ -125,5 +147,6 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     privacy: result.privacy,
     memoriesUsed: result.memoriesUsed.map((m) => ({ id: m.id, type: m.type, content: m.content })),
     outbound: captured,
+    redactions,
   };
 }
