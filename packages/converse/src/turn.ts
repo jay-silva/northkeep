@@ -253,16 +253,29 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   // value allowed to skip, and only ever set for a private endpoint above).
   if (effectiveTier !== 0) {
     const redacted: ChatMessage[] = [];
-    for (const msg of plainPrompt) {
+    for (let mi = 0; mi < plainPrompt.length; mi += 1) {
+      const msg = plainPrompt[mi]!;
+      // NER (the slow 3B model) runs only on NEW content: the system block
+      // (memories) and the newest user message. History entities were already
+      // detected in their original turns and replay instantly from the shared
+      // pseudonym map; re-running the model over every history message every
+      // turn made long chats hang for minutes (field report 2026-07-18). The
+      // deterministic layers still cover EVERY message in full.
+      const isNewContent = mi === 0 || mi === plainPrompt.length - 1;
       const r = await redactFn(msg.content, {
         tier: effectiveTier,
         pseudonyms: session.pseudonyms,
+        nerMode: isNewContent ? 'on' : 'replay-only',
       });
       if (r.tier2Degraded) tier2Degraded = true;
       redacted.push({ role: msg.role, content: r.redacted });
       replacements.push(...r.replacements);
     }
-    if (effectiveTier >= 2 && tier2Degraded && privacy === 'bounded') {
+    // Tier 2's ONLY name layer is the NER, so degraded toward a bounded
+    // endpoint refuses. Tier 3's guarantee is the deterministic layers
+    // (leak-tested with the model absent), so a degraded Tier 3 PROCEEDS —
+    // the reply's provenance shows the NER net was offline (ADR 0022).
+    if (effectiveTier === 2 && tier2Degraded && privacy === 'bounded') {
       // Loud, not silent (invariant #6): the user asked for pseudonymization
       // toward a remote endpoint and it is not available — do not send.
       audit(auditFn, now, {
@@ -284,7 +297,8 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
       );
     }
     wirePrompt = redacted;
-    tierApplied = effectiveTier >= 2 && tier2Degraded ? 1 : effectiveTier;
+    tierApplied =
+      effectiveTier === 2 && tier2Degraded ? 1 : effectiveTier;
   }
 
   // 5. Call the provider — direct client→endpoint, nothing proxies.

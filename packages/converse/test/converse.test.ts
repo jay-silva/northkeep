@@ -299,6 +299,30 @@ describe('runTurn', () => {
     expect(audits[0]!.denied).toBe(true);
   });
 
+  it('Tier-3 degraded toward a bounded endpoint PROCEEDS deterministically (ADR 0022)', async () => {
+    const provider = new FakeProvider('https://api.example.com', 'ok');
+    const degradedT3: typeof redact = async (text) => {
+      const t1 = await redact(text, { tier: 1 });
+      return { ...t1, tierApplied: 3 as const, tier2Degraded: true };
+    };
+    const result = await runTurn({
+      message: 'note about the patient',
+      session: createSession(),
+      provider,
+      model: 'fake-model',
+      vault: new FakeVault([]),
+      redactTier: 3,
+      distill: false,
+      redactFn: degradedT3,
+      auditFn: () => {},
+    });
+    // Tier 3's guarantee is the deterministic layer, so the send happens —
+    // with the degraded flag surfaced for the provenance strip.
+    expect(provider.received).toHaveLength(1);
+    expect(result.tierApplied).toBe(3);
+    expect(result.tier2Degraded).toBe(true);
+  });
+
   it('forces Tier-1 minimum on a bounded endpoint even when asked for 0', async () => {
     const provider = new FakeProvider('https://api.example.com', 'ok');
     const result = await runTurn({

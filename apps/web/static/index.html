@@ -2047,7 +2047,10 @@
     // Concierge transparency (M7b): why this endpoint answered. textContent
     // only — the reason includes endpoint labels, which are user config.
     if (ev.route_reason) strip.appendChild(el('span', '', '✦ ' + ev.route_reason));
-    strip.appendChild(el('span', '', ev.tier2_degraded ? 'Tier 2 degraded → 1' : 'Tier ' + ev.tier_applied));
+    strip.appendChild(el('span', '',
+      ev.tier_applied === 3 && ev.tier2_degraded ? 'Tier 3 — deterministic (NER net offline)'
+      : ev.tier2_degraded ? 'Tier 2 degraded → 1'
+      : 'Tier ' + ev.tier_applied));
     // Approximate on-device cost of this turn; hover shows what your other
     // connected models would have cost (all computed locally, never sent).
     if (ev.cost) {
