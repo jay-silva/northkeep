@@ -197,7 +197,8 @@
       <div class="feat"><h3><span class="dot"></span>Per-app scopes</h3><p>Grant one app your work memory only, another nothing sensitive. Enforced at the vault, not on trust.</p></div>
       <div class="feat"><h3><span class="dot"></span>Bring your history</h3><p>Import your ChatGPT or Claude export. Extraction runs entirely on your machine, and you review every memory before it's kept.</p></div>
       <div class="feat"><h3><span class="dot"></span>Any model</h3><p>Local models via Ollama, or any provider with your own key. A concierge routes each question to the cheapest capable model, cost shown up front.</p></div>
-      <div class="feat"><h3><span class="dot"></span>Encrypted sync</h3><p>Move your vault between machines. The server only ever holds ciphertext it can't decrypt, never a key, never plaintext.</p></div>
+      <div class="feat"><h3><span class="dot"></span>Encrypted sync</h3><p>Move your vault between machines. The server only ever holds ciphertext it cannot decrypt, never a key, never plaintext. We could not read it if we wanted to.</p></div>
+      <div class="feat"><h3><span class="dot"></span>Cloud Connect (Beta)</h3><p>Share the scopes you choose to the AI apps you already use, so Claude and ChatGPT remember you on your phone too. Stored encrypted at rest with no key kept in that database; decrypted only for the moment it takes to answer your app. Opt-in per scope, reversible.</p></div>
     </div>
   </div>
 </section>
@@ -235,12 +236,12 @@
         <a class="btn ghost" href="https://github.com/jay-silva/northkeep/releases/download/v0.15.0/NorthKeep_0.15.0_aarch64.dmg">Download</a>
       </div>
       <div class="tier hi">
-        <h3>Sync</h3>
+        <h3>Sync + Cloud Connect</h3>
         <div class="price">$10<small> / month</small></div>
         <ul>
           <li>Everything in Free</li>
-          <li>Encrypted sync across your devices</li>
-          <li>Server holds ciphertext only</li>
+          <li>Encrypted sync across your devices (ciphertext only, we cannot read it)</li>
+          <li>Cloud Connect (Beta): your chosen scopes reach Claude and ChatGPT, even on your phone</li>
           <li>Card handled by Stripe, never us</li>
           <li>Cancel anytime</li>
         </ul>
