@@ -149,9 +149,11 @@ function plausibleEntity(span: string, strictGate: boolean): boolean {
   const tokens = span.match(/[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’\-]*/g) ?? [];
   if (tokens.length === 0) return false; // pure digits/punctuation is not a name
   if (!strictGate) {
-    // Tier 2: NER is the only name layer; require at least one token that is
-    // name-listed or a real uncommon word, refusing pure field-label spans.
-    return tokens.some((t) => nameListHit(t) || (t.length >= 3 && !isCommonEnglish(t)));
+    // Tier 2: NER is the ONLY name layer, and legitimate org names are often
+    // built entirely from common English words ("Cascade Analytics", "First
+    // National Bank") — filtering them would cut real recall (caught by the
+    // eval harness's perfect-backend gate). Only the placeholder ban applies.
+    return true;
   }
   // Tier 3 strict: common-English tokens are the deterministic layers' job
   // ("Donna", "Smith"); NER may only add masks for OFF-English residuals
