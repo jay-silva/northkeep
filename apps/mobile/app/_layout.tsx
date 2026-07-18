@@ -118,6 +118,7 @@ export default function RootLayout() {
               {/* Pushed detail screens from Converse (keep the back arrow). */}
               <Stack.Screen name="providers" options={{ title: 'Providers' }} />
               <Stack.Screen name="converse-audit" options={{ title: 'What left this device' }} />
+              <Stack.Screen name="model-eval" options={{ title: 'On-device model eval' }} />
             </Stack>
           </View>
           <BottomNav />

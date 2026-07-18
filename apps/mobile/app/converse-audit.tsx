@@ -25,14 +25,32 @@ export default function ConverseAudit() {
         <Text style={styles.empty}>Send a message in Converse first — then this shows exactly what was transmitted.</Text>
       ) : (
         <>
+          {audit.onDevice ? (
+            <View style={styles.deviceBanner}>
+              <Text style={styles.deviceBannerText}>
+                This turn stayed on this device. Nothing was sent. The text below is what the
+                on-device model was given locally, never transmitted anywhere.
+              </Text>
+            </View>
+          ) : null}
+
           <View style={styles.metaCard}>
             <Row label="Provider" value={audit.providerLabel} />
-            <Row label="Endpoint" value={audit.outbound.endpoint} />
+            <Row label={audit.onDevice ? 'Ran on' : 'Endpoint'} value={audit.outbound.endpoint} />
             <Row label="Host" value={audit.endpointHost} />
             <Row label="Model" value={audit.outbound.model} />
-            <Row label="Privacy" value={audit.privacy === 'bounded' ? 'Bounded (leaves device)' : 'Private (on your network)'} />
-            <Row label="Redaction" value={`Tier ${audit.tierApplied} applied`} />
-            <Row label="Sent" value={new Date(audit.at).toLocaleString()} />
+            <Row
+              label="Privacy"
+              value={
+                audit.onDevice
+                  ? 'On device (nothing sent)'
+                  : audit.privacy === 'bounded'
+                    ? 'Bounded (leaves device)'
+                    : 'Private (on your network)'
+              }
+            />
+            <Row label="Redaction" value={audit.onDevice ? 'On-device, no redaction needed' : `Tier ${audit.tierApplied} applied`} />
+            <Row label={audit.onDevice ? 'Ran' : 'Sent'} value={new Date(audit.at).toLocaleString()} />
           </View>
 
           {audit.redactions.length > 0 ? (
@@ -56,13 +74,12 @@ export default function ConverseAudit() {
           )}
 
           <Text style={styles.note}>
-            This is the message body exactly as sent. Masked tokens like [EMAIL_1], [DATE-1948], or
-            Person-1 replaced the real values before transmission — the list above shows each one.
-            Shown here only, never stored. Your API key is not shown — it is a request header, never
-            part of this body.
+            {audit.onDevice
+              ? 'This is the exact text the on-device model processed locally. It was never transmitted. No API key is involved in on-device chat.'
+              : 'This is the message body exactly as sent. Masked tokens like [EMAIL_1], [DATE-1948], or Person-1 replaced the real values before transmission; the list above shows each one. Shown here only, never stored. Your API key is not shown; it is a request header, never part of this body.'}
           </Text>
 
-          <Text style={styles.sectionTitle}>Outbound messages</Text>
+          <Text style={styles.sectionTitle}>{audit.onDevice ? 'On-device messages (not sent)' : 'Outbound messages'}</Text>
           {audit.outbound.messages.map((m, i) => (
             <View key={i} style={styles.msgCard}>
               <Text style={styles.role}>{m.role.toUpperCase()}</Text>
@@ -98,6 +115,13 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 48 },
   empty: { color: colors.muted, fontSize: 15, lineHeight: 22, padding: 20, textAlign: 'center' },
+  deviceBanner: {
+    backgroundColor: '#1c2b23',
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 14,
+  },
+  deviceBannerText: { color: colors.accent, fontSize: 14, fontWeight: '600', lineHeight: 20 },
   metaCard: {
     backgroundColor: colors.card,
     borderColor: colors.border,

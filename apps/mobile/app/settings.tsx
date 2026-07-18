@@ -135,6 +135,14 @@ export default function Settings() {
       <ErrorNote message={error} />
       {notice ? <Text style={styles.notice}>{notice}</Text> : null}
 
+      <FieldLabel>Diagnostics</FieldLabel>
+      <Button
+        title="On-device model eval (Tier-2 gate)"
+        kind="secondary"
+        onPress={() => router.push('/model-eval')}
+        style={styles.stackedButton}
+      />
+
       <FieldLabel>Session</FieldLabel>
       {session.status === 'unlocked' ? (
         <Button title="Lock vault" kind="secondary" onPress={onLock} style={styles.stackedButton} />

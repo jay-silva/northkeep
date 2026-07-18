@@ -12,30 +12,41 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { Redirect, router, useFocusEffect } from 'expo-router';
+import type { LocalModelResolution } from '@northkeep/platform-mobile/dist/local-model/index.js';
 import { useVaultSession } from '../src/lib/vault-session';
-import { Button, ErrorNote, WarningBanner, colors } from '../src/ui';
+import { Button, ErrorNote, colors } from '../src/ui';
 import {
   getSelectedProviderId,
   getProviderKey,
   listProviders,
+  ON_DEVICE_PROVIDER_ID,
   type ProviderConfig,
 } from '../src/lib/providers-store';
-import { createSession, runMobileTurn, TurnError, type ConverseSession } from '../src/lib/converse-run';
+import { getLocalModel } from '../src/lib/local-model';
+import {
+  createSession,
+  runMobileTurn,
+  runOnDeviceTurn,
+  TurnError,
+  type ConverseSession,
+} from '../src/lib/converse-run';
 import { pickAttachment, type PickedAttachment } from '../src/lib/attach-file';
 
 /**
- * Converse (M6-3): BYOK chat over the REAL runTurn pipeline
- * (packages/converse/src/turn.ts), with vault memory context and the on-device
- * Tier-1 redaction firewall on everything outbound. Tier-2 (Ollama NER) does
- * not exist on the phone, so a persistent loud banner says only Tier-1 protects
- * outbound text (invariant #6, degrade loudly). "What left this device" shows
- * the actual redacted payload after a turn.
+ * Converse (M6-3 + M6-4): chat over the REAL runTurn pipeline
+ * (packages/converse/src/turn.ts) with vault memory context.
+ *
+ * Three privacy postures, shown loudly (invariant #6):
+ *  - On-device (private): the whole turn runs on the phone (runOnDeviceTurn),
+ *    no key, nothing sent off the device.
+ *  - Cloud + Tier-2 on-device: a local model pseudonymizes names/orgs/places on
+ *    the phone BEFORE the redacted prompt is sent to the chosen provider.
+ *  - Cloud + Tier-1 only: no on-device model, so only deterministic secrets are
+ *    masked; names are not pseudonymized here (the loud degradation state).
  */
 
 type UIMessage = { role: 'user' | 'assistant'; content: string };
-
-const TIER1_ONLY_BANNER =
-  'On-device firewall: secrets (emails, cards, SSNs, keys, phones, IPs) are masked, every full date becomes year-only, and names on the built-in dictionaries are pseudonymized before anything is sent. No AI model runs on the phone, so rare or unusual names can slip through (that safety net needs the local model on your Mac). Check "What left this device" after any sensitive message.';
+type Mode = 'on-device' | 'cloud' | 'none';
 
 /**
  * Animated "Thinking…" indicator shown in the assistant bubble until the first
@@ -73,32 +84,42 @@ function ThinkingDots() {
 
 export default function Converse() {
   const session = useVaultSession();
-  const [provider, setProvider] = useState<ProviderConfig | null>(null);
-  const [providerLoaded, setProviderLoaded] = useState(false);
+  const [cloudProvider, setCloudProvider] = useState<ProviderConfig | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [resolution, setResolution] = useState<LocalModelResolution | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attachment, setAttachment] = useState<PickedAttachment | null>(null);
   const [hasAudit, setHasAudit] = useState(false);
+  // Set when an on-device Tier-2 turn aborted (invariant #6: nothing was sent).
+  // Holds the message so the user can explicitly resend at Tier-1 if they choose.
+  const [tier1RetryText, setTier1RetryText] = useState<string | null>(null);
 
-  // The pipeline session persists real-name plaintext history across turns; it
-  // is re-redacted every turn before sending (see turn.ts ConverseSession).
   const convSession = useRef<ConverseSession>(createSession());
   const abortRef = useRef<AbortController | null>(null);
   const scrollRef = useRef<ScrollView | null>(null);
 
-  // Re-read the selected provider whenever the screen regains focus (the user
-  // may have just added one on the Providers screen).
+  // On focus: re-read the selected provider AND detect the on-device model
+  // (Apple-first; memoized). The llama fallback is never auto-detected here, so
+  // no model file can be downloaded implicitly (invariant #7).
   useFocusEffect(
     useCallback(() => {
       let alive = true;
       void (async () => {
-        const id = await getSelectedProviderId();
-        const all = await listProviders();
+        const [id, all, res] = await Promise.all([
+          getSelectedProviderId(),
+          listProviders(),
+          getLocalModel(),
+        ]);
         if (!alive) return;
-        setProvider(all.find((p) => p.id === id) ?? all[0] ?? null);
-        setProviderLoaded(true);
+        setSelectedId(id);
+        setResolution(res);
+        const onDevice = id === ON_DEVICE_PROVIDER_ID && res.model !== null;
+        setCloudProvider(onDevice ? null : (all.find((p) => p.id === id) ?? all[0] ?? null));
+        setLoaded(true);
       })();
       return () => {
         alive = false;
@@ -112,8 +133,16 @@ export default function Converse() {
 
   if (session.status !== 'unlocked') return <Redirect href="/unlock" />;
 
+  const localReady = resolution?.model != null;
+  const mode: Mode =
+    selectedId === ON_DEVICE_PROVIDER_ID && localReady
+      ? 'on-device'
+      : cloudProvider
+        ? 'cloud'
+        : 'none';
+
   async function onAttach() {
-    if (busy || !provider) return;
+    if (busy || mode === 'none') return;
     setError(null);
     const r = await pickAttachment();
     if (r.ok) {
@@ -130,12 +159,22 @@ export default function Converse() {
     setError('Could not read that file.');
   }
 
-  async function onSend() {
+  function onSend() {
     const text = input.trim();
-    const att = attachment;
-    if ((text.length === 0 && !att) || busy || !provider) return;
-    setError(null);
+    if ((text.length === 0 && !attachment) || busy || mode === 'none') return;
     setInput('');
+    void send(text, false);
+  }
+
+  /**
+   * One turn. `forceTier1` sends to a cloud provider with the on-device model
+   * withheld (the deterministic shield still runs — it is the always-on floor).
+   * Used only for the explicit resend after an on-device NER abort.
+   */
+  async function send(text: string, forceTier1: boolean) {
+    setError(null);
+    setTier1RetryText(null);
+    const att = attachment;
     setAttachment(null);
     setBusy(true);
     const controller = new AbortController();
@@ -167,51 +206,77 @@ export default function Converse() {
     setMessages((prev) => [...prev, { role: 'user', content: shownUser }, { role: 'assistant', content: '' }]);
     requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
 
-    // Read the key immediately before the call; never hold it in React state.
-    const apiKey = await getProviderKey(provider.id);
-    if (apiKey === null) {
-      setError('No API key stored for this provider. Open Providers and re-enter it.');
-      setMessages((prev) => prev.slice(0, -2));
-      setInput(text); // restore the draft + attachment so nothing is silently lost
-      setAttachment(att);
-      setBusy(false);
-      return;
-    }
-
-    try {
-      const result = await runMobileTurn({
-        message: outbound,
-        session: convSession.current,
-        provider,
-        apiKey,
-        retrieve: (q, o) => session.retrieve(q, o),
-        signal: controller.signal,
-        onToken: (token) => {
-          setMessages((prev) => {
-            const next = [...prev];
-            const last = next[next.length - 1];
-            if (last && last.role === 'assistant') next[next.length - 1] = { ...last, content: last.content + token };
-            return next;
-          });
-        },
-      });
-      // Authoritative restored reply (identical to the streamed Tier-1 text).
+    const onToken = (token: string) => {
       setMessages((prev) => {
         const next = [...prev];
-        next[next.length - 1] = { role: 'assistant', content: result.reply };
+        const last = next[next.length - 1];
+        if (last && last.role === 'assistant') next[next.length - 1] = { ...last, content: last.content + token };
+        return next;
+      });
+    };
+
+    try {
+      let reply: string;
+      if (mode === 'on-device') {
+        const localModel = resolution!.model!;
+        const result = await runOnDeviceTurn({
+          message: outbound,
+          session: convSession.current,
+          localModel,
+          retrieve: (q, o) => session.retrieve(q, o),
+          signal: controller.signal,
+          onToken,
+        });
+        reply = result.reply;
+      } else {
+        const provider = cloudProvider!;
+        // Read the key immediately before the call; never hold it in React state.
+        // Local OpenAI-compatible endpoints (e.g. Ollama) need no key, so only
+        // Anthropic hard-requires one; others send with no auth header.
+        const storedKey = await getProviderKey(provider.id);
+        if (storedKey === null && provider.kind === 'anthropic') {
+          setError('No API key stored for this provider. Open Providers and re-enter it.');
+          setMessages((prev) => prev.slice(0, -2));
+          setInput(text); // restore the draft + attachment so nothing is silently lost
+          setAttachment(att);
+          setBusy(false);
+          return;
+        }
+        const result = await runMobileTurn({
+          message: outbound,
+          session: convSession.current,
+          provider,
+          apiKey: storedKey ?? '',
+          // Adds the on-device NER net when a model is ready (withheld on an
+          // explicit retry); the deterministic shield always runs regardless.
+          localModel: !forceTier1 && localReady ? resolution!.model : null,
+          retrieve: (q, o) => session.retrieve(q, o),
+          signal: controller.signal,
+          onToken,
+        });
+        reply = result.reply;
+      }
+      setMessages((prev) => {
+        const next = [...prev];
+        next[next.length - 1] = { role: 'assistant', content: reply };
         return next;
       });
       setHasAudit(true);
     } catch (err) {
-      const msg =
-        err instanceof TurnError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : 'The turn failed.';
-      setError(msg);
-      // Drop the empty assistant bubble; keep the user's message visible.
-      setMessages((prev) => (prev[prev.length - 1]?.content === '' ? prev.slice(0, -1) : prev));
+      if (err instanceof TurnError && err.code === 'TIER2_UNAVAILABLE') {
+        // On-device pseudonymization failed; runTurn aborted BEFORE sending
+        // (invariant #6, nothing left the device). Roll the turn fully back and
+        // offer an explicit Tier-1 resend, in phone-true language (no Ollama here).
+        setError(
+          'Names could not be pseudonymized on-device this turn, so nothing was sent. You can resend with Tier-1 protection (secrets are still masked, but names and places are not).',
+        );
+        setTier1RetryText(text);
+        setMessages((prev) => prev.slice(0, -2));
+      } else {
+        const msg = err instanceof Error ? err.message : 'The turn failed.';
+        setError(msg);
+        setMessages((prev) => (prev[prev.length - 1]?.content === '' ? prev.slice(0, -1) : prev));
+      }
     } finally {
       setBusy(false);
       abortRef.current = null;
@@ -219,7 +284,16 @@ export default function Converse() {
     }
   }
 
-  const noProvider = providerLoaded && provider === null;
+  const headerLabel =
+    mode === 'on-device'
+      ? `On-device (private) · ${resolution?.model?.label ?? 'local model'}`
+      : mode === 'cloud'
+        ? `${cloudProvider!.label} · ${cloudProvider!.model}`
+        : loaded
+          ? 'No provider set'
+          : ' ';
+
+  const banner = statusBanner(mode, localReady);
 
   return (
     <KeyboardAvoidingView
@@ -227,14 +301,14 @@ export default function Converse() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={90}
     >
-      <WarningBanner message={TIER1_ONLY_BANNER} />
+      {banner ? <StatusBanner tone={banner.tone} message={banner.message} /> : null}
 
       <View style={styles.headerRow}>
         <Text style={styles.providerLabel} numberOfLines={1}>
-          {provider ? `${provider.label} · ${provider.model}` : noProvider ? 'No provider set' : ' '}
+          {headerLabel}
         </Text>
         <Pressable style={styles.headerBtn} onPress={() => router.push('/providers')} accessibilityRole="button">
-          <Ionicons name="key-outline" size={16} color={colors.accent} />
+          <Ionicons name="swap-horizontal-outline" size={16} color={colors.accent} />
           <Text style={styles.headerBtnText}>Providers</Text>
         </Pressable>
       </View>
@@ -250,12 +324,14 @@ export default function Converse() {
           <View style={styles.empty}>
             <Text style={styles.emptyTitle}>Talk to your vault</Text>
             <Text style={styles.emptyBody}>
-              {noProvider
-                ? 'Add a model provider with your own API key to begin. Your key stays on this device.'
-                : 'Ask anything. Relevant memories are added as context, and everything sent out is masked by the Tier-1 firewall first.'}
+              {mode === 'none'
+                ? 'Choose the on-device model (fully private) or add a cloud provider with your own API key to begin.'
+                : mode === 'on-device'
+                  ? 'This chat runs entirely on your phone. Relevant memories are added as context and nothing is sent off the device.'
+                  : 'Ask anything. Relevant memories are added as context, and everything sent out is masked by the on-device firewall first.'}
             </Text>
-            {noProvider ? (
-              <Button title="Add a provider" onPress={() => router.push('/providers')} style={styles.emptyBtn} />
+            {mode === 'none' ? (
+              <Button title="Choose a provider" onPress={() => router.push('/providers')} style={styles.emptyBtn} />
             ) : null}
           </View>
         ) : (
@@ -277,6 +353,21 @@ export default function Converse() {
       </ScrollView>
 
       <ErrorNote message={error} />
+
+      {tier1RetryText && !busy ? (
+        <Pressable
+          style={styles.retryLink}
+          onPress={() => {
+            const t = tier1RetryText;
+            setTier1RetryText(null);
+            void send(t, true);
+          }}
+          accessibilityRole="button"
+        >
+          <Ionicons name="send-outline" size={14} color={colors.warnText} />
+          <Text style={styles.retryText}>Resend with Tier-1 only</Text>
+        </Pressable>
+      ) : null}
 
       {hasAudit ? (
         <Pressable
@@ -304,21 +395,21 @@ export default function Converse() {
       <View style={styles.inputRow}>
         <Pressable
           onPress={() => void onAttach()}
-          disabled={!provider || busy}
+          disabled={mode === 'none' || busy}
           hitSlop={8}
           style={styles.attachBtn}
           accessibilityRole="button"
           accessibilityLabel="Attach a file"
         >
-          <Ionicons name="attach" size={22} color={provider && !busy ? colors.accent : colors.muted} />
+          <Ionicons name="attach" size={22} color={mode !== 'none' && !busy ? colors.accent : colors.muted} />
         </Pressable>
         <TextInput
           style={styles.input}
           value={input}
           onChangeText={setInput}
-          placeholder={provider ? 'Message' : 'Add a provider first'}
+          placeholder={mode === 'none' ? 'Choose a provider first' : 'Message'}
           placeholderTextColor={colors.muted}
-          editable={!!provider && !busy}
+          editable={mode !== 'none' && !busy}
           multiline
         />
         {busy ? (
@@ -326,8 +417,8 @@ export default function Converse() {
         ) : (
           <Button
             title="Send"
-            onPress={() => void onSend()}
-            disabled={!provider || (input.trim().length === 0 && !attachment)}
+            onPress={onSend}
+            disabled={mode === 'none' || (input.trim().length === 0 && !attachment)}
             style={styles.sendBtn}
           />
         )}
@@ -336,8 +427,63 @@ export default function Converse() {
   );
 }
 
+/** The invariant-#6 posture line, or null when there is nothing to show. */
+function statusBanner(mode: Mode, localReady: boolean): { tone: 'good' | 'warn'; message: string } | null {
+  if (mode === 'on-device') {
+    return {
+      tone: 'good',
+      message: 'Private chat. This runs entirely on your phone and nothing is sent off the device.',
+    };
+  }
+  if (mode === 'cloud') {
+    return localReady
+      ? {
+          tone: 'good',
+          message:
+            'On-device shield. Names, orgs, and places are pseudonymized by the phone model, plus secrets, dates, and addresses masked deterministically, before anything is sent.',
+        }
+      : {
+          tone: 'warn',
+          message:
+            'Deterministic firewall only. Secrets, every full date, addresses, and dictionary-listed names are masked before sending, but no AI model runs on this phone, so rare or unusual names can slip through. Check "What left this device" after any sensitive message.',
+        };
+  }
+  return null;
+}
+
+function StatusBanner({ tone, message }: { tone: 'good' | 'warn'; message: string }) {
+  return (
+    <View style={tone === 'good' ? styles.bannerGood : styles.bannerWarn}>
+      <Ionicons
+        name={tone === 'good' ? 'lock-closed' : 'alert-circle'}
+        size={15}
+        color={tone === 'good' ? colors.accent : colors.warnText}
+      />
+      <Text style={tone === 'good' ? styles.bannerGoodText : styles.bannerWarnText}>{message}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
+  bannerGood: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#1c2b23',
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  bannerGoodText: { color: colors.accent, fontSize: 13, fontWeight: '600', flex: 1, lineHeight: 18 },
+  bannerWarn: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: colors.warnBg,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+  },
+  bannerWarnText: { color: colors.warnText, fontSize: 13, fontWeight: '600', flex: 1, lineHeight: 18 },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -383,6 +529,8 @@ const styles = StyleSheet.create({
   assistantText: { color: colors.text, fontSize: 15, lineHeight: 21 },
   auditLink: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 8 },
   auditLinkText: { color: colors.accent, fontSize: 13, fontWeight: '600' },
+  retryLink: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 8 },
+  retryText: { color: colors.warnText, fontSize: 14, fontWeight: '700' },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',

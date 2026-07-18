@@ -134,3 +134,53 @@ declare module 'expo-secure-store' {
   ): Promise<void>;
   export function deleteItemAsync(key: string, options?: SecureStoreOptions): Promise<void>;
 }
+
+/**
+ * On-device model backends (M6-4, ADR 0020). Declared ambiently for the same
+ * reason as the crypto/sqlite modules above: the real packages are installed by
+ * apps/mobile (native code that only compiles at prebuild/EAS), not at the
+ * monorepo root, so tsc compiles packages/platform-mobile/src/local-model
+ * against these minimal declarations. Only the members the adapters use are
+ * declared; the on-device compile in apps/mobile is the second line of defense.
+ */
+declare module '@react-native-ai/apple' {
+  /** Opaque AI-SDK LanguageModel handle returned by apple(). */
+  export interface AppleLanguageModel {
+    readonly provider?: string;
+  }
+  /** Callable provider (apple()) that also exposes a sync capability probe. */
+  export const apple: {
+    (): AppleLanguageModel;
+    isAvailable(): boolean;
+  };
+}
+
+// NOTE: the ambient declaration for 'llama.rn' was removed with the dependency
+// (M6-4 / ADR 0023): its native iOS integration fails to build under Expo New
+// Arch. LlamaRnModel is an import-free stub. When the native issue is fixed,
+// restore both this decl and the real adapter from git commit ca4e812.
+
+declare module 'ai' {
+  /** Minimal subset of the Vercel AI SDK used by AppleFMModel. */
+  export function generateText(options: {
+    model: unknown;
+    messages?: unknown;
+    prompt?: string;
+    abortSignal?: AbortSignal;
+    maxOutputTokens?: number;
+  }): Promise<{ text: string }>;
+  export function streamText(options: {
+    model: unknown;
+    messages?: unknown;
+    prompt?: string;
+    abortSignal?: AbortSignal;
+    maxOutputTokens?: number;
+  }): { textStream: AsyncIterable<string> };
+  export function generateObject(options: {
+    model: unknown;
+    schema: unknown;
+    prompt?: string;
+    messages?: unknown;
+  }): Promise<{ object: unknown }>;
+  export function jsonSchema(schema: Record<string, unknown>): unknown;
+}

@@ -28,6 +28,8 @@ import type { ProviderConfig } from './providers-store';
  */
 
 const CHAT_TIMEOUT_MS = 300_000;
+/** Short cap for model discovery so a hung endpoint does not spin for minutes. */
+const DISCOVER_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_TOKENS = 4096;
 const ANTHROPIC_VERSION = '2023-06-01';
 
@@ -179,10 +181,37 @@ function createOpenAIProvider(
     async listModels(): Promise<string[]> {
       const headers: Record<string, string> = {};
       if (apiKey.length > 0) headers['authorization'] = `Bearer ${apiKey}`;
-      const res = await expoFetch(`${base}/v1/models`, { method: 'GET', headers, redirect: 'error' });
+      // Mirror the desktop OpenAICompatibleProvider (packages/converse/openai.ts):
+      // standard /v1/models discovery first, then Ollama's native /api/tags for
+      // local runtimes that only offer that. redirect:'error' as elsewhere.
+      try {
+        const res = await expoFetch(`${base}/v1/models`, {
+          method: 'GET',
+          headers,
+          signal: shortTimeout(DISCOVER_TIMEOUT_MS),
+          redirect: 'error',
+        });
+        if (res.ok) {
+          const body = (await res.json()) as { data?: Array<{ id?: string }> };
+          const ids = (body.data ?? [])
+            .map((m) => m.id)
+            .filter((id): id is string => typeof id === 'string' && id.length > 0);
+          if (ids.length > 0) return ids;
+        }
+      } catch {
+        // fall through to the Ollama-native form
+      }
+      const res = await expoFetch(`${base}/api/tags`, {
+        method: 'GET',
+        headers,
+        signal: shortTimeout(DISCOVER_TIMEOUT_MS),
+        redirect: 'error',
+      });
       if (!res.ok) throw new Error(`Model discovery failed: HTTP ${res.status}.`);
-      const body = (await res.json()) as { data?: Array<{ id?: string }> };
-      return (body.data ?? []).map((m) => m.id).filter((id): id is string => typeof id === 'string');
+      const body = (await res.json()) as { models?: Array<{ name?: string }> };
+      return (body.models ?? [])
+        .map((m) => m.name)
+        .filter((name): name is string => typeof name === 'string' && name.length > 0);
     },
   };
 }
@@ -286,4 +315,11 @@ function withTimeout(signal?: AbortSignal): AbortSignal | undefined {
   const timeout = AbortSignal.timeout(CHAT_TIMEOUT_MS);
   if (!signal) return timeout;
   return hasAny ? AbortSignal.any([signal, timeout]) : signal;
+}
+
+/** A standalone timeout signal for short requests (discovery). Degrades to no
+ * signal when AbortSignal.timeout is unavailable on Hermes. */
+function shortTimeout(ms: number): AbortSignal | undefined {
+  const hasTimeout = typeof (AbortSignal as { timeout?: unknown }).timeout === 'function';
+  return hasTimeout ? AbortSignal.timeout(ms) : undefined;
 }
