@@ -5,7 +5,7 @@ import {
   type ConverseSession,
   type ConverseVault,
 } from '@northkeep/converse/dist/turn.js';
-import { redactDeterministic, type RedactionResult } from '@northkeep/redact';
+import { redact } from '@northkeep/redact';
 import type { RetrieveOptions, ScoredEntry } from '@northkeep/core';
 import type { LocalModel } from '@northkeep/platform-mobile/dist/local-model/index.js';
 import { createMobileProvider, type OutboundCapture } from './mobile-providers';
@@ -118,40 +118,18 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     captured = c;
   });
 
-  // M6-4 + ADR 0022: the deterministic layers ALWAYS run; a ready on-device
-  // model adds an NER pass first (union — it can only ADD masks). If the NER
-  // errors mid-turn its failure is contained: the deterministic layers already
-  // ran, the send proceeds (tier-3 semantics), and nothing is silently weaker
-  // than the always-on floor.
+  // M6-4 + ADR 0022: run the REAL desktop Tier-3 pipeline on the phone.
+  // makeLocalTier2RedactFn forwards every option (tier, pseudonyms, nerMode)
+  // into redact() with the on-device model as the NER client, so history
+  // replays from the pseudonym map instead of re-running the model (the
+  // desktop hang fix), NER input is capped, the strict junk gate applies, and
+  // a degraded NER PROCEEDS on the deterministic guarantee (tier-3
+  // semantics). With no ready model, redact() runs deterministic-only.
   const useLocalNer = input.localModel ? await input.localModel.isReady() : false;
-  const localNer =
-    useLocalNer && input.localModel ? makeLocalTier2RedactFn(input.localModel) : null;
-
-  const composedRedactFn = async (
-    text: string,
-    opts?: Parameters<typeof redactDeterministic>[1],
-  ): Promise<RedactionResult> => {
-    let working = text;
-    const replacements: RedactionResult['replacements'] = [];
-    if (localNer) {
-      try {
-        const ner = await localNer(working, { tier: 2, pseudonyms: opts?.pseudonyms });
-        if (!ner.tier2Degraded) {
-          working = ner.redacted;
-          replacements.push(...ner.replacements);
-        }
-      } catch {
-        // NER is the bonus net; the deterministic layers below are the floor.
-      }
-    }
-    const det = await redactDeterministic(working, opts);
-    return {
-      redacted: det.redacted,
-      replacements: [...replacements, ...det.replacements],
-      tierApplied: det.tierApplied,
-      tier2Degraded: false, // the always-on floor ran; nothing degraded
-    };
-  };
+  const redactFn =
+    useLocalNer && input.localModel
+      ? makeLocalTier2RedactFn(input.localModel)
+      : (text: string, opts?: Parameters<typeof redact>[1]) => redact(text, opts, null);
 
   const result = await runTurn({
     message: input.message,
@@ -159,10 +137,8 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     provider,
     model: input.provider.model,
     vault: vaultFrom(input.retrieve),
-    // Tier 3 semantics: deterministic layers are the guarantee; the local NER
-    // rides on top and its failure never aborts the turn. Never 0 on device.
-    redactTier: useLocalNer ? 3 : 1,
-    redactFn: composedRedactFn,
+    redactTier: 3, // deterministic guarantee + NER net when the model is ready
+    redactFn,
     distill: false, // no on-phone distillation
     catalog: [], // avoid loadCatalog() node:fs; cost lookup returns null
     auditFn: () => {}, // call-log file is desktop-only

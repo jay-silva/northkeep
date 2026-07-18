@@ -33,10 +33,10 @@ export function resetLocalModel(): void {
 
 /**
  * A `typeof redact` function bound to the on-device NER client. runTurn calls it
- * with (text, { tier: 2, pseudonyms }); we supply the third argument (the client)
- * so redact skips its default localhost Ollama and uses the phone's model. If the
- * model errors, applyTier2 marks the turn tier2Degraded and runTurn aborts a
- * bounded-endpoint send (loud, never silent).
+ * with (text, { tier, pseudonyms, nerMode }); we supply the third argument (the
+ * client) so redact skips its default localhost Ollama and uses the phone's
+ * model. At tier 3 (the mobile posture) a model error marks tier2Degraded and
+ * the send PROCEEDS on the deterministic layers, surfaced in the audit view.
  */
 export function makeLocalTier2RedactFn(model: LocalModel): typeof redact {
   const client = createLocalNerClient(model);
