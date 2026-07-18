@@ -86,6 +86,17 @@ const DETECTORS: Detector[] = [
     restorable: false,
   },
   {
+    kind: 'record_id',
+    // Labeled record/account identifiers (HIPAA identifier classes): policy,
+    // member, MRN, incident, claim, run/response numbers. Label-anchored so
+    // bare numbers stay; the value needs 6+ chars incl. a digit ("s0103443101",
+    // "BRNE:2026:3035", "FDSU-EPCR-3829165"). Field report 2026-07-17: these
+    // rode through a pasted ePCR untouched.
+    regex:
+      /(?<=\b(?:policy|member|mrn|medical record|record|report|incident|account|claim|authorization|run|response|epcr|pcr)\b(?:[ .]{0,2}(?:number|no\.?|num|id)\b){0,2}[:#\s]{1,4})(?!(?:date|time|number|no|id)\b)(?=[A-Za-z0-9:._-]*\d)[A-Za-z0-9][A-Za-z0-9:._-]{5,29}\b/gi,
+    restorable: false,
+  },
+  {
     kind: 'ip',
     regex:
       /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g,

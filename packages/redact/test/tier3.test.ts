@@ -33,6 +33,16 @@ describe('generalizeDates — all mode', () => {
     expect(text).not.toContain('03/15');
   });
 
+  it('labeled record/policy/incident ids are masked (field report 2026-07-17)', async () => {
+    const result = await redact(
+      'Policy Number ID: s0103443101. Incident Number: BRNE:2026:3035. Patient Care Report Number: FDSU-EPCR-3829165. Unit 6.8 miles.',
+      { tier: 1 },
+    );
+    expect(result.redacted).not.toMatch(/s0103443101|BRNE:2026:3035|FDSU-EPCR-3829165/);
+    expect(result.redacted).toContain('[RECORD_ID_1]');
+    expect(result.redacted).toContain('6.8 miles'); // unlabeled numbers untouched
+  });
+
   it('clinical fractions and vitals are NOT dates (field report 2026-07-17)', () => {
     const src =
       'Pain 7/10, strength 5/5 bilaterally, 2/6 systolic murmur, GCS 15/15, SpO2 94 RA improving 8/10.';

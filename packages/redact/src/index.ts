@@ -36,6 +36,14 @@ export async function redact(
   let working = text;
   let tier2Degraded = false;
 
+  // Tier-1 runs FIRST: its labeled detectors (record ids, SSNs) depend on
+  // label context ("Care Report Number:") that the name scrubber may mask —
+  // ordering bug found on a real ePCR (2026-07-17). Tier-1 placeholders are
+  // protected from every later layer by the placeholder guards.
+  const t1 = applyTier1(working);
+  working = t1.text;
+  replacements.push(...t1.replacements);
+
   if (tier >= 2) {
     const dated = generalizeDates(working, tier === 3 ? 'all' : 'dob-labeled');
     working = dated.text;
@@ -61,10 +69,6 @@ export async function redact(
       }
     }
   }
-
-  const t1 = applyTier1(working);
-  working = t1.text;
-  replacements.push(...t1.replacements);
 
   return {
     redacted: working,
@@ -96,17 +100,17 @@ export async function redactDeterministic(
   const pseudonyms: PseudonymMap = options.pseudonyms ?? {};
   const replacements: Replacement[] = [];
 
-  const dated = generalizeDates(text, 'all');
-  let working = dated.text;
+  const t1 = applyTier1(text);
+  let working = t1.text;
+  replacements.push(...t1.replacements);
+
+  const dated = generalizeDates(working, 'all');
+  working = dated.text;
   replacements.push(...dated.replacements);
 
   const scrubbed = scrubNames(working, pseudonyms);
   working = scrubbed.text;
   replacements.push(...scrubbed.replacements);
-
-  const t1 = applyTier1(working);
-  working = t1.text;
-  replacements.push(...t1.replacements);
 
   return { redacted: working, replacements, tierApplied: 1, tier2Degraded: false };
 }

@@ -149,6 +149,9 @@ const EPONYM_EXCLUDE = new Set([
   'glasgow', 'apgar', 'braden', 'cincinnati', 'wells', 'morse',
   // name-list noise that reads as chart vocabulary, never as a patient name
   'temp', 'score', 'scale', 'exam', 'chart', 'triage',
+  'onset', 'acuity', 'perl', 'sul', 'payer', 'transfer', 'evaluated',
+  // EMS role/apparatus words that ride next to names and towns
+  'paramedic', 'medic', 'fire', 'rescue', 'ambulance', 'firefighter',
 ]);
 
 function nameEvidence(d: NameData, word: string): boolean {
@@ -293,6 +296,21 @@ export function findNameSpans(text: string): Span[] {
     const r = d.rank.get(p);
     return r === undefined || r > 300;
   };
+  /** Could this token BE part of a name? List-hit above the anchor floor
+   * (350: keeps "john" 372/"smith" 1282, drops "care" 309/"date" 102), or an
+   * off-English rare word. Forms glue labels into Title runs ("Bourne Fire
+   * Department Patient Information Last Name") — non-name-ish tokens SEGMENT
+   * such runs so only the name-ish core masks (ePCR field test 2026-07-17). */
+  const nameish = (t: Token): boolean => {
+    if (t.text.length < 2 || EPONYM_EXCLUDE.has(t.text.toLowerCase())) return false;
+    const anyPart = (pred: (p: string) => boolean) => partsOf(t.text).some(pred);
+    const rankOk = (p: string) => {
+      const r = d.rank.get(p);
+      return r === undefined || r > 350;
+    };
+    if (anyPart((p) => (d.first.has(p) || d.sur.has(p)) && rankOk(p))) return true;
+    return !english.has(normalizeForLookup(t.text));
+  };
   const firstAny = (w: string): boolean =>
     partsOf(w).some((p) => d.first.has(p) && !EPONYM_EXCLUDE.has(p) && pairRankOk(p));
   const surAny = (w: string): boolean =>
@@ -372,7 +390,8 @@ export function findNameSpans(text: string): Span[] {
         if (seq.length > 0 && !commaUsed && /^,\s*$/.test(gap)) commaUsed = true;
         else break;
       }
-      const acceptable = t.kind === 'title' || capsAnchorable(t);
+      const acceptable =
+        (t.kind === 'title' && nameish(t)) || (t.kind === 'allcaps' && capsAnchorable(t));
       if (!acceptable) break;
       seq.push(t);
       cursor = t.end;
@@ -380,23 +399,36 @@ export function findNameSpans(text: string): Span[] {
     if (seq.length > 0) claim(seq[0]!.start, seq[seq.length - 1]!.end);
   }
 
-  // 2. Titlecase runs: 2+ contiguous Titlecase words that read as a person
-  //    (evidence or the FIRST→SUR pair signature).
+  // 2. Titlecase runs, SEGMENTED: contiguous Titlecase words are first split
+  //    into name-ish segments (label words like "Information"/"Last"/"Name"
+  //    break them), then a segment masks when it reads as a person (evidence
+  //    or the FIRST→SUR pair signature). "Bourne Fire Department Patient
+  //    Information Last Name" masks only "Bourne"; "Eric Audette Paramedic"
+  //    masks only "Eric Audette".
   {
     let run: Token[] = [];
-    const flush = () => {
-      if (run.length >= 2 && runIsName(run)) claim(run[0]!.start, run[run.length - 1]!.end);
+    const flushSegments = () => {
+      let seg: Token[] = [];
+      const flushSeg = () => {
+        if (seg.length >= 1 && runIsName(seg)) claim(seg[0]!.start, seg[seg.length - 1]!.end);
+        seg = [];
+      };
+      for (const t of run) {
+        if (nameish(t)) seg.push(t);
+        else flushSeg();
+      }
+      flushSeg();
       run = [];
     };
     for (const t of tokens) {
       if (t.kind === 'title' && (run.length === 0 || contiguous(run[run.length - 1]!, t))) {
         run.push(t);
       } else {
-        flush();
+        flushSegments();
         if (t.kind === 'title') run = [t];
       }
     }
-    flush();
+    flushSegments();
   }
 
   // 3. ALL-CAPS name runs: contiguous caps candidates (name-listed at any

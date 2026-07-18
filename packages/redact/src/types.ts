@@ -7,7 +7,8 @@ export type SecretKind =
   | 'credit_card'
   | 'ip'
   | 'api_key'
-  | 'iban';
+  | 'iban'
+  | 'record_id';
 
 export type EntityKind = 'person' | 'org' | 'location';
 
