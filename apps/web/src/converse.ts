@@ -21,7 +21,18 @@ import {
   type PrivacyCeiling,
 } from '@northkeep/converse';
 import { createOllamaClient } from '@northkeep/librarian';
+import { loadConnectorConfig } from '@northkeep/sync';
 import type { UiSession } from './session.js';
+
+/**
+ * Auto-distilled Converse memories are diverted here when the chat's scope is
+ * shared to the connector. A shared scope syncs off-machine, and distillation
+ * can mis-extract third-party content the user pasted (e.g. a patient report),
+ * so nothing auto-created is ever allowed to land silently in a shared scope —
+ * it goes to this private holding scope for the user to review and promote
+ * deliberately (Jay's call, 2026-07-17). Never auto-shared.
+ */
+const DISTILL_INBOX_SCOPE = 'inbox';
 
 /**
  * The Converse streaming route (M6, ADR 0007). POST /api/converse answers
@@ -152,7 +163,8 @@ export async function handleConverseStream(
       'This conversation is pinned private — that endpoint would leave the machine. Unpin to use it.',
     );
   }
-  const tier = req.tier === 0 || req.tier === 1 || req.tier === 2 ? req.tier : 1;
+  const tier =
+    req.tier === 0 || req.tier === 1 || req.tier === 2 || req.tier === 3 ? req.tier : 1;
   const scope = (req.scope ?? 'personal').trim() || 'personal';
   if (!/^[a-z0-9:_.-]{1,64}$/i.test(scope)) return jsonError(res, 400, 'Invalid scope.');
   // Per-turn model override (M7a). Switching model/endpoint mid-conversation is
@@ -172,10 +184,25 @@ export async function handleConverseStream(
   if (endpoint.kind === 'anthropic' && !apiKey) {
     return jsonError(res, 400, 'No API key stored for this Anthropic endpoint.');
   }
-  const provider =
+  const baseProvider =
     endpoint.kind === 'anthropic'
       ? createAnthropicProvider({ apiKey: apiKey as string, baseUrl: endpoint.baseUrl })
       : createOpenAICompatibleProvider({ baseUrl: endpoint.baseUrl, apiKey });
+  // "What was sent" proof: snapshot the EXACT messages handed to the provider —
+  // this is the post-redaction wire prompt (masks/pseudonyms already applied).
+  // Body only: the API key rides in headers INSIDE baseProvider and never
+  // appears here. Kept in memory for this turn's 'done' event only; it is NEVER
+  // written to the content-free call log (invariant #5).
+  let sentWire: { role: string; content: string }[] | null = null;
+  const provider = {
+    kind: baseProvider.kind,
+    baseUrl: baseProvider.baseUrl,
+    listModels: () => baseProvider.listModels(),
+    chat: (messages: { role: string; content: string }[], options: Parameters<typeof baseProvider.chat>[1]) => {
+      sentWire = messages.map((m) => ({ role: m.role, content: m.content }));
+      return baseProvider.chat(messages as Parameters<typeof baseProvider.chat>[0], options);
+    },
+  } as typeof baseProvider;
   const { tier: privacy, host } = classifyEndpoint(endpoint.baseUrl);
   const model = modelOverride || routedModel || endpoint.model;
 
@@ -195,6 +222,29 @@ export async function handleConverseStream(
   const ollama = createOllamaClient();
   const distillOllama = (await ollama.available().catch(() => false)) ? ollama : null;
 
+  // Containment (PHI): never let auto-distillation write into a scope that is
+  // shared to the connector. If the chat's scope is shared, divert new memories
+  // to the private inbox; if even the inbox is shared, skip distillation rather
+  // than leak. Everything the model was ASKED about still flows normally — only
+  // the auto-created memory target is contained.
+  const sharedScopes = new Set(loadConnectorConfig()?.sharedScopes ?? []);
+  let distillScope = scope;
+  let distillDiverted = false;
+  let distillSkipped = false;
+  // An attached file is a document the user is working WITH (a report, a
+  // patient record), not facts about the user — never auto-memorize it. The
+  // composer prepends this exact marker.
+  if (/^\[Attached file: /.test(message)) {
+    distillSkipped = true;
+  } else if (sharedScopes.has(scope)) {
+    if (!sharedScopes.has(DISTILL_INBOX_SCOPE)) {
+      distillScope = DISTILL_INBOX_SCOPE;
+      distillDiverted = true;
+    } else {
+      distillSkipped = true;
+    }
+  }
+
   try {
     const result = await runTurn({
       message,
@@ -203,7 +253,8 @@ export async function handleConverseStream(
       model,
       vault: vaultAdapter((fn) => uiSession.withVault(fn)),
       redactTier: tier,
-      memoryScope: scope,
+      memoryScope: distillScope,
+      distill: !distillSkipped,
       distillOllama,
       routeReason,
       onToken: (token) => send(res, { type: 'token', text: token }),
@@ -222,6 +273,15 @@ export async function handleConverseStream(
       session_id: sessionId,
       ...(routeReason ? { route_reason: routeReason, endpoint_label: endpoint.label } : {}),
       ...(suggestion ? { suggestion } : {}),
+      // Distill containment (PHI): tell the UI when a memory was kept out of the
+      // shared scope so it can say so instead of silently relocating it.
+      ...(distillDiverted ? { distill_diverted: true, distill_scope: distillScope, requested_scope: scope } : {}),
+      ...(distillSkipped ? { distill_skipped: true } : {}),
+      // Ephemeral privacy proof: exactly what left the machine this turn,
+      // redacted (masks visible), plus the list of what was masked (real →
+      // placeholder). Streamed once; never persisted (the call log is content-free).
+      ...(sentWire ? { sent: sentWire } : {}),
+      redactions: result.redactions,
       reply: result.reply,
       privacy: result.privacy,
       endpoint_host: result.endpointHost,

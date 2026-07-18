@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { ImportedConversation, MemoryCandidate } from '@northkeep/importers';
 import type { MemoryEntry } from '@northkeep/core';
 import { dedupeCandidates, jaccard, tokenize } from '../src/dedupe.js';
-import { heuristicExtract, sanitizeCandidates } from '../src/extract.js';
+import { groundIdentityClaims, heuristicExtract, sanitizeCandidates } from '../src/extract.js';
 import { runImport } from '../src/import.js';
 import { ollamaUrl } from '../src/ollama.js';
 
@@ -97,6 +97,41 @@ describe('heuristicExtract', () => {
     expect(result).toHaveLength(1);
     expect(result[0]).toMatchObject({ confidence: 0.4, type: 'semantic' });
     expect(result[0]!.content).toContain('short-term rental');
+  });
+});
+
+describe('groundIdentityClaims (mis-attribution backstop)', () => {
+  const cand = (type: MemoryCandidate['type'], content: string): MemoryCandidate => ({
+    type,
+    content,
+    confidence: 0.8,
+    origin: { source: 'converse', conversation_id: 'c1', conversation_title: 'Converse' },
+  });
+
+  it('drops identity + identity-asserting claims when the source has no first-person marker', () => {
+    // A pasted patient report: no "I am / my" anywhere.
+    const patientReport =
+      'Review this PCR: Donna Hitchcock, a 77-year-old female with macular degeneration, presented with vision changes.';
+    const candidates = [
+      cand('identity', 'The user is Donna Hitchcock, a 77-year-old female with macular degeneration.'),
+      cand('semantic', 'The user has macular degeneration.'),
+      // Possessive form on a non-identity type — must also be dropped.
+      cand('semantic', "The user's diagnosis is macular degeneration."),
+      cand('procedural', 'Prefers PCR narratives that paint the full picture.'),
+    ];
+    const kept = groundIdentityClaims(candidates, patientReport);
+    // Every identity/identity-asserting claim about a third party is gone.
+    expect(kept.map((c) => c.content)).toEqual(['Prefers PCR narratives that paint the full picture.']);
+  });
+
+  it('keeps identity claims when the user actually speaks in the first person', () => {
+    const selfIntro = 'I am a paramedic and EMS officer. I review PCRs for quality.';
+    const candidates = [
+      cand('identity', 'The user is a paramedic and EMS officer.'),
+      cand('semantic', 'The user reviews PCRs for quality.'),
+    ];
+    const kept = groundIdentityClaims(candidates, selfIntro);
+    expect(kept).toHaveLength(2);
   });
 });
 
