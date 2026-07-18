@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Getting started with NorthKeep</title>
+<link rel="icon" href="./northkeep-icon.png">
+<style>
+  :root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd;--warn:#8a6d3b;--warnbg:#f7efdd;--serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  @media (prefers-color-scheme:dark){:root{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820;--warn:#d8b46a;--warnbg:#2b2418}}
+  :root[data-theme="light"]{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd;--warn:#8a6d3b;--warnbg:#f7efdd}
+  :root[data-theme="dark"]{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820;--warn:#d8b46a;--warnbg:#2b2418}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.65;font-size:17px;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent)} a:hover{text-decoration:underline}
+  .wrap{max-width:760px;margin:0 auto;padding:0 24px}
+  header.nav{border-bottom:1px solid var(--line)}
+  .nav .wrap{display:flex;align-items:center;height:62px;gap:18px}
+  .brand{display:flex;align-items:center;gap:10px;font-family:var(--serif);font-size:20px;font-weight:600;color:var(--ink);text-decoration:none}
+  .brand img{width:30px;height:30px;border-radius:7px}
+  main{padding:40px 0 64px}
+  h1{font-family:var(--serif);font-size:clamp(28px,5vw,40px);margin:0 0 6px;line-height:1.15}
+  h2{font-family:var(--serif);font-size:24px;margin:40px 0 8px}
+  .lede{color:var(--muted);font-size:18px;margin:0 0 8px}
+  .step{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin:18px 0}
+  .step h2{margin:0 0 10px;font-size:21px}
+  .num{display:inline-flex;align-items:center;justify-content:center;width:28px;height:28px;border-radius:50%;background:var(--accent);color:#fff;font:700 15px var(--sans);margin-right:10px;vertical-align:-4px}
+  ol,ul{padding-left:22px} li{margin:7px 0}
+  code{background:var(--chip);padding:2px 6px;border-radius:5px;font-size:.92em}
+  .note{background:var(--warnbg);border:1px solid var(--line);border-radius:10px;padding:12px 16px;color:var(--warn);font-size:15px;margin:12px 0}
+  .tip{color:var(--muted);font-size:14px;margin:10px 0 0}
+  .btn{display:inline-block;background:var(--accent);color:#fff;text-decoration:none;font-weight:600;border-radius:10px;padding:11px 20px;margin:6px 0}
+  .btn:hover{text-decoration:none;filter:brightness(1.06)}
+  footer{border-top:1px solid var(--line);padding:28px 0;color:var(--muted);font-size:14px}
+  footer .wrap{display:flex;gap:18px;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<header class="nav"><div class="wrap"><a class="brand" href="./index.html"><img src="./northkeep-icon.png" alt="">NorthKeep</a></div></header>
+<main><div class="wrap">
+
+<h1>Up and running in 15 minutes</h1>
+<p class="lede">No terminal, no configuration files. If you can install an app and paste a key, you can run NorthKeep.</p>
+
+<div class="step">
+<h2><span class="num">1</span>Install the app</h2>
+<ol>
+  <li><a href="https://github.com/jay-silva/northkeep/releases/download/v0.15.0/NorthKeep_0.15.0_aarch64.dmg">Download NorthKeep for Mac</a> (Apple Silicon, macOS 13.5 or newer).</li>
+  <li>Open the downloaded file and drag <strong>NorthKeep</strong> onto the <strong>Applications</strong> folder.</li>
+  <li>Open NorthKeep from Applications. It is signed and notarized by Apple, so it opens like any other Mac app.</li>
+</ol>
+<p class="tip">If macOS ever hesitates on first open: right-click the app, choose Open, then Open again.</p>
+</div>
+
+<div class="step">
+<h2><span class="num">2</span>Create your vault</h2>
+<p>The first run walks you through it:</p>
+<ol>
+  <li>Choose a <strong>passphrase</strong>. This encrypts everything. Pick something long you will remember.</li>
+  <li>The app creates a <strong>device secret</strong> file on your Mac. Back it up somewhere safe (a password manager note or a printed copy works).</li>
+</ol>
+<div class="note"><strong>There is no recovery.</strong> If you lose your passphrase or your device secret, nobody can restore your vault, including us. That is the point: no back door exists. Back up the secret now, before you do anything else.</div>
+</div>
+
+<div class="step">
+<h2><span class="num">3</span>Connect a model</h2>
+<p>NorthKeep talks to AI models you choose. The easiest path:</p>
+<ol>
+  <li>Open the <strong>Converse</strong> tab and click <strong>Connect a model</strong>.</li>
+  <li>Pick your provider: Claude, OpenAI, Gemini, Grok, or OpenRouter. The wizard links you to the provider's key page, and shows relative cost up front.</li>
+  <li>Paste your API key. It is stored in your Mac's Keychain, never in a file, and never sent to us.</li>
+</ol>
+<p class="tip">Want fully local instead? Install <a href="https://ollama.com">Ollama</a> and NorthKeep will detect it and offer a one-click model install. Local chats never leave your machine at all.</p>
+</div>
+
+<div class="step">
+<h2><span class="num">4</span>Have your first conversation</h2>
+<ol>
+  <li>In <strong>Converse</strong>, type a message and hit Send.</li>
+  <li>Watch the badge next to the toolbar: <strong>PRIVATE</strong> means the model runs on your machine and nothing leaves it. <strong>BOUNDED</strong> means your text goes to a cloud model, but only after masking.</li>
+  <li>Each reply shows which model answered and roughly what the turn cost.</li>
+</ol>
+<p class="tip">NorthKeep remembers useful facts from your chats automatically. Every new memory appears with an Undo button, and you can browse and edit them all in the Memories tab.</p>
+</div>
+
+<div class="step">
+<h2><span class="num">5</span>See the privacy working</h2>
+<p>This is the part worth two minutes of your time:</p>
+<ol>
+  <li>Set the tier picker to <strong>Tier 3</strong> (the maximum: names, dates, addresses, record numbers).</li>
+  <li>Send a message containing something sensitive, or attach a document with the paperclip.</li>
+  <li>On the reply, open <strong>"What left this machine"</strong>. You will see every masked item, real value to placeholder, plus the exact text that was sent. Shown on your screen only, never stored.</li>
+</ol>
+<p class="tip">Tier 1 masks secrets like emails, phones, and account numbers. Tier 2 also pseudonymizes names. Tier 3 adds dates, addresses, and record numbers, built for working with sensitive documents.</p>
+</div>
+
+<div class="step">
+<h2><span class="num">6</span>Give your AI apps your memory</h2>
+<p>This is what makes NorthKeep different: the AI apps you already pay for get your memory, on your terms.</p>
+<ol>
+  <li>Open the <strong>Connect</strong> tab.</li>
+  <li>Click Connect next to <strong>Claude Desktop</strong>, <strong>Claude Code</strong>, or <strong>ChatGPT</strong>. Pick which scope of memories the app may see.</li>
+  <li>Restart that app. Ask it "what do you know about me?" and watch it answer from your vault.</li>
+</ol>
+</div>
+
+<div class="step">
+<h2><span class="num">7</span>Optional: your phone and other devices</h2>
+<p>The <strong>Sync + Cloud Connect</strong> subscription ($10/month) adds the two hosted pieces:</p>
+<ul>
+  <li><strong>Sync</strong> moves your encrypted vault between machines. Our server holds ciphertext it cannot read.</li>
+  <li><strong>Cloud Connect (Beta)</strong> shares chosen scopes to Claude and ChatGPT wherever you use them, including your phone. Open the Cloud Connect tab, share a scope (you confirm exactly what leaves), then pair your app with the URL and one-time code shown.</li>
+</ul>
+<p class="tip">Design partners: your subscription is on us during the pilot. Just tell Jay when you reach this step.</p>
+</div>
+
+<div class="step">
+<h2><span class="num">8</span>Optional: bring your history</h2>
+<p>Already have months of ChatGPT or Claude conversations? Request your data export from the provider, then drop the export file into NorthKeep's <strong>Import</strong> wizard. Extraction runs on your machine, and you review every proposed memory before it is kept.</p>
+</div>
+
+<h2>Stuck?</h2>
+<p>Email <a href="mailto:support@northkeep.ai">support@northkeep.ai</a> and a human answers. Design partners: text Jay directly, that is what the pilot is for.</p>
+
+</div></main>
+<footer><div class="wrap">
+<a href="./index.html">Home</a><a href="./start.html">Getting started</a><a href="./privacy.html">Privacy</a><a href="./terms.html">Terms</a><a href="mailto:support@northkeep.ai">Contact</a>
+</div></footer>
+<script>var t=new URLSearchParams(location.search).get('theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);</script>
+</body>
+</html>
