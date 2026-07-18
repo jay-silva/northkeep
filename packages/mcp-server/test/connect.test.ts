@@ -3,11 +3,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parse as parseToml } from 'smol-toml';
 import {
+  chatgptStatus,
   claudeCodeAvailable,
   claudeCodeStatus,
   claudeDesktopStatus,
+  connectChatgpt,
   connectClaudeDesktop,
+  disconnectChatgpt,
   disconnectClaudeDesktop,
   mcpEntryLooksValid,
   resolveMcpCommand,
@@ -15,10 +19,12 @@ import {
 
 let dir: string;
 let configPath: string;
+let codexPath: string;
 
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), 'northkeep-connect-'));
   configPath = path.join(dir, 'nested', 'claude_desktop_config.json');
+  codexPath = path.join(dir, 'nested', '.codex', 'config.toml');
 });
 
 afterEach(() => {
@@ -199,5 +205,148 @@ describe('Claude Code (gated on the real CLI; never mutates real user config)', 
 
   it.skipIf(hasClaude)('status is not-connected when the CLI is absent', () => {
     expect(claudeCodeStatus()).toEqual({ connected: false });
+  });
+});
+
+describe('ChatGPT / Codex config.toml merge (ADR 0021)', () => {
+  function readCodex(): string {
+    return fs.readFileSync(codexPath, 'utf8');
+  }
+  function nkEntry(): Record<string, unknown> {
+    const parsed = parseToml(readCodex()) as Record<string, unknown>;
+    return (parsed.mcp_servers as Record<string, Record<string, unknown>>).northkeep;
+  }
+
+  it('creates a config with ONLY our table when none exists', () => {
+    expect(fs.existsSync(codexPath)).toBe(false);
+    const result = connectChatgpt({}, codexPath);
+    expect(result.restartNeeded).toBe(true);
+
+    const entry = nkEntry();
+    expect(entry.command).toBe(result.command);
+    expect(entry.args).toEqual(result.args);
+    expect(entry.env).toBeUndefined(); // no scopes => no env => full access
+    // Only our server exists.
+    const parsed = parseToml(readCodex()) as Record<string, unknown>;
+    expect(Object.keys(parsed.mcp_servers as object)).toEqual(['northkeep']);
+  });
+
+  it('writes NORTHKEEP_SCOPES into the .env subtable when scopes are given', () => {
+    connectChatgpt({ scopes: ['work', 'personal'] }, codexPath);
+    const entry = nkEntry();
+    expect((entry.env as Record<string, unknown>).NORTHKEEP_SCOPES).toBe('work,personal');
+    expect(chatgptStatus(codexPath)).toEqual({ connected: true, scopes: ['work', 'personal'] });
+  });
+
+  it('preserves other servers, root keys, and comments byte-faithfully', () => {
+    const original = [
+      '# my codex config',
+      'model = "gpt-5"',
+      'approval_policy = "on-request"',
+      '',
+      '[mcp_servers.other]',
+      'command = "npx"',
+      'args = ["-y", "@vendor/other-mcp"]',
+      '',
+      '[mcp_servers.other.env]',
+      'SECRET_TOKEN = "do-not-touch"  # a secret we must never drop',
+      '',
+    ].join('\n');
+    fs.mkdirSync(path.dirname(codexPath), { recursive: true });
+    fs.writeFileSync(codexPath, original);
+
+    connectChatgpt({ scopes: ['work'] }, codexPath);
+    const after = readCodex();
+
+    // Everything the user had is still present, verbatim.
+    expect(after).toContain('# my codex config');
+    expect(after).toContain('model = "gpt-5"');
+    expect(after).toContain('[mcp_servers.other]');
+    expect(after).toContain('SECRET_TOKEN = "do-not-touch"  # a secret we must never drop');
+    // Both servers now parse.
+    const parsed = parseToml(after) as Record<string, Record<string, unknown>>;
+    expect(Object.keys(parsed.mcp_servers).sort()).toEqual(['northkeep', 'other']);
+    expect((parsed.mcp_servers.other.env as Record<string, unknown>).SECRET_TOKEN).toBe('do-not-touch');
+  });
+
+  it('reconnect REPLACES our table, never duplicates it', () => {
+    connectChatgpt({ scopes: ['work'] }, codexPath);
+    connectChatgpt({ scopes: ['personal'] }, codexPath);
+    const after = readCodex();
+    // Exactly one northkeep table header.
+    expect(after.match(/^\[mcp_servers\.northkeep\]$/gm)?.length).toBe(1);
+    expect(chatgptStatus(codexPath)).toEqual({ connected: true, scopes: ['personal'] });
+  });
+
+  it('disconnect removes ONLY our table, leaving others intact', () => {
+    fs.mkdirSync(path.dirname(codexPath), { recursive: true });
+    fs.writeFileSync(codexPath, '[mcp_servers.other]\ncommand = "x"\nargs = []\n');
+    connectChatgpt({}, codexPath);
+    expect(chatgptStatus(codexPath).connected).toBe(true);
+
+    const removed = disconnectChatgpt(codexPath);
+    expect(removed).toEqual({ removed: true });
+    const parsed = parseToml(readCodex()) as Record<string, Record<string, unknown>>;
+    expect(Object.keys(parsed.mcp_servers)).toEqual(['other']);
+    // Idempotent: nothing left to remove.
+    expect(disconnectChatgpt(codexPath)).toEqual({ removed: false });
+  });
+
+  it('backs up the original once before the first write', () => {
+    fs.mkdirSync(path.dirname(codexPath), { recursive: true });
+    fs.writeFileSync(codexPath, 'model = "gpt-5"\n');
+    connectChatgpt({}, codexPath);
+    expect(fs.existsSync(codexPath + '.northkeep-bak')).toBe(true);
+    expect(fs.readFileSync(codexPath + '.northkeep-bak', 'utf8')).toBe('model = "gpt-5"\n');
+  });
+
+  it('REFUSES an unparseable config (connect and disconnect both throw)', () => {
+    fs.mkdirSync(path.dirname(codexPath), { recursive: true });
+    fs.writeFileSync(codexPath, 'this = = not valid toml [[[');
+    expect(() => connectChatgpt({}, codexPath)).toThrow(/Refusing to modify/);
+    expect(() => disconnectChatgpt(codexPath)).toThrow(/Refusing to modify/);
+    // The bad file was left untouched.
+    expect(fs.readFileSync(codexPath, 'utf8')).toBe('this = = not valid toml [[[');
+  });
+
+  it('REFUSES an inline-form northkeep entry rather than mangling it', () => {
+    fs.mkdirSync(path.dirname(codexPath), { recursive: true });
+    // northkeep declared as an inline table under [mcp_servers] — a form we do
+    // not rewrite. We must refuse, not silently duplicate or corrupt it.
+    fs.writeFileSync(codexPath, '[mcp_servers]\nnorthkeep = { command = "old", args = [] }\n');
+    expect(() => connectChatgpt({}, codexPath)).toThrow(/inline or dotted-key form/);
+  });
+
+  it('REFUSES rather than destroy a quoted-dotted sibling server (e.g. "northkeep.backup") and its secret', () => {
+    const original = [
+      '[mcp_servers.northkeep]',
+      'command = "old"',
+      'args = []',
+      '',
+      '[mcp_servers."northkeep.backup"]',
+      'command = "python"',
+      '',
+      '[mcp_servers."northkeep.backup".env]',
+      'API_KEY = "SUPER_SECRET_XYZ"',
+      '',
+      '[mcp_servers.other]',
+      'token = "OTHER_SECRET"',
+      '',
+    ].join('\n');
+    fs.mkdirSync(path.dirname(codexPath), { recursive: true });
+    fs.writeFileSync(codexPath, original);
+
+    // Connect and disconnect must both refuse — never silently delete the sibling.
+    expect(() => connectChatgpt({}, codexPath)).toThrow(/another\s+MCP server/i);
+    expect(() => disconnectChatgpt(codexPath)).toThrow(/another\s+MCP server/i);
+    // The file (and the sibling's secret) is untouched.
+    expect(fs.readFileSync(codexPath, 'utf8')).toBe(original);
+  });
+
+  it('status is not-connected for a missing or northkeep-free config', () => {
+    expect(chatgptStatus(codexPath)).toEqual({ connected: false });
+    fs.mkdirSync(path.dirname(codexPath), { recursive: true });
+    fs.writeFileSync(codexPath, 'model = "gpt-5"\n');
+    expect(chatgptStatus(codexPath)).toEqual({ connected: false });
   });
 });

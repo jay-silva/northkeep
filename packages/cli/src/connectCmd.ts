@@ -1,4 +1,5 @@
 import {
+  chatgptStatus,
   claudeCodeAvailable,
   claudeCodeStatus,
   claudeDesktopStatus,
@@ -23,6 +24,7 @@ import {
 const TARGET_LABEL: Record<ConnectTarget, string> = {
   'claude-desktop': 'Claude Desktop',
   'claude-code': 'Claude Code',
+  chatgpt: 'ChatGPT',
 };
 
 /** Commander collector: `--scope a,b --scope c` → ['a','b','c']. */
@@ -55,6 +57,8 @@ export function connectCmd(
   console.log('');
   if (target === 'claude-desktop') {
     console.log('⚠  Restart Claude Desktop to load it (it reads MCP config only at launch).');
+  } else if (target === 'chatgpt') {
+    console.log('⚠  Restart ChatGPT to load it (it reads Codex MCP config only at launch).');
   } else {
     console.log('⚠  Open a new Claude Code session to load it (registered at "user" scope).');
   }
@@ -79,6 +83,8 @@ export function disconnectCmd(target: ConnectTarget, fail: (m: string) => never)
   );
   if (removed && target === 'claude-desktop') {
     console.log('  Restart Claude Desktop for the change to take effect.');
+  } else if (removed && target === 'chatgpt') {
+    console.log('  Restart ChatGPT for the change to take effect.');
   }
 }
 
@@ -99,6 +105,14 @@ export function connectStatusCmd(): void {
   } else {
     console.log('  Claude Code:    the `claude` CLI is not installed (skipped)');
   }
+  const chatgpt = chatgptStatus();
+  console.log(
+    `  ChatGPT:        ${
+      chatgpt.connected
+        ? `connected${chatgpt.scopes ? ` (scopes: ${chatgpt.scopes.join(', ')})` : ' (full access)'}`
+        : 'not connected'
+    }`,
+  );
   console.log('');
   console.log('  Would register:');
   console.log(`    command: ${command}`);

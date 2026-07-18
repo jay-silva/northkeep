@@ -20,6 +20,7 @@
     "@northkeep/core": "workspace:*",
     "@northkeep/platform-node": "workspace:*",
     "@northkeep/redact": "workspace:*",
+    "smol-toml": "^1.7.0",
     "zod": "^3.25.0"
   }
 }

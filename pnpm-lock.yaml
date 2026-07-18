@@ -200,6 +200,9 @@ importers:
       '@northkeep/redact':
         specifier: workspace:*
         version: link:../redact
+      smol-toml:
+        specifier: ^1.7.0
+        version: 1.7.0
       zod:
         specifier: ^3.25.0
         version: 3.25.76
@@ -1461,6 +1464,10 @@ packages:
 
   simple-get@4.0.1:
     resolution: {integrity: sha512-brv7p5WgH0jmQJr1ZDDfKDOSeWWg+OVypG99A/5vYGPqJ6pxiaHLy8nxtFjBA7oMa01ebA9gfh1uMCFqOuXxvA==}
+
+  smol-toml@1.7.0:
+    resolution: {integrity: sha512-aqVvWoyO21L23mb+drl4RmMXbf6N7FdHjAhTRA9ZBL7apWBgfWC16KjrASI+1p9GAroljyMHj6fK67i0UiTNvQ==}
+    engines: {node: '>= 18'}
 
   sodium-native@5.1.0:
     resolution: {integrity: sha512-3RxgyWyJlhTsABPnJVpCI5CoTDANZTqqFrEPqr+kjfnRaBihpVtMUE3yTF40ukdoB1APXeoBNKF3MzZAIHg39g==}
@@ -2863,6 +2870,8 @@ snapshots:
       decompress-response: 6.0.0
       once: 1.4.0
       simple-concat: 1.0.1
+
+  smol-toml@1.7.0: {}
 
   sodium-native@5.1.0(bare-events@2.9.1):
     dependencies:

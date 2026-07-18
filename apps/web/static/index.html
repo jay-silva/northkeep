@@ -126,8 +126,17 @@
   .scoperow:first-child { border-top: none; }
   .scoperow .sname { font-weight: 600; }
   .scoperow .grow { flex: 1; }
-  .sharetoggle { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); cursor: pointer; }
-  .sharetoggle input { width: auto; margin: 0; }
+  /* The share control reads as an on/off chip: muted when off, green when on,
+     so a glance down the list shows exactly which scopes are shared. */
+  /* The pill IS the control: an outline "Share" chip that fills solid green
+     "Shared" when on — same look as a primary button. The checkbox drives the
+     state but is visually hidden (the label click still toggles it). */
+  .sharetoggle { display: inline-flex; align-items: center; gap: 7px; padding: 8px 16px;
+    border: 1px solid var(--line); border-radius: 999px; font: 500 14px/1 var(--sans);
+    color: var(--ink); background: var(--panel); cursor: pointer; user-select: none; white-space: nowrap; }
+  .sharetoggle input { position: absolute; width: 1px; height: 1px; opacity: 0; margin: 0; pointer-events: none; }
+  .sharetoggle:has(input:checked) { color: var(--accent-ink); background: var(--accent); border-color: var(--accent); }
+  .sharetoggle:has(input:disabled) { opacity: .5; cursor: not-allowed; }
   .conv-toolbar { display: flex; align-items: center;
     gap: 10px 8px; flex-wrap: wrap; margin-bottom: 22px; }
   .conv-controls { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; width: 100%; }
@@ -148,9 +157,15 @@
     white-space: nowrap; }
   .pinchip input { accent-color: var(--ok); margin: 0; }
   .pinchip:has(input:checked) { color: var(--ok); border-color: var(--ok); background: #e6efe8; }
+  /* Composer bubble — one bordered container; the textarea is borderless inside
+     it and the attach/send controls sit along its bottom edge (chat-style). */
+  #convComposer { transition: border-color .15s; }
+  #convComposer:focus-within { border-color: var(--accent); }
+  #convInput::placeholder { color: var(--muted); }
   .thread { margin: 14px 0; }
   .thinking { display: inline-flex; gap: 5px; align-items: center; padding: 5px 2px; }
-  .thinking i { width: 7px; height: 7px; border-radius: 50%; background: var(--muted);
+  .thinking .thinking-label { font-size: 13px; color: var(--muted); margin-left: 4px; }
+  .thinking i { width: 7px; height: 7px; border-radius: 50%; background: var(--accent);
     animation: think 1.2s infinite ease-in-out; }
   .thinking i:nth-child(2) { animation-delay: .2s; }
   .thinking i:nth-child(3) { animation-delay: .4s; }
@@ -230,6 +245,7 @@
         <select id="convTierSel" title="Redaction tier">
           <option value="1" selected>Tier 1 — mask secrets</option>
           <option value="2">Tier 2 — also pseudonymize names</option>
+          <option value="3">Tier 3 — max: names + dates (PHI)</option>
           <option value="0">Off (private endpoints only)</option>
         </select>
         <label class="pinchip" title="Pin this conversation to local models only — nothing leaves your machine, and Auto may only pick private endpoints.">
@@ -239,6 +255,7 @@
         <button class="btn" id="manageEp">Manage endpoints</button>
       </div>
     </div>
+    <p id="convPrivacyHint" class="muted" style="font-size:12.5px;margin:-12px 2px 18px;display:flex;align-items:center;gap:6px"></p>
     <div id="managePanel" hidden style="margin-bottom:14px">
       <h3 class="sect">Endpoints</h3>
       <div id="epList"></div>
@@ -311,12 +328,15 @@
     </div>
     <div id="convThread" class="thread"></div>
     <div id="convAttachChip" hidden style="margin-top:16px;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"></div>
-    <div class="row" style="align-items:flex-end;gap:10px;margin-top:12px">
+    <div id="convComposer" style="margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:6px 8px 8px">
       <textarea id="convInput" rows="2" placeholder="Message… (Enter to send, Shift+Enter for a new line)"
-        style="flex:1;min-width:200px;font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:13px 15px;resize:vertical"></textarea>
+        style="display:block;width:100%;font:inherit;color:inherit;background:transparent;border:0;outline:none;padding:9px 8px 6px;resize:none;min-height:46px;max-height:260px;overflow-y:auto"></textarea>
       <input type="file" id="convFile" accept=".pdf,.txt,.md,.csv,.json,.log" hidden>
-      <button class="btn" id="convAttach" title="Attach a file (redacted before sending)" style="padding:13px 15px;border-radius:14px">📎</button>
-      <button class="btn primary" id="convSend" style="padding:13px 24px;border-radius:14px">Send</button>
+      <div style="display:flex;align-items:center;gap:8px;padding:0 2px">
+        <button class="btn" id="convAttach" title="Attach a file (redacted before sending)" style="padding:8px 12px;border-radius:10px">📎</button>
+        <span style="flex:1"></span>
+        <button class="btn primary" id="convSend" style="padding:9px 22px;border-radius:10px">Send</button>
+      </div>
     </div>
     <p class="muted" style="font-size:12px;margin:8px 2px 0">Attached files are redacted with your message at the selected tier before anything is sent.</p>
   </section>
@@ -576,6 +596,24 @@
       <button class="btn" id="shareConfirmCancel">Cancel</button>
       <button class="btn primary" id="shareConfirmSubscribe" hidden>Subscribe to share</button>
       <button class="btn primary" id="shareConfirmYes">Share this scope</button>
+    </div>
+  </div>
+</div>
+<div class="overlay" id="unshareConfirmOverlay" hidden>
+  <div class="dialog" style="width:460px">
+    <h2 id="unshareConfirmTitle">Stop sharing this scope?</h2>
+    <div class="banner" style="margin:0 0 14px">
+      <div id="unshareConfirmLead" style="font-weight:600"></div>
+    </div>
+    <ul style="margin:0 0 16px;padding-left:18px;font-size:14px;color:var(--ink);line-height:1.65">
+      <li><strong>What happens:</strong> these memories are deleted from the connector server, so connected AI apps can no longer read them.</li>
+      <li><strong>Your vault keeps them:</strong> the memories stay on this Mac, untouched.</li>
+      <li><strong>One limit:</strong> this cannot recall a copy an app already retrieved.</li>
+    </ul>
+    <div class="err" id="unshareConfirmErr"></div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn" id="unshareConfirmCancel">Keep sharing</button>
+      <button class="btn danger" id="unshareConfirmYes">Stop sharing</button>
     </div>
   </div>
 </div>
@@ -1538,20 +1576,29 @@
     loadLocalStatus();
   }
 
+  function updatePrivacyHint() {
+    const hint = $('convPrivacyHint');
+    if (!hint) return;
+    if ($('convPrivatePin').checked) {
+      hint.innerHTML = '🔒 <span><strong>Private only is on.</strong> This chat can use only local models on your Mac — nothing is sent to any cloud or outside model.</span>';
+    } else {
+      hint.innerHTML = '<span>Turn on <strong>Private only</strong> to pin this chat to local models on your Mac, so nothing is ever sent to a cloud model. It is off, so a connected cloud model may be used (after on-device redaction).</span>';
+    }
+  }
+
   function onEndpointChange() {
     const isAuto = $('convEndpoint').value === 'auto';
     const ep = selectedEndpoint();
     const badge = $('convBadge');
+    updatePrivacyHint();
     if (isAuto) {
       // The concierge picks per message; each reply's provenance strip shows
-      // where it actually went. Tier "Off" is never safe under auto (a turn
-      // may route to a bounded endpoint), so it's disabled.
-      badge.hidden = false;
-      badge.className = 'badge auto';
-      badge.textContent = $('convPrivatePin').checked ? 'AUTO · PINNED' : 'AUTO';
-      badge.title = $('convPrivatePin').checked
-        ? 'The concierge routes each message among LOCAL models only.'
-        : 'The concierge routes each message; the reply shows where it went and why.';
+      // where it actually went. The dropdown already reads "✦ Auto — concierge
+      // decides", so a separate AUTO pill only echoes it — hide the badge in
+      // Auto mode (the "Private only" checkbox already shows the pinned state).
+      // Tier "Off" is never safe under auto (a turn may route to a bounded
+      // endpoint), so it's disabled.
+      badge.hidden = true;
       $('convModel').hidden = true;
       const offOpt = $('convTierSel').querySelector('option[value="0"]');
       offOpt.disabled = true;
@@ -2046,7 +2093,7 @@
     return strip;
   }
 
-  function memNewLine(created) {
+  function memNewLine(created, ev) {
     const box = el('div', 'memnew');
     box.style.cssText = 'display:flex;align-items:baseline;gap:8px';
     box.appendChild(el('span', 'kept', 'Kept'));
@@ -2070,7 +2117,97 @@
     });
     body.appendChild(undo);
     box.appendChild(body);
+    // Containment note: when the chat's scope is shared, new memories are held
+    // in the private Inbox instead, so nothing auto-created syncs off-machine.
+    if (ev && ev.distill_diverted) {
+      const note = el('p', 'muted', '');
+      note.style.cssText = 'margin:6px 0 0;font-size:12px';
+      note.textContent = '🔒 Saved to your private Inbox — kept out of the shared "' +
+        (ev.requested_scope || 'shared') + '" scope, so it is not synced. Review it under Memories to keep or move it.';
+      body.appendChild(note);
+    }
     return box;
+  }
+
+  const REDACT_KIND_LABEL = {
+    email: 'email', phone: 'phone number', ssn: 'SSN', credit_card: 'credit card',
+    ip: 'IP address', api_key: 'API key', iban: 'bank account (IBAN)',
+    person: 'name', org: 'organization', location: 'location',
+    date: 'date (year kept)',
+  };
+
+  // Privacy proof: lead with WHAT was masked (real value → placeholder), then the
+  // exact text that left the machine behind a secondary toggle. Built from the
+  // server's 'done' event; ephemeral — shown in this reply only, never stored
+  // (the call log stays content-free).
+  function sentProof(ev) {
+    const sent = ev.sent || [];
+    if (!sent.length) return null;
+    const reds = ev.redactions || [];
+
+    const det = document.createElement('details');
+    det.style.cssText = 'margin:8px 0 0;font-size:13px';
+    const sum = el('summary', '', '🔍 What left this machine (privacy proof)');
+    sum.style.cssText = 'cursor:pointer;color:var(--accent)';
+    det.appendChild(sum);
+
+    const head = el('div');
+    head.style.cssText = 'margin:10px 0';
+    const host = ev.endpoint_host || 'the model';
+    if (reds.length) {
+      const title = el('p', '', '🛡 ' + reds.length + (reds.length === 1 ? ' thing was' : ' things were') +
+        ' masked on your Mac before anything went to ' + host + ':');
+      title.style.cssText = 'margin:0 0 10px;font-weight:600';
+      head.appendChild(title);
+      for (const r of reds) {
+        const row = el('div');
+        row.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:5px 0';
+        const orig = el('span', '', r.original);
+        orig.style.cssText = 'font-family:var(--mono,ui-monospace,monospace);color:var(--danger);' +
+          'border:1px solid var(--danger-line);border-radius:4px;padding:2px 6px;text-decoration:line-through';
+        row.appendChild(orig);
+        row.appendChild(document.createTextNode('→'));
+        row.appendChild(el('span', 'tag', r.placeholder));
+        const kind = el('span', 'muted', REDACT_KIND_LABEL[r.kind] || r.kind);
+        kind.style.fontSize = '12px';
+        row.appendChild(kind);
+        head.appendChild(row);
+      }
+      const note = el('p', 'muted',
+        (ev.tier_applied === 2 ? 'Names are pseudonymized (put back only in the reply you see); other ' : 'These ') +
+        'secrets are one-way masked — the model only ever received the placeholders.');
+      note.style.cssText = 'margin:10px 0 0;font-size:12px';
+      head.appendChild(note);
+    } else {
+      const t = el('p', 'muted', ev.privacy === 'private'
+        ? 'This went to a private local endpoint (' + host + ') — nothing left your machine.'
+        : 'No sensitive data was found to mask in this message, so it was sent as-is at Tier ' +
+          (ev.tier_applied ?? 1) + '. The exact text is below.');
+      t.style.cssText = 'margin:0';
+      head.appendChild(t);
+    }
+    det.appendChild(head);
+
+    // The exact bytes, secondary.
+    const full = document.createElement('details');
+    full.style.cssText = 'margin:4px 0 0';
+    const fsum = el('summary', 'muted', 'Show the exact text that was sent');
+    fsum.style.cssText = 'cursor:pointer;font-size:12px';
+    full.appendChild(fsum);
+    for (const m of sent) {
+      const wrap = el('div');
+      wrap.style.cssText = 'margin:8px 0';
+      wrap.appendChild(el('span', 'tag', m.role));
+      const pre = document.createElement('pre');
+      pre.textContent = m.content; // inert; exact wire content
+      pre.style.cssText = 'white-space:pre-wrap;word-break:break-word;background:var(--chip);' +
+        'border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:6px 0 0;' +
+        'max-height:280px;overflow:auto;font:12px/1.5 var(--mono,ui-monospace,monospace)';
+      wrap.appendChild(pre);
+      full.appendChild(wrap);
+    }
+    det.appendChild(full);
+    return det;
   }
 
   $('convSend').addEventListener('click', sendTurn);
@@ -2147,11 +2284,15 @@
     $('convInput').value = '';
     clearAttachment();
     const a = addMsg('assistant', '');
-    // Thinking animation: pulses until the FIRST token arrives (the model may
-    // spend 30s+ loading into RAM). Writing textContent replaces it naturally.
+    // Thinking animation: pulses (with a "Thinking…" label so it never reads as
+    // frozen) until the FIRST token arrives — the model may spend 30s+ loading
+    // into RAM. Writing textContent replaces it naturally. We scroll it into
+    // view immediately, otherwise it sits below the just-sent message off-screen.
     const think = el('span', 'thinking');
     for (let i = 0; i < 3; i++) think.appendChild(document.createElement('i'));
+    think.appendChild(el('span', 'thinking-label', 'Thinking…'));
     a.bubble.appendChild(think);
+    a.wrap.scrollIntoView({ block: 'end' });
     let streamed = '';
     const handle = (ev) => {
       if (ev.type === 'start') {
@@ -2163,7 +2304,9 @@
         convSession = ev.session_id;
         a.bubble.textContent = ev.reply; // restored text replaces the wire-space stream
         a.wrap.appendChild(provStrip(ev));
-        if ((ev.memories_created || []).length) a.wrap.appendChild(memNewLine(ev.memories_created));
+        const proof = sentProof(ev);
+        if (proof) a.wrap.appendChild(proof);
+        if ((ev.memories_created || []).length) a.wrap.appendChild(memNewLine(ev.memories_created, ev));
         a.wrap.scrollIntoView({ block: 'end' });
       } else if (ev.type === 'error') {
         if (!streamed) a.wrap.remove();
@@ -2474,6 +2617,8 @@
         await api('/api/connect/' + t.id, { method: 'POST', json: { scopes } });
         const restart = t.id === 'claude-desktop'
           ? 'Restart Claude Desktop to load it.'
+          : t.id === 'chatgpt'
+          ? 'Restart ChatGPT to load it (it reads MCP config at launch).'
           : 'Open a new Claude Code session to load it.';
         await loadConnect({ [t.id]: restart });
       } catch (e) {
@@ -2586,7 +2731,8 @@
           cb.checked = false; // the confirm dialog drives the real change
           askShareConfirm(scope, count);
         } else {
-          doUnshare(scope);
+          cb.checked = true; // stays Shared until the confirm dialog completes the unshare
+          askUnshareConfirm(scope, count);
         }
       });
       row.appendChild(toggle);
@@ -2655,20 +2801,50 @@
     }
   });
 
-  async function doUnshare(scope) {
-    if (!confirm("Unshare '" + scope + "'?\nThis deletes its memories from the connector server. Your local vault keeps them.")) {
-      loadSharing(); // snap the toggle back to its real state
-      return;
-    }
-    $('shareScopeErr').textContent = '';
+  // Unshare goes through the same in-app confirm overlay as Share — never
+  // window.confirm, which is unreliable in the desktop webview and made the
+  // toggle look stuck. The scope stays visibly Shared until the server delete
+  // actually succeeds; any failure is shown in the dialog, never swallowed by a
+  // silent snap-back (which reads as "the scope won't turn off").
+  let pendingUnshareScope = null;
+  function askUnshareConfirm(scope, count) {
+    pendingUnshareScope = scope;
+    const n = count === undefined ? 'the memories' : (count + (count === 1 ? ' memory' : ' memories'));
+    $('unshareConfirmTitle').textContent = "Stop sharing the '" + scope + "' scope?";
+    $('unshareConfirmLead').textContent =
+      'This removes ' + n + " in the '" + scope + "' scope from NorthKeep's connector server.";
+    $('unshareConfirmErr').textContent = '';
+    const yes = $('unshareConfirmYes');
+    yes.disabled = false;
+    yes.textContent = 'Stop sharing';
+    $('unshareConfirmOverlay').hidden = false;
+  }
+  function closeUnshareConfirm() {
+    $('unshareConfirmOverlay').hidden = true;
+    pendingUnshareScope = null;
+  }
+  $('unshareConfirmCancel').addEventListener('click', () => { closeUnshareConfirm(); loadSharing(); });
+  $('unshareConfirmYes').addEventListener('click', async () => {
+    if (!pendingUnshareScope) return;
+    const scope = pendingUnshareScope;
+    const yes = $('unshareConfirmYes');
+    const yesLabel = yes.textContent;
+    $('unshareConfirmErr').textContent = '';
+    yes.disabled = true;
+    yes.textContent = 'Stopping…';
     try {
       await api('/api/share/remove', { method: 'POST', json: { scope } });
-    } catch (e) {
-      if (e.message !== 'locked') $('shareScopeErr').textContent = e.message;
-    } finally {
+      closeUnshareConfirm();
       await loadSharing();
+    } catch (e) {
+      yes.disabled = false;
+      yes.textContent = yesLabel;
+      $('unshareConfirmErr').textContent =
+        e.message && e.message !== 'locked'
+          ? e.message
+          : 'Could not reach the connector server. Your scope is still shared — try again.';
     }
-  }
+  });
 
   $('shareServerBtn').addEventListener('click', async () => {
     const url = $('shareServerUrl').value.trim();
