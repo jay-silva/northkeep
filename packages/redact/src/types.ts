@@ -10,7 +10,8 @@ export type SecretKind =
   | 'iban'
   | 'record_id'
   | 'gps'
-  | 'zip';
+  | 'zip'
+  | 'address';
 
 export type EntityKind = 'person' | 'org' | 'location';
 

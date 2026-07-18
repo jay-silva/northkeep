@@ -154,7 +154,11 @@ const EPONYM_EXCLUDE = new Set([
   'paramedic', 'medic', 'fire', 'rescue', 'ambulance', 'firefighter',
   // demographic labels, equipment, and misc chart vocabulary (PCR-2/3 field tests)
   'male', 'female', 'birth', 'minor', 'vest', 'caregiver', 'ama',
-  'gender', 'race', 'ethnicity', 'age', 'barracks',
+  'gender', 'race', 'ethnicity', 'age', 'barracks', 'transport', 'pilot',
+  // medical vocabulary that collides with the census surname list — masking a
+  // DIAGNOSIS breaks QA (PCR-6: "shingles", "Flail" masked as people)
+  'shingles', 'flail', 'colic', 'croup', 'bruit', 'clonus', 'emesis',
+  'avulsion', 'stent', 'angina', 'ascites', 'stridor', 'rales', 'rhonchi',
 ]);
 
 function nameEvidence(d: NameData, word: string): boolean {
@@ -311,7 +315,26 @@ export function findNameSpans(text: string): Span[] {
       const r = d.rank.get(p);
       return r === undefined || r > 350;
     };
-    if (anyPart((p) => (d.first.has(p) || d.sur.has(p)) && rankOk(p))) return true;
+    if (
+      anyPart(
+        (p) => (d.first.has(p) || d.sur.has(p)) && rankOk(p) && !EPONYM_EXCLUDE.has(p),
+      )
+    )
+      return true;
+    // Off-English fallback — but a hyphen compound whose every PART is common
+    // English or excluded vocabulary ("Pilot-Transport", "Caregiver-Transport")
+    // is chart language, not a rare name (PCR-5 glue artifact).
+    if (/['’\-]/.test(t.text)) {
+      const parts = t.text.split(/['’\-]+/).filter((p) => p.length >= 2);
+      if (
+        parts.length > 0 &&
+        parts.every((p) => {
+          const n = normalizeForLookup(p);
+          return english.has(n) || EPONYM_EXCLUDE.has(n);
+        })
+      )
+        return false;
+    }
     return !english.has(normalizeForLookup(t.text));
   };
   const firstAny = (w: string): boolean =>

@@ -59,6 +59,19 @@ describe('generalizeDates — all mode', () => {
     expect(r.redacted).toContain('glucose 120');
   });
 
+  it('street addresses mask; clinical phrasing survives (PCR-6 field test)', async () => {
+    const r = await redact(
+      'Incident Address: 218 MAIN STREET, apt 209. Station at 51 Meetinghouse Ln. ' +
+        'Destination 43 HIGH ST. Gave 5 mg IV over 2 min; 12 lead obtained; 5x straps.',
+      { tier: 1 },
+    );
+    expect(r.redacted).not.toMatch(/218 MAIN STREET|51 Meetinghouse Ln|43 HIGH ST/);
+    expect(r.redacted).toContain('[ADDRESS_1]');
+    expect(r.redacted).toContain('5 mg IV');
+    expect(r.redacted).toContain('12 lead');
+    expect(r.redacted).toContain('5x straps');
+  });
+
   it('crew cert ids and PDF word-splits (PCR-2 field test)', async () => {
     const r = await redact(
       'Eric Audette Paramedic P870331 Cody Craveiro Paramedic P0904221. ' +

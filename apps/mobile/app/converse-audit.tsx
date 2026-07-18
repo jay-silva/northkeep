@@ -80,7 +80,7 @@ export default function ConverseAudit() {
 const KIND_LABEL: Record<string, string> = {
   email: 'email', phone: 'phone', ssn: 'SSN', credit_card: 'card', ip: 'IP',
   api_key: 'API key', iban: 'IBAN', person: 'name', org: 'org',
-  location: 'location', date: 'date (year kept)', record_id: 'record/policy #', gps: 'GPS', zip: 'ZIP',
+  location: 'location', date: 'date (year kept)', record_id: 'record/policy #', gps: 'GPS', zip: 'ZIP', address: 'address',
 };
 
 function Row({ label, value }: { label: string; value: string }) {

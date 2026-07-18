@@ -105,6 +105,16 @@ const DETECTORS: Detector[] = [
     restorable: false,
   },
   {
+    kind: 'address',
+    // Street addresses: house number + 1-3 words + a street suffix
+    // ("218 MAIN STREET", "51 Meetinghouse Ln", "13 Milliken PL"). The
+    // patient's incident address is a core Safe Harbor identifier and appears
+    // in every ePCR (PCR-6 field test 2026-07-18). Suffix-anchored so bare
+    // numbers and prose survive.
+    regex: /\b\d{1,5}\s+(?:[A-Za-zÀ-ÖØ-öø-ÿ'.-]+\s+){1,3}(?:st|street|rd|road|ln|lane|dr|drive|ave|avenue|blvd|boulevard|ct|court|way|pl|place|ter|terrace|cir|circle|hwy|highway|pkwy|parkway)\.?\b(?!\s*(?:elevation|dose|per|of))/gi,
+    restorable: false,
+  },
+  {
     kind: 'zip',
     // ZIP codes in ADDRESS context (after a "ZIP" label, a state abbreviation
     // or "Massachusetts", "County,", or a street suffix) — Safe Harbor treats
