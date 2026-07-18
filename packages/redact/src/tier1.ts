@@ -97,6 +97,38 @@ const DETECTORS: Detector[] = [
     restorable: false,
   },
   {
+    kind: 'record_id',
+    // Letter-prefixed certification/license/run numbers (P870331, EMT0904221)
+    // — crew cert ids ride unlabeled next to names in ePCR exports (PCR-2
+    // field test). 1–4 letters + 6–9 digits, standalone.
+    regex: /\b[A-Z]{1,4}\d{6,9}\b/g,
+    restorable: false,
+  },
+  {
+    kind: 'zip',
+    // ZIP codes in ADDRESS context (after a "ZIP" label, a state abbreviation
+    // or "Massachusetts", "County,", or a street suffix) — Safe Harbor treats
+    // ZIPs as identifiers; context-anchoring keeps bare 5-digit numbers
+    // (record counts, device readings) untouched. PCR-3 field test 2026-07-18.
+    regex: new RegExp(
+      '(?<=\\b(?:zip\\s*code|zip)\\s*[:#]?\\s{0,3})\\d{5}(?:-\\d{4})?\\b' +
+        '|(?<=\\b(?:county|massachusetts)[.,]?\\s{1,3})\\d{5}(?:-\\d{4})?\\b' +
+        '|(?<=\\b(?:AL|AK|AZ|AR|CA|CO|CT|DE|FL|GA|HI|ID|IL|IN|IA|KS|KY|LA|ME|MD|MA|MI|MN|MS|MO|MT|NE|NV|NH|NJ|NM|NY|NC|ND|OH|OK|OR|PA|RI|SC|SD|TN|TX|UT|VT|VA|WA|WV|WI|WY)[.,]?\\s{1,3})\\d{5}(?:-\\d{4})?\\b' +
+        '|(?<=\\b(?:rd|ln|dr|st|ave|road|lane|drive|street|avenue|blvd|court|ct|way)[.,]?\\s{1,3})\\d{5}(?:-\\d{4})?\\b',
+      'gi',
+    ),
+    restorable: false,
+  },
+  {
+    kind: 'gps',
+    // Decimal lat,long coordinate pairs (41.564308,-70.622237) — a precise
+    // geographic identifier ePCR exports embed for scene/destination
+    // (PCR-3 field test 2026-07-18). Requires 3+ decimal places on both
+    // components so version strings and vitals never match.
+    regex: /(?<![\d.])-?(?:[1-8]?\d|90)\.\d{3,8}\s*,\s*-?(?:1[0-7]\d|[1-9]?\d|180)\.\d{3,8}\b/g,
+    restorable: false,
+  },
+  {
     kind: 'ip',
     regex:
       /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g,

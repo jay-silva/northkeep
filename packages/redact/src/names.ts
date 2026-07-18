@@ -152,6 +152,9 @@ const EPONYM_EXCLUDE = new Set([
   'onset', 'acuity', 'perl', 'sul', 'payer', 'transfer', 'evaluated',
   // EMS role/apparatus words that ride next to names and towns
   'paramedic', 'medic', 'fire', 'rescue', 'ambulance', 'firefighter',
+  // demographic labels, equipment, and misc chart vocabulary (PCR-2/3 field tests)
+  'male', 'female', 'birth', 'minor', 'vest', 'caregiver', 'ama',
+  'gender', 'race', 'ethnicity', 'age', 'barracks',
 ]);
 
 function nameEvidence(d: NameData, word: string): boolean {
@@ -302,7 +305,7 @@ export function findNameSpans(text: string): Span[] {
    * Department Patient Information Last Name") — non-name-ish tokens SEGMENT
    * such runs so only the name-ish core masks (ePCR field test 2026-07-17). */
   const nameish = (t: Token): boolean => {
-    if (t.text.length < 2 || EPONYM_EXCLUDE.has(t.text.toLowerCase())) return false;
+    if (t.text.length < 2 || EPONYM_EXCLUDE.has(normalizeForLookup(t.text))) return false;
     const anyPart = (pred: (p: string) => boolean) => partsOf(t.text).some(pred);
     const rankOk = (p: string) => {
       const r = d.rank.get(p);
@@ -319,7 +322,7 @@ export function findNameSpans(text: string): Span[] {
   /** ALL-CAPS token eligible to sit in a caps name run. */
   const capsCandidate = (t: Token): boolean =>
     t.kind === 'allcaps' &&
-    !CAPS_EXCLUDE.has(t.text.toLowerCase()) &&
+    !CAPS_EXCLUDE.has(normalizeForLookup(t.text)) &&
     (listAny(t.text) || !english.has(normalizeForLookup(t.text)));
   /** ALL-CAPS token acceptable AFTER an anchor. List membership with split
    * rank guards (round 3): FIRST needs rank > 300 — keeps JOHN (372), DAVID
@@ -327,7 +330,7 @@ export function findNameSpans(text: string): Span[] {
    * BROWN (1268), drops WAS/ON/TO/AND. Off-English rare tokens ("ZYLER")
    * always qualify. Rank alone cannot do this: "john" outranks "able". */
   const capsAnchorable = (t: Token): boolean => {
-    if (t.kind !== 'allcaps' || CAPS_EXCLUDE.has(t.text.toLowerCase())) return false;
+    if (t.kind !== 'allcaps' || CAPS_EXCLUDE.has(normalizeForLookup(t.text))) return false;
     const norm = normalizeForLookup(t.text);
     if (!english.has(norm)) return true;
     const r = d.rank.get(norm) ?? Number.MAX_SAFE_INTEGER;
@@ -347,6 +350,21 @@ export function findNameSpans(text: string): Span[] {
     return false;
   };
   const tokens = tokenize(text);
+  /** PDF extractors split words with stray spaces ("Revise d Traum a Score",
+   * "res ponse"). The reliable signal: the hit REJOINED with its neighbor is
+   * an English word — traum+a=trauma, res+ponse=response — while a real name
+   * never is (donna+is=donnais). PCR field tests 2026-07-17. */
+  const splitArtifact = (idx: number): boolean => {
+    const t = tokens[idx]!;
+    const joined = (a: Token, b: Token): boolean =>
+      /^\s+$/.test(text.slice(a.end, b.start)) &&
+      english.has(normalizeForLookup(a.text + b.text));
+    const next = tokens[idx + 1];
+    if (next && joined(t, next)) return true;
+    const prev = tokens[idx - 1];
+    if (prev && joined(prev, t)) return true;
+    return false;
+  };
   const spans: Span[] = [];
   // Overlapping claims MERGE into their union rather than dropping — an anchor
   // claims 3 tokens of "MARIA GARCIA LOPEZ HERNANDEZ" and the caps-run rule
@@ -410,7 +428,12 @@ export function findNameSpans(text: string): Span[] {
     const flushSegments = () => {
       let seg: Token[] = [];
       const flushSeg = () => {
-        if (seg.length >= 1 && runIsName(seg)) claim(seg[0]!.start, seg[seg.length - 1]!.end);
+        if (
+          seg.length >= 1 &&
+          runIsName(seg) &&
+          !(seg.length === 1 && splitArtifact(tokens.indexOf(seg[0]!)))
+        )
+          claim(seg[0]!.start, seg[seg.length - 1]!.end);
         seg = [];
       };
       for (const t of run) {
@@ -486,12 +509,18 @@ export function findNameSpans(text: string): Span[] {
       const next = tokens[i + 1];
       const nextIsLower = !!next && t.kind === 'title' && /^[a-zà-öø-ÿ]/.test(next.text);
       if (t.sentenceInitial && veto.has(normalizeForLookup(t.text)) && nextIsLower) continue;
+      if (splitArtifact(i)) continue; // PDF word-split ("Traum a")
       claim(t.start, t.end);
     } else if (t.kind === 'lower') {
       // Lowercase: name-evidence word that is NOT common English ("cabral").
       // 5+ chars: short off-English words that happen to be census surnames
       // ("vile", "sul") read as prose, not names (field report 2026-07-17).
-      if (t.text.length >= 5 && evidence(t.text) && !english.has(normalizeForLookup(t.text)))
+      if (
+        !splitArtifact(i) && // "res ponse" tails are wrapped words, not names
+        t.text.length >= 5 &&
+        evidence(t.text) &&
+        !english.has(normalizeForLookup(t.text))
+      )
         claim(t.start, t.end);
     }
   }

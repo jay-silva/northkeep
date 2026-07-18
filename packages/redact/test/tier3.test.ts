@@ -43,6 +43,37 @@ describe('generalizeDates — all mode', () => {
     expect(result.redacted).toContain('6.8 miles'); // unlabeled numbers untouched
   });
 
+  it('GPS coordinates and address-context ZIPs mask; bare numbers survive (PCR-3)', async () => {
+    const r = await redact(
+      'Destination GPS Location: 41.564308,-70.622237. ZIP Code: 02540. ' +
+        'POCASSET, Barnstable County, 02559. 51 Meetinghouse Ln, Bourne, Massachusetts, 02562. ' +
+        'Springfield, IL 62704. Odometer 10250 miles, HR 103, glucose 120.',
+      { tier: 1 },
+    );
+    expect(r.redacted).not.toMatch(/41\.564308|-70\.622237|02540|02559|02562|62704/);
+    expect(r.redacted).toContain('[GPS_1]');
+    expect(r.redacted).toContain('[ZIP_1]');
+    // Bare device numbers untouched.
+    expect(r.redacted).toContain('10250 miles');
+    expect(r.redacted).toContain('HR 103');
+    expect(r.redacted).toContain('glucose 120');
+  });
+
+  it('crew cert ids and PDF word-splits (PCR-2 field test)', async () => {
+    const r = await redact(
+      'Eric Audette Paramedic P870331 Cody Craveiro Paramedic P0904221. ' +
+        'Revise d Traum a Score noted; Appropr iate res ponse to stimu li. Primary Patient Caregiver- At Scene.',
+      { tier: 3 },
+      null,
+    );
+    expect(r.redacted).not.toMatch(/P870331|P0904221|Audette|Craveiro/);
+    // Split-word fragments and role labels are NOT masked.
+    expect(r.redacted).toContain('Traum a Score');
+    expect(r.redacted).toContain('res ponse');
+    expect(r.redacted).toContain('Caregiver-');
+    expect(r.redacted).toContain('Paramedic');
+  });
+
   it('clinical fractions and vitals are NOT dates (field report 2026-07-17)', () => {
     const src =
       'Pain 7/10, strength 5/5 bilaterally, 2/6 systolic murmur, GCS 15/15, SpO2 94 RA improving 8/10.';

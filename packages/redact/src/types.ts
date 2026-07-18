@@ -8,7 +8,9 @@ export type SecretKind =
   | 'ip'
   | 'api_key'
   | 'iban'
-  | 'record_id';
+  | 'record_id'
+  | 'gps'
+  | 'zip';
 
 export type EntityKind = 'person' | 'org' | 'location';
 
