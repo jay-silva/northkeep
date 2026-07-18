@@ -152,8 +152,9 @@ const EPONYM_EXCLUDE = new Set([
   'onset', 'acuity', 'perl', 'sul', 'payer', 'transfer', 'evaluated',
   // EMS role/apparatus words that ride next to names and towns
   'paramedic', 'medic', 'fire', 'rescue', 'ambulance', 'firefighter',
-  // demographic labels, equipment, and misc chart vocabulary (PCR-2 field test)
+  // demographic labels, equipment, and misc chart vocabulary (PCR-2/3 field tests)
   'male', 'female', 'birth', 'minor', 'vest', 'caregiver', 'ama',
+  'gender', 'race', 'ethnicity', 'age', 'barracks',
 ]);
 
 function nameEvidence(d: NameData, word: string): boolean {

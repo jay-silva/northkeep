@@ -43,6 +43,22 @@ describe('generalizeDates — all mode', () => {
     expect(result.redacted).toContain('6.8 miles'); // unlabeled numbers untouched
   });
 
+  it('GPS coordinates and address-context ZIPs mask; bare numbers survive (PCR-3)', async () => {
+    const r = await redact(
+      'Destination GPS Location: 41.564308,-70.622237. ZIP Code: 02540. ' +
+        'POCASSET, Barnstable County, 02559. 51 Meetinghouse Ln, Bourne, Massachusetts, 02562. ' +
+        'Springfield, IL 62704. Odometer 10250 miles, HR 103, glucose 120.',
+      { tier: 1 },
+    );
+    expect(r.redacted).not.toMatch(/41\.564308|-70\.622237|02540|02559|02562|62704/);
+    expect(r.redacted).toContain('[GPS_1]');
+    expect(r.redacted).toContain('[ZIP_1]');
+    // Bare device numbers untouched.
+    expect(r.redacted).toContain('10250 miles');
+    expect(r.redacted).toContain('HR 103');
+    expect(r.redacted).toContain('glucose 120');
+  });
+
   it('crew cert ids and PDF word-splits (PCR-2 field test)', async () => {
     const r = await redact(
       'Eric Audette Paramedic P870331 Cody Craveiro Paramedic P0904221. ' +
