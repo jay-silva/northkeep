@@ -27,10 +27,16 @@ describe('generalizeDates — all mode', () => {
     expect(generalizeDates(src, 'all').text).toBe(src);
   });
 
-  it('handles a yearless date', () => {
+  it('handles a yearless date in date context', () => {
     const { text } = generalizeDates('Recheck on 03/15 next visit.', 'all');
     expect(text).toContain('[DATE]');
     expect(text).not.toContain('03/15');
+  });
+
+  it('clinical fractions and vitals are NOT dates (field report 2026-07-17)', () => {
+    const src =
+      'Pain 7/10, strength 5/5 bilaterally, 2/6 systolic murmur, GCS 15/15, SpO2 94 RA improving 8/10.';
+    expect(generalizeDates(src, 'all').text).toBe(src);
   });
 
   it('marks dates non-restorable (one-way, year preserved in placeholder)', () => {
@@ -63,9 +69,16 @@ describe('deterministic name scrubbing', () => {
     expect(spans.map((s) => s.original)).toContain('Donna Hitchcock');
   });
 
-  it('masks a single dictionary surname mid-sentence', () => {
-    const spans = findNameSpans('The report mentions Hitchcock repeatedly.');
-    expect(spans.map((s) => s.original)).toContain('Hitchcock');
+  it('a solo ENGLISH-WORD surname is a documented NER-net residual; off-English solos still mask', () => {
+    // Policy (field report 2026-07-17): "hitchcock" is in the English list, so
+    // alone mid-sentence it no longer solo-triggers — English-word surnames
+    // solo-matched every Title-Case form header ("Ems", "Alcohol", "Glasgow").
+    // It still masks in pairs ("Donna Hitchcock"), anchored ("Mr Hitchcock"),
+    // and comma format ("Hitchcock, Donna").
+    expect(findNameSpans('The report mentions Hitchcock repeatedly.')).toHaveLength(0);
+    expect(findNameSpans('Mr Hitchcock was seen.').map((s) => s.original)).toContain('Hitchcock');
+    // Off-English surnames keep full solo power.
+    expect(findNameSpans('The report mentions Natarajan repeatedly.').map((s) => s.original)).toContain('Natarajan');
   });
 
   it('masks a sentence-initial first name (outside the top-2000 veto)', () => {
@@ -314,6 +327,76 @@ describe('adversarial regressions, round 3 (overlap merge, pairs, anchor noise)'
     const flat = findNameSpans("SMITH-JONES'S CHART REVIEWED.").map((s) => s.original).join(' ');
     expect(flat).toContain('SMITH-JONES');
     expect(flat).not.toContain('CHART');
+  });
+});
+
+describe('structured ePCR field report (2026-07-17 over-masking)', () => {
+  it('Title-Case form headers produce ZERO deterministic spans', () => {
+    for (const header of [
+      'First Due Ems Care Report',
+      'Care Report Number',
+      'Glasgow Score Temp',
+      'History Alcohol Drugs',
+      'Situation Symptom Onset',
+      'Method Eye Verbal Motor Qualifier Total',
+      'Billing Primary Method',
+      'Reason For Signing',
+      'Destination Odometer Reading',
+      'Certification State License',
+      'Organ System',
+      'Signature Reason',
+      'Completing This Report',
+    ]) {
+      expect(findNameSpans(header), header).toHaveLength(0);
+    }
+  });
+
+  it('real names embedded in the same form still mask', () => {
+    const flat = (t: string) => findNameSpans(t).map((s) => s.original).join(' ');
+    expect(flat('Last Name Hitchcock Gender F First Name Donna')).toContain('Hitchcock');
+    expect(flat('Hitchcock, Donna Company Address')).toContain('Hitchcock, Donna');
+    expect(flat('Eric Audette Paramedic P')).toContain('Eric Audette');
+    expect(flat('Cody Craveiro Paramedic P')).toContain('Cody Craveiro');
+  });
+
+  it('NER junk gate: placeholders, field labels, hex ids, and adjectives are refused', async () => {
+    const junkOllama = {
+      available: async () => true,
+      generateJson: async () =>
+        JSON.stringify({
+          entities: [
+            { text: 'Sex', kind: 'person' },
+            { text: 'Date', kind: 'person' },
+            { text: 'Arrived', kind: 'person' },
+            { text: 'vile', kind: 'person' },
+            { text: '8ca72b71', kind: 'person' },
+            { text: 'Person-1', kind: 'person' },
+            { text: 'Org-1', kind: 'org' },
+            { text: 'Zyler Quandril', kind: 'person' },
+            { text: 'Barnstable County', kind: 'location' },
+          ],
+        }),
+    } as never;
+    const { redact: redactFn } = await import('../src/index.js');
+    // Tier 3: the STRICT gate applies (deterministic layers own common names;
+    // NER is residuals-only). "vile"/"date"/"sul" are census surnames, so the
+    // list-membership arm alone would re-admit them — strict requires
+    // off-English tokens.
+    const result = await redactFn(
+      'Sex F Date noted. Arrived vile 8ca72b71 Person-1 Org-1. Zyler Quandril of Barnstable County.',
+      { tier: 3 },
+      junkOllama,
+    );
+    // Only the plausible entities were masked.
+    expect(result.redacted).toContain('Sex');
+    expect(result.redacted).toContain('Date');
+    expect(result.redacted).toContain('Arrived');
+    expect(result.redacted).toContain('vile');
+    expect(result.redacted).toContain('8ca72b71');
+    expect(result.redacted).toContain('Person-1'); // placeholder NOT re-masked
+    expect(result.redacted).toContain('Org-1');
+    expect(result.redacted).not.toContain('Zyler');
+    expect(result.redacted).not.toContain('Barnstable');
   });
 });
 

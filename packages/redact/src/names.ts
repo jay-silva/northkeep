@@ -52,7 +52,6 @@ import type { PseudonymMap, Replacement } from './types.js';
 
 const VETO_PREFIX = 2000;
 const FIRST_MIN_RANK = VETO_PREFIX;
-const SUR_MIN_RANK = 5000;
 
 /** Tokens that must never be treated as names in the ALL-CAPS branches.
  * Three families (all lowercase): clinical acronyms ("ALS"/"EMS" are census
@@ -125,13 +124,40 @@ function normalizeForLookup(word: string): string {
     .replace(/['’\-]/g, '');
 }
 
-/** True when a token counts as evidence of a real name (rank-guarded list
- * hit on the normalized whole token, or on any hyphen-separated part). */
+/** Internal-capital morphology (McDonald, O'Brien, DeShawn): a capital after a
+ * lowercase letter or apostrophe — English words never look like this, so a
+ * list hit with this shape is name evidence at ANY rank. */
+function hasInternalCapital(word: string): boolean {
+  return /[a-zà-öø-ÿ'’][A-ZÀ-ÖØ-Þ]/.test(word);
+}
+
+/** True when a token counts as evidence of a real name.
+ * FIRST-list hits need English rank > 2000 ("will", "may", "general" out).
+ * SURNAME-only hits must be ABSENT from English entirely ("delacruz",
+ * "okafor", "natarajan") — the census list is so inclusive that English-word
+ * surnames above any rank bar still mass-match Title-Case FORM HEADERS
+ * ("First Due Ems Care Report", "History Alcohol Drugs" — "ems" 10202,
+ * "alcohol", "glasgow" are all census surnames). Field report 2026-07-17:
+ * those solo hits shredded a real ePCR. English-word surnames keep their
+ * power in PAIRS ("Donna Hitchcock" via the FIRST token; "SMITH, JOHN" via
+ * the pair rule; "MR SMITH" via the anchor) and in internal-capital
+ * morphology ("McDonald"); solo mid-sentence they fall to the NER net. */
+/** Clinical eponyms that are also census surnames but read as scale/score
+ * names in EMS text ("Glasgow Score", "Apgar"). Excluded from SOLO evidence
+ * only — "Donna Glasgow" still masks via the pair rule. */
+const EPONYM_EXCLUDE = new Set([
+  'glasgow', 'apgar', 'braden', 'cincinnati', 'wells', 'morse',
+  // name-list noise that reads as chart vocabulary, never as a patient name
+  'temp', 'score', 'scale', 'exam', 'chart', 'triage',
+]);
+
 function nameEvidence(d: NameData, word: string): boolean {
+  const internalCap = hasInternalCapital(word);
   const probe = (lower: string): boolean => {
+    if (EPONYM_EXCLUDE.has(lower)) return false;
     const r = d.rank.get(lower);
     if (d.first.has(lower)) return r === undefined || r > FIRST_MIN_RANK;
-    if (d.sur.has(lower)) return r === undefined || r > SUR_MIN_RANK;
+    if (d.sur.has(lower)) return r === undefined || internalCap;
     return false;
   };
   if (probe(normalizeForLookup(word))) return true;
@@ -141,6 +167,25 @@ function nameEvidence(d: NameData, word: string): boolean {
     }
   }
   return false;
+}
+
+/** Rank-free list membership for a single word (whole or hyphen parts) —
+ * exported for the Tier-2 NER plausibility gate. */
+export function nameListHit(word: string): boolean {
+  const d = nameData();
+  const probe = (l: string) => d.first.has(l) || d.sur.has(l);
+  if (probe(normalizeForLookup(word))) return true;
+  if (/['’\-]/.test(word)) {
+    for (const part of word.split(/['’\-]+/)) {
+      if (part.length >= 2 && probe(normalizeForLookup(part))) return true;
+    }
+  }
+  return false;
+}
+
+/** Exported for the Tier-2 NER plausibility gate. */
+export function isCommonEnglish(word: string): boolean {
+  return nameData().english.has(normalizeForLookup(word));
 }
 
 /** Honorific / role labels whose following capitalized tokens are names. */
@@ -240,8 +285,18 @@ export function findNameSpans(text: string): Span[] {
       : [];
     return [whole, ...parts];
   };
-  const firstAny = (w: string): boolean => partsOf(w).some((p) => d.first.has(p));
-  const surAny = (w: string): boolean => partsOf(w).some((p) => d.sur.has(p));
+  // Pair-rule membership: list hit, not an eponym, and NOT an ultra-common
+  // English word — "for" (rank 7) and "this" (12) are census surnames, and
+  // without the floor "Reason For" reads as a FIRST→SUR name pair. The >300
+  // floor keeps "john" (372), the lowest-ranked real given name we must hold.
+  const pairRankOk = (p: string): boolean => {
+    const r = d.rank.get(p);
+    return r === undefined || r > 300;
+  };
+  const firstAny = (w: string): boolean =>
+    partsOf(w).some((p) => d.first.has(p) && !EPONYM_EXCLUDE.has(p) && pairRankOk(p));
+  const surAny = (w: string): boolean =>
+    partsOf(w).some((p) => d.sur.has(p) && !EPONYM_EXCLUDE.has(p) && pairRankOk(p));
   const listAny = (w: string): boolean => firstAny(w) || surAny(w);
   /** ALL-CAPS token eligible to sit in a caps name run. */
   const capsCandidate = (t: Token): boolean =>
@@ -402,7 +457,10 @@ export function findNameSpans(text: string): Span[] {
       claim(t.start, t.end);
     } else if (t.kind === 'lower') {
       // Lowercase: name-evidence word that is NOT common English ("cabral").
-      if (evidence(t.text) && !english.has(normalizeForLookup(t.text))) claim(t.start, t.end);
+      // 5+ chars: short off-English words that happen to be census surnames
+      // ("vile", "sul") read as prose, not names (field report 2026-07-17).
+      if (t.text.length >= 5 && evidence(t.text) && !english.has(normalizeForLookup(t.text)))
+        claim(t.start, t.end);
     }
   }
 

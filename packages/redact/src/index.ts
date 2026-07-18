@@ -42,7 +42,7 @@ export async function redact(
     replacements.push(...dated.replacements);
 
     const ollama = ollamaOverride !== undefined ? ollamaOverride : createOllamaClient();
-    const t2 = await applyTier2(working, ollama, pseudonyms);
+    const t2 = await applyTier2(working, ollama, pseudonyms, tier === 3);
     working = t2.text;
     replacements.push(...t2.replacements);
     tier2Degraded = t2.degraded;
@@ -54,7 +54,7 @@ export async function redact(
       if (!tier2Degraded) {
         // Verify pass: NER over the already-masked text — union only, so it
         // can catch what both the first pass and the dictionaries missed.
-        const verify = await applyTier2(working, ollama, pseudonyms);
+        const verify = await applyTier2(working, ollama, pseudonyms, true);
         working = verify.text;
         replacements.push(...verify.replacements);
         tier2Degraded = verify.degraded;
