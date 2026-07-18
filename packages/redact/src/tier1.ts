@@ -97,6 +97,14 @@ const DETECTORS: Detector[] = [
     restorable: false,
   },
   {
+    kind: 'record_id',
+    // Letter-prefixed certification/license/run numbers (P870331, EMT0904221)
+    // — crew cert ids ride unlabeled next to names in ePCR exports (PCR-2
+    // field test). 1–4 letters + 6–9 digits, standalone.
+    regex: /\b[A-Z]{1,4}\d{6,9}\b/g,
+    restorable: false,
+  },
+  {
     kind: 'ip',
     regex:
       /\b(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)\b/g,
