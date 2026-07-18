@@ -49,17 +49,26 @@ export async function redact(
     working = dated.text;
     replacements.push(...dated.replacements);
 
-    const ollama = ollamaOverride !== undefined ? ollamaOverride : createOllamaClient();
-    const t2 = await applyTier2(working, ollama, pseudonyms, tier === 3);
-    working = t2.text;
-    replacements.push(...t2.replacements);
-    tier2Degraded = t2.degraded;
+    // Known entities replay instantly from the map — no model needed. This is
+    // both a correctness net for replay-only calls and a cheap first pass.
+    const replayed = replayPseudonyms(working, pseudonyms);
+    working = replayed.text;
+    replacements.push(...replayed.replacements);
+
+    if (options.nerMode !== 'replay-only') {
+      const ollama = ollamaOverride !== undefined ? ollamaOverride : createOllamaClient();
+      const t2 = await applyTier2(working, ollama, pseudonyms, tier === 3);
+      working = t2.text;
+      replacements.push(...t2.replacements);
+      tier2Degraded = t2.degraded;
+    }
 
     if (tier === 3) {
       const scrubbed = scrubNames(working, pseudonyms);
       working = scrubbed.text;
       replacements.push(...scrubbed.replacements);
-      if (!tier2Degraded) {
+      if (options.nerMode !== 'replay-only' && !tier2Degraded) {
+        const ollama = ollamaOverride !== undefined ? ollamaOverride : createOllamaClient();
         // Verify pass: NER over the already-masked text — union only, so it
         // can catch what both the first pass and the dictionaries missed.
         const verify = await applyTier2(working, ollama, pseudonyms, true);
@@ -73,11 +82,11 @@ export async function redact(
   return {
     redacted: working,
     replacements,
-    // Convention: tierApplied is the highest tier whose FULL pipeline ran.
-    // A degraded NER drops it to 1 even though Tier-3's deterministic layers
-    // still applied (their masks are in `replacements` regardless); the
-    // degraded flag is what callers must act on.
-    tierApplied: tier >= 2 && !tier2Degraded ? tier : 1,
+    // Convention: Tier 2's name layer IS the NER, so degraded drops it to 1.
+    // Tier 3's guarantee is the DETERMINISTIC layers (leak-tested with the
+    // model absent), so it stays 3 with the degraded flag marking that the
+    // NER bonus net was offline (ADR 0022, field report 2026-07-18).
+    tierApplied: tier === 3 ? 3 : tier === 2 && !tier2Degraded ? 2 : 1,
     tier2Degraded,
   };
 }
@@ -113,6 +122,30 @@ export async function redactDeterministic(
   replacements.push(...scrubbed.replacements);
 
   return { redacted: working, replacements, tierApplied: 1, tier2Degraded: false };
+}
+
+/**
+ * Replay KNOWN pseudonyms over text with no model: every original already in
+ * the map is replaced wherever it appears (whole-word, case-insensitive,
+ * longest-first so "Bob Henderson" wins over "Bob").
+ */
+export function replayPseudonyms(
+  text: string,
+  pseudonyms: PseudonymMap,
+): { text: string; replacements: Replacement[] } {
+  const entries = Object.entries(pseudonyms).sort((a, b) => b[0].length - a[0].length);
+  const replacements: Replacement[] = [];
+  let out = text;
+  for (const [original, placeholder] of entries) {
+    if (original.length < 2) continue;
+    const re = new RegExp(`\\b${original.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+    if (!re.test(out)) continue;
+    out = out.replace(re, placeholder);
+    if (!replacements.some((r) => r.placeholder === placeholder)) {
+      replacements.push({ placeholder, original, tier: 2, kind: 'person', restorable: true });
+    }
+  }
+  return { text: out, replacements };
 }
 
 /**

@@ -47,6 +47,12 @@ export interface RedactOptions {
   /** Reuse/extend a pseudonym map so the same entity gets the same
    * placeholder across calls (consistent pseudonyms). */
   pseudonyms?: PseudonymMap;
+  /** 'replay-only' skips the NER model and only replays KNOWN pseudonyms from
+   * the map (plus all deterministic layers). Used for conversation HISTORY,
+   * whose entities were already detected in their original turn — re-running
+   * the 3B model over every history message every turn made long chats hang
+   * (field report 2026-07-18). Default 'on'. */
+  nerMode?: 'on' | 'replay-only';
 }
 
 /** entity text (lowercased) → stable placeholder, e.g. "bob henderson" → "Person-1". */

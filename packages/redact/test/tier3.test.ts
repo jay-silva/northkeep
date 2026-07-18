@@ -169,6 +169,29 @@ describe('deterministic name scrubbing', () => {
 });
 
 describe('redact() tier orchestration', () => {
+  it('tier-3 degraded keeps tierApplied 3 (deterministic IS the guarantee)', async () => {
+    const r = await redact('Donna Hitchcock, DOB 03/15/1948.', { tier: 3 }, null);
+    expect(r.tierApplied).toBe(3);
+    expect(r.tier2Degraded).toBe(true);
+    expect(r.redacted).not.toMatch(/Donna|Hitchcock/);
+  });
+
+  it('replay-only mode never calls the model and still replays known names', async () => {
+    let calls = 0;
+    const countingOllama = {
+      available: async () => { calls += 1; return true; },
+      generateJson: async () => { calls += 1; return '{"entities":[]}'; },
+    } as never;
+    const r = await redact(
+      'Donna Hitchcock said hello to Zyler.',
+      { tier: 3, pseudonyms: { 'donna hitchcock': 'Person-1' }, nerMode: 'replay-only' },
+      countingOllama,
+    );
+    expect(calls).toBe(0); // the 3B model is never touched for history
+    expect(r.redacted).toContain('Person-1');
+    expect(r.tier2Degraded).toBe(false); // nothing failed; NER was not requested
+  });
+
   it('tier 3 with no local model: degraded flag set, deterministic layers still applied', async () => {
     const result = await redact(
       'Patient: Donna Hitchcock, DOB 03/15/1948, SSN 123-45-6789.',
