@@ -151,9 +151,15 @@ export default function Converse() {
     }
     if (r.reason === 'canceled') return;
     if (r.reason === 'unsupported') {
-      setError(
-        `Can't read .${r.ext} on the phone yet. Supported: .txt, .md, .csv, .json, .log (PDFs work in the desktop app).`,
-      );
+      setError(`Can't read .${r.ext} on the phone yet. Supported: .pdf, .txt, .md, .csv, .json, .log.`);
+      return;
+    }
+    if (r.reason === 'protected') {
+      setError('That PDF is password-protected. Remove the password and try again.');
+      return;
+    }
+    if (r.reason === 'no-text') {
+      setError('No readable text found in that PDF, even after scanning it for printed text.');
       return;
     }
     setError('Could not read that file.');

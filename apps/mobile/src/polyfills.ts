@@ -22,8 +22,8 @@ if (typeof global.Buffer === 'undefined') {
 }
 
 /**
- * Guards for newer JS built-ins that pdf.js (via the lazily-imported unpdf,
- * attach-file.ts) can touch and Hermes may not ship yet. Each is a no-op when
+ * Guards for newer JS built-ins that bundled deps can touch and Hermes may
+ * not ship yet. Each is a no-op when
  * the engine already has the real thing.
  */
 

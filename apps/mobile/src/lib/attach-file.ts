@@ -7,21 +7,23 @@ import { File } from 'expo-file-system';
 /**
  * Converse file attach (mobile): pick a file and read it to text ON-DEVICE, so
  * the on-device Tier-1 firewall can redact it with the message before anything
- * is sent. Mirrors the desktop attach, including PDFs: the same `unpdf`
- * (pdf.js, DOM-free build) the desktop's @northkeep/extract uses runs here in
- * Hermes, imported lazily so the module cost is only paid on the first PDF.
- * Text formats cover notes, CSVs, JSON, and logs.
+ * is sent. Text formats cover notes, CSVs, JSON, and logs. PDFs go through the
+ * NATIVE PdfText module (modules/pdf-text): Apple PDFKit for the text layer +
+ * Vision OCR for scanned pages — chosen over pdf.js/unpdf, which fatally
+ * crashed Hermes on an internal async tick in build 13 (uncatchable from JS).
+ * Native errors arrive as coded promise rejections, so failure is always a
+ * message, never a crash.
  *
  * LOCAL-ONLY by construction (invariant #1): the picked file is read from the
- * device cache and decoded/extracted in memory; nothing is uploaded (there is
- * no server on the phone) and nothing extra is written to disk. The PDF is
- * never sent anywhere — only its extracted text, after redaction, like any
- * typed message.
+ * device cache and decoded/extracted in memory (PDFKit/Vision run on-device);
+ * nothing is uploaded and nothing extra is written to disk. The PDF is never
+ * sent anywhere — only its extracted text, after redaction, like any typed
+ * message.
  *
  * NEEDS ON-DEVICE VALIDATION: document-picker flow + File.bytes() on a picked
  * content:// / file:// URI (same caveat as import-vault.ts), and the first
- * on-device unpdf extraction (Hermes lacks some newer JS built-ins pdf.js can
- * touch — a failure surfaces as the honest 'read-failed' path, never a crash).
+ * on-device PDF extraction (text-layer, scanned/OCR, and password-protected
+ * cases).
  */
 
 /** Text formats we read directly (mirror of @northkeep/extract TEXT_EXTENSIONS). */
@@ -34,7 +36,19 @@ export type PickResult =
   | { ok: true; attachment: PickedAttachment }
   | { ok: false; reason: 'canceled' }
   | { ok: false; reason: 'unsupported'; ext: string }
+  | { ok: false; reason: 'protected' }
+  | { ok: false; reason: 'no-text' }
   | { ok: false; reason: 'read-failed' };
+
+/** Native on-device PDF extractor (modules/pdf-text): PDFKit + Vision OCR. */
+type PdfTextNative = {
+  extractText(uri: string): Promise<{
+    text: string;
+    pages: number;
+    ocrPages: number;
+    ocrLimited: boolean;
+  }>;
+};
 
 function extensionOf(name: string): string {
   const i = name.lastIndexOf('.');
@@ -52,25 +66,29 @@ export async function pickAttachment(): Promise<PickResult> {
   const asset = picked.assets[0]!;
   const name = asset.name ?? 'file';
   const ext = extensionOf(name);
-  // PDF DISABLED 2026-07-19: the unpdf path bundles and typechecks, but the
-  // first on-device run CRASHED the app outright (native-level, not a JS throw
-  // our catch could turn into 'read-failed') on build 13. Until it is
-  // diagnosed with a device crash log and proven on hardware, PDFs stay
-  // desktop-only rather than shipping a crash. Scaffolding (unpdf dep, babel
-  // import.meta transform, polyfills) is kept for the fix.
-  const PDF_ENABLED = false;
-  if (!TEXT_EXTENSIONS.has(ext) && !(PDF_ENABLED && ext === 'pdf')) {
+  if (!TEXT_EXTENSIONS.has(ext) && ext !== 'pdf') {
     return { ok: false, reason: 'unsupported', ext };
   }
   try {
-    const bytes = await new File(asset.uri).bytes();
     let text: string;
     if (ext === 'pdf') {
-      // Same extractor as the desktop app, loaded on first use.
-      const { extractText } = await import('unpdf');
-      const result = await extractText(bytes, { mergePages: true });
-      text = result.text;
+      const { requireNativeModule } = await import('expo');
+      const PdfText = requireNativeModule<PdfTextNative>('PdfText');
+      let result;
+      try {
+        result = await PdfText.extractText(asset.uri);
+      } catch (err) {
+        const code = (err as { code?: string }).code ?? '';
+        if (code === 'ERR_PDF_PROTECTED') return { ok: false, reason: 'protected' };
+        return { ok: false, reason: 'read-failed' };
+      }
+      text = result.text.trim();
+      if (text.length === 0) return { ok: false, reason: 'no-text' };
+      if (result.ocrLimited) {
+        text += `\n\n[Note: this scanned PDF is long; text was recognized from the first pages only.]`;
+      }
     } else {
+      const bytes = await new File(asset.uri).bytes();
       // Web-standard decoder (built into Hermes); avoids relying on a Buffer
       // polyfill. Non-fatal so a slightly-malformed text file still attaches.
       text = new TextDecoder('utf-8').decode(bytes);
