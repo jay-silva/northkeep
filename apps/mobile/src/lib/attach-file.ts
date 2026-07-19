@@ -52,7 +52,14 @@ export async function pickAttachment(): Promise<PickResult> {
   const asset = picked.assets[0]!;
   const name = asset.name ?? 'file';
   const ext = extensionOf(name);
-  if (!TEXT_EXTENSIONS.has(ext) && ext !== 'pdf') {
+  // PDF DISABLED 2026-07-19: the unpdf path bundles and typechecks, but the
+  // first on-device run CRASHED the app outright (native-level, not a JS throw
+  // our catch could turn into 'read-failed') on build 13. Until it is
+  // diagnosed with a device crash log and proven on hardware, PDFs stay
+  // desktop-only rather than shipping a crash. Scaffolding (unpdf dep, babel
+  // import.meta transform, polyfills) is kept for the fix.
+  const PDF_ENABLED = false;
+  if (!TEXT_EXTENSIONS.has(ext) && !(PDF_ENABLED && ext === 'pdf')) {
     return { ok: false, reason: 'unsupported', ext };
   }
   try {

@@ -152,7 +152,7 @@ export default function Converse() {
     if (r.reason === 'canceled') return;
     if (r.reason === 'unsupported') {
       setError(
-        `Can't read .${r.ext} on the phone yet. Supported: .pdf, .txt, .md, .csv, .json, .log.`,
+        `Can't read .${r.ext} on the phone yet. Supported: .txt, .md, .csv, .json, .log (PDFs work in the desktop app).`,
       );
       return;
     }
