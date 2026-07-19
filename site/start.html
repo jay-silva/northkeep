@@ -124,13 +124,14 @@
 <p>Once Cloud Connect is paired, your AI apps can write back as well as read. That enables something no single vendor offers: a record of your conversations across every app, in a vault you own. Manus, Claude, and ChatGPT scheduled tasks can all see their own session history and push summaries automatically.</p>
 <p><strong>One-time setup:</strong></p>
 <ol>
-  <li>In the Memories tab, add one memory with a new scope named <code>journal</code>. Something like: "This scope holds automatic chat summaries from my AI apps."</li>
-  <li>In the Cloud Connect tab, share the <code>journal</code> scope.</li>
+  <li>In the Memories tab, add one memory with a new scope named <code>conversations</code>. Something like: "This scope holds automatic chat summaries from my AI apps."</li>
+  <li>In the Cloud Connect tab, share the <code>conversations</code> scope.</li>
 </ol>
-<p><strong>Then, in each app, create a daily scheduled task with a prompt like:</strong></p>
-<div class="note" style="color:var(--ink)">Review my conversations from today. For each substantive one, write a two or three sentence summary. Store each summary in NorthKeep using memory_remember with type "episodic" and scope "journal". Skip small talk and anything already stored.</div>
-<p>Prefer capture as you go instead of nightly? Put a standing line in the app's custom instructions: "At the end of any substantive conversation, store a short summary in NorthKeep (type episodic, scope journal)."</p>
-<p class="tip">Honesty note: journal summaries live in a shared scope, so they sit on the connector encrypted at rest until they sync into your vault. After a Sync, you can unshare the journal scope any time; the server copies delete and your vault keeps everything.</p>
+<p><strong>Pattern 1: a nightly scheduled task</strong> (works in apps whose tasks can see session history, like Manus and ChatGPT):</p>
+<div class="note" style="color:var(--ink)">Review my conversations from today. For each substantive one, write a two or three sentence summary. Store each summary in NorthKeep using memory_remember with type "episodic" and scope "conversations". Skip small talk and anything already stored.</div>
+<p><strong>Pattern 2: a standing instruction stored in the vault itself.</strong> Send this once in any connected app, and the habit travels with your memory to every app:</p>
+<div class="note" style="color:var(--ink)">Store this in NorthKeep as a procedural memory in scope "conversations": At the end of each substantive conversation, write a concise summary of it to NorthKeep as one episodic memory in scope "conversations". Do this when the conversation is winding down, or whenever I say "log this".</div>
+<p class="tip">Honesty note: these summaries live in a shared scope, so they sit on the connector encrypted at rest until they sync into your vault. After a Sync you can unshare the scope any time; the server copies delete and your vault keeps everything.</p>
 </div>
 
 <h2>Stuck?</h2>
