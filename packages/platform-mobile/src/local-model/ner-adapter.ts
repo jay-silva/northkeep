@@ -33,10 +33,35 @@ export interface LocalNerClient {
   pull(model: string, onProgress?: (p: LocalPullProgress) => void): Promise<void>;
 }
 
+/** Hard per-call ceilings. An in-process Apple FM call has no transport layer
+ * to time out for us; if the model session wedges, an unguarded await hangs
+ * the ENTIRE turn forever (field report 2026-07-19). A rejection here flows
+ * through applyTier2 as tier2Degraded, and at tier 3 the send PROCEEDS on the
+ * deterministic shield — bounded latency, never a frozen chat. */
+const GENERATE_TIMEOUT_MS = 25_000;
+const READY_TIMEOUT_MS = 5_000;
+
+function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) =>
+      setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms),
+    ),
+  ]);
+}
+
 export function createLocalNerClient(model: LocalModel): LocalNerClient {
   return {
-    available: () => model.isReady(),
-    generateJson: (prompt: string) => model.generateStructured(prompt, ENTITY_JSON_SCHEMA),
+    available: () =>
+      withTimeout(Promise.resolve(model.isReady()), READY_TIMEOUT_MS, 'local model isReady').catch(
+        () => false,
+      ),
+    generateJson: (prompt: string) =>
+      withTimeout(
+        model.generateStructured(prompt, ENTITY_JSON_SCHEMA),
+        GENERATE_TIMEOUT_MS,
+        'local NER',
+      ),
     embed: () => {
       throw new Error('LocalNerClient does not provide embeddings (Tier-2 NER only).');
     },
