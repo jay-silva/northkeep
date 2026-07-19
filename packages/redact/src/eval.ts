@@ -70,6 +70,9 @@ const KINDS: EntityKind[] = ['person', 'org', 'location'];
 export async function evaluateNer(
   cases: NerEvalCase[],
   ner: OllamaClient | null,
+  /** Called after each case completes — drives a progress bar on slow
+   * on-device runs (a full corpus is 20+ sequential model calls). */
+  onProgress?: (done: number, total: number) => void,
 ): Promise<NerEvalReport> {
   const byKind: Record<EntityKind, KindMetric> = {
     person: { total: 0, caught: 0, recall: 0 },
@@ -83,9 +86,12 @@ export async function evaluateNer(
   let spanCaught = 0;
   let secretsChecked = 0;
 
+  let casesDone = 0;
   for (const c of cases) {
     // Fresh pseudonym map per case: recall is a per-case property, not cross-case.
     const result = await redact(c.text, { tier: 2, pseudonyms: {} }, ner);
+    casesDone += 1;
+    onProgress?.(casesDone, cases.length);
     const detected = result.replacements.filter((r) => r.tier === 2);
 
     for (const expected of c.entities) {

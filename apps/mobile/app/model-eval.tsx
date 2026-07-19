@@ -16,17 +16,20 @@ export default function ModelEval() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<OnDeviceNerEval | null>(null);
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null);
 
   async function run() {
     setBusy(true);
     setError(null);
     setResult(null);
+    setProgress(null);
     try {
-      setResult(await runOnDeviceNerEval());
+      setResult(await runOnDeviceNerEval((done, total) => setProgress({ done, total })));
     } catch (err) {
       setError(err instanceof Error ? err.message : 'The evaluation failed.');
     } finally {
       setBusy(false);
+      setProgress(null);
     }
   }
 
@@ -40,6 +43,23 @@ export default function ModelEval() {
       </Text>
 
       <Button title={busy ? 'Running...' : 'Run evaluation'} onPress={() => void run()} busy={busy} style={styles.btn} />
+      {busy ? (
+        <View style={styles.progressWrap}>
+          <View style={styles.progressTrack}>
+            <View
+              style={[
+                styles.progressFill,
+                { width: progress ? `${Math.round((progress.done / progress.total) * 100)}%` : '4%' },
+              ]}
+            />
+          </View>
+          <Text style={styles.progressText}>
+            {progress
+              ? `Document ${progress.done} of ${progress.total} scored`
+              : 'Warming up the on-device model...'}
+          </Text>
+        </View>
+      ) : null}
       <ErrorNote message={error} />
 
       {result?.status === 'unavailable' ? (
@@ -119,6 +139,10 @@ const styles = StyleSheet.create({
   content: { padding: 20, gap: 4 },
   title: { color: colors.text, fontSize: 20, fontWeight: '700', marginBottom: 8 },
   body: { color: colors.muted, fontSize: 14, lineHeight: 21, marginBottom: 16 },
+  progressWrap: { marginTop: 14, gap: 6 },
+  progressTrack: { height: 8, borderRadius: 4, backgroundColor: colors.border, overflow: 'hidden' },
+  progressFill: { height: 8, borderRadius: 4, backgroundColor: colors.accent },
+  progressText: { color: colors.muted, fontSize: 13 },
   btn: { marginBottom: 8 },
   report: { marginTop: 16, backgroundColor: colors.card, borderRadius: 12, borderWidth: 1, borderColor: colors.border, padding: 16 },
   backend: { color: colors.muted, fontSize: 13, fontWeight: '600', marginBottom: 12 },

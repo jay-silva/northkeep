@@ -23,13 +23,15 @@ export type OnDeviceNerEval =
     }
   | { status: 'unavailable'; reason: string };
 
-export async function runOnDeviceNerEval(): Promise<OnDeviceNerEval> {
+export async function runOnDeviceNerEval(
+  onProgress?: (done: number, total: number) => void,
+): Promise<OnDeviceNerEval> {
   const resolution = await getLocalModel();
   if (!resolution.model) {
     return { status: 'unavailable', reason: resolution.reason };
   }
   const client = createLocalNerClient(resolution.model);
-  const report = await evaluateNer(NER_EVAL_CORPUS, client);
+  const report = await evaluateNer(NER_EVAL_CORPUS, client, onProgress);
   return {
     status: 'ok',
     backend: resolution.model.backend,
