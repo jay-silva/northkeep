@@ -82,23 +82,27 @@ export class AppleFMModel implements LocalModel {
    * detectEntities validates spans + kinds strictly, so a malformed reply
    * degrades that one call — same as today's floor, never worse.
    *
-   * The schema is folded into the prompt as a reminder of the exact shape, and
-   * the reply is salvaged from fences/prose down to the outermost {...} so the
-   * caller gets the SAME string contract Ollama's generateJson returns.
+   * The reply is salvaged down to the outermost {...} and mechanically repaired
+   * before returning, so the caller gets the SAME string contract Ollama's
+   * generateJson returns.
+   *
+   * The schema parameter is deliberately NOT sent to the model. Appending the
+   * raw JSON Schema to the prompt made Apple FM parrot schema keys into its
+   * output ({"text": "text":"John Whitfield", ...} — invalid JSON, whole case
+   * lost). The NER prompt from applyTier2 already shows the exact output shape
+   * by example, which small models follow far better than a schema document.
+   * The duplicated-key artifact is still repaired below in case it recurs.
    */
-  async generateStructured(prompt: string, schema: LocalJsonSchema): Promise<string> {
+  async generateStructured(prompt: string, _schema: LocalJsonSchema): Promise<string> {
     const { text } = await generateText({
       model: apple(),
-      messages: [
-        {
-          role: 'user',
-          content: `${prompt}\n\nRespond with a single JSON object exactly matching this JSON Schema, no prose, no code fences:\n${JSON.stringify(schema)}`,
-        },
-      ],
+      messages: [{ role: 'user', content: prompt }],
     });
     // Salvage: strip code fences / stray prose down to the outermost object.
     const start = text.indexOf('{');
     const end = text.lastIndexOf('}');
-    return start >= 0 && end > start ? text.slice(start, end + 1) : text;
+    const sliced = start >= 0 && end > start ? text.slice(start, end + 1) : text;
+    // Repair the observed duplicated-key artifact: "text": "text":"value"
+    return sliced.replace(/"(text|kind)":\s*"(?:text|kind)":/g, '"$1":');
   }
 }

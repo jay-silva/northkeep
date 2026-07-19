@@ -7,17 +7,21 @@ import { File } from 'expo-file-system';
 /**
  * Converse file attach (mobile): pick a file and read it to text ON-DEVICE, so
  * the on-device Tier-1 firewall can redact it with the message before anything
- * is sent. Mirrors the desktop attach, with one honest difference: the desktop
- * extracts server-side with pdf.js (@northkeep/extract), which we do NOT bundle
- * into the phone, so PDFs are desktop-only for now. Text formats cover notes,
- * CSVs, JSON, and logs.
+ * is sent. Mirrors the desktop attach, including PDFs: the same `unpdf`
+ * (pdf.js, DOM-free build) the desktop's @northkeep/extract uses runs here in
+ * Hermes, imported lazily so the module cost is only paid on the first PDF.
+ * Text formats cover notes, CSVs, JSON, and logs.
  *
  * LOCAL-ONLY by construction (invariant #1): the picked file is read from the
- * device cache and decoded in memory; nothing is uploaded (there is no server
- * on the phone) and nothing extra is written to disk.
+ * device cache and decoded/extracted in memory; nothing is uploaded (there is
+ * no server on the phone) and nothing extra is written to disk. The PDF is
+ * never sent anywhere — only its extracted text, after redaction, like any
+ * typed message.
  *
  * NEEDS ON-DEVICE VALIDATION: document-picker flow + File.bytes() on a picked
- * content:// / file:// URI (same caveat as import-vault.ts).
+ * content:// / file:// URI (same caveat as import-vault.ts), and the first
+ * on-device unpdf extraction (Hermes lacks some newer JS built-ins pdf.js can
+ * touch — a failure surfaces as the honest 'read-failed' path, never a crash).
  */
 
 /** Text formats we read directly (mirror of @northkeep/extract TEXT_EXTENSIONS). */
@@ -48,12 +52,22 @@ export async function pickAttachment(): Promise<PickResult> {
   const asset = picked.assets[0]!;
   const name = asset.name ?? 'file';
   const ext = extensionOf(name);
-  if (!TEXT_EXTENSIONS.has(ext)) return { ok: false, reason: 'unsupported', ext };
+  if (!TEXT_EXTENSIONS.has(ext) && ext !== 'pdf') {
+    return { ok: false, reason: 'unsupported', ext };
+  }
   try {
     const bytes = await new File(asset.uri).bytes();
-    // Web-standard decoder (built into Hermes); avoids relying on a Buffer
-    // polyfill. Non-fatal so a slightly-malformed text file still attaches.
-    let text = new TextDecoder('utf-8').decode(bytes);
+    let text: string;
+    if (ext === 'pdf') {
+      // Same extractor as the desktop app, loaded on first use.
+      const { extractText } = await import('unpdf');
+      const result = await extractText(bytes, { mergePages: true });
+      text = result.text;
+    } else {
+      // Web-standard decoder (built into Hermes); avoids relying on a Buffer
+      // polyfill. Non-fatal so a slightly-malformed text file still attaches.
+      text = new TextDecoder('utf-8').decode(bytes);
+    }
     let truncatedFrom: number | null = null;
     if (text.length > MAX_OUTPUT_CHARS) {
       truncatedFrom = text.length;

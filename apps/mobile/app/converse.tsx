@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Keyboard,
-  KeyboardAvoidingView,
   Platform,
   Pressable,
   ScrollView,
@@ -153,7 +152,7 @@ export default function Converse() {
     if (r.reason === 'canceled') return;
     if (r.reason === 'unsupported') {
       setError(
-        `Can't read .${r.ext} on the phone yet. Supported: .txt, .md, .csv, .json, .log (PDFs work in the desktop app).`,
+        `Can't read .${r.ext} on the phone yet. Supported: .pdf, .txt, .md, .csv, .json, .log.`,
       );
       return;
     }
@@ -296,22 +295,29 @@ export default function Converse() {
 
   const banner = statusBanner(mode, localReady);
 
-  // The KeyboardAvoidingView shrinks the list when the keyboard opens, but the
-  // scroll offset stays put, leaving the newest bubble hidden behind the
-  // keyboard. Follow the resize by scrolling to the end.
+  // Keyboard handling, measured instead of guessed. KeyboardAvoidingView with a
+  // hardcoded keyboardVerticalOffset was wrong on device (the offset must equal
+  // the BottomNav's height, which varies with safe-area insets), leaving the
+  // composer partially under the keyboard. Instead: on every keyboard frame
+  // change, measure THIS screen's bottom edge in window coordinates and pad by
+  // the exact overlap. Android's adjustResize already resizes the window, so
+  // this is iOS-only.
+  const rootRef = useRef<View | null>(null);
+  const [kbPad, setKbPad] = useState(0);
   useEffect(() => {
-    const sub = Keyboard.addListener('keyboardDidShow', () => {
-      scrollRef.current?.scrollToEnd({ animated: true });
-    });
+    if (Platform.OS !== 'ios') return;
+    const onFrame = (e: { endCoordinates: { screenY: number } }) => {
+      rootRef.current?.measureInWindow((_x, y, _w, h) => {
+        setKbPad(Math.max(0, y + h - e.endCoordinates.screenY));
+        requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
+      });
+    };
+    const sub = Keyboard.addListener('keyboardWillChangeFrame', onFrame);
     return () => sub.remove();
   }, []);
 
   return (
-    <KeyboardAvoidingView
-      style={styles.screen}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      keyboardVerticalOffset={90}
-    >
+    <View ref={rootRef} style={[styles.screen, kbPad > 0 ? { paddingBottom: kbPad } : null]}>
       {banner ? <StatusBanner tone={banner.tone} message={banner.message} /> : null}
 
       <View style={styles.headerRow}>
@@ -440,7 +446,7 @@ export default function Converse() {
           />
         )}
       </View>
-    </KeyboardAvoidingView>
+    </View>
   );
 }
 
