@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  Dimensions,
   Keyboard,
   Platform,
   Pressable,
@@ -145,6 +146,7 @@ export default function Converse() {
     if (busy || mode === 'none') return;
     setError(null);
     const r = await pickAttachment();
+    setKbPad(0); // the picker's keyboard events can leave stale padding behind
     if (r.ok) {
       setAttachment(r.attachment);
       return;
@@ -162,7 +164,7 @@ export default function Converse() {
       setError('No readable text found in that PDF, even after scanning it for printed text.');
       return;
     }
-    setError('Could not read that file.');
+    setError(r.detail ? `Could not read that file. (${r.detail})` : 'Could not read that file.');
   }
 
   function onSend() {
@@ -308,18 +310,36 @@ export default function Converse() {
   // change, measure THIS screen's bottom edge in window coordinates and pad by
   // the exact overlap. Android's adjustResize already resizes the window, so
   // this is iOS-only.
+  //
+  // HARDENED after build 15: the document picker's own keyboard (Files search
+  // bar) fired frame events while the picker's window was frontmost, the
+  // measurement returned coordinates from the wrong window, and the stale
+  // padding stuck after the picker dismissed — crushing the whole screen. Now:
+  // a hide-frame (keyboard off-screen) always hard-resets WITHOUT measuring,
+  // keyboardDidHide resets as a belt-and-suspenders, the pad is clamped to
+  // half the window, and the attach flow resets after every picker round-trip.
   const rootRef = useRef<View | null>(null);
   const [kbPad, setKbPad] = useState(0);
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
-    const onFrame = (e: { endCoordinates: { screenY: number } }) => {
+    const onFrame = (e: { endCoordinates: { screenY: number; height: number } }) => {
+      const windowH = Dimensions.get('window').height;
+      if (e.endCoordinates.screenY >= windowH - 1 || e.endCoordinates.height <= 0) {
+        setKbPad(0);
+        return;
+      }
       rootRef.current?.measureInWindow((_x, y, _w, h) => {
-        setKbPad(Math.max(0, y + h - e.endCoordinates.screenY));
+        const overlap = Math.max(0, Math.min(y + h - e.endCoordinates.screenY, windowH * 0.5));
+        setKbPad(overlap);
         requestAnimationFrame(() => scrollRef.current?.scrollToEnd({ animated: true }));
       });
     };
-    const sub = Keyboard.addListener('keyboardWillChangeFrame', onFrame);
-    return () => sub.remove();
+    const s1 = Keyboard.addListener('keyboardWillChangeFrame', onFrame);
+    const s2 = Keyboard.addListener('keyboardDidHide', () => setKbPad(0));
+    return () => {
+      s1.remove();
+      s2.remove();
+    };
   }, []);
 
   return (

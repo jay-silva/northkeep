@@ -38,7 +38,8 @@ export type PickResult =
   | { ok: false; reason: 'unsupported'; ext: string }
   | { ok: false; reason: 'protected' }
   | { ok: false; reason: 'no-text' }
-  | { ok: false; reason: 'read-failed' };
+  /** detail = short diagnostic (error code/message), safe to show the user. */
+  | { ok: false; reason: 'read-failed'; detail?: string };
 
 /** Native on-device PDF extractor (modules/pdf-text): PDFKit + Vision OCR. */
 type PdfTextNative = {
@@ -78,9 +79,10 @@ export async function pickAttachment(): Promise<PickResult> {
       try {
         result = await PdfText.extractText(asset.uri);
       } catch (err) {
-        const code = (err as { code?: string }).code ?? '';
-        if (code === 'ERR_PDF_PROTECTED') return { ok: false, reason: 'protected' };
-        return { ok: false, reason: 'read-failed' };
+        const e = err as { code?: string; message?: string };
+        if (e.code === 'ERR_PDF_PROTECTED') return { ok: false, reason: 'protected' };
+        const detail = [e.code, e.message].filter(Boolean).join(': ').slice(0, 160);
+        return { ok: false, reason: 'read-failed', detail: detail || undefined };
       }
       text = result.text.trim();
       if (text.length === 0) return { ok: false, reason: 'no-text' };
@@ -99,7 +101,8 @@ export async function pickAttachment(): Promise<PickResult> {
       text = text.slice(0, MAX_OUTPUT_CHARS);
     }
     return { ok: true, attachment: { name, text, truncatedFrom } };
-  } catch {
-    return { ok: false, reason: 'read-failed' };
+  } catch (err) {
+    const detail = err instanceof Error ? err.message.slice(0, 160) : undefined;
+    return { ok: false, reason: 'read-failed', detail };
   }
 }
