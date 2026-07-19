@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Animated,
+  Keyboard,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -295,6 +296,16 @@ export default function Converse() {
 
   const banner = statusBanner(mode, localReady);
 
+  // The KeyboardAvoidingView shrinks the list when the keyboard opens, but the
+  // scroll offset stays put, leaving the newest bubble hidden behind the
+  // keyboard. Follow the resize by scrolling to the end.
+  useEffect(() => {
+    const sub = Keyboard.addListener('keyboardDidShow', () => {
+      scrollRef.current?.scrollToEnd({ animated: true });
+    });
+    return () => sub.remove();
+  }, []);
+
   return (
     <KeyboardAvoidingView
       style={styles.screen}
@@ -322,7 +333,13 @@ export default function Converse() {
       >
         {messages.length === 0 ? (
           <View style={styles.empty}>
-            <Text style={styles.emptyTitle}>Talk to your vault</Text>
+            <Text style={styles.emptyTitle}>
+              {mode === 'cloud'
+                ? `Chat with ${cloudProvider!.label}, backed by your vault`
+                : mode === 'on-device'
+                  ? 'Private chat on this phone'
+                  : 'Talk to your vault'}
+            </Text>
             <Text style={styles.emptyBody}>
               {mode === 'none'
                 ? 'Choose the on-device model (fully private) or add a cloud provider with your own API key to begin.'
