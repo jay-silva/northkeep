@@ -1098,7 +1098,12 @@
           <div class="prov">
             <span class="tag">${esc(m.type)}</span>
             <span>${esc(m.scope)}</span>
-            <span>${esc(m.source)}</span>
+            ${String(m.source).startsWith('connector')
+              ? `<span class="badge shared" title="A connected AI app wrote this memory through Cloud Connect. You own the final say: edit or forget it any time.">APP-WRITTEN${m.source.includes(':') ? ' · ' + esc(m.source.split(':')[1]) : ''}</span>`
+              : `<span>${esc(m.source)}</span>`}
+            ${String(m.source).startsWith('connector') && m.type === 'procedural'
+              ? `<span class="badge auto" title="This memory INSTRUCTS your AI apps how to behave in future conversations. Review it carefully. Forget it to revoke the instruction everywhere.">STANDING INSTRUCTION</span>`
+              : ''}
             <span>conf ${esc(m.confidence)}</span>
             <span>${esc(m.created_at.slice(0, 10))}</span>
             <span>${esc(m.id.slice(0, 8))}</span>
