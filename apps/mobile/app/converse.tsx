@@ -440,7 +440,7 @@ function statusBanner(mode: Mode, localReady: boolean): { tone: 'good' | 'warn';
       ? {
           tone: 'good',
           message:
-            'On-device shield. Names, orgs, and places are pseudonymized by the phone model, plus secrets, dates, and addresses masked deterministically, before anything is sent.',
+            'On-device shield. Secrets, dates, addresses, and known names are always masked deterministically, and the phone model adds a pseudonymization pass for other names, orgs, and places, before anything is sent. "What left this device" shows the proof for any turn.',
         }
       : {
           tone: 'warn',

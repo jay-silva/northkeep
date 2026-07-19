@@ -1,5 +1,5 @@
 import { apple } from '@react-native-ai/apple';
-import { generateObject, generateText, jsonSchema, streamText } from 'ai';
+import { generateText, streamText } from 'ai';
 import type {
   LocalChatMessage,
   LocalGenerateOptions,
@@ -16,9 +16,9 @@ import type {
  * streaming + native guided generation for free.
  *
  * Why Apple is primary: the model is part of the OS (no gigabyte download, no model
- * file to ship), inference is NPU-accelerated, and generateObject uses Apple's NATIVE
- * guided generation (constrained decoding), which is far more reliable for the Tier-2
- * NER JSON than prompt-then-parse on a small model.
+ * file to ship) and inference is NPU-accelerated. Guided generation (constrained
+ * decoding) would be the ideal path for the Tier-2 NER JSON, but the 0.12.0 bridge
+ * breaks it — see generateStructured below for the prompt-then-parse workaround.
  *
  * REQUIREMENTS (verified July 2026): iOS 26+, Apple Intelligence enabled, capable
  * hardware (iPhone 15 Pro / A17 Pro or newer, or M-series iPad). `isAvailable()`
@@ -68,18 +68,37 @@ export class AppleFMModel implements LocalModel {
   }
 
   /**
-   * Guided generation against `schema` (native constrained decoding on iOS 26+).
-   * We hand the AI SDK a JSON Schema via `jsonSchema()` rather than a zod object so
-   * the redact side (which owns ENTITY_JSON_SCHEMA) stays schema-library-agnostic.
-   * The result is re-serialized so callers get the SAME string contract Ollama's
-   * generateJson returns — applyTier2 then parses it unchanged.
+   * JSON generation against `schema`.
+   *
+   * NOT guided generation, deliberately. @react-native-ai/apple 0.12.0 has a
+   * bridge bug: for schema-constrained responses the native side serializes the
+   * transcript segment with Swift's `String(describing:)`, which for a
+   * StructuredSegment yields a struct debug-dump, not JSON (AppleLLMImpl.swift
+   * toModelMessages). generateObject() then fails to parse it and throws on
+   * EVERY call — measured 0/59 on the on-device NER eval, with applyTier2
+   * silently degrading each case. Until the upstream fix (return
+   * `content.jsonString` in the schema branch) lands or we patch the pod, we
+   * use plain generation: the NER prompt already demands JSON-only output, and
+   * detectEntities validates spans + kinds strictly, so a malformed reply
+   * degrades that one call — same as today's floor, never worse.
+   *
+   * The schema is folded into the prompt as a reminder of the exact shape, and
+   * the reply is salvaged from fences/prose down to the outermost {...} so the
+   * caller gets the SAME string contract Ollama's generateJson returns.
    */
   async generateStructured(prompt: string, schema: LocalJsonSchema): Promise<string> {
-    const { object } = await generateObject({
+    const { text } = await generateText({
       model: apple(),
-      schema: jsonSchema(schema),
-      prompt,
+      messages: [
+        {
+          role: 'user',
+          content: `${prompt}\n\nRespond with a single JSON object exactly matching this JSON Schema, no prose, no code fences:\n${JSON.stringify(schema)}`,
+        },
+      ],
     });
-    return JSON.stringify(object);
+    // Salvage: strip code fences / stray prose down to the outermost object.
+    const start = text.indexOf('{');
+    const end = text.lastIndexOf('}');
+    return start >= 0 && end > start ? text.slice(start, end + 1) : text;
   }
 }

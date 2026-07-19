@@ -110,6 +110,23 @@ function Report({ result }: { result: Extract<OnDeviceNerEval, { status: 'ok' }>
         value={report.tier1Leaks.length === 0 ? `held (${report.tier1SecretsChecked} secrets)` : `LEAKED ${report.tier1Leaks.length}`}
       />
       <Row label="Cases" value={`${report.cases}`} />
+      <Row
+        label="Model calls"
+        value={`${result.diagnostics.modelCalls} (${result.diagnostics.modelErrors} errors)`}
+      />
+
+      {result.diagnostics.modelErrors > 0 && result.diagnostics.sampleError ? (
+        <View style={styles.misses}>
+          <Text style={styles.missesTitle}>First model error</Text>
+          <Text style={styles.missLine}>{result.diagnostics.sampleError}</Text>
+        </View>
+      ) : null}
+      {result.diagnostics.sampleRaw !== undefined ? (
+        <View style={styles.misses}>
+          <Text style={styles.missesTitle}>Sample raw model reply</Text>
+          <Text style={styles.missLine}>{result.diagnostics.sampleRaw}</Text>
+        </View>
+      ) : null}
 
       {report.misses.length > 0 ? (
         <View style={styles.misses}>
