@@ -477,6 +477,147 @@ describe('structured ePCR field report (2026-07-17 over-masking)', () => {
   });
 });
 
+describe('place-context suppression (founder field report 2026-07-19 over-masking)', () => {
+  const flat = (t: string) => findNameSpans(t).map((s) => s.original).join(' ');
+
+  it('the founder case: "New Bedford" is a city, not "New Person-1"', async () => {
+    expect(findNameSpans('We moved to New Bedford last year.')).toHaveLength(0);
+    for (const tier of [2, 3] as const) {
+      const r = await redact('We moved to New Bedford last year.', { tier }, null);
+      expect(r.redacted, `tier ${tier}`).toContain('New Bedford');
+      expect(r.redacted, `tier ${tier}`).not.toMatch(/Person-\d/);
+    }
+  });
+
+  it('the founder case: "45 Morgan St" masks as an ADDRESS, never a person, at tiers 2 and 3', async () => {
+    for (const tier of [2, 3] as const) {
+      const r = await redact('The property at 45 Morgan St needs work.', { tier }, null);
+      expect(r.redacted, `tier ${tier}`).toContain('[ADDRESS_1]');
+      expect(r.redacted, `tier ${tier}`).not.toContain('Morgan');
+      expect(r.redacted, `tier ${tier}`).not.toMatch(/Person-\d/);
+    }
+  });
+
+  it('full listing line: address + ZIP masked, city untouched, zero Person pseudonyms', async () => {
+    const r = await redact('The 8-unit at 45 Morgan St, New Bedford MA 02740.', { tier: 3 }, null);
+    expect(r.redacted).toContain('[ADDRESS_1]');
+    expect(r.redacted).toContain('[ZIP_1]');
+    expect(r.redacted).toContain('New Bedford MA');
+    expect(r.redacted).not.toMatch(/Person-\d/);
+  });
+
+  it('number-less street names are place references, not people', () => {
+    expect(findNameSpans('Morgan St is closed for repairs.')).toHaveLength(0);
+    expect(findNameSpans('Parking on Bedford Ave is limited.')).toHaveLength(0);
+    expect(findNameSpans('Crews staged on Bedford Street near the bridge.')).toHaveLength(0);
+  });
+
+  it('Fall River, MA stays untouched', async () => {
+    const r = await redact('Fall River, MA is nearby.', { tier: 3 }, null);
+    expect(r.redacted).toBe('Fall River, MA is nearby.');
+  });
+
+  it('ALL-CAPS place references are suppressed too (PCR house style)', () => {
+    expect(findNameSpans('PT TRANSPORTED TO NEW BEDFORD ER.')).toHaveLength(0);
+    expect(findNameSpans('NEW BEDFORD MA 02740')).toHaveLength(0);
+  });
+
+  it('allowlisted city + state/ZIP tail is a place — but the same city bare still masks', () => {
+    expect(findNameSpans('Meet me in Jackson, MS tomorrow.')).toHaveLength(0);
+    expect(findNameSpans('Madison WI 53703 is the return address.')).toHaveLength(0);
+    expect(findNameSpans('Austin, TX and Charlotte, NC offices.')).toHaveLength(0);
+    // Never bare: without the state/ZIP tail these read as surnames.
+    expect(flat('Jackson was combative on scene.')).toContain('Jackson');
+    expect(flat('Austin refused transport.')).toContain('Austin');
+  });
+
+  it('place-prefix collocations ("Port Morgan") suppress; longer person runs never do', () => {
+    expect(findNameSpans('Port Morgan is a nice harbor.')).toHaveLength(0);
+    // A following name token makes it person-shaped again.
+    expect(flat('Contact Donna Bedford at the office.')).toContain('Donna Bedford');
+  });
+
+  it('real people who share place tokens STILL mask', async () => {
+    expect(flat('Bedford Smith arrived on scene.')).toContain('Bedford Smith');
+    expect(flat('I spoke with Morgan about the lease.')).toContain('Morgan');
+    expect(flat('Mr. Bedford was seen at 14:00.')).toContain('Bedford');
+    expect(flat('Patient: Morgan Bedford, 44yo.')).toContain('Morgan Bedford');
+    const r = await redact('Bedford Smith met Morgan yesterday.', { tier: 3 }, null);
+    expect(r.redacted).not.toMatch(/Bedford|Smith|Morgan/);
+  });
+
+  it('ambiguous designator-surnames keep masking (deliberate over-masking)', () => {
+    // "Lane"/"Court"/"Way"/"Pike" are real census surnames — "Morgan Lane"
+    // reads as a person and stays masked; "45 Morgan Lane" is Tier-1's job.
+    expect(flat('Morgan Lane signed the refusal.')).toContain('Morgan Lane');
+  });
+
+  it('clinical and credential guards: ST elevation, MD credential, caps prose states', () => {
+    // "ST" before ECG vocabulary is not a street designator.
+    expect(flat('12-LEAD SHOWS MORGAN ST ELEVATION.')).toContain('MORGAN');
+    // MD/PA are physician credentials, excluded from the state gate.
+    expect(flat('Attending was Carter, MD at bedside.')).toContain('Carter');
+    // A comma-less state followed by another caps word is caps prose.
+    expect(flat('JACKSON IN HALLWAY, UNRESPONSIVE.')).toContain('JACKSON');
+    // Uppercase state after a non-city name never suppresses ("DONNA MA").
+    expect(flat('PT DONNA MA FOUND SUPINE.')).toContain('DONNA MA');
+  });
+
+  it('Saint-style surnames survive the designator gate', () => {
+    // "St." followed by a capitalized name token is a surname, not a street.
+    const spans = flat('Morgan St. Pierre refused transport.');
+    expect(spans).toContain('Morgan');
+    expect(spans).toContain('Pierre');
+  });
+
+  it('designators outside the Tier-1 address list keep masking the name (safe direction)', async () => {
+    // "Sq"/"Turnpike" are NOT suppression designators (no Tier-1 numbered
+    // coverage; "2 cm sq" is a wound measurement) — so the name token keeps
+    // its Person mask rather than risking a bare leak.
+    const r = await redact('45 Morgan Sq was evacuated.', { tier: 3 }, null);
+    expect(r.redacted).not.toContain('Morgan');
+  });
+
+  it('face-sheet comma pairs with place-prefix surnames STILL mask (review 2026-07-19)', async () => {
+    // "LAST, FIRST" is a person by construction — West/Lake/North are real
+    // surnames and the comma gap must block the place-prefix suppression.
+    expect(flat('Lake, Mary transported to ER.')).toContain('Lake, Mary');
+    const caps = await redact('WEST, DONNA 44YO F', { tier: 3 }, null);
+    expect(caps.redacted).not.toMatch(/WEST|DONNA/);
+  });
+
+  it('caps LAST FIRST with a directional surname STILL masks (review 2026-07-19)', async () => {
+    // ePCR headers write LAST FIRST with no comma; West is a top-tier
+    // census surname, so directionals never suppress a prefix-led pair.
+    const r = await redact('WEST DONNA 44F CC CHEST PAIN', { tier: 3 }, null);
+    expect(r.redacted).not.toMatch(/WEST|DONNA/);
+    expect(flat('West Donna signed the refusal.')).toContain('West Donna');
+  });
+
+  it('a state joined into a caps run obeys the caps-prose guard (review 2026-07-19)', async () => {
+    // "TYLER MA STATES…" is patient Tyler Ma mid-narrative, not Tyler the
+    // city — the popped-state path must run the same follower check.
+    const r = await redact('TYLER MA STATES HE FELL.', { tier: 3 }, null);
+    expect(r.redacted).not.toMatch(/TYLER/);
+    expect(flat('AUSTIN MA FOUND UNRESPONSIVE.')).toContain('AUSTIN');
+    // …while a genuine city+state+ZIP still suppresses.
+    expect(findNameSpans('NEW BEDFORD MA 02740')).toHaveLength(0);
+  });
+
+  it('bare numbers after a city-named person are NOT a ZIP tail (review 2026-07-19)', () => {
+    // Crew/badge/unit numbers ride right after names in EMS narratives.
+    expect(flat('FF SAVANNAH 12345 ASSISTED.')).toContain('SAVANNAH');
+    expect(flat('CHARLOTTE 02744 RESPONDED.')).toContain('CHARLOTTE');
+    // ZIP corroborates only after a state ("Madison WI 53703" — above).
+  });
+
+  it('a designator across a sentence boundary is not an address (review 2026-07-19)', () => {
+    expect(flat('I met Morgan. Drive to the hospital.')).toContain('Morgan');
+    expect(flat('SPOKE WITH MORGAN. DRIVE TIME 8 MIN.')).toContain('MORGAN');
+    expect(flat('Interviewed Bedford. Street was blocked.')).toContain('Bedford');
+  });
+});
+
 /**
  * Seeded PCR-style corpus: every seeded patient identifier must be gone after
  * the DETERMINISTIC layers alone (no model). Invented people only.

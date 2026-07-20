@@ -187,6 +187,30 @@ every milestone; if a limit is removed, say when and how.*
   residual exposure with no local model is bounded to private endpoints. We
   never claim 100% of names (ADR 0022; adversarial reviews 2026-07-17,
   rounds 1–4).
+- **Place names are no longer masked as people — with deliberate edges both
+  ways** (field report 2026-07-19: "New Bedford" masked as "New Person-1",
+  "Morgan St" as a person). The name pass now suppresses a dictionary hit
+  only in three place-shaped contexts, each whitespace-adjacent (a comma
+  gap means face-sheet "LAST, FIRST" and never suppresses): a trailing
+  street designator ("Morgan St", "Bedford Ave" — numbered addresses were
+  already Tier-1's job, and only designators Tier-1 covers count), a
+  capitalized place prefix ("New Bedford", "Port Morgan" — the directionals
+  North/South/East/West never suppress a two-token pair, because "WEST
+  DONNA" is ePCR LAST-FIRST order and West is a top-tier surname), and a
+  small city allowlist that requires a state tail ("Jackson, MS", "Madison
+  WI 53703" — never bare, so "Jackson said…" still masks, and a bare
+  number after a name is a badge/unit, not a ZIP). Kept over-masking, on
+  purpose: designators that are real surnames or clinical tokens ("Morgan
+  Lane", "Morgan Ct", "Franklin Pike", "Morgan Sq") still mask as people;
+  "Clinton, MD" masks because MD/PA read as physician credentials; states
+  inside caps prose ("JACKSON IN HALLWAY", "TYLER MA STATES…") stay
+  masked. Known under-masking residuals (rare, and the NER union still
+  sees them): a person whose surname IS a pure designator word ("Picabo
+  Street" masks only the given name), a bare surname with an MS/MA
+  credential in city format ("Counselor Jackson, MS" — full clinician
+  names like "Sarah Jackson, MS" still mask via the pair rule), and a
+  given name directly after a place prefix ("North West" the person reads
+  as a direction).
 - **We do not remove contextual identity.** "The paramedic lieutenant in
   Bourne whose partner runs compliance" survives every content-level filter,
   at every tier. Stated plainly.

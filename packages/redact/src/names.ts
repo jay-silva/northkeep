@@ -161,6 +161,89 @@ const EPONYM_EXCLUDE = new Set([
   'avulsion', 'stent', 'angina', 'ascites', 'stridor', 'rales', 'rhonchi',
 ]);
 
+/** ---- Place-context suppression (founder field report 2026-07-19) ----
+ * The name dictionaries are full of PLACE words ("bedford" and "morgan" are
+ * both first-name-list hits above every rank guard), so "New Bedford" masked
+ * as "New Person-1" and street names ("Morgan St", "Bedford Ave") became
+ * people on real audit screenshots. These lists power CONTEXT-GATED
+ * suppressions only — never blanket dictionary removals. Claims from the
+ * label-anchor rule and multi-token person-shaped spans are never suppressed;
+ * when in doubt the span keeps masking (under-masking is the critical bug).
+ *
+ * Interplay with addresses: Tier-1's address detector runs BEFORE this layer
+ * and owns "45 Morgan St" (masked as [ADDRESS_N] at every tier); suppression
+ * here only stops the NAME pass from claiming the street-name token of
+ * number-less street references. */
+
+/** Unambiguous street designators in TRAILING position ("Morgan St",
+ * "Bedford Ave"). Deliberately EXCLUDED, so those names keep masking:
+ * real census surnames (lane, court, way, pike, place, park — "Morgan
+ * Lane" stays masked), clinical tokens (ct is also "CT scan"), and words
+ * with measurement/prose idioms that Tier-1 must not over-match (sq —
+ * "2 cm sq"; turnpike — "exit 5 off the turnpike"). Every designator here
+ * is covered by Tier-1's numbered-address detector, so suppression never
+ * exposes part of an address Tier-1 would mask. */
+const STREET_DESIGNATOR = new Set([
+  'st', 'street', 'ave', 'avenue', 'rd', 'road', 'blvd', 'boulevard',
+  'dr', 'drive', 'ln', 'pl', 'hwy', 'highway',
+  'pkwy', 'parkway', 'ter', 'terrace', 'cir', 'circle',
+]);
+
+/** "ST" before these is the ECG ST segment ("MORGAN ST ELEVATION"), not a
+ * street — the name must keep masking. */
+const ST_CLINICAL_NEXT = new Set([
+  'elevation', 'elevations', 'depression', 'depressions', 'segment',
+  'segments', 'seg', 'elev', 'change', 'changes', 'wave', 'waves',
+]);
+
+/** Capitalized prefix words that read as multi-word place collocations when
+ * directly before a lone dictionary hit ("New Bedford", "Port Morgan",
+ * "Lake Charlotte"). */
+const PLACE_PREFIX = new Set([
+  'new', 'north', 'south', 'east', 'west', 'fort', 'port', 'mount', 'lake', 'cape',
+]);
+/** Prefixes allowed to suppress a PREFIX+HIT pair when both tokens sit in
+ * one claimed run. The directionals are deliberately absent: West is a
+ * top-tier census surname (North/South/East exist too), and ePCR headers
+ * write LAST FIRST with no comma — "WEST DONNA 44YO F" is a patient, not a
+ * place (adversarial review 2026-07-19). "West Bedford"-style towns keep
+ * their Person mask: over-masking, the safe direction. */
+const PLACE_PREFIX_PAIR = new Set([
+  'new', 'fort', 'port', 'mount', 'lake', 'cape',
+]);
+
+/** US city/town names that collide with the name dictionaries. Applied ONLY
+ * when a state abbreviation or ZIP follows ("Jackson, MS", "Madison WI
+ * 53703") — never bare, so solo "Jackson said…" still masks. */
+const CITY_STATES = new Set([
+  'aurora', 'austin', 'bedford', 'bourne', 'chandler', 'charlotte', 'chelsea',
+  'cleveland', 'clinton', 'concord', 'dallas', 'denver', 'dover', 'everett',
+  'franklin', 'garland', 'gary', 'harrison', 'helena', 'henderson', 'houston',
+  'hudson', 'irving', 'jackson', 'jefferson', 'lawrence', 'lincoln', 'logan',
+  'lowell', 'madison', 'marion', 'milton', 'monroe', 'phoenix', 'quincy',
+  'randolph', 'salem', 'savannah', 'sharon', 'sherman', 'troy', 'tyler', 'warren',
+]);
+
+/** Uppercase state abbreviations for the city-allowlist gate. MD and PA are
+ * deliberately ABSENT: they are physician credentials ("Carter, MD",
+ * "Reyes, PA") far more often than address tails in our documents, and a
+ * suppressed credential would unmask a clinician (kept over-masking:
+ * "Clinton, MD" the Maryland city keeps its Person pseudonym). */
+const STATE_ABBRS = [
+  'AL', 'AK', 'AZ', 'AR', 'CA', 'CO', 'CT', 'DE', 'FL', 'GA', 'HI', 'ID',
+  'IL', 'IN', 'IA', 'KS', 'KY', 'LA', 'ME', 'MA', 'MI', 'MN', 'MS', 'MO',
+  'MT', 'NE', 'NV', 'NH', 'NJ', 'NM', 'NY', 'NC', 'ND', 'OH', 'OK', 'OR',
+  'RI', 'SC', 'SD', 'TN', 'TX', 'UT', 'VT', 'VA', 'WA', 'WV', 'WI', 'WY',
+];
+const STATE_SET = new Set(STATE_ABBRS);
+const PLACE_TAIL_STATE = new RegExp(
+  `^,?\\s{1,3}(?:${STATE_ABBRS.join('|')})(?=$|[^A-Za-z0-9])`,
+);
+// NOTE: a bare ZIP-like tail is deliberately NOT accepted ("FF SAVANNAH
+// 12345" is a crew name + unit/badge number, not a city+ZIP — adversarial
+// review 2026-07-19). A ZIP corroborates only AFTER a state ("Madison WI
+// 53703"), via the state branch's follower check.
+
 function nameEvidence(d: NameData, word: string): boolean {
   const internalCap = hasInternalCapital(word);
   const probe = (lower: string): boolean => {
@@ -410,6 +493,121 @@ export function findNameSpans(text: string): Span[] {
   // "SMITH-JONES'S CHART" masks the name, never the chart (round 3).
   const contiguous = (a: Token, b: Token) => /^\s+$/.test(text.slice(a.end, b.start));
 
+  // ---- Place-context suppression (field report 2026-07-19) ----
+  // Consulted by the segment/run/pair/single rules below; the label-anchor
+  // rule and multi-token person-shaped spans are NEVER suppressed.
+  const capitalizedTok = (t: Token) => t.kind === 'title' || t.kind === 'allcaps';
+  /** b directly follows a across whitespace, allowing a's abbreviation dot
+   * ("St. Pierre" — the dot sits between the tokens). */
+  const followsTok = (a: Token, b: Token) => /^\.?\s+$/.test(text.slice(a.end, b.start));
+  /** Token i is a street designator in designator USE. Not a designator when
+   * "ST" precedes ECG vocabulary ("MORGAN ST ELEVATION"), or when a
+   * capitalized name-ish token follows ("Morgan St. Pierre" is a Saint-style
+   * surname, "MORGAN DR SMITH" an honorific chain) — those keep masking. */
+  const designatorAt = (i: number): boolean => {
+    const t = tokens[i];
+    if (!t || !STREET_DESIGNATOR.has(normalizeForLookup(t.text))) return false;
+    const next = tokens[i + 1];
+    if (next && followsTok(t, next)) {
+      if (
+        normalizeForLookup(t.text) === 'st' &&
+        ST_CLINICAL_NEXT.has(normalizeForLookup(next.text))
+      )
+        return false;
+      if (capitalizedTok(next) && nameish(next)) return false;
+    }
+    return true;
+  };
+  const upperState = (t: Token): boolean => STATE_SET.has(t.text);
+  /** A state abbreviation or ZIP directly after `pos` ("…, MS", "… WI
+   * 53703"). Comma-less states also require that what FOLLOWS the
+   * abbreviation is not another ALL-CAPS word — "JACKSON IN HALLWAY" is caps
+   * prose (and "MS"/"IN"/"OR" are common caps words), not an address tail. */
+  /** What follows a comma-less state must be end / punctuation / lowercase /
+   * digit — never another ALL-CAPS word (caps prose, not an address tail). */
+  const stateFollowerOk = (pos: number): boolean => /^\s*(?:$|[^A-Z\s])/.test(text.slice(pos));
+  const placeTailAt = (pos: number): boolean => {
+    const after = text.slice(pos, pos + 24);
+    const m = PLACE_TAIL_STATE.exec(after);
+    if (!m) return false;
+    if (m[0].startsWith(',')) return true;
+    return stateFollowerOk(pos + m[0].length);
+  };
+  const isPrefixTok = (t: Token): boolean =>
+    capitalizedTok(t) && PLACE_PREFIX.has(normalizeForLookup(t.text));
+  /**
+   * TRUE when a candidate claim reads as a PLACE reference, not a person.
+   * Only three tightly gated shapes ever suppress:
+   *  (a) lone dictionary hit + trailing street designator ("Morgan St",
+   *      "Bedford Ave") — address vocabulary for the Tier-1 address pass;
+   *  (b) capitalized place-prefix + lone hit ("New Bedford", "PORT MORGAN")
+   *      — person context wins structurally: a following name-ish token
+   *      joins the segment (length > 2 → no suppression), and cross-casing
+   *      pairs ("Bedford SMITH") are claimed by the untouched pair rule;
+   *  (c) allowlisted city + state/ZIP tail ("Jackson, MS"), never bare.
+   * Trailing designator / state tokens are on the name lists themselves
+   * ("ave" 2320, "ma" 1388 are census hits), so they are stripped first —
+   * "BEDFORD MA" and "Bedford Ave" reduce to the lone-hit shapes above,
+   * while "DONNA MA" (no city, no prefix) keeps its full claim.
+   */
+  const placeSuppressed = (seg: Token[]): boolean => {
+    const core = [...seg];
+    let sawDesignator = false;
+    let sawState = false;
+    // Strip a trailing designator / state only across pure whitespace — a
+    // comma-joined pair is face-sheet format by construction ("Lake, Mary"
+    // is LAST, FIRST, never a place; adversarial review 2026-07-19).
+    while (
+      core.length > 1 &&
+      contiguous(core[core.length - 2]!, core[core.length - 1]!) &&
+      designatorAt(tokens.indexOf(core[core.length - 1]!))
+    ) {
+      core.pop();
+      sawDesignator = true;
+    }
+    if (core.length > 1 && contiguous(core[core.length - 2]!, core[core.length - 1]!)) {
+      const tail = core[core.length - 1]!;
+      // A popped state must pass the same caps-prose follower check as the
+      // lookahead path — "TYLER MA STATES HE FELL" is a patient named Tyler
+      // Ma mid-narrative, not a city (adversarial review 2026-07-19).
+      if (upperState(tail) && stateFollowerOk(tail.end)) {
+        core.pop();
+        sawState = true;
+      }
+    }
+    // "Port Morgan" / "LAKE CHARLOTTE": prefix-led pair, whitespace-joined.
+    // Directionals excluded — "WEST DONNA" is ePCR LAST FIRST order.
+    if (
+      core.length === 2 &&
+      capitalizedTok(core[0]!) &&
+      PLACE_PREFIX_PAIR.has(normalizeForLookup(core[0]!.text)) &&
+      contiguous(core[0]!, core[1]!)
+    )
+      return true;
+    if (core.length !== 1) return false; // person-shaped: always keep masking
+    const t = core[0]!;
+    const i = tokens.indexOf(t);
+    // A lone designator token in designator use is never a person — "Ave" is
+    // itself a name-list hit (rank 2320) and would otherwise solo-claim.
+    if (designatorAt(i)) return true;
+    // (a) trailing street designator, adjacent across whitespace ONLY — a
+    // sentence boundary is not an address ("I met Morgan. Drive safely.").
+    if (!sawDesignator) {
+      const next = tokens[i + 1];
+      if (next && contiguous(t, next) && designatorAt(i + 1)) sawDesignator = true;
+    }
+    if (sawDesignator) return true;
+    // (b) capitalized place-word prefix directly before
+    const prev = tokens[i - 1];
+    if (prev && isPrefixTok(prev) && contiguous(prev, t)) return true;
+    // (c) allowlisted city with a state tail — never bare
+    if (CITY_STATES.has(normalizeForLookup(t.text))) {
+      if (sawState) return true;
+      if (placeTailAt(t.end)) return true;
+    }
+    return false;
+  };
+
   // 1. Label anchors: up to 3 tokens right after an anchor (one comma
   //    allowed, for the chart-classic "PATIENT: SMITH, JOHN"). Titlecase
   //    tokens are accepted unconditionally. ALL-CAPS tokens are accepted when
@@ -454,7 +652,8 @@ export function findNameSpans(text: string): Span[] {
         if (
           seg.length >= 1 &&
           runIsName(seg) &&
-          !(seg.length === 1 && splitArtifact(tokens.indexOf(seg[0]!)))
+          !(seg.length === 1 && splitArtifact(tokens.indexOf(seg[0]!))) &&
+          !placeSuppressed(seg) // "New Bedford", "Bedford Ave" (2026-07-19)
         )
           claim(seg[0]!.start, seg[seg.length - 1]!.end);
         seg = [];
@@ -486,7 +685,8 @@ export function findNameSpans(text: string): Span[] {
   {
     let run: Token[] = [];
     const flush = () => {
-      if (run.length >= 1 && runIsName(run)) claim(run[0]!.start, run[run.length - 1]!.end);
+      if (run.length >= 1 && runIsName(run) && !placeSuppressed(run))
+        claim(run[0]!.start, run[run.length - 1]!.end); // "NEW BEDFORD" suppressed (2026-07-19)
       run = [];
     };
     for (const t of tokens) {
@@ -514,10 +714,15 @@ export function findNameSpans(text: string): Span[] {
       const b = tokens[i + 1]!;
       if (!pairable(a) || !pairable(b)) continue;
       const gap = text.slice(a.end, b.start);
+      // Place tails are name-list hits too ("ave" 2320, "ma" 1388 are census
+      // surnames), so "Bedford Ave" / "Madison WI" carry the FIRST→SUR
+      // signature; the place gate strips them and suppresses (2026-07-19).
       if (/^\s+$/.test(gap)) {
-        if (firstAny(a.text) && surAny(b.text)) claim(a.start, b.end);
+        if (firstAny(a.text) && surAny(b.text) && !placeSuppressed([a, b]))
+          claim(a.start, b.end);
       } else if (/^,\s*$/.test(gap)) {
-        if (surAny(a.text) && firstAny(b.text)) claim(a.start, b.end);
+        if (surAny(a.text) && firstAny(b.text) && !placeSuppressed([a, b]))
+          claim(a.start, b.end);
       }
     }
   }
@@ -533,6 +738,7 @@ export function findNameSpans(text: string): Span[] {
       const nextIsLower = !!next && t.kind === 'title' && /^[a-zà-öø-ÿ]/.test(next.text);
       if (t.sentenceInitial && veto.has(normalizeForLookup(t.text)) && nextIsLower) continue;
       if (splitArtifact(i)) continue; // PDF word-split ("Traum a")
+      if (placeSuppressed([t])) continue; // "New Bedford", "Morgan St", "Jackson, MS"
       claim(t.start, t.end);
     } else if (t.kind === 'lower') {
       // Lowercase: name-evidence word that is NOT common English ("cabral").

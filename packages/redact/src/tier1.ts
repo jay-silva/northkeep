@@ -110,7 +110,9 @@ const DETECTORS: Detector[] = [
     // ("218 MAIN STREET", "51 Meetinghouse Ln", "13 Milliken PL"). The
     // patient's incident address is a core Safe Harbor identifier and appears
     // in every ePCR (PCR-6 field test 2026-07-18). Suffix-anchored so bare
-    // numbers and prose survive.
+    // numbers and prose survive. The names.ts place gate suppresses person
+    // masks ONLY on designators this list already covers, so no numbered
+    // address loses its mask to the name-pass suppression (2026-07-19).
     regex: /\b\d{1,5}\s+(?:[A-Za-zÀ-ÖØ-öø-ÿ'.-]+\s+){1,3}(?:st|street|rd|road|ln|lane|dr|drive|ave|avenue|blvd|boulevard|ct|court|way|pl|place|ter|terrace|cir|circle|hwy|highway|pkwy|parkway)\.?\b(?!\s*(?:elevation|dose|per|of))/gi,
     restorable: false,
   },
