@@ -124,6 +124,10 @@ export default function RootLayout() {
               <Stack.Screen name="providers" options={{ title: 'Providers' }} />
               <Stack.Screen name="converse-audit" options={{ title: 'What left this device' }} />
               <Stack.Screen name="model-eval" options={{ title: 'On-device model eval' }} />
+              {/* Phase B Cloud Connect: pushed from Settings and the journal
+                  guide (keep the back arrow). */}
+              <Stack.Screen name="sharing" options={{ title: 'Cloud Connect' }} />
+              <Stack.Screen name="journal-setup" options={{ title: 'AI journal' }} />
             </Stack>
           </View>
           <BottomNav />

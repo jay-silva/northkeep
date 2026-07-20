@@ -50,12 +50,20 @@ function messageOf(err: unknown): string {
  * True for the shared transport's 402 error in every form it can arrive:
  * by name (SubscriptionRequiredError), by its CLI message (in case a wrapper
  * re-threw it as a plain Error), or by a raw "HTTP 402" transport message.
+ *
+ * The CONNECTOR client (@northkeep/sync connector-client.ts, Phase B Cloud
+ * Connect) throws plain Errors, not SubscriptionRequiredError. Most of its 402s
+ * read "Connector server returned HTTP 402 on <op>." (caught by the HTTP 402
+ * form), but downSyncConnector's is "The connector server requires an active
+ * subscription (402) to down-sync." with no "HTTP 402" token, so the
+ * "requires an active subscription" shape is matched explicitly.
  */
 function isSubscriptionRequired(err: unknown): boolean {
   if (err instanceof Error && err.name === 'SubscriptionRequiredError') return true;
   const msg = messageOf(err);
   if (/northkeep sync subscribe/i.test(msg)) return true;
   if (/\$\s*\d+.*subscription/i.test(msg)) return true;
+  if (/requires an active subscription/i.test(msg)) return true;
   return /\bHTTP 402\b/.test(msg);
 }
 

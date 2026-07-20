@@ -56,6 +56,21 @@ describe('classifySyncError: subscription-required (HTTP 402)', () => {
     expectSteeringClean(result.message);
   });
 
+  it('catches the connector client 402 shapes (Phase B: plain Errors, no error name)', () => {
+    // pushSharedScopes / startPairing / unshareScope fall through to the
+    // generic "HTTP 402" message; downSyncConnector has its own wording with
+    // NO "HTTP 402" token in it. Both must classify as subscription-required.
+    for (const msg of [
+      'Connector server returned HTTP 402 on push.',
+      'Connector server returned HTTP 402 on pairing.',
+      'The connector server requires an active subscription (402) to down-sync.',
+    ]) {
+      const result = classifySyncError(new Error(msg));
+      expect(result.kind).toBe('subscription-required');
+      expectSteeringClean(result.message);
+    }
+  });
+
   it('userFacingSyncError never emits the CLI copy for any 402 shape', () => {
     for (const err of [
       subscriptionError(),

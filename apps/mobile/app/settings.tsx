@@ -131,6 +131,14 @@ export default function Settings() {
       />
       <Button title="Save server" kind={savedUrl === null ? 'secondary' : 'primary'} onPress={() => void onSaveServer()} disabled={serverUrl.trim().length === 0} />
 
+      <FieldLabel>Cloud Connect</FieldLabel>
+      <Button title="Cloud Connect" kind="secondary" onPress={() => router.push('/sharing')} />
+      <Text style={styles.footnote}>
+        Make chosen memory scopes readable inside the AI apps you use (Claude, ChatGPT, Manus).
+        Private by default: you pick each scope, confirm what leaves this phone, and can unshare
+        anytime.
+      </Text>
+
       <FieldLabel>This device</FieldLabel>
       <Info label="Linked" value={session.accountIdShort ? `yes (account ${session.accountIdShort})` : 'no'} />
       <Info label="Vault on this phone" value={vaultPresent === null ? 'unknown' : vaultPresent ? 'yes' : 'no'} />

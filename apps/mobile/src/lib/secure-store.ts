@@ -22,6 +22,9 @@ const CACHED_MASTER_KEY = 'nk.cached_master_key_hex';
 const BIOMETRIC_FLAG_KEY = 'nk.biometric_unlock_enabled';
 const SYNC_SERVER_KEY = 'nk.sync_server_url';
 const SYNC_VERSION_KEY = 'nk.sync_last_version';
+const CONNECTOR_SERVER_KEY = 'nk.connector_server_url';
+const CONNECTOR_SHARED_SCOPES_KEY = 'nk.connector_shared_scopes';
+const JOURNAL_CARD_DISMISSED_KEY = 'nk.journal_card_dismissed';
 
 const BASE_OPTIONS: SecureStore.SecureStoreOptions = {
   keychainAccessible: SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY,
@@ -93,6 +96,50 @@ export async function loadLastSyncVersion(): Promise<number> {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
+// --- connector sidecar (Phase B Cloud Connect: the mobile analog of the
+// desktop's ~/.northkeep/connector.json, which is node:fs-only). Holds WHERE
+// the connector server is and WHICH scopes the user marked Shared. Never a
+// secret: the connector token is re-derived from the device secret on demand
+// (ADR 0019), exactly like the sync creds. ---
+
+export async function saveConnectorServerUrl(url: string): Promise<void> {
+  await SecureStore.setItemAsync(CONNECTOR_SERVER_KEY, url, BASE_OPTIONS);
+}
+
+export async function loadConnectorServerUrl(): Promise<string | null> {
+  return SecureStore.getItemAsync(CONNECTOR_SERVER_KEY, BASE_OPTIONS);
+}
+
+/** Persist the shared-scope list, deduped and sorted (mirrors saveConnectorConfig). */
+export async function saveConnectorSharedScopes(scopes: string[]): Promise<void> {
+  const clean = [...new Set(scopes)].sort();
+  await SecureStore.setItemAsync(CONNECTOR_SHARED_SCOPES_KEY, JSON.stringify(clean), BASE_OPTIONS);
+}
+
+/** The scopes the user explicitly marked Shared. Default private, so absent/corrupt reads as []. */
+export async function loadConnectorSharedScopes(): Promise<string[]> {
+  const raw = await SecureStore.getItemAsync(CONNECTOR_SHARED_SCOPES_KEY, BASE_OPTIONS);
+  if (!raw) return [];
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    const scopes = parsed.filter((s): s is string => typeof s === 'string');
+    return [...new Set(scopes)].sort();
+  } catch {
+    return [];
+  }
+}
+
+// --- journal setup card (Memories tab, Phase B WS3): a plain dismissed flag ---
+
+export async function saveJournalCardDismissed(): Promise<void> {
+  await SecureStore.setItemAsync(JOURNAL_CARD_DISMISSED_KEY, '1', BASE_OPTIONS);
+}
+
+export async function loadJournalCardDismissed(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(JOURNAL_CARD_DISMISSED_KEY, BASE_OPTIONS)) === '1';
+}
+
 // --- sign-out / wipe-local ---
 
 /** Removes every NorthKeep item from the keychain. The vault file is deleted separately. */
@@ -102,4 +149,7 @@ export async function wipeAllSecrets(): Promise<void> {
   await SecureStore.deleteItemAsync(DEVICE_SECRET_KEY);
   await SecureStore.deleteItemAsync(SYNC_SERVER_KEY);
   await SecureStore.deleteItemAsync(SYNC_VERSION_KEY);
+  await SecureStore.deleteItemAsync(CONNECTOR_SERVER_KEY);
+  await SecureStore.deleteItemAsync(CONNECTOR_SHARED_SCOPES_KEY);
+  await SecureStore.deleteItemAsync(JOURNAL_CARD_DISMISSED_KEY);
 }

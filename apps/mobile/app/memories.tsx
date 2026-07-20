@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   FlatList,
   Pressable,
@@ -11,7 +11,12 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Redirect, router, Stack } from 'expo-router';
 import type { MemoryEntry } from '@northkeep/core';
+import { hasConversationsScope } from '../src/lib/journal-recipe';
 import { filterMemories } from '../src/lib/search';
+import {
+  loadJournalCardDismissed,
+  saveJournalCardDismissed,
+} from '../src/lib/secure-store';
 import { userFacingSyncError } from '../src/lib/sync-errors';
 import { useVaultSession } from '../src/lib/vault-session';
 import { ErrorNote, SyncPill, colors } from '../src/ui';
@@ -29,6 +34,12 @@ export default function Memories() {
   const [query, setQuery] = useState('');
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // null until the persisted flag loads, so the card never flashes in and out.
+  const [journalDismissed, setJournalDismissed] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    void loadJournalCardDismissed().then(setJournalDismissed);
+  }, []);
 
   const shown = useMemo(
     () => filterMemories(session.entries, query),
@@ -37,6 +48,11 @@ export default function Memories() {
 
   if (session.status === 'locked') return <Redirect href="/unlock" />;
   if (session.status === 'unlinked') return <Redirect href="/onboarding" />;
+
+  // Journal setup card (Phase B WS3): only until the recipe's scope exists or
+  // the user dismisses it, and never over a search.
+  const showJournalCard =
+    journalDismissed === false && !hasConversationsScope(session.entries) && query.trim().length === 0;
 
   async function onRefresh() {
     setRefreshing(true);
@@ -87,6 +103,17 @@ export default function Memories() {
           <RefreshControl refreshing={refreshing} onRefresh={() => void onRefresh()} tintColor={colors.muted} />
         }
         contentContainerStyle={shown.length === 0 ? styles.emptyContainer : styles.listContent}
+        ListHeaderComponent={
+          showJournalCard ? (
+            <JournalSetupCard
+              onOpen={() => router.push('/journal-setup')}
+              onDismiss={() => {
+                setJournalDismissed(true);
+                void saveJournalCardDismissed();
+              }}
+            />
+          ) : null
+        }
         ListEmptyComponent={
           <Text style={styles.empty}>
             {query.trim().length > 0
@@ -97,6 +124,34 @@ export default function Memories() {
         renderItem={({ item }) => <MemoryCard entry={item} />}
       />
     </View>
+  );
+}
+
+/**
+ * Dismissible "set up your journal" card (Phase B WS3). Routes to the guided
+ * recipe; the dismissed flag persists in SecureStore alongside the other
+ * non-secret app state.
+ */
+function JournalSetupCard({ onOpen, onDismiss }: { onOpen: () => void; onDismiss: () => void }) {
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.card, styles.journalCard, pressed && styles.cardPressed]}
+      onPress={onOpen}
+      accessibilityRole="button"
+      accessibilityLabel="Set up your journal"
+    >
+      <View style={styles.journalHeader}>
+        <Text style={styles.journalTitle}>Let your AI apps keep a journal</Text>
+        <Pressable onPress={onDismiss} hitSlop={12} accessibilityLabel="Dismiss journal setup card">
+          <Ionicons name="close" size={18} color={colors.muted} />
+        </Pressable>
+      </View>
+      <Text style={styles.journalBody}>
+        Set up a shared scope where Claude, ChatGPT, or Manus writes a short summary of each
+        conversation into your vault. Three steps, a few minutes.
+      </Text>
+      <Text style={styles.journalLink}>Set it up</Text>
+    </Pressable>
   );
 }
 
@@ -144,6 +199,17 @@ const styles = StyleSheet.create({
     marginVertical: 6,
   },
   cardPressed: { opacity: 0.8 },
+  journalCard: { borderColor: colors.accentStrong },
+  journalHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    gap: 12,
+    marginBottom: 6,
+  },
+  journalTitle: { color: colors.text, fontSize: 15, fontWeight: '700', flexShrink: 1 },
+  journalBody: { color: colors.muted, fontSize: 13, lineHeight: 19, marginBottom: 8 },
+  journalLink: { color: colors.accent, fontSize: 14, fontWeight: '600' },
   cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
   badge: {
     color: colors.accent,

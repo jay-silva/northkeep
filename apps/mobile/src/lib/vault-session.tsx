@@ -20,13 +20,23 @@ import {
   type RetrieveOptions,
   type ScoredEntry,
 } from '@northkeep/core';
-import { deriveSyncCreds } from '@northkeep/sync';
+import {
+  deriveSyncCreds,
+  downSyncConnector,
+  fetchEntitlement,
+  pushSharedScopes,
+  startPairing,
+  unshareScope,
+  type DownSyncResult,
+} from '@northkeep/sync';
+import { DEFAULT_CONNECTOR_SERVER_URL } from './connect-flow';
 import { DEMO_MEMORIES, DEMO_PASSPHRASE } from './demo-vault';
 import { deleteIfExists, demoVaultPath, recoverVaultFileIfMissing, vaultPath } from './paths';
 import {
   biometricUnlockEnabled,
   cacheMasterKeyHex,
   clearCachedMasterKey,
+  loadConnectorServerUrl,
   loadDeviceSecretHex,
   loadLastSyncVersion,
   loadSyncServerUrl,
@@ -132,6 +142,27 @@ export interface VaultSession {
   /** Wipes SecureStore and the local vault file; returns to onboarding. */
   signOutWipe(): Promise<void>;
   getMemory(id: string): MemoryEntry | undefined;
+  /**
+   * Phase B Cloud Connect (ADR 0019 on the phone). These four wrap the
+   * @northkeep/sync connector client with the session's open vault, the
+   * SecureStore device secret, the configured (or default) connector server,
+   * and a best-effort entitlement attestation, mirroring how pushNow wires the
+   * sync transport. They THROW raw transport errors (402/401/network); the
+   * Sharing screen classifies them via src/lib/connect-flow.ts. The
+   * shared-scope LIST is not managed here; connect-flow owns it (SecureStore).
+   */
+  /** "Make these scopes match exactly": PUT the real plaintext entries of every listed scope. */
+  connectorPushScopes(scopes: string[]): Promise<{ pushed: number }>;
+  /** Server-side DELETE of one scope's rows (works without the vault; revocation is never blocked). */
+  connectorUnshareScope(scope: string): Promise<{ deleted: number }>;
+  /**
+   * Pull app-written memories/forgets into the open vault (write-back
+   * down-sync), refresh the entry list, and run the normal push-after-save so
+   * the vault change reaches the SYNC server too.
+   */
+  connectorDownSync(): Promise<DownSyncResult>;
+  /** POST /pair/start: the 8-char single-use code for the AI app's consent page. */
+  connectorStartPairing(): Promise<string>;
 }
 
 const SessionContext = createContext<VaultSession | null>(null);
@@ -557,6 +588,96 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     [reloadEntries, pushAfterSave],
   );
 
+  /**
+   * Device secret + connector server for a connector call. The demo guard is
+   * absolute: the demo vault has no persisted secret anyway, but fail loudly
+   * so no future path can share synthetic-or-real content from a demo session.
+   */
+  const connectorContext = useCallback(async (): Promise<{ secret: Buffer; server: string }> => {
+    if (isDemoRef.current) throw new Error('The demo vault never connects to the cloud.');
+    const secretHex = await loadDeviceSecretHex();
+    if (!secretHex) {
+      throw new Error('No device secret on this phone yet. Create or link a vault first.');
+    }
+    const server = (await loadConnectorServerUrl()) ?? DEFAULT_CONNECTOR_SERVER_URL;
+    return { secret: Buffer.from(secretHex, 'hex'), server };
+  }, []);
+
+  /**
+   * Best-effort entitlement attestation for the connector's billing gate,
+   * mirroring the desktop maybeEntitlement: if a sync server is configured,
+   * fetch the anonymous "active subscriber" token to forward. Never blocks a
+   * connector call; a truly gated connector returns its own clear 402.
+   */
+  const maybeConnectorEntitlement = useCallback(async (secret: Buffer): Promise<string | undefined> => {
+    const syncServer = await loadSyncServerUrl();
+    if (!syncServer) return undefined;
+    try {
+      const { token } = deriveSyncCreds(secret);
+      return (await fetchEntitlement({ syncServer, syncToken: token })) ?? undefined;
+    } catch {
+      return undefined;
+    }
+  }, []);
+
+  const connectorPushScopes = useCallback(
+    async (scopes: string[]): Promise<{ pushed: number }> => {
+      const vault = vaultRef.current;
+      if (!vault) throw new Error('Unlock the vault before sharing.');
+      const { secret, server } = await connectorContext();
+      try {
+        const entitlement = await maybeConnectorEntitlement(secret);
+        const result = await pushSharedScopes({ server, deviceSecret: secret, scopes, vault, entitlement });
+        return { pushed: result.pushed };
+      } finally {
+        memzero(secret);
+      }
+    },
+    [connectorContext, maybeConnectorEntitlement],
+  );
+
+  const connectorUnshareScope = useCallback(
+    async (scope: string): Promise<{ deleted: number }> => {
+      const { secret, server } = await connectorContext();
+      try {
+        return await unshareScope({ server, deviceSecret: secret, scope });
+      } finally {
+        memzero(secret);
+      }
+    },
+    [connectorContext],
+  );
+
+  const connectorDownSync = useCallback(async (): Promise<DownSyncResult> => {
+    const vault = vaultRef.current;
+    if (!vault) throw new Error('Unlock the vault before syncing app-written memories.');
+    const { secret, server } = await connectorContext();
+    let result: DownSyncResult;
+    try {
+      const entitlement = await maybeConnectorEntitlement(secret);
+      // downSyncConnector appends/tombstones on the open vault and save()s it
+      // BEFORE acking, so a failure after save is retried as a no-op (dedupe).
+      result = await downSyncConnector({ server, deviceSecret: secret, vault, entitlement });
+    } finally {
+      memzero(secret);
+    }
+    reloadEntries();
+    // The vault file changed on disk; run the same push-after-save every
+    // mutation runs so the change reaches the SYNC server (loud on failure).
+    if (result.added > 0 || result.forgotten > 0) await pushAfterSave();
+    return result;
+  }, [connectorContext, maybeConnectorEntitlement, reloadEntries, pushAfterSave]);
+
+  const connectorStartPairing = useCallback(async (): Promise<string> => {
+    const { secret, server } = await connectorContext();
+    try {
+      const entitlement = await maybeConnectorEntitlement(secret);
+      return await startPairing({ server, deviceSecret: secret, entitlement });
+    } finally {
+      memzero(secret);
+    }
+  }, [connectorContext, maybeConnectorEntitlement]);
+
   const signOutWipe = useCallback(async () => {
     closeSession();
     await wipeAllSecrets();
@@ -604,6 +725,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       retrieve,
       signOutWipe,
       getMemory,
+      connectorPushScopes,
+      connectorUnshareScope,
+      connectorDownSync,
+      connectorStartPairing,
     }),
     [
       status,
@@ -628,6 +753,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       retrieve,
       signOutWipe,
       getMemory,
+      connectorPushScopes,
+      connectorUnshareScope,
+      connectorDownSync,
+      connectorStartPairing,
     ],
   );
 
