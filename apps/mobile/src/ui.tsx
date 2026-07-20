@@ -118,13 +118,20 @@ export function TypeChips({ value, onChange }: { value: MemoryType; onChange: (t
  * never hidden. 'error' and 'conflict-recovered' additionally show their detail
  * line so the user always knows when an edit did not reach the server or when a
  * two-sided conflict moved the other device's version to a recoverable .bak.
+ *
+ * `errorKind` (from SyncState.errorKind, set by classifySyncError) selects a
+ * distinct presentation for subscription-required: a calm warn-colored state
+ * rather than a red failure, with the neutral activation copy in the detail
+ * line (WS4; the detail text is already neutral by the time it gets here).
  */
 export function SyncPill({
   status,
   detail,
+  errorKind,
 }: {
   status: 'idle' | 'syncing' | 'synced' | 'conflict-recovered' | 'error';
   detail: string | null;
+  errorKind?: 'subscription-required' | 'not-enabled' | 'network' | 'other';
 }) {
   const map = {
     idle: { label: 'Idle', dot: colors.muted, fg: colors.muted },
@@ -133,7 +140,10 @@ export function SyncPill({
     'conflict-recovered': { label: 'Conflict resolved', dot: colors.warnText, fg: colors.warnText },
     error: { label: 'Not synced', dot: colors.danger, fg: '#ff9599' },
   } as const;
-  const s = map[status];
+  const s =
+    status === 'error' && errorKind === 'subscription-required'
+      ? ({ label: 'Subscription required', dot: colors.warnText, fg: colors.warnText } as const)
+      : map[status];
   const showDetail = detail && (status === 'error' || status === 'conflict-recovered');
   return (
     <View style={styles.syncWrap}>

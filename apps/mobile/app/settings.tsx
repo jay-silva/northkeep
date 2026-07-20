@@ -109,7 +109,16 @@ export default function Settings() {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
-      <FieldLabel>Sync server</FieldLabel>
+      <FieldLabel>Sync</FieldLabel>
+      {savedUrl === null ? (
+        <>
+          <Button title="Enable sync" onPress={() => router.push('/sync-setup')} />
+          <Text style={styles.footnote}>
+            Keeps an end-to-end encrypted copy of your vault on your account. Or set a custom
+            server below.
+          </Text>
+        </>
+      ) : null}
       <TextInput
         style={styles.input}
         value={serverUrl}
@@ -120,7 +129,7 @@ export default function Settings() {
         placeholder="https://sync.northkeep.ai"
         placeholderTextColor={colors.muted}
       />
-      <Button title="Save server" onPress={() => void onSaveServer()} disabled={serverUrl.trim().length === 0} />
+      <Button title="Save server" kind={savedUrl === null ? 'secondary' : 'primary'} onPress={() => void onSaveServer()} disabled={serverUrl.trim().length === 0} />
 
       <FieldLabel>This device</FieldLabel>
       <Info label="Linked" value={session.accountIdShort ? `yes (account ${session.accountIdShort})` : 'no'} />
@@ -128,6 +137,17 @@ export default function Settings() {
       <Info label="Last synced version" value={lastVersion > 0 ? String(lastVersion) : 'never'} />
       <Info label="Sync server" value={savedUrl ?? 'not set'} />
       <Info label="Face ID unlock" value={session.biometricCacheEnabled ? 'on' : 'off'} />
+
+      <FieldLabel>Recovery</FieldLabel>
+      <Button
+        title="Back up recovery secret"
+        kind="secondary"
+        onPress={() => router.push('/backup-secret')}
+      />
+      <Text style={styles.footnote}>
+        Shows the secret stored on this phone. You need it plus your passphrase to open your vault
+        on a new phone. Face ID or your passcode is required to view it.
+      </Text>
 
       <FieldLabel>Vault file</FieldLabel>
       <Button title="Import a vault file (.nkv)" kind="secondary" onPress={() => void onImport()} />

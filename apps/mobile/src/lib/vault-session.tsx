@@ -43,7 +43,8 @@ import {
   verifyBlobOpensWithKey,
   type VerifiedRemoteBlob,
 } from './sync';
-import { initialSyncState, reduceSync, runSyncAfterSave, type SyncState } from './sync-flow';
+import { classifySyncError } from './sync-errors';
+import { initialSyncState, reduceSync, runSyncAfterSave, type SyncEvent, type SyncState } from './sync-flow';
 
 /**
  * The unlock-session state machine for M6-1 (link, unlock, browse). Holds the
@@ -100,6 +101,14 @@ export interface VaultSession {
   lock(opts?: { clearBiometricCache?: boolean }): Promise<void>;
   /** Pull from sync and reload; requires unlocked (the key verifies the download). */
   pullAndReload(): Promise<{ pulled: boolean }>;
+  /**
+   * Phase A enable-sync: run the save-then-push sequence NOW (same plumbing as
+   * pushAfterSave) and return the terminal event. Throws when no device secret
+   * or server URL is set, and rethrows transport errors (402/403/network) so
+   * the enable-sync flow (src/lib/sync-setup-flow.ts) can classify them; the
+   * loud syncState indicator is updated either way.
+   */
+  pushNow(): Promise<SyncEvent>;
   /** Loud sync-state indicator (M6-2, invariant #6 style): idle / syncing / synced / conflict-recovered / error. */
   syncState: SyncState;
   /**
@@ -416,30 +425,19 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
    * fetch+verify+stash, re-push) has never run against a real sync server; only
    * the sync-flow decision logic is unit-tested.
    */
-  const pushAfterSave = useCallback(async (): Promise<void> => {
-    // Hard guarantee: the demo never touches the network. It has no persisted
-    // device secret anyway, but guard explicitly so no future demo edit path can
-    // reach the sync server.
-    if (isDemoRef.current) return;
-    const secretHex = await loadDeviceSecretHex();
-    const serverUrl = await loadSyncServerUrl();
-    if (!secretHex || !serverUrl) {
-      // Saved locally; there is simply nowhere to push yet. Say so, don't error loudly.
-      setSyncState((s) =>
-        reduceSync(s, {
-          type: 'error',
-          message: 'Saved on this phone. Set a sync server in Settings to push it to your other devices.',
-        }),
-      );
-      return;
-    }
-    setSyncState((s) => reduceSync(s, { type: 'start' }));
-    const path = vaultPath();
-    // The remote fetched during conflict recovery, held so verify + stash act on
-    // the SAME verified blob the fetch port returned.
-    let pendingRemote: VerifiedRemoteBlob | null = null;
-    try {
-      const event = await runSyncAfterSave({
+  /**
+   * The save-then-push sequence against a known server, shared by pushAfterSave
+   * (every mutation) and pushNow (the enable-sync first push). Returns the
+   * terminal event; transport errors (network, 402, 403, unexpected HTTP)
+   * propagate to the caller.
+   */
+  const runPushSequence = useCallback(
+    async (serverUrl: string, secretHex: string): Promise<SyncEvent> => {
+      const path = vaultPath();
+      // The remote fetched during conflict recovery, held so verify + stash act on
+      // the SAME verified blob the fetch port returned.
+      let pendingRemote: VerifiedRemoteBlob | null = null;
+      return runSyncAfterSave({
         hasMasterKey: () => masterKeyRef.current !== null,
         loadBaseVersion: () => loadLastSyncVersion(),
         push: (baseVersion) =>
@@ -457,13 +455,61 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         },
         saveBaseVersion: (version) => saveLastSyncVersion(version),
       });
+    },
+    [],
+  );
+
+  const pushAfterSave = useCallback(async (): Promise<void> => {
+    // Hard guarantee: the demo never touches the network. It has no persisted
+    // device secret anyway, but guard explicitly so no future demo edit path can
+    // reach the sync server.
+    if (isDemoRef.current) return;
+    const secretHex = await loadDeviceSecretHex();
+    const serverUrl = await loadSyncServerUrl();
+    if (!secretHex || !serverUrl) {
+      // Saved locally; there is simply nowhere to push yet. Say so, don't error loudly.
+      setSyncState((s) =>
+        reduceSync(s, {
+          type: 'error',
+          message: 'Saved on this phone. Turn on sync in Settings to push it to your other devices.',
+        }),
+      );
+      return;
+    }
+    setSyncState((s) => reduceSync(s, { type: 'start' }));
+    try {
+      const event = await runPushSequence(serverUrl, secretHex);
       setSyncState((s) => reduceSync(s, event));
     } catch (err) {
       // A thrown transport error (network, 402, unexpected HTTP): the local
       // save already succeeded, so surface it without losing the edit.
-      setSyncState((s) => reduceSync(s, { type: 'error', message: err instanceof Error ? err.message : String(err) }));
+      // classifySyncError keeps the server's CLI-flavored 402 copy off the
+      // screen (WS4) and tags the kind for distinct presentation.
+      const friendly = classifySyncError(err);
+      setSyncState((s) => reduceSync(s, { type: 'error', message: friendly.message, kind: friendly.kind }));
     }
-  }, []);
+  }, [runPushSequence]);
+
+  /** Phase A enable-sync first push. See the VaultSession interface doc. */
+  const pushNow = useCallback(async (): Promise<SyncEvent> => {
+    if (isDemoRef.current) throw new Error('The demo vault never syncs.');
+    const secretHex = await loadDeviceSecretHex();
+    const serverUrl = await loadSyncServerUrl();
+    if (!secretHex) throw new Error('No device secret on this phone yet. Create or link a vault first.');
+    if (!serverUrl) throw new Error('No sync server configured yet.');
+    setSyncState((s) => reduceSync(s, { type: 'start' }));
+    try {
+      const event = await runPushSequence(serverUrl, secretHex);
+      setSyncState((s) => reduceSync(s, event));
+      return event;
+    } catch (err) {
+      const friendly = classifySyncError(err);
+      setSyncState((s) => reduceSync(s, { type: 'error', message: friendly.message, kind: friendly.kind }));
+      // Rethrow the RAW error: the enable-sync flow classifies it itself and
+      // must distinguish 402 from 403 from network.
+      throw err;
+    }
+  }, [runPushSequence]);
 
   const addMemory = useCallback(
     async (input: RememberInput): Promise<MemoryEntry> => {
@@ -549,6 +595,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       unlockWithBiometrics,
       lock,
       pullAndReload,
+      pushNow,
       syncState,
       addMemory,
       editMemory,
@@ -572,6 +619,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       unlockWithBiometrics,
       lock,
       pullAndReload,
+      pushNow,
       syncState,
       addMemory,
       editMemory,

@@ -32,6 +32,8 @@
  *   always a chain-valid vault so `northkeep verify` passes on the Mac after.
  */
 
+import type { SyncErrorKind } from './sync-errors';
+
 export type SyncStatus = 'idle' | 'syncing' | 'synced' | 'conflict-recovered' | 'error';
 
 export interface SyncState {
@@ -40,13 +42,19 @@ export interface SyncState {
   version: number;
   /** Human-readable detail for the loud indicator (invariant #6 style). null when idle/syncing. */
   detail: string | null;
+  /**
+   * Set only when status is 'error' and the dispatcher classified the failure
+   * (classifySyncError). Lets the UI present subscription-required distinctly
+   * (neutral activation state, WS4) without string-matching the detail text.
+   */
+  errorKind?: SyncErrorKind;
 }
 
 export type SyncEvent =
   | { type: 'start' }
   | { type: 'synced'; version: number }
   | { type: 'conflict-recovered'; version: number }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string; kind?: SyncErrorKind };
 
 /** The minimal shape a push result must expose for the decision helpers. */
 export interface PushResultLike {
@@ -72,7 +80,7 @@ export function initialSyncState(version = 0): SyncState {
 export function reduceSync(state: SyncState, event: SyncEvent): SyncState {
   switch (event.type) {
     case 'start':
-      return { ...state, status: 'syncing', detail: null };
+      return { ...state, status: 'syncing', detail: null, errorKind: undefined };
     case 'synced':
       return { status: 'synced', version: event.version, detail: null };
     case 'conflict-recovered':
@@ -84,7 +92,7 @@ export function reduceSync(state: SyncState, event: SyncEvent): SyncState {
           "the other device's version was backed up on this phone (.conflict.bak).",
       };
     case 'error':
-      return { ...state, status: 'error', detail: event.message };
+      return { ...state, status: 'error', detail: event.message, errorKind: event.kind };
     default: {
       // Exhaustiveness guard: a new event type must be handled explicitly.
       const _never: never = event;

@@ -81,8 +81,12 @@ export function parseManualSecret(raw: string): string {
 /** Decodes a bare secret value (hex or base64/base64url) to lowercase hex, validating length. */
 export function decodeDeviceSecret(value: string): string {
   const input = value.trim();
-  if (/^[0-9a-f]{64}$/i.test(input)) {
-    return input.toLowerCase();
+  // The backup screen (backup-secret.tsx) displays the secret grouped in
+  // 4-character blocks for transcription (backup-flow.ts), so a hex candidate
+  // tolerates internal whitespace: what we show must paste back cleanly.
+  const compactHex = input.replace(/\s+/g, '');
+  if (/^[0-9a-f]{64}$/i.test(compactHex)) {
+    return compactHex.toLowerCase();
   }
   // Strict base64 shape check first: Buffer.from(str, 'base64') silently
   // ignores invalid characters, which would let a corrupted scan "decode".

@@ -71,6 +71,12 @@ describe('parseManualSecret', () => {
     expect(parseManualSecret(` ${SECRET_HEX} `)).toBe(SECRET_HEX);
   });
 
+  it('accepts the grouped display form from the backup screen (internal whitespace)', () => {
+    const grouped = SECRET_HEX.match(/.{4}/g)!.join(' ');
+    expect(parseManualSecret(grouped)).toBe(SECRET_HEX);
+    expect(parseManualSecret(grouped.replace(/ /g, '\n'))).toBe(SECRET_HEX);
+  });
+
   it('accepts bare base64', () => {
     expect(parseManualSecret(SECRET_B64)).toBe(SECRET_HEX);
   });

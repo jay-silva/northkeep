@@ -53,7 +53,9 @@ export default function CreateVault() {
       await session.createVault(passphrase, { enableBiometricCache: enableBiometrics });
       setPassphrase('');
       setConfirm('');
-      router.replace('/memories');
+      // Phase A: the backup step is mandatory for a phone-only user (losing the
+      // phone before the secret is saved elsewhere means losing the vault).
+      router.replace({ pathname: '/backup-secret', params: { from: 'create' } });
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -113,9 +115,9 @@ export default function CreateVault() {
         <Button title="Create my vault" onPress={() => void onCreate()} busy={busy} disabled={!canSubmit} />
 
         <Text style={styles.warn}>
-          There is no password reset. If you forget this passphrase, or wipe this phone before
-          turning on sync, the vault cannot be recovered. That is the point: only you can open it.
-          Turn on sync in Settings to keep an encrypted backup on your account.
+          There is no password reset. If you forget this passphrase, the vault cannot be opened.
+          That is the point: only you can open it. Next, you will see your recovery secret so you
+          can back it up, and you can turn on sync to keep an encrypted copy on your account.
         </Text>
       </ScrollView>
     </KeyboardAvoidingView>

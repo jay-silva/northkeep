@@ -12,6 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Redirect, router, Stack } from 'expo-router';
 import type { MemoryEntry } from '@northkeep/core';
 import { filterMemories } from '../src/lib/search';
+import { userFacingSyncError } from '../src/lib/sync-errors';
 import { useVaultSession } from '../src/lib/vault-session';
 import { ErrorNote, SyncPill, colors } from '../src/ui';
 
@@ -44,7 +45,9 @@ export default function Memories() {
       const { pulled } = await session.pullAndReload();
       if (!pulled) setError('No vault on the sync server yet. Sync from your computer first.');
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      // userFacingSyncError keeps the server's CLI-flavored 402 copy (price +
+      // "northkeep sync subscribe") off this screen: neutral activation copy only.
+      setError(userFacingSyncError(err));
     } finally {
       setRefreshing(false);
     }
@@ -61,7 +64,11 @@ export default function Memories() {
           ),
         }}
       />
-      <SyncPill status={session.syncState.status} detail={session.syncState.detail} />
+      <SyncPill
+        status={session.syncState.status}
+        detail={session.syncState.detail}
+        errorKind={session.syncState.errorKind}
+      />
       <TextInput
         style={styles.search}
         value={query}

@@ -49,6 +49,20 @@ describe('reduceSync state machine', () => {
     expect(s).toEqual({ status: 'error', version: 9, detail: 'network down' });
   });
 
+  it('error carries the classified kind (WS4 distinct presentation) and start clears it', () => {
+    const s = reduceSync(initialSyncState(1), {
+      type: 'error',
+      message: 'Sync requires a NorthKeep subscription.',
+      kind: 'subscription-required',
+    });
+    expect(s.status).toBe('error');
+    expect(s.errorKind).toBe('subscription-required');
+    const s2 = reduceSync(s, { type: 'start' });
+    expect(s2.errorKind).toBeUndefined();
+    const s3 = reduceSync(s, { type: 'synced', version: 2 });
+    expect(s3.errorKind).toBeUndefined();
+  });
+
   it('models the full happy-path push sequence', () => {
     let s: SyncState = initialSyncState(1);
     s = reduceSync(s, { type: 'start' });

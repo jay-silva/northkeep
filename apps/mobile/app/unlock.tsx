@@ -11,6 +11,7 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { VaultAuthError } from '@northkeep/core';
+import { userFacingSyncError } from '../src/lib/sync-errors';
 import { useVaultSession } from '../src/lib/vault-session';
 import { Button, ErrorNote, FieldLabel, colors } from '../src/ui';
 
@@ -129,7 +130,10 @@ function describe(err: unknown): string {
   if (err instanceof VaultAuthError) {
     return 'That did not unlock the vault. Check your passphrase, and that this phone is linked to the right Mac.';
   }
-  return err instanceof Error ? err.message : String(err);
+  // The fresh-phone unlock path pulls from the sync server first, so a 402/403/
+  // network failure can surface here; userFacingSyncError maps those to neutral
+  // copy (never the server's CLI-flavored 402 text) and passes others through.
+  return userFacingSyncError(err);
 }
 
 const styles = StyleSheet.create({

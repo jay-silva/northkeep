@@ -107,6 +107,11 @@ export default function RootLayout() {
               <Stack.Screen name="onboarding" options={{ headerShown: false }} />
               <Stack.Screen name="device-link" options={{ title: 'Link your Mac' }} />
               <Stack.Screen name="create-vault" options={{ title: 'Start a new vault' }} />
+              {/* Phase A phone-first onboarding: mandatory backup step after
+                  create-vault (the screen itself hides back on first run), then
+                  the optional enable-sync step. Both also reachable from Settings. */}
+              <Stack.Screen name="backup-secret" options={{ title: 'Recovery secret' }} />
+              <Stack.Screen name="sync-setup" options={{ title: 'Sync' }} />
               <Stack.Screen name="demo" options={{ title: 'Demo', headerBackVisible: false }} />
               <Stack.Screen name="unlock" options={{ title: 'Unlock', headerBackVisible: false }} />
               <Stack.Screen name="memories" options={{ title: 'Memories', headerBackVisible: false }} />
