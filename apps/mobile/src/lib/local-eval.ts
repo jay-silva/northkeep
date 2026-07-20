@@ -1,5 +1,8 @@
 import { NER_EVAL_CORPUS, evaluateNer, type NerEvalReport } from '@northkeep/redact/dist/eval.js';
-import { createLocalNerClient } from '@northkeep/platform-mobile/dist/local-model/index.js';
+import {
+  createLocalNerClient,
+  type NerPassEvent,
+} from '@northkeep/platform-mobile/dist/local-model/index.js';
 import { getLocalModel } from './local-model';
 
 /**
@@ -17,12 +20,30 @@ import { getLocalModel } from './local-model';
  * Ground truth on what the model ACTUALLY did during the run. applyTier2
  * swallows model errors into a silent per-case degrade (correct for chats,
  * opaque for evals) — a run where every call throws scores 0.0% with no
- * visible error. This wrapper makes that failure mode legible: it counts
- * calls/errors at the client seam and keeps one sample of each.
+ * visible error. Since the per-kind change the client runs K focused passes
+ * per case; the `onNerPass` hook at the client seam counts calls/errors and
+ * latency PER PASS and keeps one raw-reply and one error sample for each, so
+ * a single weak kind is legible instead of averaged away.
  */
+export interface NerPassDiagnostics {
+  /** Pass id: 'person', 'org', 'street', 'place' (or 'single' fallback). */
+  pass: string;
+  calls: number;
+  errors: number;
+  /** Summed model latency across the run for this pass, in ms. */
+  totalMs: number;
+  /** First raw model reply for this pass (truncated). */
+  sampleRaw?: string;
+  /** First error message for this pass, if any. */
+  sampleError?: string;
+}
+
 export interface NerEvalDiagnostics {
+  /** Total model passes across the run (K per case since per-kind NER). */
   modelCalls: number;
   modelErrors: number;
+  /** Per-kind breakdown, in pass order. */
+  perPass: NerPassDiagnostics[];
   /** First error message seen, if any. */
   sampleError?: string;
   /** First raw model reply (truncated) — shows exactly what the parser got. */
@@ -47,28 +68,41 @@ export async function runOnDeviceNerEval(
   if (!resolution.model) {
     return { status: 'unavailable', reason: resolution.reason };
   }
-  const client = createLocalNerClient(resolution.model);
-  const diagnostics: NerEvalDiagnostics = { modelCalls: 0, modelErrors: 0 };
-  const instrumented = {
-    ...client,
-    generateJson: async (prompt: string) => {
-      diagnostics.modelCalls += 1;
-      try {
-        const raw = await client.generateJson(prompt);
-        if (diagnostics.sampleRaw === undefined) {
-          diagnostics.sampleRaw = raw.slice(0, 400);
-        }
-        return raw;
-      } catch (err) {
-        diagnostics.modelErrors += 1;
-        if (diagnostics.sampleError === undefined) {
-          diagnostics.sampleError = err instanceof Error ? err.message : String(err);
-        }
-        throw err;
+  const diagnostics: NerEvalDiagnostics = { modelCalls: 0, modelErrors: 0, perPass: [] };
+  const byPass = new Map<string, NerPassDiagnostics>();
+  const record = (event: NerPassEvent) => {
+    diagnostics.modelCalls += 1;
+    let d = byPass.get(event.pass);
+    if (!d) {
+      d = { pass: event.pass, calls: 0, errors: 0, totalMs: 0 };
+      byPass.set(event.pass, d);
+      diagnostics.perPass.push(d);
+    }
+    d.calls += 1;
+    d.totalMs += event.ms;
+    if (event.ok) {
+      if (d.sampleRaw === undefined && event.raw !== undefined) {
+        d.sampleRaw = event.raw.slice(0, 300);
       }
-    },
+      if (diagnostics.sampleRaw === undefined && event.raw !== undefined) {
+        diagnostics.sampleRaw = event.raw.slice(0, 400);
+      }
+    } else {
+      diagnostics.modelErrors += 1;
+      d.errors += 1;
+      if (d.sampleError === undefined && event.error !== undefined) {
+        d.sampleError = event.error;
+      }
+      if (diagnostics.sampleError === undefined && event.error !== undefined) {
+        diagnostics.sampleError = event.error;
+      }
+    }
   };
-  const report = await evaluateNer(NER_EVAL_CORPUS, instrumented, onProgress);
+  // The SAME client construction the real redaction path uses
+  // (makeLocalTier2RedactFn), so the eval measures the per-kind path the
+  // product ships, with the diagnostics hook layered on at the same seam.
+  const client = createLocalNerClient(resolution.model, { onNerPass: record });
+  const report = await evaluateNer(NER_EVAL_CORPUS, client, onProgress);
   return {
     status: 'ok',
     backend: resolution.model.backend,

@@ -88,6 +88,11 @@ async function detectEntities(
   ollama: OllamaClient,
   strictGate: boolean,
 ): Promise<EntityHit[]> {
+  // NOTE: the mobile NER client (packages/platform-mobile per-kind-ner.ts)
+  // splits this prompt at the trailing "\nText:\n" marker to recover the text
+  // and run per-kind passes. Keep that marker stable (or update both sides);
+  // if it drifts, mobile falls back to a single generic pass (correct, but
+  // lower recall). Desktop Ollama receives this prompt verbatim, unchanged.
   const prompt = `Extract named entities from the text. Respond with JSON only:
 {"entities":[{"text":"exact span","kind":"person|org|location"}]}
 

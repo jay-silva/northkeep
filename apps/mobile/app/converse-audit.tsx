@@ -3,6 +3,7 @@ import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Stack } from 'expo-router';
 import { colors } from '../src/ui';
 import { getLastAudit } from '../src/lib/converse-run';
+import { TIER2_UNAVAILABLE_MESSAGE, partialNerFailureMessage } from '../src/lib/ner-degrade';
 
 /**
  * "What left this device" (M6-3 acceptance). Shows the EXACT payload sent to the
@@ -30,6 +31,22 @@ export default function ConverseAudit() {
               <Text style={styles.deviceBannerText}>
                 This turn stayed on this device. Nothing was sent. The text below is what the
                 on-device model was given locally, never transmitted anywhere.
+              </Text>
+            </View>
+          ) : null}
+
+          {/* Degrade honesty (invariant #6): if the Tier-2 name net did not
+              run, or ran only partially, say so HERE, next to the payload it
+              affected. Content-free: pass ids only, never text. */}
+          {!audit.onDevice && audit.tier2Degraded ? (
+            <View style={styles.warnCard}>
+              <Text style={styles.warnCardText}>{TIER2_UNAVAILABLE_MESSAGE}</Text>
+            </View>
+          ) : null}
+          {!audit.onDevice && !audit.tier2Degraded && audit.failedPasses.length > 0 ? (
+            <View style={styles.warnCard}>
+              <Text style={styles.warnCardText}>
+                {partialNerFailureMessage(audit.failedPasses)}
               </Text>
             </View>
           ) : null}
@@ -122,6 +139,13 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   deviceBannerText: { color: colors.accent, fontSize: 14, fontWeight: '600', lineHeight: 20 },
+  warnCard: {
+    backgroundColor: colors.warnBg,
+    borderRadius: 10,
+    padding: 14,
+    marginBottom: 14,
+  },
+  warnCardText: { color: colors.warnText, fontSize: 14, fontWeight: '600', lineHeight: 20 },
   metaCard: {
     backgroundColor: colors.card,
     borderColor: colors.border,

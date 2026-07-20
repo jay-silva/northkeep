@@ -1,3 +1,9 @@
+import {
+  NerPassTimeoutError,
+  extractNerText,
+  runPerKindNer,
+  type NerPassEvent,
+} from './per-kind-ner.js';
 import { ENTITY_JSON_SCHEMA, type LocalModel } from './types.js';
 
 /**
@@ -13,9 +19,15 @@ import { ENTITY_JSON_SCHEMA, type LocalModel } from './types.js';
  * throw loudly if some future caller does reach them, rather than pretending to
  * work.
  *
- * The prompt applyTier2 passes already contains the NER instructions and the text;
- * we additionally hand the model ENTITY_JSON_SCHEMA so Apple's / llama's guided
- * generation constrains the output to the exact {"entities":[{text,kind}]} shape.
+ * The prompt applyTier2 passes already contains the NER instructions and the text.
+ * Since the per-kind change (see per-kind-ner.ts), `generateJson` does NOT send
+ * that prompt to the model verbatim: it recovers the text at the 'Text:' marker
+ * and runs K focused per-kind passes sequentially, merging the entity lists into
+ * the ONE {"entities":[{text,kind}]} reply applyTier2 parses. From redact()'s
+ * point of view nothing changed: one call in, one JSON string out, same schema.
+ * If the marker is ever absent (unexpected prompt shape), the adapter falls back
+ * to the legacy single pass so behavior never regresses. ENTITY_JSON_SCHEMA is
+ * still handed to generateStructured for backends with working guided generation.
  */
 
 /** Progress record shape mirrored from librarian's PullProgress (unused here). */
@@ -41,27 +53,80 @@ export interface LocalNerClient {
 const GENERATE_TIMEOUT_MS = 25_000;
 const READY_TIMEOUT_MS = 5_000;
 
-function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+/** NOTE: this is a bare Promise.race, not a cancellation: generateStructured
+ * takes no abort signal, so on timeout the underlying native call KEEPS
+ * RUNNING. `makeError` lets the per-pass path reject with NerPassTimeoutError,
+ * which runPerKindNer treats as "the bridge is wedged, abandon this run"
+ * rather than "try the next pass" (stacking calls on the single-call-only
+ * Apple FM bridge is what wedges a whole turn). */
+function withTimeout<T>(
+  p: Promise<T>,
+  ms: number,
+  what: string,
+  makeError: (message: string) => Error = (message) => new Error(message),
+): Promise<T> {
   return Promise.race([
     p,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms),
+      setTimeout(() => reject(makeError(`${what} timed out after ${ms}ms`)), ms),
     ),
   ]);
 }
 
-export function createLocalNerClient(model: LocalModel): LocalNerClient {
+/** Optional observer hooks. `onNerPass` fires after each internal per-kind
+ * model pass (or the legacy fallback pass, id 'single'); the eval screen uses
+ * it for per-kind calls/errors/latency diagnostics. */
+export interface LocalNerHooks {
+  onNerPass?: (event: NerPassEvent) => void;
+}
+
+export function createLocalNerClient(model: LocalModel, hooks?: LocalNerHooks): LocalNerClient {
   return {
     available: () =>
       withTimeout(Promise.resolve(model.isReady()), READY_TIMEOUT_MS, 'local model isReady').catch(
         () => false,
       ),
-    generateJson: (prompt: string) =>
-      withTimeout(
-        model.generateStructured(prompt, ENTITY_JSON_SCHEMA),
-        GENERATE_TIMEOUT_MS,
-        'local NER',
-      ),
+    generateJson: async (prompt: string) => {
+      const text = extractNerText(prompt);
+      if (text === null) {
+        // Not the applyTier2 NER prompt shape: keep the original single-call
+        // behavior, still visible to diagnostics as pass 'single'.
+        const start = Date.now();
+        try {
+          const raw = await withTimeout(
+            model.generateStructured(prompt, ENTITY_JSON_SCHEMA),
+            GENERATE_TIMEOUT_MS,
+            'local NER',
+          );
+          hooks?.onNerPass?.({ pass: 'single', ok: true, ms: Date.now() - start, raw });
+          return raw;
+        } catch (err) {
+          hooks?.onNerPass?.({
+            pass: 'single',
+            ok: false,
+            ms: Date.now() - start,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throw err;
+        }
+      }
+      // Per-kind decomposition: K sequential focused passes, merged into the
+      // one {"entities":[...]} string applyTier2 expects. A parse-failed pass
+      // is recorded and the others continue; a TIMED-OUT pass abandons the
+      // remaining passes (NerPassTimeoutError, see withTimeout above); only
+      // zero successful passes throws (-> degraded).
+      return runPerKindNer(
+        text,
+        (passPrompt, timeoutMs) =>
+          withTimeout(
+            model.generateStructured(passPrompt, ENTITY_JSON_SCHEMA),
+            timeoutMs,
+            'local NER pass',
+            (message) => new NerPassTimeoutError(message),
+          ),
+        { onPass: hooks?.onNerPass },
+      );
+    },
     embed: () => {
       throw new Error('LocalNerClient does not provide embeddings (Tier-2 NER only).');
     },

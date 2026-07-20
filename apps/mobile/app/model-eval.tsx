@@ -114,6 +114,24 @@ function Report({ result }: { result: Extract<OnDeviceNerEval, { status: 'ok' }>
         label="Model calls"
         value={`${result.diagnostics.modelCalls} (${result.diagnostics.modelErrors} errors)`}
       />
+      {result.diagnostics.perPass.map((d) => (
+        <Row
+          key={d.pass}
+          label={`  pass: ${d.pass}`}
+          value={`${d.calls} calls, ${d.errors} errors, ${(d.totalMs / 1000).toFixed(1)}s`}
+        />
+      ))}
+
+      {result.diagnostics.perPass.length > 0 ? (
+        <View style={styles.misses}>
+          <Text style={styles.missesTitle}>First reply per pass</Text>
+          {result.diagnostics.perPass.map((d) => (
+            <Text key={d.pass} style={styles.missLine}>
+              {d.pass}: {d.sampleRaw ?? (d.sampleError ? `error: ${d.sampleError}` : 'no reply seen')}
+            </Text>
+          ))}
+        </View>
+      ) : null}
 
       {result.diagnostics.modelErrors > 0 && result.diagnostics.sampleError ? (
         <View style={styles.misses}>

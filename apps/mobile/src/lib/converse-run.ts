@@ -11,6 +11,7 @@ import type { LocalModel } from '@northkeep/platform-mobile/dist/local-model/ind
 import { createMobileProvider, type OutboundCapture } from './mobile-providers';
 import { createLocalModelProvider } from './local-provider';
 import { makeLocalTier2RedactFn } from './local-model';
+import { foldFailedNerPasses, type NerPassRecord } from './ner-degrade';
 import type { ProviderConfig } from './providers-store';
 
 /**
@@ -75,6 +76,21 @@ export interface MobileTurnResult {
   outbound: OutboundCapture;
   /** What was masked (real → placeholder), for the audit view. Ephemeral. */
   redactions: MaskedItem[];
+  /**
+   * True when the Tier-2 NER name net did not run at all this turn (no ready
+   * model, or every per-kind pass failed), taken from runTurn's own
+   * tier2Degraded, the pipeline's source of truth. The deterministic layers
+   * still ran; the audit view must say so LOUDLY (invariant #6), never
+   * silently.
+   */
+  tier2Degraded: boolean;
+  /**
+   * Per-kind NER passes that failed at least once this turn (pass ids only,
+   * e.g. ['person']; content-free by construction). Empty when NER ran clean
+   * or no local model was in play. When tier2Degraded is true this may list
+   * all passes; the audit view shows the full-degrade warning in that case.
+   */
+  failedPasses: string[];
 }
 
 /** The most recent outbound payload, for the "What left this device" screen. */
@@ -87,6 +103,10 @@ export interface LastAudit {
   outbound: OutboundCapture;
   /** What was masked on this turn (real → placeholder). Never persisted. */
   redactions: MaskedItem[];
+  /** Mirrors MobileTurnResult.tier2Degraded for the audit warning. */
+  tier2Degraded: boolean;
+  /** Mirrors MobileTurnResult.failedPasses (pass ids only, content-free). */
+  failedPasses: string[];
   /**
    * True when the turn ran entirely on the phone (runOnDeviceTurn): the captured
    * payload is what the LOCAL model was given and never left the device. The
@@ -126,9 +146,15 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
   // a degraded NER PROCEEDS on the deterministic guarantee (tier-3
   // semantics). With no ready model, redact() runs deterministic-only.
   const useLocalNer = input.localModel ? await input.localModel.isReady() : false;
+  // Per-pass outcomes from the NER client seam (pass id + ok only, content-
+  // free), folded below into the failedPasses audit summary (invariant #6:
+  // a partial name-net failure must be user-visible, not console-only).
+  const passEvents: NerPassRecord[] = [];
   const redactFn =
     useLocalNer && input.localModel
-      ? makeLocalTier2RedactFn(input.localModel)
+      ? makeLocalTier2RedactFn(input.localModel, (event) =>
+          passEvents.push({ pass: event.pass, ok: event.ok }),
+        )
       : (text: string, opts?: Parameters<typeof redact>[1]) => redact(text, opts, null);
 
   const result = await runTurn({
@@ -158,6 +184,7 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     original: r.original,
     kind: r.kind,
   }));
+  const failedPasses = foldFailedNerPasses(passEvents);
 
   lastAudit = {
     at: new Date().toISOString(),
@@ -167,6 +194,8 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     privacy: result.privacy,
     outbound: captured,
     redactions,
+    tier2Degraded: result.tier2Degraded,
+    failedPasses,
     onDevice: false,
   };
 
@@ -178,6 +207,8 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     memoriesUsed: result.memoriesUsed.map((m) => ({ id: m.id, type: m.type, content: m.content })),
     outbound: captured,
     redactions,
+    tier2Degraded: result.tier2Degraded,
+    failedPasses,
   };
 }
 
@@ -244,6 +275,8 @@ export async function runOnDeviceTurn(input: OnDeviceTurnInput): Promise<MobileT
       messages: [],
     },
     redactions: [], // nothing masked — nothing left the device
+    tier2Degraded: false, // tier 0: no egress, so there is no name net to degrade
+    failedPasses: [],
     onDevice: true,
   };
 
@@ -255,5 +288,7 @@ export async function runOnDeviceTurn(input: OnDeviceTurnInput): Promise<MobileT
     memoriesUsed: result.memoriesUsed.map((m) => ({ id: m.id, type: m.type, content: m.content })),
     outbound: lastAudit.outbound,
     redactions: [],
+    tier2Degraded: false,
+    failedPasses: [],
   };
 }
