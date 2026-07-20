@@ -64,6 +64,20 @@ const config: ExpoConfig = {
         'NorthKeep uses the camera only to scan the link code shown by NorthKeep on your computer. No photos are taken or stored.',
       NSFaceIDUsageDescription:
         'NorthKeep can use Face ID to unlock your vault with a key that never leaves this device.',
+      // Ollama over LAN (approved; build 18). NSAllowsLocalNetworking is the
+      // NARROW ATS exception: plain HTTP is permitted to local/private-network
+      // addresses only, so a phone can reach an Ollama server on the user's
+      // own computer (http://192.168.x.x:11434). NOT NSAllowsArbitraryLoads:
+      // HTTP to public hosts stays blocked, which is the App-Store-defensible
+      // posture and matches the JS-side gate (src/lib/endpoint-gate.ts) that
+      // rejects plain-http public URLs at input time.
+      NSAppTransportSecurity: {
+        NSAllowsLocalNetworking: true,
+      },
+      // iOS shows this with the local-network permission prompt the first time
+      // the app touches a LAN address.
+      NSLocalNetworkUsageDescription:
+        'NorthKeep uses the local network only to reach an Ollama server you configure on your own computer, so your chats can stay private.',
     },
     // App icon comes from the top-level `icon` above (brand master). Export
     // compliance answered via ITSAppUsesNonExemptEncryption above. Still

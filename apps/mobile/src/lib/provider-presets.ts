@@ -10,11 +10,14 @@ import type { ProviderKind } from './providers-store';
  *
  * Two entries are mobile-only additions (not in the desktop catalog) and are the
  * only things to keep in sync by hand:
- *   - Ollama (local): the desktop treats a local Ollama as a custom OpenAI-compat
- *     endpoint; on the phone we surface it as a preset. Base URL is Ollama's
- *     documented default (port 11434, OpenAI-compat `/v1` path). On a phone you
- *     point the host at your computer's LAN address; a private-LAN IP classifies
- *     as a 'private' endpoint in the Converse pipeline.
+ *   - Ollama (on your computer): the desktop treats a local Ollama as a custom
+ *     OpenAI-compat endpoint; on the phone we surface it as a first-class LAN
+ *     preset (build 18: ATS NSAllowsLocalNetworking permits plain HTTP to
+ *     private addresses). No base URL is prefilled: on a phone "localhost" is
+ *     the phone itself, so the user must enter their computer's LAN address
+ *     (Ollama's documented port 11434, OpenAI-compat `/v1` path; example
+ *     below). A private-LAN address classifies as a 'private' endpoint in the
+ *     Converse pipeline, same as the desktop classifier.
  *   - Custom: the freeform escape hatch (no base URL preset).
  *
  * `kind` maps the catalog's transport ('openai-compatible' | 'anthropic') onto
@@ -73,14 +76,19 @@ const CATALOG_PRESETS: MobilePreset[] = KNOWN_PROVIDERS.map((p) => {
   } satisfies MobilePreset;
 });
 
-/** Ollama's documented default OpenAI-compatible endpoint (port 11434, /v1). */
-export const OLLAMA_DEFAULT_BASE_URL = 'http://localhost:11434/v1';
+/**
+ * Example LAN URL for the Ollama preset's placeholder/help text (Ollama's
+ * documented port 11434, OpenAI-compat /v1 path, on a typical home-router
+ * address). An EXAMPLE only, never prefilled: the user types their own
+ * computer's address.
+ */
+export const OLLAMA_LAN_EXAMPLE_URL = 'http://192.168.1.5:11434/v1';
 
 const OLLAMA_PRESET: MobilePreset = {
   key: 'ollama',
-  name: 'Ollama (local)',
+  name: 'Ollama (your computer)',
   kind: 'openai',
-  baseUrl: OLLAMA_DEFAULT_BASE_URL,
+  baseUrl: '',
   defaultModel: '',
   models: [],
   local: true,

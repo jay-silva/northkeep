@@ -1,15 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import {
-  // Deprecated in RN core but still shipped in 0.83; same tradeoff as
-  // backup-secret.tsx (no new native module).
-  Clipboard,
-  Platform,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+// expo-clipboard (build 18): the deprecated RN core Clipboard is gone from the
+// app. No timed clear here: journal prompts are instructions, not secrets.
+import * as Clipboard from 'expo-clipboard';
 import { Redirect, router } from 'expo-router';
 import {
   CONVERSATIONS_SCOPE,
@@ -65,7 +58,7 @@ export default function JournalSetup() {
   }
 
   function copy(label: string, value: string) {
-    Clipboard.setString(value);
+    void Clipboard.setStringAsync(value);
     setCopied(label);
   }
 

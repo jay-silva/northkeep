@@ -1,8 +1,5 @@
 import React, { useEffect, useState } from 'react';
 import {
-  // Deprecated in RN core but still shipped in 0.83; same tradeoff as
-  // backup-secret.tsx (no new native module, Phase A/B constraint).
-  Clipboard,
   Platform,
   Pressable,
   ScrollView,
@@ -12,6 +9,11 @@ import {
   TextInput,
   View,
 } from 'react-native';
+// expo-clipboard (build 18): the deprecated RN core Clipboard is gone from the
+// app. No timed clear here: pairing codes expire on their own TTL, and the
+// connector URL / share id are not secrets (backup-secret.tsx is the one
+// screen that timed-clears).
+import * as Clipboard from 'expo-clipboard';
 import { Redirect, useLocalSearchParams } from 'expo-router';
 import { memzero } from '@northkeep/core';
 import { assertConnectorUrl, deriveConnectorToken } from '@northkeep/sync';
@@ -130,7 +132,7 @@ export default function Sharing() {
   const pairExpired = pair !== null && pairSecondsLeft <= 0;
 
   function copy(label: string, value: string) {
-    Clipboard.setString(value);
+    void Clipboard.setStringAsync(value);
     setCopiedWhat(label);
   }
 

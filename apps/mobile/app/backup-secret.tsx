@@ -1,8 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AppState,
-  // Deprecated in RN core but still shipped in 0.83; see CLIPBOARD NOTE below.
-  Clipboard,
   Platform,
   ScrollView,
   StyleSheet,
@@ -11,9 +9,15 @@ import {
   View,
   type AppStateStatus,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
 import * as LocalAuthentication from 'expo-local-authentication';
 import { Redirect, Stack, router } from 'expo-router';
 import { formatDeviceSecretGroups } from '../src/lib/backup-flow';
+import {
+  SECRET_CLIPBOARD_CLEAR_MS,
+  secretClearDue,
+  shouldClearClipboard,
+} from '../src/lib/clipboard-clear';
 import { loadDeviceSecretHex } from '../src/lib/secure-store';
 import { useVaultSession } from '../src/lib/vault-session';
 import { Button, ErrorNote, FieldLabel, colors } from '../src/ui';
@@ -47,16 +51,21 @@ import { Button, ErrorNote, FieldLabel, colors } from '../src/ui';
  * gone; the user unlocks normally and can re-view the secret from Settings
  * behind the auth gate.
  *
- * CLIPBOARD NOTE: react-native's core Clipboard is deprecated in favor of the
- * extracted @react-native-clipboard/clipboard package, but it is still shipped
- * and compiled into RN 0.83, so using it costs no new native module and no new
- * dev-client build (a Phase A constraint). The secret Text is also selectable
- * as a fallback. Revisit when RN actually removes it.
+ * CLIPBOARD: expo-clipboard (build 18; replaced the deprecated RN core
+ * Clipboard that Phase A used to avoid a native rebuild). Copying the secret
+ * arms a ~60s timed clear: the clipboard is overwritten ONLY if it still
+ * holds the secret (shouldClearClipboard), so anything the user copied since
+ * is never clobbered. The timer is suspended while backgrounded (switching to
+ * the password manager to paste IS a background transition, so background
+ * must not clear immediately); instead the background/foreground transitions
+ * and unmount re-check the deadline / attempt the conditional clear. Decision
+ * logic is pure and tested in src/lib/clipboard-clear.ts; only the wiring
+ * lives here. The secret Text stays selectable as a fallback.
  *
  * NEEDS ON-DEVICE VALIDATION: the LocalAuthentication prompt flow (including
- * the passcode-only and no-passcode paths), Clipboard.setString on a real
- * build, and whether the iOS app-switcher privacy cover (root layout) masks
- * this screen's secret.
+ * the passcode-only and no-passcode paths), Clipboard.setStringAsync and the
+ * timed clear on a real build, and whether the iOS app-switcher privacy cover
+ * (root layout) masks this screen's secret.
  */
 export default function BackupSecret() {
   const session = useVaultSession();
@@ -80,6 +89,51 @@ export default function BackupSecret() {
   onboardingRef.current = onboarding;
   const sessionRef = useRef(session);
   sessionRef.current = session;
+
+  // Timed clipboard clear (see module doc). The ref records what was copied
+  // and when; the timer/AppState wiring below decides when to attempt the
+  // conditional clear. Cleared to null once an attempt runs, so at most one
+  // attempt per copy.
+  const copiedSecretRef = useRef<{ secret: string; at: number } | null>(null);
+  const clearTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const clearSecretFromClipboard = useCallback(async (opts?: { onlyIfDue?: boolean }) => {
+    const copied = copiedSecretRef.current;
+    if (!copied) return;
+    if (opts?.onlyIfDue && !secretClearDue(copied.at, Date.now())) return;
+    copiedSecretRef.current = null;
+    if (clearTimerRef.current) {
+      clearTimeout(clearTimerRef.current);
+      clearTimerRef.current = null;
+    }
+    try {
+      // Only overwrite if the clipboard still holds the secret; never clobber
+      // something else the user copied since.
+      const current = await Clipboard.getStringAsync();
+      if (shouldClearClipboard(current, copied.secret)) await Clipboard.setStringAsync('');
+    } catch {
+      // Best effort: a clipboard read/write failure must never crash the screen.
+    }
+  }, []);
+
+  // Clipboard-clear wiring: while foregrounded the armed timer fires at the
+  // deadline. Background suspends JS timers, so on EVERY background/foreground
+  // transition re-check the deadline (onlyIfDue keeps the just-copied secret
+  // pasteable in the password manager the user switched to). On unmount,
+  // attempt the conditional clear unconditionally: leaving this screen means
+  // the backup step is done.
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
+      if (next === 'background' || next === 'active') {
+        void clearSecretFromClipboard({ onlyIfDue: true });
+      }
+    });
+    return () => {
+      sub.remove();
+      if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
+      void clearSecretFromClipboard();
+    };
+  }, [clearSecretFromClipboard]);
 
   const reveal = useCallback(async () => {
     setState('checking');
@@ -162,10 +216,24 @@ export default function BackupSecret() {
 
   function onCopy() {
     if (!secretHex) return;
-    // Copy the RAW 64-hex form (no spaces): guaranteed to paste cleanly into
-    // the device-link screen and into password-manager fields.
-    Clipboard.setString(secretHex);
-    setCopied(true);
+    const secret = secretHex;
+    void (async () => {
+      try {
+        // Copy the RAW 64-hex form (no spaces): guaranteed to paste cleanly into
+        // the device-link screen and into password-manager fields.
+        await Clipboard.setStringAsync(secret);
+      } catch {
+        return; // copy failed: do not claim "Copied", do not arm the clear
+      }
+      setCopied(true);
+      // Arm (or re-arm) the timed clear for this copy.
+      copiedSecretRef.current = { secret, at: Date.now() };
+      if (clearTimerRef.current) clearTimeout(clearTimerRef.current);
+      clearTimerRef.current = setTimeout(() => {
+        clearTimerRef.current = null;
+        void clearSecretFromClipboard();
+      }, SECRET_CLIPBOARD_CLEAR_MS);
+    })();
   }
 
   function finishOnboarding(to: 'sync' | 'memories') {
@@ -231,8 +299,8 @@ export default function BackupSecret() {
           <Button title="Copy secret" kind="secondary" onPress={onCopy} />
           {copied ? (
             <Text style={styles.notice}>
-              Copied. Paste it into your password manager now, then copy something else so the
-              secret does not sit on the clipboard.
+              Copied. Paste it into your password manager now. NorthKeep clears the secret from
+              this phone's clipboard after about a minute.
             </Text>
           ) : null}
 

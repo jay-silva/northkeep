@@ -27,7 +27,13 @@ import {
   setSelectedProviderId,
   type ProviderConfig,
 } from '../src/lib/providers-store';
-import { PROVIDER_PRESETS, type MobilePreset, type PresetModel } from '../src/lib/provider-presets';
+import {
+  OLLAMA_LAN_EXAMPLE_URL,
+  PROVIDER_PRESETS,
+  type MobilePreset,
+  type PresetModel,
+} from '../src/lib/provider-presets';
+import { assertMobileEndpointUrl } from '../src/lib/endpoint-gate';
 import { createMobileProvider } from '../src/lib/mobile-providers';
 import { getLocalModel } from '../src/lib/local-model';
 import type { LocalModelResolution } from '@northkeep/platform-mobile/dist/local-model/index.js';
@@ -138,12 +144,22 @@ export default function Providers() {
     if (label.trim().length === 0) return setError('Give this provider a name.');
     if (model.trim().length === 0) return setError('Enter a model id.');
     if (kind === 'openai' && baseUrl.trim().length === 0) return setError('Enter the endpoint base URL.');
+    // Endpoint gate (build 18): https anywhere; plain http only to addresses on
+    // the user's own network (matches the app's ATS NSAllowsLocalNetworking).
+    let endpointUrl = '';
+    if (kind === 'openai') {
+      try {
+        endpointUrl = assertMobileEndpointUrl(baseUrl);
+      } catch (err) {
+        return setError(err instanceof Error ? err.message : String(err));
+      }
+    }
     const isNew = editingId === null;
     if (isNew && apiKey.trim().length === 0 && kind === 'anthropic') return setError('Enter your API key.');
     setBusy(true);
     try {
       const saved = await saveProvider(
-        { id: editingId ?? undefined, label, kind, baseUrl: kind === 'anthropic' ? ANTHROPIC_BASE_URL : baseUrl, model },
+        { id: editingId ?? undefined, label, kind, baseUrl: kind === 'anthropic' ? ANTHROPIC_BASE_URL : endpointUrl, model },
         apiKey.trim(),
       );
       if (isNew) await setSelectedProviderId(saved.id);
@@ -324,7 +340,7 @@ export default function Providers() {
                 setDiscovered(null);
                 setDiscoverMsg(null);
               }}
-              placeholder="https://api.openai.com/v1  (or http://192.168.1.5:11434/v1)"
+              placeholder={preset?.local ? OLLAMA_LAN_EXAMPLE_URL : 'https://api.openai.com/v1'}
               placeholderTextColor={colors.muted}
               autoCapitalize="none"
               autoCorrect={false}
@@ -332,8 +348,11 @@ export default function Providers() {
             />
             {preset?.local ? (
               <Text style={styles.modelNote}>
-                Point the host at your computer's address on your network (not localhost), for
-                example http://192.168.1.5:11434/v1. A local network address stays private.
+                Run Ollama on your computer and let it accept connections from your network: start
+                it with OLLAMA_HOST=0.0.0.0, or turn on network access in the Ollama app's
+                settings. Then enter your computer's address here, like {OLLAMA_LAN_EXAMPLE_URL}.
+                iOS will ask for local network permission the first time you connect. Chats to a
+                local network address stay on your network and count as private.
               </Text>
             ) : null}
           </>
