@@ -97,6 +97,20 @@ export interface VaultSession {
    */
   createVault(passphrase: string, opts?: { enableBiometricCache?: boolean }): Promise<void>;
   /**
+   * One-shot in-session flag: true from the moment createVault succeeds until
+   * the backup-secret screen's mandatory confirm completes (it calls
+   * consumeJustCreatedVault from the confirm buttons). This is the ONLY thing
+   * that puts backup-secret in onboarding mode (no auth prompt, back disabled,
+   * mandatory confirm). URL params are never trusted for that decision: the
+   * northkeep:// scheme deep-links any route, so a ?from=create param would
+   * let a cold deep link skip the auth gate on the recovery secret. In-memory
+   * only on purpose; it cannot survive a relaunch, so a deep link can never
+   * arrive with it set.
+   */
+  justCreatedVault: boolean;
+  /** Clear the one-shot flag above (called when the backup confirm completes). */
+  consumeJustCreatedVault(): void;
+  /**
    * M6-2b: open a built-in SAMPLE vault with synthetic memories, instantly, with
    * no passphrase, no Mac, no network. Isolated from any real vault (separate
    * cache path, ephemeral non-persisted device secret). Never syncs.
@@ -180,6 +194,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
   const [accountIdShort, setAccountIdShort] = useState<string | null>(null);
   const [syncState, setSyncState] = useState<SyncState>(() => initialSyncState());
   const [isDemo, setIsDemo] = useState(false);
+  // One-shot onboarding flag for backup-secret; see the interface doc. Survives
+  // lock-on-background on purpose (backgrounding mid-backup must not lock a
+  // fresh creator out of their own secret) and is cleared by signOutWipe.
+  const [justCreatedVault, setJustCreatedVault] = useState(false);
   const vaultRef = useRef<Vault | null>(null);
   const masterKeyRef = useRef<Buffer | null>(null);
   // Ref mirror of isDemo so the memoized callbacks (lock, pushAfterSave) can read
@@ -367,9 +385,14 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       // Re-derive and open into the session via the verified unlock path. This is
       // a second Argon2id derive; a one-time onboarding cost (see module note).
       await unlockWithPassphrase(passphrase, opts);
+      // Arm backup-secret's onboarding mode. Set ONLY here, after the vault
+      // truly exists and unlocked; consumed when the backup confirm completes.
+      setJustCreatedVault(true);
     },
     [unlockWithPassphrase],
   );
+
+  const consumeJustCreatedVault = useCallback(() => setJustCreatedVault(false), []);
 
   /**
    * M6-2b demo. Builds a synthetic vault in the cache directory under an
@@ -687,6 +710,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     setBiometricCacheEnabled(false);
     setAccountIdShort(null);
     setSyncState(initialSyncState());
+    setJustCreatedVault(false);
     setStatus('unlinked');
   }, [closeSession]);
 
@@ -710,6 +734,8 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       isDemo,
       linkDevice,
       createVault,
+      justCreatedVault,
+      consumeJustCreatedVault,
       startDemo,
       exitDemo,
       unlockWithPassphrase,
@@ -738,6 +764,8 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       isDemo,
       linkDevice,
       createVault,
+      justCreatedVault,
+      consumeJustCreatedVault,
       startDemo,
       exitDemo,
       unlockWithPassphrase,

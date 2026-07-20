@@ -2,11 +2,14 @@ import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import {
   CONNECTOR_NETWORK_MESSAGE,
+  CONNECTOR_PRIVATE_BETA_MESSAGE,
   CONNECTOR_SUBSCRIPTION_HINT,
   CONNECTOR_SUBSCRIPTION_MESSAGE,
   DEFAULT_CONNECTOR_SERVER_URL,
   NOTHING_SHARED_MESSAGE,
   PAIRING_CODE_TTL_SECONDS,
+  SYNC_PUSH_FAILED_FOLLOWUP,
+  SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE,
   classifyConnectorError,
   connectorSyncSummary,
   formatPairingCountdown,
@@ -155,6 +158,27 @@ describe('runShareScope', () => {
     expect(get()).toEqual(['work']);
   });
 
+  it('rollback removes only its OWN scope, keeping a concurrent writer\'s mark', async () => {
+    const { store, get } = memStore(['work']);
+    const outcome = await runShareScope(
+      {
+        store,
+        pushScopes: async () => {
+          // While the push is in flight, a concurrent writer marks another
+          // scope. The rollback must not blind-overwrite with the stale
+          // pre-push snapshot and erase it.
+          await store.save(['concurrent', 'conversations', 'work']);
+          throw new Error('Connector server returned HTTP 500 on push.');
+        },
+      },
+      'conversations',
+    );
+    expect(outcome.kind).toBe('failed');
+    // Only 'conversations' (this call's own mark) is removed; the concurrent
+    // writer's 'concurrent' mark and the pre-existing 'work' both survive.
+    expect(get()).toEqual(['concurrent', 'work']);
+  });
+
   it('maps a transport failure to the connector-flavored network copy', async () => {
     const { store, get } = memStore([]);
     const outcome = await runShareScope(
@@ -232,6 +256,67 @@ describe('runConnectorSyncNow', () => {
     expect(outcome).toEqual({ kind: 'synced', added: 3, forgotten: 1, deduped: 2, pushed: 9 });
   });
 
+  it('pushes the FRESH scope list when the store changed during the slow down-sync', async () => {
+    // The unshare/sync-now race (revocation honesty): 'private-stuff' is
+    // unshared while the down-sync runs. The write-back push must carry the
+    // fresh post-unshare list, never the stale one loaded before the
+    // down-sync, or the revoked scope's plaintext would be re-uploaded.
+    const { store } = memStore(['conversations', 'private-stuff']);
+    const pushedWith: string[][] = [];
+    const outcome = await runConnectorSyncNow({
+      store,
+      downSync: async () => {
+        await store.save(['conversations']); // unshare completed mid-sync
+        return { added: 1, forgotten: 0, deduped: 0 };
+      },
+      pushScopes: async (scopes) => {
+        pushedWith.push(scopes);
+        return { pushed: 2 };
+      },
+    });
+    expect(pushedWith).toEqual([['conversations']]);
+    expect(outcome).toEqual({ kind: 'synced', added: 1, forgotten: 0, deduped: 0, pushed: 2 });
+  });
+
+  it('skips the push entirely when every scope was unshared mid-sync, and says so', async () => {
+    const { store } = memStore(['conversations']);
+    const outcome = await runConnectorSyncNow({
+      store,
+      downSync: async () => {
+        await store.save([]); // the last share was revoked while syncing
+        return { added: 2, forgotten: 0, deduped: 1 };
+      },
+      pushScopes: async () => {
+        throw new Error('push must not be called with nothing shared');
+      },
+    });
+    expect(outcome).toEqual({ kind: 'synced-no-push', added: 2, forgotten: 0, deduped: 1 });
+  });
+
+  it('reports a partial sync when the down-sync landed but the write-back push failed', async () => {
+    const { store } = memStore(['conversations']);
+    const outcome = await runConnectorSyncNow({
+      store,
+      downSync: async () => ({ added: 3, forgotten: 1, deduped: 0 }),
+      pushScopes: async () => {
+        throw new TypeError('Network request failed');
+      },
+    });
+    // The successful half (memories in the vault) must not be hidden behind
+    // the push error: both halves come back, separately.
+    expect(outcome.kind).toBe('partially-synced');
+    if (outcome.kind === 'partially-synced') {
+      expect(outcome.added).toBe(3);
+      expect(outcome.forgotten).toBe(1);
+      expect(outcome.deduped).toBe(0);
+      expect(outcome.pushFailure).toEqual({
+        kind: 'failed',
+        errorKind: 'network',
+        message: CONNECTOR_NETWORK_MESSAGE,
+      });
+    }
+  });
+
   it('classifies the down-sync 402 (which has no "HTTP 402" token) neutrally', async () => {
     const { store } = memStore(['conversations']);
     const outcome = await runConnectorSyncNow({
@@ -263,6 +348,18 @@ describe('classifyConnectorError', () => {
     }
   });
 
+  it('gives the connector 403 its own private-beta copy (right noun, no "sync server")', () => {
+    const result = classifyConnectorError(new Error('Connector server returned HTTP 403 on push.'));
+    expect(result).toEqual({
+      kind: 'failed',
+      errorKind: 'not-enabled',
+      message: CONNECTOR_PRIVATE_BETA_MESSAGE,
+    });
+    expect(result.message).not.toContain('sync server');
+    expect(result.message).toContain('connector server');
+    expectSteeringClean(result.message);
+  });
+
   it('passes the connector cap message (413) through unchanged', () => {
     const msg =
       'The connector server rejected the push: over the sharing caps (too many shared memories, or a memory is too large).';
@@ -286,6 +383,18 @@ describe('connectorSyncSummary', () => {
     expect(full).toContain('2 new memories from your AI apps came into your vault.');
     expect(full).toContain('1 forget was applied.');
     expect(full).toContain('3 were already in your vault.');
+  });
+
+  it('omits the "pushed back" sentence when the push did not happen', () => {
+    // partially-synced and synced-no-push outcomes: claiming the scopes were
+    // pushed back would be a lie, so the closing sentence must disappear.
+    const withoutPush = connectorSyncSummary({ added: 2, forgotten: 0, deduped: 0 }, { pushedBack: false });
+    expect(withoutPush).toBe('2 new memories from your AI apps came into your vault.');
+    expect(withoutPush).not.toContain('pushed back');
+    // Default stays unchanged (explicit true too).
+    expect(connectorSyncSummary({ added: 2, forgotten: 0, deduped: 0 }, { pushedBack: true })).toContain(
+      'pushed back',
+    );
   });
 });
 
@@ -323,7 +432,10 @@ describe('the user-facing copy stays steering-clean and em-dash-free', () => {
       CONNECTOR_SUBSCRIPTION_MESSAGE,
       CONNECTOR_SUBSCRIPTION_HINT,
       CONNECTOR_NETWORK_MESSAGE,
+      CONNECTOR_PRIVATE_BETA_MESSAGE,
       NOTHING_SHARED_MESSAGE,
+      SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE,
+      SYNC_PUSH_FAILED_FOLLOWUP,
       JOURNAL_SEED_MEMORY.content,
       JOURNAL_PATTERN_SCHEDULED_TASK,
       JOURNAL_PATTERN_STANDING_INSTRUCTION,

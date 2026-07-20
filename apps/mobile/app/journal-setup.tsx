@@ -98,13 +98,20 @@ export default function JournalSetup() {
       {shared ? (
         <Text style={styles.done}>Done. The "conversations" scope is shared.</Text>
       ) : (
-        <Button
-          title="Share the conversations scope"
-          kind={scopeExists ? 'primary' : 'secondary'}
-          onPress={() =>
-            router.push({ pathname: '/sharing', params: { share: CONVERSATIONS_SCOPE } })
-          }
-        />
+        <>
+          {/* Disabled until step 1 created the scope: the connector write is
+              fail-closed, so sharing an EMPTY scope would break with "The 0
+              memories in...". The order note above is load-bearing. */}
+          <Button
+            title="Share the conversations scope"
+            kind={scopeExists ? 'primary' : 'secondary'}
+            disabled={!scopeExists}
+            onPress={() =>
+              router.push({ pathname: '/sharing', params: { share: CONVERSATIONS_SCOPE } })
+            }
+          />
+          {!scopeExists ? <Text style={styles.helper}>Create the scope first.</Text> : null}
+        </>
       )}
 
       <Text style={styles.stepTitle}>Step 3: Tell your AI app to write the journal</Text>
@@ -150,6 +157,7 @@ const styles = StyleSheet.create({
   body: { color: colors.muted, fontSize: 14, lineHeight: 20, marginBottom: 12 },
   stepTitle: { color: colors.text, fontSize: 16, fontWeight: '700', marginTop: 16, marginBottom: 6 },
   done: { color: '#4cc38a', fontSize: 14, fontWeight: '600', marginBottom: 8 },
+  helper: { color: colors.muted, fontSize: 13, lineHeight: 19, marginTop: 8 },
   patternLabel: {
     color: colors.muted,
     fontSize: 12,

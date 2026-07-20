@@ -48,6 +48,25 @@ export const CONNECTOR_NETWORK_MESSAGE =
 export const NOTHING_SHARED_MESSAGE = 'No scopes are shared yet. Share a scope first.';
 
 /**
+ * Sync-now landed memories but every scope was unshared while it ran, so the
+ * write-back push was skipped on purpose (re-pushing would re-upload plaintext
+ * the user just revoked). Honest, plain, no em dashes.
+ */
+export const SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE =
+  'Nothing was pushed back: every scope was unshared while the sync ran.';
+
+/**
+ * Shown with the push failure after a partially successful sync-now: the
+ * down-synced memories are already saved locally, only the re-push failed.
+ */
+export const SYNC_PUSH_FAILED_FOLLOWUP =
+  'The new memories are safe in your vault, but pushing your shared scopes back failed. Run sync again to retry the push.';
+
+/** Connector-path 403: same private-beta state as sync, with the right noun. */
+export const CONNECTOR_PRIVATE_BETA_MESSAGE =
+  "This connector server is in private beta. Your account isn't enabled yet.";
+
+/**
  * The "share id" a beta user sends to support: sha256 hex of the connector
  * token, the SAME value the server's allowlist stores (tokenHash in
  * @northkeep/sync creds.ts) and the desktop CLI prints for `northkeep share
@@ -120,6 +139,11 @@ export function classifyConnectorError(err: unknown): ConnectorFailure {
   if (friendly.kind === 'network') {
     return { kind: 'failed', errorKind: friendly.kind, message: CONNECTOR_NETWORK_MESSAGE };
   }
+  if (friendly.kind === 'not-enabled') {
+    // The sync-flavored PRIVATE_BETA_MESSAGE says "sync server"; on the
+    // connector path that noun is wrong, so use the connector wording.
+    return { kind: 'failed', errorKind: friendly.kind, message: CONNECTOR_PRIVATE_BETA_MESSAGE };
+  }
   return { kind: 'failed', errorKind: friendly.kind, message: friendly.message };
 }
 
@@ -158,7 +182,11 @@ export async function runShareScope(ports: ShareScopePorts, scope: string): Prom
     const { pushed } = await ports.pushScopes(next);
     return { kind: 'shared', scope, pushed };
   } catch (err) {
-    await ports.store.save(before); // rollback: the server never accepted it
+    // Rollback: the server never accepted it. Remove ONLY this call's own
+    // scope from a FRESH load; a blind save(before) would clobber any mark a
+    // concurrent writer added while the push was in flight.
+    const current = await ports.store.load();
+    await ports.store.save(current.filter((s) => s !== scope));
     return classifyConnectorError(err);
   }
 }
@@ -195,6 +223,29 @@ export async function runUnshareScope(
 
 export type ConnectorSyncOutcome =
   | { kind: 'synced'; added: number; forgotten: number; deduped: number; pushed: number }
+  | {
+      /**
+       * The down-sync landed, but every scope was unshared while it ran, so the
+       * write-back push was skipped (pushing the stale list would re-upload
+       * plaintext the user just revoked). The screen reports the skip honestly.
+       */
+      kind: 'synced-no-push';
+      added: number;
+      forgotten: number;
+      deduped: number;
+    }
+  | {
+      /**
+       * The down-sync landed its memories in the vault, then the write-back
+       * push failed. Split outcome so the screen can say BOTH halves: the
+       * memories arrived AND the re-push failed (suggest running sync again).
+       */
+      kind: 'partially-synced';
+      added: number;
+      forgotten: number;
+      deduped: number;
+      pushFailure: ConnectorFailure;
+    }
   | { kind: 'nothing-shared'; message: string }
   | ConnectorFailure;
 
@@ -214,25 +265,49 @@ export interface ConnectorSyncPorts {
  * "Sync app-written memories", mirroring desktop /api/share/sync: down-sync
  * the connector-born memories into the vault, then re-push every shared scope
  * so each new row is rehashed server-side under its vault id.
+ *
+ * The write-back push RE-LOADS the store immediately before pushing, and
+ * pushes only the scopes still marked shared at that moment. The down-sync is
+ * slow, and an unshare that completes while it runs must not have its scope's
+ * plaintext re-uploaded by a push of the stale pre-sync list. If the fresh
+ * list is empty, the push is skipped entirely and reported honestly.
  */
 export async function runConnectorSyncNow(ports: ConnectorSyncPorts): Promise<ConnectorSyncOutcome> {
   const scopes = await ports.store.load();
   if (scopes.length === 0) return { kind: 'nothing-shared', message: NOTHING_SHARED_MESSAGE };
+  let down: { added: number; forgotten: number; deduped: number };
   try {
-    const down = await ports.downSync();
-    const { pushed } = await ports.pushScopes(scopes);
-    return { kind: 'synced', ...down, pushed };
+    down = await ports.downSync();
   } catch (err) {
     return classifyConnectorError(err);
   }
+  // Fresh list, not the one loaded before the slow down-sync: only scopes the
+  // user STILL shares may be pushed (revocation honesty; see the doc above).
+  const fresh = await ports.store.load();
+  if (fresh.length === 0) return { kind: 'synced-no-push', ...down };
+  try {
+    const { pushed } = await ports.pushScopes(fresh);
+    return { kind: 'synced', ...down, pushed };
+  } catch (err) {
+    // The memories already landed in the vault; only the re-push failed. Keep
+    // both halves visible instead of hiding the successful down-sync.
+    return { kind: 'partially-synced', ...down, pushFailure: classifyConnectorError(err) };
+  }
 }
 
-/** Human summary of a completed sync-now, shown under the button. */
-export function connectorSyncSummary(r: {
-  added: number;
-  forgotten: number;
-  deduped: number;
-}): string {
+/**
+ * Human summary of a completed sync-now, shown under the button. Pass
+ * `pushedBack: false` for the partially-synced and synced-no-push outcomes,
+ * where the closing "pushed back" sentence would be a lie.
+ */
+export function connectorSyncSummary(
+  r: {
+    added: number;
+    forgotten: number;
+    deduped: number;
+  },
+  opts?: { pushedBack?: boolean },
+): string {
   const memories = (n: number) => (n === 1 ? '1 new memory' : `${n} new memories`);
   const parts: string[] = [];
   parts.push(
@@ -248,6 +323,8 @@ export function connectorSyncSummary(r: {
       r.deduped === 1 ? '1 was already in your vault.' : `${r.deduped} were already in your vault.`,
     );
   }
-  parts.push('Your shared scopes were pushed back so the server matches your vault.');
+  if (opts?.pushedBack !== false) {
+    parts.push('Your shared scopes were pushed back so the server matches your vault.');
+  }
   return parts.join(' ');
 }

@@ -16,7 +16,14 @@ import {
  * price, no website.
  */
 
-/** The exact string @northkeep/sync's SubscriptionRequiredError carries today. */
+/**
+ * The exact string @northkeep/sync's SubscriptionRequiredError carries today.
+ * DRIFT WATCH: hardcoded on purpose (this test stays dependency-free, so do
+ * NOT import it); the source of truth is the SubscriptionRequiredError
+ * constructor in packages/sync/src/client.ts. If that copy changes, update
+ * this constant to match or the negative steering assertions test the wrong
+ * string.
+ */
 const CLI_402_MESSAGE =
   'This sync server requires a $10/month subscription. Run "northkeep sync subscribe".';
 

@@ -55,7 +55,10 @@ export default function CreateVault() {
       setConfirm('');
       // Phase A: the backup step is mandatory for a phone-only user (losing the
       // phone before the secret is saved elsewhere means losing the vault).
-      router.replace({ pathname: '/backup-secret', params: { from: 'create' } });
+      // Onboarding mode is signalled by the session's one-shot justCreatedVault
+      // flag (set inside createVault), never by a URL param: params are
+      // deep-linkable and must not be able to skip the auth gate.
+      router.replace('/backup-secret');
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

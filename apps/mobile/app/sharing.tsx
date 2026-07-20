@@ -18,6 +18,8 @@ import { assertConnectorUrl, deriveConnectorToken } from '@northkeep/sync';
 import {
   DEFAULT_CONNECTOR_SERVER_URL,
   PAIRING_CODE_TTL_SECONDS,
+  SYNC_PUSH_FAILED_FOLLOWUP,
+  SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE,
   classifyConnectorError,
   connectorSyncSummary,
   formatPairingCountdown,
@@ -72,7 +74,12 @@ export default function Sharing() {
 
   const [pendingShare, setPendingShare] = useState<string | null>(null);
   const [pendingUnshare, setPendingUnshare] = useState<string | null>(null);
-  const [scopeBusy, setScopeBusy] = useState(false);
+  // ONE mutual exclusion across share / unshare / sync-now. Independent busy
+  // flags allowed an unshare to complete while a sync-now was mid-flight, and
+  // the sync's write-back push would re-upload the just-revoked scope's
+  // plaintext (connect-flow's fresh re-load before the push is the second,
+  // belt-and-braces layer of the same fix).
+  const [connectorBusy, setConnectorBusy] = useState<'share' | 'unshare' | 'sync' | null>(null);
   const [scopeError, setScopeError] = useState<ConnectorFailure | null>(null);
   const [scopeNotice, setScopeNotice] = useState<string | null>(null);
 
@@ -82,7 +89,6 @@ export default function Sharing() {
   const [nowMs, setNowMs] = useState(() => Date.now());
   const [copiedWhat, setCopiedWhat] = useState<string | null>(null);
 
-  const [syncBusy, setSyncBusy] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<ConnectorFailure | null>(null);
 
@@ -146,7 +152,8 @@ export default function Sharing() {
   }
 
   function onConfirmShare(scope: string) {
-    setScopeBusy(true);
+    if (connectorBusy) return;
+    setConnectorBusy('share');
     setScopeError(null);
     setScopeNotice(null);
     void (async () => {
@@ -154,7 +161,7 @@ export default function Sharing() {
         { store, pushScopes: (scopes) => session.connectorPushScopes(scopes) },
         scope,
       );
-      setScopeBusy(false);
+      setConnectorBusy(null);
       if (outcome.kind === 'shared') {
         setSharedScopes(await loadConnectorSharedScopes());
         setPendingShare(null);
@@ -169,7 +176,8 @@ export default function Sharing() {
   }
 
   function onConfirmUnshare(scope: string) {
-    setScopeBusy(true);
+    if (connectorBusy) return;
+    setConnectorBusy('unshare');
     setScopeError(null);
     setScopeNotice(null);
     void (async () => {
@@ -177,7 +185,7 @@ export default function Sharing() {
         { store, unshare: (s) => session.connectorUnshareScope(s) },
         scope,
       );
-      setScopeBusy(false);
+      setConnectorBusy(null);
       setPendingUnshare(null);
       if (outcome.kind === 'unshared') {
         setSharedScopes(await loadConnectorSharedScopes());
@@ -209,7 +217,8 @@ export default function Sharing() {
   }
 
   function onSyncNow() {
-    setSyncBusy(true);
+    if (connectorBusy) return;
+    setConnectorBusy('sync');
     setSyncError(null);
     setSyncResult(null);
     void (async () => {
@@ -218,10 +227,28 @@ export default function Sharing() {
         downSync: () => session.connectorDownSync(),
         pushScopes: (scopes) => session.connectorPushScopes(scopes),
       });
-      setSyncBusy(false);
-      if (outcome.kind === 'synced') setSyncResult(connectorSyncSummary(outcome));
-      else if (outcome.kind === 'nothing-shared') setSyncResult(outcome.message);
-      else setSyncError(outcome);
+      setConnectorBusy(null);
+      if (outcome.kind === 'synced') {
+        setSyncResult(connectorSyncSummary(outcome));
+      } else if (outcome.kind === 'synced-no-push') {
+        // Every scope was unshared while the sync ran; the push was skipped so
+        // no revoked plaintext went back up. Say so honestly.
+        setSyncResult(
+          `${connectorSyncSummary(outcome, { pushedBack: false })} ${SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE}`,
+        );
+        setSharedScopes(await loadConnectorSharedScopes());
+      } else if (outcome.kind === 'partially-synced') {
+        // Both halves stay visible: the memories arrived AND the re-push failed.
+        setSyncResult(connectorSyncSummary(outcome, { pushedBack: false }));
+        setSyncError({
+          ...outcome.pushFailure,
+          message: `${outcome.pushFailure.message} ${SYNC_PUSH_FAILED_FOLLOWUP}`,
+        });
+      } else if (outcome.kind === 'nothing-shared') {
+        setSyncResult(outcome.message);
+      } else {
+        setSyncError(outcome);
+      }
     })();
   }
 
@@ -313,7 +340,7 @@ export default function Sharing() {
           </View>
           <Switch
             value={row.shared}
-            disabled={scopeBusy}
+            disabled={connectorBusy !== null}
             onValueChange={(next) => {
               setScopeError(null);
               setScopeNotice(null);
@@ -350,14 +377,15 @@ export default function Sharing() {
           <Button
             title="Share this scope"
             onPress={() => onConfirmShare(pendingShare)}
-            busy={scopeBusy}
+            busy={connectorBusy === 'share'}
+            disabled={connectorBusy !== null}
             style={styles.stackedButton}
           />
           <Button
             title="Cancel"
             kind="secondary"
             onPress={() => setPendingShare(null)}
-            disabled={scopeBusy}
+            disabled={connectorBusy !== null}
             style={styles.stackedButton}
           />
         </View>
@@ -373,14 +401,15 @@ export default function Sharing() {
           <Button
             title="Unshare"
             onPress={() => onConfirmUnshare(pendingUnshare)}
-            busy={scopeBusy}
+            busy={connectorBusy === 'unshare'}
+            disabled={connectorBusy !== null}
             style={styles.stackedButton}
           />
           <Button
             title="Cancel"
             kind="secondary"
             onPress={() => setPendingUnshare(null)}
-            disabled={scopeBusy}
+            disabled={connectorBusy !== null}
             style={styles.stackedButton}
           />
         </View>
@@ -443,8 +472,8 @@ export default function Sharing() {
         title="Sync app-written memories"
         kind="secondary"
         onPress={onSyncNow}
-        busy={syncBusy}
-        disabled={sharedScopes.length === 0}
+        busy={connectorBusy === 'sync'}
+        disabled={connectorBusy !== null || sharedScopes.length === 0}
         style={styles.stackedButton}
       />
       {syncError ? <ErrorNote message={syncError.message} /> : null}
