@@ -232,7 +232,11 @@ function escapeRegex(s: string): string {
 function nameTokens(name: string): string[] {
   return name
     .split(/\s+/)
-    .map((t) => t.replace(/^[^A-Za-zÀ-ÖØ-öø-ÿ]+|[^A-Za-zÀ-ÖØ-öø-ÿ]+$/g, ''))
+    // Strip leading/trailing NON-LETTER (any script) chars, not just non-Latin,
+    // so a non-Latin token ("Пётр", "田中") is kept whole instead of stripped to
+    // "" and the leak becoming invisible to the gate (adversarial review
+    // 2026-07-21).
+    .map((t) => t.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, ''))
     .filter((t) => t.length >= 2);
 }
 
@@ -240,7 +244,10 @@ function nameTokens(name: string): string[] {
  * test: a name token that survives as a whole word in the redacted string is
  * plaintext going to the cloud. */
 function tokenSurvives(token: string, text: string): boolean {
-  return new RegExp(`\\b${escapeRegex(token)}\\b`, 'i').test(text);
+  // Unicode-aware boundaries (not ASCII \b) so a surviving non-Latin token is
+  // actually detected — otherwise the monotonicity gate reports leaking
+  // non-Latin text as clean (adversarial review 2026-07-21).
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegex(token)}(?![\\p{L}\\p{N}_])`, 'iu').test(text);
 }
 
 /** Tokens of `name` that survive as whole words in `redacted` (empty = no leak). */

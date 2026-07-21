@@ -211,6 +211,38 @@ describe('redact() tier orchestration', () => {
     expect(r.tier2Degraded).toBe(false);
   });
 
+  it('non-Latin-script names the NER net detects are actually masked (Unicode boundaries)', async () => {
+    // Adversarial review 2026-07-21: ASCII \b never matched non-Latin spans and
+    // the Latin-only plausibility gate dropped them, so Cyrillic/CJK/Greek/Arabic
+    // names leaked to the cloud even when the NER net detected them.
+    const cases: Array<[string, string]> = [
+      ['Contact Пётр Ivanov about the account.', 'Пётр'],
+      ['Meet 田中 about the account.', '田中'],
+      ['Call Γεωργίου about the account.', 'Γεωργίου'],
+      ['Email محمد about the account.', 'محمد'],
+    ];
+    for (const [text, name] of cases) {
+      const ner = {
+        available: async () => true,
+        generateJson: async () => JSON.stringify({ entities: [{ text: name, kind: 'person' }] }),
+      } as never;
+      const r = await redact(text, { tier: 3 }, ner);
+      expect(r.redacted).not.toContain(name);
+      expect(r.redacted).toMatch(/Person-\d/);
+      expect(r.tier2Degraded).toBe(false);
+    }
+  });
+
+  it('a lowercase Latin stray word is still not masked at the strict gate', async () => {
+    // Guard the plausibility change did not start masking stray lowercase words.
+    const ner = {
+      available: async () => true,
+      generateJson: async () => JSON.stringify({ entities: [{ text: 'vile', kind: 'person' }] }),
+    } as never;
+    const r = await redact('The vile smell lingered.', { tier: 3 }, ner);
+    expect(r.redacted).toContain('vile');
+  });
+
   it('replay-only mode never calls the model and still replays known names', async () => {
     let calls = 0;
     const countingOllama = {

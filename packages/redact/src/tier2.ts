@@ -66,8 +66,15 @@ export async function applyTier2(
       placeholder = `${PREFIX[entity.kind]}-${n}`;
       pseudonyms[key] = placeholder;
     }
-    // Whole-word, case-insensitive replacement of every occurrence.
-    const re = new RegExp(`\\b${escapeRegex(entity.text)}\\b`, 'gi');
+    // Whole-word, case-insensitive replacement of every occurrence. Unicode-
+    // aware boundaries (NOT ASCII \b) so non-Latin-script names (Cyrillic, CJK,
+    // Greek, Arabic) actually mask instead of \b silently never matching and the
+    // span leaking to the cloud (adversarial review 2026-07-21). Lookbehind is
+    // already shipped in tier1/dates regexes on this Hermes, so it is safe.
+    const re = new RegExp(
+      `(?<![\\p{L}\\p{N}_])${escapeRegex(entity.text)}(?![\\p{L}\\p{N}_])`,
+      'giu',
+    );
     if (!re.test(out)) continue;
     out = out.replace(re, placeholder);
     if (!replacements.some((r) => r.placeholder === placeholder)) {
@@ -151,7 +158,10 @@ const PLACEHOLDER_SPAN = /\[[A-Z_]+(?:-\d{2,4}|_\d+)?\]|\b(?:Person|Org|Place|Lo
  */
 function plausibleEntity(span: string, strictGate: boolean): boolean {
   if (PLACEHOLDER_SPAN.test(span)) return false;
-  const tokens = span.match(/[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’\-]*/g) ?? [];
+  // Unicode letters (ANY script), not Latin-only, so a non-Latin name survives
+  // the gate instead of tokenizing to [] and being dropped, then leaking
+  // (adversarial review 2026-07-21: Cyrillic/CJK/Greek/Arabic names leaked).
+  const tokens = span.match(/\p{L}[\p{L}'’\-]*/gu) ?? [];
   if (tokens.length === 0) return false; // pure digits/punctuation is not a name
   if (!strictGate) {
     // Tier 2: NER is the ONLY name layer, and legitimate org names are often
@@ -160,14 +170,23 @@ function plausibleEntity(span: string, strictGate: boolean): boolean {
     // eval harness's perfect-backend gate). Only the placeholder ban applies.
     return true;
   }
-  // Tier 3 strict: common-English tokens are the deterministic layers' job
-  // ("Donna", "Smith"); NER may only add masks for OFF-English residuals
-  // ("Zyler", "Natarajan") — the census list is too full of English words
-  // ("date", "vile", "sul" are all surnames) to trust list membership here.
-  // Names in prose are capitalized: a span with no capitalized token is a
-  // stray word ("vile"), not a person — refuse it outright.
-  if (!tokens.some((t) => /^[A-ZÀ-ÖØ-Þ]/.test(t))) return false;
-  return tokens.some((t) => !isCommonEnglish(t) && (t.length >= 3 || nameListHit(t)));
+  // Tier 3 strict: names in prose start with an uppercase letter, OR are in a
+  // CASELESS script (CJK/Arabic/Hebrew have no case). A span whose every token
+  // is a lowercase word ("vile") is a stray word, not a person — refuse it.
+  const nameLike = (t: string) => !/^\p{Ll}/u.test(t);
+  if (!tokens.some(nameLike)) return false;
+  // Common-English tokens are the deterministic layers' job; NER may only add
+  // OFF-English residuals ("Zyler", "Natarajan") — the census list is too full
+  // of English words ("date", "vile", "sul") to trust list membership. A
+  // non-Latin-script token is BY DEFINITION a residual the Latin dictionary
+  // floor can never mask, so it always qualifies; Latin residuals keep the
+  // length/list heuristic.
+  return tokens.some((t) => {
+    if (isCommonEnglish(t)) return false;
+    const latinOnly = /^[A-Za-zÀ-ÖØ-öø-ÿ'’\-]+$/.test(t);
+    if (!latinOnly) return true;
+    return t.length >= 3 || nameListHit(t);
+  });
 }
 
 function escapeRegex(s: string): string {

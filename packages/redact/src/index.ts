@@ -147,7 +147,9 @@ export function replayPseudonyms(
   let out = text;
   for (const [original, placeholder] of entries) {
     if (original.length < 2) continue;
-    const re = new RegExp(`\\b${original.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&')}\\b`, 'gi');
+    // Unicode-aware boundaries (not ASCII \b) so non-Latin pseudonyms replay too.
+    const esc = original.replace(/[.*+?^\${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(?<![\\p{L}\\p{N}_])${esc}(?![\\p{L}\\p{N}_])`, 'giu');
     if (!re.test(out)) continue;
     out = out.replace(re, placeholder);
     if (!replacements.some((r) => r.placeholder === placeholder)) {
