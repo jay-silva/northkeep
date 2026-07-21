@@ -26,10 +26,13 @@ The founder (Jay) is a compliance professional, not an engineer. Therefore:
    plaintext (no server-side embeddings, logs, or analytics on content). The
    connector store is a separate opt-in service; it stores shared-scope content
    encrypted at rest (ciphertext only, never private scopes) and keeps no key in
-   that database that can read it: the key is rebuilt for each request from the
-   connected app's own credential plus a secret held on our server. It decrypts
-   transiently to serve each legitimate request (so a compromised runtime is not
-   protected against), and it derives nothing from content (no embeddings, no
+   that database that can read it: the key is derived for each request from a
+   secret held in the server's environment (never in that database) plus the
+   account identity, and the transient decryption is performed only for a
+   legitimately-paired, authenticated app's request (the app's OAuth credential
+   gates access, not the key; see ADR 0020). It decrypts transiently to serve
+   each legitimate request (so a compromised runtime is not protected against),
+   and it derives nothing from content (no embeddings, no
    content logs, no analytics). Scope names, entry ids, counts, ciphertext sizes,
    and timestamps remain visible to it.
 3. No hand-rolled crypto. libsodium primitives only. Key handling changes require
