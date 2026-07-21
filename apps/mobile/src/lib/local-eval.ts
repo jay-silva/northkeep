@@ -1,9 +1,16 @@
-import { NER_EVAL_CORPUS, evaluateNer, type NerEvalReport } from '@northkeep/redact/dist/eval.js';
+import {
+  NER_EVAL_CORPUS,
+  evaluateNer,
+  evaluateRedaction,
+  type NerEvalReport,
+  type RedactionEvalReport,
+} from '@northkeep/redact/dist/eval.js';
 import {
   createLocalNerClient,
   type NerPassEvent,
 } from '@northkeep/platform-mobile/dist/local-model/index.js';
 import { getLocalModel } from './local-model';
+import { createNLTaggerNerClient } from './nltagger-ner';
 
 /**
  * On-device Tier-2 NER eval runner (M6-4 GATE). Runs the seeded corpus through
@@ -111,4 +118,35 @@ export async function runOnDeviceNerEval(
     diagnostics,
     ranAt: new Date().toISOString(),
   };
+}
+
+/**
+ * On-device eval of the SHIPPED redaction posture, via the NLTagger name net
+ * (the current mobile net — createNLTaggerNerClient). Runs evaluateRedaction, so
+ * the result carries BOTH the Tier-3 production-truth numbers (no-leak% + the
+ * floor-monotonicity safety metric) AND the Tier-2 model-in-isolation
+ * diagnostic. This is the number that actually decides ship posture; the Tier-2
+ * recall alone is only a NER-model health signal.
+ *
+ * NLTagger runs only on-device (iOS NaturalLanguage), so these numbers are
+ * device-only by construction — Node cannot produce them. When the native net is
+ * absent (Android, or a build without the module) we return an honest
+ * `unavailable` rather than a fabricated number (invariant #6).
+ */
+export type OnDeviceRedactionEval =
+  | { status: 'ok'; report: RedactionEvalReport; ranAt: string }
+  | { status: 'unavailable'; reason: string };
+
+export async function runOnDeviceRedactionEval(
+  onProgress?: (done: number, total: number) => void,
+): Promise<OnDeviceRedactionEval> {
+  const client = createNLTaggerNerClient();
+  if (!(await client.available())) {
+    return {
+      status: 'unavailable',
+      reason: 'The on-device NLTagger name net is not available here (it ships with iOS only). Tier-1 stays the guaranteed floor.',
+    };
+  }
+  const report = await evaluateRedaction(NER_EVAL_CORPUS, client, onProgress);
+  return { status: 'ok', report, ranAt: new Date().toISOString() };
 }
