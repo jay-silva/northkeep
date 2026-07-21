@@ -115,20 +115,37 @@ fn main() {
                 .expect("could not start the NorthKeep server");
 
             // The tokened URL travels only over this private pipe (ADR 0004).
+            // Read it on a helper thread and wait with a BOUND: if the server
+            // stays alive but never announces the URL, a blocking read would
+            // hang setup() forever with no window and no error. 30s is generous
+            // for the server to bind a loopback port and print.
             let stdout = child.stdout.take().expect("no stdout from server");
-            let mut url = None;
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                if let Some(rest) = line.strip_prefix("NORTHKEEP_UI_URL=") {
-                    url = Some(rest.to_string());
-                    break;
+            let (tx, rx) = std::sync::mpsc::channel::<String>();
+            std::thread::spawn(move || {
+                for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                    if let Some(rest) = line.strip_prefix("NORTHKEEP_UI_URL=") {
+                        let _ = tx.send(rest.to_string());
+                        return;
+                    }
                 }
-            }
-            let Some(url) = url else {
-                // Server died (or closed stdout) before announcing — tell
-                // the user natively instead of vanishing without a trace.
-                let status = child.wait().ok().and_then(|s| s.code());
-                report_server_death(status);
-                std::process::exit(1);
+                // Reached only if stdout closed WITHOUT announcing. Dropping tx
+                // here wakes the receiver below (recv_timeout returns Err), so
+                // the "closed stdout before announcing" case is handled there.
+            });
+
+            let url = match rx.recv_timeout(std::time::Duration::from_secs(30)) {
+                Ok(u) => u,
+                Err(_) => {
+                    // Timed out, OR stdout closed with no URL (sender dropped).
+                    // The server may still be alive and silent, so do NOT block
+                    // on wait() — terminate it (SIGTERM then SIGKILL backstop,
+                    // safe whether alive or dead), tell the user, and exit
+                    // instead of hanging with no window.
+                    stop_server(&mut child);
+                    let status = child.try_wait().ok().flatten().and_then(|s| s.code());
+                    report_server_death(status);
+                    std::process::exit(1);
+                }
             };
 
             let slot = Arc::new(Mutex::new(Some(child)));

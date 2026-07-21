@@ -108,32 +108,47 @@ else
     curl -fsSL -o "$SHASUMS.sig.tmp" "$BASE_URL/SHASUMS256.txt.sig"
     mv "$SHASUMS.sig.tmp" "$SHASUMS.sig"
   fi
-  # Dedicated, reproducible keyring under the cache — never touches your keyring.
-  GNUPGHOME="$CACHE_DIR/gnupg"; export GNUPGHOME
-  mkdir -p "$GNUPGHOME"; chmod 700 "$GNUPGHOME"
+  # Verify in a FRESH, EPHEMERAL keyring each run (not a persistent one under the
+  # cache). The trusted set is then exactly the currently-pinned
+  # NODE_RELEASE_KEYS: nothing lingers from a previous run, so removing a
+  # fingerprint from the list actually untrusts that key. A persistent keyring
+  # kept trusting keys already imported, silently accepting a de-pinned signer.
+  # Tradeoff: a fresh keyring can't reuse cached keys, so verification needs the
+  # network (a keyserver fetch) every run — fine for the release build path,
+  # which has network; a plain offline source build degrades to SHA-256 (below).
+  GNUPGHOME="$(mktemp -d)"; export GNUPGHOME
+  chmod 700 "$GNUPGHOME"
+  trap 'rm -rf "$GNUPGHOME"' EXIT
   gpg_err="$(mktemp)"
-  _nk_verify() { gpg --batch --verify "$SHASUMS.sig" "$SHASUMS" 2>"$gpg_err"; }
-  # Try verify first (offline-friendly on cached re-runs); import keys only if
-  # the key isn't already in the local keyring, then retry once.
-  if ! _nk_verify; then
-    echo "fetch-node: importing pinned Node.js release keys"
-    gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "${NODE_RELEASE_KEYS[@]}" 2>/dev/null \
-      || gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys "${NODE_RELEASE_KEYS[@]}" 2>/dev/null \
-      || true
-    _nk_verify || {
-      echo "fetch-node: FATAL — GPG verification of SHASUMS256.txt FAILED." >&2
-      echo "  Either a keyserver was unreachable, or the signer is a newer Node" >&2
-      echo "  release key not yet in NODE_RELEASE_KEYS. gpg said:" >&2
+  echo "fetch-node: importing pinned Node.js release keys into a fresh keyring"
+  if gpg --batch --keyserver hkps://keys.openpgp.org --recv-keys "${NODE_RELEASE_KEYS[@]}" 2>/dev/null \
+     || gpg --batch --keyserver hkps://keyserver.ubuntu.com --recv-keys "${NODE_RELEASE_KEYS[@]}" 2>/dev/null; then
+    if gpg --batch --verify "$SHASUMS.sig" "$SHASUMS" 2>"$gpg_err"; then
+      signer="$(grep -oiE 'key [0-9A-F]+' "$gpg_err" | head -1)"
+      echo "fetch-node: GPG signature verified: SHASUMS256.txt signed by a pinned Node.js release ${signer:-key}"
+    else
+      echo "fetch-node: FATAL: GPG verification of SHASUMS256.txt FAILED." >&2
+      echo "  The signer is not in NODE_RELEASE_KEYS (likely a newer Node release" >&2
+      echo "  key), or the file was tampered with. gpg said:" >&2
       sed 's/^/    /' "$gpg_err" >&2
       echo "  Cross-check the signer at https://github.com/nodejs/node#release-keys" >&2
       echo "  and add its fingerprint to fetch-node.sh, then rebuild." >&2
       rm -f "$gpg_err"
       exit 1
-    }
+    fi
+  else
+    # No keyserver reachable, so the pinned keys could not be imported into the
+    # fresh keyring. A signed release MUST fail closed; a plain source build
+    # degrades to SHA-256 only, loudly (matching the gpg-not-installed branch).
+    rm -f "$gpg_err"
+    if [ "$REQUIRE_GPG" = "1" ]; then
+      echo "fetch-node: FATAL: release build but could not fetch the pinned Node.js" >&2
+      echo "  release keys from any keyserver (no network?). Cannot verify the signature." >&2
+      exit 1
+    fi
+    echo "fetch-node: WARNING: could not fetch the pinned release keys; relying on SHA-256 ONLY." >&2
+    echo "  Connect to a network for a distributable build, then rebuild." >&2
   fi
-  signer="$(grep -oiE 'key [0-9A-F]+' "$gpg_err" | head -1)"
-  rm -f "$gpg_err"
-  echo "fetch-node: GPG signature verified — SHASUMS256.txt signed by a pinned Node.js release ${signer:-key}"
 fi
 
 # Extract only the node binary, straight to the externalBin location.

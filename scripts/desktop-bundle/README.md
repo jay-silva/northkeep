@@ -70,8 +70,12 @@ After the first signed build, verify (these are ADR 0012's acceptance items):
 ```sh
 spctl -a -vv apps/desktop/src-tauri/target/release/bundle/macos/NorthKeep.app
 xcrun stapler validate apps/desktop/src-tauri/target/release/bundle/dmg/Northkeep_*.dmg
-# if the DMG itself is not stapled (only the .app), staple it manually:
-#   xcrun notarytool submit <dmg> --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+# if the DMG itself is not stapled (only the .app), staple it manually.
+# Keep the app-specific password OFF the long-running submit call (it would be
+# visible via `ps` for the whole --wait); stash it once in a keychain profile:
+#   xcrun notarytool store-credentials northkeep-notary \
+#     --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_PASSWORD"
+#   xcrun notarytool submit <dmg> --keychain-profile northkeep-notary --wait
 #   xcrun stapler staple <dmg>
 ```
 

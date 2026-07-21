@@ -72,8 +72,43 @@ cd "$REPO_ROOT/apps/desktop"
 # so Gatekeeper accepts the app OFFLINE; without it, a downloader with no
 # network at launch is blocked. Only runs when we actually signed+notarized.
 if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && { [ -n "${APPLE_PASSWORD:-}" ] || [ -n "${APPLE_API_KEY:-}" ]; }; then
+  # The .app is always NorthKeep.app (no version in the name), so head -1 is fine.
   APP_OUT="$(ls -d "$REPO_ROOT/apps/desktop/src-tauri/target/release/bundle/macos/"*.app 2>/dev/null | head -1)"
-  DMG_OUT="$(ls "$REPO_ROOT/apps/desktop/src-tauri/target/release/bundle/dmg/"*.dmg 2>/dev/null | head -1)"
+
+  # Pick the DMG deterministically. After a version bump two DMGs can coexist,
+  # and a lexical `head -1` could staple the STALE one, leaving the real release
+  # unstapled. Prefer the exact version-matched file (version read from
+  # tauri.conf.json, no jq needed); fall back to newest-by-mtime only if the
+  # version can't be read. Tauri names it <productName>_<version>_<arch>.dmg.
+  DMG_DIR="$REPO_ROOT/apps/desktop/src-tauri/target/release/bundle/dmg"
+  TAURI_CONF="$REPO_ROOT/apps/desktop/src-tauri/tauri.conf.json"
+  VERSION="$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$TAURI_CONF" | head -1)"
+  all_dmgs=("$DMG_DIR/"*.dmg)
+  if [ ! -e "${all_dmgs[0]}" ]; then
+    # No DMG at all (e.g. a signed `build.sh --bundles app` smoke build). Nothing
+    # to staple; leave DMG_OUT empty so the guard below skips the DMG steps,
+    # exactly as the old code did on an empty match.
+    DMG_OUT=""
+  elif [ -n "$VERSION" ]; then
+    dmg_matches=("$DMG_DIR/"*_"${VERSION}"_*.dmg)
+    if [ ! -e "${dmg_matches[0]}" ]; then
+      # DMGs exist but none match this version: a stale DMG from another version
+      # is present and the current release DMG is missing. Fail loudly rather
+      # than staple the wrong file.
+      echo "build: FATAL: DMGs exist in $DMG_DIR but none match version ${VERSION}." >&2
+      echo "  A stale DMG is present and the current release DMG is missing; refusing to guess." >&2
+      exit 1
+    fi
+    if [ "${#dmg_matches[@]}" -gt 1 ]; then
+      echo "build: FATAL: ${#dmg_matches[@]} DMGs match version ${VERSION}; refusing to guess:" >&2
+      printf '    %s\n' "${dmg_matches[@]}" >&2
+      exit 1
+    fi
+    DMG_OUT="${dmg_matches[0]}"
+  else
+    echo "build: WARNING: could not read version from tauri.conf.json; using newest DMG by mtime." >&2
+    DMG_OUT="$(ls -t "$DMG_DIR/"*.dmg 2>/dev/null | head -1)"
+  fi
 
   # 1. Staple the .app (Tauri already got its ticket from notarization).
   if [ -n "$APP_OUT" ]; then
@@ -96,10 +131,21 @@ if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && { [ -n "${APPLE_PASSWORD:-}" ] || [ -
     echo "==> notarizing the DMG"
     if [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
       # notarytool: --key wants the .p8 FILE PATH, --key-id wants the key id.
-      # (Matches the README's APPLE_API_KEY_PATH/APPLE_API_KEY convention.)
+      # (Matches the README's APPLE_API_KEY_PATH/APPLE_API_KEY convention.) No
+      # app-specific password on argv here — the key file is the credential.
       xcrun notarytool submit "$DMG_OUT" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY" --issuer "$APPLE_API_ISSUER" --wait
     else
-      xcrun notarytool submit "$DMG_OUT" --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
+      # Do NOT pass --password to the submit call: with --wait it runs for
+      # minutes, and an app-specific password on argv is readable by any local
+      # process via `ps` for that whole window. Instead stash the credential once
+      # in a keychain profile, then submit against the profile with NO secret on
+      # the long-running command. store-credentials still puts the password on
+      # argv, but only for that one fast call (task-accepted); it writes to the
+      # login keychain and overwrites the profile each run, so it is idempotent.
+      NOTARY_PROFILE="northkeep-notary"
+      xcrun notarytool store-credentials "$NOTARY_PROFILE" \
+        --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID" --password "$APPLE_PASSWORD" >/dev/null
+      xcrun notarytool submit "$DMG_OUT" --keychain-profile "$NOTARY_PROFILE" --wait
     fi
     xcrun stapler staple "$DMG_OUT"
   fi

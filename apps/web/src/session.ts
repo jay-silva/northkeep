@@ -26,8 +26,16 @@ export class UiSession {
   }
 
   checkToken(candidate: string | undefined): boolean {
-    if (!candidate || candidate.length !== this.token.length) return false;
-    return timingSafeEqual(Buffer.from(candidate), Buffer.from(this.token));
+    if (!candidate) return false;
+    // Compare as UTF-8 bytes. Using the UTF-16 string .length as the guard let a
+    // candidate with the same code-unit count but a different UTF-8 byte length
+    // reach timingSafeEqual, which throws RangeError on mismatched Buffer
+    // lengths (an uncaught 500). A byte-length difference is not secret, so
+    // returning false on it is total and leaks nothing beyond length.
+    const a = Buffer.from(candidate, 'utf8');
+    const b = Buffer.from(this.token, 'utf8');
+    if (a.length !== b.length) return false;
+    return timingSafeEqual(a, b);
   }
 
   /** Unlocked when we hold a key, or an ambient source (Keychain/env) provides one. */

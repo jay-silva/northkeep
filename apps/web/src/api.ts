@@ -191,7 +191,12 @@ export async function handleApi(
     if (err instanceof VaultAuthError) return bad(401, err.message);
     if (err instanceof SubscriptionRequiredError)
       return bad(402, 'A $10/month subscription is required to sync on this server.');
-    if (err instanceof DeviceSecretError || err instanceof SyncRequestError || err instanceof ShareRequestError)
+    if (
+      err instanceof BadJsonError ||
+      err instanceof DeviceSecretError ||
+      err instanceof SyncRequestError ||
+      err instanceof ShareRequestError
+    )
       return bad(400, err.message);
     return bad(500, err instanceof Error ? err.message : String(err));
   }
@@ -1265,6 +1270,7 @@ function withBadge(endpoint: {
   };
 }
 
+class BadJsonError extends Error {}
 class DeviceSecretError extends Error {}
 class SyncRequestError extends Error {}
 class ShareRequestError extends Error {}
@@ -1304,6 +1310,8 @@ function parseJson<T>(body: Buffer): T {
   try {
     return JSON.parse(body.toString('utf8')) as T;
   } catch {
-    throw new Error('Invalid JSON body.');
+    // A distinct type so handleApi returns 400 (bad request), not the 500
+    // fallback: malformed client JSON is a client error, not a server fault.
+    throw new BadJsonError('Invalid JSON body.');
   }
 }

@@ -6,6 +6,7 @@ import { classifyEndpoint, getDefaultEndpoint, listEndpoints } from '@northkeep/
 import { createOllamaClient } from '@northkeep/librarian';
 import { claudeCodeStatus, claudeDesktopStatus, resolveMasterKey } from '@northkeep/mcp-server';
 import { loadSyncConfig } from '@northkeep/sync';
+import { tokenizeCommand } from './tokenize.js';
 import { c, logo, statusRow, tierDot } from './ui.js';
 
 /**
@@ -150,8 +151,9 @@ export async function runLauncher(vaultPath: string): Promise<void> {
       process.stdout.write(renderHome(await gatherStatus(vaultPath)) + '\n');
       continue;
     }
-    // Enter alone → converse; anything else → run it as a subcommand.
-    const args = line.length === 0 ? ['converse'] : line.split(/\s+/);
+    // Enter alone → converse; anything else → run it as a subcommand. Quote-aware
+    // so a command can carry a multi-word argument (e.g. remember "buy milk").
+    const args = line.length === 0 ? ['converse'] : tokenizeCommand(line);
     await runSubcommand(scriptPath, vaultPath, args);
   }
   process.stdout.write(c.muted('Bye.\n'));
