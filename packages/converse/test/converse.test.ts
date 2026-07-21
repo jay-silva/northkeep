@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { MemoryEntry, RememberInput, RetrieveOptions, ScoredEntry, ListFilter } from '@northkeep/core';
-import { redact } from '@northkeep/redact';
+import { redact, type Replacement } from '@northkeep/redact';
 import type { CallLogEntry } from '@northkeep/mcp-server';
 import {
   addEndpoint,
@@ -144,6 +144,53 @@ class FakeProvider implements ModelProvider {
   }
 }
 
+/**
+ * A fake redactor that mirrors the load-bearing behavior of real redact() for
+ * ONE known name, "Bob Henderson":
+ *   - 'replay-only'  → NER never runs; the name is masked ONLY if it is already
+ *     in the pseudonym map (replay). Empty map → the name passes through in the
+ *     clear (this is exactly the leak path the fix closes).
+ *   - 'on' at tier ≥ 2 → NER discovers the name, records it in the shared map,
+ *     and masks it to "Person-1". (Tier 1 has no name layer, like real redact.)
+ * With { degraded: true } the NER model is "offline" (no Ollama): a Tier-2 'on'
+ * call does NOT discover/mask the name and reports tier2Degraded (tierApplied
+ * drops to 1) — the replay layer for an already-KNOWN name still works, exactly
+ * like real redact when the model is down.
+ * Every call is logged so a test can assert the nerMode a given message got.
+ */
+function makeNameRedactor(
+  log: Array<{ text: string; nerMode: string; tier: number }>,
+  opts: { degraded?: boolean } = {},
+): typeof redact {
+  return async (text, options = {}) => {
+    const pseudonyms = options.pseudonyms ?? {};
+    const tier = options.tier ?? 1;
+    const nerMode = options.nerMode ?? 'on';
+    log.push({ text, nerMode, tier });
+    const replacements: Replacement[] = [];
+    let out = text;
+    const known = 'bob henderson' in pseudonyms;
+    const degraded = opts.degraded === true && tier >= 2;
+    if (known && out.includes('Bob Henderson')) {
+      // Replay layer (both modes, deterministic — survives a downed model).
+      const placeholder = pseudonyms['bob henderson']!;
+      out = out.replaceAll('Bob Henderson', placeholder);
+      replacements.push({ placeholder, original: 'Bob Henderson', tier: 2, kind: 'person', restorable: true });
+    } else if (nerMode === 'on' && tier >= 2 && !degraded && out.includes('Bob Henderson')) {
+      // NER discovery — unavailable when the model is degraded/offline.
+      pseudonyms['bob henderson'] = 'Person-1';
+      out = out.replaceAll('Bob Henderson', 'Person-1');
+      replacements.push({ placeholder: 'Person-1', original: 'Bob Henderson', tier: 2, kind: 'person', restorable: true });
+    }
+    return {
+      redacted: out,
+      replacements,
+      tierApplied: degraded ? 1 : tier === 3 ? 3 : tier >= 2 ? 2 : 1,
+      tier2Degraded: degraded,
+    };
+  };
+}
+
 describe('runTurn', () => {
   const vaultEntries = [
     makeEntry({ id: 'aaaa1111-0000-0000-0000-000000000000', content: 'Jay takes his coffee black.' }),
@@ -268,6 +315,216 @@ describe('runTurn', () => {
     const outbound = JSON.stringify(cloudProvider.received[0]);
     expect(outbound, 'history plaintext leaked to bounded endpoint').not.toContain('219-09-9999');
     expect(outbound).toContain('[SSN_1]'); // the history was re-redacted
+  });
+
+  it('re-runs full NER on a NAME first seen at a lower tier (private→bounded swap-up)', async () => {
+    // Regression for the M6 verified PII leak: a name (NER-only PII, no
+    // deterministic layer to catch it) that entered history on a private/Tier-0
+    // turn — where the pseudonym map was never populated — must be re-run through
+    // full NER, not replayed over an empty map, when the conversation later moves
+    // to a bounded endpoint at Tier 2. Before the fix, history was hard-coded to
+    // 'replay-only' and "Bob Henderson" shipped to the cloud in PLAINTEXT.
+    const nerLog: Array<{ text: string; nerMode: string; tier: number }> = [];
+    const fakeRedact = makeNameRedactor(nerLog);
+    const session = createSession();
+    const vault = new FakeVault([]);
+
+    // Turn 1 — private endpoint, Tier 0: redaction is skipped entirely, so the
+    // NER model never runs and the map stays empty; the real name is stored plain.
+    const localProvider = new FakeProvider('http://127.0.0.1:9999', 'Will do.');
+    await runTurn({
+      message: 'Ask Bob Henderson about the closing.',
+      session,
+      provider: localProvider,
+      model: 'local',
+      vault,
+      redactTier: 0,
+      distill: false,
+      redactFn: fakeRedact,
+      auditFn: () => {},
+    });
+    expect(nerLog).toHaveLength(0); // Tier 0 skips redaction outright
+    expect(JSON.stringify(session.plainHistory)).toContain('Bob Henderson');
+    expect(Object.keys(session.pseudonyms)).toHaveLength(0); // map never captured it
+    expect(session.historyTiers).toEqual([0, 0]); // user + reply both never NER'd
+
+    // Turn 2 — swap to a bounded endpoint at Tier 2. The stored plaintext name
+    // MUST be masked before it leaves the machine.
+    const cloudProvider = new FakeProvider('https://api.example.com', 'Sure.');
+    await runTurn({
+      message: 'Anything else?',
+      session,
+      provider: cloudProvider,
+      model: 'cloud',
+      vault,
+      redactTier: 2,
+      distill: false,
+      redactFn: fakeRedact,
+      auditFn: () => {},
+    });
+    const outbound = JSON.stringify(cloudProvider.received[0]);
+    expect(outbound, 'history name leaked to bounded endpoint').not.toContain('Bob Henderson');
+    expect(outbound).toContain('Person-1'); // history was re-NER'd, not replayed blind
+    // The history message ran full NER because historyTiers said 0 < 2.
+    const historyCall = nerLog.find((c) => c.text === 'Ask Bob Henderson about the closing.');
+    expect(historyCall?.nerMode).toBe('on');
+    // ...and its coverage is now recorded at the tier it was actually masked to.
+    expect(session.historyTiers[0]).toBe(2);
+  });
+
+  it('keeps replay-only for history already covered at the current tier (optimization preserved)', async () => {
+    // The desktop-hang fix must survive: a message already full-NER-redacted at
+    // the current tier is replayed from the map, NOT re-run through the 3B model.
+    const nerLog: Array<{ text: string; nerMode: string; tier: number }> = [];
+    const fakeRedact = makeNameRedactor(nerLog);
+    const session = createSession();
+    const vault = new FakeVault([]);
+
+    // Turn 1 — bounded Tier 2: the user message runs full NER and populates the map.
+    const provider1 = new FakeProvider('https://api.example.com', 'Done.');
+    await runTurn({
+      message: 'Email Bob Henderson about the closing.',
+      session,
+      provider: provider1,
+      model: 'cloud',
+      vault,
+      redactTier: 2,
+      distill: false,
+      redactFn: fakeRedact,
+      auditFn: () => {},
+    });
+    expect(session.pseudonyms['bob henderson']).toBe('Person-1');
+    expect(session.historyTiers).toEqual([2, 0]); // user covered at 2, reply never NER'd
+
+    nerLog.length = 0; // observe only turn 2
+
+    // Turn 2 — SAME bounded Tier-2 endpoint.
+    const provider2 = new FakeProvider('https://api.example.com', 'Okay.');
+    await runTurn({
+      message: 'And CC the broker.',
+      session,
+      provider: provider2,
+      model: 'cloud',
+      vault,
+      redactTier: 2,
+      distill: false,
+      redactFn: fakeRedact,
+      auditFn: () => {},
+    });
+    // The turn-1 user message (already covered at tier 2) must be REPLAYED, not
+    // re-NER'd — this is the optimization that stops long chats from hanging.
+    const userCall = nerLog.find((c) => c.text === 'Email Bob Henderson about the closing.');
+    expect(userCall?.nerMode).toBe('replay-only');
+    // The tier-0 assistant reply, tracked independently, is re-NER'd exactly once.
+    const replyCall = nerLog.find((c) => c.text === 'Done.');
+    expect(replyCall?.nerMode).toBe('on');
+    // Replay still masks the name — the optimization does not reopen the leak.
+    const outbound = JSON.stringify(provider2.received[0]);
+    expect(outbound).not.toContain('Bob Henderson');
+    expect(outbound).toContain('Person-1');
+  });
+
+  it('records DEGRADED Tier-2 coverage as the real tier (1), so a later working Tier-2 re-NERs', async () => {
+    // This is the test that pins the deviation from the original spec: coverage
+    // is recorded at the tier ACTUALLY applied (tierApplied), never the tier
+    // REQUESTED (effectiveTier). When Tier-2 NER degrades on a private endpoint,
+    // the turn proceeds at tier 1 with the name UNMASKED and the map empty — so
+    // the history message must be recorded as covered at 1, forcing a full re-NER
+    // when the conversation later reaches a working Tier-2 bounded endpoint.
+    // Recording the requested tier (2) would replay-only over the empty map and
+    // ship the real name to the cloud in plaintext.
+    const session = createSession();
+    const vault = new FakeVault([]);
+
+    // Turn 1 — private, Tier 0: plaintext name stored, map empty, tiers [0,0].
+    await runTurn({
+      message: 'Ask Bob Henderson about the closing.',
+      session,
+      provider: new FakeProvider('http://127.0.0.1:9999', 'Will do.'),
+      model: 'local',
+      vault,
+      redactTier: 0,
+      distill: false,
+      redactFn: makeNameRedactor([]),
+      auditFn: () => {},
+    });
+    expect(session.historyTiers).toEqual([0, 0]);
+
+    // Turn 2 — private, Tier 2, NER OFFLINE: history runs 'on' but degrades, so
+    // the name is NOT masked and the map stays empty; a private endpoint proceeds
+    // at tier 1 (no abort).
+    const r2 = await runTurn({
+      message: 'And the survey?',
+      session,
+      provider: new FakeProvider('http://127.0.0.1:9999', 'Okay.'),
+      model: 'local',
+      vault,
+      redactTier: 2,
+      distill: false,
+      redactFn: makeNameRedactor([], { degraded: true }),
+      auditFn: () => {},
+    });
+    expect(r2.tier2Degraded).toBe(true);
+    expect(r2.tierApplied).toBe(1);
+    expect(Object.keys(session.pseudonyms)).toHaveLength(0); // NER never ran
+    // The history name is recorded at the REAL coverage (1) — NOT the requested 2.
+    // Under the original spec (effectiveTier) this would be 2 and turn 3 leaks.
+    expect(session.historyTiers[0]).toBe(1);
+
+    // Turn 3 — bounded, Tier 2, NER back up. historyTiers[0] === 1 < 2, so the
+    // history message is re-NER'd and the name is masked, not shipped in plaintext.
+    const cloudProvider = new FakeProvider('https://api.example.com', 'Sure.');
+    await runTurn({
+      message: 'Anything else?',
+      session,
+      provider: cloudProvider,
+      model: 'cloud',
+      vault,
+      redactTier: 2,
+      distill: false,
+      redactFn: makeNameRedactor([]),
+      auditFn: () => {},
+    });
+    const outbound = JSON.stringify(cloudProvider.received[0]);
+    expect(outbound, 'degraded-tier history name leaked to cloud').not.toContain('Bob Henderson');
+    expect(outbound).toContain('Person-1');
+  });
+
+  it('does not mutate historyTiers when a Tier-2 turn aborts toward a bounded endpoint', async () => {
+    // The reNerd coverage update is deliberately deferred past the abort guard, so
+    // a turn that refuses to send (Tier-2 degraded → bounded) leaves shared session
+    // state exactly as it was: nothing sent, nothing recorded, no desync.
+    const session = createSession();
+    const vault = new FakeVault([]);
+    await runTurn({
+      message: 'Ask Bob Henderson about it.',
+      session,
+      provider: new FakeProvider('http://127.0.0.1:9999', 'Will do.'),
+      model: 'local',
+      vault,
+      redactTier: 0,
+      distill: false,
+      redactFn: makeNameRedactor([]),
+      auditFn: () => {},
+    });
+    const before = [...session.historyTiers];
+    expect(before).toEqual([0, 0]);
+
+    await expect(
+      runTurn({
+        message: 'And the rest?',
+        session,
+        provider: new FakeProvider('https://api.example.com', 'nope'),
+        model: 'cloud',
+        vault,
+        redactTier: 2,
+        distill: false,
+        redactFn: makeNameRedactor([], { degraded: true }),
+        auditFn: () => {},
+      }),
+    ).rejects.toThrowError(TurnError);
+    expect(session.historyTiers).toEqual(before); // no corruption on abort
+    expect(session.plainHistory).toHaveLength(2); // the append never happened
   });
 
   it('refuses to send when Tier-2 degrades toward a bounded endpoint', async () => {
