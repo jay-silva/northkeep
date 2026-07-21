@@ -41,6 +41,41 @@ export const PRIVATE_BETA_MESSAGE =
 export const NETWORK_FAILURE_MESSAGE =
   'Could not reach the sync server. Check your connection and try again.';
 
+/**
+ * Dignified sync-paywall copy (Wave 2). Shown on the subscription-required and
+ * private-beta outcomes so the moment has a next step instead of a dead end.
+ * Steering-clean by construction: states the fact that sync is paid and managed
+ * outside the app, explains WHY there is no in-app control, and reaffirms local
+ * safety. No price, no link, no website, no "subscribe"/"buy" verb, ever. These
+ * live here (RN-free) so the sync-errors steering test covers them verbatim.
+ */
+
+/** Acknowledge the user's position: safe locally, nothing lost. */
+export const SYNC_LOCAL_SAFE_REASSURANCE =
+  'Your vault is already safe on this phone. Sync is the one paid piece, and nothing you saved is lost.';
+
+/** Neutral explanation for the absence of any in-app control. */
+export const SYNC_MANAGED_OUTSIDE_APP =
+  'Sync is managed from your NorthKeep account, not inside the app, so it cannot be turned on from here.';
+
+/** The real next step both outcomes offer: send the account id to support. */
+export const SYNC_SUPPORT_NEXT_STEP =
+  'To get sync activated, send your account id to support. It is safe to share and reveals nothing about your vault.';
+
+/** Reaffirm that turning sync on is optional and local use is unchanged. */
+export const SYNC_TURN_ON_LATER =
+  'You can turn this on later. Your local vault keeps working exactly as it does now.';
+
+/**
+ * Re-check hint for the sync-setup SCREEN specifically. SUBSCRIPTION_ACTIVATION_HINT
+ * ends with "Pull to refresh to re-check", which is true on the memories screen
+ * (it has a RefreshControl) but NOT on sync-setup, which re-checks by tapping
+ * "Turn on sync" again. This variant names the affordance that actually exists
+ * there, keeping the copy honest.
+ */
+export const SYNC_SUBSCRIPTION_RECHECK =
+  'Already subscribed? Sync activates automatically once your subscription is active. Tap "Turn on sync" again to re-check.';
+
 function messageOf(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);

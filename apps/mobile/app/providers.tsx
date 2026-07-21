@@ -36,6 +36,11 @@ import {
 import { assertMobileEndpointUrl } from '../src/lib/endpoint-gate';
 import { createMobileProvider } from '../src/lib/mobile-providers';
 import { getLocalModel } from '../src/lib/local-model';
+import {
+  ON_DEVICE_PRIVATE_LABEL,
+  PROVIDER_TIER_INTRO,
+  effectiveTierLabel,
+} from '../src/lib/redaction-tier';
 import type { LocalModelResolution } from '@northkeep/platform-mobile/dist/local-model/index.js';
 
 /**
@@ -95,6 +100,12 @@ export default function Providers() {
   );
 
   if (session.status !== 'unlocked') return <Redirect href="/unlock" />;
+
+  // Disclosure only (Wave 2): the SAME condition converse.tsx uses to add the
+  // on-device NER pass to a cloud turn. True -> a cloud message is pseudonymized
+  // on this phone (Tier 2); false -> only the deterministic Tier-1 floor runs.
+  // This changes no send/redaction behavior; it only labels the posture here.
+  const tier2Available = localRes?.model != null;
 
   const preset = PROVIDER_PRESETS.find((p) => p.key === presetKey) ?? null;
   const curatedModels: PresetModel[] = kind === 'anthropic' ? CLAUDE_MODELS : (preset?.models ?? []);
@@ -234,6 +245,8 @@ export default function Providers() {
     <KeyboardAvoidingView style={styles.screen} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <Stack.Screen options={{ title: 'Providers' }} />
       <ScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+        <Text style={styles.tierIntro}>{PROVIDER_TIER_INTRO}</Text>
+
         <FieldLabel>On-device</FieldLabel>
         {(() => {
           const available = localRes?.model != null;
@@ -257,6 +270,7 @@ export default function Providers() {
                     ? `${localRes?.model?.label} · fully private, no key, works in airplane mode`
                     : 'Not available on this phone (needs Apple Intelligence on iOS 26)'}
                 </Text>
+                {available ? <TierLine tone="good" text={ON_DEVICE_PRIVATE_LABEL} /> : null}
               </View>
             </Pressable>
           );
@@ -287,6 +301,10 @@ export default function Providers() {
                         {p.kind === 'anthropic' ? 'Anthropic' : 'OpenAI-compatible'} · {p.model}
                         {keyed[p.id] ? '' : ' · no key'}
                       </Text>
+                      <TierLine
+                        tone={tier2Available ? 'good' : 'warn'}
+                        text={effectiveTierLabel(tier2Available)}
+                      />
                     </View>
                   </Pressable>
                   <Pressable
@@ -471,9 +489,29 @@ export default function Providers() {
   );
 }
 
+/**
+ * Effective outbound-redaction tier line (Wave 2, disclosure only). Sits under a
+ * provider's identity row and states, calmly, what protects a message before it
+ * leaves this phone. 'good' = accent (Tier 2 or on-device private); 'warn' =
+ * warnText (Tier 1 only), matching the converse.tsx banner tones so the two
+ * surfaces read as one voice. Labels only: no send/redaction behavior changes.
+ */
+function TierLine({ tone, text }: { tone: 'good' | 'warn'; text: string }) {
+  const color = tone === 'good' ? colors.accent : colors.warnText;
+  return (
+    <View style={styles.tierRow}>
+      <Ionicons name={tone === 'good' ? 'lock-closed' : 'alert-circle'} size={12} color={color} />
+      <Text style={[styles.tierText, { color }]}>{text}</Text>
+    </View>
+  );
+}
+
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 20, paddingBottom: 60 },
+  tierIntro: { ...type.footnote, color: colors.muted, marginBottom: 16, lineHeight: 19 },
+  tierRow: { flexDirection: 'row', alignItems: 'flex-start', gap: 5, marginTop: 5 },
+  tierText: { ...type.caption, fontWeight: '600', flex: 1, lineHeight: 16 },
   card: {
     flexDirection: 'row',
     alignItems: 'center',

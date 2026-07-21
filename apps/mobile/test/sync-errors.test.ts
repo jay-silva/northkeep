@@ -4,6 +4,11 @@ import {
   PRIVATE_BETA_MESSAGE,
   SUBSCRIPTION_ACTIVATION_HINT,
   SUBSCRIPTION_REQUIRED_MESSAGE,
+  SYNC_LOCAL_SAFE_REASSURANCE,
+  SYNC_MANAGED_OUTSIDE_APP,
+  SYNC_SUBSCRIPTION_RECHECK,
+  SYNC_SUPPORT_NEXT_STEP,
+  SYNC_TURN_ON_LATER,
   classifySyncError,
   userFacingSyncError,
 } from '../src/lib/sync-errors.js';
@@ -129,6 +134,12 @@ describe('the neutral copy itself stays steering-clean', () => {
       SUBSCRIPTION_ACTIVATION_HINT,
       PRIVATE_BETA_MESSAGE,
       NETWORK_FAILURE_MESSAGE,
+      // Wave 2 dignified paywall copy shares the same steering net.
+      SYNC_LOCAL_SAFE_REASSURANCE,
+      SYNC_MANAGED_OUTSIDE_APP,
+      SYNC_SUBSCRIPTION_RECHECK,
+      SYNC_SUPPORT_NEXT_STEP,
+      SYNC_TURN_ON_LATER,
     ]) {
       expectSteeringClean(s);
     }

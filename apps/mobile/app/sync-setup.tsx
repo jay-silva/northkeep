@@ -1,13 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import {
   KeyboardAvoidingView,
+  Linking,
   Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
   TextInput,
   View,
 } from 'react-native';
+import * as Clipboard from 'expo-clipboard';
+import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
 import { memzero } from '@northkeep/core';
 import { assertSyncUrl, deriveSyncCreds } from '@northkeep/sync';
@@ -17,6 +21,17 @@ import {
   runEnableSync,
   type EnableSyncOutcome,
 } from '../src/lib/sync-setup-flow';
+import {
+  SYNC_LOCAL_SAFE_REASSURANCE,
+  SYNC_MANAGED_OUTSIDE_APP,
+  SYNC_SUBSCRIPTION_RECHECK,
+  SYNC_SUPPORT_NEXT_STEP,
+  SYNC_TURN_ON_LATER,
+} from '../src/lib/sync-errors';
+import {
+  SUPPORT_EMAIL,
+  buildSupportMailto,
+} from '../src/lib/sync-support-mail';
 import { useVaultSession } from '../src/lib/vault-session';
 import { Button, ErrorNote, FieldLabel, colors, type } from '../src/ui';
 
@@ -72,7 +87,9 @@ export default function SyncSetup() {
       );
       setServerUrl(normalized);
       setOutcome(result);
-      if (result.kind === 'private-beta') {
+      // Both blocked outcomes offer the same dignified next step (copy the
+      // account id / email support), so derive it for either one.
+      if (result.kind === 'private-beta' || result.kind === 'subscription-required') {
         setAccountId(await loadFullAccountId());
       }
     } finally {
@@ -139,31 +156,16 @@ export default function SyncSetup() {
         ) : null}
 
         {outcome?.kind === 'subscription-required' ? (
-          <View style={styles.outcomeCard}>
-            <Text style={styles.outcomeTitle}>{outcome.message}</Text>
-            <Text style={styles.outcomeDetail}>{outcome.hint}</Text>
-            <Text style={styles.outcomeDetail}>Your sync settings are saved on this phone.</Text>
-            <Button title="Done" kind="secondary" onPress={onDone} style={styles.stackedButton} />
-          </View>
+          <SyncBlockedCard
+            headline={outcome.message}
+            hint={SYNC_SUBSCRIPTION_RECHECK}
+            accountId={accountId}
+            onDone={onDone}
+          />
         ) : null}
 
         {outcome?.kind === 'private-beta' ? (
-          <View style={styles.outcomeCard}>
-            <Text style={styles.outcomeTitle}>{outcome.message}</Text>
-            {accountId ? (
-              <>
-                <Text style={styles.outcomeDetail}>
-                  Your account id (safe to share; it reveals nothing about your vault):
-                </Text>
-                <Text style={styles.accountId} selectable>
-                  {accountId}
-                </Text>
-                <Text style={styles.outcomeDetail}>Send it to support to get access.</Text>
-              </>
-            ) : null}
-            <Text style={styles.outcomeDetail}>Your sync settings are saved on this phone.</Text>
-            <Button title="Done" kind="secondary" onPress={onDone} style={styles.stackedButton} />
-          </View>
+          <SyncBlockedCard headline={outcome.message} hint={null} accountId={accountId} onDone={onDone} />
         ) : null}
 
         {outcome?.kind === 'failed' ? (
@@ -186,6 +188,99 @@ export default function SyncSetup() {
         ) : null}
       </ScrollView>
     </KeyboardAvoidingView>
+  );
+}
+
+/**
+ * The dignified dead-end card for both blocked outcomes (subscription-required
+ * and private-beta). It gives the moment a next step without violating App Store
+ * steering: it acknowledges the user is already safe locally, explains in
+ * neutral terms why sync cannot be turned on in the app (managed from the
+ * NorthKeep account), and offers two real actions -- copy the account id, and
+ * email support -- neither of which is a purchase. All sentence copy comes from
+ * the RN-free constants the steering test covers; nothing sensitive leaves here.
+ */
+function SyncBlockedCard({
+  headline,
+  hint,
+  accountId,
+  onDone,
+}: {
+  headline: string;
+  hint: string | null;
+  accountId: string | null;
+  onDone: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const [mailUnavailable, setMailUnavailable] = useState(false);
+
+  async function onCopy() {
+    if (!accountId) return;
+    await Clipboard.setStringAsync(accountId);
+    setCopied(true);
+  }
+
+  async function onEmailSupport() {
+    // mailto: is a support contact, not a purchase link (App Store steering
+    // allows support). The account id travels in the body because the user is
+    // sending it to support to get sync enabled; it reveals nothing about the
+    // vault. Guard with canOpenURL and fall back to a selectable address so a
+    // device with no mail client still has a path.
+    const url = buildSupportMailto(accountId);
+    try {
+      if (await Linking.canOpenURL(url)) {
+        await Linking.openURL(url);
+        return;
+      }
+    } catch {
+      // fall through to the address fallback
+    }
+    setMailUnavailable(true);
+  }
+
+  return (
+    <View style={styles.outcomeCard}>
+      <Text style={styles.outcomeTitle}>{headline}</Text>
+      {hint ? <Text style={styles.outcomeDetail}>{hint}</Text> : null}
+
+      <Text style={styles.outcomeDetail}>{SYNC_LOCAL_SAFE_REASSURANCE}</Text>
+      <Text style={styles.outcomeDetail}>{SYNC_MANAGED_OUTSIDE_APP}</Text>
+
+      {accountId ? (
+        <>
+          <Text style={styles.outcomeDetail}>
+            Your account id (safe to share; it reveals nothing about your vault):
+          </Text>
+          <Text style={styles.accountId} selectable>
+            {accountId}
+          </Text>
+          <Button
+            title={copied ? 'Copied' : 'Copy my account id'}
+            kind="secondary"
+            onPress={() => void onCopy()}
+            style={styles.stackedButton}
+          />
+        </>
+      ) : null}
+
+      <Text style={styles.outcomeDetail}>{SYNC_SUPPORT_NEXT_STEP}</Text>
+      <Button
+        title="Email support"
+        onPress={() => void onEmailSupport()}
+        style={styles.stackedButton}
+      />
+      {mailUnavailable ? (
+        <View style={styles.mailFallback}>
+          <Ionicons name="mail-outline" size={15} color={colors.muted} />
+          <Text style={styles.mailFallbackText} selectable>
+            {SUPPORT_EMAIL}
+          </Text>
+        </View>
+      ) : null}
+
+      <Text style={styles.outcomeDetail}>{SYNC_TURN_ON_LATER}</Text>
+      <Button title="Not now" kind="secondary" onPress={onDone} style={styles.stackedButton} />
+    </View>
   );
 }
 
@@ -240,4 +335,15 @@ const styles = StyleSheet.create({
   },
   footnote: { ...type.footnote, color: colors.muted, marginTop: 4 },
   stackedButton: { marginTop: 16 },
+  mailFallback: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+  },
+  mailFallbackText: {
+    ...type.body,
+    color: colors.text,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
+  },
 });
