@@ -122,11 +122,18 @@ export default function RootLayout() {
               <Stack.Screen name="settings" options={{ title: 'Settings', headerBackVisible: false }} />
               {/* Pushed detail screens from Converse (keep the back arrow). */}
               <Stack.Screen name="providers" options={{ title: 'Providers' }} />
+              {/* Add/edit provider form, split off the Providers list (Wave 3);
+                  its title switches between Add and Edit in-screen. */}
+              <Stack.Screen name="provider-form" options={{ title: 'Add a provider' }} />
               <Stack.Screen name="converse-audit" options={{ title: 'What left this device' }} />
               <Stack.Screen name="model-eval" options={{ title: 'On-device model eval' }} />
-              {/* Phase B Cloud Connect: pushed from Settings and the journal
-                  guide (keep the back arrow). */}
-              <Stack.Screen name="sharing" options={{ title: 'Cloud Connect' }} />
+              {/* Phase B Cloud Connect (Wave 3): a hub that routes to focused
+                  sub-screens. Pushed from Settings; the journal guide deep-links
+                  straight to sharing/scopes. All keep the back arrow. */}
+              <Stack.Screen name="sharing/index" options={{ title: 'Cloud Connect' }} />
+              <Stack.Screen name="sharing/scopes" options={{ title: 'Manage sharing' }} />
+              <Stack.Screen name="sharing/pair" options={{ title: 'Pair an AI app' }} />
+              <Stack.Screen name="sharing/connection" options={{ title: 'Connection details' }} />
               <Stack.Screen name="journal-setup" options={{ title: 'AI journal' }} />
             </Stack>
           </View>

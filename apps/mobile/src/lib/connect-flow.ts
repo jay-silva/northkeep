@@ -4,8 +4,9 @@
  * sync-now actions. NO React Native or Expo imports, so the state transitions
  * (including the rollback-on-failure invariants) are unit-tested under Node in
  * apps/mobile/test/connect-flow.test.ts, following the sync-flow /
- * sync-setup-flow pattern. The screen (app/sharing.tsx) wires the ports to
- * SecureStore and to the VaultSession connector methods and stays thin.
+ * sync-setup-flow pattern. The Cloud Connect screens (app/sharing/*, chiefly
+ * app/sharing/scopes.tsx) wire the ports to SecureStore and to the VaultSession
+ * connector methods and stay thin.
  *
  * Invariant #1 lives here: sharing is per-scope, opt-in, and loudly confirmed
  * BY THE SCREEN before runShareScope is ever called; reaching these functions

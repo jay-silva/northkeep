@@ -100,7 +100,7 @@ export default function JournalSetup() {
             kind={scopeExists ? 'primary' : 'secondary'}
             disabled={!scopeExists}
             onPress={() =>
-              router.push({ pathname: '/sharing', params: { share: CONVERSATIONS_SCOPE } })
+              router.push({ pathname: '/sharing/scopes', params: { share: CONVERSATIONS_SCOPE } })
             }
           />
           {!scopeExists ? <Text style={styles.helper}>Create the scope first.</Text> : null}
