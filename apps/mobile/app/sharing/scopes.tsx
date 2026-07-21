@@ -168,6 +168,11 @@ export default function ManageScopes() {
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
+      <View style={styles.reminder}>
+        <Text style={styles.reminderText}>
+          The connector server can read the scopes you share. Everything else stays on this phone.
+        </Text>
+      </View>
       <FieldLabel>Scopes</FieldLabel>
       <Text style={styles.footnote}>
         Every scope is private until you turn Share on. Turning it on shows a confirmation first.
@@ -286,6 +291,8 @@ export default function ManageScopes() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 20, paddingBottom: 48 },
+  reminder: { backgroundColor: colors.warnBg, borderRadius: 8, padding: 12, marginBottom: 4 },
+  reminderText: { ...type.footnote, color: colors.warnText, fontWeight: '600' },
   footnote: { ...type.footnote, color: colors.muted, marginBottom: 8 },
   notice: { ...type.footnote, color: '#4cc38a', marginVertical: 8 },
   scopeRow: {

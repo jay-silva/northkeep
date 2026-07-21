@@ -241,7 +241,7 @@ export function SyncPill({
 
   return (
     <View style={styles.syncWrap} accessibilityLiveRegion="polite">
-      <View style={styles.syncRow} accessibilityLabel={a11yLabel}>
+      <View style={styles.syncRow} accessible accessibilityLabel={a11yLabel}>
         {status === 'syncing' ? (
           <ActivityIndicator size="small" color={colors.accent} />
         ) : (
