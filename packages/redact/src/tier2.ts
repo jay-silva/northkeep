@@ -75,8 +75,19 @@ export async function applyTier2(
       `(?<![\\p{L}\\p{N}_])${escapeRegex(entity.text)}(?![\\p{L}\\p{N}_])`,
       'giu',
     );
-    if (!re.test(out)) continue;
-    out = out.replace(re, placeholder);
+    if (re.test(out)) {
+      out = out.replace(re, placeholder);
+    } else if (noSpaceScript(entity.text) && out.includes(entity.text)) {
+      // No-space / clitic scripts (CJK, kana, Hangul, Thai, Arabic, Hebrew):
+      // word boundaries are unreliable, so a detected name abuts other letters
+      // and the boundary replace above misses it (adversarial re-review
+      // 2026-07-21). Mask the exact detected span as a substring. Over-masking
+      // is the safe direction; Latin/Cyrillic/Greek are space-delimited and
+      // never reach here, so "Ann" is never cut out of "Anna".
+      out = out.split(entity.text).join(placeholder);
+    } else {
+      continue;
+    }
     if (!replacements.some((r) => r.placeholder === placeholder)) {
       replacements.push({
         placeholder,
@@ -191,4 +202,20 @@ function plausibleEntity(span: string, strictGate: boolean): boolean {
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * True when a span contains a character from a script written WITHOUT spaces
+ * between words (CJK ideographs, kana, Hangul, Thai) or with attached clitics
+ * (Arabic, Hebrew). Word-boundary matching is unreliable for these, so a
+ * detected name abuts other letters and a boundary-anchored replace misses it;
+ * callers fall back to exact-substring masking there. Latin/Cyrillic/Greek are
+ * space-delimited and are deliberately NOT in this set, so substring masking
+ * never over-cuts them (e.g. "Ann" inside "Anna"). Shared by applyTier2 and
+ * replayPseudonyms (index.ts) and the eval's leak monitor (eval.ts).
+ */
+export function noSpaceScript(s: string): boolean {
+  return /[぀-ヿ㐀-䶿一-鿿가-힯豈-﫿฀-๿؀-ۿ֐-׿]|[\u{20000}-\u{2FFFF}]/u.test(
+    s,
+  );
 }

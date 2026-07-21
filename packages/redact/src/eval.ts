@@ -1,5 +1,6 @@
 import type { OllamaClient } from '@northkeep/librarian';
 import { redact } from './index.js';
+import { noSpaceScript } from './tier2.js';
 import type { EntityKind } from './types.js';
 
 /**
@@ -244,9 +245,14 @@ function nameTokens(name: string): string[] {
  * test: a name token that survives as a whole word in the redacted string is
  * plaintext going to the cloud. */
 function tokenSurvives(token: string, text: string): boolean {
-  // Unicode-aware boundaries (not ASCII \b) so a surviving non-Latin token is
-  // actually detected — otherwise the monotonicity gate reports leaking
-  // non-Latin text as clean (adversarial review 2026-07-21).
+  // No-space / clitic scripts (CJK/Thai/Arabic/Hebrew/Hangul, all caseless):
+  // word boundaries are unreliable, so substring PRESENCE is the leak signal —
+  // otherwise the gate reports leaking scriptio-continua text as clean
+  // (adversarial re-review 2026-07-21).
+  if (noSpaceScript(token)) return text.includes(token);
+  // Latin/Cyrillic/Greek: case-insensitive Unicode WHOLE-WORD, so a token is
+  // caught regardless of case ("TRENT") but not flagged inside a longer word
+  // ("Ann" in "Anna").
   return new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegex(token)}(?![\\p{L}\\p{N}_])`, 'iu').test(text);
 }
 

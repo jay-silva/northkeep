@@ -205,18 +205,25 @@ every milestone; if a limit is removed, say when and how.*
   gate mask the non-placeholder residual inside a rejected span rather than
   dropping the whole span (packages/redact/src/tier2.ts).
 - **Non-Latin-script names mask when DETECTED, but have no deterministic floor.**
-  As of 2026-07-21 the NER masking and the strict-gate plausibility check are
-  Unicode-aware (lookbehind/lookahead boundaries + \p{L} tokenizing), so a
-  Cyrillic / CJK / Greek / Arabic personal name the on-device name net (NLTagger)
-  detects is now actually pseudonymized instead of silently leaking to the cloud
-  (adversarial review found the old ASCII \b + Latin-only gate leaked them). BUT
-  the deterministic dictionary floor (scrubNames) is Latin/list-based, so it does
-  NOT back-stop non-Latin names: unlike a Latin name, a non-Latin name the NER
-  net MISSES has no second layer and can still egress. Non-Latin coverage is
-  therefore "masked when the on-device recognizer detects it," not the
-  deterministic guarantee Latin/listed names get. The eval floor-monotonicity
-  gate is likewise now Unicode-aware, so it no longer scores leaking non-Latin
-  text as clean.
+  As of 2026-07-21 (two adversarial-review rounds) the NER masking covers every
+  script: Latin / Cyrillic / Greek via Unicode word boundaries, AND CJK / kana /
+  Hangul / Thai / Arabic / Hebrew via a script-gated exact-substring fallback
+  (word boundaries are meaningless in no-space and clitic-attached scripts, so a
+  name abutting other letters like "田中さん" or the Arabic proclitic "ومحمد" is
+  masked as a substring; over-masking is the safe direction, and space-delimited
+  Latin/Cyrillic/Greek never take the fallback so "Ann" is never cut from
+  "Anna"). The old ASCII \b + Latin-only gate silently leaked ALL non-Latin
+  names; this closes the detected cases. REMAINING residuals, honestly: (1) the
+  deterministic dictionary floor (scrubNames) is Latin/list-based, so it does NOT
+  back-stop non-Latin names — a non-Latin name the NER net MISSES has no second
+  layer and can still egress (coverage is "masked when the on-device recognizer
+  detects it," not the deterministic guarantee Latin/listed names get); (2) a
+  single-character CJK surname masked as a substring can over-mask that character
+  elsewhere (safe direction); (3) an inflected surface differing from a lemma the
+  NER returns would still miss, but the on-device recognizer (NLTagger) returns
+  the surface span, so this does not affect the mobile path. The eval
+  floor-monotonicity gate is likewise script-aware (substring presence for
+  no-space scripts), so it no longer scores leaking non-Latin text as clean.
 - **Place names are no longer masked as people — with deliberate edges both
   ways** (field report 2026-07-19: "New Bedford" masked as "New Person-1",
   "Morgan St" as a person). The name pass now suppresses a dictionary hit

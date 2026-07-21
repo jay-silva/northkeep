@@ -211,15 +211,22 @@ describe('redact() tier orchestration', () => {
     expect(r.tier2Degraded).toBe(false);
   });
 
-  it('non-Latin-script names the NER net detects are actually masked (Unicode boundaries)', async () => {
+  it('non-Latin-script names the NER net detects are actually masked (Unicode + no-space fallback)', async () => {
     // Adversarial review 2026-07-21: ASCII \b never matched non-Latin spans and
     // the Latin-only plausibility gate dropped them, so Cyrillic/CJK/Greek/Arabic
-    // names leaked to the cloud even when the NER net detected them.
+    // names leaked to the cloud even when the NER net detected them. Re-review:
+    // the boundary fix alone still leaked no-space (CJK/Thai) and clitic (Arabic)
+    // forms where the name abuts other letters; the script-gated substring
+    // fallback closes those too.
     const cases: Array<[string, string]> = [
-      ['Contact Пётр Ivanov about the account.', 'Пётр'],
-      ['Meet 田中 about the account.', '田中'],
-      ['Call Γεωργίου about the account.', 'Γεωργίου'],
-      ['Email محمد about the account.', 'محمد'],
+      ['Contact Пётр Ivanov about the account.', 'Пётр'], // Cyrillic, spaced
+      ['Meet 田中 about the account.', '田中'], // CJK, spaced
+      ['Call Γεωργίου about the account.', 'Γεωργίου'], // Greek, spaced
+      ['Email محمد about the account.', 'محمد'], // Arabic, spaced
+      ['田中さんは来ました。', '田中'], // CJK scriptio-continua (name abuts さ)
+      ['李明是医生です。', '李明'], // CJK, name abuts 是
+      ['สมชายไปตลาด', 'สมชาย'], // Thai, no spaces
+      ['ومحمد جاء اليوم.', 'محمد'], // Arabic proclitic (و attached)
     ];
     for (const [text, name] of cases) {
       const ner = {
@@ -241,6 +248,20 @@ describe('redact() tier orchestration', () => {
     } as never;
     const r = await redact('The vile smell lingered.', { tier: 3 }, ner);
     expect(r.redacted).toContain('vile');
+  });
+
+  it('the no-space substring fallback does NOT over-cut a Latin token inside a longer word', async () => {
+    // The substring fallback is script-gated: Latin is space-delimited and never
+    // takes it, so a detected off-list token whose boundary does not match must
+    // not be cut out of a longer word ("Xyz" must not be sliced from "Xyzabc").
+    // A non-dictionary word is used so scrubNames does not mask it for its own
+    // reasons; the point is the FALLBACK never fires for Latin.
+    const ner = {
+      available: async () => true,
+      generateJson: async () => JSON.stringify({ entities: [{ text: 'Xyz', kind: 'person' }] }),
+    } as never;
+    const r = await redact('The Xyzabc device shipped.', { tier: 3 }, ner);
+    expect(r.redacted).toContain('Xyzabc');
   });
 
   it('replay-only mode never calls the model and still replays known names', async () => {
