@@ -189,6 +189,28 @@ describe('redact() tier orchestration', () => {
     expect(r.redacted).not.toMatch(/Donna|Hitchcock/);
   });
 
+  it('surname-only NER catch cannot strand an off-list first name (dictionary-first floor)', async () => {
+    // Regression for the adversarial review 2026-07-21: with NER running BEFORE
+    // the dictionary, an NER pass that masked the surname alone ("Subramanian"
+    // -> Person-1) left the off-list first name behind ("Ravindranathan
+    // Person-1"), leaking a patient name to the cloud. Dictionary-first glues
+    // the whole multi-token name on pristine text, so no NER catch can regress
+    // below the deterministic floor.
+    const surnameOnlyNer = {
+      available: async () => true,
+      generateJson: async () =>
+        JSON.stringify({ entities: [{ text: 'Subramanian', kind: 'person' }] }),
+    } as never;
+    const r = await redact(
+      'Handoff: Ravindranathan Subramanian, afebrile and hemodynamically stable.',
+      { tier: 3 },
+      surnameOnlyNer,
+    );
+    expect(r.redacted).not.toMatch(/Ravindranathan|Subramanian/);
+    expect(r.redacted).toMatch(/Person-\d/);
+    expect(r.tier2Degraded).toBe(false);
+  });
+
   it('replay-only mode never calls the model and still replays known names', async () => {
     let calls = 0;
     const countingOllama = {

@@ -187,6 +187,23 @@ every milestone; if a limit is removed, say when and how.*
   residual exposure with no local model is bounded to private endpoints. We
   never claim 100% of names (ADR 0022; adversarial reviews 2026-07-17,
   rounds 1–4).
+- **Tier 3 runs the deterministic dictionary BEFORE the NER pass (2026-07-21
+  reorder), so the dictionary is a structural floor the NER net can only add
+  to.** This fixed a real leak: the old NER-first order could mask a surname
+  alone to a placeholder, which broke the dictionary's FIRST→SUR pairing and
+  stranded an off-list first name in plaintext ("Ravindranathan Person-1").
+  Cost of the fix: the NER net now runs on the dict-masked text, not the raw
+  text, so it loses a narrow recall BONUS on one edge — a mixed-casing name
+  whose parts split across the dict floor (e.g. "DONNA Ravindranathan": caps
+  "DONNA" masks, off-list "Ravindranathan" is a floor residual) can still leak
+  the residual IF the model quotes it grouped with the adjacent placeholder
+  (the placeholder gate then drops the whole span). This is a NER-bonus miss on
+  a token the deterministic floor already leaves (the null-model floor leaves it
+  too), never a token the floor masks and NER un-masks — the floor guarantee
+  holds. Recovering the old bonus is not possible without reintroducing the
+  non-monotonic surname-stranding bug. A clean future fix: have the placeholder
+  gate mask the non-placeholder residual inside a rejected span rather than
+  dropping the whole span (packages/redact/src/tier2.ts).
 - **Place names are no longer masked as people — with deliberate edges both
   ways** (field report 2026-07-19: "New Bedford" masked as "New Person-1",
   "Morgan St" as a person). The name pass now suppresses a dictionary hit

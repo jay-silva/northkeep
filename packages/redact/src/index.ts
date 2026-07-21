@@ -14,7 +14,8 @@ export { findNameSpans, scrubNames } from './names.js';
  * Redacts text before it goes to a cloud model. Tier-1 (deterministic
  * secrets) always runs. Tier-2 adds NER pseudonymization and DOB-labeled
  * date generalization. Tier-3 (ADR 0022) adds blanket date generalization,
- * deterministic dictionary/anchor name scrubbing, and an NER verify pass.
+ * deterministic dictionary/anchor name scrubbing, and a strict-gated NER
+ * residual pass over the already-masked text.
  *
  * NER needs the local model: when it is unavailable the result is flagged
  * `tier2Degraded` and the caller must degrade LOUDLY (a degraded tier ≥ 2
@@ -22,8 +23,18 @@ export { findNameSpans, scrubNames } from './names.js';
  * layers (dates, dictionary names) run regardless — they need no model.
  *
  * Order (deliberate):
- *   dates → NER pass (sees real names) → deterministic names → NER verify
- *   (tier 3 only; can only ADD masks) → Tier-1 secrets over the result.
+ *   Tier-1 secrets FIRST → dates → [tier 3: deterministic dictionary names,
+ *   which glue multi-token names on pristine text and form a STRUCTURAL floor]
+ *   → NER pass (tier 2: full recall over real names; tier 3: strict-gated
+ *   residual ADD over the dict-masked text, which can only ADD masks).
+ *
+ * WHY the dictionary runs BEFORE the NER pass at tier 3: running NER first let
+ * it mask a surname alone to a placeholder, which broke the dictionary's
+ * multi-token pair rule and leaked the off-list first name to the cloud
+ * ("Ravindranathan Person-1"). Dictionary-first keeps the deterministic layer
+ * a true floor the NER pass can never regress below (adversarial review
+ * 2026-07-21). It also collapses the old two NER passes (main + verify) into
+ * the single strict-gated residual pass strictGate was designed for.
  */
 export async function redact(
   text: string,
@@ -55,27 +66,25 @@ export async function redact(
     working = replayed.text;
     replacements.push(...replayed.replacements);
 
-    if (options.nerMode !== 'replay-only') {
-      const ollama = ollamaOverride !== undefined ? ollamaOverride : createOllamaClient();
-      const t2 = await applyTier2(working, ollama, pseudonyms, tier === 3);
-      working = t2.text;
-      replacements.push(...t2.replacements);
-      tier2Degraded = t2.degraded;
-    }
-
+    // Tier 3: the deterministic dictionary runs FIRST so it glues multi-token
+    // names on pristine text and becomes a structural floor. See the header
+    // note (the NER-first ordering leaked off-list first names to the cloud).
     if (tier === 3) {
       const scrubbed = scrubNames(working, pseudonyms);
       working = scrubbed.text;
       replacements.push(...scrubbed.replacements);
-      if (options.nerMode !== 'replay-only' && !tier2Degraded) {
-        const ollama = ollamaOverride !== undefined ? ollamaOverride : createOllamaClient();
-        // Verify pass: NER over the already-masked text — union only, so it
-        // can catch what both the first pass and the dictionaries missed.
-        const verify = await applyTier2(working, ollama, pseudonyms, true);
-        working = verify.text;
-        replacements.push(...verify.replacements);
-        tier2Degraded = verify.degraded;
-      }
+    }
+
+    if (options.nerMode !== 'replay-only') {
+      const ollama = ollamaOverride !== undefined ? ollamaOverride : createOllamaClient();
+      // Tier 2: NER is the only name layer, full recall over real names.
+      // Tier 3: strict-gated residual pass over the dict-masked text (the
+      // deterministic layer already owns common names) — a union-only ADD that
+      // can only add masks, never remove one the dictionary placed.
+      const t2 = await applyTier2(working, ollama, pseudonyms, tier === 3);
+      working = t2.text;
+      replacements.push(...t2.replacements);
+      tier2Degraded = t2.degraded;
     }
   }
 
