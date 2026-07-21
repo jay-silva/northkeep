@@ -31,7 +31,11 @@ const config: ExpoConfig = {
   // scanner on the device-link screen is the primary path).
   scheme: 'northkeep',
   orientation: 'portrait',
-  userInterfaceStyle: 'automatic',
+  // Dark-only by design: the UI is a hard-coded warm near-black theme with a
+  // fixed light status bar and no light variant. 'dark' (not 'automatic') makes
+  // native surfaces (Alert, keyboard, Switch track, status-bar background) match
+  // the app instead of flipping to a light appearance that never renders here.
+  userInterfaceStyle: 'dark',
   // RN New Architecture (ADR 0017): the default and only mode on SDK 55, so
   // no newArchEnabled flag exists anymore. react-native-quick-crypto (Nitro)
   // and react-native-libsodium both require New Arch, which is satisfied.

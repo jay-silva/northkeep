@@ -3,7 +3,8 @@ import { Pressable, StyleSheet, Text, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { colors } from './ui';
+import { colors, type } from './ui';
+import { MAX_SCALE_TABBAR } from './lib/type-scale';
 
 type Tab = {
   route: string;
@@ -56,7 +57,9 @@ export function BottomNav() {
             accessibilityLabel={t.label}
           >
             <Ionicons name={active ? t.activeIcon : t.icon} size={23} color={tint} />
-            <Text style={[styles.label, { color: tint }]}>{t.label}</Text>
+            <Text style={[styles.label, { color: tint }]} maxFontSizeMultiplier={MAX_SCALE_TABBAR}>
+              {t.label}
+            </Text>
           </Pressable>
         );
       })}
@@ -73,5 +76,5 @@ const styles = StyleSheet.create({
     paddingTop: 9,
   },
   tab: { flex: 1, alignItems: 'center', gap: 3 },
-  label: { fontSize: 11, fontWeight: '600' },
+  label: { ...type.caption, fontWeight: '600' },
 });

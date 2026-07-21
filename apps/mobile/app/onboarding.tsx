@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { router } from 'expo-router';
-import { Button, ErrorNote, colors } from '../src/ui';
+import { Button, ErrorNote, colors, type } from '../src/ui';
 import { useVaultSession } from '../src/lib/vault-session';
 import { importVaultFile } from '../src/lib/import-vault';
 
@@ -118,9 +118,10 @@ export default function Onboarding() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 24, paddingTop: 72, paddingBottom: 48 },
-  title: { color: colors.text, fontSize: 40, fontWeight: '700' },
-  tagline: { color: colors.accent, fontSize: 16, fontWeight: '600', marginTop: 8, marginBottom: 20 },
-  body: { color: colors.text, fontSize: 15, lineHeight: 22, marginBottom: 8 },
+  // bespoke brand display numeral (the "NorthKeep" wordmark); larger than any scale role
+  title: { color: colors.text, fontSize: 40, lineHeight: 46, fontWeight: '700' },
+  tagline: { ...type.callout, color: colors.accent, marginTop: 8, marginBottom: 20 },
+  body: { ...type.body, color: colors.text, lineHeight: 22, marginBottom: 8 },
   option: {
     backgroundColor: colors.card,
     borderColor: colors.border,
@@ -129,8 +130,8 @@ const styles = StyleSheet.create({
     padding: 16,
     marginTop: 16,
   },
-  optionTitle: { color: colors.text, fontSize: 17, fontWeight: '700', marginBottom: 6 },
-  optionBody: { color: colors.muted, fontSize: 14, lineHeight: 20, marginBottom: 14 },
+  optionTitle: { ...type.headline, color: colors.text, marginBottom: 6 },
+  optionBody: { ...type.subhead, color: colors.muted, marginBottom: 14 },
   importButton: { marginTop: 24 },
-  footnote: { color: colors.muted, fontSize: 13, lineHeight: 19, marginTop: 16 },
+  footnote: { ...type.footnote, color: colors.muted, marginTop: 16 },
 });

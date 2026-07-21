@@ -12,7 +12,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { Redirect, Stack, useFocusEffect } from 'expo-router';
 import { useVaultSession } from '../src/lib/vault-session';
-import { Button, ErrorNote, FieldLabel, colors } from '../src/ui';
+import { Button, ErrorNote, FieldLabel, colors, type } from '../src/ui';
 import {
   ANTHROPIC_BASE_URL,
   DEFAULT_ANTHROPIC_MODEL,
@@ -282,16 +282,25 @@ export default function Providers() {
                     />
                     <View style={styles.cardText}>
                       <Text style={styles.cardTitle}>{p.label}</Text>
-                      <Text style={styles.cardSub} numberOfLines={1}>
+                      {/* Identity field: provider + model. Wraps, never truncates. */}
+                      <Text style={styles.cardSub}>
                         {p.kind === 'anthropic' ? 'Anthropic' : 'OpenAI-compatible'} · {p.model}
                         {keyed[p.id] ? '' : ' · no key'}
                       </Text>
                     </View>
                   </Pressable>
-                  <Pressable onPress={() => onEdit(p)} hitSlop={8} accessibilityLabel={`Edit ${p.label}`}>
+                  <Pressable
+                    onPress={() => onEdit(p)}
+                    hitSlop={{ top: 13, bottom: 13, left: 13, right: 13 }}
+                    accessibilityLabel={`Edit ${p.label}`}
+                  >
                     <Ionicons name="pencil" size={18} color={colors.muted} style={styles.cardIcon} />
                   </Pressable>
-                  <Pressable onPress={() => void onDelete(p.id)} hitSlop={8} accessibilityLabel={`Delete ${p.label}`}>
+                  <Pressable
+                    onPress={() => void onDelete(p.id)}
+                    hitSlop={{ top: 13, bottom: 13, left: 13, right: 13 }}
+                    accessibilityLabel={`Delete ${p.label}`}
+                  >
                     <Ionicons name="trash-outline" size={18} color={colors.danger} style={styles.cardIcon} />
                   </Pressable>
                 </View>
@@ -310,6 +319,7 @@ export default function Providers() {
                 <Pressable
                   key={p.key}
                   onPress={() => onPickPreset(p)}
+                  hitSlop={8}
                   accessibilityRole="button"
                   accessibilityState={{ selected: on }}
                 >
@@ -367,6 +377,7 @@ export default function Providers() {
                 <Pressable
                   key={m.id}
                   onPress={() => setModel(m.id)}
+                  hitSlop={8}
                   accessibilityRole="button"
                   accessibilityState={{ selected: on }}
                 >
@@ -399,6 +410,7 @@ export default function Providers() {
                       <Pressable
                         key={id}
                         onPress={() => setModel(id)}
+                        hitSlop={8}
                         accessibilityRole="button"
                         accessibilityState={{ selected: on }}
                       >
@@ -477,29 +489,32 @@ const styles = StyleSheet.create({
   cardDisabled: { opacity: 0.55 },
   cardMain: { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 },
   cardText: { flex: 1 },
-  cardTitle: { color: colors.text, fontSize: 15, fontWeight: '600' },
-  cardSub: { color: colors.muted, fontSize: 12, marginTop: 2 },
+  cardTitle: { ...type.body, color: colors.text, fontWeight: '600' },
+  cardSub: { ...type.caption, color: colors.muted, fontWeight: '400', marginTop: 2 },
   cardIcon: { marginLeft: 14 },
   modelRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 6 },
-  modelNote: { color: colors.muted, fontSize: 12, marginBottom: 10 },
+  modelNote: { ...type.caption, color: colors.muted, fontWeight: '400', marginBottom: 10 },
   discoverRow: { flexDirection: 'row', marginTop: 4, marginBottom: 8 },
   discoverBtn: { paddingVertical: 10, paddingHorizontal: 16 },
   discoverLabel: {
+    ...type.caption,
     color: colors.muted,
-    fontSize: 12,
     fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     marginBottom: 6,
   },
   kindChip: {
-    fontSize: 13,
+    ...type.footnote,
     fontWeight: '600',
-    paddingVertical: 8,
+    paddingVertical: 10,
     paddingHorizontal: 14,
     borderRadius: 999,
     overflow: 'hidden',
     borderWidth: 1,
+    minHeight: 40,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   kindChipOn: { color: colors.bg, borderColor: colors.accent, backgroundColor: colors.accent },
   kindChipOff: { color: colors.muted, borderColor: colors.border, backgroundColor: colors.card },
@@ -510,9 +525,9 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     color: colors.text,
     padding: 12,
-    fontSize: 15,
+    ...type.body,
   },
-  hint: { color: colors.muted, fontSize: 13, lineHeight: 19, marginTop: 8 },
+  hint: { ...type.footnote, color: colors.muted, marginTop: 8 },
   saveBtn: { marginTop: 20 },
   cancelBtn: { marginTop: 10 },
 });

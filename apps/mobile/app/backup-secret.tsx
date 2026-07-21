@@ -20,7 +20,7 @@ import {
 } from '../src/lib/clipboard-clear';
 import { loadDeviceSecretHex } from '../src/lib/secure-store';
 import { useVaultSession } from '../src/lib/vault-session';
-import { Button, ErrorNote, FieldLabel, colors } from '../src/ui';
+import { Button, ErrorNote, FieldLabel, colors, type } from '../src/ui';
 
 /**
  * Back up the recovery secret (Phase A of phone-first onboarding). A person
@@ -308,7 +308,12 @@ export default function BackupSecret() {
             <>
               <View style={styles.switchRow}>
                 <Text style={styles.switchLabel}>I saved my recovery secret</Text>
-                <Switch value={confirmed} onValueChange={setConfirmed} />
+                <Switch
+                  value={confirmed}
+                  onValueChange={setConfirmed}
+                  accessibilityLabel="I saved my recovery secret"
+                  accessibilityHint="Required before you can continue"
+                />
               </View>
               <Text style={styles.footnote}>
                 Next, you can turn on sync to keep an end-to-end encrypted copy of your vault on
@@ -340,9 +345,9 @@ export default function BackupSecret() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 20, paddingBottom: 48 },
-  title: { color: colors.text, fontSize: 26, fontWeight: '700', marginBottom: 8 },
-  body: { color: colors.muted, fontSize: 14, lineHeight: 20, marginBottom: 8 },
-  warnNote: { color: colors.warnText, fontSize: 13, lineHeight: 19, marginBottom: 12 },
+  title: { ...type.title, color: colors.text, marginBottom: 8 },
+  body: { ...type.subhead, color: colors.muted, marginBottom: 8 },
+  warnNote: { ...type.footnote, color: colors.warnText, marginBottom: 12 },
   secretCard: {
     backgroundColor: colors.card,
     borderColor: colors.border,
@@ -351,6 +356,8 @@ const styles = StyleSheet.create({
     padding: 14,
     marginBottom: 12,
   },
+  // BESPOKE: the recovery secret must render in exact 64-hex monospace, so this
+  // keeps its fixed size/leading/tracking rather than joining the prose scale.
   secretText: {
     color: colors.text,
     fontSize: 16,
@@ -358,7 +365,7 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  notice: { color: '#4cc38a', fontSize: 13, lineHeight: 19, marginTop: 8 },
+  notice: { ...type.footnote, color: '#4cc38a', marginTop: 8 },
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -366,7 +373,7 @@ const styles = StyleSheet.create({
     marginVertical: 16,
     gap: 12,
   },
-  switchLabel: { color: colors.text, fontSize: 14, flex: 1, lineHeight: 20 },
-  footnote: { color: colors.muted, fontSize: 13, lineHeight: 19, marginBottom: 12 },
+  switchLabel: { ...type.subhead, color: colors.text, flex: 1 },
+  footnote: { ...type.footnote, color: colors.muted, marginBottom: 12 },
   stackedButton: { marginTop: 12 },
 });

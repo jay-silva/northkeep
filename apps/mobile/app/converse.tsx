@@ -15,7 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Redirect, router, useFocusEffect } from 'expo-router';
 import type { LocalModelResolution } from '@northkeep/platform-mobile/dist/local-model/index.js';
 import { useVaultSession } from '../src/lib/vault-session';
-import { Button, ErrorNote, colors } from '../src/ui';
+import { Button, ErrorNote, colors, type, useAnnounce, useReduceMotion } from '../src/ui';
 import {
   getSelectedProviderId,
   getProviderKey,
@@ -55,10 +55,14 @@ type Mode = 'on-device' | 'cloud' | 'none';
  * model can spend 30s+ loading into RAM before it streams anything.
  */
 function ThinkingDots() {
+  const reduceMotion = useReduceMotion();
   const d0 = useRef(new Animated.Value(0.3)).current;
   const d1 = useRef(new Animated.Value(0.3)).current;
   const d2 = useRef(new Animated.Value(0.3)).current;
   useEffect(() => {
+    // Respect Reduce Motion: skip the infinite loop entirely and leave the dots
+    // at a static opacity. The "Thinking..." label still communicates the wait.
+    if (reduceMotion) return;
     const dots = [d0, d1, d2];
     const loops = dots.map((d, i) =>
       Animated.loop(
@@ -72,12 +76,12 @@ function ThinkingDots() {
     );
     loops.forEach((l) => l.start());
     return () => loops.forEach((l) => l.stop());
-  }, [d0, d1, d2]);
+  }, [d0, d1, d2, reduceMotion]);
   return (
     <View style={styles.thinkingRow} accessibilityLabel="Thinking">
-      <Animated.View style={[styles.thinkingDot, { opacity: d0 }]} />
-      <Animated.View style={[styles.thinkingDot, { opacity: d1 }]} />
-      <Animated.View style={[styles.thinkingDot, { opacity: d2 }]} />
+      <Animated.View style={[styles.thinkingDot, reduceMotion ? styles.thinkingDotStatic : { opacity: d0 }]} />
+      <Animated.View style={[styles.thinkingDot, reduceMotion ? styles.thinkingDotStatic : { opacity: d1 }]} />
+      <Animated.View style={[styles.thinkingDot, reduceMotion ? styles.thinkingDotStatic : { opacity: d2 }]} />
       <Text style={styles.thinkingLabel}>Thinking…</Text>
     </View>
   );
@@ -347,12 +351,20 @@ export default function Converse() {
       {banner ? <StatusBanner tone={banner.tone} message={banner.message} /> : null}
 
       <View style={styles.headerRow}>
-        <Text style={styles.providerLabel} numberOfLines={1}>
-          {headerLabel}
-        </Text>
-        <Pressable style={styles.headerBtn} onPress={() => router.push('/providers')} accessibilityRole="button">
+        {/* Identity field: the active provider/model. Wraps instead of
+            truncating so a long model id is never clipped. */}
+        <Text style={styles.providerLabel}>{headerLabel}</Text>
+        <Pressable
+          style={styles.headerBtn}
+          onPress={() => router.push('/providers')}
+          accessibilityRole="button"
+          accessibilityLabel="Switch provider"
+          hitSlop={{ top: 12, bottom: 12, left: 10, right: 10 }}
+        >
           <Ionicons name="swap-horizontal-outline" size={16} color={colors.accent} />
-          <Text style={styles.headerBtnText}>Providers</Text>
+          <Text style={styles.headerBtnText} maxFontSizeMultiplier={1.5}>
+            Providers
+          </Text>
         </Pressable>
       </View>
 
@@ -501,8 +513,16 @@ function statusBanner(mode: Mode, localReady: boolean): { tone: 'good' | 'warn';
 }
 
 function StatusBanner({ tone, message }: { tone: 'good' | 'warn'; message: string }) {
+  // Invariant #6, now audible: announce the posture to VoiceOver. The banner
+  // message only changes when the privacy posture changes (mode / local-model
+  // readiness), and useAnnounce de-dupes, so this never spams the reader.
+  useAnnounce(message);
   return (
-    <View style={tone === 'good' ? styles.bannerGood : styles.bannerWarn}>
+    <View
+      style={tone === 'good' ? styles.bannerGood : styles.bannerWarn}
+      accessibilityLiveRegion={tone === 'warn' ? 'assertive' : 'polite'}
+      accessibilityRole={tone === 'warn' ? 'alert' : 'text'}
+    >
       <Ionicons
         name={tone === 'good' ? 'lock-closed' : 'alert-circle'}
         size={15}
@@ -523,7 +543,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
   },
-  bannerGoodText: { color: colors.accent, fontSize: 13, fontWeight: '600', flex: 1, lineHeight: 18 },
+  bannerGoodText: { ...type.footnote, color: colors.accent, fontWeight: '600', flex: 1, lineHeight: 18 },
   bannerWarn: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -532,7 +552,7 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     paddingHorizontal: 12,
   },
-  bannerWarnText: { color: colors.warnText, fontSize: 13, fontWeight: '600', flex: 1, lineHeight: 18 },
+  bannerWarnText: { ...type.footnote, color: colors.warnText, fontWeight: '600', flex: 1, lineHeight: 18 },
   headerRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -542,21 +562,22 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  providerLabel: { color: colors.muted, fontSize: 13, flex: 1, marginRight: 12 },
-  headerBtn: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  headerBtnText: { color: colors.accent, fontSize: 14, fontWeight: '600' },
+  providerLabel: { ...type.footnote, color: colors.muted, flex: 1, marginRight: 12 },
+  headerBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, minHeight: 44, paddingLeft: 8 },
+  headerBtnText: { ...type.subhead, color: colors.accent, fontWeight: '600' },
   list: { flex: 1 },
   listContent: { padding: 16, gap: 10 },
   empty: { alignItems: 'center', paddingTop: 60, paddingHorizontal: 20 },
-  emptyTitle: { color: colors.text, fontSize: 18, fontWeight: '700', marginBottom: 8 },
-  emptyBody: { color: colors.muted, fontSize: 14, lineHeight: 21, textAlign: 'center' },
+  emptyTitle: { ...type.headline, color: colors.text, marginBottom: 8 },
+  emptyBody: { ...type.subhead, color: colors.muted, lineHeight: 21, textAlign: 'center' },
   emptyBtn: { marginTop: 20, alignSelf: 'stretch' },
   bubble: { maxWidth: '86%', borderRadius: 14, paddingVertical: 10, paddingHorizontal: 14 },
   userBubble: { alignSelf: 'flex-end', backgroundColor: colors.accentStrong },
   assistantBubble: { alignSelf: 'flex-start', backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border },
   thinkingRow: { flexDirection: 'row', alignItems: 'center', gap: 5, paddingVertical: 2 },
   thinkingDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: colors.accent },
-  thinkingLabel: { color: colors.muted, fontSize: 14, marginLeft: 4 },
+  thinkingDotStatic: { opacity: 0.6 },
+  thinkingLabel: { ...type.subhead, color: colors.muted, marginLeft: 4 },
   attachBtn: { padding: 6, alignSelf: 'flex-end', marginBottom: 4 },
   attachChip: {
     flexDirection: 'row',
@@ -573,13 +594,13 @@ const styles = StyleSheet.create({
     marginBottom: 6,
     maxWidth: '90%',
   },
-  attachChipText: { color: colors.text, fontSize: 13, flexShrink: 1 },
-  userText: { color: '#ffffff', fontSize: 15, lineHeight: 21 },
-  assistantText: { color: colors.text, fontSize: 15, lineHeight: 21 },
-  auditLink: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 8 },
-  auditLinkText: { color: colors.accent, fontSize: 13, fontWeight: '600' },
-  retryLink: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 8 },
-  retryText: { color: colors.warnText, fontSize: 14, fontWeight: '700' },
+  attachChipText: { ...type.footnote, color: colors.text, flexShrink: 1 },
+  userText: { ...type.body, color: '#ffffff' },
+  assistantText: { ...type.body, color: colors.text },
+  auditLink: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 11, minHeight: 44 },
+  auditLinkText: { ...type.footnote, color: colors.accent, fontWeight: '600' },
+  retryLink: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 11, minHeight: 44 },
+  retryText: { ...type.subhead, color: colors.warnText, fontWeight: '700' },
   inputRow: {
     flexDirection: 'row',
     alignItems: 'flex-end',
@@ -597,7 +618,7 @@ const styles = StyleSheet.create({
     color: colors.text,
     paddingHorizontal: 14,
     paddingVertical: 10,
-    fontSize: 15,
+    ...type.body,
     maxHeight: 120,
   },
   sendBtn: { paddingVertical: 10, paddingHorizontal: 16 },

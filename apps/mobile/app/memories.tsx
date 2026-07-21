@@ -19,7 +19,7 @@ import {
 } from '../src/lib/secure-store';
 import { userFacingSyncError } from '../src/lib/sync-errors';
 import { useVaultSession } from '../src/lib/vault-session';
-import { ErrorNote, SyncPill, colors } from '../src/ui';
+import { ErrorNote, SyncPill, colors, type } from '../src/ui';
 
 /**
  * Memories (M6-2): browse + keyword search over Vault.list(), newest first
@@ -185,11 +185,11 @@ const styles = StyleSheet.create({
     padding: 12,
     margin: 16,
     marginBottom: 8,
-    fontSize: 15,
+    ...type.body,
   },
   listContent: { paddingHorizontal: 16, paddingBottom: 24 },
   emptyContainer: { flexGrow: 1, alignItems: 'center', justifyContent: 'center', padding: 32 },
-  empty: { color: colors.muted, fontSize: 15, textAlign: 'center', lineHeight: 22 },
+  empty: { ...type.body, color: colors.muted, textAlign: 'center', lineHeight: 22 },
   card: {
     backgroundColor: colors.card,
     borderRadius: 12,
@@ -207,18 +207,18 @@ const styles = StyleSheet.create({
     gap: 12,
     marginBottom: 6,
   },
-  journalTitle: { color: colors.text, fontSize: 15, fontWeight: '700', flexShrink: 1 },
-  journalBody: { color: colors.muted, fontSize: 13, lineHeight: 19, marginBottom: 8 },
-  journalLink: { color: colors.accent, fontSize: 14, fontWeight: '600' },
+  journalTitle: { ...type.body, color: colors.text, fontWeight: '700', flexShrink: 1 },
+  journalBody: { ...type.footnote, color: colors.muted, marginBottom: 8 },
+  journalLink: { ...type.subhead, color: colors.accent, fontWeight: '600' },
   cardMeta: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 8 },
   badge: {
+    ...type.caption,
     color: colors.accent,
-    fontSize: 12,
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
-  scope: { color: colors.muted, fontSize: 12 },
-  date: { color: colors.muted, fontSize: 12, marginLeft: 'auto' },
-  cardContent: { color: colors.text, fontSize: 15, lineHeight: 21 },
+  scope: { ...type.caption, color: colors.muted, fontWeight: '400' },
+  date: { ...type.caption, color: colors.muted, fontWeight: '400', marginLeft: 'auto' },
+  cardContent: { ...type.body, color: colors.text },
 });

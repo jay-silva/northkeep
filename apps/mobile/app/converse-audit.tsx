@@ -1,7 +1,7 @@
 import React from 'react';
 import { ScrollView, StyleSheet, Text, View } from 'react-native';
 import { Stack } from 'expo-router';
-import { colors } from '../src/ui';
+import { colors, type, useAnnounce } from '../src/ui';
 import { getLastAudit } from '../src/lib/converse-run';
 import { TIER2_UNAVAILABLE_MESSAGE, partialNerFailureMessage } from '../src/lib/ner-degrade';
 
@@ -18,6 +18,19 @@ import { TIER2_UNAVAILABLE_MESSAGE, partialNerFailureMessage } from '../src/lib/
  */
 export default function ConverseAudit() {
   const audit = getLastAudit();
+
+  // Invariant #6, now audible: if the Tier-2 name net did not run (or ran only
+  // partially) this turn, announce that degradation to VoiceOver when the audit
+  // opens. Content-free by construction (ids/pass names only, never memory text).
+  const degradeWarning =
+    audit && !audit.onDevice
+      ? audit.tier2Degraded
+        ? TIER2_UNAVAILABLE_MESSAGE
+        : audit.failedPasses.length > 0
+          ? partialNerFailureMessage(audit.failedPasses)
+          : null
+      : null;
+  useAnnounce(degradeWarning);
 
   return (
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
@@ -39,12 +52,12 @@ export default function ConverseAudit() {
               run, or ran only partially, say so HERE, next to the payload it
               affected. Content-free: pass ids only, never text. */}
           {!audit.onDevice && audit.tier2Degraded ? (
-            <View style={styles.warnCard}>
+            <View style={styles.warnCard} accessibilityLiveRegion="assertive" accessibilityRole="alert">
               <Text style={styles.warnCardText}>{TIER2_UNAVAILABLE_MESSAGE}</Text>
             </View>
           ) : null}
           {!audit.onDevice && !audit.tier2Degraded && audit.failedPasses.length > 0 ? (
-            <View style={styles.warnCard}>
+            <View style={styles.warnCard} accessibilityLiveRegion="assertive" accessibilityRole="alert">
               <Text style={styles.warnCardText}>
                 {partialNerFailureMessage(audit.failedPasses)}
               </Text>
@@ -76,9 +89,7 @@ export default function ConverseAudit() {
               <View style={styles.metaCard}>
                 {audit.redactions.map((r, i) => (
                   <View key={i} style={styles.maskRow}>
-                    <Text style={styles.maskOriginal} numberOfLines={1}>
-                      {r.original}
-                    </Text>
+                    <Text style={styles.maskOriginal}>{r.original}</Text>
                     <Text style={styles.maskArrow}>→</Text>
                     <Text style={styles.maskPlaceholder}>{r.placeholder}</Text>
                     <Text style={styles.maskKind}>{KIND_LABEL[r.kind] ?? r.kind}</Text>
@@ -121,9 +132,8 @@ function Row({ label, value }: { label: string; value: string }) {
   return (
     <View style={styles.row}>
       <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={styles.rowValue} numberOfLines={2}>
-        {value}
-      </Text>
+      {/* Identity fields (endpoint, host, model): wrap fully, never truncate. */}
+      <Text style={styles.rowValue}>{value}</Text>
     </View>
   );
 }
@@ -131,21 +141,21 @@ function Row({ label, value }: { label: string; value: string }) {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 48 },
-  empty: { color: colors.muted, fontSize: 15, lineHeight: 22, padding: 20, textAlign: 'center' },
+  empty: { ...type.body, color: colors.muted, lineHeight: 22, padding: 20, textAlign: 'center' },
   deviceBanner: {
     backgroundColor: '#1c2b23',
     borderRadius: 10,
     padding: 14,
     marginBottom: 14,
   },
-  deviceBannerText: { color: colors.accent, fontSize: 14, fontWeight: '600', lineHeight: 20 },
+  deviceBannerText: { ...type.subhead, color: colors.accent, fontWeight: '600' },
   warnCard: {
     backgroundColor: colors.warnBg,
     borderRadius: 10,
     padding: 14,
     marginBottom: 14,
   },
-  warnCardText: { color: colors.warnText, fontSize: 14, fontWeight: '600', lineHeight: 20 },
+  warnCardText: { ...type.subhead, color: colors.warnText, fontWeight: '600' },
   metaCard: {
     backgroundColor: colors.card,
     borderColor: colors.border,
@@ -154,12 +164,12 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   row: { flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 4 },
-  rowLabel: { color: colors.muted, fontSize: 13, fontWeight: '600' },
-  rowValue: { color: colors.text, fontSize: 13, flex: 1, textAlign: 'right' },
-  note: { color: colors.muted, fontSize: 13, lineHeight: 19, marginTop: 14 },
+  rowLabel: { ...type.footnote, color: colors.muted, fontWeight: '600' },
+  rowValue: { ...type.footnote, color: colors.text, flex: 1, textAlign: 'right' },
+  note: { ...type.footnote, color: colors.muted, marginTop: 14 },
   sectionTitle: {
+    ...type.footnote,
     color: colors.text,
-    fontSize: 13,
     fontWeight: '700',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
@@ -174,11 +184,12 @@ const styles = StyleSheet.create({
     padding: 12,
     marginBottom: 10,
   },
-  role: { color: colors.accent, fontSize: 11, fontWeight: '700', letterSpacing: 0.6, marginBottom: 6 },
+  role: { ...type.caption, color: colors.accent, fontWeight: '700', letterSpacing: 0.6, marginBottom: 6 },
   maskRow: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 4 },
-  maskOriginal: { color: '#c0625a', fontSize: 13, textDecorationLine: 'line-through', flexShrink: 1 },
-  maskArrow: { color: colors.muted, fontSize: 13 },
-  maskPlaceholder: { color: colors.accent, fontSize: 13, fontWeight: '600' },
-  maskKind: { color: colors.muted, fontSize: 11 },
-  body: { color: colors.text, fontSize: 14, lineHeight: 20 },
+  // colors.removed (#f0716b) = 5.76:1 on card; was #c0625a at 4.07:1 (WCAG fail).
+  maskOriginal: { ...type.footnote, color: colors.removed, textDecorationLine: 'line-through', flexShrink: 1 },
+  maskArrow: { ...type.footnote, color: colors.muted },
+  maskPlaceholder: { ...type.footnote, color: colors.accent, fontWeight: '600' },
+  maskKind: { ...type.caption, color: colors.muted, fontWeight: '400' },
+  body: { ...type.subhead, color: colors.text },
 });

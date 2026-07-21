@@ -11,7 +11,7 @@ import {
   saveSyncServerUrl,
 } from '../src/lib/secure-store';
 import { useVaultSession } from '../src/lib/vault-session';
-import { Button, ErrorNote, FieldLabel, colors } from '../src/ui';
+import { Button, ErrorNote, FieldLabel, colors, type } from '../src/ui';
 
 /**
  * Settings (M6-1): sync server, device info, lock, sign out / wipe local.
@@ -205,7 +205,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     color: colors.text,
     padding: 12,
-    fontSize: 15,
+    ...type.body,
     marginBottom: 12,
   },
   infoRow: {
@@ -216,9 +216,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  infoLabel: { color: colors.muted, fontSize: 14 },
-  infoValue: { color: colors.text, fontSize: 14, flexShrink: 1, textAlign: 'right' },
-  notice: { color: '#4cc38a', fontSize: 14, marginVertical: 8 },
+  infoLabel: { ...type.subhead, color: colors.muted },
+  infoValue: { ...type.subhead, color: colors.text, flexShrink: 1, textAlign: 'right' },
+  notice: { ...type.subhead, color: '#4cc38a', marginVertical: 8 },
   stackedButton: { marginBottom: 12 },
-  footnote: { color: colors.muted, fontSize: 13, lineHeight: 19 },
+  footnote: { ...type.footnote, color: colors.muted },
 });

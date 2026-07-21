@@ -42,7 +42,7 @@ import {
   saveConnectorSharedScopes,
 } from '../src/lib/secure-store';
 import { useVaultSession } from '../src/lib/vault-session';
-import { Button, ErrorNote, FieldLabel, colors } from '../src/ui';
+import { Button, ErrorNote, FieldLabel, colors, type } from '../src/ui';
 
 /**
  * Cloud Connect (Phase B of phone-first onboarding): share chosen scopes to
@@ -279,10 +279,18 @@ export default function Sharing() {
       <FieldLabel>Connector server</FieldLabel>
       <Info label="Server" value={effectiveServer} />
       <Info label="Connector URL for your AI apps" value={mcpUrl} />
-      <Pressable onPress={() => copy('mcp', mcpUrl)} accessibilityRole="button">
+      <Pressable
+        onPress={() => copy('mcp', mcpUrl)}
+        accessibilityRole="button"
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      >
         <Text style={styles.copyLink}>{copiedWhat === 'mcp' ? 'Copied.' : 'Copy connector URL'}</Text>
       </Pressable>
-      <Pressable onPress={() => setAdvancedOpen((v) => !v)} accessibilityRole="button">
+      <Pressable
+        onPress={() => setAdvancedOpen((v) => !v)}
+        accessibilityRole="button"
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      >
         <Text style={styles.copyLink}>{advancedOpen ? 'Hide advanced' : 'Advanced: use a custom server'}</Text>
       </Pressable>
       {advancedOpen ? (
@@ -315,7 +323,11 @@ export default function Sharing() {
         </Text>
       </View>
       {shareId ? (
-        <Pressable onPress={() => copy('shareid', shareId)} accessibilityRole="button">
+        <Pressable
+          onPress={() => copy('shareid', shareId)}
+          accessibilityRole="button"
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <Text style={styles.copyLink}>{copiedWhat === 'shareid' ? 'Copied.' : 'Copy share id'}</Text>
         </Pressable>
       ) : null}
@@ -444,14 +456,22 @@ export default function Sharing() {
               ? 'This code expired. Generate a new one.'
               : `Expires in ${formatPairingCountdown(pairSecondsLeft)}`}
           </Text>
-          <Pressable onPress={() => copy('code', pair.code)} accessibilityRole="button">
+          <Pressable
+            onPress={() => copy('code', pair.code)}
+            accessibilityRole="button"
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
             <Text style={styles.copyLink}>{copiedWhat === 'code' ? 'Copied.' : 'Copy code'}</Text>
           </Pressable>
           <Text style={styles.pairLabel}>Connector URL</Text>
           <Text style={styles.monoText} selectable>
             {mcpUrl}
           </Text>
-          <Pressable onPress={() => copy('mcp2', mcpUrl)} accessibilityRole="button">
+          <Pressable
+            onPress={() => copy('mcp2', mcpUrl)}
+            accessibilityRole="button"
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          >
             <Text style={styles.copyLink}>{copiedWhat === 'mcp2' ? 'Copied.' : 'Copy connector URL'}</Text>
           </Pressable>
           <Text style={styles.confirmBody}>
@@ -521,15 +541,15 @@ const mono = Platform.OS === 'ios' ? 'Menlo' : 'monospace';
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 20, paddingBottom: 48 },
-  body: { color: colors.muted, fontSize: 14, lineHeight: 20, marginBottom: 8 },
+  body: { ...type.subhead, color: colors.muted, marginBottom: 8 },
   banner: {
     backgroundColor: colors.warnBg,
     borderRadius: 10,
     padding: 12,
     marginTop: 8,
   },
-  bannerStrong: { color: colors.warnText, fontSize: 13, fontWeight: '700', lineHeight: 19 },
-  bannerBody: { color: colors.warnText, fontSize: 13, lineHeight: 19, marginTop: 6 },
+  bannerStrong: { ...type.footnote, color: colors.warnText, fontWeight: '700' },
+  bannerBody: { ...type.footnote, color: colors.warnText, marginTop: 6 },
   input: {
     backgroundColor: colors.card,
     borderColor: colors.border,
@@ -537,7 +557,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     color: colors.text,
     padding: 12,
-    fontSize: 15,
+    ...type.body,
     marginBottom: 12,
   },
   infoRow: {
@@ -548,9 +568,9 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
   },
-  infoLabel: { color: colors.muted, fontSize: 14 },
-  infoValue: { color: colors.text, fontSize: 13, flexShrink: 1, textAlign: 'right' },
-  copyLink: { color: colors.accent, fontSize: 14, fontWeight: '600', paddingVertical: 8 },
+  infoLabel: { ...type.subhead, color: colors.muted },
+  infoValue: { ...type.footnote, color: colors.text, flexShrink: 1, textAlign: 'right' },
+  copyLink: { ...type.subhead, color: colors.accent, fontWeight: '600', paddingVertical: 12 },
   monoCard: {
     backgroundColor: colors.card,
     borderColor: colors.border,
@@ -559,8 +579,8 @@ const styles = StyleSheet.create({
     padding: 12,
   },
   monoText: { color: colors.text, fontSize: 13, lineHeight: 20, fontFamily: mono },
-  footnote: { color: colors.muted, fontSize: 13, lineHeight: 19, marginBottom: 8 },
-  notice: { color: '#4cc38a', fontSize: 13, lineHeight: 19, marginVertical: 8 },
+  footnote: { ...type.footnote, color: colors.muted, marginBottom: 8 },
+  notice: { ...type.footnote, color: '#4cc38a', marginVertical: 8 },
   scopeRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -574,8 +594,8 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   scopeName: { flexShrink: 1 },
-  scopeTitle: { color: colors.text, fontSize: 15, fontWeight: '600' },
-  scopeCount: { color: colors.muted, fontSize: 12, marginTop: 2 },
+  scopeTitle: { ...type.body, color: colors.text, fontWeight: '600' },
+  scopeCount: { ...type.caption, color: colors.muted, fontWeight: '400', marginTop: 2 },
   confirmCard: {
     backgroundColor: colors.card,
     borderColor: colors.warnText,
@@ -585,8 +605,8 @@ const styles = StyleSheet.create({
     marginTop: 8,
     marginBottom: 8,
   },
-  confirmTitle: { color: colors.text, fontSize: 16, fontWeight: '700', marginBottom: 8 },
-  confirmBody: { color: colors.text, fontSize: 14, lineHeight: 20, marginBottom: 8 },
+  confirmTitle: { ...type.headline, color: colors.text, marginBottom: 8 },
+  confirmBody: { ...type.subhead, color: colors.text, marginBottom: 8 },
   pairCard: {
     backgroundColor: colors.card,
     borderColor: colors.border,
@@ -596,14 +616,15 @@ const styles = StyleSheet.create({
     marginTop: 8,
   },
   pairLabel: {
+    ...type.caption,
     color: colors.muted,
-    fontSize: 12,
-    fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     marginTop: 8,
     marginBottom: 4,
   },
+  // Bespoke display numeral: the one-time pairing code. Left off the prose scale
+  // on purpose (large monospace); stays selectable and non-truncating.
   pairCode: {
     color: colors.text,
     fontSize: 34,
@@ -611,7 +632,7 @@ const styles = StyleSheet.create({
     letterSpacing: 4,
     fontFamily: mono,
   },
-  pairCountdown: { color: colors.warnText, fontSize: 13, fontWeight: '600', marginTop: 4 },
-  pairWarning: { color: colors.warnText, fontSize: 13, lineHeight: 19, fontWeight: '600' },
+  pairCountdown: { ...type.footnote, color: colors.warnText, fontWeight: '600', marginTop: 4 },
+  pairWarning: { ...type.footnote, color: colors.warnText, fontWeight: '600' },
   stackedButton: { marginTop: 12 },
 });

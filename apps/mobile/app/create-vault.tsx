@@ -11,7 +11,7 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { useVaultSession } from '../src/lib/vault-session';
-import { Button, ErrorNote, FieldLabel, colors } from '../src/ui';
+import { Button, ErrorNote, FieldLabel, colors, type } from '../src/ui';
 
 /**
  * Create a brand-new vault on this phone (M6-2b), no Mac required. Passphrase
@@ -111,7 +111,12 @@ export default function CreateVault() {
 
         <View style={styles.switchRow}>
           <Text style={styles.switchLabel}>Allow Face ID or fingerprint unlock on this phone</Text>
-          <Switch value={enableBiometrics} onValueChange={setEnableBiometrics} />
+          <Switch
+            value={enableBiometrics}
+            onValueChange={setEnableBiometrics}
+            accessibilityLabel="Allow Face ID or fingerprint unlock on this phone"
+            accessibilityHint="Caches your key in the device keychain so you can unlock without typing your passphrase"
+          />
         </View>
 
         <ErrorNote message={error} />
@@ -130,8 +135,8 @@ export default function CreateVault() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 20, paddingTop: 40 },
-  title: { color: colors.text, fontSize: 26, fontWeight: '700', marginBottom: 8 },
-  body: { color: colors.muted, fontSize: 14, lineHeight: 20, marginBottom: 8 },
+  title: { ...type.title, color: colors.text, marginBottom: 8 },
+  body: { ...type.subhead, color: colors.muted, marginBottom: 8 },
   input: {
     backgroundColor: colors.card,
     borderColor: colors.border,
@@ -139,10 +144,11 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     color: colors.text,
     padding: 14,
-    fontSize: 16,
+    ...type.callout,
+    fontWeight: '400',
     marginBottom: 4,
   },
-  hint: { color: colors.warnText, fontSize: 13, marginTop: 4, marginBottom: 4 },
+  hint: { ...type.footnote, color: colors.warnText, marginTop: 4, marginBottom: 4 },
   switchRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -150,6 +156,6 @@ const styles = StyleSheet.create({
     marginVertical: 16,
     gap: 12,
   },
-  switchLabel: { color: colors.text, fontSize: 14, flex: 1, lineHeight: 20 },
-  warn: { color: colors.muted, fontSize: 13, lineHeight: 19, marginTop: 20 },
+  switchLabel: { ...type.subhead, color: colors.text, flex: 1 },
+  warn: { ...type.footnote, color: colors.muted, marginTop: 20 },
 });

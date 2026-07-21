@@ -14,7 +14,7 @@ import {
 } from '../src/lib/journal-recipe';
 import { loadConnectorSharedScopes } from '../src/lib/secure-store';
 import { useVaultSession } from '../src/lib/vault-session';
-import { Button, ErrorNote, colors } from '../src/ui';
+import { Button, ErrorNote, colors, type } from '../src/ui';
 
 /**
  * "Let your AI apps keep a journal" (Phase B WS3): the phone walkthrough of
@@ -120,7 +120,11 @@ export default function JournalSetup() {
           {JOURNAL_PATTERN_SCHEDULED_TASK}
         </Text>
       </View>
-      <Pressable onPress={() => copy('p1', JOURNAL_PATTERN_SCHEDULED_TASK)} accessibilityRole="button">
+      <Pressable
+        onPress={() => copy('p1', JOURNAL_PATTERN_SCHEDULED_TASK)}
+        accessibilityRole="button"
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      >
         <Text style={styles.copyLink}>{copied === 'p1' ? 'Copied.' : 'Copy pattern 1'}</Text>
       </Pressable>
 
@@ -133,6 +137,7 @@ export default function JournalSetup() {
       <Pressable
         onPress={() => copy('p2', JOURNAL_PATTERN_STANDING_INSTRUCTION)}
         accessibilityRole="button"
+        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
       >
         <Text style={styles.copyLink}>{copied === 'p2' ? 'Copied.' : 'Copy pattern 2'}</Text>
       </Pressable>
@@ -146,15 +151,14 @@ export default function JournalSetup() {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 20, paddingBottom: 48 },
-  title: { color: colors.text, fontSize: 24, fontWeight: '700', marginBottom: 8 },
-  body: { color: colors.muted, fontSize: 14, lineHeight: 20, marginBottom: 12 },
-  stepTitle: { color: colors.text, fontSize: 16, fontWeight: '700', marginTop: 16, marginBottom: 6 },
-  done: { color: '#4cc38a', fontSize: 14, fontWeight: '600', marginBottom: 8 },
-  helper: { color: colors.muted, fontSize: 13, lineHeight: 19, marginTop: 8 },
+  title: { ...type.title, color: colors.text, marginBottom: 8 },
+  body: { ...type.subhead, color: colors.muted, marginBottom: 12 },
+  stepTitle: { ...type.headline, color: colors.text, marginTop: 16, marginBottom: 6 },
+  done: { ...type.subhead, color: '#4cc38a', fontWeight: '600', marginBottom: 8 },
+  helper: { ...type.footnote, color: colors.muted, marginTop: 8 },
   patternLabel: {
+    ...type.caption,
     color: colors.muted,
-    fontSize: 12,
-    fontWeight: '600',
     textTransform: 'uppercase',
     letterSpacing: 0.6,
     marginTop: 10,
@@ -173,6 +177,6 @@ const styles = StyleSheet.create({
     lineHeight: 20,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  copyLink: { color: colors.accent, fontSize: 14, fontWeight: '600', paddingVertical: 8 },
-  noteTitle: { color: colors.text, fontSize: 16, fontWeight: '700', marginTop: 16, marginBottom: 6 },
+  copyLink: { ...type.subhead, color: colors.accent, fontWeight: '600', paddingVertical: 12 },
+  noteTitle: { ...type.headline, color: colors.text, marginTop: 16, marginBottom: 6 },
 });

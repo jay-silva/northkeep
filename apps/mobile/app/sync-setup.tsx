@@ -18,7 +18,7 @@ import {
   type EnableSyncOutcome,
 } from '../src/lib/sync-setup-flow';
 import { useVaultSession } from '../src/lib/vault-session';
-import { Button, ErrorNote, FieldLabel, colors } from '../src/ui';
+import { Button, ErrorNote, FieldLabel, colors, type } from '../src/ui';
 
 /**
  * Turn on sync from this phone (Phase A: "this phone is my first device").
@@ -208,8 +208,8 @@ async function loadFullAccountId(): Promise<string | null> {
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 20, paddingBottom: 48 },
-  title: { color: colors.text, fontSize: 26, fontWeight: '700', marginBottom: 8 },
-  body: { color: colors.muted, fontSize: 14, lineHeight: 20, marginBottom: 8 },
+  title: { ...type.title, color: colors.text, marginBottom: 8 },
+  body: { ...type.subhead, color: colors.muted, marginBottom: 8 },
   input: {
     backgroundColor: colors.card,
     borderColor: colors.border,
@@ -217,7 +217,7 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     color: colors.text,
     padding: 12,
-    fontSize: 15,
+    ...type.body,
     marginBottom: 12,
   },
   outcomeCard: {
@@ -228,9 +228,9 @@ const styles = StyleSheet.create({
     padding: 16,
     marginTop: 16,
   },
-  outcomeTitle: { color: colors.text, fontSize: 15, fontWeight: '600', lineHeight: 21 },
-  outcomeDetail: { color: colors.muted, fontSize: 13, lineHeight: 19, marginTop: 8 },
-  successText: { color: '#4cc38a', fontSize: 15, fontWeight: '600', lineHeight: 21 },
+  outcomeTitle: { ...type.body, color: colors.text, fontWeight: '600' },
+  outcomeDetail: { ...type.footnote, color: colors.muted, marginTop: 8 },
+  successText: { ...type.body, color: '#4cc38a', fontWeight: '600' },
   accountId: {
     color: colors.text,
     fontSize: 13,
@@ -238,6 +238,6 @@ const styles = StyleSheet.create({
     marginTop: 8,
     fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
-  footnote: { color: colors.muted, fontSize: 13, lineHeight: 19, marginTop: 4 },
+  footnote: { ...type.footnote, color: colors.muted, marginTop: 4 },
   stackedButton: { marginTop: 16 },
 });
