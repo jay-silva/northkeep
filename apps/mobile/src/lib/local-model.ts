@@ -33,6 +33,13 @@ export function resetLocalModel(): void {
 }
 
 /**
+ * TODO: Apple FM NER path retired in favor of NLTagger 2026-07-21; kept for
+ * rollback, delete after on-device acceptance. This factory is no longer wired
+ * into the send path (converse-run.ts now uses createNLTaggerNerClient); it and
+ * its Apple FM per-kind machinery (createLocalNerClient, per-kind-ner) stay in
+ * the tree, unreferenced, so the change is reversible. getLocalModel/
+ * resetLocalModel above remain live (on-device chat + model detection).
+ *
  * A `typeof redact` function bound to the on-device NER client. runTurn calls it
  * with (text, { tier, pseudonyms, nerMode }); we supply the third argument (the
  * client) so redact skips its default localhost Ollama and uses the phone's

@@ -24,6 +24,7 @@ import {
   type ProviderConfig,
 } from '../src/lib/providers-store';
 import { getLocalModel } from '../src/lib/local-model';
+import { isNLTaggerNerAvailable } from '../src/lib/nltagger-ner';
 import {
   createSession,
   runMobileTurn,
@@ -92,6 +93,12 @@ export default function Converse() {
   const [cloudProvider, setCloudProvider] = useState<ProviderConfig | null>(null);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [resolution, setResolution] = useState<LocalModelResolution | null>(null);
+  // The Tier-2 name net is now the always-on NLTagger (nltagger-ner.ts), NOT the
+  // on-device chat model. This tracks whether the NLTagger native module is
+  // present on this phone (true on every iOS build); it drives the composer
+  // posture banner (Tier 2 vs deterministic-only), independent of `resolution`
+  // (which still gates on-device chat via Apple Intelligence).
+  const [nerAvailable, setNerAvailable] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [messages, setMessages] = useState<UIMessage[]>([]);
   const [input, setInput] = useState('');
@@ -114,14 +121,19 @@ export default function Converse() {
     useCallback(() => {
       let alive = true;
       void (async () => {
-        const [id, all, res] = await Promise.all([
+        const [id, all, res, nerReady] = await Promise.all([
           getSelectedProviderId(),
           listProviders(),
           getLocalModel(),
+          // NLTagger name net presence: always true on iOS once the native
+          // module is compiled in, false on Android/unsupported. Drives the
+          // Tier-2 posture, separate from the on-device chat model.
+          isNLTaggerNerAvailable(),
         ]);
         if (!alive) return;
         setSelectedId(id);
         setResolution(res);
+        setNerAvailable(nerReady);
         const onDevice = id === ON_DEVICE_PROVIDER_ID && res.model !== null;
         setCloudProvider(onDevice ? null : (all.find((p) => p.id === id) ?? all[0] ?? null));
         setLoaded(true);
@@ -179,9 +191,9 @@ export default function Converse() {
   }
 
   /**
-   * One turn. `forceTier1` sends to a cloud provider with the on-device model
-   * withheld (the deterministic shield still runs — it is the always-on floor).
-   * Used only for the explicit resend after an on-device NER abort.
+   * One turn. `forceTier1` sends to a cloud provider with the on-device name net
+   * (NLTagger) withheld (the deterministic shield still runs, it is the
+   * always-on floor). Used only for the explicit resend after a name-net abort.
    */
   async function send(text: string, forceTier1: boolean) {
     setError(null);
@@ -259,9 +271,10 @@ export default function Converse() {
           session: convSession.current,
           provider,
           apiKey: storedKey ?? '',
-          // Adds the on-device NER net when a model is ready (withheld on an
-          // explicit retry); the deterministic shield always runs regardless.
-          localModel: !forceTier1 && localReady ? resolution!.model : null,
+          // The NLTagger name net runs on every iOS turn; forceTier1 (the
+          // explicit Tier-1 resend) withholds it so only the deterministic
+          // shield runs. The deterministic shield always runs regardless.
+          disableNameNet: forceTier1,
           retrieve: (q, o) => session.retrieve(q, o),
           signal: controller.signal,
           onToken,
@@ -305,7 +318,9 @@ export default function Converse() {
           ? 'No provider set'
           : ' ';
 
-  const banner = statusBanner(mode, localReady);
+  // The cloud posture banner keys on the NLTagger name net (nerAvailable), not
+  // the on-device chat model: on iOS the name net is always present (Tier 2).
+  const banner = statusBanner(mode, nerAvailable);
 
   // Keyboard handling, measured instead of guessed. KeyboardAvoidingView with a
   // hardcoded keyboardVerticalOffset was wrong on device (the offset must equal
@@ -488,8 +503,9 @@ export default function Converse() {
   );
 }
 
-/** The invariant-#6 posture line, or null when there is nothing to show. */
-function statusBanner(mode: Mode, localReady: boolean): { tone: 'good' | 'warn'; message: string } | null {
+/** The invariant-#6 posture line, or null when there is nothing to show.
+ * `nerAvailable` is the on-device NLTagger name net (always true on iOS). */
+function statusBanner(mode: Mode, nerAvailable: boolean): { tone: 'good' | 'warn'; message: string } | null {
   if (mode === 'on-device') {
     return {
       tone: 'good',
@@ -497,16 +513,16 @@ function statusBanner(mode: Mode, localReady: boolean): { tone: 'good' | 'warn';
     };
   }
   if (mode === 'cloud') {
-    return localReady
+    return nerAvailable
       ? {
           tone: 'good',
           message:
-            'On-device shield. Secrets, dates, addresses, and known names are always masked deterministically, and the phone model adds a pseudonymization pass for other names, orgs, and places, before anything is sent. "What left this device" shows the proof for any turn.',
+            'On-device shield. Secrets, dates, addresses, and known names are always masked deterministically, and an on-device name recognizer adds a pseudonymization pass for other names, orgs, and places, before anything is sent. "What left this device" shows the proof for any turn.',
         }
       : {
           tone: 'warn',
           message:
-            'Deterministic firewall only. Secrets, every full date, addresses, and dictionary-listed names are masked before sending, but no AI model runs on this phone, so rare or unusual names can slip through. Check "What left this device" after any sensitive message.',
+            'Deterministic firewall only. Secrets, every full date, addresses, and dictionary-listed names are masked before sending, but on-device name recognition is not available here, so rare or unusual names can slip through. Check "What left this device" after any sensitive message.',
         };
   }
   return null;

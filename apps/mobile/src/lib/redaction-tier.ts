@@ -4,21 +4,23 @@
  * @northkeep imports, so the availability -> copy mapping is unit-tested under
  * Node (apps/mobile/test/redaction-tier.test.ts).
  *
- * WHY THIS EXISTS: cloud chat only pseudonymizes names on-device when Apple FM
- * NER is available on THIS phone; otherwise the deterministic Tier-1 floor is
- * all that runs and unusual names can slip through (converse.tsx's warn banner).
- * Surfacing the same fact at selection time means the user learns the posture
- * before choosing a provider, not after they are already in the composer.
+ * WHY THIS EXISTS: cloud chat pseudonymizes names on-device via the NLTagger
+ * name net (nltagger-ner.ts), which ships in every iOS, so Tier 2 is the
+ * universal posture on iPhone; where the net is absent (Android/unsupported) the
+ * deterministic Tier-1 floor is all that runs and unusual names can slip through
+ * (converse.tsx's warn banner). Surfacing the same fact at selection time means
+ * the user learns the posture before choosing a provider, not after they are
+ * already in the composer.
  *
  * SCOPE: labels only. This module changes no redaction or send behavior; it
- * maps a boolean the app already computes (localRes.model != null, the exact
- * condition converse.tsx uses to add the on-device NER pass) into calm copy.
+ * maps a boolean the app already computes (NLTagger native module present, the
+ * exact condition converse.tsx uses for the name net) into calm copy.
  *
  * ALIGNMENT: the Tier-2 / Tier-1 strings are kept factual and consistent with
  * the converse.tsx banner so the two surfaces never contradict.
  */
 
-/** Cloud chat WITH the on-device NER pass (Apple FM available on this phone). */
+/** Cloud chat WITH the on-device NER pass (NLTagger present, universal on iOS). */
 export const TIER2_ONDEVICE_LABEL = 'Tier 2: names pseudonymized on device';
 
 /** Cloud chat WITHOUT the on-device NER pass: the deterministic floor only. */
@@ -38,9 +40,9 @@ export const PROVIDER_TIER_INTRO =
 
 /**
  * Map on-device Tier-2 availability to the effective outbound tier label for a
- * CLOUD provider. `true` when Apple FM NER is ready on this phone
- * (localRes.model != null), so the redacted prompt gets the pseudonymization
- * pass; `false` when only the deterministic Tier-1 shield runs.
+ * CLOUD provider. `true` when the NLTagger name net is present on this phone
+ * (universal on iOS), so the redacted prompt gets the pseudonymization pass;
+ * `false` when only the deterministic Tier-1 shield runs (e.g. Android).
  */
 export function effectiveTierLabel(tier2Available: boolean): string {
   return tier2Available ? TIER2_ONDEVICE_LABEL : TIER1_ONLY_LABEL;

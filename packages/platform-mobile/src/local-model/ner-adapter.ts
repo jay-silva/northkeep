@@ -7,6 +7,13 @@ import {
 import { ENTITY_JSON_SCHEMA, type LocalModel } from './types.js';
 
 /**
+ * TODO: Apple FM NER path retired in favor of NLTagger 2026-07-21; kept for
+ * rollback, delete after on-device acceptance. createLocalNerClient (and the
+ * per-kind-ner machinery it drives) is no longer wired into the mobile send
+ * path (apps/mobile now uses the NLTagger name net, nltagger-ner.ts). This file
+ * stays in the tree, unreferenced by the app, so the swap is reversible; its
+ * unit tests keep passing in isolation.
+ *
  * The Tier-2 NER seam: adapt a LocalModel into the SAME shape the desktop uses,
  * so `packages/redact` applyTier2 runs UNCHANGED on the phone and emits the
  * identical entity/pseudonym output.

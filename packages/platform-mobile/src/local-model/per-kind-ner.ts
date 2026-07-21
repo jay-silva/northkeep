@@ -1,4 +1,11 @@
 /**
+ * TODO: Apple FM NER path retired in favor of NLTagger 2026-07-21; kept for
+ * rollback, delete after on-device acceptance. This per-kind machinery drove the
+ * Apple FM client (ner-adapter.ts) and is no longer wired into the mobile send
+ * path (apps/mobile now uses NLTagger, nltagger-ner.ts). extractNerText below is
+ * still REUSED by the NLTagger client to recover the text from the applyTier2
+ * prompt; the rest stays unreferenced-but-intact so the swap is reversible.
+ *
  * Per-kind NER decomposition for the on-device Tier-2 client (pure logic).
  *
  * WHY: with the one do-everything NER prompt, Apple FM measured ~35-39% strict

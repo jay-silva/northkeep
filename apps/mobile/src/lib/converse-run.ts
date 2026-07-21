@@ -10,9 +10,17 @@ import type { RetrieveOptions, ScoredEntry } from '@northkeep/core';
 import type { LocalModel } from '@northkeep/platform-mobile/dist/local-model/index.js';
 import { createMobileProvider, type OutboundCapture } from './mobile-providers';
 import { createLocalModelProvider } from './local-provider';
-import { makeLocalTier2RedactFn } from './local-model';
-import { foldFailedNerPasses, type NerPassRecord } from './ner-degrade';
+import { createNLTaggerNerClient } from './nltagger-ner';
 import type { ProviderConfig } from './providers-store';
+
+// Apple FM NER path retired in favor of NLTagger 2026-07-21; kept for rollback,
+// delete after on-device acceptance. The send path no longer wires the Apple FM
+// per-kind client (makeLocalTier2RedactFn) or its per-pass fold (foldFailedNerPasses):
+//   import { makeLocalTier2RedactFn } from './local-model';
+//   import { foldFailedNerPasses, type NerPassRecord } from './ner-degrade';
+// NLTagger is a single native tagNames call with no per-kind passes, so there
+// are no partial-pass failures to fold; a native failure degrades the whole
+// pass (tier2Degraded), which runTurn still reports.
 
 /**
  * The M6-3 Converse turn on device. This runs the REAL runTurn pipeline
@@ -54,12 +62,20 @@ export interface MobileTurnInput {
   /** Scored retrieval over the unlocked vault (VaultSession.retrieve). */
   retrieve: (query: string, options?: RetrieveOptions) => ScoredEntry[];
   /**
-   * On-device model (M6-4). When present AND ready, a CLOUD turn adds local
-   * NER pseudonymization on top of the always-on deterministic layers. When
-   * null/absent/not-ready, the deterministic layers alone protect the turn.
-   * Ignored by runOnDeviceTurn, which uses the model as the provider itself.
+   * On-device model (M6-4). No longer used by the cloud NER net: since
+   * 2026-07-21 the name net is the always-on NLTagger client (nltagger-ner.ts),
+   * which needs no model detection or download. Retained on the input for
+   * call-site compatibility and possible future use; runMobileTurn does not read
+   * it. Airplane-mode chat still uses the model directly via runOnDeviceTurn.
    */
   localModel?: LocalModel | null;
+  /**
+   * Explicit "send with the deterministic floor only" (the Tier-1 resend after
+   * a name-net abort). When true, runMobileTurn withholds the NLTagger client so
+   * redact() runs deterministic-only; the deterministic shield always runs
+   * regardless. Defaults to false (NLTagger name net on, the iOS posture).
+   */
+  disableNameNet?: boolean;
   onToken?: (token: string) => void;
   signal?: AbortSignal;
 }
@@ -77,18 +93,19 @@ export interface MobileTurnResult {
   /** What was masked (real → placeholder), for the audit view. Ephemeral. */
   redactions: MaskedItem[];
   /**
-   * True when the Tier-2 NER name net did not run at all this turn (no ready
-   * model, or every per-kind pass failed), taken from runTurn's own
+   * True when the Tier-2 NLTagger name net did not run this turn (native module
+   * absent, e.g. Android, or the native call threw), taken from runTurn's own
    * tier2Degraded, the pipeline's source of truth. The deterministic layers
    * still ran; the audit view must say so LOUDLY (invariant #6), never
    * silently.
    */
   tier2Degraded: boolean;
   /**
-   * Per-kind NER passes that failed at least once this turn (pass ids only,
-   * e.g. ['person']; content-free by construction). Empty when NER ran clean
-   * or no local model was in play. When tier2Degraded is true this may list
-   * all passes; the audit view shows the full-degrade warning in that case.
+   * Always empty with the NLTagger net: it is a SINGLE native pass, not a
+   * per-kind decomposition, so there are no partial-pass failures to report; a
+   * native failure degrades the whole pass and surfaces as tier2Degraded above.
+   * Retained (content-free, pass ids only) for the audit view's shape and for
+   * the retired Apple FM path's rollback.
    */
   failedPasses: string[];
 }
@@ -138,24 +155,20 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     captured = c;
   });
 
-  // M6-4 + ADR 0022: run the REAL desktop Tier-3 pipeline on the phone.
-  // makeLocalTier2RedactFn forwards every option (tier, pseudonyms, nerMode)
-  // into redact() with the on-device model as the NER client, so history
-  // replays from the pseudonym map instead of re-running the model (the
-  // desktop hang fix), NER input is capped, the strict junk gate applies, and
-  // a degraded NER PROCEEDS on the deterministic guarantee (tier-3
-  // semantics). With no ready model, redact() runs deterministic-only.
-  const useLocalNer = input.localModel ? await input.localModel.isReady() : false;
-  // Per-pass outcomes from the NER client seam (pass id + ok only, content-
-  // free), folded below into the failedPasses audit summary (invariant #6:
-  // a partial name-net failure must be user-visible, not console-only).
-  const passEvents: NerPassRecord[] = [];
-  const redactFn =
-    useLocalNer && input.localModel
-      ? makeLocalTier2RedactFn(input.localModel, (event) =>
-          passEvents.push({ pass: event.pass, ok: event.ok }),
-        )
-      : (text: string, opts?: Parameters<typeof redact>[1]) => redact(text, opts, null);
+  // M6-4 + ADR 0022 (NLTagger swap 2026-07-21): run the REAL desktop Tier-3
+  // pipeline on the phone. redact() runs its deterministic dictionary floor
+  // first, then hands the dict-masked text to the NLTagger name net as one
+  // strict-gated pass. NLTagger ships in every iOS, so the net is ALWAYS on
+  // here — no model detection, download, or readiness gate. A degraded/absent
+  // net (Android, or a native throw mid-turn) PROCEEDS on the deterministic
+  // guarantee (tier-3 semantics) and is reported as tier2Degraded. The explicit
+  // Tier-1 resend (disableNameNet) withholds the client so redact() runs
+  // deterministic-only. Unlike the retired Apple FM client there are no per-kind
+  // passes, so there is no partial-pass fold: failedPasses stays empty and
+  // tier2Degraded is the single degrade signal.
+  const nerClient = input.disableNameNet ? null : createNLTaggerNerClient();
+  const redactFn = (text: string, opts?: Parameters<typeof redact>[1]) =>
+    redact(text, opts, nerClient);
 
   const result = await runTurn({
     message: input.message,
@@ -184,7 +197,11 @@ export async function runMobileTurn(input: MobileTurnInput): Promise<MobileTurnR
     original: r.original,
     kind: r.kind,
   }));
-  const failedPasses = foldFailedNerPasses(passEvents);
+  // NLTagger is a single native pass with no per-kind decomposition, so there
+  // are never partial-pass failures to report; a native failure degrades the
+  // whole pass and surfaces as result.tier2Degraded below. Kept for the audit
+  // shape (the view still renders TIER2_UNAVAILABLE_MESSAGE on full degrade).
+  const failedPasses: string[] = [];
 
   lastAudit = {
     at: new Date().toISOString(),

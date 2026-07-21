@@ -14,6 +14,7 @@ import {
   type ProviderConfig,
 } from '../src/lib/providers-store';
 import { getLocalModel } from '../src/lib/local-model';
+import { isNLTaggerNerAvailable } from '../src/lib/nltagger-ner';
 import {
   ON_DEVICE_PRIVATE_LABEL,
   PROVIDER_TIER_INTRO,
@@ -37,6 +38,10 @@ export default function Providers() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [keyed, setKeyed] = useState<Record<string, boolean>>({});
   const [localRes, setLocalRes] = useState<LocalModelResolution | null>(null);
+  // The Tier-2 name net is the always-on NLTagger (present on every iOS build),
+  // NOT the on-device chat model. Tracked separately from localRes, which still
+  // drives the on-device (Apple Intelligence) chat card below.
+  const [nerAvailable, setNerAvailable] = useState(false);
   const [busy, setBusy] = useState(false);
 
   const refresh = useCallback(async () => {
@@ -47,10 +52,13 @@ export default function Providers() {
     // Apple-first detection; the llama fallback is never auto-probed here, so no
     // model file can download implicitly (invariant #7).
     const res = await getLocalModel();
+    // NLTagger name-net presence (the Tier-2 posture); always true on iOS.
+    const nerReady = await isNLTaggerNerAvailable();
     setProviders(list);
     setSelectedId(sel);
     setKeyed(flags);
     setLocalRes(res);
+    setNerAvailable(nerReady);
   }, []);
 
   useFocusEffect(
@@ -61,11 +69,12 @@ export default function Providers() {
 
   if (session.status !== 'unlocked') return <Redirect href="/unlock" />;
 
-  // Disclosure only (Wave 2): the SAME condition converse.tsx uses to add the
-  // on-device NER pass to a cloud turn. True -> a cloud message is pseudonymized
-  // on this phone (Tier 2); false -> only the deterministic Tier-1 floor runs.
-  // This changes no send/redaction behavior; it only labels the posture here.
-  const tier2Available = localRes?.model != null;
+  // Disclosure only (Wave 2): the SAME condition converse.tsx uses for the
+  // Tier-2 posture, now the always-on NLTagger name net (nltagger-ner.ts), not
+  // the on-device chat model. True -> a cloud message is pseudonymized on this
+  // phone (Tier 2, universal on iOS); false -> only the deterministic Tier-1
+  // floor runs (e.g. Android). Labels only; no send/redaction behavior changes.
+  const tier2Available = nerAvailable;
 
   async function onDelete(id: string) {
     setBusy(true);
