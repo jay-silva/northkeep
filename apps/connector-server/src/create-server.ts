@@ -38,12 +38,14 @@ import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handle
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { OAuthError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
+import { NeonConnectorStorage } from './neon-storage.js';
 import { ConnectorOAuthProvider } from './provider.js';
 import { createMcpServer } from './mcp.js';
 import { renderConsentPage } from './consent.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
 import { sha256hex, generatePairingCode } from './hash.js';
 import { connectorGateFromEnv, verifyEntitlement, ENTITLEMENT_GRACE_MS } from './entitlement.js';
+import { connectorContentSecretFromEnv, encryptContent, decryptContent } from './content-crypto.js';
 
 const PAIRING_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const RATE_LIMIT_DEFAULT = 120;
@@ -76,7 +78,45 @@ const MAX_TOTAL_CONTENT_BYTES = 4 * 1024 * 1024; // ~4 MB of content per push
 // in-handler, not silently 413'd by the parser.
 const CLIENT_BODY_LIMIT = '8mb';
 
-export function createConnectorServer(storage: ConnectorStorage): express.Express {
+/** Options for the connector server factory. */
+export interface ConnectorServerOptions {
+  /**
+   * The content-encryption secret (IKM for the per-account content KDF). When
+   * OMITTED, it is read from NORTHKEEP_CONNECTOR_CONTENT_SECRET via the env
+   * helper (production path). Pass an explicit Buffer to inject a fixed secret
+   * (tests) or `null` to force the no-secret path (in-memory dev only). See
+   * content-crypto.ts and the fail-closed guard below.
+   */
+  contentSecret?: Buffer | null;
+}
+
+export function createConnectorServer(
+  storage: ConnectorStorage,
+  options: ConnectorServerOptions = {},
+): express.Express {
+  // ---- content encryption-at-rest (invariant #2/#3) ----------------------
+  // Resolve the content secret: an explicit option wins (tests inject a fixed
+  // 32-byte secret; `null` forces plaintext for in-memory dev), otherwise read
+  // the env. FAIL CLOSED, mirroring the billing/entitlement pattern: a server
+  // backed by REAL (Neon) content storage MUST NOT start without a secret, or it
+  // would persist shared-scope content as plaintext at rest — the exact bug this
+  // fixes. In-memory storage (tests/local dev) has nothing at rest, so a missing
+  // secret there is a plaintext passthrough, not a refusal.
+  const contentSecret: Buffer | null =
+    options.contentSecret !== undefined ? options.contentSecret : connectorContentSecretFromEnv(process.env);
+  if (storage instanceof NeonConnectorStorage && !contentSecret) {
+    throw new Error(
+      'Refusing to start: a Neon-backed connector stores shared content at rest and requires ' +
+        'NORTHKEEP_CONNECTOR_CONTENT_SECRET (>= 32 bytes) to encrypt it. Set it (e.g. `openssl rand -hex 32`).',
+    );
+  }
+  /** Encrypt plaintext for at-rest storage (passthrough when no secret — in-memory dev). */
+  const encForStore = (accountHash: string, plaintext: string): string =>
+    contentSecret ? encryptContent(accountHash, plaintext, contentSecret) : plaintext;
+  /** Decrypt an at-rest blob to plaintext, or null if unreadable (fail-closed skip). */
+  const decFromStore = (accountHash: string, blob: string): string | null =>
+    contentSecret ? decryptContent(accountHash, blob, contentSecret) : blob;
+
   const publicUrl = (process.env.PUBLIC_URL || 'http://localhost:3000').replace(/\/$/, '');
   const issuerUrl = new URL(publicUrl);
   const mcpResourceUrl = `${publicUrl}/mcp`;
@@ -329,7 +369,7 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
       });
       return;
     }
-    const server = createMcpServer(storage, accountHash);
+    const server = createMcpServer(storage, accountHash, contentSecret);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       transport.close();
@@ -432,11 +472,14 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
         res.status(413).json({ error: `The push exceeds the ${MAX_TOTAL_CONTENT_BYTES / 1024 / 1024} MB total content cap.` });
         return;
       }
+      // ENCRYPT-AT-REST boundary: the per-entry/total byte caps above are measured
+      // on the PLAINTEXT (the user-facing size limit), then content is encrypted
+      // before it ever reaches storage. No plaintext content is persisted.
       entries.push({
         entryId: e.entry_id,
         scope: e.scope,
         type: e.type,
-        content: e.content,
+        content: encForStore(accountHash, e.content),
         entryHash: typeof e.entry_hash === 'string' ? e.entry_hash : '',
         createdAt: now,
       });
@@ -510,10 +553,19 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
     // fresh entry — otherwise a forgotten-before-delivery memory would land in the
     // vault. It still rides in `forgets` so the server row is drained.
     const forgottenSet = new Set(forgets);
+    // DECRYPT-AT-REST boundary: connector-born rows are stored encrypted; the
+    // desktop expects plaintext to append into the open vault. Decrypt transiently
+    // here. A row that fails to decrypt (legacy plaintext / tamper) yields null and
+    // is SKIPPED (fail-closed) rather than delivered as garbage.
+    const deliverable: Array<{ server_id: string; scope: string; type: string; content: string }> = [];
+    for (const e of pending) {
+      if (forgottenSet.has(e.entryId)) continue;
+      const content = decFromStore(accountHash, e.content);
+      if (content === null) continue;
+      deliverable.push({ server_id: e.entryId, scope: e.scope, type: e.type, content });
+    }
     res.status(200).json({
-      entries: pending
-        .filter((e) => !forgottenSet.has(e.entryId))
-        .map((e) => ({ server_id: e.entryId, scope: e.scope, type: e.type, content: e.content })),
+      entries: deliverable,
       forgets: forgets.map((entry_id) => ({ entry_id })),
     });
   });

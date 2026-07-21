@@ -365,8 +365,10 @@ every milestone; if a limit is removed, say when and how.*
   stays ciphertext-only and keyless. A scope you mark Shared is copied to
   NorthKeep's connector server, where it is stored encrypted at rest: the database
   holds only ciphertext, and NorthKeep keeps no key in that database that can read
-  it. The key is rebuilt for each request from your connected app's own credential
-  plus a secret held on our server. Because the server rebuilds that key and
+  it. The key is derived for each request from a secret held in the server's
+  environment (never in the database) plus your account identity, and the
+  transient decryption is only performed to serve a legitimately-paired,
+  authenticated app's request. Because the server rebuilds that key and
   decrypts on every legitimate request to serve your apps, the honest claim is "we
   do not store a key in the database that reads your content," not "we cannot
   read." If you never share a scope, nothing changes.

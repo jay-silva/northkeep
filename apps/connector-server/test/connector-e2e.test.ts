@@ -7,6 +7,11 @@ import { deriveConnectorToken, tokenHash } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
 import { sha256hex } from '../src/hash.js';
+import { encryptContent } from '../src/content-crypto.js';
+
+/** Fixed 32-byte content secret; storage seeds must be encrypted like the push boundary. */
+const TEST_CONTENT_SECRET = Buffer.alloc(32, 0x2b);
+const enc = (acct: string, content: string): string => encryptContent(acct, content, TEST_CONTENT_SECRET);
 
 /**
  * C1 acceptance — the hosted shareable-scope connector against a locally-started
@@ -67,8 +72,8 @@ beforeAll(async () => {
   process.env.PUBLIC_URL = `http://127.0.0.1:${portA}`;
   baseA = process.env.PUBLIC_URL;
   RESOURCE = `${baseA}/mcp`;
-  [serverA] = await listen(createConnectorServer(storage), portA);
-  [serverB, baseB] = await listen(createConnectorServer(storage), 0);
+  [serverA] = await listen(createConnectorServer(storage, { contentSecret: TEST_CONTENT_SECRET }), portA);
+  [serverB, baseB] = await listen(createConnectorServer(storage, { contentSecret: TEST_CONTENT_SECRET }), 0);
 });
 
 afterAll(async () => {
@@ -235,7 +240,7 @@ describe('C1 connector acceptance', () => {
       entryId: 'e1',
       scope: 'work',
       type: 'fact',
-      content: SECRET_MEMORY,
+      content: enc(account1, SECRET_MEMORY),
       createdAt: new Date().toISOString(),
     });
 
@@ -304,7 +309,7 @@ describe('C1 connector acceptance', () => {
       entryId: 'x1',
       scope: 'personal',
       type: 'fact',
-      content: 'Account two likes espresso.',
+      content: enc(account2, 'Account two likes espresso.'),
       createdAt: new Date().toISOString(),
     });
 
@@ -337,7 +342,7 @@ describe('C1 connector acceptance', () => {
       entryId: 'e2',
       scope: 'work',
       type: 'fact',
-      content: SECRET_MEMORY,
+      content: enc(account1, SECRET_MEMORY),
       createdAt: new Date().toISOString(),
     });
     const pairingCode = await pairStart(baseA, connToken1);
@@ -443,7 +448,7 @@ describe('C1 connector acceptance', () => {
       entryId: 'e3',
       scope: 'work',
       type: 'fact',
-      content: SECRET_MEMORY,
+      content: enc(account1, SECRET_MEMORY),
       createdAt: new Date().toISOString(),
     });
     const call = await mcpCall(baseB, refreshed.access_token, {

@@ -6,6 +6,11 @@ import type { AddressInfo } from 'node:net';
 import { deriveConnectorToken, tokenHash } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
+import { encryptContent } from '../src/content-crypto.js';
+
+/** Fixed 32-byte content secret; direct storage seeds must be encrypted like the push boundary. */
+const TEST_CONTENT_SECRET = Buffer.alloc(32, 0x2b);
+const enc = (acct: string, content: string): string => encryptContent(acct, content, TEST_CONTENT_SECRET);
 
 /**
  * C4 acceptance — ChatGPT hardening (ADR 0019).
@@ -61,20 +66,23 @@ beforeAll(async () => {
   process.env.PUBLIC_URL = `http://127.0.0.1:${port}`;
   base = process.env.PUBLIC_URL;
   RESOURCE = `${base}/mcp`;
-  [server] = await listen(createConnectorServer(storage), port);
+  [server] = await listen(createConnectorServer(storage, { contentSecret: TEST_CONTENT_SECRET }), port);
 
+  // Seeds go straight into storage, so they must be encrypted the way the push
+  // boundary would — otherwise the retrieve boundary treats them as legacy
+  // plaintext, fails closed, and skips them.
   await storage.putEntry(account1, {
     entryId: 'a1-e1',
     scope: 'work',
     type: 'semantic',
-    content: SECRET_MEMORY,
+    content: enc(account1, SECRET_MEMORY),
     createdAt: new Date().toISOString(),
   });
   await storage.putEntry(account2, {
     entryId: 'a2-e1',
     scope: 'personal',
     type: 'semantic',
-    content: ACCT2_MEMORY,
+    content: enc(account2, ACCT2_MEMORY),
     createdAt: new Date().toISOString(),
   });
 });

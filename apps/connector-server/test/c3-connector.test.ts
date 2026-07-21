@@ -16,6 +16,12 @@ import {
 } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
+import { decryptContent } from '../src/content-crypto.js';
+
+/** Fixed 32-byte content secret injected into the server; the store holds ciphertext at rest. */
+const TEST_CONTENT_SECRET = Buffer.alloc(32, 0x2b);
+/** Decrypt a stored blob under an account's key (storage rows are ciphertext, not plaintext). */
+const dec = (acct: string, blob: string): string | null => decryptContent(acct, blob, TEST_CONTENT_SECRET);
 
 /**
  * C3 acceptance — write-back down-sync + the billing gate (ADR 0019).
@@ -86,7 +92,7 @@ describe('C3 write-back down-sync', () => {
     process.env.PUBLIC_URL = `http://127.0.0.1:${port}`;
     base = process.env.PUBLIC_URL;
     RESOURCE = `${base}/mcp`;
-    [server] = await listen(createConnectorServer(storage), port);
+    [server] = await listen(createConnectorServer(storage, { contentSecret: TEST_CONTENT_SECRET }), port);
 
     // Seed the server so 'work' is a currently-shared scope (memory_remember
     // fails closed against a scope with no existing rows).
@@ -221,7 +227,9 @@ describe('C3 write-back down-sync', () => {
     // 2. It shows up as pending, connector-origin, undelivered.
     const pending = await storage.listPendingEntries(account);
     expect(pending).toHaveLength(1);
-    expect(pending[0]!.content).toBe(FERRY);
+    // Stored at rest as ciphertext; decrypts transiently to the plaintext.
+    expect(pending[0]!.content.startsWith('nkc1:')).toBe(true);
+    expect(dec(account, pending[0]!.content)).toBe(FERRY);
     expect(pending[0]!.origin).toBe('connector');
 
     // 3. Down-sync: it lands in the vault as a normal append; chain stays valid.
@@ -240,12 +248,12 @@ describe('C3 write-back down-sync', () => {
     // After the down-sync ack, the server row is remapped to the vault id and no
     // longer pending; a re-push then rehashes it with the real vault entry_hash.
     expect(await storage.listPendingEntries(account)).toHaveLength(0);
-    let row = (await storage.listEntries(account)).find((e) => e.content === FERRY);
+    let row = (await storage.listEntries(account)).find((e) => dec(account, e.content) === FERRY);
     expect(row!.entryId).toBe(localId);
     expect(row!.pending).toBe(false);
 
     await withVault((v) => pushSharedScopes({ server: base, deviceSecret, scopes: ['work'], vault: v }));
-    row = (await storage.listEntries(account)).find((e) => e.content === FERRY);
+    row = (await storage.listEntries(account)).find((e) => dec(account, e.content) === FERRY);
     expect(/^[0-9a-f]{64}$/.test(row!.entryHash ?? '')).toBe(true);
 
     // 4. The AI forgets it. It is hidden immediately, then tombstoned in the
@@ -261,7 +269,7 @@ describe('C3 write-back down-sync', () => {
       expect(v.list({ scope: 'work' }).some((e) => e.content === FERRY)).toBe(false);
       expect(v.verifyChain().ok).toBe(true);
     });
-    expect((await storage.listEntries(account)).some((e) => e.content === FERRY)).toBe(false);
+    expect((await storage.listEntries(account)).some((e) => dec(account, e.content) === FERRY)).toBe(false);
     expect(await storage.listPendingForgets(account)).toHaveLength(0);
   });
 
@@ -276,7 +284,7 @@ describe('C3 write-back down-sync', () => {
     // the vault yet). The reconcile-delete must spare the pending connector row.
     await withVault((v) => pushSharedScopes({ server: base, deviceSecret, scopes: ['work'], vault: v }));
     const stillPending = await storage.listPendingEntries(account);
-    expect(stillPending.some((e) => e.entryId === serverId && e.content === RACE)).toBe(true);
+    expect(stillPending.some((e) => e.entryId === serverId && dec(account, e.content) === RACE)).toBe(true);
 
     // Now the down-sync succeeds and the memory reaches the vault.
     const down = await withVault((v) => downSyncConnector({ server: base, deviceSecret, vault: v }));
@@ -340,12 +348,12 @@ describe('C3 write-back down-sync', () => {
       expect(tomb?.forgotten_at).toBeTruthy(); // tombstoned, chain preserved
       expect(v.verifyChain().ok).toBe(true);
     });
-    expect((await storage.listEntries(account)).some((e) => e.content === RACED)).toBe(false);
+    expect((await storage.listEntries(account)).some((e) => dec(account, e.content) === RACED)).toBe(false);
     expect(await storage.listPendingForgets(account)).toHaveLength(0);
 
     // 6. A re-push must NOT resurrect it server-side.
     await withVault((v) => pushSharedScopes({ server: base, deviceSecret, scopes: ['work'], vault: v }));
-    expect((await storage.listEntries(account)).some((e) => e.content === RACED)).toBe(false);
+    expect((await storage.listEntries(account)).some((e) => dec(account, e.content) === RACED)).toBe(false);
   });
 });
 
@@ -382,7 +390,7 @@ describe('C3 billing gate', () => {
     process.env.CONNECTOR_ENTITLEMENT_SECRET = SECRET;
     const port = await freePort();
     process.env.PUBLIC_URL = `http://127.0.0.1:${port}`;
-    [server, base] = await listen(createConnectorServer(storage), port);
+    [server, base] = await listen(createConnectorServer(storage, { contentSecret: TEST_CONTENT_SECRET }), port);
   });
 
   afterAll(async () => {

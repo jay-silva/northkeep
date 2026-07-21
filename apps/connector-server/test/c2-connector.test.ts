@@ -17,6 +17,14 @@ import {
 } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
+import { decryptContent, encryptContent } from '../src/content-crypto.js';
+
+/** Fixed 32-byte content secret injected into the server so stored content is encrypted at rest. */
+const TEST_CONTENT_SECRET = Buffer.alloc(32, 0x2b);
+/** Decrypt a stored blob under an account's key (the store holds ciphertext, not plaintext). */
+const dec = (acct: string, blob: string): string | null => decryptContent(acct, blob, TEST_CONTENT_SECRET);
+/** Encrypt content the way the push boundary does — for seeds injected straight into storage. */
+const enc = (acct: string, content: string): string => encryptContent(acct, content, TEST_CONTENT_SECRET);
 
 /**
  * C2 acceptance — desktop marks scopes Shared and pushes REAL vault entries to
@@ -97,7 +105,7 @@ beforeAll(async () => {
   process.env.PUBLIC_URL = `http://127.0.0.1:${port}`;
   base = process.env.PUBLIC_URL;
   RESOURCE = `${base}/mcp`;
-  [server] = await listen(createConnectorServer(storage), port);
+  [server] = await listen(createConnectorServer(storage, { contentSecret: TEST_CONTENT_SECRET }), port);
 });
 
 afterAll(async () => {
@@ -247,14 +255,22 @@ describe('C2 client push + share marking', () => {
     );
     expect(result.pushed).toBe(2); // two live work memories
 
-    // Server holds exactly the work rows, byte-faithful, with entry_hash set.
+    // Server holds exactly the work rows, with entry_hash set.
     const rows = await storage.listEntries(account);
     expect(rows).toHaveLength(2);
     expect(rows.every((r) => r.scope === 'work')).toBe(true);
     expect(rows.every((r) => /^[0-9a-f]{64}$/.test(r.entryHash ?? ''))).toBe(true);
-    expect(rows.some((r) => r.content === WORK_1)).toBe(true);
-    // The personal secret was NEVER pushed.
-    expect(rows.some((r) => r.content.includes('lisinopril'))).toBe(false);
+
+    // ENCRYPTION-AT-REST: the value STORED in the content column is CIPHERTEXT —
+    // versioned "nkc1:" blobs, and the plaintext never appears at rest. A
+    // connector-DB breach yields ciphertext, not content (invariant #2).
+    expect(rows.every((r) => r.content.startsWith('nkc1:'))).toBe(true);
+    expect(rows.some((r) => r.content.includes(WORK_1))).toBe(false);
+    expect(rows.some((r) => r.content.includes('compliance'))).toBe(false);
+    // ...but it decrypts transiently to the correct plaintext under the account key.
+    expect(rows.some((r) => dec(account, r.content) === WORK_1)).toBe(true);
+    // The personal secret was NEVER pushed (no row decrypts to it).
+    expect(rows.some((r) => (dec(account, r.content) ?? '').includes('lisinopril'))).toBe(false);
 
     // The AI app connects and retrieves the work memory.
     const token = await connectAiApp();
@@ -286,7 +302,7 @@ describe('C2 client push + share marking', () => {
     let manifest = await getManifest({ server: base, deviceSecret });
     expect(manifest).toHaveLength(3);
     let serverRows = await storage.listEntries(account);
-    expect(serverRows.some((r) => r.content === NEW)).toBe(true);
+    expect(serverRows.some((r) => dec(account, r.content) === NEW)).toBe(true);
 
     // Forget the new memory in the vault and re-push: the server row must vanish.
     withVault((vault) => {
@@ -298,8 +314,9 @@ describe('C2 client push + share marking', () => {
     manifest = await getManifest({ server: base, deviceSecret });
     expect(manifest).toHaveLength(2);
     serverRows = await storage.listEntries(account);
-    expect(serverRows.some((r) => r.content === NEW)).toBe(false); // gone server-side
-    expect(serverRows.some((r) => r.content === WORK_1)).toBe(true); // the others remain
+    // Decrypt-then-compare so "gone" is a real absence, not a vacuous ciphertext mismatch.
+    expect(serverRows.some((r) => dec(account, r.content) === NEW)).toBe(false); // gone server-side
+    expect(serverRows.some((r) => dec(account, r.content) === WORK_1)).toBe(true); // the others remain
   });
 
   it('share remove work → /mcp returns nothing, shared_entries is empty, a tombstone exists', async () => {
@@ -328,12 +345,14 @@ describe('C2 client push + share marking', () => {
       entryId: 'other-1',
       scope: 'work',
       type: 'semantic',
-      content: 'Account two prefers oat milk.',
+      content: enc(otherAccount, 'Account two prefers oat milk.'),
       createdAt: new Date().toISOString(),
     });
     const rows = await storage.listEntries(otherAccount);
     expect(rows).toHaveLength(1);
-    expect(rows.some((r) => r.content === WORK_1)).toBe(false);
+    expect(rows.some((r) => dec(otherAccount, r.content) === WORK_1)).toBe(false);
+    // Account 1's key cannot read account 2's blob (cross-account isolation is cryptographic).
+    expect(dec(account, rows[0]!.content)).toBeNull();
   });
 
   it('caps: an over-cap push is rejected (per-entry content > 8 KB)', async () => {

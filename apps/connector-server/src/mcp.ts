@@ -33,6 +33,7 @@ import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
+import { decryptContent, encryptContent } from './content-crypto.js';
 
 const MAX_RESULTS = 20;
 const MAX_REMEMBER_BYTES = 8 * 1024; // mirrors the push per-entry content cap
@@ -75,11 +76,32 @@ function snippetOf(content: string): string {
   return flat.length > SEARCH_SNIPPET_MAX ? `${flat.slice(0, SEARCH_SNIPPET_MAX - 1)}…` : flat;
 }
 
-export function createMcpServer(storage: ConnectorStorage, accountHash: string): McpServer {
+export function createMcpServer(
+  storage: ConnectorStorage,
+  accountHash: string,
+  contentSecret: Buffer | null,
+): McpServer {
   const server = new McpServer(
     { name: 'northkeep-connector', version: '0.1.0' },
     { capabilities: { tools: {} } },
   );
+
+  // DECRYPT-AT-REST boundary: storage holds ciphertext blobs; every content-
+  // CONSUMING path (retrieve/list/search/fetch) runs rows through here to get
+  // transient plaintext, in memory only. A row that fails to decrypt (wrong key,
+  // tamper, or legacy plaintext) yields null and is DROPPED — fail-closed, never
+  // returned. Passthrough when no secret is configured (in-memory dev only).
+  // NOTE: metadata-only paths (scope/count checks in memory_remember) must NOT go
+  // through this — they operate on plaintext metadata and must see every row.
+  const decryptEntries = (rows: SharedEntry[]): SharedEntry[] => {
+    const out: SharedEntry[] = [];
+    for (const e of rows) {
+      const content = contentSecret ? decryptContent(accountHash, e.content, contentSecret) : e.content;
+      if (content === null) continue;
+      out.push({ ...e, content });
+    }
+    return out;
+  };
 
   server.registerTool(
     'memory_retrieve',
@@ -92,7 +114,7 @@ export function createMcpServer(storage: ConnectorStorage, accountHash: string):
     async ({ query }) => {
       const terms = tokenize(query ?? '');
       const hidden = new Set(await storage.listPendingForgets(accountHash));
-      const all = (await storage.listEntries(accountHash)).filter((e) => !hidden.has(e.entryId));
+      const all = decryptEntries((await storage.listEntries(accountHash)).filter((e) => !hidden.has(e.entryId)));
       const ranked = all
         .map((e) => ({ e, s: scoreEntry(e, terms) }))
         .filter((x) => x.s > 0)
@@ -127,7 +149,10 @@ export function createMcpServer(storage: ConnectorStorage, accountHash: string):
     },
     async () => {
       const hidden = new Set(await storage.listPendingForgets(accountHash));
-      const all = (await storage.listEntries(accountHash)).filter((e) => !hidden.has(e.entryId)).slice(0, MAX_RESULTS);
+      const all = decryptEntries((await storage.listEntries(accountHash)).filter((e) => !hidden.has(e.entryId))).slice(
+        0,
+        MAX_RESULTS,
+      );
 
       await storage.appendAudit({
         ts: new Date().toISOString(),
@@ -209,11 +234,14 @@ export function createMcpServer(storage: ConnectorStorage, accountHash: string):
         };
       }
       const entryId = `conn_${randomUUID().replace(/-/g, '')}`;
+      // ENCRYPT-AT-REST boundary: a connector-born memory is stored encrypted too,
+      // so nothing this AI flow writes lands as plaintext. The scope/count checks
+      // above read only plaintext METADATA (scope, row count), never content.
       await storage.putEntry(accountHash, {
         entryId,
         scope: targetScope,
         type: memType,
-        content: body,
+        content: contentSecret ? encryptContent(accountHash, body, contentSecret) : body,
         entryHash: '',
         origin: 'connector',
         pending: true,
@@ -286,7 +314,7 @@ export function createMcpServer(storage: ConnectorStorage, accountHash: string):
     async ({ query }) => {
       const terms = tokenize(query ?? '');
       const hidden = new Set(await storage.listPendingForgets(accountHash));
-      const all = (await storage.listEntries(accountHash)).filter((e) => !hidden.has(e.entryId));
+      const all = decryptEntries((await storage.listEntries(accountHash)).filter((e) => !hidden.has(e.entryId)));
       const ranked = all
         .map((e) => ({ e, s: scoreEntry(e, terms) }))
         .filter((x) => x.s > 0)
@@ -327,7 +355,11 @@ export function createMcpServer(storage: ConnectorStorage, accountHash: string):
     async ({ id }) => {
       const entryId = (id ?? '').trim();
       const hidden = new Set(await storage.listPendingForgets(accountHash));
-      const row = entryId && !hidden.has(entryId) ? await storage.getEntry(accountHash, entryId) : null;
+      const stored = entryId && !hidden.has(entryId) ? await storage.getEntry(accountHash, entryId) : null;
+      // Decrypt at the retrieve boundary; a row that fails to decrypt (wrong key,
+      // tamper, legacy plaintext) is treated as not-found — fail-closed, no id
+      // disclosed in the audit below.
+      const row = stored ? (decryptEntries([stored])[0] ?? null) : null;
 
       await storage.appendAudit({
         ts: new Date().toISOString(),
