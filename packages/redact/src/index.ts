@@ -2,7 +2,7 @@ import { createOllamaClient, type OllamaClient } from '@northkeep/librarian';
 import { generalizeDates } from './dates.js';
 import { scrubNames } from './names.js';
 import { applyTier1 } from './tier1.js';
-import { applyTier2, noSpaceScript } from './tier2.js';
+import { applyTier2, boundaryFriendly } from './tier2.js';
 import type { PseudonymMap, RedactOptions, RedactionResult, Replacement } from './types.js';
 
 export * from './types.js';
@@ -152,9 +152,9 @@ export function replayPseudonyms(
     const re = new RegExp(`(?<![\\p{L}\\p{N}_])${esc}(?![\\p{L}\\p{N}_])`, 'giu');
     if (re.test(out)) {
       out = out.replace(re, placeholder);
-    } else if (noSpaceScript(original) && out.includes(original)) {
-      // No-space / clitic scripts: boundaries are unreliable; mask the exact
-      // span (over-masking is the safe direction; see tier2.noSpaceScript).
+    } else if (!boundaryFriendly(original) && out.includes(original)) {
+      // Non-space-delimited / unlisted script: boundaries unreliable; mask the
+      // exact span (over-masking is the safe direction; see boundaryFriendly).
       out = out.split(original).join(placeholder);
     } else {
       continue;

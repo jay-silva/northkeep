@@ -204,26 +204,30 @@ every milestone; if a limit is removed, say when and how.*
   non-monotonic surname-stranding bug. A clean future fix: have the placeholder
   gate mask the non-placeholder residual inside a rejected span rather than
   dropping the whole span (packages/redact/src/tier2.ts).
-- **Non-Latin-script names mask when DETECTED, but have no deterministic floor.**
-  As of 2026-07-21 (two adversarial-review rounds) the NER masking covers every
-  script: Latin / Cyrillic / Greek via Unicode word boundaries, AND CJK / kana /
-  Hangul / Thai / Arabic / Hebrew via a script-gated exact-substring fallback
-  (word boundaries are meaningless in no-space and clitic-attached scripts, so a
-  name abutting other letters like "田中さん" or the Arabic proclitic "ومحمد" is
-  masked as a substring; over-masking is the safe direction, and space-delimited
-  Latin/Cyrillic/Greek never take the fallback so "Ann" is never cut from
-  "Anna"). The old ASCII \b + Latin-only gate silently leaked ALL non-Latin
-  names; this closes the detected cases. REMAINING residuals, honestly: (1) the
-  deterministic dictionary floor (scrubNames) is Latin/list-based, so it does NOT
-  back-stop non-Latin names — a non-Latin name the NER net MISSES has no second
-  layer and can still egress (coverage is "masked when the on-device recognizer
-  detects it," not the deterministic guarantee Latin/listed names get); (2) a
-  single-character CJK surname masked as a substring can over-mask that character
-  elsewhere (safe direction); (3) an inflected surface differing from a lemma the
-  NER returns would still miss, but the on-device recognizer (NLTagger) returns
-  the surface span, so this does not affect the mobile path. The eval
-  floor-monotonicity gate is likewise script-aware (substring presence for
-  no-space scripts), so it no longer scores leaking non-Latin text as clean.
+- **Non-Latin names: masked by a FAIL-CLOSED default, not an enumerated list.**
+  After three adversarial-review rounds (2026-07-21) name masking no longer tries
+  to enumerate the dangerous scripts (that list kept missing members - Lao,
+  Khmer, Myanmar, halfwidth katakana, single-character CJK all leaked in turn).
+  It inverts: only space-delimited CASED alphabets (Latin incl. Vietnamese
+  extended, Cyrillic, Greek, Armenian, Georgian) use word-boundary masking, where
+  a boundary miss reliably means "genuine substring of a longer word" and must
+  NOT be cut ("Ann" in "Anna"). EVERY OTHER script - all no-space scripts
+  (CJK/kana/Hangul/Thai/Lao/Khmer/Myanmar/Tibetan), clitic-attaching scripts
+  (Arabic/Hebrew), Indic scripts, AND any script not listed or invented later -
+  defaults to exact-substring masking (OVER-MASK, the safe direction). So an
+  unknown or new script can never SILENTLY LEAK; the worst case is over-masking.
+  The eval floor-monotonicity monitor mirrors the same split, so it is at least
+  as broad as the masker and never scores a leaking script clean.
+  REMAINING residuals, honestly: (1) no DETERMINISTIC floor for non-Latin - the
+  dictionary (scrubNames) is Latin/list-based, so a non-Latin name the on-device
+  recognizer (NLTagger) MISSES has no second layer and can still egress; coverage
+  is "masked when detected," not the deterministic guarantee Latin/listed names
+  get. (2) Over-masking noise in no-space scripts: a short CJK name masked as a
+  substring can over-mask that sequence elsewhere (safe direction, but visible).
+  (3) A lemma-vs-surface mismatch (NER returns a base form differing from the
+  inflected text) would still miss in a boundary script like Cyrillic, but the
+  on-device recognizer returns the surface span, so the mobile path is unaffected;
+  desktop Ollama can hit it.
 - **Place names are no longer masked as people — with deliberate edges both
   ways** (field report 2026-07-19: "New Bedford" masked as "New Person-1",
   "Morgan St" as a person). The name pass now suppresses a dictionary hit

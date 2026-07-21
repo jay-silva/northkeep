@@ -77,13 +77,14 @@ export async function applyTier2(
     );
     if (re.test(out)) {
       out = out.replace(re, placeholder);
-    } else if (noSpaceScript(entity.text) && out.includes(entity.text)) {
-      // No-space / clitic scripts (CJK, kana, Hangul, Thai, Arabic, Hebrew):
-      // word boundaries are unreliable, so a detected name abuts other letters
-      // and the boundary replace above misses it (adversarial re-review
-      // 2026-07-21). Mask the exact detected span as a substring. Over-masking
-      // is the safe direction; Latin/Cyrillic/Greek are space-delimited and
-      // never reach here, so "Ann" is never cut out of "Anna".
+    } else if (!boundaryFriendly(entity.text) && out.includes(entity.text)) {
+      // Any script that is NOT a space-delimited cased alphabet (CJK, kana,
+      // Hangul, Thai, Lao, Khmer, Arabic, Hebrew, Indic, or an unlisted/new
+      // script): word boundaries are unreliable, so the boundary replace above
+      // can miss a name abutting other letters. Mask the exact detected span as
+      // a substring. Over-masking is the safe direction; only Latin/Cyrillic/
+      // Greek/Armenian/Georgian reach the plain `continue`, so "Ann" is never
+      // cut out of "Anna". Fail-closed inversion, adversarial review round 3.
       out = out.split(entity.text).join(placeholder);
     } else {
       continue;
@@ -141,7 +142,11 @@ ${text.slice(0, 6000)}`;
     const record = item as { text?: unknown; kind?: unknown };
     if (typeof record.text !== 'string') continue;
     const span = record.text.trim();
-    if (span.length < 2 || span.length > 100) continue;
+    // Drop length-1 spans ONLY for boundary-friendly scripts (a lone Latin "J."
+    // is an initial); a single-character CJK name ("王") is a real name and must
+    // survive to the substring fallback (adversarial review round 3).
+    if (span.length > 100) continue;
+    if (span.length < 2 && boundaryFriendly(span)) continue;
     if (!text.includes(span)) continue; // model must quote real spans, not invent
     if (!plausibleEntity(span, strictGate)) continue; // 3B junk gate (field report 2026-07-17)
     const kind =
@@ -204,18 +209,30 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+const SAFE_SCRIPT_LETTER =
+  /[A-Za-z\u00C0-\u024F\u1E00-\u1EFF\u0370-\u03FF\u1F00-\u1FFF\u0400-\u052F\u0531-\u058F\u10A0-\u10FF\u1C90-\u1CBF]/u;
+const ANY_LETTER = /\p{L}/u;
+
 /**
- * True when a span contains a character from a script written WITHOUT spaces
- * between words (CJK ideographs, kana, Hangul, Thai) or with attached clitics
- * (Arabic, Hebrew). Word-boundary matching is unreliable for these, so a
- * detected name abuts other letters and a boundary-anchored replace misses it;
- * callers fall back to exact-substring masking there. Latin/Cyrillic/Greek are
- * space-delimited and are deliberately NOT in this set, so substring masking
- * never over-cuts them (e.g. "Ann" inside "Anna"). Shared by applyTier2 and
- * replayPseudonyms (index.ts) and the eval's leak monitor (eval.ts).
+ * True when EVERY letter in the span belongs to a space-delimited, cased
+ * alphabetic script (Latin incl. extended for Vietnamese, Cyrillic, Greek incl.
+ * extended, Armenian, Georgian) - the scripts where a word-boundary FAILURE
+ * reliably means the span is a genuine substring of a longer word, so the caller
+ * must NOT substring-mask it ("Ann" inside "Anna").
+ *
+ * FAIL-CLOSED INVERSION (adversarial review round 3, 2026-07-21): callers treat
+ * !boundaryFriendly as "use the exact-substring fallback = OVER-MASK" (the safe
+ * direction). So every OTHER script - no-space (CJK/kana/Hangul/Thai/Lao/Khmer/
+ * Myanmar/Tibetan), clitic-attaching (Arabic/Hebrew), Indic, halfwidth katakana,
+ * AND any script not enumerated here or invented later - over-masks on a boundary
+ * miss instead of silently leaking. Omitting a script from the SAFE set costs
+ * over-masking, never a leak; that is why we list the SAFE set, not the dangerous
+ * one (the dangerous-set list had missed members three review rounds running).
+ * Shared by applyTier2, replayPseudonyms (index.ts), and the eval monitor.
  */
-export function noSpaceScript(s: string): boolean {
-  return /[぀-ヿ㐀-䶿一-鿿가-힯豈-﫿฀-๿؀-ۿ֐-׿]|[\u{20000}-\u{2FFFF}]/u.test(
-    s,
-  );
+export function boundaryFriendly(s: string): boolean {
+  for (const ch of s) {
+    if (ANY_LETTER.test(ch) && !SAFE_SCRIPT_LETTER.test(ch)) return false;
+  }
+  return true;
 }

@@ -227,6 +227,10 @@ describe('redact() tier orchestration', () => {
       ['李明是医生です。', '李明'], // CJK, name abuts 是
       ['สมชายไปตลาด', 'สมชาย'], // Thai, no spaces
       ['ومحمد جاء اليوم.', 'محمد'], // Arabic proclitic (و attached)
+      ['ສົມຊາຍໄປຕະຫຼາດ', 'ສົມຊາຍ'], // Lao (round-3 fail-closed: was leaking)
+      ['សុខាទៅផ្សារ', 'សុខា'], // Khmer (was leaking)
+      ['ﾀﾅｶさんは来た', 'ﾀﾅｶ'], // halfwidth katakana, Japanese (was leaking)
+      ['王来了。', '王'], // single-char CJK name (was dropped by length<2 then leaked)
     ];
     for (const [text, name] of cases) {
       const ner = {

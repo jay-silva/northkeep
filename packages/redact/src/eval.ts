@@ -1,6 +1,6 @@
 import type { OllamaClient } from '@northkeep/librarian';
 import { redact } from './index.js';
-import { noSpaceScript } from './tier2.js';
+import { boundaryFriendly } from './tier2.js';
 import type { EntityKind } from './types.js';
 
 /**
@@ -238,21 +238,20 @@ function nameTokens(name: string): string[] {
     // "" and the leak becoming invisible to the gate (adversarial review
     // 2026-07-21).
     .map((t) => t.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, ''))
-    .filter((t) => t.length >= 2);
+    .filter((t) => t.length >= 2 || !boundaryFriendly(t));
 }
 
 /** Whole-word (case-insensitive) presence of `token` in `text`. This is the wire
  * test: a name token that survives as a whole word in the redacted string is
  * plaintext going to the cloud. */
 function tokenSurvives(token: string, text: string): boolean {
-  // No-space / clitic scripts (CJK/Thai/Arabic/Hebrew/Hangul, all caseless):
-  // word boundaries are unreliable, so substring PRESENCE is the leak signal —
-  // otherwise the gate reports leaking scriptio-continua text as clean
-  // (adversarial re-review 2026-07-21).
-  if (noSpaceScript(token)) return text.includes(token);
-  // Latin/Cyrillic/Greek: case-insensitive Unicode WHOLE-WORD, so a token is
-  // caught regardless of case ("TRENT") but not flagged inside a longer word
-  // ("Ann" in "Anna").
+  // Only space-delimited cased scripts (Latin/Cyrillic/Greek/Armenian/Georgian)
+  // use a case-insensitive Unicode WHOLE-WORD test, so a token is caught
+  // regardless of case ("TRENT") but not flagged inside a longer word ("Ann" in
+  // "Anna"). EVERY OTHER script (no-space/clitic/Indic/unlisted) uses substring
+  // presence, so the monitor stays at least as broad as the masker and never
+  // scores a leaking non-boundary script clean (adversarial review round 3).
+  if (!boundaryFriendly(token)) return text.includes(token);
   return new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegex(token)}(?![\\p{L}\\p{N}_])`, 'iu').test(text);
 }
 
