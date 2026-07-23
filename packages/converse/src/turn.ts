@@ -77,14 +77,26 @@ export function vaultAdapter(
  * the moment the conversation moves to a bounded endpoint. Never store
  * already-redacted "wire" text and replay it — a weaker tier would leak.
  * `pseudonyms` persists so "Bob Henderson" is the same Person-N every turn.
+ *
+ * `historyTiers` runs PARALLEL to `plainHistory` (same length, same order):
+ * historyTiers[i] is the effective tier at which plainHistory[i] was last put
+ * through FULL redaction/NER. 0 means it has never been NER-redacted — a
+ * restored assistant reply (plaintext that never went through NER) or a message
+ * whose only turn ran on a private/Tier-0 endpoint. This is what lets each turn
+ * decide, per message, whether the shared pseudonym map already covers it at the
+ * current tier (replay-only is safe) or whether it must be re-run through full
+ * NER now (it was first seen at a LOWER tier, so its entities may be missing
+ * from the map — see the redaction loop).
  */
 export interface ConverseSession {
   pseudonyms: PseudonymMap;
   plainHistory: ChatMessage[];
+  /** Parallel to plainHistory: the tier each entry was last full-NER-redacted at (0 = never). */
+  historyTiers: (0 | 1 | 2 | 3)[];
 }
 
 export function createSession(): ConverseSession {
-  return { pseudonyms: {}, plainHistory: [] };
+  return { pseudonyms: {}, plainHistory: [], historyTiers: [] };
 }
 
 export class TurnError extends Error {
@@ -240,6 +252,10 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   //    can ride along unredacted when the conversation moves to a bounded
   //    endpoint. `replacements` is rebuilt per turn and therefore covers every
   //    pseudonym present in this prompt, so the reply restores completely.
+  // Defensive: a session deserialized before historyTiers existed (or built
+  // outside createSession) may lack it; treat missing/short as tier 0 (never
+  // NER'd), which forces full NER — the safe direction. Never touches other files.
+  session.historyTiers ??= [];
   const plainPrompt: ChatMessage[] = [
     { role: 'system', content: systemText },
     ...session.plainHistory,
@@ -249,27 +265,49 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   const replacements: Replacement[] = [];
   let tierApplied: 0 | 1 | 2 | 3 = 0;
   let tier2Degraded = false;
+  // History indices (into session.historyTiers) that we re-ran full NER on this
+  // turn because they were under-covered — updated to the tier ACTUALLY applied,
+  // but only after the abort guard below (so an aborted, nothing-sent turn does
+  // not corrupt shared session state).
+  const reNerdHistory: number[] = [];
   // Fail closed: redact for anything that isn't an explicit tier-0 (the only
   // value allowed to skip, and only ever set for a private endpoint above).
   if (effectiveTier !== 0) {
     const redacted: ChatMessage[] = [];
     for (let mi = 0; mi < plainPrompt.length; mi += 1) {
       const msg = plainPrompt[mi]!;
-      // NER (the slow 3B model) runs only on NEW content: the system block
-      // (memories) and the newest user message. History entities were already
-      // detected in their original turns and replay instantly from the shared
-      // pseudonym map; re-running the model over every history message every
-      // turn made long chats hang for minutes (field report 2026-07-18). The
-      // deterministic layers still cover EVERY message in full.
-      const isNewContent = mi === 0 || mi === plainPrompt.length - 1;
+      // NER (the slow 3B model) is expensive, so we skip it (replay-only) for a
+      // history message ONLY when the pseudonym map already covers it at THIS
+      // tier — i.e. it was already full-NER-redacted at >= effectiveTier. A
+      // message first seen at a LOWER tier (a private/Tier-0 turn, a Tier-1 turn
+      // with no name layer, or a restored assistant reply — all recorded as a
+      // lower historyTiers value) is re-run through full NER now, because its
+      // entities may NOT be in the shared map and replay-only would ship them in
+      // PLAINTEXT after a tier/endpoint swap-up (invariant #1). New content — the
+      // system block (memories) and the newest user message — always runs 'on'.
+      // Cost stays bounded: same-tier sends still replay instantly, so the extra
+      // NER is paid at most once per message, the turn its tier first increases
+      // (this is what kept long chats from hanging — field report 2026-07-18).
+      // The deterministic layers still cover EVERY message in full regardless.
+      let nerMode: 'on' | 'replay-only';
+      let historyIndex = -1;
+      if (mi === 0 || mi === plainPrompt.length - 1) {
+        nerMode = 'on'; // system block or the new user message
+      } else {
+        // History message: plainPrompt[mi] === session.plainHistory[mi - 1].
+        historyIndex = mi - 1;
+        const seenTier = session.historyTiers[historyIndex] ?? 0;
+        nerMode = seenTier < effectiveTier ? 'on' : 'replay-only';
+      }
       const r = await redactFn(msg.content, {
         tier: effectiveTier,
         pseudonyms: session.pseudonyms,
-        nerMode: isNewContent ? 'on' : 'replay-only',
+        nerMode,
       });
       if (r.tier2Degraded) tier2Degraded = true;
       redacted.push({ role: msg.role, content: r.redacted });
       replacements.push(...r.replacements);
+      if (historyIndex >= 0 && nerMode === 'on') reNerdHistory.push(historyIndex);
     }
     // Tier 2's ONLY name layer is the NER, so degraded toward a bounded
     // endpoint refuses. Tier 3's guarantee is the deterministic layers
@@ -299,6 +337,13 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
     wirePrompt = redacted;
     tierApplied =
       effectiveTier === 2 && tier2Degraded ? 1 : effectiveTier;
+    // Record real coverage for the history messages we just re-NER'd. Use
+    // tierApplied, NOT effectiveTier: a degraded Tier-2 dropped to 1 and its NER
+    // never ran, so its entities are NOT in the map — marking it "covered at 2"
+    // would make a later same-tier turn replay-only over a map that lacks them
+    // and leak. tierApplied is the tier whose masking actually happened. Written
+    // here (past the abort guard) so an aborted turn never mutates the session.
+    for (const idx of reNerdHistory) session.historyTiers[idx] = tierApplied;
   }
 
   // 5. Call the provider — direct client→endpoint, nothing proxies.
@@ -342,13 +387,21 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   const reply = restoreFn(wireReply, replacements);
 
   // History is stored as PLAINTEXT (see ConverseSession): the user's real
-  // message and the restored reply. It is re-redacted at send time every
-  // turn, so it is always masked to the CURRENT endpoint's tier — never
-  // replayed at a stale, weaker tier.
+  // message and the restored reply. It is re-redacted at send time every turn.
+  // Push the parallel historyTiers in LOCKSTEP (two entries, same order) so the
+  // arrays never desync: the user message is recorded at tierApplied (the tier
+  // whose masking actually ran this turn — a degraded Tier-2 is 1, not 2); the
+  // restored assistant reply is recorded at 0 because it is plaintext that NEVER
+  // went through NER, so it must be re-run through full NER the next time NER
+  // runs. This is what makes replay-only safe: it is used for a history message
+  // only once its recorded tier is >= the current tier; anything first seen at a
+  // lower tier is re-NER'd on the turn the tier increases, so nothing rides along
+  // under-redacted after a tier/endpoint swap-up (invariant #1).
   session.plainHistory.push(
     { role: 'user', content: message },
     { role: 'assistant', content: reply },
   );
+  session.historyTiers.push(tierApplied, 0);
 
   // 8. Distill this exchange into memory — on the RESTORED plaintext, which
   //    never leaves the machine (loopback Ollama or pure heuristics).

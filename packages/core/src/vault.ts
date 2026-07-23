@@ -117,17 +117,31 @@ export class Vault {
     const kdf = options.kdf ?? KDF_MODERATE;
     const salt = randomBytes(SALT_BYTES, platform.crypto);
     const key = deriveMasterKey(options.passphrase, options.deviceSecret, salt, kdf, platform.crypto);
-    const db = platform.sqlite.createEmpty();
-    db.pragma('foreign_keys = ON');
-    db.exec(SCHEMA_DDL);
-    const setMeta = db.prepare('INSERT INTO vault_meta (key, value) VALUES (?, ?)');
-    setMeta.run('schema_version', SCHEMA_VERSION);
-    setMeta.run('vault_id', uuidv4(platform.crypto));
-    setMeta.run('chain_head', GENESIS_HASH);
-    setMeta.run('created_at', new Date().toISOString());
-    const vault = new Vault(options.path, db, key, salt, kdf, platform);
-    vault.save();
-    return vault;
+    // From here the derived master key is live: if any step below throws, zero
+    // it (and close the db) before rethrowing, matching openDecrypting's
+    // discipline so a failed create never leaves key material for GC.
+    let db: SqliteDb | null = null;
+    try {
+      db = platform.sqlite.createEmpty();
+      db.pragma('foreign_keys = ON');
+      // Zeroize freed pages on delete/overwrite (defense-in-depth for forget();
+      // the vault image is already encrypted). Set at the same seam as the other
+      // PRAGMAs, on create and on every open (openDecrypting).
+      db.pragma('secure_delete = ON');
+      db.exec(SCHEMA_DDL);
+      const setMeta = db.prepare('INSERT INTO vault_meta (key, value) VALUES (?, ?)');
+      setMeta.run('schema_version', SCHEMA_VERSION);
+      setMeta.run('vault_id', uuidv4(platform.crypto));
+      setMeta.run('chain_head', GENESIS_HASH);
+      setMeta.run('created_at', new Date().toISOString());
+      const vault = new Vault(options.path, db, key, salt, kdf, platform);
+      vault.save();
+      return vault;
+    } catch (err) {
+      db?.close();
+      memzero(key, platform.crypto);
+      throw err;
+    }
   }
 
   /** Parses and bounds-checks the plaintext header without decrypting anything. */
@@ -138,7 +152,10 @@ export class Vault {
     } catch {
       throw new Error(`No vault found at ${vaultPath}. Run "northkeep init" first.`);
     }
-    if (file.length < HEADER_LENGTH || !file.subarray(0, MAGIC.length).equals(MAGIC)) {
+    // Buffer.compare (static) instead of subarray().equals(): on Hermes the
+    // Buffer polyfill's subarray returns a plain Uint8Array (no Symbol.species),
+    // which has no .equals. Buffer.compare accepts Uint8Array; identical on Node.
+    if (file.length < HEADER_LENGTH || Buffer.compare(file.subarray(0, MAGIC.length), MAGIC) !== 0) {
       throw new VaultAuthError(`${vaultPath} is not a NorthKeep vault file.`);
     }
     let offset = MAGIC.length;
@@ -207,6 +224,8 @@ export class Vault {
     try {
       db = platform.sqlite.openFromImage(image);
       db.pragma('foreign_keys = ON');
+      // Zeroize freed pages on delete/overwrite (defense-in-depth for forget()).
+      db.pragma('secure_delete = ON');
       const vault = new Vault(vaultPath, db, key, header.salt, header.kdf, platform);
       vault.migrate();
       return vault;

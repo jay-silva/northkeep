@@ -348,8 +348,13 @@ program
     }
     process.stdout.write(result.redacted + (result.redacted.endsWith('\n') ? '' : '\n'));
     if (options.map) {
-      fs.writeFileSync(path.resolve(options.map), JSON.stringify(result.replacements, null, 2), { mode: 0o600 });
-      console.error(`✓ Restore map written to ${options.map} (tier ${result.tierApplied}).`);
+      // ONLY restorable (Tier-2 pseudonym) entries go to the map. Tier-1 secrets
+      // (SSN/card/API-key/JWT) are one-way and restore() never reads them, so
+      // writing them would leak real plaintext secrets to disk for nothing
+      // (code review 2026-07-21; never write secrets to files).
+      const restorable = result.replacements.filter((r) => r.restorable);
+      fs.writeFileSync(path.resolve(options.map), JSON.stringify(restorable, null, 2), { mode: 0o600 });
+      console.error(`✓ Restore map written to ${options.map} (${restorable.length} pseudonyms, tier ${result.tierApplied}).`);
     } else if (result.replacements.some((r) => r.restorable)) {
       console.error('Tip: pass --map <file> to save the mapping so "northkeep restore" can put names back.');
     }

@@ -7,3 +7,6 @@ allowBuilds:
   better-sqlite3: true
   sodium-native: true
   esbuild: true
+  # Mobile-only RN native module: its native build runs in EAS/Xcode for the
+  # device, never via pnpm on a dev/CI host, so its install script stays off here.
+  react-native-libsodium: false
