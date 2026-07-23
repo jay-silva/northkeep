@@ -90,7 +90,7 @@ const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 // to match apps/desktop/src-tauri/tauri.conf.json on every release, or the
 // check will misreport. Kept as a constant (not read from a package.json) to
 // avoid bundle-path fragility.
-const APP_VERSION = '0.15.0';
+const APP_VERSION = '0.15.1';
 const RELEASES_LATEST_API = 'https://api.github.com/repos/jay-silva/northkeep/releases/latest';
 const RELEASES_PAGE = 'https://github.com/jay-silva/northkeep/releases/latest';
 
