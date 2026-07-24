@@ -62,6 +62,35 @@ export function logo(): string {
   return lines.join('\n');
 }
 
+/**
+ * A single-line braille spinner for "the model is thinking" waits. TTY-only:
+ * when stdout is piped (e2e, scripts) start() is a no-op, so captured output
+ * stays byte-identical to the pre-spinner CLI. stop() clears the spinner line;
+ * both are idempotent, so call sites can stop/restart around any output.
+ */
+export function createSpinner(label = 'thinking'): { start: () => void; stop: () => void } {
+  const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  let timer: NodeJS.Timeout | null = null;
+  let i = 0;
+  return {
+    start() {
+      if (timer !== null || process.stdout.isTTY !== true) return;
+      const draw = (): void => {
+        process.stdout.write(`\r${c.dim(`${frames[i++ % frames.length]} ${label}…`)}`);
+      };
+      draw();
+      timer = setInterval(draw, 80);
+      timer.unref();
+    },
+    stop() {
+      if (timer === null) return;
+      clearInterval(timer);
+      timer = null;
+      process.stdout.write('\r\x1b[2K');
+    },
+  };
+}
+
 /** A labeled status row: "  label  value" with a dim label. */
 export function statusRow(label: string, value: string): string {
   return `  ${c.muted(label.padEnd(11))}${value}`;

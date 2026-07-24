@@ -1,5 +1,5 @@
 import readline from 'node:readline/promises';
-import { DIM, GREEN, YELLOW, RED, RESET } from './ui.js';
+import { DIM, GREEN, YELLOW, RED, RESET, createSpinner } from './ui.js';
 import type { Vault } from '@northkeep/core';
 import { createOllamaClient, type OllamaClient } from '@northkeep/librarian';
 import {
@@ -165,6 +165,12 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     return new Promise((r) => waiters.push(r));
   };
 
+  // The spinner fills every silent wait: after send until the first token,
+  // and between agent steps while a tool runs or the model plans. It must be
+  // stopped before ANY other output (tokens, events, prompts) or the \r
+  // clearing would eat that output's line.
+  const spinner = createSpinner();
+
   // Agent-loop hooks (M10b): dim one-line progress renders, and approval via
   // the same line queue the REPL uses (pasted input keeps working). Only y/yes
   // approves — anything else (including EOF and the 5-minute timeout inside
@@ -172,6 +178,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   // real permission engine in M10c.
   const taskHooks: TaskHooks = {
     onEvent: (e: TaskEvent) => {
+      spinner.stop();
       if (e.type === 'step' && e.n > 1) {
         process.stdout.write(`\n${DIM}↳ step ${e.n}${RESET}\n`);
       } else if (e.type === 'tool_call') {
@@ -187,8 +194,13 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
             : `${DIM}↳ ✗ ${e.name} returned an error (shown to the model)${RESET}`,
         );
       }
+      // Waiting resumes after everything except tool_call, where the approval
+      // prompt is about to take the line: an approved tool is now executing;
+      // after a result/denial/new step the model is thinking again.
+      if (e.type !== 'tool_call') spinner.start();
     },
     requestApproval: async (req) => {
+      spinner.stop();
       // Show the EXACT restored plaintext that would execute (ADR 0027):
       // for web_fetch that is the URL itself; otherwise the raw arguments.
       let url: string | null = null;
@@ -387,10 +399,12 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         memoryScope: options.scope,
         distillOllama,
         onToken: (token: string) => {
+          spinner.stop();
           streamed += token;
           process.stdout.write(token);
         },
       };
+      spinner.start();
       // --tools rides runTask (the agent loop, M10b); otherwise EXACTLY the
       // old runTurn path — byte-for-byte the same behavior without the flag.
       let taskResult: TaskResult | null = null;
@@ -401,6 +415,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       } else {
         result = await runTurn(turnArgs);
       }
+      spinner.stop();
       process.stdout.write('\n');
       if (taskResult?.stopped === 'step-limit') {
         console.log(`${YELLOW}[stopped: step limit]${RESET}`);
@@ -450,6 +465,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         // suggestions are best-effort; never let one break a turn.
       }
     } catch (err) {
+      spinner.stop();
       if (err instanceof TurnError && err.code === 'TIER2_UNAVAILABLE') {
         console.error(`\n${RED}✗ NOTHING WAS SENT.${RESET} ${err.message}`);
       } else {
