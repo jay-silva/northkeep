@@ -194,14 +194,25 @@ export async function handleConverseStream(
   // appears here. Kept in memory for this turn's 'done' event only; it is NEVER
   // written to the content-free call log (invariant #5).
   let sentWire: { role: string; content: string }[] | null = null;
+  // Snapshot lives on chatTurn — the one wire path (M10a: every provider's
+  // chat() is a thin wrapper over chatTurn, and future agent loops call
+  // chatTurn directly). The proxy's chat() routes through THIS wrapper (not
+  // baseProvider.chat, whose delegation would reach the base's own chatTurn
+  // and skip the snapshot), so both entry points are covered by one capture.
+  const chatTurnCapturing = (
+    messages: { role: string; content: string }[],
+    options: Parameters<typeof baseProvider.chatTurn>[1],
+  ) => {
+    sentWire = messages.map((m) => ({ role: m.role, content: m.content }));
+    return baseProvider.chatTurn(messages as Parameters<typeof baseProvider.chatTurn>[0], options);
+  };
   const provider = {
     kind: baseProvider.kind,
     baseUrl: baseProvider.baseUrl,
     listModels: () => baseProvider.listModels(),
-    chat: (messages: { role: string; content: string }[], options: Parameters<typeof baseProvider.chat>[1]) => {
-      sentWire = messages.map((m) => ({ role: m.role, content: m.content }));
-      return baseProvider.chat(messages as Parameters<typeof baseProvider.chat>[0], options);
-    },
+    chatTurn: chatTurnCapturing,
+    chat: (messages: { role: string; content: string }[], options: Parameters<typeof baseProvider.chat>[1]) =>
+      chatTurnCapturing(messages, options).then((r) => r.text),
   } as typeof baseProvider;
   const { tier: privacy, host } = classifyEndpoint(endpoint.baseUrl);
   const model = modelOverride || routedModel || endpoint.model;

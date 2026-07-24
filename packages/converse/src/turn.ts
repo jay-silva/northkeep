@@ -99,9 +99,20 @@ export function createSession(): ConverseSession {
   return { pseudonyms: {}, plainHistory: [], historyTiers: [] };
 }
 
+/**
+ * Codes:
+ *  - TIER2_UNAVAILABLE: Tier-2 NER is down and the endpoint is bounded — the
+ *    turn refuses rather than silently degrading (invariant #6).
+ *  - PROVIDER_FAILED: the model endpoint errored or was unreachable.
+ *  - TOOLS_UNSUPPORTED: a tools-bearing request was refused by the endpoint
+ *    (M10a, ADR 0027). runTurn itself never sends tools — the code exists now
+ *    so the API is stable for the agent loop (M10b+), which capability-gates
+ *    loudly instead of falling back to prompt-parsed pseudo-tools: the
+ *    permission gate needs faithful structured arguments (invariant #6).
+ */
 export class TurnError extends Error {
   constructor(
-    readonly code: 'TIER2_UNAVAILABLE' | 'PROVIDER_FAILED',
+    readonly code: 'TIER2_UNAVAILABLE' | 'PROVIDER_FAILED' | 'TOOLS_UNSUPPORTED',
     message: string,
   ) {
     super(message);

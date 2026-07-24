@@ -2,9 +2,13 @@ export {
   classifyEndpoint,
   type ChatMessage,
   type ChatOptions,
+  type ChatTurnResult,
   type ModelProvider,
   type PrivacyTier,
+  type StopReason,
   type TierClassification,
+  type ToolCallRequest,
+  type ToolSpec,
 } from './provider.js';
 export {
   createOpenAICompatibleProvider,

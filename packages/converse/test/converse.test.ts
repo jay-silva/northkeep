@@ -139,6 +139,11 @@ class FakeProvider implements ModelProvider {
     options.onToken?.(this.reply);
     return this.reply;
   }
+  // Fakes invert the real providers' delegation (chatTurn wraps chat) — the
+  // point is just that both interface methods exist and behave consistently.
+  async chatTurn(messages: ChatMessage[], options: ChatOptions) {
+    return { text: await this.chat(messages, options), toolCalls: [], stopReason: 'end' as const };
+  }
   async listModels(): Promise<string[]> {
     return ['fake-model'];
   }
@@ -460,6 +465,9 @@ describe('runTurn', () => {
       kind: 'openai-compatible',
       baseUrl: 'http://127.0.0.1:9999',
       async chat() {
+        throw new Error('Model endpoint returned HTTP 500.');
+      },
+      async chatTurn(): Promise<never> {
         throw new Error('Model endpoint returned HTTP 500.');
       },
       async listModels() {

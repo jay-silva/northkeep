@@ -1,5 +1,12 @@
 import Anthropic from '@anthropic-ai/sdk';
-import type { ChatMessage, ChatOptions, ModelProvider } from './provider.js';
+import type {
+  ChatMessage,
+  ChatOptions,
+  ChatTurnResult,
+  ModelProvider,
+  StopReason,
+  ToolCallRequest,
+} from './provider.js';
 
 /**
  * Native Anthropic provider (ADR 0008) — the best-quality Claude path:
@@ -22,22 +29,106 @@ export interface AnthropicProviderConfig {
   baseUrl?: string;
 }
 
+/** One outbound message in the Anthropic Messages API shape. */
+type AnthropicTurn = {
+  role: 'user' | 'assistant';
+  content:
+    | string
+    | Array<
+        | { type: 'text'; text: string }
+        | { type: 'tool_use'; id: string; name: string; input: unknown }
+        | { type: 'tool_result'; tool_use_id: string; content: string }
+      >;
+};
+
+/**
+ * Map internal ChatMessages onto Anthropic turns (ADR 0027). Every role is
+ * handled EXPLICITLY — the pre-M10a `role !== 'system'` filter would let a
+ * 'tool' message through with a lying type predicate (or, filtered stricter,
+ * silently DROP it, making the model forget the tool ever ran). Neither
+ * failure mode is acceptable for the permission-gated tool loop.
+ *
+ * Exported for tests (the outbound-mapping unit tests exercise it directly);
+ * not part of the package's public surface (not re-exported by index.ts).
+ */
+export function toAnthropicTurns(messages: ChatMessage[]): AnthropicTurn[] {
+  const turns: AnthropicTurn[] = [];
+  for (const m of messages) {
+    if (m.role === 'system') continue; // hoisted into the top-level `system` field by the caller
+    if (m.role === 'tool') {
+      // Anthropic wire convention: tool results ride in a USER-role message
+      // as tool_result content blocks referencing the tool_use id.
+      turns.push({
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: m.toolCallId ?? '', content: m.content }],
+      });
+      continue;
+    }
+    if (m.role === 'assistant' && m.toolCalls !== undefined && m.toolCalls.length > 0) {
+      turns.push({
+        role: 'assistant',
+        content: [
+          // An empty text block is invalid on this API — include it only when
+          // the assistant actually said something alongside the tool calls.
+          ...(m.content.length > 0 ? [{ type: 'text' as const, text: m.content }] : []),
+          ...m.toolCalls.map((c) => ({
+            type: 'tool_use' as const,
+            id: c.id,
+            name: c.name,
+            input: parseArguments(c.arguments),
+          })),
+        ],
+      });
+      continue;
+    }
+    turns.push({ role: m.role, content: m.content });
+  }
+  return turns;
+}
+
+/**
+ * ToolCallRequest.arguments is raw JSON TEXT (the OpenAI wire shape); this
+ * API wants a parsed object. Guarded: on unparseable arguments we send `{}`
+ * and keep going rather than fail the whole turn — the faithful raw text
+ * still lives on the internal message, and the harness (not the provider) is
+ * the layer that validates arguments and refuses loudly (ADR 0027). FLAG:
+ * a `{}` here means history replay of a malformed call, not silent repair.
+ */
+function parseArguments(raw: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return {};
+  }
+}
+
+/** Anthropic stop_reason → the normalized StopReason (ADR 0027). */
+function mapStopReason(reason: string | null | undefined): StopReason {
+  if (reason === 'tool_use') return 'tool_use';
+  if (reason === 'max_tokens') return 'max_tokens';
+  return 'end';
+}
+
 export function createAnthropicProvider(config: AnthropicProviderConfig): ModelProvider {
   const baseUrl = config.baseUrl ?? ANTHROPIC_BASE_URL;
   const client = new Anthropic({ apiKey: config.apiKey, baseURL: baseUrl });
 
-  return {
+  const provider: ModelProvider = {
     kind: 'anthropic',
     baseUrl,
 
-    async chat(messages: ChatMessage[], options: ChatOptions): Promise<string> {
+    // Thin wrapper: one stream path per provider (ADR 0027). Text-only
+    // callers keep the old contract; tool calls surface only via chatTurn.
+    chat(messages: ChatMessage[], options: ChatOptions): Promise<string> {
+      return provider.chatTurn(messages, options).then((r) => r.text);
+    },
+
+    async chatTurn(messages: ChatMessage[], options: ChatOptions): Promise<ChatTurnResult> {
       const system = messages
         .filter((m) => m.role === 'system')
         .map((m) => m.content)
         .join('\n\n');
-      const turns = messages
-        .filter((m): m is ChatMessage & { role: 'user' | 'assistant' } => m.role !== 'system')
-        .map((m) => ({ role: m.role, content: m.content }));
+      const turns = toAnthropicTurns(messages);
 
       try {
         const stream = client.messages.stream(
@@ -46,7 +137,16 @@ export function createAnthropicProvider(config: AnthropicProviderConfig): ModelP
             max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
             thinking: { type: 'adaptive' },
             ...(system.length > 0 ? { system } : {}),
-            messages: turns,
+            messages: turns as Parameters<typeof client.messages.stream>[0]['messages'],
+            ...(options.tools !== undefined && options.tools.length > 0
+              ? {
+                  tools: options.tools.map((t) => ({
+                    name: t.name,
+                    description: t.description,
+                    input_schema: t.inputSchema as Anthropic.Tool['input_schema'],
+                  })),
+                }
+              : {}),
           },
           options.signal ? { signal: options.signal } : {},
         );
@@ -66,7 +166,18 @@ export function createAnthropicProvider(config: AnthropicProviderConfig): ModelP
         ) {
           options.onUsage({ inputTokens: usage.input_tokens, outputTokens: usage.output_tokens });
         }
-        return full;
+        // Tool calls arrive as complete tool_use content blocks on the final
+        // message (the SDK assembles streamed input_json deltas for us). The
+        // internal shape carries `arguments` as JSON TEXT, so serialize —
+        // symmetrical with parseArguments on the way out.
+        const toolCalls: ToolCallRequest[] = finalMessage.content
+          .filter((block): block is Anthropic.ToolUseBlock => block.type === 'tool_use')
+          .map((block) => ({
+            id: block.id,
+            name: block.name,
+            arguments: JSON.stringify(block.input),
+          }));
+        return { text: full, toolCalls, stopReason: mapStopReason(finalMessage.stop_reason) };
       } catch (err) {
         throw sanitizeError(err);
       }
@@ -84,6 +195,7 @@ export function createAnthropicProvider(config: AnthropicProviderConfig): ModelP
       }
     },
   };
+  return provider;
 }
 
 /** Status/type only — no response bodies, no key material. */

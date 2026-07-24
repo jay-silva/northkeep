@@ -90,6 +90,14 @@ function createAnthropicProvider(
       if (!res.body) return readAnthropicJson(await res.json(), options);
       return readSse(res.body, (payload) => parseAnthropicEvent(payload, options));
     },
+    // M10a widened ModelProvider with chatTurn (tool-call plumbing). Mobile
+    // has no tool support yet, so this is a compatibility wrapper over chat()
+    // — inverted from the desktop providers, whose chat() wraps chatTurn —
+    // and always reports a plain 'end'. Mobile tool streaming is a later
+    // milestone (ADR 0027).
+    async chatTurn(messages: ChatMessage[], options: ChatOptions) {
+      return { text: await this.chat(messages, options), toolCalls: [], stopReason: 'end' as const };
+    },
     async listModels(): Promise<string[]> {
       const res = await expoFetch(`${base}/v1/models`, {
         method: 'GET',
@@ -177,6 +185,10 @@ function createOpenAIProvider(
       if (!res.ok) throw new Error(`Model endpoint returned HTTP ${res.status}.`);
       if (!res.body) return readOpenAiJson(await res.json(), options);
       return readSse(res.body, (payload) => parseOpenAiEvent(payload, options));
+    },
+    // Compatibility wrapper over chat() — see the Anthropic twin above.
+    async chatTurn(messages: ChatMessage[], options: ChatOptions) {
+      return { text: await this.chat(messages, options), toolCalls: [], stopReason: 'end' as const };
     },
     async listModels(): Promise<string[]> {
       const headers: Record<string, string> = {};

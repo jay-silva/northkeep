@@ -7,9 +7,45 @@ import net from 'node:net';
  * Swapping models = editing endpoint config; nothing else changes.
  */
 
+/**
+ * One tool invocation the model asked for (M10a, ADR 0027). `arguments` is the
+ * RAW JSON text exactly as the model emitted it — parsed and validated by the
+ * harness (which owns the permission gate and needs the faithful original),
+ * never by providers. Providers only transport it.
+ */
+export interface ToolCallRequest {
+  id: string;
+  name: string;
+  /** Raw JSON text — parsed/validated by the harness, never by providers. */
+  arguments: string;
+}
+
+/**
+ * A tool offered to the model (M10a, ADR 0027). `inputSchema` is JSON Schema —
+ * the same shape MCP's listTools returns, so MCP tools plug in unconverted
+ * when a later milestone wires them up.
+ */
+export interface ToolSpec {
+  name: string;
+  description: string;
+  /** JSON Schema — same shape MCP listTools returns. */
+  inputSchema: Record<string, unknown>;
+}
+
+/**
+ * ChatMessage is deliberately widened IN PLACE for tools (ADR 0027) rather
+ * than forked into a parallel type: the redaction path in turn.ts iterates
+ * ChatMessage[] and must stay single — a second message type would be a
+ * second place to forget redaction. The tool fields are internal-only;
+ * each provider maps them to its wire format and never sends them verbatim.
+ */
 export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
+  /** Tool calls the model made — assistant messages only. */
+  toolCalls?: ToolCallRequest[];
+  /** Which ToolCallRequest this result answers — tool messages only. */
+  toolCallId?: string;
 }
 
 export interface ChatOptions {
@@ -25,14 +61,40 @@ export interface ChatOptions {
   onUsage?: (usage: { inputTokens: number; outputTokens: number }) => void;
   signal?: AbortSignal;
   maxTokens?: number;
+  /** Tools to offer the model (M10a, ADR 0027). Omitted = plain chat. */
+  tools?: ToolSpec[];
+}
+
+/**
+ * Why the model stopped (M10a, ADR 0027), normalized across providers:
+ * 'tool_use' = it wants tool results before continuing; 'max_tokens' = it was
+ * cut off; 'end' = a normal finish (or an endpoint that reports nothing).
+ */
+export type StopReason = 'end' | 'tool_use' | 'max_tokens';
+
+/** One provider turn: streamed text plus any tool calls the model made. */
+export interface ChatTurnResult {
+  text: string;
+  toolCalls: ToolCallRequest[];
+  stopReason: StopReason;
 }
 
 export interface ModelProvider {
   readonly kind: 'openai-compatible' | 'anthropic';
   /** The endpoint base URL this provider talks to (used for tier display). */
   readonly baseUrl: string;
-  /** Send a chat and return the complete reply text. */
+  /**
+   * Send a chat and return the complete reply text. Kept for every text-only
+   * caller (runTurn); implemented as a thin wrapper over chatTurn so each
+   * provider has exactly ONE wire parser (ADR 0027).
+   */
   chat(messages: ChatMessage[], options: ChatOptions): Promise<string>;
+  /**
+   * Send a chat and return the full turn result, including tool calls and the
+   * stop reason (M10a, ADR 0027). This is what the agent loop calls; plain
+   * chat surfaces keep using chat().
+   */
+  chatTurn(messages: ChatMessage[], options: ChatOptions): Promise<ChatTurnResult>;
   /** Model ids the endpoint offers (for the picker). */
   listModels(): Promise<string[]>;
 }

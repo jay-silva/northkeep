@@ -137,6 +137,10 @@ class CostProvider implements ModelProvider {
     if (this.usage) options.onUsage?.(this.usage);
     return this.reply;
   }
+  // Fake inverts the real delegation (chatTurn wraps chat); see converse.test.ts.
+  async chatTurn(messages: ChatMessage[], options: ChatOptions) {
+    return { text: await this.chat(messages, options), toolCalls: [], stopReason: 'end' as const };
+  }
   async listModels(): Promise<string[]> {
     return [];
   }
