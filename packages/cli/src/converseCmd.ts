@@ -7,6 +7,7 @@ import {
   classifyEndpoint,
   createAnthropicProvider,
   createOpenAICompatibleProvider,
+  createPermissionEngine,
   createSession,
   enabledTools,
   getDefaultEndpoint,
@@ -130,13 +131,17 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   if (auto) console.log(`${GREEN}✦ Auto${RESET} — the concierge routes each message (":auto" toggles).`);
   if (taskTools.length > 0) {
     console.log(
-      `${YELLOW}⚒ Tools${RESET} — ${taskTools.map((t) => t.name).join(', ')} available; every call asks for your approval first.`,
+      `${YELLOW}⚒ Tools${RESET} — ${taskTools.map((t) => t.name).join(', ')} available; calls ask for your approval (site grants are remembered — "northkeep tools grants" lists, "revoke" undoes).`,
     );
   }
   console.log(`${DIM}Commands: :auto  :private  :model <name>  :models  :endpoint <label|id>  :endpoints  :undo  :memories  :quit${RESET}\n`);
 
   const session = createSession();
   const vault = vaultAdapter(withVault);
+  // The ADR-0029 permission engine, ONE instance for the whole REPL run so
+  // session grants live exactly as long as the conversation window. persist:
+  // true is the CLI's explicit opt-in to ~/.northkeep/permissions.json.
+  const permissionEngine = createPermissionEngine({ persist: true });
   let lastCreated: string[] = [];
   let lastUsed: Array<{ id: string; type: string; content: string }> = [];
   // M9d: the last concierge tip we surfaced, so we don't nag it every turn.
@@ -171,11 +176,11 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   // clearing would eat that output's line.
   const spinner = createSpinner();
 
-  // Agent-loop hooks (M10b): dim one-line progress renders, and approval via
-  // the same line queue the REPL uses (pasted input keeps working). Only y/yes
-  // approves — anything else (including EOF and the 5-minute timeout inside
-  // runTask) denies. Richer scopes ("always for this site") come with the
-  // real permission engine in M10c.
+  // Agent-loop hooks (M10b/M10c): dim one-line progress renders, and approval
+  // via the same line queue the REPL uses (pasted input keeps working). The
+  // ADR-0029 engine behind runTask honors scoped answers; anything
+  // unrecognized (including EOF and the 5-minute timeout inside runTask)
+  // denies — fail closed.
   const taskHooks: TaskHooks = {
     onEvent: (e: TaskEvent) => {
       spinner.stop();
@@ -183,10 +188,22 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         process.stdout.write(`\n${DIM}↳ step ${e.n}${RESET}\n`);
       } else if (e.type === 'tool_call') {
         console.log(
-          `\n${DIM}↳ ${e.name} ${e.host ?? ''}${e.egressTier ? ` · ${e.egressTier}` : ''} · pending approval${RESET}`,
+          `\n${DIM}↳ ${e.name} ${e.host ?? ''}${e.egressTier ? ` · ${e.egressTier}` : ''}${RESET}`,
         );
-      } else if (e.type === 'permission' && e.decision !== 'approved') {
-        console.log(`${DIM}↳ ✗ ${e.name} ${e.decision === 'timeout' ? 'timed out — denied' : 'denied'}${RESET}`);
+      } else if (e.type === 'permission') {
+        // Provenance is rendered honestly (ADR 0029 decision 4): the user
+        // must be able to tell a grant-based auto-allow from their own yes,
+        // and a screen block must say WHY (content-free reasons).
+        if (e.decision === 'approved' && e.via === 'grant') {
+          console.log(`${DIM}↳ ✓ ${e.name} auto-allowed (site grant — "northkeep tools revoke" undoes)${RESET}`);
+        } else if (e.decision !== 'approved' && e.via === 'screen') {
+          console.log(`${RED}↳ ✗ ${e.name} blocked by the exfiltration screen:${RESET}`);
+          for (const reason of e.reasons ?? []) console.log(`${RED}    ⚠ ${reason}${RESET}`);
+        } else if (e.decision !== 'approved' && e.via === 'grant') {
+          console.log(`${DIM}↳ ✗ ${e.name} refused (never-for-this-site grant)${RESET}`);
+        } else if (e.decision !== 'approved') {
+          console.log(`${DIM}↳ ✗ ${e.name} ${e.decision === 'timeout' ? 'timed out — denied' : 'denied'}${RESET}`);
+        }
       } else if (e.type === 'tool_result') {
         console.log(
           e.ok
@@ -210,12 +227,27 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       } catch {
         url = null;
       }
+      // Exfil-screen warnings render loudly ABOVE the question — a screened
+      // call never auto-allows, and the human deciding must see why.
+      for (const w of req.warnings) console.log(`${YELLOW}⚠ ${w}${RESET}`);
       const what =
         req.tool === 'web_fetch' && url !== null
           ? `Allow web_fetch of ${url}?`
           : `Allow ${req.tool} with ${req.argsPlain}?`;
-      const answer = await nextLine(`${what} [y]es once / [n]o: `);
-      return answer !== null && /^y(es)?$/i.test(answer.trim()) ? 'allow' : 'deny';
+      // Site-scoped answers exist only for read-only calls with a concrete
+      // host and no screen warnings; everything else is yes-once/no (a
+      // consequential call and a flagged call must be seen every time).
+      const offerScopes = req.egress !== null && req.risk === 'safe-read' && req.warnings.length === 0;
+      const site = req.egress?.host ?? '';
+      const options = offerScopes
+        ? `[y]es once / [s] yes this session for ${site} / [a]lways for ${site} / [n]o / ne[v]er for ${site}`
+        : '[y]es once / [n]o';
+      const answer = (await nextLine(`${what} ${options}: `))?.trim().toLowerCase() ?? '';
+      if (/^y(es)?$/.test(answer)) return 'allow';
+      if (offerScopes && /^s(ession)?$/.test(answer)) return 'allow-session';
+      if (offerScopes && /^a(lways)?$/.test(answer)) return 'allow-always';
+      if (offerScopes && /^(v|never)$/.test(answer)) return 'deny-never';
+      return 'deny'; // fail closed: EOF, typos, anything else
     },
   };
 
@@ -410,7 +442,12 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       let taskResult: TaskResult | null = null;
       let result: TurnResult;
       if (taskTools.length > 0) {
-        taskResult = await runTask({ ...turnArgs, tools: taskTools, hooks: taskHooks });
+        taskResult = await runTask({
+          ...turnArgs,
+          tools: taskTools,
+          hooks: taskHooks,
+          gate: permissionEngine,
+        });
         result = taskResult;
       } else {
         result = await runTurn(turnArgs);

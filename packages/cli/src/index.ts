@@ -62,7 +62,7 @@ import {
   shareSyncCmd,
 } from './shareCmd.js';
 import { routingClear, routingList, routingSet } from './routingCmd.js';
-import { toolsDisable, toolsEnable, toolsList } from './toolsCmd.js';
+import { toolsDisable, toolsEnable, toolsGrants, toolsList, toolsRevoke } from './toolsCmd.js';
 import { collectScopes, connectCmd, connectStatusCmd, disconnectCmd } from './connectCmd.js';
 import { runLauncher } from './launcher.js';
 
@@ -408,10 +408,16 @@ program
         const t = entry.tool_call;
         console.log(
           `    ${t.name}${t.domain !== undefined ? ` ${t.domain}` : ''} · ${t.decision}` +
+            (t.scope !== undefined && t.scope !== 'once' ? ` (${t.scope})` : '') +
             (t.url_hash !== undefined ? ` · url#${t.url_hash.slice(0, 12)}` : '') +
             ` · args#${t.args_hash.slice(0, 12)} (${t.arg_chars} chars)` +
             (t.result_bytes !== undefined ? ` · ${t.result_bytes} B` : ''),
         );
+        // Screen flags get their own line — an exfil block should not be
+        // easy to miss when auditing (content-free descriptors only).
+        if (t.screen !== undefined && t.screen.length > 0) {
+          console.log(`      ⚠ screened: ${t.screen.join('  ')}`);
+        }
       }
     }
   });
@@ -573,6 +579,23 @@ toolsGroup
   .argument('<name>', 'tool name')
   .action((name: string) => {
     toolsDisable(name, fail);
+  });
+
+toolsGroup
+  .command('grants')
+  .description('List remembered per-site approvals (created only at a live approval prompt)')
+  .action(() => {
+    toolsGrants();
+  });
+
+toolsGroup
+  .command('revoke')
+  .description('Revoke a remembered approval so that site asks again')
+  .argument('[tool]', 'tool name, e.g. web_fetch')
+  .argument('[host]', 'exact host the grant was made for, e.g. example.com')
+  .option('--all', 'revoke every remembered approval')
+  .action((tool: string | undefined, host: string | undefined, options: { all?: boolean }) => {
+    toolsRevoke(tool, host, options.all === true, fail);
   });
 
 const models = program

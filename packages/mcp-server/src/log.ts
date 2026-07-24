@@ -61,6 +61,14 @@ export interface CallLogEntry {
     args_hash: string;
     arg_chars: number;
     decision: 'approved' | 'denied' | 'timeout';
+    /** Decision provenance (M10c, ADR 0029): the scope the user chose at the
+     * prompt, 'auto' when an existing grant satisfied it, 'never' when a
+     * persisted deny refused it, 'screen' when the exfiltration screens
+     * hard-denied before the gate. */
+    scope?: 'once' | 'session' | 'always' | 'never' | 'auto' | 'screen';
+    /** Content-free exfil-screen flag descriptors when any fired (ADR 0029),
+     * e.g. "secret:ssn:query:decoded" — never matched text. */
+    screen?: string[];
     result_bytes?: number;
     ok: boolean;
   };

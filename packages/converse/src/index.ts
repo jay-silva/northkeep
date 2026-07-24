@@ -32,6 +32,7 @@ export {
 } from './turn.js';
 export {
   runTask,
+  type ApprovalAnswer,
   type ApprovalRequest,
   type TaskEvent,
   type TaskHooks,
@@ -45,6 +46,26 @@ export {
   type ToolResult,
 } from './tools/types.js';
 export { placeholderGate, type PermissionGate, type PermissionRequest } from './tools/gate.js';
+export {
+  describeFlag,
+  screenArguments,
+  type ExfilClass,
+  type ExfilFlag,
+  type ExfilScreenInput,
+} from './tools/exfil.js';
+export {
+  addGrant,
+  clearGrants,
+  createPermissionEngine,
+  listGrants,
+  loadPermissions,
+  permissionsPath,
+  removeGrant,
+  type GrantScope,
+  type PermissionEngine,
+  type PermissionGrant,
+  type PermissionsConfig,
+} from './tools/policy.js';
 export {
   classifyFetchTarget,
   FetchRefusedError,

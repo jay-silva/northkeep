@@ -23,6 +23,7 @@ import { estimateTurnCost, loadCatalog, lookupModel, type TokenUsage } from './c
 import { redactJsonLeaves, restoreJsonLeaves } from './jsonLeaves.js';
 import type { ToolDefinition, ToolResult } from './tools/types.js';
 import { placeholderGate, type PermissionGate } from './tools/gate.js';
+import { describeFlag, screenArguments, type ExfilFlag } from './tools/exfil.js';
 import { newFenceNonce, untrustedSystemLine, wrapUntrusted } from './tools/untrusted.js';
 
 /**
@@ -50,11 +51,33 @@ const DEFAULT_MAX_STEPS = 10;
 const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60_000;
 const DEFAULT_MAX_RESULT_CHARS = 20_000;
 
+/**
+ * Secret kinds that HARD-DENY a tool call when the exfil screens find one in
+ * the arguments (ADR 0029 decision 2): kinds with no legitimate reason to
+ * ride an egress URL and catastrophic-if-leaked semantics. Every OTHER
+ * screen hit (email, phone, record ids, addresses, protected names, memory
+ * overlap) escalates to a warned, grant-bypassing prompt instead — those
+ * have legitimate uses (searching your own email) and false positives, so
+ * the human decides. Widening this set is cheap; narrowing it is a review.
+ */
+const HARD_DENY_SECRET_KINDS = new Set(['ssn', 'credit_card', 'iban', 'api_key']);
+
 /** Content-free progress events for the driving surface (CLI now, web M10e). */
 export type TaskEvent =
   | { type: 'step'; n: number; model: string; endpointHost: string; privacy: PrivacyTier }
   | { type: 'tool_call'; name: string; host?: string; egressTier?: PrivacyTier }
-  | { type: 'permission'; name: string; decision: 'approved' | 'denied' | 'timeout' }
+  | {
+      type: 'permission';
+      name: string;
+      decision: 'approved' | 'denied' | 'timeout';
+      /** Decision provenance (M10c, ADR 0029): 'user' answered a prompt,
+       * 'grant' means the engine decided from a stored grant (auto-allow OR
+       * never-deny), 'screen' means the exfil screens hard-denied. */
+      via?: 'user' | 'grant' | 'screen';
+      /** Content-free warning sentences, present on screen denials so the
+       * surface can say WHY (invariant #6: loud, never silent). */
+      reasons?: string[];
+    }
   | { type: 'tool_result'; name: string; ok: boolean; bytes: number; truncated: boolean; host?: string };
 
 export interface ApprovalRequest {
@@ -63,11 +86,23 @@ export interface ApprovalRequest {
   argsPlain: string;
   risk: 'safe-read' | 'consequential';
   egress: { host: string; tier: PrivacyTier } | null;
+  /** Exfil-screen warnings (ADR 0029), one plain sentence each, content-free.
+   * Non-empty means grants were bypassed and a human MUST see this call. */
+  warnings: string[];
 }
+
+/**
+ * What the approval surface may answer (M10c widens M10b's allow/deny).
+ * Scoped answers ('-session', '-always', '-never') are recorded with the
+ * gate's engine when it supports recording and the call has an egress host;
+ * they degrade to their once-only meaning otherwise — degrading TOWARD
+ * asking again is the safe direction.
+ */
+export type ApprovalAnswer = 'allow' | 'allow-session' | 'allow-always' | 'deny' | 'deny-never';
 
 export interface TaskHooks {
   onEvent(event: TaskEvent): void;
-  requestApproval(req: ApprovalRequest): Promise<'allow' | 'deny'>;
+  requestApproval(req: ApprovalRequest): Promise<ApprovalAnswer>;
 }
 
 export interface TaskOptions extends TurnOptions {
@@ -102,27 +137,46 @@ function truncateChars(text: string, max: number): string {
 }
 
 /** requestApproval with the deny-on-timeout and deny-on-abort rails. */
+interface ApprovalOutcome {
+  decision: 'approved' | 'denied' | 'timeout';
+  /** The scope the user attached to their answer, when they attached one. */
+  scope?: 'session' | 'always' | 'never';
+}
+
 async function approvalWithTimeout(
   hooks: TaskHooks,
   req: ApprovalRequest,
   timeoutMs: number,
   signal: AbortSignal | undefined,
-): Promise<'approved' | 'denied' | 'timeout'> {
+): Promise<ApprovalOutcome> {
   let timer: NodeJS.Timeout | undefined;
-  const timeout = new Promise<'timeout'>((resolve) => {
-    timer = setTimeout(() => resolve('timeout'), timeoutMs);
+  const timeout = new Promise<ApprovalOutcome>((resolve) => {
+    timer = setTimeout(() => resolve({ decision: 'timeout' }), timeoutMs);
   });
-  const races: Array<Promise<'approved' | 'denied' | 'timeout'>> = [
+  const races: Array<Promise<ApprovalOutcome>> = [
     hooks
       .requestApproval(req)
-      .then((a): 'approved' | 'denied' => (a === 'allow' ? 'approved' : 'denied'))
-      .catch((): 'denied' => 'denied'), // a broken approval surface fails CLOSED
+      .then((a): ApprovalOutcome => {
+        switch (a) {
+          case 'allow':
+            return { decision: 'approved' };
+          case 'allow-session':
+            return { decision: 'approved', scope: 'session' };
+          case 'allow-always':
+            return { decision: 'approved', scope: 'always' };
+          case 'deny-never':
+            return { decision: 'denied', scope: 'never' };
+          default: // 'deny' — and any future unknown answer fails CLOSED
+            return { decision: 'denied' };
+        }
+      })
+      .catch((): ApprovalOutcome => ({ decision: 'denied' })), // broken surface fails CLOSED
     timeout,
   ];
   if (signal !== undefined) {
     races.push(
-      new Promise<'denied'>((resolve) => {
-        signal.addEventListener('abort', () => resolve('denied'), { once: true });
+      new Promise<ApprovalOutcome>((resolve) => {
+        signal.addEventListener('abort', () => resolve({ decision: 'denied' }), { once: true });
       }),
     );
   }
@@ -140,6 +194,13 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   const auditFn = options.auditFn ?? appendCallLog;
   const now = options.now ?? (() => new Date());
   const gate = options.gate ?? placeholderGate;
+  // Scoped approvals are recorded with the gate when it can record them
+  // (the ADR-0029 engine can; the placeholder and test stubs cannot).
+  // Structural, not an import of policy.ts: the loop must not depend on any
+  // particular gate implementation — see ADR 0029 decision 1.
+  const gateRecord = (
+    gate as { record?: (tool: string, host: string, scope: 'session' | 'always' | 'never') => void }
+  ).record?.bind(gate);
   const tools = options.tools ?? [];
   const toolByName = new Map(tools.map((t) => [t.name, t]));
   const toolSpecs: ToolSpec[] = tools.map((t) => ({
@@ -430,6 +491,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         let egressTier: PrivacyTier = 'bounded'; // fail closed: unknown = it leaves
         let execMeta: ToolResult['meta'] | null = null;
         let resultContent: string;
+        // M10c (ADR 0029): screen flags, decision provenance, and the scope
+        // that produced the decision — all content-free, all audited.
+        let screenFlags: ExfilFlag[] = [];
+        let scopeApplied: 'once' | 'session' | 'always' | 'never' | 'auto' | 'screen' | undefined;
+        let screenedDeny = false;
 
         if (tool === undefined) {
           resultContent = JSON.stringify({
@@ -470,32 +536,101 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
               egressUrl !== null && egressHost !== undefined
                 ? { host: egressHost, tier: egressTier }
                 : null;
-            const gateAnswer = await gate.evaluate({
-              tool: call.name,
+
+            // ---- EXFILTRATION SCREENS (M10c, ADR 0029 decision 1): run IN
+            // THE LOOP, before the gate, over the RESTORED plaintext — the
+            // gate is an injectable seam, and a security control must not
+            // depend on which implementation a surface wired in (same logic
+            // that put the SSRF guard inside the net client). Secret-class
+            // hits hard-deny without consulting gate or user; identity/
+            // memory-class hits force a human prompt with warnings.
+            screenFlags = screenArguments({
               argsPlain: call.arguments,
-              risk: tool.risk,
-              modelTier: privacy,
-              toolEgress,
+              egressUrl,
+              // PseudonymMap keys are the lowercased REAL entity values the
+              // session's redaction is actively protecting (tier2.ts).
+              protectedValues: Object.keys(session.pseudonyms),
+              usedMemoryContents: used.map((s) => s.entry.content),
             });
-            if (gateAnswer === 'deny') {
+            const warnings = screenFlags.map(describeFlag);
+            let via: 'user' | 'grant' | 'screen' = 'user';
+
+            if (
+              screenFlags.some(
+                (f) => f.class === 'secret' && f.kind !== undefined && HARD_DENY_SECRET_KINDS.has(f.kind),
+              )
+            ) {
               decision = 'denied';
-            } else if (gateAnswer === 'auto-allow') {
-              decision = 'approved';
+              screenedDeny = true;
+              scopeApplied = 'screen';
+              via = 'screen';
             } else {
-              decision = await approvalWithTimeout(
-                hooks,
-                { tool: call.name, argsPlain: call.arguments, risk: tool.risk, egress: toolEgress },
-                approvalTimeoutMs,
-                signal,
-              );
+              const gateAnswer = await gate.evaluate({
+                tool: call.name,
+                argsPlain: call.arguments,
+                risk: tool.risk,
+                modelTier: privacy,
+                toolEgress,
+                screened: screenFlags.length > 0,
+              });
+              if (gateAnswer === 'deny') {
+                // Only a stored 'never' grant produces this in v1.
+                decision = 'denied';
+                scopeApplied = 'never';
+                via = 'grant';
+              } else if (gateAnswer === 'auto-allow') {
+                decision = 'approved';
+                scopeApplied = 'auto';
+                via = 'grant';
+              } else {
+                const outcome = await approvalWithTimeout(
+                  hooks,
+                  {
+                    tool: call.name,
+                    argsPlain: call.arguments,
+                    risk: tool.risk,
+                    egress: toolEgress,
+                    warnings,
+                  },
+                  approvalTimeoutMs,
+                  signal,
+                );
+                decision = outcome.decision;
+                scopeApplied = outcome.scope ?? 'once';
+                // A scoped answer becomes a grant — but never for a screened
+                // call (the flag may recur; each screened call must be seen)
+                // and never without a concrete host to key it on.
+                if (
+                  outcome.scope !== undefined &&
+                  egressHost !== undefined &&
+                  screenFlags.length === 0 &&
+                  gateRecord !== undefined
+                ) {
+                  gateRecord(call.name, egressHost, outcome.scope);
+                }
+              }
             }
-            hooks.onEvent({ type: 'permission', name: call.name, decision });
+            hooks.onEvent({
+              type: 'permission',
+              name: call.name,
+              decision,
+              via,
+              ...(screenedDeny ? { reasons: warnings } : {}),
+            });
 
             if (decision !== 'approved') {
-              resultContent = JSON.stringify({
-                error: 'permission_denied',
-                guidance: 'The user declined this tool call.',
-              });
+              resultContent = JSON.stringify(
+                screenedDeny
+                  ? {
+                      error: 'blocked_exfiltration',
+                      guidance:
+                        'The harness blocked this call: its arguments appear to carry a secret-shaped value, possibly hidden by encoding. Do not retry with re-encoded or restructured arguments.',
+                    }
+                  : {
+                      error: 'permission_denied',
+                      guidance: 'The user declined this tool call.',
+                    },
+              );
             } else {
               // EGRESS-TIER SEAM (ADR 0028): arguments bound for a tool are
               // redacted at the TOOL's egress tier, not the model's. A
@@ -586,6 +721,17 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             args_hash: sha256(call.arguments),
             arg_chars: call.arguments.length,
             decision,
+            // M10c provenance (ADR 0029 decision 4): scope and content-free
+            // screen descriptors — flag kinds, never matched text.
+            ...(scopeApplied !== undefined ? { scope: scopeApplied } : {}),
+            ...(screenFlags.length > 0
+              ? {
+                  screen: screenFlags.map(
+                    (f) =>
+                      `${f.class}${f.kind !== undefined ? `:${f.kind}` : ''}:${f.where}${f.decoded ? ':decoded' : ''}`,
+                  ),
+                }
+              : {}),
             ...(execMeta !== null ? { result_bytes: execMeta.bytes } : {}),
             ok: execMeta?.ok ?? false,
           },
