@@ -36,6 +36,7 @@ describe('classifyEndpoint', () => {
     'http://[::ffff:192.168.1.7]/', // IPv4-mapped private
     'http://[fd00::1]/', // unique-local
     'http://[fe80::1]/', // link-local
+    'http://[::]/', // unspecified — localhost-equivalent, private in both uses (G2 2026-07-24)
     'http://10.0.0.5:8000',
     'http://172.16.0.1/',
     'http://172.31.255.254/',
@@ -61,7 +62,6 @@ describe('classifyEndpoint', () => {
     'http://192.169.1.1/', // just past 192.168/16
     'http://[2001:4860:4860::8888]/',
     'http://[::ffff:8.8.8.8]/', // IPv4-mapped public
-    'http://[::]/', // unspecified — fail closed
     'http://nas/', // bare single-label host — cannot prove it is local
   ];
   for (const url of boundedCases) {

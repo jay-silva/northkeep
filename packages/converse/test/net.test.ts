@@ -41,6 +41,25 @@ describe('classifyFetchTarget — the nasty-URL suite (production guard, no over
     refuse('https://172.16.0.1/', 'private-address');
   });
 
+  it('refuses the ranges G2 review 2026-07-24 reproduced dialing', () => {
+    // CGNAT / shared 100.64/10 — includes 100.100.100.200 (Alibaba metadata);
+    // also Tailscale's range, so private for the badge too.
+    refuse('https://100.100.100.200/', 'private-address');
+    refuse('https://100.64.0.1/', 'private-address');
+    refuse('https://100.127.255.255/', 'private-address');
+    // Whole 0.0.0.0/8, not just the single 0.0.0.0 (Linux routes 0.x to loopback).
+    refuse('https://0.1.2.3/', 'private-address');
+    refuse('https://[::]/', 'private-address'); // IPv6 unspecified
+    // Embedded-v4 IPv6 forms that reach private space.
+    refuse('https://[::7f00:1]/', 'private-address'); // ::127.0.0.1 (v4-compatible)
+    refuse('https://[64:ff9b::a00:1]/', 'private-address'); // NAT64 → 10.0.0.1
+    // Guardrail: 100.63/8 and 100.128/9 are NOT CGNAT — must stay public.
+    expect(classifyFetchTarget('https://100.63.0.1/').ok).toBe(true);
+    expect(classifyFetchTarget('https://100.128.0.1/').ok).toBe(true);
+    // NAT64 embedding a PUBLIC v4 stays public.
+    expect(classifyFetchTarget('https://[64:ff9b::808:808]/').ok).toBe(true); // → 8.8.8.8
+  });
+
   it('refuses name-based local hosts', () => {
     refuse('https://localhost/', 'private-address');
     refuse('https://foo.localhost/', 'private-address');

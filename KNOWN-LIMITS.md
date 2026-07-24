@@ -88,10 +88,17 @@ every milestone; if a limit is removed, say when and how.*
   address is used (no fallback dialing).
 - **Redirects are followed manually, 5 hops max, each hop re-validated** and
   re-pinned. A redirect into private address space refuses at the hop.
-- **The URL itself leaks intent.** Redaction of tool arguments (Tier-1 floor
-  on every string leaf toward a bounded destination) protects identifiers,
-  not what you are interested in: a fetch of a disease page says what it says.
-  The approval prompt exists so you see that before it leaves.
+- **The URL itself leaks intent.** The approval prompt exists so you see the
+  exact URL and arguments before they leave.
+- **The Tier-1 egress floor is a literal-string matcher, not a normalizer
+  (M10b).** It masks a plaintext SSN/card/API-key sitting in a tool argument,
+  but a secret that is percent-encoded (`123%2D45%2D6789`), base64-encoded, or
+  case/whitespace-split slips past it and decodes at the destination. It does
+  NOT reliably "protect identifiers" in an encoded URL. This is why every
+  outbound tool call is gated behind approval in M10b, and why the M10c policy
+  engine screens the DECODED/normalized URL components (host, decoded path,
+  decoded query) plus vault-content and pseudonym real-values, not the raw
+  string. Do not rely on the Tier-1 floor alone for argument secrecy.
 - **Extraction is a zero-dependency lexer, not a browser.** ~200 lines:
   scripts/styles dropped, links kept as "text (url)", entities decoded,
   whitespace collapsed. No JavaScript runs, no CSS is understood, and heavily

@@ -166,20 +166,30 @@ export function classifyIpAddress(host: string): TierClassification | null {
 function classifyIPv4(host: string): TierClassification {
   const parts = host.split('.').map(Number);
   const [a = -1, b = -1] = parts;
+  // This classifier is shared by two callers with OPPOSITE fail-closed
+  // directions: classifyEndpoint (private = plaintext-OK local endpoint) and
+  // the web_fetch SSRF guard in tools/net.ts (private = refuse the fetch).
+  // Marking a range 'private' is safe for BOTH here: 0.0.0.0/8 and CGNAT are
+  // never the public web (SSRF-safe to refuse), and CGNAT 100.64/10 is exactly
+  // Tailscale's range, i.e. the user's own private mesh (correct to treat local
+  // for the privacy badge). G2 review 2026-07-24 reproduced 100.100.100.200
+  // (Alibaba metadata) and 0.x reaching the socket before these were added.
   const priv =
     a === 127
       ? 'loopback'
-      : a === 10
-        ? 'RFC-1918 10/8'
-        : a === 172 && b >= 16 && b <= 31
-          ? 'RFC-1918 172.16/12'
-          : a === 192 && b === 168
-            ? 'RFC-1918 192.168/16'
-            : a === 169 && b === 254
-              ? 'link-local 169.254/16'
-              : host === '0.0.0.0'
-                ? 'unspecified (resolves to this machine)'
-                : null;
+      : a === 0
+        ? '0.0.0.0/8 (this host / resolves to this machine)'
+        : a === 10
+          ? 'RFC-1918 10/8'
+          : a === 100 && b >= 64 && b <= 127
+            ? 'CGNAT / shared 100.64/10'
+            : a === 172 && b >= 16 && b <= 31
+              ? 'RFC-1918 172.16/12'
+              : a === 192 && b === 168
+                ? 'RFC-1918 192.168/16'
+                : a === 169 && b === 254
+                  ? 'link-local 169.254/16'
+                  : null;
   return priv
     ? { tier: 'private', host, reason: priv }
     : { tier: 'bounded', host, reason: 'public IPv4' };
@@ -196,6 +206,10 @@ function classifyIPv6(host: string): TierClassification {
 
   if (expanded === '0000:0000:0000:0000:0000:0000:0000:0001') {
     return { tier: 'private', host, reason: 'IPv6 loopback' };
+  }
+  if (expanded === '0000:0000:0000:0000:0000:0000:0000:0000') {
+    // :: unspecified — localhost-equivalent on many stacks (G2 review).
+    return { tier: 'private', host, reason: 'IPv6 unspecified ::' };
   }
   const firstWord = parseInt(expanded.slice(0, 4), 16);
   if ((firstWord & 0xfe00) === 0xfc00) {
@@ -238,8 +252,29 @@ function expandIPv6(host: string): string | null {
 }
 
 /** If `expanded` is IPv4-mapped (::ffff:x.x.x.x), return the dotted quad. */
+/**
+ * Extract an embedded IPv4 from the IPv6 forms that carry one, so it can be
+ * classified as the v4 address it really reaches:
+ *  - IPv4-mapped   ::ffff:a.b.c.d   (the common one)
+ *  - IPv4-compatible ::a.b.c.d      (deprecated, but ::7f00:1 can hit loopback)
+ *  - NAT64         64:ff9b::a.b.c.d (well-known /96)
+ * All three are "high 96 bits are a fixed prefix, low 32 bits are the v4".
+ * Returns null when the address embeds no v4 (a genuine IPv6 host).
+ * G2 review 2026-07-24: ::a.b.c.d and NAT64 previously fell through to the
+ * public branch, an SSRF bypass onto embedded private addresses.
+ */
 function ipv4FromMapped(expanded: string): string | null {
-  if (!expanded.startsWith('0000:0000:0000:0000:0000:ffff:')) return null;
+  const embeds =
+    expanded.startsWith('0000:0000:0000:0000:0000:ffff:') || // v4-mapped
+    expanded.startsWith('0064:ff9b:0000:0000:0000:0000:'); // NAT64 64:ff9b::/96
+  // v4-compatible ::a.b.c.d: high 96 bits all zero AND a non-zero low 32 that
+  // is not ::1 (loopback, handled by its own branch) — else ::/unspecified and
+  // ::1 would be misread as 0.0.0.x here. Those two are caught before this call.
+  const v4compat =
+    expanded.startsWith('0000:0000:0000:0000:0000:0000:') &&
+    expanded.slice(30) !== '0000:0000' &&
+    expanded.slice(30) !== '0000:0001';
+  if (!embeds && !v4compat) return null;
   const w6 = parseInt(expanded.slice(30, 34), 16);
   const w7 = parseInt(expanded.slice(35, 39), 16);
   return `${w6 >> 8}.${w6 & 0xff}.${w7 >> 8}.${w7 & 0xff}`;
