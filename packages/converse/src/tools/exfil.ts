@@ -188,30 +188,53 @@ function printableText(buf: Buffer, encoding: BufferEncoding): { text: string; r
   return { text, ratio: printable / text.length };
 }
 
+// A secret is a CONTIGUOUS printable run; ≥ this many printable ASCII chars in
+// a row is worth screening even inside an otherwise-binary decode. 8 catches a
+// bare SSN (11 chars) and a 16-digit card while staying long enough that random
+// binary almost never produces one by chance (0.37^8 ≈ 3e-4/position), so
+// run-extraction adds negligible false-positive surface (G3 round-2 measured 0
+// across 1300 realistic components; the tier1/16-gram detectors stay specific).
+const MIN_PRINTABLE_RUN = 8;
+const PRINTABLE_RUN = /[\x20-\x7e]{8,}/g;
+
 /**
- * Decode a component that LOOKS like base64 (charset-valid, length ≥ 16,
- * optional padding, embedded whitespace tolerated — MIME wraps at 76 cols,
- * G3 #7). Tries utf8 THEN utf16le THEN latin1 and keeps the first that is
- * ≥ 85% printable: the gate keeps binary junk (hashes, real ciphertext,
- * images) from producing garbage candidates, but must not let a mere charset
- * choice hide ASCII (G3 #2). Honest limit: base64 EMBEDDED inside longer
- * prose is still not found — only whole components decode (KNOWN-LIMITS).
+ * Decode candidates from a component that LOOKS like base64 (charset-valid,
+ * length ≥ 16, optional padding, embedded whitespace tolerated — MIME wraps at
+ * 76 cols, G3 #7). Returns EVERY plausible plaintext reading:
+ *  - if the whole buffer is ≥ 85% printable under utf8 / utf16le / latin1, the
+ *    full decode (a UTF-16LE ASCII secret is ~50% NUL under utf8 but clean
+ *    under utf16le — G3 #2, so all three are tried);
+ *  - otherwise the maximal printable-ASCII RUNS of each decode. This closes
+ *    G3 round-2 #3: padding a base64 secret with high bytes (0xFF is non-
+ *    printable under all three encodings) sank the whole-buffer ratio below
+ *    85% and hid the secret; the run survives the padding.
+ * Binary junk (hashes, ciphertext, images) yields only short runs that no
+ * detector matches, so the run fallback does not degrade trust.
  */
-function tryBase64(text: string): string | null {
+function base64Decodes(text: string): string[] {
   // Whitespace is allowed in the shape test but stripped before decoding, so
   // the length/charset checks see the real payload.
   const compact = text.replace(/\s+/g, '');
-  if (compact.length < 16) return null;
+  if (compact.length < 16) return [];
   let buf: Buffer;
   if (BASE64_STD.test(text)) buf = Buffer.from(compact, 'base64');
   else if (BASE64_URL.test(text)) buf = Buffer.from(compact, 'base64url');
-  else return null;
-  if (buf.length === 0) return null;
+  else return [];
+  if (buf.length === 0) return [];
+  const out: string[] = [];
   for (const encoding of ['utf8', 'utf16le', 'latin1'] as const) {
     const { text: decoded, ratio } = printableText(buf, encoding);
-    if (ratio >= 0.85) return decoded;
+    if (ratio >= 0.85) {
+      out.push(decoded);
+    } else {
+      // Screen each printable run separately (never joined — joining could
+      // fuse unrelated fragments into a false 16-gram).
+      for (const run of decoded.match(PRINTABLE_RUN) ?? []) {
+        if (run.length >= MIN_PRINTABLE_RUN) out.push(run);
+      }
+    }
   }
-  return null;
+  return out;
 }
 
 // Decode budget. A layered encoding (percent∘base64∘base64∘…) is unwrapped by
@@ -219,9 +242,12 @@ function tryBase64(text: string): string | null {
 // base64 run only once, so double-base64 slipped BELOW the confessed quadruple
 // boundary. MAX_DECODE_ROUNDS bounds the layering depth; MAX_VARIANTS caps the
 // total work so a decode-bomb (each layer fanning to several forms) cannot hang
-// the screen. Both are generous versus any real URL and cheap to widen.
+// the screen. Percent-decode is a linear chain (a '%' can't be base64), but a
+// single base64 buffer can now yield several printable-run readings, so the cap
+// carries headroom above that fan-out — 64 keeps a buried-secret run reachable
+// while still bounding work. Both are generous versus any real URL.
 const MAX_DECODE_ROUNDS = 6;
-const MAX_VARIANTS = 24;
+const MAX_VARIANTS = 64;
 
 /**
  * All decoded variants of one candidate, as a bounded fixpoint over BOTH
@@ -260,10 +286,11 @@ function decodedVariants(text: string): Variant[] {
         const added = push(percentDecoded);
         if (added !== null) next.push(added);
       }
-      const b64 = tryBase64(current);
-      if (b64 !== null) {
+      // base64 may yield several readings (multi-encoding + printable runs).
+      for (const b64 of base64Decodes(current)) {
         const added = push(b64);
         if (added !== null) next.push(added);
+        if (out.length >= MAX_VARIANTS) break;
       }
     }
     frontier = next;

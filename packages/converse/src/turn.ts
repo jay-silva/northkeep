@@ -110,6 +110,25 @@ export function createSession(): ConverseSession {
 }
 
 /**
+ * Record vault memory disclosed to the model this turn onto the conversation-
+ * wide accumulator (ADR 0029). EVERY path that puts memory in front of the
+ * model must call this — runTurn AND runTask — so the exfil screen (runTask)
+ * sees a memory regardless of which turn type first disclosed it. Keeping it
+ * in one helper is the point: the G1 blocker was runTask recording while
+ * runTurn silently did not. The `??=` guard tolerates a session deserialized
+ * before the field existed. Exact-content dedup; grows only (removal would
+ * reopen the hole — over-screening stale content is the safe direction).
+ */
+export function recordDisclosedMemory(session: ConverseSession, used: ScoredEntry[]): void {
+  session.disclosedMemory ??= [];
+  for (const s of used) {
+    if (!session.disclosedMemory.includes(s.entry.content)) {
+      session.disclosedMemory.push(s.entry.content);
+    }
+  }
+}
+
+/**
  * Codes:
  *  - TIER2_UNAVAILABLE: Tier-2 NER is down and the endpoint is bounded — the
  *    turn refuses rather than silently degrading (invariant #6).
@@ -291,6 +310,10 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
     memoryLimit: options.memoryLimit,
     memoryCharBudget: options.memoryCharBudget,
   });
+  // runTurn discloses `used` to the model via systemText below — record it so
+  // a later tool turn on this same session screens it (ADR 0029; G1 review:
+  // runTurn was an unrecorded disclosure path that left the blocker latent).
+  recordDisclosedMemory(session, used);
 
   // 4. Redact outbound. STRICTLY before the provider call; no path skips it
   //    for a bounded endpoint. The WHOLE prompt is redacted every turn —

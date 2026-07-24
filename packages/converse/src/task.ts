@@ -13,6 +13,7 @@ import { classifyEndpoint } from './provider.js';
 import {
   audit,
   distillExchange,
+  recordDisclosedMemory,
   resolveUsage,
   retrieveAndAssemble,
   TurnError,
@@ -247,15 +248,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // sessions interleaving runTurn and runTask stay consistent.
   session.historyTiers ??= [];
   // Conversation-wide disclosed-memory accumulator (ADR 0029, G1 blocker fix):
-  // this task's freshly-retrieved memories join everything disclosed earlier,
-  // so the exfil screen covers memory the model saw on a PRIOR turn even when
-  // this turn's retrieval no longer surfaces it. Dedup keeps it bounded.
-  session.disclosedMemory ??= [];
-  for (const s of used) {
-    if (!session.disclosedMemory.includes(s.entry.content)) {
-      session.disclosedMemory.push(s.entry.content);
-    }
-  }
+  // this task's freshly-retrieved memories join everything disclosed earlier
+  // (by prior runTask OR runTurn turns — recordDisclosedMemory is shared), so
+  // the exfil screen covers memory the model saw on a PRIOR turn even when
+  // this turn's retrieval no longer surfaces it.
+  recordDisclosedMemory(session, used);
 
   // The user message enters the plaintext history up front (the loop's wire
   // is always [system, ...plainHistory]). Recorded at 0 = never NER'd; the

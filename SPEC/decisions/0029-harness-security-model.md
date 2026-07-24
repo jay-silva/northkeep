@@ -61,9 +61,12 @@ Every tool call's restored arguments are decomposed and screened:
   and up to six percent rounds) all unwrap, not just a single fixed pipeline.
   The G1/G3 reviews showed a fixed structure let base64 run only once, so
   double-base64 slipped BELOW the confessed quadruple boundary; the fixpoint
-  closes that. base64 output is interpreted as UTF-8, UTF-16LE, or Latin-1 and
-  kept if mostly printable (a mere charset choice must not hide ASCII). Both a
-  round cap and a total-variant cap bound the work against decode bombs.
+  closes that. base64 output is interpreted as UTF-8, UTF-16LE, or Latin-1: the
+  whole decode is screened if mostly printable (a mere charset choice must not
+  hide ASCII), and otherwise its maximal printable-ASCII RUNS are screened —
+  so padding a base64 secret with high bytes (which sinks the whole-buffer
+  printable ratio) no longer hides the plaintext run (G3 round-2). Both a round
+  cap and a total-variant cap bound the work against decode bombs.
   Matching normalizes case and strips punctuation, so `1-2-3`, `1_2_3`, `1:2:3`
   splits and `%2D` games do not evade.
 - **Three detector classes:**

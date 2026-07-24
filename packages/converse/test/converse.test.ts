@@ -154,6 +154,28 @@ describe('runTurn', () => {
     makeEntry({ id: 'aaaa1111-0000-0000-0000-000000000000', content: 'Jay takes his coffee black.' }),
   ];
 
+  // G1 round-2 regression: runTurn discloses vault memory to the model, so it
+  // MUST record it on session.disclosedMemory — otherwise a later tool turn on
+  // the same session can't screen it (the round-1 blocker, latent via runTurn).
+  it('records disclosed memory on the session so a later tool turn can screen it', async () => {
+    const provider = new FakeProvider('http://127.0.0.1:9999', 'Noted.');
+    const vault = new FakeVault(vaultEntries);
+    const session = createSession();
+    expect(session.disclosedMemory).toEqual([]);
+    await runTurn({
+      message: 'what coffee do I like?',
+      session,
+      provider,
+      model: 'fake-model',
+      vault,
+      redactTier: 1,
+      distill: false,
+      auditFn: () => {},
+    });
+    // The disclosed memory content is now in the conversation-wide accumulator.
+    expect(session.disclosedMemory).toContain('Jay takes his coffee black.');
+  });
+
   it('masks Tier-1 secrets before the provider sees them, and audits content-free', async () => {
     const provider = new FakeProvider('http://127.0.0.1:9999', 'Got it, noted.');
     const vault = new FakeVault(vaultEntries);

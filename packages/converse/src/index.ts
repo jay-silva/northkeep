@@ -22,6 +22,7 @@ export {
 } from './anthropic.js';
 export {
   createSession,
+  recordDisclosedMemory,
   runTurn,
   TurnError,
   vaultAdapter,
