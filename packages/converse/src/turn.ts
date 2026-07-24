@@ -192,32 +192,24 @@ const DEFAULT_CHAR_BUDGET = 4000;
 /** Keep memories scoring within this fraction of the best match; drop the rest. */
 const RELEVANCE_RATIO = 0.6;
 
-export async function runTurn(options: TurnOptions): Promise<TurnResult> {
-  const {
-    message,
-    session,
-    provider,
-    model,
-    vault,
-    allowedScopes,
-    onToken,
-    signal,
-  } = options;
-  const redactFn = options.redactFn ?? redact;
-  const restoreFn = options.restoreFn ?? restore;
-  const auditFn = options.auditFn ?? appendCallLog;
-  const now = options.now ?? (() => new Date());
-
-  const { tier: privacy, host: endpointHost } = classifyEndpoint(provider.baseUrl);
-
-  // Bounded endpoints get Tier-1 minimum, whatever the caller asked for.
-  const effectiveTier: 0 | 1 | 2 | 3 =
-    privacy === 'bounded' && options.redactTier === 0 ? 1 : options.redactTier;
-
+/**
+ * Steps 1–3 of the pipeline (retrieve → compress → assemble), extracted so
+ * runTask (M10b, ADR 0027) shares the exact same memory-injection behavior as
+ * runTurn instead of forking it. Pure refactor: runTurn's behavior is
+ * unchanged. Returns the scored memories actually used and the assembled
+ * system text.
+ */
+export async function retrieveAndAssemble(args: {
+  vault: ConverseVault;
+  message: string;
+  allowedScopes?: string[];
+  memoryLimit?: number;
+  memoryCharBudget?: number;
+}): Promise<{ used: ScoredEntry[]; systemText: string }> {
   // 1. Retrieve (scope-enforced in the store, M4).
-  const scored = await vault.retrieve(message, {
-    allowedScopes,
-    limit: options.memoryLimit ?? DEFAULT_MEMORY_LIMIT,
+  const scored = await args.vault.retrieve(args.message, {
+    allowedScopes: args.allowedScopes,
+    limit: args.memoryLimit ?? DEFAULT_MEMORY_LIMIT,
   });
 
   // 2. Compress to budget. Keep score order, drop the weak tail, stop when the
@@ -228,7 +220,7 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   //    scoring within RELEVANCE_RATIO of the best match (the top match is
   //    always kept). Tunable; semantic retrieval will make this sharper.
   //    A small local model also wants a tighter digest — lower memoryCharBudget.
-  const budget = options.memoryCharBudget ?? DEFAULT_CHAR_BUDGET;
+  const budget = args.memoryCharBudget ?? DEFAULT_CHAR_BUDGET;
   const floor = (scored[0]?.score ?? 0) * RELEVANCE_RATIO;
   const used: ScoredEntry[] = [];
   let spent = 0;
@@ -255,6 +247,40 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   ]
     .filter((s) => s.length > 0)
     .join('\n\n');
+
+  return { used, systemText };
+}
+
+export async function runTurn(options: TurnOptions): Promise<TurnResult> {
+  const {
+    message,
+    session,
+    provider,
+    model,
+    vault,
+    allowedScopes,
+    onToken,
+    signal,
+  } = options;
+  const redactFn = options.redactFn ?? redact;
+  const restoreFn = options.restoreFn ?? restore;
+  const auditFn = options.auditFn ?? appendCallLog;
+  const now = options.now ?? (() => new Date());
+
+  const { tier: privacy, host: endpointHost } = classifyEndpoint(provider.baseUrl);
+
+  // Bounded endpoints get Tier-1 minimum, whatever the caller asked for.
+  const effectiveTier: 0 | 1 | 2 | 3 =
+    privacy === 'bounded' && options.redactTier === 0 ? 1 : options.redactTier;
+
+  // 1–3. Retrieve → compress → assemble (shared with runTask, M10b).
+  const { used, systemText } = await retrieveAndAssemble({
+    vault,
+    message,
+    allowedScopes,
+    memoryLimit: options.memoryLimit,
+    memoryCharBudget: options.memoryCharBudget,
+  });
 
   // 4. Redact outbound. STRICTLY before the provider call; no path skips it
   //    for a bounded endpoint. The WHOLE prompt is redacted every turn —
@@ -493,9 +519,9 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
  * Real usage if the provider reported it; otherwise a ~4-chars/token estimate
  * over the wire prompt (all messages) and reply, flagged `estimated`. Taking
  * `reported` as a parameter also side-steps TS narrowing a closure-assigned
- * `let` down to `never`.
+ * `let` down to `never`. Exported (refactor only) for runTask (M10b).
  */
-function resolveUsage(
+export function resolveUsage(
   reported: { inputTokens: number; outputTokens: number } | null,
   wirePrompt: ChatMessage[],
   wireReply: string,
@@ -510,7 +536,8 @@ function resolveUsage(
   };
 }
 
-async function distillExchange(args: {
+/** Exported (refactor only) for runTask (M10b) — distillation stays single. */
+export async function distillExchange(args: {
   vault: ConverseVault;
   allowedScopes?: string[];
   message: string;
@@ -557,7 +584,8 @@ async function distillExchange(args: {
   return { created, mode: extraction.mode };
 }
 
-function audit(
+/** Exported (refactor only) for runTask (M10b) — one content-free row shape. */
+export function audit(
   auditFn: (entry: CallLogEntry) => void,
   now: () => Date,
   args: {

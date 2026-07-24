@@ -193,26 +193,57 @@ export async function handleConverseStream(
   // Body only: the API key rides in headers INSIDE baseProvider and never
   // appears here. Kept in memory for this turn's 'done' event only; it is NEVER
   // written to the content-free call log (invariant #5).
-  let sentWire: { role: string; content: string }[] | null = null;
+  //
+  // M10b widening (M10a review carry-forward): when a tool-bearing wire goes
+  // out, the snapshot captures the assistant `toolCalls` (RAW argument JSON —
+  // arguments egress exactly like content), each tool result's `toolCallId`,
+  // and the `tools` array offered to the model. The "what left this device"
+  // proof must never under-report what actually left.
+  interface SentWireMessage {
+    role: string;
+    content: string;
+    toolCalls?: Array<{ id: string; name: string; arguments: string }>;
+    toolCallId?: string;
+  }
+  let sentWire: SentWireMessage[] | null = null;
+  let sentTools: Array<{ name: string; description: string; inputSchema: Record<string, unknown> }> | null =
+    null;
   // Snapshot lives on chatTurn — the one wire path (M10a: every provider's
-  // chat() is a thin wrapper over chatTurn, and future agent loops call
+  // chat() is a thin wrapper over chatTurn, and the agent loop calls
   // chatTurn directly). The proxy's chat() routes through THIS wrapper (not
   // baseProvider.chat, whose delegation would reach the base's own chatTurn
   // and skip the snapshot), so both entry points are covered by one capture.
   const chatTurnCapturing = (
-    messages: { role: string; content: string }[],
+    messages: Parameters<typeof baseProvider.chatTurn>[0],
     options: Parameters<typeof baseProvider.chatTurn>[1],
   ) => {
-    sentWire = messages.map((m) => ({ role: m.role, content: m.content }));
-    return baseProvider.chatTurn(messages as Parameters<typeof baseProvider.chatTurn>[0], options);
+    sentWire = messages.map((m) => ({
+      role: m.role,
+      content: m.content,
+      ...(m.toolCalls !== undefined && m.toolCalls.length > 0
+        ? { toolCalls: m.toolCalls.map((c) => ({ id: c.id, name: c.name, arguments: c.arguments })) }
+        : {}),
+      ...(m.toolCallId !== undefined ? { toolCallId: m.toolCallId } : {}),
+    }));
+    sentTools =
+      options.tools !== undefined && options.tools.length > 0
+        ? options.tools.map((t) => ({
+            name: t.name,
+            description: t.description,
+            inputSchema: t.inputSchema,
+          }))
+        : null;
+    return baseProvider.chatTurn(messages, options);
   };
   const provider = {
     kind: baseProvider.kind,
     baseUrl: baseProvider.baseUrl,
     listModels: () => baseProvider.listModels(),
     chatTurn: chatTurnCapturing,
-    chat: (messages: { role: string; content: string }[], options: Parameters<typeof baseProvider.chat>[1]) =>
-      chatTurnCapturing(messages, options).then((r) => r.text),
+    chat: (
+      messages: Parameters<typeof baseProvider.chat>[0],
+      options: Parameters<typeof baseProvider.chat>[1],
+    ) => chatTurnCapturing(messages, options).then((r) => r.text),
   } as typeof baseProvider;
   const { tier: privacy, host } = classifyEndpoint(endpoint.baseUrl);
   const model = modelOverride || routedModel || endpoint.model;
@@ -291,7 +322,10 @@ export async function handleConverseStream(
       // Ephemeral privacy proof: exactly what left the machine this turn,
       // redacted (masks visible), plus the list of what was masked (real →
       // placeholder). Streamed once; never persisted (the call log is content-free).
+      // M10b: includes toolCalls/toolCallId on messages and the offered tools
+      // array whenever a tool-bearing wire went out (never under-report).
       ...(sentWire ? { sent: sentWire } : {}),
+      ...(sentTools ? { sent_tools: sentTools } : {}),
       redactions: result.redactions,
       reply: result.reply,
       privacy: result.privacy,

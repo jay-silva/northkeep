@@ -58,10 +58,25 @@ export function toAnthropicTurns(messages: ChatMessage[]): AnthropicTurn[] {
     if (m.role === 'tool') {
       // Anthropic wire convention: tool results ride in a USER-role message
       // as tool_result content blocks referencing the tool_use id.
-      turns.push({
-        role: 'user',
-        content: [{ type: 'tool_result', tool_use_id: m.toolCallId ?? '', content: m.content }],
-      });
+      //
+      // COALESCING (M10b carry-forward): when several tool results answer one
+      // assistant turn (parallel tool calls), the internal history holds
+      // CONSECUTIVE role:'tool' messages. The Messages API enforces strict
+      // user/assistant alternation, so mapping each to its own user turn
+      // makes proxies 400 the request. Consecutive tool messages therefore
+      // merge into ONE user turn carrying multiple tool_result blocks.
+      const block = { type: 'tool_result' as const, tool_use_id: m.toolCallId ?? '', content: m.content };
+      const last = turns[turns.length - 1];
+      if (
+        last !== undefined &&
+        last.role === 'user' &&
+        Array.isArray(last.content) &&
+        last.content.every((b) => b.type === 'tool_result')
+      ) {
+        last.content.push(block);
+      } else {
+        turns.push({ role: 'user', content: [block] });
+      }
       continue;
     }
     if (m.role === 'assistant' && m.toolCalls !== undefined && m.toolCalls.length > 0) {

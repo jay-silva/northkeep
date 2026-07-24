@@ -1,0 +1,680 @@
+import crypto from 'node:crypto';
+import type { MemoryEntry } from '@northkeep/core';
+import { applyTier1, redact, restore, type Replacement } from '@northkeep/redact';
+import { appendCallLog, type CallLogEntry } from '@northkeep/mcp-server';
+import type {
+  ChatMessage,
+  ChatTurnResult,
+  PrivacyTier,
+  ToolCallRequest,
+  ToolSpec,
+} from './provider.js';
+import { classifyEndpoint } from './provider.js';
+import {
+  audit,
+  distillExchange,
+  resolveUsage,
+  retrieveAndAssemble,
+  TurnError,
+  type TurnOptions,
+  type TurnResult,
+} from './turn.js';
+import { estimateTurnCost, loadCatalog, lookupModel, type TokenUsage } from './catalog.js';
+import { redactJsonLeaves, restoreJsonLeaves } from './jsonLeaves.js';
+import type { ToolDefinition, ToolResult } from './tools/types.js';
+import { placeholderGate, type PermissionGate } from './tools/gate.js';
+import { newFenceNonce, untrustedSystemLine, wrapUntrusted } from './tools/untrusted.js';
+
+/**
+ * runTask — the agent loop (M10b, ADR 0027/0028): model → tool → model → …
+ * with bounded iterations, built on chatTurn. runTurn stays untouched for
+ * plain chat; this file owns its OWN wire assembly because tool fields
+ * (assistant toolCalls, tool results) must ride through redaction, which
+ * runTurn's text-only rebuild would strip.
+ *
+ * The governing principle (ADR 0027 decision 1): everything crossing the
+ * harness boundary arrives as plaintext, is stored as plaintext in the
+ * session, and is redacted PER DESTINATION at send time. Concretely, every
+ * step of the loop:
+ *   - re-redacts the ENTIRE prompt (system + full history, including tool
+ *     results and tool-call arguments) at the effective tier before the
+ *     provider call — nothing captured at a weaker tier ever rides along;
+ *   - restores the model's text AND its tool-call argument string leaves to
+ *     plaintext locally (bounded models emit pseudonyms/masks — the tool
+ *     needs real values, and the permission gate must show real values);
+ *   - re-redacts tool-bound arguments at the TOOL's egress tier before
+ *     execute (ADR 0028 §egress seam) — never a raw restore onto the wire.
+ */
+
+const DEFAULT_MAX_STEPS = 10;
+const DEFAULT_APPROVAL_TIMEOUT_MS = 5 * 60_000;
+const DEFAULT_MAX_RESULT_CHARS = 20_000;
+
+/** Content-free progress events for the driving surface (CLI now, web M10e). */
+export type TaskEvent =
+  | { type: 'step'; n: number; model: string; endpointHost: string; privacy: PrivacyTier }
+  | { type: 'tool_call'; name: string; host?: string; egressTier?: PrivacyTier }
+  | { type: 'permission'; name: string; decision: 'approved' | 'denied' | 'timeout' }
+  | { type: 'tool_result'; name: string; ok: boolean; bytes: number; truncated: boolean; host?: string };
+
+export interface ApprovalRequest {
+  tool: string;
+  /** RESTORED plaintext arguments — exactly what will execute (ADR 0027). */
+  argsPlain: string;
+  risk: 'safe-read' | 'consequential';
+  egress: { host: string; tier: PrivacyTier } | null;
+}
+
+export interface TaskHooks {
+  onEvent(event: TaskEvent): void;
+  requestApproval(req: ApprovalRequest): Promise<'allow' | 'deny'>;
+}
+
+export interface TaskOptions extends TurnOptions {
+  tools?: ToolDefinition[];
+  hooks: TaskHooks;
+  /** Model→tool round trips before the loop stops loudly. Default 10. */
+  maxSteps?: number;
+  /** Injectable for tests; defaults to the fail-closed placeholder (M10c: ADR 0029 engine). */
+  gate?: PermissionGate;
+  /** An unanswered approval DENIES after this long. Default 5 minutes. */
+  approvalTimeoutMs?: number;
+  /** Per-tool-result truncation (characters). */
+  maxResultChars?: number;
+  maxTokens?: number;
+}
+
+export interface TaskResult extends TurnResult {
+  /** Provider round trips this task made. */
+  steps: number;
+  /** Content-free per-call summary (names/hosts/decisions — never arguments). */
+  toolCallsMade: Array<{ name: string; host?: string; decision: string }>;
+  /** How the loop ended — 'step-limit' and 'aborted' are visible, never silent. */
+  stopped: 'done' | 'step-limit' | 'aborted';
+}
+
+function sha256(text: string): string {
+  return crypto.createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
+function truncateChars(text: string, max: number): string {
+  return text.length <= max ? text : `${text.slice(0, max)}\n[truncated: result exceeded ${max} characters]`;
+}
+
+/** requestApproval with the deny-on-timeout and deny-on-abort rails. */
+async function approvalWithTimeout(
+  hooks: TaskHooks,
+  req: ApprovalRequest,
+  timeoutMs: number,
+  signal: AbortSignal | undefined,
+): Promise<'approved' | 'denied' | 'timeout'> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<'timeout'>((resolve) => {
+    timer = setTimeout(() => resolve('timeout'), timeoutMs);
+  });
+  const races: Array<Promise<'approved' | 'denied' | 'timeout'>> = [
+    hooks
+      .requestApproval(req)
+      .then((a): 'approved' | 'denied' => (a === 'allow' ? 'approved' : 'denied'))
+      .catch((): 'denied' => 'denied'), // a broken approval surface fails CLOSED
+    timeout,
+  ];
+  if (signal !== undefined) {
+    races.push(
+      new Promise<'denied'>((resolve) => {
+        signal.addEventListener('abort', () => resolve('denied'), { once: true });
+      }),
+    );
+  }
+  try {
+    return await Promise.race(races);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+export async function runTask(options: TaskOptions): Promise<TaskResult> {
+  const { message, session, provider, model, vault, allowedScopes, hooks, onToken, signal } = options;
+  const redactFn = options.redactFn ?? redact;
+  const restoreFn = options.restoreFn ?? restore;
+  const auditFn = options.auditFn ?? appendCallLog;
+  const now = options.now ?? (() => new Date());
+  const gate = options.gate ?? placeholderGate;
+  const tools = options.tools ?? [];
+  const toolByName = new Map(tools.map((t) => [t.name, t]));
+  const toolSpecs: ToolSpec[] = tools.map((t) => ({
+    name: t.name,
+    description: t.description,
+    inputSchema: t.inputSchema,
+  }));
+  const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
+  const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
+  const maxResultChars = options.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS;
+  // Read through a function call: TypeScript persists property narrowing on
+  // `signal.aborted` across awaits, which would make later checks look dead.
+  const isAborted = (): boolean => signal?.aborted === true;
+
+  const { tier: privacy, host: endpointHost } = classifyEndpoint(provider.baseUrl);
+  // Same rule as runTurn: bounded endpoints get Tier-1 minimum, always.
+  const effectiveTier: 0 | 1 | 2 | 3 =
+    privacy === 'bounded' && options.redactTier === 0 ? 1 : options.redactTier;
+
+  // Retrieve → compress → assemble exactly as runTurn (shared code), plus the
+  // one external-content system line when tools are enabled (ADR 0028).
+  const { used, systemText: baseSystem } = await retrieveAndAssemble({
+    vault,
+    message,
+    allowedScopes,
+    memoryLimit: options.memoryLimit,
+    memoryCharBudget: options.memoryCharBudget,
+  });
+  const fenceNonce = newFenceNonce();
+  const systemText =
+    tools.length > 0 ? `${baseSystem}\n\n${untrustedSystemLine(fenceNonce)}` : baseSystem;
+
+  // NER MECHANISM — UNIFIED WITH runTurn, NOT DUPLICATED. The M10b plan
+  // sketched a `nerSeen` count watermark on the session (messages below the
+  // watermark replay-only, at/above run full NER). The mechanism merged into
+  // turn.ts by the reconciliation — `historyTiers`, parallel to plainHistory —
+  // is that same watermark GENERALIZED per message with the tier recorded:
+  // a message replays only when it was already full-NER'd at >= the current
+  // tier; anything first seen lower (including every restored assistant reply
+  // and every tool result, recorded as 0) is re-NER'd the next time NER runs.
+  // A bare count would forget WHICH tier covered a message and leak on a
+  // tier swap-up mid-session, so we reuse historyTiers verbatim: one
+  // mechanism, one place to reason about it, runTurn behavior unchanged, and
+  // sessions interleaving runTurn and runTask stay consistent.
+  session.historyTiers ??= [];
+
+  // The user message enters the plaintext history up front (the loop's wire
+  // is always [system, ...plainHistory]). Recorded at 0 = never NER'd; the
+  // first step's redaction runs it 'on' and records the tier actually applied.
+  session.plainHistory.push({ role: 'user', content: message });
+  session.historyTiers.push(0);
+  let appendedBeyondUser = false; // for clean unwind if step 1 fails outright
+
+  const redactionSeen = new Map<
+    string,
+    { placeholder: string; original: string; kind: string; tier: 1 | 2 | 3 }
+  >();
+  const usageSteps: TokenUsage[] = [];
+  const toolCallsMade: TaskResult['toolCallsMade'] = [];
+  let steps = 0;
+  let finalText = '';
+  let tierAppliedLast: 0 | 1 | 2 | 3 = 0;
+  let tier2DegradedAny = false;
+  let stopped: TaskResult['stopped'] = 'done';
+
+  const appendSynthetic = (calls: ToolCallRequest[], text: string): void => {
+    // History must stay wire-valid: an assistant message with tool calls MUST
+    // be answered by one tool result per call before any later send.
+    for (const call of calls) {
+      session.plainHistory.push({ role: 'tool', toolCallId: call.id, content: text });
+      session.historyTiers.push(0);
+    }
+  };
+
+  try {
+    taskLoop: for (let step = 1; step <= maxSteps; step += 1) {
+      steps = step;
+
+      // ---- Wire assembly: FULL re-redaction at the effective tier, EVERY
+      // step (ADR 0007). Message content AND the string leaves of assistant
+      // toolCalls[].arguments are redacted; ids and tool NAMES pass through
+      // (they are our identifiers, not user content).
+      const plainPrompt: ChatMessage[] = [
+        { role: 'system', content: systemText },
+        ...session.plainHistory,
+      ];
+      let wire: ChatMessage[] = plainPrompt;
+      const replacements: Replacement[] = [];
+      let tier2Degraded = false;
+      let tierApplied: 0 | 1 | 2 | 3 = 0;
+      if (effectiveTier !== 0) {
+        const redacted: ChatMessage[] = [];
+        const reNerdHistory: number[] = [];
+        for (let mi = 0; mi < plainPrompt.length; mi += 1) {
+          const msg = plainPrompt[mi]!;
+          // Per-message NER decision — the historyTiers mechanism, see above.
+          // The system block (memories change per task) always runs 'on'.
+          let historyIndex = -1;
+          let nerMode: 'on' | 'replay-only';
+          if (mi === 0) {
+            nerMode = 'on';
+          } else {
+            historyIndex = mi - 1; // plainPrompt[mi] === session.plainHistory[mi-1]
+            const seenTier = session.historyTiers[historyIndex] ?? 0;
+            nerMode = seenTier < effectiveTier ? 'on' : 'replay-only';
+          }
+          const redactLeaf = async (text: string): Promise<string> => {
+            const r = await redactFn(text, {
+              tier: effectiveTier,
+              pseudonyms: session.pseudonyms,
+              nerMode,
+            });
+            if (r.tier2Degraded) tier2Degraded = true;
+            replacements.push(...r.replacements);
+            return r.redacted;
+          };
+          const out: ChatMessage = { role: msg.role, content: await redactLeaf(msg.content) };
+          if (msg.toolCalls !== undefined && msg.toolCalls.length > 0) {
+            const calls: ToolCallRequest[] = [];
+            for (const c of msg.toolCalls) {
+              calls.push({
+                id: c.id,
+                name: c.name,
+                // Parse → redact each string leaf → re-serialize; unparseable
+                // argument JSON is redacted as raw text (fail closed).
+                arguments: await redactJsonLeaves(c.arguments, redactLeaf),
+              });
+            }
+            out.toolCalls = calls;
+          }
+          if (msg.toolCallId !== undefined) out.toolCallId = msg.toolCallId;
+          redacted.push(out);
+          if (historyIndex >= 0 && nerMode === 'on') reNerdHistory.push(historyIndex);
+        }
+        // Same refusal rule as runTurn: Tier 2's only name layer is the NER,
+        // so degraded toward a bounded endpoint refuses LOUDLY (invariant #6).
+        if (effectiveTier === 2 && tier2Degraded && privacy === 'bounded') {
+          audit(auditFn, now, {
+            ok: false,
+            denied: true,
+            error: 'tier2-unavailable',
+            endpointHost,
+            model,
+            privacy,
+            tier: effectiveTier,
+            allowedScopes,
+            message,
+            used: [],
+            created: [],
+          });
+          throw new TurnError(
+            'TIER2_UNAVAILABLE',
+            'Name pseudonymization needs the local model (is Ollama running?) and this endpoint is not private. Nothing was sent. Start the local model, or explicitly switch this endpoint to Tier 1.',
+          );
+        }
+        wire = redacted;
+        tierApplied = effectiveTier === 2 && tier2Degraded ? 1 : effectiveTier;
+        // Record real NER coverage AFTER the refuse guard, exactly as runTurn.
+        for (const idx of reNerdHistory) session.historyTiers[idx] = tierApplied;
+      }
+      tierAppliedLast = tierApplied;
+      if (tier2Degraded) tier2DegradedAny = true;
+
+      hooks.onEvent({ type: 'step', n: step, model, endpointHost, privacy });
+
+      // ---- Provider call.
+      let reportedUsage: { inputTokens: number; outputTokens: number } | null = null;
+      let turn: ChatTurnResult;
+      try {
+        turn = await provider.chatTurn(wire, {
+          model,
+          onToken,
+          signal,
+          onUsage: (u) => {
+            reportedUsage = u;
+          },
+          ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
+          ...(toolSpecs.length > 0 ? { tools: toolSpecs } : {}),
+        });
+      } catch (err) {
+        if (isAborted()) {
+          // Cancelled mid-call: nothing landed in history for this step, so
+          // it is already wire-valid — conclude gracefully, no error row.
+          stopped = 'aborted';
+          break;
+        }
+        audit(auditFn, now, {
+          ok: false,
+          error: err instanceof Error ? err.message : 'provider call failed',
+          endpointHost,
+          model,
+          privacy,
+          tier: tierApplied,
+          allowedScopes,
+          message,
+          used: used.map((s) => s.entry),
+          created: [],
+        });
+        // An endpoint that 400s a tools-bearing request does not speak tools:
+        // loud, structured, never a prompt-parsing fallback (ADR 0027).
+        if (toolSpecs.length > 0 && err instanceof Error && /HTTP 400\b/.test(err.message)) {
+          throw new TurnError(
+            'TOOLS_UNSUPPORTED',
+            `${model} on ${endpointHost} refused the tool-enabled request. This endpoint likely has no native tool support — disable tools for it, or pick a tool-capable model.`,
+          );
+        }
+        throw new TurnError(
+          'PROVIDER_FAILED',
+          err instanceof Error ? err.message : 'The model endpoint did not answer.',
+        );
+      }
+      usageSteps.push(resolveUsage(reportedUsage, wire, turn.text));
+      for (const r of replacements) {
+        if (!redactionSeen.has(r.placeholder)) {
+          redactionSeen.set(r.placeholder, {
+            placeholder: r.placeholder,
+            original: r.original,
+            kind: r.kind,
+            tier: r.tier,
+          });
+        }
+      }
+
+      // ---- Restore locally: reply text and tool-call argument leaves.
+      const restoreLeaf = (text: string): string => restoreFn(text, replacements);
+      const restoredText = restoreLeaf(turn.text);
+      const restoredCalls: ToolCallRequest[] = turn.toolCalls.map((c) => ({
+        id: c.id,
+        name: c.name,
+        arguments: restoreJsonLeaves(c.arguments, restoreLeaf),
+      }));
+      session.plainHistory.push({
+        role: 'assistant',
+        content: restoredText,
+        ...(restoredCalls.length > 0 ? { toolCalls: restoredCalls } : {}),
+      });
+      session.historyTiers.push(0); // restored plaintext: re-NER on next NER run
+      appendedBeyondUser = true;
+      if (restoredText.length > 0) finalText = restoredText;
+
+      // ---- Continue or stop. The loop keys on toolCalls.length, NEVER on
+      // stopReason alone: a truncated or nonconforming response can carry
+      // tool calls with stopReason 'end', and dropping them would desync the
+      // model's view of its own actions (M10a review carry-forward).
+      if (restoredCalls.length === 0) {
+        stopped = 'done';
+        break;
+      }
+      const modelRowBase = {
+        ok: true,
+        endpointHost,
+        model,
+        privacy,
+        tier: tierApplied,
+        allowedScopes,
+        message,
+        used: used.map((s) => s.entry),
+        routeReason: options.routeReason,
+      };
+      if (isAborted()) {
+        appendSynthetic(restoredCalls, 'Cancelled by the user.');
+        stopped = 'aborted';
+        break;
+      }
+      if (step === maxSteps) {
+        // Step cap: stop LOUDLY (the result carries the marker), and keep
+        // history wire-valid with synthetic results for the unrun calls.
+        appendSynthetic(restoredCalls, 'Not executed: the task reached its step limit.');
+        stopped = 'step-limit';
+        break;
+      }
+      // A non-final model call gets its audit row now; the FINAL call's row is
+      // written after distillation so it carries created_ids like runTurn's.
+      audit(auditFn, now, { ...modelRowBase, created: [] });
+
+      // ---- Execute the tool calls, one gate decision + one audit row each.
+      for (let ci = 0; ci < restoredCalls.length; ci += 1) {
+        const call = restoredCalls[ci]!;
+        if (isAborted()) {
+          appendSynthetic(restoredCalls.slice(ci), 'Cancelled by the user.');
+          stopped = 'aborted';
+          break taskLoop;
+        }
+        const tool = toolByName.get(call.name);
+        let decision: 'approved' | 'denied' | 'timeout' = 'denied';
+        let egressUrl: string | null = null;
+        let egressHost: string | undefined;
+        let egressTier: PrivacyTier = 'bounded'; // fail closed: unknown = it leaves
+        let execMeta: ToolResult['meta'] | null = null;
+        let resultContent: string;
+
+        if (tool === undefined) {
+          resultContent = JSON.stringify({
+            error: 'unknown_tool',
+            guidance: `No tool named "${call.name}" is available. Use only the tools you were offered.`,
+          });
+        } else {
+          let parsedArgs: unknown;
+          let argsParse = true;
+          try {
+            parsedArgs = JSON.parse(call.arguments) as unknown;
+          } catch {
+            argsParse = false;
+          }
+          if (!argsParse) {
+            resultContent = JSON.stringify({
+              error: 'invalid_arguments',
+              guidance: 'The tool arguments were not valid JSON. Emit one valid JSON object.',
+            });
+          } else {
+            const egress = tool.egress(parsedArgs);
+            if (egress !== null) {
+              egressUrl = egress.url;
+              try {
+                const c = classifyEndpoint(egress.url);
+                egressHost = c.host;
+                egressTier = c.tier;
+              } catch {
+                egressHost = undefined; // unclassifiable stays 'bounded' (fail closed)
+              }
+            }
+            hooks.onEvent({
+              type: 'tool_call',
+              name: call.name,
+              ...(egressHost !== undefined ? { host: egressHost, egressTier } : {}),
+            });
+            const toolEgress =
+              egressUrl !== null && egressHost !== undefined
+                ? { host: egressHost, tier: egressTier }
+                : null;
+            const gateAnswer = await gate.evaluate({
+              tool: call.name,
+              argsPlain: call.arguments,
+              risk: tool.risk,
+              modelTier: privacy,
+              toolEgress,
+            });
+            if (gateAnswer === 'deny') {
+              decision = 'denied';
+            } else if (gateAnswer === 'auto-allow') {
+              decision = 'approved';
+            } else {
+              decision = await approvalWithTimeout(
+                hooks,
+                { tool: call.name, argsPlain: call.arguments, risk: tool.risk, egress: toolEgress },
+                approvalTimeoutMs,
+                signal,
+              );
+            }
+            hooks.onEvent({ type: 'permission', name: call.name, decision });
+
+            if (decision !== 'approved') {
+              resultContent = JSON.stringify({
+                error: 'permission_denied',
+                guidance: 'The user declined this tool call.',
+              });
+            } else {
+              // EGRESS-TIER SEAM (ADR 0028): arguments bound for a tool are
+              // redacted at the TOOL's egress tier, not the model's. A
+              // bounded destination gets the deterministic Tier-1 floor on
+              // every string leaf (no Ollama in this path). The full policy
+              // engine (name screens etc.) is ADR 0029, M10c — this milestone
+              // ships the floor. A private destination is unreachable in v1:
+              // web_fetch is always bounded, and classifyFetchTarget already
+              // refused anything private.
+              let egressArgs: unknown = parsedArgs;
+              if (egressUrl !== null && egressTier === 'bounded') {
+                const masked = await redactJsonLeaves(
+                  call.arguments,
+                  (leaf) => applyTier1(leaf).text,
+                );
+                try {
+                  egressArgs = JSON.parse(masked) as unknown;
+                } catch {
+                  egressArgs = parsedArgs; // unreachable: masked is re-serialized JSON
+                }
+              }
+              let toolOut: ToolResult;
+              try {
+                toolOut = await tool.execute(egressArgs, {
+                  ...(signal !== undefined ? { signal } : {}),
+                  maxResultChars,
+                });
+              } catch (err) {
+                // Tools promise not to throw; if one does anyway, the loop
+                // stays alive and the failure is loud in the transcript.
+                toolOut = {
+                  content: JSON.stringify({
+                    error: 'tool_failed',
+                    detail: err instanceof Error ? err.message : String(err),
+                    guidance: 'The tool failed unexpectedly. Consider a different approach.',
+                  }),
+                  meta: { bytes: 0, truncated: false, ok: false },
+                };
+              }
+              execMeta = toolOut.meta;
+              // Fence SUCCESSFUL external content (attacker-authored data);
+              // our own structured error JSON is not external and stays bare.
+              resultContent =
+                toolOut.meta.ok && egressUrl !== null
+                  ? wrapUntrusted(
+                      truncateChars(toolOut.content, maxResultChars),
+                      egressUrl,
+                      fenceNonce,
+                      now,
+                    )
+                  : truncateChars(toolOut.content, maxResultChars);
+              hooks.onEvent({
+                type: 'tool_result',
+                name: call.name,
+                ok: toolOut.meta.ok,
+                bytes: toolOut.meta.bytes,
+                truncated: toolOut.meta.truncated,
+                ...(toolOut.meta.host !== undefined ? { host: toolOut.meta.host } : {}),
+              });
+            }
+          }
+        }
+
+        session.plainHistory.push({ role: 'tool', toolCallId: call.id, content: resultContent });
+        session.historyTiers.push(0);
+        toolCallsMade.push({
+          name: call.name,
+          ...(egressHost !== undefined ? { host: egressHost } : {}),
+          decision,
+        });
+
+        // One content-free audit row PER tool call, denials included
+        // (invariant #5-adjacent: hashes and counts, never argument text).
+        const toolRow: CallLogEntry = {
+          ts: now().toISOString(),
+          tool: 'tool_call',
+          provider: 'northkeep-converse',
+          redaction_tier: effectiveTier,
+          params: {},
+          ok: decision === 'approved' && (execMeta?.ok ?? false),
+          ...(decision !== 'approved' ? { denied: true } : {}),
+          ...(egressHost !== undefined ? { endpoint_host: egressHost } : {}),
+          ...(egressUrl !== null ? { privacy: egressTier } : {}),
+          tool_call: {
+            name: call.name,
+            ...(egressHost !== undefined ? { domain: egressHost } : {}),
+            ...(egressUrl !== null ? { url_hash: sha256(egressUrl) } : {}),
+            args_hash: sha256(call.arguments),
+            arg_chars: call.arguments.length,
+            decision,
+            ...(execMeta !== null ? { result_bytes: execMeta.bytes } : {}),
+            ok: execMeta?.ok ?? false,
+          },
+        };
+        try {
+          auditFn(toolRow);
+        } catch {
+          // advisory row; enforcement already happened above
+        }
+      }
+    }
+  } catch (err) {
+    if (!appendedBeyondUser) {
+      // Step 1 failed before anything else landed: unwind the pushed user
+      // message so a retry does not double it (runTurn parity — it pushes
+      // history only after success).
+      session.plainHistory.pop();
+      session.historyTiers.pop();
+    }
+    throw err;
+  }
+
+  // ---- Finalize: distill ONCE over (user message, final assistant text).
+  let memoriesCreated: MemoryEntry[] = [];
+  let distillMode: TurnResult['distillMode'] = 'off';
+  if (options.distill !== false && stopped !== 'aborted' && finalText.length > 0) {
+    const outcome = await distillExchange({
+      vault,
+      allowedScopes,
+      message,
+      reply: finalText,
+      memoryScope: options.memoryScope ?? 'personal',
+      ollama: options.distillOllama ?? null,
+      now,
+    });
+    memoriesCreated = outcome.created;
+    distillMode = outcome.mode;
+  }
+
+  // Final audit row — the last model call's row, carrying created_ids
+  // (same one-row-per-model-call shape as runTurn).
+  audit(auditFn, now, {
+    ok: true,
+    endpointHost,
+    model,
+    privacy,
+    tier: tierAppliedLast,
+    allowedScopes,
+    message,
+    used: used.map((s) => s.entry),
+    created: memoriesCreated,
+    routeReason: options.routeReason,
+  });
+
+  const usage: TokenUsage = {
+    inputTokens: usageSteps.reduce((n, u) => n + u.inputTokens, 0),
+    outputTokens: usageSteps.reduce((n, u) => n + u.outputTokens, 0),
+    estimated: usageSteps.some((u) => u.estimated),
+  };
+  const catalog = options.catalog ?? loadCatalog();
+  const cost = estimateTurnCost(usage, lookupModel(model, catalog));
+
+  // The step-limit stop is VISIBLE in the returned reply (never silent); the
+  // marker is result-only — plainHistory keeps the model's actual words.
+  const reply =
+    stopped === 'step-limit'
+      ? `${finalText}${finalText.length > 0 ? '\n\n' : ''}[stopped: step limit]`
+      : finalText;
+
+  return {
+    reply,
+    privacy,
+    endpointHost,
+    model,
+    tierApplied: tierAppliedLast,
+    tier2Degraded: tier2DegradedAny,
+    redactions: [...redactionSeen.values()],
+    memoriesUsed: used.map((s) => ({
+      id: s.entry.id,
+      type: s.entry.type,
+      scope: s.entry.scope,
+      content: s.entry.content,
+    })),
+    memoriesCreated,
+    distillMode,
+    usage,
+    cost,
+    steps,
+    toolCallsMade,
+    stopped,
+  };
+}

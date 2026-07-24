@@ -47,6 +47,23 @@ export interface CallLogEntry {
   /** Concierge (M7b): how auto-routing chose the endpoint/model — task kind +
    * endpoint labels only, never content. */
   route_reason?: string;
+  /** Agent loop (M10b, ADR 0028): one row per tool call, denials included.
+   * Content-free by construction: the URL and the arguments appear ONLY as
+   * sha256 hashes plus a length — enough to prove "this exact call happened"
+   * against a value the user shows, never enough to recover it from the log. */
+  tool_call?: {
+    name: string;
+    /** Hostname the call egressed to (host only, like endpoint_host). */
+    domain?: string;
+    /** sha256 of the full egress URL (the URL itself is never logged). */
+    url_hash?: string;
+    /** sha256 of the plaintext argument JSON (never the arguments). */
+    args_hash: string;
+    arg_chars: number;
+    decision: 'approved' | 'denied' | 'timeout';
+    result_bytes?: number;
+    ok: boolean;
+  };
 }
 
 export function appendCallLog(entry: CallLogEntry): void {

@@ -31,6 +31,42 @@ export {
   type TurnResult,
 } from './turn.js';
 export {
+  runTask,
+  type ApprovalRequest,
+  type TaskEvent,
+  type TaskHooks,
+  type TaskOptions,
+  type TaskResult,
+} from './task.js';
+export { redactJsonLeaves, restoreJsonLeaves, transformJsonLeaves } from './jsonLeaves.js';
+export {
+  type ToolContext,
+  type ToolDefinition,
+  type ToolResult,
+} from './tools/types.js';
+export { placeholderGate, type PermissionGate, type PermissionRequest } from './tools/gate.js';
+export {
+  classifyFetchTarget,
+  FetchRefusedError,
+  hardenedFetch,
+  type FetchRefusalCode,
+  type HardenedFetchOptions,
+  type HardenedFetchResult,
+  type NetTestOverrides,
+} from './tools/net.js';
+export { extractText } from './tools/extract-text.js';
+export { createWebFetchTool, type WebFetchConfig } from './tools/webFetch.js';
+export { newFenceNonce, untrustedSystemLine, wrapUntrusted } from './tools/untrusted.js';
+export {
+  enabledTools,
+  KNOWN_TOOL_NAMES,
+  loadToolsConfig,
+  saveToolsConfig,
+  setToolEnabled,
+  toolsConfigPath,
+  type ToolsConfig,
+} from './tools/registry.js';
+export {
   BASELINE_CATALOG,
   catalogPath,
   compareTurnCost,

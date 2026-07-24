@@ -148,6 +148,21 @@ export function classifyEndpoint(rawUrl: string): TierClassification {
   return { tier: 'bounded', host, reason: 'public or unrecognized host' };
 }
 
+/**
+ * Classify a bare IP literal (IPv4 or IPv6, brackets already stripped).
+ * Returns null when `host` is not an IP literal at all. This is the
+ * refactor-export (M10b, ADR 0028) that lets the web-egress SSRF guard in
+ * tools/net.ts reuse the SAME loopback/RFC-1918/link-local/ULA/IPv4-mapped
+ * parsing that the endpoint privacy badge uses — one classifier, one place
+ * to fix, instead of a second hand-rolled IP parser that could disagree.
+ */
+export function classifyIpAddress(host: string): TierClassification | null {
+  const ipVersion = net.isIP(host);
+  if (ipVersion === 4) return classifyIPv4(host);
+  if (ipVersion === 6) return classifyIPv6(host);
+  return null;
+}
+
 function classifyIPv4(host: string): TierClassification {
   const parts = host.split('.').map(Number);
   const [a = -1, b = -1] = parts;

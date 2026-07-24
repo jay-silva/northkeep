@@ -62,6 +62,7 @@ import {
   shareSyncCmd,
 } from './shareCmd.js';
 import { routingClear, routingList, routingSet } from './routingCmd.js';
+import { toolsDisable, toolsEnable, toolsList } from './toolsCmd.js';
 import { collectScopes, connectCmd, connectStatusCmd, disconnectCmd } from './connectCmd.js';
 import { runLauncher } from './launcher.js';
 
@@ -531,8 +532,36 @@ program
   .option('--tier <n>', 'redaction tier: 0 (private endpoints only) | 1 | 2', '1')
   .option('--scope <scope>', 'scope for memories distilled from this conversation', 'personal')
   .option('--auto', 'let the concierge route each message by task (M7b)')
+  .option('--tools', 'enable agent tools for this conversation (registry-enabled tools only; every call asks first)')
   .action(async (options: ConverseCmdOptions) => {
     await runConverse(options, withVault);
+  });
+
+const toolsGroup = program
+  .command('tools')
+  .description('Agent tools for "northkeep converse --tools" — everything ships disabled; you enable per tool');
+
+toolsGroup
+  .command('list', { isDefault: true })
+  .description('Show known tools and whether each is enabled')
+  .action(() => {
+    toolsList();
+  });
+
+toolsGroup
+  .command('enable')
+  .description('Enable a tool (it still asks for approval on every call)')
+  .argument('<name>', 'tool name, e.g. web_fetch')
+  .action((name: string) => {
+    toolsEnable(name, fail);
+  });
+
+toolsGroup
+  .command('disable')
+  .description('Disable a tool')
+  .argument('<name>', 'tool name')
+  .action((name: string) => {
+    toolsDisable(name, fail);
   });
 
 const models = program

@@ -8,6 +8,7 @@ import {
   createAnthropicProvider,
   createOpenAICompatibleProvider,
   createSession,
+  enabledTools,
   getDefaultEndpoint,
   getEndpoint,
   getEndpointKey,
@@ -15,12 +16,19 @@ import {
   loadRoutingPolicy,
   route,
   RouteError,
+  runTask,
   runTurn,
   suggestBetterModel,
   vaultAdapter,
   type EndpointConfig,
   type ModelProvider,
   type PrivacyCeiling,
+  type TaskEvent,
+  type TaskHooks,
+  type TaskResult,
+  type ToolDefinition,
+  type TurnOptions,
+  type TurnResult,
 } from '@northkeep/converse';
 
 /**
@@ -58,7 +66,13 @@ export interface ConverseCmdOptions {
   scope: string;
   /** Start with the concierge routing each message (M7b). */
   auto?: boolean;
+  /** Opt IN to agent tools (M10b): registry-enabled tools ride each turn via
+   * runTask. Without the flag, exactly the old runTurn path — v1 conservative. */
+  tools?: boolean;
 }
+
+const fmtKb = (bytes: number): string =>
+  bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
 
 export async function runConverse(options: ConverseCmdOptions, withVault: WithVault): Promise<void> {
   let endpoint = options.endpoint ? getEndpoint(options.endpoint) : getDefaultEndpoint();
@@ -84,6 +98,19 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     throw new Error('Redaction tier 0 needs a fixed private endpoint — it cannot ride --auto.');
   }
 
+  // --tools (M10b): opt-in agent tools, gated twice — the flag AND the
+  // registry (~/.northkeep/tools.json). Nothing enabled → say so and refuse
+  // rather than silently running a plain chat the user thought had tools.
+  let taskTools: ToolDefinition[] = [];
+  if (options.tools === true) {
+    taskTools = enabledTools();
+    if (taskTools.length === 0) {
+      throw new Error(
+        'No tools are enabled. Enable one first:\n  northkeep tools enable web_fetch\nThen re-run: northkeep converse --tools',
+      );
+    }
+  }
+
   let provider = providerFor(endpoint);
   let model = endpoint.model;
   const ollama = createOllamaClient();
@@ -101,6 +128,11 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       ` · memory distillation: ${distillOllama ? 'local model' : 'heuristic (Ollama not running)'}`,
   );
   if (auto) console.log(`${GREEN}✦ Auto${RESET} — the concierge routes each message (":auto" toggles).`);
+  if (taskTools.length > 0) {
+    console.log(
+      `${YELLOW}⚒ Tools${RESET} — ${taskTools.map((t) => t.name).join(', ')} available; every call asks for your approval first.`,
+    );
+  }
   console.log(`${DIM}Commands: :auto  :private  :model <name>  :models  :endpoint <label|id>  :endpoints  :undo  :memories  :quit${RESET}\n`);
 
   const session = createSession();
@@ -131,6 +163,48 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     if (stdinClosed) return Promise.resolve(null);
     process.stdout.write(promptText);
     return new Promise((r) => waiters.push(r));
+  };
+
+  // Agent-loop hooks (M10b): dim one-line progress renders, and approval via
+  // the same line queue the REPL uses (pasted input keeps working). Only y/yes
+  // approves — anything else (including EOF and the 5-minute timeout inside
+  // runTask) denies. Richer scopes ("always for this site") come with the
+  // real permission engine in M10c.
+  const taskHooks: TaskHooks = {
+    onEvent: (e: TaskEvent) => {
+      if (e.type === 'step' && e.n > 1) {
+        process.stdout.write(`\n${DIM}↳ step ${e.n}${RESET}\n`);
+      } else if (e.type === 'tool_call') {
+        console.log(
+          `\n${DIM}↳ ${e.name} ${e.host ?? ''}${e.egressTier ? ` · ${e.egressTier}` : ''} · pending approval${RESET}`,
+        );
+      } else if (e.type === 'permission' && e.decision !== 'approved') {
+        console.log(`${DIM}↳ ✗ ${e.name} ${e.decision === 'timeout' ? 'timed out — denied' : 'denied'}${RESET}`);
+      } else if (e.type === 'tool_result') {
+        console.log(
+          e.ok
+            ? `${DIM}↳ ✓ ${fmtKb(e.bytes)} from ${e.host ?? e.name}${e.truncated ? ' (truncated)' : ''}${RESET}`
+            : `${DIM}↳ ✗ ${e.name} returned an error (shown to the model)${RESET}`,
+        );
+      }
+    },
+    requestApproval: async (req) => {
+      // Show the EXACT restored plaintext that would execute (ADR 0027):
+      // for web_fetch that is the URL itself; otherwise the raw arguments.
+      let url: string | null = null;
+      try {
+        const parsed = JSON.parse(req.argsPlain) as { url?: unknown };
+        if (typeof parsed.url === 'string') url = parsed.url;
+      } catch {
+        url = null;
+      }
+      const what =
+        req.tool === 'web_fetch' && url !== null
+          ? `Allow web_fetch of ${url}?`
+          : `Allow ${req.tool} with ${req.argsPlain}?`;
+      const answer = await nextLine(`${what} [y]es once / [n]o: `);
+      return answer !== null && /^y(es)?$/i.test(answer.trim()) ? 'allow' : 'deny';
+    },
   };
 
   for (;;) {
@@ -302,22 +376,35 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
 
     let streamed = '';
     try {
-      const result = await runTurn({
+      const turnArgs: TurnOptions = {
         message: trimmed,
         session,
         provider: turnProvider,
         model: turnModel,
-        routeReason,
+        ...(routeReason !== undefined ? { routeReason } : {}),
         vault,
         redactTier: tier,
         memoryScope: options.scope,
         distillOllama,
-        onToken: (token) => {
+        onToken: (token: string) => {
           streamed += token;
           process.stdout.write(token);
         },
-      });
+      };
+      // --tools rides runTask (the agent loop, M10b); otherwise EXACTLY the
+      // old runTurn path — byte-for-byte the same behavior without the flag.
+      let taskResult: TaskResult | null = null;
+      let result: TurnResult;
+      if (taskTools.length > 0) {
+        taskResult = await runTask({ ...turnArgs, tools: taskTools, hooks: taskHooks });
+        result = taskResult;
+      } else {
+        result = await runTurn(turnArgs);
+      }
       process.stdout.write('\n');
+      if (taskResult?.stopped === 'step-limit') {
+        console.log(`${YELLOW}[stopped: step limit]${RESET}`);
+      }
       if (result.reply !== streamed) {
         console.log(`${DIM}— restored —${RESET}`);
         console.log(result.reply);
@@ -337,6 +424,15 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
           ` · memory: ${result.memoriesUsed.length} used, ${result.memoriesCreated.length} added]${RESET}`,
       );
       if (routeReason) console.log(`${DIM}[✦ ${routeReason}]${RESET}`);
+      if (taskResult !== null && taskResult.toolCallsMade.length > 0) {
+        console.log(
+          `${DIM}[⚒ ${taskResult.steps} step${taskResult.steps === 1 ? '' : 's'} · ` +
+            taskResult.toolCallsMade
+              .map((tc) => `${tc.name}${tc.host ? ` ${tc.host}` : ''} (${tc.decision})`)
+              .join(', ') +
+            `]${RESET}`,
+        );
+      }
       for (const m of result.memoriesCreated) console.log(`  ${DIM}+ [${m.type}] ${m.content}${RESET}`);
       if (result.memoriesCreated.length > 0) console.log(`  ${DIM}(:undo to remove them)${RESET}`);
       // M9d concierge: if the catalog's strongest model for this task isn't
