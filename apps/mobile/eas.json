@@ -1,0 +1,34 @@
+{
+  "cli": {
+    "version": ">= 16.0.0",
+    "requireCommit": false,
+    "appVersionSource": "local"
+  },
+  "build": {
+    "base": {
+      "node": "20.18.0"
+    },
+    "development": {
+      "extends": "base",
+      "developmentClient": true,
+      "distribution": "internal",
+      "ios": {
+        "simulator": false
+      }
+    },
+    "preview": {
+      "extends": "base",
+      "distribution": "internal"
+    },
+    "production": {
+      "extends": "base"
+    }
+  },
+  "submit": {
+    "production": {
+      "ios": {
+        "ascAppId": "6792012575"
+      }
+    }
+  }
+}

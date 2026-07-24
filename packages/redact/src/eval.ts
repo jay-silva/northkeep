@@ -1,17 +1,38 @@
 import type { OllamaClient } from '@northkeep/librarian';
 import { redact } from './index.js';
+import { boundaryFriendly } from './tier2.js';
 import type { EntityKind } from './types.js';
 
 /**
- * Tier-2 NER evaluation harness — the M6-4 GATE (ADR 0020).
+ * Redaction evaluation harness — the M6-4 GATE (ADR 0020).
  *
- * Runs a seeded entity corpus through the REAL redact() pipeline at Tier-2 with a
- * given NER backend and measures recall against the desktop target (85-95%
- * in-domain). The SAME function scores:
- *   - the desktop Ollama baseline (pass createOllamaClient()), and
- *   - the on-device model (pass createLocalNerClient(localModel) — structurally an
- *     OllamaClient), from a device runner.
- * so parity is an apples-to-apples number, not a vibe.
+ * Two distinct measurements live here; keeping them apart is the whole point
+ * (adversarial review 2026-07-21):
+ *
+ *  1. TIER-2 MODEL-IN-ISOLATION recall (evaluateNer) — a DIAGNOSTIC of the NER
+ *     model ALONE, with NO deterministic dictionary floor under it. This is
+ *     where the old "Apple FM 35-39%" number came from. It is NOT the shipped
+ *     posture and must NEVER be read as production recall: mobile cloud chat
+ *     ships redactTier: 3, where a deterministic name dictionary runs FIRST as a
+ *     structural floor and the NER model is only an additive net on top. This
+ *     number is kept ONLY so a silent NER-model regression stays visible.
+ *
+ *  2. TIER-3 PIPELINE truth (evaluateTier3Monotonicity) — the SHIPPED tier-3
+ *     pipeline (dictionary floor + NER net). It reports the production wire-leak
+ *     metric (per person name, does any token survive in the redacted output)
+ *     AND, load-bearing, FLOOR-MONOTONICITY: the full pipeline must never leave
+ *     in plaintext a name token that the dictionary-only floor masks. A tier-3
+ *     "high recall" number alone would NOT have caught the Ravindranathan leak
+ *     (commit 8435d12, where NER-before-dictionary ordering broke the dict's
+ *     multi-token pair rule and leaked an off-list first name to the cloud).
+ *
+ * evaluateRedaction(cases, ner) returns BOTH so a report never confuses the
+ * model-in-isolation diagnostic for the production-truth number.
+ *
+ * The SAME evaluateNer scores the desktop Ollama baseline (createOllamaClient())
+ * and the on-device net (createNLTaggerNerClient / createLocalNerClient —
+ * structurally an OllamaClient), from a device runner, so parity is
+ * apples-to-apples, not a vibe.
  *
  * Deliberately NOT re-exported from the package index: it pulls the librarian
  * OllamaClient type into scope and is infra, not core API. Import via the subpath
@@ -63,9 +84,17 @@ export interface NerEvalReport {
 const KINDS: EntityKind[] = ['person', 'org', 'location'];
 
 /**
- * Evaluate a NER backend. `ner` is an OllamaClient (desktop) or the on-device
- * LocalNerClient (structurally compatible). `null` measures the no-model floor
- * (recall 0, no leaks) — useful to prove the harness runs even when degraded.
+ * DIAGNOSTIC: evaluate a NER backend IN ISOLATION at Tier-2 (no dictionary
+ * floor). `ner` is an OllamaClient (desktop) or the on-device NER client
+ * (structurally compatible). `null` measures the no-model floor (recall 0, no
+ * leaks) — useful to prove the harness runs even when degraded.
+ *
+ * The returned recall is the NER MODEL'S standalone recall, NOT the shipped
+ * production posture (production ships Tier-3, where the deterministic
+ * dictionary is the floor and NER is only an additive net). Use
+ * evaluateTier3Monotonicity for the production-truth no-leak number. This path
+ * exists so a silent NER-model regression stays visible even when the Tier-3
+ * dictionary would otherwise mask the same names.
  */
 export async function evaluateNer(
   cases: NerEvalCase[],
@@ -135,6 +164,209 @@ export async function evaluateNer(
     tier1Leaks,
     tier1SecretsChecked: secretsChecked,
   };
+}
+
+// ---------------------------------------------------------------------------
+// TIER-3 PIPELINE EVAL: production truth + floor-monotonicity (the safety check)
+// ---------------------------------------------------------------------------
+
+/** A single below-floor leak: the dictionary-only floor masked this token of an
+ * expected person name, yet the full pipeline (dict + NER) left it in plaintext.
+ * ANY of these is a MONOTONICITY VIOLATION — the NER net regressed below the
+ * deterministic floor, the exact class of the Ravindranathan leak. */
+export interface Tier3MonotonicityViolation {
+  /** The full expected person-name span the leaked token belongs to. */
+  expectedName: string;
+  /** The whole-word token that survived in the full output but not the floor. */
+  leakedToken: string;
+  /** The case text, so the violation is reproducible from the report alone. */
+  caseText: string;
+}
+
+/** A person name with at least one token surviving as a whole word in an output
+ * (the plain wire-leak metric, reported for both floor and full separately). */
+export interface Tier3NameLeak {
+  name: string;
+  survivingTokens: string[];
+  caseText: string;
+}
+
+export interface Tier3MonotonicityReport {
+  cases: number;
+  /** Expected person-name spans scored across the corpus. */
+  personNames: number;
+  /**
+   * The load-bearing safety metric. MUST be empty: a non-empty list means the
+   * full pipeline left in plaintext a name token the deterministic floor masked
+   * (a real leak class the naive "tier-3 = high recall" eval would hide).
+   */
+  violations: Tier3MonotonicityViolation[];
+  /** Production truth: fraction of person names with NO token surviving in the
+   * FULL (dict + NER) output. This is the shipped no-leak posture. */
+  fullNoLeakRate: number;
+  /** Same metric for the dictionary-ONLY floor, so the two are directly
+   * comparable — the NER net can only push this up, never down. */
+  floorNoLeakRate: number;
+  /** Names that still leak a token through the full pipeline (should be rare;
+   * these lean on residual NER and are the honest KNOWN-LIMITS surface). */
+  fullLeaks: Tier3NameLeak[];
+  /** Names the floor alone leaks — the gap the NER net exists to close. */
+  floorLeaks: Tier3NameLeak[];
+}
+
+/** Combined report: the model-in-isolation DIAGNOSTIC and the production-truth
+ * tier-3 numbers, side by side, so a reader can never mistake one for the other. */
+export interface RedactionEvalReport {
+  /** DIAGNOSTIC ONLY — NER model alone at Tier-2, NOT the shipped posture. */
+  tier2Diagnostic: NerEvalReport;
+  /** PRODUCTION TRUTH — the shipped Tier-3 pipeline (dict floor + NER net). */
+  tier3: Tier3MonotonicityReport;
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Whitespace-split tokens of a name span, minus initials/punctuation (a bare
+ * "J." is not a leakable name token). Kept pure and exported-adjacent so the
+ * monotonicity detector and the wire-leak metric agree on "token". */
+function nameTokens(name: string): string[] {
+  return name
+    .split(/\s+/)
+    // Strip leading/trailing NON-LETTER (any script) chars, not just non-Latin,
+    // so a non-Latin token ("Пётр", "田中") is kept whole instead of stripped to
+    // "" and the leak becoming invisible to the gate (adversarial review
+    // 2026-07-21).
+    .map((t) => t.replace(/^[^\p{L}]+|[^\p{L}]+$/gu, ''))
+    .filter((t) => t.length >= 2 || !boundaryFriendly(t));
+}
+
+/** Whole-word (case-insensitive) presence of `token` in `text`. This is the wire
+ * test: a name token that survives as a whole word in the redacted string is
+ * plaintext going to the cloud. */
+function tokenSurvives(token: string, text: string): boolean {
+  // Only space-delimited cased scripts (Latin/Cyrillic/Greek/Armenian/Georgian)
+  // use a case-insensitive Unicode WHOLE-WORD test, so a token is caught
+  // regardless of case ("TRENT") but not flagged inside a longer word ("Ann" in
+  // "Anna"). EVERY OTHER script (no-space/clitic/Indic/unlisted) uses substring
+  // presence, so the monitor stays at least as broad as the masker and never
+  // scores a leaking non-boundary script clean (adversarial review round 3).
+  if (!boundaryFriendly(token)) return text.includes(token);
+  return new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegex(token)}(?![\\p{L}\\p{N}_])`, 'iu').test(text);
+}
+
+/** Tokens of `name` that survive as whole words in `redacted` (empty = no leak). */
+function survivingTokens(name: string, redacted: string): string[] {
+  return nameTokens(name).filter((t) => tokenSurvives(t, redacted));
+}
+
+/**
+ * PURE monotonicity detector — the check that would have caught Ravindranathan.
+ *
+ * Contract: for each expected person-name span, a token is a BELOW-FLOOR LEAK
+ * when it is ABSENT (as a whole word, case-insensitive) from `floorRedacted`
+ * but PRESENT in `fullRedacted`. In words: the deterministic dictionary-only
+ * floor masked that token, yet the full dict+NER pipeline left it in plaintext.
+ * Because the dictionary runs first and identically in both, and the NER net can
+ * only ADD masks, a correct pipeline yields ZERO such tokens; any hit means the
+ * NER layer somehow un-masked what the floor guaranteed — a regression below the
+ * floor. Exported so tests can drive it directly with crafted floor/full strings.
+ */
+export function findBelowFloorLeaks(
+  personNames: string[],
+  floorRedacted: string,
+  fullRedacted: string,
+): Array<{ expectedName: string; leakedToken: string }> {
+  const leaks: Array<{ expectedName: string; leakedToken: string }> = [];
+  for (const name of personNames) {
+    for (const token of nameTokens(name)) {
+      const inFloor = tokenSurvives(token, floorRedacted);
+      const inFull = tokenSurvives(token, fullRedacted);
+      if (!inFloor && inFull) leaks.push({ expectedName: name, leakedToken: token });
+    }
+  }
+  return leaks;
+}
+
+/**
+ * Evaluate the SHIPPED Tier-3 pipeline. For each case it computes two redactions
+ * of the SAME text with a fresh pseudonym map:
+ *   - floor = redact(text, {tier:3}, null)  — dictionary only, NO NER
+ *   - full  = redact(text, {tier:3}, ner)   — dictionary + the NER net
+ * then (a) collects floor-monotonicity violations via findBelowFloorLeaks (the
+ * safety metric — MUST be empty) and (b) records the per-name wire-leak metric
+ * for both floor and full so the NER net's contribution is legible and the full
+ * number is never confused with the model-in-isolation diagnostic.
+ *
+ * Pure over the injected `ner` (OllamaClient shape). `null` makes full == floor
+ * (0 violations, equal no-leak rates) — the degraded-but-safe case.
+ */
+export async function evaluateTier3Monotonicity(
+  cases: NerEvalCase[],
+  ner: OllamaClient | null,
+  onProgress?: (done: number, total: number) => void,
+): Promise<Tier3MonotonicityReport> {
+  const violations: Tier3MonotonicityViolation[] = [];
+  const fullLeaks: Tier3NameLeak[] = [];
+  const floorLeaks: Tier3NameLeak[] = [];
+  let personNames = 0;
+  let fullNoLeak = 0;
+  let floorNoLeak = 0;
+  let done = 0;
+
+  for (const c of cases) {
+    const persons = c.entities.filter((e) => e.kind === 'person').map((e) => e.text);
+    // Fresh pseudonym maps: floor and full must be independent measurements.
+    const floor = await redact(c.text, { tier: 3, pseudonyms: {} }, null);
+    const full = await redact(c.text, { tier: 3, pseudonyms: {} }, ner);
+    done += 1;
+    onProgress?.(done, cases.length);
+
+    for (const leak of findBelowFloorLeaks(persons, floor.redacted, full.redacted)) {
+      violations.push({ ...leak, caseText: c.text });
+    }
+
+    for (const name of persons) {
+      personNames += 1;
+      const fullSurv = survivingTokens(name, full.redacted);
+      const floorSurv = survivingTokens(name, floor.redacted);
+      if (fullSurv.length === 0) fullNoLeak += 1;
+      else fullLeaks.push({ name, survivingTokens: fullSurv, caseText: c.text });
+      if (floorSurv.length === 0) floorNoLeak += 1;
+      else floorLeaks.push({ name, survivingTokens: floorSurv, caseText: c.text });
+    }
+  }
+
+  return {
+    cases: cases.length,
+    personNames,
+    violations,
+    fullNoLeakRate: personNames === 0 ? 1 : fullNoLeak / personNames,
+    floorNoLeakRate: personNames === 0 ? 1 : floorNoLeak / personNames,
+    fullLeaks,
+    floorLeaks,
+  };
+}
+
+/**
+ * Run BOTH measurements against the same NER backend: the Tier-2
+ * model-in-isolation DIAGNOSTIC and the Tier-3 PRODUCTION-truth pipeline eval.
+ * Progress spans both halves so a device UI shows one continuous bar.
+ */
+export async function evaluateRedaction(
+  cases: NerEvalCase[],
+  ner: OllamaClient | null,
+  onProgress?: (done: number, total: number) => void,
+): Promise<RedactionEvalReport> {
+  const total = cases.length * 2;
+  let done = 0;
+  const bump = () => {
+    done += 1;
+    onProgress?.(done, total);
+  };
+  const tier2Diagnostic = await evaluateNer(cases, ner, bump);
+  const tier3 = await evaluateTier3Monotonicity(cases, ner, bump);
+  return { tier2Diagnostic, tier3 };
 }
 
 /**

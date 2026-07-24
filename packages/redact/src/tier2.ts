@@ -66,10 +66,29 @@ export async function applyTier2(
       placeholder = `${PREFIX[entity.kind]}-${n}`;
       pseudonyms[key] = placeholder;
     }
-    // Whole-word, case-insensitive replacement of every occurrence.
-    const re = new RegExp(`\\b${escapeRegex(entity.text)}\\b`, 'gi');
-    if (!re.test(out)) continue;
-    out = out.replace(re, placeholder);
+    // Whole-word, case-insensitive replacement of every occurrence. Unicode-
+    // aware boundaries (NOT ASCII \b) so non-Latin-script names (Cyrillic, CJK,
+    // Greek, Arabic) actually mask instead of \b silently never matching and the
+    // span leaking to the cloud (adversarial review 2026-07-21). Lookbehind is
+    // already shipped in tier1/dates regexes on this Hermes, so it is safe.
+    const re = new RegExp(
+      `(?<![\\p{L}\\p{N}_])${escapeRegex(entity.text)}(?![\\p{L}\\p{N}_])`,
+      'giu',
+    );
+    if (re.test(out)) {
+      out = out.replace(re, placeholder);
+    } else if (!boundaryFriendly(entity.text) && out.includes(entity.text)) {
+      // Any script that is NOT a space-delimited cased alphabet (CJK, kana,
+      // Hangul, Thai, Lao, Khmer, Arabic, Hebrew, Indic, or an unlisted/new
+      // script): word boundaries are unreliable, so the boundary replace above
+      // can miss a name abutting other letters. Mask the exact detected span as
+      // a substring. Over-masking is the safe direction; only Latin/Cyrillic/
+      // Greek/Armenian/Georgian reach the plain `continue`, so "Ann" is never
+      // cut out of "Anna". Fail-closed inversion, adversarial review round 3.
+      out = out.split(entity.text).join(placeholder);
+    } else {
+      continue;
+    }
     if (!replacements.some((r) => r.placeholder === placeholder)) {
       replacements.push({
         placeholder,
@@ -88,6 +107,11 @@ async function detectEntities(
   ollama: OllamaClient,
   strictGate: boolean,
 ): Promise<EntityHit[]> {
+  // NOTE: the mobile NER client (packages/platform-mobile per-kind-ner.ts)
+  // splits this prompt at the trailing "\nText:\n" marker to recover the text
+  // and run per-kind passes. Keep that marker stable (or update both sides);
+  // if it drifts, mobile falls back to a single generic pass (correct, but
+  // lower recall). Desktop Ollama receives this prompt verbatim, unchanged.
   const prompt = `Extract named entities from the text. Respond with JSON only:
 {"entities":[{"text":"exact span","kind":"person|org|location"}]}
 
@@ -118,7 +142,11 @@ ${text.slice(0, 6000)}`;
     const record = item as { text?: unknown; kind?: unknown };
     if (typeof record.text !== 'string') continue;
     const span = record.text.trim();
-    if (span.length < 2 || span.length > 100) continue;
+    // Drop length-1 spans ONLY for boundary-friendly scripts (a lone Latin "J."
+    // is an initial); a single-character CJK name ("王") is a real name and must
+    // survive to the substring fallback (adversarial review round 3).
+    if (span.length > 100) continue;
+    if (span.length < 2 && boundaryFriendly(span)) continue;
     if (!text.includes(span)) continue; // model must quote real spans, not invent
     if (!plausibleEntity(span, strictGate)) continue; // 3B junk gate (field report 2026-07-17)
     const kind =
@@ -146,7 +174,10 @@ const PLACEHOLDER_SPAN = /\[[A-Z_]+(?:-\d{2,4}|_\d+)?\]|\b(?:Person|Org|Place|Lo
  */
 function plausibleEntity(span: string, strictGate: boolean): boolean {
   if (PLACEHOLDER_SPAN.test(span)) return false;
-  const tokens = span.match(/[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’\-]*/g) ?? [];
+  // Unicode letters (ANY script), not Latin-only, so a non-Latin name survives
+  // the gate instead of tokenizing to [] and being dropped, then leaking
+  // (adversarial review 2026-07-21: Cyrillic/CJK/Greek/Arabic names leaked).
+  const tokens = span.match(/\p{L}[\p{L}'’\-]*/gu) ?? [];
   if (tokens.length === 0) return false; // pure digits/punctuation is not a name
   if (!strictGate) {
     // Tier 2: NER is the ONLY name layer, and legitimate org names are often
@@ -155,16 +186,53 @@ function plausibleEntity(span: string, strictGate: boolean): boolean {
     // eval harness's perfect-backend gate). Only the placeholder ban applies.
     return true;
   }
-  // Tier 3 strict: common-English tokens are the deterministic layers' job
-  // ("Donna", "Smith"); NER may only add masks for OFF-English residuals
-  // ("Zyler", "Natarajan") — the census list is too full of English words
-  // ("date", "vile", "sul" are all surnames) to trust list membership here.
-  // Names in prose are capitalized: a span with no capitalized token is a
-  // stray word ("vile"), not a person — refuse it outright.
-  if (!tokens.some((t) => /^[A-ZÀ-ÖØ-Þ]/.test(t))) return false;
-  return tokens.some((t) => !isCommonEnglish(t) && (t.length >= 3 || nameListHit(t)));
+  // Tier 3 strict: names in prose start with an uppercase letter, OR are in a
+  // CASELESS script (CJK/Arabic/Hebrew have no case). A span whose every token
+  // is a lowercase word ("vile") is a stray word, not a person — refuse it.
+  const nameLike = (t: string) => !/^\p{Ll}/u.test(t);
+  if (!tokens.some(nameLike)) return false;
+  // Common-English tokens are the deterministic layers' job; NER may only add
+  // OFF-English residuals ("Zyler", "Natarajan") — the census list is too full
+  // of English words ("date", "vile", "sul") to trust list membership. A
+  // non-Latin-script token is BY DEFINITION a residual the Latin dictionary
+  // floor can never mask, so it always qualifies; Latin residuals keep the
+  // length/list heuristic.
+  return tokens.some((t) => {
+    if (isCommonEnglish(t)) return false;
+    const latinOnly = /^[A-Za-zÀ-ÖØ-öø-ÿ'’\-]+$/.test(t);
+    if (!latinOnly) return true;
+    return t.length >= 3 || nameListHit(t);
+  });
 }
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+const SAFE_SCRIPT_LETTER =
+  /[A-Za-z\u00C0-\u024F\u1E00-\u1EFF\u0370-\u03FF\u1F00-\u1FFF\u0400-\u052F\u0531-\u058F\u10A0-\u10FF\u1C90-\u1CBF]/u;
+const ANY_LETTER = /\p{L}/u;
+
+/**
+ * True when EVERY letter in the span belongs to a space-delimited, cased
+ * alphabetic script (Latin incl. extended for Vietnamese, Cyrillic, Greek incl.
+ * extended, Armenian, Georgian) - the scripts where a word-boundary FAILURE
+ * reliably means the span is a genuine substring of a longer word, so the caller
+ * must NOT substring-mask it ("Ann" inside "Anna").
+ *
+ * FAIL-CLOSED INVERSION (adversarial review round 3, 2026-07-21): callers treat
+ * !boundaryFriendly as "use the exact-substring fallback = OVER-MASK" (the safe
+ * direction). So every OTHER script - no-space (CJK/kana/Hangul/Thai/Lao/Khmer/
+ * Myanmar/Tibetan), clitic-attaching (Arabic/Hebrew), Indic, halfwidth katakana,
+ * AND any script not enumerated here or invented later - over-masks on a boundary
+ * miss instead of silently leaking. Omitting a script from the SAFE set costs
+ * over-masking, never a leak; that is why we list the SAFE set, not the dangerous
+ * one (the dangerous-set list had missed members three review rounds running).
+ * Shared by applyTier2, replayPseudonyms (index.ts), and the eval monitor.
+ */
+export function boundaryFriendly(s: string): boolean {
+  for (const ch of s) {
+    if (ANY_LETTER.test(ch) && !SAFE_SCRIPT_LETTER.test(ch)) return false;
+  }
+  return true;
 }

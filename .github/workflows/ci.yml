@@ -10,12 +10,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # pnpm pinned exactly: a floating "11" resolved to 11.17.0, which needs
+      # node:sqlite (Node >= 22.5) and crashed on the Node-20 runner before a
+      # single test ran — CI was silently red from 2026-07-19. 11.9.0 matches
+      # local dev. Node 24 matches dev and the bundled desktop sidecar (24.14).
       - uses: pnpm/action-setup@v4
         with:
-          version: 11
+          version: 11.9.0
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 24
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm build

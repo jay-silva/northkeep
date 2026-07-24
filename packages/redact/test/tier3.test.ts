@@ -189,6 +189,85 @@ describe('redact() tier orchestration', () => {
     expect(r.redacted).not.toMatch(/Donna|Hitchcock/);
   });
 
+  it('surname-only NER catch cannot strand an off-list first name (dictionary-first floor)', async () => {
+    // Regression for the adversarial review 2026-07-21: with NER running BEFORE
+    // the dictionary, an NER pass that masked the surname alone ("Subramanian"
+    // -> Person-1) left the off-list first name behind ("Ravindranathan
+    // Person-1"), leaking a patient name to the cloud. Dictionary-first glues
+    // the whole multi-token name on pristine text, so no NER catch can regress
+    // below the deterministic floor.
+    const surnameOnlyNer = {
+      available: async () => true,
+      generateJson: async () =>
+        JSON.stringify({ entities: [{ text: 'Subramanian', kind: 'person' }] }),
+    } as never;
+    const r = await redact(
+      'Handoff: Ravindranathan Subramanian, afebrile and hemodynamically stable.',
+      { tier: 3 },
+      surnameOnlyNer,
+    );
+    expect(r.redacted).not.toMatch(/Ravindranathan|Subramanian/);
+    expect(r.redacted).toMatch(/Person-\d/);
+    expect(r.tier2Degraded).toBe(false);
+  });
+
+  it('non-Latin-script names the NER net detects are actually masked (Unicode + no-space fallback)', async () => {
+    // Adversarial review 2026-07-21: ASCII \b never matched non-Latin spans and
+    // the Latin-only plausibility gate dropped them, so Cyrillic/CJK/Greek/Arabic
+    // names leaked to the cloud even when the NER net detected them. Re-review:
+    // the boundary fix alone still leaked no-space (CJK/Thai) and clitic (Arabic)
+    // forms where the name abuts other letters; the script-gated substring
+    // fallback closes those too.
+    const cases: Array<[string, string]> = [
+      ['Contact Пётр Ivanov about the account.', 'Пётр'], // Cyrillic, spaced
+      ['Meet 田中 about the account.', '田中'], // CJK, spaced
+      ['Call Γεωργίου about the account.', 'Γεωργίου'], // Greek, spaced
+      ['Email محمد about the account.', 'محمد'], // Arabic, spaced
+      ['田中さんは来ました。', '田中'], // CJK scriptio-continua (name abuts さ)
+      ['李明是医生です。', '李明'], // CJK, name abuts 是
+      ['สมชายไปตลาด', 'สมชาย'], // Thai, no spaces
+      ['ومحمد جاء اليوم.', 'محمد'], // Arabic proclitic (و attached)
+      ['ສົມຊາຍໄປຕະຫຼາດ', 'ສົມຊາຍ'], // Lao (round-3 fail-closed: was leaking)
+      ['សុខាទៅផ្សារ', 'សុខា'], // Khmer (was leaking)
+      ['ﾀﾅｶさんは来た', 'ﾀﾅｶ'], // halfwidth katakana, Japanese (was leaking)
+      ['王来了。', '王'], // single-char CJK name (was dropped by length<2 then leaked)
+    ];
+    for (const [text, name] of cases) {
+      const ner = {
+        available: async () => true,
+        generateJson: async () => JSON.stringify({ entities: [{ text: name, kind: 'person' }] }),
+      } as never;
+      const r = await redact(text, { tier: 3 }, ner);
+      expect(r.redacted).not.toContain(name);
+      expect(r.redacted).toMatch(/Person-\d/);
+      expect(r.tier2Degraded).toBe(false);
+    }
+  });
+
+  it('a lowercase Latin stray word is still not masked at the strict gate', async () => {
+    // Guard the plausibility change did not start masking stray lowercase words.
+    const ner = {
+      available: async () => true,
+      generateJson: async () => JSON.stringify({ entities: [{ text: 'vile', kind: 'person' }] }),
+    } as never;
+    const r = await redact('The vile smell lingered.', { tier: 3 }, ner);
+    expect(r.redacted).toContain('vile');
+  });
+
+  it('the no-space substring fallback does NOT over-cut a Latin token inside a longer word', async () => {
+    // The substring fallback is script-gated: Latin is space-delimited and never
+    // takes it, so a detected off-list token whose boundary does not match must
+    // not be cut out of a longer word ("Xyz" must not be sliced from "Xyzabc").
+    // A non-dictionary word is used so scrubNames does not mask it for its own
+    // reasons; the point is the FALLBACK never fires for Latin.
+    const ner = {
+      available: async () => true,
+      generateJson: async () => JSON.stringify({ entities: [{ text: 'Xyz', kind: 'person' }] }),
+    } as never;
+    const r = await redact('The Xyzabc device shipped.', { tier: 3 }, ner);
+    expect(r.redacted).toContain('Xyzabc');
+  });
+
   it('replay-only mode never calls the model and still replays known names', async () => {
     let calls = 0;
     const countingOllama = {
