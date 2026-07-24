@@ -103,10 +103,23 @@ export interface ConverseSession {
    * exactly like `pseudonyms`, so the two content screens stay in lockstep.
    */
   disclosedMemory: string[];
+  /**
+   * Per-conversation executed-call count per COSTED tool (M10d, ADR 0030).
+   * The persisted daily cap (budget.ts) is the real wallet/quota guard; this
+   * is the fast per-conversation bound, conversation-scoped like the fields
+   * above. Free tools never appear here.
+   */
+  toolSpend: Record<string, number>;
 }
 
 export function createSession(): ConverseSession {
-  return { pseudonyms: {}, plainHistory: [], historyTiers: [], disclosedMemory: [] };
+  return {
+    pseudonyms: {},
+    plainHistory: [],
+    historyTiers: [],
+    disclosedMemory: [],
+    toolSpend: {},
+  };
 }
 
 /**

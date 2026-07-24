@@ -65,7 +65,7 @@ export interface CallLogEntry {
      * prompt, 'auto' when an existing grant satisfied it, 'never' when a
      * persisted deny refused it, 'screen' when the exfiltration screens
      * hard-denied before the gate. */
-    scope?: 'once' | 'session' | 'always' | 'never' | 'auto' | 'screen';
+    scope?: 'once' | 'session' | 'always' | 'never' | 'auto' | 'screen' | 'budget';
     /** Content-free exfil-screen flag descriptors when any fired (ADR 0029),
      * e.g. "secret:ssn:query:decoded" — never matched text. */
     screen?: string[];

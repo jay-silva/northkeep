@@ -1,13 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CallLogEntry } from '@northkeep/mcp-server';
 import type { RedactionResult, Replacement } from '@northkeep/redact';
 import {
   createPermissionEngine,
   createSession,
+  daySpend,
   placeholderGate,
   redactJsonLeaves,
   restoreJsonLeaves,
   runTask,
+  setToolBudget,
   TurnError,
   wrapUntrusted,
   type ApprovalRequest,
@@ -749,5 +754,104 @@ describe('runTask — the agent loop', () => {
       tool: 'echo', argsPlain: '{}', risk: 'consequential', modelTier: 'bounded',
       toolEgress: { host: 'evil.example', tier: 'bounded' },
     })).toBe('ask');
+  });
+});
+
+// M10d — the tool-spend budget enforced in runTask (ADR 0030 decision 4).
+// These persist to ~/.northkeep/budget.json, so each test fakes NORTHKEEP_HOME.
+describe('runTask — budget enforcement', () => {
+  let home: string;
+  let prior: string | undefined;
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-budget-task-'));
+    prior = process.env.NORTHKEEP_HOME;
+    process.env.NORTHKEEP_HOME = home;
+  });
+  afterEach(() => {
+    if (prior === undefined) delete process.env.NORTHKEEP_HOME;
+    else process.env.NORTHKEEP_HOME = prior;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  const costedTool = (executed: unknown[]): ToolDefinition => ({
+    ...echoTool(executed),
+    costPerCallUsd: 0.005,
+  });
+  const toolThenAnswer = () =>
+    scriptedProvider(BOUNDED_URL, [
+      {
+        text: '',
+        toolCalls: [{ id: 'c1', name: 'echo', arguments: '{"url":"https://example.com/x"}' }],
+        stopReason: 'tool_use',
+      },
+      { text: 'done', toolCalls: [], stopReason: 'end' },
+    ]);
+  const base = (provider: ModelProvider, tools: ToolDefinition[]) => ({
+    provider,
+    model: 'fake-model',
+    vault: fakeVault,
+    distill: false as const,
+    auditFn: (() => {}) as (e: CallLogEntry) => void,
+    redactTier: 1 as const,
+    tools,
+  });
+
+  it('denies a costed tool once the per-conversation cap is reached', async () => {
+    setToolBudget('echo', { dailyCap: 100, perConversationCap: 1 });
+    const session = createSession();
+    const exec1: unknown[] = [];
+    await runTask({ ...base(toolThenAnswer().provider, [costedTool(exec1)]), session, message: 'go1', hooks: hooks([]) });
+    expect(exec1).toHaveLength(1);
+    expect(session.toolSpend['echo']).toBe(1);
+
+    // Same session, cap is 1 — the second turn's call is refused before the gate.
+    const exec2: unknown[] = [];
+    const events: TaskEvent[] = [];
+    const asked: ApprovalRequest[] = [];
+    const r2 = await runTask({
+      ...base(toolThenAnswer().provider, [costedTool(exec2)]),
+      session,
+      message: 'go2',
+      hooks: hooks(events, 'allow', (req) => asked.push(req)),
+    });
+    expect(exec2).toHaveLength(0); // never executed
+    expect(asked).toHaveLength(0); // never even prompted (pre-gate refusal)
+    expect(r2.toolCallsMade[0]!.decision).toBe('denied');
+    const perm = events.find(
+      (e): e is Extract<TaskEvent, { type: 'permission' }> => e.type === 'permission',
+    )!;
+    expect(perm.via).toBe('budget');
+  });
+
+  it('denies once the persisted DAILY cap is reached, across separate conversations', async () => {
+    setToolBudget('echo', { dailyCap: 1, perConversationCap: 100 });
+    const exec1: unknown[] = [];
+    await runTask({ ...base(toolThenAnswer().provider, [costedTool(exec1)]), session: createSession(), message: 'a', hooks: hooks([]) });
+    expect(exec1).toHaveLength(1);
+    expect(daySpend('echo', new Date())).toBe(1);
+
+    // A brand-new conversation the same day: the daily cap of 1 is already spent.
+    const exec2: unknown[] = [];
+    const events: TaskEvent[] = [];
+    await runTask({
+      ...base(toolThenAnswer().provider, [costedTool(exec2)]),
+      session: createSession(),
+      message: 'b',
+      hooks: hooks(events),
+    });
+    expect(exec2).toHaveLength(0);
+    const perm = events.find(
+      (e): e is Extract<TaskEvent, { type: 'permission' }> => e.type === 'permission',
+    )!;
+    expect(perm.via).toBe('budget');
+  });
+
+  it('a FREE tool ignores the budget even at zero caps', async () => {
+    setToolBudget('echo', { dailyCap: 0, perConversationCap: 0 });
+    const exec: unknown[] = [];
+    // echoTool (no costPerCallUsd) is not costed, so the budget never applies.
+    await runTask({ ...base(toolThenAnswer().provider, [echoTool(exec)]), session: createSession(), message: 'go', hooks: hooks([]) });
+    expect(exec).toHaveLength(1);
+    expect(daySpend('echo', new Date())).toBe(0); // free tool never recorded spend
   });
 });

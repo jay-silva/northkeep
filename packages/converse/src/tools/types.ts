@@ -37,6 +37,18 @@ export interface ToolDefinition {
    */
   risk: 'safe-read' | 'consequential';
   /**
+   * Who chooses the egress destination (M10d, ADR 0030 decision 2):
+   *  - 'model-chosen': an arbitrary attacker-reachable URL (web_fetch). ALL
+   *    exfil-screen classes apply — a hijacked model could paraphrase vault
+   *    content into the URL for an attacker to read.
+   *  - 'trusted-api': a fixed trusted third-party endpoint (web_search →
+   *    Brave). Only the catastrophic-secret hard-block applies; identity and
+   *    memory screening is dropped because the attacker never sees the query,
+   *    and warning on "search for my doctor <name>" is pure fatigue.
+   * Absent = 'model-chosen' (the safe default: screen everything).
+   */
+  egressTrust?: 'model-chosen' | 'trusted-api';
+  /**
    * Where this call's arguments will EGRESS to, derived from the parsed
    * plaintext arguments — or null when the call leaves nothing (or the
    * arguments are malformed). The loop classifies this URL to pick the

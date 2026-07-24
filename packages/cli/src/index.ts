@@ -31,11 +31,14 @@ import { redact, restore, type Replacement } from '@northkeep/redact';
 import { createOllamaEmbedder } from '@northkeep/librarian';
 import {
   addEndpoint,
+  BRAVE_KEY_ID,
   classifyEndpoint,
   createOpenAICompatibleProvider,
+  getBraveKey,
   listEndpoints,
   removeEndpoint,
   setDefaultEndpoint,
+  setEndpointKey,
   getDefaultEndpoint,
 } from '@northkeep/converse';
 import { getPassphrase } from './prompt.js';
@@ -62,7 +65,7 @@ import {
   shareSyncCmd,
 } from './shareCmd.js';
 import { routingClear, routingList, routingSet } from './routingCmd.js';
-import { toolsDisable, toolsEnable, toolsGrants, toolsList, toolsRevoke } from './toolsCmd.js';
+import { toolsBudget, toolsDisable, toolsEnable, toolsGrants, toolsList, toolsRevoke } from './toolsCmd.js';
 import { collectScopes, connectCmd, connectStatusCmd, disconnectCmd } from './connectCmd.js';
 import { runLauncher } from './launcher.js';
 
@@ -596,6 +599,29 @@ toolsGroup
   .option('--all', 'revoke every remembered approval')
   .action((tool: string | undefined, host: string | undefined, options: { all?: boolean }) => {
     toolsRevoke(tool, host, options.all === true, fail);
+  });
+
+toolsGroup
+  .command('budget')
+  .description('Show or set per-tool spend caps (daily and per-conversation) for costed tools like web_search')
+  .argument('[tool]', 'tool name, e.g. web_search')
+  .option('--daily <n>', 'max calls per UTC day')
+  .option('--per-conversation <n>', 'max calls per conversation')
+  .action((tool: string | undefined, options: { daily?: string; perConversation?: string }) => {
+    toolsBudget(tool, options.daily, options.perConversation, fail);
+  });
+
+toolsGroup
+  .command('brave-key')
+  .description('Store the Brave Search subscription token for web_search (read from stdin, never an argument)')
+  .action(async () => {
+    if (process.stdin.isTTY) {
+      fail('Pipe the key in so it never lands in shell history:\n  echo "$BRAVE_KEY" | northkeep tools brave-key');
+    }
+    const key = (await readStdin()).trim();
+    if (!key) fail('No key on stdin. Pipe it in: echo "$BRAVE_KEY" | northkeep tools brave-key');
+    setEndpointKey(BRAVE_KEY_ID, key);
+    console.log('✓ Brave Search key stored in your Keychain. Enable search: northkeep tools enable web_search');
   });
 
 const models = program

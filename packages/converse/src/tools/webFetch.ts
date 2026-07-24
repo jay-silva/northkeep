@@ -67,6 +67,7 @@ export function createWebFetchTool(config: WebFetchConfig = {}): ToolDefinition 
       additionalProperties: false,
     },
     risk: 'safe-read',
+    egressTrust: 'model-chosen', // arbitrary URL: screen all exfil classes (ADR 0030)
 
     egress(args: unknown): { url: string } | null {
       if (args !== null && typeof args === 'object' && typeof (args as { url?: unknown }).url === 'string') {

@@ -63,6 +63,11 @@ export type FetchRefusalCode =
   | 'too-large'
   | 'content-type'
   | 'too-many-redirects'
+  // M10d (ADR 0030 decision 1): a redirect arrived on the CREDENTIALED path.
+  // A fixed trusted API that 302s is a signal, not a hop to chase — we refuse
+  // rather than follow it (with or without the header). Distinct from
+  // 'too-many-redirects' so guidance can say "the API redirected", not "loop".
+  | 'redirect-refused'
   | 'http-status'
   | 'network';
 
@@ -175,10 +180,28 @@ function requestOnce(
   url: URL,
   pinned: { address: string; family: number },
   signal: AbortSignal,
+  /**
+   * M10d (ADR 0030 decision 1): the ONLY credential path in this client. The
+   * caller (hardenedFetch) passes this ONLY on the hop whose host already
+   * equals the authorized host — the host match is decided ONCE there, so this
+   * function just attaches what it is given. The token rides this header only:
+   * never a URL, never logged, never returned in the result or an error.
+   */
+  authToken?: AuthToken,
 ): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
     const isHttps = url.protocol === 'https:';
     const mod = isHttps ? https : http;
+    const headers: Record<string, string> = {
+      accept: 'text/html, application/xhtml+xml, application/json, text/plain, text/xml',
+      'user-agent': USER_AGENT,
+      'accept-encoding': 'identity',
+    };
+    // Attach the bearer credential under its purpose-named header. This is the
+    // sole write of a credential in the whole file; the header name is
+    // caller-supplied and distinct from the three fixed headers above, so it
+    // never collides with or overwrites one the client already sends.
+    if (authToken !== undefined) headers[authToken.headerName] = authToken.value;
     const req = mod.request(
       {
         protocol: url.protocol,
@@ -187,11 +210,7 @@ function requestOnce(
         path: `${url.pathname}${url.search}`,
         method: 'GET',
         signal,
-        headers: {
-          accept: 'text/html, application/xhtml+xml, application/json, text/plain, text/xml',
-          'user-agent': USER_AGENT,
-          'accept-encoding': 'identity',
-        },
+        headers,
         // THE PIN: the socket dials the address we validated seconds ago —
         // whatever DNS says between validation and connect is irrelevant.
         lookup: ((_hostname: string, options: { all?: boolean }, callback: unknown) => {
@@ -241,12 +260,30 @@ function readBody(
   });
 }
 
+/**
+ * M10d (ADR 0030 decision 1): a bearer-style credential for a FIXED trusted
+ * API. Purpose-named, NOT a generic headers map — a generic map would downgrade
+ * "no credential path by construction" to "no credentials unless a caller
+ * passes some", which every future caller must remember to avoid. This single
+ * named seam is greppable and hard to misuse: the header is attached ONLY while
+ * the request host === authorizedHost, and a redirect on a credentialed request
+ * is REFUSED (a fixed API that 302s is a signal, not something to chase).
+ * web_fetch never sets this — its model-chosen-URL path stays credential-free.
+ */
+export interface AuthToken {
+  headerName: string;
+  value: string;
+  authorizedHost: string;
+}
+
 export interface HardenedFetchOptions {
   maxBytes?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
   /** TEST-ONLY — see NetTestOverrides. Production wiring never passes this. */
   testOverrides?: NetTestOverrides;
+  /** M10d (ADR 0030): the one credential seam — see AuthToken. web_fetch omits it. */
+  authToken?: AuthToken;
 }
 
 export interface HardenedFetchResult {
@@ -288,13 +325,39 @@ export async function hardenedFetch(
     const host = url.hostname.replace(/^\[|\]$/g, '');
     const pinned = await resolvePinned(host, overrides);
 
+    // M10d (ADR 0030 decision 1): the credential is bound to ONE host. This
+    // single boolean decides BOTH whether the token is attached AND whether a
+    // redirect is refused — one source of truth, so the two can never drift
+    // into "token attached but redirect followed". Host match is
+    // case-insensitive with IPv6 brackets already stripped (into `host`).
+    const credentialed =
+      options.authToken !== undefined &&
+      host.toLowerCase() === options.authToken.authorizedHost.toLowerCase();
+
     let res: IncomingMessage;
     try {
-      res = await requestOnce(url, pinned, signal);
+      // Only the credentialed hop carries the token; every other hop (a
+      // redirect elsewhere on the uncredentialed path) gets undefined.
+      res = await requestOnce(url, pinned, signal, credentialed ? options.authToken : undefined);
     } catch (err) {
       throw err instanceof FetchRefusedError ? err : mapAbort(err);
     }
     const status = res.statusCode ?? 0;
+
+    // On the credentialed path a 3xx is REFUSED outright — not followed with
+    // the header stripped. The token already went out on THIS request; chasing
+    // the redirect would either leak it onward or silently drop the auth, and a
+    // fixed trusted API redirecting is a signal something is wrong. (304 cannot
+    // arise: the client sends no conditional headers.) web_fetch's
+    // uncredentialed 5-hop follow below is untouched.
+    if (credentialed && status >= 300 && status < 400) {
+      res.resume(); // drain and discard the body
+      throw new FetchRefusedError(
+        'redirect-refused',
+        `the trusted API answered HTTP ${status} with a redirect, which is refused on a credentialed request`,
+        status,
+      );
+    }
 
     if (status >= 300 && status < 400 && typeof res.headers.location === 'string') {
       res.resume(); // drain and discard the redirect body

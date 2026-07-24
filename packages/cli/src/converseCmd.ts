@@ -201,6 +201,8 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
           for (const reason of e.reasons ?? []) console.log(`${RED}    ⚠ ${reason}${RESET}`);
         } else if (e.decision !== 'approved' && e.via === 'grant') {
           console.log(`${DIM}↳ ✗ ${e.name} refused (never-for-this-site grant)${RESET}`);
+        } else if (e.decision !== 'approved' && e.via === 'budget') {
+          console.log(`${YELLOW}↳ ✗ ${e.name} skipped — ${(e.reasons ?? []).join('; ')} ("northkeep tools budget" to raise)${RESET}`);
         } else if (e.decision !== 'approved') {
           console.log(`${DIM}↳ ✗ ${e.name} ${e.decision === 'timeout' ? 'timed out — denied' : 'denied'}${RESET}`);
         }
@@ -219,11 +221,15 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     requestApproval: async (req) => {
       spinner.stop();
       // Show the EXACT restored plaintext that would execute (ADR 0027):
-      // for web_fetch that is the URL itself; otherwise the raw arguments.
+      // web_fetch shows the URL; web_search shows the QUERY (never the raw
+      // Brave API URL, which is noise and must never carry the token, ADR
+      // 0030); anything else shows the raw arguments.
       let url: string | null = null;
+      let query: string | null = null;
       try {
-        const parsed = JSON.parse(req.argsPlain) as { url?: unknown };
+        const parsed = JSON.parse(req.argsPlain) as { url?: unknown; query?: unknown };
         if (typeof parsed.url === 'string') url = parsed.url;
+        if (typeof parsed.query === 'string') query = parsed.query;
       } catch {
         url = null;
       }
@@ -233,7 +239,9 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       const what =
         req.tool === 'web_fetch' && url !== null
           ? `Allow web_fetch of ${url}?`
-          : `Allow ${req.tool} with ${req.argsPlain}?`;
+          : req.tool === 'web_search' && query !== null
+            ? `Allow web_search for "${query}"?`
+            : `Allow ${req.tool} with ${req.argsPlain}?`;
       // Site-scoped answers exist only for read-only calls with a concrete
       // host and no screen warnings; everything else is yes-once/no (a
       // consequential call and a flagged call must be seen every time).

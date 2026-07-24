@@ -25,6 +25,7 @@ import { redactJsonLeaves, restoreJsonLeaves } from './jsonLeaves.js';
 import type { ToolDefinition, ToolResult } from './tools/types.js';
 import { placeholderGate, type PermissionGate } from './tools/gate.js';
 import { describeFlag, screenArguments, type ExfilFlag } from './tools/exfil.js';
+import { getToolBudget, recordSpend, withinDailyCap } from './tools/budget.js';
 import { newFenceNonce, untrustedSystemLine, wrapUntrusted } from './tools/untrusted.js';
 
 /**
@@ -71,10 +72,11 @@ export type TaskEvent =
       type: 'permission';
       name: string;
       decision: 'approved' | 'denied' | 'timeout';
-      /** Decision provenance (M10c, ADR 0029): 'user' answered a prompt,
-       * 'grant' means the engine decided from a stored grant (auto-allow OR
-       * never-deny), 'screen' means the exfil screens hard-denied. */
-      via?: 'user' | 'grant' | 'screen';
+      /** Decision provenance (M10c, ADR 0029; M10d adds 'budget'): 'user'
+       * answered a prompt, 'grant' means the engine decided from a stored
+       * grant (auto-allow OR never-deny), 'screen' means the exfil screens
+       * hard-denied, 'budget' means the spend cap refused it. */
+      via?: 'user' | 'grant' | 'screen' | 'budget';
       /** Content-free warning sentences, present on screen denials so the
        * surface can say WHY (invariant #6: loud, never silent). */
       reasons?: string[];
@@ -253,6 +255,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // the exfil screen covers memory the model saw on a PRIOR turn even when
   // this turn's retrieval no longer surfaces it.
   recordDisclosedMemory(session, used);
+  // Per-conversation spend counter (M10d, ADR 0030); `??=` tolerates a session
+  // built before the field existed.
+  session.toolSpend ??= {};
 
   // The user message enters the plaintext history up front (the loop's wire
   // is always [system, ...plainHistory]). Recorded at 0 = never NER'd; the
@@ -501,7 +506,15 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         // M10c (ADR 0029): screen flags, decision provenance, and the scope
         // that produced the decision — all content-free, all audited.
         let screenFlags: ExfilFlag[] = [];
-        let scopeApplied: 'once' | 'session' | 'always' | 'never' | 'auto' | 'screen' | undefined;
+        let scopeApplied:
+          | 'once'
+          | 'session'
+          | 'always'
+          | 'never'
+          | 'auto'
+          | 'screen'
+          | 'budget'
+          | undefined;
         let screenedDeny = false;
 
         if (tool === undefined) {
@@ -571,10 +584,39 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
               screenThrew = true;
               screenFlags = [];
             }
+            // Trusted-API egress (web_search → Brave): the query goes to a
+            // trusted third party, not an attacker, so identity/memory and
+            // warn-class flags are pure fatigue (ADR 0030 decision 2). Keep
+            // ONLY the catastrophic-secret hard-block — an SSN must not reach
+            // even Brave's logs — and drop the rest, so a clean search is not
+            // gratuitously screened and a site grant can auto-allow it.
+            if (tool.egressTrust === 'trusted-api') {
+              screenFlags = screenFlags.filter(
+                (f) => f.class === 'secret' && f.kind !== undefined && HARD_DENY_SECRET_KINDS.has(f.kind),
+              );
+            }
+            // Budget check (M10d, ADR 0030 decision 4): a COSTED tool is
+            // refused BEFORE the gate — no point asking the user to approve a
+            // call the spend cap won't run — when either the persisted daily
+            // cap or the per-conversation cap is already reached. Free tools
+            // (no costPerCallUsd) never touch the budget.
+            const costed = tool.costPerCallUsd !== undefined && tool.costPerCallUsd > 0;
+            const convCount = session.toolSpend[call.name] ?? 0;
+            const overBudget =
+              costed &&
+              (!withinDailyCap(call.name, now()) ||
+                convCount >= getToolBudget(call.name).perConversationCap);
+            const budgetReason = !withinDailyCap(call.name, now())
+              ? "this tool's daily budget is used up"
+              : 'this tool hit its per-conversation limit';
+
             const warnings = screenThrew
               ? ['the request could not be safety-screened, so it was blocked']
-              : screenFlags.map(describeFlag);
-            let via: 'user' | 'grant' | 'screen' = 'user';
+              : overBudget
+                ? [budgetReason]
+                : screenFlags.map(describeFlag);
+            let via: 'user' | 'grant' | 'screen' | 'budget' = 'user';
+            let budgetDeny = false;
 
             if (
               screenThrew ||
@@ -586,6 +628,12 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
               screenedDeny = true;
               scopeApplied = 'screen';
               via = 'screen';
+            } else if (overBudget) {
+              // Loud, structured, audited — never a silent stop (invariant #6).
+              decision = 'denied';
+              budgetDeny = true;
+              scopeApplied = 'budget';
+              via = 'budget';
             } else {
               const gateAnswer = await gate.evaluate({
                 tool: call.name,
@@ -645,7 +693,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
               name: call.name,
               decision,
               via,
-              ...(screenedDeny ? { reasons: warnings } : {}),
+              ...(screenedDeny || budgetDeny ? { reasons: warnings } : {}),
             });
 
             if (decision !== 'approved') {
@@ -656,10 +704,15 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                       guidance:
                         'The harness blocked this call: its arguments appear to carry a secret-shaped value, possibly hidden by encoding. Do not retry with re-encoded or restructured arguments.',
                     }
-                  : {
-                      error: 'permission_denied',
-                      guidance: 'The user declined this tool call.',
-                    },
+                  : budgetDeny
+                    ? {
+                        error: 'budget_exceeded',
+                        guidance: `Not run: ${budgetReason}. Do not retry this tool now; the limit resets or can be raised by the user.`,
+                      }
+                    : {
+                        error: 'permission_denied',
+                        guidance: 'The user declined this tool call.',
+                      },
               );
             } else {
               // EGRESS-TIER SEAM (ADR 0028): arguments bound for a tool are
@@ -701,6 +754,14 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                 };
               }
               execMeta = toolOut.meta;
+              // Record spend the moment a costed tool RUNS — the API call was
+              // made (quota consumed) regardless of whether it returned ok, so
+              // a failed-but-billed call still counts (ADR 0030). Persisted
+              // daily count and the per-conversation counter move together.
+              if (costed) {
+                recordSpend(call.name, now());
+                session.toolSpend[call.name] = convCount + 1;
+              }
               // Fence SUCCESSFUL external content (attacker-authored data);
               // our own structured error JSON is not external and stays bare.
               resultContent =

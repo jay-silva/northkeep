@@ -71,6 +71,7 @@ export {
   classifyFetchTarget,
   FetchRefusedError,
   hardenedFetch,
+  type AuthToken,
   type FetchRefusalCode,
   type HardenedFetchOptions,
   type HardenedFetchResult,
@@ -78,16 +79,38 @@ export {
 } from './tools/net.js';
 export { extractText } from './tools/extract-text.js';
 export { createWebFetchTool, type WebFetchConfig } from './tools/webFetch.js';
+export {
+  BRAVE_HOST,
+  buildBraveUrl,
+  createWebSearchTool,
+  type WebSearchConfig,
+} from './tools/webSearch.js';
 export { newFenceNonce, untrustedSystemLine, wrapUntrusted } from './tools/untrusted.js';
 export {
+  BRAVE_KEY_ID,
   enabledTools,
+  getBraveKey,
   KNOWN_TOOL_NAMES,
   loadToolsConfig,
   saveToolsConfig,
   setToolEnabled,
   toolsConfigPath,
+  webSearchNeedsKey,
   type ToolsConfig,
 } from './tools/registry.js';
+export {
+  budgetPath,
+  daySpend,
+  DEFAULT_TOOL_BUDGET,
+  getToolBudget,
+  listBudgetedTools,
+  loadBudget,
+  recordSpend,
+  setToolBudget,
+  withinDailyCap,
+  type BudgetConfig,
+  type ToolBudget,
+} from './tools/budget.js';
 export {
   BASELINE_CATALOG,
   catalogPath,

@@ -3,6 +3,20 @@ import path from 'node:path';
 import { northkeepHome } from '@northkeep/core';
 import type { ToolDefinition } from './types.js';
 import { createWebFetchTool } from './webFetch.js';
+import { createWebSearchTool } from './webSearch.js';
+import { getEndpointKey } from '../settings.js';
+
+/**
+ * web_search's Brave subscription token is stored under this pseudo-endpoint id
+ * in the same Keychain/env store as model API keys (settings.ts), so it never
+ * touches a file. Set it with `northkeep tools brave-key`.
+ */
+export const BRAVE_KEY_ID = 'brave-search';
+
+/** The Brave key, or null when unset (web_search then stays unavailable). */
+export function getBraveKey(): string | null {
+  return getEndpointKey(BRAVE_KEY_ID);
+}
 
 /**
  * The tool registry (M10b, ADR 0028): ~/.northkeep/tools.json decides which
@@ -19,14 +33,17 @@ export interface ToolsConfig {
   webFetch?: { maxBytes?: number; timeoutMs?: number };
 }
 
-/** The tools this build knows how to construct. web_search arrives in M10d. */
-export const KNOWN_TOOL_NAMES = ['web_fetch'] as const;
+/** The tools this build knows how to construct (M10d adds web_search). */
+export const KNOWN_TOOL_NAMES = ['web_fetch', 'web_search'] as const;
 
 export function toolsConfigPath(): string {
   return path.join(northkeepHome(), 'tools.json');
 }
 
-const DEFAULTS: ToolsConfig = { version: 1, tools: { web_fetch: { enabled: false } } };
+const DEFAULTS: ToolsConfig = {
+  version: 1,
+  tools: { web_fetch: { enabled: false }, web_search: { enabled: false } },
+};
 
 export function loadToolsConfig(): ToolsConfig {
   let parsed: unknown;
@@ -92,5 +109,20 @@ export function enabledTools(): ToolDefinition[] {
   if (config.tools['web_fetch']?.enabled === true) {
     tools.push(createWebFetchTool(config.webFetch ?? {}));
   }
+  // web_search needs BOTH the enable flag AND a stored Brave key. A tool the
+  // model cannot actually use must not be offered — silently omitting it (vs.
+  // constructing a tool that always errors) keeps the model's tool list honest.
+  // The CLI (`tools enable web_search`) tells the user when the key is missing.
+  if (config.tools['web_search']?.enabled === true) {
+    const braveKey = getBraveKey();
+    if (braveKey !== null) {
+      tools.push(createWebSearchTool({ apiKey: braveKey }));
+    }
+  }
   return tools;
+}
+
+/** True when web_search is enabled but its Brave key is missing (CLI hint). */
+export function webSearchNeedsKey(): boolean {
+  return loadToolsConfig().tools['web_search']?.enabled === true && getBraveKey() === null;
 }

@@ -34,7 +34,10 @@ describe('tools registry', () => {
   });
 
   it('defaults to everything DISABLED when no config exists', () => {
-    expect(loadToolsConfig()).toEqual({ version: 1, tools: { web_fetch: { enabled: false } } });
+    expect(loadToolsConfig()).toEqual({
+      version: 1,
+      tools: { web_fetch: { enabled: false }, web_search: { enabled: false } },
+    });
     expect(enabledTools()).toEqual([]);
   });
 
@@ -93,7 +96,9 @@ describe('tools registry', () => {
     saveToolsConfig({ version: 1, tools: { web_fetch: { enabled: true } }, webFetch: { maxBytes: 2048 } });
     expect(loadToolsConfig()).toEqual({
       version: 1,
-      tools: { web_fetch: { enabled: true } },
+      // web_search falls back to its disabled default (the loader overlays the
+      // file onto DEFAULTS, so a tool absent from the file stays disabled).
+      tools: { web_fetch: { enabled: true }, web_search: { enabled: false } },
       webFetch: { maxBytes: 2048 },
     });
   });
