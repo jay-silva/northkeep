@@ -65,6 +65,10 @@ export function buildBraveUrl(query: string, count: number, origin = `https://${
   const url = new URL(BRAVE_SEARCH_PATH, origin);
   url.searchParams.set('q', query);
   url.searchParams.set('count', String(count));
+  // Pin text_decorations OFF (its documented default) so descriptions arrive as
+  // plain text — never Brave's <strong> highlight markup. Explicit so a future
+  // default change can't start injecting markup into the fenced model input.
+  url.searchParams.set('text_decorations', 'false');
   return url.href;
 }
 

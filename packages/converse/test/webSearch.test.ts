@@ -23,13 +23,17 @@ const API_KEY = 'brave-subscription-token-DO-NOT-LEAK';
 const ctx: ToolContext = { maxResultChars: 10_000 };
 
 describe('buildBraveUrl / egress — the query rides the URL, the token never does', () => {
-  it('builds the fixed Brave endpoint with the encoded query and a count', () => {
+  it('builds the fixed Brave endpoint with the encoded query, count, and decorations off', () => {
     const url = new URL(buildBraveUrl('carol mansfield doctor', 5));
     expect(url.hostname).toBe(BRAVE_HOST);
     expect(url.pathname).toBe('/res/v1/web/search');
     expect(url.protocol).toBe('https:');
     expect(url.searchParams.get('q')).toBe('carol mansfield doctor');
     expect(url.searchParams.get('count')).toBe('5');
+    // Verified against Brave's live API docs: results live under web.results[]
+    // with plain-string title/url/description, and text_decorations defaults
+    // OFF — we pin it OFF so descriptions never arrive as <strong> markup.
+    expect(url.searchParams.get('text_decorations')).toBe('false');
   });
 
   it('percent-encodes a query with URL-hostile characters', () => {
