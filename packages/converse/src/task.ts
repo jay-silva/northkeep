@@ -246,6 +246,16 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // mechanism, one place to reason about it, runTurn behavior unchanged, and
   // sessions interleaving runTurn and runTask stay consistent.
   session.historyTiers ??= [];
+  // Conversation-wide disclosed-memory accumulator (ADR 0029, G1 blocker fix):
+  // this task's freshly-retrieved memories join everything disclosed earlier,
+  // so the exfil screen covers memory the model saw on a PRIOR turn even when
+  // this turn's retrieval no longer surfaces it. Dedup keeps it bounded.
+  session.disclosedMemory ??= [];
+  for (const s of used) {
+    if (!session.disclosedMemory.includes(s.entry.content)) {
+      session.disclosedMemory.push(s.entry.content);
+    }
+  }
 
   // The user message enters the plaintext history up front (the loop's wire
   // is always [system, ...plainHistory]). Recorded at 0 = never NER'd; the
@@ -544,18 +554,33 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             // that put the SSRF guard inside the net client). Secret-class
             // hits hard-deny without consulting gate or user; identity/
             // memory-class hits force a human prompt with warnings.
-            screenFlags = screenArguments({
-              argsPlain: call.arguments,
-              egressUrl,
-              // PseudonymMap keys are the lowercased REAL entity values the
-              // session's redaction is actively protecting (tier2.ts).
-              protectedValues: Object.keys(session.pseudonyms),
-              usedMemoryContents: used.map((s) => s.entry.content),
-            });
-            const warnings = screenFlags.map(describeFlag);
+            // The screen is pure and bounded, but a bug or an adversarial
+            // input that still slips past its caps must never abort the task
+            // or, worse, skip screening: a throw here FAILS CLOSED into a hard
+            // deny (G3 #5), never into an unscreened execute.
+            let screenThrew = false;
+            try {
+              screenFlags = screenArguments({
+                argsPlain: call.arguments,
+                egressUrl,
+                // PseudonymMap keys are the lowercased REAL entity values the
+                // session's redaction is actively protecting (tier2.ts).
+                protectedValues: Object.keys(session.pseudonyms),
+                // Conversation-wide, not this-turn (G1 blocker): see the
+                // session.disclosedMemory accumulator above.
+                usedMemoryContents: session.disclosedMemory,
+              });
+            } catch {
+              screenThrew = true;
+              screenFlags = [];
+            }
+            const warnings = screenThrew
+              ? ['the request could not be safety-screened, so it was blocked']
+              : screenFlags.map(describeFlag);
             let via: 'user' | 'grant' | 'screen' = 'user';
 
             if (
+              screenThrew ||
               screenFlags.some(
                 (f) => f.class === 'secret' && f.kind !== undefined && HARD_DENY_SECRET_KINDS.has(f.kind),
               )
@@ -596,17 +621,25 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                   signal,
                 );
                 decision = outcome.decision;
-                scopeApplied = outcome.scope ?? 'once';
-                // A scoped answer becomes a grant — but never for a screened
-                // call (the flag may recur; each screened call must be seen)
-                // and never without a concrete host to key it on.
-                if (
-                  outcome.scope !== undefined &&
-                  egressHost !== undefined &&
-                  screenFlags.length === 0 &&
-                  gateRecord !== undefined
-                ) {
+                // A scoped answer becomes a grant, gated by (G1 review):
+                //  - a concrete host to key it on;
+                //  - an ALLOW scope ('session'/'always') persists only for a
+                //    safe-read tool with NO screen flags (a consequential or
+                //    flagged call must be seen every time — G1 minor); but
+                //  - a 'never' DENY always persists: a standing "no" is
+                //    fail-safe and must hold even on a screened/consequential
+                //    call (G1 nit).
+                const recordable =
+                  outcome.scope === 'never' ||
+                  (tool.risk === 'safe-read' && screenFlags.length === 0);
+                if (outcome.scope !== undefined && egressHost !== undefined && recordable && gateRecord !== undefined) {
                   gateRecord(call.name, egressHost, outcome.scope);
+                  // Audit the scope actually REMEMBERED, not what was asked —
+                  // a scope we declined to persist must not read as persisted
+                  // in the log (G1 nit: provenance honesty).
+                  scopeApplied = outcome.scope;
+                } else {
+                  scopeApplied = 'once';
                 }
               }
             }

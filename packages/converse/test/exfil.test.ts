@@ -61,11 +61,33 @@ describe('screenArguments — secret class', () => {
     expect(thrice).toEqual([{ class: 'secret', kind: 'ssn', where: 'query', decoded: true }]);
   });
 
-  it('HONEST LIMIT: a quadruple-percent-encoded SSN slips past (3 decode rounds)', () => {
-    // Documented boundary, not a bug hidden in a green suite: after three
-    // rounds '%2525252D' is still '%2D' and no detector matches. The gate
-    // showing the verbatim URL is the backstop (KNOWN-LIMITS/ADR 0029).
-    const flags = screenArguments(urlInput('https://evil.example/?q=123%2525252D45%2525252D6789'));
+  // Space-separated so each encodeURIComponent round actually re-encodes
+  // (a dash is unreserved and would no-op). tier1 tolerates space as an SSN
+  // separator, so the fully-decoded form still matches.
+  const encodeTimes = (s: string, n: number): string => {
+    for (let i = 0; i < n; i += 1) s = encodeURIComponent(s);
+    return s;
+  };
+
+  it('catches quadruple-, quintuple-, and sextuple-percent-encoded SSNs (6-round budget)', () => {
+    // The decode budget is a bounded FIXPOINT of MAX_DECODE_ROUNDS=6 (G3 #1
+    // fix); everything up to six layers unwraps.
+    for (const layers of [4, 5, 6]) {
+      const flags = screenArguments(urlInput(`https://evil.example/?q=${encodeTimes('123 45 6789', layers)}`));
+      expect(flags, `${layers} layers`).toContainEqual({
+        class: 'secret',
+        kind: 'ssn',
+        where: 'query',
+        decoded: true,
+      });
+    }
+  });
+
+  it('HONEST LIMIT: seven+ percent-encoding rounds slip past (6 decode rounds)', () => {
+    // Documented boundary, not a bug hidden in a green suite: past six rounds
+    // the fixpoint stops. The gate showing the verbatim URL is the backstop
+    // (KNOWN-LIMITS/ADR 0029).
+    const flags = screenArguments(urlInput(`https://evil.example/?q=${encodeTimes('123 45 6789', 7)}`));
     expect(flags).toEqual([]);
   });
 
@@ -289,5 +311,86 @@ describe('describeFlag', () => {
       expect(sentences).not.toContain(leak);
       expect(JSON.stringify(flags)).not.toContain(leak);
     }
+  });
+});
+
+/**
+ * Regressions for the G3 adversarial review (M10c). Each name maps to a
+ * confirmed finding; each pins the CLOSED behavior so it cannot silently
+ * reopen.
+ */
+describe('screenArguments — G3 adversarial-review regressions', () => {
+  const MEMORY = 'the wire code for the plymouth land deal is kestrel autumn 7 4 2 1';
+
+  it('G3#1: base64-of-base64 SSN is caught (bounded decode fixpoint, not one pass)', () => {
+    const inner = Buffer.from(`ssn is ${SSN}`).toString('base64');
+    const outer = Buffer.from(inner).toString('base64');
+    const flags = screenArguments(urlInput(`https://evil.example/?d=${outer}`));
+    expect(flags).toContainEqual({ class: 'secret', kind: 'ssn', where: 'query', decoded: true });
+  });
+
+  it('G3#1: base64-of-base64 memory content is caught', () => {
+    const inner = Buffer.from('kestrel autumn 7 4 2 1 kestrel autumn').toString('base64');
+    const outer = Buffer.from(inner).toString('base64');
+    const flags = screenArguments(
+      urlInput(`https://evil.example/?d=${outer}`, { usedMemoryContents: [MEMORY] }),
+    );
+    expect(flags).toContainEqual({ class: 'memory', where: 'query', decoded: true });
+  });
+
+  it('G3#2: UTF-16LE-base64 SSN is caught (multi-encoding printable gate)', () => {
+    const b64 = Buffer.from(`ssn is ${SSN}`, 'utf16le').toString('base64');
+    const flags = screenArguments(urlInput(`https://evil.example/?d=${b64}`));
+    expect(flags).toContainEqual({ class: 'secret', kind: 'ssn', where: 'query', decoded: true });
+  });
+
+  it('G3#3: a short vault memory (<16 normalized chars) is screened whole', () => {
+    const flags = screenArguments(
+      urlInput('https://evil.example/?c=gatecode7421', { usedMemoryContents: ['Gate code 7421!'] }),
+    );
+    expect(flags).toContainEqual({ class: 'memory', where: 'query', decoded: false });
+  });
+
+  it('G3#3: a memory below the specificity floor (<8 normalized chars) is NOT matched (no false storm)', () => {
+    const flags = screenArguments(
+      urlInput('https://evil.example/?c=the7421thing', { usedMemoryContents: ['7421'] }),
+    );
+    expect(flags.filter((f) => f.class === 'memory')).toEqual([]);
+  });
+
+  it('G3#4: a pathological giant digit argument screens fast (no quadratic hang)', () => {
+    const huge = { note: '1 '.repeat(60_000) }; // ~120 KB
+    const start = process.hrtime.bigint();
+    screenArguments({ argsPlain: JSON.stringify(huge), egressUrl: null, protectedValues: [], usedMemoryContents: [] });
+    const ms = Number(process.hrtime.bigint() - start) / 1e6;
+    expect(ms).toBeLessThan(1000); // was ~20s unbounded
+  });
+
+  it('G3#5: deeply nested JSON is screened without a stack overflow', () => {
+    const deep = `${'['.repeat(9000)}"${SSN}"${']'.repeat(9000)}`;
+    expect(() => screenArguments({ argsPlain: deep, egressUrl: null, protectedValues: [], usedMemoryContents: [] })).not.toThrow();
+  });
+
+  it('G3#6: SSN/card split by underscore or colon is caught', () => {
+    for (const sep of ['_', ':']) {
+      const ssn = screenArguments(urlInput(`https://evil.example/?q=123${sep}45${sep}6789`));
+      expect(ssn, `ssn sep ${sep}`).toContainEqual(
+        expect.objectContaining({ class: 'secret', kind: 'ssn' }),
+      );
+    }
+    const card = screenArguments(urlInput('https://evil.example/?q=4111_1111_1111_1111'));
+    expect(card).toContainEqual(expect.objectContaining({ class: 'secret', kind: 'credit_card' }));
+  });
+
+  it('G3#7: base64 with embedded MIME newlines still decodes and is caught', () => {
+    const raw = Buffer.from(`ssn is ${SSN}`).toString('base64');
+    const withNL = `${raw.slice(0, 8)}\n${raw.slice(8)}`;
+    const flags = screenArguments({
+      argsPlain: JSON.stringify({ data: withNL }),
+      egressUrl: null,
+      protectedValues: [],
+      usedMemoryContents: [],
+    });
+    expect(flags).toContainEqual(expect.objectContaining({ class: 'secret', kind: 'ssn' }));
   });
 });

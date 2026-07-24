@@ -55,24 +55,34 @@ Every tool call's restored arguments are decomposed and screened:
   keys and values, and fragment; every string leaf of the argument JSON is
   screened as body. Unparseable URLs or JSON are screened whole (fail
   closed — malformed input never skips the screen).
-- **Decoding:** each component is percent-decoded up to three rounds
-  (double-encoding is a classic reviewer-evasion; three rounds catches
-  triple encoding, and the bound prevents decode-bomb loops). Components
-  that look like base64/base64url (charset-valid, ≥ 16 chars) are decoded
-  and screened too when the result is mostly printable, including one
-  further percent-decode of the decoded text. Matching normalizes case and
-  strips punctuation, so `1-2-3` splits and `%2D` games do not evade.
+- **Decoding:** each component is unwrapped by a bounded fixpoint (up to six
+  rounds) that mixes percent-decode and base64/base64url decode, feeding every
+  new form back in — so layered encodings (base64-of-base64, percent-of-base64,
+  and up to six percent rounds) all unwrap, not just a single fixed pipeline.
+  The G1/G3 reviews showed a fixed structure let base64 run only once, so
+  double-base64 slipped BELOW the confessed quadruple boundary; the fixpoint
+  closes that. base64 output is interpreted as UTF-8, UTF-16LE, or Latin-1 and
+  kept if mostly printable (a mere charset choice must not hide ASCII). Both a
+  round cap and a total-variant cap bound the work against decode bombs.
+  Matching normalizes case and strips punctuation, so `1-2-3`, `1_2_3`, `1:2:3`
+  splits and `%2D` games do not evade.
 - **Three detector classes:**
   - `secret` — the deterministic Tier-1 detectors (SSN, card, API key
     shapes) run over every raw and decoded component.
   - `identity` — the session's pseudonym real-values (the names Tier-2/3
     redaction is actively protecting in this conversation) as normalized
     substrings.
-  - `memory` — normalized 16-gram overlap between components and the
-    content of vault memories disclosed to the model THIS task. This is the
-    paraphrase-exfiltration screen: if the model tries to smuggle what it
-    just read from the vault into a URL, the overlap trips regardless of
-    encoding.
+  - `memory` — normalized overlap between components and the content of vault
+    memories disclosed to the model anywhere in this CONVERSATION (16-gram
+    overlap, or whole-form substring for memories under 16 normalized chars
+    like a gate code). Conversation-scoped, not this-task: a memory disclosed
+    on an earlier turn lives in the model's context on every later turn, so
+    scoping the screen to the current turn's retrieval (as the first cut did)
+    let a granted host receive an encoded OLD memory unscreened — the G1
+    blocker. The accumulator lives on the session beside `pseudonyms` so both
+    content screens share one conversation-wide scope. This is the
+    paraphrase-exfiltration screen: if the model tries to smuggle what it read
+    from the vault into a URL, the overlap trips regardless of encoding.
 - The URL **host** is screened for secrets only, not identity/memory: the
   user who says "fetch carolmansfield.com" named that host on purpose, the
   host is shown verbatim at every approval prompt, and a host-level identity
@@ -137,7 +147,24 @@ exact call, never sight-unseen.
 The default engine (`createPermissionEngine()`) is memory-only; only a
 surface that explicitly opts in (`persist: true` — the CLI does) reads or
 writes the grants file. A library call must not write config as a side
-effect. `runTask`'s default gate remains fail-closed.
+effect. `runTask`'s default gate remains fail-closed. The 0600 mode is
+re-applied on every write (`chmod`, not just create-time mode), so a
+pre-existing loose-permission file cannot leave grants world-readable.
+
+Session-scoped ("this session") grants live in the engine INSTANCE, keyed on
+(tool, host) with no conversation identity. A "this session" yes is defined
+as lasting the current conversation, so a surface serving multiple
+conversations (M10e's web GUI) MUST create a fresh engine per conversation,
+or a session grant from conversation A would auto-allow in conversation B.
+The CLI is safe by construction (one engine per REPL process). This is a
+documented security requirement on callers, enforced in code review.
+
+A scoped ALLOW ('session'/'always') persists only for a safe-read tool with
+no screen flags — a consequential or screened call must be seen every time,
+so a scoped yes on one degrades to yes-once and no grant is written. A
+scoped 'never' DENY always persists regardless: a standing "no" is fail-safe.
+The audit row records the scope actually REMEMBERED, never one that was asked
+for but declined, so `tools grants` and the log never disagree.
 
 ## Decision 4: audit and events
 
@@ -156,11 +183,23 @@ matched values, argument text, or anything recoverable.
   vault text and passes clean. The approval prompt showing the exact URL
   remains the real backstop, and the fence discipline (ADR 0028 decision 5)
   remains the first line.
-- Decoding is bounded and enumerable: percent (3 rounds) and base64. A
-  novel encoding the model invents (ROT13, custom substitution) is not
-  decoded; it is partially mitigated by the memory screen running over the
-  RAW component too, and by tier-1 masking having removed verbatim secrets
-  from what a bounded model ever saw.
+- Decoding is bounded and enumerable: a 6-round fixpoint over percent and
+  base64 (UTF-8/UTF-16LE/Latin-1). A secret encoded past the round budget, or
+  in an encoding we do not decode (ROT13, custom substitution, gzip), is not
+  seen; it is partially mitigated by the memory screen running over the RAW
+  component too, and by tier-1 masking having removed verbatim secrets from
+  what a bounded model ever saw. A value split across two URL components, or
+  leaked a few characters per call, also defeats both the detectors and the
+  16-gram threshold.
+- The URL HOST is screened for secret shapes only, not identity or memory
+  (Decision 2): a protected name or memory chunk placed in a hostname/subdomain
+  (up to ~240 chars) rides unflagged. The host is shown verbatim at every
+  approval prompt, which is the intended backstop for that surface.
+- Argument screening is length- and depth-capped (oversized components are
+  screened by prefix, deep JSON nesting is bounded) to keep the synchronous
+  screen from being turned into a CPU/stack DoS by a hostile argument; a
+  component past the cap is not fully screened, but is shown at the gate. A
+  screen that throws despite the caps fails closed to a hard deny.
 - `never`/`always` grants key on (tool, host) — a granted host that later
   starts redirecting elsewhere is caught by the net client's per-hop
   re-validation, but a granted host serving different CONTENT than when

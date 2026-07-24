@@ -93,10 +93,20 @@ export interface ConverseSession {
   plainHistory: ChatMessage[];
   /** Parallel to plainHistory: the tier each entry was last full-NER-redacted at (0 = never). */
   historyTiers: (0 | 1 | 2 | 3)[];
+  /**
+   * Plaintext content of every vault memory disclosed to the model across the
+   * WHOLE conversation (M10c, ADR 0029). The exfiltration screen (runTask)
+   * builds its memory-overlap matcher from this, NOT from the current turn's
+   * retrieval: a memory disclosed on turn 1 lives in the model's context for
+   * every later turn, so a later turn whose retrieval no longer surfaces it
+   * could still smuggle it out unscreened (G1 blocker). Conversation-scoped
+   * exactly like `pseudonyms`, so the two content screens stay in lockstep.
+   */
+  disclosedMemory: string[];
 }
 
 export function createSession(): ConverseSession {
-  return { pseudonyms: {}, plainHistory: [], historyTiers: [] };
+  return { pseudonyms: {}, plainHistory: [], historyTiers: [], disclosedMemory: [] };
 }
 
 /**

@@ -63,17 +63,26 @@ interface Variant {
 // Candidate extraction
 // ---------------------------------------------------------------------------
 
-/**
- * Break the egress URL and the argument JSON into the components an attacker
- * can smuggle data through. WHATWG URL parsing normalizes hostile spellings
- * the same way tools/net.ts does (one parser family, no disagreement); an
- * unparseable URL is screened WHOLE as a body candidate — fail closed, never
- * "could not parse, therefore clean".
- */
+// DoS bounds (G3 #4, #5). The detector chain (applyTier1's O(hits²) overlap
+// scan × the variant/form fan-out) is ~quadratic in a single candidate's
+// length, and a prompt-injected model can emit a giant argument. Caps: no
+// single candidate longer than MAX_CANDIDATE_CHARS is screened past its
+// prefix (a real URL or arg component is far smaller; a huge one is itself
+// suspicious and shown verbatim at the gate), and no more than MAX_CANDIDATES
+// candidates total. Both are generous vs. reality and keep the SYNCHRONOUS
+// screen from blocking the event loop. MAX_JSON_DEPTH stops the recursive
+// leaf walk from overflowing the stack on adversarial nesting (JSON.parse
+// itself succeeds far deeper than the default call stack).
+const MAX_CANDIDATE_CHARS = 4096;
+const MAX_CANDIDATES = 1024;
+const MAX_JSON_DEPTH = 200;
+
 function extractCandidates(input: ExfilScreenInput): Candidate[] {
   const out: Candidate[] = [];
   const push = (text: string, where: Where): void => {
-    if (text.length > 0) out.push({ text, where });
+    if (text.length === 0 || out.length >= MAX_CANDIDATES) return;
+    // Screen only the prefix of an oversized component (see MAX_CANDIDATE_CHARS).
+    out.push({ text: text.length > MAX_CANDIDATE_CHARS ? text.slice(0, MAX_CANDIDATE_CHARS) : text, where });
   };
 
   if (input.egressUrl !== null) {
@@ -123,7 +132,8 @@ function extractCandidates(input: ExfilScreenInput): Candidate[] {
   if (!parseOk) {
     push(input.argsPlain, 'body');
   } else {
-    const walk = (node: unknown): void => {
+    const walk = (node: unknown, depth: number): void => {
+      if (depth > MAX_JSON_DEPTH || out.length >= MAX_CANDIDATES) return;
       if (typeof node === 'string') {
         // The egress URL itself rides in the arguments as a leaf (that is
         // where the loop extracted it from). It is already screened above
@@ -136,16 +146,16 @@ function extractCandidates(input: ExfilScreenInput): Candidate[] {
         return;
       }
       if (Array.isArray(node)) {
-        for (const item of node) walk(item);
+        for (const item of node) walk(item, depth + 1);
         return;
       }
       if (node !== null && typeof node === 'object') {
         // Keys are OUR schema identifiers, not model-chosen content carriers
         // of interest here — values are walked, keys pass (jsonLeaves parity).
-        for (const value of Object.values(node as Record<string, unknown>)) walk(value);
+        for (const value of Object.values(node as Record<string, unknown>)) walk(value, depth + 1);
       }
     };
-    walk(parsed);
+    walk(parsed, 0);
   }
 
   return out;
@@ -155,79 +165,108 @@ function extractCandidates(input: ExfilScreenInput): Candidate[] {
 // Decoded variants
 // ---------------------------------------------------------------------------
 
-const BASE64_STD = /^[A-Za-z0-9+/]+={0,2}$/;
+const BASE64_STD = /^[A-Za-z0-9+/\s]+={0,2}$/;
 const BASE64_URL = /^[A-Za-z0-9_-]+={0,2}$/;
 
 /**
- * Decode a component that LOOKS like base64 (charset-valid, length ≥ 16,
- * optional padding). The 85%-printable gate keeps binary junk (hashes, real
- * ciphertext, images) from producing garbage candidates: a decode that is
- * mostly unprintable is not smuggled text, and screening it would only add
- * noise. Honest limit: base64 EMBEDDED inside longer prose is not found —
- * only whole components decode (KNOWN-LIMITS/ADR 0029).
+ * Fraction of `buf` that decodes as printable text under `encoding`. Used to
+ * pick the RIGHT interpretation of decoded base64 bytes: a UTF-16LE-encoded
+ * ASCII secret is ~50% NUL under utf8 (G3 finding #2) but ~100% printable
+ * under utf16le, so trying multiple encodings and keeping the best-printing
+ * one recovers the hidden text instead of discarding it as "binary junk".
  */
-function tryBase64(text: string): string | null {
-  if (text.length < 16) return null;
-  let buf: Buffer;
-  if (BASE64_STD.test(text)) buf = Buffer.from(text, 'base64');
-  else if (BASE64_URL.test(text)) buf = Buffer.from(text, 'base64url');
-  else return null;
-  if (buf.length === 0) return null;
+function printableText(buf: Buffer, encoding: BufferEncoding): { text: string; ratio: number } {
+  const text = buf.toString(encoding);
+  if (text.length === 0) return { text, ratio: 0 };
   let printable = 0;
-  for (const byte of buf) {
-    if ((byte >= 0x20 && byte <= 0x7e) || byte === 0x09 || byte === 0x0a || byte === 0x0d) {
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if ((code >= 0x20 && code <= 0x7e) || code === 0x09 || code === 0x0a || code === 0x0d) {
       printable += 1;
     }
   }
-  if (printable / buf.length < 0.85) return null;
-  return buf.toString('utf8');
+  return { text, ratio: printable / text.length };
 }
 
 /**
- * All decoded variants of one candidate: up to 3 percent-decode rounds
- * (stop when a round changes nothing or throws — malformed sequences like a
- * bare '%' must never crash the screen; the raw form was screened anyway),
- * plus base64/base64url on the raw text and on every percent variant
- * (percent-encoded base64 — '+' as %2B — is a plausible layering), plus one
- * further percent round on each base64 decode. Three rounds is a deliberate
- * boundary: each extra round costs little but a model willing to quadruple-
- * encode can just as well invent an encoding no decoder anticipates, so the
- * cutoff is documented (KNOWN-LIMITS) rather than chased.
+ * Decode a component that LOOKS like base64 (charset-valid, length ≥ 16,
+ * optional padding, embedded whitespace tolerated — MIME wraps at 76 cols,
+ * G3 #7). Tries utf8 THEN utf16le THEN latin1 and keeps the first that is
+ * ≥ 85% printable: the gate keeps binary junk (hashes, real ciphertext,
+ * images) from producing garbage candidates, but must not let a mere charset
+ * choice hide ASCII (G3 #2). Honest limit: base64 EMBEDDED inside longer
+ * prose is still not found — only whole components decode (KNOWN-LIMITS).
+ */
+function tryBase64(text: string): string | null {
+  // Whitespace is allowed in the shape test but stripped before decoding, so
+  // the length/charset checks see the real payload.
+  const compact = text.replace(/\s+/g, '');
+  if (compact.length < 16) return null;
+  let buf: Buffer;
+  if (BASE64_STD.test(text)) buf = Buffer.from(compact, 'base64');
+  else if (BASE64_URL.test(text)) buf = Buffer.from(compact, 'base64url');
+  else return null;
+  if (buf.length === 0) return null;
+  for (const encoding of ['utf8', 'utf16le', 'latin1'] as const) {
+    const { text: decoded, ratio } = printableText(buf, encoding);
+    if (ratio >= 0.85) return decoded;
+  }
+  return null;
+}
+
+// Decode budget. A layered encoding (percent∘base64∘base64∘…) is unwrapped by
+// a bounded fixpoint, NOT a fixed pipeline: G3 #1 showed a fixed structure let
+// base64 run only once, so double-base64 slipped BELOW the confessed quadruple
+// boundary. MAX_DECODE_ROUNDS bounds the layering depth; MAX_VARIANTS caps the
+// total work so a decode-bomb (each layer fanning to several forms) cannot hang
+// the screen. Both are generous versus any real URL and cheap to widen.
+const MAX_DECODE_ROUNDS = 6;
+const MAX_VARIANTS = 24;
+
+/**
+ * All decoded variants of one candidate, as a bounded fixpoint over BOTH
+ * decoders. Each round takes every variant discovered so far and applies one
+ * percent-decode and one base64-decode, feeding novel results back in — so
+ * base64(base64(x)), percent(base64(x)), base64(percent(x)) and any other
+ * layering up to the round/variant budget are all unwrapped (closes G3 #1).
+ * Percent-decode of a malformed escape throws and is swallowed (a bare '%'
+ * must never crash the screen); base64 that does not look like base64 simply
+ * yields nothing. Termination is guaranteed by the `seen` set plus both caps.
  */
 function decodedVariants(text: string): Variant[] {
   const out: Variant[] = [];
   const seen = new Set<string>([text]);
-  const push = (t: string): void => {
-    if (t.length > 0 && !seen.has(t)) {
-      seen.add(t);
-      out.push({ text: t, decoded: true });
-    }
+  let frontier: string[] = [text];
+
+  const push = (t: string): string | null => {
+    if (t.length === 0 || seen.has(t) || out.length >= MAX_VARIANTS) return null;
+    seen.add(t);
+    out.push({ text: t, decoded: true });
+    return t;
   };
 
-  let current = text;
-  for (let round = 0; round < 3; round += 1) {
-    let next: string;
-    try {
-      next = decodeURIComponent(current);
-    } catch {
-      break; // malformed escape: keep earlier variants, never throw
+  for (let round = 0; round < MAX_DECODE_ROUNDS && frontier.length > 0; round += 1) {
+    const next: string[] = [];
+    for (const current of frontier) {
+      if (out.length >= MAX_VARIANTS) break;
+      let percentDecoded: string | null = null;
+      try {
+        const p = decodeURIComponent(current);
+        if (p !== current) percentDecoded = p;
+      } catch {
+        // malformed escape: no percent variant from this node, never throw
+      }
+      if (percentDecoded !== null) {
+        const added = push(percentDecoded);
+        if (added !== null) next.push(added);
+      }
+      const b64 = tryBase64(current);
+      if (b64 !== null) {
+        const added = push(b64);
+        if (added !== null) next.push(added);
+      }
     }
-    if (next === current) break;
-    push(next);
-    current = next;
-  }
-
-  const base64Sources = [text, ...out.map((v) => v.text)];
-  for (const source of base64Sources) {
-    const decoded = tryBase64(source);
-    if (decoded === null) continue;
-    push(decoded);
-    try {
-      const percentAgain = decodeURIComponent(decoded);
-      if (percentAgain !== decoded) push(percentAgain);
-    } catch {
-      // decoded base64 with a stray '%': the base64 layer itself is screened
-    }
+    frontier = next;
   }
 
   return out;
@@ -240,7 +279,7 @@ function decodedVariants(text: string): Variant[] {
 // Horizontal separators that can split a digit group — the same set tier1.ts
 // uses (SEP) between digits, minus '/' (path-shaped dates like 2026/07/24
 // would otherwise fuse into fake digit runs).
-const DIGIT_SEP_RUN = /(?<=\d)[ .\-\u00A0\u2009\u202F]+(?=\d)/g;
+const DIGIT_SEP_RUN = /(?<=\d)[ .\-_:\u00A0\u2009\u202F]+(?=\d)/g;
 
 /**
  * Digit-normalized forms for the secret detectors. applyTier1 already
@@ -268,24 +307,44 @@ function normalizeLoose(text: string): string {
 }
 
 const MEMORY_GRAM = 16;
+// A memory whose ENTIRE normalized form is shorter than a 16-gram (a gate
+// code, a PIN, a short passphrase — "Gate code 7421!" → 'gatecode7421', 12
+// chars) produces no grams and would be wholly unscreenable (G3 #3). Such
+// memories are matched as whole normalized substrings instead, down to this
+// floor. Below the floor the token is too short to match specifically (a
+// 4-digit PIN substring-hits half the URLs on the web), so it is left to the
+// per-call gate — documented in KNOWN-LIMITS.
+const MIN_SHORT_MEMORY = 8;
+
+interface MemoryMatcher {
+  grams: Set<string>;
+  /** Whole normalized forms of memories too short to gram (length in
+   * [MIN_SHORT_MEMORY, MEMORY_GRAM)). Matched by substring. */
+  shorts: string[];
+}
 
 /**
- * Every 16-gram of every normalized memory, as a Set. A shared normalized
- * common substring of length ≥ 16 exists iff candidate and memory share a
- * 16-gram, so membership tests replace substring search: O(n + m) with the
- * constant 16 folded in (JS string keys act as the rolling-hash set — exact,
- * no collision handling). ~10 memories × ~1 KB → ~10k entries; a 4 KB
- * candidate → ~4k lookups. Never the O(n·m·k) triple loop.
+ * The memory matcher: every 16-gram of every normalized memory as a Set, plus
+ * the whole-form list for sub-16 memories. A shared normalized common
+ * substring of length ≥ 16 exists iff candidate and memory share a 16-gram,
+ * so gram membership replaces substring search: O(n + m), the constant 16
+ * folded in (JS string keys act as the rolling-hash set — exact, no collision
+ * handling). Never the O(n·m·k) triple loop.
  */
-function buildMemoryGrams(memories: string[]): Set<string> | null {
+function buildMemoryMatcher(memories: string[]): MemoryMatcher | null {
   const grams = new Set<string>();
+  const shorts: string[] = [];
   for (const memory of memories) {
     const norm = normalizeLoose(memory);
-    for (let i = 0; i + MEMORY_GRAM <= norm.length; i += 1) {
-      grams.add(norm.slice(i, i + MEMORY_GRAM));
+    if (norm.length >= MEMORY_GRAM) {
+      for (let i = 0; i + MEMORY_GRAM <= norm.length; i += 1) {
+        grams.add(norm.slice(i, i + MEMORY_GRAM));
+      }
+    } else if (norm.length >= MIN_SHORT_MEMORY) {
+      shorts.push(norm);
     }
   }
-  return grams.size > 0 ? grams : null;
+  return grams.size > 0 || shorts.length > 0 ? { grams, shorts } : null;
 }
 
 type FlagMap = Map<string, ExfilFlag>;
@@ -331,13 +390,21 @@ function screenIdentity(flags: FlagMap, variant: Variant, where: Where, protecte
   }
 }
 
-function screenMemory(flags: FlagMap, variant: Variant, where: Where, grams: Set<string> | null): void {
-  if (grams === null) return;
+function screenMemory(flags: FlagMap, variant: Variant, where: Where, matcher: MemoryMatcher | null): void {
+  if (matcher === null) return;
   const norm = normalizeLoose(variant.text);
   for (let i = 0; i + MEMORY_GRAM <= norm.length; i += 1) {
-    if (grams.has(norm.slice(i, i + MEMORY_GRAM))) {
+    if (matcher.grams.has(norm.slice(i, i + MEMORY_GRAM))) {
       addFlag(flags, 'memory', undefined, where, variant.decoded);
       return; // one flag per candidate region; dedupe collapses across candidates
+    }
+  }
+  // Short memories: the whole normalized form appearing anywhere in the
+  // candidate (G3 #3). Cheap — `shorts` is tiny (only sub-16 memories).
+  for (const short of matcher.shorts) {
+    if (norm.includes(short)) {
+      addFlag(flags, 'memory', undefined, where, variant.decoded);
+      return;
     }
   }
 }
@@ -353,7 +420,7 @@ function screenMemory(flags: FlagMap, variant: Variant, where: Where, grams: Set
  */
 export function screenArguments(input: ExfilScreenInput): ExfilFlag[] {
   const flags: FlagMap = new Map();
-  const memoryGrams = buildMemoryGrams(input.usedMemoryContents);
+  const memoryMatcher = buildMemoryMatcher(input.usedMemoryContents);
   // Protected values shorter than 4 normalized characters skip: initials and
   // two-letter fragments substring-match half the alphabet and would make
   // every call scream (a screen nobody believes protects nobody).
@@ -379,7 +446,7 @@ export function screenArguments(input: ExfilScreenInput): ExfilFlag[] {
       // fragments, body JSON).
       if (candidate.where !== 'host') {
         screenIdentity(flags, variant, candidate.where, protectedNorms);
-        screenMemory(flags, variant, candidate.where, memoryGrams);
+        screenMemory(flags, variant, candidate.where, memoryMatcher);
       }
     }
   }

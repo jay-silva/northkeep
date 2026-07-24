@@ -84,16 +84,26 @@ every milestone; if a limit is removed, say when and how.*
   showing the exact URL remains the real backstop.
 - **The exfiltration screens are syntactic, not semantic.** Every tool call's
   restored arguments are decomposed (host, decoded path, decoded query,
-  fragment, body leaves), percent-decoded up to 3 rounds, base64/base64url
-  candidates decoded, and matched case/punctuation-insensitively against:
+  fragment, body leaves) and run through a bounded decode FIXPOINT — up to 6
+  rounds mixing percent-decode and base64/base64url, so layered encodings
+  (base64-of-base64, percent-of-base64) unwrap, with base64 tried as UTF-8,
+  UTF-16LE, and Latin-1 — then matched case/punctuation-insensitively against:
   Tier-1 secret shapes (SSN/card/IBAN/API-key hits hard-block the call;
   email/phone/record-id/address hits warn), protected names from this
-  conversation, and 16-gram overlap with vault memories disclosed this task
-  (warn-class hits force a warned prompt; grants are bypassed). What still passes clean: SEMANTIC paraphrase in novel words, a
-  secret quadruple-encoded or hidden in an encoding we don't decode (ROT13,
-  custom substitution), and content the model memorized on earlier turns of
-  a different task. Screens narrow the channel; the human at the prompt and
-  the fence discipline remain the defense.
+  conversation, and overlap with vault memory disclosed anywhere in this
+  CONVERSATION (16-gram overlap, or whole-form match for memories under 16
+  normalized chars like a gate code). Warn-class hits force a warned prompt and
+  bypass grants. Arguments are length- and depth-capped so a giant or deeply
+  nested payload cannot hang the screen, and if the screen ever throws it fails
+  closed to a hard deny. What still passes clean: SEMANTIC paraphrase in novel
+  words; a secret encoded past the 6-round budget or in an encoding we don't
+  decode (ROT13, custom substitution, gzip); a value split across two URL
+  components or dribbled a few characters per call; and — by deliberate design
+  — a protected name or memory placed in the URL's HOST (the host is shown
+  verbatim at the gate, so it is screened for secret shapes only, not identity
+  or memory, to avoid flagging every "fetch carolmansfield.com"). Screens
+  narrow the channel; the human at the prompt and the fence discipline remain
+  the defense.
 - **DNS rebinding is closed by pinning; what remains is scope, not a race.**
   The client resolves a hostname once, refuses if ANY answer is private
   (loopback, RFC-1918, link-local incl. 169.254.169.254, ULA, IPv4-mapped),

@@ -105,6 +105,15 @@ describe('permissions store', () => {
     expect(grants[0]!.scope).toBe('always');
   });
 
+  it('re-applies 0600 to a PRE-EXISTING loose-permission grants file (G1 review)', () => {
+    // writeFileSync's mode only applies on CREATE; an attacker or a loose
+    // umask could leave an existing file world-readable. chmod every write.
+    fs.writeFileSync(permissionsPath(), '{"version":1,"grants":[]}\n', { mode: 0o644 });
+    expect(fs.statSync(permissionsPath()).mode & 0o777).toBe(0o644);
+    addGrant('web_fetch', 'example.com', 'always');
+    expect(fs.statSync(permissionsPath()).mode & 0o777).toBe(0o600);
+  });
+
   it('upserts on the (tool, host) key, case-insensitively', () => {
     addGrant('web_fetch', 'example.com', 'always');
     addGrant('web_fetch', 'EXAMPLE.com', 'never'); // same key → replace
