@@ -133,6 +133,30 @@ describe('groundIdentityClaims (mis-attribution backstop)', () => {
     const kept = groundIdentityClaims(candidates, selfIntro);
     expect(kept).toHaveLength(2);
   });
+
+  it('keeps progressive-verb activity statements — "is <verb>ing" is not an identity claim', () => {
+    // Regression (m6 e2e): no FACT_PATTERN marker in the message, yet the
+    // memory is an activity, not an identity assertion. It must survive.
+    const message = 'Ask Bob Henderson to file it — and what coffee do I take?';
+    const candidates = [
+      cand('semantic', 'The user is planning a sailing trip with their lawyer.'),
+      cand('episodic', 'The user is looking for a second rental property.'),
+    ];
+    expect(groundIdentityClaims(candidates, message)).toHaveLength(2);
+  });
+
+  it('still drops copular identity claims and "is being" clinical shapes without a first-person marker', () => {
+    const patientReport = 'PCR narrative: patient presented with chest pain, treated and transported.';
+    const candidates = [
+      cand('semantic', 'The user is Donna Hitchcock.'), // copular + name
+      cand('semantic', 'The user is a nurse at St. Luke’s.'), // copular + class
+      cand('semantic', 'The user is 77 years old.'), // copular + age
+      cand('semantic', 'The user is being treated for chest pain.'), // the pasted-report progressive
+      cand('semantic', 'The user is King of the grill.'), // -ing SUFFIX on a noun: known residual, documented
+    ];
+    const kept = groundIdentityClaims(candidates, patientReport);
+    expect(kept.map((c) => c.content)).toEqual(['The user is King of the grill.']);
+  });
 });
 
 describe('dedupe', () => {

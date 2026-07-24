@@ -83,7 +83,18 @@ ${userText}`;
  * shape a mis-read document produces ("The user is Donna, a 77-year-old…" or the
  * possessive "The user's diagnosis is …"). Note the possessive `'s` attaches
  * directly (no space); the verb forms carry their own leading space. */
-const ASSERTS_IDENTITY = /\bthe user(?:'s| is| was| has| lives| works| named| is a| is an)\b/i;
+/* " is" carries a negative lookahead excluding PROGRESSIVE verbs ("is
+ * planning", "is looking"): those are activity statements, not identity
+ * claims, and the extraction prompt itself asks for "The user ..." phrasing —
+ * without the exclusion, every "The user is <verb>ing" memory was silently
+ * dropped whenever the message lacked a FACT_PATTERN marker (found via the
+ * m6 e2e: "The user is planning a sailing trip" produced zero memories).
+ * "is being <treated/seen>" stays DROPPED (the inner (?!being\b) re-admits
+ * it): that progressive is the pasted-patient-report shape the PHI
+ * containment targets. Copular claims ("is Donna", "is a nurse", "is 77")
+ * still drop — their next word is not *ing. */
+const ASSERTS_IDENTITY =
+  /\bthe user(?:'s| is(?! (?!being\b)\w+ing\b)| was| has| lives| works| named| is a| is an)\b/i;
 
 /**
  * Deterministic backstop (a 3B model will not always obey the prompt): a claim
