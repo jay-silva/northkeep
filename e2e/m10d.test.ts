@@ -46,6 +46,7 @@ let fakeProvider: http.Server;
 let fakeProviderUrl: string;
 let braveServer: http.Server;
 let braveOrigin = '';
+let bravePort = 0;
 /** Every X-Subscription-Token header the fake Brave server received. */
 let braveTokensSeen: Array<string | undefined> = [];
 /** Every full request URL the fake Brave server received. */
@@ -54,10 +55,13 @@ let braveUrlsSeen: string[] = [];
 const SSN = '123-45-6789';
 const fakeVault: ConverseVault = { retrieve: () => [], list: () => [], commit: () => [] };
 
+const EMAIL = 'jay.private@example.org';
+
 /** What query the fake model puts in its web_search call, keyed off the message. */
 function queryForMessage(msg: string): string {
   if (msg.includes('EXFIL-SSN')) return `medical records for ${SSN}`;
   if (msg.includes('NAME')) return 'reviews for Carol Mansfield realty';
+  if (msg.includes('EMAIL')) return `who owns ${EMAIL}`;
   return 'best espresso machines 2026';
 }
 
@@ -84,7 +88,8 @@ beforeAll(async () => {
     );
   });
   await new Promise<void>((r) => braveServer.listen(0, '127.0.0.1', r));
-  braveOrigin = `http://127.0.0.1:${(braveServer.address() as { port: number }).port}`;
+  bravePort = (braveServer.address() as { port: number }).port;
+  braveOrigin = `http://127.0.0.1:${bravePort}`;
 
   fakeProvider = http.createServer((req, res) => {
     let body = '';
@@ -155,6 +160,26 @@ function searchTool(): ToolDefinition {
   return createWebSearchTool({
     apiKey: TOKEN,
     testEndpoint: { origin: braveOrigin, authorizedHost: '127.0.0.1' },
+    testOverrides: {
+      allowHttp: true,
+      resolver: () => Promise.resolve([{ address: '127.0.0.1', family: 4 }]),
+      isPrivateAddress: () => false,
+    },
+  });
+}
+
+/**
+ * A web_search tool whose egress classifies as BOUNDED (not loopback-private),
+ * by keeping the real Brave hostname in the origin and resolving it to the
+ * loopback fixture via testOverrides. This is the only way to exercise the
+ * production Tier-1 egress-mask layer (task.ts applies applyTier1 to tool
+ * args only for a bounded destination — a loopback origin is private and
+ * SKIPS the floor). G5 finding 2.
+ */
+function boundedSearchTool(port: number): ToolDefinition {
+  return createWebSearchTool({
+    apiKey: TOKEN,
+    testEndpoint: { origin: `http://api.search.brave.com:${port}`, authorizedHost: 'api.search.brave.com' },
     testOverrides: {
       allowHttp: true,
       resolver: () => Promise.resolve([{ address: '127.0.0.1', family: 4 }]),
@@ -260,6 +285,30 @@ describe('M10d acceptance — web_search + budget', () => {
     expect(approvals[0]!.warnings).toEqual([]);
     expect(braveTokensSeen).toEqual([TOKEN]);
     expect(result.toolCallsMade[0]!.decision).toBe('approved');
+    restoreHome();
+  });
+
+  it('masks literal PII in the query toward a BOUNDED Brave egress (prod Tier-1 floor)', async () => {
+    // web_search drops the warn-class email FLAG (trusted-api), but the Tier-1
+    // egress floor still masks the literal email before it reaches Brave —
+    // because the egress classifies bounded (real hostname, not loopback).
+    const result = await runTask({
+      message: 'EMAIL find the owner',
+      session: createSession(),
+      provider: createOpenAICompatibleProvider({ baseUrl: fakeProviderUrl }),
+      model: 'fake-model',
+      vault: fakeVault,
+      redactTier: 1, // bounded egress: the floor needs a nonzero tier context
+      distill: false,
+      tools: [boundedSearchTool(bravePort)],
+      hooks: { onEvent: () => {}, requestApproval: () => Promise.resolve('allow') },
+    });
+    expect(result.toolCallsMade[0]!.decision).toBe('approved');
+    // Brave received the MASKED query — the real email never left the machine.
+    expect(braveUrlsSeen).toHaveLength(1);
+    const received = decodeURIComponent(braveUrlsSeen[0]!);
+    expect(received).not.toContain(EMAIL);
+    expect(received).toMatch(/\[EMAIL/);
     restoreHome();
   });
 

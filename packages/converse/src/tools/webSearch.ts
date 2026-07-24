@@ -54,9 +54,12 @@ export interface WebSearchConfig {
  * The Brave query URL. CRITICAL (ADR 0030 decision 1): this is exactly what the
  * gate, the exfil screen, and the audit see, and it must NOT contain the token
  * — there is deliberately no parameter here to hold one. The query is
- * percent-encoded by URLSearchParams. egress() and execute() both build the URL
- * through this one function so the gate can never show a URL that differs from
- * the one that executes.
+ * percent-encoded by URLSearchParams. egress() and execute() build the URL
+ * through this one function from the same query string. (The bytes that
+ * actually reach Brave may carry LESS: for a bounded egress the loop applies
+ * the Tier-1 floor to the args before execute, so a literal secret is masked
+ * on the wire though the gate/audit saw it unmasked — the divergence only ever
+ * removes data, never adds it.)
  */
 export function buildBraveUrl(query: string, count: number, origin = `https://${BRAVE_HOST}`): string {
   const url = new URL(BRAVE_SEARCH_PATH, origin);

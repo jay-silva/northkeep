@@ -139,6 +139,37 @@ every milestone; if a limit is removed, say when and how.*
 - **fetch is https-only, ports 443/8443, GET, no cookies, ever.** Content
   types beyond HTML/text/JSON/XML are refused without reading the body.
 
+## M10d (web_search + spend budget), current
+
+- **The budget is a call COUNT, not a dollar ledger.** A persisted daily cap
+  and a per-conversation cap per costed tool bound how many times it runs;
+  they do not track actual dollars (the free Brave tier is $0 anyway). A true
+  cost ledger is future work.
+- **The daily cap can be overshot under CONCURRENT tool calls.** The cap is
+  checked, then the tool runs, then the count is recorded — with no lock
+  across those steps. The CLI runs one conversation at a time, so it cannot
+  hit this; but once a driver runs several conversations at once (the M10e web
+  GUI / an MCP server fronting multiple clients), N in-flight searches can
+  each pass the check before any records, overshooting by up to N-1. Bounded,
+  never unbounded. Proper atomic reservation lands with the concurrent driver
+  in M10e.
+- **web_search screens the query for catastrophic secrets only.** An SSN/card/
+  IBAN/API-key in the query is hard-blocked, but identity and memory screening
+  are deliberately off (the query goes to Brave, a trusted API, not an
+  attacker — ADR 0030). Warn-class PII (email, phone) in the query is not
+  flagged, but the Tier-1 egress floor still masks it on the wire to Brave.
+- **The Brave subscription token is trusted to that one host.** It rides a
+  single header bound to api.search.brave.com; a redirect on that request is
+  refused rather than followed. If Brave itself were compromised or
+  impersonated past TLS, the token and the query are what it would see — the
+  same trust any API key places in its provider.
+- **Search results are fenced but SEO-influenceable.** A hostile page can rank
+  for a term; results enter the conversation as nonce-fenced untrusted data
+  (like a fetched page), and any result URL the model then opens rides
+  web_fetch's own SSRF guard. The model still reads attacker-authored result
+  text — prompt injection via results is the same open problem as via a
+  fetched page.
+
 ## M6 (Converse, the mediated client) — current
 
 - **"Bounded" is bounded, not invisible.** Point Converse at a cloud
