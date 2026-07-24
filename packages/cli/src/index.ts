@@ -397,10 +397,21 @@ program
         ? entry.result_count !== undefined
           ? `${entry.result_count} result${entry.result_count === 1 ? '' : 's'}`
           : (entry.result_id?.slice(0, 8) ?? 'ok')
-        : `error: ${entry.error}`;
+        : entry.denied
+          ? 'denied'
+          : `error: ${entry.error}`;
       console.log(`${status} ${entry.ts}  ${entry.tool}  ${params}  → ${outcome}`);
       if (entry.result_ids && entry.result_ids.length > 0) {
         console.log(`    disclosed: ${entry.result_ids.map((id) => id.slice(0, 8)).join(' ')}`);
+      }
+      if (entry.tool_call) {
+        const t = entry.tool_call;
+        console.log(
+          `    ${t.name}${t.domain !== undefined ? ` ${t.domain}` : ''} · ${t.decision}` +
+            (t.url_hash !== undefined ? ` · url#${t.url_hash.slice(0, 12)}` : '') +
+            ` · args#${t.args_hash.slice(0, 12)} (${t.arg_chars} chars)` +
+            (t.result_bytes !== undefined ? ` · ${t.result_bytes} B` : ''),
+        );
       }
     }
   });
