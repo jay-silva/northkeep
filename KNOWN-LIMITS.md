@@ -87,7 +87,9 @@ every milestone; if a limit is removed, say when and how.*
   fragment, body leaves) and run through a bounded decode FIXPOINT — up to 6
   rounds mixing percent-decode and base64/base64url, so layered encodings
   (base64-of-base64, percent-of-base64) unwrap, with base64 tried as UTF-8,
-  UTF-16LE, and Latin-1 — then matched case/punctuation-insensitively against:
+  UTF-16LE, and Latin-1 (and, when a decode is mostly binary, its printable
+  runs pulled out so a secret padded with high bytes cannot hide) — then
+  matched case/punctuation-insensitively against:
   Tier-1 secret shapes (SSN/card/IBAN/API-key hits hard-block the call;
   email/phone/record-id/address hits warn), protected names from this
   conversation, and overlap with vault memory disclosed anywhere in this
