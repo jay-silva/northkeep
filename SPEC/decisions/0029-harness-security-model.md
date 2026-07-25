@@ -77,8 +77,13 @@ Every tool call's restored arguments are decomposed and screened:
     substrings.
   - `memory` — normalized overlap between components and the content of vault
     memories disclosed to the model anywhere in this CONVERSATION (16-gram
-    overlap, or whole-form substring for memories under 16 normalized chars
-    like a gate code). Conversation-scoped, not this-task: a memory disclosed
+    overlap, or whole-form substring for memories between 8 and 16 normalized
+    chars like a gate code). **A memory shorter than 8 normalized characters is
+    not screened at all** (`MIN_SHORT_MEMORY`, exfil.ts): a 4-digit PIN
+    substring-hits half the URLs on the web, so screening it would be pure
+    noise. Such values rest on the per-call approval prompt, which shows the
+    exact URL, and on the Tier-1 secret classes, which are matched by shape
+    rather than by memory content. Conversation-scoped, not this-task: a memory disclosed
     on an earlier turn lives in the model's context on every later turn, so
     scoping the screen to the current turn's retrieval (as the first cut did)
     let a granted host receive an encoded OLD memory unscreened — the G1
@@ -203,6 +208,27 @@ matched values, argument text, or anything recoverable.
   screen from being turned into a CPU/stack DoS by a hostile argument; a
   component past the cap is not fully screened, but is shown at the gate. A
   screen that throws despite the caps fails closed to a hard deny.
+- **An `always` grant removes the prompt this document calls "the real
+  backstop," and that compound is the strongest practical attack inside this
+  threat model.** Each limit above ends by pointing at the approval prompt:
+  semantic paraphrase, dribbling a value a few characters per call, and
+  host-placed content are all screen-clean by construction, and the prompt
+  showing the exact URL is what catches them. But a granted (tool, host) pair
+  skips the prompt for every screen-clean call. So: a hostile page persuades
+  the model to make one innocuous-looking fetch, the user grants "always" to
+  be rid of the prompting, and subsequent turns can dribble vault content to
+  that host character by character with no prompt at all — visible only as
+  tool-log lines in the transcript and as content-free audit rows. Nothing in
+  the engine reconciles this today. Mitigations that exist: grants are exact
+  per host, listed by `northkeep tools grants`, and revocable; the transcript
+  shows every call. Mitigations deliberately NOT built yet: a cap on
+  consecutive auto-allowed calls per turn, and re-prompting when a granted
+  host is called an unusual number of times. Both add friction and should be
+  weighed when M11 brings consequential tools.
+- The `identity` screen only considers protected values of **4 or more
+  normalized characters** (exfil.ts): two- and three-letter pseudonym values,
+  such as initials, are never screened, because at that length the false-positive
+  rate makes the signal useless.
 - `never`/`always` grants key on (tool, host) — a granted host that later
   starts redirecting elsewhere is caught by the net client's per-hop
   re-validation, but a granted host serving different CONTENT than when

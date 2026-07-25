@@ -20,8 +20,19 @@ answer is a new authenticated POST. Not WebSockets — the loopback token +
 one-shot request model is simpler and already the app's security posture.
 
 When a request sets `tools: true`, the converse handler runs `runTask` (not
-`runTurn`) with hooks. New NDJSON event types (all content-free, mirroring the
-CLI's TaskEvent fields):
+`runTurn`) with hooks. New NDJSON event types, mirroring the CLI's TaskEvent
+fields.
+
+**On "content-free":** every event below is content-free in the sense the audit
+log means it — names, hosts, counts, decisions, never vault text or fetched page
+content — with **two deliberate exceptions that carry restored plaintext**:
+`approval_request` (`query` / `args_plain`) and the `tool_egress` proof of
+Decision 6. Both must, because a gate that hides what it is approving is not a
+gate. They are ephemeral and loopback-only: streamed once over the authenticated
+localhost response, rendered, and never persisted. The audit log written from the
+same events stores only hashes (ADR 0029 Decision 4). Nothing here is a
+disclosure to a third party; it is a disclosure to the user, about their own
+machine, which is the entire point of the surface.
 
 - `{type:'tool_step', n}` — a new agent-loop step began.
 - `{type:'tool_call', name, host?, egress_tier?}` — the model asked for a tool.

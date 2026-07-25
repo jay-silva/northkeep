@@ -61,9 +61,24 @@ corner; ADR 0029 specifies them precisely before any tool executes:
   local consumer (the user's screen, a tool executing on their behalf under
   the permission gate). No code path may restore plaintext into content that
   is about to leave the machine for a model or any other remote destination.
-- **Tier-1 floor when tools are enabled.** A conversation with tools enabled
-  runs at Tier 1 minimum, even on a private endpoint, because tool egress
-  (a web fetch) can leave the machine regardless of where the model lives.
+- **Tier-1 floor on tool-bound ARGUMENTS.** Arguments headed for a tool are
+  redacted at Tier 1 minimum even when the conversation runs at Tier 0 on a
+  private endpoint, because tool egress (a web fetch) can leave the machine
+  regardless of where the model lives.
+
+  > **Amended 2026-07-25 (M10 review).** This bullet originally read "a
+  > conversation with tools enabled runs at Tier 1 minimum," which was never
+  > implemented and is NOT what shipped: `task.ts` derives `effectiveTier` from
+  > the endpoint alone (`privacy === 'bounded' && redactTier === 0 ? 1 :
+  > redactTier`), so enabling tools does not raise the conversation's tier. The
+  > floor that exists is the argument-level one above, applied where the
+  > arguments actually egress. That is the deliberate design: raising the whole
+  > conversation would mask secrets in the prompt sent to a LOCAL model the user
+  > chose at Tier 0 — a real utility cost on exactly the workflows Tier 0
+  > exists for — while buying no privacy, since that prompt never leaves the
+  > machine. What leaves is the tool call, and that is what the floor covers.
+  > ADR 0031's "Security properties" section describes this argument-level floor
+  > correctly.
 
 ## Decision 3: the provider layer (shipped by M10a, this milestone)
 

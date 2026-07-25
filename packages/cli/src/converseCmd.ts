@@ -450,12 +450,31 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       let taskResult: TaskResult | null = null;
       let result: TurnResult;
       if (taskTools.length > 0) {
-        taskResult = await runTask({
-          ...turnArgs,
-          tools: taskTools,
-          hooks: taskHooks,
-          gate: permissionEngine,
-        });
+        // Ctrl-C cancels the RUNNING TASK rather than killing the REPL: the
+        // loop's own abort path denies any pending approval and appends
+        // "Cancelled by the user." (task.ts). Without this the CLI passed no
+        // signal at all, so a mid-task Ctrl-C could only kill the process —
+        // and KNOWN-LIMITS claimed otherwise. The listener is scoped to the
+        // task and removed in `finally`, so it can never accumulate across
+        // turns or swallow Ctrl-C at the prompt.
+        const controller = new AbortController();
+        const onSigint = (): void => {
+          spinner.stop();
+          console.log(`\n${YELLOW}[cancelling…]${RESET}`);
+          controller.abort();
+        };
+        process.on('SIGINT', onSigint);
+        try {
+          taskResult = await runTask({
+            ...turnArgs,
+            tools: taskTools,
+            hooks: taskHooks,
+            gate: permissionEngine,
+            signal: controller.signal,
+          });
+        } finally {
+          process.off('SIGINT', onSigint);
+        }
         result = taskResult;
       } else {
         result = await runTurn(turnArgs);

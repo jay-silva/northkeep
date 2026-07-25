@@ -133,8 +133,24 @@ every milestone; if a limit is removed, say when and how.*
   abort, marked truncated) and tool results are truncated to a character
   budget before they reach the model, so a huge page cannot flood a
   conversation. What the model saw is what the (truncated) fence contains.
-- **Disconnect aborts the task (M10e).** In the CLI a Ctrl-C / session drop
-  mid-task appends "Cancelled by the user." and stops. In the web GUI, closing
+- **Very short protected values are not screened.** A vault memory under 8
+  normalized characters (a 4-digit PIN, a short gate code) and a pseudonym
+  value under 4 characters (initials) are skipped by the memory and identity
+  screens: at that length a substring match hits half the URLs on the web, so
+  the signal would be noise. Those values rest on the per-call approval prompt,
+  which shows the exact URL, and on the Tier-1 secret classes, which match by
+  shape rather than by memory content.
+- **An "always" grant removes the approval prompt that backstops the screens.**
+  The screens are syntactic, so paraphrased or dribbled content passes clean and
+  the prompt is what catches it. Granting "always" to a host trades that
+  backstop for convenience: later calls to that host proceed without asking, and
+  a hostile page that earned one grant can leak slowly. Grants are exact per
+  host, listed by `northkeep tools grants`, and revocable at any time; every call
+  still appears in the transcript and the audit log. Prefer "once" for a host you
+  do not already trust.
+- **Disconnect aborts the task (M10e).** In the CLI, Ctrl-C mid-task cancels
+  the RUNNING TASK (not the REPL): it denies any pending approval, appends
+  "Cancelled by the user." and returns to the prompt. In the web GUI, closing
   the tab or reloading fires the response 'close' event, which aborts the loop
   and sweeps that turn's pending approvals; a late approve POST for a swept id
   404s (the frontend re-asks). An unanswered approval still denies after the

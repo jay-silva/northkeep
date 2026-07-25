@@ -795,17 +795,24 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                 };
               }
               execMeta = toolOut.meta;
-              // Fence SUCCESSFUL external content (attacker-authored data);
-              // our own structured error JSON is not external and stays bare.
-              resultContent =
-                toolOut.meta.ok && egressUrl !== null
-                  ? wrapUntrusted(
-                      truncateChars(toolOut.content, maxResultChars),
-                      egressUrl,
-                      fenceNonce,
-                      now,
-                    )
-                  : truncateChars(toolOut.content, maxResultChars);
+              // Fence SUCCESSFUL tool output (attacker-authored data); our own
+              // structured error JSON is not external and stays bare.
+              //
+              // The trigger is "a tool produced this", NOT "it has an egress
+              // URL". Keying on the URL fails OPEN for any tool that egresses
+              // somewhere we cannot name — exactly the shape M11's MCP tools
+              // take (ADR 0033), where a stdio server has no URL at all. Both
+              // tools shipped today always carry one, so this changes nothing
+              // now; it means a URL-less tool cannot arrive later and quietly
+              // inject unfenced attacker text into the transcript.
+              resultContent = toolOut.meta.ok
+                ? wrapUntrusted(
+                    truncateChars(toolOut.content, maxResultChars),
+                    egressUrl ?? toolOut.meta.host ?? call.name,
+                    fenceNonce,
+                    now,
+                  )
+                : truncateChars(toolOut.content, maxResultChars);
               // On failure, lift the tool's own {error, guidance} out of the
               // (unfenced) structured error content so the surface can show the
               // user WHY — content-free, never page/query text.

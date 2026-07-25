@@ -72,9 +72,12 @@ sees it. The model reading a result is not the model trusting it.
 
 Brave's free tier is 2,000 queries/month at 1 query/second ($0); paid tiers
 bill per query. The genuinely uncovered risk is CUMULATIVE spend/quota across
-many conversations — a single conversation is already bounded by the agent
+many conversations — a single conversation is loosely bounded by the agent
 loop's step limit (MAX_STEPS = 10), so a per-conversation dollar cap is
-nearly redundant with it. The budget is therefore a PERSISTED daily
+nearly redundant with it. (Precisely: MAX_STEPS bounds model round TRIPS, not
+tool calls; one step may carry several calls, so the per-conversation cap below
+is what actually bounds a costed tool within a conversation. A free tool has no
+per-conversation call bound at all, only the step limit.) The budget is therefore a PERSISTED daily
 call-count per costed tool (`~/.northkeep/budget.json`, same 0600 tolerant-
 loader idiom as the grants file), plus a small per-conversation cap as a
 fast local bound.

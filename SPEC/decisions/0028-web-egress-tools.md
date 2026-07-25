@@ -65,6 +65,14 @@ Every byte web_fetch moves goes through one file, with these guards:
    decompression bombs); and no cookie jar or Authorization path exists in
    the client at all.
 
+   > **Superseded in part, 2026-07-25 (M10d).** The last clause is no longer
+   > true: `net.ts` gained a narrow, opt-in credential path (`AuthToken`) so
+   > `web_search` can authenticate to Brave. It is deliberately constrained —
+   > the token travels in a HEADER and never in a URL, it is set only by a
+   > registered tool and never by the model, and it is never logged or shown.
+   > There is still no cookie jar. See ADR 0030 Decision 1 for the full
+   > reasoning and its limits.
+
 Tests inject a resolver/classifier through a clearly marked TEST-ONLY seam
 (NetTestOverrides), because the fixture servers live on loopback, which the
 production guard categorically refuses. No production code path constructs

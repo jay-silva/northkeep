@@ -43,7 +43,8 @@ export function toolsList(): void {
   console.log(`${DIM}Enable with: northkeep tools enable <name> · use with: northkeep converse --tools${RESET}`);
   if (KNOWN_TOOL_NAMES.some((n) => config.tools[n]?.enabled)) {
     console.log(
-      `${YELLOW}Note:${RESET} every tool call still asks for your approval before it runs (M10b placeholder gate).`,
+      `${YELLOW}Note:${RESET} a tool call asks for your approval before it runs, unless you have\n` +
+        `      already answered "always" or "never" for that tool and site. See: northkeep tools grants`,
     );
   }
 }

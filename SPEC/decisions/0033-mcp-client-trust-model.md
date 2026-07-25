@@ -28,17 +28,33 @@ load-bearing rather than incidental:
    cannot see where the arguments go next.
 
 The permission engine, exfiltration screens, spend budget, approval protocol and
-content-free audit all carry over unchanged. That is the payoff for having built
-the gate before the tools. What follows is only what MCP genuinely changes.
+content-free audit all carry over in **shape**. That is the payoff for having
+built the gate before the tools. But "unchanged" would be false, and a spec that
+says it invites an implementer to skip the work, so here is the per-component
+delta:
+
+| Component | Carries over | Must change for M11 |
+| --- | --- | --- |
+| Approval protocol (0031) | Whole NDJSON suspend/resume flow, single-settle, timeouts | Nothing structural |
+| Audit (0029 D4) | One content-free row per call, denials included | Record server id + tool, not host |
+| Exfil screens (0029 D2) | Secret hard-block and the body-leaf screening of arguments | No URL exists to decompose, so the URL-component and host screens simply do not apply |
+| Permission engine (policy.ts) | Fail-closed evaluation, exact matching, revocability | Grants cannot even be **stored** for a host-less tool today: `policy.ts` asks whenever there is no host, and `task.ts` only records a grant when `egressHost !== undefined`. The `(server, tool)` key of Decision 1 is a real change to the file this sentence used to call unchanged. |
+| Scoped answers | once / session / always / never | Both surfaces offer scopes only when `offer_scopes` is set, which today tracks having a host. Decision 4 requires `never` to be available for every tool, so that condition must be rewritten. |
+| Budget (0030) | Daily and per-conversation caps, atomic reserve | Keys on `costPerCallUsd`, which MCP tools will not declare. An MCP server fronting a paid API is **uncapped** unless the budget gains a per-server call cap. |
 
 ## Decision 1: identity is `(server, tool)`, and server identity binds to what actually runs
 
 The grant key becomes `(server, tool)`. The subtlety is what "server" means. A
 server **id is a user-chosen label**, not an identity — a label can point at a
-different binary tomorrow. So a grant additionally records a **launch
+different program tomorrow. So a grant additionally records a **launch
 fingerprint**:
 
-- **stdio:** a hash over the resolved command path plus its argument vector.
+- **stdio:** a hash over the fully-resolved command path (symlinks resolved at
+  approval time AND re-resolved at launch, since a symlink is a redirection),
+  the argument vector, the working directory, and the names-and-values of any
+  environment variables the config sets for this server. Resolution is pinned:
+  the config stores an absolute path, so `PATH` is not consulted at launch and
+  cannot be used to swap the target.
 - **http:** the exact origin (scheme + host + port), matched exactly, no
   wildcards, inheriting policy.ts's no-subdomain-inheritance rule verbatim.
 
@@ -46,8 +62,32 @@ If the fingerprint does not match at connect time, **existing grants do not
 apply and every call asks again**. This is the same fail-closed spirit as
 policy.ts's tolerant loader: anything not positively recognized asks, and a
 grant can only ever remove a prompt the user already answered for the identical
-thing. It closes the obvious rug-pull, where a server earns "always" while
-benign and is then swapped.
+thing.
+
+### What the fingerprint does NOT do, stated plainly
+
+**It detects configuration changes, not program changes.** Replace the file at
+the fingerprinted path, and the fingerprint is identical. This matters more than
+it first appears, because a stdio MCP server is typically `node /path/server.js`
+or `python /path/server.py`: what is pinned is the interpreter plus a script
+whose contents, imports and `node_modules` can all change freely underneath a
+grant that was given to yesterday's behavior.
+
+We are **not** solving that here, and the reason is that solving it properly
+means content-hashing a transitive dependency tree on every launch, which is
+both expensive and defeated by any server that loads code at runtime. The honest
+framing is the one this document uses everywhere else: **an MCP server you
+install is a local program running with your privileges, exactly like any other
+program you install.** The fingerprint stops the *config-level* swap (the id now
+points somewhere else, an argument changed, the environment changed); ordinary
+software trust — where you got the program, whether you update it — covers the
+rest, and no permission prompt can substitute for it.
+
+For **http on loopback** the origin is only a port number, which any local
+process can claim after a restart. A loopback MCP server therefore gets no more
+trust than "some program on this machine," and the UI must not imply otherwise.
+
+This limitation belongs in KNOWN-LIMITS before M11 ships, in these words.
 
 ## Decision 2: tool definitions are untrusted input, and they outrank tool results in privilege
 
@@ -67,15 +107,45 @@ Therefore:
 
 - **Namespace every tool** the model sees as `server__tool`. Shadowing becomes
   impossible because the namespace is assigned by us from the user's config, not
-  by the server.
+  by the server. Server ids are constrained to `[a-z0-9-]+` precisely so the
+  `__` join stays unambiguous: without that rule, server `a__b` with tool `c`
+  collides with server `a` with tool `b__c`, and the namespace that was supposed
+  to prevent shadowing becomes a way to achieve it.
 - **Fence definitions as untrusted**, the same treatment M10b gives fetched
   content, and cap description and schema size. A server cannot buy unlimited
   context.
 - **Pin the definitions.** Record a hash of the tool set the user approved. If it
   changes, say so and re-ask rather than proceeding. Silent redefinition is the
   attack; a visible diff is the defense.
+
+  The pin is specified exactly, because a vague one is a fail-open one: the hash
+  is **sha256 over canonical JSON of the full advertised tool list — for every
+  tool its `name`, `description`, and `inputSchema`, with object keys sorted and
+  the list sorted by name.** Names alone are not enough; a names-only pin
+  re-opens precisely the silent-redefinition attack it exists to stop.
+
+  **Pinning is not connect-time only.** MCP servers may send
+  `notifications/tools/list_changed` mid-connection, so a server can pass the
+  check at connect and swap descriptions one call later. That notification
+  therefore **invalidates the pin immediately**: the new list is re-hashed, and
+  if it differs the user is told and asked again before the next call executes.
+  A connect-time-only pin would be theatre.
 - **No server-supplied text may alter harness behavior.** Descriptions are model
   context only. Nothing in them may influence gating, tiering, budgets or audit.
+
+### Results are fenced unconditionally
+
+Definitions are the new surface, but MCP tool **results** are attacker-authored
+too, and the loop's fence must not be conditional on knowing a destination. As
+of 2026-07-25 `task.ts` fences every successful tool result, using the egress URL
+as the source label when there is one and falling back to the reported host and
+then the tool name. The predicate is "a tool produced this", not "it has a URL".
+
+This is called out because the earlier predicate keyed on the egress URL, which
+fails **open** for exactly the tools this ADR introduces: a stdio server has no
+URL by construction (see Decision 3), so its results would have entered the
+transcript unfenced. That is fixed ahead of M11, with a regression test that
+fails if the predicate is narrowed again.
 
 ## Decision 3: an invisible destination gets the strictest tier, never a guess
 
@@ -88,6 +158,19 @@ So **MCP tool arguments redact at the strictest tier by default**, and the
 per-server trust level that relaxes it is **user-declared configuration, never
 inferred**. Local-and-ours is not automatically safer than remote: the vault's
 own server can read every memory.
+
+"Strictest tier" needs two things nailed down, or implementers will differ:
+
+- **It means Tier 3.** Tier 3 needs the local NER model, so what happens when
+  Ollama is absent is a real question, and invariant #6 answers it: **refuse the
+  call loudly** rather than degrade. That mirrors the existing rule where a
+  Tier-2 conversation bound for a bounded endpoint refuses to send when the NER
+  net is down (`task.ts`). Silently dropping to Tier 1 for a destination we
+  cannot even see would be the exact "quiet privacy downgrade" invariant #6
+  forbids.
+- **It applies to argument STRING LEAVES**, walking the parsed JSON, not to the
+  serialized blob — the same treatment the current Tier-1 argument floor uses,
+  so structure is preserved and a tool still receives valid arguments.
 
 This forces an honesty requirement on the UI. The "what left this machine" proof
 can state exactly what we sent to a server; it can never state what that server
@@ -151,10 +234,18 @@ be aligned before M11 builds on either.
 
 - We can prove what we sent a server. We cannot prove what it did next. A local
   server is a local program with the user's own privileges.
+- **The launch fingerprint detects configuration changes, not program changes.**
+  Swapping the file at the pinned path keeps the fingerprint identical, and for
+  the usual `node server.js` shape the pinned thing is an interpreter plus a
+  script whose contents and dependencies can change freely. See Decision 1.
+- A loopback `http` origin is a port number, and any local process can claim it
+  after a restart. Loopback earns no trust beyond "some program on this machine."
 - Namespacing stops tool shadowing; it does not stop a server from describing
   itself persuasively. Definition pinning bounds that, it does not eliminate it.
 - Each added server widens the injection surface, which is why the count of
   configured servers should stay small and visible.
+- An MCP server fronting a paid API has no spend cap until the budget grows a
+  per-server call cap (see the delta table in Context).
 
 ## Acceptance test (per CLAUDE.md, Jay runs this himself)
 
@@ -166,4 +257,7 @@ be aligned before M11 builds on either.
 4. Edit the configured command, restart, ask again: it asks for approval again,
    citing the changed fingerprint.
 5. A server whose tool descriptions changed since approval prompts a re-review
-   rather than running silently.
+   rather than running silently — both when the change appears at reconnect and
+   when the server sends `tools/list_changed` mid-conversation.
+6. With Ollama stopped, a call to an MCP tool refuses loudly and says why,
+   rather than sending arguments at a lower tier.
