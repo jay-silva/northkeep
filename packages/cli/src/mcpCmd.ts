@@ -83,7 +83,8 @@ export function mcpAdd(
         '        server is a local program running with your privileges, like any other.',
     );
   } catch (err) {
-    fail(err instanceof Error ? err.message : String(err));
+    const msg = err instanceof Error ? err.message : String(err);
+    fail(msg.includes('already exists') ? `${msg}\n  Remove it with: northkeep mcp remove ${id}` : msg);
   }
 }
 

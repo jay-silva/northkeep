@@ -882,9 +882,13 @@
     try {
       entries = (await api('/api/mcp/catalog')).entries || [];
     } catch { return; }
-    const configured = new Set();
+    // Key on the ID, because that is what addServer actually rejects on. Keying
+    // on command+args meant a vault configured from a different copy (a repo
+    // checkout rather than this app bundle) looked un-added, offered an Add
+    // button, and then failed on the name collision.
+    const byId = new Map();
     try {
-      for (const s of (await api('/api/mcp')).servers || []) configured.add(s.command + ' ' + (s.args || []).join(' '));
+      for (const s of (await api('/api/mcp')).servers || []) byId.set(s.id, s);
     } catch { /* best effort */ }
     for (const e of entries) {
       const row = el('div');
@@ -895,8 +899,22 @@
       row.appendChild(el('div', 'muted', e.caution));
       if (!e.available) {
         row.appendChild(el('div', 'danger', e.unavailable_reason || e.unavailableReason || 'Not available on this Mac.'));
-      } else if (configured.has(e.command + ' ' + (e.args || []).join(' '))) {
-        row.appendChild(el('div', 'muted', 'Already added.'));
+      } else if (byId.has(e.id)) {
+        const existing = byId.get(e.id);
+        const samePath =
+          existing.command === e.command &&
+          (existing.args || []).join(' ') === (e.args || []).join(' ');
+        row.appendChild(
+          el(
+            'div',
+            'muted',
+            samePath
+              ? 'Already added.'
+              : 'Already added, but pointing at a different copy: ' +
+                existing.command + ' ' + (existing.args || []).join(' ') +
+                '. Remove it below to add the one bundled with this app.',
+          ),
+        );
       } else {
         const add = el('button', 'btn primary', 'Add ' + e.label);
         add.addEventListener('click', async () => {

@@ -541,3 +541,20 @@ describe("a failing server cannot speak in NorthKeep's voice", () => {
     await conn.close();
   });
 });
+
+describe('the duplicate-id error does not prescribe a surface', () => {
+  it('tells you what to do without naming a terminal command', () => {
+    // A GUI user hit this with a Remove button on screen and was told to open
+    // a terminal. addServer is shared, so the message must work on both
+    // surfaces; the CLI appends its own hint.
+    addServer({ id: 'vault', command: node, args: [realCommand] });
+    let msg = '';
+    try {
+      addServer({ id: 'vault', command: node, args: [] });
+    } catch (err) {
+      msg = err instanceof Error ? err.message : String(err);
+    }
+    expect(msg).toContain('already exists');
+    expect(msg).not.toContain('northkeep mcp');
+  });
+});

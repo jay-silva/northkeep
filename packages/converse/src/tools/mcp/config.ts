@@ -173,9 +173,10 @@ export function addServer(input: AddServerInput, now: () => Date = () => new Dat
   }
   const config = loadMcpConfig();
   if (config.servers.some((s) => s.id === input.id)) {
-    throw new Error(
-      `An MCP server named "${input.id}" already exists. Remove it first: northkeep mcp remove ${input.id}`,
-    );
+    // Surface-neutral on purpose: addServer is shared, and telling a GUI user
+    // to run a terminal command (while a Remove button sits on their screen) is
+    // exactly the gap ADR 0034 set out to close. Each surface adds its own hint.
+    throw new Error(`An MCP server named "${input.id}" already exists. Remove it before adding another with that name.`);
   }
   const server: McpServerConfig = {
     id: input.id,
