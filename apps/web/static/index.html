@@ -1626,12 +1626,12 @@
   const MD_INLINE_SRC =
     '\\\\([\\\\`*_{}\\[\\]()#+\\-.!])' +                    // 1     \\escaped char
     '|(`+)([\\s\\S]*?)\\2' +                                // 2,3   code span
-    '|!\\[[^\\]\\n]*\\]\\([^()\\s]*\\)' +                   // (none) image → literal
-    '|\\*\\*\\*([^\\s*](?:[^*\\n]*?[^\\s*])?)\\*\\*\\*' +   // 4     ***both***
-    '|\\*\\*([^\\s*](?:[^*\\n]*?[^\\s*])?)\\*\\*' +         // 5     **bold**
-    '|\\*([^\\s*](?:[^*\\n]*?[^\\s*])?)\\*' +               // 6     *italic*
-    '|(^|[^A-Za-z0-9_])_([^\\s_](?:[^_\\n]*?[^\\s_])?)_(?![A-Za-z0-9_])' + // 7,8 _italic_
-    '|\\[([^\\]\\n]*)\\]\\(([^()\\s]*)\\)';                 // 9,10  [text](url)
+    '|(!\\[[^\\]\\n]*\\]\\([^()\\s]*\\))' +                 // 4     image → literal
+    '|\\*\\*\\*([^\\s*](?:[^*\\n]*?[^\\s*])?)\\*\\*\\*' +   // 5     ***both***
+    '|\\*\\*([^\\s*](?:[^*\\n]*?[^\\s*])?)\\*\\*' +         // 6     **bold**
+    '|\\*([^\\s*](?:[^*\\n]*?[^\\s*])?)\\*' +               // 7     *italic*
+    '|(^|[^A-Za-z0-9_])_([^\\s_](?:[^_\\n]*?[^\\s_])?)_(?![A-Za-z0-9_])' + // 8,9 _italic_
+    '|\\[([^\\]\\n]*)\\]\\(([^()\\s]*)\\)';                 // 10,11 [text](url)
 
   function mdInline(parent, text, depth) {
     const d = depth || 0;
@@ -1644,38 +1644,43 @@
       if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
       // The boundary character captured before an underscore run belongs to the
       // surrounding text, so put it back before whatever it delimited.
-      if (m[7]) parent.appendChild(document.createTextNode(m[7]));
+      if (m[8]) parent.appendChild(document.createTextNode(m[8]));
+      // Every branch below dispatches on ITS OWN capture group. Inferring the
+      // branch from the whole match instead is a trap: the underscore
+      // alternative consumes the boundary character before it, and that
+      // character can be "!", so "!_hi_" looked like an image and emitted its
+      // "!" twice.
       if (m[1] !== undefined) {
         // A backslash escape: the model wrote \* to SHOW an asterisk. Emit the
         // character it escaped and drop the backslash.
         parent.appendChild(document.createTextNode(m[1]));
-      } else if (m[0].charAt(0) === '!') {
-        // ![alt](url) — an image. We never load a remote image into an unlocked
-        // vault UI (it is an outbound request the model chose), so the whole
-        // construct stays literal text, exactly as KNOWN-LIMITS promises.
-        parent.appendChild(document.createTextNode(m[0]));
       } else if (m[3] !== undefined) {
         parent.appendChild(mdEl('code', 'mdcode', m[3])); // literal, no recursion
       } else if (m[4] !== undefined) {
-        const b = mdEl('strong');
-        const i = mdEl('em');
-        mdInline(i, m[4], d + 1);
-        b.appendChild(i);
-        parent.appendChild(b);
+        // ![alt](url) — an image. We never load a remote image into an unlocked
+        // vault UI (it is an outbound request the model chose), so the whole
+        // construct stays literal text, exactly as KNOWN-LIMITS promises.
+        parent.appendChild(document.createTextNode(m[4]));
       } else if (m[5] !== undefined) {
         const b = mdEl('strong');
-        mdInline(b, m[5], d + 1);
-        parent.appendChild(b);
-      } else if (m[6] !== undefined || m[8] !== undefined) {
         const i = mdEl('em');
-        mdInline(i, m[6] !== undefined ? m[6] : m[8], d + 1);
+        mdInline(i, m[5], d + 1);
+        b.appendChild(i);
+        parent.appendChild(b);
+      } else if (m[6] !== undefined) {
+        const b = mdEl('strong');
+        mdInline(b, m[6], d + 1);
+        parent.appendChild(b);
+      } else if (m[7] !== undefined || m[9] !== undefined) {
+        const i = mdEl('em');
+        mdInline(i, m[7] !== undefined ? m[7] : m[9], d + 1);
         parent.appendChild(i);
       } else {
         // Link → plain text. The label keeps its own inline formatting; the URL
         // trails in a dim span so you can still SEE where it points, and can
         // copy it deliberately. No <a>, no href, nothing clickable, ever.
-        mdInline(parent, m[9], d + 1);
-        if (m[10]) parent.appendChild(mdEl('span', 'mdurl', ' (' + m[10] + ')'));
+        mdInline(parent, m[10], d + 1);
+        if (m[11]) parent.appendChild(mdEl('span', 'mdurl', ' (' + m[11] + ')'));
       }
       last = re.lastIndex;
     }

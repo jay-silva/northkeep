@@ -203,7 +203,11 @@ describe('renderer never interprets its input as HTML', () => {
     // actually happened while building the renderer, and no amount of DOM
     // testing catches it, because these tests evaluate extracted source rather
     // than parsing HTML. Hence a flat text assertion.
-    expect(extractSource().toLowerCase()).not.toContain('</script');
+    const lower = extractSource().toLowerCase();
+    expect(lower).not.toContain('</script');
+    // "<!--" is the other way to flip the script-data tokenizer into its
+    // double-escaped state, where a later "</script" stops closing the element.
+    expect(lower).not.toContain('<!--');
     const html = fs.readFileSync(staticFile, 'utf8');
     expect(html.match(/<script/gi) ?? []).toHaveLength(1);
     expect(html.match(/<\/script/gi) ?? []).toHaveLength(1);
@@ -414,6 +418,16 @@ describe('inline formatting', () => {
   it('keeps a trailing hash in a heading', () => {
     expect(render('## What is C#').out).toBe('div(div.md(div.mdh.mdh2("What is C#")))');
     expect(render('### Title ###').out).toBe('div(div.md(div.mdh.mdh3("Title")))');
+  });
+
+  it('does not confuse an exclamation mark before emphasis with an image', () => {
+    // The underscore branch consumes the character before it, which can be "!".
+    // Dispatching on the whole match instead of a per-branch capture group made
+    // "!_hi_" emit its "!" twice AND lose the emphasis.
+    expect(render('!_hello_').text).toBe('!hello');
+    expect(tags(render('!_hello_').root)).toContain('em');
+    expect(render('a !_b_ c').text).toBe('a !b c');
+    expect(render('Really!!_x_').text).toBe('Really!!x');
   });
 
   it('leaves an image construct entirely literal', () => {
