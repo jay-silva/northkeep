@@ -279,6 +279,20 @@ every milestone; if a limit is removed, say when and how.*
 - **Closing the Tauri window kills the server and forgets the held key.**
   A browser tab from `northkeep ui` does the same when you Ctrl-C the
   terminal — but not if you only close the tab; the server keeps running.
+- **Assistant replies render a deliberate subset of Markdown.** Headings,
+  bold/italic, inline code, fenced code blocks, nested lists and rules are
+  formatted; **tables, images and raw HTML are not** — their lines stay as
+  literal text, which is readable but unformatted. Nothing is ever parsed as
+  HTML: the renderer only constructs DOM nodes, because since M10 a reply can
+  quote a web page the agent fetched, and handing that page an HTML parser
+  inside an unlocked vault UI would be a script-injection path.
+- **Links in replies are not clickable.** `[text](url)` renders as `text (url)`
+  in plain text. A model relaying a URL out of a page it fetched should not be
+  one click away — see the M10c exfiltration screen. Copy the URL deliberately.
+- **Formatting appears when the reply completes, not while it streams.** Tokens
+  stream as plain text and the formatted version replaces them at the end (the
+  same swap that already restored redacted text). A long answer shows raw
+  `**asterisks**` until it finishes.
 - **Only *scope* is editable, not content.** Each memory card has a "Move
   scope" button (supersede semantics — see ADR 0015); editing content or other
   fields is still forget-and-re-add. A re-scoped memory gets a new id (the old
