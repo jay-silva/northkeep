@@ -1,4 +1,5 @@
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -164,4 +165,49 @@ export function pinTools(tools: readonly PinnableTool[]): string {
     }))
     .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   return sha256(canonicalJson(reduced));
+}
+
+/**
+ * Roots a GUI-added server may live under (ADR 0034 Decision 3).
+ *
+ * A STRUCTURAL bound, not a judgement call: even holding the passphrase, the
+ * GUI cannot be talked into `/bin/sh -c "..."`, because /bin is not here.
+ *
+ * The CLI deliberately does NOT consult this. Someone at a terminal already has
+ * code execution, so an allowlist there would protect nobody while blocking the
+ * legitimate case of a server checked out in a project folder.
+ */
+export function allowedGuiRoots(home: string): string[] {
+  return [
+    path.join(home, '.northkeep', 'mcp-servers'),
+    '/opt/homebrew',
+    '/usr/local',
+    // The running installation itself: the packaged app's resources, or the
+    // repo when running from source. Derived, never supplied by a request.
+    path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..'),
+  ];
+}
+
+/**
+ * Is `command` inside one of `roots`? Compares RESOLVED paths, so `..` and a
+ * symlink out of an allowed root cannot smuggle a target past the check, and
+ * requires a path separator after the root so `/usr/localevil` is not inside
+ * `/usr/local`.
+ */
+export function isUnderAllowedRoot(command: string, roots: string[]): boolean {
+  let resolved: string;
+  try {
+    resolved = resolveCommand(command);
+  } catch {
+    return false; // unresolvable is not allowed (fail closed)
+  }
+  return roots.some((root) => {
+    let realRoot: string;
+    try {
+      realRoot = fs.realpathSync(root);
+    } catch {
+      return false; // a root that does not exist cannot contain anything
+    }
+    return resolved === realRoot || resolved.startsWith(realRoot + path.sep);
+  });
 }

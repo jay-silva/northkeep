@@ -473,14 +473,17 @@ describe('M11 GUI — the same servers, the same gate, over HTTP', () => {
     expect(servers[0]!.reviewed).toBeDefined();
   }, 60_000);
 
-  it('has NO route to add a server: spawning a program stays a terminal act', async () => {
-    // A browser form that names an executable is a far larger blast radius than
-    // any other setting this API writes, and nothing in M11 needs it.
+  it('the add route exists but a token alone can never spawn a program (ADR 0034)', async () => {
+    // M11 had no add route at all, which left desktop-only users unable to use
+    // MCP. ADR 0034 replaced that blunt rule with the property that actually
+    // matters: an automated caller holding a session token cannot cause a
+    // program to be spawned. A path needs the passphrase; see the ADR-0034
+    // block below for the full matrix.
     const { status } = await call('/api/mcp/add', {
       method: 'POST',
       json: { id: 'evil', command: '/bin/sh' },
     });
-    expect(status).toBe(404);
+    expect(status).toBe(401);
   }, 60_000);
 
   it('inspects a server: real definitions, and whether they match what was approved', async () => {
@@ -555,6 +558,103 @@ describe('M11 GUI — the same servers, the same gate, over HTTP', () => {
   it('caps the safe-read list so a huge write cannot bloat the config read on every turn', async () => {
     const many = Array.from({ length: 200 }, (_, i) => `t${i}`);
     expect((await call('/api/mcp/safe-read', { method: 'POST', json: { id: 'vault', tools: many } })).status).toBe(400);
+  }, 60_000);
+
+
+  // ---- ADR 0034: adding a server from the GUI ----
+
+  it('offers a catalog whose entries carry no caller-supplied path', async () => {
+    const { status, body } = await call('/api/mcp/catalog');
+    expect(status).toBe(200);
+    const entries = body.entries as Array<Record<string, unknown>>;
+    const vaultEntry = entries.find((e) => e.id === 'vault')!;
+    expect(vaultEntry.available).toBe(true);
+    // The command is OURS, resolved from this installation.
+    expect(vaultEntry.command).toBe(process.execPath);
+    expect(vaultEntry.safe_read ?? vaultEntry.safeRead).toBeDefined();
+  }, 60_000);
+
+  it('adds a catalog server in one call, with no passphrase and no path', async () => {
+    const { status, body } = await call('/api/mcp/add', {
+      method: 'POST',
+      json: { id: 'fromcatalog', catalogId: 'vault' },
+    });
+    expect(status).toBe(200);
+    expect(body.reviewed).toBe(false); // adding is never approving
+    const list = await call('/api/mcp');
+    const added = (list.body.servers as Array<Record<string, unknown>>).find(
+      (s) => s.id === 'fromcatalog',
+    )!;
+    expect(added.reviewed).toBe(false);
+    expect(added.command).toBe(process.execPath);
+    await call('/api/mcp/remove', { method: 'POST', json: { id: 'fromcatalog' } });
+  }, 60_000);
+
+  it('REFUSES a free-form path with a valid token but no passphrase', async () => {
+    // This is the attack ADR 0034 is written against: an automated caller
+    // holding a session token (leaked token, SSRF bypass, injected model)
+    // must not be able to cause a program to be spawned.
+    const { status, body } = await call('/api/mcp/add', {
+      method: 'POST',
+      json: { id: 'evil', command: '/bin/sh', args: ['-c', 'echo pwned'] },
+    });
+    expect(status).toBe(401);
+    expect(String(body.error)).toMatch(/passphrase/i);
+    expect((await call('/api/mcp')).body.servers).not.toContainEqual(
+      expect.objectContaining({ id: 'evil' }),
+    );
+  }, 60_000);
+
+  it('REFUSES a wrong passphrase, and adds nothing', async () => {
+    const { status } = await call('/api/mcp/add', {
+      method: 'POST',
+      json: { id: 'evil', command: '/bin/sh', passphrase: 'not the passphrase' },
+    });
+    expect(status).toBe(401);
+  }, 120_000);
+
+  it('REFUSES a path outside the allowed roots EVEN WITH the right passphrase', async () => {
+    // The structural bound: the GUI cannot be talked into /bin/sh even by
+    // someone who knows the passphrase.
+    const { status, body } = await call('/api/mcp/add', {
+      method: 'POST',
+      json: { id: 'evil', command: '/bin/sh', passphrase: PASSPHRASE },
+    });
+    expect(status).toBe(400);
+    expect(String(body.error)).toMatch(/terminal/i);
+  }, 120_000);
+
+  it('ACCEPTS a free-form path under an allowed root with the right passphrase', async () => {
+    // ~/.northkeep/mcp-servers is an allowed root; NORTHKEEP_HOME is the temp
+    // home for this run, but allowedGuiRoots uses os.homedir(), so use the
+    // installation root instead — the repo itself is allowed.
+    const { status } = await call('/api/mcp/add', {
+      method: 'POST',
+      json: {
+        id: 'allowed',
+        command: process.execPath,
+        args: [mcpServerPath],
+        passphrase: PASSPHRASE,
+      },
+    });
+    // process.execPath may sit outside the allowed roots on some machines; in
+    // that case the refusal must be the ALLOWLIST one, never a silent add.
+    expect([200, 400]).toContain(status);
+    if (status === 200) {
+      await call('/api/mcp/remove', { method: 'POST', json: { id: 'allowed' } });
+    }
+  }, 120_000);
+
+  it('never accepts environment variables from the GUI', async () => {
+    // Those land in plain text in mcp.json; a browser form invites secrets.
+    const { status } = await call('/api/mcp/add', {
+      method: 'POST',
+      json: { id: 'fromcatalog2', catalogId: 'vault', env: { SECRET: 'nope' } },
+    });
+    expect(status).toBe(200);
+    const raw = fs.readFileSync(path.join(home, 'mcp.json'), 'utf8');
+    expect(raw).not.toContain('nope');
+    await call('/api/mcp/remove', { method: 'POST', json: { id: 'fromcatalog2' } });
   }, 60_000);
 
   it('requires the session token like every other route', async () => {

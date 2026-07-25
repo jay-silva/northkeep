@@ -1,6 +1,7 @@
 import { execFile } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import {
   Vault,
@@ -78,7 +79,12 @@ import {
   removeServer as removeMcpServer,
   setSafeRead,
   setToolsPin,
+  addServer,
+  allowedGuiRoots,
   connectServer,
+  getMcpCatalogEntry,
+  isUnderAllowedRoot,
+  listMcpCatalog,
   sanitizeServerText,
   loadRoutingPolicy,
   lookupModel,
@@ -797,6 +803,83 @@ async function dispatch(
   // Connect and report what a server advertises RIGHT NOW, plus whether that
   // matches what was approved. Never executes a tool: enforcePin is off so the
   // user can SEE a changed definition, and only reading happens here.
+  if (method === 'GET' && route === '/api/mcp/catalog') {
+    return ok({ entries: listMcpCatalog() });
+  }
+
+  /**
+   * Add a server (ADR 0034). Two shapes, two very different gates.
+   *
+   * A CATALOG add carries only an id: the command comes from OUR template, so
+   * the route cannot be talked into spawning something of the caller's
+   * choosing, and no extra proof is required.
+   *
+   * A CUSTOM add names a program, so it requires the PASSPHRASE and the path
+   * must sit under an allowed root. That combination is what keeps ADR 0034's
+   * property true: an automated caller holding a session token — a leaked
+   * token, an SSRF bypass, a prompt-injected model — still cannot cause a
+   * program to be spawned.
+   */
+  if (method === 'POST' && route === '/api/mcp/add') {
+    const { id, catalogId, command, args, passphrase } = parseJson<{
+      id?: unknown;
+      catalogId?: unknown;
+      command?: unknown;
+      args?: unknown;
+      passphrase?: unknown;
+    }>(body);
+    if (typeof id !== 'string') return bad(400, 'id is required.');
+
+    if (typeof catalogId === 'string') {
+      const entry = getMcpCatalogEntry(catalogId);
+      if (entry === undefined) return bad(404, `No such catalog entry: ${catalogId}`);
+      if (!entry.available) {
+        return bad(400, entry.unavailableReason ?? 'That server is not available on this Mac.');
+      }
+      try {
+        const server = addServer({
+          id,
+          command: entry.command!,
+          args: entry.args!,
+          safeRead: entry.safeRead,
+        });
+        return ok({ id: server.id, reviewed: false });
+      } catch (err) {
+        return bad(400, err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    if (typeof command !== 'string') return bad(400, 'command or catalogId is required.');
+    if (args !== undefined && (!Array.isArray(args) || args.some((a) => typeof a !== 'string'))) {
+      return bad(400, 'args must be an array of strings.');
+    }
+    if (typeof passphrase !== 'string' || passphrase.length === 0) {
+      return bad(401, 'Adding a server by path needs your passphrase.');
+    }
+    // Verified WITHOUT touching session state: proving is not unlocking.
+    if (!(await session.verifyPassphrase(passphrase))) {
+      return bad(401, 'That passphrase is not right.');
+    }
+    // The allowlist is checked AFTER the passphrase so a wrong passphrase
+    // cannot be used to probe which paths exist on the machine.
+    if (!isUnderAllowedRoot(command, allowedGuiRoots(os.homedir()))) {
+      return bad(
+        400,
+        'From the app, a server has to live under ~/.northkeep/mcp-servers, /opt/homebrew, ' +
+          '/usr/local, or the NorthKeep installation itself. Anywhere else, add it from a ' +
+          'terminal with: northkeep mcp add',
+      );
+    }
+    try {
+      // No env from the GUI (ADR 0034 Decision 4): those values are stored in
+      // plain text, and a browser form invites putting a secret in one.
+      const server = addServer({ id, command, args: (args as string[]) ?? [] });
+      return ok({ id: server.id, reviewed: false });
+    } catch (err) {
+      return bad(400, err instanceof Error ? err.message : String(err));
+    }
+  }
+
   if (method === 'POST' && route === '/api/mcp/inspect') {
     const { id } = parseJson<{ id?: unknown }>(body);
     if (typeof id !== 'string') return bad(400, 'id is required.');

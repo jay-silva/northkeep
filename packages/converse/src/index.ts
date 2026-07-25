@@ -55,6 +55,12 @@ export {
   type ExfilScreenInput,
 } from './tools/exfil.js';
 export {
+  getMcpCatalogEntry,
+  listMcpCatalog,
+  type McpCatalogEntry,
+  type ResolvedMcpCatalogEntry,
+} from './tools/mcp/catalog.js';
+export {
   collectMcpTools,
   type McpCollection,
   type McpUnavailable,
@@ -83,6 +89,8 @@ export {
   type McpTrust,
 } from './tools/mcp/config.js';
 export {
+  allowedGuiRoots,
+  isUnderAllowedRoot,
   fingerprintLaunch,
   isValidServerId,
   namespacedName,

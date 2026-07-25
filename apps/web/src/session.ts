@@ -64,6 +64,31 @@ export class UiSession {
     this.heldKey = key;
   }
 
+  /**
+   * Prove the caller knows the passphrase, WITHOUT changing any session state
+   * (ADR 0034 Decision 2). Re-authenticating must be a way to prove, never a
+   * way to unlock: folding this into unlock() would make a re-auth prompt an
+   * unlock path, and a route that asks for proof would quietly grant access.
+   *
+   * Derives and opens exactly as unlock() does, then zeroes the key. The
+   * Argon2id cost is a feature here — it is what makes guessing impractical on
+   * a route an automated caller would want to hammer.
+   */
+  async verifyPassphrase(passphrase: string): Promise<boolean> {
+    const header = Vault.readHeader(this.vaultPath);
+    const key = deriveMasterKey(passphrase, loadDeviceSecret(), header.salt, header.kdf);
+    try {
+      await withFileLock(this.vaultPath, () => {
+        Vault.openWithKey(this.vaultPath, Buffer.from(key)).close();
+      });
+      return true;
+    } catch {
+      return false;
+    } finally {
+      key.fill(0);
+    }
+  }
+
   keyHex(): string {
     if (this.heldKey === null) throw new Error('locked');
     return this.heldKey.toString('hex');

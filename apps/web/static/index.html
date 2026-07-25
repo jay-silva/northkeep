@@ -508,10 +508,30 @@
     <div id="logList"></div>
   </section>
   <section id="view-mcp" hidden>
-    <p class="muted">MCP servers your chat can use as tools. Each one is a program on this Mac
-      that you configured. Nothing here is reachable by a model: adding a server is a
-      deliberate act in the terminal, and this screen only lets you review, approve,
-      restrict, or remove what is already configured.</p>
+    <p class="muted">MCP servers your chat can use as tools. Each one is a program on this Mac.
+      Nothing here is reachable by a model. Adding a known server is one click; naming a
+      program yourself needs your passphrase, so knowing this window's address is never
+      enough to make NorthKeep run something. A server you add offers nothing until you
+      review what it advertises and approve it.</p>
+    <div class="card">
+      <h3 class="sect">Add a server</h3>
+      <div id="mcpCatalog"></div>
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer;color:var(--accent)">Add one by path (advanced)</summary>
+        <p class="muted" style="margin:10px 0">Naming a program to run needs your passphrase, and
+          from the app it has to live under <code>~/.northkeep/mcp-servers</code>, Homebrew, or the
+          NorthKeep installation. Anywhere else, add it from a terminal.</p>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <input type="text" id="mcpCustomId" placeholder="short id (a-z, 0-9, -)" style="flex:1;min-width:150px">
+          <input type="text" id="mcpCustomCmd" placeholder="/absolute/path/to/server" style="flex:2;min-width:220px">
+        </div>
+        <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
+          <input type="password" id="mcpCustomPass" placeholder="your passphrase" style="flex:1;min-width:180px">
+          <button class="btn" id="mcpCustomAdd">Add server</button>
+        </div>
+        <p class="muted" id="mcpCustomErr" style="margin-top:8px"></p>
+      </details>
+    </div>
     <div id="mcpList"></div>
     <p class="muted" id="mcpEmpty" hidden>No MCP servers configured. Add one from a terminal:
       <code>northkeep mcp add &lt;id&gt; --command &lt;absolute path&gt;</code></p>
@@ -853,6 +873,73 @@
     else if (v === 'mcp') loadMcp();
     else if (v === 'about') loadAbout();
   }
+  // The catalog (ADR 0034 Decision 1): one click, no typing, and the command
+  // comes from OUR template rather than anything this page sends.
+  async function loadMcpCatalog() {
+    const box = $('mcpCatalog');
+    box.textContent = '';
+    let entries = [];
+    try {
+      entries = (await api('/api/mcp/catalog')).entries || [];
+    } catch { return; }
+    const configured = new Set();
+    try {
+      for (const s of (await api('/api/mcp')).servers || []) configured.add(s.command + ' ' + (s.args || []).join(' '));
+    } catch { /* best effort */ }
+    for (const e of entries) {
+      const row = el('div');
+      row.style.cssText = 'margin:8px 0';
+      row.appendChild(el('strong', '', e.label));
+      row.appendChild(el('div', 'muted', e.description));
+      // Say what it can see BEFORE the button, not after.
+      row.appendChild(el('div', 'muted', e.caution));
+      if (!e.available) {
+        row.appendChild(el('div', 'danger', e.unavailable_reason || e.unavailableReason || 'Not available on this Mac.'));
+      } else if (configured.has(e.command + ' ' + (e.args || []).join(' '))) {
+        row.appendChild(el('div', 'muted', 'Already added.'));
+      } else {
+        const add = el('button', 'btn primary', 'Add ' + e.label);
+        add.addEventListener('click', async () => {
+          add.disabled = true;
+          try {
+            await api('/api/mcp/add', { method: 'POST', json: { id: e.id, catalogId: e.id } });
+            loadMcp();
+          } catch (err) {
+            row.appendChild(el('div', 'danger', err.message || 'Could not add it.'));
+            add.disabled = false;
+          }
+        });
+        row.appendChild(add);
+      }
+      box.appendChild(row);
+    }
+  }
+
+  $('mcpCustomAdd').addEventListener('click', async () => {
+    const err = $('mcpCustomErr');
+    err.textContent = '';
+    const id = $('mcpCustomId').value.trim();
+    const command = $('mcpCustomCmd').value.trim();
+    const passphrase = $('mcpCustomPass').value;
+    if (!id || !command || !passphrase) { err.textContent = 'Id, path and passphrase are all needed.'; return; }
+    const btn = $('mcpCustomAdd');
+    btn.disabled = true;
+    try {
+      await api('/api/mcp/add', { method: 'POST', json: { id, command, passphrase } });
+      $('mcpCustomId').value = '';
+      $('mcpCustomCmd').value = '';
+      loadMcp();
+    } catch (e) {
+      err.textContent = e.message || 'Could not add it.';
+    } finally {
+      // Clear the passphrase on EVERY outcome, not just success. A failed
+      // attempt is exactly when it would otherwise sit in a DOM node
+      // indefinitely, and re-typing it is a small price.
+      $('mcpCustomPass').value = '';
+      btn.disabled = false;
+    }
+  });
+
   // --- MCP servers (M11, ADR 0033). Review surface.
   //
   // EVERY string a server supplies (tool names, descriptions) is rendered with
@@ -863,6 +950,7 @@
   // codes could repaint the review screen). The server also strips control
   // characters before we ever see them.
   async function loadMcp() {
+    await loadMcpCatalog();
     const list = $('mcpList');
     list.textContent = '';
     let servers = [];
