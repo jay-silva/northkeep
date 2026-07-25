@@ -41,7 +41,7 @@ import {
   setEndpointKey,
   getDefaultEndpoint,
 } from '@northkeep/converse';
-import { getPassphrase } from './prompt.js';
+import { getPassphrase, promptLine } from './prompt.js';
 import { PASTE_PROMPT, prepareImport, writeApproved, type ImportCmdOptions } from './importCmd.js';
 import { runConverse, type ConverseCmdOptions } from './converseCmd.js';
 import { modelsAdd, modelsInstall, modelsList } from './modelsCmd.js';
@@ -613,15 +613,39 @@ toolsGroup
 
 toolsGroup
   .command('brave-key')
-  .description('Store the Brave Search subscription token for web_search (read from stdin, never an argument)')
-  .action(async () => {
-    if (process.stdin.isTTY) {
-      fail('Pipe the key in so it never lands in shell history:\n  echo "$BRAVE_KEY" | northkeep tools brave-key');
+  .description('Store the Brave Search subscription token for web_search (interactive paste, a file, or stdin — never a shell argument)')
+  .option('--file <path>', 'read the key from a file (bulletproof: no shell or paste-escape mangling)')
+  .action(async (options: { file?: string }) => {
+    let key: string;
+    if (options.file !== undefined) {
+      // The bulletproof path: the shell never touches the key bytes.
+      try {
+        key = fs.readFileSync(options.file, 'utf8');
+      } catch {
+        fail(`Could not read key file: ${options.file}`);
+      }
+    } else if (process.stdin.isTTY) {
+      // Interactive paste — the key goes straight into this program, never a
+      // shell command line (so no $ / backtick / ! expansion, no history).
+      key = await promptLine('Paste your Brave Search key, then press Enter: ');
+    } else {
+      key = await readStdin(); // piped (scripting)
     }
-    const key = (await readStdin()).trim();
-    if (!key) fail('No key on stdin. Pipe it in: echo "$BRAVE_KEY" | northkeep tools brave-key');
+    // Terminals with bracketed paste wrap input in ESC[200~ … ESC[201~; strip
+    // those, and any stray control chars, before storing so a paste artifact
+    // can't corrupt the token the way a shell would.
+    // eslint-disable-next-line no-control-regex
+    key = key.replace(/\x1b\[20[01]~/g, '').replace(/[\x00-\x1f\x7f]/g, '').trim();
+    if (!key) {
+      fail('No key provided. Paste it interactively, or: northkeep tools brave-key --file /path/to/keyfile');
+    }
+    // A valid Brave token has no spaces; catch a shell-mangled or partial paste
+    // loudly instead of storing a broken key that fails opaquely later.
+    if (/\s/.test(key)) {
+      fail('That key contains a space — it looks mangled or partial. Re-copy it and use --file if a paste keeps breaking.');
+    }
     setEndpointKey(BRAVE_KEY_ID, key);
-    console.log('✓ Brave Search key stored in your Keychain. Enable search: northkeep tools enable web_search');
+    console.log(`✓ Brave Search key stored (${key.length} chars) in your Keychain. Enable search: northkeep tools enable web_search`);
   });
 
 const models = program
