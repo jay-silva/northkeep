@@ -185,6 +185,18 @@ every milestone; if a limit is removed, say when and how.*
   model would have helped. Both are recoverable: the offer has a "keep it on
   this iPhone" answer, and you can switch provider at any time.
 
+## The privacy ceiling, current
+
+- **"Private only" governs which MODEL reads your conversation, not whether tools
+  reach the network.** Pinning a chat private stops the concierge from routing it
+  to a cloud model. It does **not** stop `web_fetch` or `web_search` from leaving
+  the machine: those are gated per call instead, by an approval that names the
+  exact host and shows the exact query or URL, with the deterministic Tier-1 mask
+  applied to the arguments first. The ceiling exists to prevent SILENT
+  escalation by the router (ADR 0011), and a tool call is never silent. If you
+  want a conversation where nothing at all leaves, pin it private AND leave the
+  Tools toggle off.
+
 ## M11 (MCP client tools), current
 
 - **A configured MCP server is a local program with your privileges.** The
