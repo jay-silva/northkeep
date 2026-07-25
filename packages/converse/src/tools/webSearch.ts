@@ -237,6 +237,9 @@ export function createWebSearchTool(config: WebSearchConfig): ToolDefinition {
           // The credential seam: attached ONLY while the request host is
           // api.search.brave.com, and a redirect refuses (net.ts, ADR 0030).
           authToken: { headerName: BRAVE_AUTH_HEADER, value: config.apiKey, authorizedHost },
+          // Brave 422s the default HTML-oriented Accept ("Unable to validate
+          // request parameter(s)") — it wants application/json.
+          accept: 'application/json',
           maxBytes: SEARCH_MAX_BYTES,
           timeoutMs: SEARCH_TIMEOUT_MS,
           ...(ctx.signal !== undefined ? { signal: ctx.signal } : {}),

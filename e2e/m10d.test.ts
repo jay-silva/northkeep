@@ -51,6 +51,8 @@ let bravePort = 0;
 let braveTokensSeen: Array<string | undefined> = [];
 /** Every full request URL the fake Brave server received. */
 let braveUrlsSeen: string[] = [];
+/** Every Accept header the fake Brave server received. */
+let braveAcceptsSeen: Array<string | undefined> = [];
 
 const SSN = '123-45-6789';
 const fakeVault: ConverseVault = { retrieve: () => [], list: () => [], commit: () => [] };
@@ -75,6 +77,17 @@ beforeAll(async () => {
         : undefined,
     );
     braveUrlsSeen.push(req.url ?? '');
+    braveAcceptsSeen.push(typeof req.headers.accept === 'string' ? req.headers.accept : undefined);
+    // Mirror the REAL Brave API (verified live): a non-JSON Accept is rejected
+    // with 422 "Unable to validate request parameter(s)". This is what caught
+    // us — the old fixture answered JSON regardless of Accept, so a wrong
+    // header passed every test while the real API 422'd. Now it can't.
+    if (req.headers.accept !== 'application/json') {
+      res.statusCode = 422;
+      res.setHeader('content-type', 'application/json');
+      res.end(JSON.stringify({ error: { code: 'VALIDATION', detail: 'Unable to validate request parameter(s)', status: 422 } }));
+      return;
+    }
     res.setHeader('content-type', 'application/json');
     res.end(
       JSON.stringify({
@@ -146,6 +159,7 @@ beforeEach(() => {
   process.env.NORTHKEEP_HOME = home;
   braveTokensSeen = [];
   braveUrlsSeen = [];
+  braveAcceptsSeen = [];
 });
 
 function restoreHome(): void {
@@ -229,6 +243,9 @@ describe('M10d acceptance — web_search + budget', () => {
     expect(braveTokensSeen).toEqual([TOKEN]);
     expect(braveUrlsSeen[0]).toContain('espresso');
     expect(braveUrlsSeen[0]).not.toContain(TOKEN);
+    // And we sent Accept: application/json — the real Brave API 422s anything
+    // else (the fixture now enforces that, so a regression here fails loudly).
+    expect(braveAcceptsSeen).toEqual(['application/json']);
 
     // The results came back FENCED as external data (the model's round-2 saw them).
     // Audit + reply carry no token anywhere.

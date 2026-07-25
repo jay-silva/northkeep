@@ -175,6 +175,12 @@ async function resolvePinned(
   return addresses[0]!;
 }
 
+/** The default Accept for page fetches (web_fetch). A JSON API (web_search →
+ * Brave) overrides it: Brave 422s this multi-type value ("Unable to validate
+ * request parameter(s)") and wants application/json — verified against the
+ * live API, a mismatch the fake test server could not catch. */
+const DEFAULT_ACCEPT = 'text/html, application/xhtml+xml, application/json, text/plain, text/xml';
+
 /** One pinned HTTP(S) request; resolves at response headers. */
 function requestOnce(
   url: URL,
@@ -188,12 +194,13 @@ function requestOnce(
    * never a URL, never logged, never returned in the result or an error.
    */
   authToken?: AuthToken,
+  accept: string = DEFAULT_ACCEPT,
 ): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
     const isHttps = url.protocol === 'https:';
     const mod = isHttps ? https : http;
     const headers: Record<string, string> = {
-      accept: 'text/html, application/xhtml+xml, application/json, text/plain, text/xml',
+      accept,
       'user-agent': USER_AGENT,
       'accept-encoding': 'identity',
     };
@@ -284,6 +291,9 @@ export interface HardenedFetchOptions {
   testOverrides?: NetTestOverrides;
   /** M10d (ADR 0030): the one credential seam — see AuthToken. web_fetch omits it. */
   authToken?: AuthToken;
+  /** Override the Accept header (default: HTML-oriented for page fetches). A
+   * JSON API sets 'application/json' — Brave rejects the default value. */
+  accept?: string;
 }
 
 export interface HardenedFetchResult {
@@ -338,7 +348,7 @@ export async function hardenedFetch(
     try {
       // Only the credentialed hop carries the token; every other hop (a
       // redirect elsewhere on the uncredentialed path) gets undefined.
-      res = await requestOnce(url, pinned, signal, credentialed ? options.authToken : undefined);
+      res = await requestOnce(url, pinned, signal, credentialed ? options.authToken : undefined, options.accept);
     } catch (err) {
       throw err instanceof FetchRefusedError ? err : mapAbort(err);
     }
