@@ -36,6 +36,7 @@ describe('classifyEndpoint', () => {
     'http://[::ffff:192.168.1.7]/', // IPv4-mapped private
     'http://[fd00::1]/', // unique-local
     'http://[fe80::1]/', // link-local
+    'http://[::]/', // unspecified — localhost-equivalent, private in both uses (G2 2026-07-24)
     'http://10.0.0.5:8000',
     'http://172.16.0.1/',
     'http://172.31.255.254/',
@@ -61,7 +62,6 @@ describe('classifyEndpoint', () => {
     'http://192.169.1.1/', // just past 192.168/16
     'http://[2001:4860:4860::8888]/',
     'http://[::ffff:8.8.8.8]/', // IPv4-mapped public
-    'http://[::]/', // unspecified — fail closed
     'http://nas/', // bare single-label host — cannot prove it is local
   ];
   for (const url of boundedCases) {
@@ -139,6 +139,11 @@ class FakeProvider implements ModelProvider {
     options.onToken?.(this.reply);
     return this.reply;
   }
+  // Fakes invert the real providers' delegation (chatTurn wraps chat) — the
+  // point is just that both interface methods exist and behave consistently.
+  async chatTurn(messages: ChatMessage[], options: ChatOptions) {
+    return { text: await this.chat(messages, options), toolCalls: [], stopReason: 'end' as const };
+  }
   async listModels(): Promise<string[]> {
     return ['fake-model'];
   }
@@ -148,6 +153,28 @@ describe('runTurn', () => {
   const vaultEntries = [
     makeEntry({ id: 'aaaa1111-0000-0000-0000-000000000000', content: 'Jay takes his coffee black.' }),
   ];
+
+  // G1 round-2 regression: runTurn discloses vault memory to the model, so it
+  // MUST record it on session.disclosedMemory — otherwise a later tool turn on
+  // the same session can't screen it (the round-1 blocker, latent via runTurn).
+  it('records disclosed memory on the session so a later tool turn can screen it', async () => {
+    const provider = new FakeProvider('http://127.0.0.1:9999', 'Noted.');
+    const vault = new FakeVault(vaultEntries);
+    const session = createSession();
+    expect(session.disclosedMemory).toEqual([]);
+    await runTurn({
+      message: 'what coffee do I like?',
+      session,
+      provider,
+      model: 'fake-model',
+      vault,
+      redactTier: 1,
+      distill: false,
+      auditFn: () => {},
+    });
+    // The disclosed memory content is now in the conversation-wide accumulator.
+    expect(session.disclosedMemory).toContain('Jay takes his coffee black.');
+  });
 
   it('masks Tier-1 secrets before the provider sees them, and audits content-free', async () => {
     const provider = new FakeProvider('http://127.0.0.1:9999', 'Got it, noted.');
@@ -460,6 +487,9 @@ describe('runTurn', () => {
       kind: 'openai-compatible',
       baseUrl: 'http://127.0.0.1:9999',
       async chat() {
+        throw new Error('Model endpoint returned HTTP 500.');
+      },
+      async chatTurn(): Promise<never> {
         throw new Error('Model endpoint returned HTTP 500.');
       },
       async listModels() {

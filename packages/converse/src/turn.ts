@@ -93,15 +93,68 @@ export interface ConverseSession {
   plainHistory: ChatMessage[];
   /** Parallel to plainHistory: the tier each entry was last full-NER-redacted at (0 = never). */
   historyTiers: (0 | 1 | 2 | 3)[];
+  /**
+   * Plaintext content of every vault memory disclosed to the model across the
+   * WHOLE conversation (M10c, ADR 0029). The exfiltration screen (runTask)
+   * builds its memory-overlap matcher from this, NOT from the current turn's
+   * retrieval: a memory disclosed on turn 1 lives in the model's context for
+   * every later turn, so a later turn whose retrieval no longer surfaces it
+   * could still smuggle it out unscreened (G1 blocker). Conversation-scoped
+   * exactly like `pseudonyms`, so the two content screens stay in lockstep.
+   */
+  disclosedMemory: string[];
+  /**
+   * Per-conversation executed-call count per COSTED tool (M10d, ADR 0030).
+   * The persisted daily cap (budget.ts) is the real wallet/quota guard; this
+   * is the fast per-conversation bound, conversation-scoped like the fields
+   * above. Free tools never appear here.
+   */
+  toolSpend: Record<string, number>;
 }
 
 export function createSession(): ConverseSession {
-  return { pseudonyms: {}, plainHistory: [], historyTiers: [] };
+  return {
+    pseudonyms: {},
+    plainHistory: [],
+    historyTiers: [],
+    disclosedMemory: [],
+    toolSpend: {},
+  };
 }
 
+/**
+ * Record vault memory disclosed to the model this turn onto the conversation-
+ * wide accumulator (ADR 0029). EVERY path that puts memory in front of the
+ * model must call this — runTurn AND runTask — so the exfil screen (runTask)
+ * sees a memory regardless of which turn type first disclosed it. Keeping it
+ * in one helper is the point: the G1 blocker was runTask recording while
+ * runTurn silently did not. The `??=` guard tolerates a session deserialized
+ * before the field existed. Exact-content dedup; grows only (removal would
+ * reopen the hole — over-screening stale content is the safe direction).
+ */
+export function recordDisclosedMemory(session: ConverseSession, used: ScoredEntry[]): void {
+  session.disclosedMemory ??= [];
+  for (const s of used) {
+    if (!session.disclosedMemory.includes(s.entry.content)) {
+      session.disclosedMemory.push(s.entry.content);
+    }
+  }
+}
+
+/**
+ * Codes:
+ *  - TIER2_UNAVAILABLE: Tier-2 NER is down and the endpoint is bounded — the
+ *    turn refuses rather than silently degrading (invariant #6).
+ *  - PROVIDER_FAILED: the model endpoint errored or was unreachable.
+ *  - TOOLS_UNSUPPORTED: a tools-bearing request was refused by the endpoint
+ *    (M10a, ADR 0027). runTurn itself never sends tools — the code exists now
+ *    so the API is stable for the agent loop (M10b+), which capability-gates
+ *    loudly instead of falling back to prompt-parsed pseudo-tools: the
+ *    permission gate needs faithful structured arguments (invariant #6).
+ */
 export class TurnError extends Error {
   constructor(
-    readonly code: 'TIER2_UNAVAILABLE' | 'PROVIDER_FAILED',
+    readonly code: 'TIER2_UNAVAILABLE' | 'PROVIDER_FAILED' | 'TOOLS_UNSUPPORTED',
     message: string,
   ) {
     super(message);
@@ -181,32 +234,24 @@ const DEFAULT_CHAR_BUDGET = 4000;
 /** Keep memories scoring within this fraction of the best match; drop the rest. */
 const RELEVANCE_RATIO = 0.6;
 
-export async function runTurn(options: TurnOptions): Promise<TurnResult> {
-  const {
-    message,
-    session,
-    provider,
-    model,
-    vault,
-    allowedScopes,
-    onToken,
-    signal,
-  } = options;
-  const redactFn = options.redactFn ?? redact;
-  const restoreFn = options.restoreFn ?? restore;
-  const auditFn = options.auditFn ?? appendCallLog;
-  const now = options.now ?? (() => new Date());
-
-  const { tier: privacy, host: endpointHost } = classifyEndpoint(provider.baseUrl);
-
-  // Bounded endpoints get Tier-1 minimum, whatever the caller asked for.
-  const effectiveTier: 0 | 1 | 2 | 3 =
-    privacy === 'bounded' && options.redactTier === 0 ? 1 : options.redactTier;
-
+/**
+ * Steps 1–3 of the pipeline (retrieve → compress → assemble), extracted so
+ * runTask (M10b, ADR 0027) shares the exact same memory-injection behavior as
+ * runTurn instead of forking it. Pure refactor: runTurn's behavior is
+ * unchanged. Returns the scored memories actually used and the assembled
+ * system text.
+ */
+export async function retrieveAndAssemble(args: {
+  vault: ConverseVault;
+  message: string;
+  allowedScopes?: string[];
+  memoryLimit?: number;
+  memoryCharBudget?: number;
+}): Promise<{ used: ScoredEntry[]; systemText: string }> {
   // 1. Retrieve (scope-enforced in the store, M4).
-  const scored = await vault.retrieve(message, {
-    allowedScopes,
-    limit: options.memoryLimit ?? DEFAULT_MEMORY_LIMIT,
+  const scored = await args.vault.retrieve(args.message, {
+    allowedScopes: args.allowedScopes,
+    limit: args.memoryLimit ?? DEFAULT_MEMORY_LIMIT,
   });
 
   // 2. Compress to budget. Keep score order, drop the weak tail, stop when the
@@ -217,7 +262,7 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   //    scoring within RELEVANCE_RATIO of the best match (the top match is
   //    always kept). Tunable; semantic retrieval will make this sharper.
   //    A small local model also wants a tighter digest — lower memoryCharBudget.
-  const budget = options.memoryCharBudget ?? DEFAULT_CHAR_BUDGET;
+  const budget = args.memoryCharBudget ?? DEFAULT_CHAR_BUDGET;
   const floor = (scored[0]?.score ?? 0) * RELEVANCE_RATIO;
   const used: ScoredEntry[] = [];
   let spent = 0;
@@ -244,6 +289,44 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
   ]
     .filter((s) => s.length > 0)
     .join('\n\n');
+
+  return { used, systemText };
+}
+
+export async function runTurn(options: TurnOptions): Promise<TurnResult> {
+  const {
+    message,
+    session,
+    provider,
+    model,
+    vault,
+    allowedScopes,
+    onToken,
+    signal,
+  } = options;
+  const redactFn = options.redactFn ?? redact;
+  const restoreFn = options.restoreFn ?? restore;
+  const auditFn = options.auditFn ?? appendCallLog;
+  const now = options.now ?? (() => new Date());
+
+  const { tier: privacy, host: endpointHost } = classifyEndpoint(provider.baseUrl);
+
+  // Bounded endpoints get Tier-1 minimum, whatever the caller asked for.
+  const effectiveTier: 0 | 1 | 2 | 3 =
+    privacy === 'bounded' && options.redactTier === 0 ? 1 : options.redactTier;
+
+  // 1–3. Retrieve → compress → assemble (shared with runTask, M10b).
+  const { used, systemText } = await retrieveAndAssemble({
+    vault,
+    message,
+    allowedScopes,
+    memoryLimit: options.memoryLimit,
+    memoryCharBudget: options.memoryCharBudget,
+  });
+  // runTurn discloses `used` to the model via systemText below — record it so
+  // a later tool turn on this same session screens it (ADR 0029; G1 review:
+  // runTurn was an unrecorded disclosure path that left the blocker latent).
+  recordDisclosedMemory(session, used);
 
   // 4. Redact outbound. STRICTLY before the provider call; no path skips it
   //    for a bounded endpoint. The WHOLE prompt is redacted every turn —
@@ -482,9 +565,9 @@ export async function runTurn(options: TurnOptions): Promise<TurnResult> {
  * Real usage if the provider reported it; otherwise a ~4-chars/token estimate
  * over the wire prompt (all messages) and reply, flagged `estimated`. Taking
  * `reported` as a parameter also side-steps TS narrowing a closure-assigned
- * `let` down to `never`.
+ * `let` down to `never`. Exported (refactor only) for runTask (M10b).
  */
-function resolveUsage(
+export function resolveUsage(
   reported: { inputTokens: number; outputTokens: number } | null,
   wirePrompt: ChatMessage[],
   wireReply: string,
@@ -499,7 +582,8 @@ function resolveUsage(
   };
 }
 
-async function distillExchange(args: {
+/** Exported (refactor only) for runTask (M10b) — distillation stays single. */
+export async function distillExchange(args: {
   vault: ConverseVault;
   allowedScopes?: string[];
   message: string;
@@ -546,7 +630,8 @@ async function distillExchange(args: {
   return { created, mode: extraction.mode };
 }
 
-function audit(
+/** Exported (refactor only) for runTask (M10b) — one content-free row shape. */
+export function audit(
   auditFn: (entry: CallLogEntry) => void,
   now: () => Date,
   args: {

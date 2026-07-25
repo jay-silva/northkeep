@@ -1,5 +1,5 @@
 import readline from 'node:readline/promises';
-import { DIM, GREEN, YELLOW, RED, RESET } from './ui.js';
+import { DIM, GREEN, YELLOW, RED, RESET, createSpinner } from './ui.js';
 import type { Vault } from '@northkeep/core';
 import { createOllamaClient, type OllamaClient } from '@northkeep/librarian';
 import {
@@ -7,7 +7,9 @@ import {
   classifyEndpoint,
   createAnthropicProvider,
   createOpenAICompatibleProvider,
+  createPermissionEngine,
   createSession,
+  enabledTools,
   getDefaultEndpoint,
   getEndpoint,
   getEndpointKey,
@@ -15,12 +17,19 @@ import {
   loadRoutingPolicy,
   route,
   RouteError,
+  runTask,
   runTurn,
   suggestBetterModel,
   vaultAdapter,
   type EndpointConfig,
   type ModelProvider,
   type PrivacyCeiling,
+  type TaskEvent,
+  type TaskHooks,
+  type TaskResult,
+  type ToolDefinition,
+  type TurnOptions,
+  type TurnResult,
 } from '@northkeep/converse';
 
 /**
@@ -58,7 +67,13 @@ export interface ConverseCmdOptions {
   scope: string;
   /** Start with the concierge routing each message (M7b). */
   auto?: boolean;
+  /** Opt IN to agent tools (M10b): registry-enabled tools ride each turn via
+   * runTask. Without the flag, exactly the old runTurn path — v1 conservative. */
+  tools?: boolean;
 }
+
+const fmtKb = (bytes: number): string =>
+  bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
 
 export async function runConverse(options: ConverseCmdOptions, withVault: WithVault): Promise<void> {
   let endpoint = options.endpoint ? getEndpoint(options.endpoint) : getDefaultEndpoint();
@@ -84,6 +99,19 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     throw new Error('Redaction tier 0 needs a fixed private endpoint — it cannot ride --auto.');
   }
 
+  // --tools (M10b): opt-in agent tools, gated twice — the flag AND the
+  // registry (~/.northkeep/tools.json). Nothing enabled → say so and refuse
+  // rather than silently running a plain chat the user thought had tools.
+  let taskTools: ToolDefinition[] = [];
+  if (options.tools === true) {
+    taskTools = enabledTools();
+    if (taskTools.length === 0) {
+      throw new Error(
+        'No tools are enabled. Enable one first:\n  northkeep tools enable web_fetch\nThen re-run: northkeep converse --tools',
+      );
+    }
+  }
+
   let provider = providerFor(endpoint);
   let model = endpoint.model;
   const ollama = createOllamaClient();
@@ -101,10 +129,19 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       ` · memory distillation: ${distillOllama ? 'local model' : 'heuristic (Ollama not running)'}`,
   );
   if (auto) console.log(`${GREEN}✦ Auto${RESET} — the concierge routes each message (":auto" toggles).`);
+  if (taskTools.length > 0) {
+    console.log(
+      `${YELLOW}⚒ Tools${RESET} — ${taskTools.map((t) => t.name).join(', ')} available; calls ask for your approval (site grants are remembered — "northkeep tools grants" lists, "revoke" undoes).`,
+    );
+  }
   console.log(`${DIM}Commands: :auto  :private  :model <name>  :models  :endpoint <label|id>  :endpoints  :undo  :memories  :quit${RESET}\n`);
 
   const session = createSession();
   const vault = vaultAdapter(withVault);
+  // The ADR-0029 permission engine, ONE instance for the whole REPL run so
+  // session grants live exactly as long as the conversation window. persist:
+  // true is the CLI's explicit opt-in to ~/.northkeep/permissions.json.
+  const permissionEngine = createPermissionEngine({ persist: true });
   let lastCreated: string[] = [];
   let lastUsed: Array<{ id: string; type: string; content: string }> = [];
   // M9d: the last concierge tip we surfaced, so we don't nag it every turn.
@@ -131,6 +168,95 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     if (stdinClosed) return Promise.resolve(null);
     process.stdout.write(promptText);
     return new Promise((r) => waiters.push(r));
+  };
+
+  // The spinner fills every silent wait: after send until the first token,
+  // and between agent steps while a tool runs or the model plans. It must be
+  // stopped before ANY other output (tokens, events, prompts) or the \r
+  // clearing would eat that output's line.
+  const spinner = createSpinner();
+
+  // Agent-loop hooks (M10b/M10c): dim one-line progress renders, and approval
+  // via the same line queue the REPL uses (pasted input keeps working). The
+  // ADR-0029 engine behind runTask honors scoped answers; anything
+  // unrecognized (including EOF and the 5-minute timeout inside runTask)
+  // denies — fail closed.
+  const taskHooks: TaskHooks = {
+    onEvent: (e: TaskEvent) => {
+      spinner.stop();
+      if (e.type === 'step' && e.n > 1) {
+        process.stdout.write(`\n${DIM}↳ step ${e.n}${RESET}\n`);
+      } else if (e.type === 'tool_call') {
+        console.log(
+          `\n${DIM}↳ ${e.name} ${e.host ?? ''}${e.egressTier ? ` · ${e.egressTier}` : ''}${RESET}`,
+        );
+      } else if (e.type === 'permission') {
+        // Provenance is rendered honestly (ADR 0029 decision 4): the user
+        // must be able to tell a grant-based auto-allow from their own yes,
+        // and a screen block must say WHY (content-free reasons).
+        if (e.decision === 'approved' && e.via === 'grant') {
+          console.log(`${DIM}↳ ✓ ${e.name} auto-allowed (site grant — "northkeep tools revoke" undoes)${RESET}`);
+        } else if (e.decision !== 'approved' && e.via === 'screen') {
+          console.log(`${RED}↳ ✗ ${e.name} blocked by the exfiltration screen:${RESET}`);
+          for (const reason of e.reasons ?? []) console.log(`${RED}    ⚠ ${reason}${RESET}`);
+        } else if (e.decision !== 'approved' && e.via === 'grant') {
+          console.log(`${DIM}↳ ✗ ${e.name} refused (never-for-this-site grant)${RESET}`);
+        } else if (e.decision !== 'approved' && e.via === 'budget') {
+          console.log(`${YELLOW}↳ ✗ ${e.name} skipped — ${(e.reasons ?? []).join('; ')} ("northkeep tools budget" to raise)${RESET}`);
+        } else if (e.decision !== 'approved') {
+          console.log(`${DIM}↳ ✗ ${e.name} ${e.decision === 'timeout' ? 'timed out — denied' : 'denied'}${RESET}`);
+        }
+      } else if (e.type === 'tool_result') {
+        console.log(
+          e.ok
+            ? `${DIM}↳ ✓ ${fmtKb(e.bytes)} from ${e.host ?? e.name}${e.truncated ? ' (truncated)' : ''}${RESET}`
+            : `${YELLOW}↳ ✗ ${e.name}: ${e.error ?? 'returned an error'}${RESET}`,
+        );
+      }
+      // Waiting resumes after everything except tool_call, where the approval
+      // prompt is about to take the line: an approved tool is now executing;
+      // after a result/denial/new step the model is thinking again.
+      if (e.type !== 'tool_call') spinner.start();
+    },
+    requestApproval: async (req) => {
+      spinner.stop();
+      // Show the EXACT restored plaintext that would execute (ADR 0027):
+      // web_fetch shows the URL; web_search shows the QUERY (never the raw
+      // Brave API URL, which is noise and must never carry the token, ADR
+      // 0030); anything else shows the raw arguments.
+      let url: string | null = null;
+      let query: string | null = null;
+      try {
+        const parsed = JSON.parse(req.argsPlain) as { url?: unknown; query?: unknown };
+        if (typeof parsed.url === 'string') url = parsed.url;
+        if (typeof parsed.query === 'string') query = parsed.query;
+      } catch {
+        url = null;
+      }
+      // Exfil-screen warnings render loudly ABOVE the question — a screened
+      // call never auto-allows, and the human deciding must see why.
+      for (const w of req.warnings) console.log(`${YELLOW}⚠ ${w}${RESET}`);
+      const what =
+        req.tool === 'web_fetch' && url !== null
+          ? `Allow web_fetch of ${url}?`
+          : req.tool === 'web_search' && query !== null
+            ? `Allow web_search for "${query}"?`
+            : `Allow ${req.tool} with ${req.argsPlain}?`;
+      // Site-scoped answers exist only for read-only calls with a concrete
+      // host and no screen warnings; everything else is yes-once/no (a
+      // consequential call and a flagged call must be seen every time).
+      const offerScopes = req.egress !== null && req.risk === 'safe-read' && req.warnings.length === 0;
+      const site = req.egress?.host ?? '';
+      const options = offerScopes
+        ? `[y]es once / [s] yes this session for ${site} / [a]lways for ${site} / [n]o / ne[v]er for ${site}`
+        : '[y]es once / [n]o';
+      const answer = (await nextLine(`${what} ${options}: `))?.trim().toLowerCase() ?? '';
+      if (/^y(es)?$/.test(answer)) return 'allow';
+      if (offerScopes && /^s(ession)?$/.test(answer)) return 'allow-session';
+      if (offerScopes && /^a(lways)?$/.test(answer)) return 'allow-always';
+      if (offerScopes && /^(v|never)$/.test(answer)) return 'deny-never';
+      return 'deny'; // fail closed: EOF, typos, anything else
+    },
   };
 
   for (;;) {
@@ -302,22 +428,43 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
 
     let streamed = '';
     try {
-      const result = await runTurn({
+      const turnArgs: TurnOptions = {
         message: trimmed,
         session,
         provider: turnProvider,
         model: turnModel,
-        routeReason,
+        ...(routeReason !== undefined ? { routeReason } : {}),
         vault,
         redactTier: tier,
         memoryScope: options.scope,
         distillOllama,
-        onToken: (token) => {
+        onToken: (token: string) => {
+          spinner.stop();
           streamed += token;
           process.stdout.write(token);
         },
-      });
+      };
+      spinner.start();
+      // --tools rides runTask (the agent loop, M10b); otherwise EXACTLY the
+      // old runTurn path — byte-for-byte the same behavior without the flag.
+      let taskResult: TaskResult | null = null;
+      let result: TurnResult;
+      if (taskTools.length > 0) {
+        taskResult = await runTask({
+          ...turnArgs,
+          tools: taskTools,
+          hooks: taskHooks,
+          gate: permissionEngine,
+        });
+        result = taskResult;
+      } else {
+        result = await runTurn(turnArgs);
+      }
+      spinner.stop();
       process.stdout.write('\n');
+      if (taskResult?.stopped === 'step-limit') {
+        console.log(`${YELLOW}[stopped: step limit]${RESET}`);
+      }
       if (result.reply !== streamed) {
         console.log(`${DIM}— restored —${RESET}`);
         console.log(result.reply);
@@ -337,6 +484,15 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
           ` · memory: ${result.memoriesUsed.length} used, ${result.memoriesCreated.length} added]${RESET}`,
       );
       if (routeReason) console.log(`${DIM}[✦ ${routeReason}]${RESET}`);
+      if (taskResult !== null && taskResult.toolCallsMade.length > 0) {
+        console.log(
+          `${DIM}[⚒ ${taskResult.steps} step${taskResult.steps === 1 ? '' : 's'} · ` +
+            taskResult.toolCallsMade
+              .map((tc) => `${tc.name}${tc.host ? ` ${tc.host}` : ''} (${tc.decision})`)
+              .join(', ') +
+            `]${RESET}`,
+        );
+      }
       for (const m of result.memoriesCreated) console.log(`  ${DIM}+ [${m.type}] ${m.content}${RESET}`);
       if (result.memoriesCreated.length > 0) console.log(`  ${DIM}(:undo to remove them)${RESET}`);
       // M9d concierge: if the catalog's strongest model for this task isn't
@@ -354,6 +510,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         // suggestions are best-effort; never let one break a turn.
       }
     } catch (err) {
+      spinner.stop();
       if (err instanceof TurnError && err.code === 'TIER2_UNAVAILABLE') {
         console.error(`\n${RED}✗ NOTHING WAS SENT.${RESET} ${err.message}`);
       } else {

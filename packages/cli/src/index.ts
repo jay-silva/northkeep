@@ -31,14 +31,17 @@ import { redact, restore, type Replacement } from '@northkeep/redact';
 import { createOllamaEmbedder } from '@northkeep/librarian';
 import {
   addEndpoint,
+  BRAVE_KEY_ID,
   classifyEndpoint,
   createOpenAICompatibleProvider,
+  getBraveKey,
   listEndpoints,
   removeEndpoint,
   setDefaultEndpoint,
+  setEndpointKey,
   getDefaultEndpoint,
 } from '@northkeep/converse';
-import { getPassphrase } from './prompt.js';
+import { getPassphrase, promptLine } from './prompt.js';
 import { PASTE_PROMPT, prepareImport, writeApproved, type ImportCmdOptions } from './importCmd.js';
 import { runConverse, type ConverseCmdOptions } from './converseCmd.js';
 import { modelsAdd, modelsInstall, modelsList } from './modelsCmd.js';
@@ -62,6 +65,7 @@ import {
   shareSyncCmd,
 } from './shareCmd.js';
 import { routingClear, routingList, routingSet } from './routingCmd.js';
+import { toolsBudget, toolsDisable, toolsEnable, toolsGrants, toolsList, toolsRevoke } from './toolsCmd.js';
 import { collectScopes, connectCmd, connectStatusCmd, disconnectCmd } from './connectCmd.js';
 import { runLauncher } from './launcher.js';
 
@@ -396,10 +400,27 @@ program
         ? entry.result_count !== undefined
           ? `${entry.result_count} result${entry.result_count === 1 ? '' : 's'}`
           : (entry.result_id?.slice(0, 8) ?? 'ok')
-        : `error: ${entry.error}`;
+        : entry.denied
+          ? 'denied'
+          : `error: ${entry.error}`;
       console.log(`${status} ${entry.ts}  ${entry.tool}  ${params}  → ${outcome}`);
       if (entry.result_ids && entry.result_ids.length > 0) {
         console.log(`    disclosed: ${entry.result_ids.map((id) => id.slice(0, 8)).join(' ')}`);
+      }
+      if (entry.tool_call) {
+        const t = entry.tool_call;
+        console.log(
+          `    ${t.name}${t.domain !== undefined ? ` ${t.domain}` : ''} · ${t.decision}` +
+            (t.scope !== undefined && t.scope !== 'once' ? ` (${t.scope})` : '') +
+            (t.url_hash !== undefined ? ` · url#${t.url_hash.slice(0, 12)}` : '') +
+            ` · args#${t.args_hash.slice(0, 12)} (${t.arg_chars} chars)` +
+            (t.result_bytes !== undefined ? ` · ${t.result_bytes} B` : ''),
+        );
+        // Screen flags get their own line — an exfil block should not be
+        // easy to miss when auditing (content-free descriptors only).
+        if (t.screen !== undefined && t.screen.length > 0) {
+          console.log(`      ⚠ screened: ${t.screen.join('  ')}`);
+        }
       }
     }
   });
@@ -531,8 +552,100 @@ program
   .option('--tier <n>', 'redaction tier: 0 (private endpoints only) | 1 | 2', '1')
   .option('--scope <scope>', 'scope for memories distilled from this conversation', 'personal')
   .option('--auto', 'let the concierge route each message by task (M7b)')
+  .option('--tools', 'enable agent tools for this conversation (registry-enabled tools only; every call asks first)')
   .action(async (options: ConverseCmdOptions) => {
     await runConverse(options, withVault);
+  });
+
+const toolsGroup = program
+  .command('tools')
+  .description('Agent tools for "northkeep converse --tools" — everything ships disabled; you enable per tool');
+
+toolsGroup
+  .command('list', { isDefault: true })
+  .description('Show known tools and whether each is enabled')
+  .action(() => {
+    toolsList();
+  });
+
+toolsGroup
+  .command('enable')
+  .description('Enable a tool (it still asks for approval on every call)')
+  .argument('<name>', 'tool name, e.g. web_fetch')
+  .action((name: string) => {
+    toolsEnable(name, fail);
+  });
+
+toolsGroup
+  .command('disable')
+  .description('Disable a tool')
+  .argument('<name>', 'tool name')
+  .action((name: string) => {
+    toolsDisable(name, fail);
+  });
+
+toolsGroup
+  .command('grants')
+  .description('List remembered per-site approvals (created only at a live approval prompt)')
+  .action(() => {
+    toolsGrants();
+  });
+
+toolsGroup
+  .command('revoke')
+  .description('Revoke a remembered approval so that site asks again')
+  .argument('[tool]', 'tool name, e.g. web_fetch')
+  .argument('[host]', 'exact host the grant was made for, e.g. example.com')
+  .option('--all', 'revoke every remembered approval')
+  .action((tool: string | undefined, host: string | undefined, options: { all?: boolean }) => {
+    toolsRevoke(tool, host, options.all === true, fail);
+  });
+
+toolsGroup
+  .command('budget')
+  .description('Show or set per-tool spend caps (daily and per-conversation) for costed tools like web_search')
+  .argument('[tool]', 'tool name, e.g. web_search')
+  .option('--daily <n>', 'max calls per UTC day')
+  .option('--per-conversation <n>', 'max calls per conversation')
+  .action((tool: string | undefined, options: { daily?: string; perConversation?: string }) => {
+    toolsBudget(tool, options.daily, options.perConversation, fail);
+  });
+
+toolsGroup
+  .command('brave-key')
+  .description('Store the Brave Search subscription token for web_search (interactive paste, a file, or stdin — never a shell argument)')
+  .option('--file <path>', 'read the key from a file (bulletproof: no shell or paste-escape mangling)')
+  .action(async (options: { file?: string }) => {
+    let key: string;
+    if (options.file !== undefined) {
+      // The bulletproof path: the shell never touches the key bytes.
+      try {
+        key = fs.readFileSync(options.file, 'utf8');
+      } catch {
+        fail(`Could not read key file: ${options.file}`);
+      }
+    } else if (process.stdin.isTTY) {
+      // Interactive paste — the key goes straight into this program, never a
+      // shell command line (so no $ / backtick / ! expansion, no history).
+      key = await promptLine('Paste your Brave Search key, then press Enter: ');
+    } else {
+      key = await readStdin(); // piped (scripting)
+    }
+    // Terminals with bracketed paste wrap input in ESC[200~ … ESC[201~; strip
+    // those, and any stray control chars, before storing so a paste artifact
+    // can't corrupt the token the way a shell would.
+    // eslint-disable-next-line no-control-regex
+    key = key.replace(/\x1b\[20[01]~/g, '').replace(/[\x00-\x1f\x7f]/g, '').trim();
+    if (!key) {
+      fail('No key provided. Paste it interactively, or: northkeep tools brave-key --file /path/to/keyfile');
+    }
+    // A valid Brave token has no spaces; catch a shell-mangled or partial paste
+    // loudly instead of storing a broken key that fails opaquely later.
+    if (/\s/.test(key)) {
+      fail('That key contains a space — it looks mangled or partial. Re-copy it and use --file if a paste keeps breaking.');
+    }
+    setEndpointKey(BRAVE_KEY_ID, key);
+    console.log(`✓ Brave Search key stored (${key.length} chars) in your Keychain. Enable search: northkeep tools enable web_search`);
   });
 
 const models = program

@@ -27,13 +27,22 @@ export function createLocalModelProvider(model: LocalModel): ModelProvider {
     baseUrl: ON_DEVICE_BASE_URL,
     async chat(messages: ChatMessage[], options: ChatOptions): Promise<string> {
       return model.generateText(
-        messages.map((m) => ({ role: m.role, content: m.content })),
+        // The on-device model API predates M10a's 'tool' role. No mobile
+        // surface produces tool messages today (runTurn never emits them);
+        // if one ever arrives, carry it as user text rather than crash.
+        messages.map((m) => ({ role: m.role === 'tool' ? ('user' as const) : m.role, content: m.content })),
         {
           onToken: options.onToken,
           signal: options.signal,
           ...(options.maxTokens !== undefined ? { maxTokens: options.maxTokens } : {}),
         },
       );
+    },
+    // M10a widened ModelProvider with chatTurn (tool-call plumbing). The
+    // on-device model has no tool support, so this is a compatibility wrapper
+    // over chat() that always reports a plain 'end' (ADR 0027).
+    async chatTurn(messages: ChatMessage[], options: ChatOptions) {
+      return { text: await this.chat(messages, options), toolCalls: [], stopReason: 'end' as const };
     },
     async listModels(): Promise<string[]> {
       return [model.label];

@@ -111,6 +111,37 @@ describe('GUI server', () => {
     expect((await api('/api/status', { token: 'f'.repeat(64) })).status).toBe(401);
   });
 
+  it('serves a page whose script element is intact, with the reply renderer in it', async () => {
+    // Two invariants that unit tests structurally cannot see, because they
+    // extract the renderer as text instead of parsing HTML:
+    //
+    // 1. The BUILD COPIES the page (tsc, then cp static/index.html into
+    //    dist/static), and the server reads it from dist at boot. An edit that
+    //    never gets built is invisible to every other test in the suite.
+    // 2. The renderer lives inside the page's single <script> element. A
+    //    literal closing tag anywhere in it — this happened, inside a comment —
+    //    ends the script early, and every line of the page's JavaScript dies
+    //    while the whole test suite stays green.
+    const html = await (await fetch(`${baseUrl}/`)).text();
+    expect(html).toContain('function renderMarkdown');
+    // The SERVED renderer must be byte-identical to the one in the source
+    // tree, so an edit that was never built fails here instead of silently
+    // serving the old page.
+    const cut = (s: string): string =>
+      s.slice(s.indexOf('// --- md-render-start'), s.indexOf('// --- md-render-end'));
+    const source = fs.readFileSync(
+      path.join(repoRoot, 'apps', 'web', 'static', 'index.html'),
+      'utf8',
+    );
+    expect(cut(source).length).toBeGreaterThan(0);
+    expect(cut(html)).toBe(cut(source));
+    expect(html.match(/<script/gi) ?? []).toHaveLength(1);
+    expect(html.match(/<\/script/gi) ?? []).toHaveLength(1);
+    // The one closing tag must come AFTER the renderer, so the block is inside
+    // a script that is still open — not after one that ended early.
+    expect(html.indexOf('</script')).toBeGreaterThan(html.indexOf('// --- md-render-end'));
+  });
+
   it('rejects non-loopback Host headers (DNS rebinding)', async () => {
     // fetch() refuses to forge Host, so speak raw HTTP like an attacker would.
     const { request } = await import('node:http');

@@ -157,6 +157,10 @@
     white-space: nowrap; }
   .pinchip input { accent-color: var(--ok); margin: 0; }
   .pinchip:has(input:checked) { color: var(--ok); border-color: var(--ok); background: #e6efe8; }
+  /* Tools toggle (M10e): same chip vocabulary as the privacy pin, accent-tinted
+     when on so it reads as a distinct control. */
+  .toolchip input { accent-color: var(--accent); }
+  .toolchip:has(input:checked) { color: var(--accent); border-color: var(--accent); background: #e6efe8; }
   /* Composer bubble — one bordered container; the textarea is borderless inside
      it and the attach/send controls sit along its bottom edge (chat-style). */
   #convComposer { transition: border-color .15s; }
@@ -180,6 +184,31 @@
   .msg.user .bubble { background: var(--accent); color: var(--accent-ink); border-radius: 16px 16px 5px 16px; }
   .msg.assistant .bubble { background: var(--panel); border: 1px solid var(--line); }
   .msg.error .bubble { background: #f6e4dd; color: var(--danger); border: 1px solid var(--danger); }
+  /* Markdown in assistant replies. The bubble is pre-wrap for plain text; the
+     .md wrapper turns that off so block spacing comes from margins instead of
+     stray newlines, and paragraphs opt back in to keep the model's own breaks. */
+  .bubble .md { white-space: normal; }
+  .md > :first-child { margin-top: 0; }
+  .md > :last-child { margin-bottom: 0; }
+  /* pre-wrap everywhere text from the reply lands, so runs of spaces the model
+     wrote survive in list items and headings too, not just paragraphs. */
+  .md .mdp, .md li, .md .mdh { white-space: pre-wrap; }
+  .md .mdp { margin: 0 0 10px; }
+  .md .mdh { font-weight: 600; line-height: 1.35; margin: 15px 0 6px; }
+  .md .mdh1 { font-size: 19px; }
+  .md .mdh2 { font-size: 17px; }
+  .md .mdh3 { font-size: 15.5px; }
+  .md .mdh4, .md .mdh5, .md .mdh6 { font-size: 15px; color: var(--muted); }
+  .md .mdlist { margin: 0 0 10px; padding-left: 23px; }
+  .md li { margin: 3px 0; }
+  .md li > .mdlist { margin: 3px 0 0; }
+  .md .mdcode { font: 13px/1.5 var(--mono); background: var(--chip); border-radius: 5px; padding: 1px 5px; }
+  /* Long lines scroll inside the block rather than stretching the bubble. */
+  .md .mdpre { margin: 0 0 10px; padding: 10px 12px; border-radius: 10px; background: var(--chip);
+    border: 1px solid var(--line); white-space: pre; overflow-x: auto; }
+  .md .mdpre code { font: 12.5px/1.5 var(--mono); background: none; padding: 0; }
+  .md .mdurl { color: var(--muted); overflow-wrap: anywhere; }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: 13px 0; }
   .msg .prov { max-width: 82%; align-items: center; }
   .prov details { font-size: 12px; }
   .prov summary { cursor: pointer; color: var(--accent); }
@@ -190,6 +219,33 @@
   .memnew.undone button { text-decoration: none; }
   .memnew .kept { font-family: var(--serif); font-style: italic; font-size: 15px; color: #8a6f30; flex: none; }
   .memnew .undo { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
+  /* Agent-loop tool activity (M10e): dim inline status lines mirroring the CLI,
+     plus the inline approval panel. Sits ABOVE the answer bubble — the process
+     the model ran to reach the answer, then the answer, then the provenance. */
+  .toollog { max-width: 82%; margin: 4px 0 2px; display: flex; flex-direction: column; gap: 3px; }
+  .toollog .thinking { padding: 3px 2px; }
+  .toolstep { font: 600 11px/1 var(--sans); text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); margin: 9px 0 3px; border-top: 1px solid var(--line); padding-top: 9px; }
+  .toolline { font: 500 12px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+  .toolline.warn { color: var(--warn-ink); }
+  .toolline.bad { color: var(--danger); }
+  /* Neutral by default so a benign ask reads calm; escalates to warn styling
+     only when the call carries screen/identity warnings, so those pop by contrast. */
+  .toolask { border: 1px solid var(--line); background: var(--panel); border-radius: 12px;
+    padding: 13px 15px; margin: 7px 0 4px; }
+  .toolask.warn { border-color: var(--warn-line); background: var(--warn-bg); }
+  .toolask .ask-what { margin: 0; font-weight: 600; color: var(--ink); font-size: 14px; overflow-wrap: anywhere; }
+  .toolask .ask-args { margin: 5px 0 0; font: 500 12px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+  .toolask .ask-host { margin: 5px 0 0; font: 500 12px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+  .toolask .ask-warn { display: flex; gap: 7px; margin: 9px 0 0; color: var(--warn-ink); font-size: 13px; line-height: 1.5; }
+  .toolask .ask-warn span:first-child { flex: none; }
+  .toolask .ask-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
+  .toolask .ask-btns button { font: 500 13px/1 var(--sans); border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink); border-radius: 8px; padding: 9px 13px; cursor: pointer; }
+  .toolask .ask-btns button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .toolask .ask-btns button.danger { color: var(--danger); border-color: var(--danger-line); }
+  .toolask .ask-btns button:disabled { opacity: .5; cursor: default; }
+  .toolask .ask-status { margin: 11px 0 0; font-size: 12.5px; color: var(--muted); }
   .epline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     border-bottom: 1px solid var(--line); padding: 9px 2px; font-size: 13px; }
   /* Connect-a-model wizard provider cards + the concierge suggestion tip. */
@@ -204,6 +260,7 @@
     .pill.locked { background: #3a241d; }
     .msg.error .bubble { background: #3a241d; }
     .pinchip:has(input:checked) { background: #22382c; }
+    .toolchip:has(input:checked) { background: #22382c; border-color: var(--accent); color: var(--accent); }
   }
 </style>
 </head>
@@ -250,6 +307,9 @@
         </select>
         <label class="pinchip" title="Pin this conversation to local models only — nothing leaves your machine, and Auto may only pick private endpoints.">
           <input type="checkbox" id="convPrivatePin"> Private only
+        </label>
+        <label class="pinchip toolchip" title="Let the assistant use web tools (search and fetch) to answer. Every call asks for your approval before anything leaves your machine; site grants you make are remembered.">
+          <input type="checkbox" id="convToolsEnabled"> Tools
         </label>
         <span id="convBadge" class="badge" hidden></span>
         <button class="btn" id="manageEp">Manage endpoints</button>
@@ -1498,6 +1558,264 @@
     if (text !== undefined) n.textContent = text;
     return n;
   }
+  // --- md-render-start (extracted verbatim by apps/web/test/markdown.test.ts —
+  // keep this block self-contained: it may use only document.createElement,
+  // createTextNode, textContent, appendChild, className, and the numeric
+  // `start` property of an ordered list.)
+  //
+  // Markdown rendering for ASSISTANT REPLIES ONLY (never your own typing, never
+  // an error string). Since M10 an assistant reply can quote text the model
+  // copied out of a web page it fetched, so the reply is untrusted input from a
+  // page we never saw. Parsing it as HTML — a markdown library, innerHTML,
+  // insertAdjacentHTML — would hand that page a script-injection path into an
+  // UNLOCKED vault UI. So nothing here parses HTML; it only CONSTRUCTS DOM
+  // nodes, and every scrap of model text lands in a textContent assignment.
+  // A reply containing a literal script tag renders as visible characters,
+  // because that is all a text node can ever be.
+  //
+  // NOTE FOR EDITORS: this block lives INSIDE the page's script element, so it
+  // must never contain the characters that close one — not even in a comment.
+  // The HTML parser would end the script right there and kill the whole app.
+  // A test asserts this; see apps/web/test/markdown.test.ts.
+  //
+  // Deliberate omissions, each a safety or scope call:
+  //   - raw HTML in the reply: never interpreted, always literal text.
+  //   - CLICKABLE LINKS: "[text](url)" renders as `text (url)` in plain text.
+  //     A model relaying a URL out of a fetched page must not be one click
+  //     away — that is the exfiltration path the M10c screen exists to stop.
+  //   - images, tables, blockquotes: unrecognized, so their lines fall through
+  //     as literal text (a pipe table stays readable, just unformatted).
+  //     KNOWN-LIMITS records this.
+  // Anything the grammar below does not recognize degrades to literal text —
+  // never to mangled output, and never to interpreted markup.
+  const MD_MAX = 200000; // absurd-length guard: longer replies render plain
+
+  function mdEl(tag, cls, text) {
+    const n = document.createElement(tag);
+    if (cls) n.className = cls;
+    if (text !== undefined) n.textContent = text;
+    return n;
+  }
+
+  // Inline spans, in precedence order: `code` (wins outright — its contents are
+  // literal, so "`**x**`" shows the asterisks), **bold**/__bold__,
+  // *italic*/_italic_, and [text](url). Built fresh per call because mdInline
+  // recurses (bold containing code) and a shared /g regex would corrupt
+  // lastIndex mid-recursion. No nested quantifiers anywhere: hostile input
+  // cannot make this backtrack catastrophically.
+  // TWO RULES SHAPE THIS PATTERN, and both exist because the failure mode that
+  // matters here is not ugly output — it is DELETED CHARACTERS. Emphasis marks
+  // are consumed, so a wrong match silently changes what the reply SAYS.
+  //
+  // 1. Emphasis content may not contain its own delimiter or a newline
+  //    ([^*\n] / [^_\n]) and may not begin or end on whitespace or a
+  //    delimiter. That single constraint keeps `*args and **kwargs`, glob
+  //    patterns like *.md, and "**bold ** x" literal instead of italicizing
+  //    across unrelated text, and it is also what keeps this LINEAR: an
+  //    unmatched delimiter can only scan to the next one, never to the end of
+  //    a 200 KB reply from every one of thousands of start positions.
+  // 2. Underscore emphasis additionally requires word BOUNDARIES on both
+  //    sides, so some_long_name and MAX_TOKENS survive intact. The boundary
+  //    before is a consumed group rather than a lookbehind, so this parses in
+  //    every browser engine; the captured character is re-emitted below.
+  //
+  // __bold__ is deliberately NOT supported: models write **bold**, while
+  // __init__, __name__ and __all__ are everyday reply content, and CommonMark
+  // would eat those underscores. Showing a stray underscore in the rare
+  // __bold__ beats deleting characters from a Python answer.
+  const MD_INLINE_SRC =
+    '\\\\([\\\\`*_{}\\[\\]()#+\\-.!])' +                    // 1     \\escaped char
+    '|(`+)([\\s\\S]*?)\\2' +                                // 2,3   code span
+    '|(!\\[[^\\]\\n]*\\]\\([^()\\s]*\\))' +                 // 4     image → literal
+    '|\\*\\*\\*([^\\s*](?:[^*\\n]*?[^\\s*])?)\\*\\*\\*' +   // 5     ***both***
+    '|\\*\\*([^\\s*](?:[^*\\n]*?[^\\s*])?)\\*\\*' +         // 6     **bold**
+    '|\\*([^\\s*](?:[^*\\n]*?[^\\s*])?)\\*' +               // 7     *italic*
+    '|(^|[^A-Za-z0-9_])_([^\\s_](?:[^_\\n]*?[^\\s_])?)_(?![A-Za-z0-9_])' + // 8,9 _italic_
+    '|\\[([^\\]\\n]*)\\]\\(([^()\\s]*)\\)';                 // 10,11 [text](url)
+
+  function mdInline(parent, text, depth) {
+    const d = depth || 0;
+    // Depth cap: emphasis can legitimately nest one or two deep; beyond that a
+    // pathological reply should not be able to drive unbounded recursion.
+    if (d > 4) { parent.appendChild(document.createTextNode(text)); return; }
+    const re = new RegExp(MD_INLINE_SRC, 'g');
+    let last = 0, m;
+    while ((m = re.exec(text)) !== null) {
+      if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
+      // The boundary character captured before an underscore run belongs to the
+      // surrounding text, so put it back before whatever it delimited.
+      if (m[8]) parent.appendChild(document.createTextNode(m[8]));
+      // Every branch below dispatches on ITS OWN capture group. Inferring the
+      // branch from the whole match instead is a trap: the underscore
+      // alternative consumes the boundary character before it, and that
+      // character can be "!", so "!_hi_" looked like an image and emitted its
+      // "!" twice.
+      if (m[1] !== undefined) {
+        // A backslash escape: the model wrote \* to SHOW an asterisk. Emit the
+        // character it escaped and drop the backslash.
+        parent.appendChild(document.createTextNode(m[1]));
+      } else if (m[3] !== undefined) {
+        parent.appendChild(mdEl('code', 'mdcode', m[3])); // literal, no recursion
+      } else if (m[4] !== undefined) {
+        // ![alt](url) — an image. We never load a remote image into an unlocked
+        // vault UI (it is an outbound request the model chose), so the whole
+        // construct stays literal text, exactly as KNOWN-LIMITS promises.
+        parent.appendChild(document.createTextNode(m[4]));
+      } else if (m[5] !== undefined) {
+        const b = mdEl('strong');
+        const i = mdEl('em');
+        mdInline(i, m[5], d + 1);
+        b.appendChild(i);
+        parent.appendChild(b);
+      } else if (m[6] !== undefined) {
+        const b = mdEl('strong');
+        mdInline(b, m[6], d + 1);
+        parent.appendChild(b);
+      } else if (m[7] !== undefined || m[9] !== undefined) {
+        const i = mdEl('em');
+        mdInline(i, m[7] !== undefined ? m[7] : m[9], d + 1);
+        parent.appendChild(i);
+      } else {
+        // Link → plain text. The label keeps its own inline formatting; the URL
+        // trails in a dim span so you can still SEE where it points, and can
+        // copy it deliberately. No <a>, no href, nothing clickable, ever.
+        mdInline(parent, m[10], d + 1);
+        if (m[11]) parent.appendChild(mdEl('span', 'mdurl', ' (' + m[11] + ')'));
+      }
+      last = re.lastIndex;
+    }
+    if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)));
+  }
+
+  const MD_FENCE = /^ {0,3}(`{3,}|~{3,})(.*)$/;
+  const MD_HEADING = /^ {0,3}(#{1,6})[ \t]+(.*)$/;
+  const MD_HR = /^ {0,3}([-*_])[ \t]*(?:\1[ \t]*){2,}$/;
+  const MD_ITEM = /^([ \t]*)([-*+]|\d{1,9}[.)])[ \t]+(.*)$/;
+
+  function mdBlocks(container, src) {
+    const lines = src.split(/\r\n|[\r\n]/); // CRLF, LF, and a lone CR
+    let i = 0, para = [];
+    function flushPara() {
+      if (!para.length) return;
+      // Lines inside one paragraph keep their own breaks (CSS pre-wrap on .mdp)
+      // so the model's deliberate line breaks survive, as they did when the
+      // whole bubble was plain text.
+      const p = mdEl('p', 'mdp');
+      mdInline(p, para.join('\n'), 0);
+      container.appendChild(p);
+      para = [];
+    }
+    while (i < lines.length) {
+      const line = lines[i];
+      const fence = MD_FENCE.exec(line);
+      if (fence) {
+        flushPara();
+        // Close only on the same fence CHARACTER, so ``` inside a ~~~ block is
+        // content. An unterminated fence (a stream cut short) runs to the end
+        // and still renders as a code block rather than swallowing the reply.
+        const closer = fence[1][0] === '`' ? /^ {0,3}`{3,}[ \t]*$/ : /^ {0,3}~{3,}[ \t]*$/;
+        const body = [];
+        i++;
+        while (i < lines.length && !closer.test(lines[i])) { body.push(lines[i]); i++; }
+        if (i < lines.length) i++; // consume the closer if there was one
+        const pre = mdEl('pre', 'mdpre');
+        pre.appendChild(mdEl('code', '', body.join('\n')));
+        container.appendChild(pre);
+        continue;
+      }
+      if (line.trim() === '') { flushPara(); i++; continue; }
+      const h = MD_HEADING.exec(line);
+      if (h) {
+        flushPara();
+        // Real heading levels are not used: a chat bubble is not a document
+        // outline, and injecting h1s here would corrupt the page's heading
+        // order for screen readers. Styled divs carry the visual weight.
+        const div = mdEl('div', 'mdh mdh' + h[1].length);
+        // Trim a CLOSING #### sequence, which must be preceded by whitespace:
+        // without that requirement "## What is C#" loses the # and answers a
+        // different question.
+        mdInline(div, h[2].replace(/[ \t]+#+[ \t]*$/, ''), 0);
+        container.appendChild(div);
+        i++;
+        continue;
+      }
+      if (MD_HR.test(line)) { flushPara(); container.appendChild(mdEl('hr')); i++; continue; }
+      if (MD_ITEM.test(line)) {
+        flushPara();
+        // One indent-keyed stack builds the whole run of list lines, including
+        // the nesting the search-answer shape actually produces (sub-bullets
+        // under a numbered item). Deeper indent opens a child list inside the
+        // last <li>; shallower pops back; a marker-type change at the same
+        // indent starts a sibling list.
+        const stack = [];
+        while (i < lines.length) {
+          // A thematic break and a fence both out-rank the item pattern, which
+          // would otherwise read "* * *" as a bullet and swallow an asterisk.
+          if (MD_HR.test(lines[i]) || MD_FENCE.test(lines[i])) break;
+          const it = MD_ITEM.exec(lines[i]);
+          if (!it) {
+            // A blank line BETWEEN items is a "loose" list, not the end of one,
+            // and models emit these constantly. Ending the run there would open
+            // a fresh <ol> and renumber "2." back to "1." — silently changing
+            // what the reply says. Look past the blanks: if another item
+            // follows, the same list continues.
+            if (lines[i].trim() === '') {
+              let j = i + 1;
+              while (j < lines.length && lines[j].trim() === '') j++;
+              if (j < lines.length && MD_ITEM.test(lines[j])) { i = j; continue; }
+            }
+            break;
+          }
+          const indent = it[1].replace(/\t/g, '    ').length;
+          const ordered = !/^[-*+]$/.test(it[2]);
+          while (stack.length > 1 && indent < stack[stack.length - 1].indent) stack.pop();
+          let top = stack[stack.length - 1];
+          if (!top || indent > top.indent || ordered !== top.ordered) {
+            const parent = !top ? container
+              : indent > top.indent ? (top.list.lastChild || top.list)
+              : top.parent; // same indent, different marker → sibling list
+            const list = mdEl(ordered ? 'ol' : 'ul', 'mdlist');
+            // Honor the first number: a reply that resumes at "3." after a
+            // heading must not renumber to "1.". This is a numeric property
+            // assignment, never a string from the model — the value comes from
+            // the \d{1,9} the pattern matched, parsed to an integer.
+            if (ordered) {
+              const first = parseInt(it[2], 10);
+              if (first >= 0 && first !== 1) list.start = first;
+            }
+            parent.appendChild(list);
+            if (top && indent <= top.indent) stack.pop();
+            top = { indent, ordered, list, parent };
+            stack.push(top);
+          }
+          const li = mdEl('li');
+          mdInline(li, it[3], 0);
+          top.list.appendChild(li);
+          i++;
+        }
+        continue;
+      }
+      para.push(line);
+      i++;
+    }
+    flushPara();
+  }
+
+  // Replace everything in `container` with `text` rendered as markdown. Clearing
+  // via textContent also drops the "Thinking…" span, the way the plain-text
+  // assignment it replaces did.
+  function renderMarkdown(container, text) {
+    container.textContent = '';
+    const src = typeof text === 'string' ? text : String(text === undefined || text === null ? '' : text);
+    if (src.length > MD_MAX) { container.textContent = src; return; } // guard
+    const md = mdEl('div', 'md');
+    mdBlocks(md, src);
+    container.appendChild(md);
+  }
+  // --- md-render-end
+
+  // Byte→human size for tool results, matching the CLI's fmtKb exactly.
+  const fmtKb = (bytes) => bytes < 1024 ? bytes + ' B' : (bytes / 1024).toFixed(1) + ' KB';
   // Cost surfacing (M9b). Mirrors @northkeep/converse costLabel() — a pure
   // 4-case switch — so the static page can render a $/$$ hint without shipping
   // the catalog. Keep in sync with catalog.ts if the ranges ever change.
@@ -2218,6 +2536,45 @@
     return det;
   }
 
+  // Tool-egress proof (ADR 0031, Decision 6): the model wire (sentProof above)
+  // never captures what a TOOL sent out — the query to Brave or the URL of a
+  // fetched site. The 'done' event carries a content-free line per executed
+  // tool call so the "what left this device" proof never under-reports. Fields:
+  // { name, host?, query?, url?, args_plain? } — the query/URL as the gate
+  // showed it, never a token or page content.
+  function toolEgressProof(ev) {
+    const list = ev.tool_egress || [];
+    if (!list.length) return null;
+    const det = document.createElement('details');
+    det.style.cssText = 'margin:8px 0 0;font-size:13px';
+    const sum = el('summary', '', '📡 What web tools sent off this machine');
+    sum.style.cssText = 'cursor:pointer;color:var(--accent)';
+    det.appendChild(sum);
+    const note = el('p', 'muted',
+      'You approved each of these — the query or URL the tool sent out is shown exactly as it left. Never a token, never page content.');
+    note.style.cssText = 'margin:10px 0';
+    det.appendChild(note);
+    for (const t of list) {
+      const row = el('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:5px 0';
+      row.appendChild(el('span', 'tag', t.name));
+      if (t.host) {
+        const h = el('span', '', t.host);
+        h.style.cssText = 'font-family:var(--mono,ui-monospace,monospace);color:var(--muted)';
+        row.appendChild(h);
+      }
+      // The restored query/URL as the gate showed it — the exact string sent.
+      const wire = t.query ?? t.url ?? t.args_plain;
+      if (wire) {
+        const w = el('span', '', wire);
+        w.style.cssText = 'font-family:var(--mono,ui-monospace,monospace);color:var(--ink);word-break:break-all';
+        row.appendChild(w);
+      }
+      det.appendChild(row);
+    }
+    return det;
+  }
+
   $('convSend').addEventListener('click', sendTurn);
   $('convInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTurn(); }
@@ -2302,22 +2659,177 @@
     a.bubble.appendChild(think);
     a.wrap.scrollIntoView({ block: 'end' });
     let streamed = '';
+    // --- Agent-loop tool activity (M10e / ADR 0031). When tools are enabled the
+    // stream interleaves tool_step / tool_call / permission / tool_result events
+    // and pauses on approval_request for a human decision delivered via a SEPARATE
+    // authed POST — the NDJSON reader below stays open the whole time and resumes
+    // on the SAME reader. All fields are content-free per the contract: names,
+    // hosts, byte counts, warnings, and the query/URL the gate showed — never a
+    // token or page content. These lines render in a tool box just BELOW the
+    // answer bubble (appended, so already-streamed narration never jumps), with
+    // provStrip / proof / egress appended after it in the 'done' case.
+    let toolBox = null, toolThink = null;
+    function ensureToolBox() {
+      if (!toolBox) { toolBox = el('div', 'toollog'); a.wrap.appendChild(toolBox); }
+      return toolBox;
+    }
+    // Drop the initial "Thinking…" pulse; while the bubble holds no text yet (a
+    // turn that opens straight into tool calls) hide the empty bubble so only the
+    // tool activity shows — the bubble reappears the instant text streams in.
+    function clearInitThink() {
+      if (think.parentNode) think.remove();
+      if (!a.bubble.textContent) a.bubble.hidden = true;
+    }
+    // The "thinking" pulse follows the model across steps: parked at the bottom of
+    // the tool box whenever the model is working, pulled the moment output streams
+    // or a decision is due (mirrors the CLI starting/stopping its spinner).
+    function showToolThinking() {
+      const box = ensureToolBox();
+      if (!toolThink) {
+        toolThink = el('span', 'thinking');
+        for (let i = 0; i < 3; i++) toolThink.appendChild(document.createElement('i'));
+        toolThink.appendChild(el('span', 'thinking-label', 'Working…'));
+      }
+      box.appendChild(toolThink); // re-append moves it to the end, below the lines
+      a.wrap.scrollIntoView({ block: 'end' });
+    }
+    function hideToolThinking() { if (toolThink && toolThink.parentNode) toolThink.remove(); }
+    function toolLine(text, cls) {
+      const box = ensureToolBox();
+      hideToolThinking(); // keep status lines above the pulse
+      box.appendChild(el('div', 'toolline' + (cls ? ' ' + cls : ''), text));
+    }
+    const DECISION_MSG = {
+      allow: 'Allowed once — running the tool…',
+      'allow-session': 'Allowed for this session — running the tool…',
+      'allow-always': 'Always allowed — running the tool…',
+      deny: 'Denied.',
+      'deny-never': 'Never allowed for this site.',
+    };
+    function renderApproval(ev) {
+      const box = ensureToolBox();
+      hideToolThinking(); clearInitThink();
+      const host = ev.egress && ev.egress.host;
+      const warned = (ev.warnings || []).length > 0;
+      const panel = el('div', 'toolask' + (warned ? ' warn' : ''));
+      // The human-readable ask: the query for a search, the tool + raw args
+      // otherwise. Both are the restored plaintext the gate would execute.
+      panel.appendChild(el('p', 'ask-what',
+        ev.tool === 'web_search' ? 'Search for: "' + (ev.query ?? '') + '"' : ev.tool));
+      if (ev.tool !== 'web_search' && ev.args_plain) panel.appendChild(el('div', 'ask-args', ev.args_plain));
+      if (host) panel.appendChild(el('div', 'ask-host', '→ ' + host));
+      // Screen / identity / memory warnings render loudly ABOVE the buttons — a
+      // screened call is offer_scopes:false and must be seen every time.
+      for (const w of (ev.warnings || [])) {
+        const wl = el('div', 'ask-warn');
+        wl.appendChild(el('span', '', '⚠'));
+        wl.appendChild(el('span', '', w));
+        panel.appendChild(wl);
+      }
+      const btns = el('div', 'ask-btns');
+      const status = el('div', 'ask-status'); status.hidden = true;
+      const buttons = [];
+      const decide = async (decision) => {
+        buttons.forEach((b) => { b.disabled = true; }); // never a spinning button
+        status.hidden = false; status.textContent = 'Sending your decision…';
+        try {
+          const res = await fetch('/api/converse/approve', {
+            method: 'POST',
+            headers: { 'X-NorthKeep-Token': TOKEN, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: convSession, approval_id: ev.approval_id, decision }),
+          });
+          // 404 = the pending call is gone (answered, timed out, or aborted).
+          if (res.status === 404) { status.textContent = 'This request expired — send again.'; return; }
+          if (!res.ok) { status.textContent = 'Could not send that decision — send again.'; return; }
+          // Success: the loop resumes on the OPEN stream; tool_result / more
+          // steps / done arrive on the same reader below. Nothing to re-open.
+          status.textContent = DECISION_MSG[decision] || 'Decision sent.';
+        } catch {
+          status.textContent = 'This request expired — send again.'; // network gone, same as 404
+        }
+      };
+      const addBtn = (label, decision, cls) => {
+        const b = el('button', cls, label);
+        b.addEventListener('click', () => decide(decision));
+        buttons.push(b); btns.appendChild(b);
+      };
+      addBtn('Allow once', 'allow', 'primary');
+      // Scope buttons only when the server offers them (a safe read of a concrete,
+      // screen-clean host); a screened or host-less call is yes-once / no only.
+      if (ev.offer_scopes) {
+        addBtn('Allow this session', 'allow-session', '');
+        addBtn('Always for ' + host, 'allow-always', '');
+      }
+      addBtn('Deny', 'deny', 'danger');
+      if (ev.offer_scopes) addBtn('Never for ' + host, 'deny-never', 'danger');
+      panel.appendChild(btns);
+      panel.appendChild(status);
+      box.appendChild(panel);
+      a.wrap.scrollIntoView({ block: 'end' });
+    }
     const handle = (ev) => {
       if (ev.type === 'start') {
         convSession = ev.session_id; // keep the animation until tokens flow
       } else if (ev.type === 'token') {
         streamed += ev.text; // wire space: [SSN_1]-style masks, pseudonyms
+        a.bubble.hidden = false;
         a.bubble.textContent = streamed;
+        hideToolThinking(); clearInitThink(); // output is flowing now
+      } else if (ev.type === 'tool_step') {
+        // A new agent-loop step began; only n>1 needs a divider (the first is implied).
+        clearInitThink();
+        if (ev.n > 1) { hideToolThinking(); ensureToolBox().appendChild(el('div', 'toolstep', 'step ' + ev.n)); }
+        showToolThinking();
+      } else if (ev.type === 'tool_call') {
+        // The model asked for a tool — pending. No pulse: an approval or an
+        // execution is next (the CLI stops its spinner at exactly this point).
+        clearInitThink(); hideToolThinking();
+        toolLine('↳ ' + ev.name + (ev.host ? ' ' + ev.host : '') + (ev.egress_tier ? ' · ' + ev.egress_tier : ''));
+      } else if (ev.type === 'approval_request') {
+        renderApproval(ev);
+      } else if (ev.type === 'permission') {
+        // How the call resolved. Honest provenance (ADR 0029): a grant auto-allow
+        // is not your own yes, and a screen block must say WHY (content-free reasons).
+        if (ev.decision === 'approved' && ev.via === 'grant') {
+          toolLine('↳ ✓ ' + ev.name + ' auto-allowed (site grant)');
+        } else if (ev.decision !== 'approved' && ev.via === 'screen') {
+          toolLine('↳ ✗ ' + ev.name + ' blocked by the exfiltration screen:', 'bad');
+          for (const r of (ev.reasons || [])) toolLine('    ⚠ ' + r, 'bad');
+        } else if (ev.decision !== 'approved' && ev.via === 'grant') {
+          toolLine('↳ ✗ ' + ev.name + ' refused (never-for-this-site grant)');
+        } else if (ev.decision !== 'approved' && ev.via === 'budget') {
+          toolLine('↳ ✗ ' + ev.name + ' skipped — ' + (ev.reasons || []).join('; '), 'warn');
+        } else if (ev.decision !== 'approved') {
+          toolLine('↳ ✗ ' + ev.name + ' ' + (ev.decision === 'timeout' ? 'timed out — denied' : 'denied'));
+        }
+        showToolThinking(); // the model weighs the result / next step
+      } else if (ev.type === 'tool_result') {
+        toolLine(ev.ok
+          ? '↳ ✓ ' + fmtKb(ev.bytes) + ' from ' + (ev.host || ev.name) + (ev.truncated ? ' (truncated)' : '')
+          : '↳ ✗ ' + ev.name + ': ' + (ev.error || 'returned an error'),
+          ev.ok ? '' : 'warn');
+        showToolThinking();
       } else if (ev.type === 'done') {
         convSession = ev.session_id;
-        a.bubble.textContent = ev.reply; // restored text replaces the wire-space stream
+        hideToolThinking(); clearInitThink();
+        a.bubble.hidden = false;
+        // The restored text replaces the wire-space stream (it always did), and
+        // this is where markdown formatting lands. Streaming stays PLAIN TEXT
+        // above: a reply is re-rendered on every token, so parsing mid-stream
+        // would rebuild the tree ~1000 times, kill text selection while it
+        // streams, and flicker as half-written **bold** closed. One swap at the
+        // end, on the text that is actually final.
+        renderMarkdown(a.bubble, ev.reply);
         a.wrap.appendChild(provStrip(ev));
         const proof = sentProof(ev);
         if (proof) a.wrap.appendChild(proof);
+        const egress = toolEgressProof(ev); // what the tools themselves sent out
+        if (egress) a.wrap.appendChild(egress);
         if ((ev.memories_created || []).length) a.wrap.appendChild(memNewLine(ev.memories_created, ev));
         a.wrap.scrollIntoView({ block: 'end' });
       } else if (ev.type === 'error') {
-        if (!streamed) a.wrap.remove();
+        hideToolThinking();
+        if (!streamed && !toolBox) a.wrap.remove(); // keep the message if tool activity showed
         addMsg('error', ev.code === 'TIER2_UNAVAILABLE'
           ? 'Nothing was sent to the model — ' + ev.message
           : ev.message);
@@ -2336,6 +2848,9 @@
           // Always explicit: the server RATCHETS the conversation's ceiling,
           // so unchecking must send the deliberate 'bounded-allowed'.
           ceiling: $('convPrivatePin').checked ? 'private-only' : 'bounded-allowed',
+          // Opt-in web tools (M10e / ADR 0031): only when the Tools chip is on
+          // does the server run the agent loop and emit tool/approval events.
+          ...($('convToolsEnabled').checked ? { tools: true } : {}),
           // M7a quick-switch: the picked model rides along; the reply's
           // provenance strip shows which model actually answered.
           ...(!isAuto && $('convModel').value && $('convModel').value !== ep.model
