@@ -9,6 +9,7 @@ import {
   pinTools,
   removeServer,
   riskOf,
+  sanitizeServerText,
   setSafeRead,
   setToolsPin,
 } from '@northkeep/converse';
@@ -117,7 +118,13 @@ export async function mcpTools(id: string, accept: boolean, fail: (m: string) =>
   try {
     // Show what is there even when the pin has moved; accepting is a separate,
     // explicit act below.
-    conn = await connectServer(server, { enforcePin: false });
+    conn = await connectServer(server, {
+      enforcePin: false,
+      onSkipped: (_id, reasons) => {
+        console.log(`${YELLOW}⚠ ${reasons.length} definition(s) will be IGNORED:${RESET}`);
+        for (const r of reasons) console.log(`    ${r}`);
+      },
+    });
   } catch (err) {
     if (err instanceof McpFingerprintChangedError) {
       fail(
@@ -132,8 +139,13 @@ export async function mcpTools(id: string, accept: boolean, fail: (m: string) =>
       const risk = riskOf(server, bare);
       const label =
         risk === 'safe-read' ? `${GREEN}read-only${RESET}` : `${YELLOW}consequential${RESET}`;
+      // Server-supplied text reaches a terminal here, and THIS is the only
+      // human review of what a server advertises. adaptTool already stripped
+      // control characters; collapsing whitespace keeps one tool to one line.
       console.log(`  ${t.name.padEnd(30)} ${label}`);
-      if (t.description.length > 0) console.log(`  ${DIM}${t.description.replace(/\s+/g, ' ')}${RESET}`);
+      if (t.description.length > 0) {
+        console.log(`  ${DIM}${sanitizeServerText(t.description).replace(/\s+/g, ' ')}${RESET}`);
+      }
     }
     const changed = server.toolsPin !== undefined && server.toolsPin !== conn.pin;
     if (server.toolsPin === undefined) {
@@ -171,11 +183,23 @@ export async function collectMcpTools(): Promise<{
   const tools: Awaited<ReturnType<typeof connectServer>>['tools'] = [];
   for (const server of servers) {
     try {
-      const conn = await connectServer(server);
-      // First successful connect pins what we saw, so a LATER change is
-      // detectable. Pinning here rather than at add-time is deliberate: at
-      // add-time we have not spoken to the server yet.
-      if (server.toolsPin === undefined) setToolsPin(server.id, conn.pin);
+      // NEVER auto-pin. ADR 0033 Decision 2 says the pin records the tool set
+      // THE USER APPROVED; pinning whatever we happened to see first would let
+      // a server that is malicious on its very first connect win the pin
+      // silently and never be reviewed. An unreviewed server offers nothing.
+      if (server.toolsPin === undefined) {
+        console.log(
+          `${YELLOW}⚠ MCP server "${server.id}" has not been reviewed yet.${RESET} ` +
+            `Its tools are not being offered.\n  Review them with: northkeep mcp tools ${server.id} --accept`,
+        );
+        continue;
+      }
+      const conn = await connectServer(server, {
+        onSkipped: (id, reasons) => {
+          console.log(`${YELLOW}⚠ Ignored ${reasons.length} definition(s) from "${id}":${RESET}`);
+          for (const r of reasons) console.log(`    ${r}`);
+        },
+      });
       connections.push(conn);
       tools.push(...conn.tools);
     } catch (err) {

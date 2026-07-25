@@ -33,9 +33,16 @@ export function wrapUntrusted(
   now: () => Date = () => new Date(),
 ): string {
   const cleaned = content.replace(INVISIBLES, '').replace(FENCE_LOOKALIKE, '[fence-marker-removed]');
+  // The SOURCE label is interpolated into the opening marker, and since M11 it
+  // can be a tool name rather than a URL we produced. A label containing `]`
+  // and a newline would close the fence early and leave server text OUTSIDE
+  // any nonce'd fence — an escape that needs no knowledge of the nonce. Strip
+  // controls and the bracket, and bound the length.
+  // eslint-disable-next-line no-control-regex
+  const safeSource = source.replace(/[\u0000-\u001F\u007F-\u009F\]]/g, ' ').slice(0, 200);
   const retrieved = now().toISOString();
   return (
-    `[EXTERNAL CONTENT «${nonce}» source=${source} retrieved=${retrieved}]\n` +
+    `[EXTERNAL CONTENT «${nonce}» source=${safeSource} retrieved=${retrieved}]\n` +
     `${cleaned}\n` +
     `[END EXTERNAL CONTENT «${nonce}»]`
   );

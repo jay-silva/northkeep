@@ -25,7 +25,6 @@ import { redactJsonLeaves, restoreJsonLeaves } from './jsonLeaves.js';
 import type { ToolDefinition, ToolResult } from './tools/types.js';
 import { placeholderGate, type PermissionGate } from './tools/gate.js';
 import { describeFlag, screenArguments, type ExfilFlag } from './tools/exfil.js';
-import { splitNamespaced } from './tools/mcp/identity.js';
 import { getServer as getMcpServer } from './tools/mcp/config.js';
 import { getToolBudget, reserveDailySpend, withinDailyCap } from './tools/budget.js';
 import { newFenceNonce, untrustedSystemLine, wrapUntrusted } from './tools/untrusted.js';
@@ -533,7 +532,10 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         // server id comes from OUR config, never from model-supplied text
         // (ADR 0033 D1). It is what a grant keys on when there is no host, and
         // what the audit row names when there is no domain.
-        const mcpServerId = splitNamespaced(call.name)?.serverId;
+        // STRUCTURAL, not string-parsed: `tool` was looked up in our own
+        // registry, so its serverId is our config's value. Deriving this from
+        // the name would let a server choose (or erase) its own identity.
+        const mcpServerId = tool?.serverId;
         let decision: 'approved' | 'denied' | 'timeout' = 'denied';
         let egressUrl: string | null = null;
         let egressHost: string | undefined;

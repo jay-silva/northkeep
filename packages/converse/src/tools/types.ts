@@ -27,6 +27,14 @@ export interface ToolResult {
 
 export interface ToolDefinition {
   name: string;
+  /**
+   * For an MCP tool (M11, ADR 0033), the configured server it came from. Set by
+   * OUR adapter from OUR config, never by the server and never parsed out of
+   * the tool name — a name is server-supplied text, and deriving identity from
+   * it let a server named its tool "" escape the argument floor, the grant
+   * subject and the audit attribution entirely.
+   */
+  serverId?: string;
   description: string;
   /** JSON Schema, the shape offered to the model (ADR 0027 / MCP-compatible). */
   inputSchema: Record<string, unknown>;

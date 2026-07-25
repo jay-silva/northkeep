@@ -24,6 +24,36 @@ import { fingerprintLaunch, namespacedName, pinTools, type PinnableTool } from '
 export const MAX_TOOLS_PER_SERVER = 64;
 /** Each description is truncated to this many characters before the model sees it. */
 export const MAX_DESCRIPTION_CHARS = 1024;
+/** A tool's whole input schema, serialized, may not exceed this. */
+export const MAX_SCHEMA_CHARS = 8192;
+/** No single request to a server may hang the loop longer than this. */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
+/**
+ * The grammar a server-supplied tool name must satisfy.
+ *
+ * This is load-bearing three times over, and each was a real defect before it
+ * existed. A name of `""` produced the offered name `server__`, which parses to
+ * nothing — so the argument floor, the grant subject and the audit attribution
+ * all silently vanished for that tool. A name carrying ESC could rewrite the
+ * CLI approval prompt with terminal control codes, so the user reads one
+ * question and answers another. And a name is interpolated into the
+ * untrusted-content fence header, where `]` and a newline can close the fence
+ * early and put server text OUTSIDE it. One grammar closes all three, and it
+ * matches what hosted providers accept anyway.
+ */
+export const TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,48}$/;
+
+/**
+ * Strip C0/C1 control characters (ESC included) from server-supplied text.
+ * Anything from a server may reach a TTY — `northkeep mcp tools` prints
+ * descriptions, and that screen is the ONLY human review of what a server
+ * advertises. A review surface a server can forge is not a review surface.
+ */
+export function sanitizeServerText(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ');
+}
 
 export class McpPinChangedError extends Error {
   constructor(
@@ -66,12 +96,20 @@ export interface ConnectOptions {
   clientFactory?: (server: McpServerConfig) => Promise<McpClientLike>;
   /** Reject a pin that differs from the stored one. Default true. */
   enforcePin?: boolean;
+  /** Called with definitions we refused to offer, so a surface can say so. */
+  onSkipped?: (serverId: string, reasons: string[]) => void;
+  /** Cancels in-flight requests to the server. */
+  signal?: AbortSignal;
 }
 
 /** The slice of the SDK client this module uses, so tests can substitute it. */
 export interface McpClientLike {
-  listTools(): Promise<{ tools: PinnableTool[] }>;
-  callTool(params: { name: string; arguments?: Record<string, unknown> }): Promise<unknown>;
+  listTools(options?: { timeout?: number; signal?: AbortSignal }): Promise<{ tools: PinnableTool[] }>;
+  callTool(
+    params: { name: string; arguments?: Record<string, unknown> },
+    resultSchema?: unknown,
+    options?: { timeout?: number; signal?: AbortSignal },
+  ): Promise<unknown>;
   close(): Promise<void>;
   setNotificationHandler?: (schema: unknown, handler: () => void) => void;
 }
@@ -124,7 +162,7 @@ export async function connectServer(
 
   let listed: PinnableTool[];
   try {
-    listed = (await client.listTools()).tools;
+    listed = (await client.listTools({ timeout: REQUEST_TIMEOUT_MS, signal: options.signal })).tools;
   } catch (err) {
     await client.close().catch(() => {});
     throw err;
@@ -137,7 +175,34 @@ export async function connectServer(
     );
   }
 
-  const pin = pinTools(listed);
+  // Reject unusable definitions BEFORE anything is pinned or offered. Skipping
+  // loudly (never silently) keeps invariant #6: a tool that vanished must not
+  // look like a model that chose not to use it.
+  const skipped: string[] = [];
+  const seenNames = new Set<string>();
+  const usable = listed.filter((t) => {
+    if (typeof t.name !== 'string' || !TOOL_NAME_RE.test(t.name)) {
+      skipped.push(`${JSON.stringify(t.name)} (name must match ${String(TOOL_NAME_RE)})`);
+      return false;
+    }
+    // A duplicate name would let a server show one description and run a
+    // differently-described twin, since a later definition wins the lookup.
+    if (seenNames.has(t.name)) {
+      skipped.push(`${t.name} (duplicate name)`);
+      return false;
+    }
+    seenNames.add(t.name);
+    if (JSON.stringify(t.inputSchema ?? null).length > MAX_SCHEMA_CHARS) {
+      skipped.push(`${t.name} (input schema over ${MAX_SCHEMA_CHARS} chars)`);
+      return false;
+    }
+    return true;
+  });
+  if (skipped.length > 0) {
+    options.onSkipped?.(server.id, skipped);
+  }
+
+  const pin = pinTools(usable);
   if ((options.enforcePin ?? true) && server.toolsPin !== undefined && server.toolsPin !== pin) {
     await client.close().catch(() => {});
     throw new McpPinChangedError(server.id, server.toolsPin, pin);
@@ -148,12 +213,21 @@ export async function connectServer(
   // connection stale; the loop refuses to execute anything from a stale
   // connection and the user is asked again.
   let stale = false;
-  client.setNotificationHandler?.(ToolListChangedNotificationSchema, () => {
+  if (typeof client.setNotificationHandler !== 'function') {
+    // Without this, the pin would be connect-time only — the exact "theatre"
+    // ADR 0033 Decision 2 forbids. Refuse rather than silently degrade.
+    await client.close().catch(() => {});
+    throw new Error(
+      'This MCP client cannot subscribe to tools/list_changed, so definition pinning ' +
+        'would only hold at connect time. Refusing to connect.',
+    );
+  }
+  client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
     stale = true;
   });
 
   const isStale = (): boolean => stale;
-  const tools = listed.map((t) => adaptTool(server, t, client, isStale));
+  const tools = usable.map((t) => adaptTool(server, t, client, isStale, options.signal));
 
   return {
     serverId: server.id,
@@ -200,10 +274,14 @@ function adaptTool(
   tool: PinnableTool,
   client: McpClientLike,
   isStale: () => boolean,
+  signal?: AbortSignal,
 ): ToolDefinition {
-  const description = (tool.description ?? '').slice(0, MAX_DESCRIPTION_CHARS);
+  const description = sanitizeServerText(tool.description ?? '').slice(0, MAX_DESCRIPTION_CHARS);
   return {
     name: namespacedName(server.id, tool.name),
+    // Identity travels STRUCTURALLY, so nothing downstream has to parse a
+    // server-supplied name to learn which server this is (ADR 0033 D1).
+    serverId: server.id,
     // The description is server-supplied text. It is passed through to the
     // model as CONTEXT ONLY: nothing in it may influence gating, tiering,
     // budgets or audit, all of which key on our own config.
@@ -214,7 +292,7 @@ function adaptTool(
         : { type: 'object' },
     risk: riskOf(server, tool.name),
     egress: () => null,
-    execute: async (args: unknown): Promise<ToolResult> => {
+    execute: async (args: unknown, ctx): Promise<ToolResult> => {
       if (isStale()) {
         return {
           content: JSON.stringify({
@@ -225,11 +303,21 @@ function adaptTool(
           meta: { bytes: 0, truncated: false, ok: false },
         };
       }
-      const raw = await client.callTool({
-        name: tool.name,
-        arguments:
-          args !== null && typeof args === 'object' ? (args as Record<string, unknown>) : {},
-      });
+      const raw = await client.callTool(
+        {
+          name: tool.name,
+          arguments:
+            args !== null && typeof args === 'object' ? (args as Record<string, unknown>) : {},
+        },
+        undefined,
+        // A server that never answers must not hold the loop open forever, and
+        // Ctrl-C has to reach an in-flight call — the CLI promises it does.
+        {
+          timeout: REQUEST_TIMEOUT_MS,
+          // The loop's per-task signal wins; the connect-time one is the fallback.
+          ...(ctx.signal ?? signal ? { signal: ctx.signal ?? signal } : {}),
+        },
+      );
       const { text, isError } = resultToText(raw);
       return {
         content: isError

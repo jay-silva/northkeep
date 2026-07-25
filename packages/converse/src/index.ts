@@ -56,6 +56,9 @@ export {
 } from './tools/exfil.js';
 export {
   connectServer,
+  sanitizeServerText,
+  MAX_SCHEMA_CHARS,
+  TOOL_NAME_RE,
   McpFingerprintChangedError,
   McpPinChangedError,
   type McpConnection,

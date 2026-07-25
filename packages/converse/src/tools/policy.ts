@@ -97,8 +97,8 @@ const GRANT_SCOPES: ReadonlySet<string> = new Set(['always', 'never']);
  */
 const grantKey = (tool: string, subject: GrantSubject): string =>
   isServerSubject(subject)
-    ? `${tool} server ${subject.server}`
-    : `${tool} host ${subject.host.toLowerCase()}`;
+    ? `${tool}\u0000server\u0000${subject.server}`
+    : `${tool}\u0000host\u0000${subject.host.toLowerCase()}`;
 
 
 /**

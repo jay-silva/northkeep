@@ -174,13 +174,13 @@ own server can read every memory.
 
 "Strictest tier" needs two things nailed down, or implementers will differ:
 
-- **It means Tier 3.** Tier 3 needs the local NER model, so what happens when
-  Ollama is absent is a real question, and invariant #6 answers it: **refuse the
-  call loudly** rather than degrade. That mirrors the existing rule where a
-  Tier-2 conversation bound for a bounded endpoint refuses to send when the NER
-  net is down (`task.ts`). Silently dropping to Tier 1 for a destination we
-  cannot even see would be the exact "quiet privacy downgrade" invariant #6
-  forbids.
+- **The target was Tier 3; M11 ships Tier 1** (see the amendment box above).
+  Tier 3 needs the local NER model, and making it the default would mean every
+  MCP call refuses whenever Ollama is stopped. If Tier 3 is adopted later, the
+  Ollama-absent case must **refuse loudly** rather than degrade, mirroring the
+  existing rule where a Tier-2 conversation bound for a bounded endpoint refuses
+  to send when the NER net is down (`task.ts`). What must never happen is a
+  silent drop, which is the "quiet privacy downgrade" invariant #6 forbids.
 - **It applies to argument STRING LEAVES**, walking the parsed JSON, not to the
   serialized blob — the same treatment the current Tier-1 argument floor uses,
   so structure is preserved and a tool still receives valid arguments.
@@ -262,15 +262,30 @@ be aligned before M11 builds on either.
 
 ## Acceptance test (per CLAUDE.md, Jay runs this himself)
 
-1. `northkeep mcp add vault --stdio <path>` and `northkeep mcp list` shows it
-   with its fingerprint.
-2. In Converse with tools on, ask something that needs a memory search. The
-   approval panel names `vault__search`, and the transcript shows the call.
-3. `northkeep tools grants` shows the grant keyed by server and tool.
-4. Edit the configured command, restart, ask again: it asks for approval again,
-   citing the changed fingerprint.
-5. A server whose tool descriptions changed since approval prompts a re-review
-   rather than running silently — both when the change appears at reconnect and
-   when the server sends `tools/list_changed` mid-conversation.
-6. With Ollama stopped, a call to an MCP tool refuses loudly and says why,
-   rather than sending arguments at a lower tier.
+Corrected 2026-07-25 to match the shipped commands and the Tier-1 amendment
+above; the original steps named flags and behaviors that do not exist.
+
+1. `northkeep mcp add vault --command <absolute node path> --arg <path to
+   northkeep-mcp> --safe-read memory_retrieve,memory_list`, then
+   `northkeep mcp list` shows it as configured but **not yet pinned**.
+2. `northkeep converse --tools` reports that the server has not been reviewed
+   and offers none of its tools. Trust-on-first-use is not trust.
+3. `northkeep mcp tools vault` prints the four vault tools with their risk, and
+   `--accept` pins them. Now `--tools` offers them.
+4. In `converse --tools`, ask something needing a memory search. The approval
+   prompt names `vault__memory_retrieve` and `mcp:vault`, since there is no host
+   to name.
+5. `northkeep tools grants` shows the grant keyed on the server, and
+   `northkeep tools revoke vault__memory_retrieve mcp:vault` removes it.
+6. Edit the stored command or arguments in `~/.northkeep/mcp.json`, then run
+   `northkeep mcp tools vault`: it refuses, citing the changed launch
+   configuration, and remembered approvals no longer apply.
+7. A server whose tool descriptions changed since approval refuses until
+   re-reviewed, both at reconnect and on a mid-conversation
+   `tools/list_changed`.
+8. `memory_forget` (undeclared, therefore consequential) asks EVERY time, and
+   answering "always" never creates a grant.
+
+Note on step 4: **MCP tools are CLI-only in M11.** The web GUI's approval panel
+already carries the server plumbing, but `apps/web/src/converse.ts` offers only
+registry tools, so nothing MCP appears there yet. KNOWN-LIMITS says so.

@@ -202,6 +202,12 @@ every milestone; if a limit is removed, say when and how.*
   re-expose a connected server's tools to anything else.
 - **Stdio servers only.** Remote/http MCP servers are specified in ADR 0033 but
   not implemented; only a local command is supported.
+- **CLI only.** `northkeep converse --tools` offers MCP tools; the web GUI does
+  not yet, though its approval panel already knows how to name a server.
+- **A server must be reviewed before its tools are offered.** Adding one is not
+  enough: run `northkeep mcp tools <id> --accept` and read what it advertises.
+  NorthKeep will not pin whatever it happens to see first, because a server that
+  is hostile on its very first connect would win that pin unexamined.
 - **The argument floor is Tier 1, not Tier 3.** Arguments to a `strict` server
   get the deterministic Tier-1 mask (secrets by shape) rather than full
   name pseudonymization, because Tier 3 needs the local NER model and would make
