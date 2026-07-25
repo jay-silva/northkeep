@@ -1,7 +1,7 @@
 # ADR 0033: The MCP client trust model (M11 foundation)
 
 - **Date:** 2026-07-25
-- **Status:** Proposed
+- **Status:** Accepted (implemented by M11, 2026-07-25)
 - **Deciders:** Jay (product owner), Claude Code
 - **Parent:** ADR 0027 (harness umbrella), ADR 0029 (harness security model)
 
@@ -57,6 +57,8 @@ fingerprint**:
   cannot be used to swap the target.
 - **http:** the exact origin (scheme + host + port), matched exactly, no
   wildcards, inheriting policy.ts's no-subdomain-inheritance rule verbatim.
+  **Not implemented in M11: stdio only.** The http transport is specified here
+  so the identity model covers it, but no code path connects to one yet.
 
 If the fingerprint does not match at connect time, **existing grants do not
 apply and every call asks again**. This is the same fail-closed spirit as
@@ -158,6 +160,17 @@ So **MCP tool arguments redact at the strictest tier by default**, and the
 per-server trust level that relaxes it is **user-declared configuration, never
 inferred**. Local-and-ours is not automatically safer than remote: the vault's
 own server can read every memory.
+
+> **What M11 actually shipped, 2026-07-25.** The floor is the DETERMINISTIC
+> Tier-1 mask over argument string leaves — the same floor a bounded web
+> destination gets — not Tier 3. Reason: Tier 3 needs the local NER model, so
+> making it the default would mean every MCP call refuses whenever Ollama is
+> down, turning a local-tools feature into one that breaks when a background
+> service stops. Tier-1 is always available and always applies. Tier 3 for
+> strict servers remains the target and is future work; until then this
+> document's "strictest tier" means Tier 1, and KNOWN-LIMITS says so.
+> Verified end to end: a strict server asked to store `pipes@example.com`
+> receives `[EMAIL_1]`.
 
 "Strictest tier" needs two things nailed down, or implementers will differ:
 

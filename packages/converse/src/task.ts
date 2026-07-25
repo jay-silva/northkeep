@@ -25,6 +25,8 @@ import { redactJsonLeaves, restoreJsonLeaves } from './jsonLeaves.js';
 import type { ToolDefinition, ToolResult } from './tools/types.js';
 import { placeholderGate, type PermissionGate } from './tools/gate.js';
 import { describeFlag, screenArguments, type ExfilFlag } from './tools/exfil.js';
+import { splitNamespaced } from './tools/mcp/identity.js';
+import { getServer as getMcpServer } from './tools/mcp/config.js';
 import { getToolBudget, reserveDailySpend, withinDailyCap } from './tools/budget.js';
 import { newFenceNonce, untrustedSystemLine, wrapUntrusted } from './tools/untrusted.js';
 
@@ -100,6 +102,12 @@ export interface ApprovalRequest {
   argsPlain: string;
   risk: 'safe-read' | 'consequential';
   egress: { host: string; tier: PrivacyTier } | null;
+  /**
+   * The configured MCP server this call belongs to, when it is an MCP tool
+   * (M11, ADR 0033). Surfaces use it to name what a remembered answer would
+   * apply to, since such a call has no host to name.
+   */
+  server?: string;
   /** Exfil-screen warnings (ADR 0029), one plain sentence each, content-free.
    * Non-empty means grants were bypassed and a human MUST see this call. */
   warnings: string[];
@@ -220,7 +228,13 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   // Structural, not an import of policy.ts: the loop must not depend on any
   // particular gate implementation — see ADR 0029 decision 1.
   const gateRecord = (
-    gate as { record?: (tool: string, host: string, scope: 'session' | 'always' | 'never') => void }
+    gate as {
+      record?: (
+        tool: string,
+        subject: { host: string } | { server: string },
+        scope: 'session' | 'always' | 'never',
+      ) => void;
+    }
   ).record?.bind(gate);
   const tools = options.tools ?? [];
   const toolByName = new Map(tools.map((t) => [t.name, t]));
@@ -515,6 +529,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           break taskLoop;
         }
         const tool = toolByName.get(call.name);
+        // An MCP tool is namespaced `server__tool` by the adapter, so the
+        // server id comes from OUR config, never from model-supplied text
+        // (ADR 0033 D1). It is what a grant keys on when there is no host, and
+        // what the audit row names when there is no domain.
+        const mcpServerId = splitNamespaced(call.name)?.serverId;
         let decision: 'approved' | 'denied' | 'timeout' = 'denied';
         let egressUrl: string | null = null;
         let egressHost: string | undefined;
@@ -574,6 +593,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
               egressUrl !== null && egressHost !== undefined
                 ? { host: egressHost, tier: egressTier }
                 : null;
+
 
             // ---- EXFILTRATION SCREENS (M10c, ADR 0029 decision 1): run IN
             // THE LOOP, before the gate, over the RESTORED plaintext — the
@@ -659,6 +679,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                 risk: tool.risk,
                 modelTier: privacy,
                 toolEgress,
+                ...(mcpServerId !== undefined ? { server: mcpServerId } : {}),
                 screened: screenFlags.length > 0,
               });
               if (gateAnswer === 'deny') {
@@ -678,6 +699,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                     argsPlain: call.arguments,
                     risk: tool.risk,
                     egress: toolEgress,
+                    ...(mcpServerId !== undefined ? { server: mcpServerId } : {}),
                     warnings,
                   },
                   approvalTimeoutMs,
@@ -695,8 +717,14 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                 const recordable =
                   outcome.scope === 'never' ||
                   (tool.risk === 'safe-read' && screenFlags.length === 0);
-                if (outcome.scope !== undefined && egressHost !== undefined && recordable && gateRecord !== undefined) {
-                  gateRecord(call.name, egressHost, outcome.scope);
+                const grantSubject =
+                  mcpServerId !== undefined
+                    ? { server: mcpServerId }
+                    : egressHost !== undefined
+                      ? { host: egressHost }
+                      : undefined;
+                if (outcome.scope !== undefined && grantSubject !== undefined && recordable && gateRecord !== undefined) {
+                  gateRecord(call.name, grantSubject, outcome.scope);
                   // Audit the scope actually REMEMBERED, not what was asked —
                   // a scope we declined to persist must not read as persisted
                   // in the log (G1 nit: provenance honesty).
@@ -765,7 +793,16 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
               // web_fetch is always bounded, and classifyFetchTarget already
               // refused anything private.
               let egressArgs: unknown = parsedArgs;
-              if (egressUrl !== null && egressTier === 'bounded') {
+              // M11 (ADR 0033 Decision 3): an MCP server's real destination is
+              // INVISIBLE to us — it may write to disk, spawn a process, or
+              // make its own network calls. So a 'strict' server (the default)
+              // gets the same deterministic floor a bounded web destination
+              // gets, rather than raw plaintext. 'trusted' is user-declared and
+              // never inferred: the vault's own server needs the real query,
+              // and masking a memory_remember would corrupt what gets stored.
+              const mcpStrict =
+                mcpServerId !== undefined && getMcpServer(mcpServerId)?.trust !== 'trusted';
+              if (mcpStrict || (egressUrl !== null && egressTier === 'bounded')) {
                 const masked = await redactJsonLeaves(
                   call.arguments,
                   (leaf) => applyTier1(leaf).text,
@@ -868,6 +905,10 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           tool_call: {
             name: call.name,
             ...(egressHost !== undefined ? { domain: egressHost } : {}),
+            // An MCP call has no domain, so the audit names the SERVER instead
+            // (ADR 0033): a row must always say WHAT was called, not just that
+            // something was. The id is our own config value, never model text.
+            ...(mcpServerId !== undefined ? { mcp_server: mcpServerId } : {}),
             ...(egressUrl !== null ? { url_hash: sha256(egressUrl) } : {}),
             args_hash: sha256(call.arguments),
             arg_chars: call.arguments.length,

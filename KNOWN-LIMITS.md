@@ -163,6 +163,52 @@ every milestone; if a limit is removed, say when and how.*
 - **fetch is https-only, ports 443/8443, GET, no cookies, ever.** Content
   types beyond HTML/text/JSON/XML are refused without reading the body.
 
+## M11 (MCP client tools), current
+
+- **A configured MCP server is a local program with your privileges.** The
+  launch fingerprint that binds your approvals covers the resolved command
+  path, its arguments, the working directory and the environment the config
+  sets. It detects CONFIGURATION changes, not PROGRAM changes: replace the file
+  at that path and the fingerprint is identical. For the usual
+  `node server.js` shape, what is pinned is an interpreter plus a script whose
+  contents and dependencies can change freely. Trust an MCP server the way you
+  trust any program you install; no approval prompt substitutes for that.
+- **We can prove what we sent a server. We cannot prove what it did next.** A
+  server may write to disk, spawn processes, or make its own network calls, none
+  of which are visible to us. That is why arguments to an MCP tool are redacted
+  at the strictest tier by default, and why the privacy proof describes what left
+  for the server rather than where it ultimately went.
+- **Every MCP tool asks EVERY time until you declare it read-only.** Risk is
+  user-declared (`northkeep mcp safe-read <server> <tools>`); anything
+  undeclared is treated as consequential, which can never hold an "always"
+  grant. Remembering "yes" to an irreversible action is how approval fatigue
+  becomes data loss.
+- **Definitions are pinned, and a change refuses rather than proceeds.** The pin
+  covers every advertised tool's name, description and input schema, because a
+  description is read by the model while it decides what to do. A server that
+  changes them, at reconnect or mid-conversation, stops working until you review
+  it with `northkeep mcp tools <id>`.
+- **`--env` values are stored in plain text** in `~/.northkeep/mcp.json` (0600).
+  Do not put API keys or passphrases there. A server that needs a secret should
+  read it from its own keychain or config.
+- **MCP tools have no spend cap.** The budget keys on a per-call cost, which MCP
+  tools do not declare, so a server fronting a paid API is bounded only by the
+  agent loop's step limit and your approvals. A per-server call cap is future
+  work.
+- **Non-text tool results are omitted, not rendered.** Images and embedded
+  resources from a server show as `[image content omitted]`: they are another
+  content channel we have not screened.
+- **One level deep.** NorthKeep is an MCP client here, not a proxy: it does not
+  re-expose a connected server's tools to anything else.
+- **Stdio servers only.** Remote/http MCP servers are specified in ADR 0033 but
+  not implemented; only a local command is supported.
+- **The argument floor is Tier 1, not Tier 3.** Arguments to a `strict` server
+  get the deterministic Tier-1 mask (secrets by shape) rather than full
+  name pseudonymization, because Tier 3 needs the local NER model and would make
+  every MCP call fail whenever Ollama is stopped. Names and other Tier-2/3
+  content therefore reach a strict server unmasked. Declare a server `trusted`
+  only when it should see raw content, as NorthKeep's own vault server must.
+
 ## M10d (web_search + spend budget), current
 
 - **The budget is a call COUNT, not a dollar ledger.** A persisted daily cap

@@ -55,6 +55,33 @@ export {
   type ExfilScreenInput,
 } from './tools/exfil.js';
 export {
+  connectServer,
+  McpFingerprintChangedError,
+  McpPinChangedError,
+  type McpConnection,
+  type McpClientLike,
+} from './tools/mcp/client.js';
+export {
+  addServer,
+  getServer,
+  loadMcpConfig,
+  mcpConfigPath,
+  removeServer,
+  riskOf,
+  setSafeRead,
+  setToolsPin,
+  type McpConfig,
+  type McpServerConfig,
+  type McpTrust,
+} from './tools/mcp/config.js';
+export {
+  fingerprintLaunch,
+  isValidServerId,
+  namespacedName,
+  pinTools,
+  splitNamespaced,
+} from './tools/mcp/identity.js';
+export {
   addGrant,
   clearGrants,
   createPermissionEngine,
@@ -63,6 +90,11 @@ export {
   permissionsPath,
   removeGrant,
   type GrantScope,
+  type GrantSubject,
+  grantSubject,
+  hostSubject,
+  serverSubject,
+  subjectLabel,
   type PermissionEngine,
   type PermissionGrant,
   type PermissionsConfig,

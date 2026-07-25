@@ -8,6 +8,7 @@ import {
   createPermissionEngine,
   createSession,
   daySpend,
+  hostSubject,
   placeholderGate,
   reserveDailySpend,
   redactJsonLeaves,
@@ -729,7 +730,7 @@ describe('runTask — the agent loop', () => {
     // A standing 'always' grant on the exfil host — the auto-allow path the
     // attack relies on.
     const engine = createPermissionEngine({ persist: false });
-    engine.record('echo', 'evil.example', 'always');
+    engine.record('echo', hostSubject('evil.example'), 'always');
     const session = createSession();
     const approvals: ApprovalRequest[] = [];
     const base = {

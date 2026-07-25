@@ -416,8 +416,12 @@ export async function handleConverseStream(
       } catch {
         query = null;
       }
+      // ADR 0033 Decision 4: an ALLOW scope needs a subject and a clean
+      // safe-read call; a NEVER is offered for anything with a subject.
+      const hasSubject = approvalReq.egress !== null || approvalReq.server !== undefined;
       const offerScopes =
-        approvalReq.egress !== null && approvalReq.risk === 'safe-read' && approvalReq.warnings.length === 0;
+        hasSubject && approvalReq.risk === 'safe-read' && approvalReq.warnings.length === 0;
+      const offerNever = hasSubject;
       return new Promise<ApprovalAnswer>((resolve) => {
         // Self-deny by DELETION on timeout so a late approve 404s (Decision 3);
         // unref so a pending prompt never keeps the process alive.
@@ -436,6 +440,8 @@ export async function handleConverseStream(
           risk: approvalReq.risk,
           warnings: approvalReq.warnings,
           offer_scopes: offerScopes,
+          offer_never: offerNever,
+          ...(approvalReq.server !== undefined ? { mcp_server: approvalReq.server } : {}),
         });
       });
     },

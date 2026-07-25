@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addGrant,
+  hostSubject,
   createOpenAICompatibleProvider,
   createPermissionEngine,
   createSession,
@@ -276,7 +277,7 @@ describe('M10c acceptance — permission engine + exfiltration screens', () => {
   });
 
   it('base64-smuggled vault memory forces a WARNED prompt even with an always-grant on the host', async () => {
-    addGrant('web_fetch', 'blocked-fixture.test', 'always');
+    addGrant('web_fetch', hostSubject('blocked-fixture.test'), 'always');
     const engine = createPermissionEngine({ persist: true });
     const prompts: ApprovalRequest[] = [];
     const hooks: TaskHooks = {
@@ -302,7 +303,7 @@ describe('M10c acceptance — permission engine + exfiltration screens', () => {
   });
 
   it('a persisted "never" grant refuses without prompting', async () => {
-    addGrant('web_fetch', 'never-fixture.test', 'never');
+    addGrant('web_fetch', hostSubject('never-fixture.test'), 'never');
     const engine = createPermissionEngine({ persist: true });
     const prompts: ApprovalRequest[] = [];
     const events: TaskEvent[] = [];

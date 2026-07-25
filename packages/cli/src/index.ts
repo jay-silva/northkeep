@@ -65,6 +65,7 @@ import {
   shareSyncCmd,
 } from './shareCmd.js';
 import { routingClear, routingList, routingSet } from './routingCmd.js';
+import { mcpAdd, mcpList, mcpRemove, mcpSafeRead, mcpTools } from './mcpCmd.js';
 import { toolsBudget, toolsDisable, toolsEnable, toolsGrants, toolsList, toolsRevoke } from './toolsCmd.js';
 import { collectScopes, connectCmd, connectStatusCmd, disconnectCmd } from './connectCmd.js';
 import { runLauncher } from './launcher.js';
@@ -555,6 +556,56 @@ program
   .option('--tools', 'enable agent tools for this conversation (registry-enabled tools only; every call asks first)')
   .action(async (options: ConverseCmdOptions) => {
     await runConverse(options, withVault);
+  });
+
+const mcpGroup = program
+  .command('mcp')
+  .description('MCP servers your chat can use as tools (M11) — you configure them, never the model');
+
+mcpGroup
+  .command('list', { isDefault: true })
+  .description('Show configured MCP servers')
+  .action(() => {
+    mcpList();
+  });
+
+mcpGroup
+  .command('add')
+  .description('Add an MCP server (approvals bind to its launch configuration)')
+  .argument('<id>', 'short id, lowercase letters/digits/hyphens — becomes the tool namespace')
+  .requiredOption('--command <path>', 'absolute path to the executable (PATH is never consulted)')
+  .option('--arg <value...>', 'argument to pass (repeatable)')
+  .option('--cwd <path>', 'working directory')
+  .option('--env <NAME=VALUE...>', 'environment variable for the server (repeatable)')
+  .option('--safe-read <tools>', 'comma-separated tools that only READ (may be remembered with "always")')
+  .action((id: string, options: { command?: string; arg?: string[]; cwd?: string; env?: string[]; safeRead?: string }) => {
+    mcpAdd(id, options, fail);
+  });
+
+mcpGroup
+  .command('remove')
+  .description('Remove an MCP server so its tools are no longer offered')
+  .argument('<id>', 'server id')
+  .action((id: string) => {
+    mcpRemove(id, fail);
+  });
+
+mcpGroup
+  .command('safe-read')
+  .description('Declare which of a server\'s tools only read (everything else asks every time)')
+  .argument('<id>', 'server id')
+  .argument('<tools>', 'comma-separated tool names, or "" to clear')
+  .action((id: string, tools: string) => {
+    mcpSafeRead(id, tools, fail);
+  });
+
+mcpGroup
+  .command('tools')
+  .description('Connect and show exactly what a server advertises, and whether it changed')
+  .argument('<id>', 'server id')
+  .option('--accept', 'accept the current definitions as the approved ones')
+  .action(async (id: string, options: { accept?: boolean }) => {
+    await mcpTools(id, options.accept === true, fail);
   });
 
 const toolsGroup = program

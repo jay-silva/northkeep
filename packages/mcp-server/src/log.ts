@@ -55,6 +55,10 @@ export interface CallLogEntry {
     name: string;
     /** Hostname the call egressed to (host only, like endpoint_host). */
     domain?: string;
+    /** For an MCP tool call (M11, ADR 0033), the configured server id. Such a
+     * call has no domain, and a row that named neither would not say WHAT ran.
+     * A config value, never model-supplied text, so it stays content-free. */
+    mcp_server?: string;
     /** sha256 of the full egress URL (the URL itself is never logged). */
     url_hash?: string;
     /** sha256 of the plaintext argument JSON (never the arguments). */

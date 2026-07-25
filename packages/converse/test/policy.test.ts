@@ -5,6 +5,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addGrant,
   clearGrants,
+  hostSubject,
+  serverSubject,
   createPermissionEngine,
   listGrants,
   loadPermissions,
@@ -96,7 +98,7 @@ describe('permissions store', () => {
   });
 
   it('writes 0600 and round-trips, lowercasing the host', () => {
-    addGrant('web_fetch', 'Example.COM', 'always');
+    addGrant('web_fetch', hostSubject('Example.COM'), 'always');
     const mode = fs.statSync(permissionsPath()).mode & 0o777;
     expect(mode).toBe(0o600);
     const grants = listGrants();
@@ -110,28 +112,28 @@ describe('permissions store', () => {
     // umask could leave an existing file world-readable. chmod every write.
     fs.writeFileSync(permissionsPath(), '{"version":1,"grants":[]}\n', { mode: 0o644 });
     expect(fs.statSync(permissionsPath()).mode & 0o777).toBe(0o644);
-    addGrant('web_fetch', 'example.com', 'always');
+    addGrant('web_fetch', hostSubject('example.com'), 'always');
     expect(fs.statSync(permissionsPath()).mode & 0o777).toBe(0o600);
   });
 
   it('upserts on the (tool, host) key, case-insensitively', () => {
-    addGrant('web_fetch', 'example.com', 'always');
-    addGrant('web_fetch', 'EXAMPLE.com', 'never'); // same key → replace
+    addGrant('web_fetch', hostSubject('example.com'), 'always');
+    addGrant('web_fetch', hostSubject('EXAMPLE.com'), 'never'); // same key → replace
     const grants = listGrants();
     expect(grants).toHaveLength(1);
     expect(grants[0]!.scope).toBe('never');
   });
 
   it('removeGrant reports whether anything was removed', () => {
-    addGrant('web_fetch', 'example.com', 'always');
-    expect(removeGrant('web_fetch', 'nope.example')).toBe(false);
-    expect(removeGrant('web_fetch', 'Example.Com')).toBe(true);
+    addGrant('web_fetch', hostSubject('example.com'), 'always');
+    expect(removeGrant('web_fetch', hostSubject('nope.example'))).toBe(false);
+    expect(removeGrant('web_fetch', hostSubject('Example.Com'))).toBe(true);
     expect(listGrants()).toEqual([]);
   });
 
   it('clearGrants returns how many were removed', () => {
-    addGrant('web_fetch', 'a.example', 'always');
-    addGrant('web_fetch', 'b.example', 'never');
+    addGrant('web_fetch', hostSubject('a.example'), 'always');
+    addGrant('web_fetch', hostSubject('b.example'), 'never');
     expect(clearGrants()).toBe(2);
     expect(clearGrants()).toBe(0);
     expect(listGrants()).toEqual([]);
@@ -161,34 +163,34 @@ describe('permission engine (evaluate decision order)', () => {
 
   it("step 1: 'never' beats everything, including a session allow", async () => {
     const engine = createPermissionEngine();
-    engine.record('web_fetch', 'example.com', 'session');
-    engine.record('web_fetch', 'example.com', 'never');
+    engine.record('web_fetch', hostSubject('example.com'), 'session');
+    engine.record('web_fetch', hostSubject('example.com'), 'never');
     await expect(engine.evaluate(req())).resolves.toBe('deny');
   });
 
   it("step 2: consequential NEVER auto-allows, grants notwithstanding", async () => {
     const engine = createPermissionEngine({ persist: true });
-    addGrant('web_fetch', 'example.com', 'always');
-    engine.record('web_fetch', 'example.com', 'session');
+    addGrant('web_fetch', hostSubject('example.com'), 'always');
+    engine.record('web_fetch', hostSubject('example.com'), 'session');
     await expect(engine.evaluate(req({ risk: 'consequential' }))).resolves.toBe('ask');
   });
 
   it('step 3: a screened call never auto-allows, grants notwithstanding', async () => {
     const engine = createPermissionEngine({ persist: true });
-    addGrant('web_fetch', 'example.com', 'always');
-    engine.record('web_fetch', 'example.com', 'session');
+    addGrant('web_fetch', hostSubject('example.com'), 'always');
+    engine.record('web_fetch', hostSubject('example.com'), 'session');
     await expect(engine.evaluate(req({ screened: true }))).resolves.toBe('ask');
   });
 
   it("a screened call with a 'never' grant still denies (step 1 first)", async () => {
     const engine = createPermissionEngine();
-    engine.record('web_fetch', 'example.com', 'never');
+    engine.record('web_fetch', hostSubject('example.com'), 'never');
     await expect(engine.evaluate(req({ screened: true }))).resolves.toBe('deny');
   });
 
   it('step 4: a session grant auto-allows in this instance only', async () => {
     const engine = createPermissionEngine();
-    engine.record('web_fetch', 'example.com', 'session');
+    engine.record('web_fetch', hostSubject('example.com'), 'session');
     await expect(engine.evaluate(req())).resolves.toBe('auto-allow');
     const fresh = createPermissionEngine();
     await expect(fresh.evaluate(req())).resolves.toBe('ask');
@@ -196,7 +198,7 @@ describe('permission engine (evaluate decision order)', () => {
 
   it("step 4: a persisted 'always' grant survives across engine instances (persist:true)", async () => {
     const a = createPermissionEngine({ persist: true });
-    a.record('web_fetch', 'example.com', 'always');
+    a.record('web_fetch', hostSubject('example.com'), 'always');
     const b = createPermissionEngine({ persist: true });
     await expect(b.evaluate(req())).resolves.toBe('auto-allow');
   });
@@ -204,12 +206,12 @@ describe('permission engine (evaluate decision order)', () => {
   it('persist:false (the default) never reads or writes the file', async () => {
     // Writes: recording 'always'/'never' must not create the file.
     const engine = createPermissionEngine();
-    engine.record('web_fetch', 'example.com', 'always');
-    engine.record('web_fetch', 'other.example', 'never');
+    engine.record('web_fetch', hostSubject('example.com'), 'always');
+    engine.record('web_fetch', hostSubject('other.example'), 'never');
     await expect(engine.evaluate(req())).resolves.toBe('auto-allow'); // in-process only
     expect(fs.existsSync(permissionsPath())).toBe(false);
     // Reads: a pre-seeded file's grants are invisible to a persist:false engine.
-    addGrant('web_fetch', 'seeded.example', 'always');
+    addGrant('web_fetch', hostSubject('seeded.example'), 'always');
     await expect(
       engine.evaluate(req({ toolEgress: { host: 'seeded.example', tier: 'bounded' } })),
     ).resolves.toBe('ask');
@@ -217,7 +219,7 @@ describe('permission engine (evaluate decision order)', () => {
 
   it("persist:false 'always' degrades to session semantics (lost with the instance)", async () => {
     const engine = createPermissionEngine();
-    engine.record('web_fetch', 'example.com', 'always');
+    engine.record('web_fetch', hostSubject('example.com'), 'always');
     await expect(engine.evaluate(req())).resolves.toBe('auto-allow');
     const restarted = createPermissionEngine();
     await expect(restarted.evaluate(req())).resolves.toBe('ask');
@@ -225,7 +227,7 @@ describe('permission engine (evaluate decision order)', () => {
 
   it('host matching is case-insensitive', async () => {
     const engine = createPermissionEngine({ persist: true });
-    engine.record('web_fetch', 'Example.COM', 'always');
+    engine.record('web_fetch', hostSubject('Example.COM'), 'always');
     await expect(
       engine.evaluate(req({ toolEgress: { host: 'EXAMPLE.com', tier: 'bounded' } })),
     ).resolves.toBe('auto-allow');
@@ -233,7 +235,7 @@ describe('permission engine (evaluate decision order)', () => {
 
   it('NO subdomain inheritance: example.com does not cover api.example.com', async () => {
     const engine = createPermissionEngine({ persist: true });
-    engine.record('web_fetch', 'example.com', 'always');
+    engine.record('web_fetch', hostSubject('example.com'), 'always');
     await expect(
       engine.evaluate(req({ toolEgress: { host: 'api.example.com', tier: 'bounded' } })),
     ).resolves.toBe('ask');
@@ -241,19 +243,19 @@ describe('permission engine (evaluate decision order)', () => {
 
   it('grants are per-tool: a web_fetch grant does not cover another tool', async () => {
     const engine = createPermissionEngine();
-    engine.record('web_fetch', 'example.com', 'session');
+    engine.record('web_fetch', hostSubject('example.com'), 'session');
     await expect(engine.evaluate(req({ tool: 'web_search' }))).resolves.toBe('ask');
   });
 
   it('no-egress requests (toolEgress: null) always ask in v1', async () => {
     const engine = createPermissionEngine({ persist: true });
-    engine.record('web_fetch', 'example.com', 'always');
+    engine.record('web_fetch', hostSubject('example.com'), 'always');
     await expect(engine.evaluate(req({ toolEgress: null }))).resolves.toBe('ask');
   });
 
   it("record('session') never persists, even with persist:true", async () => {
     const engine = createPermissionEngine({ persist: true });
-    engine.record('web_fetch', 'example.com', 'session');
+    engine.record('web_fetch', hostSubject('example.com'), 'session');
     expect(fs.existsSync(permissionsPath())).toBe(false);
     const restarted = createPermissionEngine({ persist: true });
     await expect(restarted.evaluate(req())).resolves.toBe('ask');
@@ -261,9 +263,9 @@ describe('permission engine (evaluate decision order)', () => {
 
   it('revocation takes effect immediately, mid-instance (persist:true)', async () => {
     const engine = createPermissionEngine({ persist: true });
-    engine.record('web_fetch', 'example.com', 'always');
+    engine.record('web_fetch', hostSubject('example.com'), 'always');
     await expect(engine.evaluate(req())).resolves.toBe('auto-allow');
-    removeGrant('web_fetch', 'example.com'); // e.g. `northkeep tools revoke`
+    removeGrant('web_fetch', hostSubject('example.com')); // e.g. `northkeep tools revoke`
     await expect(engine.evaluate(req())).resolves.toBe('ask');
   });
 });

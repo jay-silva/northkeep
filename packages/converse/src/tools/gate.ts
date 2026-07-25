@@ -22,6 +22,13 @@ export interface PermissionRequest {
   /** Where the tool call's arguments would egress to; null = no egress. */
   toolEgress: { host: string; tier: PrivacyTier } | null;
   /**
+   * For an MCP tool, the configured server id this call belongs to (M11, ADR
+   * 0033 Decision 1). Grants for such a tool key on (server, tool), because a
+   * stdio server has no host to key on. Derived by the loop from our own
+   * config — never from model-supplied text.
+   */
+  server?: string;
+  /**
    * True when the loop's exfiltration screens flagged this call (the loop
    * computes and passes this; the gate never does). A screened call must
    * reach human eyes — the ADR-0029 engine answers 'ask' for it regardless

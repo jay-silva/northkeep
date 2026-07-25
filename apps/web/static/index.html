@@ -2710,6 +2710,9 @@
       const box = ensureToolBox();
       hideToolThinking(); clearInitThink();
       const host = ev.egress && ev.egress.host;
+      // An MCP call has no host: it names the configured SERVER instead, so the
+      // user is never asked to approve a thing with no name (M11, ADR 0033).
+      const subject = host || (ev.mcp_server ? 'mcp server "' + ev.mcp_server + '"' : '');
       const warned = (ev.warnings || []).length > 0;
       const panel = el('div', 'toolask' + (warned ? ' warn' : ''));
       // The human-readable ask: the query for a search, the tool + raw args
@@ -2717,7 +2720,7 @@
       panel.appendChild(el('p', 'ask-what',
         ev.tool === 'web_search' ? 'Search for: "' + (ev.query ?? '') + '"' : ev.tool));
       if (ev.tool !== 'web_search' && ev.args_plain) panel.appendChild(el('div', 'ask-args', ev.args_plain));
-      if (host) panel.appendChild(el('div', 'ask-host', '→ ' + host));
+      if (subject) panel.appendChild(el('div', 'ask-host', '→ ' + subject));
       // Screen / identity / memory warnings render loudly ABOVE the buttons — a
       // screened call is offer_scopes:false and must be seen every time.
       for (const w of (ev.warnings || [])) {
@@ -2754,14 +2757,17 @@
         buttons.push(b); btns.appendChild(b);
       };
       addBtn('Allow once', 'allow', 'primary');
-      // Scope buttons only when the server offers them (a safe read of a concrete,
-      // screen-clean host); a screened or host-less call is yes-once / no only.
+      // ALLOW scopes need a clean safe-read call with a subject to key on. A
+      // remembered NO is offered whenever there is a subject at all: saying
+      // "yes" forever to an irreversible action is how approval fatigue turns
+      // into data loss, while saying "no" forever can only narrow what runs
+      // (ADR 0033 Decision 4).
       if (ev.offer_scopes) {
         addBtn('Allow this session', 'allow-session', '');
-        addBtn('Always for ' + host, 'allow-always', '');
+        addBtn('Always for ' + subject, 'allow-always', '');
       }
       addBtn('Deny', 'deny', 'danger');
-      if (ev.offer_scopes) addBtn('Never for ' + host, 'deny-never', 'danger');
+      if (ev.offer_never ?? ev.offer_scopes) addBtn('Never for ' + subject, 'deny-never', 'danger');
       panel.appendChild(btns);
       panel.appendChild(status);
       box.appendChild(panel);

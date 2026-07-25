@@ -9,6 +9,8 @@ import {
   loadToolsConfig,
   permissionsPath,
   removeGrant,
+  hostSubject,
+  serverSubject,
   setToolBudget,
   setToolEnabled,
   toolsConfigPath,
@@ -87,13 +89,16 @@ export function toolsGrants(): void {
   }
   for (const g of grants) {
     const scope = g.scope === 'never' ? `${RED}never${RESET}` : `${GREEN}always${RESET}`;
+    // A grant names either a host (web tools) or a configured MCP server,
+    // which has no host to name (ADR 0033 Decision 1).
+    const subject = g.server !== undefined ? `mcp:${g.server}` : (g.host ?? '?');
     console.log(
-      `  ${g.tool.padEnd(12)} ${g.host.padEnd(28)} ${scope} · granted ${g.createdAt.slice(0, 10)}`,
+      `  ${g.tool.padEnd(20)} ${subject.padEnd(28)} ${scope} · granted ${g.createdAt.slice(0, 10)}`,
     );
   }
   console.log(`\n${DIM}Stored in ${permissionsPath()} (settings only — no secrets, no content).${RESET}`);
   console.log(
-    `${DIM}Revoke with: northkeep tools revoke <tool> <host> · everything: northkeep tools revoke --all${RESET}`,
+    `${DIM}Revoke with: northkeep tools revoke <tool> <host|mcp:server> · everything: northkeep tools revoke --all${RESET}`,
   );
 }
 
@@ -120,9 +125,13 @@ export function toolsRevoke(
     return;
   }
   if (tool === undefined || host === undefined) {
-    fail('Usage: northkeep tools revoke <tool> <host> (or: northkeep tools revoke --all)');
+    fail('Usage: northkeep tools revoke <tool> <host|mcp:server> (or: northkeep tools revoke --all)');
   }
-  if (!removeGrant(tool, host)) {
+  // "mcp:<id>" addresses a server grant; anything else is a host.
+  const subject = host.startsWith('mcp:')
+    ? serverSubject(host.slice(4))
+    : hostSubject(host);
+  if (!removeGrant(tool, subject)) {
     fail(`No such grant: ${tool} ${host}. See what exists with: northkeep tools grants`);
   }
   console.log(`✓ Revoked: ${tool} ${host}. Calls there ask again.`);

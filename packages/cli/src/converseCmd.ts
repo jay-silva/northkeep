@@ -1,5 +1,6 @@
 import readline from 'node:readline/promises';
 import { DIM, GREEN, YELLOW, RED, RESET, createSpinner } from './ui.js';
+import { collectMcpTools } from './mcpCmd.js';
 import type { Vault } from '@northkeep/core';
 import { createOllamaClient, type OllamaClient } from '@northkeep/librarian';
 import {
@@ -103,11 +104,21 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   // registry (~/.northkeep/tools.json). Nothing enabled → say so and refuse
   // rather than silently running a plain chat the user thought had tools.
   let taskTools: ToolDefinition[] = [];
+  let closeMcp: (() => Promise<void>) | null = null;
   if (options.tools === true) {
     taskTools = enabledTools();
+    // M11 (ADR 0033): configured MCP servers contribute their tools too,
+    // namespaced <server>__<tool>. A server that fails identity or pin checks
+    // is reported by collectMcpTools and skipped — never silently dropped.
+    const mcp = await collectMcpTools();
+    closeMcp = mcp.close;
+    taskTools = [...taskTools, ...mcp.tools];
     if (taskTools.length === 0) {
+      await closeMcp();
       throw new Error(
-        'No tools are enabled. Enable one first:\n  northkeep tools enable web_fetch\nThen re-run: northkeep converse --tools',
+        'No tools are enabled. Enable a web tool:\n  northkeep tools enable web_fetch\n' +
+          'or add an MCP server:\n  northkeep mcp add <id> --command <absolute path>\n' +
+          'Then re-run: northkeep converse --tools',
       );
     }
   }
@@ -161,6 +172,9 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   });
   rl.on('close', () => {
     stdinClosed = true;
+    // Stdio MCP servers are child processes; leaving them running after the
+    // REPL exits would strand them holding a vault handle.
+    void closeMcp?.();
     while (waiters.length) waiters.shift()!(null);
   });
   const nextLine = (promptText: string): Promise<string | null> => {
@@ -245,16 +259,27 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       // Site-scoped answers exist only for read-only calls with a concrete
       // host and no screen warnings; everything else is yes-once/no (a
       // consequential call and a flagged call must be seen every time).
-      const offerScopes = req.egress !== null && req.risk === 'safe-read' && req.warnings.length === 0;
-      const site = req.egress?.host ?? '';
+      // ADR 0033 Decision 4: a remembered ALLOW needs a subject to key on and
+      // is only offered for a clean safe-read call, but a remembered NO is
+      // offered for EVERY call with a subject — remembering "yes" to an
+      // irreversible action is how approval fatigue becomes data loss, while
+      // remembering "no" can only ever narrow what runs.
+      const hasSubject = req.egress !== null || req.server !== undefined;
+      const offerScopes = hasSubject && req.risk === 'safe-read' && req.warnings.length === 0;
+      const offerNever = hasSubject;
+      // What a remembered answer would apply to: a host for a web tool, the
+      // configured server for an MCP tool.
+      const site = req.egress?.host ?? (req.server !== undefined ? `mcp:${req.server}` : '');
       const options = offerScopes
         ? `[y]es once / [s] yes this session for ${site} / [a]lways for ${site} / [n]o / ne[v]er for ${site}`
-        : '[y]es once / [n]o';
+        : offerNever
+          ? `[y]es once / [n]o / ne[v]er for ${site}`
+          : '[y]es once / [n]o';
       const answer = (await nextLine(`${what} ${options}: `))?.trim().toLowerCase() ?? '';
       if (/^y(es)?$/.test(answer)) return 'allow';
       if (offerScopes && /^s(ession)?$/.test(answer)) return 'allow-session';
       if (offerScopes && /^a(lways)?$/.test(answer)) return 'allow-always';
-      if (offerScopes && /^(v|never)$/.test(answer)) return 'deny-never';
+      if (offerNever && /^(v|never)$/.test(answer)) return 'deny-never';
       return 'deny'; // fail closed: EOF, typos, anything else
     },
   };
