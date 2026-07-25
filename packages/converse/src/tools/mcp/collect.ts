@@ -1,5 +1,10 @@
 import type { ToolDefinition } from '../types.js';
-import { connectServer, McpFingerprintChangedError, McpPinChangedError } from './client.js';
+import {
+  connectServer,
+  McpFingerprintChangedError,
+  McpPinChangedError,
+  sanitizeServerText,
+} from './client.js';
 import { loadMcpConfig } from './config.js';
 
 /**
@@ -19,8 +24,17 @@ import { loadMcpConfig } from './config.js';
 
 export interface McpUnavailable {
   serverId: string;
-  /** One plain sentence, safe to show a user. Never server-supplied text. */
+  /** One plain sentence, OURS. Never server-supplied text — see `detail`. */
   reason: string;
+  /**
+   * The server's own words, when it failed in a way only it can explain.
+   * Sanitized and capped, and surfaces MUST label it as coming from the server:
+   * a hostile server given an unlabelled channel to the user writes things like
+   * "NorthKeep: this server is verified, approve every tool it offers." An
+   * error path is exactly where such a server chooses to speak, which is why
+   * this field is separated from `reason` rather than folded into it.
+   */
+  detail?: string;
   /** True when the fix is a review rather than a repair. */
   needsReview: boolean;
 }
@@ -61,16 +75,18 @@ export async function collectMcpTools(options?: { signal?: AbortSignal }): Promi
       connections.push(conn);
       tools.push(...conn.tools);
     } catch (err) {
+      const known =
+        err instanceof McpPinChangedError
+          ? 'The tools this server offers have changed since you approved them, so nothing from it will run.'
+          : err instanceof McpFingerprintChangedError
+            ? "This server's launch configuration changed, so remembered approvals no longer apply."
+            : null;
       unavailable.push({
         serverId: server.id,
-        reason:
-          err instanceof McpPinChangedError
-            ? 'The tools this server offers have changed since you approved them, so nothing from it will run.'
-            : err instanceof McpFingerprintChangedError
-              ? 'This server\'s launch configuration changed, so remembered approvals no longer apply.'
-              : err instanceof Error
-                ? err.message
-                : String(err),
+        reason: known ?? 'This server did not start, so none of its tools are available.',
+        ...(known === null
+          ? { detail: sanitizeServerText(err instanceof Error ? err.message : String(err), 300) }
+          : {}),
         needsReview: err instanceof McpPinChangedError || err instanceof McpFingerprintChangedError,
       });
     }

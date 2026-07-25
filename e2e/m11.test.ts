@@ -508,6 +508,55 @@ describe('M11 GUI — the same servers, the same gate, over HTTP', () => {
     expect((await call('/api/mcp/remove', { method: 'POST', json: { id: 'nope' } })).status).toBe(404);
   }, 60_000);
 
+
+  it('safe-read accepts the NAMESPACED names the panel shows, and really applies them', async () => {
+    // The inspect route returns `vault__memory_list`, but risk is matched on the
+    // bare name — so accepting the displayed form used to return 200 and change
+    // nothing. A permission setting that silently does not apply is the failure
+    // mode invariant #6 exists to prevent.
+    // Establish the precondition rather than assuming it: only memory_retrieve
+    // is read-only, so memory_list must currently be consequential.
+    await call('/api/mcp/safe-read', {
+      method: 'POST',
+      json: { id: 'vault', tools: ['memory_retrieve'] },
+    });
+    const before = await call('/api/mcp/inspect', { method: 'POST', json: { id: 'vault' } });
+    const listBefore = (before.body.tools as Array<Record<string, unknown>>).find(
+      (t) => t.name === 'vault__memory_list',
+    )!;
+    expect(listBefore.risk).toBe('consequential');
+
+    const set = await call('/api/mcp/safe-read', {
+      method: 'POST',
+      json: { id: 'vault', tools: ['vault__memory_retrieve', 'vault__memory_list'] },
+    });
+    expect(set.status).toBe(200);
+
+    const after = await call('/api/mcp/inspect', { method: 'POST', json: { id: 'vault' } });
+    const listAfter = (after.body.tools as Array<Record<string, unknown>>).find(
+      (t) => t.name === 'vault__memory_list',
+    )!;
+    expect(listAfter.risk).toBe('safe-read');
+    // Restore the original declaration for any later test.
+    await call('/api/mcp/safe-read', {
+      method: 'POST',
+      json: { id: 'vault', tools: ['memory_retrieve', 'memory_list'] },
+    });
+  }, 60_000);
+
+  it('refuses a tool name belonging to a DIFFERENT server rather than silently ignoring it', async () => {
+    const res = await call('/api/mcp/safe-read', {
+      method: 'POST',
+      json: { id: 'vault', tools: ['other__memory_list'] },
+    });
+    expect(res.status).toBe(400);
+  }, 60_000);
+
+  it('caps the safe-read list so a huge write cannot bloat the config read on every turn', async () => {
+    const many = Array.from({ length: 200 }, (_, i) => `t${i}`);
+    expect((await call('/api/mcp/safe-read', { method: 'POST', json: { id: 'vault', tools: many } })).status).toBe(400);
+  }, 60_000);
+
   it('requires the session token like every other route', async () => {
     const res = await fetch(`${baseUrl}/api/mcp`);
     expect(res.status).toBe(401);

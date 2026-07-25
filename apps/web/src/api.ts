@@ -79,6 +79,7 @@ import {
   setSafeRead,
   setToolsPin,
   connectServer,
+  sanitizeServerText,
   loadRoutingPolicy,
   lookupModel,
   recommendLocalModel,
@@ -802,10 +803,22 @@ async function dispatch(
     const server = getMcpServer(id);
     if (server === undefined) return bad(404, `No such MCP server: ${id}`);
     let conn;
+    const skipped: string[] = [];
     try {
-      conn = await connectServer(server, { enforcePin: false });
+      conn = await connectServer(server, {
+        enforcePin: false,
+        // The browser review screen must show what a server tried to sneak
+        // past us, not just what survived — otherwise it is strictly less
+        // informative than the terminal on the one question it exists to answer.
+        onSkipped: (_id, reasons) => skipped.push(...reasons),
+      });
     } catch (err) {
-      return bad(400, err instanceof Error ? err.message : String(err));
+      // A failing server's message is ITS text. Sanitize it, cap it, and let
+      // the client label it — an error path is where a hostile server speaks.
+      return bad(
+        400,
+        `This server did not start. It said: ${sanitizeServerText(err instanceof Error ? err.message : String(err), 300)}`,
+      );
     }
     try {
       return ok({
@@ -813,6 +826,7 @@ async function dispatch(
         pin: conn.pin,
         reviewed: server.toolsPin !== undefined,
         changed: server.toolsPin !== undefined && server.toolsPin !== conn.pin,
+        skipped,
         tools: conn.tools.map((t) => ({
           name: t.name,
           // Already stripped of control characters by the adapter; the browser
@@ -846,8 +860,22 @@ async function dispatch(
     if (!Array.isArray(tools) || tools.some((t) => typeof t !== 'string')) {
       return bad(400, 'tools must be an array of tool names.');
     }
+    if (tools.length > 64) return bad(400, 'Too many tools (max 64).');
+    if ((tools as string[]).some((t) => t.length > 64)) return bad(400, 'Tool name too long.');
     if (getMcpServer(id) === undefined) return bad(404, `No such MCP server: ${id}`);
-    setSafeRead(id, tools as string[]);
+    // The inspect route returns NAMESPACED names (`vault__memory_retrieve`) and
+    // riskOf matches the BARE name, so accepting a namespaced name here would
+    // return 200 and change nothing — a permission setting that silently does
+    // not apply. Normalize, and refuse a prefix that is not this server's.
+    const prefix = `${id}__`;
+    const bare: string[] = [];
+    for (const t of tools as string[]) {
+      if (t.startsWith(prefix)) bare.push(t.slice(prefix.length));
+      else if (t.includes('__')) return bad(400, `"${t}" does not belong to server "${id}".`);
+      else bare.push(t);
+    }
+    if (bare.some((t) => t.length === 0)) return bad(400, 'Empty tool name.');
+    setSafeRead(id, bare);
     return ok({ ok: true });
   }
 

@@ -86,7 +86,7 @@
   .chips button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   .banner { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line);
     border-radius: 12px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; }
-  .muted { color: var(--muted); }
+  .muted { color: var(--muted); overflow-wrap: anywhere; }
   .overlay { position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 82%, transparent);
     backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 10; }
   .overlay[hidden] { display: none; } /* explicit display beats the hidden attr otherwise */
@@ -912,6 +912,9 @@
           return;
         }
         detail.textContent = '';
+        for (const r of (info.skipped || [])) {
+          detail.appendChild(el('p', 'danger', 'Refused a definition this server offered: ' + r));
+        }
         if (info.changed) {
           detail.appendChild(el('p', 'danger',
             'These tools have CHANGED since you approved them. Nothing from this server will run until you accept.'));
@@ -2898,7 +2901,9 @@
         // Server-supplied text never reaches here: `message` is our sentence.
         clearInitThink();
         toolLine('↳ ⚠ ' + ev.server + ': ' + ev.message, 'warn');
-        if (ev.needs_review) toolLine('    Review it under Settings → MCP servers.', 'warn');
+        // The server's own words are shown ATTRIBUTED, never as our sentence.
+        if (ev.detail) toolLine('    the server said: ' + ev.detail, 'warn');
+        if (ev.needs_review) toolLine('    Review it under Settings → Tools.', 'warn');
       } else if (ev.type === 'tool_step') {
         // A new agent-loop step began; only n>1 needs a divider (the first is implied).
         clearInitThink();

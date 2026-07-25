@@ -50,9 +50,20 @@ export const TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,48}$/;
  * descriptions, and that screen is the ONLY human review of what a server
  * advertises. A review surface a server can forge is not a review surface.
  */
-export function sanitizeServerText(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ');
+export function sanitizeServerText(text: string, maxChars = MAX_DESCRIPTION_CHARS): string {
+  return (
+    String(text)
+      // C0/C1 controls, ESC included: these repaint a terminal.
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
+      // Bidi embedding/override/isolate marks: these REORDER text without any
+      // control character at all, so a sanitizer that only strips C0/C1 still
+      // lets a server display one sentence and mean another. The fence
+      // sanitizer in untrusted.ts has stripped these since M10b; the M11 paths
+      // needed the same treatment.
+      .replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
+      .slice(0, maxChars)
+  );
 }
 
 export class McpPinChangedError extends Error {
@@ -182,18 +193,20 @@ export async function connectServer(
   const seenNames = new Set<string>();
   const usable = listed.filter((t) => {
     if (typeof t.name !== 'string' || !TOOL_NAME_RE.test(t.name)) {
-      skipped.push(`${JSON.stringify(t.name)} (name must match ${String(TOOL_NAME_RE)})`);
+      // The rejected NAME is server-authored and ends up on a terminal and in
+      // the browser, so it is sanitized and short-capped here.
+      skipped.push(`${JSON.stringify(sanitizeServerText(String(t.name), 80))} (name must match ${String(TOOL_NAME_RE)})`);
       return false;
     }
     // A duplicate name would let a server show one description and run a
     // differently-described twin, since a later definition wins the lookup.
     if (seenNames.has(t.name)) {
-      skipped.push(`${t.name} (duplicate name)`);
+      skipped.push(`${sanitizeServerText(t.name, 80)} (duplicate name)`);
       return false;
     }
     seenNames.add(t.name);
     if (JSON.stringify(t.inputSchema ?? null).length > MAX_SCHEMA_CHARS) {
-      skipped.push(`${t.name} (input schema over ${MAX_SCHEMA_CHARS} chars)`);
+      skipped.push(`${sanitizeServerText(t.name, 80)} (input schema over ${MAX_SCHEMA_CHARS} chars)`);
       return false;
     }
     return true;

@@ -181,6 +181,9 @@ export async function collectMcpToolsForCli(): Promise<{
   const collected = await collectMcpTools();
   for (const u of collected.unavailable) {
     console.log(`${YELLOW}⚠ MCP server "${u.serverId}" is not available:${RESET} ${u.reason}`);
+    // The server's own words are LABELLED as its own. Unlabelled, a hostile
+    // server writes sentences that read as NorthKeep speaking.
+    if (u.detail !== undefined) console.log(`  ${DIM}the server said: ${u.detail}${RESET}`);
     if (u.needsReview) {
       console.log(`  ${DIM}Review it with: northkeep mcp tools ${u.serverId} --accept${RESET}`);
     }

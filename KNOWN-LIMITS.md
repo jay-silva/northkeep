@@ -195,6 +195,12 @@ every milestone; if a limit is removed, say when and how.*
   tools do not declare, so a server fronting a paid API is bounded only by the
   agent loop's step limit and your approvals. A per-server call cap is future
   work.
+- **A failing server's own words are shown, but always attributed to it.** When
+  a server fails in a way only it can explain, its message appears labelled as
+  the server talking, with terminal escapes and bidirectional-text marks
+  stripped and the length capped. Unlabelled, an error message is a channel for
+  a hostile server to write sentences that read as NorthKeep speaking, and an
+  error path is precisely where such a server would choose to speak.
 - **Non-text tool results are omitted, not rendered.** Images and embedded
   resources from a server show as `[image content omitted]`: they are another
   content channel we have not screened.
@@ -203,8 +209,8 @@ every milestone; if a limit is removed, say when and how.*
 - **Stdio servers only.** Remote/http MCP servers are specified in ADR 0033 but
   not implemented; only a local command is supported.
 - **The GUI can review and use MCP servers, but not add one.** Settings → Tools
-  lists configured servers, shows exactly what each advertises, and approves or
-  removes them; the Chat tab's Tools toggle then offers their tools under the
+  lists configured servers, shows what each advertises (including the
+  definitions NorthKeep refused, and why), and approves or removes them; the Chat tab's Tools toggle then offers their tools under the
   same gate. **Adding** a server stays a terminal act (`northkeep mcp add`),
   because adding means naming an executable to spawn, and a browser form that
   spawns arbitrary programs is a far larger blast radius than anything else this

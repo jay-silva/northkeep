@@ -386,6 +386,7 @@ export async function handleConverseStream(
         type: 'tool_notice',
         server: u.serverId,
         message: u.reason,
+        ...(u.detail !== undefined ? { detail: u.detail } : {}),
         needs_review: u.needsReview,
       });
     }
