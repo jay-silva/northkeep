@@ -9,7 +9,9 @@ import {
   createOpenAICompatibleProvider,
   createPermissionEngine,
   createSession,
+  collectMcpTools,
   enabledTools,
+  type McpCollection,
   getDefaultEndpoint,
   getEndpoint,
   getEndpointKey,
@@ -352,9 +354,13 @@ export async function handleConverseStream(
   // --- Agent tools (M10e, ADR 0031). Opt-in per turn; registry-enabled tools
   // only. Nothing here runs unless the request set tools:true.
   const wantsTools = req.tools === true;
+  // Registry tools are synchronous; MCP servers are child processes we must
+  // connect and later reap, so they are gathered below once the stream is open
+  // (a failing server should be reported IN the transcript, not as a 500).
   const taskTools: ToolDefinition[] = wantsTools
     ? (testOptions?.toolsOverride ?? enabledTools())
     : [];
+  let mcp: McpCollection | null = null;
   const approvalTimeoutMs = approvalTimeoutFor(testOptions);
   // AbortController wired to the response: if the browser disconnects mid-turn
   // (navigate away / reload), abort the loop AND sweep this turn's pending
@@ -366,6 +372,32 @@ export async function handleConverseStream(
     if (!responseComplete) controller.abort();
     for (const id of localApprovalIds) sweepApproval(id);
   });
+
+  // M11 (ADR 0033): configured MCP servers contribute namespaced tools. Only
+  // when the caller did not inject tools (tests) and only when tools are on.
+  if (wantsTools && testOptions?.toolsOverride === undefined) {
+    mcp = await collectMcpTools({ signal: controller.signal });
+    taskTools.push(...mcp.tools);
+    // Degrade LOUDLY (invariant #6): a server that is unreviewed, changed, or
+    // unreachable contributes nothing, and the user must see why rather than
+    // wonder why the model ignored a tool.
+    for (const u of mcp.unavailable) {
+      send(res, {
+        type: 'tool_notice',
+        server: u.serverId,
+        message: u.reason,
+        needs_review: u.needsReview,
+      });
+    }
+    for (const s2 of mcp.skipped) {
+      send(res, {
+        type: 'tool_notice',
+        server: s2.serverId,
+        message: `Ignored ${s2.reasons.length} tool definition(s) this server offered: ${s2.reasons.join('; ')}`,
+        needs_review: false,
+      });
+    }
+  }
 
   // The per-conversation permission engine (ADR 0031 Decision 4). Created once
   // and reused across this conversation's turns so "this session" grants last
@@ -570,6 +602,10 @@ export async function handleConverseStream(
     // settles all approvals before returning, but a throw could skip that).
     responseComplete = true;
     for (const id of localApprovalIds) sweepApproval(id);
+    // Stdio MCP servers are child processes owned by THIS turn. Reap them on
+    // every exit path — normal finish, throw, or browser disconnect — or the
+    // GUI would accumulate orphans holding vault handles.
+    if (mcp !== null) await mcp.close().catch(() => {});
     res.end();
   }
 }

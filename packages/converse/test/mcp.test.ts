@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   addServer,
+  collectMcpTools,
   connectServer,
   fingerprintLaunch,
   getServer,
@@ -431,5 +432,43 @@ describe('server-supplied definitions are constrained (M11 review findings)', ()
           } as never),
       }),
     ).rejects.toThrow(/only hold at connect time/);
+  });
+});
+
+// ---------- the shared collector (both surfaces) ----------
+
+describe('collectMcpTools degrades LOUDLY (invariant #6)', () => {
+  it('offers NOTHING from an unreviewed server, and says why', async () => {
+    addServer({ id: 'vault', command: node, args: [realCommand] });
+    const c = await collectMcpTools();
+    expect(c.tools).toEqual([]);
+    expect(c.unavailable).toHaveLength(1);
+    expect(c.unavailable[0]!.serverId).toBe('vault');
+    expect(c.unavailable[0]!.needsReview).toBe(true);
+    expect(c.unavailable[0]!.reason).toMatch(/not reviewed/i);
+    await c.close();
+  });
+
+  it('reports a server that cannot start instead of silently dropping it', async () => {
+    addServer({ id: 'vault', command: node, args: [realCommand] });
+    // Pretend it was reviewed, then break the launch config so connect refuses.
+    setToolsPin('vault', 'a'.repeat(64));
+    const raw = JSON.parse(fs.readFileSync(mcpConfigPath(), 'utf8')) as {
+      servers: Array<Record<string, unknown>>;
+    };
+    raw.servers[0]!.args = [realCommand, '--changed'];
+    fs.writeFileSync(mcpConfigPath(), JSON.stringify(raw));
+    const c = await collectMcpTools();
+    expect(c.tools).toEqual([]);
+    expect(c.unavailable[0]!.needsReview).toBe(true);
+    expect(c.unavailable[0]!.reason).toMatch(/launch configuration/i);
+    await c.close();
+  });
+
+  it('returns nothing at all when no servers are configured', async () => {
+    const c = await collectMcpTools();
+    expect(c.tools).toEqual([]);
+    expect(c.unavailable).toEqual([]);
+    await c.close();
   });
 });

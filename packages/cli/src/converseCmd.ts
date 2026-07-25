@@ -1,6 +1,6 @@
 import readline from 'node:readline/promises';
 import { DIM, GREEN, YELLOW, RED, RESET, createSpinner } from './ui.js';
-import { collectMcpTools } from './mcpCmd.js';
+import { collectMcpToolsForCli } from './mcpCmd.js';
 import type { Vault } from '@northkeep/core';
 import { createOllamaClient, type OllamaClient } from '@northkeep/librarian';
 import {
@@ -110,7 +110,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     // M11 (ADR 0033): configured MCP servers contribute their tools too,
     // namespaced <server>__<tool>. A server that fails identity or pin checks
     // is reported by collectMcpTools and skipped — never silently dropped.
-    const mcp = await collectMcpTools();
+    const mcp = await collectMcpToolsForCli();
     closeMcp = mcp.close;
     taskTools = [...taskTools, ...mcp.tools];
     if (taskTools.length === 0) {

@@ -55,6 +55,11 @@ export {
   type ExfilScreenInput,
 } from './tools/exfil.js';
 export {
+  collectMcpTools,
+  type McpCollection,
+  type McpUnavailable,
+} from './tools/mcp/collect.js';
+export {
   connectServer,
   sanitizeServerText,
   MAX_SCHEMA_CHARS,

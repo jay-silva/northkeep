@@ -286,6 +286,7 @@
 <nav id="settingsNav" hidden>
   <button data-sub="import" class="active">Import</button>
   <button data-sub="activity">Activity</button>
+  <button data-sub="mcp">Tools</button>
   <button data-sub="sync">Sync</button>
   <button data-sub="about">About</button>
 </nav>
@@ -505,6 +506,15 @@
       <button class="btn" id="auditJson">Export JSON</button>
     </div>
     <div id="logList"></div>
+  </section>
+  <section id="view-mcp" hidden>
+    <p class="muted">MCP servers your chat can use as tools. Each one is a program on this Mac
+      that you configured. Nothing here is reachable by a model: adding a server is a
+      deliberate act in the terminal, and this screen only lets you review, approve,
+      restrict, or remove what is already configured.</p>
+    <div id="mcpList"></div>
+    <p class="muted" id="mcpEmpty" hidden>No MCP servers configured. Add one from a terminal:
+      <code>northkeep mcp add &lt;id&gt; --command &lt;absolute path&gt;</code></p>
   </section>
   <section id="view-sync" hidden>
     <p class="muted">Sync your encrypted vault across machines. The server only ever stores
@@ -831,7 +841,7 @@
   });
 
   // --- views: top-level tabs, plus a Settings group holding Import/Activity/Sync
-  const sections = ['converse', 'memories', 'redact', 'connect', 'sharing', 'import', 'activity', 'sync', 'about'];
+  const sections = ['converse', 'memories', 'redact', 'connect', 'sharing', 'import', 'activity', 'mcp', 'sync', 'about'];
   let currentSub = 'import';
   function runLoader(v) {
     if (v === 'activity') loadLog();
@@ -840,8 +850,110 @@
     else if (v === 'sync') loadSyncStatus();
     else if (v === 'connect') loadConnect();
     else if (v === 'sharing') loadSharing();
+    else if (v === 'mcp') loadMcp();
     else if (v === 'about') loadAbout();
   }
+  // --- MCP servers (M11, ADR 0033). Review surface.
+  //
+  // EVERY string a server supplies (tool names, descriptions) is rendered with
+  // el()/textContent, so it can be neither markup nor script. That matters more
+  // here than anywhere else in this page: this screen is the human review of an
+  // untrusted party's own claims about itself, and an adversarial review of the
+  // CLI found exactly this class of bug (a description carrying terminal escape
+  // codes could repaint the review screen). The server also strips control
+  // characters before we ever see them.
+  async function loadMcp() {
+    const list = $('mcpList');
+    list.textContent = '';
+    let servers = [];
+    try {
+      servers = (await api('/api/mcp')).servers || [];
+    } catch (e) {
+      list.appendChild(el('p', 'muted', 'Could not load MCP servers: ' + (e.message || 'error')));
+      return;
+    }
+    $('mcpEmpty').hidden = servers.length > 0;
+    for (const s of servers) {
+      const card = el('div', 'card');
+      const head = el('div', 'row');
+      head.style.cssText = 'justify-content:space-between;align-items:center';
+      const title = el('div');
+      title.appendChild(el('strong', '', s.id));
+      title.appendChild(el('span', 'tag', s.reviewed ? 'reviewed' : 'not reviewed'));
+      title.appendChild(el('span', 'tag', s.trust === 'trusted' ? 'trusted' : 'strict'));
+      head.appendChild(title);
+      const actions = el('div', 'chips');
+      const inspectBtn = el('button', '', 'Review tools');
+      const removeBtn = el('button', '', 'Remove');
+      actions.appendChild(inspectBtn);
+      actions.appendChild(removeBtn);
+      head.appendChild(actions);
+      card.appendChild(head);
+      // The command is OUR config, not server text, but it is still shown as
+      // text so a path can never be markup.
+      card.appendChild(el('div', 'muted', s.command + ' ' + (s.args || []).join(' ')));
+      card.appendChild(el('div', 'muted',
+        'Read-only tools: ' + ((s.safe_read || []).length ? s.safe_read.join(', ') : 'none declared')
+        + ' — everything else asks every time and can never be remembered.'));
+      const detail = el('div');
+      card.appendChild(detail);
+
+      inspectBtn.addEventListener('click', async () => {
+        detail.textContent = '';
+        inspectBtn.disabled = true;
+        detail.appendChild(el('p', 'muted', 'Connecting…'));
+        let info;
+        try {
+          info = await api('/api/mcp/inspect', { method: 'POST', json: { id: s.id } });
+        } catch (e) {
+          detail.textContent = '';
+          detail.appendChild(el('p', 'danger', e.message || 'Could not connect.'));
+          inspectBtn.disabled = false;
+          return;
+        }
+        detail.textContent = '';
+        if (info.changed) {
+          detail.appendChild(el('p', 'danger',
+            'These tools have CHANGED since you approved them. Nothing from this server will run until you accept.'));
+        }
+        for (const t of info.tools) {
+          const row = el('div');
+          row.style.cssText = 'margin:8px 0';
+          row.appendChild(el('code', 'tag', t.name));
+          row.appendChild(el('span', 'tag', t.risk === 'safe-read' ? 'read-only' : 'consequential'));
+          if (t.description) row.appendChild(el('div', 'muted', t.description));
+          detail.appendChild(row);
+        }
+        const accept = el('button', 'btn primary',
+          info.reviewed ? (info.changed ? 'Accept the new tools' : 'Re-approve') : 'Approve these tools');
+        accept.addEventListener('click', async () => {
+          accept.disabled = true;
+          try {
+            await api('/api/mcp/accept', { method: 'POST', json: { id: s.id, pin: info.pin } });
+            loadMcp();
+          } catch (e) {
+            detail.appendChild(el('p', 'danger', e.message || 'Could not approve.'));
+            accept.disabled = false;
+          }
+        });
+        detail.appendChild(accept);
+        inspectBtn.disabled = false;
+      });
+
+      removeBtn.addEventListener('click', async () => {
+        removeBtn.disabled = true;
+        try {
+          await api('/api/mcp/remove', { method: 'POST', json: { id: s.id } });
+          loadMcp();
+        } catch (e) {
+          detail.appendChild(el('p', 'danger', e.message || 'Could not remove.'));
+          removeBtn.disabled = false;
+        }
+      });
+      list.appendChild(card);
+    }
+  }
+
   function loadAbout() {
     $('aboutVersion').textContent = status.version || '—';
     $('updateResult').textContent = '';
@@ -2781,6 +2893,12 @@
         a.bubble.hidden = false;
         a.bubble.textContent = streamed;
         hideToolThinking(); clearInitThink(); // output is flowing now
+      } else if (ev.type === 'tool_notice') {
+        // A configured MCP server contributed nothing, and why (invariant #6).
+        // Server-supplied text never reaches here: `message` is our sentence.
+        clearInitThink();
+        toolLine('↳ ⚠ ' + ev.server + ': ' + ev.message, 'warn');
+        if (ev.needs_review) toolLine('    Review it under Settings → MCP servers.', 'warn');
       } else if (ev.type === 'tool_step') {
         // A new agent-loop step began; only n>1 needs a divider (the first is implied).
         clearInitThink();

@@ -286,6 +286,10 @@ above; the original steps named flags and behaviors that do not exist.
 8. `memory_forget` (undeclared, therefore consequential) asks EVERY time, and
    answering "always" never creates a grant.
 
-Note on step 4: **MCP tools are CLI-only in M11.** The web GUI's approval panel
-already carries the server plumbing, but `apps/web/src/converse.ts` offers only
-registry tools, so nothing MCP appears there yet. KNOWN-LIMITS says so.
+Note on step 4: the GUI reached parity on 2026-07-25. Settings → Tools is the
+browser review surface (list, inspect, approve, remove) and the Chat tab's Tools
+toggle offers MCP tools through the same gate, with unavailable servers reported
+as transcript notices rather than silence. The GUI deliberately has **no add
+route**: naming an executable to spawn stays a terminal act, since a browser
+form that does it is a far larger blast radius than any other setting this local
+API writes. Decision 6 holds either way — no model can reach any of it.

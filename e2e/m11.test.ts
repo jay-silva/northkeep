@@ -1,4 +1,4 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -410,5 +410,106 @@ describe('M11 — screens and the argument floor (ADR 0033 Decision 3)', () => {
     } finally {
       await conn.close();
     }
+  }, 60_000);
+});
+
+// ---------- the web GUI path (M11 GUI) ----------
+
+describe('M11 GUI — the same servers, the same gate, over HTTP', () => {
+  let server: ChildProcess;
+  let baseUrl: string;
+  let token: string;
+
+  beforeAll(async () => {
+    const serverPath = path.join(repoRoot, 'apps', 'web', 'dist', 'server.js');
+    server = spawn(process.execPath, [serverPath], {
+      env: {
+        PATH: process.env.PATH ?? '',
+        HOME: process.env.HOME ?? '',
+        NORTHKEEP_HOME: home,
+        NORTHKEEP_PASSPHRASE: PASSPHRASE,
+        NORTHKEEP_NO_KEYCHAIN: '1',
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    const url = await new Promise<string>((resolve, reject) => {
+      let buf = '';
+      const t = setTimeout(() => reject(new Error(`server did not start: ${buf}`)), 30_000);
+      server.stdout!.on('data', (d: Buffer) => {
+        buf += d.toString();
+        const m = /http:\/\/127\.0\.0\.1:\d+\/\?token=[a-f0-9]+/.exec(buf);
+        if (m) {
+          clearTimeout(t);
+          resolve(m[0]);
+        }
+      });
+    });
+    const parsed = new URL(url);
+    baseUrl = parsed.origin;
+    token = parsed.searchParams.get('token')!;
+  }, 60_000);
+
+  afterAll(() => {
+    server?.kill('SIGTERM');
+  });
+
+  const call = async (route: string, init?: { method?: string; json?: unknown }) => {
+    const res = await fetch(`${baseUrl}${route}`, {
+      method: init?.method ?? 'GET',
+      headers: {
+        'X-NorthKeep-Token': token,
+        ...(init?.json !== undefined ? { 'content-type': 'application/json' } : {}),
+      },
+      ...(init?.json !== undefined ? { body: JSON.stringify(init.json) } : {}),
+    });
+    return { status: res.status, body: (await res.json()) as Record<string, unknown> };
+  };
+
+  it('lists configured servers without exposing anything a model could reach', async () => {
+    const { status, body } = await call('/api/mcp');
+    expect(status).toBe(200);
+    const servers = body.servers as Array<Record<string, unknown>>;
+    expect(servers.map((s) => s.id)).toContain('vault');
+    expect(servers[0]!.reviewed).toBeDefined();
+  }, 60_000);
+
+  it('has NO route to add a server: spawning a program stays a terminal act', async () => {
+    // A browser form that names an executable is a far larger blast radius than
+    // any other setting this API writes, and nothing in M11 needs it.
+    const { status } = await call('/api/mcp/add', {
+      method: 'POST',
+      json: { id: 'evil', command: '/bin/sh' },
+    });
+    expect(status).toBe(404);
+  }, 60_000);
+
+  it('inspects a server: real definitions, and whether they match what was approved', async () => {
+    const { status, body } = await call('/api/mcp/inspect', { method: 'POST', json: { id: 'vault' } });
+    expect(status).toBe(200);
+    const tools = body.tools as Array<Record<string, unknown>>;
+    expect(tools.map((t) => t.name)).toContain('vault__memory_retrieve');
+    // Risk is OUR classification, not the server's claim.
+    const forget = tools.find((t) => t.name === 'vault__memory_forget')!;
+    expect(forget.risk).toBe('consequential');
+    expect(body.pin).toMatch(/^[0-9a-f]{64}$/);
+  }, 60_000);
+
+  it('accepting a pin is accepting exactly what was shown', async () => {
+    const inspect = await call('/api/mcp/inspect', { method: 'POST', json: { id: 'vault' } });
+    const pin = inspect.body.pin as string;
+    expect((await call('/api/mcp/accept', { method: 'POST', json: { id: 'vault', pin } })).status).toBe(200);
+    const after = await call('/api/mcp/inspect', { method: 'POST', json: { id: 'vault' } });
+    expect(after.body.reviewed).toBe(true);
+    expect(after.body.changed).toBe(false);
+  }, 60_000);
+
+  it('404s an unknown server rather than guessing', async () => {
+    expect((await call('/api/mcp/inspect', { method: 'POST', json: { id: 'nope' } })).status).toBe(404);
+    expect((await call('/api/mcp/remove', { method: 'POST', json: { id: 'nope' } })).status).toBe(404);
+  }, 60_000);
+
+  it('requires the session token like every other route', async () => {
+    const res = await fetch(`${baseUrl}/api/mcp`);
+    expect(res.status).toBe(401);
   }, 60_000);
 });

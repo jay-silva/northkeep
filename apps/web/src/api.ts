@@ -73,6 +73,12 @@ import {
   isRoutingRule,
   KNOWN_PROVIDERS,
   listEndpoints,
+  loadMcpConfig,
+  getServer as getMcpServer,
+  removeServer as removeMcpServer,
+  setSafeRead,
+  setToolsPin,
+  connectServer,
   loadRoutingPolicy,
   lookupModel,
   recommendLocalModel,
@@ -762,6 +768,94 @@ async function dispatch(
       pushed: result.push.pushed,
       scopes: result.push.scopes,
     });
+  }
+
+  // --- MCP servers (M11, ADR 0033). REVIEW surface, not an add surface. ---
+  //
+  // The GUI can list configured servers, see exactly what each advertises,
+  // accept those definitions, mark tools read-only, and remove a server. It
+  // deliberately CANNOT add one: adding means naming an executable to spawn,
+  // and that stays a deliberate act in a terminal. A browser form that spawns
+  // arbitrary programs is a much larger blast radius than any other setting
+  // this API writes, and nothing about M11 needs it. (ADR 0033 Decision 6 is
+  // satisfied either way: the model can never reach any of this.)
+
+  if (method === 'GET' && route === '/api/mcp') {
+    const servers = loadMcpConfig().servers.map((s) => ({
+      id: s.id,
+      command: s.command,
+      args: s.args,
+      trust: s.trust,
+      safe_read: s.safeRead,
+      reviewed: s.toolsPin !== undefined,
+      added_at: s.addedAt,
+    }));
+    return ok({ servers });
+  }
+
+  // Connect and report what a server advertises RIGHT NOW, plus whether that
+  // matches what was approved. Never executes a tool: enforcePin is off so the
+  // user can SEE a changed definition, and only reading happens here.
+  if (method === 'POST' && route === '/api/mcp/inspect') {
+    const { id } = parseJson<{ id?: unknown }>(body);
+    if (typeof id !== 'string') return bad(400, 'id is required.');
+    const server = getMcpServer(id);
+    if (server === undefined) return bad(404, `No such MCP server: ${id}`);
+    let conn;
+    try {
+      conn = await connectServer(server, { enforcePin: false });
+    } catch (err) {
+      return bad(400, err instanceof Error ? err.message : String(err));
+    }
+    try {
+      return ok({
+        id: server.id,
+        pin: conn.pin,
+        reviewed: server.toolsPin !== undefined,
+        changed: server.toolsPin !== undefined && server.toolsPin !== conn.pin,
+        tools: conn.tools.map((t) => ({
+          name: t.name,
+          // Already stripped of control characters by the adapter; the browser
+          // renders it with textContent, so it cannot inject markup either.
+          description: t.description,
+          risk: t.risk,
+        })),
+      });
+    } finally {
+      await conn.close().catch(() => {});
+    }
+  }
+
+  if (method === 'POST' && route === '/api/mcp/accept') {
+    const { id, pin } = parseJson<{ id?: unknown; pin?: unknown }>(body);
+    if (typeof id !== 'string' || typeof pin !== 'string') return bad(400, 'id and pin are required.');
+    if (getMcpServer(id) === undefined) return bad(404, `No such MCP server: ${id}`);
+    try {
+      // The pin must be the one the browser was just shown, so accepting is
+      // always accepting something a human looked at.
+      setToolsPin(id, pin);
+    } catch (err) {
+      return bad(400, err instanceof Error ? err.message : String(err));
+    }
+    return ok({ ok: true });
+  }
+
+  if (method === 'POST' && route === '/api/mcp/safe-read') {
+    const { id, tools } = parseJson<{ id?: unknown; tools?: unknown }>(body);
+    if (typeof id !== 'string') return bad(400, 'id is required.');
+    if (!Array.isArray(tools) || tools.some((t) => typeof t !== 'string')) {
+      return bad(400, 'tools must be an array of tool names.');
+    }
+    if (getMcpServer(id) === undefined) return bad(404, `No such MCP server: ${id}`);
+    setSafeRead(id, tools as string[]);
+    return ok({ ok: true });
+  }
+
+  if (method === 'POST' && route === '/api/mcp/remove') {
+    const { id } = parseJson<{ id?: unknown }>(body);
+    if (typeof id !== 'string') return bad(400, 'id is required.');
+    if (!removeMcpServer(id)) return bad(404, `No such MCP server: ${id}`);
+    return ok({ ok: true });
   }
 
   // --- Routing policy (M7b). Rules only — no secrets, no content. ---

@@ -202,8 +202,13 @@ every milestone; if a limit is removed, say when and how.*
   re-expose a connected server's tools to anything else.
 - **Stdio servers only.** Remote/http MCP servers are specified in ADR 0033 but
   not implemented; only a local command is supported.
-- **CLI only.** `northkeep converse --tools` offers MCP tools; the web GUI does
-  not yet, though its approval panel already knows how to name a server.
+- **The GUI can review and use MCP servers, but not add one.** Settings → Tools
+  lists configured servers, shows exactly what each advertises, and approves or
+  removes them; the Chat tab's Tools toggle then offers their tools under the
+  same gate. **Adding** a server stays a terminal act (`northkeep mcp add`),
+  because adding means naming an executable to spawn, and a browser form that
+  spawns arbitrary programs is a far larger blast radius than anything else this
+  local API writes.
 - **A server must be reviewed before its tools are offered.** Adding one is not
   enough: run `northkeep mcp tools <id> --accept` and read what it advertises.
   NorthKeep will not pin whatever it happens to see first, because a server that

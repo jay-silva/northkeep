@@ -1,6 +1,7 @@
 import path from 'node:path';
 import {
   addServer,
+  collectMcpTools,
   connectServer,
   getServer,
   loadMcpConfig,
@@ -169,53 +170,24 @@ export async function mcpTools(id: string, accept: boolean, fail: (m: string) =>
 }
 
 /**
- * Connect every configured server and return their tools for a converse run.
- * A server that fails to connect is REPORTED and skipped — never silently
- * dropped, because "my tool did not appear" must not look like "the model
- * chose not to use it" (invariant #6: degrade loudly).
+ * CLI rendering of the shared collector. The collector itself prints nothing
+ * (the GUI needs the same facts as transcript notices), so the dim lines a
+ * terminal user expects are produced here.
  */
-export async function collectMcpTools(): Promise<{
-  tools: Awaited<ReturnType<typeof connectServer>>['tools'];
+export async function collectMcpToolsForCli(): Promise<{
+  tools: Awaited<ReturnType<typeof collectMcpTools>>['tools'];
   close: () => Promise<void>;
 }> {
-  const { servers } = loadMcpConfig();
-  const connections: Array<Awaited<ReturnType<typeof connectServer>>> = [];
-  const tools: Awaited<ReturnType<typeof connectServer>>['tools'] = [];
-  for (const server of servers) {
-    try {
-      // NEVER auto-pin. ADR 0033 Decision 2 says the pin records the tool set
-      // THE USER APPROVED; pinning whatever we happened to see first would let
-      // a server that is malicious on its very first connect win the pin
-      // silently and never be reviewed. An unreviewed server offers nothing.
-      if (server.toolsPin === undefined) {
-        console.log(
-          `${YELLOW}⚠ MCP server "${server.id}" has not been reviewed yet.${RESET} ` +
-            `Its tools are not being offered.\n  Review them with: northkeep mcp tools ${server.id} --accept`,
-        );
-        continue;
-      }
-      const conn = await connectServer(server, {
-        onSkipped: (id, reasons) => {
-          console.log(`${YELLOW}⚠ Ignored ${reasons.length} definition(s) from "${id}":${RESET}`);
-          for (const r of reasons) console.log(`    ${r}`);
-        },
-      });
-      connections.push(conn);
-      tools.push(...conn.tools);
-    } catch (err) {
-      const why =
-        err instanceof McpPinChangedError || err instanceof McpFingerprintChangedError
-          ? err.message
-          : err instanceof Error
-            ? err.message
-            : String(err);
-      console.log(`${RED}⚠ MCP server "${server.id}" is not available:${RESET} ${why}`);
+  const collected = await collectMcpTools();
+  for (const u of collected.unavailable) {
+    console.log(`${YELLOW}⚠ MCP server "${u.serverId}" is not available:${RESET} ${u.reason}`);
+    if (u.needsReview) {
+      console.log(`  ${DIM}Review it with: northkeep mcp tools ${u.serverId} --accept${RESET}`);
     }
   }
-  return {
-    tools,
-    close: async () => {
-      for (const c of connections) await c.close().catch(() => {});
-    },
-  };
+  for (const s of collected.skipped) {
+    console.log(`${YELLOW}⚠ Ignored ${s.reasons.length} definition(s) from "${s.serverId}":${RESET}`);
+    for (const r of s.reasons) console.log(`    ${r}`);
+  }
+  return { tools: collected.tools, close: collected.close };
 }
