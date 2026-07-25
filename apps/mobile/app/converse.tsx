@@ -19,11 +19,13 @@ import { Button, ErrorNote, colors, type, useAnnounce, useReduceMotion } from '.
 import {
   getSelectedProviderId,
   getProviderKey,
+  hasKey,
   listProviders,
   ON_DEVICE_PROVIDER_ID,
   type ProviderConfig,
 } from '../src/lib/providers-store';
 import { getLocalModel } from '../src/lib/local-model';
+import { decideMobileRoute } from '../src/lib/route-mobile';
 import { isNLTaggerNerAvailable } from '../src/lib/nltagger-ner';
 import {
   createSession,
@@ -109,6 +111,23 @@ export default function Converse() {
   // Set when an on-device Tier-2 turn aborted (invariant #6: nothing was sent).
   // Holds the message so the user can explicitly resend at Tier-1 if they choose.
   const [tier1RetryText, setTier1RetryText] = useState<string | null>(null);
+  // A turn the on-device model would answer badly, held back pending the user's
+  // choice. It is NEVER sent on its own: choosing on-device means "nothing
+  // leaves this phone", and a router that quietly forwarded the hard questions
+  // would break that promise on exactly the questions most likely to matter
+  // (ADR 0011's privacy ceiling).
+  const [routeOffer, setRouteOffer] = useState<
+    { text: string; reason: string; provider: ProviderConfig } | null
+  >(null);
+  // A one-off note when the local model is weak here and there is nothing to
+  // offer. We still answer — refusing would be worse — but we say why.
+  const [routeNote, setRouteNote] = useState<string | null>(null);
+  // All configured providers and which of them we can actually authenticate.
+  // Kept even while on-device is selected, because that is precisely when we
+  // may need to name one in an offer. An offer we cannot authenticate is a
+  // broken promise, not a choice, so the key check happens up front.
+  const [allProviders, setAllProviders] = useState<ProviderConfig[]>([]);
+  const [cloudUsableIds, setCloudUsableIds] = useState<ReadonlySet<string>>(new Set());
 
   const convSession = useRef<ConverseSession>(createSession());
   const abortRef = useRef<AbortController | null>(null);
@@ -136,6 +155,14 @@ export default function Converse() {
         setNerAvailable(nerReady);
         const onDevice = id === ON_DEVICE_PROVIDER_ID && res.model !== null;
         setCloudProvider(onDevice ? null : (all.find((p) => p.id === id) ?? all[0] ?? null));
+        setAllProviders(all);
+        // Anthropic hard-requires a stored key; a local OpenAI-compatible
+        // endpoint (Ollama on the LAN) needs none, mirroring the send path.
+        const usable = await Promise.all(
+          all.map(async (p) => ((p.kind === 'anthropic' ? await hasKey(p.id) : true) ? p.id : null)),
+        );
+        if (!alive) return;
+        setCloudUsableIds(new Set(usable.filter((x): x is string => x !== null)));
         setLoaded(true);
       })();
       return () => {
@@ -186,6 +213,26 @@ export default function Converse() {
   function onSend() {
     const text = input.trim();
     if ((text.length === 0 && !attachment) || busy || mode === 'none') return;
+    setRouteNote(null);
+    // Route BEFORE sending. An attachment is a long-document turn by nature, so
+    // it skips the heuristic and is treated as beyond the local model.
+    const decision = decideMobileRoute({
+      message: attachment ? `${attachment.name}\n${text}` : text,
+      selectedId,
+      providers: allProviders,
+      usableIds: cloudUsableIds,
+    });
+    if (decision.mode === 'offer-cloud' && decision.offer) {
+      // Hold the turn. Nothing is sent, and the draft stays put so the user
+      // can also just send it on-device instead.
+      setRouteOffer({
+        text,
+        reason: decision.reason,
+        provider: decision.offer as ProviderConfig,
+      });
+      return;
+    }
+    if (decision.mode === 'send-degraded') setRouteNote(decision.reason);
     setInput('');
     void send(text, false);
   }
@@ -195,7 +242,7 @@ export default function Converse() {
    * (NLTagger) withheld (the deterministic shield still runs, it is the
    * always-on floor). Used only for the explicit resend after a name-net abort.
    */
-  async function send(text: string, forceTier1: boolean) {
+  async function send(text: string, forceTier1: boolean, providerOverride?: ProviderConfig) {
     setError(null);
     setTier1RetryText(null);
     const att = attachment;
@@ -241,7 +288,11 @@ export default function Converse() {
 
     try {
       let reply: string;
-      if (mode === 'on-device') {
+      // A one-turn override (the user accepted the offer) takes the cloud path
+      // even though the selected provider is on-device. It changes nothing
+      // about the selection itself: the next turn is on-device again unless
+      // they say otherwise.
+      if (providerOverride === undefined && mode === 'on-device') {
         const localModel = resolution!.model!;
         const result = await runOnDeviceTurn({
           message: outbound,
@@ -253,7 +304,7 @@ export default function Converse() {
         });
         reply = result.reply;
       } else {
-        const provider = cloudProvider!;
+        const provider = providerOverride ?? cloudProvider!;
         // Read the key immediately before the call; never hold it in React state.
         // Local OpenAI-compatible endpoints (e.g. Ollama) need no key, so only
         // Anthropic hard-requires one; others send with no auth header.
@@ -429,6 +480,46 @@ export default function Converse() {
       </ScrollView>
 
       <ErrorNote message={error} />
+
+      {routeNote && !busy ? <ErrorNote message={routeNote} /> : null}
+
+      {routeOffer && !busy ? (
+        <View style={styles.routeOffer}>
+          <Text style={styles.routeOfferText}>{routeOffer.reason}</Text>
+          <View style={styles.routeOfferRow}>
+            <Pressable
+              style={styles.routeOfferBtn}
+              accessibilityRole="button"
+              accessibilityLabel={`Send this to ${routeOffer.provider.label}`}
+              onPress={() => {
+                const o = routeOffer;
+                setRouteOffer(null);
+                setInput('');
+                // One turn only. The selected provider is untouched, so the
+                // next message is on-device again unless they change it.
+                void send(o.text, false, o.provider);
+              }}
+            >
+              <Ionicons name="cloud-upload-outline" size={14} color={colors.warnText} />
+              <Text style={styles.routeOfferBtnText}>Send to {routeOffer.provider.label}</Text>
+            </Pressable>
+            <Pressable
+              style={styles.routeOfferBtn}
+              accessibilityRole="button"
+              accessibilityLabel="Answer on this iPhone instead"
+              onPress={() => {
+                const o = routeOffer;
+                setRouteOffer(null);
+                setInput('');
+                void send(o.text, false);
+              }}
+            >
+              <Ionicons name="phone-portrait-outline" size={14} color={colors.warnText} />
+              <Text style={styles.routeOfferBtnText}>Keep it on this iPhone</Text>
+            </Pressable>
+          </View>
+        </View>
+      ) : null}
 
       {tier1RetryText && !busy ? (
         <Pressable
@@ -616,6 +707,12 @@ const styles = StyleSheet.create({
   auditLink: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 11, minHeight: 44 },
   auditLinkText: { ...type.footnote, color: colors.accent, fontWeight: '600' },
   retryLink: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingHorizontal: 16, paddingVertical: 11, minHeight: 44 },
+  routeOffer: { paddingHorizontal: 16, paddingVertical: 10, gap: 8 },
+  routeOfferText: { ...type.subhead, color: colors.warnText },
+  routeOfferRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap' },
+  // 44pt minimum touch target, matching the retry link above it.
+  routeOfferBtn: { flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 11, paddingRight: 14, minHeight: 44 },
+  routeOfferBtnText: { ...type.subhead, color: colors.warnText, fontWeight: '700' },
   retryText: { ...type.subhead, color: colors.warnText, fontWeight: '700' },
   inputRow: {
     flexDirection: 'row',

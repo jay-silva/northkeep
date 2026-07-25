@@ -163,6 +163,28 @@ every milestone; if a limit is removed, say when and how.*
 - **fetch is https-only, ports 443/8443, GET, no cookies, ever.** Content
   types beyond HTML/text/JSON/XML are refused without reading the body.
 
+## Mobile chat routing, current
+
+- **The on-device model is for recalling memories, not for reasoning.** The
+  vault does the retrieval; the model only phrases an answer from memories it
+  was handed. It is adequate at that and weak at reasoning, code, writing and
+  long documents. The Providers screen now says so before you pick it, because
+  the old label read as a capability claim and invited exactly the questions it
+  answers badly.
+- **A hard question is OFFERED to a connected model, never sent to one.** When
+  you are on the on-device model and ask something beyond it, NorthKeep names a
+  provider and waits for a tap. Choosing on-device means nothing about that
+  conversation leaves the phone, and a router that quietly forwarded the hard
+  questions would break that promise on exactly the questions most likely to
+  matter (ADR 0011's privacy ceiling). Accepting an offer applies to that one
+  turn; your selected provider is unchanged.
+- **With no connected model, a hard question is still answered, with a warning.**
+  Refusing would be worse. The answer may be thin and the app says so.
+- **Task detection is heuristic.** It reads the wording, not the meaning, so it
+  will occasionally offer when it did not need to, or stay local when a bigger
+  model would have helped. Both are recoverable: the offer has a "keep it on
+  this iPhone" answer, and you can switch provider at any time.
+
 ## M11 (MCP client tools), current
 
 - **A configured MCP server is a local program with your privileges.** The

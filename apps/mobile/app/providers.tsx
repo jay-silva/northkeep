@@ -13,6 +13,7 @@ import {
   setSelectedProviderId,
   type ProviderConfig,
 } from '../src/lib/providers-store';
+import { ON_DEVICE_BLURB } from '../src/lib/route-mobile';
 import { getLocalModel } from '../src/lib/local-model';
 import { isNLTaggerNerAvailable } from '../src/lib/nltagger-ner';
 import {
@@ -114,9 +115,9 @@ export default function Providers() {
             />
             <View style={styles.cardText}>
               <Text style={styles.cardTitle}>On-device (private)</Text>
-              <Text style={styles.cardSub} numberOfLines={2}>
+              <Text style={styles.cardSub} numberOfLines={4}>
                 {available
-                  ? `${localRes?.model?.label} · fully private, no key, works in airplane mode`
+                  ? `${localRes?.model?.label} · ${ON_DEVICE_BLURB}`
                   : 'Not available on this phone (needs Apple Intelligence on iOS 26)'}
               </Text>
               {available ? <TierLine tone="good" text={ON_DEVICE_PRIVATE_LABEL} /> : null}

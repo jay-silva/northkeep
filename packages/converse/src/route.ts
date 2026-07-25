@@ -52,7 +52,11 @@ const CREATIVE_HINTS =
   /\b(write|draft|compose)\b.*\b(story|poem|song|essay|blog|post|speech|toast)\b|\bbrainstorm\b|\bslogan\b|\btagline\b/i;
 const REASONING_HINTS =
   /\b(why|analyze|analyse|compare|evaluate|trade-?offs?|pros and cons|plan|strategy|should (i|we)|what if|explain the difference)\b/i;
-const SUMMARIZE_HINTS = /\b(summariz|summaris|tl;?dr|key points|condense|shorten)\b/i;
+// The summariz/summaris alternatives are PREFIXES, so they take \w* rather
+// than a trailing \b: with the boundary, "summarize" and "summarizing" never
+// matched at all (the prefix is only followed by a word char), and every
+// summarize request was classified 'general' instead of 'long-context'.
+const SUMMARIZE_HINTS = /\b(?:summariz\w*|summaris\w*)|\b(?:tl;?dr|key points|condense|shorten)\b/i;
 
 const LONG_INPUT_CHARS = 6000;
 const QUICK_MAX_CHARS = 120;

@@ -162,3 +162,26 @@ describe('route — the privacy ceiling (NEVER silently escalate)', () => {
     expect(d.endpointId).toBe('cloud');
   });
 });
+
+describe('classifyTask — summarize prefixes (regression)', () => {
+  it('classifies every summarize form as long-context', () => {
+    // The hint list used \b after the PREFIX "summariz", which can only match
+    // if the word ends there — so "summarize" and "summarizing" silently fell
+    // through to 'general' and were routed to a cheap model instead of one
+    // with a big context window. The exact case a summary request needs.
+    for (const message of [
+      'summarize this thread',
+      'summarise the meeting',
+      'summarizing the deposition for me',
+      'give me a summarized version',
+    ]) {
+      expect(classifyTask(message), message).toBe('long-context');
+    }
+  });
+
+  it('still classifies the non-prefix hints', () => {
+    for (const message of ['tl;dr please', 'give me the key points', 'condense this', 'shorten it']) {
+      expect(classifyTask(message), message).toBe('long-context');
+    }
+  });
+});

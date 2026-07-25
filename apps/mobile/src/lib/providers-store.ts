@@ -17,17 +17,13 @@ import * as SecureStore from 'expo-secure-store';
  * device-only (same caveat as src/lib/secure-store.ts).
  */
 
-export type ProviderKind = 'anthropic' | 'openai';
+export type { ProviderKind } from './provider-ids';
 
 /** Non-secret provider config. The API key is stored separately, never here. */
-export interface ProviderConfig {
-  id: string;
-  label: string;
-  kind: ProviderKind;
-  /** Endpoint base URL. Anthropic is fixed; OpenAI-compatible is user-entered. */
-  baseUrl: string;
-  model: string;
-}
+/** The stored provider. Structurally the shared ProviderMeta, re-declared as an
+ * alias so pure modules (and their tests) can use the same type without
+ * importing expo-secure-store. */
+export type ProviderConfig = ProviderMeta;
 
 const PROVIDERS_KEY = 'nk.converse.providers';
 const SELECTED_KEY = 'nk.converse.selected';
@@ -61,7 +57,10 @@ export const CLAUDE_MODELS: { id: string; label: string; note: string }[] = [
  * routes the turn through the local model (runOnDeviceTurn). Kept out of the
  * `nk.converse.key.*` namespace so no key item is ever created for it.
  */
-export const ON_DEVICE_PROVIDER_ID = 'on-device';
+// Re-exported from provider-ids.ts so pure modules can import it without
+// pulling expo-secure-store into a test runner.
+export { ON_DEVICE_PROVIDER_ID } from './provider-ids';
+import type { ProviderMeta } from './provider-ids';
 
 /** Keychain keys must be alphanumeric + ".-_"; keep generated ids in that set. */
 function newId(): string {
