@@ -144,10 +144,12 @@ describe('fetchErrorToResult — Brave HTTP failures map to clear guidance', () 
     expect(parse(r).guidance).toMatch(/rate limit/i);
   });
 
-  it('maps 401 and 403 to auth', () => {
-    for (const status of [401, 403]) {
+  it('maps 401, 403, and 422 to auth (Brave uses 422 SUBSCRIPTION_TOKEN_INVALID)', () => {
+    // 422 verified against the live Brave API: a bad/inactive key returns
+    // HTTP 422, not 401/403, so it must map to the auth guidance too.
+    for (const status of [401, 403, 422]) {
       const r = fetchErrorToResult(new FetchRefusedError('http-status', `HTTP ${status}`, status), BRAVE_HOST);
-      expect(parse(r).error).toBe('auth');
+      expect(parse(r).error, `status ${status}`).toBe('auth');
       expect(parse(r).guidance).toMatch(/key/i);
     }
   });

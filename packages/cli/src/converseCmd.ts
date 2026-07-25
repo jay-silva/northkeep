@@ -210,7 +210,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         console.log(
           e.ok
             ? `${DIM}↳ ✓ ${fmtKb(e.bytes)} from ${e.host ?? e.name}${e.truncated ? ' (truncated)' : ''}${RESET}`
-            : `${DIM}↳ ✗ ${e.name} returned an error (shown to the model)${RESET}`,
+            : `${YELLOW}↳ ✗ ${e.name}: ${e.error ?? 'returned an error'}${RESET}`,
         );
       }
       // Waiting resumes after everything except tool_call, where the approval

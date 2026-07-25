@@ -81,7 +81,18 @@ export type TaskEvent =
        * surface can say WHY (invariant #6: loud, never silent). */
       reasons?: string[];
     }
-  | { type: 'tool_result'; name: string; ok: boolean; bytes: number; truncated: boolean; host?: string };
+  | {
+      type: 'tool_result';
+      name: string;
+      ok: boolean;
+      bytes: number;
+      truncated: boolean;
+      host?: string;
+      /** On a FAILED call, the tool's own one-line guidance (M10d) — content-
+       * free by construction (structured {error, guidance}, never page/query
+       * text), so the driving surface can tell the user WHY, not just "error". */
+      error?: string;
+    };
 
 export interface ApprovalRequest {
   tool: string;
@@ -773,6 +784,20 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                       now,
                     )
                   : truncateChars(toolOut.content, maxResultChars);
+              // On failure, lift the tool's own {error, guidance} out of the
+              // (unfenced) structured error content so the surface can show the
+              // user WHY — content-free, never page/query text.
+              let errorLine: string | undefined;
+              if (!toolOut.meta.ok) {
+                try {
+                  const parsed = JSON.parse(toolOut.content) as { error?: unknown; guidance?: unknown };
+                  const err = typeof parsed.error === 'string' ? parsed.error : undefined;
+                  const guide = typeof parsed.guidance === 'string' ? parsed.guidance : undefined;
+                  errorLine = [err, guide].filter(Boolean).join(': ') || undefined;
+                } catch {
+                  errorLine = undefined; // non-JSON content: no structured reason
+                }
+              }
               hooks.onEvent({
                 type: 'tool_result',
                 name: call.name,
@@ -780,6 +805,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                 bytes: toolOut.meta.bytes,
                 truncated: toolOut.meta.truncated,
                 ...(toolOut.meta.host !== undefined ? { host: toolOut.meta.host } : {}),
+                ...(errorLine !== undefined ? { error: errorLine } : {}),
               });
             }
           }
