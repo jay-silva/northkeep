@@ -100,16 +100,44 @@ function evictStaleConversations(): void {
 interface PendingApproval {
   sessionId: string;
   resolve: (answer: ApprovalAnswer) => void;
+  /** Deletes the entry and denies if no one answers — so ENTRY DELETION is the
+   * single-settle guard on the timeout path too (ADR 0031 Decision 3), not
+   * just on approve/abort. Cleared when another path settles first. */
+  timer: NodeJS.Timeout;
 }
 const pendingApprovals = new Map<string, PendingApproval>();
+
+/**
+ * How long an approval waits before it self-denies (ADR 0031). Matches the
+ * value passed to runTask below, so the converse-layer timer (which deletes
+ * the map entry) and runTask's internal backstop fire together — a late
+ * approve for a timed-out id then 404s, as the spec's single-settle promises.
+ */
+const APPROVAL_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** The default 5-min timeout, or a test-only shortened one. */
+function approvalTimeoutFor(testOptions?: ConverseTestOptions): number {
+  return testOptions?.approvalTimeoutMs ?? APPROVAL_TIMEOUT_MS;
+}
 
 /** Settle a pending approval exactly once (delete-then-resolve). */
 function settleApproval(approvalId: string, answer: ApprovalAnswer): boolean {
   const entry = pendingApprovals.get(approvalId);
   if (entry === undefined) return false;
+  clearTimeout(entry.timer);
   pendingApprovals.delete(approvalId);
   entry.resolve(answer);
   return true;
+}
+
+/** Drop a pending approval without resolving (abort sweep): clear its timer
+ * so no orphaned self-deny fires, then delete. runTask has already moved on
+ * via the abort signal, so the promise is intentionally left unresolved. */
+function sweepApproval(approvalId: string): void {
+  const entry = pendingApprovals.get(approvalId);
+  if (entry === undefined) return;
+  clearTimeout(entry.timer);
+  pendingApprovals.delete(approvalId);
 }
 
 interface ConverseRequest {
@@ -145,6 +173,9 @@ const validModelId = (id: string): boolean => MODEL_ID_RE.test(id) && !id.includ
  */
 export interface ConverseTestOptions {
   toolsOverride?: ToolDefinition[];
+  /** TEST-ONLY: shorten the 5-minute approval timeout so the timeout path is
+   * testable in ms. Production never sets it. */
+  approvalTimeoutMs?: number;
 }
 
 export async function handleConverseStream(
@@ -324,6 +355,7 @@ export async function handleConverseStream(
   const taskTools: ToolDefinition[] = wantsTools
     ? (testOptions?.toolsOverride ?? enabledTools())
     : [];
+  const approvalTimeoutMs = approvalTimeoutFor(testOptions);
   // AbortController wired to the response: if the browser disconnects mid-turn
   // (navigate away / reload), abort the loop AND sweep this turn's pending
   // approvals so no resolver leaks (ADR 0031 Decision 3).
@@ -332,7 +364,7 @@ export async function handleConverseStream(
   let responseComplete = false;
   res.on('close', () => {
     if (!responseComplete) controller.abort();
-    for (const id of localApprovalIds) pendingApprovals.delete(id);
+    for (const id of localApprovalIds) sweepApproval(id);
   });
 
   // The per-conversation permission engine (ADR 0031 Decision 4). Created once
@@ -387,7 +419,11 @@ export async function handleConverseStream(
       const offerScopes =
         approvalReq.egress !== null && approvalReq.risk === 'safe-read' && approvalReq.warnings.length === 0;
       return new Promise<ApprovalAnswer>((resolve) => {
-        pendingApprovals.set(approvalId, { sessionId, resolve });
+        // Self-deny by DELETION on timeout so a late approve 404s (Decision 3);
+        // unref so a pending prompt never keeps the process alive.
+        const timer = setTimeout(() => settleApproval(approvalId, 'deny'), approvalTimeoutMs);
+        timer.unref();
+        pendingApprovals.set(approvalId, { sessionId, resolve, timer });
         localApprovalIds.add(approvalId);
         send(res, {
           type: 'approval_request',
@@ -455,6 +491,8 @@ export async function handleConverseStream(
         hooks: taskHooks,
         ...(stored.gate !== undefined ? { gate: stored.gate } : {}),
         signal: controller.signal,
+        // Same value the converse-layer timer uses, so the two settle together.
+        approvalTimeoutMs,
       });
       result = taskResult;
     } else {
@@ -525,7 +563,7 @@ export async function handleConverseStream(
     // finish as a disconnect-abort. Sweep any stragglers (defensive: runTask
     // settles all approvals before returning, but a throw could skip that).
     responseComplete = true;
-    for (const id of localApprovalIds) pendingApprovals.delete(id);
+    for (const id of localApprovalIds) sweepApproval(id);
     res.end();
   }
 }

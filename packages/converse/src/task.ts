@@ -166,6 +166,10 @@ async function approvalWithTimeout(
   timeoutMs: number,
   signal: AbortSignal | undefined,
 ): Promise<ApprovalOutcome> {
+  // Already aborted before we even ask? Deny at once — the abort listener
+  // below would attach to a signal that never fires again, stranding the call
+  // until the timeout (G4 nit: defensive, effectively unreachable today).
+  if (signal?.aborted === true) return { decision: 'denied' };
   let timer: NodeJS.Timeout | undefined;
   const timeout = new Promise<ApprovalOutcome>((resolve) => {
     timer = setTimeout(() => resolve({ decision: 'timeout' }), timeoutMs);
@@ -835,9 +839,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           name: call.name,
           ...(egressHost !== undefined ? { host: egressHost } : {}),
           decision,
-          // The restored URL that actually left, only for a call that EXECUTED
-          // (proof of what egressed — ADR 0031 Decision 6). Never the token.
-          ...(decision === 'approved' && egressUrl !== null ? { egress: egressUrl } : {}),
+          // The restored URL that actually left, only for a call that truly
+          // EXECUTED (proof of what egressed — ADR 0031 Decision 6). Gated on
+          // execMeta, NOT on decision: an approved call that then lost the
+          // budget reserve race never ran, so nothing left (G4 review).
+          ...(execMeta !== null && egressUrl !== null ? { egress: egressUrl } : {}),
         });
 
         // One content-free audit row PER tool call, denials included

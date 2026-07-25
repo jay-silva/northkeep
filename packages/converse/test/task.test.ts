@@ -9,6 +9,7 @@ import {
   createSession,
   daySpend,
   placeholderGate,
+  reserveDailySpend,
   redactJsonLeaves,
   restoreJsonLeaves,
   runTask,
@@ -862,5 +863,38 @@ describe('runTask — budget enforcement', () => {
     await runTask({ ...base(toolThenAnswer().provider, [echoTool(exec)]), session: createSession(), message: 'go', hooks: hooks([]) });
     expect(exec).toHaveLength(1);
     expect(daySpend('echo', new Date())).toBe(0); // free tool never recorded spend
+  });
+
+  // G4 regression: on the reserve-RACE branch (approved by consent, but the
+  // daily slot was taken concurrently before this call's execute reserve), the
+  // tool must NOT execute AND must NOT appear in the egress proof — nothing
+  // left the machine.
+  it('an approved call that loses the reserve race does not execute or report egress', async () => {
+    setToolBudget('echo', { dailyCap: 1, perConversationCap: 5 });
+    const exec: unknown[] = [];
+    // A gate that STEALS the daily slot during evaluate (simulating a
+    // concurrent conversation) then auto-allows — so this call's own reserve
+    // fails after the pre-gate passed and the gate approved.
+    let stolen = false;
+    const racingGate = {
+      evaluate: () => {
+        if (!stolen) {
+          stolen = true;
+          reserveDailySpend('echo', new Date()); // concurrent consumer wins the slot
+        }
+        return Promise.resolve('auto-allow' as const);
+      },
+    };
+    const result = await runTask({
+      ...base(toolThenAnswer().provider, [costedTool(exec)]),
+      session: createSession(),
+      message: 'go',
+      gate: racingGate,
+      hooks: hooks([]),
+    });
+    expect(exec).toHaveLength(0); // never executed — the slot was gone
+    // Consent was 'approved', but nothing egressed → no egress in the proof.
+    expect(result.toolCallsMade[0]!.decision).toBe('approved');
+    expect(result.toolCallsMade[0]!.egress).toBeUndefined();
   });
 });

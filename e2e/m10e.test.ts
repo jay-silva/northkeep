@@ -258,6 +258,26 @@ describe('M10e — web approval protocol', () => {
     expect(handleApprove(Buffer.from(JSON.stringify({ session_id: 'x', approval_id: 'nope', decision: 'allow' }))).status).toBe(404);
   });
 
+  it('a timed-out approval deletes its entry so a late approve 404s (single-settle, G4 fix)', async () => {
+    const res = new MockRes();
+    // Short timeout so the approval self-denies (by DELETION) before we answer.
+    const done = handleConverseStream(session(), converseBody(), res as never, {
+      toolsOverride: [searchTool()],
+      approvalTimeoutMs: 40,
+    });
+    const ask = await res.waitFor('approval_request');
+    const start = await res.waitFor('start');
+    await done; // the loop times out, denies, and concludes
+    // The entry is gone: a late approve for that id 404s (not a stale 200).
+    const late = handleApprove(
+      Buffer.from(JSON.stringify({ session_id: start.session_id, approval_id: ask.approval_id, decision: 'allow' })),
+    );
+    expect(late.status).toBe(404);
+    // And the loop concluded with the call denied (timeout).
+    expect(res.lines.find((l) => l.type === 'permission' && l.decision !== 'approved')).toBeDefined();
+    expect(res.lines.find((l) => l.type === 'done')).toBeDefined();
+  });
+
   it('a denied approval feeds permission_denied and the loop concludes', async () => {
     const res = new MockRes();
     const done = handleConverseStream(session(), converseBody(), res as never, { toolsOverride: [searchTool()] });
