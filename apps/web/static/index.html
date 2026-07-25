@@ -190,7 +190,10 @@
   .bubble .md { white-space: normal; }
   .md > :first-child { margin-top: 0; }
   .md > :last-child { margin-bottom: 0; }
-  .md .mdp { white-space: pre-wrap; margin: 0 0 10px; }
+  /* pre-wrap everywhere text from the reply lands, so runs of spaces the model
+     wrote survive in list items and headings too, not just paragraphs. */
+  .md .mdp, .md li, .md .mdh { white-space: pre-wrap; }
+  .md .mdp { margin: 0 0 10px; }
   .md .mdh { font-weight: 600; line-height: 1.35; margin: 15px 0 6px; }
   .md .mdh1 { font-size: 19px; }
   .md .mdh2 { font-size: 17px; }
@@ -1600,20 +1603,34 @@
   // recurses (bold containing code) and a shared /g regex would corrupt
   // lastIndex mid-recursion. No nested quantifiers anywhere: hostile input
   // cannot make this backtrack catastrophically.
-  // UNDERSCORE emphasis additionally requires word BOUNDARIES on both sides:
-  // model output is full of identifiers like some_long_name and MAX_TOKENS, and
-  // treating those underscores as emphasis silently DELETES characters from the
-  // reply (some_long_name → somelongname). A reply that quietly loses text is
-  // worse than one that shows a stray underscore. The boundary before is a
-  // consumed group rather than a lookbehind, so this parses in every browser
-  // engine, and that captured character is re-emitted as text below.
-  // Asterisk emphasis keeps CommonMark's intraword behavior.
+  // TWO RULES SHAPE THIS PATTERN, and both exist because the failure mode that
+  // matters here is not ugly output — it is DELETED CHARACTERS. Emphasis marks
+  // are consumed, so a wrong match silently changes what the reply SAYS.
+  //
+  // 1. Emphasis content may not contain its own delimiter or a newline
+  //    ([^*\n] / [^_\n]) and may not begin or end on whitespace or a
+  //    delimiter. That single constraint keeps `*args and **kwargs`, glob
+  //    patterns like *.md, and "**bold ** x" literal instead of italicizing
+  //    across unrelated text, and it is also what keeps this LINEAR: an
+  //    unmatched delimiter can only scan to the next one, never to the end of
+  //    a 200 KB reply from every one of thousands of start positions.
+  // 2. Underscore emphasis additionally requires word BOUNDARIES on both
+  //    sides, so some_long_name and MAX_TOKENS survive intact. The boundary
+  //    before is a consumed group rather than a lookbehind, so this parses in
+  //    every browser engine; the captured character is re-emitted below.
+  //
+  // __bold__ is deliberately NOT supported: models write **bold**, while
+  // __init__, __name__ and __all__ are everyday reply content, and CommonMark
+  // would eat those underscores. Showing a stray underscore in the rare
+  // __bold__ beats deleting characters from a Python answer.
   const MD_INLINE_SRC =
-    '(`+)([\\s\\S]*?)\\1' +                                 // 1,2   code span
-    '|\\*\\*(\\S[\\s\\S]*?)\\*\\*' +                        // 3     **bold**
-    '|(^|[^A-Za-z0-9_])__(\\S[\\s\\S]*?)__(?![A-Za-z0-9_])' + // 4,5   __bold__
-    '|\\*(\\S[\\s\\S]*?)\\*' +                              // 6     *italic*
-    '|(^|[^A-Za-z0-9_])_(\\S[\\s\\S]*?)_(?![A-Za-z0-9_])' +   // 7,8   _italic_
+    '\\\\([\\\\`*_{}\\[\\]()#+\\-.!])' +                    // 1     \\escaped char
+    '|(`+)([\\s\\S]*?)\\2' +                                // 2,3   code span
+    '|!\\[[^\\]\\n]*\\]\\([^()\\s]*\\)' +                   // (none) image → literal
+    '|\\*\\*\\*([^\\s*](?:[^*\\n]*?[^\\s*])?)\\*\\*\\*' +   // 4     ***both***
+    '|\\*\\*([^\\s*](?:[^*\\n]*?[^\\s*])?)\\*\\*' +         // 5     **bold**
+    '|\\*([^\\s*](?:[^*\\n]*?[^\\s*])?)\\*' +               // 6     *italic*
+    '|(^|[^A-Za-z0-9_])_([^\\s_](?:[^_\\n]*?[^\\s_])?)_(?![A-Za-z0-9_])' + // 7,8 _italic_
     '|\\[([^\\]\\n]*)\\]\\(([^()\\s]*)\\)';                 // 9,10  [text](url)
 
   function mdInline(parent, text, depth) {
@@ -1627,13 +1644,27 @@
       if (m.index > last) parent.appendChild(document.createTextNode(text.slice(last, m.index)));
       // The boundary character captured before an underscore run belongs to the
       // surrounding text, so put it back before whatever it delimited.
-      const boundary = m[4] !== undefined ? m[4] : m[7] !== undefined ? m[7] : '';
-      if (boundary) parent.appendChild(document.createTextNode(boundary));
-      if (m[2] !== undefined) {
-        parent.appendChild(mdEl('code', 'mdcode', m[2])); // literal, no recursion
-      } else if (m[3] !== undefined || m[5] !== undefined) {
+      if (m[7]) parent.appendChild(document.createTextNode(m[7]));
+      if (m[1] !== undefined) {
+        // A backslash escape: the model wrote \* to SHOW an asterisk. Emit the
+        // character it escaped and drop the backslash.
+        parent.appendChild(document.createTextNode(m[1]));
+      } else if (m[0].charAt(0) === '!') {
+        // ![alt](url) — an image. We never load a remote image into an unlocked
+        // vault UI (it is an outbound request the model chose), so the whole
+        // construct stays literal text, exactly as KNOWN-LIMITS promises.
+        parent.appendChild(document.createTextNode(m[0]));
+      } else if (m[3] !== undefined) {
+        parent.appendChild(mdEl('code', 'mdcode', m[3])); // literal, no recursion
+      } else if (m[4] !== undefined) {
         const b = mdEl('strong');
-        mdInline(b, m[3] !== undefined ? m[3] : m[5], d + 1);
+        const i = mdEl('em');
+        mdInline(i, m[4], d + 1);
+        b.appendChild(i);
+        parent.appendChild(b);
+      } else if (m[5] !== undefined) {
+        const b = mdEl('strong');
+        mdInline(b, m[5], d + 1);
         parent.appendChild(b);
       } else if (m[6] !== undefined || m[8] !== undefined) {
         const i = mdEl('em');
@@ -1657,7 +1688,7 @@
   const MD_ITEM = /^([ \t]*)([-*+]|\d{1,9}[.)])[ \t]+(.*)$/;
 
   function mdBlocks(container, src) {
-    const lines = src.split(/\r?\n/);
+    const lines = src.split(/\r\n|[\r\n]/); // CRLF, LF, and a lone CR
     let i = 0, para = [];
     function flushPara() {
       if (!para.length) return;
@@ -1695,7 +1726,10 @@
         // outline, and injecting h1s here would corrupt the page's heading
         // order for screen readers. Styled divs carry the visual weight.
         const div = mdEl('div', 'mdh mdh' + h[1].length);
-        mdInline(div, h[2].replace(/[ \t]*#+[ \t]*$/, ''), 0); // trim closing #s
+        // Trim a CLOSING #### sequence, which must be preceded by whitespace:
+        // without that requirement "## What is C#" loses the # and answers a
+        // different question.
+        mdInline(div, h[2].replace(/[ \t]+#+[ \t]*$/, ''), 0);
         container.appendChild(div);
         i++;
         continue;
@@ -1710,6 +1744,9 @@
         // indent starts a sibling list.
         const stack = [];
         while (i < lines.length) {
+          // A thematic break and a fence both out-rank the item pattern, which
+          // would otherwise read "* * *" as a bullet and swallow an asterisk.
+          if (MD_HR.test(lines[i]) || MD_FENCE.test(lines[i])) break;
           const it = MD_ITEM.exec(lines[i]);
           if (!it) {
             // A blank line BETWEEN items is a "loose" list, not the end of one,

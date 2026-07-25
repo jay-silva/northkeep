@@ -30,11 +30,16 @@ const staticFile = path.resolve(
 /** The renderer's source, exactly as the browser will run it. */
 function extractSource(): string {
   const html = fs.readFileSync(staticFile, 'utf8');
+  // Each marker must be unique: a second occurrence anywhere in the page would
+  // silently shift the slice, and the whole suite would then be testing some
+  // other code while still passing.
+  for (const marker of ['// --- md-render-start', '// --- md-render-end']) {
+    const count = html.split(marker).length - 1;
+    if (count !== 1) throw new Error(`expected exactly one ${marker}, found ${count}`);
+  }
   const start = html.indexOf('// --- md-render-start');
   const end = html.indexOf('// --- md-render-end');
-  if (start < 0 || end < 0 || end < start) {
-    throw new Error('md-render markers missing from static/index.html');
-  }
+  if (end < start) throw new Error('md-render markers are out of order');
   return html.slice(start, end);
 }
 
@@ -44,6 +49,20 @@ function stripComments(src: string): string {
 }
 
 // --- the hostile fake DOM -------------------------------------------------
+
+/**
+ * The complete vocabulary the renderer is allowed to construct. Anything else
+ * is a test failure: an adversarial review showed that a renderer additively
+ * emitting `img.src = <model-controlled url>` passed a shim that only forbade
+ * innerHTML and anchors — a model-controlled outbound GET from an unlocked
+ * vault UI, which is precisely the exfiltration shape M10c exists to stop.
+ * So the allowlist covers both the TAGS and the PROPERTIES, not just the
+ * obviously dangerous ones.
+ */
+const ALLOWED_TAGS = [
+  '#text', 'div', 'p', 'strong', 'em', 'code', 'pre', 'ul', 'ol', 'li', 'hr', 'span',
+];
+const ALLOWED_PROPS = ['tag', 'className', 'start', 'textContent', 'children', 'text', 'isText'];
 
 class FakeNode {
   tag: string;
@@ -89,9 +108,32 @@ class FakeNode {
   }
 }
 
+/**
+ * Wrap a node so that writing ANY property outside the allowlist throws. This
+ * catches URL- and code-bearing sinks the innerHTML ban never sees: src, href,
+ * srcdoc, style, onclick, and anything else a future edit might reach for.
+ */
+function guard(node: FakeNode): FakeNode {
+  return new Proxy(node, {
+    set(target, prop, value) {
+      if (typeof prop === 'string' && !ALLOWED_PROPS.includes(prop)) {
+        throw new Error(
+          `renderer set "${prop}" on <${target.tag}> — only ${ALLOWED_PROPS.join(', ')} are allowed`,
+        );
+      }
+      return Reflect.set(target, prop, value);
+    },
+  });
+}
+
 const fakeDocument = {
-  createElement: (tag: string) => new FakeNode(tag),
-  createTextNode: (text: string) => new FakeNode('#text', text),
+  createElement: (tag: string) => {
+    if (!ALLOWED_TAGS.includes(tag)) {
+      throw new Error(`renderer created <${tag}>, which is outside its allowed vocabulary`);
+    }
+    return guard(new FakeNode(tag));
+  },
+  createTextNode: (text: string) => guard(new FakeNode('#text', text)),
   write: () => {
     throw new Error('renderer called document.write');
   },
@@ -329,6 +371,70 @@ describe('inline formatting', () => {
     expect(render('call some_long_name(x) * 2').text).toBe('call some_long_name(x) * 2');
   });
 
+  it('never eats characters out of identifiers, globs, or kwargs', () => {
+    // Every one of these deletes characters under CommonMark's rules or under
+    // a naive pattern. In a product whose whole claim is fidelity, a reply that
+    // quietly loses text is a correctness bug, not a formatting nit.
+    for (const src of [
+      'Define the __init__ method.',
+      'if __name__ == "__main__": run()',
+      'Use __all__ and __slots__ here',
+      'the *args and **kwargs pattern',
+      'run *.md and *.txt through it',
+      '**bold ** x',
+      'call some_long_name(x) * 2',
+      'a MAX_TOKENS constant',
+    ]) {
+      expect(render(src).text, src).toBe(src);
+    }
+  });
+
+  it('renders ***both*** as bold italic', () => {
+    expect(render('***important***').out).toBe(
+      'div(div.md(p.mdp(strong(em("important")))))',
+    );
+  });
+
+  it('honors a backslash escape instead of formatting it', () => {
+    // The model wrote \\* to SHOW an asterisk; italicizing it says the opposite.
+    expect(render('a \\*not italic\\* b').text).toBe('a *not italic* b');
+    expect(tags(render('a \\*not italic\\* b').root)).not.toContain('em');
+  });
+
+  it('consumes the backslash of an escape, which costs a Windows path one', () => {
+    // The documented tradeoff (KNOWN-LIMITS): honoring escapes is the right
+    // call — without it, "\*" renders as italics AND a stray backslash, which
+    // is wrong twice — but it means a literal backslash before a markup
+    // character is dropped. Paths in replies normally arrive in `code spans`,
+    // where nothing is interpreted at all.
+    expect(render('C:\\path\\*.txt').text).toBe('C:\\path*.txt');
+    expect(render('`C:\\path\\*.txt`').text).toBe('C:\\path\\*.txt'); // untouched in code
+  });
+
+  it('keeps a trailing hash in a heading', () => {
+    expect(render('## What is C#').out).toBe('div(div.md(div.mdh.mdh2("What is C#")))');
+    expect(render('### Title ###').out).toBe('div(div.md(div.mdh.mdh3("Title")))');
+  });
+
+  it('leaves an image construct entirely literal', () => {
+    // KNOWN-LIMITS promises this, and a remote image would be an outbound
+    // request the model chose, from an unlocked vault UI.
+    const src = '![a screenshot](https://evil.test/beacon.png)';
+    const { root, text } = render(src);
+    expect(text).toBe(src);
+    expect(tags(root)).not.toContain('img');
+  });
+
+  it('does not turn a thematic break inside a list into a bullet', () => {
+    const { out } = render('- a\n* * *\n- b');
+    expect(out).toContain('hr()');
+    expect(render('- a\n* * *\n- b').text).not.toContain('* *');
+  });
+
+  it('splits paragraphs on a lone carriage return', () => {
+    expect(tags(render('a\r\rb').root)).toEqual(['div', 'div', 'p', 'p']);
+  });
+
   it('handles bold containing code', () => {
     expect(render('**bold `code` here**').out).toBe(
       'div(div.md(p.mdp(strong("bold " code.mdcode("code") " here"))))',
@@ -371,5 +477,21 @@ describe('robustness', () => {
     render(evil);
     const ms = Number(process.hrtime.bigint() - started) / 1e6;
     expect(ms).toBeLessThan(2000);
+  });
+
+  it('stays fast on a reply engineered to be quadratic', () => {
+    // An adversarial review froze an earlier version of this renderer for ~12
+    // SECONDS on this exact input, sized just under the length guard: thousands
+    // of unmatched delimiters, each scanning the rest of the reply for a closer
+    // that never comes. A fetched page can talk the model into echoing one, and
+    // the main thread has no way to cancel. Emphasis content is now bounded so
+    // an unmatched delimiter can only scan to the next one.
+    for (const unit of [' __a', ' _a', ' *a', 'a __b', ' **a']) {
+      const evil = unit.repeat(Math.floor(199_000 / unit.length));
+      const started = process.hrtime.bigint();
+      render(evil);
+      const ms = Number(process.hrtime.bigint() - started) / 1e6;
+      expect(ms, `${JSON.stringify(unit)} x ${evil.length} chars took ${ms}ms`).toBeLessThan(500);
+    }
   });
 });

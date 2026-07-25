@@ -286,6 +286,16 @@ every milestone; if a limit is removed, say when and how.*
   HTML: the renderer only constructs DOM nodes, because since M10 a reply can
   quote a web page the agent fetched, and handing that page an HTML parser
   inside an unlocked vault UI would be a script-injection path.
+- **Emphasis is deliberately stricter than CommonMark, to avoid deleting
+  characters.** Emphasis marks are consumed, so a wrong match changes what the
+  reply *says* — `some_long_name` must never render as `somelongname`. So
+  emphasis cannot span its own delimiter or a line break, underscores need word
+  boundaries, and `__bold__` is not supported at all (models write `**bold**`,
+  while `__init__` and `__name__` are ordinary content). The cost is that
+  `__bold__` and a few exotic nestings show their literal marks. The one place a
+  character is intentionally consumed is a backslash escape: `\*` renders as
+  `*`, per Markdown, which also drops the backslash in an unquoted Windows path
+  like `C:\path\*.txt`. Inside `code spans` nothing is interpreted.
 - **Links in replies are not clickable.** `[text](url)` renders as `text (url)`
   in plain text. A model relaying a URL out of a page it fetched should not be
   one click away — see the M10c exfiltration screen. Copy the URL deliberately.
