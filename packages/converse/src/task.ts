@@ -25,7 +25,7 @@ import { redactJsonLeaves, restoreJsonLeaves } from './jsonLeaves.js';
 import type { ToolDefinition, ToolResult } from './tools/types.js';
 import { placeholderGate, type PermissionGate } from './tools/gate.js';
 import { describeFlag, screenArguments, type ExfilFlag } from './tools/exfil.js';
-import { getToolBudget, recordSpend, withinDailyCap } from './tools/budget.js';
+import { getToolBudget, reserveDailySpend, withinDailyCap } from './tools/budget.js';
 import { newFenceNonce, untrustedSystemLine, wrapUntrusted } from './tools/untrusted.js';
 
 /**
@@ -136,8 +136,11 @@ export interface TaskOptions extends TurnOptions {
 export interface TaskResult extends TurnResult {
   /** Provider round trips this task made. */
   steps: number;
-  /** Content-free per-call summary (names/hosts/decisions — never arguments). */
-  toolCallsMade: Array<{ name: string; host?: string; decision: string }>;
+  /** Per-call summary (names/hosts/decisions). `egress` is the RESTORED URL a
+   * call actually sent out (web_fetch URL / Brave query URL — never the token),
+   * present only on executed calls, for the "what left this device" proof (ADR
+   * 0031 Decision 6). The content-free AUDIT log is written separately. */
+  toolCallsMade: Array<{ name: string; host?: string; decision: string; egress?: string }>;
   /** How the loop ended — 'step-limit' and 'aborted' are visible, never silent. */
   stopped: 'done' | 'step-limit' | 'aborted';
 }
@@ -725,7 +728,30 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                         guidance: 'The user declined this tool call.',
                       },
               );
+            } else if (costed && !reserveDailySpend(call.name, now())) {
+              // ATOMIC DAILY RESERVE at execute (ADR 0031 Decision 5): the
+              // authority for the daily cap. A rare concurrent call may have
+              // taken the last slot AFTER this call's advisory pre-gate check
+              // and approval — the approved call then does not run, and the
+              // model gets a budget result (never a silent over-run).
+              scopeApplied = 'budget';
+              resultContent = JSON.stringify({
+                error: 'budget_exceeded',
+                guidance:
+                  'Not run: this tool\'s daily budget was just used up by another request. Do not retry now.',
+              });
+              hooks.onEvent({
+                type: 'tool_result',
+                name: call.name,
+                ok: false,
+                bytes: 0,
+                truncated: false,
+                error: 'budget_exceeded: daily limit reached',
+              });
             } else {
+              // The daily slot is reserved (or the tool is free); count this
+              // call against the per-conversation cap (ADR 0030).
+              if (costed) session.toolSpend[call.name] = convCount + 1;
               // EGRESS-TIER SEAM (ADR 0028): arguments bound for a tool are
               // redacted at the TOOL's egress tier, not the model's. A
               // bounded destination gets the deterministic Tier-1 floor on
@@ -765,14 +791,6 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                 };
               }
               execMeta = toolOut.meta;
-              // Record spend the moment a costed tool RUNS — the API call was
-              // made (quota consumed) regardless of whether it returned ok, so
-              // a failed-but-billed call still counts (ADR 0030). Persisted
-              // daily count and the per-conversation counter move together.
-              if (costed) {
-                recordSpend(call.name, now());
-                session.toolSpend[call.name] = convCount + 1;
-              }
               // Fence SUCCESSFUL external content (attacker-authored data);
               // our own structured error JSON is not external and stays bare.
               resultContent =
@@ -817,6 +835,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           name: call.name,
           ...(egressHost !== undefined ? { host: egressHost } : {}),
           decision,
+          // The restored URL that actually left, only for a call that EXECUTED
+          // (proof of what egressed — ADR 0031 Decision 6). Never the token.
+          ...(decision === 'approved' && egressUrl !== null ? { egress: egressUrl } : {}),
         });
 
         // One content-free audit row PER tool call, denials included

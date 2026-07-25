@@ -6,7 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { defaultVaultPath, setPlatform } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import { handleApi } from './api.js';
-import { handleConverseStream } from './converse.js';
+import { handleApprove, handleConverseStream } from './converse.js';
 import { UiSession } from './session.js';
 
 /**
@@ -83,6 +83,16 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Runn
       // Converse streams NDJSON as the model answers — it owns the response.
       if (req.method === 'POST' && url.pathname === '/api/converse') {
         await handleConverseStream(session, body, res);
+        return;
+      }
+      // The browser's answer to a tool approval_request (M10e, ADR 0031). Same
+      // loopback+token auth as every /api call (checked above). POST-only, so
+      // no cross-origin form/img GET can carry the token (CSRF, ADR 0031).
+      if (req.method === 'POST' && url.pathname === '/api/converse/approve') {
+        const out = handleApprove(body);
+        res.statusCode = out.status;
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify(out.body));
         return;
       }
       const result = await handleApi(

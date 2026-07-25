@@ -106,6 +106,7 @@ export {
   listBudgetedTools,
   loadBudget,
   recordSpend,
+  reserveDailySpend,
   setToolBudget,
   withinDailyCap,
   type BudgetConfig,

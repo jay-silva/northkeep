@@ -157,6 +157,10 @@
     white-space: nowrap; }
   .pinchip input { accent-color: var(--ok); margin: 0; }
   .pinchip:has(input:checked) { color: var(--ok); border-color: var(--ok); background: #e6efe8; }
+  /* Tools toggle (M10e): same chip vocabulary as the privacy pin, accent-tinted
+     when on so it reads as a distinct control. */
+  .toolchip input { accent-color: var(--accent); }
+  .toolchip:has(input:checked) { color: var(--accent); border-color: var(--accent); background: #e6efe8; }
   /* Composer bubble — one bordered container; the textarea is borderless inside
      it and the attach/send controls sit along its bottom edge (chat-style). */
   #convComposer { transition: border-color .15s; }
@@ -190,6 +194,33 @@
   .memnew.undone button { text-decoration: none; }
   .memnew .kept { font-family: var(--serif); font-style: italic; font-size: 15px; color: #8a6f30; flex: none; }
   .memnew .undo { background: none; border: 0; padding: 0; font: inherit; color: inherit; text-decoration: underline; cursor: pointer; }
+  /* Agent-loop tool activity (M10e): dim inline status lines mirroring the CLI,
+     plus the inline approval panel. Sits ABOVE the answer bubble — the process
+     the model ran to reach the answer, then the answer, then the provenance. */
+  .toollog { max-width: 82%; margin: 4px 0 2px; display: flex; flex-direction: column; gap: 3px; }
+  .toollog .thinking { padding: 3px 2px; }
+  .toolstep { font: 600 11px/1 var(--sans); text-transform: uppercase; letter-spacing: .1em;
+    color: var(--muted); margin: 9px 0 3px; border-top: 1px solid var(--line); padding-top: 9px; }
+  .toolline { font: 500 12px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+  .toolline.warn { color: var(--warn-ink); }
+  .toolline.bad { color: var(--danger); }
+  /* Neutral by default so a benign ask reads calm; escalates to warn styling
+     only when the call carries screen/identity warnings, so those pop by contrast. */
+  .toolask { border: 1px solid var(--line); background: var(--panel); border-radius: 12px;
+    padding: 13px 15px; margin: 7px 0 4px; }
+  .toolask.warn { border-color: var(--warn-line); background: var(--warn-bg); }
+  .toolask .ask-what { margin: 0; font-weight: 600; color: var(--ink); font-size: 14px; overflow-wrap: anywhere; }
+  .toolask .ask-args { margin: 5px 0 0; font: 500 12px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+  .toolask .ask-host { margin: 5px 0 0; font: 500 12px/1.5 var(--mono); color: var(--muted); overflow-wrap: anywhere; }
+  .toolask .ask-warn { display: flex; gap: 7px; margin: 9px 0 0; color: var(--warn-ink); font-size: 13px; line-height: 1.5; }
+  .toolask .ask-warn span:first-child { flex: none; }
+  .toolask .ask-btns { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 13px; }
+  .toolask .ask-btns button { font: 500 13px/1 var(--sans); border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink); border-radius: 8px; padding: 9px 13px; cursor: pointer; }
+  .toolask .ask-btns button.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .toolask .ask-btns button.danger { color: var(--danger); border-color: var(--danger-line); }
+  .toolask .ask-btns button:disabled { opacity: .5; cursor: default; }
+  .toolask .ask-status { margin: 11px 0 0; font-size: 12.5px; color: var(--muted); }
   .epline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     border-bottom: 1px solid var(--line); padding: 9px 2px; font-size: 13px; }
   /* Connect-a-model wizard provider cards + the concierge suggestion tip. */
@@ -204,6 +235,7 @@
     .pill.locked { background: #3a241d; }
     .msg.error .bubble { background: #3a241d; }
     .pinchip:has(input:checked) { background: #22382c; }
+    .toolchip:has(input:checked) { background: #22382c; border-color: var(--accent); color: var(--accent); }
   }
 </style>
 </head>
@@ -250,6 +282,9 @@
         </select>
         <label class="pinchip" title="Pin this conversation to local models only — nothing leaves your machine, and Auto may only pick private endpoints.">
           <input type="checkbox" id="convPrivatePin"> Private only
+        </label>
+        <label class="pinchip toolchip" title="Let the assistant use web tools (search and fetch) to answer. Every call asks for your approval before anything leaves your machine; site grants you make are remembered.">
+          <input type="checkbox" id="convToolsEnabled"> Tools
         </label>
         <span id="convBadge" class="badge" hidden></span>
         <button class="btn" id="manageEp">Manage endpoints</button>
@@ -1498,6 +1533,8 @@
     if (text !== undefined) n.textContent = text;
     return n;
   }
+  // Byte→human size for tool results, matching the CLI's fmtKb exactly.
+  const fmtKb = (bytes) => bytes < 1024 ? bytes + ' B' : (bytes / 1024).toFixed(1) + ' KB';
   // Cost surfacing (M9b). Mirrors @northkeep/converse costLabel() — a pure
   // 4-case switch — so the static page can render a $/$$ hint without shipping
   // the catalog. Keep in sync with catalog.ts if the ranges ever change.
@@ -2218,6 +2255,45 @@
     return det;
   }
 
+  // Tool-egress proof (ADR 0031, Decision 6): the model wire (sentProof above)
+  // never captures what a TOOL sent out — the query to Brave or the URL of a
+  // fetched site. The 'done' event carries a content-free line per executed
+  // tool call so the "what left this device" proof never under-reports. Fields:
+  // { name, host?, query?, url?, args_plain? } — the query/URL as the gate
+  // showed it, never a token or page content.
+  function toolEgressProof(ev) {
+    const list = ev.tool_egress || [];
+    if (!list.length) return null;
+    const det = document.createElement('details');
+    det.style.cssText = 'margin:8px 0 0;font-size:13px';
+    const sum = el('summary', '', '📡 What web tools sent off this machine');
+    sum.style.cssText = 'cursor:pointer;color:var(--accent)';
+    det.appendChild(sum);
+    const note = el('p', 'muted',
+      'You approved each of these — the query or URL the tool sent out is shown exactly as it left. Never a token, never page content.');
+    note.style.cssText = 'margin:10px 0';
+    det.appendChild(note);
+    for (const t of list) {
+      const row = el('div');
+      row.style.cssText = 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin:5px 0';
+      row.appendChild(el('span', 'tag', t.name));
+      if (t.host) {
+        const h = el('span', '', t.host);
+        h.style.cssText = 'font-family:var(--mono,ui-monospace,monospace);color:var(--muted)';
+        row.appendChild(h);
+      }
+      // The restored query/URL as the gate showed it — the exact string sent.
+      const wire = t.query ?? t.url ?? t.args_plain;
+      if (wire) {
+        const w = el('span', '', wire);
+        w.style.cssText = 'font-family:var(--mono,ui-monospace,monospace);color:var(--ink);word-break:break-all';
+        row.appendChild(w);
+      }
+      det.appendChild(row);
+    }
+    return det;
+  }
+
   $('convSend').addEventListener('click', sendTurn);
   $('convInput').addEventListener('keydown', (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTurn(); }
@@ -2302,22 +2378,171 @@
     a.bubble.appendChild(think);
     a.wrap.scrollIntoView({ block: 'end' });
     let streamed = '';
+    // --- Agent-loop tool activity (M10e / ADR 0031). When tools are enabled the
+    // stream interleaves tool_step / tool_call / permission / tool_result events
+    // and pauses on approval_request for a human decision delivered via a SEPARATE
+    // authed POST — the NDJSON reader below stays open the whole time and resumes
+    // on the SAME reader. All fields are content-free per the contract: names,
+    // hosts, byte counts, warnings, and the query/URL the gate showed — never a
+    // token or page content. These lines render in a tool box just BELOW the
+    // answer bubble (appended, so already-streamed narration never jumps), with
+    // provStrip / proof / egress appended after it in the 'done' case.
+    let toolBox = null, toolThink = null;
+    function ensureToolBox() {
+      if (!toolBox) { toolBox = el('div', 'toollog'); a.wrap.appendChild(toolBox); }
+      return toolBox;
+    }
+    // Drop the initial "Thinking…" pulse; while the bubble holds no text yet (a
+    // turn that opens straight into tool calls) hide the empty bubble so only the
+    // tool activity shows — the bubble reappears the instant text streams in.
+    function clearInitThink() {
+      if (think.parentNode) think.remove();
+      if (!a.bubble.textContent) a.bubble.hidden = true;
+    }
+    // The "thinking" pulse follows the model across steps: parked at the bottom of
+    // the tool box whenever the model is working, pulled the moment output streams
+    // or a decision is due (mirrors the CLI starting/stopping its spinner).
+    function showToolThinking() {
+      const box = ensureToolBox();
+      if (!toolThink) {
+        toolThink = el('span', 'thinking');
+        for (let i = 0; i < 3; i++) toolThink.appendChild(document.createElement('i'));
+        toolThink.appendChild(el('span', 'thinking-label', 'Working…'));
+      }
+      box.appendChild(toolThink); // re-append moves it to the end, below the lines
+      a.wrap.scrollIntoView({ block: 'end' });
+    }
+    function hideToolThinking() { if (toolThink && toolThink.parentNode) toolThink.remove(); }
+    function toolLine(text, cls) {
+      const box = ensureToolBox();
+      hideToolThinking(); // keep status lines above the pulse
+      box.appendChild(el('div', 'toolline' + (cls ? ' ' + cls : ''), text));
+    }
+    const DECISION_MSG = {
+      allow: 'Allowed once — running the tool…',
+      'allow-session': 'Allowed for this session — running the tool…',
+      'allow-always': 'Always allowed — running the tool…',
+      deny: 'Denied.',
+      'deny-never': 'Never allowed for this site.',
+    };
+    function renderApproval(ev) {
+      const box = ensureToolBox();
+      hideToolThinking(); clearInitThink();
+      const host = ev.egress && ev.egress.host;
+      const warned = (ev.warnings || []).length > 0;
+      const panel = el('div', 'toolask' + (warned ? ' warn' : ''));
+      // The human-readable ask: the query for a search, the tool + raw args
+      // otherwise. Both are the restored plaintext the gate would execute.
+      panel.appendChild(el('p', 'ask-what',
+        ev.tool === 'web_search' ? 'Search for: "' + (ev.query ?? '') + '"' : ev.tool));
+      if (ev.tool !== 'web_search' && ev.args_plain) panel.appendChild(el('div', 'ask-args', ev.args_plain));
+      if (host) panel.appendChild(el('div', 'ask-host', '→ ' + host));
+      // Screen / identity / memory warnings render loudly ABOVE the buttons — a
+      // screened call is offer_scopes:false and must be seen every time.
+      for (const w of (ev.warnings || [])) {
+        const wl = el('div', 'ask-warn');
+        wl.appendChild(el('span', '', '⚠'));
+        wl.appendChild(el('span', '', w));
+        panel.appendChild(wl);
+      }
+      const btns = el('div', 'ask-btns');
+      const status = el('div', 'ask-status'); status.hidden = true;
+      const buttons = [];
+      const decide = async (decision) => {
+        buttons.forEach((b) => { b.disabled = true; }); // never a spinning button
+        status.hidden = false; status.textContent = 'Sending your decision…';
+        try {
+          const res = await fetch('/api/converse/approve', {
+            method: 'POST',
+            headers: { 'X-NorthKeep-Token': TOKEN, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ session_id: convSession, approval_id: ev.approval_id, decision }),
+          });
+          // 404 = the pending call is gone (answered, timed out, or aborted).
+          if (res.status === 404) { status.textContent = 'This request expired — send again.'; return; }
+          if (!res.ok) { status.textContent = 'Could not send that decision — send again.'; return; }
+          // Success: the loop resumes on the OPEN stream; tool_result / more
+          // steps / done arrive on the same reader below. Nothing to re-open.
+          status.textContent = DECISION_MSG[decision] || 'Decision sent.';
+        } catch {
+          status.textContent = 'This request expired — send again.'; // network gone, same as 404
+        }
+      };
+      const addBtn = (label, decision, cls) => {
+        const b = el('button', cls, label);
+        b.addEventListener('click', () => decide(decision));
+        buttons.push(b); btns.appendChild(b);
+      };
+      addBtn('Allow once', 'allow', 'primary');
+      // Scope buttons only when the server offers them (a safe read of a concrete,
+      // screen-clean host); a screened or host-less call is yes-once / no only.
+      if (ev.offer_scopes) {
+        addBtn('Allow this session', 'allow-session', '');
+        addBtn('Always for ' + host, 'allow-always', '');
+      }
+      addBtn('Deny', 'deny', 'danger');
+      if (ev.offer_scopes) addBtn('Never for ' + host, 'deny-never', 'danger');
+      panel.appendChild(btns);
+      panel.appendChild(status);
+      box.appendChild(panel);
+      a.wrap.scrollIntoView({ block: 'end' });
+    }
     const handle = (ev) => {
       if (ev.type === 'start') {
         convSession = ev.session_id; // keep the animation until tokens flow
       } else if (ev.type === 'token') {
         streamed += ev.text; // wire space: [SSN_1]-style masks, pseudonyms
+        a.bubble.hidden = false;
         a.bubble.textContent = streamed;
+        hideToolThinking(); clearInitThink(); // output is flowing now
+      } else if (ev.type === 'tool_step') {
+        // A new agent-loop step began; only n>1 needs a divider (the first is implied).
+        clearInitThink();
+        if (ev.n > 1) { hideToolThinking(); ensureToolBox().appendChild(el('div', 'toolstep', 'step ' + ev.n)); }
+        showToolThinking();
+      } else if (ev.type === 'tool_call') {
+        // The model asked for a tool — pending. No pulse: an approval or an
+        // execution is next (the CLI stops its spinner at exactly this point).
+        clearInitThink(); hideToolThinking();
+        toolLine('↳ ' + ev.name + (ev.host ? ' ' + ev.host : '') + (ev.egress_tier ? ' · ' + ev.egress_tier : ''));
+      } else if (ev.type === 'approval_request') {
+        renderApproval(ev);
+      } else if (ev.type === 'permission') {
+        // How the call resolved. Honest provenance (ADR 0029): a grant auto-allow
+        // is not your own yes, and a screen block must say WHY (content-free reasons).
+        if (ev.decision === 'approved' && ev.via === 'grant') {
+          toolLine('↳ ✓ ' + ev.name + ' auto-allowed (site grant)');
+        } else if (ev.decision !== 'approved' && ev.via === 'screen') {
+          toolLine('↳ ✗ ' + ev.name + ' blocked by the exfiltration screen:', 'bad');
+          for (const r of (ev.reasons || [])) toolLine('    ⚠ ' + r, 'bad');
+        } else if (ev.decision !== 'approved' && ev.via === 'grant') {
+          toolLine('↳ ✗ ' + ev.name + ' refused (never-for-this-site grant)');
+        } else if (ev.decision !== 'approved' && ev.via === 'budget') {
+          toolLine('↳ ✗ ' + ev.name + ' skipped — ' + (ev.reasons || []).join('; '), 'warn');
+        } else if (ev.decision !== 'approved') {
+          toolLine('↳ ✗ ' + ev.name + ' ' + (ev.decision === 'timeout' ? 'timed out — denied' : 'denied'));
+        }
+        showToolThinking(); // the model weighs the result / next step
+      } else if (ev.type === 'tool_result') {
+        toolLine(ev.ok
+          ? '↳ ✓ ' + fmtKb(ev.bytes) + ' from ' + (ev.host || ev.name) + (ev.truncated ? ' (truncated)' : '')
+          : '↳ ✗ ' + ev.name + ': ' + (ev.error || 'returned an error'),
+          ev.ok ? '' : 'warn');
+        showToolThinking();
       } else if (ev.type === 'done') {
         convSession = ev.session_id;
+        hideToolThinking(); clearInitThink();
+        a.bubble.hidden = false;
         a.bubble.textContent = ev.reply; // restored text replaces the wire-space stream
         a.wrap.appendChild(provStrip(ev));
         const proof = sentProof(ev);
         if (proof) a.wrap.appendChild(proof);
+        const egress = toolEgressProof(ev); // what the tools themselves sent out
+        if (egress) a.wrap.appendChild(egress);
         if ((ev.memories_created || []).length) a.wrap.appendChild(memNewLine(ev.memories_created, ev));
         a.wrap.scrollIntoView({ block: 'end' });
       } else if (ev.type === 'error') {
-        if (!streamed) a.wrap.remove();
+        hideToolThinking();
+        if (!streamed && !toolBox) a.wrap.remove(); // keep the message if tool activity showed
         addMsg('error', ev.code === 'TIER2_UNAVAILABLE'
           ? 'Nothing was sent to the model — ' + ev.message
           : ev.message);
@@ -2336,6 +2561,9 @@
           // Always explicit: the server RATCHETS the conversation's ceiling,
           // so unchecking must send the deliberate 'bounded-allowed'.
           ceiling: $('convPrivatePin').checked ? 'private-only' : 'bounded-allowed',
+          // Opt-in web tools (M10e / ADR 0031): only when the Tools chip is on
+          // does the server run the agent loop and emit tool/approval events.
+          ...($('convToolsEnabled').checked ? { tools: true } : {}),
           // M7a quick-switch: the picked model rides along; the reply's
           // provenance strip shows which model actually answered.
           ...(!isAuto && $('convModel').value && $('convModel').value !== ep.model

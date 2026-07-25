@@ -13,6 +13,9 @@ import {
   setToolBudget,
   withinDailyCap,
 } from '../src/index.js';
+// reserveDailySpend (ADR 0031 Decision 5) is not re-exported through index.js —
+// the lead wires that export separately — so import it straight from the module.
+import { reserveDailySpend } from '../src/tools/budget.js';
 
 /**
  * M10d — the ADR-0030 (decision 4) tool-spend budget (~/.northkeep/budget.json).
@@ -215,5 +218,59 @@ describe('budget store', () => {
     expect(listBudgetedTools(DAY1)).toEqual(['web_search', 'zzz_tool']);
     // a tool that only spent on a PRIOR day is not listed today
     expect(listBudgetedTools(DAY2)).toEqual(['web_search']);
+  });
+
+  // ADR 0031 Decision 5 — the atomic reserve that closes M10d's check→record
+  // TOCTOU. reserveDailySpend is the AUTHORITY for the daily cap; the property
+  // it guarantees is verified sequentially here because the function is
+  // synchronous (no await between read and write), which is exactly why two
+  // concurrent runTask calls in single-threaded Node cannot both reserve.
+  it('reserveDailySpend below the cap returns true and increments daySpend by 1', () => {
+    setToolBudget('web_search', { dailyCap: 5, perConversationCap: 5 });
+    expect(daySpend('web_search', DAY1)).toBe(0);
+    expect(reserveDailySpend('web_search', DAY1)).toBe(true);
+    expect(daySpend('web_search', DAY1)).toBe(1); // incremented by exactly one
+  });
+
+  it('reserveDailySpend AT the cap returns false and does NOT change daySpend', () => {
+    setToolBudget('web_search', { dailyCap: 2, perConversationCap: 5 });
+    recordSpend('web_search', DAY1);
+    recordSpend('web_search', DAY1); // count now 2 == cap
+    expect(daySpend('web_search', DAY1)).toBe(2);
+    expect(reserveDailySpend('web_search', DAY1)).toBe(false); // at cap → denied
+    expect(daySpend('web_search', DAY1)).toBe(2); // unchanged: wrote nothing
+  });
+
+  it('two sequential reserves against dailyCap:1 → first true, second false, ends at 1', () => {
+    // The concurrency-safety property: the first reserve takes the last slot and
+    // the second reads the incremented count and fails — no double-reserve.
+    setToolBudget('web_search', { dailyCap: 1, perConversationCap: 5 });
+    expect(reserveDailySpend('web_search', DAY1)).toBe(true);
+    expect(reserveDailySpend('web_search', DAY1)).toBe(false);
+    expect(daySpend('web_search', DAY1)).toBe(1); // exactly one slot consumed
+  });
+
+  it('reserveDailySpend on a NEW day succeeds again (per-UTC-day reset)', () => {
+    setToolBudget('web_search', { dailyCap: 1, perConversationCap: 5 });
+    expect(reserveDailySpend('web_search', DAY1)).toBe(true);
+    expect(reserveDailySpend('web_search', DAY1)).toBe(false); // DAY1 exhausted
+    expect(reserveDailySpend('web_search', DAY2)).toBe(true); // fresh day, fresh slot
+    expect(daySpend('web_search', DAY2)).toBe(1);
+  });
+
+  it('reserveDailySpend uses getToolBudget’s DEFAULT cap for an unconfigured tool', () => {
+    // No setToolBudget → the default cap bounds it (never unbounded, never zero).
+    for (let i = 0; i < DEFAULT_TOOL_BUDGET.dailyCap; i++) {
+      expect(reserveDailySpend('web_search', DAY1)).toBe(true);
+    }
+    expect(daySpend('web_search', DAY1)).toBe(DEFAULT_TOOL_BUDGET.dailyCap);
+    expect(reserveDailySpend('web_search', DAY1)).toBe(false); // at the default cap
+  });
+
+  it('reserveDailySpend preserves 0600 on the write', () => {
+    setToolBudget('web_search', { dailyCap: 5, perConversationCap: 5 });
+    fs.chmodSync(budgetPath(), 0o644); // loosen before the reserve writes
+    expect(reserveDailySpend('web_search', DAY1)).toBe(true);
+    expect(fs.statSync(budgetPath()).mode & 0o777).toBe(0o600);
   });
 });

@@ -133,9 +133,17 @@ every milestone; if a limit is removed, say when and how.*
   abort, marked truncated) and tool results are truncated to a character
   budget before they reach the model, so a huge page cannot flood a
   conversation. What the model saw is what the (truncated) fence contains.
-- **Disconnect behavior is TBD until the web UI lands (M10e).** In the CLI, a
-  Ctrl-C or session drop mid-task appends "Cancelled by the user." results and
-  stops; how a browser disconnect maps to abort is an M10e decision.
+- **Disconnect aborts the task (M10e).** In the CLI a Ctrl-C / session drop
+  mid-task appends "Cancelled by the user." and stops. In the web GUI, closing
+  the tab or reloading fires the response 'close' event, which aborts the loop
+  and sweeps that turn's pending approvals; a late approve POST for a swept id
+  404s (the frontend re-asks). An unanswered approval still denies after the
+  loop's 5-minute timeout.
+- **Approvals live in server memory, not across a restart.** A pending tool
+  approval is held in the converse process's memory keyed by a random
+  single-use id. If the UI server restarts while an approval is outstanding,
+  the id is gone: the browser's approve POST 404s (re-ask) and the killed
+  loop simply ended. Nothing is auto-approved across a restart.
 - **fetch is https-only, ports 443/8443, GET, no cookies, ever.** Content
   types beyond HTML/text/JSON/XML are refused without reading the body.
 
@@ -145,14 +153,14 @@ every milestone; if a limit is removed, say when and how.*
   and a per-conversation cap per costed tool bound how many times it runs;
   they do not track actual dollars (the free Brave tier is $0 anyway). A true
   cost ledger is future work.
-- **The daily cap can be overshot under CONCURRENT tool calls.** The cap is
-  checked, then the tool runs, then the count is recorded — with no lock
-  across those steps. The CLI runs one conversation at a time, so it cannot
-  hit this; but once a driver runs several conversations at once (the M10e web
-  GUI / an MCP server fronting multiple clients), N in-flight searches can
-  each pass the check before any records, overshooting by up to N-1. Bounded,
-  never unbounded. Proper atomic reservation lands with the concurrent driver
-  in M10e.
+- **The daily cap is enforced by an atomic reserve (M10e).** A costed tool
+  reserves its daily slot in one synchronous read-check-write at execute time,
+  so concurrent conversations (the web GUI, an MCP server fronting several
+  clients) cannot both pass and overshoot — the second reserve sees the
+  incremented count and budget-denies. The rare visible edge: two concurrent
+  prompts for a cap-1 tool can both appear, and the second approval is
+  budget-denied AFTER consent. The budget is still a call COUNT, not a dollar
+  ledger.
 - **web_search screens the query for catastrophic secrets only.** An SSN/card/
   IBAN/API-key in the query is hard-blocked, but identity and memory screening
   are deliberately off (the query goes to Brave, a trusted API, not an

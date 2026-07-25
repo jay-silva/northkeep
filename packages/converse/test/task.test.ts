@@ -276,8 +276,11 @@ describe('runTask — the agent loop', () => {
     expect(result.reply).toBe('All done.');
     expect(result.steps).toBe(2);
     expect(result.stopped).toBe('done');
+    // toolCallsMade now carries the restored egress URL for the executed call
+    // (the "what left this device" proof, ADR 0031 Decision 6) — this is the
+    // returned result, NOT the audit log (which stays content-free).
     expect(result.toolCallsMade).toEqual([
-      { name: 'echo', host: 'example.com', decision: 'approved' },
+      { name: 'echo', host: 'example.com', decision: 'approved', egress: 'https://example.com/a' },
     ]);
     expect(executed).toEqual([{ url: 'https://example.com/a' }]);
 
@@ -623,7 +626,7 @@ describe('runTask — the agent loop', () => {
     ).rejects.toSatisfy((e: unknown) => e instanceof TurnError && e.code === 'PROVIDER_FAILED');
   });
 
-  it('accumulates usage across steps and reports steps/toolCallsMade content-free', async () => {
+  it('accumulates usage across steps and reports steps + the executed egress URL', async () => {
     const { provider } = scriptedProvider(PRIVATE_URL, [
       {
         text: 'a',
@@ -641,9 +644,15 @@ describe('runTask — the agent loop', () => {
     });
     expect(result.usage?.estimated).toBe(true);
     expect(result.usage!.inputTokens).toBeGreaterThan(0);
-    expect(result.toolCallsMade.every((c) => !JSON.stringify(c).includes('example.com/u'))).toBe(
-      true,
-    ); // host only, never the full URL
+    // toolCallsMade carries host AND the executed egress URL for the proof
+    // (ADR 0031); the content-free guarantee is on the AUDIT LOG, verified in
+    // the m10b/m10c e2e (url_hash only, never the raw URL).
+    expect(result.toolCallsMade[0]).toEqual({
+      name: 'echo',
+      host: 'example.com',
+      decision: 'approved',
+      egress: 'https://example.com/u',
+    });
   });
 
   // G1 blocker regression: a memory disclosed on turn 1 must stay screened on

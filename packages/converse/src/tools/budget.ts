@@ -259,3 +259,52 @@ export function recordSpend(tool: string, now: Date): void {
   file.spend[tool] = bucket;
   saveFile(file);
 }
+
+/**
+ * Atomically reserve one daily call for `tool`: if today's persisted count is
+ * below the tool's daily cap, increment it and return true; otherwise return
+ * false and change nothing. ONE synchronous read-check-increment-write (no
+ * await between read and write) so two concurrent runTask calls in single-
+ * threaded Node cannot both reserve the last slot — the first completes and
+ * increments, the second reads the incremented count and fails. This is the
+ * authority for the daily cap (ADR 0031 Decision 5); recordSpend remains for
+ * the unconditional-increment callers.
+ *
+ * WHY this is the authority, not withinDailyCap: the GUI (M10e) makes
+ * concurrent conversations real, so M10d's check→execute→record TOCTOU
+ * (KNOWN-LIMITS, G5) is now reachable — two runTask calls could each pass an
+ * advisory withinDailyCap for the last slot, then both execute. Folding the
+ * check and the increment into a single synchronous critical section closes
+ * that race: because nothing yields between the spend read and the spend
+ * write, the first call runs to completion (count now at cap) before the
+ * second's read happens, and the second reads the incremented count and
+ * returns false. There is deliberately NO release path (ADR 0031 Decision 5):
+ * reserve-at-execute has no non-execute exits to unwind, so no missed release
+ * can ever drift the count up until midnight.
+ *
+ * Fail-closed like the rest of the file: a corrupt/absent budget.json loads as
+ * zero spend (loadFile → EMPTY), so a first reserve succeeds against the
+ * explicit-or-DEFAULT cap — a bounded first call, never an unbounded pass.
+ */
+export function reserveDailySpend(tool: string, now: Date): boolean {
+  const today = dayKey(now);
+  const cap = getToolBudget(tool).dailyCap;
+  // Single synchronous read: the count we check and the file we write must come
+  // from the SAME load, so no interleaving call can slip a write in between.
+  const file = loadFile();
+  const current = file.spend[tool]?.[today] ?? 0;
+  if (current >= cap) return false; // at/over cap → deny, write nothing.
+  // Under cap → same on-disk write path as recordSpend: prune every non-today
+  // entry (only today's count is ever read), then increment today's, then the
+  // 0600 write. No await anywhere between the read above and this write.
+  for (const [t, days] of Object.entries(file.spend)) {
+    const kept = days[today];
+    if (kept !== undefined) file.spend[t] = { [today]: kept };
+    else delete file.spend[t];
+  }
+  const bucket = file.spend[tool] ?? {};
+  bucket[today] = (bucket[today] ?? 0) + 1;
+  file.spend[tool] = bucket;
+  saveFile(file);
+  return true;
+}

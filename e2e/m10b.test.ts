@@ -186,7 +186,8 @@ describe('M10b acceptance — agent loop + hardened web_fetch', () => {
     expect(result.stopped).toBe('done');
     expect(result.reply).toBe('The page says: your memory stays in a vault you own.');
     expect(result.toolCallsMade).toEqual([
-      { name: 'web_fetch', host: 'page-fixture.test', decision: 'approved' },
+      // egress = the restored URL that executed (the "what left" proof, ADR 0031).
+      { name: 'web_fetch', host: 'page-fixture.test', decision: 'approved', egress: pageUrl },
     ]);
 
     // Approval saw the EXACT plaintext URL that executed.

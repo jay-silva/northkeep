@@ -7,18 +7,30 @@ import {
   compareTurnCost,
   createAnthropicProvider,
   createOpenAICompatibleProvider,
+  createPermissionEngine,
   createSession,
+  enabledTools,
   getDefaultEndpoint,
   getEndpoint,
   getEndpointKey,
   listEndpoints,
   loadRoutingPolicy,
   route,
+  runTask,
   runTurn,
   suggestBetterModel,
   vaultAdapter,
+  type ApprovalAnswer,
+  type ApprovalRequest,
   type ConverseSession,
+  type PermissionEngine,
   type PrivacyCeiling,
+  type TaskEvent,
+  type TaskHooks,
+  type TaskResult,
+  type ToolDefinition,
+  type TurnOptions,
+  type TurnResult,
 } from '@northkeep/converse';
 import { createOllamaClient } from '@northkeep/librarian';
 import { loadConnectorConfig } from '@northkeep/sync';
@@ -59,6 +71,13 @@ interface StoredConversation {
    * explicit 'bounded-allowed', which is the deliberate act the ADR requires.
    */
   ceiling: PrivacyCeiling;
+  /**
+   * ONE permission engine per conversation (ADR 0031 Decision 4 / ADR 0029
+   * requirement): a shared engine would let a "this session" grant in one
+   * conversation silently auto-allow in another. Persisted so "always" grants
+   * survive; created lazily on the first tool-enabled turn.
+   */
+  gate?: PermissionEngine;
 }
 
 const conversations = new Map<string, StoredConversation>();
@@ -68,6 +87,29 @@ function evictStaleConversations(): void {
   for (const [id, conv] of conversations) {
     if (now - conv.lastUsed > SESSION_TTL_MS) conversations.delete(id);
   }
+}
+
+/**
+ * Pending tool-approval requests awaiting a browser decision (ADR 0031). Keyed
+ * by an unguessable single-use approval_id. The map entry — not the promise —
+ * is the settle guard: whichever of {approve POST, runTask's 5-min timeout,
+ * stream abort} fires first DELETES the entry; the others find it gone and
+ * no-op (a second approve POST 404s). `sessionId` binds the approval to the
+ * conversation that issued it, so one conversation can never resolve another's.
+ */
+interface PendingApproval {
+  sessionId: string;
+  resolve: (answer: ApprovalAnswer) => void;
+}
+const pendingApprovals = new Map<string, PendingApproval>();
+
+/** Settle a pending approval exactly once (delete-then-resolve). */
+function settleApproval(approvalId: string, answer: ApprovalAnswer): boolean {
+  const entry = pendingApprovals.get(approvalId);
+  if (entry === undefined) return false;
+  pendingApprovals.delete(approvalId);
+  entry.resolve(answer);
+  return true;
 }
 
 interface ConverseRequest {
@@ -81,6 +123,10 @@ interface ConverseRequest {
   model?: string;
   /** Per-conversation privacy ceiling (M7b). Default: bounded-allowed. */
   ceiling?: string;
+  /** Opt IN to the agent tools for this turn (M10e) — mirrors CLI --tools.
+   * Runs runTask (the tool loop) instead of runTurn; registry-enabled tools
+   * only, every call gated by the approval prompt. */
+  tools?: boolean;
 }
 
 /**
@@ -91,10 +137,21 @@ interface ConverseRequest {
 const MODEL_ID_RE = /^[\w.:/-]{1,128}$/;
 const validModelId = (id: string): boolean => MODEL_ID_RE.test(id) && !id.includes('..');
 
+/**
+ * TEST-ONLY seam. Production (server.ts) never passes it, so the tools come
+ * from the registry (enabledTools). Tests inject a tool built with the net
+ * test-overrides (a loopback fake), because the registry constructs the real
+ * SSRF-guarded tool which cannot reach a local fixture.
+ */
+export interface ConverseTestOptions {
+  toolsOverride?: ToolDefinition[];
+}
+
 export async function handleConverseStream(
   uiSession: UiSession,
   body: Buffer,
   res: ServerResponse,
+  testOptions?: ConverseTestOptions,
 ): Promise<void> {
   let req: ConverseRequest;
   try {
@@ -261,6 +318,93 @@ export async function handleConverseStream(
     ...(routeReason ? { route_reason: routeReason, endpoint_label: endpoint.label } : {}),
   });
 
+  // --- Agent tools (M10e, ADR 0031). Opt-in per turn; registry-enabled tools
+  // only. Nothing here runs unless the request set tools:true.
+  const wantsTools = req.tools === true;
+  const taskTools: ToolDefinition[] = wantsTools
+    ? (testOptions?.toolsOverride ?? enabledTools())
+    : [];
+  // AbortController wired to the response: if the browser disconnects mid-turn
+  // (navigate away / reload), abort the loop AND sweep this turn's pending
+  // approvals so no resolver leaks (ADR 0031 Decision 3).
+  const controller = new AbortController();
+  const localApprovalIds = new Set<string>();
+  let responseComplete = false;
+  res.on('close', () => {
+    if (!responseComplete) controller.abort();
+    for (const id of localApprovalIds) pendingApprovals.delete(id);
+  });
+
+  // The per-conversation permission engine (ADR 0031 Decision 4). Created once
+  // and reused across this conversation's turns so "this session" grants last
+  // the conversation — never shared with another conversation.
+  if (wantsTools && stored.gate === undefined) {
+    stored.gate = createPermissionEngine({ persist: true });
+  }
+
+  const taskHooks: TaskHooks = {
+    onEvent: (e: TaskEvent) => {
+      if (e.type === 'step') {
+        if (e.n > 1) send(res, { type: 'tool_step', n: e.n });
+      } else if (e.type === 'tool_call') {
+        send(res, {
+          type: 'tool_call',
+          name: e.name,
+          ...(e.host !== undefined ? { host: e.host } : {}),
+          ...(e.egressTier !== undefined ? { egress_tier: e.egressTier } : {}),
+        });
+      } else if (e.type === 'permission') {
+        send(res, {
+          type: 'permission',
+          name: e.name,
+          decision: e.decision,
+          ...(e.via !== undefined ? { via: e.via } : {}),
+          ...(e.reasons !== undefined ? { reasons: e.reasons } : {}),
+        });
+      } else if (e.type === 'tool_result') {
+        send(res, {
+          type: 'tool_result',
+          name: e.name,
+          ok: e.ok,
+          bytes: e.bytes,
+          truncated: e.truncated,
+          ...(e.host !== undefined ? { host: e.host } : {}),
+          ...(e.error !== undefined ? { error: e.error } : {}),
+        });
+      }
+    },
+    requestApproval: (approvalReq: ApprovalRequest): Promise<ApprovalAnswer> => {
+      const approvalId = randomUUID();
+      // Show the query for web_search (never the raw Brave URL/token); the raw
+      // restored args otherwise. argsPlain is what the CLI gate shows too.
+      let query: string | null = null;
+      try {
+        const parsed = JSON.parse(approvalReq.argsPlain) as { query?: unknown };
+        if (typeof parsed.query === 'string') query = parsed.query;
+      } catch {
+        query = null;
+      }
+      const offerScopes =
+        approvalReq.egress !== null && approvalReq.risk === 'safe-read' && approvalReq.warnings.length === 0;
+      return new Promise<ApprovalAnswer>((resolve) => {
+        pendingApprovals.set(approvalId, { sessionId, resolve });
+        localApprovalIds.add(approvalId);
+        send(res, {
+          type: 'approval_request',
+          approval_id: approvalId,
+          tool: approvalReq.tool,
+          ...(approvalReq.tool === 'web_search' && query !== null
+            ? { query }
+            : { args_plain: approvalReq.argsPlain }),
+          egress: approvalReq.egress,
+          risk: approvalReq.risk,
+          warnings: approvalReq.warnings,
+          offer_scopes: offerScopes,
+        });
+      });
+    },
+  };
+
   const ollama = createOllamaClient();
   const distillOllama = (await ollama.available().catch(() => false)) ? ollama : null;
 
@@ -288,7 +432,7 @@ export async function handleConverseStream(
   }
 
   try {
-    const result = await runTurn({
+    const turnArgs: TurnOptions = {
       message,
       session: stored.session,
       provider,
@@ -298,9 +442,30 @@ export async function handleConverseStream(
       memoryScope: distillScope,
       distill: !distillSkipped,
       distillOllama,
-      routeReason,
-      onToken: (token) => send(res, { type: 'token', text: token }),
-    });
+      ...(routeReason !== undefined ? { routeReason } : {}),
+      onToken: (token: string) => send(res, { type: 'token', text: token }),
+    };
+    // --tools rides runTask (the agent loop); otherwise the exact runTurn path.
+    let taskResult: TaskResult | null = null;
+    let result: TurnResult;
+    if (taskTools.length > 0) {
+      taskResult = await runTask({
+        ...turnArgs,
+        tools: taskTools,
+        hooks: taskHooks,
+        ...(stored.gate !== undefined ? { gate: stored.gate } : {}),
+        signal: controller.signal,
+      });
+      result = taskResult;
+    } else {
+      result = await runTurn(turnArgs);
+    }
+    // The "what left this device" proof for a tool turn: the restored URLs/
+    // queries that actually egressed (ADR 0031 Decision 6). Content, like
+    // `sent` — never the token, streamed once, never persisted.
+    const toolEgress = (taskResult?.toolCallsMade ?? [])
+      .filter((c) => c.egress !== undefined)
+      .map((c) => ({ name: c.name, ...(c.host !== undefined ? { host: c.host } : {}), url: c.egress as string }));
     // Concierge tip (M9d): a stronger model the user hasn't connected would
     // suit this message better. PURELY advisory — isolated in its own try so a
     // fault here can never turn a successful turn into an error response.
@@ -326,6 +491,7 @@ export async function handleConverseStream(
       // array whenever a tool-bearing wire went out (never under-report).
       ...(sentWire ? { sent: sentWire } : {}),
       ...(sentTools ? { sent_tools: sentTools } : {}),
+      ...(toolEgress.length > 0 ? { tool_egress: toolEgress } : {}),
       redactions: result.redactions,
       reply: result.reply,
       privacy: result.privacy,
@@ -355,12 +521,65 @@ export async function handleConverseStream(
       });
     }
   } finally {
+    // Mark complete BEFORE end so the 'close' handler doesn't read a normal
+    // finish as a disconnect-abort. Sweep any stragglers (defensive: runTask
+    // settles all approvals before returning, but a throw could skip that).
+    responseComplete = true;
+    for (const id of localApprovalIds) pendingApprovals.delete(id);
     res.end();
   }
 }
 
+/**
+ * POST /api/converse/approve — the browser's answer to an approval_request
+ * (ADR 0031 Decision 2). Auth is enforced by the caller (server.ts: loopback +
+ * token, same as every /api call). Returns a small JSON result the server
+ * relays. A missing/mismatched approval_id is a 404 the frontend treats as
+ * "expired — re-ask", never a bypass: the loop's secret hard-block already ran
+ * before this point, so a stale/forged allow can only land on an already-clean
+ * or warned call.
+ */
+export function handleApprove(body: Buffer): { status: number; body: Record<string, unknown> } {
+  let req: { session_id?: unknown; approval_id?: unknown; decision?: unknown };
+  try {
+    req = JSON.parse(body.toString('utf8')) as typeof req;
+  } catch {
+    return { status: 400, body: { error: 'Invalid JSON body.' } };
+  }
+  const approvalId = typeof req.approval_id === 'string' ? req.approval_id : '';
+  const sessionId = typeof req.session_id === 'string' ? req.session_id : '';
+  const decision = typeof req.decision === 'string' ? req.decision : '';
+  const VALID: ReadonlySet<string> = new Set([
+    'allow',
+    'allow-session',
+    'allow-always',
+    'deny',
+    'deny-never',
+  ]);
+  if (!VALID.has(decision)) {
+    return { status: 400, body: { error: 'Invalid decision.' } };
+  }
+  const entry = pendingApprovals.get(approvalId);
+  // Not found OR issued for a different conversation → 404 (single-settle: an
+  // already-answered/timed-out/aborted id is gone). Fail closed: the loop's
+  // own 5-min timeout still denies an approval nobody ever answers.
+  if (entry === undefined || entry.sessionId !== sessionId) {
+    return { status: 404, body: { error: 'No pending approval for that id (it may have expired — send again).' } };
+  }
+  settleApproval(approvalId, decision as ApprovalAnswer);
+  return { status: 200, body: { ok: true } };
+}
+
 function send(res: ServerResponse, event: Record<string, unknown>): void {
-  res.write(`${JSON.stringify(event)}\n`);
+  // The agent loop keeps running until it next checks the abort signal, so a
+  // send after the client disconnected would throw write-after-end and crash
+  // the handler. Guard every send (ADR 0031 Decision 3).
+  if (res.writableEnded) return;
+  try {
+    res.write(`${JSON.stringify(event)}\n`);
+  } catch {
+    // socket died between the check and the write — nothing more to do.
+  }
 }
 
 function jsonError(res: ServerResponse, status: number, message: string): void {
