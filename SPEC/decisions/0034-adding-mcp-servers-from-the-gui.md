@@ -49,8 +49,16 @@ child. Break the first link and the rest is inert.
 
 ## The property this ADR preserves
 
-> Adding an MCP server must require something an automated caller cannot
-> produce, **even holding a valid session token**.
+> Causing NorthKeep to spawn an **attacker-chosen program** must require
+> something an automated caller cannot produce, **even holding a valid session
+> token**.
+
+The wording matters and was sharpened after review. "Adding must require
+something an automated caller cannot produce" is falsified by this ADR's own
+Decision 1: a catalog add is token-only by design. What the gates actually
+guarantee — and what ADR 0035 Decision 7 must satisfy — is the sentence above:
+an automated caller can at most add a server **we** vetted, whose command comes
+from our template.
 
 Note what this does NOT say. It does not say "the GUI cannot add servers", which
 was M11's blunt instrument. It names the actual property, which turns out to be

@@ -221,8 +221,15 @@ Three holes, all verified:
 ADR 0034's property is quoted here because this ADR must satisfy it, not
 reinterpret it:
 
-> Adding an MCP server must require something an automated caller cannot
-> produce, **even holding a valid session token**.
+> Causing NorthKeep to spawn an **attacker-chosen program** must require
+> something an automated caller cannot produce, **even holding a valid session
+> token**.
+
+A remote server spawns nothing, so the literal property is not the binding one
+here. The equivalent for remote is: **an automated caller must not be able to put
+an attacker-chosen server's tool definitions in front of the model, nor cause a
+browser to open at an attacker-chosen URL.** Both are exactly what the holes
+below allow, which is why the gate has to be explicit.
 
 Therefore:
 

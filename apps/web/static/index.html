@@ -306,7 +306,7 @@
           <option value="3">Tier 3 — max: names + dates (PHI)</option>
           <option value="0">Off (private endpoints only)</option>
         </select>
-        <label class="pinchip" title="Pin this conversation to local models only — nothing leaves your machine, and Auto may only pick private endpoints.">
+        <label class="pinchip" title="Pin this conversation to local models only — only local models read this chat (web tools, if on, still leave), and Auto may only pick private endpoints.">
           <input type="checkbox" id="convPrivatePin"> Private only
         </label>
         <label class="pinchip toolchip" title="Let the assistant use web tools (search and fetch) to answer. Every call asks for your approval before anything leaves your machine; site grants you make are remembered.">
@@ -1220,7 +1220,7 @@
       const r = await api('/api/models?base=' + encodeURIComponent(OLLAMA_BASE));
       const pick = pickChatModel(r.models || []);
       if (pick) {
-        $('setupAiLine').textContent = 'Found Ollama on this Mac. Pick a model — nothing leaves your machine:';
+        $('setupAiLine').textContent = 'Found Ollama on this Mac. Pick a model — it runs here, so your chat never goes to a cloud model:';
         const sel = $('setupOllamaModel');
         sel.textContent = '';
         for (const m of (r.models || []).filter((x) => !/embed/i.test(x))) {
@@ -1820,8 +1820,8 @@
   }
 
   // Inline spans, in precedence order: `code` (wins outright — its contents are
-  // literal, so "`**x**`" shows the asterisks), **bold**/__bold__,
-  // *italic*/_italic_, and [text](url). Built fresh per call because mdInline
+  // literal, so "`**x**`" shows the asterisks), **bold**, *italic*/_italic_,
+  // and [text](url). __bold__ is deliberately NOT supported; see below. Built fresh per call because mdInline
   // recurses (bold containing code) and a shared /g regex would corrupt
   // lastIndex mid-recursion. No nested quantifiers anywhere: hostile input
   // cannot make this backtrack catastrophically.
@@ -2135,8 +2135,9 @@
       hint.innerHTML =
         '🔒 <span><strong>Private only is on.</strong> Only local models on your Mac will read this chat; ' +
         'nothing is sent to a cloud model. Web tools are separate: if you turn Tools on, a search or fetch ' +
-        'still leaves your Mac, and asks you first every time. For a chat where nothing at all leaves, ' +
-        'leave Tools off.</span>';
+        'still leaves your Mac. It asks you first, unless you have already granted that site ' +
+        '&quot;always&quot; \u2014 a standing grant runs with no prompt, even here. For a chat where nothing at ' +
+        'all leaves, keep Tools off.</span>';
     } else {
       hint.innerHTML = '<span>Turn on <strong>Private only</strong> to pin this chat to local models on your Mac, so nothing is ever sent to a cloud model. It is off, so a connected cloud model may be used (after on-device redaction).</span>';
     }

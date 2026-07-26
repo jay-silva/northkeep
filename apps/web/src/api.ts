@@ -779,13 +779,13 @@ async function dispatch(
 
   // --- MCP servers (M11, ADR 0033). REVIEW surface, not an add surface. ---
   //
-  // The GUI can list configured servers, see exactly what each advertises,
-  // accept those definitions, mark tools read-only, and remove a server. It
-  // deliberately CANNOT add one: adding means naming an executable to spawn,
-  // and that stays a deliberate act in a terminal. A browser form that spawns
-  // arbitrary programs is a much larger blast radius than any other setting
-  // this API writes, and nothing about M11 needs it. (ADR 0033 Decision 6 is
-  // satisfied either way: the model can never reach any of this.)
+  // The GUI lists configured servers, sees exactly what each advertises,
+  // accepts those definitions, marks tools read-only, removes a server, and
+  // (since ADR 0034) ADDS one under two gates: a catalog add carries only a
+  // catalog id, so the command comes from our template and never from the
+  // request; a free-form path needs the vault passphrase AND must sit under an
+  // allowed root. ADR 0033 Decision 6 holds throughout: no model can reach any
+  // of this.
 
   if (method === 'GET' && route === '/api/mcp') {
     const servers = loadMcpConfig().servers.map((s) => ({

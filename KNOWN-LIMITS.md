@@ -190,9 +190,11 @@ every milestone; if a limit is removed, say when and how.*
 - **"Private only" governs which MODEL reads your conversation, not whether tools
   reach the network.** Pinning a chat private stops the concierge from routing it
   to a cloud model. It does **not** stop `web_fetch` or `web_search` from leaving
-  the machine: those are gated per call instead, by an approval that names the
-  exact host and shows the exact query or URL, with the deterministic Tier-1 mask
-  applied to the arguments first. The ceiling exists to prevent SILENT
+  the machine: those are gated by the permission engine instead, which has no
+  ceiling input at all. A call to a host you have not answered for shows an
+  approval naming the exact host and the exact query or URL; **a call to a host
+  you granted "always" runs with no prompt**, even in a private-pinned chat. The
+  deterministic Tier-1 mask is applied to the arguments either way. The ceiling exists to prevent SILENT
   escalation by the router (ADR 0011), and a tool call is never silent. If you
   want a conversation where nothing at all leaves, pin it private AND leave the
   Tools toggle off.
@@ -207,11 +209,14 @@ every milestone; if a limit is removed, say when and how.*
   `node server.js` shape, what is pinned is an interpreter plus a script whose
   contents and dependencies can change freely. Trust an MCP server the way you
   trust any program you install; no approval prompt substitutes for that.
-- **We can prove what we sent a server. We cannot prove what it did next.** A
+- **We can show what we sent a server. We cannot show what it did next.** A
   server may write to disk, spawn processes, or make its own network calls, none
-  of which are visible to us. That is why arguments to an MCP tool are redacted
-  at the strictest tier by default, and why the privacy proof describes what left
-  for the server rather than where it ultimately went.
+  of which are visible to us. That is why arguments to a `strict` server get the
+  deterministic Tier-1 mask before it sees them. Note the limit on "show": the
+  "what left this machine" strip lists calls with a nameable destination, and an
+  MCP tool has none, so an MCP call never appears there. Its approval prompt
+  shows the arguments and the audit stores a hash of them, but a call
+  auto-allowed by a standing grant displays its arguments nowhere afterwards.
 - **Every MCP tool asks EVERY time until you declare it read-only.** Risk is
   user-declared (`northkeep mcp safe-read <server> <tools>`); anything
   undeclared is treated as consequential, which can never hold an "always"
@@ -242,13 +247,16 @@ every milestone; if a limit is removed, say when and how.*
   re-expose a connected server's tools to anything else.
 - **Stdio servers only.** Remote/http MCP servers are specified in ADR 0033 but
   not implemented; only a local command is supported.
-- **The GUI can review and use MCP servers, but not add one.** Settings → Tools
-  lists configured servers, shows what each advertises (including the
-  definitions NorthKeep refused, and why), and approves or removes them; the Chat tab's Tools toggle then offers their tools under the
-  same gate. **Adding** a server stays a terminal act (`northkeep mcp add`),
-  because adding means naming an executable to spawn, and a browser form that
-  spawns arbitrary programs is a far larger blast radius than anything else this
-  local API writes.
+- **The GUI can add an MCP server, under two gates (ADR 0034).** Settings → Tools
+  lists configured servers, shows what each advertises (including the definitions
+  NorthKeep refused, and why), and approves or removes them. Adding one from the
+  **catalog** is a single click, because the command comes from NorthKeep's own
+  template and never from the request. Adding one **by path** requires your vault
+  passphrase and the program must live under `~/.northkeep/mcp-servers`,
+  Homebrew, or the NorthKeep installation. The property both gates preserve:
+  knowing this window's address is not enough to make NorthKeep run a program of
+  your choosing. The CLI stays unrestricted, since a terminal already grants code
+  execution.
 - **A server must be reviewed before its tools are offered.** Adding one is not
   enough: run `northkeep mcp tools <id> --accept` and read what it advertises.
   NorthKeep will not pin whatever it happens to see first, because a server that

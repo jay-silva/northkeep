@@ -33,8 +33,11 @@ export type McpToolRisk = 'safe-read' | 'consequential';
 /**
  * How much the user trusts this server with argument content (ADR 0033
  * Decision 3). We cannot see where a server sends things, so:
- *  - 'strict'  (default): arguments redact at the STRICTEST tier before the
- *    server sees them. Refuses loudly if that tier is unavailable.
+ *  - 'strict'  (default): arguments get the deterministic Tier-1 mask before the
+ *    server sees them. ADR 0033 originally specified Tier 3 here and was amended
+ *    to Tier 1, because Tier 3 needs the local NER model and would break every
+ *    MCP call whenever Ollama is stopped. Tier 1 is always available, so there is
+ *    no unavailable case to refuse on.
  *  - 'trusted': the user has declared this server a local consumer, so
  *    arguments pass at the conversation's own tier. Never inferred, and
  *    "local" or "ours" does not earn it — the vault's own server can read

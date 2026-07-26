@@ -156,9 +156,11 @@ tool's egress tier. An MCP server is opaque: it may write to disk, spawn a
 process, or make network calls we never see. Guessing a tier here would be
 inventing a privacy claim we cannot support.
 
-So **MCP tool arguments redact at the strictest tier by default**, and the
-per-server trust level that relaxes it is **user-declared configuration, never
-inferred**. Local-and-ours is not automatically safer than remote: the vault's
+So **MCP tool arguments are redacted before the server sees them, and the
+per-server trust level that relaxes it is user-declared configuration, never
+inferred.** (This originally read "at the strictest tier by default"; what
+shipped is the deterministic Tier-1 floor — see the amendment immediately
+below, which is the operative rule.) Local-and-ours is not automatically safer than remote: the vault's
 own server can read every memory.
 
 > **What M11 actually shipped, 2026-07-25.** The floor is the DETERMINISTIC
@@ -289,7 +291,10 @@ above; the original steps named flags and behaviors that do not exist.
 Note on step 4: the GUI reached parity on 2026-07-25. Settings → Tools is the
 browser review surface (list, inspect, approve, remove) and the Chat tab's Tools
 toggle offers MCP tools through the same gate, with unavailable servers reported
-as transcript notices rather than silence. The GUI deliberately has **no add
-route**: naming an executable to spawn stays a terminal act, since a browser
-form that does it is a far larger blast radius than any other setting this local
-API writes. Decision 6 holds either way — no model can reach any of it.
+as transcript notices rather than silence. The GUI originally had **no add route**, on the reasoning that naming an
+executable to spawn should stay a terminal act. **Superseded the same day by ADR
+0034**, which replaced that blunt rule with the property it was standing in for:
+adding must require something an automated caller cannot produce. A catalog add
+carries only a catalog id (our template, not the request); a free-form path needs
+the vault passphrase and an allowed root. Decision 6 holds throughout — no model
+can reach any of it.

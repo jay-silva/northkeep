@@ -26,8 +26,12 @@ The founder (Jay) is a compliance professional, not an engineer. Therefore:
    or under a grant they created at a live prompt and can revoke. Default is
    private; sharing is per-scope, opt-in, loudly confirmed, badge-visible, and
    reversible with server-side deletion. Under (c) that server receives those
-   arguments only: never the vault, never the conversation. A tool server
-   running ON this machine is not an exception at all, because nothing leaves.
+   arguments only: NorthKeep never sends it the vault or the transcript. This
+   invariant bounds what NORTHKEEP transmits. A tool server running on this
+   machine is outside that boundary rather than an exception to it: a local
+   program the user installed may forward what it is given (many wrap a cloud
+   API), and that is its egress, not ours — which is why arguments to a
+   `strict` server get the tool-egress redaction floor before it sees them.
 2. Our vault-sync server stores ciphertext only. No plaintext, no derived
    plaintext (no server-side embeddings, logs, or analytics on content). The
    connector store is a separate opt-in service; it stores shared-scope content
