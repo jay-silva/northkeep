@@ -1,7 +1,7 @@
 # ADR 0020 - Connector store encryption at rest
 
 - **Date:** 2026-07-16
-- **Status:** Proposed. Adversarial review required before merge (invariant #3:
+- **Status:** Accepted (shipped; adversarial review completed). *Status corrected 2026-07-25: this ADR still read "Proposed" long after the work shipped.*
   key handling changes need an explicit adversarial-review session).
 - **Deciders:** Jay, Claude Code
 

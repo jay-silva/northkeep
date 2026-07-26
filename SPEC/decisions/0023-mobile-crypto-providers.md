@@ -1,7 +1,7 @@
 # ADR 0023: Mobile crypto providers (platform-mobile adapters + Node byte-exact proof)
 
 - **Date:** 2026-07-16
-- **Status:** Proposed. NOT trusted for real vaults until (1) the invariant-#3
+- **Status:** Accepted (shipped in the iOS app). *Status corrected 2026-07-25: this ADR still read "Proposed" long after the work shipped.*
   adversarial review of the full mobile key-handling surface passes and (2) the
   on-device spike run confirms the real React Native bindings match their Node
   stand-ins byte-for-byte on Jay's iPhone.

@@ -1,7 +1,7 @@
 # ADR 0024: Mobile device linking and secret storage
 
 - **Date:** 2026-07-16
-- **Status:** Proposed. NOT trusted for real vaults until (1) the invariant-#3
+- **Status:** Accepted (shipped in the iOS app). *Status corrected 2026-07-25: this ADR still read "Proposed" long after the work shipped.*
   adversarial review of the mobile key-handling surface, INCLUDING the new
   desktop path that exposes device.secret as a QR, passes; and (2) the desktop
   QR-rendering side is actually built (it does not exist yet). The mobile

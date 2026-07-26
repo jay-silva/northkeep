@@ -147,7 +147,19 @@ export interface TaskResult extends TurnResult {
    * call actually sent out (web_fetch URL / Brave query URL — never the token),
    * present only on executed calls, for the "what left this device" proof (ADR
    * 0031 Decision 6). The content-free AUDIT log is written separately. */
-  toolCallsMade: Array<{ name: string; host?: string; decision: string; egress?: string }>;
+  toolCallsMade: Array<{
+    name: string;
+    host?: string;
+    decision: string;
+    egress?: string;
+    /** For an executed MCP call: the server, and the MASKED arguments it
+     * received. An MCP tool has no URL, so it never appeared in the egress
+     * proof — and an auto-allowed one showed its arguments nowhere at all,
+     * since the audit keeps only a hash. Ephemeral, like the rest of the
+     * proof: streamed once, never persisted. */
+    mcpServer?: string;
+    argsSent?: string;
+  }>;
   /** How the loop ended — 'step-limit' and 'aborted' are visible, never silent. */
   stopped: 'done' | 'step-limit' | 'aborted';
 }
@@ -541,6 +553,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         let egressHost: string | undefined;
         let egressTier: PrivacyTier = 'bounded'; // fail closed: unknown = it leaves
         let execMeta: ToolResult['meta'] | null = null;
+        // The masked arguments an executed tool actually received, kept for the
+        // ephemeral proof only (see toolCallsMade).
+        let sentArgsJson: string | undefined;
         let resultContent: string;
         // M10c (ADR 0029): screen flags, decision provenance, and the scope
         // that produced the decision — all content-free, all audited.
@@ -817,6 +832,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
               }
               let toolOut: ToolResult;
               try {
+                // What the tool really received, after the egress floor. Kept
+                // for the proof only; never logged, never persisted.
+                sentArgsJson = JSON.stringify(egressArgs);
                 toolOut = await tool.execute(egressArgs, {
                   ...(signal !== undefined ? { signal } : {}),
                   maxResultChars,
@@ -890,6 +908,14 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           // execMeta, NOT on decision: an approved call that then lost the
           // budget reserve race never ran, so nothing left (G4 review).
           ...(execMeta !== null && egressUrl !== null ? { egress: egressUrl } : {}),
+          // An MCP call has no URL to name, so it never appeared in the egress
+          // proof — and one auto-allowed by a standing grant showed its
+          // arguments NOWHERE afterwards, since the audit keeps only a hash.
+          // Record the server and the MASKED arguments it actually received.
+          // Ephemeral like the rest of the proof: streamed once, never stored.
+          ...(execMeta !== null && mcpServerId !== undefined
+            ? { mcpServer: mcpServerId, ...(sentArgsJson !== undefined ? { argsSent: sentArgsJson } : {}) }
+            : {}),
         });
 
         // One content-free audit row PER tool call, denials included

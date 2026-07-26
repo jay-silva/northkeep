@@ -1,7 +1,7 @@
 # ADR 0026: Mobile App Store distribution and licensing
 
 - **Date:** 2026-07-16
-- **Status:** Proposed. Requires Jay's Apple Developer account and a REAL
+- **Status:** Accepted (shipped; TestFlight builds since). *Status corrected 2026-07-25: this ADR still read "Proposed" long after the work shipped.*
   submission to validate; nothing here is confirmed until an actual EAS build
   clears App Store review. The build/submit configuration is scaffolded in
   apps/mobile; the licensing and privacy decisions below take effect only when

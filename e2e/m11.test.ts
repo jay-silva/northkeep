@@ -255,6 +255,51 @@ describe('M11 — the vault as an MCP tool, under the gate', () => {
     }
   }, 60_000);
 
+
+  it('an AUTO-ALLOWED MCP call still shows what it sent (audit gap)', async () => {
+    // A granted MCP call displays no prompt, and the audit keeps only a hash,
+    // so before this the arguments a granted server received were visible
+    // NOWHERE. The ephemeral turn proof now carries the masked arguments.
+    const conn = await connectServer(getServer('vault')!);
+    try {
+      const engine = createPermissionEngine({ persist: false });
+      const run = async (answer: 'allow-always' | 'allow') =>
+        runTask({
+          session: createSession(),
+          provider: scripted([
+            {
+              text: '',
+              toolCalls: [
+                { id: 'c1', name: 'vault__memory_retrieve', arguments: '{"query":"espresso"}' },
+              ],
+              stopReason: 'tool_use',
+            },
+            { text: 'done', toolCalls: [], stopReason: 'end' },
+          ]),
+          model: 'scripted',
+          vault,
+          distill: false,
+          auditFn: () => {},
+          message: 'look it up',
+          redactTier: 0,
+          tools: conn.tools,
+          gate: engine,
+          hooks: { onEvent: () => {}, requestApproval: () => Promise.resolve(answer) },
+        });
+
+      await run('allow-always');
+      // Second turn is auto-allowed by the grant: no prompt is shown at all.
+      const second = await run('allow');
+      const call = second.toolCallsMade[0]!;
+      expect(call.mcpServer).toBe('vault');
+      expect(call.argsSent).toContain('espresso');
+      // It still reports no URL egress, because none is nameable.
+      expect(call).not.toHaveProperty('egress');
+    } finally {
+      await conn.close();
+    }
+  }, 60_000);
+
   it('never lets a CONSEQUENTIAL tool be remembered, so it asks every time', async () => {
     const server = getServer('vault')!;
     const conn = await connectServer(server);

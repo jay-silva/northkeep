@@ -541,8 +541,17 @@ export async function handleConverseStream(
     // queries that actually egressed (ADR 0031 Decision 6). Content, like
     // `sent` — never the token, streamed once, never persisted.
     const toolEgress = (taskResult?.toolCallsMade ?? [])
-      .filter((c) => c.egress !== undefined)
-      .map((c) => ({ name: c.name, ...(c.host !== undefined ? { host: c.host } : {}), url: c.egress as string }));
+      .filter((c) => c.egress !== undefined || c.argsSent !== undefined)
+      .map((c) => ({
+        name: c.name,
+        ...(c.host !== undefined ? { host: c.host } : {}),
+        ...(c.egress !== undefined ? { url: c.egress } : {}),
+        // An MCP call names its server and shows the masked arguments it sent,
+        // since it has no URL to name and may have been auto-allowed by a
+        // standing grant, in which case no prompt ever displayed them.
+        ...(c.mcpServer !== undefined ? { mcp_server: c.mcpServer } : {}),
+        ...(c.argsSent !== undefined ? { args_sent: c.argsSent } : {}),
+      }));
     // Concierge tip (M9d): a stronger model the user hasn't connected would
     // suit this message better. PURELY advisory — isolated in its own try so a
     // fault here can never turn a successful turn into an error response.

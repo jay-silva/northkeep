@@ -2798,7 +2798,15 @@
         row.appendChild(h);
       }
       // The restored query/URL as the gate showed it — the exact string sent.
-      const wire = t.query ?? t.url ?? t.args_plain;
+      // An MCP call has no URL, so it shows the server it went to and the
+      // masked arguments it actually received. Without this, a call
+      // auto-allowed by a standing grant displayed its arguments nowhere.
+      if (t.mcp_server) {
+        const s2 = el('span', '', 'mcp server "' + t.mcp_server + '"');
+        s2.style.cssText = 'font-family:var(--mono,ui-monospace,monospace);color:var(--muted)';
+        row.appendChild(s2);
+      }
+      const wire = t.query ?? t.url ?? t.args_sent ?? t.args_plain;
       if (wire) {
         const w = el('span', '', wire);
         w.style.cssText = 'font-family:var(--mono,ui-monospace,monospace);color:var(--ink);word-break:break-all';

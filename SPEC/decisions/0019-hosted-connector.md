@@ -1,7 +1,7 @@
 # ADR 0019 — Hosted shareable-scope connector
 
 - **Date:** 2026-07-15
-- **Status:** Proposed (C1 service under construction; the invariant re-wording and
+- **Status:** Accepted (shipped as Cloud Connect). *Status corrected 2026-07-25: this ADR still read "Proposed" long after the work shipped.*
   the full-surface adversarial review land with the beta, phase C5)
 - **Deciders:** Jay (wants his memory usable inside the AI apps he already pays
   for — Claude, ChatGPT, Grok — not only NorthKeep's own client), Claude Code

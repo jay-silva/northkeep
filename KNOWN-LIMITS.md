@@ -212,11 +212,11 @@ every milestone; if a limit is removed, say when and how.*
 - **We can show what we sent a server. We cannot show what it did next.** A
   server may write to disk, spawn processes, or make its own network calls, none
   of which are visible to us. That is why arguments to a `strict` server get the
-  deterministic Tier-1 mask before it sees them. Note the limit on "show": the
-  "what left this machine" strip lists calls with a nameable destination, and an
-  MCP tool has none, so an MCP call never appears there. Its approval prompt
-  shows the arguments and the audit stores a hash of them, but a call
-  auto-allowed by a standing grant displays its arguments nowhere afterwards.
+  deterministic Tier-1 mask before it sees them. The "what left this machine"
+  strip names the server and shows the masked arguments an MCP call actually
+  sent, including calls auto-allowed by a standing grant where no prompt was
+  displayed. That proof is ephemeral: shown once with the reply, never stored.
+  The audit log keeps only a hash, by design.
 - **Every MCP tool asks EVERY time until you declare it read-only.** Risk is
   user-declared (`northkeep mcp safe-read <server> <tools>`); anything
   undeclared is treated as consequential, which can never hold an "always"

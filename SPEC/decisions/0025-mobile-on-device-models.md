@@ -1,7 +1,7 @@
 # ADR 0025: Mobile on-device models (private chat and Tier-2 redaction)
 
 - **Date:** 2026-07-16
-- **Status:** Proposed. Entirely device-gated; NOTHING here has been validated on
+- **Status:** Accepted (shipped in the iOS app). *Status corrected 2026-07-25: this ADR still read "Proposed" long after the work shipped.*
   hardware. No on-device model code ships until the leak-corpus evaluation
   (below) is run on a real device and its result selects one of the three
   outcomes. This ADR fixes the interface and the gating rule; it does not
