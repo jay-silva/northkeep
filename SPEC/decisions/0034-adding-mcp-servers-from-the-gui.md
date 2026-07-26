@@ -135,6 +135,12 @@ server needs, and anything else is a CLI concern.
   what the threat model actually requires. Worth revisiting if a future feature
   needs out-of-band confirmation for its own reasons.
 - No remote/http servers; ADR 0033's stdio-only limit stands.
+  **AMENDED 2026-07-25:** ADR 0035 (M12) added a GUI remote-add route. It is
+  deliberately NOT passphrase-gated, because it stores an address and spawns
+  nothing — this ADR's property is about causing a program to run. The
+  equivalent gate for a remote server sits on *connecting*, which is where its
+  tool descriptions first reach the model, and that route does require the
+  passphrase.
 - No auto-install of third-party servers. The catalog names things already
   present on the machine; it never downloads.
 

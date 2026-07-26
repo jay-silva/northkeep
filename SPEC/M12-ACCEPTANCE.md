@@ -7,7 +7,7 @@ line needs your hands.
 
 ## What I verified
 
-Automated (1024 tests passing, 77 files):
+Automated (77 files, all passing):
 
 - The config is a discriminated union on transport. A pre-M12 entry with no
   `transport` field still loads as a stdio server with its command, args, cwd,
@@ -78,9 +78,13 @@ and no client can do it for you — see the note at the bottom.
 
 - [ ] **Review tools** lists what it advertises. Accept the definitions.
 - [ ] In a chat with Tools on, ask something that needs it. The approval prompt
-      names the host.
-- [ ] The proof line afterwards shows the server and the masked arguments that
+      names the server **and its origin** — `mcp server "gmail" at
+      https://gmailmcp.googleapis.com` — not just the label you chose.
+- [ ] The proof line afterwards shows the same, plus the masked arguments that
       went to it.
+- [ ] If you mark a tool read-only and answer "always", later calls to it run
+      **with no prompt**. That is the same standing-grant mechanism web tools
+      use, and it is worth seeing once so it is not a surprise later.
 
 ### 5. The refusals that matter
 
@@ -88,8 +92,9 @@ and no client can do it for you — see the note at the bottom.
       outright**, with a reason naming the pin — not a prompt you can click
       through. A web search in the same pinned chat still works and still asks.
       That asymmetry is the choice you made on 25 July.
-- [ ] Edit the URL in `mcp.json` to a different host and try to use it. It
-      refuses: remembered approvals do not carry across a change of host.
+- [ ] Edit the URL in `mcp.json` to a different host and try to use it. The
+      server stops working entirely — its tools are not offered, so nothing even
+      prompts. Remembered approvals cannot carry to a host you never approved.
 - [ ] Revoke the grant at the provider, then use the tool. It should fail loudly
       and tell you to reconnect.
 

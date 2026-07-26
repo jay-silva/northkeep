@@ -60,6 +60,12 @@ fingerprint**:
   **Not implemented in M11: stdio only.** The http transport is specified here
   so the identity model covers it, but no code path connects to one yet.
 
+  > **SUPERSEDED 2026-07-25 by ADR 0035 (M12).** Remote http servers are
+  > implemented; read this paragraph as history. ADR 0035 Decision 2 also
+  > corrects the identity model sketched here: TLS answers "am I talking to
+  > whoever holds this name now", which is a different question from the one a
+  > launch fingerprint answers, not a stronger version of it.
+
 If the fingerprint does not match at connect time, **existing grants do not
 apply and every call asks again**. This is the same fail-closed spirit as
 policy.ts's tolerant loader: anything not positively recognized asks, and a

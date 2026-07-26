@@ -274,7 +274,16 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       const offerNever = hasSubject;
       // What a remembered answer would apply to: a host for a web tool, the
       // configured server for an MCP tool.
-      const site = req.egress?.host ?? (req.server !== undefined ? `mcp:${req.server}` : '');
+      // A remote server's ORIGIN, when there is one. A label is not an identity
+      // (ADR 0033 D1), so "gmail" alone tells you nothing about where your mail
+      // is going; the origin is the answer to "who receives this".
+      const site =
+        req.egress?.host ??
+        (req.server !== undefined
+          ? req.serverOrigin !== undefined
+            ? `mcp:${req.server} → ${req.serverOrigin}`
+            : `mcp:${req.server}`
+          : '');
       const options = offerScopes
         ? `[y]es once / [s] yes this session for ${site} / [a]lways for ${site} / [n]o / ne[v]er for ${site}`
         : offerNever
@@ -552,7 +561,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         for (const tc of taskResult.toolCallsMade) {
           if (tc.mcpServer !== undefined && tc.argsSent !== undefined) {
             console.log(
-              `  ${DIM}↳ sent to mcp:${tc.mcpServer} — ${truncateForLine(tc.argsSent)}${RESET}`,
+              `  ${DIM}↳ sent to mcp:${tc.mcpServer}${tc.mcpOrigin !== undefined ? ` (${tc.mcpOrigin})` : ''} — ${truncateForLine(tc.argsSent)}${RESET}`,
             );
           }
         }

@@ -108,6 +108,17 @@ export interface ApprovalRequest {
    * apply to, since such a call has no host to name.
    */
   server?: string;
+  /**
+   * For a REMOTE MCP server, the origin its arguments are about to be sent to.
+   *
+   * A stdio server has none, and that absence is the information: nothing
+   * leaves. An audit on 2026-07-25 found ADR 0035 claiming "every call names
+   * the host in the approval prompt" while both surfaces showed only the
+   * user-chosen label. A label is not an identity (ADR 0033 D1), and "gmail"
+   * tells you nothing about where your mail is going, so the origin is carried
+   * here rather than the claim being softened.
+   */
+  serverOrigin?: string;
   /** Exfil-screen warnings (ADR 0029), one plain sentence each, content-free.
    * Non-empty means grants were bypassed and a human MUST see this call. */
   warnings: string[];
@@ -176,6 +187,8 @@ export interface TaskResult extends TurnResult {
      * since the audit keeps only a hash. Ephemeral, like the rest of the
      * proof: streamed once, never persisted. */
     mcpServer?: string;
+    /** For a REMOTE MCP server only: the origin the arguments went to. */
+    mcpOrigin?: string;
     argsSent?: string;
   }>;
   /** How the loop ended — 'step-limit' and 'aborted' are visible, never silent. */
@@ -589,6 +602,8 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           | 'budget'
           | undefined;
         let screenedDeny = false;
+        // Hoisted so the proof (built after the block below closes) can name it.
+        let remoteOriginForProof: string | undefined;
 
         if (tool === undefined) {
           resultContent = JSON.stringify({
@@ -644,6 +659,8 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             const remoteServer =
               mcpServerId !== undefined ? getMcpServer(mcpServerId) : undefined;
             const isRemoteMcp = remoteServer !== undefined && isHttpServer(remoteServer);
+            const remoteOrigin = isRemoteMcp ? endpointOrigin(remoteServer.url) : undefined;
+            remoteOriginForProof = remoteOrigin;
             if (ceiling === 'private-only' && isRemoteMcp) {
               decision = 'denied';
               scopeApplied = 'screen';
@@ -778,6 +795,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                     risk: tool.risk,
                     egress: toolEgress,
                     ...(mcpServerId !== undefined ? { server: mcpServerId } : {}),
+                    ...(remoteOrigin !== undefined ? { serverOrigin: remoteOrigin } : {}),
                     warnings,
                   },
                   approvalTimeoutMs,
@@ -976,7 +994,13 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           // Record the server and the MASKED arguments it actually received.
           // Ephemeral like the rest of the proof: streamed once, never stored.
           ...(execMeta !== null && mcpServerId !== undefined
-            ? { mcpServer: mcpServerId, ...(sentArgsJson !== undefined ? { argsSent: sentArgsJson } : {}) }
+            ? {
+                mcpServer: mcpServerId,
+                // Only a remote server has one. Its absence in the proof is
+                // itself the statement that nothing left the machine.
+                ...(remoteOriginForProof !== undefined ? { mcpOrigin: remoteOriginForProof } : {}),
+                ...(sentArgsJson !== undefined ? { argsSent: sentArgsJson } : {}),
+              }
             : {}),
         });
 

@@ -1,7 +1,7 @@
 # ADR 0035: Remote MCP servers over HTTPS, with OAuth
 
 - **Date:** 2026-07-25 (rewritten the same day after adversarial review)
-- **Status:** Accepted 2026-07-25 — implementation in progress (M12)
+- **Status:** Accepted and implemented 2026-07-25 (M12)
 - **Deciders:** Jay (product owner), Claude Code
 - **Parent:** ADR 0033 (MCP client trust model), ADR 0034 (adding servers from the GUI)
 
@@ -132,6 +132,13 @@ server **sends your data off the machine by definition**. Therefore:
   keep the Tier-1 argument floor on, since `mcpStrict` computes `trust !==
   'trusted'`.
 - Every call names the host in the approval prompt and in the egress proof.
+  **Was false when first written, now true.** An audit on 2026-07-25 found both
+  surfaces showing only the user-chosen LABEL ("gmail"), because an MCP tool's
+  `egress()` returns null and there was no host field to render. Rather than
+  soften the claim, `ApprovalRequest.serverOrigin` and the proof's `mcpOrigin`
+  were added and both surfaces now render `mcp server "gmail" at
+  https://mcp.example.com`. A stdio server has neither field, and that absence
+  is itself the statement that nothing left the machine.
 
 ### Does the privacy ceiling bind tool egress? (decided)
 
@@ -218,8 +225,14 @@ Required:
   stack trace is the proof that the SDK honours `fetchFn` for discovery, which
   is the part of this decision with the least test coverage behind it and the
   part most easily assumed rather than checked.
-- `hardenedFetch` **cannot be reused as-is**: it is GET-only, its port allowlist
-  is 443/8443, and its content-type allowlist excludes `text/event-stream`.
+- `hardenedFetch` **cannot be reused as-is**: it is GET-only and its
+  content-type allowlist excludes `text/event-stream`. **Correction:** this
+  originally listed the 443/8443 port allowlist as a third reason.
+  `guardedFetch` shares that allowlist deliberately (both call
+  `classifyFetchTarget`), so it was never relaxed — which means **a remote MCP
+  endpoint or authorization server on any other port is refused.** That is the
+  intended behaviour, but it is a real constraint on which providers can be
+  used, and listing it as a difference implied otherwise.
 
 ## Decision 6: origin-change detection replaces the launch fingerprint
 
@@ -361,8 +374,16 @@ requests.
 
 ## Honest limits
 
-- Remote MCP egress does not use the `net.ts` guard unless Decision 5 ships.
-- The privacy ceiling does not bind tool calls today, for any tool.
+*Two entries here were written before the implementation and were left standing
+after it contradicted them — corrected 2026-07-25 rather than deleted, so the
+drift is visible.*
+
+- ~~Remote MCP egress does not use the `net.ts` guard unless Decision 5 ships.~~
+  **Decision 5 shipped.** Every remote byte goes through `guardedFetch`.
+- ~~The privacy ceiling does not bind tool calls today, for any tool.~~ **It now
+  binds exactly one class:** a `private-only` conversation refuses remote MCP
+  tools. Web tools and stdio servers are unaffected, which is option A / option
+  B as chosen.
 - Tool-egress redaction is the deterministic Tier-1 floor, not the active tier.
 - The proof names the **endpoint**, which is constant, not the arguments. "We can
   prove what we sent" is weaker here than for `web_fetch` unless the proof
@@ -417,8 +438,13 @@ argument-sized pieces, where before it said they could not at all.
 3. Connecting asks for the passphrase, then opens the browser. The auth-server
    origin is shown before it opens.
 4. After sign-in, tools list; approving pins them. `mcp.json` contains no secret.
-5. A call names the host in the prompt, and the proof shows the host plus the
-   redacted arguments that went to it.
-6. Editing the stored URL invalidates remembered approvals and re-asks.
+5. A call names the server AND its origin in the prompt, and the proof shows
+   both plus the redacted arguments that went to it.
+6. Editing the stored URL stops the server working: its tools are not offered at
+   all, so nothing prompts. (Decision 6 says "invalidates remembered approvals
+   and re-asks"; what the code does is refuse the connection, exactly as
+   `McpFingerprintChangedError` does for stdio. The grants stay in
+   `permissions.json` and are simply never reachable. Same outcome, and the
+   acceptance test says what you will actually see.)
 7. Revoking the grant at Google makes the next call fail loudly with "reconnect".
 8. A test server that serves `tools/list` without authentication is refused.

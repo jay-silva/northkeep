@@ -346,9 +346,11 @@ export interface AddRemoteServerInput {
  * Three things differ from addServer and each is a decision, not an omission:
  *  - the URL must pass `remoteUrlRefusal` (Decision 1), the same check the
  *    loader applies, so a refused origin cannot arrive by either route;
- *  - only the ORIGIN is stored, never a path or query. Identity is the origin
- *    the certificate proves (Decision 2); a path is a detail of that origin, and
- *    a query string is somewhere a token gets pasted by accident;
+ *  - the ENDPOINT is stored — scheme, host, port and path — with query and
+ *    fragment dropped, since a query string is where a token gets pasted by
+ *    accident. IDENTITY is `endpointOrigin()` of that (Decision 2); the path is
+ *    how you reach the origin, not part of who it is. Storing the bare origin,
+ *    as an earlier draft said, produces a config that cannot connect at all;
  *  - there is no `trust` parameter. A remote server is always `strict`: 'trusted'
  *    means "a local consumer I own", and this one is by definition not.
  */

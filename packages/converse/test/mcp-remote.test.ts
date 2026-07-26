@@ -425,3 +425,74 @@ describe('a sign-in attempt must not destroy the grant it is replacing', () => {
     pending.cancel();
   });
 });
+
+describe('a remote call names its ORIGIN, not just the label (audit 2026-07-25)', () => {
+  it('carries the origin into the approval prompt and the proof, and omits it for stdio', async () => {
+    // The audit found ADR 0035 claiming "every call names the host in the
+    // approval prompt" while both surfaces showed only the user-chosen label.
+    // A label is not an identity, and "gmail" says nothing about where the mail
+    // is going, so this pins the origin at both places it has to appear.
+    addRemoteServer({ id: 'gmail', url: 'https://mcp.example.com/v1' });
+    const cmd = path.join(home, 'server.js');
+    fs.writeFileSync(cmd, '// fake\n');
+    addServer({ id: 'vault', command: cmd, args: [] });
+
+    const seen: Array<{ server?: string; serverOrigin?: string }> = [];
+    const runOne = async (serverId: string) => {
+      const executed: string[] = [];
+      const script: ChatTurnResult[] = [
+        { text: '', toolCalls: [{ id: 'c1', name: `${serverId}__search`, arguments: '{"q":"x"}' }], stopReason: 'tool_use' },
+        { text: 'done', toolCalls: [], stopReason: 'end' },
+      ];
+      const provider: ModelProvider = {
+        kind: 'openai-compatible',
+        baseUrl: 'http://localhost:11434/v1',
+        chat: (m, o) => provider.chatTurn(m, o).then((r) => r.text),
+        chatTurn: () => Promise.resolve(script.shift()!),
+      };
+      return runTask({
+        provider,
+        vault: { retrieve: () => [], list: () => [], commit: () => [] },
+        session: createSession(),
+        model: 'llama3.2:3b',
+        message: 'search',
+        redactTier: 0,
+        distill: false,
+        tools: [
+          {
+            name: `${serverId}__search`,
+            serverId,
+            description: 'search',
+            inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
+            risk: 'safe-read',
+            egress: () => null,
+            execute: (args) => {
+              executed.push(JSON.stringify(args));
+              return Promise.resolve({ content: 'r', meta: { bytes: 1, truncated: false, ok: true } });
+            },
+          },
+        ],
+        // Force the prompt rather than a grant, so the request is observable.
+        gate: { evaluate: () => Promise.resolve('ask') },
+        hooks: {
+          onEvent: () => undefined,
+          requestApproval: (req) => {
+            seen.push({ ...(req.server !== undefined ? { server: req.server } : {}), ...(req.serverOrigin !== undefined ? { serverOrigin: req.serverOrigin } : {}) });
+            return Promise.resolve('allow' as const);
+          },
+        },
+        auditFn: () => undefined,
+      });
+    };
+
+    const remote = await runOne('gmail');
+    expect(seen[0]).toEqual({ server: 'gmail', serverOrigin: 'https://mcp.example.com' });
+    expect(remote.toolCallsMade[0]?.mcpOrigin).toBe('https://mcp.example.com');
+
+    const local = await runOne('vault');
+    // A stdio server has no origin, and that ABSENCE is the statement that
+    // nothing left the machine. Asserted, so nobody fills it in "for symmetry".
+    expect(seen[1]).toEqual({ server: 'vault' });
+    expect(local.toolCallsMade[0]?.mcpOrigin).toBeUndefined();
+  });
+});

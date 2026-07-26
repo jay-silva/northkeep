@@ -78,11 +78,23 @@ NorthKeep-to-third-party data flow**, which the two milestones above did not:
   model answers. Reading email through a remote server and answering with a
   cloud model therefore discloses to **two** third parties, not one.
 
-User-visible controls: a remote server is contacted only after an explicit
-sign-in that requires the vault passphrase; its arguments always get the Tier-1
-floor and it can never be marked "trusted"; a conversation pinned "Private only"
-refuses its tools outright; each call is approved and the per-turn proof names
-the host and the redacted arguments.
+User-visible controls, stated precisely because two earlier drafts of this
+paragraph overstated them:
+
+- A remote server is **not contacted at all** until the user starts a sign-in,
+  and starting one **requires the vault passphrase**. (During the sign-in itself
+  the server is contacted, before any grant exists — that is what a sign-in is.)
+- Its arguments always get the deterministic **Tier-1 floor**, and it can never
+  be marked "trusted".
+- A conversation pinned **"Private only" refuses its tools outright.**
+- Each call is approved at a prompt naming the server and its origin, **or runs
+  under a standing grant** the user created at such a prompt and can revoke.
+  **A standing grant means no prompt on later calls**, which is the honest
+  version of "each call is approved" and matches how the same mechanism already
+  works for web tools. Only tools the user has explicitly marked read-only can
+  hold one; anything else asks every time and cannot be remembered.
+- The per-turn proof names the **connected server and its origin** plus the
+  redacted arguments that went to it.
 
 **For point 4 below, this means the MCP paragraph must cover two cases, not one:
 software the user installs locally, and a remote service the user grants access

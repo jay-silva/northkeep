@@ -187,10 +187,10 @@ every milestone; if a limit is removed, say when and how.*
 
 ## The privacy ceiling, current
 
-- **"Private only" governs which MODEL reads your conversation, not whether tools
-  reach the network.** Pinning a chat private stops the concierge from routing it
-  to a cloud model. It does **not** stop `web_fetch` or `web_search` from leaving
-  the machine: those are gated by the permission engine instead, which has no
+- **"Private only" governs which MODEL reads your conversation, and refuses one
+  class of tool.** Pinning a chat private stops the concierge from routing it to
+  a cloud model, and (since M12) refuses **remote MCP tools** outright. It does
+  **not** stop `web_fetch` or `web_search` from leaving the machine: those are gated by the permission engine instead, which has no
   ceiling input at all. A call to a host you have not answered for shows an
   approval naming the exact host and the exact query or URL; **a call to a host
   you granted "always" runs with no prompt**, even in a private-pinned chat. The
@@ -201,7 +201,9 @@ every milestone; if a limit is removed, say when and how.*
 
 ## M11 (MCP client tools), current
 
-- **A configured MCP server is a local program with your privileges.** The
+- **A configured LOCAL (stdio) MCP server is a program with your privileges.**
+  Remote servers are covered in the M12 block below and are a different shape
+  entirely — nothing on this machine, everything over the network. The
   launch fingerprint that binds your approvals covers the resolved command
   path, its arguments, the working directory and the environment the config
   sets. It detects CONFIGURATION changes, not PROGRAM changes: replace the file
@@ -267,9 +269,17 @@ every milestone; if a limit is removed, say when and how.*
     secret. No client can do that step for you.
   - **Removing a server here does not revoke the grant.** Revoke it at the
     provider.
-  - **The proof names the endpoint and the masked arguments, not a per-call
-    URL** — a remote MCP call posts to one constant address, so "we can prove
-    what we sent" is weaker here than for `web_fetch`.
+  - **The proof and the approval prompt name the server, its origin and the
+    masked arguments — but not a per-call URL.** A remote MCP call posts to one
+    constant endpoint, so "we can prove what we sent" is weaker here than for
+    `web_fetch`, where every call carries a distinct URL.
+  - **A read-only tool can hold an `always` grant, and then it does not ask.**
+    Same mechanism as a site grant for `web_fetch`: you create it at a live
+    prompt and you can revoke it, but while it exists later calls to that server
+    run with no prompt. Only tools you explicitly marked read-only are eligible.
+  - **The endpoint must be on port 443 or 8443.** The egress guard's port
+    allowlist is shared with `web_fetch` and was not widened for MCP, so a
+    provider serving on any other port cannot be used.
 - **The GUI can add an MCP server, under two gates (ADR 0034).** Settings → Tools
   lists configured servers, shows what each advertises (including the definitions
   NorthKeep refused, and why), and approves or removes them. Adding one from the

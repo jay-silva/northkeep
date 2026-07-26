@@ -475,6 +475,8 @@ export async function handleConverseStream(
           offer_scopes: offerScopes,
           offer_never: offerNever,
           ...(approvalReq.server !== undefined ? { mcp_server: approvalReq.server } : {}),
+          // Remote servers only. Its absence says nothing left the machine.
+          ...(approvalReq.serverOrigin !== undefined ? { mcp_origin: approvalReq.serverOrigin } : {}),
         });
       });
     },
@@ -553,6 +555,7 @@ export async function handleConverseStream(
         // since it has no URL to name and may have been auto-allowed by a
         // standing grant, in which case no prompt ever displayed them.
         ...(c.mcpServer !== undefined ? { mcp_server: c.mcpServer } : {}),
+        ...(c.mcpOrigin !== undefined ? { mcp_origin: c.mcpOrigin } : {}),
         ...(c.argsSent !== undefined ? { args_sent: c.argsSent } : {}),
       }));
     // Concierge tip (M9d): a stronger model the user hasn't connected would

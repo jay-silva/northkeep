@@ -2951,7 +2951,11 @@
       // masked arguments it actually received. Without this, a call
       // auto-allowed by a standing grant displayed its arguments nowhere.
       if (t.mcp_server) {
-        const s2 = el('span', '', 'mcp server "' + t.mcp_server + '"');
+        // A REMOTE server also names its origin. A label is what the user typed;
+        // the origin is who actually received this.
+        const s2 = el('span', '', t.mcp_origin
+          ? 'mcp server "' + t.mcp_server + '" at ' + t.mcp_origin
+          : 'mcp server "' + t.mcp_server + '"');
         s2.style.cssText = 'font-family:var(--mono,ui-monospace,monospace);color:var(--muted)';
         row.appendChild(s2);
       }
@@ -3103,7 +3107,13 @@
       const host = ev.egress && ev.egress.host;
       // An MCP call has no host: it names the configured SERVER instead, so the
       // user is never asked to approve a thing with no name (M11, ADR 0033).
-      const subject = host || (ev.mcp_server ? 'mcp server "' + ev.mcp_server + '"' : '');
+      // For a REMOTE server the origin is shown too: "gmail" alone tells you
+      // nothing about where your mail is going, and a label is not an identity.
+      const subject = host || (ev.mcp_server
+        ? (ev.mcp_origin
+            ? 'mcp server "' + ev.mcp_server + '" at ' + ev.mcp_origin
+            : 'mcp server "' + ev.mcp_server + '"')
+        : '');
       const warned = (ev.warnings || []).length > 0;
       const panel = el('div', 'toolask' + (warned ? ' warn' : ''));
       // The human-readable ask: the query for a search, the tool + raw args
