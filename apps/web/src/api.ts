@@ -788,6 +788,13 @@ async function dispatch(
   // of this.
 
   if (method === 'GET' && route === '/api/mcp') {
+    // Make the sanctioned directory real so it is discoverable in Finder and
+    // usable as a link target. Cheap, idempotent, and never fatal.
+    try {
+      fs.mkdirSync(path.join(os.homedir(), '.northkeep', 'mcp-servers'), { recursive: true });
+    } catch {
+      // A read-only or unusual home is not a reason to fail listing servers.
+    }
     const servers = loadMcpConfig().servers.map((s) => ({
       id: s.id,
       command: s.command,
@@ -863,11 +870,18 @@ async function dispatch(
     // The allowlist is checked AFTER the passphrase so a wrong passphrase
     // cannot be used to probe which paths exist on the machine.
     if (!isUnderAllowedRoot(command, allowedGuiRoots(os.homedir()))) {
+      // Actionable, not merely correct. Most MCP servers install through npm,
+      // whose global prefix is often somewhere this list does not cover
+      // (~/.local is common when npm is configured to avoid sudo), so naming
+      // the sanctioned directory and the exact way to get there matters more
+      // than reciting the roots.
       return bad(
         400,
-        'From the app, a server has to live under ~/.northkeep/mcp-servers, /opt/homebrew, ' +
-          '/usr/local, or the NorthKeep installation itself. Anywhere else, add it from a ' +
-          'terminal with: northkeep mcp add',
+        'From the app, a server has to live under ~/.northkeep/mcp-servers (the place for this), ' +
+          'Homebrew, /usr/local, or the NorthKeep installation. If you installed it with npm, ' +
+          'link it into the first one: ln -s "$(readlink -f "$(which <the-server-command>)")" ' +
+          '~/.northkeep/mcp-servers/<name>. Or add it from a terminal, where there is no ' +
+          'restriction: northkeep mcp add',
       );
     }
     try {
