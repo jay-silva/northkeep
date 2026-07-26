@@ -18,10 +18,16 @@ The founder (Jay) is a compliance professional, not an engineer. Therefore:
 ## Non-negotiable invariants (violating these is a critical bug)
 1. Plaintext memory content NEVER leaves the machine except (a) to the model
    provider the user explicitly selected, after the active redaction tier has
-   run, or (b) content in scopes the user has explicitly, individually marked
+   run, (b) content in scopes the user has explicitly, individually marked
    Shared, which is copied to NorthKeep's connector store so the user's own AI
-   apps can reach it. Default is private; sharing is per-scope, opt-in, loudly
-   confirmed, badge-visible, and reversible with server-side deletion.
+   apps can reach it, or (c) the arguments of tool calls to a tool server the
+   user explicitly connected and that runs off this machine, after the
+   tool-egress redaction floor, and only for calls the user allowed — per call,
+   or under a grant they created at a live prompt and can revoke. Default is
+   private; sharing is per-scope, opt-in, loudly confirmed, badge-visible, and
+   reversible with server-side deletion. Under (c) that server receives those
+   arguments only: never the vault, never the conversation. A tool server
+   running ON this machine is not an exception at all, because nothing leaves.
 2. Our vault-sync server stores ciphertext only. No plaintext, no derived
    plaintext (no server-side embeddings, logs, or analytics on content). The
    connector store is a separate opt-in service; it stores shared-scope content

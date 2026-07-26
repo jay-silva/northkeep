@@ -310,9 +310,17 @@ Invariant #1 says plaintext memory content never leaves the machine except to
 has run," or to explicitly shared scopes via the connector. **A remote MCP server
 is a third recipient that the invariant as written does not contemplate.**
 
-This ADR does not quietly widen it. Either the invariant gains an explicit
-third clause naming user-connected tool servers, or remote MCP does not ship.
-That is a decision for Jay, and it belongs in CLAUDE.md rather than here.
+**RESOLVED 2026-07-25.** Jay approved an explicit clause (c) in CLAUDE.md
+covering the arguments of tool calls to a server the user explicitly connected
+that runs **off** this machine — after the tool-egress redaction floor, only for
+calls the user allowed, and receiving those arguments only: never the vault,
+never the conversation. A tool server running ON this machine is not an
+exception at all, because nothing leaves, which is why stdio MCP never
+implicated this invariant.
+
+This is a real widening, and it is recorded as one: NorthKeep now says your
+memories can reach a third party you connected, under approval, in
+argument-sized pieces, where before it said they could not at all.
 
 ## Acceptance test (Jay runs this himself)
 
