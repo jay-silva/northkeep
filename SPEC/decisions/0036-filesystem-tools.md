@@ -1,7 +1,12 @@
 # ADR 0036: Filesystem tools
 
 - **Date:** 2026-07-25
-- **Status:** Proposed — **Revision 2, 2026-07-26, awaiting adversarial review.**
+- **Status:** **Revision 2 REVIEWED 2026-07-26 — verdict PASTURE as written.**
+  The reviewer implemented Decision 2's four layers in Node and defeated L1 with
+  ordinary user behaviour. See "Adversarial review of Revision 2" at the end.
+  Awaiting Jay's decision on the one question that decides ship-or-pasture; no
+  code until then. Original Revision 2 header follows.
+- ~~Proposed — **Revision 2, 2026-07-26, awaiting adversarial review.**~~
   Revision 1's floor was defeated on this machine (the reviewer read the real
   vault and the real device secret past it). Revision 2 below supersedes
   Decisions 2, 3 and 6. **Jay's bar for this milestone: if any plausible path
@@ -492,3 +497,115 @@ Every one of these must refuse, and each targets a specific defeated bypass:
 12. A 4 GB file, and a FIFO, both refused before any read.
 13. `~/Library/Keychains/login.keychain-db` refused without triggering a TCC
     prompt.
+
+
+# Adversarial review of Revision 2 — 2026-07-26
+
+**VERDICT: PASTURE as written.** Revision 2 leaked all three protected
+categories. The reviewer implemented Decision 2's four layers verbatim in Node
+and attacked the implementation with mock fixtures, never copying the real vault,
+secret or export anywhere on disk.
+
+## The structural error
+
+L2, L3 and L4 are exact for **live objects** — every inode measurement in
+Revision 2 was independently reproduced. But **L1 is the only layer that catches
+copies, and L1 was three narrow point-checks presented as a class**: magic at
+byte 0, whole-file 65-byte equality, and whole-file `JSON.parse`. Each falls to a
+one-step transformation of the container.
+
+So Revision 2's claim — "**EXACT** … the vault and any copy of it; the device
+secret and any copy of it; any vault export" — is false as written. Under the
+CLAUDE.md review gate that is both a leak class and a published-claim defect.
+
+## Class A — marker present, container transformed. FIXABLE.
+
+Each verified by execution:
+
+- **A UTF-8 BOM defeats the export check.** Open `export.json` in a text editor,
+  save it, and `JSON.parse` throws on the leading `﻿`. Pure ordinary user
+  behaviour; no attacker involved. This one case is the whole indictment.
+- **A truncated export** also fails `JSON.parse` — and reads are capped at
+  `DEFAULT_MAX_RESULT_CHARS` anyway, so the attacker loses nothing. The first
+  20 000 characters of the truncated and pristine files were byte-identical,
+  27 memory entries visible in both.
+- **A tar of an export** decides on a mechanism Revision 2 never specifies: NUL
+  is valid UTF-8, so "does it decode as text" passes it while "contains NUL"
+  refuses it. The binary rule is load-bearing and undocumented.
+- **The device secret in any file that is not exactly 65 bytes** — and
+  `platform.ts:44-45` tells users to *"restore it from your backup"*, so a
+  labelled line in a notes file is the behaviour the product invites.
+- **Base64 of the vault** passes every layer.
+- Also: export plus an appended line, two exports concatenated, an export
+  wrapped in a parent object, an export saved as a JS module.
+
+**The fix, tested rather than asserted: replace parse/compare-whole with SCAN.**
+`NKV1` anywhere in the buffer, `northkeep_export` as a byte substring, the
+64-hex secret as a substring, plus a phase-aligned base64 needle. That refused
+every Class A fixture with no false positives on innocent files.
+
+## Class B — marker absent, content derived. NOT FIXABLE.
+
+`northkeep export | jq '.memories' > notes.json`. A CSV made from it. A paragraph
+pasted into a Word document. After export, these **are** ordinary user text, and
+no content check distinguishes them from any other document the user wrote.
+Undecidable by construction.
+
+**This is the decision, and it is Jay's, because it narrows or widens his own
+bar rather than answering it.** Strict reading of "if any chance exists that we
+are gonna leak the vault" → Class B is inside the bar and 0036 is parked no
+matter how good the engineering. Narrow reading — the vault, the secret, and the
+export as our tool produces it, plus near-misses — → Class A fixes suffice.
+
+## Confirmed weaknesses that do not reach the vault
+
+1. **Nothing binds the validated name to the held descriptor.** L1/L2 act on the
+   fd, L3 necessarily acts on a name, so containment can be decided about a
+   different object than the one held. Fix: require
+   `stat(realpath(path)).dev/ino === fstat(fd).dev/ino`. **This also corrects
+   Revision 2's residual paragraph** — the worst case is reading a file OUTSIDE
+   the granted root, not "a file already inside a granted root."
+2. **L3's wording admits two implementations, one of which is a grant escape.**
+   Pin it to `realpath(file)`, not `realpath(dirname)`.
+3. **Error paths are undefined and one is reachable today.**
+   `~/Documents/x.txt/..namedfork/rsrc` throws `ENOTDIR` in the ancestor walk.
+   Fail-open on an exception is a leak; the ADR must say fail-closed.
+4. **L2 enumeration must be recursive, at check time.** Demonstrated: a
+   one-level `readdir` allows `nkhome/mcp-servers/nested-secret.json`.
+   Corroboration that hand-listed sidecars fail: `${vaultPath}.pulled.tmp`
+   (`packages/sync/src/client.ts:212`) is a fourth sidecar Revision 2 missed.
+5. **The `~/Library` name list omits directories this app already creates** —
+   `Caches/ai.northkeep.desktop`, `WebKit/ai.northkeep.desktop`. Empty of memory
+   content today, so a list gap rather than a leak.
+6. **The operation set is not closed**, and "listing gets the same floor"
+   contradicts the byte cap (applying L1 to every entry means reading every
+   entry).
+7. **`nlink > 1` is cost without marginal benefit** — L2's enumeration already
+   refuses the hardlink, and APFS clones are `nlink=1`. Harmless, not
+   load-bearing.
+8. `northkeep remember '<content>'` writes memory content into shell history by
+   construction. Belongs in Honest limits.
+
+## Claims checked and found TRUE
+
+`NKV1` at byte 0 of the real vault; the device secret 65 bytes; both Revision-1
+bypasses collapsing to `16777230:139523843`; APFS clones getting new inodes;
+hardlinks carrying the target inode; fd-first ordering defeating the swap;
+`/dev/fd/N` carrying the true inode under `fstat`. **No plaintext SQLite
+anywhere** — the vault is serialized in memory and encrypted before
+`writeAtomic` (`packages/platform-node/src/storage.ts:20-41`), and no
+`-wal`/`-shm` sidecar for it exists. **The audit log is genuinely content-free**
+(`packages/mcp-server/src/log.ts:10-77`), so `northkeep audit --out` into a
+granted root is not a leak channel.
+
+## Two errors in Revision 2's own writing
+
+- **The Time Machine justification was overstated.** This machine has no
+  Data-volume snapshots (`tmutil destinationinfo` → no destinations; only sealed
+  system-volume `com.apple.os.update-*` snapshots), and mounting an APFS snapshot
+  needs root. Acceptance test 6 is not runnable as written. L1 would catch a
+  snapshotted vault by magic regardless, so the reasoning stands and the
+  measurement did not.
+- **A miscitation of exactly the kind the previous review caught.** Truncation
+  was cited at `task.ts:171-173`; the real sites are `DEFAULT_MAX_RESULT_CHARS`
+  at `packages/converse/src/task.ts:56` and `truncateChars` at `:202`.
