@@ -1,10 +1,13 @@
 # ADR 0036: Filesystem tools
 
 - **Date:** 2026-07-25
-- **Status:** Proposed — **NOT sound enough to implement as written.** An
-  adversarial review on 2026-07-25 read the real vault and the real device
-  secret past Decision 2's floor. See "Adversarial review" at the end; the six
-  listed corrections are prerequisites to any code.
+- **Status:** Proposed — **Revision 2, 2026-07-26, awaiting adversarial review.**
+  Revision 1's floor was defeated on this machine (the reviewer read the real
+  vault and the real device secret past it). Revision 2 below supersedes
+  Decisions 2, 3 and 6. **Jay's bar for this milestone: if any plausible path
+  exists by which the vault or the device secret can be read, the feature is not
+  built at all.** Revision 2 either clears that bar or 0036 is parked beside
+  0037.
 - **Deciders:** Jay (product owner), Claude Code
 - **Parent:** ADR 0027 (harness umbrella), ADR 0029 (harness security model), ADR 0033 (MCP trust model)
 
@@ -320,3 +323,172 @@ part of the document and is materially correct.
 6. Expand the acceptance tests — configured vault path, hardlink, case variant,
    firmlink path, an `export --out` file in a granted root, a large-file refusal,
    and a read-then-`web_fetch` screen — and add the KNOWN-LIMITS obligation.
+
+
+# Revision 2 — 2026-07-26
+
+**Supersedes Decisions 2, 3 and 6.** Written after the adversarial review below
+defeated Revision 1's floor, and after measuring the proposed replacement on the
+target machine rather than reasoning about it. Every claim in this section that
+says "verified" was executed on Jay's Mac on 2026-07-26; the numbers are real.
+
+## The mistake Revision 1 made, stated once
+
+Revision 1 asked *"is this path allowed?"* Paths are names, names have unbounded
+aliases, and macOS supplies more aliases than any denylist enumerates. Revision 2
+asks two different questions instead: **"what is this file?"** and **"which
+object am I actually holding?"** Neither has aliases.
+
+## Decision 2 (revised): four layers, and an explicit confidence for each
+
+Applied in this order, for every read.
+
+### L1 — Content refusal. Exact, path-independent, catches every copy.
+
+Refuse the file, wherever it lives and whatever it is called, if:
+
+- its first four bytes are `NKV1` — the vault magic (`packages/core/src/vault.ts:44`).
+  Any vault, any copy, clone, backup, rename, or snapshot of one.
+- its contents equal the live device secret. That file is 64 hex characters plus
+  a newline (`packages/core/src/platform.ts:33`), so this is a 65-byte exact
+  comparison, not a heuristic.
+- it parses as a NorthKeep export — our own schema, our own marker.
+
+**Why this layer leads, and why Revision 1 could not have worked without it.**
+An identity-based floor still misses every *copy*. Verified: an APFS clone of a
+file receives a **different inode** (`16777230:149845706` vs
+`...707`). So `cp ~/.northkeep/vault.nkv ~/Documents/backup.nkv`, an APFS clone,
+and a Time Machine local snapshot (this machine has several: `tmutil
+listlocalsnapshots /`) are all distinct filesystem objects containing the whole
+vault. Content is the only property every copy shares.
+
+This layer also subsumes finding C2's inbound half: `northkeep export --out`
+writes plaintext JSON that invariant #4 *requires* to exist, frequently into
+`~/Documents`, and it is refused by what it contains rather than by where the
+user happened to put it — which keeps working after they move or rename it.
+
+### L2 — Identity deny-set. Exact, alias-independent, computed at runtime.
+
+Refuse when the opened descriptor's `dev`+`ino` is in a set built at check time
+from: the **configured** vault path (never a literal — `--vault` exists,
+`packages/cli/src/index.ts:83`), its `.bak` and `.tmp` sidecars
+(`packages/platform-node/src/storage.ts:21,32`), `deviceSecretPath()`, every
+entry under `northkeepHome()` (which honours `NORTHKEEP_HOME`,
+`packages/core/src/platform.ts:8`), and the enumerable secret stores —
+`~/.ssh/*`, `~/.aws/*`, `~/.gnupg/*`, `~/Library/Keychains/*`.
+
+Verified on this machine: `~/.northkeep` and `~/.NORTHKEEP` are the same inode
+(`16777230:139523843`), and so is
+`/System/Volumes/Data/Users/jsilva/.northkeep`. The APFS case-insensitivity
+bypass and the firmlink bypass — the two that defeated Revision 1 — both
+collapse here. So does a hardlink: verified, a hardlink under an innocent name
+carried the target's exact inode.
+
+Enumerating the secret stores as *inodes* rather than leaving them as globs is
+what makes a hardlink to `~/.ssh/id_rsa` refusable under any filename.
+
+### L3 — Containment by inode ancestor walk.
+
+"Is this file inside granted root R" is answered by walking the file's resolved
+ancestors and requiring one of them to **be** R, by `dev`+`ino` — not by string
+prefix. Verified: correctly accepts a case-variant and a firmlink path to a file
+genuinely inside the root, and correctly rejects the firmlinked vault as being
+inside `~/Documents`.
+
+### L4 — Ordering. Open first, then decide, then read only from that descriptor.
+
+`open()` → `fstat()` the descriptor → apply L1/L2/L3 → read from **that
+descriptor**, never re-opening by name. Verified against a live attack: check a
+path, unlink it, replace it with a symlink to a secret, then read. Re-opening by
+name returns `SECRET`. Reading from the descriptor opened first returns
+`PUBLIC`, with the swap already committed underneath it.
+
+### Also required, each cheap and bounded
+
+- **Refuse `nlink > 1`.** A read tool has no legitimate need for hardlinked
+  files, and the link count is the visible tell for the whole hardlink class
+  (verified: `nlink: 2` on the planted link).
+- **Refuse non-regular files by `fstat` mode.** Subsumes `/dev/**`, FIFOs and
+  sockets more reliably than a path rule — and note *why* `/dev` matters: this
+  process holds the vault open, so `/dev/fd/N` is a path to it.
+- **Refuse above a byte cap before reading, with a deadline** (H5). Truncation
+  in this codebase is post-hoc (`task.ts:171-173`); the real bound must be
+  pre-read. Covers stalled network mounts and iCloud dataless files in
+  `~/Documents`, which is the ADR's own example grant.
+- **Refuse `~/Library/{Keychains,Mail,Messages,Safari,Containers,Application
+  Support}` by NAME, before touching them** (H4), so NorthKeep never triggers a
+  TCC prompt it cannot explain. For a verifiable-privacy product that dialog is
+  a product incident whichever way the user answers.
+- **Listing gets its own paragraph** (M5): same floor, same screens, its own
+  risk class, an explicit entry cap, and floor-refused entries shown as
+  `refused` rather than hidden, so a user can see the floor working.
+
+## What is exact and what is not
+
+Revision 1's error of presenting one list at one confidence level is not
+repeated.
+
+**EXACT — no known path, and the mechanism admits no aliases.** The vault and
+any copy of it; the device secret and any copy of it; any vault export; and
+every live object under `northkeepHome()`, under any name, any case, any link,
+any mount path.
+
+**HEURISTIC — best effort, will be incomplete.** The shape globs: `*.pem`,
+`*.key`, `.env*`, `id_rsa` outside `~/.ssh`, `*.mobileprovision`. These cannot
+be inode-enumerated because they describe files that do not exist yet.
+
+**RESIDUAL, stated rather than hidden.**
+- A swap-and-swap-back race between `realpath` and `open` remains theoretically
+  possible, because macOS gives no way to recover an open descriptor's true path
+  from Node — verified, `realpath('/dev/fd/N')` returns `/dev/fd/11`, not the
+  file. Its worst case is reading a file already inside a granted root, and L1
+  and L2 both act on the descriptor, so the vault is not reachable through it.
+- A user-made export in some format we do not recognise (a manual copy-paste
+  into a Word document) is not detectable by content and is ordinary user data.
+
+## Decision 3 (revised): no `always` grant for filesystem reads in v1
+
+Dropped, per finding C3. The engine has no subject for a directory
+(`policy.ts:43`), documents that no-egress calls always ask (`policy.ts:266`),
+and refuses prefix inheritance by design for hosts (`policy.ts:22-28`) on
+reasoning that applies identically to directories. Per-call approval only.
+Adding a third grant subject is "changes who decides" and needs its own ADR.
+
+## Decision 6 (revised): distillation is off for a turn that read a file
+
+`distillExchange` (`turn.ts:586-631`) commits extracted candidates to the vault
+at `memoryScope ?? 'personal'` (`task.ts:986`). Quietly copying a contract into
+the user's vault is not a defensible default, so a turn in which a filesystem
+read executed sets `distill: false`. The inbound half of C2 is handled by L1.
+
+## Decision 10 (new): file content joins the exfiltration screen corpus
+
+Per finding H3. `recordDisclosedMemory` (`turn.ts:135-140`) is fed by vault
+entries only, and its own docstring says "EVERY path that puts memory in front
+of the model must call this." A filesystem read is such a path, so content read
+this conversation joins the corpus, size-bounded, and a later `web_fetch`
+carrying it is flagged. Also from H3: `where: 'path'` already means "the URL's
+path" (`exfil.ts:485`), so filesystem arguments must not reuse it; and
+`HARD_DENY_SECRET_KINDS` (`task.ts:66`) should not apply to a no-egress read,
+or `2024-tax-123-45-6789.pdf` becomes silently un-approvable.
+
+## Acceptance test for Revision 2
+
+Every one of these must refuse, and each targets a specific defeated bypass:
+
+1. `~/.northkeep/vault.nkv` (baseline), after granting `~`.
+2. `~/.NORTHKEEP/vault.nkv` (APFS case-insensitivity).
+3. `/System/Volumes/Data/Users/<you>/.northkeep/vault.nkv` (firmlink).
+4. `cp ~/.northkeep/vault.nkv ~/Documents/holiday-photos.nkv`, then read it
+   (copy — inode differs, content does not).
+5. The same copy renamed to `notes.txt` (content, not extension).
+6. A Time Machine local snapshot path containing a vault.
+7. `~/.northkeep/device.secret`, and a copy of it under any name.
+8. `northkeep export --out ~/Documents/x.json`, then read it.
+9. A hardlink in `~/Documents` to `~/.ssh/id_rsa`.
+10. A symlink swapped between approval and read (must read the approved file, or
+    refuse — never the swapped one).
+11. A vault at a non-default `--vault` path inside a granted root.
+12. A 4 GB file, and a FIFO, both refused before any read.
+13. `~/Library/Keychains/login.keychain-db` refused without triggering a TCC
+    prompt.
