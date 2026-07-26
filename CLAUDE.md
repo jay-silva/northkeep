@@ -22,9 +22,10 @@ The founder (Jay) is a compliance professional, not an engineer. Therefore:
    Shared, which is copied to NorthKeep's connector store so the user's own AI
    apps can reach it, or (c) the arguments of a tool call the user allowed —
    whether to a web tool's destination or to a tool server the user explicitly
-   connected that runs off this machine — after the tool-egress redaction floor
-   and the exfiltration screens, and only per call or under a grant the user
-   created at a live prompt and can revoke. Default is private; sharing is
+   connected that runs off this machine — screened for secret shapes, protected
+   names and vault content while still unmasked, then masked by the tool-egress
+   redaction floor before they are sent, and only per call or under a grant the
+   user created at a live prompt and can revoke. Default is private; sharing is
    per-scope, opt-in, loudly confirmed, badge-visible, and reversible with
    server-side deletion. Under (c) NorthKeep sends only those arguments: never
    the vault, never the transcript. This invariant bounds what NORTHKEEP
