@@ -500,6 +500,9 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
             tools: taskTools,
             hooks: taskHooks,
             gate: permissionEngine,
+            // ADR 0035 Decision 3 (option B): a private-pinned conversation
+            // refuses remote MCP tools. Web tools still ask and still work.
+            ceiling,
             signal: controller.signal,
           });
         } finally {

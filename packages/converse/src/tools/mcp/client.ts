@@ -3,10 +3,25 @@ import {
   getDefaultEnvironment,
   StdioClientTransport,
 } from '@modelcontextprotocol/sdk/client/stdio.js';
+import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolDefinition, ToolResult } from '../types.js';
-import { isHttpServer, remoteUrlRefusal, riskOf, type McpServerConfig } from './config.js';
-import { fingerprintLaunch, namespacedName, pinTools, type PinnableTool } from './identity.js';
+import { endpointOrigin, isHttpServer, remoteUrlRefusal, riskOf, type McpServerConfig } from './config.js';
+import {
+  fingerprintLaunch,
+  MAX_DESCRIPTION_CHARS,
+  namespacedName,
+  pinTools,
+  sanitizeServerText,
+  type PinnableTool,
+} from './identity.js';
+import { credentialsOriginMatches, hasRemoteTokens } from './tokens.js';
+import { KeychainOAuthProvider } from './oauth.js';
+import { guardedFetch } from '../net.js';
+// Re-exported so every existing importer of this module is unaffected by the
+// move; the function itself lives in identity.js because oauth.js needs it and
+// importing this module from there would be a cycle.
+export { sanitizeServerText };
 
 /**
  * The MCP client (M11, ADR 0033). Connects to a user-configured server, checks
@@ -23,7 +38,8 @@ import { fingerprintLaunch, namespacedName, pinTools, type PinnableTool } from '
 /** A server may advertise at most this many tools. */
 export const MAX_TOOLS_PER_SERVER = 64;
 /** Each description is truncated to this many characters before the model sees it. */
-export const MAX_DESCRIPTION_CHARS = 1024;
+// Defined in identity.js beside the sanitizer that uses it as a default.
+export { MAX_DESCRIPTION_CHARS };
 /** A tool's whole input schema, serialized, may not exceed this. */
 export const MAX_SCHEMA_CHARS = 8192;
 /** No single request to a server may hang the loop longer than this. */
@@ -43,28 +59,6 @@ export const REQUEST_TIMEOUT_MS = 30_000;
  * matches what hosted providers accept anyway.
  */
 export const TOOL_NAME_RE = /^[A-Za-z0-9_-]{1,48}$/;
-
-/**
- * Strip C0/C1 control characters (ESC included) from server-supplied text.
- * Anything from a server may reach a TTY — `northkeep mcp tools` prints
- * descriptions, and that screen is the ONLY human review of what a server
- * advertises. A review surface a server can forge is not a review surface.
- */
-export function sanitizeServerText(text: string, maxChars = MAX_DESCRIPTION_CHARS): string {
-  return (
-    String(text)
-      // C0/C1 controls, ESC included: these repaint a terminal.
-      // eslint-disable-next-line no-control-regex
-      .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
-      // Bidi embedding/override/isolate marks: these REORDER text without any
-      // control character at all, so a sanitizer that only strips C0/C1 still
-      // lets a server display one sentence and mean another. The fence
-      // sanitizer in untrusted.ts has stripped these since M10b; the M11 paths
-      // needed the same treatment.
-      .replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
-      .slice(0, maxChars)
-  );
-}
 
 export class McpPinChangedError extends Error {
   constructor(
@@ -125,6 +119,17 @@ export interface McpClientLike {
   setNotificationHandler?: (schema: unknown, handler: () => void) => void;
 }
 
+export class McpOriginChangedError extends Error {
+  constructor(readonly serverId: string) {
+    super(
+      `MCP server "${serverId}" now points at a different host than the one you signed in to. ` +
+        'Remembered approvals do not carry across a change of host, so NorthKeep will not use the ' +
+        'stored sign-in. Remove the server and add it again if the new address is what you intended.',
+    );
+    this.name = 'McpOriginChangedError';
+  }
+}
+
 export class McpNotConnectedError extends Error {
   constructor(readonly serverId: string) {
     super(
@@ -143,9 +148,31 @@ async function defaultClientFactory(server: McpServerConfig): Promise<McpClientL
     // ADR 0035 Decision 7: nothing happens until a completed OAuth token
     // exists. Listing tools is not harmless — a tool DESCRIPTION is read by the
     // model while it decides what to do — so an unauthenticated listing is the
-    // very thing the gate exists to prevent. Until the OAuth half lands
-    // (part 3), a remote server refuses here rather than connecting anonymously.
-    throw new McpNotConnectedError(server.id);
+    // very thing the gate exists to prevent.
+    if (!hasRemoteTokens(server.id)) throw new McpNotConnectedError(server.id);
+    // Decision 6: grants key on the server LABEL, so a URL edit would otherwise
+    // carry an `always` grant to a different host. The credentials remember the
+    // origin they were issued for; a mismatch is a changed server, not a
+    // reconnect, and is refused with the same force as a changed fingerprint.
+    if (!credentialsOriginMatches(server.id, endpointOrigin(server.url))) {
+      throw new McpOriginChangedError(server.id);
+    }
+    const provider = new KeychainOAuthProvider({
+      serverId: server.id,
+      origin: endpointOrigin(server.url),
+      ...(server.clientId !== undefined ? { clientId: server.clientId } : {}),
+    });
+    const transport = new StreamableHTTPClientTransport(new URL(server.url), {
+      authProvider: provider,
+      // Decision 5: the SDK transport calls bare `fetch`, which would be a
+      // SECOND, UNGUARDED egress path beside web_fetch. Every byte — the
+      // JSON-RPC POST, the SSE stream, and the OAuth discovery fetches the SDK
+      // makes on this same fetch — goes through our resolve-refuse-pin guard
+      // instead.
+      fetch: guardedFetch as unknown as typeof fetch,
+    });
+    await client.connect(transport);
+    return client as unknown as McpClientLike;
   }
 
   const transport = new StdioClientTransport({

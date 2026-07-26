@@ -528,6 +528,9 @@ export async function handleConverseStream(
         ...turnArgs,
         tools: taskTools,
         hooks: taskHooks,
+        // ADR 0035 Decision 3 (option B): a private-pinned conversation
+        // refuses remote MCP tools. Web tools still ask and still work.
+        ceiling,
         ...(stored.gate !== undefined ? { gate: stored.gate } : {}),
         signal: controller.signal,
         // Same value the converse-layer timer uses, so the two settle together.

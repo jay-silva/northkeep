@@ -83,7 +83,16 @@ export interface McpStdioServer extends McpServerCommon {
 
 export interface McpHttpServer extends McpServerCommon {
   transport: 'http';
-  /** The exact origin approved, re-checked at every connect (Decision 6). */
+  /**
+   * The endpoint to POST to: scheme, host, port and PATH. Query and fragment
+   * are dropped — a query string is where a token gets pasted by accident, and
+   * nothing about an MCP endpoint needs one.
+   *
+   * IDENTITY is `new URL(url).origin`, not this whole string (Decision 2), and
+   * that is what the stored credentials are bound to. Keeping the path here is
+   * not a weakening: a real endpoint is `https://host/mcp/v1`, and storing the
+   * bare origin would have produced a config that cannot connect at all.
+   */
   url: string;
   /**
    * OAuth client id, when the provider requires a pre-registered client.
@@ -164,7 +173,9 @@ function isServer(entry: unknown): entry is McpServerConfig {
  * obtain a valid certificate. So this asks whether the origin is positively
  * BOUNDED, rather than whether it looks local.
  */
-export function remoteUrlRefusal(rawUrl: string): { ok: true; origin: string } | { ok: false; reason: string } {
+export function remoteUrlRefusal(
+  rawUrl: string,
+): { ok: true; endpoint: string; origin: string } | { ok: false; reason: string } {
   let url: URL;
   try {
     url = new URL(rawUrl);
@@ -193,7 +204,15 @@ export function remoteUrlRefusal(rawUrl: string): { ok: true; origin: string } |
   if (tier !== 'bounded') {
     return { ok: false, reason: `That origin classifies as ${tier}, not a remote service. Add a server on this machine as a local command instead.` };
   }
-  return { ok: true, origin: url.origin };
+  // Keep the path, drop query and fragment. A trailing slash is normalized away
+  // so the same endpoint typed two ways is one entry.
+  const pathname = url.pathname === '/' ? '' : url.pathname.replace(/\/+$/, '');
+  return { ok: true, endpoint: `${url.origin}${pathname}`, origin: url.origin };
+}
+
+/** The identity half of a stored endpoint: scheme, host, port. */
+export function endpointOrigin(url: string): string {
+  return new URL(url).origin;
 }
 
 export function loadMcpConfig(): McpConfig {
@@ -352,7 +371,7 @@ export function addRemoteServer(
   const server: McpHttpServer = {
     id: input.id,
     transport: 'http',
-    url: checked.origin,
+    url: checked.endpoint,
     ...(input.clientId !== undefined ? { clientId: input.clientId } : {}),
     trust: 'strict',
     safeRead: [...(input.safeRead ?? [])],

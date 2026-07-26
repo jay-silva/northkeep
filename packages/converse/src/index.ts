@@ -71,6 +71,8 @@ export {
   MAX_SCHEMA_CHARS,
   TOOL_NAME_RE,
   McpFingerprintChangedError,
+  McpNotConnectedError,
+  McpOriginChangedError,
   McpPinChangedError,
   type McpConnection,
   type McpClientLike,
@@ -83,6 +85,7 @@ export {
   isStdioServer,
   loadMcpConfig,
   mcpConfigPath,
+  endpointOrigin,
   remoteUrlRefusal,
   removeServer,
   riskOf,
@@ -95,6 +98,21 @@ export {
   type McpTransport,
   type McpTrust,
 } from './tools/mcp/config.js';
+export {
+  awaitOAuthCallback,
+  KeychainOAuthProvider,
+  openInBrowser,
+  OAuthNotAvailableError,
+  OAUTH_CALLBACK_PORT,
+  OAUTH_REDIRECT_URI,
+  requireTokenStore,
+} from './tools/mcp/oauth.js';
+export {
+  McpServerNotAuthenticatedError,
+  startRemoteConnect,
+  type PendingConnect,
+  type RemoteConnectOptions,
+} from './tools/mcp/connect-remote.js';
 export {
   credentialsOriginMatches,
   deleteCredentials,

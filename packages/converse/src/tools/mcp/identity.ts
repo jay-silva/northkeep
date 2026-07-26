@@ -214,3 +214,28 @@ export function isUnderAllowedRoot(command: string, roots: string[]): boolean {
     return resolved === realRoot || resolved.startsWith(realRoot + path.sep);
   });
 }
+
+/** Each description is truncated to this many characters before the model sees it. */
+export const MAX_DESCRIPTION_CHARS = 1024;
+
+/**
+ * Strip C0/C1 control characters (ESC included) from server-supplied text.
+ * Anything from a server may reach a TTY — `northkeep mcp tools` prints
+ * descriptions, and that screen is the ONLY human review of what a server
+ * advertises. A review surface a server can forge is not a review surface.
+ */
+export function sanitizeServerText(text: string, maxChars = MAX_DESCRIPTION_CHARS): string {
+  return (
+    String(text)
+      // C0/C1 controls, ESC included: these repaint a terminal.
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u001F\u007F-\u009F]/g, ' ')
+      // Bidi embedding/override/isolate marks: these REORDER text without any
+      // control character at all, so a sanitizer that only strips C0/C1 still
+      // lets a server display one sentence and mean another. The fence
+      // sanitizer in untrusted.ts has stripped these since M10b; the M11 paths
+      // needed the same treatment.
+      .replace(/[\u200E\u200F\u202A-\u202E\u2066-\u2069]/g, '')
+      .slice(0, maxChars)
+  );
+}

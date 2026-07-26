@@ -9,6 +9,7 @@ import type {
   ToolCallRequest,
   ToolSpec,
 } from './provider.js';
+import type { PrivacyCeiling } from './route.js';
 import { classifyEndpoint } from './provider.js';
 import {
   audit,
@@ -25,7 +26,7 @@ import { redactJsonLeaves, restoreJsonLeaves } from './jsonLeaves.js';
 import type { ToolDefinition, ToolResult } from './tools/types.js';
 import { placeholderGate, type PermissionGate } from './tools/gate.js';
 import { describeFlag, screenArguments, type ExfilFlag } from './tools/exfil.js';
-import { getServer as getMcpServer } from './tools/mcp/config.js';
+import { endpointOrigin, getServer as getMcpServer, isHttpServer } from './tools/mcp/config.js';
 import { getToolBudget, reserveDailySpend, withinDailyCap } from './tools/budget.js';
 import { newFenceNonce, untrustedSystemLine, wrapUntrusted } from './tools/untrusted.js';
 
@@ -138,6 +139,23 @@ export interface TaskOptions extends TurnOptions {
   /** Per-tool-result truncation (characters). */
   maxResultChars?: number;
   maxTokens?: number;
+  /**
+   * The conversation's privacy ceiling (ADR 0011), passed in so the loop can
+   * enforce it on TOOL egress, not just on model routing.
+   *
+   * ADR 0035 Decision 3, chosen by Jay 2026-07-25: option A for web tools,
+   * option B for remote MCP. So `private-only` does NOT stop a web search — a
+   * query is transient, masked and near-anonymous, and local-model-plus-search
+   * is the best privacy/utility combination this product has — but it DOES
+   * refuse a remote MCP tool outright, because a connected MCP server is a
+   * persistent, authenticated third party holding a scoped grant to the user's
+   * accounts. The asymmetry is deliberate and is stated in the refusal text.
+   *
+   * Default `bounded-allowed`: a surface that does not pass a ceiling has not
+   * pinned anything, and inventing a pin it never set would be worse than not
+   * enforcing one it never had.
+   */
+  ceiling?: PrivacyCeiling;
 }
 
 export interface TaskResult extends TurnResult {
@@ -257,6 +275,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
   const maxSteps = options.maxSteps ?? DEFAULT_MAX_STEPS;
   const approvalTimeoutMs = options.approvalTimeoutMs ?? DEFAULT_APPROVAL_TIMEOUT_MS;
   const maxResultChars = options.maxResultChars ?? DEFAULT_MAX_RESULT_CHARS;
+  const ceiling: PrivacyCeiling = options.ceiling ?? 'bounded-allowed';
   // Read through a function call: TypeScript persists property narrowing on
   // `signal.aborted` across awaits, which would make later checks look dead.
   const isAborted = (): boolean => signal?.aborted === true;
@@ -612,6 +631,48 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                 : null;
 
 
+            // ---- PRIVACY CEILING, on tool egress (ADR 0035 Decision 3,
+            // option B for remote MCP). Placed BEFORE the screens because
+            // nothing needs screening for a call that cannot proceed, and
+            // before the gate because this is not a prompt the user can click
+            // through: the point of pinning a conversation private is that this
+            // class of egress is off the table for it.
+            //
+            // Keyed STRUCTURALLY on `tool.serverId` → our own config, never on
+            // the tool's name. A name is model-supplied text and an empty one
+            // once erased three separate controls at the same time.
+            const remoteServer =
+              mcpServerId !== undefined ? getMcpServer(mcpServerId) : undefined;
+            const isRemoteMcp = remoteServer !== undefined && isHttpServer(remoteServer);
+            if (ceiling === 'private-only' && isRemoteMcp) {
+              decision = 'denied';
+              scopeApplied = 'screen';
+              screenedDeny = true;
+              resultContent = JSON.stringify({
+                error: 'privacy_ceiling',
+                guidance:
+                  `This conversation is pinned to private, so it cannot use "${call.name}": ` +
+                  `${remoteServer.id} runs on ${endpointOrigin(remoteServer.url)}, off this machine, ` +
+                  'and holds a standing sign-in to that account. Web search and fetch still work in a ' +
+                  'private conversation, with approval; a connected account server does not. ' +
+                  'Unpin the conversation if you want to use it.',
+              });
+              // Reported through the SAME `permission` event a screen denial
+              // uses, with via:'screen', so every surface that already shows a
+              // refusal and its reason shows this one too — rather than a new
+              // event type each surface would have to learn.
+              hooks.onEvent({
+                type: 'permission',
+                name: call.name,
+                decision: 'denied',
+                via: 'screen',
+                reasons: [
+                  `this conversation is pinned to private, and ${remoteServer.id} is a connected ` +
+                    'account server running off this machine',
+                ],
+              });
+            } else {
+
             // ---- EXFILTRATION SCREENS (M10c, ADR 0029 decision 1): run IN
             // THE LOOP, before the gate, over the RESTORED plaintext — the
             // gate is an injectable seam, and a security control must not
@@ -894,6 +955,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                 ...(errorLine !== undefined ? { error: errorLine } : {}),
               });
             }
+            } // end of the privacy-ceiling else
           }
         }
 

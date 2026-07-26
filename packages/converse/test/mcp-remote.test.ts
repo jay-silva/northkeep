@@ -16,7 +16,13 @@ import {
   saveCredentials,
   setTokenBackend,
   updateCredentials,
+  createSession,
+  runTask,
+  type ChatTurnResult,
+  type ModelProvider,
+  type TaskEvent,
   type TokenBackend,
+  type ToolDefinition,
 } from '../src/index.js';
 
 /**
@@ -51,10 +57,20 @@ afterEach(() => {
 });
 
 describe('remoteUrlRefusal (ADR 0035 Decision 1)', () => {
-  it('accepts a public https origin and keeps only the origin', () => {
-    const r = remoteUrlRefusal('https://gmailmcp.googleapis.com/mcp/v1?x=1');
+  it('keeps the endpoint path but drops query and fragment', () => {
+    const r = remoteUrlRefusal('https://gmailmcp.googleapis.com/mcp/v1?token=leaked#x');
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.origin).toBe('https://gmailmcp.googleapis.com');
+    if (r.ok) {
+      expect(r.endpoint).toBe('https://gmailmcp.googleapis.com/mcp/v1');
+      // Identity is the origin; the path is how you reach it.
+      expect(r.origin).toBe('https://gmailmcp.googleapis.com');
+    }
+  });
+
+  it('normalizes a bare origin and a trailing slash to the same endpoint', () => {
+    const a = remoteUrlRefusal('https://mcp.example.com/');
+    const b = remoteUrlRefusal('https://mcp.example.com');
+    expect(a.ok && b.ok && a.endpoint === b.endpoint).toBe(true);
   });
 
   it('preserves a non-default port, because identity is scheme+host+PORT', () => {
@@ -95,10 +111,10 @@ describe('remoteUrlRefusal (ADR 0035 Decision 1)', () => {
 });
 
 describe('config discriminated union (ADR 0035 Decision 9)', () => {
-  it('stores a remote server as origin-only, strict, with no fingerprint', () => {
-    const s = addRemoteServer({ id: 'gmail', url: 'https://mcp.example.com/v1/rpc' });
+  it('stores a remote server as endpoint, strict, with no fingerprint', () => {
+    const s = addRemoteServer({ id: 'gmail', url: 'https://mcp.example.com/v1/rpc?k=1' });
     expect(s.transport).toBe('http');
-    expect(s.url).toBe('https://mcp.example.com');
+    expect(s.url).toBe('https://mcp.example.com/v1/rpc');
     expect(s.trust).toBe('strict');
     expect(s).not.toHaveProperty('fingerprint');
     expect(s).not.toHaveProperty('command');
@@ -238,5 +254,96 @@ describe('credential store (ADR 0035 Decision 8)', () => {
     backend.set('gmail', 'not json');
     expect(loadCredentials('gmail')).toBeNull();
     expect(hasRemoteTokens('gmail')).toBe(false);
+  });
+});
+
+describe('privacy ceiling on remote MCP egress (ADR 0035 Decision 3, option B)', () => {
+  const PRIVATE_URL = 'http://localhost:11434/v1';
+
+  /** Minimal scripted provider: one tool call, then a final answer. */
+  function providerCalling(toolName: string): ModelProvider {
+    const script: ChatTurnResult[] = [
+      {
+        text: '',
+        toolCalls: [{ id: 'c1', name: toolName, arguments: '{"q":"hello"}' }],
+        stopReason: 'tool_use',
+      },
+      { text: 'done', toolCalls: [], stopReason: 'end' },
+    ];
+    const provider: ModelProvider = {
+      kind: 'openai-compatible',
+      baseUrl: PRIVATE_URL,
+      chat: (m, o) => provider.chatTurn(m, o).then((r) => r.text),
+      chatTurn: () => Promise.resolve(script.shift()!),
+    };
+    return provider;
+  }
+
+  function mcpTool(serverId: string, executed: string[]): ToolDefinition {
+    return {
+      name: `${serverId}__search`,
+      serverId,
+      description: 'search',
+      inputSchema: { type: 'object', properties: { q: { type: 'string' } } },
+      risk: 'safe-read',
+      egress: () => null,
+      execute: (args) => {
+        executed.push(JSON.stringify(args));
+        return Promise.resolve({ content: 'result', meta: { bytes: 6, truncated: false, ok: true } });
+      },
+    };
+  }
+
+  async function run(serverId: string, ceiling: 'private-only' | 'bounded-allowed') {
+    const executed: string[] = [];
+    const events: TaskEvent[] = [];
+    const result = await runTask({
+      provider: providerCalling(`${serverId}__search`),
+      vault: { retrieve: () => [], list: () => [], commit: () => [] },
+      session: createSession(),
+      model: 'llama3.2:3b',
+      message: 'search my mail',
+      redactTier: 0,
+      distill: false,
+      tools: [mcpTool(serverId, executed)],
+      ceiling,
+      // Auto-approve everything, so a refusal can only come from the ceiling.
+      gate: { evaluate: () => Promise.resolve('allow') },
+      hooks: {
+        onEvent: (e) => void events.push(e),
+        requestApproval: () => Promise.resolve('allow' as const),
+      },
+      auditFn: () => undefined,
+    });
+    return { executed, events, result };
+  }
+
+  it('refuses a REMOTE MCP tool in a private-pinned conversation, before it runs', async () => {
+    addRemoteServer({ id: 'gmail', url: 'https://mcp.example.com/v1' });
+    const { executed, events, result } = await run('gmail', 'private-only');
+    expect(executed).toEqual([]); // nothing left the machine
+    const denial = events.find((e) => e.type === 'permission' && e.decision === 'denied');
+    expect(denial).toBeDefined();
+    expect(JSON.stringify(denial)).toMatch(/pinned to private/);
+    // Denied, and with no egress recorded, because nothing egressed.
+    expect(result.toolCallsMade[0]?.decision).toBe('denied');
+    expect(result.toolCallsMade[0]).not.toHaveProperty('egress');
+  });
+
+  it('allows the SAME tool when the conversation is not pinned', async () => {
+    addRemoteServer({ id: 'gmail', url: 'https://mcp.example.com/v1' });
+    const { executed } = await run('gmail', 'bounded-allowed');
+    expect(executed).toEqual(['{"q":"hello"}']);
+  });
+
+  it('does NOT refuse a LOCAL stdio server in a private-pinned conversation', async () => {
+    // The asymmetry is deliberate: a local program is not egress, so the
+    // ceiling has nothing to bind. If this ever starts failing, the ceiling has
+    // grown a reach ADR 0035 did not give it.
+    const cmd = path.join(home, 'server.js');
+    fs.writeFileSync(cmd, '// fake\n');
+    addServer({ id: 'vault', command: cmd, args: [] });
+    const { executed } = await run('vault', 'private-only');
+    expect(executed).toEqual(['{"q":"hello"}']);
   });
 });
