@@ -1,10 +1,41 @@
 # ADR 0037: Browser tools
 
 - **Date:** 2026-07-25
-- **Status:** Proposed — **sound as a statement of restraint, not sound as a
-  specification.** An adversarial review on 2026-07-25 found the engineering
-  claims in Decisions 1, 2 and 5 do not hold. See "Adversarial review" at the
-  end; the six listed corrections are prerequisites to any code.
+- **Status:** **PARKED 2026-07-26 by Jay. Not being built.** Kept as a decision
+  record: why we declined to build the obvious thing, and what it would take if
+  that ever changes. An adversarial review on 2026-07-25 found the engineering
+  claims in Decisions 1, 2 and 5 do not hold (see the end of this document), and
+  the architecture that WOULD hold costs more than the feature is worth.
+
+## Why parked (2026-07-26)
+
+The review's H6/H7 showed that a browser cannot inherit `net.ts`'s guarantee,
+because that guarantee comes from dialing a validated address on a socket we
+own, and a browser owns its own sockets. There is a real fix: run a **local
+CONNECT proxy** and launch the engine pointed at it. The browser asks the proxy
+to tunnel to `host:443`; we resolve the name, refuse if any answer is private,
+and dial the pinned address ourselves. TLS stays end-to-end (no interception, no
+certificate games) and **DNS never happens inside the browser at all**, which
+also closes the WebSocket, prefetch and speculative-connection holes, since
+those are tunnels like everything else.
+
+That works. What it sits on does not justify itself:
+
+- It requires a **bundled** engine, because Decision 5 option A (driving the
+  user's own browser) is an unauthenticated control channel over a signed-in
+  profile (H9).
+- A bundled Chromium roughly **triples an 80 MB app**, brings a permanent CVE
+  obligation, and by default makes network requests we never asked for —
+  component updater, Safe Browsing, OCSP, DoH probes — against **invariant #5,
+  "No telemetry. None."** (H8).
+- Add the proxy, an enterprise-policy file to block `file:` and the other
+  internal schemes (M2), and screenshots deferred until there is any path for an
+  image through the redaction pipeline at all (M1).
+
+That is a large, permanent cost for "read pages that render client-side", which
+`web_fetch` already approximates. **Revisit only if design partners ask for it
+more than once.** If that happens, the CONNECT proxy above is the starting
+point, not the interceptor design in Decision 2.
 - **Deciders:** Jay (product owner), Claude Code
 - **Parent:** ADR 0027 (harness umbrella), ADR 0029 (harness security model), ADR 0036 (filesystem tools)
 
