@@ -288,6 +288,26 @@ The SDK owns discovery, PKCE, state and token exchange; we implement
   ephemeral loopback listener (RFC 8252). This is a second listening surface and
   must be said out loud, since this ADR's own Context sells remote MCP as
   avoiding one.
+
+  **AMENDED IN IMPLEMENTATION, and this is a better answer than the one above.**
+  Neither of the previous two bullets was built as written. There is no
+  `/oauth/callback` route on the GUI server and no CSP carve-out: instead ONE
+  short-lived listener (`awaitOAuthCallback`, `oauth.ts`) binds 127.0.0.1 on a
+  fixed port only while a connect is in flight, answers exactly one request, and
+  closes. The CLI and the GUI use the same code.
+
+  Three things improve at once. The GUI's token gate and its `default-src 'none'`
+  CSP are never relaxed. There is no permanently-open unauthenticated route to
+  reason about — the window in which anything can talk to that port is the
+  seconds between opening the browser and finishing sign-in. And the "second
+  listening surface" the bullet above conceded is not two surfaces but one,
+  shared, so it cannot drift between the CLI and the GUI.
+
+  What it costs: the port is fixed (8788), so two NorthKeep sign-ins at the same
+  instant collide, and the second reports the port is in use rather than
+  silently doing something surprising. A fixed port is not optional — providers
+  require an exactly pre-registered redirect URI, and the GUI's own port is
+  random.
 - **Pre-registered client credentials are REQUIRED, not a fallback.** Google's
   documentation states plainly that its remote MCP servers "don't support
   Dynamic Client Registration or OAuth Client ID Metadata Documents": the user
@@ -372,6 +392,13 @@ memories can reach a third party you connected, under approval, in
 argument-sized pieces, where before it said they could not at all.
 
 ## Acceptance test (Jay runs this himself)
+
+> **Implementation note on what is stored.** The config keeps the endpoint —
+> scheme, host, port and PATH — with query and fragment dropped. IDENTITY is
+> still the origin (`endpointOrigin()`), and that is what the stored credentials
+> are bound to and what a change invalidates. Storing the bare origin, as the
+> first draft implied, would have produced a config that cannot connect at all,
+> since a real endpoint is `https://host/mcp/v1`.
 
 1. Adding `https://gmailmcp.googleapis.com/mcp/v1` stores the origin and reports
    that it needs connecting. Adding an http URL, a bare IP, or a `.internal`

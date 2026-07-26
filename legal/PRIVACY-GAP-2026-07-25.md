@@ -58,13 +58,36 @@ Two points counsel should weigh:
 **Recipients created:** whatever program the user chose to install and connect,
 and by extension whatever that program contacts.
 
-### 3. Not yet shipped, but specified
+### 3. Remote MCP servers (M12) — UPDATED 2026-07-25, later the same day
 
-ADR 0035 proposes **remote MCP servers** (HTTPS, OAuth) — e.g. Google's Gmail MCP
-server. That would create a direct NorthKeep-to-third-party data flow, with an
-OAuth grant to the user's account at that provider. It is **not implemented** and
-should not be described as a current practice. Flagged so any policy wording
-drafted now can anticipate it rather than needing a second revision.
+**This section previously said remote MCP was specified but not implemented.
+That is no longer true, and the change is material enough that counsel should
+re-read this section rather than the earlier version.**
+
+Remote MCP servers (ADR 0035) are now implemented. The user can add an HTTPS MCP
+endpoint — Google's Gmail MCP server is the motivating example — sign in to it
+with OAuth, and let approved tool calls run against it. This creates a **direct
+NorthKeep-to-third-party data flow**, which the two milestones above did not:
+
+- The arguments of an approved call are sent **from this machine to that
+  provider**, after the deterministic Tier-1 redaction floor.
+- An **OAuth grant** to the user's account at that provider is created and
+  stored in the macOS Keychain. It is a standing, scoped authorization, not a
+  one-off, and NorthKeep cannot revoke it — the user does that at the provider.
+- Results come back **into the conversation**, and then travel to whichever
+  model answers. Reading email through a remote server and answering with a
+  cloud model therefore discloses to **two** third parties, not one.
+
+User-visible controls: a remote server is contacted only after an explicit
+sign-in that requires the vault passphrase; its arguments always get the Tier-1
+floor and it can never be marked "trusted"; a conversation pinned "Private only"
+refuses its tools outright; each call is approved and the per-turn proof names
+the host and the redacted arguments.
+
+**For point 4 below, this means the MCP paragraph must cover two cases, not one:
+software the user installs locally, and a remote service the user grants access
+to their account at.** The second is the stronger disclosure and the one with an
+ongoing authorization attached.
 
 ## What the policy would need to cover
 
@@ -75,9 +98,13 @@ Counsel to decide the form; the substance appears to be:
 2. That **Brave Search** is a processor/recipient when web search is used, and a
    pointer to their policy.
 3. That a **fetched website** receives the request and standard request metadata.
-4. That **MCP servers the user installs** receive the arguments of calls the user
-   approves, that they are third-party software not operated by NorthKeep, and
-   that what they do with that data is governed by their own terms.
+4. That **MCP servers the user connects** receive the arguments of calls the
+   user approves, that they are third-party software or services not operated by
+   NorthKeep, and that what they do with that data is governed by their own
+   terms. Two sub-cases (see section 3): a **local program** the user installs,
+   and a **remote service** the user signs in to, where NorthKeep transmits
+   directly to that provider and the user's account there holds a standing OAuth
+   grant that only they can revoke.
 5. That NorthKeep applies redaction and screening before transmission, but that
    these reduce rather than eliminate disclosure — the policy already uses this
    framing for the model provider and it is consistent.

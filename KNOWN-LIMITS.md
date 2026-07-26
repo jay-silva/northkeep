@@ -245,8 +245,31 @@ every milestone; if a limit is removed, say when and how.*
   content channel we have not screened.
 - **One level deep.** NorthKeep is an MCP client here, not a proxy: it does not
   re-expose a connected server's tools to anything else.
-- **Stdio servers only.** Remote/http MCP servers are specified in ADR 0033 but
-  not implemented; only a local command is supported.
+- **Remote (https) MCP servers exist as of M12 (ADR 0035), with real limits.**
+  A remote server sends the arguments of a call you approve OFF this machine, to
+  a third party you signed in to. Specifically:
+  - Its arguments always get the deterministic **Tier-1 floor**, never the
+    conversation's full active tier, and it can never be marked `trusted`.
+  - **A chat pinned "Private only" refuses remote MCP tools outright** — not a
+    prompt you can click through. Web search and fetch still work under a pin
+    (see the privacy-ceiling entry above). That asymmetry is deliberate: a
+    search query is transient and near-anonymous, a connected account server is
+    a standing grant to your mail or your documents.
+  - **The sign-in lives in the macOS Keychain, so remote servers are macOS-only.**
+    There is no file fallback, on purpose.
+  - **Two processes can race a token refresh.** Refreshes are serialized inside
+    one process, but the CLI and the GUI refreshing the same grant in the same
+    instant can lose a rotated refresh token, which ends the grant until you
+    sign in again. It cannot leak anything; it can break the connection.
+  - **There is no one-click path to an official server, for anyone.** Google's
+    remote MCP servers do not support dynamic client registration, so you create
+    an OAuth client in the provider's console yourself and paste the id and
+    secret. No client can do that step for you.
+  - **Removing a server here does not revoke the grant.** Revoke it at the
+    provider.
+  - **The proof names the endpoint and the masked arguments, not a per-call
+    URL** — a remote MCP call posts to one constant address, so "we can prove
+    what we sent" is weaker here than for `web_fetch`.
 - **The GUI can add an MCP server, under two gates (ADR 0034).** Settings → Tools
   lists configured servers, shows what each advertises (including the definitions
   NorthKeep refused, and why), and approves or removes them. Adding one from the
