@@ -77,6 +77,11 @@ import {
   loadMcpConfig,
   isHttpServer,
   hasRemoteTokens,
+  addRemoteServer,
+  endpointOrigin,
+  remoteUrlRefusal,
+  startRemoteConnect,
+  type PendingConnect,
   getServer as getMcpServer,
   removeServer as removeMcpServer,
   setSafeRead,
@@ -169,6 +174,14 @@ interface PullJob {
   error?: string;
 }
 const pullJobs = new Map<string, PullJob>();
+
+/**
+ * Sign-ins waiting for the user to confirm the destination. Keyed by server id,
+ * held only in memory, and dropped the moment /proceed or /cancel runs — a
+ * pending entry owns a bound loopback port, so it must never outlive the
+ * question it is waiting on.
+ */
+const pendingConnects = new Map<string, PendingConnect>();
 
 function evictStalePullJobs(): void {
   const now = Date.now();
@@ -899,6 +912,104 @@ async function dispatch(
     } catch (err) {
       return bad(400, err instanceof Error ? err.message : String(err));
     }
+  }
+
+  /**
+   * Add a REMOTE server (ADR 0035). No passphrase, and that is deliberate
+   * rather than an oversight: this route stores an address. It spawns nothing,
+   * contacts nothing, and lists nothing, so the property ADR 0034 protects —
+   * that a token-holding automated caller cannot cause a program to run — is
+   * not in play. The passphrase gate sits on /connect below, which is the
+   * route that first contacts the server and puts its tools in front of the
+   * model.
+   */
+  if (method === 'POST' && route === '/api/mcp/add-remote') {
+    const { id, url, clientId } = parseJson<{ id?: unknown; url?: unknown; clientId?: unknown }>(body);
+    if (typeof id !== 'string') return bad(400, 'id is required.');
+    if (typeof url !== 'string') return bad(400, 'url is required.');
+    if (clientId !== undefined && typeof clientId !== 'string') return bad(400, 'clientId must be a string.');
+    const checked = remoteUrlRefusal(url);
+    if (!checked.ok) return bad(400, checked.reason);
+    try {
+      const server = addRemoteServer({
+        id,
+        url,
+        ...(typeof clientId === 'string' && clientId.length > 0 ? { clientId } : {}),
+      });
+      return ok({ id: server.id, url: server.url, origin: endpointOrigin(server.url), connected: false });
+    } catch (err) {
+      return bad(400, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /**
+   * Begin a sign-in. Requires the passphrase (ADR 0035 Decision 7), and stops
+   * BEFORE opening a browser so the page can show where the server wants to
+   * send the user. A server names its own authorization address and nothing
+   * constrains it to the server's own origin, so this is a destination a human
+   * has to look at, not a redirect to follow.
+   */
+  if (method === 'POST' && route === '/api/mcp/connect/begin') {
+    const { id, passphrase, clientSecret, scope } = parseJson<{
+      id?: unknown;
+      passphrase?: unknown;
+      clientSecret?: unknown;
+      scope?: unknown;
+    }>(body);
+    if (typeof id !== 'string') return bad(400, 'id is required.');
+    if (typeof passphrase !== 'string' || passphrase.length === 0) {
+      return bad(401, 'Connecting a server needs your passphrase.');
+    }
+    if (!(await session.verifyPassphrase(passphrase))) return bad(401, 'That passphrase is not right.');
+    const server = getMcpServer(id);
+    if (server === undefined) return bad(404, `No such MCP server: ${id}`);
+    if (!isHttpServer(server)) return bad(400, `"${id}" is a local server; there is nothing to sign in to.`);
+    // A pending attempt for this id is replaced, never stacked: two live
+    // listeners on one port is a failure mode, and an abandoned attempt should
+    // not keep a port bound.
+    pendingConnects.get(id)?.cancel();
+    pendingConnects.delete(id);
+    let pending;
+    try {
+      pending = await startRemoteConnect(server, {
+        ...(typeof clientSecret === 'string' && clientSecret.length > 0 ? { clientSecret } : {}),
+        ...(typeof scope === 'string' && scope.length > 0 ? { scope } : {}),
+      });
+    } catch (err) {
+      // A remote server's own failure text is ITS text. Sanitized and labelled.
+      return bad(400, sanitizeServerText(err instanceof Error ? err.message : String(err), 300));
+    }
+    pendingConnects.set(id, pending);
+    return ok({
+      id,
+      server_origin: endpointOrigin(server.url),
+      auth_origin: pending.authOrigin,
+      same_origin: pending.sameOrigin,
+      redirect_uri: pending.redirectUri,
+    });
+  }
+
+  /** Open the browser and wait. Only reachable after /begin showed the origin. */
+  if (method === 'POST' && route === '/api/mcp/connect/proceed') {
+    const { id } = parseJson<{ id?: unknown }>(body);
+    if (typeof id !== 'string') return bad(400, 'id is required.');
+    const pending = pendingConnects.get(id);
+    if (pending === undefined) return bad(409, 'That sign-in is no longer pending. Start it again.');
+    pendingConnects.delete(id);
+    try {
+      await pending.proceed();
+    } catch (err) {
+      return bad(400, sanitizeServerText(err instanceof Error ? err.message : String(err), 300));
+    }
+    return ok({ id, connected: true });
+  }
+
+  if (method === 'POST' && route === '/api/mcp/connect/cancel') {
+    const { id } = parseJson<{ id?: unknown }>(body);
+    if (typeof id !== 'string') return bad(400, 'id is required.');
+    pendingConnects.get(id)?.cancel();
+    pendingConnects.delete(id);
+    return ok({ id, cancelled: true });
   }
 
   if (method === 'POST' && route === '/api/mcp/inspect') {

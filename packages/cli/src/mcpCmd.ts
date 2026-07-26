@@ -1,7 +1,11 @@
 import path from 'node:path';
 import {
+  addRemoteServer,
+  endpointOrigin,
   isHttpServer,
   hasRemoteTokens,
+  remoteUrlRefusal,
+  startRemoteConnect,
   addServer,
   collectMcpTools,
   connectServer,
@@ -209,4 +213,118 @@ export async function collectMcpToolsForCli(): Promise<{
     for (const r of s.reasons) console.log(`    ${r}`);
   }
   return { tools: collected.tools, close: collected.close };
+}
+
+/**
+ * Add a REMOTE (HTTPS) MCP server — ADR 0035.
+ *
+ * Adding stores the address and nothing else. It does not contact the server,
+ * does not list its tools, and does not sign in: a remote server contributes
+ * nothing at all until `northkeep mcp connect` completes (Decision 7), so an id
+ * in this file is a note-to-self, never a capability.
+ */
+export function mcpAddRemote(
+  id: string,
+  options: { url?: string; clientId?: string; safeRead?: string },
+  fail: (m: string) => never,
+): void {
+  if (options.url === undefined) fail('A remote MCP server needs --url <https://…>.');
+  const checked = remoteUrlRefusal(options.url);
+  if (!checked.ok) fail(checked.reason);
+  const safeRead =
+    options.safeRead !== undefined && options.safeRead.length > 0
+      ? options.safeRead.split(',').map((s) => s.trim()).filter(Boolean)
+      : [];
+  let server;
+  try {
+    server = addRemoteServer({
+      id,
+      url: options.url,
+      ...(options.clientId !== undefined ? { clientId: options.clientId } : {}),
+      safeRead,
+    });
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+  console.log(`${GREEN}✓${RESET} Added remote MCP server "${id}".`);
+  console.log(`  ${DIM}endpoint:${RESET} ${server.url}`);
+  console.log(
+    `\n${YELLOW}Not connected yet.${RESET} NorthKeep will not contact this server — not even to list ` +
+      `its tools — until you sign in:\n  northkeep mcp connect ${id}`,
+  );
+  console.log(
+    `\n${DIM}Its tools will send your arguments to ${endpointOrigin(server.url)}, off this machine, ` +
+      `so they always get the Tier-1 redaction floor and can never be marked "trusted".${RESET}`,
+  );
+}
+
+/**
+ * Sign in to a remote MCP server.
+ *
+ * The passphrase is required, and that is the gate — not the browser flow. ADR
+ * 0035 Decision 7 records why: nothing forces a server to demand credentials,
+ * and the server picks its own authorization address, so "a human completed a
+ * sign-in" proves neither that a gate was crossed nor where they were sent.
+ * The passphrase is the out-of-band proof ADR 0034 already uses for a free-form
+ * path, and an automated caller cannot produce it.
+ */
+export async function mcpConnect(
+  id: string,
+  options: { clientSecret?: string; scope?: string },
+  deps: {
+    getPassphrase: (prompt: string) => Promise<string>;
+    promptLine: (question: string) => Promise<string>;
+    verifyPassphrase: (passphrase: string) => boolean;
+  },
+  fail: (m: string) => never,
+): Promise<void> {
+  const server = getServer(id);
+  if (server === undefined) fail(`No such MCP server: ${id}. See: northkeep mcp list`);
+  if (!isHttpServer(server)) {
+    fail(`"${id}" is a local server. Local servers start on demand and have nothing to sign in to.`);
+  }
+
+  const passphrase = await deps.getPassphrase('Vault passphrase (to authorize connecting a server): ');
+  if (!deps.verifyPassphrase(passphrase)) fail('That passphrase did not open the vault. Nothing was changed.');
+
+  let pending;
+  try {
+    pending = await startRemoteConnect(server, {
+      ...(options.clientSecret !== undefined ? { clientSecret: options.clientSecret } : {}),
+      ...(options.scope !== undefined ? { scope: options.scope } : {}),
+    });
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+
+  if (pending.authorizationUrl.origin === endpointOrigin(server.url) && pending.sameOrigin) {
+    console.log(`\nSigning in at ${GREEN}${pending.authOrigin}${RESET} (the server's own address).`);
+  } else {
+    // The loud case. A server may name ANY authorization server, so this is
+    // shown before a browser opens, verbatim, and requires a typed yes.
+    console.log(
+      `\n${YELLOW}⚠ This server wants to send you somewhere else to sign in.${RESET}\n` +
+        `    server:  ${endpointOrigin(server.url)}\n` +
+        `    sign-in: ${pending.authOrigin}\n` +
+        `  Only continue if you recognize that second address as this provider's own.`,
+    );
+  }
+  console.log(`\n${DIM}Your provider must have this exact redirect URI registered:${RESET}`);
+  console.log(`  ${pending.redirectUri}`);
+
+  const answer = (await deps.promptLine('\nOpen the browser and sign in? [y/N] ')).trim().toLowerCase();
+  if (answer !== 'y' && answer !== 'yes') {
+    pending.cancel();
+    console.log('Cancelled. Nothing was stored.');
+    return;
+  }
+
+  console.log(`${DIM}Waiting for the sign-in to finish in your browser…${RESET}`);
+  try {
+    await pending.proceed();
+  } catch (err) {
+    fail(err instanceof Error ? err.message : String(err));
+  }
+  console.log(`${GREEN}✓${RESET} Connected. The sign-in is in your Keychain, not in any file.`);
+  console.log(`\nNow review what it advertises before anything uses it:\n  northkeep mcp tools ${id} --accept`);
 }

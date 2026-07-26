@@ -509,11 +509,11 @@
     <div id="logList"></div>
   </section>
   <section id="view-mcp" hidden>
-    <p class="muted">MCP servers your chat can use as tools. Each one is a program on this Mac.
-      Nothing here is reachable by a model. Adding a known server is one click; naming a
-      program yourself needs your passphrase, so knowing this window's address is never
-      enough to make NorthKeep run something. A server you add offers nothing until you
-      review what it advertises and approve it.</p>
+    <p class="muted">MCP servers your chat can use as tools. Nothing here is reachable by a model.
+      A server is either a program on this Mac or a service you sign in to. Naming a program
+      yourself needs your passphrase, and so does signing in to a remote service, so knowing this
+      window's address is never enough. A server you add offers nothing until you review what it
+      advertises and approve it.</p>
     <div class="card">
       <h3 class="sect">Add a server</h3>
       <div id="mcpCatalog"></div>
@@ -531,6 +531,25 @@
           <button class="btn" id="mcpCustomAdd">Add server</button>
         </div>
         <p class="muted" id="mcpCustomErr" style="margin-top:8px"></p>
+      </details>
+      <details style="margin-top:12px">
+        <summary style="cursor:pointer;color:var(--accent)">Add a remote server (https, sign-in required)</summary>
+        <p class="muted" style="margin:10px 0">A remote server runs on someone else's machine, so
+          the arguments of a call you approve leave this Mac. It always gets the Tier-1 redaction
+          floor and can never be marked trusted. In a chat pinned to <strong>Private only</strong>,
+          its tools are refused outright.</p>
+        <p class="muted" style="margin:10px 0">There is no one-click path to an official server, for
+          anyone: providers like Google require you to create an OAuth client yourself and register
+          a redirect address. Paste the client id you created below, and the secret when you sign in.</p>
+        <div class="row" style="gap:8px;flex-wrap:wrap">
+          <input type="text" id="mcpRemoteId" placeholder="short id (a-z, 0-9, -)" style="flex:1;min-width:150px">
+          <input type="text" id="mcpRemoteUrl" placeholder="https://provider.example.com/mcp/v1" style="flex:2;min-width:240px">
+        </div>
+        <div class="row" style="gap:8px;margin-top:8px;flex-wrap:wrap">
+          <input type="text" id="mcpRemoteClientId" placeholder="OAuth client id (optional)" style="flex:2;min-width:200px">
+          <button class="btn" id="mcpRemoteAdd">Add remote server</button>
+        </div>
+        <p class="muted" id="mcpRemoteErr" style="margin-top:8px"></p>
       </details>
     </div>
     <div id="mcpList"></div>
@@ -959,6 +978,28 @@
     }
   });
 
+  $('mcpRemoteAdd').addEventListener('click', async () => {
+    const err = $('mcpRemoteErr');
+    err.textContent = '';
+    const id = $('mcpRemoteId').value.trim();
+    const url = $('mcpRemoteUrl').value.trim();
+    const clientId = $('mcpRemoteClientId').value.trim();
+    if (!id || !url) { err.textContent = 'An id and an https address are both needed.'; return; }
+    const btn = $('mcpRemoteAdd');
+    btn.disabled = true;
+    try {
+      await api('/api/mcp/add-remote', { method: 'POST', json: { id, url, clientId } });
+      $('mcpRemoteId').value = '';
+      $('mcpRemoteUrl').value = '';
+      $('mcpRemoteClientId').value = '';
+      loadMcp();
+    } catch (e) {
+      err.textContent = e.message || 'Could not add it.';
+    } finally {
+      btn.disabled = false;
+    }
+  });
+
   // --- MCP servers (M11, ADR 0033). Review surface.
   //
   // EVERY string a server supplies (tool names, descriptions) is rendered with
@@ -989,21 +1030,129 @@
       title.appendChild(el('span', 'tag', s.reviewed ? 'reviewed' : 'not reviewed'));
       title.appendChild(el('span', 'tag', s.trust === 'trusted' ? 'trusted' : 'strict'));
       head.appendChild(title);
+      if (s.transport === 'http') {
+        title.appendChild(el('span', 'tag', s.connected ? 'signed in' : 'not connected'));
+      }
       const actions = el('div', 'chips');
       const inspectBtn = el('button', '', 'Review tools');
       const removeBtn = el('button', '', 'Remove');
+      // A remote server that has never been signed in to is not inspectable,
+      // and the button must not pretend otherwise: nothing contacts it at all
+      // until a sign-in exists, so "Review tools" would only ever error.
+      const needsConnect = s.transport === 'http' && !s.connected;
+      if (needsConnect) inspectBtn.disabled = true;
+      const connectBtn = s.transport === 'http' ? el('button', 'btn primary', s.connected ? 'Sign in again' : 'Sign in') : null;
+      if (connectBtn) actions.appendChild(connectBtn);
       actions.appendChild(inspectBtn);
       actions.appendChild(removeBtn);
       head.appendChild(actions);
       card.appendChild(head);
-      // The command is OUR config, not server text, but it is still shown as
-      // text so a path can never be markup.
-      card.appendChild(el('div', 'muted', s.command + ' ' + (s.args || []).join(' ')));
+      // OUR config, not server text, but still rendered as text so neither a
+      // path nor a URL can ever be markup.
+      card.appendChild(el('div', 'muted',
+        s.transport === 'http' ? s.url : (s.command + ' ' + (s.args || []).join(' '))));
+      if (s.transport === 'http') {
+        card.appendChild(el('div', 'muted',
+          'Remote: the arguments of a call you approve leave this Mac, after the Tier-1 floor. '
+          + 'Refused entirely in a chat pinned to Private only.'));
+      }
       card.appendChild(el('div', 'muted',
         'Read-only tools: ' + ((s.safe_read || []).length ? s.safe_read.join(', ') : 'none declared')
         + ' — everything else asks every time and can never be remembered.'));
       const detail = el('div');
       card.appendChild(detail);
+
+      if (connectBtn) {
+        connectBtn.addEventListener('click', () => {
+          detail.textContent = '';
+          const form = el('div', 'card');
+          form.appendChild(el('p', 'muted',
+            'Signing in needs your passphrase. That is the gate, not the browser step: '
+            + 'nothing forces a server to ask for credentials, and the server chooses where it '
+            + 'sends you, so finishing a sign-in on its own proves neither.'));
+          const pass = el('input');
+          pass.type = 'password';
+          pass.placeholder = 'your passphrase';
+          pass.style.cssText = 'flex:1;min-width:180px';
+          const secret = el('input');
+          secret.type = 'password';
+          secret.placeholder = 'OAuth client secret (if your provider issued one)';
+          secret.style.cssText = 'flex:2;min-width:220px';
+          const row1 = el('div', 'row'); row1.style.cssText = 'gap:8px;flex-wrap:wrap';
+          row1.appendChild(pass); row1.appendChild(secret);
+          form.appendChild(row1);
+          const go = el('button', 'btn primary', 'Continue');
+          const msg = el('p', 'muted');
+          form.appendChild(go);
+          form.appendChild(msg);
+          detail.appendChild(form);
+
+          go.addEventListener('click', async () => {
+            msg.className = 'muted';
+            msg.textContent = 'Asking the server where it wants to send you…';
+            go.disabled = true;
+            let begun;
+            try {
+              begun = await api('/api/mcp/connect/begin', {
+                method: 'POST',
+                json: { id: s.id, passphrase: pass.value, clientSecret: secret.value },
+              });
+            } catch (e) {
+              msg.className = 'danger';
+              msg.textContent = e.message || 'Could not start the sign-in.';
+              go.disabled = false;
+              return;
+            } finally {
+              // Cleared on EVERY outcome. A failed attempt is exactly when a
+              // passphrase would otherwise sit in a DOM node indefinitely.
+              pass.value = '';
+              secret.value = '';
+            }
+            form.textContent = '';
+            // The destination, shown before any browser opens. A server names
+            // its own sign-in address and nothing constrains it to the
+            // server's own origin, so this is the screen that matters.
+            if (begun.same_origin) {
+              form.appendChild(el('p', '', 'Sign in at ' + begun.auth_origin + ' (the server\'s own address).'));
+            } else {
+              const warn = el('p', 'danger', 'This server wants to send you to a DIFFERENT address to sign in.');
+              form.appendChild(warn);
+              form.appendChild(el('div', 'muted', 'server:  ' + begun.server_origin));
+              form.appendChild(el('div', 'muted', 'sign-in: ' + begun.auth_origin));
+              form.appendChild(el('p', 'muted',
+                'Only continue if you recognize that second address as this provider\'s own.'));
+            }
+            form.appendChild(el('p', 'muted',
+              'Your provider must have this exact redirect address registered: ' + begun.redirect_uri));
+            const openBtn = el('button', 'btn primary', 'Open the sign-in page');
+            const cancelBtn = el('button', '', 'Cancel');
+            const chips = el('div', 'chips');
+            chips.appendChild(openBtn); chips.appendChild(cancelBtn);
+            form.appendChild(chips);
+            const status = el('p', 'muted');
+            form.appendChild(status);
+
+            cancelBtn.addEventListener('click', async () => {
+              try { await api('/api/mcp/connect/cancel', { method: 'POST', json: { id: s.id } }); } catch {}
+              detail.textContent = '';
+            });
+            openBtn.addEventListener('click', async () => {
+              openBtn.disabled = true; cancelBtn.disabled = true;
+              status.className = 'muted';
+              status.textContent = 'Waiting for you to finish signing in…';
+              try {
+                await api('/api/mcp/connect/proceed', { method: 'POST', json: { id: s.id } });
+              } catch (e) {
+                status.className = 'danger';
+                status.textContent = e.message || 'The sign-in did not complete.';
+                return;
+              }
+              status.textContent = 'Signed in. Now review what it advertises.';
+              loadMcp();
+            });
+          });
+        });
+      }
 
       inspectBtn.addEventListener('click', async () => {
         detail.textContent = '';

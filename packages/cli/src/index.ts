@@ -11,6 +11,7 @@ import {
   deviceSecretPath,
   ensureDeviceSecret,
   loadDeviceSecret,
+  memzero,
   setPlatform,
   withFileLock,
   type MemoryEntry,
@@ -65,7 +66,7 @@ import {
   shareSyncCmd,
 } from './shareCmd.js';
 import { routingClear, routingList, routingSet } from './routingCmd.js';
-import { mcpAdd, mcpList, mcpRemove, mcpSafeRead, mcpTools } from './mcpCmd.js';
+import { mcpAdd, mcpAddRemote, mcpConnect, mcpList, mcpRemove, mcpSafeRead, mcpTools } from './mcpCmd.js';
 import { toolsBudget, toolsDisable, toolsEnable, toolsGrants, toolsList, toolsRevoke } from './toolsCmd.js';
 import { collectScopes, connectCmd, connectStatusCmd, disconnectCmd } from './connectCmd.js';
 import { runLauncher } from './launcher.js';
@@ -580,6 +581,53 @@ mcpGroup
   .option('--safe-read <tools>', 'comma-separated tools that only READ (may be remembered with "always")')
   .action((id: string, options: { command?: string; arg?: string[]; cwd?: string; env?: string[]; safeRead?: string }) => {
     mcpAdd(id, options, fail);
+  });
+
+mcpGroup
+  .command('add-remote')
+  .description('Add a remote MCP server over HTTPS (stores the address only — it is not contacted)')
+  .argument('<id>', 'short id, lowercase letters/digits/hyphens — becomes the tool namespace')
+  .requiredOption('--url <url>', 'the https endpoint, e.g. https://provider.example.com/mcp/v1')
+  .option('--client-id <id>', 'OAuth client id you created with the provider')
+  .option('--safe-read <tools>', 'comma-separated tools that only READ (may be remembered with "always")')
+  .action((id: string, options: { url?: string; clientId?: string; safeRead?: string }) => {
+    mcpAddRemote(id, options, fail);
+  });
+
+mcpGroup
+  .command('connect')
+  .description('Sign in to a remote MCP server (requires your passphrase, then opens a browser)')
+  .argument('<id>', 'server id')
+  .option('--client-secret <secret>', 'OAuth client secret, if your provider issued one')
+  .option('--scope <scope>', 'OAuth scopes to request')
+  .action(async (id: string, options: { clientSecret?: string; scope?: string }) => {
+    await mcpConnect(
+      id,
+      options,
+      {
+        getPassphrase,
+        promptLine,
+        // Proof the caller holds the vault passphrase. Verified against the
+        // real header + device secret, so it cannot be satisfied by anything
+        // an automated caller can reach on its own.
+        verifyPassphrase: (passphrase) => {
+          try {
+            const vaultPath = vaultPathOpt();
+            const header = Vault.readHeader(vaultPath);
+            const key = deriveMasterKey(passphrase, loadDeviceSecret(), header.salt, header.kdf);
+            try {
+              Vault.openWithKey(vaultPath, Buffer.from(key)).close();
+              return true;
+            } finally {
+              memzero(key);
+            }
+          } catch {
+            return false;
+          }
+        },
+      },
+      fail,
+    );
   });
 
 mcpGroup
