@@ -73,6 +73,11 @@ export interface ConverseCmdOptions {
   tools?: boolean;
 }
 
+/** One line, so a large argument payload cannot flood the transcript. The full
+ * value is what the tool received; this is a display bound, not a privacy one. */
+const truncateForLine = (text: string, max = 300): string =>
+  text.length <= max ? text : `${text.slice(0, max)}… (${text.length} chars)`;
+
 const fmtKb = (bytes: number): string =>
   bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
 
@@ -536,6 +541,18 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
               .join(', ') +
             `]${RESET}`,
         );
+        // What an executed MCP call actually sent. It has no URL to name, and
+        // one auto-allowed by a standing grant showed no prompt either, so
+        // without this line its arguments appear NOWHERE in the terminal — the
+        // audit keeps only a hash by design. Ephemeral: printed with the reply,
+        // never stored.
+        for (const tc of taskResult.toolCallsMade) {
+          if (tc.mcpServer !== undefined && tc.argsSent !== undefined) {
+            console.log(
+              `  ${DIM}↳ sent to mcp:${tc.mcpServer} — ${truncateForLine(tc.argsSent)}${RESET}`,
+            );
+          }
+        }
       }
       for (const m of result.memoriesCreated) console.log(`  ${DIM}+ [${m.type}] ${m.content}${RESET}`);
       if (result.memoriesCreated.length > 0) console.log(`  ${DIM}(:undo to remove them)${RESET}`);
