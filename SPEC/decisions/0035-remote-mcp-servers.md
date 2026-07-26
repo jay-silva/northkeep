@@ -96,7 +96,7 @@ it." TLS answers "am I talking to whoever holds this name now." Neither
 substitutes for the other, and remote MCP as specified has **no** change-detection
 mechanism until Decision 6 adds one.
 
-## Decision 3: a remote server is bounded egress — and the ceiling question is Jay's
+## Decision 3: a remote server is bounded egress, and the ceiling binds it
 
 A stdio server is a local program that might do anything with your data. A remote
 server **sends your data off the machine by definition**. Therefore:
@@ -107,7 +107,7 @@ server **sends your data off the machine by definition**. Therefore:
   'trusted'`.
 - Every call names the host in the approval prompt and in the egress proof.
 
-### The open decision: does the privacy ceiling bind tool egress?
+### Does the privacy ceiling bind tool egress? (decided)
 
 The first draft asserted "a conversation pinned private cannot call a remote MCP
 tool at all, the same way it cannot reach a bounded model." **There is no such
@@ -116,7 +116,8 @@ purpose is to stop the router from *silently* escalating. A tool call is never
 silent — it stops, names the host, and waits.
 
 So the real question is whether the word "private" promises more than the
-mechanism delivers. Three options, for Jay:
+mechanism delivers. **DECIDED by Jay 2026-07-25: option A for web tools, option
+B for remote MCP.** The options as posed:
 
 - **A — the ceiling governs which model reads the conversation, and nothing
   more.** Ships today. Keeps local-model-plus-web-search, which is the best
@@ -129,16 +130,32 @@ mechanism delivers. Three options, for Jay:
   costs complexity, and raises whether a ceiling you can click through is a
   ceiling.
 
-**Recommended: A for web tools, B for remote MCP.** A search query is transient,
+**Chosen: A for web tools, B for remote MCP.** A search query is transient,
 masked and near-anonymous. A connected MCP server is a persistent, authenticated
 third party holding a scoped grant to your accounts and returning your email or
-documents *into* the conversation. The new capability can start with the stricter
-rule; tightening later is far harder. The counter-argument — that both are
-bounded egress under per-call approval and should behave identically — is
-legitimate and this is Jay's call.
+documents *into* the conversation. The new capability starts with the stricter
+rule, since tightening later is far harder.
 
-**Whatever is chosen, it is new code in the loop**, because `withinCeiling` takes
-an `EndpointConfig` and structurally cannot express a tool call.
+### What that decision obliges, on each side
+
+**Option A creates an obligation in the SHIPPED build, not a future one.** If the
+ceiling does not stop web tools, the product must stop implying that it does. The
+GUI told users "Private only is on … nothing is sent to any cloud or outside
+model", which a reader takes as "nothing is sent". Corrected 2026-07-25 to state
+both halves: local models only, and web tools still leave with per-call approval.
+KNOWN-LIMITS carries the same sentence. Nothing else about option A is work.
+
+**Option B is new code in the loop.** `withinCeiling` takes an `EndpointConfig`
+and structurally cannot express a tool call, so the refusal has to live where the
+loop evaluates a tool: when the conversation's ceiling is `private-only` and the
+tool is a remote MCP tool, the call is refused before the gate, with a reason
+naming the pin — not a silent skip, and not a prompt the user can click through,
+because the point of the pin is that this class of egress is off the table.
+
+Note the asymmetry is deliberate and must be visible to the user: in a
+private-pinned chat, a web search asks and a remote MCP tool refuses. If that
+reads as arbitrary in practice, revisit it — but revisit it in the direction of
+tightening web tools, not loosening MCP.
 
 ## Decision 4: the argument floor is Tier 1, and a degraded higher tier must refuse
 

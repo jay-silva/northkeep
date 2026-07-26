@@ -358,7 +358,8 @@
       <div class="card">
         <p class="muted" style="margin:0 0 10px;font-size:13px">When <strong>✦ Auto</strong> is on,
           these decide which endpoint answers each kind of message. No matching rule → your default
-          endpoint. A conversation pinned <em>Private only</em> skips any rule that would leave the machine.</p>
+          endpoint. A conversation pinned <em>Private only</em> skips any routing rule that would send it to a
+          cloud model. It does not disable web tools, which ask for your approval on every call.</p>
         <div id="ruleList"></div>
         <div class="row" style="margin-top:10px">
           <select id="ruleTask">
@@ -2124,7 +2125,18 @@
     const hint = $('convPrivacyHint');
     if (!hint) return;
     if ($('convPrivatePin').checked) {
-      hint.innerHTML = '🔒 <span><strong>Private only is on.</strong> This chat can use only local models on your Mac — nothing is sent to any cloud or outside model.</span>';
+      // ADR 0011 + ADR 0035 Decision 3 (option A for web tools): the ceiling
+      // governs which MODEL reads this chat, NOT whether tools reach the
+      // network. The old copy said "nothing is sent to any cloud or outside
+      // model", which a reader takes as "nothing is sent" — and with the Tools
+      // toggle on, a web search does leave, per call and with approval. Say
+      // both halves, because the pin is exactly the setting someone chooses
+      // when they are relying on the promise.
+      hint.innerHTML =
+        '🔒 <span><strong>Private only is on.</strong> Only local models on your Mac will read this chat; ' +
+        'nothing is sent to a cloud model. Web tools are separate: if you turn Tools on, a search or fetch ' +
+        'still leaves your Mac, and asks you first every time. For a chat where nothing at all leaves, ' +
+        'leave Tools off.</span>';
     } else {
       hint.innerHTML = '<span>Turn on <strong>Private only</strong> to pin this chat to local models on your Mac, so nothing is ever sent to a cloud model. It is off, so a connected cloud model may be used (after on-device redaction).</span>';
     }
