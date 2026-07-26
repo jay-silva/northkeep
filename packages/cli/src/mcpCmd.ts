@@ -1,5 +1,7 @@
 import path from 'node:path';
 import {
+  isHttpServer,
+  hasRemoteTokens,
   addServer,
   collectMcpTools,
   connectServer,
@@ -37,6 +39,19 @@ export function mcpList(): void {
   }
   for (const s of servers) {
     const pinned = s.toolsPin !== undefined ? `${GREEN}pinned${RESET}` : `${DIM}not yet pinned${RESET}`;
+    // A remote server has no command; its origin is the thing to show, because
+    // the origin IS its identity (ADR 0035 Decision 2). Whether it has been
+    // connected matters more than a pin, since an unconnected remote server is
+    // not contacted at all (Decision 7).
+    if (isHttpServer(s)) {
+      const linked = hasRemoteTokens(s.id) ? `${GREEN}connected${RESET}` : `${DIM}not connected${RESET}`;
+      console.log(`  ${s.id.padEnd(16)} ${s.url} ${DIM}(remote)${RESET}`);
+      console.log(
+        `  ${''.padEnd(16)} ${DIM}trust:${RESET} ${s.trust} · ${DIM}read-only tools:${RESET} ` +
+          `${s.safeRead.length > 0 ? s.safeRead.join(', ') : 'none declared'} · ${linked} · ${pinned}`,
+      );
+      continue;
+    }
     console.log(`  ${s.id.padEnd(16)} ${s.command} ${s.args.join(' ')}`);
     console.log(
       `  ${''.padEnd(16)} ${DIM}trust:${RESET} ${s.trust} · ${DIM}read-only tools:${RESET} ` +

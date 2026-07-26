@@ -76,18 +76,37 @@ export {
   type McpClientLike,
 } from './tools/mcp/client.js';
 export {
+  addRemoteServer,
   addServer,
   getServer,
+  isHttpServer,
+  isStdioServer,
   loadMcpConfig,
   mcpConfigPath,
+  remoteUrlRefusal,
   removeServer,
   riskOf,
   setSafeRead,
   setToolsPin,
   type McpConfig,
+  type McpHttpServer,
   type McpServerConfig,
+  type McpStdioServer,
+  type McpTransport,
   type McpTrust,
 } from './tools/mcp/config.js';
+export {
+  credentialsOriginMatches,
+  deleteCredentials,
+  hasRemoteTokens,
+  loadCredentials,
+  saveCredentials,
+  setTokenBackend,
+  tokenStoreAvailable,
+  updateCredentials,
+  type RemoteCredentials,
+  type TokenBackend,
+} from './tools/mcp/tokens.js';
 export {
   allowedGuiRoots,
   isUnderAllowedRoot,

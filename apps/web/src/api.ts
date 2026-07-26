@@ -75,6 +75,8 @@ import {
   KNOWN_PROVIDERS,
   listEndpoints,
   loadMcpConfig,
+  isHttpServer,
+  hasRemoteTokens,
   getServer as getMcpServer,
   removeServer as removeMcpServer,
   setSafeRead,
@@ -797,8 +799,13 @@ async function dispatch(
     }
     const servers = loadMcpConfig().servers.map((s) => ({
       id: s.id,
-      command: s.command,
-      args: s.args,
+      transport: s.transport,
+      // A remote server has no command to show; showing its origin instead is
+      // the point — that origin IS its identity (ADR 0035 Decision 2), the way
+      // the command path is a local server's.
+      ...(isHttpServer(s)
+        ? { url: s.url, connected: hasRemoteTokens(s.id) }
+        : { command: s.command, args: s.args }),
       trust: s.trust,
       safe_read: s.safeRead,
       reviewed: s.toolsPin !== undefined,

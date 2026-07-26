@@ -5,7 +5,7 @@ import {
 } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { ToolListChangedNotificationSchema } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolDefinition, ToolResult } from '../types.js';
-import { riskOf, type McpServerConfig } from './config.js';
+import { isHttpServer, remoteUrlRefusal, riskOf, type McpServerConfig } from './config.js';
 import { fingerprintLaunch, namespacedName, pinTools, type PinnableTool } from './identity.js';
 
 /**
@@ -125,8 +125,29 @@ export interface McpClientLike {
   setNotificationHandler?: (schema: unknown, handler: () => void) => void;
 }
 
+export class McpNotConnectedError extends Error {
+  constructor(readonly serverId: string) {
+    super(
+      `MCP server "${serverId}" has not been connected yet. A remote server does nothing — ` +
+        'not even list its tools — until you sign in to it, so that nobody holding this ' +
+        "window's address can put an unknown server's tools in front of the model.",
+    );
+    this.name = 'McpNotConnectedError';
+  }
+}
+
 async function defaultClientFactory(server: McpServerConfig): Promise<McpClientLike> {
   const client = new Client({ name: 'northkeep', version: '1' }, { capabilities: {} });
+
+  if (isHttpServer(server)) {
+    // ADR 0035 Decision 7: nothing happens until a completed OAuth token
+    // exists. Listing tools is not harmless — a tool DESCRIPTION is read by the
+    // model while it decides what to do — so an unauthenticated listing is the
+    // very thing the gate exists to prevent. Until the OAuth half lands
+    // (part 3), a remote server refuses here rather than connecting anonymously.
+    throw new McpNotConnectedError(server.id);
+  }
+
   const transport = new StdioClientTransport({
     command: server.command,
     args: server.args,
@@ -157,16 +178,25 @@ export async function connectServer(
   server: McpServerConfig,
   options: ConnectOptions = {},
 ): Promise<McpConnection> {
-  // Re-resolve the launch spec NOW. Symlinks are re-resolved on every connect
-  // because a symlink is a redirection: resolving once at add-time would let
-  // the link be re-pointed afterwards (ADR 0033 Decision 1).
-  const current = fingerprintLaunch({
-    command: server.command,
-    args: server.args,
-    ...(server.cwd !== undefined ? { cwd: server.cwd } : {}),
-    ...(server.env !== undefined ? { env: server.env } : {}),
-  });
-  if (current !== server.fingerprint) throw new McpFingerprintChangedError(server.id);
+  // Identity, re-checked at every connect. The two transports answer different
+  // questions (ADR 0035 Decision 2): a fingerprint asks "has this launch
+  // configuration changed since you approved it"; an origin asks "is this still
+  // the host you approved". Neither substitutes for the other, and both are
+  // re-checked here rather than trusted from add-time.
+  if (isHttpServer(server)) {
+    const check = remoteUrlRefusal(server.url);
+    if (!check.ok) throw new McpFingerprintChangedError(server.id);
+  } else {
+    // Symlinks are re-resolved every time because a symlink is a redirection:
+    // resolving once at add-time would let the link be re-pointed afterwards.
+    const current = fingerprintLaunch({
+      command: server.command,
+      args: server.args,
+      ...(server.cwd !== undefined ? { cwd: server.cwd } : {}),
+      ...(server.env !== undefined ? { env: server.env } : {}),
+    });
+    if (current !== server.fingerprint) throw new McpFingerprintChangedError(server.id);
+  }
 
   const factory = options.clientFactory ?? defaultClientFactory;
   const client = await factory(server);

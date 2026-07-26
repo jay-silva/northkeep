@@ -1,9 +1,15 @@
 # ADR 0035: Remote MCP servers over HTTPS, with OAuth
 
 - **Date:** 2026-07-25 (rewritten the same day after adversarial review)
-- **Status:** Proposed
+- **Status:** Accepted 2026-07-25 — implementation in progress (M12)
 - **Deciders:** Jay (product owner), Claude Code
 - **Parent:** ADR 0033 (MCP client trust model), ADR 0034 (adding servers from the GUI)
+
+> **Invariant #7 sign-off.** The Dependencies section below asks for Jay's
+> explicit OK to activate the MCP SDK's HTTP client, OAuth client and discovery
+> fetches. Given 2026-07-25 ("Build 0035"), after the adversarial review that
+> produced this document's corrections. Recorded here rather than in a commit
+> message so the approval sits with the argument it approved.
 
 > **Rewrite note.** The first draft of this ADR argued that remote MCP "reuses
 > more machinery than stdio did" and that "the OAuth sign-in IS the human gate."
@@ -70,6 +76,26 @@ reconnect** (DNS changes underneath a stored config):
 2. The host must not be a bare IP literal, `localhost`, `.local`, or `.internal`,
    mirroring `net.ts`.
 3. Scheme must be `https`.
+
+**Amended 2026-07-25, after review, because the first wording claimed a check
+the add path does not perform.** These three are *syntactic*: they read the URL
+and classify the name. `classifyEndpoint` returns `bounded` for any "public or
+unrecognized host" **without resolving it**, so `https://127.0.0.1.nip.io/mcp`
+passes this check and is *not* refused at add time.
+
+The refusal for a name that RESOLVES private lives one layer down, in the
+transport guard (Decision 5): `guardedFetch` resolves the host at connect time,
+refuses if **any** answer is private, and dials the pinned address. That is the
+better place for it — the answer is fresh, and it is the same code path that
+carries the guarantee for every subsequent request rather than a snapshot taken
+once when the server was added.
+
+Stated as a division of labour so no one reads either half as the whole:
+`remoteUrlRefusal` refuses the *shapes* that can never be legitimate (http, bare
+IPs, local names, credentials in the URL, a non-bounded classification);
+`guardedFetch` refuses the *addresses* that turn out to be private, every time it
+connects. Acceptance test 1 is amended to match: a name that resolves private is
+refused **at connect**, with the reason, not at add.
 
 A server that lives on this machine should be configured as **stdio**, where the
 launch fingerprint provides real identity.
@@ -279,7 +305,12 @@ The SDK owns discovery, PKCE, state and token exchange; we implement
   "connect Gmail in one click".
 - **Refresh races.** Two surfaces refreshing one grant can write a stale refresh
   token over a rotated one and destroy the grant. Needs a single-writer token
-  store or a per-server lock.
+  store or a per-server lock. **Implemented as an in-process write chain**
+  (`updateCredentials`), which serializes the CLI's own writers and the GUI
+  server's own writers. It does **not** serialize the CLI against a running GUI:
+  two processes refreshing the same grant in the same instant can still lose a
+  rotation. Recorded in KNOWN-LIMITS rather than solved with a lock file, whose
+  stale-lock recovery would be its own failure mode.
 - **Keychain is macOS-only.** Refresh tokens rotate, so the env-var fallback used
   for tests is not viable. Linux/Windows have no token store under this design.
 
@@ -343,8 +374,10 @@ argument-sized pieces, where before it said they could not at all.
 ## Acceptance test (Jay runs this himself)
 
 1. Adding `https://gmailmcp.googleapis.com/mcp/v1` stores the origin and reports
-   that it needs connecting. Adding an http URL, a bare IP, a `.internal` host,
-   or a name that resolves private is refused with the reason.
+   that it needs connecting. Adding an http URL, a bare IP, or a `.internal`
+   host is refused with the reason. A public name that RESOLVES to a private
+   address is accepted at add time and refused at **connect** (Decision 1 as
+   amended) — check both halves, since the split is deliberate.
 2. Before connecting, `northkeep mcp tools gmail` does **not** contact the server.
 3. Connecting asks for the passphrase, then opens the browser. The auth-server
    origin is shown before it opens.

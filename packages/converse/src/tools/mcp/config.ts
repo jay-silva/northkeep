@@ -1,6 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { northkeepHome } from '@northkeep/core';
+import net from 'node:net';
+import { classifyEndpoint } from '../../provider.js';
 import { fingerprintLaunch, isValidServerId, type LaunchSpec } from './identity.js';
 
 /**
@@ -45,21 +47,59 @@ export type McpToolRisk = 'safe-read' | 'consequential';
  */
 export type McpTrust = 'strict' | 'trusted';
 
-export interface McpServerConfig {
+/**
+ * Transport. A stdio server is a local program identified by a launch
+ * fingerprint; a remote server is an HTTPS origin identified by TLS (ADR 0035
+ * Decision 2). They share the pin, the risk model and the grant machinery, and
+ * differ in identity and in whether anything leaves the machine — so the config
+ * is a discriminated union rather than one shape with optional halves.
+ *
+ * The `transport` field is OPTIONAL on read and defaults to 'stdio', so every
+ * entry written before M12 loads unchanged. Extending version 1 is deliberate:
+ * loadMcpConfig returns ZERO servers for a version it did not write, so bumping
+ * would make an older build silently see no servers at all.
+ */
+export type McpTransport = 'stdio' | 'http';
+
+interface McpServerCommon {
   id: string;
+  trust: McpTrust;
+  /** Tool names the user declared read-only. Everything else is consequential. */
+  safeRead: string[];
+  /** Definitions pin recorded once the user reviews and accepts; absent until then. */
+  toolsPin?: string;
+  addedAt: string;
+}
+
+export interface McpStdioServer extends McpServerCommon {
+  transport: 'stdio';
   command: string;
   args: string[];
   cwd?: string;
   env?: Record<string, string>;
-  trust: McpTrust;
-  /** Tool names the user declared read-only. Everything else is consequential. */
-  safeRead: string[];
   /** Launch fingerprint recorded when the server was added (identity.ts). */
   fingerprint: string;
-  /** Definitions pin recorded at first successful connect; absent until then. */
-  toolsPin?: string;
-  addedAt: string;
 }
+
+export interface McpHttpServer extends McpServerCommon {
+  transport: 'http';
+  /** The exact origin approved, re-checked at every connect (Decision 6). */
+  url: string;
+  /**
+   * OAuth client id, when the provider requires a pre-registered client.
+   * Google's remote MCP servers do not support dynamic registration, so this is
+   * the primary path rather than a fallback. The SECRET is never stored here —
+   * it lives in the Keychain beside the tokens.
+   */
+  clientId?: string;
+}
+
+export type McpServerConfig = McpStdioServer | McpHttpServer;
+
+export const isHttpServer = (s: McpServerConfig): s is McpHttpServer => s.transport === 'http';
+/** For raw loader entries, where `transport` may be absent (pre-M12 = stdio). */
+const rawIsHttp = (e: { transport?: unknown }): boolean => e.transport === 'http';
+export const isStdioServer = (s: McpServerConfig): s is McpStdioServer => s.transport === 'stdio';
 
 export interface McpConfig {
   version: 1;
@@ -86,17 +126,74 @@ function isServer(entry: unknown): entry is McpServerConfig {
   if (entry === null || typeof entry !== 'object') return false;
   const s = entry as Record<string, unknown>;
   if (!isValidServerId(s.id)) return false;
-  if (typeof s.command !== 'string' || s.command.length === 0) return false;
-  if (!isStringArray(s.args)) return false;
-  if (s.cwd !== undefined && typeof s.cwd !== 'string') return false;
-  if (s.env !== undefined && !isStringRecord(s.env)) return false;
   if (s.trust !== 'strict' && s.trust !== 'trusted') return false;
   if (!isStringArray(s.safeRead)) return false;
-  if (typeof s.fingerprint !== 'string' || !/^[0-9a-f]{64}$/.test(s.fingerprint)) return false;
   if (s.toolsPin !== undefined && (typeof s.toolsPin !== 'string' || !/^[0-9a-f]{64}$/.test(s.toolsPin)))
     return false;
   if (typeof s.addedAt !== 'string') return false;
-  return true;
+
+  // Absent transport means an entry written before M12, which was always stdio.
+  const transport = s.transport ?? 'stdio';
+  if (transport === 'stdio') {
+    if (typeof s.command !== 'string' || s.command.length === 0) return false;
+    if (!isStringArray(s.args)) return false;
+    if (s.cwd !== undefined && typeof s.cwd !== 'string') return false;
+    if (s.env !== undefined && !isStringRecord(s.env)) return false;
+    return typeof s.fingerprint === 'string' && /^[0-9a-f]{64}$/.test(s.fingerprint);
+  }
+  if (transport === 'http') {
+    // A remote entry is only as good as its URL. Validate it the same way the
+    // add path does, so a hand-edited file cannot smuggle in an origin the add
+    // route would have refused (ADR 0035 Decision 1).
+    if (typeof s.url !== 'string') return false;
+    if (!remoteUrlRefusal(s.url).ok) return false;
+    if (s.clientId !== undefined && typeof s.clientId !== 'string') return false;
+    // A remote server must NEVER be 'trusted': it sends data off the machine by
+    // definition, and that setting exists for a local server the user owns.
+    if (s.trust !== 'strict') return false;
+    return true;
+  }
+  return false;
+}
+
+/**
+ * The positive check a remote MCP origin must pass, at add time AND at every
+ * connect (ADR 0035 Decision 1). A blocklist of "http and localhost" does not
+ * hold: `https://192.168.1.1` classifies private, and `https://127.0.0.1.nip.io`
+ * is a public name resolving to loopback for which anyone owning the domain can
+ * obtain a valid certificate. So this asks whether the origin is positively
+ * BOUNDED, rather than whether it looks local.
+ */
+export function remoteUrlRefusal(rawUrl: string): { ok: true; origin: string } | { ok: false; reason: string } {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch {
+    return { ok: false, reason: 'That is not a valid URL.' };
+  }
+  if (url.protocol !== 'https:') {
+    return { ok: false, reason: 'A remote MCP server must be https. A server on this machine should be added as a local command instead, where its identity is the program it runs.' };
+  }
+  if (url.username !== '' || url.password !== '') {
+    return { ok: false, reason: 'A URL with embedded credentials is refused.' };
+  }
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  if (net.isIP(host) !== 0) {
+    return { ok: false, reason: 'A bare IP address is refused: an origin is identified by its name and certificate.' };
+  }
+  if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local') || host.endsWith('.internal')) {
+    return { ok: false, reason: `${host} is a local name. Add a server on this machine as a local command instead.` };
+  }
+  let tier: string;
+  try {
+    tier = classifyEndpoint(url.origin).tier;
+  } catch {
+    return { ok: false, reason: 'That origin could not be classified.' };
+  }
+  if (tier !== 'bounded') {
+    return { ok: false, reason: `That origin classifies as ${tier}, not a remote service. Add a server on this machine as a local command instead.` };
+  }
+  return { ok: true, origin: url.origin };
 }
 
 export function loadMcpConfig(): McpConfig {
@@ -120,18 +217,37 @@ export function loadMcpConfig(): McpConfig {
     if (!isServer(entry)) continue;
     if (seen.has(entry.id)) continue; // duplicate ids would make the namespace ambiguous
     seen.add(entry.id);
-    out.servers.push({
+    // Normalize to exactly the known fields, per transport. Extra keys in a
+    // hand-edited file are never carried through to disk.
+    const common = {
       id: entry.id,
-      command: entry.command,
-      args: [...entry.args],
-      ...(entry.cwd !== undefined ? { cwd: entry.cwd } : {}),
-      ...(entry.env !== undefined ? { env: { ...entry.env } } : {}),
       trust: entry.trust,
       safeRead: [...entry.safeRead],
-      fingerprint: entry.fingerprint,
       ...(entry.toolsPin !== undefined ? { toolsPin: entry.toolsPin } : {}),
       addedAt: entry.addedAt,
-    });
+    };
+    // isServer has already validated each shape; these casts read the fields it
+    // proved present, per transport.
+    if (rawIsHttp(entry as { transport?: unknown })) {
+      const h = entry as unknown as McpHttpServer;
+      out.servers.push({
+        ...common,
+        transport: 'http',
+        url: h.url,
+        ...(h.clientId !== undefined ? { clientId: h.clientId } : {}),
+      });
+    } else {
+      const d = entry as unknown as McpStdioServer;
+      out.servers.push({
+        ...common,
+        transport: 'stdio',
+        command: d.command,
+        args: [...d.args],
+        ...(d.cwd !== undefined ? { cwd: d.cwd } : {}),
+        ...(d.env !== undefined ? { env: { ...d.env } } : {}),
+        fingerprint: d.fingerprint,
+      });
+    }
   }
   return out;
 }
@@ -181,8 +297,9 @@ export function addServer(input: AddServerInput, now: () => Date = () => new Dat
     // exactly the gap ADR 0034 set out to close. Each surface adds its own hint.
     throw new Error(`An MCP server named "${input.id}" already exists. Remove it before adding another with that name.`);
   }
-  const server: McpServerConfig = {
+  const server: McpStdioServer = {
     id: input.id,
+    transport: 'stdio',
     command: input.command,
     args: [...input.args],
     ...(input.cwd !== undefined ? { cwd: input.cwd } : {}),
@@ -190,6 +307,55 @@ export function addServer(input: AddServerInput, now: () => Date = () => new Dat
     trust: input.trust ?? 'strict',
     safeRead: [...(input.safeRead ?? [])],
     fingerprint: fingerprintLaunch(input),
+    addedAt: now().toISOString(),
+  };
+  config.servers.push(server);
+  save(config);
+  return server;
+}
+
+export interface AddRemoteServerInput {
+  id: string;
+  url: string;
+  clientId?: string;
+  safeRead?: string[];
+}
+
+/**
+ * Add a remote (HTTPS) MCP server — ADR 0035.
+ *
+ * Three things differ from addServer and each is a decision, not an omission:
+ *  - the URL must pass `remoteUrlRefusal` (Decision 1), the same check the
+ *    loader applies, so a refused origin cannot arrive by either route;
+ *  - only the ORIGIN is stored, never a path or query. Identity is the origin
+ *    the certificate proves (Decision 2); a path is a detail of that origin, and
+ *    a query string is somewhere a token gets pasted by accident;
+ *  - there is no `trust` parameter. A remote server is always `strict`: 'trusted'
+ *    means "a local consumer I own", and this one is by definition not.
+ */
+export function addRemoteServer(
+  input: AddRemoteServerInput,
+  now: () => Date = () => new Date(),
+): McpHttpServer {
+  if (!isValidServerId(input.id)) {
+    throw new Error(
+      `Invalid server id "${String(input.id)}". Use lowercase letters, digits and hyphens ` +
+        '(the id is part of the tool namespace the model sees).',
+    );
+  }
+  const checked = remoteUrlRefusal(input.url);
+  if (!checked.ok) throw new Error(checked.reason);
+  const config = loadMcpConfig();
+  if (config.servers.some((s) => s.id === input.id)) {
+    throw new Error(`An MCP server named "${input.id}" already exists. Remove it before adding another with that name.`);
+  }
+  const server: McpHttpServer = {
+    id: input.id,
+    transport: 'http',
+    url: checked.origin,
+    ...(input.clientId !== undefined ? { clientId: input.clientId } : {}),
+    trust: 'strict',
+    safeRead: [...(input.safeRead ?? [])],
     addedAt: now().toISOString(),
   };
   config.servers.push(server);

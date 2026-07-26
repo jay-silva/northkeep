@@ -1,7 +1,10 @@
 # ADR 0036: Filesystem tools
 
 - **Date:** 2026-07-25
-- **Status:** Proposed
+- **Status:** Proposed — **NOT sound enough to implement as written.** An
+  adversarial review on 2026-07-25 read the real vault and the real device
+  secret past Decision 2's floor. See "Adversarial review" at the end; the six
+  listed corrections are prerequisites to any code.
 - **Deciders:** Jay (product owner), Claude Code
 - **Parent:** ADR 0027 (harness umbrella), ADR 0029 (harness security model), ADR 0033 (MCP trust model)
 
@@ -150,3 +153,170 @@ relaxed, the invariant must be revisited first, not afterwards.
 6. Reading a binary file reports binary rather than dumping bytes.
 7. The turn proof names the files read, and the audit records the call
    content-free.
+
+
+## Adversarial review — 2026-07-25
+
+Run under the CLAUDE.md review gate, against code at `5b6158b`, with experiments
+on this machine. Recorded here rather than in a commit message, and corrected
+rather than softened, following ADR 0035's precedent. **Verdict: do not
+implement as written.**
+
+### Critical
+
+**C1 — Decision 2's floor is name-based, and macOS path aliasing defeats it.**
+Demonstrated on this machine, with no attacker, no race and nothing
+pre-planted:
+
+- APFS is case-insensitive but `realpath` is case-*preserving*, so
+  `~/.NORTHKEEP/vault.nkv` realpaths to itself and matches no glob written
+  against `~/.northkeep/`. **573 KB of the real vault was read.**
+- `/System/Volumes/Data/Users/…` is a **firmlink**, not a symlink: it realpaths
+  to itself and is a second complete path to the home directory that never
+  contains the string `.northkeep`. **The real `device.secret` was read.**
+- The vault need not live in `~/.northkeep` at all (`--vault <path>`,
+  `packages/cli/src/index.ts:83`), and `northkeepHome()` honours
+  `NORTHKEEP_HOME` (`packages/core/src/platform.ts:8`). A literal floor path is
+  wrong by construction; it must be computed at runtime.
+- The sidecars `${vault}.tmp` and `${vault}.bak`
+  (`packages/platform-node/src/storage.ts:21,32`) are not on the list.
+
+*Correction required:* the vault half of the floor becomes an **identity**
+check, not a name check — `open()`, `fstat()`, compare `dev`+`ino` against a
+runtime-computed deny-set (resolved vault path plus `.bak`/`.tmp`,
+`deviceSecretPath()`, everything under `northkeepHome()`), containment-check the
+descriptor's own resolved path, and read from that descriptor. Say plainly that
+the *shape* half (`.ssh/**`, `*.pem`, `.env*`) cannot be inode-enumerated and
+stays heuristic. One list with one confidence level was the error.
+
+*Counter-check, so this is not overclaimed:* `/Volumes/Macintosh HD/…` **is** a
+real symlink and `realpath` collapses it correctly.
+
+**C2 — Decision 6 is wrong in both directions.** Inbound: `northkeep export
+--out` (`packages/cli/src/index.ts:289-305`) writes the entire vault as
+plaintext JSON, and invariant #4 *requires* that it can. Users write it to
+`~/Documents` — the ADR's own example grant. That file **is** vault content, and
+Decision 6's "not vault content, so clause (a)" reasoning is exactly backwards
+for it. Outbound: `distillExchange` (`packages/converse/src/turn.ts:586-631`)
+commits extracted candidates to the vault at `memoryScope ?? 'personal'`
+(`task.ts:986`), so whatever the assistant quotes from a read file becomes
+permanent memory, syncs, and is eligible for a scope later marked Shared.
+
+*Correction required:* add the configured vault path and sidecars to the
+identity floor; decide explicitly what distillation does on a turn in which a
+file was read (recommended: `distill: false` for that turn, or a visible
+notice); test both. Credit where due: `turn.ts:611-613` already drops candidates
+carrying a Tier-1 secret, and the default scope is `personal`.
+
+**C3 — Decision 3's per-root `always` grant has no representation in the
+engine, and the engine forecloses it.** `GrantSubject` is
+`{ host } | { server }` (`policy.ts:43`); a filesystem call has neither, and
+`policy.ts:266` states the consequence outright: no-egress calls "always ask in
+v1." Worse, a root grant is **prefix inheritance**, which `policy.ts:22-28`
+refuses by design for hosts ("a wildcard grant is exactly the kind of quiet
+blanket permission this product refuses"). KNOWN-LIMITS L143-150 and ADR 0029
+L211-227 already call the `always`-grant compound the strongest practical attack
+in the threat model; Decision 3 points it at the local disk.
+
+*Correction required:* drop `always` for filesystem reads in v1 — per-call
+approval only. Adding a third grant subject is "changes who decides" and needs
+its own ADR and review first. Any root subject must then be bound by the root's
+`dev`+`ino`, or C1's aliasing reopens at the grant layer.
+
+### High
+
+- **H1 — `realpath`-then-read is TOCTOU** (demonstrated: check passes, symlink
+  swapped, secret read). The cited precedent is also miscited: `resolveCommand`
+  (`identity.ts:97-115`) canonicalizes for *fingerprinting* and performs no
+  containment check. The containment function is `isUnderAllowedRoot`
+  (`identity.ts:194-216`) — cite that, and note it is still a string
+  comparison. **Hardlinks are invisible to any name-based rule**, including
+  `realpath`; same fix as C1.
+- **H2 — "the turn's proof names which files were read" describes a surface
+  that does not exist.** `toolCallsMade` (`task.ts:146-162`) carries `host`,
+  `egress`, `mcpServer`, `argsSent`; a file read supplies none. A third shape is
+  needed in both the struct and the ADR-0031 `done` schema. Also worth a
+  sentence: for web and MCP the proof reports what *left*; for a file read it
+  reports what *entered*.
+- **H3 — the screen claim is half true, and the failing half is the one that
+  matters.** True and free: `screenArguments` runs on every call before the
+  gate (`task.ts:626-639`), every string leaf becomes a `body` candidate
+  (`exfil.ts:135-158`), so identity/memory screens do apply to a path string.
+  False: the leak is what comes *back*, on turn N+1, and the memory screen's
+  corpus is fed only by `recordDisclosedMemory(session, used: ScoredEntry[])`
+  (`turn.ts:135-140`) — **vault entries only**. That function's own docstring
+  says "EVERY path that puts memory in front of the model must call this." A new
+  decision is required: file content read this conversation joins the screen
+  corpus, with a size bound. Three smaller items in the same decision: the
+  proposed "credential store" class does not exist (`ExfilClass` is
+  `secret | identity | memory`, `exfil.ts:27`, with a fixed phrase table at
+  `:514`); `where: 'path'` already means "the URL's path" (`exfil.ts:485`) and
+  would mislabel a file read; and `HARD_DENY_SECRET_KINDS` (`task.ts:66`) would
+  silently make `2024-tax-123-45-6789.pdf` un-approvable — argue explicitly
+  whether hard-deny should apply to a no-egress read.
+- **H4 — macOS omissions, and a TCC problem to get ahead of.**
+  `~/Library/{Keychains,Messages,Mail,Safari,Containers}` must be refused **by
+  name, before being touched**, so NorthKeep never triggers an OS "would like to
+  access data from other apps" prompt it cannot explain. Also missing: SQLite
+  `-wal`/`-shm` sidecars, Time Machine local snapshots, resource forks
+  (`..namedfork/rsrc`), `._AppleDouble`, extended attributes, `.DS_Store`. State
+  *why* `/dev/**` is refused (`/dev/fd/*` reaches arbitrary open descriptors) so
+  a future narrowing does not reopen it.
+- **H5 — no pre-read size or type bound.** Truncation here is post-hoc
+  (`truncateChars`, `task.ts:171-173`, `DEFAULT_MAX_RESULT_CHARS = 20_000`);
+  `web_fetch`'s real bound is the streamed 2 MB cap in `net.ts`. Reading a huge
+  file fully into memory to emit 20 000 characters is the same DoS the
+  `/dev/random` clause anticipated. Add: `fstat` the descriptor, refuse
+  non-regular files by mode (subsumes FIFOs and sockets more reliably than
+  `/dev/**`), refuse above a stated byte cap, apply a deadline. Note iCloud
+  dataless files in `~/Documents`/`~/Desktop` — reading one triggers a download
+  and can hang.
+
+### Medium
+
+- **M3 — `safe-read` is claimed "in ADR 0029's terms" and 0029 defines no such
+  term.** The only definition is a code comment (`types.ts:42-46`) and it is
+  egress-shaped: "read-only egress (a fetch)." A file read has no egress, which
+  is the point this ADR's own Context makes at lines 29-31. Define the term
+  here, or give filesystem read its own risk class. Do not borrow a definition
+  that does not fit.
+- **M5 — "listing is separate from reading and is bounded" does unexamined
+  work.** A listing *is* disclosure; filenames are content. Listing needs its
+  own paragraph: risk class, floor interaction (are refused paths hidden or
+  shown as refused? probably shown), screens, and an explicit entry cap.
+
+### Low
+
+- **L1 — `modelTier` is still dead code.** Set at `task.ts:697`, declared at
+  `gate.ts:21`, read by no consumer. Wire it or delete it before adding a second
+  never-read field. (ADR 0035 cites `task.ts:682` for this; the actual site is
+  `:697`.)
+- **L2 — no KNOWN-LIMITS obligation.** ADR 0033:92 set the precedent. This ADR
+  would falsify the privacy-ceiling entry (L188-200), whose reasoning is
+  entirely about network tools and never contemplates disk content entering the
+  conversation.
+
+### What survives, stated plainly
+
+Verified and sound, keep as written: **Decision 1** (no ambient access,
+per-directory grants, the `files.json` version/0600/tolerant-loader idiom
+matching every other config); **Decision 3's write/delete split** — `policy.ts:322`
+makes `consequential` ask unconditionally above any grant, so "never holds an
+`always` grant" is a property of the engine, not a promise, and refusing
+delete/move/overwrite in v1 is right; **Decision 4**, all four sub-claims —
+the fence keys on "a tool produced this" (`task.ts:858-872`), truncation is
+real, results are re-redacted at the model's tier every step; **Decision 5's
+second paragraph**; and the **Honest limits** section, which is the strongest
+part of the document and is materially correct.
+
+### Prerequisites before any code
+
+1. Rewrite Decision 2 as an identity check with fd-based reads (C1, H1).
+2. Drop the per-root `always` grant, or write the permission-engine ADR first (C3).
+3. Rewrite Decision 6 for both directions (C2).
+4. Add file content to the exfil screen corpus (H3).
+5. Add the macOS omissions, the pre-read size/type bound, and the listing
+   paragraph (H4, H5, M5).
+6. Expand the acceptance tests — configured vault path, hardlink, case variant,
+   firmlink path, an `export --out` file in a granted root, a large-file refusal,
+   and a read-then-`web_fetch` screen — and add the KNOWN-LIMITS obligation.
