@@ -13,7 +13,8 @@ The founder (Jay) is a compliance professional, not an engineer. Therefore:
 - Every milestone must end with an acceptance test Jay can run himself from the
   CLI, copy-paste exact commands.
 - Write an ADR in SPEC/decisions/ for every consequential choice (schema changes,
-  crypto, dependencies with network access, licensing-relevant code).
+  crypto, dependencies with network access, licensing-relevant code). See the
+  review gate below for when an adversarial review is required too.
 
 ## Non-negotiable invariants (violating these is a critical bug)
 1. Plaintext memory content NEVER leaves the machine except (a) to the model
@@ -53,6 +54,45 @@ The founder (Jay) is a compliance professional, not an engineer. Therefore:
 6. Degrade privacy loudly: if Tier-2 redaction is unavailable (no Ollama), the
    user must be told visibly. Never silently drop a privacy tier.
 7. New dependencies with network access require an ADR and Jay's explicit OK.
+
+## Review gate
+
+An ADR **and** an adversarial review are required before implementing anything
+that:
+
+- changes **what leaves the machine** — a new egress path, a new recipient, or a
+  change to redaction, tiers, or screening;
+- changes **who decides** — permission gates, grants, approvals, the privacy
+  ceiling;
+- puts **untrusted input** in front of the model, or in front of a human review
+  surface (a server's own tool descriptions, a fetched page, an error message
+  from a third party);
+- touches **crypto or key handling** (invariant #3 already requires this);
+- adds a **dependency with network access** (invariant #7).
+
+It is also required before **publishing a claim** about what the system enforces
+— in KNOWN-LIMITS.md, an ADR, the site, or release notes. For this product a
+false claim is a defect, so a claim ships under the same gate as the code.
+
+**Ordinary work does not need this**, and saying so is part of the rule: copy
+fixes, refactors that cross no boundary, tests, build tooling. A gate that covers
+everything gets routed around, and a routed-around gate weakens the ones that
+matter.
+
+How the review has to be run, learned by doing it badly first:
+
+- **It verifies against CODE, not against the document's prose.** Every finding
+  worth having came from opening files and checking, not from reading the claim
+  and judging it plausible.
+- **Findings are recorded in the ADR itself**, so the document carries its own
+  history instead of the reasoning living in a commit message nobody reads.
+- **A clean result is stated plainly.** "Nothing found, here is what I tried" is
+  a result, not a failure.
+
+**Before any release, do a doc-versus-code pass** over KNOWN-LIMITS and every
+ADR claim about current behaviour. Prose that was true when written stops being
+true when the next decision lands, and *nothing fails when it does* — no test
+catches this, and it is the most common way this repo has been wrong.
 
 ## Stack (decided — do not relitigate)
 TypeScript / Node 20+, pnpm monorepo per 03-BUILD-BLUEPRINT.md structure.
