@@ -182,8 +182,11 @@ export function allowedGuiRoots(home: string): string[] {
     path.join(home, '.northkeep', 'mcp-servers'),
     '/opt/homebrew',
     '/usr/local',
-    // The running installation itself: the packaged app's resources, or the
-    // repo when running from source. Derived, never supplied by a request.
+    // The running installation itself, derived from where this file sits and
+    // never supplied by a request. In a packaged build that resolves to the
+    // bundled server tree (Contents/Resources/server/node_modules), not the app
+    // bundle root; from source it is the repo's packages/ parent. Either way it
+    // covers the copy of NorthKeep that is actually executing.
     path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..', '..', '..'),
   ];
 }

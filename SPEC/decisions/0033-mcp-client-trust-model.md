@@ -129,9 +129,12 @@ Therefore:
   **Pinning is not connect-time only.** MCP servers may send
   `notifications/tools/list_changed` mid-connection, so a server can pass the
   check at connect and swap descriptions one call later. That notification
-  therefore **invalidates the pin immediately**: the new list is re-hashed, and
-  if it differs the user is told and asked again before the next call executes.
-  A connect-time-only pin would be theatre.
+  therefore **invalidates the connection immediately**: every subsequent call
+  from it refuses, and the user must review the server again. As shipped this is
+  stricter than re-hashing and comparing — a changed list is not trusted enough
+  to re-derive a pin from mid-conversation. The subscription is registered
+  BEFORE the tool list is read, so a notification arriving during the listing
+  cannot be lost. A connect-time-only pin would be theatre.
 - **No server-supplied text may alter harness behavior.** Descriptions are model
   context only. Nothing in them may influence gating, tiering, budgets or audit.
 

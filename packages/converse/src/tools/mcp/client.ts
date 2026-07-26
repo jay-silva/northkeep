@@ -171,6 +171,23 @@ export async function connectServer(
   const factory = options.clientFactory ?? defaultClientFactory;
   const client = await factory(server);
 
+  // Subscribe BEFORE listing. A tools/list_changed arriving while we are still
+  // reading the list would otherwise be lost, and we would pin a set the server
+  // had already replaced.
+  if (typeof client.setNotificationHandler !== 'function') {
+    // Without this, the pin would be connect-time only — the exact "theatre"
+    // ADR 0033 Decision 2 forbids. Refuse rather than silently degrade.
+    await client.close().catch(() => {});
+    throw new Error(
+      'This MCP client cannot subscribe to tools/list_changed, so definition pinning ' +
+        'would only hold at connect time. Refusing to connect.',
+    );
+  }
+  let stale = false;
+  client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
+    stale = true;
+  });
+
   let listed: PinnableTool[];
   try {
     listed = (await client.listTools({ timeout: REQUEST_TIMEOUT_MS, signal: options.signal })).tools;
@@ -225,20 +242,6 @@ export async function connectServer(
   // pin would be theatre (ADR 0033 Decision 2). The notification marks the
   // connection stale; the loop refuses to execute anything from a stale
   // connection and the user is asked again.
-  let stale = false;
-  if (typeof client.setNotificationHandler !== 'function') {
-    // Without this, the pin would be connect-time only — the exact "theatre"
-    // ADR 0033 Decision 2 forbids. Refuse rather than silently degrade.
-    await client.close().catch(() => {});
-    throw new Error(
-      'This MCP client cannot subscribe to tools/list_changed, so definition pinning ' +
-        'would only hold at connect time. Refusing to connect.',
-    );
-  }
-  client.setNotificationHandler(ToolListChangedNotificationSchema, () => {
-    stale = true;
-  });
-
   const isStale = (): boolean => stale;
   const tools = usable.map((t) => adaptTool(server, t, client, isStale, options.signal));
 

@@ -16,7 +16,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
     "@northkeep/core": "workspace:*",
     "@northkeep/platform-node": "workspace:*",
     "@northkeep/redact": "workspace:*",
