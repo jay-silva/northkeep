@@ -156,15 +156,15 @@ export function updateCredentials(
     saveCredentials(id, updated);
     return updated;
   });
-  // Keep the chain alive on failure so one error does not wedge the server's
-  // queue, and drop the entry once quiet so this map cannot grow unbounded.
+  // Keep the chain alive on failure so one error does not wedge the queue for
+  // this server. The map is bounded by the number of configured servers, so it
+  // is never pruned — an earlier version had a no-op "cleanup" here with a
+  // comment claiming it bounded the map, which is exactly the kind of false
+  // claim about a property that this repo keeps getting wrong.
   chains.set(
     id,
     next.catch(() => undefined),
   );
-  void next.catch(() => undefined).then(() => {
-    if (chains.get(id) === undefined) return;
-  });
   return next;
 }
 

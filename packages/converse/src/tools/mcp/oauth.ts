@@ -52,6 +52,17 @@ export interface ProviderOptions {
   clientId?: string;
   clientSecret?: string;
   scope?: string;
+  /**
+   * Behave as though no token is stored, WITHOUT deleting the one that is.
+   *
+   * A sign-in flow needs the SDK to start a fresh authorization rather than
+   * decide it is already authorized. The obvious way to get that — delete the
+   * stored credentials first — means an abandoned or failed sign-in destroys a
+   * working grant, and takes the user's client secret with it. So the flow
+   * hides the tokens instead, and `saveTokens` overwrites them only when a new
+   * one actually arrives.
+   */
+  ignoreStoredTokens?: boolean;
 }
 
 /**
@@ -111,6 +122,7 @@ export class KeychainOAuthProvider implements OAuthClientProvider {
   }
 
   tokens(): OAuthTokens | undefined {
+    if (this.opts.ignoreStoredTokens === true) return undefined;
     const rec = loadCredentials(this.opts.serverId);
     // A grant issued for a different origin is not this server's grant. This is
     // ADR 0035 Decision 6's enforcement at its narrowest point: even if the

@@ -210,6 +210,14 @@ Required:
   the `net.ts` logic generalized to POST and `text/event-stream`.
 - Route **OAuth discovery through the same guard**; those fetches default to bare
   `fetch` too.
+
+  **VERIFIED EMPIRICALLY 2026-07-25, not merely implemented.** A test written
+  against `https://mcp.example.com` failed with `FetchRefusedError('dns')`
+  raised from `guardedFetch`, through the SDK's own
+  `discoverAuthorizationServerMetadata` → `fetchWithCorsRetry` call chain. That
+  stack trace is the proof that the SDK honours `fetchFn` for discovery, which
+  is the part of this decision with the least test coverage behind it and the
+  part most easily assumed rather than checked.
 - `hardenedFetch` **cannot be reused as-is**: it is GET-only, its port allowlist
   is 443/8443, and its content-type allowlist excludes `text/event-stream`.
 

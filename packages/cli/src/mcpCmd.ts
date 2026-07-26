@@ -274,7 +274,7 @@ export async function mcpConnect(
   deps: {
     getPassphrase: (prompt: string) => Promise<string>;
     promptLine: (question: string) => Promise<string>;
-    verifyPassphrase: (passphrase: string) => boolean;
+    verifyPassphrase: (passphrase: string) => boolean | Promise<boolean>;
   },
   fail: (m: string) => never,
 ): Promise<void> {
@@ -285,7 +285,7 @@ export async function mcpConnect(
   }
 
   const passphrase = await deps.getPassphrase('Vault passphrase (to authorize connecting a server): ');
-  if (!deps.verifyPassphrase(passphrase)) fail('That passphrase did not open the vault. Nothing was changed.');
+  if (!(await deps.verifyPassphrase(passphrase))) fail('That passphrase did not open the vault. Nothing was changed.');
 
   let pending;
   try {

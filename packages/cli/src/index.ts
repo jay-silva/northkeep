@@ -610,13 +610,18 @@ mcpGroup
         // Proof the caller holds the vault passphrase. Verified against the
         // real header + device secret, so it cannot be satisfied by anything
         // an automated caller can reach on its own.
-        verifyPassphrase: (passphrase) => {
+        verifyPassphrase: async (passphrase) => {
           try {
             const vaultPath = vaultPathOpt();
             const header = Vault.readHeader(vaultPath);
             const key = deriveMasterKey(passphrase, loadDeviceSecret(), header.salt, header.kdf);
             try {
-              Vault.openWithKey(vaultPath, Buffer.from(key)).close();
+              // Under the file lock, for the same reason `unlock` above takes
+              // it: opening can trigger a schema migration, which WRITES, and
+              // the GUI may be running against the same vault.
+              await withFileLock(vaultPath, () => {
+                Vault.openWithKey(vaultPath, Buffer.from(key)).close();
+              });
               return true;
             } finally {
               memzero(key);

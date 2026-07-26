@@ -18,6 +18,7 @@ import {
   updateCredentials,
   createSession,
   runTask,
+  startRemoteConnect,
   type ChatTurnResult,
   type ModelProvider,
   type TaskEvent,
@@ -345,5 +346,82 @@ describe('privacy ceiling on remote MCP egress (ADR 0035 Decision 3, option B)',
     addServer({ id: 'vault', command: cmd, args: [] });
     const { executed } = await run('vault', 'private-only');
     expect(executed).toEqual(['{"q":"hello"}']);
+  });
+});
+
+/**
+ * A provider that answers only the OAuth discovery documents, so the SDK can
+ * build an authorization URL without touching the network. Everything else 404s.
+ */
+const fakeOAuthDiscovery: typeof fetch = (input) => {
+  const url = String(typeof input === 'string' ? input : (input as URL).toString());
+  if (url.includes('/.well-known/oauth-authorization-server') || url.includes('/.well-known/openid-configuration')) {
+    return Promise.resolve(
+      new Response(
+        JSON.stringify({
+          issuer: 'https://mcp.example.com',
+          authorization_endpoint: 'https://mcp.example.com/authorize',
+          token_endpoint: 'https://mcp.example.com/token',
+          response_types_supported: ['code'],
+          code_challenge_methods_supported: ['S256'],
+        }),
+        { status: 200, headers: { 'content-type': 'application/json' } },
+      ),
+    );
+  }
+  return Promise.resolve(new Response('not found', { status: 404 }));
+};
+
+describe('a sign-in attempt must not destroy the grant it is replacing', () => {
+  /** The record a connected server has: tokens, and a client secret behind them. */
+  function seedConnected(id: string, origin: string) {
+    saveCredentials(id, {
+      origin,
+      tokens: { access_token: 'live-at', token_type: 'Bearer', refresh_token: 'live-rt' },
+      client: { client_id: 'client-123', client_secret: 'the-secret-the-user-pasted' },
+    });
+  }
+
+  it('leaves a working grant intact when the user cancels at the confirm screen', async () => {
+    const server = addRemoteServer({ id: 'gmail', url: 'https://mcp.example.com/v1' });
+    seedConnected('gmail', 'https://mcp.example.com');
+
+    const pending = await startRemoteConnect(server, {
+      // No network: the probe and the listener are both injected.
+      probeRequiresAuth: () => Promise.resolve(true),
+      awaitCallback: () => ({
+        result: new Promise<never>(() => undefined), // never resolves
+        cancel: () => undefined,
+      }),
+      openBrowser: () => undefined,
+      fetchImpl: fakeOAuthDiscovery,
+    });
+    // The user reads the destination and does not recognize it.
+    pending.cancel();
+
+    // Everything that would otherwise have to be re-obtained is still here. The
+    // earlier version deleted the whole record at the top of startRemoteConnect,
+    // so cancelling cost the user their client secret as well as their sign-in.
+    expect(hasRemoteTokens('gmail')).toBe(true);
+    const rec = loadCredentials('gmail');
+    expect(rec?.tokens?.refresh_token).toBe('live-rt');
+    expect(rec?.client?.client_secret).toBe('the-secret-the-user-pasted');
+    // Only this attempt's PKCE verifier is gone.
+    expect(rec?.codeVerifier).toBeUndefined();
+  });
+
+  it('still forces a fresh authorization rather than reporting success from the old token', async () => {
+    const server = addRemoteServer({ id: 'gmail', url: 'https://mcp.example.com/v1' });
+    seedConnected('gmail', 'https://mcp.example.com');
+    // Hiding the stored token (rather than deleting it) has to actually work,
+    // or "Sign in again" would silently do nothing and report success.
+    const pending = await startRemoteConnect(server, {
+      probeRequiresAuth: () => Promise.resolve(true),
+      awaitCallback: () => ({ result: new Promise<never>(() => undefined), cancel: () => undefined }),
+      openBrowser: () => undefined,
+      fetchImpl: fakeOAuthDiscovery,
+    });
+    expect(pending.authorizationUrl.toString()).not.toBe('https://mcp.example.com/');
+    pending.cancel();
   });
 });

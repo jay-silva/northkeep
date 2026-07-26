@@ -995,11 +995,17 @@ async function dispatch(
     if (typeof id !== 'string') return bad(400, 'id is required.');
     const pending = pendingConnects.get(id);
     if (pending === undefined) return bad(409, 'That sign-in is no longer pending. Start it again.');
-    pendingConnects.delete(id);
     try {
       await pending.proceed();
     } catch (err) {
       return bad(400, sanitizeServerText(err instanceof Error ? err.message : String(err), 300));
+    } finally {
+      // Dropped only once proceed() has SETTLED. Deleting first meant that a
+      // client going away mid-wait — closed tab, dropped connection — left a
+      // listener holding the fixed callback port with nobody able to cancel it,
+      // and the next attempt failed with "port already in use", which points at
+      // the wrong culprit entirely.
+      pendingConnects.delete(id);
     }
     return ok({ id, connected: true });
   }

@@ -10,7 +10,15 @@ import {
   requireTokenStore,
   OAUTH_REDIRECT_URI,
 } from './oauth.js';
-import { deleteCredentials } from './tokens.js';
+import { loadCredentials, saveCredentials } from './tokens.js';
+
+/** Drop this attempt's PKCE verifier, leaving any existing grant untouched. */
+function clearVerifier(serverId: string): void {
+  const cur = loadCredentials(serverId);
+  if (cur === null || cur.codeVerifier === undefined) return;
+  const { codeVerifier: _dropped, ...rest } = cur;
+  saveCredentials(serverId, rest);
+}
 
 /**
  * The remote sign-in flow (ADR 0035 Decision 7).
@@ -66,6 +74,17 @@ export interface RemoteConnectOptions {
   awaitCallback?: typeof awaitOAuthCallback;
   /** Injected by tests in place of a real anonymous probe. */
   probeRequiresAuth?: (server: McpHttpServer) => Promise<boolean>;
+  /**
+   * Injected by TESTS ONLY, in place of `guardedFetch`.
+   *
+   * Every production caller leaves this undefined, and the default is the
+   * guard. It exists because the alternative — letting the OAuth tests reach
+   * the real network — is worse, and because `connectServer` already takes a
+   * `clientFactory` on the same reasoning. Note what it does NOT do: it is not
+   * reachable from any surface, any config file, or any model turn, so there is
+   * no path by which a caller can substitute a fetch that skips the guard.
+   */
+  fetchImpl?: typeof fetch;
 }
 
 /**
@@ -84,10 +103,12 @@ export async function startRemoteConnect(
   if (!checked.ok) throw new Error(checked.reason);
   const origin = endpointOrigin(server.url);
 
-  // A previous half-finished attempt leaves a PKCE verifier and possibly a
-  // stale client registration. Start clean, so a failure never leaves state
-  // that makes the NEXT attempt behave in a way nobody can explain.
-  deleteCredentials(server.id);
+  // Deliberately NOT deleteCredentials() here. An earlier version wiped the
+  // record before probing, which meant an abandoned sign-in — the user reads
+  // the destination, does not recognize it, clicks Cancel — destroyed a working
+  // grant AND the client secret behind it. The flow hides the existing tokens
+  // instead (`ignoreStoredTokens`), so a fresh authorization is forced and
+  // nothing is lost unless a new token actually replaces the old one.
 
   const probe = options.probeRequiresAuth ?? probeRequiresAuth;
   if (!(await probe(server))) throw new McpServerNotAuthenticatedError(server.id);
@@ -95,6 +116,7 @@ export async function startRemoteConnect(
   const provider = new KeychainOAuthProvider({
     serverId: server.id,
     origin,
+    ignoreStoredTokens: true,
     ...(server.clientId !== undefined ? { clientId: server.clientId } : {}),
     ...(options.clientSecret !== undefined ? { clientSecret: options.clientSecret } : {}),
     ...(options.scope !== undefined ? { scope: options.scope } : {}),
@@ -104,9 +126,10 @@ export async function startRemoteConnect(
   // registration — all through our own guarded fetch, per Decision 5, because
   // the SDK's discovery calls would otherwise use bare `fetch` and bypass the
   // egress wall entirely.
+  const fetchFn = options.fetchImpl ?? (guardedFetch as unknown as typeof fetch);
   const result = await auth(provider, {
     serverUrl: server.url,
-    fetchFn: guardedFetch as unknown as typeof fetch,
+    fetchFn,
     ...(options.scope !== undefined ? { scope: options.scope } : {}),
   });
 
@@ -150,15 +173,16 @@ export async function startRemoteConnect(
         const finished = await auth(provider, {
           serverUrl: server.url,
           authorizationCode: code,
-          fetchFn: guardedFetch as unknown as typeof fetch,
+          fetchFn,
           ...(options.scope !== undefined ? { scope: options.scope } : {}),
         });
         if (finished !== 'AUTHORIZED') {
           throw new Error('The sign-in finished but no token was issued. Nothing was stored.');
         }
       } catch (err) {
-        // Never leave a usable-looking half-state behind.
-        deleteCredentials(server.id);
+        // Clear only the PKCE verifier, which belongs to THIS attempt. A failed
+        // sign-in must not take the previous working one with it.
+        clearVerifier(server.id);
         throw err;
       } finally {
         started?.cancel();
@@ -166,7 +190,7 @@ export async function startRemoteConnect(
     },
     cancel: () => {
       started?.cancel();
-      deleteCredentials(server.id);
+      clearVerifier(server.id);
     },
   };
 }
