@@ -1,11 +1,39 @@
 # ADR 0036: Filesystem tools
 
 - **Date:** 2026-07-25
-- **Status:** **Revision 2 REVIEWED 2026-07-26 — verdict PASTURE as written.**
-  The reviewer implemented Decision 2's four layers in Node and defeated L1 with
-  ordinary user behaviour. See "Adversarial review of Revision 2" at the end.
-  Awaiting Jay's decision on the one question that decides ship-or-pasture; no
-  code until then. Original Revision 2 header follows.
+- **Status:** **PARKED 2026-07-26 by Jay. Not being built.** Two revisions were
+  defeated empirically in two days: Revision 1's floor was beaten with a
+  differently-cased path, Revision 2's with a UTF-8 byte-order mark. Kept as a
+  decision record. See both reviews at the end.
+
+## Why parked (2026-07-26)
+
+The reviewable part is fixable. Revision 2's Class A leaks (BOM, truncation,
+tar, base64, a device secret in any file that is not exactly 65 bytes) all close
+by scanning for markers anywhere in the buffer instead of parsing or comparing
+whole, and that fix was tested against every fixture. Eight concrete corrections
+are listed at the end of the Revision 2 review.
+
+**Class B is not fixable, and that is what decided it.** `northkeep export | jq
+'.memories' > notes.json`, a CSV made from it, a paragraph pasted into a Word
+document: after export these ARE ordinary user text, with no marker left to
+detect. Whether reading one counts as "leaking the vault" is undecidable by
+construction, not by effort.
+
+Jay's bar was *"if any chance exists that we are gonna leak the vault its a no
+go"*, and under a strict reading Class B sits inside it. The trade also does not
+pay: the feature buys "summarize this contract" and costs a KNOWN-LIMITS entry
+reading roughly *"if you exported your vault and built a spreadsheet from it, we
+may read that spreadsheet"* — which is expensive for a product whose entire
+claim is verifiable privacy.
+
+**If this is ever revisited**, start from the Revision 2 review's eight required
+changes, not from Revision 2 itself. One untested idea worth evaluating first:
+the repo already has 16-gram overlap matching for the memory-class exfiltration
+screen (`exfil.ts`), and pointing it INBOUND — screening file content against
+the vault before returning it — would catch verbatim Class B artifacts, since a
+`jq` slice contains memory text word for word. Paraphrase would still escape.
+Unverified; verify before it changes any decision.
 - ~~Proposed — **Revision 2, 2026-07-26, awaiting adversarial review.**~~
   Revision 1's floor was defeated on this machine (the reviewer read the real
   vault and the real device secret past it). Revision 2 below supersedes
