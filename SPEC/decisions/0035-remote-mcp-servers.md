@@ -262,10 +262,21 @@ The SDK owns discovery, PKCE, state and token exchange; we implement
   ephemeral loopback listener (RFC 8252). This is a second listening surface and
   must be said out loud, since this ADR's own Context sells remote MCP as
   avoiding one.
-- **Dynamic client registration is not optional in practice.** The SDK throws
-  when client information is absent and cannot be saved, so "no DCR" means every
-  server without a pre-registered client id fails to connect. Scope it
-  deliberately.
+- **Pre-registered client credentials are REQUIRED, not a fallback.** Google's
+  documentation states plainly that its remote MCP servers "don't support
+  Dynamic Client Registration or OAuth Client ID Metadata Documents": the user
+  creates a Google Cloud project, configures a consent screen, creates an OAuth
+  client ID and secret, and registers a redirect URI. Claude requires the same
+  (a custom connector with the client id and secret pasted in). So supporting
+  BYO client credentials is the primary path for the flagship server, and DCR is
+  the optional extra rather than the reverse. The SDK also throws when client
+  information is absent and cannot be saved, so a provider offering neither
+  simply cannot connect.
+
+  **Product consequence worth stating in the UI:** there is no zero-config
+  official path, for anyone. No client can perform the Cloud console setup on the
+  user's behalf. The honest promise is "paste the two values you created", not
+  "connect Gmail in one click".
 - **Refresh races.** Two surfaces refreshing one grant can write a stale refresh
   token over a rotated one and destroy the grant. Needs a single-writer token
   store or a per-server lock.
