@@ -2,6 +2,7 @@ import dns from 'node:dns/promises';
 import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
+import { Readable } from 'node:stream';
 import type { IncomingMessage } from 'node:http';
 import { classifyIpAddress } from '../provider.js';
 
@@ -149,7 +150,7 @@ export function classifyFetchTarget(
  * DNS-layer guard + pin: resolve, refuse if ANY address is private, and
  * return the one address the socket will actually dial.
  */
-async function resolvePinned(
+export async function resolvePinned(
   host: string,
   overrides?: NetTestOverrides,
 ): Promise<{ address: string; family: number }> {
@@ -419,4 +420,115 @@ export async function hardenedFetch(
     };
   }
   throw new FetchRefusedError('too-many-redirects', `more than ${MAX_REDIRECT_HOPS} redirects`);
+}
+
+
+/**
+ * A `fetch`-compatible function that goes through the SAME guard as web_fetch,
+ * for callers that need POST bodies and streaming responses — the MCP
+ * streamable-HTTP transport and its OAuth discovery (ADR 0035 Decision 5).
+ *
+ * WHY THIS EXISTS RATHER THAN REUSING hardenedFetch: that one is deliberately
+ * GET-only, allows ports 443/8443, and enforces a content-type allowlist that
+ * excludes `text/event-stream`. MCP needs POST with a JSON-RPC body and an SSE
+ * response. Loosening hardenedFetch would weaken web_fetch's guarantees to suit
+ * a different caller, so this is a separate door through the same wall.
+ *
+ * WHAT IT KEEPS, which is the whole point: the URL-layer refusals
+ * (https only, no embedded credentials, no private literals, no name-based
+ * local hosts) and the DNS-layer pin — resolve, refuse if ANY answer is
+ * private, then dial exactly that address. ADR 0028's architecture rests on
+ * every byte going through one guard; without this, remote MCP would be a
+ * second, unguarded egress path.
+ *
+ * The response is wrapped in the platform `Response`, so callers get
+ * `ok`/`status`/`headers.get`/`json()`/`text()`/`body` with full fidelity,
+ * including a streaming body for SSE.
+ */
+export async function guardedFetch(
+  input: string | URL,
+  init: RequestInit & { signal?: AbortSignal } = {},
+  overrides?: NetTestOverrides,
+): Promise<Response> {
+  const raw = typeof input === 'string' ? input : input.toString();
+  const classified = classifyFetchTarget(raw, overrides);
+  if (!classified.ok) {
+    throw new FetchRefusedError(classified.code, classified.reason);
+  }
+  const url = classified.url;
+  const host = url.hostname.replace(/^\[|\]$/g, '');
+  const pinned = await resolvePinned(host, overrides);
+
+  const headers: Record<string, string> = {};
+  if (init.headers !== undefined) {
+    // Accept the three shapes fetch accepts, normalizing to a flat record.
+    const h = init.headers;
+    if (typeof (h as Headers).forEach === 'function' && !Array.isArray(h)) {
+      (h as Headers).forEach((v, k) => {
+        headers[k] = v;
+      });
+    } else if (Array.isArray(h)) {
+      for (const [k, v] of h) headers[k] = v;
+    } else {
+      Object.assign(headers, h as Record<string, string>);
+    }
+  }
+
+  const body =
+    init.body === undefined || init.body === null
+      ? undefined
+      : typeof init.body === 'string'
+        ? init.body
+        : JSON.stringify(init.body);
+
+  // http is unreachable in production (classifyFetchTarget refuses it); the
+  // TEST seam allows it so fixture servers can run on loopback, exactly as
+  // hardenedFetch's tests do. Choosing the module by scheme keeps that seam
+  // usable instead of forcing TLS onto a plain fixture.
+  const transport = url.protocol === 'http:' ? http : https;
+  return new Promise<Response>((resolve, reject) => {
+    const req = transport.request(
+      {
+        protocol: url.protocol,
+        // Host/SNI stay the HOSTNAME so TLS validates against the certificate;
+        // only the dialed ADDRESS is pinned, via the lookup override.
+        host,
+        servername: host,
+        port: url.port === '' ? 443 : Number(url.port),
+        path: `${url.pathname}${url.search}`,
+        method: init.method ?? 'GET',
+        headers,
+        lookup: ((_h: string, _o: unknown, cb: unknown) => {
+          (cb as (e: null, a: string, f: number) => void)(null, pinned.address, pinned.family);
+        }) as never,
+      },
+      (res) => {
+        const resHeaders = new Headers();
+        for (const [k, v] of Object.entries(res.headers)) {
+          if (v === undefined) continue;
+          resHeaders.set(k, Array.isArray(v) ? v.join(', ') : String(v));
+        }
+        // Stream the body rather than buffering: an SSE response never ends,
+        // and buffering it would hang the transport.
+        const webBody = Readable.toWeb(res) as unknown as ReadableStream<Uint8Array>;
+        resolve(
+          new Response(res.statusCode === 204 || res.statusCode === 304 ? null : webBody, {
+            status: res.statusCode ?? 0,
+            statusText: res.statusMessage ?? '',
+            headers: resHeaders,
+          }),
+        );
+      },
+    );
+    req.on('error', (err) => reject(err));
+    if (init.signal !== undefined) {
+      const onAbort = (): void => {
+        req.destroy(new Error('aborted'));
+      };
+      if (init.signal.aborted) onAbort();
+      else init.signal.addEventListener('abort', onAbort, { once: true });
+    }
+    if (body !== undefined) req.write(body);
+    req.end();
+  });
 }
