@@ -4,7 +4,7 @@
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** support@northkeep.ai · **Effective date:** July 17, 2026
+**Contact:** support@northkeep.ai · **Effective date:** July 27, 2026
 
 These Terms govern your use of the NorthKeep software and the optional hosted
 sync service (together, the "Service"). By installing the software or using the
@@ -25,7 +25,7 @@ support@northkeep.ai.
 version of NorthKeep as a network service (our hosted sync and connector
 servers), AGPL-3.0 section 13 entitles users interacting with that service to the
 Corresponding Source of the exact version we run. We publish that source,
-including our modifications, at https://github.com/silvapeak/northkeep, and you
+including our modifications, at https://github.com/jay-silva/northkeep, and you
 may also request it at support@northkeep.ai.
 
 **Contributions.** Contributions to NorthKeep are accepted under the Developer
@@ -100,7 +100,48 @@ them. It is part of the hosted subscription.
   whatever it retrieves from your shared scopes, under its own terms. Private
   scopes are never sent.
 
-## 4. Personal vs. business use
+## 4. Third-party tools you connect
+
+NorthKeep can optionally use third-party services you enable or connect: web
+search (Brave Search), web fetch (any site you allow a fetch to), and MCP
+servers (local programs you install, or remote HTTPS services you sign in to
+with OAuth). What each of these transmits, and to whom, is described in the
+Privacy Policy. This section covers your responsibilities, and the limits of
+ours, when you use them.
+
+- **They are third-party services, not ours.** Brave Search, a site you allow a
+  fetch to, an MCP server you install, and any remote MCP provider you sign in
+  to are operated by parties other than us, under their own terms and privacy
+  policies. Once we transmit your approved, masked request to one of them, we
+  do not control what they do with it. Review their terms before connecting
+  them, particularly a remote MCP provider: signing in creates a standing
+  authorization at your own account there, described further below and in the
+  Privacy Policy.
+- **You are responsible for what you connect and approve.** You choose which
+  sites to allow a fetch to, which MCP servers to install or sign in to, and
+  which calls to approve. You are responsible for having the right to send the
+  data those calls contain, and for complying with the applicable third
+  party's own terms (including, where applicable, Brave's terms and the API
+  terms of any service you connect through an MCP server).
+- **A local MCP server runs with your own privileges.** It is software you
+  chose to install. What it does after receiving arguments from NorthKeep,
+  including forwarding them to a service of its own, is that program's
+  conduct, not something we control, monitor, or are responsible for.
+- **Your OAuth grants are yours to manage.** Signing in to a remote MCP server
+  creates a standing, scoped authorization at that provider, to your own
+  account there. We cannot revoke it; you revoke it directly at the provider.
+  We store the resulting tokens, and any client credentials you create for
+  that connection, only in your device's keychain, and never receive them.
+- **Acceptable use extends to these tools.** Section 7 (Acceptable Use) applies
+  to your use of these tools as it does to the rest of the Service: do not use
+  them for unlawful purposes, to store or transmit unlawful content, or to
+  infringe others' rights.
+- **No warranty as to third-party services.** We make no representation about
+  the availability, accuracy, security, or data practices of Brave Search, any
+  site you fetch, or any MCP server you connect. Section 8 (Disclaimers)
+  applies to your use of them.
+
+## 5. Personal vs. business use
 
 A standard subscription is for an individual's personal use. **Use by a company,
 team, or organization, including multi-user or multi-seat deployment, requires
@@ -108,7 +149,7 @@ a business/team plan or a commercial license.** Contact support@northkeep.ai to
 arrange one. (This section concerns our hosted service and commercial licensing;
 it does not limit any rights the AGPL grants you in the software itself.)
 
-## 5. Your account, your keys, no recovery
+## 6. Your account, your keys, no recovery
 
 NorthKeep secures your vault with two secrets: a **passphrase** you choose and a
 **device secret** file stored on your machine. **You are solely responsible for
@@ -122,7 +163,7 @@ you against a lost passphrase or device secret: keep your own backups of your
 device secret and, if you wish, your vault file. We remind you of this when you
 subscribe and in the app so that the choice to rely on it is an informed one.
 
-## 6. Acceptable use
+## 7. Acceptable use
 
 You agree not to: use the Service for unlawful purposes or to store or transmit
 unlawful content; attempt to breach, overload, probe, or circumvent the Service's
@@ -130,7 +171,7 @@ security, rate limits, or size limits; resell or provide the hosted service to
 third parties without our authorization; or use the Service to infringe others'
 rights. We may suspend or terminate access that violates these Terms.
 
-## 7. Disclaimers
+## 8. Disclaimers
 
 The Service is provided **"as is" and "as available," without warranties of any
 kind**, express or implied, including merchantability, fitness for a particular
@@ -141,7 +182,7 @@ on-device redaction is not perfect (see `KNOWN-LIMITS.md`). NorthKeep is a tool,
 not professional advice, it does not provide legal, medical, financial, or other
 professional advice, and you are responsible for your own compliance obligations.
 
-## 8. Limitation of liability
+## 9. Limitation of liability
 
 To the maximum extent permitted by law, we will not be liable for any indirect,
 incidental, special, consequential, or punitive damages, or for lost data,
@@ -156,7 +197,7 @@ under consumer-protection statutes (such as the Massachusetts Consumer Protectio
 Act, M.G.L. c. 93A, where it applies). Some jurisdictions do not allow certain
 limitations, so parts of this section may not apply to you.
 
-## 9. Changes and termination
+## 10. Changes and termination
 
 We may modify these Terms or the Service. **For material changes, we will give
 reasonable advance notice before they take effect**: for hosted-service
@@ -168,7 +209,7 @@ Service, and hosted subscribers may cancel, before it takes effect. We may suspe
 or terminate the hosted service for violations of these Terms or to comply with
 law; you keep your local vault regardless, since it lives on your device.
 
-## 10. Governing law and disputes
+## 11. Governing law and disputes
 
 These Terms are governed by the laws of the Commonwealth of Massachusetts, USA,
 without regard to its conflict-of-laws rules.
@@ -185,7 +226,7 @@ located in Massachusetts, and you consent to their jurisdiction. **We have not
 required arbitration or waived your right to participate in a class action**;
 you keep those rights.
 
-## 11. Contact
+## 12. Contact
 
 Questions about these Terms, or to arrange a business or commercial license:
 support@northkeep.ai.

@@ -5,19 +5,17 @@
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** support@northkeep.ai · **Effective date:** July 17, 2026
+**Contact:** support@northkeep.ai · **Effective date:** July 27, 2026
 
 NorthKeep is built on a simple promise: **your AI memory lives on your device,
-encrypted, and we never see its contents** (the one exception is a scope you
-deliberately choose to share with the optional connector, described below: those
-shared memories are stored on our server encrypted at rest, the connector
-database holds no key that can read them, and the key is rebuilt for each request
-from your app's own credential plus a secret held on our server, which briefly
-decrypts them in memory so a connected AI app can read the result). This policy
-explains the little data that does exist, where it lives, and what we do, and
-don't, do with it. The statements below describe how NorthKeep works today; if our
-practices change, we will update this policy and, for material changes, tell you
-before the change takes effect (see "Changes").
+encrypted, and we never see its contents** (the exceptions are content you
+deliberately choose to share or send: a scope you share with the optional
+connector, described below, and the arguments of a tool call you approve,
+described in "Tools" below). This policy explains the little data that does
+exist, where it lives, and what we do, and don't, do with it. The statements
+below describe how NorthKeep works today; if our practices change, we will
+update this policy and, for material changes, tell you before the change takes
+effect (see "Changes").
 
 ## The short version
 
@@ -25,9 +23,10 @@ before the change takes effect (see "Changes").
   on your device**. We cannot read them.
 - **No telemetry. No analytics. No tracking.** The app does not phone home: it
   makes no network connection except the ones you initiate or enable: syncing
-  your encrypted vault, reaching an AI provider you connect, or an update check if
-  you turn one on. We do not collect usage data, and there are no third-party
-  trackers in it.
+  your encrypted vault, reaching an AI provider you connect, an update check if
+  you turn one on, or — each off by default until you turn it on — a web search
+  or fetch you approve, or an MCP server, local or remote, that you connect. We
+  do not collect usage data, and there are no third-party trackers in it.
 - If you use our **optional hosted sync**, our server stores only an **encrypted
   blob it cannot decrypt** plus a version number, never a key, never plaintext.
 - If you **subscribe**, payment is handled by Stripe; your card and email live
@@ -37,9 +36,11 @@ before the change takes effect (see "Changes").
 ## What we collect
 
 **On your device (not sent to us):** your memories, their scopes, provenance,
-your passphrase, and your API keys (kept in your operating system's keychain).
-None of this is transmitted to us. There is no account to create to use NorthKeep
-locally.
+your passphrase, and the credentials NorthKeep stores in your operating
+system's keychain — your AI provider API keys, your Brave Search key (if you
+enable web search), and any OAuth tokens and client credentials for the remote
+MCP servers you connect. None of this is transmitted to us. There is no
+account to create to use NorthKeep locally.
 
 **If you enable hosted sync**, our sync server receives and stores:
 - an **opaque, client-side-encrypted copy of your vault** (ciphertext bytes we
@@ -108,12 +109,16 @@ memory ever transits our server.
 ## What we do not do
 
 - We do **not** collect, read, store, or transmit the contents of your memories
-  or conversations, with one exception you turn on yourself: a scope you
+  or conversations, with two exceptions you turn on yourself: (1) a scope you
   deliberately share with the optional connector (see "Shared scopes" above),
   which is stored there encrypted at rest and briefly decrypted per request so
-  your own AI apps can read it. Everything you keep private stays on your device.
-  (Chat transcripts are never stored at all; only distilled memories you can see
-  and undo are kept, on your device.)
+  your own AI apps can read it, and (2) the arguments of a tool call you
+  approve — a web search, a web fetch, or a call to an MCP server you've
+  connected — which are screened and then masked by our redaction floor before
+  they're sent to that destination (see "Tools" below). Everything you keep
+  private, and every tool you leave off, stays on your device. (Chat transcripts
+  are never stored at all; only distilled memories you can see and undo are
+  kept, on your device.)
 - We do **not** sell, rent, or share your data with advertisers or data brokers.
 - We do **not** run analytics or embed trackers.
 - We do **not** create server-side embeddings, logs, or analytics derived from
@@ -134,6 +139,85 @@ NorthKeep can send text to AI models **you** connect:
   does not receive that traffic.
 
 You control which providers you use and can disconnect them at any time.
+
+## Tools: web search, web fetch, and MCP servers
+
+NorthKeep can optionally let the model take actions beyond answering from your
+vault: searching the web, fetching a page, or calling a tool exposed by an MCP
+server you connect. **All of this is off by default.** Turning any of it on
+creates data flows to third parties you choose, described here.
+
+### Web search and web fetch
+
+When you enable tools, the model can ask to search the web or fetch a specific
+page.
+
+- **Web search.** Your search query is sent to **Brave Search**, a third-party
+  search API, authenticated with a key you supply and that NorthKeep stores in
+  your operating system's keychain. Brave receives the query text; see Brave's
+  own privacy policy for how it handles that.
+- **Web fetch.** A URL is requested directly from the site it points to. That
+  site receives the URL and whatever a normal web request discloses (for
+  example, your IP address), under its own privacy policy.
+- **Controls.** Every call is screened on-device for secret shapes, protected
+  names, and vault content before it runs. You approve each call at a prompt
+  showing the exact query or URL, unless you've granted that specific site
+  "always," which you can revoke at any time. Before anything is sent, the
+  arguments are passed through a deterministic redaction pass that masks them.
+  A per-turn proof shows exactly what left your device. We keep a content-free
+  audit log recording that a call happened, not what was in it.
+- **The honest limit.** Screening and masking reduce, they do not eliminate,
+  what a query or URL can disclose. Using web search or web fetch means
+  choosing to send a query or URL to a third party we don't control. **A
+  conversation pinned "Private only" does not block web search or web fetch**
+  (see the remote MCP servers section below for what "Private only" does
+  block).
+
+### MCP servers
+
+You can connect "MCP servers" — programs or services that expose tools to the
+model, so it can act beyond your vault (for example, reading your email).
+There are two kinds, with different exposure.
+
+- **Local MCP servers** are programs you install and run on your own machine,
+  under your own privileges. When you approve a tool call, its arguments —
+  masked by NorthKeep's redaction floor first — are passed to that program.
+  What that program does with them afterward is outside NorthKeep: many wrap a
+  third-party cloud API, and a program forwarding what it's given to that API
+  is its own egress, not ours. NorthKeep never sends a local server your vault
+  or your conversation, only the approved, masked arguments.
+- **Remote MCP servers** are HTTPS services you sign in to, such as a
+  provider's own MCP endpoint. Connecting one creates a direct,
+  NorthKeep-to-provider data flow:
+  - Signing in creates a **standing, scoped OAuth authorization** to your own
+    account at that provider. It is not a one-time grant. **We cannot revoke
+    it — you revoke it at the provider**, not through NorthKeep. Sign-in
+    happens in your browser, at the provider's own authorization page; we
+    never see your credentials there.
+  - The resulting tokens, and any client credentials you create for that
+    connection, are stored only in your operating system's keychain. **We
+    never receive them.**
+  - The arguments of an approved call — always masked by our redaction floor
+    first, with no exception for a server you've marked "trusted" — are sent
+    from your device to that provider.
+  - Results come back into your conversation and, if you're using a cloud
+    model to answer, travel on to that model provider too. Reading data
+    through a remote MCP server and then answering with a cloud model means
+    **two** third parties see it, not one.
+  - **A conversation pinned "Private only" refuses remote MCP tools
+    outright.**
+  - Each call is approved at a live prompt naming the server and its origin,
+    or runs under a standing grant you created at such a prompt and can
+    revoke at any time. Only tools you've explicitly marked read-only can hold
+    a standing grant; anything else asks every time.
+- **What your model provider also learns.** The tool names and descriptions of
+  the MCP servers you connect — text written by that server, not by us — are
+  included in what we send your model provider, so it knows which tools it can
+  call. That means your model provider can learn which services you've
+  connected, separately from anything a call's results return.
+
+Self-hosting, or simply never turning tools on or connecting a server, means
+none of the data flows in this section happen.
 
 ## How we protect the little data we hold
 
