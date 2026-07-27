@@ -1,5 +1,21 @@
 # M12 acceptance — remote MCP servers (ADR 0035)
 
+> **Run record 2026-07-27 (Jay + Claude): PASSED**, against two real providers.
+> Sections 1–2 with Google's Gmail server (add, refusals, no-secrets file,
+> inert-before-sign-in). Section 3 with both: the full OAuth sign-in, loopback
+> callback and token exchange completed against real Google (cross-origin
+> notice shown, tokens Keychain-only) and against Cloudflare's
+> bindings server via dynamic client registration (same-origin, quiet path).
+> Section 4 with Cloudflare: live tools/call, approval prompt naming server +
+> origin, proof strip, read-only + "always" standing grant then a promptless
+> run. Section 5: private-pin outright refusal with web search still asking;
+> tampered-URL host change killed the server with the origin-changed message;
+> revocation failed loudly (see the timing note at that item). Section 6:
+> vault stdio server unaffected. Gmail tools/call itself is blocked by
+> Google's Workspace Developer Preview gate, documented below — a Google
+> program gate, not a NorthKeep defect. Four product findings from the run are
+> recorded in ADR 0035, with the user-facing ones in KNOWN-LIMITS.
+
 What I built and tested myself is listed first, so you know what this checklist
 is and is not asking you to re-do. **The one thing I could not test is the part
 that matters most: a real sign-in to a real provider.** Everything below the
@@ -95,8 +111,12 @@ and no client can do it for you — see the note at the bottom.
 - [ ] Edit the URL in `mcp.json` to a different host and try to use it. The
       server stops working entirely — its tools are not offered, so nothing even
       prompts. Remembered approvals cannot carry to a host you never approved.
-- [ ] Revoke the grant at the provider, then use the tool. It should fail loudly
-      and tell you to reconnect.
+- [ ] Revoke the grant at the provider, then use the tool. It must fail loudly
+      — no hang, no silent retry, and NEVER a browser opening on its own. Note
+      the timing reality (observed 2026-07-27): providers honor already-issued
+      access tokens until expiry, so immediately after revoking you may see the
+      server's own error text; NorthKeep's "sign in again" message appears once
+      the token expires and the transport gets its 401.
 
 ### 6. Nothing regressed
 
@@ -125,7 +145,13 @@ callbacks are hosted URLs (`https://claude.ai/api/mcp/auth_callback` and
 `https://antigravity.google/oauth-callback`). NorthKeep is a local app, so you
 register **ours** instead:
 
-1. Google Cloud console → enable the Gmail API on a project.
+1. Google Cloud console → enable BOTH APIs on the project: the **Gmail API**
+   (`gmail.googleapis.com`) and the **Gmail MCP service**
+   (`gmailmcp.googleapis.com`). They are separate services and each needs its
+   own Enable click; with only the first, sign-in succeeds but every MCP call
+   answers 403 (found the hard way, 2026-07-27 — and the 403 arrives with a
+   full tool list in its body and no error text, so do not expect Google to
+   tell you why).
 2. Google Auth Platform → Branding: configure the consent screen.
 3. Google Auth Platform → Clients → Create client → **Web application**.
 4. Authorized redirect URIs → add exactly:
@@ -145,6 +171,38 @@ Endpoint and redirect-URI rule verified against Google's live documentation
 today. **What I could not verify is the sign-in itself**, because it needs your
 Google account: that is step 3 of the checklist and it is the one place a
 surprise would show up.
+
+### What the 2026-07-27 run against real Google actually found
+
+The sign-in itself works end to end: discovery resolves accounts.google.com
+(cross-origin, so the loud notice is the NORMAL path for Gmail), the loopback
+callback and token exchange succeed, and tokens land in the Keychain with the
+requested scopes (verified via Google's tokeninfo). Everything after that is
+gated on Google's side, in ways their errors never explain:
+
+1. Both `gmail.googleapis.com` AND `gmailmcp.googleapis.com` must be enabled
+   (see step 1 above). With only the first, every MCP call answers 403 with a
+   full tool list in the body and no error text.
+2. **Workspace accounts only.** Google's own docs: consumer @gmail.com is not
+   supported at all.
+3. **The Gmail MCP server is a Google Workspace DEVELOPER PREVIEW feature**
+   (developers.google.com/workspace/preview), not GA. With everything else
+   correct, `tools/call` still answers "The caller does not have permission"
+   for an account not enrolled in the preview program. tools/list works
+   anonymously regardless, which makes the failure look like ours. It is not:
+   the same token drives the plain Gmail REST API perfectly.
+4. **Google issues NO refresh token to this flow** (that requires Google's
+   nonstandard `access_type=offline` parameter, which the SDK does not send),
+   so a Gmail sign-in dies after one hour, silently. Fix tracked in ADR 0035;
+   until then Gmail reconnects hourly.
+
+Consequence for the product: do not present Gmail as a mainstream connect
+target while it is preview-gated. The smooth path to verify remote MCP end to
+end is a dynamic-registration server; Cloudflare's
+(`https://bindings.mcp.cloudflare.com/mcp`) needs no console setup at all:
+add, sign in with an existing Cloudflare account, done. Same-origin
+authorization server, 401 on anonymous access, metadata published, DCR
+supported.
 
 **Remote servers are macOS-only.** The sign-in lives in the Keychain and there
 is no file fallback, deliberately — refresh tokens rotate, and tokens on disk is

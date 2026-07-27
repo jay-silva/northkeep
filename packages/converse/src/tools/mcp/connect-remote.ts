@@ -1,6 +1,6 @@
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { auth } from '@modelcontextprotocol/sdk/client/auth.js';
+import { auth, discoverOAuthProtectedResourceMetadata } from '@modelcontextprotocol/sdk/client/auth.js';
 import { endpointOrigin, remoteUrlRefusal, type McpHttpServer } from './config.js';
 import { guardedFetch } from '../net.js';
 import {
@@ -73,7 +73,7 @@ export interface RemoteConnectOptions {
   /** Injected by tests, so no listener is bound and no browser opens. */
   awaitCallback?: typeof awaitOAuthCallback;
   /** Injected by tests in place of a real anonymous probe. */
-  probeRequiresAuth?: (server: McpHttpServer) => Promise<boolean>;
+  probeRequiresAuth?: (server: McpHttpServer, fetchFn?: typeof fetch) => Promise<boolean>;
   /**
    * Injected by TESTS ONLY, in place of `guardedFetch`.
    *
@@ -110,8 +110,9 @@ export async function startRemoteConnect(
   // instead (`ignoreStoredTokens`), so a fresh authorization is forced and
   // nothing is lost unless a new token actually replaces the old one.
 
+  const fetchFn = options.fetchImpl ?? (guardedFetch as unknown as typeof fetch);
   const probe = options.probeRequiresAuth ?? probeRequiresAuth;
-  if (!(await probe(server))) throw new McpServerNotAuthenticatedError(server.id);
+  if (!(await probe(server, fetchFn))) throw new McpServerNotAuthenticatedError(server.id);
 
   const provider = new KeychainOAuthProvider({
     serverId: server.id,
@@ -126,7 +127,6 @@ export async function startRemoteConnect(
   // registration — all through our own guarded fetch, per Decision 5, because
   // the SDK's discovery calls would otherwise use bare `fetch` and bypass the
   // egress wall entirely.
-  const fetchFn = options.fetchImpl ?? (guardedFetch as unknown as typeof fetch);
   const result = await auth(provider, {
     serverUrl: server.url,
     fetchFn,
@@ -154,7 +154,16 @@ export async function startRemoteConnect(
   const authOrigin = authorizationUrl.origin;
 
   const listener = options.awaitCallback ?? awaitOAuthCallback;
-  const state = authorizationUrl.searchParams.get('state');
+  // The expected state comes from the PROVIDER that issued it, not from
+  // re-parsing the URL: one source of truth for the value the callback must
+  // echo. A redirect flow without an issued state has nothing to verify the
+  // callback against, so it is refused rather than waited on.
+  const state = provider.issuedState;
+  if (state === null) {
+    throw new Error(
+      'No state value was issued for this sign-in, so its callback could not be verified. Start the sign-in again.',
+    );
+  }
 
   let started: ReturnType<typeof awaitOAuthCallback> | null = null;
   return {
@@ -168,6 +177,11 @@ export async function startRemoteConnect(
       // cannot redirect back to a port nothing is listening on.
       started = listener(state);
       try {
+        // The bind must be CONFIRMED, not merely started, before any browser
+        // opens: if the fixed port is already owned by another process, the
+        // user would otherwise complete a real sign-in whose code is delivered
+        // to whatever owns it. Port-in-use fails here, browser unopened.
+        await started.ready;
         (options.openBrowser ?? openInBrowser)(authorizationUrl);
         const { code } = await started.result;
         const finished = await auth(provider, {
@@ -199,17 +213,35 @@ export async function startRemoteConnect(
  * Does this server actually demand authentication?
  *
  * ADR 0035 Decision 7, hole 2: nothing in the protocol requires a server to ask
- * for credentials, and a server that serves `tools/list` to anyone has put its
- * descriptions in front of the model with no gate at all. So probe ANONYMOUSLY
- * — no auth provider, no stored token — and refuse the server if that works.
+ * for credentials, and NorthKeep refuses a server that is credential-less in
+ * fact — "sign in" to such a server means nothing, and approved arguments
+ * would flow to an endpoint that answers to anyone.
  *
- * The probe connects and immediately closes. It never lists tools, so even a
- * server that answers is never given the chance to have its descriptions read.
+ * "Demands authentication" has two honest shapes (acceptance finding
+ * 2026-07-27): a server may refuse the anonymous handshake outright, OR it may
+ * answer the handshake — even `tools/list` — anonymously while gating every
+ * `tools/call` behind a token it declares via RFC 9728 protected-resource
+ * metadata. Google's Gmail server is the second shape, and judging it by its
+ * open front door refused the flagship provider. So: a published metadata
+ * document naming an authorization server counts as demanding auth. A server
+ * that neither publishes one nor refuses the anonymous handshake is refused.
+ *
+ * The probe never lists tools, so even a server that answers is never given
+ * the chance to have its descriptions read.
  */
-async function probeRequiresAuth(server: McpHttpServer): Promise<boolean> {
+export async function probeRequiresAuth(
+  server: McpHttpServer,
+  fetchFn: typeof fetch = guardedFetch as unknown as typeof fetch,
+): Promise<boolean> {
+  try {
+    const metadata = await discoverOAuthProtectedResourceMetadata(server.url, undefined, fetchFn);
+    if ((metadata.authorization_servers?.length ?? 0) > 0) return true;
+  } catch {
+    // No declaration published; the anonymous handshake below decides.
+  }
   const client = new Client({ name: 'northkeep', version: '1' }, { capabilities: {} });
   const transport = new StreamableHTTPClientTransport(new URL(server.url), {
-    fetch: guardedFetch as unknown as typeof fetch,
+    fetch: fetchFn,
   });
   try {
     await client.connect(transport);

@@ -658,8 +658,16 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
             // once erased three separate controls at the same time.
             const remoteServer =
               mcpServerId !== undefined ? getMcpServer(mcpServerId) : undefined;
-            const isRemoteMcp = remoteServer !== undefined && isHttpServer(remoteServer);
-            const remoteOrigin = isRemoteMcp ? endpointOrigin(remoteServer.url) : undefined;
+            const remoteHttp =
+              remoteServer !== undefined && isHttpServer(remoteServer) ? remoteServer : undefined;
+            // A tool that carries a serverId the config no longer has counts
+            // as REMOTE here: the config can change under a running turn, and
+            // an already-connected remote tool whose row vanished must not
+            // slip a Private pin because it cannot be classified. Unknown =
+            // it leaves (fail closed), same as egressTier above.
+            const serverVanished = mcpServerId !== undefined && remoteServer === undefined;
+            const isRemoteMcp = remoteHttp !== undefined || serverVanished;
+            const remoteOrigin = remoteHttp !== undefined ? endpointOrigin(remoteHttp.url) : undefined;
             remoteOriginForProof = remoteOrigin;
             if (ceiling === 'private-only' && isRemoteMcp) {
               decision = 'denied';
@@ -668,11 +676,16 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
               resultContent = JSON.stringify({
                 error: 'privacy_ceiling',
                 guidance:
-                  `This conversation is pinned to private, so it cannot use "${call.name}": ` +
-                  `${remoteServer.id} runs on ${endpointOrigin(remoteServer.url)}, off this machine, ` +
-                  'and holds a standing sign-in to that account. Web search and fetch still work in a ' +
-                  'private conversation, with approval; a connected account server does not. ' +
-                  'Unpin the conversation if you want to use it.',
+                  remoteHttp !== undefined
+                    ? `This conversation is pinned to private, so it cannot use "${call.name}": ` +
+                      `${remoteHttp.id} runs on ${remoteOrigin}, off this machine, ` +
+                      'and holds a standing sign-in to that account. Web search and fetch still work in a ' +
+                      'private conversation, with approval; a connected account server does not. ' +
+                      'Unpin the conversation if you want to use it.'
+                    : `This conversation is pinned to private, so it cannot use "${call.name}": ` +
+                      'the server it belongs to is no longer in the MCP configuration, so where it ' +
+                      'runs cannot be checked, and an uncheckable server is refused as though it ' +
+                      'ran off this machine.',
               });
               // Reported through the SAME `permission` event a screen denial
               // uses, with via:'screen', so every surface that already shows a
@@ -684,8 +697,11 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                 decision: 'denied',
                 via: 'screen',
                 reasons: [
-                  `this conversation is pinned to private, and ${remoteServer.id} is a connected ` +
-                    'account server running off this machine',
+                  remoteHttp !== undefined
+                    ? `this conversation is pinned to private, and ${remoteHttp.id} is a connected ` +
+                      'account server running off this machine'
+                    : 'this conversation is pinned to private, and the server this tool belongs to ' +
+                      'is no longer in the MCP configuration, which refuses as remote',
                 ],
               });
             } else {

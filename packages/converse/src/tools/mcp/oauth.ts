@@ -1,4 +1,5 @@
 import http from 'node:http';
+import { randomBytes } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import type { OAuthClientProvider } from '@modelcontextprotocol/sdk/client/auth.js';
 import type {
@@ -74,7 +75,25 @@ export class KeychainOAuthProvider implements OAuthClientProvider {
   /** Set by redirectToAuthorization; read by the caller to decide whether to open it. */
   authorizationUrl: URL | null = null;
 
+  /**
+   * Set by state(); the callback must echo exactly this value. The caller
+   * awaiting the loopback callback reads it from HERE, not from the
+   * authorization URL's query string, so the URL builder and the callback
+   * verifier can never disagree about what was issued.
+   */
+  issuedState: string | null = null;
+
   constructor(private readonly opts: ProviderOptions) {}
+
+  /**
+   * CSRF binding for the authorization redirect. Without this the SDK omits
+   * `state` entirely and the callback check has nothing to verify, so any code
+   * delivered to the loopback port would be accepted. Fresh per attempt.
+   */
+  state(): string {
+    this.issuedState = randomBytes(32).toString('base64url');
+    return this.issuedState;
+  }
 
   get redirectUrl(): string {
     return OAUTH_REDIRECT_URI;
@@ -136,6 +155,24 @@ export class KeychainOAuthProvider implements OAuthClientProvider {
     await updateCredentials(this.opts.serverId, (cur) => ({
       ...(cur ?? { origin: this.opts.origin }),
       origin: this.opts.origin,
+      // A pasted client secret is persisted HERE, on the success of the grant
+      // it was pasted for, and nowhere earlier — a failed attempt must not
+      // overwrite a working record (same property as 5e03cfc). Without this,
+      // the secret lived only in memory, so a later refresh could not
+      // authenticate and every re-sign-in required re-pasting it. A stored
+      // registration (DCR) is preserved when this attempt pasted nothing.
+      ...(this.opts.clientId !== undefined && this.opts.clientSecret !== undefined
+        ? {
+            client: {
+              client_id: this.opts.clientId,
+              client_secret: this.opts.clientSecret,
+            },
+          }
+        : cur?.client !== undefined
+          ? { client: cur.client }
+          : this.opts.clientId !== undefined
+            ? { client: { client_id: this.opts.clientId } }
+            : {}),
       tokens: {
         access_token: tokens.access_token,
         token_type: tokens.token_type,
@@ -177,9 +214,16 @@ export class KeychainOAuthProvider implements OAuthClientProvider {
     const cur = loadCredentials(this.opts.serverId);
     if (cur === null) return;
     if (scope === 'discovery') return;
+    // Under `ignoreStoredTokens` the stored tokens and client belong to the
+    // PREVIOUS, working grant, not to this attempt: the SDK invalidates on
+    // InvalidGrant/InvalidClient from the NEW attempt's requests, and deleting
+    // here would destroy exactly what that flag exists to preserve. Only this
+    // attempt's PKCE verifier is ours to clear. Normal-path invalidation (an
+    // expired refresh token during ordinary use) is unaffected.
+    const preserveStored = this.opts.ignoreStoredTokens === true;
     const next = { ...cur };
-    if (scope === 'all' || scope === 'tokens') delete next.tokens;
-    if (scope === 'all' || scope === 'client') delete next.client;
+    if (!preserveStored && (scope === 'all' || scope === 'tokens')) delete next.tokens;
+    if (!preserveStored && (scope === 'all' || scope === 'client')) delete next.client;
     if (scope === 'all' || scope === 'verifier') delete next.codeVerifier;
     saveCredentials(this.opts.serverId, next);
   }
@@ -205,13 +249,26 @@ export interface CallbackResult {
 export function awaitOAuthCallback(
   expectedState: string | null,
   timeoutMs = 5 * 60 * 1000,
-): { result: Promise<CallbackResult>; cancel: () => void } {
+): { result: Promise<CallbackResult>; ready: Promise<void>; cancel: () => void } {
   let settle: ((r: CallbackResult) => void) | null = null;
   let fail: ((e: Error) => void) | null = null;
   const result = new Promise<CallbackResult>((resolve, reject) => {
     settle = resolve;
     fail = reject;
   });
+  let readyResolve: (() => void) | null = null;
+  let readyReject: ((e: Error) => void) | null = null;
+  // `ready` settles only once the socket is BOUND (or has failed to bind).
+  // `listen()` returns before either, and EADDRINUSE arrives async, so a
+  // caller that opens the browser without awaiting this can send a real
+  // sign-in's code to whatever process owns the port.
+  const ready = new Promise<void>((resolve, reject) => {
+    readyResolve = resolve;
+    readyReject = reject;
+  });
+  // A bind failure rejects `ready` AND `result`; a caller that stops at
+  // `ready` must not leave `result` an unhandled rejection.
+  result.catch(() => undefined);
 
   const server = http.createServer((req, res) => {
     const url = new URL(req.url ?? '/', `http://127.0.0.1:${OAUTH_CALLBACK_PORT}`);
@@ -241,6 +298,8 @@ export function awaitOAuthCallback(
       fail?.(new Error(error !== null ? `The provider refused the sign-in (${sanitizeServerText(error, 120)}).` : 'The provider returned no authorization code.'));
       return;
     }
+    // When a state was issued, a MISSING state is a mismatch: `state` is null
+    // then, so the inequality catches absent and wrong alike, fail closed.
     if (expectedState !== null && state !== expectedState) {
       res
         .writeHead(400, {
@@ -275,21 +334,27 @@ export function awaitOAuthCallback(
     clearTimeout(timer);
     server.close();
     server.closeAllConnections?.();
+    // A cancel before the bind settled must not leave `ready` pending forever.
+    readyResolve?.();
   }
 
   server.on('error', (err: NodeJS.ErrnoException) => {
-    close();
-    fail?.(
+    const failure =
       err.code === 'EADDRINUSE'
         ? new Error(
             `Port ${OAUTH_CALLBACK_PORT} is already in use, so NorthKeep cannot receive the sign-in. Close whatever is using it and try again.`,
           )
-        : err,
-    );
+        : err;
+    // Reject BEFORE close(): close() resolves `ready` for the cancel path, and
+    // a promise settles once, so the rejection must win here.
+    readyReject?.(failure);
+    close();
+    fail?.(failure);
   });
+  server.on('listening', () => readyResolve?.());
   server.listen(OAUTH_CALLBACK_PORT, '127.0.0.1');
 
-  return { result, cancel: close };
+  return { result, ready, cancel: close };
 }
 
 /** Open a URL in the user's default browser. Only ever called after the caller confirms the origin. */

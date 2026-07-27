@@ -474,12 +474,34 @@ export async function guardedFetch(
     }
   }
 
-  const body =
-    init.body === undefined || init.body === null
-      ? undefined
-      : typeof init.body === 'string'
-        ? init.body
-        : JSON.stringify(init.body);
+  // Each supported body shape is written as its OWN bytes. The MCP SDK's OAuth
+  // token exchange and refresh POST a URLSearchParams body, and
+  // JSON.stringify(new URLSearchParams(...)) is "{}", so serializing it that
+  // way silently destroys the request. Anything unrecognized throws rather
+  // than being JSON-ified on a guess.
+  let body: string | Uint8Array | undefined;
+  if (init.body === undefined || init.body === null) {
+    body = undefined;
+  } else if (typeof init.body === 'string') {
+    body = init.body;
+  } else if (init.body instanceof URLSearchParams) {
+    body = init.body.toString();
+    // fetch's own default for a URLSearchParams body; a caller-set header wins.
+    if (!Object.keys(headers).some((k) => k.toLowerCase() === 'content-type')) {
+      headers['content-type'] = 'application/x-www-form-urlencoded;charset=UTF-8';
+    }
+  } else if (init.body instanceof Uint8Array) {
+    body = init.body; // Buffer included; written byte-for-byte
+  } else {
+    throw new TypeError(
+      'guardedFetch supports string, URLSearchParams, and Uint8Array bodies only',
+    );
+  }
+  // A known length keeps the request un-chunked; some token endpoints answer
+  // 411 to Transfer-Encoding: chunked.
+  if (body !== undefined && !Object.keys(headers).some((k) => k.toLowerCase() === 'content-length')) {
+    headers['content-length'] = String(Buffer.byteLength(body));
+  }
 
   // http is unreachable in production (classifyFetchTarget refuses it); the
   // TEST seam allows it so fixture servers can run on loopback, exactly as
@@ -498,8 +520,22 @@ export async function guardedFetch(
         path: `${url.pathname}${url.search}`,
         method: init.method ?? 'GET',
         headers,
-        lookup: ((_h: string, _o: unknown, cb: unknown) => {
-          (cb as (e: null, a: string, f: number) => void)(null, pinned.address, pinned.family);
+        // Node 20+ enables autoSelectFamily by default, which calls lookup with
+        // {all:true} and requires an ARRAY back; the two-shape branch below is
+        // the same contract hardenedFetch honors. A bare (addr, family) answer
+        // under all:true fails every hostname dial with "Invalid IP address".
+        lookup: ((_hostname: string, options: { all?: boolean }, callback: unknown) => {
+          if (options.all === true) {
+            (callback as (e: null, a: Array<{ address: string; family: number }>) => void)(null, [
+              { address: pinned.address, family: pinned.family },
+            ]);
+          } else {
+            (callback as (e: null, address: string, family: number) => void)(
+              null,
+              pinned.address,
+              pinned.family,
+            );
+          }
         }) as never,
       },
       (res) => {

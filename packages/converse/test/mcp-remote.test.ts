@@ -12,6 +12,7 @@ import {
   loadCredentials,
   loadMcpConfig,
   mcpConfigPath,
+  probeRequiresAuth,
   remoteUrlRefusal,
   saveCredentials,
   setTokenBackend,
@@ -19,6 +20,7 @@ import {
   createSession,
   runTask,
   startRemoteConnect,
+  KeychainOAuthProvider,
   type ChatTurnResult,
   type ModelProvider,
   type TaskEvent,
@@ -337,6 +339,20 @@ describe('privacy ceiling on remote MCP egress (ADR 0035 Decision 3, option B)',
     expect(executed).toEqual(['{"q":"hello"}']);
   });
 
+  it('refuses a tool whose serverId is NOT in the config, in a private-pinned conversation', async () => {
+    // Adversarial review 2026-07-27, finding 5: nothing is added to the
+    // config, so the id resolves to no server at all. The ceiling must refuse
+    // that as remote (unknown = it leaves), not classify it as local because
+    // the lookup came back empty. An already-connected remote tool whose
+    // config row was removed mid-turn is exactly this shape.
+    const { executed, events, result } = await run('ghost', 'private-only');
+    expect(executed).toEqual([]);
+    const denial = events.find((e) => e.type === 'permission' && e.decision === 'denied');
+    expect(denial).toBeDefined();
+    expect(JSON.stringify(denial)).toMatch(/pinned to private/);
+    expect(result.toolCallsMade[0]?.decision).toBe('denied');
+  });
+
   it('does NOT refuse a LOCAL stdio server in a private-pinned conversation', async () => {
     // The asymmetry is deliberate: a local program is not egress, so the
     // ceiling has nothing to bind. If this ever starts failing, the ceiling has
@@ -372,6 +388,111 @@ const fakeOAuthDiscovery: typeof fetch = (input) => {
   return Promise.resolve(new Response('not found', { status: 404 }));
 };
 
+describe('a completed sign-in persists the client credentials it used', () => {
+  it('stores a pasted client secret on token save, so refresh can authenticate later', async () => {
+    const provider = new KeychainOAuthProvider({
+      serverId: 'gmail',
+      origin: 'https://mcp.example.com',
+      clientId: 'client-123',
+      clientSecret: 'the-pasted-secret',
+    });
+    await provider.saveTokens({ access_token: 'at', token_type: 'Bearer', refresh_token: 'rt' });
+    const rec = loadCredentials('gmail');
+    expect(rec?.client).toEqual({ client_id: 'client-123', client_secret: 'the-pasted-secret' });
+    expect(rec?.tokens?.refresh_token).toBe('rt');
+  });
+
+  it('preserves a stored DCR registration when this attempt pasted nothing', async () => {
+    saveCredentials('cloudflare', {
+      origin: 'https://mcp.example.com',
+      client: { client_id: 'dcr-client', client_secret: 'dcr-secret' },
+    });
+    const provider = new KeychainOAuthProvider({
+      serverId: 'cloudflare',
+      origin: 'https://mcp.example.com',
+    });
+    await provider.saveTokens({ access_token: 'at', token_type: 'Bearer' });
+    expect(loadCredentials('cloudflare')?.client).toEqual({
+      client_id: 'dcr-client',
+      client_secret: 'dcr-secret',
+    });
+  });
+});
+
+describe('probeRequiresAuth: what counts as demanding credentials', () => {
+  const server = { id: 'gmail', transport: 'http', url: 'https://mcp.example.com/v1', trust: 'strict', safeRead: [], addedAt: 'now' } as never;
+
+  it('treats PUBLISHED protected-resource metadata as demanding auth, without a handshake', async () => {
+    // Acceptance finding 2026-07-27: Google's Gmail server answers the
+    // anonymous handshake and even tools/list, gating only tools/call. Its
+    // RFC 9728 declaration is the honest signal. The stub REFUSES any POST so
+    // the test also proves the metadata path never falls through to a
+    // handshake attempt.
+    const calls: Array<{ url: string; method: string }> = [];
+    const fakeFetch: typeof fetch = (input, init) => {
+      const url = String(typeof input === 'string' ? input : (input as URL).toString());
+      const method = init?.method ?? 'GET';
+      calls.push({ url, method });
+      if (method !== 'GET') {
+        return Promise.reject(new Error('the metadata path must not attempt a handshake'));
+      }
+      if (url.includes('/.well-known/oauth-protected-resource')) {
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              resource: 'https://mcp.example.com/v1',
+              authorization_servers: ['https://accounts.example.com/'],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        );
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    };
+    await expect(probeRequiresAuth(server, fakeFetch)).resolves.toBe(true);
+    expect(calls.some((c) => c.url.includes('/.well-known/oauth-protected-resource'))).toBe(true);
+    // The strong claim, asserted rather than implied: a rejected POST would be
+    // swallowed by the probe's catch and the probe would still return true, so
+    // only this proves no handshake was attempted after the metadata answered.
+    expect(calls.every((c) => c.method === 'GET' && c.url.includes('/.well-known/'))).toBe(true);
+  });
+
+  it('still refuses a server with NO declaration that lets the anonymous handshake in', async () => {
+    // The refusal ADR 0035 promised, kept: credential-less in fact means no
+    // metadata AND an open door. The stub speaks just enough streamable-http
+    // to let an anonymous initialize succeed.
+    const fakeFetch: typeof fetch = (input, init) => {
+      const url = String(typeof input === 'string' ? input : (input as URL).toString());
+      if (url.includes('/.well-known/')) {
+        return Promise.resolve(new Response('not found', { status: 404 }));
+      }
+      if ((init?.method ?? 'GET') === 'POST') {
+        const body = JSON.parse(String(init?.body ?? '{}')) as { id?: number; method?: string };
+        if (body.method === 'initialize') {
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({
+                jsonrpc: '2.0',
+                id: body.id,
+                result: {
+                  protocolVersion: '2025-06-18',
+                  capabilities: {},
+                  serverInfo: { name: 'open-door', version: '1' },
+                },
+              }),
+              { status: 200, headers: { 'content-type': 'application/json' } },
+            ),
+          );
+        }
+        // notifications/initialized and anything else: accepted, no content.
+        return Promise.resolve(new Response(null, { status: 202 }));
+      }
+      return Promise.resolve(new Response('not found', { status: 404 }));
+    };
+    await expect(probeRequiresAuth(server, fakeFetch)).resolves.toBe(false);
+  });
+});
+
 describe('a sign-in attempt must not destroy the grant it is replacing', () => {
   /** The record a connected server has: tokens, and a client secret behind them. */
   function seedConnected(id: string, origin: string) {
@@ -391,6 +512,7 @@ describe('a sign-in attempt must not destroy the grant it is replacing', () => {
       probeRequiresAuth: () => Promise.resolve(true),
       awaitCallback: () => ({
         result: new Promise<never>(() => undefined), // never resolves
+        ready: Promise.resolve(),
         cancel: () => undefined,
       }),
       openBrowser: () => undefined,
@@ -417,12 +539,128 @@ describe('a sign-in attempt must not destroy the grant it is replacing', () => {
     // or "Sign in again" would silently do nothing and report success.
     const pending = await startRemoteConnect(server, {
       probeRequiresAuth: () => Promise.resolve(true),
-      awaitCallback: () => ({ result: new Promise<never>(() => undefined), cancel: () => undefined }),
+      awaitCallback: () => ({ result: new Promise<never>(() => undefined), ready: Promise.resolve(), cancel: () => undefined }),
       openBrowser: () => undefined,
       fetchImpl: fakeOAuthDiscovery,
     });
     expect(pending.authorizationUrl.toString()).not.toBe('https://mcp.example.com/');
     pending.cancel();
+  });
+});
+
+describe('CSRF state and callback readiness (adversarial review 2026-07-27, findings 2 and 3)', () => {
+  it('state() is crypto-random, fresh per call, and remembered on the provider', () => {
+    const p = new KeychainOAuthProvider({ serverId: 'x', origin: 'https://mcp.example.com' });
+    const a = p.state();
+    expect(p.issuedState).toBe(a);
+    expect(a).toMatch(/^[A-Za-z0-9_-]{43}$/); // 32 bytes, base64url
+    expect(p.state()).not.toBe(a);
+  });
+
+  it('puts the issued state in the authorization URL and hands the SAME value to the listener', async () => {
+    // The finding: no state() meant the SDK omitted the parameter, the caller
+    // read null from the URL, and the callback's mismatch guard was dead code.
+    // The URL builder and the callback verifier must share one issued value.
+    const server = addRemoteServer({
+      id: 'gmail',
+      url: 'https://mcp.example.com/v1',
+      clientId: 'client-123',
+    });
+    const expectedStates: Array<string | null> = [];
+    let rejectResult: ((e: Error) => void) | null = null;
+    const pending = await startRemoteConnect(server, {
+      probeRequiresAuth: () => Promise.resolve(true),
+      awaitCallback: (expectedState) => {
+        expectedStates.push(expectedState);
+        return {
+          result: new Promise<never>((_, rej) => {
+            rejectResult = rej;
+          }),
+          ready: Promise.resolve(),
+          cancel: () => rejectResult?.(new Error('cancelled by test')),
+        };
+      },
+      openBrowser: () => undefined,
+      fetchImpl: fakeOAuthDiscovery,
+    });
+    const urlState = pending.authorizationUrl.searchParams.get('state');
+    expect(urlState).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    const proceeding = pending.proceed();
+    expect(expectedStates).toEqual([urlState]);
+    pending.cancel();
+    await expect(proceeding).rejects.toThrow(/cancelled by test/);
+  });
+
+  it('does not open a browser when the callback port cannot be bound', async () => {
+    // Finding 3: listen() returns before EADDRINUSE arrives, so the old flow
+    // opened the browser over a port owned by another process, which would
+    // then receive the user's real sign-in code. Readiness must fail first.
+    const server = addRemoteServer({
+      id: 'gmail',
+      url: 'https://mcp.example.com/v1',
+      clientId: 'client-123',
+    });
+    let opened = 0;
+    const pending = await startRemoteConnect(server, {
+      probeRequiresAuth: () => Promise.resolve(true),
+      awaitCallback: () => ({
+        result: new Promise<never>(() => undefined),
+        ready: Promise.reject(new Error('Port 8788 is already in use, so NorthKeep cannot receive the sign-in.')),
+        cancel: () => undefined,
+      }),
+      openBrowser: () => {
+        opened += 1;
+      },
+      fetchImpl: fakeOAuthDiscovery,
+    });
+    await expect(pending.proceed()).rejects.toThrow(/already in use/);
+    expect(opened).toBe(0);
+  });
+});
+
+describe('SDK error recovery must not destroy the grant a re-sign-in is replacing (finding 4)', () => {
+  /** The record a connected server has, plus this attempt's PKCE verifier. */
+  const seed = (): void =>
+    saveCredentials('gmail', {
+      origin: 'https://mcp.example.com',
+      tokens: { access_token: 'live-at', token_type: 'Bearer', refresh_token: 'live-rt' },
+      client: { client_id: 'client-123', client_secret: 'the-secret-the-user-pasted' },
+      codeVerifier: 'this-attempt-verifier',
+    });
+
+  it('preserves the stored tokens and client under ignoreStoredTokens, for every scope', () => {
+    // The SDK's auth() calls invalidateCredentials('all' | 'tokens') on
+    // InvalidClient/UnauthorizedClient/InvalidGrant from the NEW attempt.
+    // While the stored record is the PREVIOUS grant, none of those may touch
+    // it; only the attempt's own verifier is clearable.
+    seed();
+    const p = new KeychainOAuthProvider({
+      serverId: 'gmail',
+      origin: 'https://mcp.example.com',
+      ignoreStoredTokens: true,
+    });
+    p.invalidateCredentials('tokens');
+    p.invalidateCredentials('client');
+    p.invalidateCredentials('all');
+    const rec = loadCredentials('gmail');
+    expect(rec?.tokens?.refresh_token).toBe('live-rt');
+    expect(rec?.client?.client_secret).toBe('the-secret-the-user-pasted');
+    expect(rec?.codeVerifier).toBeUndefined();
+  });
+
+  it('still invalidates normally when no re-sign-in is in flight', () => {
+    // An expired refresh token during ordinary use must keep clearing, or the
+    // next attempt would present dead credentials forever.
+    seed();
+    const p = new KeychainOAuthProvider({ serverId: 'gmail', origin: 'https://mcp.example.com' });
+    p.invalidateCredentials('tokens');
+    let rec = loadCredentials('gmail');
+    expect(rec?.tokens).toBeUndefined();
+    expect(rec?.client?.client_secret).toBe('the-secret-the-user-pasted');
+    p.invalidateCredentials('all');
+    rec = loadCredentials('gmail');
+    expect(rec?.client).toBeUndefined();
+    expect(rec?.codeVerifier).toBeUndefined();
   });
 });
 

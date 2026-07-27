@@ -446,5 +446,171 @@ argument-sized pieces, where before it said they could not at all.
    `McpFingerprintChangedError` does for stdio. The grants stay in
    `permissions.json` and are simply never reachable. Same outcome, and the
    acceptance test says what you will actually see.)
-7. Revoking the grant at Google makes the next call fail loudly with "reconnect".
+7. Revoking the grant at Google makes the next call fail loudly with
+   "reconnect". *(Amended by the 2026-07-27 acceptance run: providers honor
+   already-issued access tokens until expiry, so the loud failure immediately
+   after revocation may carry the server's own error text; the "sign in again"
+   message appears once the token expires.)*
 8. A test server that serves `tools/list` without authentication is refused.
+
+## Adversarial review 2026-07-27
+
+Second adversarial pass over the M12 OAuth work, verified against code rather
+than against this document's prose. Five findings, all fixed in the same change
+set, each fix carrying tests.
+
+1. **guardedFetch destroyed URLSearchParams bodies.** `guardedFetch`
+   JSON-stringified any non-string body, and
+   `JSON.stringify(new URLSearchParams(...))` is `"{}"`, so the SDK's token
+   exchange and refresh (which POST URLSearchParams as
+   `application/x-www-form-urlencoded`) sent a body of `{}` to every token
+   endpoint. Fixed: a URLSearchParams body is written as its urlencoded string,
+   a Uint8Array or Buffer body is written byte for byte, a caller-set
+   Content-Type is preserved, and any other body shape throws instead of being
+   serialized on a guess. A fixture-server test round-trips an SDK-shaped token
+   exchange and asserts grant_type, code, code_verifier and client_id arrive
+   intact.
+
+2. **The state parameter was never generated, so the callback's state check was
+   dead code.** `KeychainOAuthProvider` implemented no `state()`, the SDK
+   therefore omitted the parameter from the authorization URL, the connect flow
+   read null from that URL, and the mismatch guard in `awaitOAuthCallback` could
+   never run in production. Fixed: the provider issues a fresh 32-byte
+   crypto-random state per attempt and remembers it (`issuedState`); the connect
+   flow passes that provider-held value to the listener, and refuses to proceed
+   if none was issued; a missing state on the callback, when one was issued,
+   counts as a mismatch, fail closed. Tests cover a wrong state, a missing
+   state, and that the authorization URL and the listener share one value.
+
+3. **The browser could open before the loopback listener was bound.**
+   `server.listen()` returns before the bind settles and EADDRINUSE arrives
+   asynchronously, so if port 8788 was owned by another process, the user could
+   complete a real sign-in whose authorization code was delivered to whatever
+   owned the port. Fixed: `awaitOAuthCallback` now exposes a `ready` promise
+   that settles when the socket is bound or the bind has failed, and `proceed()`
+   awaits it before any browser opens. Port-in-use now fails with the browser
+   unopened. Tested against the real port, including the timeout and
+   one-request-then-close behaviour.
+
+4. **SDK error recovery destroyed the working grant during a re-sign-in.** The
+   SDK's `auth()` calls `invalidateCredentials('all' | 'tokens')` on
+   InvalidClient, UnauthorizedClient and InvalidGrant errors. During a
+   re-sign-in (`ignoreStoredTokens`), the stored record is the previous working
+   grant, so a failed new attempt deleted exactly what the
+   hide-instead-of-delete flow (commit 5e03cfc) exists to preserve. Fixed:
+   while `ignoreStoredTokens` is set, `invalidateCredentials` leaves the stored
+   tokens and client untouched and clears only this attempt's PKCE verifier;
+   normal-path invalidation, an expired refresh token during ordinary use, is
+   unchanged. Both directions are tested.
+
+5. **The privacy ceiling failed open when a server vanished from the config
+   mid-turn.** In the task loop, a tool carrying an `mcpServerId` that
+   `getMcpServer` could not resolve classified as not-remote, so an
+   already-connected remote tool could run in a Private-pinned conversation if
+   its config row was removed mid-turn. Fixed: a tool whose server id resolves
+   to nothing is refused as remote under the pin (unknown means it leaves, fail
+   closed), with its own denial wording. Tested.
+
+## Acceptance-test finding 2026-07-27 (real Google sign-in)
+
+The first real sign-in attempt against Google's Gmail MCP server opened the
+browser at `https://gmailmcp.googleapis.com/authorize` and got Google's 404
+page. Root cause, found by reproducing the SDK's discovery calls through
+`guardedFetch` outside the app: the pinned-DNS `lookup` override answered in
+the two-argument shape `(address, family)` unconditionally, but Node 20+
+enables `autoSelectFamily` by default, which invokes the override with
+`{all: true}` and requires an array back. Every `guardedFetch` to a real
+HOSTNAME therefore threw `Invalid IP address: undefined` before a packet was
+sent; the SDK swallowed the failed discovery fetches, concluded the server
+published no metadata, and fell back to the default `/authorize` path on the
+server origin. Every unit test stayed green because every fixture dials
+`127.0.0.1`, an IP literal, which skips the custom lookup entirely.
+
+Fixed by honoring both callback shapes, the same contract `hardenedFetch`
+already implemented (which is why M10 web tools never hit this). A canary test
+now connects to a fixture through a hostname so the override actually runs.
+
+Verified after the fix: `/.well-known/oauth-protected-resource/mcp/v1` on the
+Gmail server resolves to `authorization_servers: ["https://accounts.google.com/"]`,
+and accounts.google.com metadata yields the real authorization and token
+endpoints. Consequence the UI must own: for Google the authorization server is
+CROSS-ORIGIN from the MCP server, so the loud origin notice is the EXPECTED
+path for the flagship provider, not an edge case.
+
+Lesson, same family as the URLSearchParams blocker above: the loopback test
+seam cannot exercise the DNS layer, so any change to the socket-level options
+needs one probe against a real hostname before it is called done.
+
+## Amendment 2026-07-27: what "demands authentication" means (Decision 7, hole 2)
+
+The acceptance run surfaced a second finding, this one a design collision
+rather than a bug. Decision 7 refuses "a server that serves tools
+unauthenticated," and the probe implemented that as "the anonymous handshake
+succeeds." Google's official Gmail server answers the anonymous handshake AND
+serves its full tool list to anyone; only `tools/call` demands a token. As
+written, the gate refused the flagship provider permanently.
+
+Decision, approved by Jay 2026-07-27: a server counts as demanding
+authentication when it publishes RFC 9728 protected-resource metadata naming
+at least one authorization server. That document is the machine-readable
+declaration "my API is gated by sign-in," and it is what the sign-in flow
+consumes anyway. A server that neither publishes one nor refuses the anonymous
+handshake is still refused with the original wording. What this deliberately
+does not change: tool descriptions still reach the model only after a
+passphrase-gated connect and an explicit review; the cross-origin notice still
+shows; the probe still never lists tools.
+
+Adversarial note, recorded so nobody reopens it: a hostile server could always
+pass the old probe by answering 401, so the gate never defended against
+auth-shaped hostile servers. It defends against credential-less endpoints, and
+still does. A server that publishes metadata yet answers calls anonymously
+gains nothing: after sign-in every call carries the token, and the user's
+exposure is identical to any approved remote server.
+
+Verified against the live Gmail endpoint after the change: the probe returns
+"demands auth." Fixture tests pin both directions, including that the metadata
+path never falls through to a handshake attempt.
+
+## Acceptance run 2026-07-27: passed, with four product findings
+
+The checklist in SPEC/M12-ACCEPTANCE.md was run against real Google and real
+Cloudflare (see the run record there). Both OAuth shapes verified: a
+user-created confidential client (Google) and dynamic client registration
+(Cloudflare). Findings that are now tracked work, in priority order:
+
+1. **No refresh token from Google.** Google requires its nonstandard
+   `access_type=offline` query parameter before it issues a refresh token; the
+   SDK sends only standard parameters, so a Google grant dies with its first
+   access token (about an hour). The connect flow holds the authorization URL
+   before opening the browser, so appending `access_type=offline` (and
+   `prompt=consent`) there is possible without forking the SDK. Decide whether
+   to append for all providers or detect Google; unknown parameters are
+   ignored by compliant providers.
+2. **The pasted client secret is not persisted.** A user-supplied secret was
+   used transiently for the exchange and never saved, so even with a refresh
+   token a confidential-client refresh could not authenticate, and every
+   "Sign in again" required re-pasting. DCR clients store their registration
+   (verified in the Cloudflare record). **FIXED same day:** `saveTokens` now
+   persists the pasted client id and secret to the Keychain record at the
+   moment the grant they were pasted for succeeds — never earlier, so a failed
+   attempt cannot overwrite a working record — and preserves a stored DCR
+   registration when nothing was pasted. Tested both directions. This also
+   makes the privacy policy's "stored only in your operating system's
+   keychain" sentence exactly true.
+3. **Scope selection requests everything the server advertises.** The SDK
+   defaults to joining `scopes_supported`; for Gmail that meant five scopes
+   including `gmail.metadata` where Google documents two. Harmless in this
+   run, but the flow should support a documented default and the existing
+   `--scope` override end to end (the CLI has it; the GUI does not).
+4. **The GUI has no control for marking a tool read-only.** The local API
+   endpoint exists (`POST /api/mcp/safe-read`) but no frontend calls it, so
+   GUI-only users cannot create the one grant type that stops repeat prompts;
+   the CLI verb is `northkeep mcp safe-read`. UX decision, not security: the
+   marking is a trust declaration and deserves the same weight in the GUI as
+   in the CLI.
+
+Also recorded in KNOWN-LIMITS: Google's Gmail MCP is Workspace-only AND
+Developer-Preview-gated (tools/list answers anonymously while tools/call
+denies, which reads as a client bug and is not); provider revocation takes
+effect at token expiry; and a tool-incapable local model can fabricate tool
+results with no egress, which the concierge's routing does not yet weigh.

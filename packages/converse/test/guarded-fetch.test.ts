@@ -137,3 +137,132 @@ describe('guardedFetch carries a real POST and streams the response', () => {
     }
   }, 30_000);
 });
+
+describe('guardedFetch body shapes (adversarial review 2026-07-27, finding 1)', () => {
+  /**
+   * The SDK's token exchange and refresh POST URLSearchParams. The first
+   * implementation JSON.stringify-ed any non-string body, and
+   * JSON.stringify(new URLSearchParams(...)) is "{}", so every OAuth token
+   * request silently carried an empty object. These tests pin each supported
+   * shape as the exact bytes a local fixture receives.
+   */
+  const seen: Array<{ body: Buffer; ct: string | undefined }> = [];
+  const withFixture = async (
+    fn: (url: string) => Promise<void>,
+    status = 200,
+  ): Promise<void> => {
+    const http = await import('node:http');
+    const server = http.createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        seen.push({ body: Buffer.concat(chunks), ct: req.headers['content-type'] });
+        res.writeHead(status, { 'content-type': 'application/json' });
+        res.end('{"ok":true}');
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const port = (server.address() as { port: number }).port;
+    try {
+      await fn(`http://127.0.0.1:${port}/token`);
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  };
+  const seam = { allowHttp: true, isPrivateAddress: () => false };
+
+  it('writes a URLSearchParams body as the urlencoded string, not "{}"', async () => {
+    seen.length = 0;
+    await withFixture(async (url) => {
+      const res = await guardedFetch(
+        url,
+        { method: 'POST', body: new URLSearchParams({ a: 'one two', b: '&=' }) },
+        seam,
+      );
+      expect(res.ok).toBe(true);
+    });
+    expect(seen[0]!.body.toString('utf8')).toBe('a=one+two&b=%26%3D');
+    // fetch's own default when the caller set no content-type of their own.
+    expect(seen[0]!.ct).toBe('application/x-www-form-urlencoded;charset=UTF-8');
+  });
+
+  it('round-trips an SDK-shaped token exchange with every field intact', async () => {
+    // Exactly what auth.js executeTokenRequest sends: URLSearchParams body,
+    // urlencoded content-type set via a Headers object.
+    seen.length = 0;
+    await withFixture(async (url) => {
+      const res = await guardedFetch(
+        url,
+        {
+          method: 'POST',
+          headers: new Headers({
+            'Content-Type': 'application/x-www-form-urlencoded',
+            Accept: 'application/json',
+          }),
+          body: new URLSearchParams({
+            grant_type: 'authorization_code',
+            code: 'the-code',
+            code_verifier: 'the-verifier',
+            redirect_uri: 'http://127.0.0.1:8788/oauth/callback',
+            client_id: 'client-123',
+          }),
+        },
+        seam,
+      );
+      expect(res.ok).toBe(true);
+      expect(await res.json()).toEqual({ ok: true });
+    });
+    const got = new URLSearchParams(seen[0]!.body.toString('utf8'));
+    expect(got.get('grant_type')).toBe('authorization_code');
+    expect(got.get('code')).toBe('the-code');
+    expect(got.get('code_verifier')).toBe('the-verifier');
+    expect(got.get('redirect_uri')).toBe('http://127.0.0.1:8788/oauth/callback');
+    expect(got.get('client_id')).toBe('client-123');
+    // The caller's own content-type header wins over the URLSearchParams default.
+    expect(seen[0]!.ct).toBe('application/x-www-form-urlencoded');
+  });
+
+  it('writes a Uint8Array body byte-exact', async () => {
+    seen.length = 0;
+    const bytes = new Uint8Array([0, 1, 2, 255, 254, 128, 10, 13]);
+    await withFixture(async (url) => {
+      await guardedFetch(url, { method: 'POST', body: bytes }, seam);
+    });
+    expect(Array.from(seen[0]!.body)).toEqual(Array.from(bytes));
+  });
+
+  it('connects through a HOSTNAME, exercising the pinned lookup override', async () => {
+    // Every other fixture in this file dials 127.0.0.1, an IP literal, which
+    // skips the custom lookup entirely. Node 20+ calls that lookup with
+    // {all:true} (autoSelectFamily) and requires an array back; answering in
+    // the old (addr, family) shape broke every real-hostname fetch — including
+    // all of OAuth discovery — while every loopback test stayed green. This
+    // test is the canary: a hostname, resolved by the seam to the fixture.
+    seen.length = 0;
+    await withFixture(async (url) => {
+      const port = new URL(url).port;
+      const res = await guardedFetch(
+        `http://oauth-discovery.test:${port}/token`,
+        { method: 'POST', body: new URLSearchParams({ grant_type: 'authorization_code' }) },
+        {
+          ...seam,
+          resolver: () => Promise.resolve([{ address: '127.0.0.1', family: 4 }]),
+        },
+      );
+      expect(res.ok).toBe(true);
+    });
+    expect(seen[0]!.body.toString('utf8')).toBe('grant_type=authorization_code');
+  });
+
+  it('throws loudly on a body shape it does not support', async () => {
+    // A silent JSON-ification is exactly the bug this section exists to keep
+    // out; anything unrecognized must refuse before a request is made.
+    await expect(
+      guardedFetch(
+        'https://example.com/token',
+        { method: 'POST', body: { grant_type: 'oops' } as unknown as BodyInit },
+        seam,
+      ),
+    ).rejects.toThrow(/string, URLSearchParams, and Uint8Array/);
+  });
+});

@@ -109,6 +109,7 @@ export {
 } from './tools/mcp/oauth.js';
 export {
   McpServerNotAuthenticatedError,
+  probeRequiresAuth,
   startRemoteConnect,
   type PendingConnect,
   type RemoteConnectOptions,
