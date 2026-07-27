@@ -131,8 +131,8 @@ ours, when you use them.
   creates a standing, scoped authorization at that provider, to your own
   account there. We cannot revoke it; you revoke it directly at the provider.
   We store the resulting tokens, and any client credentials you create for
-  that connection, only in your device's keychain, and never receive them.
-- **Acceptable use extends to these tools.** Section 7 (Acceptable Use) applies
+  that connection, only in the macOS Keychain, and never receive them.
+- **Acceptable use extends to these tools.** Section 6 (Acceptable Use) applies
   to your use of these tools as it does to the rest of the Service: do not use
   them for unlawful purposes, to store or transmit unlawful content, or to
   infringe others' rights.

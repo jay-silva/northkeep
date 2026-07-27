@@ -36,11 +36,13 @@ effect (see "Changes").
 ## What we collect
 
 **On your device (not sent to us):** your memories, their scopes, provenance,
-your passphrase, and the credentials NorthKeep stores in your operating
-system's keychain — your AI provider API keys, your Brave Search key (if you
-enable web search), and any OAuth tokens and client credentials for the remote
-MCP servers you connect. None of this is transmitted to us. There is no
-account to create to use NorthKeep locally.
+your passphrase, and the credentials NorthKeep stores in the **macOS
+Keychain** — your AI provider API keys, your Brave Search key (if you enable
+web search), and any OAuth tokens and client credentials for the remote MCP
+servers you connect. (NorthKeep runs on macOS today; on a platform without a
+Keychain, API keys fall back to an environment variable you supply, and
+remote MCP sign-in is not available at all.) None of this is transmitted to
+us. There is no account to create to use NorthKeep locally.
 
 **If you enable hosted sync**, our sync server receives and stores:
 - an **opaque, client-side-encrypted copy of your vault** (ciphertext bytes we
@@ -154,8 +156,11 @@ page.
 
 - **Web search.** Your search query is sent to **Brave Search**, a third-party
   search API, authenticated with a key you supply and that NorthKeep stores in
-  your operating system's keychain. Brave receives the query text; see Brave's
-  own privacy policy for how it handles that.
+  the macOS Keychain. Brave receives the query text; see Brave's own privacy
+  and API terms for how it handles that (Brave's published API privacy notice
+  states it does not collect identifiers linking a query to an individual and
+  retains query logs for a maximum of 90 days, for billing and
+  troubleshooting).
 - **Web fetch.** A URL is requested directly from the site it points to. That
   site receives the URL and whatever a normal web request discloses (for
   example, your IP address), under its own privacy policy.
@@ -195,8 +200,8 @@ There are two kinds, with different exposure.
     happens in your browser, at the provider's own authorization page; we
     never see your credentials there.
   - The resulting tokens, and any client credentials you create for that
-    connection, are stored only in your operating system's keychain. **We
-    never receive them.**
+    connection, are stored only in the macOS Keychain. **We never receive
+    them.**
   - The arguments of an approved call — always masked by our redaction floor
     first, with no exception for a server you've marked "trusted" — are sent
     from your device to that provider.
