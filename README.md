@@ -12,15 +12,15 @@ inside any one of them.
 NorthKeep works two ways:
 
 - **Connect**, NorthKeep serves your vault to an app you already pay for
-  (Claude Desktop, Claude Code) over MCP. Your memory becomes portable across
+  (Claude Desktop, Claude Code, ChatGPT) over MCP. Your memory becomes portable across
   those apps and you set, per app, exactly what it may read. It does **not**
   redact what you type into that app, that's ownership and portability, not a
   firewall on your keystrokes.
 - **Converse**, you talk *through* NorthKeep instead (the **Chat** tab in the
   app), and it masks sensitive data out of your message *before* it leaves the
   machine, then restores it locally in the reply. This is the real privacy
-  firewall, against a local model (free, nothing leaves your network) or a
-  cloud model with your own key.
+  firewall, against a local model (free, and with tools off nothing leaves
+  your network) or a cloud model with your own key.
 
 > **One-line version:** connect NorthKeep to the AI apps you already pay for,
 > or converse through NorthKeep when privacy has to be absolute.
@@ -51,6 +51,7 @@ One command wires NorthKeep into the app, no hand-edited JSON:
 ```bash
 northkeep connect claude-desktop   # writes the MCP config for you (backs up the old one)
 northkeep connect claude-code      # or Claude Code
+northkeep connect chatgpt          # or ChatGPT (via ~/.codex/config.toml)
 northkeep disconnect claude-desktop
 ```
 
@@ -59,6 +60,7 @@ write your vault. To hand an app only part of your memory, connect it with a
 **scope**, it then physically cannot read anything outside that scope:
 
 ```bash
+northkeep connect claude-desktop --scope work   # this app sees 'work', nothing else
 northkeep unlock   # grant background access via your macOS Keychain
 northkeep lock     # revoke it
 northkeep log      # what every AI app asked of your vault (never the content)
@@ -91,12 +93,23 @@ northkeep converse
 Point it at **any** OpenAI-compatible endpoint, Ollama, LM Studio, vLLM,
 llama.cpp on a LAN box, a hosted API, or at Claude natively. Every endpoint
 wears an honest badge derived from where it actually is: **private** (loopback
-or your LAN, nothing leaves your network) or **bounded** (a cloud host, where
+or your LAN, model traffic never leaves your network) or **bounded** (a cloud host, where
 Tier-1 masking always runs before send, and the audit log proves what was
 masked). There is no way to send unredacted text to a remote endpoint, not a
 setting, a code path that doesn't exist. In **Auto** mode a concierge routes
 each message to the cheapest capable model you've connected; you can pin a
 model, pin a task to a model, or force private-only.
+
+### Tools (optional, off by default)
+
+Converse can also use tools when you turn them on: web search and web fetch,
+plus any MCP server you add, local (a program on your machine, over stdio) or
+remote (an HTTPS service you sign in to, macOS only, tokens live in your
+Keychain and never in a file). Every tool call is approved by you, per call or
+under a grant you create at a live prompt and can revoke, and the arguments
+are screened and masked before they are sent; a per-turn proof shows exactly
+what left. A chat pinned private-only refuses remote MCP tools outright.
+`KNOWN-LIMITS.md` states precisely what these tools do and do not send.
 
 ## Bring your memory with you
 
@@ -171,7 +184,7 @@ northkeep share code            # a one-time code you enter when connecting the 
 northkeep share sync            # pull memories you made inside the apps back in
 ```
 
-There's a **Sharing** tab in the app that does all of this with the same loud
+There's a **Cloud Connect** tab in the app that does all of this with the same loud
 confirmation and a SHARED badge on every scope that leaves your machine.
 
 ## Scopes & audit (for professionals)
@@ -213,24 +226,35 @@ and doesn't pretend to.
   result), and you can pull it back. No telemetry, none. Crash reports would be
   opt-in and content-free.
 - Plaintext never leaves your machine except (a) to the model provider you chose,
-  after redaction has run, or (b) for a scope you explicitly share with the
-  connector, so your own AI apps can read it. Private scopes never leave.
+  after redaction has run, (b) for a scope you explicitly share with the
+  connector, so your own AI apps can read it, or (c) the arguments of a tool
+  call you allowed, screened and masked before they are sent, and only those
+  arguments, never the vault, never the transcript. Private scopes never leave.
 - What it **can't** do is written down too, plainly: `KNOWN-LIMITS.md`.
 
 ## Layout
 
 - `SPEC/`, the open memory schema (CC-BY-4.0), security model, and ADRs
 - `packages/core`, vault: store, schema, crypto, provenance chain
+- `packages/platform-node` / `packages/platform-mobile`, platform adapters for
+  core (crypto, SQLite driver, storage) on Node and React Native
 - `packages/redact`, tiered on-device redaction
-- `packages/importers`, ChatGPT / Claude / paste import + extraction
-- `packages/converse`, providers, model concierge/routing, catalog
+- `packages/extract`, local-only text extraction (txt/md/csv/json/log + PDF)
+- `packages/importers`, ChatGPT / Claude / paste import
+- `packages/librarian`, extraction, dedupe, and import orchestration (local
+  models via Ollama)
+- `packages/converse`, providers, model concierge/routing, catalog, and the
+  agent tools with their permission engine
 - `packages/mcp-server`, the MCP server + one-click Connect
 - `packages/sync`, client-side-encrypted sync client
 - `packages/cli`, the `northkeep` command
 - `apps/web`, the local app (loopback server + single-file UI)
 - `apps/desktop`, the Tauri desktop shell (signed DMG)
+- `apps/mobile`, the Expo / React Native phone app
 - `apps/sync-server`, the ciphertext-only sync server (self-hostable)
 - `apps/connector-server`, the opt-in connector for shared scopes (ADR 0019)
 - `e2e/`, milestone acceptance tests
 
-License: AGPL-3.0 (the schema spec itself is CC-BY-4.0).
+License: AGPL-3.0 (the schema spec itself is CC-BY-4.0). App Store builds
+carry an additional permission for Apple's distribution terms, see
+`LICENSE-APPSTORE-EXCEPTION`.

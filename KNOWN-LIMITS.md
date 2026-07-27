@@ -280,6 +280,30 @@ every milestone; if a limit is removed, say when and how.*
   - **The endpoint must be on port 443 or 8443.** The egress guard's port
     allowlist is shared with `web_fetch` and was not widened for MCP, so a
     provider serving on any other port cannot be used.
+  - **A Google sign-in currently dies after one hour.** Google issues refresh
+    tokens only to flows that send its nonstandard `access_type=offline`
+    parameter, which the standard OAuth flow here does not, so a Gmail-style
+    grant expires with its first access token and you sign in again. Servers
+    using dynamic registration issue refresh tokens (seen in the Cloudflare
+    record). Fix tracked in ADR 0035. Related, found
+    the same day: Google's Gmail MCP server is a Workspace **Developer
+    Preview** feature — consumer Gmail is unsupported entirely, and without
+    preview enrollment every TOOL CALL returns a bare permission error even
+    when the sign-in, scopes, and API enablement are all correct (tools/list
+    still answers, which makes the failure look like a client bug).
+  - **Revoking a grant at the provider takes effect when the current access
+    token expires, not instantly.** Providers honor already-issued short-lived
+    tokens; until expiry, calls may keep working or fail with the server's own
+    error text rather than NorthKeep's "sign in again" message.
+- **A model that cannot drive tools may FAKE a tool result, convincingly.**
+  Small local models (the 7B class this hardware runs) sometimes answer a
+  tools-enabled question by inventing a tool call and a plausible result —
+  fake function names, fake counts — with no prompt shown and nothing sent
+  anywhere. The tell: no approval prompt appeared and the proof strip shows no
+  egress. Nothing left the machine, but the ANSWER is fiction. Pin a
+  tool-capable model (any current cloud model) for work that uses tools; the
+  concierge's cheapest-capable routing does not yet account for
+  tool-use quality.
 - **The GUI can add an MCP server, under two gates (ADR 0034).** Settings → Tools
   lists configured servers, shows what each advertises (including the definitions
   NorthKeep refused, and why), and approves or removes them. Adding one from the
@@ -396,7 +420,8 @@ every milestone; if a limit is removed, say when and how.*
   Anthropic, so it cannot intercept a prompt you type directly into a chat
   client. Honest boundary, stated plainly.
 - **Tier 1 is ~99%, not a guarantee.** It targets specific identifier
-  formats (email, phone, SSN, card, IP, API keys, IBAN). An exotic format it
+  formats (email, phone, SSN, card, IP, API keys, IBAN, street addresses,
+  ZIP codes, record/account IDs). An exotic format it
   doesn't recognize can slip through — the leak test locks in the formats we
   claim, and we add formats as we find gaps.
 - **Tier 2 needs Ollama and is 85–95% in-domain.** A name it misses is a
@@ -523,10 +548,12 @@ every milestone; if a limit is removed, say when and how.*
   logged-in session (including any MCP client you configure) can open the
   vault. Same trust level as saved browser passwords. `northkeep lock`
   revokes it.
-- **Retrieval is keyword matching, not semantic search.** It ranks by word
-  overlap, recency, and type priority. It will miss synonyms ("car" won't
-  find "vehicle"). Embedding-based retrieval arrives with the local-model
-  milestone (M2) — this line gets deleted then.
+- **This server's retrieval is keyword matching, not semantic search.** The
+  MCP `memory_retrieve` tool and converse's per-turn memory recall rank by
+  word overlap, recency, and type priority, and will miss synonyms ("car"
+  won't find "vehicle"). Semantic (embedding-blended) search DID ship for the
+  direct surfaces — `northkeep search` and the GUI Memories tab — but has not
+  been wired into this MCP tool or chat recall.
 - **No scope enforcement yet.** Any connected MCP client can read every
   scope. Per-conversation scope grants are M4; until then, don't point an
   untrusted MCP client at your vault.

@@ -89,12 +89,50 @@ log` shows what every AI app asked of the vault.
 
 ## Roadmap sections
 
-- **(M3) Redaction tiers:** Tier 1 deterministic (always on), Tier 2
-  pseudonymization (on-device), Tier 3 explicitly NOT claimed.
+- **(M3, shipped; Tier 3 per ADR 0022) Redaction tiers:** Tier 1 deterministic
+  (always on), Tier 2 pseudonymization (on-device), Tier 3 blanket dates and
+  deterministic name masking. Redaction reduces disclosure; it cannot make free
+  text anonymous — see KNOWN-LIMITS.md.
 - **(M4) Scope enforcement + audit log:** capability-based scope grants per
   conversation; immutable audit export.
 - **(M5) Sync:** client-side-encrypted blobs; server stores ciphertext and
   version numbers only.
+
+## Agent tools and MCP servers (M10–M12 — ADRs 0028–0031, 0033–0035)
+
+Converse can use tools, all off by default and user-enabled: web search (Brave)
+and web fetch (M10), local MCP servers over stdio (M11), and remote MCP servers
+over HTTPS with OAuth sign-in (M12). What this changes about egress, plainly:
+
+- **A new class of egress exists: tool-call arguments.** When the user allows a
+  tool call (per call, or under a revocable grant created at a live prompt),
+  the arguments — and only the arguments, never the vault or transcript — are
+  screened for secret shapes, protected names, and vault content, masked by the
+  tool-egress redaction floor, and then sent to the tool's destination. A
+  per-turn proof shows what left. The audit log stays content-free.
+- **Tool results are untrusted input.** Fetched pages, MCP results, and
+  server-supplied tool descriptions enter the conversation and travel to the
+  selected model provider with it. A server's own text is length-capped and
+  sanitized before any human review surface shows it.
+- **All tool traffic crosses one SSRF wall** (`guardedFetch`): the JSON-RPC
+  POST, the SSE stream, and OAuth discovery alike. Private-address and
+  redirect tricks fail closed.
+- **Remote MCP sign-in** is two-phase: discovery first shows which
+  authorization server the browser would open (loudly if cross-origin), and
+  only then may a browser open. The OAuth callback is a short-lived loopback
+  listener on `127.0.0.1:8788`. Tokens and user-created client credentials
+  live only in the macOS Keychain (service `northkeep-mcp-oauth`), never in
+  config files — which makes remote MCP macOS-only. Adding a server stores an
+  address and contacts nothing; connecting is passphrase-gated.
+- **The privacy ceiling:** a chat pinned Private-only refuses remote MCP tools
+  outright (no click-through); web search/fetch still run under a pin, per the
+  user's standing approvals. Local stdio servers are outside NorthKeep's
+  egress boundary: a local program the user installed may forward what it is
+  given, which is its egress, not ours — arguments to a `strict` server get
+  the tool-egress floor before it sees them.
+
+KNOWN-LIMITS.md carries the full, current statement of these behaviors and
+their limits; where this summary and KNOWN-LIMITS disagree, KNOWN-LIMITS wins.
 
 ## Shared scopes: the optional connector (ADR 0019 + ADR 0020)
 

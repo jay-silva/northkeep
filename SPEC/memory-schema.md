@@ -117,7 +117,7 @@ A vault export is a single JSON document:
 ```json
 {
   "northkeep_export": {
-    "schema_version": "0.1",
+    "schema_version": "0.2",
     "vault_id": "d3b0…",
     "exported_at": "2026-07-04T12:00:00.000Z",
     "chain_head": "9f2c…"

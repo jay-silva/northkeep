@@ -96,7 +96,8 @@ catches this, and it is the most common way this repo has been wrong.
 
 ## Stack (decided — do not relitigate)
 TypeScript / Node 20+, pnpm monorepo per 03-BUILD-BLUEPRINT.md structure.
-SQLite + sqlite-vec. @modelcontextprotocol/sdk (stdio first). Ollama for local
+SQLite (better-sqlite3; sqlite-vec is planned, not shipped — semantic search
+ranks embeddings in-process). @modelcontextprotocol/sdk (stdio first). Ollama for local
 models (llama3.2:3b extraction, nomic-embed-text embeddings), graceful degradation
 without it. sodium-native for crypto. Vitest for tests. Stripe (Phase 3).
 

@@ -77,7 +77,7 @@
 <h2><span class="num">4</span>Have your first conversation</h2>
 <ol>
   <li>In <strong>Converse</strong>, type a message and hit Send.</li>
-  <li>Watch the badge next to the toolbar: <strong>PRIVATE</strong> means the model runs on your machine and nothing leaves it. <strong>BOUNDED</strong> means your text goes to a cloud model, but only after masking.</li>
+  <li>Watch the badge next to the toolbar: <strong>PRIVATE</strong> means the model runs on your machine or your own network, so your conversation never leaves your network. (With Tools on, a tool call you approve does leave, masked; keep Tools off to keep every byte on your network.) <strong>BOUNDED</strong> means your text goes to a cloud model, but only after masking.</li>
   <li>Each reply shows which model answered and roughly what the turn cost.</li>
 </ol>
 <p class="tip">NorthKeep remembers useful facts from your chats automatically. Every new memory appears with an Undo button, and you can browse and edit them all in the Memories tab.</p>
@@ -91,7 +91,7 @@
   <li>Send a message containing something sensitive, or attach a document with the paperclip.</li>
   <li>On the reply, open <strong>"What left this machine"</strong>. You will see every masked item, real value to placeholder, plus the exact text that was sent. Shown on your screen only, never stored.</li>
 </ol>
-<p class="tip">Tier 1 masks secrets like emails, phones, and account numbers. Tier 2 also pseudonymizes names. Tier 3 adds dates, addresses, and record numbers, built for working with sensitive documents.</p>
+<p class="tip">Tier 1 masks secrets and identifiers like emails, phones, account numbers, and street addresses, always. Tier 2 also pseudonymizes names. Tier 3 adds blanket date masking, built for working with sensitive documents.</p>
 </div>
 
 <div class="step">
