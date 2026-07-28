@@ -4,14 +4,25 @@
  *
  * Buffer: the vault/crypto/sync code is written against Node's Buffer and the
  * plan keeps it that way (Metro `buffer` polyfill; do NOT refactor desktop
- * code to Uint8Array). The npm `buffer` package is API-compatible for
- * everything core uses: from/alloc/concat, subarray (returns Buffer since
- * buffer@6.0.2), equals, readUInt32LE/writeUInt32LE, toString('hex'|'base64').
+ * code to Uint8Array). The npm `buffer` package covers what core uses:
+ * from/alloc/concat, equals, readUInt32LE/writeUInt32LE, toString('hex'|'base64').
  *
- * NEEDS ON-DEVICE VALIDATION: exercise a full vault open/save round trip on
- * Hermes to confirm polyfill behavior matches Node byte for byte (the Week-1
- * spike proved the crypto/SQLite contracts with wasm stand-ins, not this
- * polyfill).
+ * TWO EXCEPTIONS, both found by running this on a device:
+ *
+ * 1. `subarray()` does NOT give you a Buffer here. buffer@6.0.3 overrides
+ *    `slice` but never defines `subarray`, so it is inherited from
+ *    Uint8Array.prototype. Under Node that still yields a Buffer (species
+ *    resolves to the Buffer constructor), which is why this comment used to
+ *    claim it was safe and why every Node test agreed — but Hermes returns a
+ *    PLAIN Uint8Array, with no .equals/.readUInt32LE/.toString('hex'). Use the
+ *    static `Buffer.compare(a, b)`, or re-wrap with `Buffer.from(x.subarray(…))`
+ *    before calling a Buffer method. Enforced by
+ *    packages/sync/test/hermes-buffer-guard.test.ts.
+ *
+ * 2. A Buffer (or a raw ArrayBuffer) is not a valid argument to every native
+ *    module. ExpoModulesCore's TypedArray conversion rejects an ArrayBuffer
+ *    outright, and the Metro Buffer subclass breaks JSI argument conversion.
+ *    Pass a plain `new Uint8Array(...)` across any native boundary.
  */
 import { Buffer } from 'buffer';
 

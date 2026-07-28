@@ -7,12 +7,19 @@ import { describe, expect, it } from 'vitest';
  * Structural guard for a bug that shipped, was fixed in ONE place, and then bit
  * us again somewhere else.
  *
- * On Hermes (the React Native engine) the Buffer polyfill's `subarray()` returns
- * a plain Uint8Array rather than a Buffer, because it does not honour
- * Symbol.species. A plain Uint8Array has no `.equals`, so `buf.subarray(a, b)
- * .equals(other)` throws `TypeError: ... .equals is not a function` on device
- * while passing every Node test — V8 DOES honour Symbol.species, so this class
- * of bug is structurally invisible to the rest of this suite.
+ * The mechanism, measured rather than assumed (buffer@6.0.3 is what the phone
+ * resolves): the polyfill overrides `Buffer.prototype.slice` but never defines
+ * `subarray`, so `subarray` is inherited from `Uint8Array.prototype`, and it
+ * defines no `Symbol.species` either. Under V8 the inherited `subarray` runs
+ * SpeciesConstructor, finds no species, falls back to the object's constructor,
+ * and hands back a Buffer — verified: the POLYFILL's `subarray(0,4)` under Node
+ * still has `.equals`. Hermes does not apply that lookup and returns a base
+ * Uint8Array, which has no `.equals`, so `buf.subarray(a,b).equals(other)`
+ * throws `TypeError: ... .equals is not a function` on device only.
+ *
+ * So this is genuinely engine-specific, and swapping in the polyfill under
+ * vitest does NOT reproduce it. That is exactly why a behavioural test cannot
+ * cover this and a source scan has to.
  *
  * It was fixed in packages/core/src/vault.ts (Buffer.compare) but missed in
  * apps/mobile/src/lib/sync.ts, where it threw inside the local-vault check that
@@ -20,9 +27,8 @@ import { describe, expect, it } from 'vitest';
  * "Could not reach the sync server", so a code bug presented as bad wifi and
  * sync was dead on the phone.
  *
- * A behavioural test cannot catch this under Node, so this scans the source
- * instead. Use `Buffer.compare(a, b) === 0`, which accepts a Uint8Array and is
- * identical on both engines.
+ * Use `Buffer.compare(a, b) === 0`, which accepts a Uint8Array and behaves
+ * identically on both engines.
  */
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -87,6 +93,62 @@ function sourceFiles(dir: string): string[] {
   }
   return out;
 }
+
+/**
+ * Second guard, for the OTHER binary-type bug this codebase shipped: a raw
+ * ArrayBuffer handed to a native module.
+ *
+ * expo-crypto's digest() falls through to `ExpoCrypto.digest(algorithm, output,
+ * data)` on iOS and Android, and ExpoModulesCore resolves that third argument
+ * with DynamicTypedArrayType, which requires a TYPED ARRAY and throws
+ * NotTypedArrayException on an ArrayBuffer. The declared TS type is
+ * `BufferSource`, which INCLUDES ArrayBuffer — so `x.buffer.slice(...) as
+ * ArrayBuffer` typechecks, passes every Node test, and dies on the device.
+ *
+ * `.buffer.slice()` and `as ArrayBuffer` are the two shapes that produced it.
+ * Neither has a legitimate use in phone-reachable code today: pass a plain
+ * `new Uint8Array(bytes)` across any native boundary instead.
+ */
+const ARRAYBUFFER_SHAPES = [
+  { re: /\.buffer\s*\.slice\s*\(/, why: 'yields an ArrayBuffer; native TypedArray args reject it' },
+  { re: /\bas\s+ArrayBuffer\b/, why: 'casts away the very mismatch the compiler was reporting' },
+];
+
+/** Only the trees that actually execute on a phone. */
+const DEVICE_TREES = ['apps/mobile/src', 'packages/platform-mobile/src'];
+
+describe('native binary-argument guard', () => {
+  it('no phone-reachable source builds a raw ArrayBuffer for a native call', () => {
+    const offenders: string[] = [];
+    for (const rel of DEVICE_TREES.flatMap(sourceFiles)) {
+      const text = fs.readFileSync(path.join(repoRoot, rel), 'utf8');
+      text.split('\n').forEach((line, i) => {
+        // Comments explain the bug on purpose; they are not the bug.
+        const code = line.replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '');
+        for (const { re, why } of ARRAYBUFFER_SHAPES) {
+          if (re.test(code)) offenders.push(`${rel}:${i + 1}: ${why}\n    ${line.trim()}`);
+        }
+      });
+    }
+    expect(
+      offenders,
+      `Pass a plain Uint8Array across native boundaries:\n${offenders.join('\n')}`,
+    ).toEqual([]);
+  });
+
+  it('catches the exact line that broke sync, and ignores the fix and the prose', () => {
+    const broke = 'bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + n) as ArrayBuffer,';
+    const fixed = 'const view = new Uint8Array(bytes);';
+    const prose = '  // into the `.slice() as ArrayBuffer` cast that caused this bug.';
+    const hits = (line: string): boolean => {
+      const code = line.replace(/\/\/.*$/, '').replace(/^\s*\*.*$/, '');
+      return ARRAYBUFFER_SHAPES.some(({ re }) => re.test(code));
+    };
+    expect(hits(broke)).toBe(true);
+    expect(hits(fixed)).toBe(false);
+    expect(hits(prose)).toBe(false);
+  });
+});
 
 describe('Hermes Buffer guard', () => {
   it('finds files to scan (the guard itself must not silently pass)', () => {

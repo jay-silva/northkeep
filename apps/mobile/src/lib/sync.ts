@@ -2,6 +2,7 @@ import { fetch } from 'expo/fetch';
 import * as Crypto from 'expo-crypto';
 import { Vault, VaultAuthError, getPlatform } from '@northkeep/core';
 import { MAX_BLOB_BYTES, SubscriptionRequiredError, deriveSyncCreds } from '@northkeep/sync';
+import { createDeadline, type DeadlineScope } from './deadline';
 import { deleteIfExists, pulledTmpPath } from './paths';
 
 /**
@@ -23,13 +24,26 @@ import { deleteIfExists, pulledTmpPath } from './paths';
  * Uses expo/fetch (WinterCG fetch) rather than RN's global fetch, per the plan,
  * so redirect handling and future streaming behave to spec.
  *
- * NEEDS ON-DEVICE VALIDATION: expo/fetch redirect:'error' behavior, timeout
- * wiring, expo-crypto digest output, and the PUT body (Buffer) upload against a
- * real sync server. None of the network paths in this file have executed off a
- * device; only the pure decision logic (src/lib/sync-flow.ts) is unit-tested.
+ * VALIDATED ON DEVICE 2026-07-28, and it cost three bugs, all of which passed
+ * every Node test and the typechecker first: `subarray().equals()` (Hermes
+ * returns a plain Uint8Array), an ArrayBuffer handed to expo-crypto's digest
+ * (native wants a TypedArray), and a timeout that could not fire because
+ * expo/fetch's arrayBuffer() never settles on a body error. See isVaultBlob,
+ * sha256Hex and src/lib/deadline.ts for the specifics.
+ *
+ * STILL UNVALIDATED: redirect:'error' behavior, and the 409 conflict branch
+ * (fetch + verify + stash + re-push) has not run against a real conflict.
  */
 
 const BLOB_TIMEOUT_MS = 120_000; // matches packages/sync/src/client.ts
+
+/** Shown when a transfer stalls. Deliberately NOT phrased like the offline copy
+ *  (see sync-errors.ts isTransportFailure), so a stall stays distinguishable. */
+const STALLED_MESSAGE = 'The sync server stopped responding partway through. Nothing was changed.';
+
+/** See src/lib/deadline.ts for why a timeout here must be RACED, not just armed. */
+const deadlineScope = (): DeadlineScope => createDeadline(BLOB_TIMEOUT_MS, STALLED_MESSAGE);
+
 const NKV_MAGIC = 'NKV1';
 const NKV_HEADER_LENGTH = 52;
 
@@ -64,11 +78,25 @@ function isVaultBlob(blob: Buffer): boolean {
 }
 
 async function sha256Hex(bytes: Buffer): Promise<string> {
-  const digest = await Crypto.digest(
-    Crypto.CryptoDigestAlgorithm.SHA256,
-    bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength) as ArrayBuffer,
-  );
-  return Buffer.from(digest).toString('hex');
+  // MUST be a plain Uint8Array, not an ArrayBuffer and not a Metro Buffer.
+  //
+  // expo-crypto's `digest()` shim falls back to the native
+  // `ExpoCrypto.digest(algorithm, output, data)` when `digestAsync` is absent,
+  // and that 3rd argument is resolved by ExpoModulesCore's DynamicTypedArrayType
+  // — which accepts a TYPED ARRAY and rejects a bare ArrayBuffer:
+  //   NotTypedArrayException: Given argument is not an instance of TypedArray
+  // The declared TS type is `BufferSource` (ArrayBuffer included), so this
+  // compiles cleanly and only fails on device. A Metro Buffer is no good either
+  // (its subclass breaks JSI arg conversion), hence a fresh plain array.
+  //
+  // `new Uint8Array(bytes)` COPIES rather than viewing `bytes.buffer`, and that
+  // is deliberate: a view inherits `ArrayBufferLike` (possibly SharedArrayBuffer),
+  // which does not satisfy `BufferSource` and is what pushed the original author
+  // into the `.slice() as ArrayBuffer` cast that caused this bug. The copy is a
+  // few hundred KB once per transfer, against a network round trip.
+  const view = new Uint8Array(bytes);
+  const digest = await Crypto.digest(Crypto.CryptoDigestAlgorithm.SHA256, view);
+  return Buffer.from(new Uint8Array(digest)).toString('hex');
 }
 
 /**
@@ -89,37 +117,39 @@ export async function fetchRemoteBlob(options: {
   const { token } = deriveSyncCreds(Buffer.from(options.deviceSecretHex, 'hex'));
   const serverUrl = options.serverUrl.replace(/\/+$/, '');
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), BLOB_TIMEOUT_MS);
-  let res: Awaited<ReturnType<typeof fetch>>;
+  const deadline = deadlineScope();
   try {
-    res = await fetch(`${serverUrl}/api/blob`, {
-      headers: { authorization: `Bearer ${token}` },
-      // A redirect could re-send the bearer token to an attacker's Location
-      // (same stance as packages/sync/src/client.ts).
-      redirect: 'error',
-      signal: controller.signal,
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-  if (res.status === 404) return null;
-  if (res.status === 402) throw new SubscriptionRequiredError();
-  if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on pull.`);
+    const res = await deadline.race(
+      fetch(`${serverUrl}/api/blob`, {
+        headers: { authorization: `Bearer ${token}` },
+        // A redirect could re-send the bearer token to an attacker's Location
+        // (same stance as packages/sync/src/client.ts).
+        redirect: 'error',
+        signal: deadline.signal,
+      }),
+    );
+    if (res.status === 404) return null;
+    if (res.status === 402) throw new SubscriptionRequiredError();
+    if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on pull.`);
 
-  const blob = Buffer.from(await res.arrayBuffer());
-  if (blob.length > MAX_BLOB_BYTES) {
-    throw new Error('Downloaded vault exceeds the sync size limit. Nothing was changed.');
+    // Raced, not just armed: this is the download itself, and it is the await
+    // that would otherwise hang forever on a dropped connection.
+    const blob = Buffer.from(await deadline.race(res.arrayBuffer()));
+    if (blob.length > MAX_BLOB_BYTES) {
+      throw new Error('Downloaded vault exceeds the sync size limit. Nothing was changed.');
+    }
+    if (!isVaultBlob(blob)) {
+      throw new Error('Downloaded data is not a NorthKeep vault (corrupt download or wrong server).');
+    }
+    const claimedSha = res.headers.get('x-sha256') ?? '';
+    if (claimedSha && (await sha256Hex(blob)) !== claimedSha) {
+      throw new Error('Downloaded vault failed its integrity check. Nothing was changed.');
+    }
+    const version = Number(res.headers.get('x-version') ?? '0');
+    return { blob, version };
+  } finally {
+    deadline.done();
   }
-  if (!isVaultBlob(blob)) {
-    throw new Error('Downloaded data is not a NorthKeep vault (corrupt download or wrong server).');
-  }
-  const claimedSha = res.headers.get('x-sha256') ?? '';
-  if (claimedSha && (await sha256Hex(blob)) !== claimedSha) {
-    throw new Error('Downloaded vault failed its integrity check. Nothing was changed.');
-  }
-  const version = Number(res.headers.get('x-version') ?? '0');
-  return { blob, version };
 }
 
 /**
@@ -212,37 +242,41 @@ export async function pushVaultMobile(options: {
     );
   }
 
-  // expo/fetch's BodyInit wants an ArrayBuffer/BufferSource, not a Node Buffer
-  // (whose ArrayBufferLike backing does not match BufferSource<ArrayBuffer>);
-  // hand it the exact byte range as a standalone ArrayBuffer, mirroring the
-  // cast sha256Hex already uses for expo-crypto.
-  const requestBody = blob.buffer.slice(blob.byteOffset, blob.byteOffset + blob.byteLength) as ArrayBuffer;
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), BLOB_TIMEOUT_MS);
-  let res: Awaited<ReturnType<typeof fetch>>;
+  // A plain Uint8Array, for the same reason sha256Hex uses one: expo/fetch
+  // normalizes the body in JS (an ArrayBuffer body is wrapped as a Uint8Array
+  // before it reaches native), so this is the form native actually receives —
+  // stating it directly beats relying on that conversion. The previous comment
+  // here claimed expo/fetch REQUIRED an ArrayBuffer and cited sha256Hex's cast
+  // as precedent; both were wrong, and that cast was the bug that broke pull.
+  const requestBody = new Uint8Array(blob);
+  const deadline = deadlineScope();
   try {
-    res = await fetch(`${serverUrl}/api/blob`, {
-      method: 'PUT',
-      headers: {
-        authorization: `Bearer ${token}`,
-        'content-type': 'application/octet-stream',
-        'x-base-version': String(options.baseVersion),
-      },
-      body: requestBody,
-      redirect: 'error',
-      signal: controller.signal,
-    });
+    const res = await deadline.race(
+      fetch(`${serverUrl}/api/blob`, {
+        method: 'PUT',
+        headers: {
+          authorization: `Bearer ${token}`,
+          'content-type': 'application/octet-stream',
+          'x-base-version': String(options.baseVersion),
+        },
+        body: requestBody,
+        redirect: 'error',
+        signal: deadline.signal,
+      }),
+    );
+    // Each body read is raced too: res.json() is text() + JSON.parse, and
+    // text() has the same never-settles-on-error behavior as arrayBuffer().
+    if (res.status === 409) {
+      const body = (await deadline.race(res.json().catch(() => ({})))) as { version?: number };
+      return { ok: false, conflict: true, version: body.version ?? options.baseVersion };
+    }
+    if (res.status === 402) throw new SubscriptionRequiredError();
+    if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on push.`);
+    const body = (await deadline.race(res.json())) as { version: number };
+    return { ok: true, conflict: false, version: body.version };
   } finally {
-    clearTimeout(timer);
+    deadline.done();
   }
-  if (res.status === 409) {
-    const body = (await res.json().catch(() => ({}))) as { version?: number };
-    return { ok: false, conflict: true, version: body.version ?? options.baseVersion };
-  }
-  if (res.status === 402) throw new SubscriptionRequiredError();
-  if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on push.`);
-  const body = (await res.json()) as { version: number };
-  return { ok: true, conflict: false, version: body.version };
 }
 
 /** The durable recovery slot for a conflict-displaced remote (see below). */

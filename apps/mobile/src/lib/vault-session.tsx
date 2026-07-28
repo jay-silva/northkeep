@@ -473,11 +473,24 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     // Reopen from the freshly written file with the held key.
     vaultRef.current.close();
     vaultRef.current = null;
-    const reopenKey = Buffer.from(key);
-    vaultRef.current = Vault.openWithKey(vaultPath(), reopenKey);
+    try {
+      const reopenKey = Buffer.from(key);
+      vaultRef.current = Vault.openWithKey(vaultPath(), reopenKey);
+    } catch (err) {
+      // The vault is already closed and nulled by this point, so a throw here
+      // (a native sqlite failure, a bad header, a migration error) would strand
+      // the session at status 'unlocked' with no vault: the UI keeps claiming
+      // unlocked while every action fails with "Unlock the vault first", and
+      // there is no route back because the lock screen never shows. Drop to
+      // locked so the user can simply unlock again. The vault file on disk is
+      // intact either way — the previous image is at .bak.
+      closeSession();
+      setStatus('locked');
+      throw err;
+    }
     reloadEntries();
     return { pulled: true };
-  }, [reloadEntries]);
+  }, [reloadEntries, closeSession]);
 
   /**
    * Push the just-saved local vault, resolving a two-sided conflict with the
