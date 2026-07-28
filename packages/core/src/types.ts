@@ -118,6 +118,12 @@ export interface ExportedMemory {
   metadata: Record<string, unknown> | null;
 }
 
+/** A scope the user marked Shared (ADR 0038). Absent scope = private. */
+export interface ExportedScopeSharing {
+  scope: string;
+  shared_at: string | null;
+}
+
 export interface VaultExport {
   northkeep_export: {
     schema_version: string;
@@ -126,7 +132,14 @@ export interface VaultExport {
     chain_head: string;
   };
   memories: ExportedMemory[];
+  /**
+   * Scopes marked Shared with Cloud Connect. User state, so invariant #4 says
+   * it must survive an export/rebuild — unlike embeddings, which are cache.
+   * Exports written before 0.3 have no such key; readers must treat that as
+   * "nothing shared" (fail closed), never as "unknown".
+   */
+  shared_scopes: ExportedScopeSharing[];
 }
 
-export const SCHEMA_VERSION = '0.2';
+export const SCHEMA_VERSION = '0.3';
 export const GENESIS_HASH = '0'.repeat(64);

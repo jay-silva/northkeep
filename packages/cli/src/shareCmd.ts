@@ -1,14 +1,13 @@
 import { loadDeviceSecret, type Vault } from '@northkeep/core';
 import {
-  addSharedScope,
   deriveConnectorToken,
   deriveSyncCreds,
   downSyncConnector,
   fetchEntitlement,
+  foldSidecarScopesIntoVault,
   loadConnectorConfig,
   loadSyncConfig,
   pushSharedScopes,
-  removeSharedScope,
   setConnectorServer,
   startPairing,
   tokenHash,
@@ -22,6 +21,11 @@ import { promptLine } from './prompt.js';
  * scopes to the hosted connector (ADR 0019, phase C2). Private is the default;
  * sharing is per-scope, loudly confirmed, and reversible with server-side
  * deletion.
+ *
+ * The shared-scope list lives IN THE VAULT (ADR 0038), so a mark made here is a
+ * mark on every device after the next vault sync. Each command folds a pre-0038
+ * sidecar list into the vault first (idempotent), so nothing is silently
+ * revoked by upgrading.
  *
  * `withVault` is injected by the CLI (index.ts) so these functions reuse the one
  * vault-open path (Keychain/env key, else passphrase) and stay unit-testable
@@ -87,17 +91,37 @@ export async function shareAddCmd(
       `Memories in '${scope}' will be copied to NorthKeep's connector server, where the AI apps you connect read them IN FULL. ` +
         'They are stored encrypted at rest; the connector database holds no key that can read them, but the server rebuilds ' +
         "the key each request from your app's credential plus a secret it holds and briefly decrypts them to answer. It can " +
-        "always see this scope's name, how many memories it holds, and when they change. Private scopes are never shared.",
+        "always see this scope's name, how many memories it holds, and when they change. Private scopes are never shared. " +
+        'Sharing applies to this scope on EVERY device that syncs this vault, and so does unsharing.',
     );
     const answer = await promptLine('Continue? [y/N] ');
     if (!/^y(es)?$/i.test(answer.trim())) fail('Cancelled. Nothing was shared.');
   }
 
-  const updated = addSharedScope(scope);
   const entitlement = await maybeEntitlement(deviceSecret);
-  const result = await withVault((vault) =>
-    pushSharedScopes({ server: updated.server, deviceSecret, scopes: updated.sharedScopes, vault, entitlement }),
-  );
+  const result = await withVault(async (vault) => {
+    foldSidecarScopesIntoVault(vault);
+    const wasShared = vault.sharedScopes().includes(scope);
+    vault.setScopeShared(scope, true);
+    vault.save();
+    try {
+      return await pushSharedScopes({ server: cfg.server, deviceSecret, scopes: vault.sharedScopes(), vault, entitlement });
+    } catch (err) {
+      // Same rollback rule as the GUI and the phone (review F5/F1): a scope the
+      // server never accepted must not stay marked — the mark would sync to
+      // every device as a phantom SHARED badge. But never unmark a scope that
+      // was already shared before this call; its server rows are real.
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!wasShared) {
+        vault.setScopeShared(scope, false);
+        vault.save();
+        throw new Error(`Sharing failed — the mark was rolled back, nothing is shared: ${msg}`);
+      }
+      throw new Error(`Push failed — '${scope}' stays Shared (it already was): ${msg}`);
+    }
+  }).catch((err: unknown) => {
+    fail(err instanceof Error ? err.message : String(err));
+  });
   console.log(
     `✓ Scope '${scope}' is now Shared. Pushed ${result.pushed} memories across ${result.scopes.length} shared scope(s).`,
   );
@@ -107,14 +131,17 @@ export async function shareAddCmd(
 export async function sharePushCmd(withVault: WithVault, fail: (m: string) => never): Promise<void> {
   const cfg = requireConfig(fail);
   const deviceSecret = deviceSecretOrFail(fail);
-  if (cfg.sharedScopes.length === 0) {
+  const entitlement = await maybeEntitlement(deviceSecret);
+  const result = await withVault((vault) => {
+    foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
+    const scopes = vault.sharedScopes();
+    if (scopes.length === 0) return null;
+    return pushSharedScopes({ server: cfg.server, deviceSecret, scopes, vault, entitlement });
+  });
+  if (result === null) {
     console.log('No scopes are shared yet. Run: northkeep share add <scope>');
     return;
   }
-  const entitlement = await maybeEntitlement(deviceSecret);
-  const result = await withVault((vault) =>
-    pushSharedScopes({ server: cfg.server, deviceSecret, scopes: cfg.sharedScopes, vault, entitlement }),
-  );
   console.log(
     `✓ Pushed ${result.pushed} memories across ${result.scopes.length} shared scope(s) to ${cfg.server}.`,
   );
@@ -129,18 +156,21 @@ export async function sharePushCmd(withVault: WithVault, fail: (m: string) => ne
 export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => never): Promise<void> {
   const cfg = requireConfig(fail);
   const deviceSecret = deviceSecretOrFail(fail);
-  if (cfg.sharedScopes.length === 0) {
-    console.log('No scopes are shared yet. Run: northkeep share add <scope>');
-    return;
-  }
   const entitlement = await maybeEntitlement(deviceSecret);
   const result = await withVault(async (vault) => {
+    foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
+    const scopes = vault.sharedScopes();
+    if (scopes.length === 0) return null;
     const down = await downSyncConnector({ server: cfg.server, deviceSecret, vault, entitlement });
     // Re-push so each newly down-synced row is rehashed server-side under its
     // vault id with pending cleared, and any forgotten row is reconciled away.
-    const push = await pushSharedScopes({ server: cfg.server, deviceSecret, scopes: cfg.sharedScopes, vault, entitlement });
+    const push = await pushSharedScopes({ server: cfg.server, deviceSecret, scopes, vault, entitlement });
     return { down, push };
   });
+  if (result === null) {
+    console.log('No scopes are shared yet. Run: northkeep share add <scope>');
+    return;
+  }
   console.log(
     `✓ Down-synced: ${result.down.added} added, ${result.down.forgotten} forgotten, ${result.down.deduped} already present.`,
   );
@@ -149,20 +179,37 @@ export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => ne
   );
 }
 
-export async function shareRemoveCmd(scope: string, fail: (m: string) => never): Promise<void> {
+export async function shareRemoveCmd(
+  scope: string,
+  withVault: WithVault,
+  fail: (m: string) => never,
+): Promise<void> {
   const cfg = requireConfig(fail);
   const deviceSecret = deviceSecretOrFail(fail);
-  if (!cfg.sharedScopes.includes(scope)) {
-    console.log(`Scope '${scope}' is not currently shared. Unsharing on the server anyway to be safe.`);
+  let outcome: { deleted: number; wasShared: boolean } | { error: string };
+  outcome = await withVault(async (vault) => {
+    foldSidecarScopesIntoVault(vault);
+    const wasShared = vault.sharedScopes().includes(scope);
+    // Server delete FIRST, local unmark second (same ordering as always): a
+    // failed delete leaves the mark honestly in place rather than the vault
+    // claiming private while the server still holds rows.
+    try {
+      const { deleted } = await unshareScope({ server: cfg.server, deviceSecret, scope });
+      vault.setScopeShared(scope, false);
+      vault.save();
+      return { deleted, wasShared };
+    } catch (err) {
+      // Nothing to roll back: the fold-in saves itself, and the unmark never
+      // happened — the mark honestly stays until the server delete succeeds.
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+  if ('error' in outcome) fail(`Could not unshare on the connector server: ${outcome.error}`);
+  if (!outcome.wasShared) {
+    console.log(`Scope '${scope}' was not marked shared. Unshared on the server anyway to be safe.`);
   }
-  let deleted = 0;
-  try {
-    ({ deleted } = await unshareScope({ server: cfg.server, deviceSecret, scope }));
-  } catch (err) {
-    fail(`Could not unshare on the connector server: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  removeSharedScope(scope);
-  console.log(`✓ Scope '${scope}' unshared. Deleted ${deleted} memories from the connector server.`);
+  console.log(`✓ Scope '${scope}' unshared. Deleted ${outcome.deleted} memories from the connector server.`);
+  console.log('  The unshare reaches your other devices with the next vault sync.');
 }
 
 export async function shareStatusCmd(withVault: WithVault): Promise<void> {
@@ -172,16 +219,18 @@ export async function shareStatusCmd(withVault: WithVault): Promise<void> {
     return;
   }
   console.log(`Connector server: ${cfg.server}`);
-  if (cfg.sharedScopes.length === 0) {
+  const counts = await withVault((vault) => {
+    foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
+    return vault.sharedScopes().map((scope) => ({ scope, count: vault.list({ scope }).length }));
+  });
+  if (counts.length === 0) {
     console.log('Shared scopes: (none). Everything is private by default.');
     return;
   }
-  const counts = await withVault((vault) =>
-    cfg.sharedScopes.map((scope) => ({ scope, count: vault.list({ scope }).length })),
-  );
   console.log(
     'Shared scopes (stored encrypted on the connector, no key in its database to read them; the key is rebuilt per request ' +
-      "from your app's credential plus a server-side secret, and the AI apps you connect read them in full):",
+      "from your app's credential plus a server-side secret, and the AI apps you connect read them in full). " +
+      'Marks live in the vault, so they apply on every device that syncs it:',
   );
   for (const c of counts) console.log(`  ${c.scope} — ${c.count} ${c.count === 1 ? 'memory' : 'memories'}`);
 }

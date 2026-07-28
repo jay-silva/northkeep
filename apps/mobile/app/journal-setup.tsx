@@ -12,7 +12,6 @@ import {
   JOURNAL_SEED_MEMORY,
   hasConversationsScope,
 } from '../src/lib/journal-recipe';
-import { loadConnectorSharedScopes } from '../src/lib/secure-store';
 import { useVaultSession } from '../src/lib/vault-session';
 import { Button, ErrorNote, colors, type } from '../src/ui';
 
@@ -33,9 +32,10 @@ export default function JournalSetup() {
   const [copied, setCopied] = useState<string | null>(null);
 
   useEffect(() => {
-    void loadConnectorSharedScopes().then((scopes) =>
+    void session.connectorScopeStore.load().then((scopes: string[]) =>
       setShared(scopes.includes(CONVERSATIONS_SCOPE)),
     );
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- read once on mount, like the original
   }, []);
 
   if (session.status === 'locked') return <Redirect href="/unlock" />;

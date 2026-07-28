@@ -158,6 +158,28 @@ describe('runShareScope', () => {
     expect(get()).toEqual(['work']);
   });
 
+  /**
+   * REGRESSION (ADR 0038 review F1): the scope was ALREADY shared — e.g. marked
+   * on the Mac and synced into the vault while this screen's state was stale —
+   * and the user taps Share again, and the push fails. Rolling back would
+   * unmark a legitimately shared scope with NO server delete: every device
+   * would then claim Private while the connector still holds the rows.
+   */
+  it('never rolls back a scope that was already shared before the call', async () => {
+    const { store, get } = memStore(['conversations', 'work']);
+    const outcome = await runShareScope(
+      {
+        store,
+        pushScopes: async () => {
+          throw new Error('Connector server returned HTTP 500 on push.');
+        },
+      },
+      'work', // already in the store
+    );
+    expect(outcome.kind).toBe('failed');
+    expect(get()).toEqual(['conversations', 'work']); // mark untouched
+  });
+
   it('rollback removes only its OWN scope, keeping a concurrent writer\'s mark', async () => {
     const { store, get } = memStore(['work']);
     const outcome = await runShareScope(

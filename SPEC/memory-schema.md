@@ -1,4 +1,4 @@
-# NorthKeep Memory Schema — v0.2
+# NorthKeep Memory Schema — v0.3
 
 *The open schema for portable, user-owned AI memory.*
 
@@ -100,6 +100,18 @@ A scope is a lowercase string tag: `personal`, `work`, or namespaced
 enforcement (per-conversation scope grants) is specified in the security
 model and lands at M4. An entry has exactly one scope.
 
+### Scope sharing state (v0.3, ADR 0038)
+
+A vault MAY mark a scope **Shared** (with the implementation's connector
+service). This mark is user state and lives inside the vault — a `scopes`
+table keyed by scope name with a `shared` flag and an optional `shared_at`
+timestamp — so it travels with the vault through sync and every device
+answers "what is shared?" identically. The default is structural: no row (or
+`shared = 0`) means private, and migration from earlier versions creates the
+table empty. Marks are never derived from entries; an implementation MUST NOT
+infer a share from anything but an explicit user action (or an import of an
+export that recorded one).
+
 ## Embeddings (derived cache — normative)
 
 Implementations MAY maintain an embeddings table keyed by
@@ -117,7 +129,7 @@ A vault export is a single JSON document:
 ```json
 {
   "northkeep_export": {
-    "schema_version": "0.2",
+    "schema_version": "0.3",
     "vault_id": "d3b0…",
     "exported_at": "2026-07-04T12:00:00.000Z",
     "chain_head": "9f2c…"
@@ -148,9 +160,22 @@ A vault export is a single JSON document:
 }
 ```
 
-`memories` is ordered by insertion (chain order). The export is complete: a
-conforming implementation can rebuild an equivalent vault from it, including
-chain verification.
+`memories` is ordered by insertion (chain order). Since 0.3 the document also
+carries the sharing marks:
+
+```json
+  "shared_scopes": [
+    { "scope": "work", "shared_at": "2026-07-28T12:00:00.000Z" }
+  ]
+```
+
+Only shared scopes are listed; absence means private. An export written
+before 0.3 has no `shared_scopes` key, and a reader MUST treat that as
+"nothing shared" (fail closed), never as "unknown". Embeddings remain
+excluded — they are cache; sharing marks are user state.
+
+The export is complete: a conforming implementation can rebuild an
+equivalent vault from it, including chain verification and the shared set.
 
 ## Versioning
 
@@ -159,6 +184,9 @@ fields. Anything that changes the meaning or requiredness of an existing
 field is a major version and requires a migration note in this spec.
 
 **Changelog**
+- **0.3** (2026-07-28): added the `scopes` table (per-scope sharing state,
+  ADR 0038) and the `shared_scopes` export key. Additive; migration creates
+  the table empty. Entry fields and the hash rule are unchanged.
 - **0.2** (2026-07-04, pre-release): added `forgotten_at` tombstones;
   narrowed the hash input to immutable-at-creation fields (previously it
   included `superseded_at`/`superseded_by`, which would have broken the

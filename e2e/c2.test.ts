@@ -228,11 +228,15 @@ describe('C2 acceptance (CLI) — share work → AI reads it; personal never lea
     // Loud: the confirmation copy names the readable-storage consequence.
     expect(add.stdout).toContain("Scope 'work' is now Shared");
 
-    // Sidecar written 0600 with the server + the shared scope (no secrets).
+    // Sidecar written 0600 with the server only (ADR 0038: the mark lives in
+    // the vault, not the sidecar, so it syncs with the vault).
     const sidecar = JSON.parse(fs.readFileSync(path.join(home, 'connector.json'), 'utf8'));
     expect(sidecar.server).toBe(base);
-    expect(sidecar.sharedScopes).toEqual(['work']);
+    expect(sidecar.sharedScopes).toBeUndefined();
     expect((fs.statSync(path.join(home, 'connector.json')).mode & 0o777)).toBe(0o600);
+    // The vault carries the mark — `share status` reads it from there.
+    const statusAfterAdd = await cli(['share', 'status']);
+    expect(statusAfterAdd.stdout).toMatch(/work\s+—\s+1 memory/);
 
     // Server now holds exactly the work row (personal was never sent).
     const rows = await storage.listEntries(accountHash());
@@ -269,9 +273,9 @@ describe('C2 acceptance (CLI) — share work → AI reads it; personal never lea
     expect(remove.code).toBe(0);
     expect(remove.stdout).toContain("Scope 'work' unshared");
 
-    // Sidecar no longer lists the scope.
-    const sidecar = JSON.parse(fs.readFileSync(path.join(home, 'connector.json'), 'utf8'));
-    expect(sidecar.sharedScopes).toEqual([]);
+    // The vault no longer marks the scope (the sidecar never lists scopes now).
+    const statusAfterRemove = await cli(['share', 'status']);
+    expect(statusAfterRemove.stdout).toContain('Shared scopes: (none)');
 
     // Server-side: zero rows for the account and a content-free tombstone.
     const account = accountHash();

@@ -52,8 +52,14 @@ export interface VerifiedRemoteBlob {
 }
 
 function isVaultBlob(blob: Buffer): boolean {
+  // Buffer.compare (static) instead of subarray().equals(): on Hermes the Buffer
+  // polyfill's subarray returns a plain Uint8Array (no Symbol.species), which has
+  // no .equals — calling it threw a TypeError that the error classifier then
+  // reported as "could not reach the sync server". Same fix as vault.ts:158.
+  // Buffer.compare accepts Uint8Array; identical on Node.
   return (
-    blob.length >= NKV_HEADER_LENGTH && blob.subarray(0, 4).equals(Buffer.from(NKV_MAGIC, 'ascii'))
+    blob.length >= NKV_HEADER_LENGTH &&
+    Buffer.compare(blob.subarray(0, 4), Buffer.from(NKV_MAGIC, 'ascii')) === 0
   );
 }
 

@@ -97,10 +97,15 @@ export async function loadLastSyncVersion(): Promise<number> {
 }
 
 // --- connector sidecar (Phase B Cloud Connect: the mobile analog of the
-// desktop's ~/.northkeep/connector.json, which is node:fs-only). Holds WHERE
-// the connector server is and WHICH scopes the user marked Shared. Never a
-// secret: the connector token is re-derived from the device secret on demand
-// (ADR 0019), exactly like the sync creds. ---
+// desktop's ~/.northkeep/connector.json, which is node:fs-only). Holds only
+// WHERE the connector server is. Never a secret: the connector token is
+// re-derived from the device secret on demand (ADR 0019), exactly like the
+// sync creds.
+//
+// The shared-scope LIST no longer lives here: ADR 0038 moved it into the
+// encrypted vault's scopes table so it syncs with the vault and matches the
+// desktop exactly. The legacy key survives below only as a one-time migration
+// source (read once, folded into the vault, deleted). ---
 
 export async function saveConnectorServerUrl(url: string): Promise<void> {
   await SecureStore.setItemAsync(CONNECTOR_SERVER_KEY, url, BASE_OPTIONS);
@@ -110,14 +115,12 @@ export async function loadConnectorServerUrl(): Promise<string | null> {
   return SecureStore.getItemAsync(CONNECTOR_SERVER_KEY, BASE_OPTIONS);
 }
 
-/** Persist the shared-scope list, deduped and sorted (mirrors saveConnectorConfig). */
-export async function saveConnectorSharedScopes(scopes: string[]): Promise<void> {
-  const clean = [...new Set(scopes)].sort();
-  await SecureStore.setItemAsync(CONNECTOR_SHARED_SCOPES_KEY, JSON.stringify(clean), BASE_OPTIONS);
-}
-
-/** The scopes the user explicitly marked Shared. Default private, so absent/corrupt reads as []. */
-export async function loadConnectorSharedScopes(): Promise<string[]> {
+/**
+ * MIGRATION ONLY (ADR 0038): the pre-0038 shared-scope list, if this install
+ * ever wrote one. Returns [] for absent or corrupt. The caller folds these
+ * into the vault and then calls clearLegacyConnectorSharedScopes().
+ */
+export async function loadLegacyConnectorSharedScopes(): Promise<string[]> {
   const raw = await SecureStore.getItemAsync(CONNECTOR_SHARED_SCOPES_KEY, BASE_OPTIONS);
   if (!raw) return [];
   try {
@@ -128,6 +131,11 @@ export async function loadConnectorSharedScopes(): Promise<string[]> {
   } catch {
     return [];
   }
+}
+
+/** Delete the legacy list after fold-in, so a stale copy can never resurrect a share the user has since revoked. */
+export async function clearLegacyConnectorSharedScopes(): Promise<void> {
+  await SecureStore.deleteItemAsync(CONNECTOR_SHARED_SCOPES_KEY, BASE_OPTIONS);
 }
 
 // --- journal setup card (Memories tab, Phase B WS3): a plain dismissed flag ---

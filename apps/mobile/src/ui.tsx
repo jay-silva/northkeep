@@ -11,6 +11,10 @@ import {
 } from 'react-native';
 import { MEMORY_TYPES, type MemoryType } from '@northkeep/core';
 import { announcementFor } from './lib/announce';
+// Import the kind rather than restating it: a hand-copied union here silently
+// went stale when a new kind was added, and a duplicated definition drifting
+// from its source is the exact bug class this sync work was fixing.
+import type { SyncErrorKind } from './lib/sync-errors';
 import {
   MAX_SCALE_DENSE,
   TYPE_SCALE as type,
@@ -213,7 +217,7 @@ export function SyncPill({
 }: {
   status: 'idle' | 'syncing' | 'synced' | 'conflict-recovered' | 'error';
   detail: string | null;
-  errorKind?: 'subscription-required' | 'not-enabled' | 'network' | 'other';
+  errorKind?: SyncErrorKind;
 }) {
   const map = {
     idle: { label: 'Idle', dot: colors.muted, fg: colors.muted },

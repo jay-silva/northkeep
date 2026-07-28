@@ -28,6 +28,9 @@
        get pixel-exact type. */
     --serif: 'Newsreader', Georgia, 'Iowan Old Style', 'Palatino Linotype', 'Times New Roman', serif;
     --sans: 'Hanken Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    /* Header height. Overwritten from JS once the header is measured; this is
+       the value for the default header so the rail is right on first paint. */
+    --header-h: 67px;
   }
   @media (prefers-color-scheme: dark) {
     :root {
@@ -52,18 +55,57 @@
   .pill { font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px; background: var(--chip); color: var(--muted); }
   .pill.ok { background: #e6efe8; color: var(--ok); }
   .pill.locked { background: #f6e4dd; color: var(--danger); }
-  nav { display: flex; gap: 4px; padding: 0 28px; background: var(--panel); border-bottom: 1px solid var(--line); }
-  nav button { border: 0; background: none; padding: 14px 14px 15px; font: 400 15px/1 var(--sans); color: var(--muted);
-    border-bottom: 2px solid transparent; margin-bottom: -1px; cursor: pointer; }
-  nav button.active { color: var(--ink); border-color: var(--accent); font-weight: 600; }
+  /* Left rail + content. `--header-h` is measured at runtime (the header grows
+     when a pill appears), so the sticky rail always starts flush under it. */
+  .shell { display: flex; align-items: flex-start; }
+  #sidebar { flex: none; width: 212px; box-sizing: border-box; padding: 14px 0 24px;
+    background: var(--panel); border-right: 1px solid var(--line);
+    position: sticky; top: var(--header-h); min-height: calc(100vh - var(--header-h));
+    max-height: calc(100vh - var(--header-h)); overflow-y: auto; }
+  nav { display: flex; flex-direction: column; gap: 2px; padding: 0 10px; }
+  nav button { border: 0; background: none; width: 100%; text-align: left; cursor: pointer;
+    display: flex; align-items: center; border-radius: 8px;
+    padding: 9px 12px; font: 400 15px/1.25 var(--sans); color: var(--muted); }
+  nav button:hover { background: var(--chip); color: var(--ink); }
+  nav button.active { background: var(--chip); color: var(--ink); font-weight: 600;
+    box-shadow: inset 2px 0 0 var(--accent); }
   /* `nav { display:flex }` (author) overrides the UA `[hidden]{display:none}`,
      so a hidden nav needs this explicit rule to actually hide (same reason as
      .overlay[hidden] above). Without it the Settings sub-nav never disappears. */
   nav[hidden] { display: none; }
-  /* Secondary tab strip for the Settings group: quieter than the main nav. */
-  #settingsNav { background: var(--chip); padding-top: 2px; padding-bottom: 2px; }
-  #settingsNav button { font-size: 14px; padding: 10px 12px 11px; }
-  main { max-width: 840px; margin: 0 auto; padding: 24px 28px 64px; }
+  /* Converse holds two modes: talk to a model, or scrub text by hand for pasting
+     elsewhere. Both are the redaction pipeline pointed at different destinations,
+     which is why Redact sits here rather than in the rail. The tier choices
+     differ: Converse offers 0-3, the scrubber only 1-2. */
+  .modeswitch { display: inline-flex; gap: 2px; padding: 3px; margin: 0 0 18px;
+    background: var(--chip); border-radius: 11px; }
+  .modeswitch button { border: 0; background: none; cursor: pointer; border-radius: 8px;
+    padding: 7px 18px; font: 500 14px/1 var(--sans); color: var(--muted); }
+  .modeswitch button:hover { color: var(--ink); }
+  .modeswitch button.active { background: var(--panel); color: var(--ink); font-weight: 600; }
+  /* Group heading (Connect) — matches the h3.sect treatment used inside views. */
+  .nav-label { padding: 16px 12px 5px; font: 600 11px/1 var(--sans);
+    text-transform: uppercase; letter-spacing: .1em; color: var(--muted); }
+  /* Children of a group: indented and a step quieter than a top-level item. */
+  nav button.sub { padding-left: 26px; font-size: 14px; }
+  /* Only earns its keep in the wrapped narrow layout — see the media query. */
+  .nav-break { display: none; }
+  /* Settings sub-items sit directly under the Settings button in the rail. */
+  #settingsNav { padding: 2px 10px 0; }
+  #settingsNav button { padding-left: 26px; font-size: 14px; }
+  main { flex: 1; min-width: 0; max-width: 840px; margin: 0 auto; padding: 24px 28px 64px; }
+  /* Narrow windows: the rail lies down into a scrollable strip above content. */
+  @media (max-width: 720px) {
+    .shell { display: block; }
+    #sidebar { position: static; width: auto; min-height: 0; max-height: none;
+      border-right: 0; border-bottom: 1px solid var(--line); padding: 8px 0; }
+    nav { flex-direction: row; flex-wrap: wrap; }
+    nav button { width: auto; }
+    .nav-label { padding: 10px 12px 4px; width: 100%; }
+    nav button.sub { padding-left: 12px; }
+    /* Ends the Connect run so Settings can't read as one of its children. */
+    .nav-break { display: block; width: 100%; height: 0; }
+  }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
     padding: 15px 18px; margin-bottom: 12px; }
   #countPill { background: #e6efe8; color: var(--ok); display: inline-flex; align-items: center; gap: 7px; }
@@ -118,8 +160,8 @@
   .badge.auto { background: var(--chip); color: var(--ink); }
   .badge.shared { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line); }
   /* BETA marker: same warn palette as the SHARED badge, but compact enough to sit
-     inline in the nav without making the "Cloud Connect" button taller than its
-     siblings (font + padding keep its box within the 15px nav text line). */
+     inline in the rail without making the "Cloud" button taller than its siblings
+     (font + padding keep its box within the 14px sub-item text line). */
   .badge.beta { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line);
     font-size: 9px; padding: 1px 5px; letter-spacing: .06em; vertical-align: middle; margin-left: 6px; }
   .scoperow { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--line); }
@@ -275,12 +317,15 @@
   <button class="btn" id="exportBtn">Export</button>
   <button class="btn" id="lockBtn" hidden>Lock</button>
 </header>
+<div class="shell">
+<aside id="sidebar">
 <nav id="mainNav">
-  <button data-view="converse">Chat</button>
-  <button data-view="connect">Desktop Connect</button>
-  <button data-view="sharing">Cloud Connect<span class="badge beta">BETA</span></button>
+  <button data-view="converse">Converse</button>
   <button data-view="memories" class="active">Memories</button>
-  <button data-view="redact">Redact</button>
+  <div class="nav-label">Connect</div>
+  <button data-view="connect" class="sub">Desktop</button>
+  <button data-view="sharing" class="sub">Cloud<span class="badge beta">BETA</span></button>
+  <div class="nav-break"></div>
   <button data-view="settings">Settings</button>
 </nav>
 <nav id="settingsNav" hidden>
@@ -290,117 +335,161 @@
   <button data-sub="sync">Sync</button>
   <button data-sub="about">About</button>
 </nav>
+</aside>
 <main>
   <div id="degradedBanner" class="banner" hidden>
     <strong>Local AI is not running.</strong> Imports will use rough pattern-matching instead of
     the on-device model. Fix: <code>brew services start ollama</code>
   </div>
   <section id="view-converse" hidden>
-    <div class="conv-toolbar">
-      <div class="conv-controls">
-        <select id="convEndpoint" title="Endpoint"></select>
-        <select id="convModel" title="Model — switch anytime, even mid-conversation" hidden></select>
-        <select id="convTierSel" title="Redaction tier">
-          <option value="1" selected>Tier 1 — mask secrets</option>
-          <option value="2">Tier 2 — also pseudonymize names</option>
-          <option value="3">Tier 3 — max: names + dates (PHI)</option>
-          <option value="0">Off (private endpoints only)</option>
-        </select>
-        <label class="pinchip" title="Pin this conversation to local models only — only local models read this chat (web tools, if on, still leave), and Auto may only pick private endpoints.">
-          <input type="checkbox" id="convPrivatePin"> Private only
-        </label>
-        <label class="pinchip toolchip" title="Let the assistant use web tools (search and fetch) to answer. Every call asks for your approval before anything leaves your machine; site grants you make are remembered.">
-          <input type="checkbox" id="convToolsEnabled"> Tools
-        </label>
-        <span id="convBadge" class="badge" hidden></span>
-        <button class="btn" id="manageEp">Manage endpoints</button>
-      </div>
+    <div class="modeswitch" id="convModeSwitch">
+      <button data-mode="talk" class="active">Converse</button>
+      <button data-mode="redact">Redact</button>
     </div>
-    <p id="convPrivacyHint" class="muted" style="font-size:12.5px;margin:-12px 2px 18px;display:flex;align-items:center;gap:6px"></p>
-    <div id="managePanel" hidden style="margin-bottom:14px">
-      <h3 class="sect">Endpoints</h3>
-      <div id="epList"></div>
-      <div class="row" style="margin-top:12px">
-        <button class="btn primary" id="cwOpen">✦ Connect a model</button>
-        <span class="muted" style="font-size:13px">Guided setup for Claude, OpenAI, Gemini, Grok, and more.</span>
-      </div>
-      <h3 class="sect">Local models</h3>
-      <div class="card" id="localCard">
-        <div id="localBody" class="muted">Checking this Mac…</div>
-        <div id="localPullWrap" hidden style="margin-top:10px">
-          <p id="localPullStatus" class="muted" style="margin:0 0 6px"></p>
-          <progress id="localPullBar" max="100" value="0"></progress>
-        </div>
-        <div class="err" id="localErr"></div>
-      </div>
-      <h3 class="sect">Advanced</h3>
-      <details class="card">
-        <summary style="cursor:pointer;font-weight:600;color:var(--muted)">Add any endpoint by hand</summary>
-        <p class="muted" style="margin:8px 0 12px;font-size:13px">Point NorthKeep at any OpenAI-compatible runtime or hosted API.</p>
-        <div class="row" style="margin-bottom:8px">
-          <input type="text" id="epLabel" placeholder="Label (e.g. This Mac — Ollama)" style="flex:0 1 240px;min-width:160px">
-          <input type="text" id="epBase" placeholder="Base URL (e.g. http://localhost:11434/v1)">
-        </div>
-        <div class="row" style="margin-bottom:8px">
-          <input type="text" id="epModel" placeholder="Model (e.g. llama3.2:3b)" style="flex:0 1 240px;min-width:160px">
-          <button class="btn" id="epDiscover" title="List the models this endpoint serves">Discover</button>
-          <select id="epModelSel" hidden></select>
-          <span id="epAddBadge" class="badge" hidden></span>
-        </div>
-        <div class="row" style="margin-bottom:4px">
-          <input type="password" id="epKey" placeholder="API key (optional)" style="flex:1;min-width:200px">
-        </div>
-        <p class="muted" style="margin:0 0 10px;font-size:13px">Stored in the macOS Keychain — never written to files.</p>
-        <div class="err" id="epErr"></div>
-        <div class="row"><button class="btn primary" id="epAdd">Add endpoint</button></div>
-      </details>
-      <h3 class="sect">Auto-routing rules</h3>
-      <div class="card">
-        <p class="muted" style="margin:0 0 10px;font-size:13px">When <strong>✦ Auto</strong> is on,
-          these decide which endpoint answers each kind of message. No matching rule → your default
-          endpoint. A conversation pinned <em>Private only</em> skips any routing rule that would send it to a
-          cloud model. It does not disable web tools, which ask for your approval on every call.</p>
-        <div id="ruleList"></div>
-        <div class="row" style="margin-top:10px">
-          <select id="ruleTask">
-            <option value="code">code</option>
-            <option value="reasoning">reasoning</option>
-            <option value="creative">creative</option>
-            <option value="long-context">long-context</option>
-            <option value="quick">quick</option>
-            <option value="general">general</option>
-            <option value="*">everything else (*)</option>
+    <div id="conversePane">
+      <div class="conv-toolbar">
+        <div class="conv-controls">
+          <select id="convEndpoint" title="Endpoint"></select>
+          <select id="convModel" title="Model — switch anytime, even mid-conversation" hidden></select>
+          <select id="convTierSel" title="Redaction tier">
+            <option value="1" selected>Tier 1 — mask secrets</option>
+            <option value="2">Tier 2 — also pseudonymize names</option>
+            <option value="3">Tier 3 — max: names + dates (PHI)</option>
+            <option value="0">Off (private endpoints only)</option>
           </select>
-          <span class="muted">→</span>
-          <select id="ruleEndpoint"></select>
-          <button class="btn" id="ruleAdd">Add rule</button>
+          <label class="pinchip" title="Pin this conversation to local models only — only local models read this chat (web tools, if on, still leave), and Auto may only pick private endpoints.">
+            <input type="checkbox" id="convPrivatePin"> Private only
+          </label>
+          <label class="pinchip toolchip" title="Let the assistant use web tools (search and fetch) to answer. Every call asks for your approval before anything leaves your machine; site grants you make are remembered.">
+            <input type="checkbox" id="convToolsEnabled"> Tools
+          </label>
+          <span id="convBadge" class="badge" hidden></span>
+          <button class="btn" id="manageEp">Manage endpoints</button>
         </div>
-        <div class="err" id="ruleErr"></div>
+      </div>
+      <p id="convPrivacyHint" class="muted" style="font-size:12.5px;margin:-12px 2px 18px;display:flex;align-items:center;gap:6px"></p>
+      <div id="managePanel" hidden style="margin-bottom:14px">
+        <h3 class="sect">Endpoints</h3>
+        <div id="epList"></div>
+        <div class="row" style="margin-top:12px">
+          <button class="btn primary" id="cwOpen">✦ Connect a model</button>
+          <span class="muted" style="font-size:13px">Guided setup for Claude, OpenAI, Gemini, Grok, and more.</span>
+        </div>
+        <h3 class="sect">Local models</h3>
+        <div class="card" id="localCard">
+          <div id="localBody" class="muted">Checking this Mac…</div>
+          <div id="localPullWrap" hidden style="margin-top:10px">
+            <p id="localPullStatus" class="muted" style="margin:0 0 6px"></p>
+            <progress id="localPullBar" max="100" value="0"></progress>
+          </div>
+          <div class="err" id="localErr"></div>
+        </div>
+        <h3 class="sect">Advanced</h3>
+        <details class="card">
+          <summary style="cursor:pointer;font-weight:600;color:var(--muted)">Add any endpoint by hand</summary>
+          <p class="muted" style="margin:8px 0 12px;font-size:13px">Point NorthKeep at any OpenAI-compatible runtime or hosted API.</p>
+          <div class="row" style="margin-bottom:8px">
+            <input type="text" id="epLabel" placeholder="Label (e.g. This Mac — Ollama)" style="flex:0 1 240px;min-width:160px">
+            <input type="text" id="epBase" placeholder="Base URL (e.g. http://localhost:11434/v1)">
+          </div>
+          <div class="row" style="margin-bottom:8px">
+            <input type="text" id="epModel" placeholder="Model (e.g. llama3.2:3b)" style="flex:0 1 240px;min-width:160px">
+            <button class="btn" id="epDiscover" title="List the models this endpoint serves">Discover</button>
+            <select id="epModelSel" hidden></select>
+            <span id="epAddBadge" class="badge" hidden></span>
+          </div>
+          <div class="row" style="margin-bottom:4px">
+            <input type="password" id="epKey" placeholder="API key (optional)" style="flex:1;min-width:200px">
+          </div>
+          <p class="muted" style="margin:0 0 10px;font-size:13px">Stored in the macOS Keychain — never written to files.</p>
+          <div class="err" id="epErr"></div>
+          <div class="row"><button class="btn primary" id="epAdd">Add endpoint</button></div>
+        </details>
+        <h3 class="sect">Auto-routing rules</h3>
+        <div class="card">
+          <p class="muted" style="margin:0 0 10px;font-size:13px">When <strong>✦ Auto</strong> is on,
+            these decide which endpoint answers each kind of message. No matching rule → your default
+            endpoint. A conversation pinned <em>Private only</em> skips any routing rule that would send it to a
+            cloud model. It does not disable web tools, which ask for your approval on every call.</p>
+          <div id="ruleList"></div>
+          <div class="row" style="margin-top:10px">
+            <select id="ruleTask">
+              <option value="code">code</option>
+              <option value="reasoning">reasoning</option>
+              <option value="creative">creative</option>
+              <option value="long-context">long-context</option>
+              <option value="quick">quick</option>
+              <option value="general">general</option>
+              <option value="*">everything else (*)</option>
+            </select>
+            <span class="muted">→</span>
+            <select id="ruleEndpoint"></select>
+            <button class="btn" id="ruleAdd">Add rule</button>
+          </div>
+          <div class="err" id="ruleErr"></div>
+        </div>
+      </div>
+      <div id="convEmpty" class="card" hidden>
+        <strong>No AI endpoints configured yet.</strong>
+        <p class="muted" style="margin:6px 0 10px">Point NorthKeep at any OpenAI-compatible runtime —
+          Ollama, LM Studio, vLLM — or a hosted API. Your memories stay in the vault; only what you
+          send (after redaction) reaches the endpoint.</p>
+        <div class="row">
+          <button class="btn primary" id="convEmptyConnect">✦ Connect a model</button>
+          <button class="btn" id="convEmptyManage">Manage endpoints</button>
+        </div>
+      </div>
+      <div id="convThread" class="thread"></div>
+      <div id="convAttachChip" hidden style="margin-top:16px;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"></div>
+      <div id="convComposer" style="margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:6px 8px 8px">
+        <textarea id="convInput" rows="2" placeholder="Message… (Enter to send, Shift+Enter for a new line)"
+          style="display:block;width:100%;font:inherit;color:inherit;background:transparent;border:0;outline:none;padding:9px 8px 6px;resize:none;min-height:46px;max-height:260px;overflow-y:auto"></textarea>
+        <input type="file" id="convFile" accept=".pdf,.txt,.md,.csv,.json,.log" hidden>
+        <div style="display:flex;align-items:center;gap:8px;padding:0 2px">
+          <button class="btn" id="convAttach" title="Attach a file (redacted before sending)" style="padding:8px 12px;border-radius:10px">📎</button>
+          <span style="flex:1"></span>
+          <button class="btn primary" id="convSend" style="padding:9px 22px;border-radius:10px">Send</button>
+        </div>
+      </div>
+      <p class="muted" style="font-size:12px;margin:8px 2px 0">Attached files are redacted with your message at the selected tier before anything is sent.</p>
+    </div>
+    <div id="redactPane" hidden>
+      <h3 class="sect" style="margin-top:0">Scrub text before you paste it into another AI</h3>
+      <p class="muted">Use this when you're about to paste something into an AI <em>outside</em> NorthKeep
+        (the ChatGPT or Claude website, a colleague's tool). Paste your text below and NorthKeep masks
+        the sensitive parts here on this Mac, so you can safely copy the result. When you talk to a model
+        in Converse this happens automatically, so you only need this mode for text you're pasting
+        somewhere else yourself.</p>
+      <ul class="muted" style="margin:0 0 12px 18px;font-size:14px;line-height:1.6">
+        <li><strong>Tier 1</strong> masks secrets: emails, phone numbers, SSNs, card numbers, API keys. Always on.</li>
+        <li><strong>Tier 2</strong> also replaces names and companies with consistent placeholders
+          (e.g. Jane Doe becomes Person 1) and can restore them in the AI's reply. Needs a local AI (Ollama).</li>
+      </ul>
+      <div class="row" style="margin:10px 0">
+        <select id="redactTier">
+          <option value="1">Tier 1 — mask secrets (emails, SSNs, cards, keys…)</option>
+          <option value="2">Tier 2 — also pseudonymize names &amp; orgs (needs local AI)</option>
+        </select>
+        <button class="btn primary" id="redactBtn">Redact</button>
+      </div>
+      <textarea id="redactIn" placeholder="Paste the text you're about to send to an AI…"
+        style="width:100%;min-height:120px;font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 15px"></textarea>
+      <div id="redactDegraded" class="banner" hidden style="margin-top:10px">
+        <strong>Tier 2 unavailable</strong> — local AI is off, so names were NOT pseudonymized
+        (secrets were still masked). Start Ollama to enable it.
+      </div>
+      <div id="redactOutWrap" hidden style="margin-top:12px">
+        <h3 class="sect">Redacted — safe to paste into any AI <button class="btn" id="copyRedacted" style="font-size:12px;padding:2px 10px;margin-left:8px">Copy</button></h3>
+        <div class="card content" id="redactOut" style="white-space:pre-wrap"></div>
+        <div id="restoreWrap" hidden>
+          <h3 class="sect">Paste the AI's reply to restore real names</h3>
+          <textarea id="restoreIn" placeholder="Paste the AI's response here…"
+            style="width:100%;min-height:90px;font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 15px"></textarea>
+          <button class="btn" id="restoreBtn" style="margin-top:8px">Restore names</button>
+          <div class="card content" id="restoreOut" hidden style="white-space:pre-wrap;margin-top:10px"></div>
+        </div>
       </div>
     </div>
-    <div id="convEmpty" class="card" hidden>
-      <strong>No AI endpoints configured yet.</strong>
-      <p class="muted" style="margin:6px 0 10px">Point NorthKeep at any OpenAI-compatible runtime —
-        Ollama, LM Studio, vLLM — or a hosted API. Your memories stay in the vault; only what you
-        send (after redaction) reaches the endpoint.</p>
-      <div class="row">
-        <button class="btn primary" id="convEmptyConnect">✦ Connect a model</button>
-        <button class="btn" id="convEmptyManage">Manage endpoints</button>
-      </div>
-    </div>
-    <div id="convThread" class="thread"></div>
-    <div id="convAttachChip" hidden style="margin-top:16px;font-size:13px;display:flex;align-items:center;gap:8px;flex-wrap:wrap"></div>
-    <div id="convComposer" style="margin-top:12px;background:var(--panel);border:1px solid var(--line);border-radius:16px;padding:6px 8px 8px">
-      <textarea id="convInput" rows="2" placeholder="Message… (Enter to send, Shift+Enter for a new line)"
-        style="display:block;width:100%;font:inherit;color:inherit;background:transparent;border:0;outline:none;padding:9px 8px 6px;resize:none;min-height:46px;max-height:260px;overflow-y:auto"></textarea>
-      <input type="file" id="convFile" accept=".pdf,.txt,.md,.csv,.json,.log" hidden>
-      <div style="display:flex;align-items:center;gap:8px;padding:0 2px">
-        <button class="btn" id="convAttach" title="Attach a file (redacted before sending)" style="padding:8px 12px;border-radius:10px">📎</button>
-        <span style="flex:1"></span>
-        <button class="btn primary" id="convSend" style="padding:9px 22px;border-radius:10px">Send</button>
-      </div>
-    </div>
-    <p class="muted" style="font-size:12px;margin:8px 2px 0">Attached files are redacted with your message at the selected tier before anything is sent.</p>
   </section>
   <section id="view-memories">
     <div class="card" id="addMemCard">
@@ -461,42 +550,6 @@
         <button class="btn primary" id="commitBtn">Import selected</button>
       </div>
       <div id="candList"></div>
-    </div>
-  </section>
-  <section id="view-redact" hidden>
-    <h3 class="sect" style="margin-top:0">Scrub text before you paste it into another AI</h3>
-    <p class="muted">Use this when you're about to paste something into an AI <em>outside</em> NorthKeep
-      (the ChatGPT or Claude website, a colleague's tool). Paste your text below and NorthKeep masks
-      the sensitive parts here on this Mac, so you can safely copy the result. In NorthKeep's own Chat
-      this happens automatically, so you don't need this tab for that.</p>
-    <ul class="muted" style="margin:0 0 12px 18px;font-size:14px;line-height:1.6">
-      <li><strong>Tier 1</strong> masks secrets: emails, phone numbers, SSNs, card numbers, API keys. Always on.</li>
-      <li><strong>Tier 2</strong> also replaces names and companies with consistent placeholders
-        (e.g. Jane Doe becomes Person 1) and can restore them in the AI's reply. Needs a local AI (Ollama).</li>
-    </ul>
-    <div class="row" style="margin:10px 0">
-      <select id="redactTier">
-        <option value="1">Tier 1 — mask secrets (emails, SSNs, cards, keys…)</option>
-        <option value="2">Tier 2 — also pseudonymize names &amp; orgs (needs local AI)</option>
-      </select>
-      <button class="btn primary" id="redactBtn">Redact</button>
-    </div>
-    <textarea id="redactIn" placeholder="Paste the text you're about to send to an AI…"
-      style="width:100%;min-height:120px;font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 15px"></textarea>
-    <div id="redactDegraded" class="banner" hidden style="margin-top:10px">
-      <strong>Tier 2 unavailable</strong> — local AI is off, so names were NOT pseudonymized
-      (secrets were still masked). Start Ollama to enable it.
-    </div>
-    <div id="redactOutWrap" hidden style="margin-top:12px">
-      <h3 class="sect">Redacted — safe to paste into any AI <button class="btn" id="copyRedacted" style="font-size:12px;padding:2px 10px;margin-left:8px">Copy</button></h3>
-      <div class="card content" id="redactOut" style="white-space:pre-wrap"></div>
-      <div id="restoreWrap" hidden>
-        <h3 class="sect">Paste the AI's reply to restore real names</h3>
-        <textarea id="restoreIn" placeholder="Paste the AI's response here…"
-          style="width:100%;min-height:90px;font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 15px"></textarea>
-        <button class="btn" id="restoreBtn" style="margin-top:8px">Restore names</button>
-        <div class="card content" id="restoreOut" hidden style="white-space:pre-wrap;margin-top:10px"></div>
-      </div>
     </div>
   </section>
   <section id="view-activity" hidden>
@@ -596,7 +649,7 @@
       over, set the same sync server, then Pull.</p>
   </section>
   <section id="view-connect" hidden>
-    <p class="muted">Give the Claude apps you already use access to your NorthKeep memory —
+    <p class="muted">Give the AI apps you already use access to your NorthKeep memory,
       on your existing subscription. One click registers the memory server that ships inside
       NorthKeep; no terminal, no config files to edit by hand.</p>
     <div class="banner" style="margin:16px 0 22px">
@@ -604,7 +657,7 @@
       <div style="margin-top:6px">Connecting hands that app your <strong>owned, portable memory</strong>
         under the scope you pick. It does <strong>not</strong> change what you type into that app —
         the app still sends your whole chat to its provider. For a privacy firewall on your
-        <em>messages</em>, use <strong>Chat</strong>, which masks them before they leave your Mac.</div>
+        <em>messages</em>, use <strong>Converse</strong>, which masks them before they leave your Mac.</div>
     </div>
     <div id="connectCards"></div>
   </section>
@@ -689,6 +742,7 @@
     <p class="muted" style="font-size:12px;margin-top:14px">This checks the public release page only when you click the button. Nothing about you or your vault is sent, and updates are never downloaded or installed automatically.</p>
   </section>
 </main>
+</div>
 <div class="overlay" id="shareConfirmOverlay" hidden>
   <div class="dialog" style="width:500px">
     <h2 id="shareConfirmTitle">Share this scope?</h2>
@@ -776,16 +830,15 @@
         <input type="text" id="setupEpModel" placeholder="Model (e.g. llama3.2:3b)">
         <button class="btn primary" id="setupManualAdd" style="width:100%;margin-bottom:8px">Add endpoint</button>
       </div>
-      <button class="btn" id="setupSkip" style="width:100%">Skip — add one later under Chat → Manage endpoints</button>
+      <button class="btn" id="setupSkip" style="width:100%">Skip — add one later under Converse → Manage endpoints</button>
     </div>
     <div id="setupStepTour" hidden>
       <h2>You're all set</h2>
       <p>Here's where everything lives:</p>
       <ul style="margin:0 0 16px 18px;line-height:1.9;font-size:14px;color:var(--muted)">
         <li><strong>Memories</strong> — everything NorthKeep knows about you, on this Mac. Browse, search, edit, or add.</li>
-        <li><strong>Chat</strong> — talk to an AI with your memory and the redaction firewall in front. You can attach files safely too.</li>
-        <li><strong>Connect</strong> — plug your memory into Claude Desktop or Claude Code in one click.</li>
-        <li><strong>Redact</strong> — scrub sensitive text before pasting it into an AI outside NorthKeep.</li>
+        <li><strong>Converse</strong> — talk to an AI with your memory and the redaction firewall in front. You can attach files safely too. Its <strong>Redact</strong> mode scrubs sensitive text you're pasting into an AI outside NorthKeep.</li>
+        <li><strong>Connect</strong> — <strong>Desktop</strong> plugs your memory into the AI apps on this Mac in one click; <strong>Cloud</strong> copies chosen scopes to NorthKeep's connector server so the AI apps you use on the web can read them.</li>
         <li><strong>Settings</strong> — import your history from ChatGPT or Claude, review activity, and set up sync across devices.</li>
       </ul>
       <button class="btn primary" id="setupDone" style="width:100%">Start using NorthKeep</button>
@@ -881,7 +934,8 @@
   });
 
   // --- views: top-level tabs, plus a Settings group holding Import/Activity/Sync
-  const sections = ['converse', 'memories', 'redact', 'connect', 'sharing', 'import', 'activity', 'mcp', 'sync', 'about'];
+  // No 'redact' here: it is a mode inside Converse now, not a section of its own.
+  const sections = ['converse', 'memories', 'connect', 'sharing', 'import', 'activity', 'mcp', 'sync', 'about'];
   let currentSub = 'import';
   function runLoader(v) {
     if (v === 'activity') loadLog();
@@ -1248,6 +1302,9 @@
       runLoader(currentSub);
     } else {
       $('settingsNav').hidden = true;
+      // Entering Converse always lands on the conversation, never on whichever
+      // mode you left behind last time.
+      if (v === 'converse') setConvMode('talk');
       showSection(v);
       runLoader(v);
     }
@@ -1260,6 +1317,28 @@
     showSection(currentSub);
     runLoader(currentSub);
   }));
+
+  // Converse mode switch. Redact used to be its own tab; it is a pane in here
+  // now, so nothing routes to it through showTop/showSection any more.
+  function setConvMode(mode) {
+    document.querySelectorAll('#convModeSwitch button').forEach((x) =>
+      x.classList.toggle('active', x.dataset.mode === mode));
+    $('conversePane').hidden = mode !== 'talk';
+    $('redactPane').hidden = mode !== 'redact';
+  }
+  document.querySelectorAll('#convModeSwitch button').forEach((b) =>
+    b.addEventListener('click', () => setConvMode(b.dataset.mode)));
+
+  // The rail is sticky under the header, whose height changes when a pill
+  // (locked, local-AI-off, env override) shows or hides. Measure instead of
+  // hardcoding, or the rail sits behind the header or floats below it.
+  (() => {
+    const hdr = document.querySelector('header');
+    const sync = () =>
+      document.documentElement.style.setProperty('--header-h', hdr.offsetHeight + 'px');
+    sync();
+    new ResizeObserver(sync).observe(hdr);
+  })();
 
   // --- redact
   let lastReplacements = [];
@@ -2672,7 +2751,7 @@
     body.textContent = '';
     if (r.state === 'not-installed') {
       body.appendChild(el('strong', '', 'Install Ollama to run models privately on this Mac'));
-      body.appendChild(el('p', 'muted', 'Ollama is a free, open-source runtime for local AI. It powers private Chat and Tier 2 redaction, and nothing you run through it leaves your machine.'));
+      body.appendChild(el('p', 'muted', 'Ollama is a free, open-source runtime for local AI. It powers private Converse and Tier 2 redaction, and nothing you run through it leaves your machine.'));
       const ol = el('ol', 'muted'); ol.style.cssText = 'margin:2px 0 12px 18px;font-size:14px;line-height:1.9';
       const li1 = el('li'); li1.appendChild(document.createTextNode('Install it: '));
       const link = el('a', 'btn', 'Download from ollama.com');
@@ -3318,6 +3397,9 @@
       case 'in-sync': return '✓ In sync (version ' + s.localVersion + ').';
       case 'behind': return '↓ The server has newer changes — Pull to update.';
       case 'ahead': return '↑ You have local changes — Push to upload.';
+      // Both sides moved. Pull first: it keeps the current vault as vault.nkv.bak,
+      // so the local work is recoverable either way.
+      case 'diverged': return '⚠ This Mac and the server both changed — Pull first (your current vault is kept as a .bak), then Push.';
       case 'no-remote': return 'Nothing uploaded yet — Push to start.';
       case 'no-local': return 'No local vault; Pull to download version ' + s.remoteVersion + '.';
       case 'no-config': return 'Set a sync server above to start.';
@@ -3633,17 +3715,20 @@
       list.appendChild(el('p', 'muted', 'Set a connector server above to start sharing.'));
       return;
     }
-    const shared = new Set(s.shared_scopes || []);
+    // Which scopes are shared now lives in the vault (ADR 0038), so while
+    // locked the honest answer is "unknown", not "none" — the server returns
+    // shared_scopes: null and we show an unlock prompt instead of guessing.
     if (!s.unlocked) {
       list.appendChild(el('p', 'muted',
-        shared.size ? 'Your vault is locked. You can still unshare a scope; unlock to share new ones or see counts.'
-                    : 'Unlock your vault to see and share your scopes.'));
+        'Your vault is locked. Unlock it to see and manage sharing — the shared-scope list lives inside the vault, so it syncs to every device.'));
+      return;
     }
+    const shared = new Set(s.shared_scopes || []);
     // Union of the vault's scopes and the shared list: a shared scope emptied of
     // its last memory still needs a row so the user can turn it off.
     const all = [...new Set([...(s.vault_scopes || []), ...(s.shared_scopes || [])])].sort();
     if (all.length === 0) {
-      if (s.unlocked) list.appendChild(el('p', 'muted', 'No scopes yet. Add memories, then share a scope here.'));
+      list.appendChild(el('p', 'muted', 'No scopes yet. Add memories, then share a scope here.'));
       return;
     }
     for (const scope of all) {
@@ -3657,10 +3742,9 @@
       const cb = document.createElement('input');
       cb.type = 'checkbox';
       cb.checked = shared.has(scope);
-      // Sharing (on) pushes vault entries, so it needs the vault unlocked.
-      // Unsharing (off) only deletes server-side (device secret, no vault), so a
-      // locked user can always REVOKE exposure, never blocked from privacy.
-      cb.disabled = !s.unlocked && !shared.has(scope);
+      // This list only renders while unlocked now (the marks live in the
+      // vault), so every toggle is live.
+      cb.disabled = false;
       const cbLabel = document.createTextNode(cb.checked ? 'Shared' : 'Share');
       toggle.appendChild(cb);
       toggle.appendChild(cbLabel);
@@ -3684,7 +3768,8 @@
     const n = count === undefined ? 'the memories' : (count + (count === 1 ? ' memory' : ' memories'));
     $('shareConfirmLead').textContent =
       'You are about to copy ' + n + " in the '" + scope + "' scope off this Mac to " +
-      "NorthKeep's connector server, where the AI apps you connect can read them.";
+      "NorthKeep's connector server, where the AI apps you connect can read them. " +
+      'Sharing applies to this scope on every device that syncs this vault, and so does unsharing.';
     $('shareConfirmErr').textContent = '';
     $('shareConfirmYes').disabled = false;
     $('shareConfirmYes').textContent = 'Share this scope'; // reset after a prior "Sharing…" run

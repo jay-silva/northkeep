@@ -35,7 +35,7 @@ import {
   type TurnResult,
 } from '@northkeep/converse';
 import { createOllamaClient } from '@northkeep/librarian';
-import { loadConnectorConfig } from '@northkeep/sync';
+
 import type { UiSession } from './session.js';
 
 /**
@@ -490,7 +490,14 @@ export async function handleConverseStream(
   // to the private inbox; if even the inbox is shared, skip distillation rather
   // than leak. Everything the model was ASKED about still flows normally — only
   // the auto-created memory target is contained.
-  const sharedScopes = new Set(loadConnectorConfig()?.sharedScopes ?? []);
+  //
+  // The shared list lives in the vault (ADR 0038). A conversation always has
+  // the vault open (retrieval needs it), so this read is authoritative; if it
+  // fails anyway, fail CLOSED — treat every scope as shared and skip
+  // distillation — because guessing "not shared" is the leak direction.
+  const sharedScopes = await uiSession
+    .withVault((vault) => new Set(vault.sharedScopes()))
+    .catch(() => new Set([scope, DISTILL_INBOX_SCOPE]));
   let distillScope = scope;
   let distillDiverted = false;
   let distillSkipped = false;

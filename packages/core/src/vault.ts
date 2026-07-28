@@ -236,10 +236,16 @@ export class Vault {
     }
   }
 
-  /** In-place schema upgrades for vaults created by older releases. */
+  /**
+   * In-place schema upgrades for vaults created by older releases. Steps apply
+   * SEQUENTIALLY — a 0.1 vault walks 0.1 → 0.2 → 0.3 in one open — and each
+   * step stamps its version before the single save() at the end, so a
+   * mid-migration crash re-runs from the last stamped version on next open.
+   */
   private migrate(): void {
-    const version = this.getMeta('schema_version');
+    let version = this.getMeta('schema_version');
     if (version === SCHEMA_VERSION) return;
+    const from = version;
     if (version === '0.1') {
       // 0.1 → 0.2: add the forgotten_at tombstone column, and rehash the
       // chain under the 0.2 rule (mutable bookkeeping fields left out of the
@@ -259,13 +265,27 @@ export class Vault {
       }
       this.setMeta('chain_head', prev);
       this.setMeta('schema_version', '0.2');
-      this.save();
-      console.error('northkeep: migrated vault schema 0.1 → 0.2 (rehashed provenance chain)');
-      return;
+      version = '0.2';
     }
-    throw new Error(
-      `Vault schema ${version} is newer than this build understands (${SCHEMA_VERSION}). Update NorthKeep.`,
-    );
+    if (version === '0.2') {
+      // 0.2 → 0.3: per-scope sharing state (ADR 0038). The table is created
+      // EMPTY — migration must never mark anything shared; existing sidecar
+      // shares are folded in explicitly by @northkeep/sync, not here.
+      this.db.exec(`CREATE TABLE IF NOT EXISTS scopes (
+        scope     TEXT PRIMARY KEY,
+        shared    INTEGER NOT NULL DEFAULT 0 CHECK (shared IN (0, 1)),
+        shared_at TEXT
+      )`);
+      this.setMeta('schema_version', '0.3');
+      version = '0.3';
+    }
+    if (version !== SCHEMA_VERSION) {
+      throw new Error(
+        `Vault schema ${version} is newer than this build understands (${SCHEMA_VERSION}). Update NorthKeep.`,
+      );
+    }
+    this.save();
+    console.error(`northkeep: migrated vault schema ${from} → ${SCHEMA_VERSION}`);
   }
 
   /** Serialize → encrypt with a fresh nonce → atomic replace, keeping the previous file as .bak. */
@@ -769,6 +789,49 @@ export class Vault {
     return rows.map((r) => r.scope);
   }
 
+  /**
+   * Scopes marked Shared with Cloud Connect (ADR 0038), sorted. Lives in the
+   * vault — not a sidecar — so the marks travel with the vault through sync and
+   * every device answers this identically. No row / shared=0 means private.
+   */
+  sharedScopes(): string[] {
+    this.assertOpen();
+    const rows = this.db
+      .prepare('SELECT scope FROM scopes WHERE shared = 1 ORDER BY scope')
+      .all() as Array<{ scope: string }>;
+    return rows.map((r) => r.scope);
+  }
+
+  /** Shared rows with their timestamps — the export/rebuild shape. */
+  sharedScopeRows(): Array<{ scope: string; shared_at: string | null }> {
+    this.assertOpen();
+    return this.db
+      .prepare('SELECT scope, shared_at FROM scopes WHERE shared = 1 ORDER BY scope')
+      .all() as Array<{ scope: string; shared_at: string | null }>;
+  }
+
+  /**
+   * Mark a scope Shared or private again. Persists via the caller's next
+   * save(), like remember(). Unsharing DELETES the row rather than flipping the
+   * flag, so the table only ever describes shares — an empty table and a fresh
+   * vault are indistinguishable, which keeps "default private" structural.
+   */
+  setScopeShared(scope: string, shared: boolean, sharedAt?: string): void {
+    this.assertOpen();
+    const s = scope.trim();
+    if (s.length === 0) throw new Error('Scope must not be empty.');
+    if (shared) {
+      this.db
+        .prepare(
+          'INSERT INTO scopes (scope, shared, shared_at) VALUES (?, 1, ?) ' +
+            'ON CONFLICT(scope) DO UPDATE SET shared = 1, shared_at = excluded.shared_at',
+        )
+        .run(s, sharedAt ?? new Date().toISOString());
+    } else {
+      this.db.prepare('DELETE FROM scopes WHERE scope = ?').run(s);
+    }
+  }
+
   /** Replays the hash chain over all entries in insertion order. */
   verifyChain(): { ok: boolean; error?: string } {
     this.assertOpen();
@@ -833,6 +896,9 @@ export class Vault {
         chain_head: this.getMeta('chain_head'),
       },
       memories,
+      // Sharing marks are user state, not derived cache, so invariant #4 says
+      // they survive a rebuild. Only shares are listed; absence = private.
+      shared_scopes: this.sharedScopeRows().map((r) => ({ scope: r.scope, shared_at: r.shared_at })),
     };
   }
 

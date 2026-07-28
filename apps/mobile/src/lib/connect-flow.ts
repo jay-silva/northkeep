@@ -177,6 +177,7 @@ export interface ShareScopePorts {
  */
 export async function runShareScope(ports: ShareScopePorts, scope: string): Promise<ShareScopeOutcome> {
   const before = await ports.store.load();
+  const wasShared = before.includes(scope);
   const next = [...new Set([...before, scope])].sort();
   await ports.store.save(next);
   try {
@@ -186,8 +187,16 @@ export async function runShareScope(ports: ShareScopePorts, scope: string): Prom
     // Rollback: the server never accepted it. Remove ONLY this call's own
     // scope from a FRESH load; a blind save(before) would clobber any mark a
     // concurrent writer added while the push was in flight.
-    const current = await ports.store.load();
-    await ports.store.save(current.filter((s) => s !== scope));
+    //
+    // NEVER roll back a scope that was already shared before this call (e.g.
+    // marked on another device and arrived via vault sync while this screen's
+    // state was stale): unmarking it here would sync "private" everywhere while
+    // the connector still holds the rows from the earlier legitimate share —
+    // no unshare DELETE ever ran. Same guard the web route has.
+    if (!wasShared) {
+      const current = await ports.store.load();
+      await ports.store.save(current.filter((s) => s !== scope));
+    }
     return classifyConnectorError(err);
   }
 }

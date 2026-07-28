@@ -501,22 +501,45 @@ describe('scope enforcement (capability allowlist)', () => {
   });
 });
 
-describe('schema migration 0.1 → 0.2', () => {
-  it('adds the tombstone column and rehashes the chain', () => {
+describe('schema migration', () => {
+  it('walks a 0.1 vault all the way to current: tombstone column, rehashed chain, scopes table', () => {
     const vault = createVault();
     vault.remember({ content: 'pre-migration entry', type: 'semantic' });
-    // Downgrade the vault to look like a 0.1 file (no forgotten_at column).
+    // Downgrade the vault to look like a 0.1 file (no forgotten_at column, no scopes table).
     const db = (vault as unknown as { db: import('better-sqlite3').Database }).db;
     db.exec('ALTER TABLE memories DROP COLUMN forgotten_at');
+    db.exec('DROP TABLE scopes');
     db.prepare("UPDATE vault_meta SET value = '0.1' WHERE key = 'schema_version'").run();
     vault.save();
     vault.close();
 
     const reopened = openVault(); // migration runs inside open
     const exported = reopened.export();
-    expect(exported.northkeep_export.schema_version).toBe('0.2');
+    expect(exported.northkeep_export.schema_version).toBe('0.3');
     expect(reopened.verifyChain().ok).toBe(true);
     expect(reopened.list()[0]!.forgotten_at).toBeNull();
+    // ADR 0038 review item 1: migration must never invent a share.
+    expect(reopened.sharedScopes()).toEqual([]);
+    reopened.close();
+  });
+
+  it('0.2 → 0.3 adds an EMPTY scopes table and nothing else changes', () => {
+    const vault = createVault();
+    vault.remember({ content: 'kept across migration', type: 'semantic' });
+    const db = (vault as unknown as { db: import('better-sqlite3').Database }).db;
+    const headBefore = vault.export().northkeep_export.chain_head;
+    db.exec('DROP TABLE scopes');
+    db.prepare("UPDATE vault_meta SET value = '0.2' WHERE key = 'schema_version'").run();
+    vault.save();
+    vault.close();
+
+    const reopened = openVault();
+    expect(reopened.export().northkeep_export.schema_version).toBe('0.3');
+    // 0.2 → 0.3 must not touch entries or the chain (unlike 0.1 → 0.2).
+    expect(reopened.export().northkeep_export.chain_head).toBe(headBefore);
+    expect(reopened.verifyChain().ok).toBe(true);
+    expect(reopened.sharedScopes()).toEqual([]);
+    expect(reopened.list().map((e) => e.content)).toEqual(['kept across migration']);
     reopened.close();
   });
 });
@@ -526,7 +549,7 @@ describe('export', () => {
     const vault = createVault();
     vault.remember({ content: 'exported fact', type: 'identity', metadata: { origin: 'test' } });
     const doc = vault.export();
-    expect(doc.northkeep_export.schema_version).toBe('0.2');
+    expect(doc.northkeep_export.schema_version).toBe('0.3');
     expect(doc.northkeep_export.vault_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(doc.northkeep_export.chain_head).toMatch(/^[0-9a-f]{64}$/);
     expect(doc.memories).toHaveLength(1);
@@ -541,6 +564,62 @@ describe('export', () => {
     expect(memory.validity.superseded_at).toBeNull();
     // The export must be fully JSON-serializable and human-readable.
     expect(() => JSON.stringify(doc, null, 2)).not.toThrow();
+    vault.close();
+  });
+});
+
+describe('scope sharing (ADR 0038)', () => {
+  it('defaults every scope to private and persists marks across reopen', () => {
+    const vault = createVault();
+    vault.remember({ content: 'a', type: 'semantic', scope: 'work' });
+    expect(vault.sharedScopes()).toEqual([]);
+
+    vault.setScopeShared('work', true);
+    vault.setScopeShared('personal', true);
+    expect(vault.sharedScopes()).toEqual(['personal', 'work']);
+    vault.save();
+    vault.close();
+
+    const reopened = openVault();
+    expect(reopened.sharedScopes()).toEqual(['personal', 'work']);
+    reopened.close();
+  });
+
+  it('unshare deletes the row, leaving the table indistinguishable from never-shared', () => {
+    const vault = createVault();
+    vault.setScopeShared('work', true);
+    vault.setScopeShared('work', false);
+    expect(vault.sharedScopes()).toEqual([]);
+    const db = (vault as unknown as { db: import('better-sqlite3').Database }).db;
+    expect(db.prepare('SELECT COUNT(*) AS n FROM scopes').get()).toEqual({ n: 0 });
+    vault.close();
+  });
+
+  it('exports shares and a rebuild from the export restores them (invariant #4)', () => {
+    const vault = createVault();
+    vault.remember({ content: 'shared fact', type: 'semantic', scope: 'work' });
+    vault.setScopeShared('work', true);
+    const doc = vault.export();
+    expect(doc.shared_scopes).toEqual([
+      { scope: 'work', shared_at: expect.stringMatching(/^\d{4}-/) },
+    ]);
+    vault.close();
+
+    // Rebuild: a fresh vault, entries re-added, shares restored from the export.
+    fs.rmSync(vaultPath, { force: true });
+    const rebuilt = createVault();
+    for (const s of doc.shared_scopes) rebuilt.setScopeShared(s.scope, true, s.shared_at ?? undefined);
+    expect(rebuilt.sharedScopes()).toEqual(['work']);
+    expect(rebuilt.sharedScopeRows()[0]!.shared_at).toBe(doc.shared_scopes[0]!.shared_at);
+    rebuilt.close();
+  });
+
+  it('rejects an empty scope and tolerates re-sharing an already-shared scope', () => {
+    const vault = createVault();
+    expect(() => vault.setScopeShared('  ', true)).toThrow(/empty/i);
+    vault.setScopeShared('work', true);
+    vault.setScopeShared('work', true); // idempotent, updates shared_at
+    expect(vault.sharedScopes()).toEqual(['work']);
     vault.close();
   });
 });

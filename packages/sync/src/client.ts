@@ -56,7 +56,14 @@ export type PullResult =
   | { ok: true; version: number; wroteVault: boolean }
   | { ok: false; reason: 'no-remote' };
 
-export type SyncState = 'no-config' | 'no-remote' | 'no-local' | 'in-sync' | 'ahead' | 'behind';
+export type SyncState =
+  | 'no-config'
+  | 'no-remote'
+  | 'no-local'
+  | 'in-sync'
+  | 'ahead'
+  | 'behind'
+  | 'diverged';
 
 // --- raw transport ---
 
@@ -139,7 +146,10 @@ function sha256Hex(buf: Buffer): string {
 
 /** A well-formed vault blob starts with the NKV1 magic and carries a full header. */
 function isVaultBlob(blob: Buffer): boolean {
-  return blob.length >= NKV_HEADER_LENGTH && blob.subarray(0, 4).equals(NKV_MAGIC);
+  // Buffer.compare, not subarray().equals() — see vault.ts:158. This module is
+  // node:fs-coupled so it does not run on Hermes today, but keeping the two
+  // copies of this check identical is what stops the bug coming back.
+  return blob.length >= NKV_HEADER_LENGTH && Buffer.compare(blob.subarray(0, 4), NKV_MAGIC) === 0;
 }
 
 // --- high-level operations ---
@@ -169,7 +179,15 @@ export async function pushVault(options: {
     }
     const result = await pushBlob(config.serverUrl, token, blob, config.lastVersion);
     if (result.ok) {
-      saveSyncConfig({ ...config, lastVersion: result.version, lastSyncedAt: new Date().toISOString() });
+      saveSyncConfig({
+        ...config,
+        lastVersion: result.version,
+        lastSyncedAt: new Date().toISOString(),
+        // The bytes we just uploaded ARE the server's copy now; recording their
+        // hash is what lets syncState later say "unchanged since last sync"
+        // without re-downloading the blob.
+        lastSha: createHash('sha256').update(blob).digest('hex'),
+      });
     }
     return result;
   });
@@ -235,30 +253,129 @@ export async function pullVault(options: {
       fs.renameSync(tmpPath, options.vaultPath);
     } finally {
       if (fs.existsSync(tmpPath)) fs.rmSync(tmpPath, { force: true });
+      // openWithKey above may migrate, and migrate() calls save(), whose
+      // writeAtomic leaves a rolling backup beside the TEMP file. Nothing else
+      // ever cleans that path up.
+      if (fs.existsSync(`${tmpPath}.bak`)) fs.rmSync(`${tmpPath}.bak`, { force: true });
     }
 
-    saveSyncConfig({ ...config, lastVersion: pulled.version, lastSyncedAt: new Date().toISOString() });
+    saveSyncConfig({
+      ...config,
+      lastVersion: pulled.version,
+      lastSyncedAt: new Date().toISOString(),
+      // Hash the file AS IT NOW SITS ON DISK, not `pulled.blob` and not
+      // `pulled.sha256`. Two things make the downloaded bytes the wrong answer:
+      // the sha comes from the x-sha256 HEADER and is '' when a server omits it,
+      // and the open-verify above can MIGRATE the vault (migrate() → save()
+      // re-encrypts with a fresh nonce), so the renamed file may legitimately
+      // differ from what came over the wire. Either way a stale baseline makes
+      // the next syncState() read "edited since sync" and report diverged where
+      // behind is correct. Reading it back is authoritative and costs one read.
+      lastSha: sha256Hex(fs.readFileSync(options.vaultPath)),
+    });
     return { ok: true, version: pulled.version, wroteVault: true };
   });
 }
 
 /** Compare local state to the server without changing anything. */
+/**
+ * Where this machine stands against the server.
+ *
+ * "In sync" means the BYTES MATCH — the local vault file hashes to what the
+ * server is holding. It used to mean `config.lastVersion === remote.version`,
+ * i.e. "the last version I pushed is still the newest one there", which stayed
+ * true forever while the local vault was edited and never pushed. That reported
+ * "✓ In sync" over a vault that was weeks ahead of its only backup, which is the
+ * one thing this command exists to tell you.
+ *
+ * Version numbers still decide the DIRECTION once the content differs:
+ *   - server advanced past our last push, and we have local edits → diverged
+ *   - server advanced past our last push                          → behind
+ *   - otherwise                                                    → ahead
+ * A byte difference is enough to be "not in sync": the push is cheap, and
+ * claiming a match we have not verified is the failure mode we just removed.
+ */
 export async function syncState(options: {
   vaultPath: string;
   deviceSecret: Buffer;
-}): Promise<{ state: SyncState; localVersion: number; remoteVersion: number | null }> {
+}): Promise<{
+  state: SyncState;
+  localVersion: number;
+  remoteVersion: number | null;
+  /** True when the local file differs from the blob the server holds. */
+  localChanged: boolean;
+  /**
+   * False when this machine has no recorded post-sync hash, so "did WE edit?"
+   * could not be answered and was assumed yes. Callers should hedge their
+   * wording rather than assert both sides changed.
+   */
+  baselineKnown: boolean;
+}> {
   const config = loadSyncConfig();
-  if (!config) return { state: 'no-config', localVersion: 0, remoteVersion: null };
+  if (!config) return { state: 'no-config', localVersion: 0, remoteVersion: null, localChanged: false, baselineKnown: true };
   const { token } = deriveSyncCreds(options.deviceSecret);
   const remote = await remoteStatus(config.serverUrl, token);
   const localExists = fs.existsSync(options.vaultPath);
   if (remote === null) {
-    return { state: localExists ? 'no-remote' : 'no-config', localVersion: config.lastVersion, remoteVersion: null };
+    return {
+      state: localExists ? 'no-remote' : 'no-config',
+      localVersion: config.lastVersion,
+      remoteVersion: null,
+      localChanged: localExists,
+      baselineKnown: config.lastSha !== null,
+    };
   }
-  if (!localExists) return { state: 'no-local', localVersion: config.lastVersion, remoteVersion: remote.version };
-  const state: SyncState =
-    config.lastVersion === remote.version ? 'in-sync' : config.lastVersion > remote.version ? 'ahead' : 'behind';
-  return { state, localVersion: config.lastVersion, remoteVersion: remote.version };
+  if (!localExists) {
+    return {
+      state: 'no-local',
+      localVersion: config.lastVersion,
+      remoteVersion: remote.version,
+      localChanged: false,
+      baselineKnown: true,
+    };
+  }
+
+  // A server that does not report sha256 (an older or third-party one — ours
+  // has always sent it, apps/sync-server/src/handler.ts) leaves us unable to
+  // compare bytes at all. Fall back to the version comparison instead of
+  // treating "no hash" as "different", which would pin such a server to
+  // ahead/diverged forever and never say in-sync again.
+  const remoteSha = /^[0-9a-f]{64}$/.test(remote.sha256 ?? '') ? remote.sha256 : null;
+  if (remoteSha === null) {
+    const versionState: SyncState =
+      config.lastVersion === remote.version ? 'in-sync' : config.lastVersion > remote.version ? 'ahead' : 'behind';
+    return {
+      state: versionState,
+      localVersion: config.lastVersion,
+      remoteVersion: remote.version,
+      localChanged: false,
+      baselineKnown: config.lastSha !== null,
+    };
+  }
+
+  const localSha = createHash('sha256').update(fs.readFileSync(options.vaultPath)).digest('hex');
+  const localChanged = localSha !== remoteSha;
+  const serverAdvanced = remote.version > config.lastVersion;
+  // Did WE edit since our own last sync? A config written before lastSha
+  // existed cannot prove the file is untouched, so it counts as edited: the
+  // safe error is offering a merge that turns out to be unnecessary, not a
+  // plain pull that buries local work.
+  const editedSinceSync = config.lastSha === null || localSha !== config.lastSha;
+
+  const state: SyncState = !localChanged
+    ? 'in-sync'
+    : serverAdvanced
+      ? editedSinceSync
+        ? 'diverged'
+        : 'behind'
+      : 'ahead';
+  return {
+    state,
+    localVersion: config.lastVersion,
+    remoteVersion: remote.version,
+    localChanged,
+    baselineKnown: config.lastSha !== null,
+  };
 }
 
 // --- billing (M5b) ---

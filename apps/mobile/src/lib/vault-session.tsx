@@ -36,8 +36,10 @@ import {
   biometricUnlockEnabled,
   cacheMasterKeyHex,
   clearCachedMasterKey,
+  clearLegacyConnectorSharedScopes,
   loadConnectorServerUrl,
   loadDeviceSecretHex,
+  loadLegacyConnectorSharedScopes,
   loadLastSyncVersion,
   loadSyncServerUrl,
   readCachedMasterKeyHex,
@@ -163,12 +165,21 @@ export interface VaultSession {
    * and a best-effort entitlement attestation, mirroring how pushNow wires the
    * sync transport. They THROW raw transport errors (402/401/network); the
    * Sharing screen classifies them via src/lib/connect-flow.ts. The
-   * shared-scope LIST is not managed here; connect-flow owns it (SecureStore).
+   * shared-scope LIST lives in the vault's scopes table (ADR 0038) and is
+   * reached through connectorScopeStore below.
    */
   /** "Make these scopes match exactly": PUT the real plaintext entries of every listed scope. */
   connectorPushScopes(scopes: string[]): Promise<{ pushed: number }>;
-  /** Server-side DELETE of one scope's rows (works without the vault; revocation is never blocked). */
+  /** Server-side DELETE of one scope's rows. */
   connectorUnshareScope(scope: string): Promise<{ deleted: number }>;
+  /**
+   * The shared-scope list, backed by the open vault (ADR 0038): load() returns
+   * vault.sharedScopes() (after a one-time fold-in of the pre-0038 SecureStore
+   * list), save() diffs the marks, saves the vault, and runs push-after-save so
+   * the change syncs to every other device. load() is [] while locked (screens
+   * redirect anyway); save() throws while locked.
+   */
+  connectorScopeStore: { load(): Promise<string[]>; save(scopes: string[]): Promise<void> };
   /**
    * Pull app-written memories/forgets into the open vault (write-back
    * down-sync), refresh the entry list, and run the normal push-after-save so
@@ -671,6 +682,42 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     [connectorContext],
   );
 
+  const connectorScopeStore = useMemo(
+    () => ({
+      load: async (): Promise<string[]> => {
+        const vault = vaultRef.current;
+        if (!vault) return [];
+        // One-time fold-in of the pre-0038 SecureStore list. Additive only —
+        // it can mark, never unmark — and the legacy key is deleted only AFTER
+        // the folded marks are saved into the vault (review F4): a crash
+        // between the two refolds next time, an additive no-op, instead of
+        // losing the list. A corrupt legacy value reads as [] and is left in
+        // place rather than deleted — never destroy what wasn't folded.
+        const legacy = await loadLegacyConnectorSharedScopes();
+        if (legacy.length > 0) {
+          for (const scope of legacy) vault.setScopeShared(scope, true);
+          vault.save();
+          await clearLegacyConnectorSharedScopes();
+          await pushAfterSave();
+        }
+        return vault.sharedScopes();
+      },
+      save: async (scopes: string[]): Promise<void> => {
+        const vault = vaultRef.current;
+        if (!vault) throw new Error('Unlock the vault before changing sharing.');
+        const want = new Set(scopes);
+        const have = new Set(vault.sharedScopes());
+        for (const scope of want) if (!have.has(scope)) vault.setScopeShared(scope, true);
+        for (const scope of have) if (!want.has(scope)) vault.setScopeShared(scope, false);
+        vault.save();
+        // Same save-then-push every vault mutation runs: this is what carries
+        // the mark (or unmark) to the sync server and on to the other devices.
+        await pushAfterSave();
+      },
+    }),
+    [pushAfterSave],
+  );
+
   const connectorDownSync = useCallback(async (): Promise<DownSyncResult> => {
     const vault = vaultRef.current;
     if (!vault) throw new Error('Unlock the vault before syncing app-written memories.');
@@ -753,6 +800,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       getMemory,
       connectorPushScopes,
       connectorUnshareScope,
+      connectorScopeStore,
       connectorDownSync,
       connectorStartPairing,
     }),
@@ -783,6 +831,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       getMemory,
       connectorPushScopes,
       connectorUnshareScope,
+      connectorScopeStore,
       connectorDownSync,
       connectorStartPairing,
     ],

@@ -29,12 +29,11 @@ import {
   // Hosted connector / sharing (ADR 0019). These CALL the already-exported
   // @northkeep/sync client — the connector token is derived from the device
   // secret inside them and is never returned to the page.
-  addSharedScope,
+  foldSidecarScopesIntoVault,
   downSyncConnector,
   fetchEntitlement,
   loadConnectorConfig,
   pushSharedScopes,
-  removeSharedScope,
   setConnectorServer,
   startPairing,
   unshareScope,
@@ -671,14 +670,17 @@ async function dispatch(
   if (method === 'GET' && route === '/api/share/status') {
     const config = loadConnectorConfig();
     const unlocked = session.isUnlocked();
-    // Distinct scopes the vault actually holds, with a live count each, so the UI
-    // can offer a real Share toggle per scope. Only readable while unlocked;
-    // locked simply omits them (the shared list from config still renders, so the
-    // user always sees exactly what is shared).
+    // The shared list lives IN THE VAULT (ADR 0038), so it is only readable
+    // while unlocked. Locked returns shared_scopes: null — "unknown", which the
+    // GUI renders as an unlock prompt — never [] ("nothing shared"), because
+    // claiming private while unable to check would be the dishonest direction.
     let vaultScopes: string[] = [];
+    let sharedScopes: string[] | null = null;
     const counts: Record<string, number> = {};
     if (unlocked) {
       await session.withVault((vault) => {
+        foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
+        sharedScopes = vault.sharedScopes();
         for (const entry of vault.list()) {
           counts[entry.scope] = (counts[entry.scope] ?? 0) + 1;
         }
@@ -688,7 +690,7 @@ async function dispatch(
     return ok({
       configured: Boolean(config),
       server: config?.server ?? null,
-      shared_scopes: config?.sharedScopes ?? [],
+      shared_scopes: sharedScopes,
       vault_scopes: vaultScopes,
       counts,
       unlocked,
@@ -719,18 +721,29 @@ async function dispatch(
     const config = loadConnectorConfig();
     if (!config) return bad(400, 'Set a connector server first.');
     const deviceSecret = deviceSecretOrError();
-    const updated = addSharedScope(targetScope);
     const entitlement = await maybeEntitlement(deviceSecret);
     try {
-      const result = await session.withVault((vault) =>
-        pushSharedScopes({ server: updated.server, deviceSecret, scopes: updated.sharedScopes, vault, entitlement }),
-      );
+      const result = await session.withVault(async (vault) => {
+        foldSidecarScopesIntoVault(vault);
+        const wasShared = vault.sharedScopes().includes(targetScope);
+        vault.setScopeShared(targetScope, true);
+        vault.save();
+        try {
+          return await pushSharedScopes({ server: config.server, deviceSecret, scopes: vault.sharedScopes(), vault, entitlement });
+        } catch (err) {
+          // The push did not land (offline, over the sharing caps, or the
+          // billing gate refused). Roll the mark back — unless it was already
+          // shared before this call — so a scope the server never accepted
+          // can't wear a phantom SHARED badge.
+          if (!wasShared) {
+            vault.setScopeShared(targetScope, false);
+            vault.save();
+          }
+          throw err;
+        }
+      });
       return ok({ shared: targetScope, pushed: result.pushed, scopes: result.scopes });
     } catch (err) {
-      // The push did not land (offline, over the sharing caps, or the billing
-      // gate refused). Roll the local mark back so a scope the server never
-      // accepted can't wear a phantom SHARED badge.
-      removeSharedScope(targetScope);
       if (err instanceof LockedError) throw err; // → 423, prompts unlock
       const msg = err instanceof Error ? err.message : String(err);
       if (/HTTP 402/.test(msg)) return bad(402, 'The connector server requires an active subscription to share.');
@@ -747,8 +760,16 @@ async function dispatch(
     const config = loadConnectorConfig();
     if (!config) return bad(400, 'Set a connector server first.');
     const deviceSecret = deviceSecretOrError();
-    const { deleted } = await unshareScope({ server: config.server, deviceSecret, scope: targetScope });
-    removeSharedScope(targetScope);
+    // Unsharing now needs the vault open: the mark lives there (ADR 0038). The
+    // server delete still runs FIRST, so a failure leaves the mark honestly in
+    // place — never a vault claiming private while the server holds rows.
+    const deleted = await session.withVault(async (vault) => {
+      foldSidecarScopesIntoVault(vault);
+      const res = await unshareScope({ server: config.server, deviceSecret, scope: targetScope });
+      vault.setScopeShared(targetScope, false);
+      vault.save();
+      return res.deleted;
+    });
     return ok({ unshared: targetScope, deleted });
   }
 
@@ -769,20 +790,25 @@ async function dispatch(
   if (method === 'POST' && route === '/api/share/sync') {
     const config = loadConnectorConfig();
     if (!config) return bad(400, 'Set a connector server first.');
-    if (config.sharedScopes.length === 0) return bad(400, 'No scopes are shared yet.');
     const deviceSecret = deviceSecretOrError();
     const entitlement = await maybeEntitlement(deviceSecret);
     const result = await session.withVault(async (vault) => {
+      foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
+      const scopes = vault.sharedScopes();
+      if (scopes.length === 0) return null;
       const down = await downSyncConnector({ server: config.server, deviceSecret, vault, entitlement });
+      // Re-read after the slow down-sync so a scope unshared mid-sync (on this
+      // device or arriving via vault sync) is never re-pushed.
       const push = await pushSharedScopes({
         server: config.server,
         deviceSecret,
-        scopes: config.sharedScopes,
+        scopes: vault.sharedScopes(),
         vault,
         entitlement,
       });
       return { down, push };
     });
+    if (result === null) return bad(400, 'No scopes are shared yet.');
     return ok({
       added: result.down.added,
       forgotten: result.down.forgotten,

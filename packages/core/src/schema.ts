@@ -1,4 +1,4 @@
-/** SQLite DDL implementing SPEC/memory-schema.md v0.1. */
+/** SQLite DDL implementing SPEC/memory-schema.md v0.3. */
 export const SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS memories (
   id            TEXT PRIMARY KEY,
@@ -35,5 +35,15 @@ CREATE TABLE IF NOT EXISTS embeddings (
 CREATE TABLE IF NOT EXISTS vault_meta (
   key   TEXT PRIMARY KEY,
   value TEXT NOT NULL
+);
+
+-- Per-scope sharing state (ADR 0038, schema 0.3). Inside the vault so it syncs
+-- with the vault: a scope marked Shared on one device is Shared on all of them.
+-- Default private is structural — no row (or shared = 0) means private, and a
+-- fresh migration creates this table EMPTY.
+CREATE TABLE IF NOT EXISTS scopes (
+  scope     TEXT PRIMARY KEY,
+  shared    INTEGER NOT NULL DEFAULT 0 CHECK (shared IN (0, 1)),
+  shared_at TEXT
 );
 `;

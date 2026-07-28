@@ -7,7 +7,6 @@ import {
 } from '../../src/lib/connect-flow';
 import {
   loadConnectorServerUrl,
-  loadConnectorSharedScopes,
 } from '../../src/lib/secure-store';
 import { useVaultSession } from '../../src/lib/vault-session';
 import { Button, FieldLabel, colors, type } from '../../src/ui';
@@ -42,7 +41,7 @@ export default function SharingHub() {
     useCallback(() => {
       void (async () => {
         setSavedServer(await loadConnectorServerUrl());
-        setSharedScopes(await loadConnectorSharedScopes());
+        setSharedScopes(await session.connectorScopeStore.load());
         setLoaded(true);
       })();
     }, []),

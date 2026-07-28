@@ -1,26 +1,24 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { northkeepHome } from '@northkeep/core';
+import { northkeepHome, type Vault } from '@northkeep/core';
 
 /**
- * Connector sharing config sidecar (`~/.northkeep/connector.json`, 0600 like
- * sync.json). Holds only WHERE the connector server is and WHICH scopes the user
- * marked Shared — never a secret (the connector token is re-derived from
- * `device.secret` on demand, ADR 0019).
+ * Connector config sidecar (`~/.northkeep/connector.json`, 0600 like
+ * sync.json). Holds only WHERE the connector server is — never a secret (the
+ * connector token is re-derived from `device.secret` on demand, ADR 0019).
  *
- * C2 uses a sidecar deliberately. The plan's longer-term refinement is to keep
- * the shared-scope list inside the encrypted vault so it follows the vault
- * through sync across machines; that would touch the vault SQLite image and the
- * invariant-#4 export surface, so it is deferred past C2. The sidecar avoids a
- * memory-schema change while keeping the same 0700-dir / 0600-file posture as
- * the sync sidecar.
+ * The shared-scope list used to live here too (C2). ADR 0038 moved it into the
+ * encrypted vault's `scopes` table so the marks travel with the vault through
+ * sync and every device answers "what is shared?" identically. The server URL
+ * stays in the sidecar because it is genuinely per-device configuration (a
+ * self-hoster may point one machine at a different connector).
+ * `foldSidecarScopesIntoVault` migrates a pre-0038 sidecar's list into the
+ * vault once, then strips it from the file.
  */
 
 export interface ConnectorConfig {
   /** Connector server base URL (https, or loopback for tests). */
   server: string;
-  /** Scopes the user has explicitly marked Shared. Default private → empty. */
-  sharedScopes: string[];
 }
 
 export function connectorConfigPath(): string {
@@ -29,13 +27,9 @@ export function connectorConfigPath(): string {
 
 export function loadConnectorConfig(): ConnectorConfig | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as ConnectorConfig;
+    const parsed = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as { server?: unknown };
     if (typeof parsed.server !== 'string') return null;
-    const scopes = Array.isArray(parsed.sharedScopes)
-      ? parsed.sharedScopes.filter((s): s is string => typeof s === 'string')
-      : [];
-    // Dedupe + sort so the file is stable and a scope can't be listed twice.
-    return { server: parsed.server, sharedScopes: [...new Set(scopes)].sort() };
+    return { server: parsed.server };
   } catch {
     return null;
   }
@@ -44,11 +38,44 @@ export function loadConnectorConfig(): ConnectorConfig | null {
 export function saveConnectorConfig(config: ConnectorConfig): void {
   const target = connectorConfigPath();
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  const clean: ConnectorConfig = {
-    server: config.server,
-    sharedScopes: [...new Set(config.sharedScopes)].sort(),
-  };
-  fs.writeFileSync(target, `${JSON.stringify(clean, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(target, `${JSON.stringify({ server: config.server }, null, 2)}\n`, { mode: 0o600 });
+}
+
+/**
+ * One-time migration (ADR 0038): move a pre-0038 sidecar's `sharedScopes` list
+ * into the vault, then rewrite the sidecar without it. Idempotent — a sidecar
+ * with no `sharedScopes` key is a no-op — and additive only: it can mark a
+ * scope shared in the vault, never unmark one, so it cannot revoke a share made
+ * elsewhere.
+ *
+ * ORDER IS LOAD-BEARING (review F4): the vault is SAVED before the sidecar key
+ * is stripped. A crash between the two leaves both copies present, and the next
+ * run refolds — an additive no-op. Stripping first risked the reverse: legacy
+ * list gone, vault never saved, shares silently lost.
+ *
+ * Every share path calls this before reading `vault.sharedScopes()`, so a user
+ * upgrading mid-flight keeps their existing shares without silent revocation.
+ */
+export function foldSidecarScopesIntoVault(vault: Vault): { folded: string[] } {
+  let raw: { sharedScopes?: unknown };
+  try {
+    raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as { sharedScopes?: unknown };
+  } catch {
+    return { folded: [] };
+  }
+  if (!Array.isArray(raw.sharedScopes)) return { folded: [] };
+  const scopes = [...new Set(raw.sharedScopes.filter((s): s is string => typeof s === 'string' && s.trim() !== ''))].sort();
+  if (scopes.length > 0) {
+    for (const scope of scopes) vault.setScopeShared(scope, true);
+    vault.save();
+  }
+  // Strip the key so the fold-in never runs again — a stale sidecar list
+  // re-asserting itself later could resurrect a share the user has since
+  // revoked on another device.
+  const rest = { ...(raw as Record<string, unknown>) };
+  delete rest.sharedScopes;
+  fs.writeFileSync(connectorConfigPath(), `${JSON.stringify(rest, null, 2)}\n`, { mode: 0o600 });
+  return { folded: scopes };
 }
 
 /**
@@ -72,42 +99,22 @@ export function assertConnectorUrl(rawUrl: string): URL {
   );
 }
 
-/** Set (or change) the connector server, keeping any already-shared scopes. */
+/**
+ * Set (or change) the connector server. A pre-0038 sidecar's sharedScopes key
+ * is preserved verbatim until foldSidecarScopesIntoVault runs — rewriting it
+ * away here would silently drop shares before they reach the vault.
+ */
 export function setConnectorServer(serverUrl: string): ConnectorConfig {
   const url = assertConnectorUrl(serverUrl);
-  const existing = loadConnectorConfig();
-  const config: ConnectorConfig = {
-    server: url.toString().replace(/\/$/, ''),
-    sharedScopes: existing?.sharedScopes ?? [],
-  };
-  saveConnectorConfig(config);
-  return config;
-}
-
-/** Add a scope to the shared list (idempotent). Requires a server already set. */
-export function addSharedScope(scope: string): ConnectorConfig {
-  const existing = loadConnectorConfig();
-  if (!existing) {
-    throw new Error('No connector server configured. Run: northkeep share server <url>');
+  const server = url.toString().replace(/\/$/, '');
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as Record<string, unknown>;
+  } catch {
+    // No existing file — start fresh.
   }
-  const config: ConnectorConfig = {
-    server: existing.server,
-    sharedScopes: [...new Set([...existing.sharedScopes, scope])],
-  };
-  saveConnectorConfig(config);
-  return config;
-}
-
-/** Remove a scope from the shared list (idempotent). */
-export function removeSharedScope(scope: string): ConnectorConfig {
-  const existing = loadConnectorConfig();
-  if (!existing) {
-    throw new Error('No connector server configured. Run: northkeep share server <url>');
-  }
-  const config: ConnectorConfig = {
-    server: existing.server,
-    sharedScopes: existing.sharedScopes.filter((s) => s !== scope),
-  };
-  saveConnectorConfig(config);
-  return config;
+  const target = connectorConfigPath();
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(target, `${JSON.stringify({ ...raw, server }, null, 2)}\n`, { mode: 0o600 });
+  return { server };
 }

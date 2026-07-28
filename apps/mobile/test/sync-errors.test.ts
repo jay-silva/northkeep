@@ -116,6 +116,50 @@ describe('classifySyncError: other kinds', () => {
     expect(classifySyncError(abort).kind).toBe('network');
   });
 
+  // expo/fetch (SDK 55) wraps every native failure as FetchError with
+  // name 'Error' — none of these are TypeErrors, so classification has to work
+  // off the message shape. These are the real strings the phone can produce.
+  it('recognizes the expo/fetch transport failures verbatim', () => {
+    for (const message of [
+      'fetch failed: The Internet connection appears to be offline.',
+      'fetch failed: A server with the specified hostname could not be found.',
+      'Fetch request has been canceled',
+    ]) {
+      expect(classifySyncError(new Error(message))).toEqual({
+        kind: 'network',
+        message: NETWORK_FAILURE_MESSAGE,
+      });
+    }
+  });
+
+  // The transport sets redirect:'error' so a redirect cannot re-send the bearer
+  // token to an attacker's Location. expo wraps that refusal as
+  // "fetch failed: Redirect is not allowed…", which the generic transport match
+  // would otherwise swallow — reporting a security refusal as flaky wifi.
+  it('reports a refused redirect as itself, not as a connection failure', () => {
+    for (const message of [
+      "Redirect is not allowed when redirect mode is 'error'",
+      "fetch failed: Redirect is not allowed when redirect mode is 'error'",
+    ]) {
+      const result = classifySyncError(new Error(message));
+      expect(result.kind).toBe('redirect-refused');
+      expect(result.message).not.toBe(NETWORK_FAILURE_MESSAGE);
+      expect(result.message).toMatch(/redirected somewhere else/i);
+    }
+  });
+
+  // REGRESSION (the "could not reach the sync server" bug): a TypeError raised
+  // by our own code before any socket opens must NOT be dressed up as a network
+  // failure. Hermes' Buffer.subarray() drops .equals, and the resulting
+  // TypeError told the user to check their wifi while the server was healthy.
+  it('does not disguise a non-transport TypeError as a connection failure', () => {
+    const bug = new TypeError('blob.subarray(...).equals is not a function');
+    const result = classifySyncError(bug);
+    expect(result.kind).toBe('other');
+    expect(result.message).toBe('blob.subarray(...).equals is not a function');
+    expect(result.message).not.toBe(NETWORK_FAILURE_MESSAGE);
+  });
+
   it('passes other user-facing sync messages through unchanged', () => {
     const message =
       'Vault is 5.0 MB, over the 4 MB sync limit.';

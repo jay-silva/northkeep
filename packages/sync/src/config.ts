@@ -17,6 +17,14 @@ export interface SyncConfig {
   /** Highest server version this machine has pulled or pushed. 0 = never synced. */
   lastVersion: number;
   lastSyncedAt: string | null;
+  /**
+   * sha256 of the vault file as it stood at the end of the last successful push
+   * or pull. Lets `syncState` tell "the server moved on" apart from "we BOTH
+   * moved on" without downloading the remote blob. Null on configs written
+   * before this field existed, and on a server change; callers treat null as
+   * "cannot prove the local file is untouched".
+   */
+  lastSha: string | null;
 }
 
 export function syncConfigPath(): string {
@@ -32,6 +40,7 @@ export function loadSyncConfig(): SyncConfig | null {
       accountId: typeof parsed.accountId === 'string' ? parsed.accountId : '',
       lastVersion: Number.isInteger(parsed.lastVersion) ? parsed.lastVersion : 0,
       lastSyncedAt: typeof parsed.lastSyncedAt === 'string' ? parsed.lastSyncedAt : null,
+      lastSha: typeof parsed.lastSha === 'string' ? parsed.lastSha : null,
     };
   } catch {
     return null;
@@ -76,6 +85,7 @@ export function setSyncServer(serverUrl: string, accountId: string): SyncConfig 
     // Changing servers resets the version baseline; keep it if the account matches.
     lastVersion: existing && existing.accountId === accountId ? existing.lastVersion : 0,
     lastSyncedAt: existing && existing.accountId === accountId ? existing.lastSyncedAt : null,
+    lastSha: existing && existing.accountId === accountId ? existing.lastSha : null,
   };
   saveSyncConfig(config);
   return config;

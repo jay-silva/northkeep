@@ -882,7 +882,7 @@ share
   .command('remove <scope>')
   .description('Unshare a scope: delete all its memories from the connector server')
   .action(async (scope: string) => {
-    await shareRemoveCmd(scope, fail);
+    await shareRemoveCmd(scope, withVault, fail);
   });
 
 share

@@ -18,7 +18,12 @@
  */
 
 /** Machine-readable category for a sync failure (drives distinct UI states). */
-export type SyncErrorKind = 'subscription-required' | 'not-enabled' | 'network' | 'other';
+export type SyncErrorKind =
+  | 'subscription-required'
+  | 'not-enabled'
+  | 'network'
+  | 'redirect-refused'
+  | 'other';
 
 export interface UserFacingSyncError {
   kind: SyncErrorKind;
@@ -40,6 +45,17 @@ export const PRIVATE_BETA_MESSAGE =
 /** Transport-level failure (offline, DNS, timeout). Always retryable. */
 export const NETWORK_FAILURE_MESSAGE =
   'Could not reach the sync server. Check your connection and try again.';
+
+/**
+ * The sync transport sets `redirect: 'error'` so a redirect can never re-send
+ * the bearer token to whatever an attacker put in `Location`. When that fires,
+ * the address did not lead where it claimed — which is a different situation
+ * from a dropped connection and must not be reported as one. Common innocent
+ * cause: a captive portal (hotel/airport wifi) intercepting the request.
+ */
+export const REDIRECT_REFUSED_MESSAGE =
+  'The sync server address redirected somewhere else, so NorthKeep stopped rather than send your credentials on. ' +
+  'If you are on shared wifi, sign in to that network and try again; otherwise check the server address.';
 
 /**
  * Dignified sync-paywall copy (Wave 2). Shown on the subscription-required and
@@ -103,6 +119,35 @@ function isSubscriptionRequired(err: unknown): boolean {
 }
 
 /**
+ * True only for a REAL transport failure, matched on error name or message
+ * shape — never on error CLASS.
+ *
+ * This used to include `err instanceof TypeError`, and that clause cost real
+ * debugging time: a Hermes-only TypeError thrown in sync.ts's local-vault check
+ * (before any socket was opened) was reported to the user as "could not reach
+ * the sync server", so a code bug looked like bad wifi. Nothing else can produce
+ * that message, so anything landing here that is NOT listed below is a bug we
+ * want to SEE, not to disguise as a connectivity problem — it falls through to
+ * kind 'other', which shows the real message.
+ *
+ * The strings come from expo/fetch (SDK 55), which wraps native failures as
+ * FetchError with name 'Error' — so matching TypeError never caught the genuine
+ * offline case anyway. React Native's global fetch phrasing is kept too, since
+ * either transport may be in play.
+ */
+function isTransportFailure(err: unknown, msg: string): boolean {
+  if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) return true;
+  return (
+    // expo/fetch: "fetch failed: The Internet connection appears to be offline."
+    /\bfetch failed\b/i.test(msg) ||
+    /the internet connection appears to be offline/i.test(msg) ||
+    /fetch request has been canceled/i.test(msg) ||
+    // RN global fetch / WinterCG phrasings.
+    /network request failed|failed to fetch|network error/i.test(msg)
+  );
+}
+
+/**
  * Map any error thrown by the sync paths (push, pull, first push during
  * enable-sync) to copy that is safe to show a mobile user. Non-sync errors
  * pass through with their original message; the messages written in
@@ -119,11 +164,13 @@ export function classifySyncError(err: unknown): UserFacingSyncError {
   if (/\bHTTP 403\b/.test(msg)) {
     return { kind: 'not-enabled', message: PRIVATE_BETA_MESSAGE };
   }
-  if (
-    (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) ||
-    err instanceof TypeError ||
-    /network request failed|failed to fetch|network error/i.test(msg)
-  ) {
+  // BEFORE the transport check: expo wraps this as "fetch failed: Redirect is
+  // not allowed…", so the generic "fetch failed" match would otherwise swallow
+  // it and report a security refusal as a flaky connection.
+  if (/redirect is not allowed/i.test(msg)) {
+    return { kind: 'redirect-refused', message: REDIRECT_REFUSED_MESSAGE };
+  }
+  if (isTransportFailure(err, msg)) {
     return { kind: 'network', message: NETWORK_FAILURE_MESSAGE };
   }
   return { kind: 'other', message: msg };

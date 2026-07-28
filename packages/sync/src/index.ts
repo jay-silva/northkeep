@@ -24,10 +24,9 @@ export {
 } from './client.js';
 export {
   assertConnectorUrl,
-  addSharedScope,
   connectorConfigPath,
+  foldSidecarScopesIntoVault,
   loadConnectorConfig,
-  removeSharedScope,
   saveConnectorConfig,
   setConnectorServer,
   type ConnectorConfig,

@@ -13,8 +13,6 @@ import {
   type SharedScopeStore,
 } from '../../src/lib/connect-flow';
 import {
-  loadConnectorSharedScopes,
-  saveConnectorSharedScopes,
 } from '../../src/lib/secure-store';
 import { useVaultSession } from '../../src/lib/vault-session';
 import { Button, ErrorNote, FieldLabel, colors, type } from '../../src/ui';
@@ -61,7 +59,7 @@ export default function ManageScopes() {
   // preselects on entry.
   useEffect(() => {
     void (async () => {
-      const scopes = await loadConnectorSharedScopes();
+      const scopes = await session.connectorScopeStore.load();
       setSharedScopes(scopes);
       const wanted = typeof params.share === 'string' ? params.share : null;
       if (wanted && !scopes.includes(wanted)) setPendingShare(wanted);
@@ -72,10 +70,8 @@ export default function ManageScopes() {
   if (session.status === 'unlinked') return <Redirect href="/onboarding" />;
 
   const rows = scopeRows(session.entries, sharedScopes);
-  const store: SharedScopeStore = {
-    load: () => loadConnectorSharedScopes(),
-    save: (scopes) => saveConnectorSharedScopes(scopes),
-  };
+  // Vault-backed (ADR 0038): marks live in the vault and sync to every device.
+  const store: SharedScopeStore = session.connectorScopeStore;
 
   function onConfirmShare(scope: string) {
     if (connectorBusy) return;
@@ -89,7 +85,7 @@ export default function ManageScopes() {
       );
       setConnectorBusy(null);
       if (outcome.kind === 'shared') {
-        setSharedScopes(await loadConnectorSharedScopes());
+        setSharedScopes(await store.load());
         setPendingShare(null);
         setScopeNotice(
           `"${outcome.scope}" is shared. ${outcome.pushed} ${outcome.pushed === 1 ? 'memory' : 'memories'} on the connector now match your vault.`,
@@ -114,7 +110,7 @@ export default function ManageScopes() {
       setConnectorBusy(null);
       setPendingUnshare(null);
       if (outcome.kind === 'unshared') {
-        setSharedScopes(await loadConnectorSharedScopes());
+        setSharedScopes(await store.load());
         setScopeNotice(`"${outcome.scope}" is private again. The server copies were deleted.`);
       } else {
         // Honest failure: the server still holds the copies, so the mark stays.
@@ -146,7 +142,7 @@ export default function ManageScopes() {
         setSyncResult(
           `${connectorSyncSummary(outcome, { pushedBack: false })} ${SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE}`,
         );
-        setSharedScopes(await loadConnectorSharedScopes());
+        setSharedScopes(await store.load());
       } else if (outcome.kind === 'partially-synced') {
         // Both halves stay visible: the memories arrived AND the re-push failed.
         setSyncResult(connectorSyncSummary(outcome, { pushedBack: false }));
@@ -222,8 +218,12 @@ export default function ManageScopes() {
             metadata.
           </Text>
           <Text style={styles.confirmBody}>
-            Every scope you have not shared stays on this phone. Unsharing deletes the server
+            Every scope you have not shared stays private. Unsharing deletes the server
             copies; your vault keeps everything.
+          </Text>
+          <Text style={styles.confirmBody}>
+            Sharing applies to this scope on every device that syncs this vault — including your
+            Mac — and so does unsharing.
           </Text>
           <Button
             title="Share this scope"
