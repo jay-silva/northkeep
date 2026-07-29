@@ -50,10 +50,21 @@ echo "==> [4/5] Pre-signing native binaries (skips when unsigned)"
 echo "==> [5/5] tauri build"
 if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
   echo "    signing enabled (identity from env, not shown)"
-  if [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
-    echo "    notarization enabled (Apple ID flow)"
-  elif [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
+  # API key FIRST, matching the DMG-notarize branch below. The old order tested
+  # the Apple ID path first, so with both sets of credentials configured this
+  # banner claimed "Apple ID flow" while the DMG was actually notarized with the
+  # key. A build log that misreports which credential was used is worse than no
+  # log, because it is what you would check after a leak.
+  if [ -n "${APPLE_API_KEY:-}" ] && [ -n "${APPLE_API_ISSUER:-}" ]; then
     echo "    notarization enabled (App Store Connect API key flow)"
+    # Tauri notarizes the .app itself, reading credentials from the environment,
+    # and its own precedence is not ours to assume. Take the password out of the
+    # environment entirely so NO step, ours or Tauri's, can put an app-specific
+    # password on a long-running argv where `ps` can read it. The key file is
+    # the credential from here on.
+    unset APPLE_ID APPLE_PASSWORD
+  elif [ -n "${APPLE_ID:-}" ] && [ -n "${APPLE_PASSWORD:-}" ] && [ -n "${APPLE_TEAM_ID:-}" ]; then
+    echo "    notarization enabled (Apple ID flow)"
   else
     echo "    NOTE: no notarization credentials in env — the DMG will be signed but NOT notarized"
   fi
