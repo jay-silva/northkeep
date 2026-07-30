@@ -1,6 +1,7 @@
 import type { MemoryType, Vault } from '@northkeep/core';
 import { deriveConnectorToken } from './creds.js';
 import { assertConnectorUrl } from './connector-config.js';
+import { timeoutSignal } from './abort.js';
 
 /**
  * The hosted-connector client (ADR 0019, phase C2). Pushes the user's REAL vault
@@ -14,6 +15,7 @@ import { assertConnectorUrl } from './connector-config.js';
  */
 
 const TIMEOUT_MS = 30_000;
+
 
 /** Entry as pushed on the wire — byte-faithful to the vault (id/hash/scope/type/content). */
 export interface PushEntry {
@@ -59,7 +61,7 @@ export async function fetchEntitlement(opts: { syncServer: string; syncToken: st
     headers: { authorization: `Bearer ${opts.syncToken}`, 'content-type': 'application/json' },
     body: '{}',
     redirect: 'error',
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: timeoutSignal(TIMEOUT_MS),
   });
   if (res.status === 404) return null;
   if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on entitlement.`);
@@ -123,7 +125,7 @@ export async function pushSharedScopes(opts: {
     headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
     body: JSON.stringify({ scopes, entries }),
     redirect: 'error',
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: timeoutSignal(TIMEOUT_MS),
   });
   if (res.status === 413) {
     throw new Error(
@@ -147,7 +149,7 @@ export async function unshareScope(opts: {
     method: 'DELETE',
     headers: authHeaders(opts.deviceSecret),
     redirect: 'error',
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: timeoutSignal(TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Connector server returned HTTP ${res.status} on unshare.`);
   const body = (await res.json().catch(() => ({}))) as { deleted?: number };
@@ -163,7 +165,7 @@ export async function getManifest(opts: {
   const res = await fetch(`${server}/client/manifest`, {
     headers: authHeaders(opts.deviceSecret),
     redirect: 'error',
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: timeoutSignal(TIMEOUT_MS),
   });
   if (!res.ok) throw new Error(`Connector server returned HTTP ${res.status} on manifest.`);
   const body = (await res.json()) as { entries?: ManifestEntry[] };
@@ -212,7 +214,7 @@ export async function downSyncConnector(opts: {
   const pendingRes = await fetch(`${server}/client/pending`, {
     headers: authHeaders(opts.deviceSecret, opts.entitlement),
     redirect: 'error',
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: timeoutSignal(TIMEOUT_MS),
   });
   if (pendingRes.status === 401) throw new Error('The connector server rejected the connector token (401).');
   if (pendingRes.status === 402) {
@@ -274,7 +276,7 @@ export async function downSyncConnector(opts: {
     headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
     body: JSON.stringify({ acked, forgets: forgetIds }),
     redirect: 'error',
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: timeoutSignal(TIMEOUT_MS),
   });
   if (!ackRes.ok) throw new Error(`Connector server returned HTTP ${ackRes.status} on ack.`);
 
@@ -297,7 +299,7 @@ export async function startPairing(opts: {
     headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
     body: '{}',
     redirect: 'error',
-    signal: AbortSignal.timeout(TIMEOUT_MS),
+    signal: timeoutSignal(TIMEOUT_MS),
   });
   if (res.status === 409) throw reencryptError();
   if (!res.ok) throw new Error(`Connector server returned HTTP ${res.status} on pairing.`);

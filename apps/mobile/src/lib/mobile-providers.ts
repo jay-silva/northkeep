@@ -1,5 +1,6 @@
 import { fetch as expoFetch } from 'expo/fetch';
 import type { ChatMessage, ChatOptions, ModelProvider } from '@northkeep/converse/dist/provider.js';
+import { timeoutSignal, withTimeout } from '@northkeep/sync';
 import type { ProviderConfig } from './providers-store';
 
 /**
@@ -83,7 +84,7 @@ function createAnthropicProvider(
           ...(system.length > 0 ? { system } : {}),
           messages: turns,
         }),
-        signal: withTimeout(options.signal),
+        signal: withTimeoutSignal(options.signal),
         redirect: 'error',
       });
       if (!res.ok) throw new Error(`Anthropic API returned HTTP ${res.status}.`);
@@ -179,7 +180,7 @@ function createOpenAIProvider(
           stream_options: { include_usage: true },
           ...(options.maxTokens !== undefined ? { max_tokens: options.maxTokens } : {}),
         }),
-        signal: withTimeout(options.signal),
+        signal: withTimeoutSignal(options.signal),
         redirect: 'error',
       });
       if (!res.ok) throw new Error(`Model endpoint returned HTTP ${res.status}.`);
@@ -316,22 +317,16 @@ function normalizeOpenAiBase(raw: string): string {
 }
 
 /**
- * Combine the caller's abort signal with a hard timeout. AbortSignal.timeout /
- * .any are not guaranteed on Hermes, so feature-detect and degrade to the
- * caller's signal (or none) rather than throwing.
+ * Combine the caller's signal with a hard timeout, and a standalone deadline
+ * for short requests. Both delegate to @northkeep/sync's abort helper, which is
+ * the one place allowed to touch AbortSignal.timeout/.any: they do not exist on
+ * Hermes, and the previous local version degraded to NO timeout there, so a
+ * stalled model request had nothing to stop it.
  */
-function withTimeout(signal?: AbortSignal): AbortSignal | undefined {
-  const hasTimeout = typeof (AbortSignal as { timeout?: unknown }).timeout === 'function';
-  const hasAny = typeof (AbortSignal as { any?: unknown }).any === 'function';
-  if (!hasTimeout) return signal;
-  const timeout = AbortSignal.timeout(CHAT_TIMEOUT_MS);
-  if (!signal) return timeout;
-  return hasAny ? AbortSignal.any([signal, timeout]) : signal;
+function withTimeoutSignal(signal?: AbortSignal): AbortSignal {
+  return withTimeout(CHAT_TIMEOUT_MS, signal);
 }
 
-/** A standalone timeout signal for short requests (discovery). Degrades to no
- * signal when AbortSignal.timeout is unavailable on Hermes. */
-function shortTimeout(ms: number): AbortSignal | undefined {
-  const hasTimeout = typeof (AbortSignal as { timeout?: unknown }).timeout === 'function';
-  return hasTimeout ? AbortSignal.timeout(ms) : undefined;
+function shortTimeout(ms: number): AbortSignal {
+  return timeoutSignal(ms);
 }

@@ -1,3 +1,4 @@
+export { timeoutSignal, withTimeout } from './abort.js';
 export { deriveConnectorToken, deriveSyncCreds, tokenHash, type SyncCreds } from './creds.js';
 export {
   assertSyncUrl,
