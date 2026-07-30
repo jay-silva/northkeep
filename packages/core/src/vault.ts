@@ -4,6 +4,7 @@ import {
   NONCE_BYTES,
   SALT_BYTES,
   VaultAuthError,
+  VaultSchemaError,
   blake2bHex,
   decrypt,
   deriveMasterKey,
@@ -280,7 +281,7 @@ export class Vault {
       version = '0.3';
     }
     if (version !== SCHEMA_VERSION) {
-      throw new Error(
+      throw new VaultSchemaError(
         `Vault schema ${version} is newer than this build understands (${SCHEMA_VERSION}). Update NorthKeep.`,
       );
     }

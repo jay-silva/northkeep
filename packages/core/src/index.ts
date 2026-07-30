@@ -9,6 +9,7 @@ export {
   AEAD_OVERHEAD,
   KEY_BYTES,
   VaultAuthError,
+  VaultSchemaError,
   generateDeviceSecret,
   type KdfParams,
 } from './crypto.js';

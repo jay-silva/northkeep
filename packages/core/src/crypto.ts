@@ -67,6 +67,24 @@ export class VaultAuthError extends Error {
   }
 }
 
+/**
+ * The vault on disk uses a schema this build does not understand, i.e. it was
+ * migrated by a NEWER NorthKeep. Distinct from VaultAuthError because it is not
+ * a credential problem and the remedy is different: run current code.
+ *
+ * Typed rather than a bare Error so long-lived processes can recognise their own
+ * obsolescence. A stdio MCP server spawned before a migration otherwise keeps
+ * running forever, failing every call with the same message, while the build on
+ * disk is perfectly current (observed 2026-07-30 across Claude and Codex at
+ * once).
+ */
+export class VaultSchemaError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'VaultSchemaError';
+  }
+}
+
 export function randomBytes(length: number, provider: CryptoProvider = getPlatform().crypto): Buffer {
   return provider.randomBytes(length);
 }

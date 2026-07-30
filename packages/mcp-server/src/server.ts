@@ -5,6 +5,7 @@ import {
   MEMORY_TYPES,
   Vault,
   VaultAuthError,
+  VaultSchemaError,
   defaultVaultPath,
   setPlatform,
   withFileLock,
@@ -108,6 +109,12 @@ async function withVault<T>(
           'Stored key no longer matches the vault. Ask the user to run "northkeep unlock" again.',
         );
       }
+      // This process is older than the vault: it was spawned before a schema
+      // migration and cannot read it, and never will. Sitting here failing every
+      // call is the worst option, because the build on disk is already current
+      // and only this long-lived process is behind. Answer this call honestly,
+      // then exit so the client's next request spawns a server on current code.
+      if (err instanceof VaultSchemaError) scheduleObsoleteExit(err.message);
       throw err;
     }
     try {
@@ -363,6 +370,75 @@ export async function startServer(vaultPath?: string): Promise<void> {
   // web/cli import this package they call setPlatform in their own startup.
   setPlatform(nodePlatform());
   const server = createServer(vaultPath);
-  await server.connect(new StdioServerTransport());
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  isStandaloneStdioServer = true;
+  installShutdownOnClientExit(server);
   console.error('northkeep MCP server ready (stdio)');
+}
+
+/**
+ * Exit when the client goes away.
+ *
+ * The SDK's StdioServerTransport.start() subscribes to stdin 'data' and 'error'
+ * ONLY. It never listens for 'end' or 'close', and its onclose fires only from
+ * an explicit close() call. So when a client quits, or its process dies, or the
+ * pipe is closed, this process just sits there: stdin at EOF, nothing left to
+ * read, still running.
+ *
+ * That is not merely untidy. Observed 2026-07-30: 25 orphaned servers across
+ * several days of finished Claude and Codex sessions, some over a week old.
+ * Each one keeps whatever code it was started with, so when the vault migrated
+ * to schema 0.3 they carried on holding 0.2 and every write through them failed
+ * — in three different apps at once, silently, while the on-disk build was
+ * perfectly current. An orphan is a landmine, not a leak.
+ *
+ * EOF on stdin is the signal, and it is reliable here because the transport's
+ * own 'data' listener puts stdin in flowing mode. An interactive run (stdin a
+ * TTY) still waits for a real Ctrl-D, which is what you want.
+ */
+/**
+ * Exit shortly after answering a call that proved this build is obsolete.
+ *
+ * Deliberately NOT immediate: the caller still needs the error written to
+ * stdout, and killing the process first would turn a clear "update NorthKeep"
+ * into a silent transport failure. The delay is long enough to flush and short
+ * enough that the next request gets a fresh process.
+ *
+ * Only meaningful for the standalone stdio server, so it no-ops when the server
+ * is embedded (web/CLI import these tools in-process, and exiting there would
+ * take the whole app down).
+ */
+let obsoleteExitScheduled = false;
+function scheduleObsoleteExit(detail: string): void {
+  if (obsoleteExitScheduled || !isStandaloneStdioServer) return;
+  obsoleteExitScheduled = true;
+  console.error(`northkeep MCP server is out of date and exiting so a current one starts: ${detail}`);
+  setTimeout(() => process.exit(0), 250).unref();
+}
+
+/** Set by startServer(); false when these tools are imported in-process. */
+let isStandaloneStdioServer = false;
+
+function installShutdownOnClientExit(server: { close: () => Promise<void> }): void {
+  let shuttingDown = false;
+  const shutdown = (reason: string, code = 0): void => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.error(`northkeep MCP server exiting (${reason})`);
+    // Close the transport, then leave regardless: a hung close must not be the
+    // thing that recreates the orphan this function exists to prevent.
+    const done = (): never => process.exit(code);
+    server.close().then(done, done);
+    setTimeout(done, 2000).unref();
+  };
+
+  // The client disconnected, or its process died and closed the pipe.
+  process.stdin.once('end', () => shutdown('client closed stdin'));
+  process.stdin.once('close', () => shutdown('stdin closed'));
+  // A read error on stdin means the pipe is gone too.
+  process.stdin.once('error', () => shutdown('stdin error', 1));
+  // Ordinary termination: still close the transport rather than dying mid-write.
+  process.once('SIGINT', () => shutdown('SIGINT'));
+  process.once('SIGTERM', () => shutdown('SIGTERM'));
 }
