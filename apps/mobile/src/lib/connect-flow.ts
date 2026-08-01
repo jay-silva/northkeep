@@ -76,7 +76,27 @@ export const CONNECTOR_PRIVATE_BETA_MESSAGE =
  * Not a secret: it is a one-way hash the server already knows.
  */
 export function shareIdFromConnectorToken(connectorToken: string): string {
-  return bytesToHex(sha256(utf8ToBytes(connectorToken)));
+  return allowlistHashFromToken(connectorToken);
+}
+
+/**
+ * sha256 hex of a derived token: the exact value BOTH server allowlists store
+ * (`NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES`, `NORTHKEEP_CONNECTOR_ALLOWED_TOKEN_HASHES`)
+ * and what `tokenHash` produces on desktop.
+ *
+ * Sync and Cloud Connect derive DIFFERENT tokens from the same device secret,
+ * so a comped account needs a hash from each; they are not interchangeable. The
+ * phone could previously produce only the connector one, which meant a
+ * phone-only design partner could be given Cloud Connect but not sync, since
+ * the Settings screen showed the account id and that is a different derivation
+ * label the allowlist will never match.
+ *
+ * @noble/hashes rather than node:crypto: the mobile shim has no createHash. A
+ * test proves byte-for-byte equality with node's sha256. Not a secret, just a
+ * one-way hash the server already knows.
+ */
+export function allowlistHashFromToken(token: string): string {
+  return bytesToHex(sha256(utf8ToBytes(token)));
 }
 
 /** The URL the user pastes into an AI app to add the connector: server + /mcp (desktop mcpUrl). */

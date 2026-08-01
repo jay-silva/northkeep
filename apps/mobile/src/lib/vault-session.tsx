@@ -29,7 +29,7 @@ import {
   unshareScope,
   type DownSyncResult,
 } from '@northkeep/sync';
-import { DEFAULT_CONNECTOR_SERVER_URL } from './connect-flow';
+import { DEFAULT_CONNECTOR_SERVER_URL, allowlistHashFromToken } from './connect-flow';
 import { DEMO_MEMORIES, DEMO_PASSPHRASE } from './demo-vault';
 import { deleteIfExists, demoVaultPath, recoverVaultFileIfMissing, vaultPath } from './paths';
 import {
@@ -859,6 +859,29 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
  * derivation needs BLAKE2b), so bootstrap still works with the loud
  * platform-unavailable banner showing.
  */
+/**
+ * The value `NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES` stores, i.e. what a design
+ * partner sends to get sync comped. Distinct from the account id above: sync
+ * and Cloud Connect derive different tokens from the same device secret, and
+ * the allowlist matches only this one. Without it a phone-only partner could be
+ * comped for Cloud Connect but never for sync.
+ *
+ * One-way and safe to share: it identifies an account, decrypts nothing, and
+ * the server already knows it.
+ */
+export function syncAllowlistHash(deviceSecretHex: string): string | null {
+  try {
+    const secret = Buffer.from(deviceSecretHex, 'hex');
+    try {
+      return allowlistHashFromToken(deriveSyncCreds(secret).token);
+    } finally {
+      memzero(secret);
+    }
+  } catch {
+    return null;
+  }
+}
+
 function shortAccountId(deviceSecretHex: string): string | null {
   try {
     const secret = Buffer.from(deviceSecretHex, 'hex');

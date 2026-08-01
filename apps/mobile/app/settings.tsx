@@ -10,7 +10,9 @@ import {
   loadSyncServerUrl,
   saveSyncServerUrl,
 } from '../src/lib/secure-store';
-import { useVaultSession } from '../src/lib/vault-session';
+import { useVaultSession, syncAllowlistHash } from '../src/lib/vault-session';
+import { loadDeviceSecretHex } from '../src/lib/secure-store';
+import * as Clipboard from 'expo-clipboard';
 import { Button, ErrorNote, FieldLabel, colors, type } from '../src/ui';
 
 /**
@@ -28,6 +30,8 @@ export default function Settings() {
   const [savedUrl, setSavedUrl] = useState<string | null>(null);
   const [lastVersion, setLastVersion] = useState(0);
   const [vaultPresent, setVaultPresent] = useState<boolean | null>(null);
+  const [syncId, setSyncId] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
@@ -37,6 +41,8 @@ export default function Settings() {
       setSavedUrl(url);
       setServerUrl(url ?? '');
       setLastVersion(await loadLastSyncVersion());
+      const hex = await loadDeviceSecretHex();
+      setSyncId(hex ? syncAllowlistHash(hex) : null);
       try {
         setVaultPresent(getPlatform().storage.exists(vaultPath()));
       } catch {
@@ -145,6 +151,27 @@ export default function Settings() {
       <Info label="Last synced version" value={lastVersion > 0 ? String(lastVersion) : 'never'} />
       <Info label="Sync server" value={savedUrl ?? 'not set'} />
       <Info label="Face ID unlock" value={session.biometricCacheEnabled ? 'on' : 'off'} />
+
+      {syncId ? (
+        <>
+          <Info label="Sync id" value={`${syncId.slice(0, 12)}...`} />
+          <Button
+            title={copied ? 'Sync id copied' : 'Copy sync id'}
+            kind="secondary"
+            onPress={() => {
+              void Clipboard.setStringAsync(syncId).then(() => {
+                setCopied(true);
+                setTimeout(() => setCopied(false), 2000);
+              });
+            }}
+          />
+          <Text style={styles.footnote}>
+            Send this to support to have sync enabled on your account during the beta. It is a
+            one-way id: it identifies your account and reveals nothing about your memories, and it
+            cannot decrypt anything. Cloud Connect uses a separate id, shown on its own screen.
+          </Text>
+        </>
+      ) : null}
 
       <FieldLabel>Recovery</FieldLabel>
       <Button
