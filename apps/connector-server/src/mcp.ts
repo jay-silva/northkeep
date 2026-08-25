@@ -41,7 +41,7 @@ import {
   parseProjectSlug,
   projectScope,
   serializeProjectDoc,
-} from '@northkeep/core/project-doc';
+} from './project-doc.js';
 import { z } from 'zod';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
 import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
@@ -49,7 +49,7 @@ import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './
 const MAX_RESULTS = 20;
 const MAX_REMEMBER_BYTES = 8 * 1024; // mirrors the ordinary push per-entry content cap
 const MAX_SHARED_ENTRIES = 5000; // per-account row cap, mirrors create-server.ts push cap
-/** Vault memory types, kept local. Project-doc helpers come from @northkeep/core/project-doc (pure; no sqlite or sodium). */
+/** Vault memory types, kept local. Project-doc helpers are the pure copy in ./project-doc.ts (no sqlite or sodium). */
 const MEMORY_TYPES = new Set(['episodic', 'semantic', 'procedural', 'working', 'identity']);
 const projectSlugSchema = z
   .string()

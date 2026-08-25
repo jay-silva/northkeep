@@ -38,7 +38,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { OAuthError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
-import { parseProjectSlug } from '@northkeep/core/project-doc';
+import { parseProjectSlug } from './project-doc.js';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
 import { InMemoryConnectorStorage } from './storage.js';
 import { ConnectorOAuthProvider } from './provider.js';

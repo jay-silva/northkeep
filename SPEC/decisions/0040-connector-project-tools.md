@@ -134,11 +134,14 @@ deleted.
 - No Cursor Connect, no contract installer, no curator.
 - No prefix-only project checks in the connector or the new fold path.
 
-The connector's Vercel build must compile `@northkeep/core` first. The
-`./project-doc` export points at `dist/`, which is gitignored, so `tsc`
-on Vercel cannot resolve `@northkeep/core/project-doc` unless core is
-built in the same command. That is why `apps/connector-server/vercel.json`
-runs `pnpm --filter @northkeep/core build` before the connector `tsc`.
+The connector does not import `@northkeep/core` at runtime. Vercel's Node
+preset loads the compiled function as CommonJS; a workspace ESM subpath
+(`@northkeep/core/project-doc`) is left as a live `import` and crashes
+with `Cannot use import statement outside a module`. The pure
+`project-doc.ts` module is therefore compiled as a local file under
+`apps/connector-server/src/`, identical to `packages/core/src/project-doc.ts`.
+A test requires the two files to be byte-identical so the copy cannot
+drift. `vercel.json` keeps the pre-M14 build command.
 
 ### Adversarial review: what was inspected, what is enforced
 
@@ -161,6 +164,7 @@ runs `pnpm --filter @northkeep/core build` before the connector `tsc`.
 - Tool handlers are check-then-write without a cross-request transaction, so an update racing an unshare within one request window can land a pending row after the scope delete. This window is identical to the pre-existing `memory_remember` race and is bounded by one request.
 - Project documents in a shared scope are served in full by `memory_retrieve`, `memory_list`, and ChatGPT's `search`/`fetch`, like every other shared memory. This is the consented sharing contract, not a leak; no filter is applied.
 - The server, while answering a request, briefly holds the decrypted document, exactly as it already does for every shared memory. The at-rest claim is unchanged: the database alone yields no key and no plaintext.
+- Vercel Node serverless loads the function as CommonJS. A workspace ESM subpath is left as a live `import` and 500s. The connector therefore compiles a byte-identical copy of `project-doc.ts` as a local file so it bundles with the rest of `src/`.
 
 ## Consequences
 

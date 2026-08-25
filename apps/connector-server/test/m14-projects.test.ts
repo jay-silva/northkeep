@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import {
@@ -25,6 +26,13 @@ import { decryptedEntries, decryptedPendingEntries, seedEncryptedEntry } from '.
  * M14 — connector project tools + project-scope push cap + desktop fold
  * (ADR 0040). No rider, slug-exact validation, fail-closed create.
  */
+
+it('keeps the local project-doc copy byte-identical to core', () => {
+  const dir = path.dirname(fileURLToPath(import.meta.url));
+  const here = path.join(dir, '..', 'src', 'project-doc.ts');
+  const core = path.join(dir, '..', '..', '..', 'packages', 'core', 'src', 'project-doc.ts');
+  expect(fs.readFileSync(here, 'utf8')).toBe(fs.readFileSync(core, 'utf8'));
+});
 
 const b64url = (buf: Buffer): string => buf.toString('base64url');
 const REDIRECT_URI = 'http://localhost:9999/callback';
