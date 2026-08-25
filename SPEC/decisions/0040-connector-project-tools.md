@@ -134,6 +134,12 @@ deleted.
 - No Cursor Connect, no contract installer, no curator.
 - No prefix-only project checks in the connector or the new fold path.
 
+The connector's Vercel build must compile `@northkeep/core` first. The
+`./project-doc` export points at `dist/`, which is gitignored, so `tsc`
+on Vercel cannot resolve `@northkeep/core/project-doc` unless core is
+built in the same command. That is why `apps/connector-server/vercel.json`
+runs `pnpm --filter @northkeep/core build` before the connector `tsc`.
+
 ### Adversarial review: what was inspected, what is enforced
 
 **Inspected:** `apps/connector-server/src/mcp.ts` (tool surface, remember fail-closed, caps), `create-server.ts` (push caps, `/client/pending`, `/client/ack`), `crypto.ts` (row envelope, DEK custody), `storage.ts` and `neon-storage.ts` (`putEntry` upsert semantics, `replaceScopes` pending shield, `deleteScope`), `packages/sync/src/connector-client.ts` (`downSyncConnector` fold), `packages/core/src/project-doc.ts` (parse, merge, 16384-char cap, slug regex), `packages/core/src/vault.ts` (`editMemory` supersession, `setScopeShared`), `packages/mcp-server/src/server.ts` (local newest-wins and slug validation), and the c2/c3/c4/encryption test suites.

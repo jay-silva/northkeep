@@ -1,5 +1,5 @@
 {
   "$schema": "https://openapi.vercel.sh/vercel.json",
-  "buildCommand": "pnpm --filter @northkeep/connector-server build",
+  "buildCommand": "pnpm --filter @northkeep/core build && pnpm --filter @northkeep/connector-server exec tsc -p tsconfig.json",
   "regions": ["iad1"]
 }
