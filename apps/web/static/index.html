@@ -158,7 +158,11 @@
   .badge.private { background: #e6efe8; color: var(--ok); }
   .badge.bounded { background: var(--warn-bg); color: var(--warn-ink); }
   .badge.auto { background: var(--chip); color: var(--ink); }
+  .badge.project { background: #e6efe8; color: var(--ok); }
   .badge.shared { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line); }
+  /* Project docs reuse the reply markdown renderer; turn off the card's
+     pre-wrap so heading/list spacing comes from .md margins. */
+  .content .md { white-space: normal; }
   /* BETA marker: same warn palette as the SHARED badge, but compact enough to sit
      inline in the rail without making the "Cloud" button taller than its siblings
      (font + padding keep its box within the 14px sub-item text line). */
@@ -298,6 +302,7 @@
     color: var(--muted); text-decoration: underline; cursor: pointer; }
   @media (prefers-color-scheme: dark) {
     .badge.private { background: #22382c; }
+    .badge.project { background: #22382c; }
     .pill.ok, #countPill { background: #22382c; }
     .pill.locked { background: #3a241d; }
     .msg.error .bubble { background: #3a241d; }
@@ -1600,6 +1605,13 @@
         + (resp.semantic_reason ? ' (' + esc(resp.semantic_reason) + ')' : '')
         + '. Start Ollama + pull nomic-embed-text for meaning-based search.</p>';
     }
+    const isLiveProjectDoc = (m) => {
+      if (m.type !== 'working' || !String(m.scope).startsWith('project:')) return false;
+      const peers = memories.filter((x) => x.scope === m.scope && x.type === 'working');
+      if (peers.length <= 1) return true;
+      const newest = peers.reduce((a, b) => (a.created_at > b.created_at ? a : b));
+      return newest.id === m.id;
+    };
     $('memList').innerHTML = note + (memories.length === 0
       ? '<p class="muted">No memories match.</p>'
       : memories.map((m) => `
@@ -1608,6 +1620,9 @@
           <div class="prov">
             <span class="tag">${esc(m.type)}</span>
             <span>${esc(m.scope)}</span>
+            ${isLiveProjectDoc(m)
+              ? `<span class="badge project" title="Live project document. Agents read this at session start and update it when a session ends.">LIVE PROJECT</span>`
+              : ''}
             ${String(m.source).startsWith('connector')
               ? `<span class="badge shared" title="A connected AI app wrote this memory through Cloud Connect. You own the final say: edit or forget it any time.">APP-WRITTEN${m.source.includes(':') ? ' · ' + esc(m.source.split(':')[1]) : ''}</span>`
               : `<span>${esc(m.source)}</span>`}
@@ -1624,6 +1639,14 @@
             <button class="btn danger" data-forget="${esc(m.id)}" style="font-size:12px;padding:5px 12px;border-radius:8px">Forget</button>
           </div>
         </div>`).join(''));
+    for (const m of memories) {
+      if (!isLiveProjectDoc(m)) continue;
+      const card = document.getElementById('mem-' + m.id);
+      if (!card) continue;
+      card.dataset.rawContent = m.content;
+      const contentDiv = card.querySelector('.content');
+      if (contentDiv) renderMarkdown(contentDiv, m.content);
+    }
   }
   $('memList').addEventListener('click', async (e) => {
     const d = e.target.dataset || {};
@@ -1644,7 +1667,9 @@
     if (!card || card.querySelector('.edit-editor')) return;
     btn.disabled = true;
     const contentDiv = card.querySelector('.content');
-    const current = contentDiv ? contentDiv.textContent : '';
+    const current = card.dataset.rawContent !== undefined
+      ? card.dataset.rawContent
+      : (contentDiv ? contentDiv.textContent : '');
     const wrap = el('div', 'edit-editor');
     wrap.style.cssText = 'margin-top:8px;display:flex;flex-direction:column;gap:8px';
     const ta = el('textarea');

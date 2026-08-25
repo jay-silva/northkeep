@@ -81,7 +81,16 @@ describe('M1 acceptance — MCP server', () => {
   it('exposes the four memory tools', async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
-    expect(names).toEqual(['memory_forget', 'memory_list', 'memory_remember', 'memory_retrieve']);
+    expect(names).toEqual([
+      'memory_edit',
+      'memory_forget',
+      'memory_list',
+      'memory_remember',
+      'memory_retrieve',
+      'project_get',
+      'project_list',
+      'project_update',
+    ]);
   });
 
   it('memory_remember stores an entry', async () => {

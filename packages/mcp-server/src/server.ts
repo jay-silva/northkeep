@@ -6,7 +6,17 @@ import {
   Vault,
   VaultAuthError,
   VaultSchemaError,
+  assertProjectDocSize,
   defaultVaultPath,
+  emptyProjectDoc,
+  firstNonEmptyLine,
+  getProjectSection,
+  isProjectScope,
+  isValidProjectSlug,
+  mergeProjectDoc,
+  parseProjectDoc,
+  projectScope,
+  serializeProjectDoc,
   setPlatform,
   withFileLock,
   type MemoryEntry,
@@ -66,6 +76,9 @@ const scopeSchema = z
   .string()
   .max(64)
   .regex(/^[a-z0-9:_.-]+$/i, 'scopes are short tags like "personal" or "client:acme"');
+const projectSlugSchema = z
+  .string()
+  .regex(/^[a-z0-9-]{1,40}$/, 'project slugs are 1-40 lowercase letters, digits, or hyphens');
 
 interface ToolOk {
   [key: string]: unknown;
@@ -198,6 +211,51 @@ function maskContent<T extends { content: string }>(entries: T[]): T[] {
 
 function distinctScopes(scopes: string[]): string[] {
   return [...new Set(scopes)].sort();
+}
+
+function assertGrantedScope(scope: string, granted: string[] | undefined): void {
+  if (granted !== undefined && !granted.includes(scope)) {
+    throw new ScopeDeniedError(
+      `This connection is not granted the "${scope}" scope (granted: ${granted.join(', ') || '(none)'}).`,
+    );
+  }
+}
+
+/** Newest live `working` entry in a scope. `list` is insertion order, so last wins. */
+function newestLiveWorking(
+  vault: Vault,
+  scope: string,
+  granted: string[] | undefined,
+): MemoryEntry | undefined {
+  const rows = vault.list({ type: 'working', scope, allowedScopes: granted });
+  return rows.length === 0 ? undefined : rows[rows.length - 1];
+}
+
+function liveProjectIndex(vault: Vault, granted: string[] | undefined): MemoryEntry[] {
+  const rows = vault.list({ type: 'working', allowedScopes: granted }).filter((e) => isProjectScope(e.scope));
+  const byScope = new Map<string, MemoryEntry>();
+  for (const row of rows) byScope.set(row.scope, row);
+  return [...byScope.values()].sort((a, b) => a.scope.localeCompare(b.scope));
+}
+
+function statusFirstLine(content: string): string {
+  return firstNonEmptyLine(getProjectSection(parseProjectDoc(content), 'Current Status'));
+}
+
+function toProjectUpdate(args: {
+  what_why?: string;
+  status?: string;
+  next_actions?: string;
+  log_entry?: string;
+  decision?: string;
+}) {
+  return {
+    whatWhy: args.what_why,
+    status: args.status,
+    nextActions: args.next_actions,
+    logEntry: args.log_entry,
+    decision: args.decision,
+  };
 }
 
 export function createServer(vaultPath: string = defaultVaultPath()): McpServer {
@@ -359,6 +417,193 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           disclosed_scopes: [tombstone.scope],
         };
       }),
+  );
+
+  server.registerTool(
+    'memory_edit',
+    {
+      title: 'Edit a memory',
+      description:
+        'Correct or update an existing memory instead of storing a near-duplicate. Pass the id from ' +
+        'memory_retrieve or memory_list. Optional new content and/or type. This tool cannot change a ' +
+        "memory's scope; moving a memory between scopes stays in the NorthKeep app and CLI.",
+      inputSchema: {
+        id: idSchema.describe('The id of the memory to edit'),
+        content: z
+          .string()
+          .min(1)
+          .max(16384)
+          .optional()
+          .describe('Replacement content (omit to leave content unchanged)'),
+        type: typeEnum.optional().describe('Replacement memory type (omit to leave type unchanged)'),
+      },
+    },
+    async ({ id, content, type }) =>
+      run(
+        ctx,
+        'memory_edit',
+        { id, content_chars: content?.length, type },
+        vaultPath,
+        (vault, granted) => {
+          if (content === undefined && type === undefined) {
+            throw new Error('Provide content and/or type to edit.');
+          }
+          // Scope is intentionally omitted from the patch (ADR 0039). Do not
+          // forward extra request keys even if a future SDK starts passing them.
+          const patch: { content?: string; type?: MemoryType } = {};
+          if (content !== undefined) patch.content = content;
+          if (type !== undefined) patch.type = type as MemoryType;
+          const edited = vault.editMemory(id, patch, granted);
+          vault.save();
+          return {
+            payload: { edited: publicEntry(edited) },
+            result_id: edited.id,
+            disclosed_scopes: [edited.scope],
+          };
+        },
+      ),
+  );
+
+  server.registerTool(
+    'project_list',
+    {
+      title: 'List projects',
+      description:
+        "List the user's live projects. Each row is a project scope plus the first line of Current " +
+        'Status. This list is the project index; there is no separate index memory. Call this to see ' +
+        'what is in flight.',
+      inputSchema: {},
+    },
+    async () =>
+      run(ctx, 'project_list', {}, vaultPath, (vault, granted) => {
+        const docs = liveProjectIndex(vault, granted);
+        const projects = docs.map((entry) => ({
+          project: entry.scope.slice('project:'.length),
+          scope: entry.scope,
+          status: statusFirstLine(entry.content),
+          id: entry.id,
+          updated_at: entry.created_at,
+        }));
+        return {
+          payload: { projects },
+          result_count: projects.length,
+          result_ids: docs.map((e) => e.id),
+          disclosed_scopes: distinctScopes(docs.map((e) => e.scope)),
+        };
+      }),
+  );
+
+  server.registerTool(
+    'project_get',
+    {
+      title: 'Read a project',
+      description:
+        'Read the live project document when the user names a project. Call this at session start so ' +
+        'you pick up Current Status, Next Actions, and the Log. If more than one live working memory ' +
+        'exists in the scope, the newest wins.',
+      inputSchema: {
+        project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
+      },
+    },
+    async ({ project }) =>
+      run(ctx, 'project_get', { scope: `project:${project}` }, vaultPath, (vault, granted) => {
+        if (!isValidProjectSlug(project)) {
+          throw new Error(`Invalid project slug "${project}".`);
+        }
+        const scope = projectScope(project);
+        assertGrantedScope(scope, granted);
+        const live = newestLiveWorking(vault, scope, granted);
+        if (!live) {
+          throw new Error(`No live project document for "${project}".`);
+        }
+        return {
+          payload: { project, ...publicEntry(live) },
+          result_id: live.id,
+          disclosed_scopes: [live.scope],
+        };
+      }),
+  );
+
+  server.registerTool(
+    'project_update',
+    {
+      title: 'Update a project',
+      description:
+        'Create or update a project document. Call this when a working session ends, with the new ' +
+        'Current Status, Next Actions, and a log entry describing what was done. Optional What & Why ' +
+        'replacement and a dated decision. Updates merge into the existing sections; they do not ' +
+        'replace the whole document. Documents over 16384 characters are refused: prune the Log and ' +
+        'try again. NorthKeep will not silently truncate.',
+      inputSchema: {
+        project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
+        what_why: z.string().min(1).max(16384).optional().describe('Replacement What & Why section'),
+        status: z.string().min(1).max(16384).optional().describe('Replacement Current Status section'),
+        next_actions: z.string().min(1).max(16384).optional().describe('Replacement Next Actions section'),
+        log_entry: z.string().min(1).max(4096).optional().describe('New Log entry (dated, newest first)'),
+        decision: z.string().min(1).max(4096).optional().describe('New Decisions entry (dated, appended)'),
+      },
+    },
+    async ({ project, what_why, status, next_actions, log_entry, decision }) =>
+      run(
+        ctx,
+        'project_update',
+        {
+          scope: `project:${project}`,
+          content_chars:
+            (what_why?.length ?? 0) +
+            (status?.length ?? 0) +
+            (next_actions?.length ?? 0) +
+            (log_entry?.length ?? 0) +
+            (decision?.length ?? 0),
+        },
+        vaultPath,
+        (vault, granted) => {
+          if (!isValidProjectSlug(project)) {
+            throw new Error(`Invalid project slug "${project}".`);
+          }
+          if (
+            what_why === undefined &&
+            status === undefined &&
+            next_actions === undefined &&
+            log_entry === undefined &&
+            decision === undefined
+          ) {
+            throw new Error(
+              'Provide at least one of what_why, status, next_actions, log_entry, or decision.',
+            );
+          }
+          const scope = projectScope(project);
+          assertGrantedScope(scope, granted);
+          const update = toProjectUpdate({ what_why, status, next_actions, log_entry, decision });
+          const live = newestLiveWorking(vault, scope, granted);
+          const merged = mergeProjectDoc(live ? parseProjectDoc(live.content) : emptyProjectDoc(), update);
+          const content = serializeProjectDoc(merged);
+          assertProjectDocSize(content);
+          if (!live) {
+            const entry = vault.remember({
+              content,
+              type: 'working',
+              scope,
+              source: 'mcp',
+              sourceModel: 'mcp-client',
+              confidence: 0.9,
+            });
+            vault.save();
+            return {
+              payload: { created: true, project, ...publicEntry(entry) },
+              result_id: entry.id,
+              disclosed_scopes: [entry.scope],
+            };
+          }
+          const edited = vault.editMemory(live.id, { content }, granted);
+          vault.save();
+          return {
+            payload: { created: false, project, ...publicEntry(edited) },
+            result_id: edited.id,
+            disclosed_scopes: [edited.scope],
+          };
+        },
+      ),
   );
 
   return server;

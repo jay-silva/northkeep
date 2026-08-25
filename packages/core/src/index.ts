@@ -27,3 +27,26 @@ export { getPlatform, setPlatform, type Platform } from './platform-context.js';
 export type { CryptoProvider } from './crypto-provider.js';
 export type { SqliteDb, SqliteDriver, SqliteStatement } from './sqlite-driver.js';
 export type { VaultStorage } from './vault-storage.js';
+export {
+  PROJECT_DOC_MAX_CHARS,
+  PROJECT_DOC_CAP_MESSAGE,
+  PROJECT_SCOPE_PREFIX,
+  PROJECT_SLUG_PATTERN,
+  PROJECT_SECTION_HEADINGS,
+  assertProjectDocSize,
+  emptyProjectDoc,
+  firstNonEmptyLine,
+  getProjectSection,
+  isProjectScope,
+  isValidProjectSlug,
+  mergeProjectDoc,
+  parseProjectDoc,
+  parseProjectSlug,
+  projectScope,
+  projectSectionKind,
+  serializeProjectDoc,
+  type ProjectDoc,
+  type ProjectDocSection,
+  type ProjectDocUpdate,
+  type ProjectSectionHeading,
+} from './project-doc.js';

@@ -454,6 +454,31 @@ every milestone; if a limit is removed, say when and how.*
 - **Restore is one-directional for secrets.** Pseudonyms (names/orgs) come
   back; a masked SSN or card number stays masked — by design.
 
+## M13 (projects as vault memories), current
+
+- **Two machines editing before syncing still lose one side.** Sync is
+  whole-vault last-writer-wins; a project updated on two machines in the same
+  window keeps one machine's version (the other survives in `vault.nkv.bak`,
+  not merged). Same limit as every memory; projects make it more visible
+  because they change often.
+- **The contract is advisory.** An agent updates the project because its
+  tools and a standing instruction tell it to. Nothing forces a session-end
+  handoff; a session that ends abruptly wrote nothing.
+- **Cloud and mobile agents read, not drive.** Claude.ai and ChatGPT via
+  Cloud Connect see a project only if its scope is Shared, through the
+  generic memory tools; the project tools are local-MCP only this milestone.
+- **The Log grows the doc and the vault.** Every update stores a full
+  superseded copy; the doc caps at 16 KiB and `project_update` refuses with a
+  prune message rather than silently truncating. Long-running projects need
+  occasional Log pruning (handled manually today). The ~4 MB sync cap bounds
+  the whole vault, projects included.
+- **`memory_edit` cannot move a memory between scopes.** Deliberate: over
+  MCP, a scope change could turn private content into shared content. Rescope
+  stays in the GUI and CLI.
+- **`working` memories still do not age out.** The type's "ages out"
+  description remains aspirational; a stale project sits there until you
+  archive it (edit or forget).
+
 ## GUI — current
 
 - **The app window is a local web page with a per-session key.** While the
@@ -487,10 +512,10 @@ every milestone; if a limit is removed, say when and how.*
   stream as plain text and the formatted version replaces them at the end (the
   same swap that already restored redacted text). A long answer shows raw
   `**asterisks**` until it finishes.
-- **Only *scope* is editable, not content.** Each memory card has a "Move
-  scope" button (supersede semantics — see ADR 0015); editing content or other
-  fields is still forget-and-re-add. A re-scoped memory gets a new id (the old
-  version is kept as superseded history).
+- **Content and scope are both editable.** Each memory card has Edit (content)
+  and Move scope. Both use supersede semantics (ADR 0015): a new live entry is
+  appended, the old version is kept as history, and the edited memory gets a
+  new id. Forgetting is still a separate tombstone.
 
 ## Desktop app / distribution (M7d) — current
 

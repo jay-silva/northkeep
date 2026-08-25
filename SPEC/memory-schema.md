@@ -100,6 +100,23 @@ A scope is a lowercase string tag: `personal`, `work`, or namespaced
 enforcement (per-conversation scope grants) is specified in the security
 model and lands at M4. An entry has exactly one scope.
 
+### Project convention (non-normative, ADR 0039)
+
+A project is an ordinary vault memory, not a new object and not a schema
+change (vault version stays 0.3). By convention:
+
+- One live `working` memory per `project:<slug>` scope, where `slug` is
+  `[a-z0-9-]{1,40}`.
+- The document is Markdown with five fixed headings: What & Why, Current
+  Status, Next Actions, Decisions, Log. Extra headings are allowed and
+  preserved. There is no stored INDEX memory; `project_list` is the index.
+- Local MCP exposes `project_list`, `project_get`, and `project_update`
+  (structured merge, 16 KiB cap, refuse rather than truncate). `memory_edit`
+  can correct content or type but cannot change scope over MCP.
+
+This subsection describes a convention implementations MAY follow. It does
+not add fields or tables.
+
 ### Scope sharing state (v0.3, ADR 0038)
 
 A vault MAY mark a scope **Shared** (with the implementation's connector
