@@ -69,7 +69,7 @@ memory.
 
 The Cloud Connect connector does **not** grow these tools this milestone.
 Claude.ai and ChatGPT see a project only if its scope is Shared, through the
-generic memory tools. Connector project tools are M14.
+generic memory tools. Connector project tools are M14 (ADR 0040).
 
 ## Decision 3: `memory_edit` cannot change scope over MCP
 
