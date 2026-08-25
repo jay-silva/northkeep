@@ -141,7 +141,10 @@ with `Cannot use import statement outside a module`. The pure
 `project-doc.ts` module is therefore compiled as a local file under
 `apps/connector-server/src/`, identical to `packages/core/src/project-doc.ts`.
 A test requires the two files to be byte-identical so the copy cannot
-drift. `vercel.json` keeps the pre-M14 build command.
+drift. Vercel must not run connector `tsc`: the Node preset then loads
+the ESM emit as CommonJS and 500s (`Cannot use import statement outside
+a module`). `vercel.json` `buildCommand` is `true` so Vercel compiles
+`src/index.ts` itself.
 
 ### Adversarial review: what was inspected, what is enforced
 
