@@ -6,6 +6,18 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./project-doc": {
+      "types": "./dist/project-doc.d.ts",
+      "import": "./dist/project-doc.js",
+      "default": "./dist/project-doc.js"
+    }
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json"
   },

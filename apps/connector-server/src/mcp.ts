@@ -31,15 +31,29 @@
 
 import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import {
+  PROJECT_DOC_CAP_MESSAGE,
+  PROJECT_SLUG_PATTERN,
+  firstNonEmptyLine,
+  getProjectSection,
+  mergeProjectDoc,
+  parseProjectDoc,
+  parseProjectSlug,
+  projectScope,
+  serializeProjectDoc,
+} from '@northkeep/core/project-doc';
 import { z } from 'zod';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
 import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
 
 const MAX_RESULTS = 20;
-const MAX_REMEMBER_BYTES = 8 * 1024; // mirrors the push per-entry content cap
+const MAX_REMEMBER_BYTES = 8 * 1024; // mirrors the ordinary push per-entry content cap
 const MAX_SHARED_ENTRIES = 5000; // per-account row cap, mirrors create-server.ts push cap
-/** The vault's memory types (kept local so the serverless bundle never pulls @northkeep/core). */
+/** Vault memory types, kept local. Project-doc helpers come from @northkeep/core/project-doc (pure; no sqlite or sodium). */
 const MEMORY_TYPES = new Set(['episodic', 'semantic', 'procedural', 'working', 'identity']);
+const projectSlugSchema = z
+  .string()
+  .regex(PROJECT_SLUG_PATTERN, 'project slugs are 1-40 lowercase letters, digits, or hyphens');
 
 /** Lowercase word tokens, deduped — a tiny keyword scorer, no server-side embeddings (ADR 0016). */
 function tokenize(text: string): string[] {
@@ -74,6 +88,45 @@ function titleFor(entry: SharedEntry): string {
 function snippetOf(content: string): string {
   const flat = content.replace(/\s+/g, ' ').trim();
   return flat.length > SEARCH_SNIPPET_MAX ? `${flat.slice(0, SEARCH_SNIPPET_MAX - 1)}…` : flat;
+}
+
+/**
+ * Pick the live project document from already-decrypted rows in one scope.
+ * Pending working-type first; else newest createdAt, then highest entryId.
+ */
+function selectProjectWorkingDoc(rows: SharedEntry[]): SharedEntry | null {
+  const working = rows.filter((e) => e.type === 'working');
+  const pending = working.filter((e) => e.pending === true);
+  const pool = pending.length > 0 ? pending : working;
+  if (pool.length === 0) return null;
+  let best = pool[0]!;
+  for (let i = 1; i < pool.length; i++) {
+    const e = pool[i]!;
+    if (e.createdAt > best.createdAt || (e.createdAt === best.createdAt && e.entryId > best.entryId)) {
+      best = e;
+    }
+  }
+  return best;
+}
+
+function statusFirstLine(content: string): string {
+  return firstNonEmptyLine(getProjectSection(parseProjectDoc(content), 'Current Status'));
+}
+
+function toProjectUpdate(args: {
+  what_why?: string;
+  status?: string;
+  next_actions?: string;
+  log_entry?: string;
+  decision?: string;
+}) {
+  return {
+    whatWhy: args.what_why,
+    status: args.status,
+    nextActions: args.next_actions,
+    logEntry: args.log_entry,
+    decision: args.decision,
+  };
 }
 
 /**
@@ -431,6 +484,263 @@ export function createMcpServer(
         metadata: { scope: row.scope, type: row.type },
       };
       return { structuredContent: record, content: [{ type: 'text', text: JSON.stringify(record) }] };
+    },
+  );
+
+  // ---- project tools (M14 / ADR 0040) -----------------------------------
+  // Same three tools as local MCP. Cloud cannot create a project: update
+  // requires a decryptable working base document. One pending row per
+  // project scope, overwritten in place. Slug-exact validation; never a
+  // prefix-only project: check.
+
+  server.registerTool(
+    'project_list',
+    {
+      title: 'List shared projects',
+      description:
+        "List the user's shared projects. Each row is a project slug plus the first line of Current " +
+        'Status. This list is the project index; there is no separate index memory. Only scopes the ' +
+        'user has shared are visible.',
+      inputSchema: {},
+    },
+    async () => {
+      let all: SharedEntry[];
+      try {
+        all = await visibleEntries();
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError) return reencryptResult('project_list');
+        throw err;
+      }
+      const byScope = new Map<string, SharedEntry[]>();
+      for (const e of all) {
+        if (parseProjectSlug(e.scope) === null) continue;
+        const group = byScope.get(e.scope) ?? [];
+        group.push(e);
+        byScope.set(e.scope, group);
+      }
+      const docs: SharedEntry[] = [];
+      for (const group of byScope.values()) {
+        const picked = selectProjectWorkingDoc(group);
+        if (picked) docs.push(picked);
+      }
+      docs.sort((a, b) => a.scope.localeCompare(b.scope));
+      const projects = docs.flatMap((e) => {
+        const slug = parseProjectSlug(e.scope);
+        if (slug === null) return [];
+        return [{ project: slug, scope: e.scope, status: statusFirstLine(e.content), id: e.entryId }];
+      });
+      await storage.appendAudit({
+        ts: new Date().toISOString(),
+        accountHash,
+        tool: 'project_list',
+        params: {},
+        ok: true,
+        resultCount: projects.length,
+        resultIds: docs.map((e) => e.entryId),
+      });
+      return { content: [{ type: 'text', text: JSON.stringify({ projects }, null, 2) }] };
+    },
+  );
+
+  server.registerTool(
+    'project_get',
+    {
+      title: 'Read a shared project',
+      description:
+        'Read the live project document when the user names a project. Call this at session start so ' +
+        'you pick up Current Status, Next Actions, and the Log. You cannot create a project here.',
+      inputSchema: {
+        project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
+      },
+    },
+    async ({ project }) => {
+      const auditFail = async (): Promise<void> => {
+        await storage.appendAudit({
+          ts: new Date().toISOString(),
+          accountHash,
+          tool: 'project_get',
+          params: {},
+          ok: false,
+          resultCount: 0,
+          resultIds: [],
+        });
+      };
+      // Slug-exact: reject before any storage read. A prefix-only project: scope is not a project.
+      if (!PROJECT_SLUG_PATTERN.test(project ?? '')) {
+        await auditFail();
+        return {
+          content: [{ type: 'text', text: `Invalid project slug "${project ?? ''}".` }],
+          isError: true,
+        };
+      }
+      let all: SharedEntry[];
+      try {
+        all = await visibleEntries();
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError) return reencryptResult('project_get');
+        throw err;
+      }
+      const scope = projectScope(project);
+      const picked = selectProjectWorkingDoc(all.filter((e) => e.scope === scope));
+      if (!picked) {
+        await auditFail();
+        return {
+          content: [{ type: 'text', text: `No live project document for "${project}".` }],
+          isError: true,
+        };
+      }
+      await storage.appendAudit({
+        ts: new Date().toISOString(),
+        accountHash,
+        tool: 'project_get',
+        params: {},
+        ok: true,
+        resultCount: 1,
+        resultIds: [picked.entryId],
+      });
+      return { content: [{ type: 'text', text: picked.content }] };
+    },
+  );
+
+  server.registerTool(
+    'project_update',
+    {
+      title: 'Update a shared project',
+      description:
+        'Update a shared project document. Call this when a working session ends, with the new ' +
+        'Current Status, Next Actions, and a log entry describing what was done. Optional What & Why ' +
+        'replacement and a dated decision. Updates merge into the existing sections; they do not ' +
+        'replace the whole document. Documents over 16384 characters are refused: prune the Log and ' +
+        'try again. NorthKeep will not silently truncate. You cannot create a project here; the ' +
+        'project scope must already be shared from NorthKeep with a live working document.',
+      inputSchema: {
+        project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
+        what_why: z.string().min(1).max(16384).optional().describe('Replacement What & Why section'),
+        status: z.string().min(1).max(16384).optional().describe('Replacement Current Status section'),
+        next_actions: z.string().min(1).max(16384).optional().describe('Replacement Next Actions section'),
+        log_entry: z.string().min(1).max(4096).optional().describe('New Log entry (dated, newest first)'),
+        decision: z.string().min(1).max(4096).optional().describe('New Decisions entry (dated, appended)'),
+      },
+    },
+    async ({ project, what_why, status, next_actions, log_entry, decision }) => {
+      const auditFail = async (): Promise<void> => {
+        await storage.appendAudit({
+          ts: new Date().toISOString(),
+          accountHash,
+          tool: 'project_update',
+          params: {},
+          ok: false,
+          resultCount: 0,
+          resultIds: [],
+        });
+      };
+      if (!PROJECT_SLUG_PATTERN.test(project ?? '')) {
+        await auditFail();
+        return {
+          content: [{ type: 'text', text: `Invalid project slug "${project ?? ''}".` }],
+          isError: true,
+        };
+      }
+      if (
+        what_why === undefined &&
+        status === undefined &&
+        next_actions === undefined &&
+        log_entry === undefined &&
+        decision === undefined
+      ) {
+        await auditFail();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Nothing was saved: provide at least one of what_why, status, next_actions, log_entry, or decision.',
+            },
+          ],
+          isError: true,
+        };
+      }
+      let all: SharedEntry[];
+      try {
+        all = await visibleEntries();
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError) return reencryptResult('project_update');
+        throw err;
+      }
+      const scope = projectScope(project);
+      const base = selectProjectWorkingDoc(all.filter((e) => e.scope === scope));
+      if (!base) {
+        await auditFail();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Nothing was saved: no live project document for "${project}". Cloud cannot create a project; share the project from NorthKeep first.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      let markdown: string;
+      try {
+        const merged = mergeProjectDoc(parseProjectDoc(base.content), toProjectUpdate({
+          what_why,
+          status,
+          next_actions,
+          log_entry,
+          decision,
+        }));
+        markdown = serializeProjectDoc(merged);
+      } catch (err) {
+        await auditFail();
+        const text = err instanceof Error && err.message === PROJECT_DOC_CAP_MESSAGE
+          ? PROJECT_DOC_CAP_MESSAGE
+          : err instanceof Error
+            ? err.message
+            : 'Nothing was saved: the merge failed.';
+        return { content: [{ type: 'text', text }], isError: true };
+      }
+      const overwrite = base.pending === true;
+      const existing = await storage.listEntries(accountHash);
+      if (!overwrite && existing.length >= MAX_SHARED_ENTRIES) {
+        await auditFail();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Nothing was saved: this account is at the shared-memory cap (${MAX_SHARED_ENTRIES}). Ask the user to remove some shared memories in NorthKeep first.`,
+            },
+          ],
+          isError: true,
+        };
+      }
+      const entryId = overwrite ? base.entryId : `conn_${randomUUID().replace(/-/g, '')}`;
+      await storage.putEntry(accountHash, {
+        entryId,
+        scope,
+        type: '',
+        content: await encryptRow({ accountHash, type: 'working', content: markdown }, dek),
+        entryHash: '',
+        origin: 'connector',
+        pending: true,
+        createdAt: new Date().toISOString(),
+      });
+      await storage.appendAudit({
+        ts: new Date().toISOString(),
+        accountHash,
+        tool: 'project_update',
+        params: {},
+        ok: true,
+        resultCount: 1,
+        resultIds: [entryId],
+      });
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `Updated project "${project}". It will sync into the vault. (id: ${entryId})`,
+          },
+        ],
+      };
     },
   );
 

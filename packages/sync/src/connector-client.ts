@@ -1,4 +1,4 @@
-import type { MemoryType, Vault } from '@northkeep/core';
+import { parseProjectSlug, type MemoryType, type Vault } from '@northkeep/core';
 import { deriveConnectorToken } from './creds.js';
 import { assertConnectorUrl } from './connector-config.js';
 import { timeoutSignal } from './abort.js';
@@ -239,6 +239,18 @@ export async function downSyncConnector(opts: {
       acked.push({ server_id: e.server_id, local_entry_id: dup.id });
       deduped++;
       continue;
+    }
+    // M14: a pending working doc in a slug-valid project scope supersedes the
+    // local live working document. Prefix-only project: scopes are not projects.
+    if (parseProjectSlug(e.scope) !== null && e.type === 'working') {
+      const liveWorking = opts.vault.list({ scope: e.scope, type: 'working' });
+      const live = liveWorking.length === 0 ? undefined : liveWorking[liveWorking.length - 1];
+      if (live) {
+        const edited = opts.vault.editMemory(live.id, { content: e.content });
+        acked.push({ server_id: e.server_id, local_entry_id: edited.id });
+        added++;
+        continue;
+      }
     }
     const created = opts.vault.remember({
       content: e.content,

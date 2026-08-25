@@ -464,9 +464,12 @@ every milestone; if a limit is removed, say when and how.*
 - **The contract is advisory.** An agent updates the project because its
   tools and a standing instruction tell it to. Nothing forces a session-end
   handoff; a session that ends abruptly wrote nothing.
-- **Cloud and mobile agents read, not drive.** Claude.ai and ChatGPT via
-  Cloud Connect see a project only if its scope is Shared, through the
-  generic memory tools; the project tools are local-MCP only this milestone.
+- **Cloud agents can update a shared project (M14).** Claude.ai via Cloud
+  Connect can call `project_list`, `project_get`, and `project_update` on a
+  shared project scope. After `northkeep share sync`, local agents see one
+  live working document via `project_get`. Mobile has no project tools yet.
+  ChatGPT still sees a shared project through `search` / `fetch` and the
+  generic memory tools; it does not have to use the project tools.
 - **The Log grows the doc and the vault.** Every update stores a full
   superseded copy; the doc caps at 16 KiB and `project_update` refuses with a
   prune message rather than silently truncating. Long-running projects need
@@ -478,6 +481,31 @@ every milestone; if a limit is removed, say when and how.*
 - **`working` memories still do not age out.** The type's "ages out"
   description remains aspirational; a stale project sits there until you
   archive it (edit or forget).
+
+## M14 (connector project tools), current
+
+- **An old desktop client shadows instead of superseding.** A client that
+  predates M14 folds a project update as a new working memory. Newest-wins
+  then shows the folded document; the prior document remains live in the
+  vault and is recoverable. Nothing is deleted. Upgrade the desktop to get
+  a single live document.
+- **Stale-base last-writer-wins per section.** Two cloud sessions that
+  `project_update` without a fresh `project_get` each merge against the
+  document they last read. Status, Next Actions, and What & Why replace;
+  the later write wins those sections. Log and Decisions append, so both
+  sides' entries survive. Same class of race as two local sessions.
+- **Share is write access.** Sharing a project scope lets the connected
+  AI update that project. Unshare deletes the scope's rows, including a
+  not-yet-delivered project update. The revoke wins.
+- **The 64 KiB push cap is only for project-scope working rows.** Ordinary
+  memories stay at 8 KiB per entry. The 4 MB per-push total and the
+  `memory_remember` 8 KiB cap are unchanged. The merged document is still
+  refused at 16384 characters.
+- **The server holds plaintext only for the request.** While answering
+  `project_get` or `project_update`, the process briefly holds the
+  decrypted document, as it already does for every shared memory. At rest
+  the claim is unchanged: encrypted at rest, we store no key. The
+  database alone yields no key and no plaintext.
 
 ## GUI — current
 

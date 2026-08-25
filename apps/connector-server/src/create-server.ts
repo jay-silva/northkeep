@@ -21,7 +21,8 @@
  *     POST   /pair/start         (Bearer connector_token -> single-use pairing code)
  *     POST   /consent            (pairing code -> account binding -> auth code)
  *     POST   /mcp                (bearer-protected, stateless MCP; account-scoped tools:
- *                                 memory_retrieve/list/remember/forget + search/fetch)
+ *                                 memory_retrieve/list/remember/forget + search/fetch
+ *                                 + project_list/get/update)
  *     GET    /mcp                (405 — stateless, no server-initiated stream)
  *     GET    /client/manifest    (Bearer connector_token -> [{entry_id,entry_hash,scope}])
  *     PUT    /client/entries     (Bearer; "make these scopes match" batch push)
@@ -37,6 +38,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { OAuthError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
+import { parseProjectSlug } from '@northkeep/core/project-doc';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
 import { InMemoryConnectorStorage } from './storage.js';
 import { ConnectorOAuthProvider } from './provider.js';
@@ -85,8 +87,12 @@ const OAUTH_BROWSER_PREFIXES = ['/register', '/token', '/revoke'];
 // Per-account sharing caps (ADR 0019). Enforced on the push payload; a precise
 // per-account TOTAL across not-pushed scopes would need an extra read (noted).
 const MAX_SHARED_ENTRIES = 5000;
-const MAX_CONTENT_BYTES = 8 * 1024; // 8 KB per entry
+const MAX_CONTENT_BYTES = 8 * 1024; // 8 KB per ordinary entry
+const MAX_PROJECT_DOC_BYTES = 64 * 1024; // 64 KB: working-type rows in valid project scopes only
 const MAX_TOTAL_CONTENT_BYTES = 4 * 1024 * 1024; // ~4 MB of content per push
+const PER_ENTRY_CAP_MESSAGE =
+  `A memory exceeds the per-entry content cap (${MAX_CONTENT_BYTES} bytes ordinarily, ` +
+  `${MAX_PROJECT_DOC_BYTES} bytes for a project-scope working document).`;
 // Body parser ceiling for the push: above the 4 MB content cap so a legitimate
 // max payload (JSON key/id/hash overhead per row) is measured by the real cap
 // in-handler, not silently 413'd by the parser.
@@ -534,8 +540,10 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
         return;
       }
       const bytes = Buffer.byteLength(e.content, 'utf8');
-      if (bytes > MAX_CONTENT_BYTES) {
-        res.status(413).json({ error: `A memory exceeds the ${MAX_CONTENT_BYTES}-byte per-entry content cap.` });
+      const perEntryCap =
+        parseProjectSlug(e.scope) !== null && e.type === 'working' ? MAX_PROJECT_DOC_BYTES : MAX_CONTENT_BYTES;
+      if (bytes > perEntryCap) {
+        res.status(413).json({ error: PER_ENTRY_CAP_MESSAGE });
         return;
       }
       totalBytes += bytes;
@@ -748,7 +756,7 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
 <p>Public origin: <code>${publicUrl}</code></p>
 <p>OAuth 2.1 authorization server + MCP resource server. Serves ONLY scopes the user marked Shared.</p>
 <ul>
-  <li><code>POST /mcp</code> — MCP streamable HTTP (bearer-protected, stateless). Tools: <code>memory_retrieve</code>, <code>memory_list</code>, <code>memory_remember</code>, <code>memory_forget</code>, and ChatGPT's <code>search</code> + <code>fetch</code></li>
+  <li><code>POST /mcp</code> — MCP streamable HTTP (bearer-protected, stateless). Tools: <code>memory_retrieve</code>, <code>memory_list</code>, <code>memory_remember</code>, <code>memory_forget</code>, <code>project_list</code>, <code>project_get</code>, <code>project_update</code>, and ChatGPT's <code>search</code> + <code>fetch</code></li>
   <li><code>POST /pair/start</code> — pairing code from a connector token</li>
   <li><code>GET /client/manifest</code>, <code>PUT /client/entries</code>, <code>DELETE /client/scope/:scope</code> — desktop push of shared scopes</li>
   <li><code>GET /.well-known/oauth-authorization-server</code> — RFC 8414 AS metadata</li>
