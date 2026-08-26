@@ -117,19 +117,26 @@ export async function loadConnectorServerUrl(): Promise<string | null> {
 
 /**
  * MIGRATION ONLY (ADR 0038): the pre-0038 shared-scope list, if this install
- * ever wrote one. Returns [] for absent or corrupt. The caller folds these
- * into the vault and then calls clearLegacyConnectorSharedScopes().
+ * ever wrote one. Absent (already-migrated 0.19.0, or never shared) is
+ * distinct from corrupt: the caller pins fold-done on absent so a restored
+ * key cannot re-stamp, and leaves corrupt unmarked so a later readable value
+ * can still fold (review F4).
  */
-export async function loadLegacyConnectorSharedScopes(): Promise<string[]> {
+export type LegacySharedScopes =
+  | { status: 'absent' }
+  | { status: 'corrupt' }
+  | { status: 'ok'; scopes: string[] };
+
+export async function loadLegacyConnectorSharedScopes(): Promise<LegacySharedScopes> {
   const raw = await SecureStore.getItemAsync(CONNECTOR_SHARED_SCOPES_KEY, BASE_OPTIONS);
-  if (!raw) return [];
+  if (!raw) return { status: 'absent' };
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [];
+    if (!Array.isArray(parsed)) return { status: 'corrupt' };
     const scopes = parsed.filter((s): s is string => typeof s === 'string');
-    return [...new Set(scopes)].sort();
+    return { status: 'ok', scopes: [...new Set(scopes)].sort() };
   } catch {
-    return [];
+    return { status: 'corrupt' };
   }
 }
 

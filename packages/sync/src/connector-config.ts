@@ -43,10 +43,11 @@ export function saveConnectorConfig(config: ConnectorConfig): void {
 
 /**
  * One-time migration (ADR 0038): move a pre-0038 sidecar's `sharedScopes` list
- * into the vault, then rewrite the sidecar without it. Idempotent — a sidecar
- * with no `sharedScopes` key is a no-op — and additive only: it can mark a
- * scope shared in the vault, never unmark one, so it cannot revoke a share made
- * elsewhere.
+ * into the vault, then rewrite the sidecar without it. Idempotent. A missing
+ * file or a sidecar with no `sharedScopes` key still pins fold-done so a later
+ * Time Machine restore of a pre-0038 list cannot re-stamp. Additive only: it
+ * can mark a scope shared in the vault, never unmark one, so it cannot revoke a
+ * share made elsewhere.
  *
  * ORDER IS LOAD-BEARING (review F4): the vault is SAVED before the sidecar key
  * is stripped. A crash between the two leaves both copies present, and the next
@@ -61,17 +62,30 @@ export function foldSidecarScopesIntoVault(vault: Vault): { folded: string[] } {
   let raw: { sharedScopes?: unknown };
   try {
     raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as { sharedScopes?: unknown };
-  } catch {
+  } catch (err) {
+    // Missing sidecar: this vault has nothing to fold (new vault, or 0.19.0
+    // already stripped the key and the file was deleted). Mark done so a later
+    // Time Machine restore of a pre-0038 sidecar cannot re-stamp shares.
+    // Corrupt JSON: leave unmarked so a readable sidecar can still fold (F4).
+    const code = err && typeof err === 'object' && 'code' in err ? (err as NodeJS.ErrnoException).code : undefined;
+    if (code === 'ENOENT') {
+      vault.markSidecarFoldDone();
+      vault.save();
+    }
     return { folded: [] };
   }
-  if (!Array.isArray(raw.sharedScopes)) return { folded: [] };
+  if (!Array.isArray(raw.sharedScopes)) {
+    vault.markSidecarFoldDone();
+    vault.save();
+    return { folded: [] };
+  }
   const scopes = [...new Set(raw.sharedScopes.filter((s): s is string => typeof s === 'string' && s.trim() !== ''))].sort();
   if (scopes.length > 0) {
     for (const scope of scopes) vault.setScopeShared(scope, true);
   }
   vault.markSidecarFoldDone();
   vault.save();
-  // Strip the key so the fold-in never runs again — a stale sidecar list
+  // Strip the key so the fold-in never runs again. A stale sidecar list
   // re-asserting itself later could resurrect a share the user has since
   // revoked on another device.
   const rest = { ...(raw as Record<string, unknown>) };

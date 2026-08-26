@@ -132,16 +132,61 @@ describe('foldSidecarScopesIntoVault (one-time migration, ADR 0038)', () => {
   it('no sidecar / no legacy key / junk entries are all safe no-ops', () => {
     const vault = makeVault();
     expect(foldSidecarScopesIntoVault(vault).folded).toEqual([]); // no file at all
+    expect(vault.isSidecarFoldDone()).toBe(true);
 
     setConnectorServer('https://a.example.com'); // modern file, no legacy key
     expect(foldSidecarScopesIntoVault(vault).folded).toEqual([]);
+    expect(vault.isSidecarFoldDone()).toBe(true);
+    vault.close();
+  });
 
+  it('junk sidecar entries are dropped; only non-blank strings fold', () => {
+    fs.mkdirSync(path.dirname(connectorConfigPath()), { recursive: true });
     fs.writeFileSync(
       connectorConfigPath(),
       `${JSON.stringify({ server: 'https://a.example.com', sharedScopes: ['ok', 7, '', '  '] }, null, 2)}\n`,
     );
-    expect(foldSidecarScopesIntoVault(vault).folded).toEqual(['ok']); // non-strings and blanks dropped
+    const vault = makeVault();
+    expect(foldSidecarScopesIntoVault(vault).folded).toEqual(['ok']);
     expect(vault.sharedScopes()).toEqual(['ok']);
+    vault.close();
+  });
+
+  it('a 0.19.0 stripped sidecar still pins fold-done so a restored pre-0038 list cannot re-stamp', () => {
+    fs.mkdirSync(path.dirname(connectorConfigPath()), { recursive: true });
+    fs.writeFileSync(
+      connectorConfigPath(),
+      `${JSON.stringify({ server: 'https://a.example.com' }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    const vault = makeVault();
+    expect(foldSidecarScopesIntoVault(vault).folded).toEqual([]);
+    expect(vault.isSidecarFoldDone()).toBe(true);
+
+    fs.writeFileSync(
+      connectorConfigPath(),
+      `${JSON.stringify({ server: 'https://a.example.com', sharedScopes: ['work'] }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    expect(foldSidecarScopesIntoVault(vault).folded).toEqual([]);
+    expect(vault.sharedScopes()).toEqual([]);
+    vault.close();
+  });
+
+  it('corrupt sidecar JSON leaves fold-done unmarked so a later readable list can still fold', () => {
+    fs.mkdirSync(path.dirname(connectorConfigPath()), { recursive: true });
+    fs.writeFileSync(connectorConfigPath(), '{not json', { mode: 0o600 });
+    const vault = makeVault();
+    expect(foldSidecarScopesIntoVault(vault).folded).toEqual([]);
+    expect(vault.isSidecarFoldDone()).toBe(false);
+
+    fs.writeFileSync(
+      connectorConfigPath(),
+      `${JSON.stringify({ server: 'https://a.example.com', sharedScopes: ['work'] }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    expect(foldSidecarScopesIntoVault(vault).folded).toEqual(['work']);
+    expect(vault.sharedScopes()).toEqual(['work']);
     vault.close();
   });
 });

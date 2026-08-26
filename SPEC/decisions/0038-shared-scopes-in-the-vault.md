@@ -345,10 +345,11 @@ per-scope `shared_at`. Accept when parsed UTC `shared_at > unshared_at`.
 `setScopeShared` (planner N6).** One choke point: if the row is already
 `shared = 1` and no explicit timestamp is given, keep the old `shared_at`.
 Callers (CLI, web, mobile, both fold-ins) must not each reinvent this.
-Residual: a Time Machine restore of a pre-0038 `connector.json` can
-re-trigger fold-in as a genuine private→shared with a fresh timestamp.
-Pin a `vault_meta` fold-done flag (fold once per vault, not once per
-sidecar file). Mobile SecureStore is this-device-only, lower risk.
+Residual: a Time Machine restore of a pre-0038 `connector.json` cannot
+re-stamp shares unless the vault itself is also rolled back. Fold-done is
+pinned even when the sidecar was already stripped (0.19.0 upgrade) or
+absent. Mobile SecureStore is this-device-only; absent key pins fold-done,
+corrupt value is left unmarked (F4).
 
 No tombstone expiry. Clock skew / user-set clock / fabricated `shared_at`
 remain residual (honest-lag, not a proof). Record in KNOWN-LIMITS.

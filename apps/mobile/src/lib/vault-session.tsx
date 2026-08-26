@@ -736,16 +736,34 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         // it can mark, never unmark — and the legacy key is deleted only AFTER
         // the folded marks are saved into the vault (review F4): a crash
         // between the two refolds next time, an additive no-op, instead of
-        // losing the list. A corrupt legacy value reads as [] and is left in
-        // place rather than deleted — never destroy what wasn't folded.
+        // losing the list. A corrupt legacy value is left in place rather
+        // than deleted, and fold-done is not pinned, so a later readable
+        // value can still fold. An absent key pins fold-done so a restored
+        // pre-0038 list cannot re-stamp.
         if (!vault.isSidecarFoldDone()) {
           const legacy = await loadLegacyConnectorSharedScopes();
-          if (legacy.length > 0) {
-            for (const scope of legacy) vault.setScopeShared(scope, true);
-            vault.markSidecarFoldDone();
-            vault.save();
-            await clearLegacyConnectorSharedScopes();
-            await pushAfterSave();
+          switch (legacy.status) {
+            case 'ok': {
+              for (const scope of legacy.scopes) vault.setScopeShared(scope, true);
+              vault.markSidecarFoldDone();
+              vault.save();
+              await clearLegacyConnectorSharedScopes();
+              if (legacy.scopes.length > 0) await pushAfterSave();
+              break;
+            }
+            case 'absent':
+              // Already-migrated 0.19.0 install (legacy key gone). Mark done so a
+              // later restore of the old key cannot re-stamp shares.
+              vault.markSidecarFoldDone();
+              vault.save();
+              break;
+            case 'corrupt':
+              // Leave unmarked and do not delete: a later readable value can still fold.
+              break;
+            default: {
+              const _never: never = legacy;
+              void _never;
+            }
           }
         }
         return vault.sharedScopes();

@@ -725,8 +725,9 @@ every milestone; if a limit is removed, say when and how.*
   When the flag is on, a push of a tombstoned scope without a newer `shared_at`
   is refused with HTTP 412. Honest-lag timestamps remain residual: a client
   clock that is far ahead can mint a `shared_at` that outranks a real unshare.
-  A Time Machine restore of a pre-0038 sidecar can still look like a fresh
-  private-to-shared fold if `sidecar_fold_done` was also rolled back. Managing
+  A Time Machine restore of a pre-0038 sidecar cannot re-stamp shares unless
+  the vault itself is also rolled back (fold-done is set even when the sidecar
+  was already stripped, as on a 0.19.0 upgrade). Managing
   sharing requires the vault unlocked (the marks live in it), including
   unsharing.
 - **Billing-gated in the beta.** Sharing rides the hosted subscription; a
