@@ -4,6 +4,7 @@ import {
   claudeCodeStatus,
   claudeDesktopStatus,
   connect,
+  cursorStatus,
   disconnect,
   resolveMcpCommand,
   type ConnectResult,
@@ -11,10 +12,11 @@ import {
 } from '@northkeep/mcp-server';
 
 /**
- * `northkeep connect` — M8 one-click Connect (ADR 0013). Registers the MCP
- * server that ships inside NorthKeep with Claude Desktop or Claude Code, under
- * a scope preset the user chooses. The writers live in @northkeep/mcp-server;
- * this is just the CLI skin.
+ * `northkeep connect` — M8 one-click Connect (ADR 0013, ChatGPT ADR 0021,
+ * Cursor ADR 0041). Registers the MCP server that ships inside NorthKeep with
+ * Claude Desktop, Claude Code, ChatGPT, or Cursor, under a scope preset the
+ * user chooses. The writers live in @northkeep/mcp-server; this is just the
+ * CLI skin.
  *
  * Mode-2 honesty (ADR Decision 4): Connect hands that app your OWNED, portable
  * memory under the scope you pick — it does NOT redact what you type into that
@@ -25,7 +27,42 @@ const TARGET_LABEL: Record<ConnectTarget, string> = {
   'claude-desktop': 'Claude Desktop',
   'claude-code': 'Claude Code',
   chatgpt: 'ChatGPT',
+  cursor: 'Cursor',
 };
+
+function connectRestartHint(target: ConnectTarget): string {
+  switch (target) {
+    case 'claude-desktop':
+      return '⚠  Restart Claude Desktop to load it (it reads MCP config only at launch).';
+    case 'claude-code':
+      return '⚠  Open a new Claude Code session to load it (registered at "user" scope).';
+    case 'chatgpt':
+      return '⚠  Restart ChatGPT to load it (it reads Codex MCP config only at launch).';
+    case 'cursor':
+      return '⚠  Restart Cursor, or toggle the server in Cursor Settings → MCP.';
+    default: {
+      const _exhaustive: never = target;
+      throw new Error(`Unhandled Connect target: ${String(_exhaustive)}`);
+    }
+  }
+}
+
+function disconnectRestartHint(target: ConnectTarget): string | null {
+  switch (target) {
+    case 'claude-desktop':
+      return '  Restart Claude Desktop for the change to take effect.';
+    case 'claude-code':
+      return null;
+    case 'chatgpt':
+      return '  Restart ChatGPT for the change to take effect.';
+    case 'cursor':
+      return '  Restart Cursor, or toggle the server in Cursor Settings → MCP.';
+    default: {
+      const _exhaustive: never = target;
+      throw new Error(`Unhandled Connect target: ${String(_exhaustive)}`);
+    }
+  }
+}
 
 /** Commander collector: `--scope a,b --scope c` → ['a','b','c']. */
 export function collectScopes(value: string, previous: string[]): string[] {
@@ -55,13 +92,7 @@ export function connectCmd(
   console.log(`  command: ${result.command}`);
   console.log(`  args:    ${result.args.join(' ')}`);
   console.log('');
-  if (target === 'claude-desktop') {
-    console.log('⚠  Restart Claude Desktop to load it (it reads MCP config only at launch).');
-  } else if (target === 'chatgpt') {
-    console.log('⚠  Restart ChatGPT to load it (it reads Codex MCP config only at launch).');
-  } else {
-    console.log('⚠  Open a new Claude Code session to load it (registered at "user" scope).');
-  }
+  console.log(connectRestartHint(target));
   console.log('');
   console.log('Note: Connect gives that app your portable memory under the scope above. It does');
   console.log('NOT redact what you type into that app — the app still sends your chat to its');
@@ -81,10 +112,9 @@ export function disconnectCmd(target: ConnectTarget, fail: (m: string) => never)
       ? `✓ Disconnected ${label}. Only NorthKeep's entry was removed; every other setting is untouched.`
       : `${label} was not connected — nothing to remove.`,
   );
-  if (removed && target === 'claude-desktop') {
-    console.log('  Restart Claude Desktop for the change to take effect.');
-  } else if (removed && target === 'chatgpt') {
-    console.log('  Restart ChatGPT for the change to take effect.');
+  if (removed) {
+    const hint = disconnectRestartHint(target);
+    if (hint) console.log(hint);
   }
 }
 
@@ -110,6 +140,14 @@ export function connectStatusCmd(): void {
     `  ChatGPT:        ${
       chatgpt.connected
         ? `connected${chatgpt.scopes ? ` (scopes: ${chatgpt.scopes.join(', ')})` : ' (full access)'}`
+        : 'not connected'
+    }`,
+  );
+  const cursor = cursorStatus();
+  console.log(
+    `  Cursor:         ${
+      cursor.connected
+        ? `connected${cursor.scopes ? ` (scopes: ${cursor.scopes.join(', ')})` : ' (full access)'}`
         : 'not connected'
     }`,
   );

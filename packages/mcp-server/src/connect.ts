@@ -6,11 +6,11 @@ import { fileURLToPath } from 'node:url';
 import { parse as parseToml } from 'smol-toml';
 
 /**
- * M8 "Connect" (ADR 0013, extended for ChatGPT in ADR 0021) — register the MCP
- * server that ships *inside* NorthKeep with the consumer AI apps (Claude
- * Desktop, Claude Code, ChatGPT desktop), so a user who only downloaded the app
- * gets one-click memory portability. No repo, no terminal, no separate Node
- * install required.
+ * M8 "Connect" (ADR 0013, extended for ChatGPT in ADR 0021 and Cursor in
+ * ADR 0041) — register the MCP server that ships *inside* NorthKeep with the
+ * consumer AI apps (Claude Desktop, Claude Code, ChatGPT desktop, Cursor), so a
+ * user who only downloaded the app gets one-click memory portability. No repo,
+ * no terminal, no separate Node install required.
  *
  * The crown-jewel invariant (ADR Decision 2): we are editing files NorthKeep
  * does not own. The writer MERGES — it reads the existing config, touches ONLY
@@ -19,9 +19,13 @@ import { parse as parseToml } from 'smol-toml';
  * byte-faithfully. (ChatGPT's config is TOML that can carry hand-written
  * comments and other servers' secrets, so its writer preserves the file text
  * verbatim and rewrites ONLY our own table — see the Codex/ChatGPT section.)
+ *
+ * Cursor writes the user-global `~/.cursor/mcp.json` (strict JSON, same
+ * surgical writer as Claude Desktop). It does not write a project
+ * `.cursor/mcp.json` and does not register the hosted connector.
  */
 
-export type ConnectTarget = 'claude-desktop' | 'claude-code' | 'chatgpt';
+export type ConnectTarget = 'claude-desktop' | 'claude-code' | 'chatgpt' | 'cursor';
 
 /** The MCP server name key we own in every target's config. We touch no other. */
 export const SERVER_NAME = 'northkeep';
@@ -106,7 +110,9 @@ function isObject(value: unknown): value is Record<string, unknown> {
  */
 function readConfig(file: string): Record<string, unknown> {
   if (!fs.existsSync(file)) return {};
-  const raw = fs.readFileSync(file, 'utf8');
+  // P3: strip one leading UTF-8 BOM so an editor-saved file still parses.
+  // backupOnce copies original bytes (BOM included); writeConfig writes none.
+  const raw = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
   if (raw.trim() === '') return {};
   let parsed: unknown;
   try {
@@ -116,6 +122,23 @@ function readConfig(file: string): Record<string, unknown> {
   }
   if (!isObject(parsed)) throw unparseable(file);
   return parsed;
+}
+
+/**
+ * P1: `mcpServers` must be a plain object we can merge into. Absent → `{}`.
+ * Present-but-not-an-object (array/string/number) THROWS — substituting `{}`
+ * would silently destroy other servers' secrets. Callers invoke this BEFORE
+ * `backupOnce`.
+ */
+function mcpServersOrThrow(file: string, config: Record<string, unknown>): Record<string, unknown> {
+  if (config.mcpServers === undefined) return {};
+  if (!isObject(config.mcpServers)) {
+    throw new Error(
+      `Refusing to modify ${file}: its "mcpServers" key is not a JSON object. ` +
+        `NorthKeep never overwrites configuration it cannot merge into. Fix that key, then reconnect.`,
+    );
+  }
+  return config.mcpServers;
 }
 
 function unparseable(file: string): Error {
@@ -139,30 +162,35 @@ function backupOnce(file: string): void {
 }
 
 /**
- * Write pretty (2-space) JSON with a trailing newline; mkdir -p the parent.
- * ATOMIC (temp file + rename) so a mid-write crash can never leave the user's
- * real Claude config truncated, and MODE-PRESERVING — the config can carry
- * other MCP servers' secrets in `env`, so a rewrite must not loosen its
- * permissions. New files get 0600 (safer default for a file that may hold
- * secrets); existing files keep their own mode.
+ * Atomic, mode-preserving write. P4: `realpathSync` an existing file and
+ * write/rename against that target so a symlink is not replaced by a regular
+ * file (temp in the resolved parent, mode from the resolved file). A missing
+ * path writes at the literal location with 0600. writeFileSync mode is subject
+ * to umask, so we chmod after write.
  */
-function writeConfig(file: string, config: Record<string, unknown>): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+function atomicWrite(file: string, contents: string): void {
+  let target = file;
   let mode = 0o600;
   try {
-    mode = fs.statSync(file).mode & 0o777;
+    target = fs.realpathSync(file);
+    mode = fs.statSync(target).mode & 0o777;
   } catch {
-    /* new file — keep the 0600 default */
+    /* new file — keep the 0600 default, write at the literal path */
   }
-  const tmp = `${file}.northkeep-tmp`;
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const tmp = `${target}.northkeep-tmp`;
   try {
-    fs.writeFileSync(tmp, `${JSON.stringify(config, null, 2)}\n`, { mode });
+    fs.writeFileSync(tmp, contents, { mode });
     fs.chmodSync(tmp, mode); // writeFileSync mode is subject to umask; force it
-    fs.renameSync(tmp, file); // atomic on the same filesystem
+    fs.renameSync(tmp, target); // atomic on the same filesystem
   } finally {
     // Never leave a stray temp behind if the rename didn't happen.
     if (fs.existsSync(tmp)) fs.rmSync(tmp, { force: true });
   }
+}
+
+function writeConfig(file: string, config: Record<string, unknown>): void {
+  atomicWrite(file, `${JSON.stringify(config, null, 2)}\n`);
 }
 
 /**
@@ -211,12 +239,12 @@ export function connectClaudeDesktop(
 ): ConnectResult {
   const file = claudeDesktopConfigPath(configPathOverride);
   const config = readConfig(file); // throws on unparseable — never clobber
+  const servers = mcpServersOrThrow(file, config); // P1: refuse a non-object before backup
   const { command, args } = resolveMcpCommand();
   const scopes = normalizeScopes(opts.scopes);
 
   backupOnce(file);
 
-  const servers = isObject(config.mcpServers) ? config.mcpServers : {};
   servers[SERVER_NAME] = {
     command,
     args,
@@ -495,23 +523,10 @@ function assertOnlyOursTouched(
 }
 
 /** Atomic, mode-preserving TEXT writer (Codex config can hold other servers'
- * secrets, so new files get 0600 and existing files keep their mode). */
+ * secrets, so new files get 0600 and existing files keep their mode). P4:
+ * writes through a symlink rather than replacing it. */
 function writeText(file: string, text: string): void {
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  let mode = 0o600;
-  try {
-    mode = fs.statSync(file).mode & 0o777;
-  } catch {
-    /* new file — keep 0600 */
-  }
-  const tmp = `${file}.northkeep-tmp`;
-  try {
-    fs.writeFileSync(tmp, text, { mode });
-    fs.chmodSync(tmp, mode);
-    fs.renameSync(tmp, file);
-  } finally {
-    if (fs.existsSync(tmp)) fs.rmSync(tmp, { force: true });
-  }
+  atomicWrite(file, text);
 }
 
 export function chatgptStatus(configPathOverride?: string): ConnectStatus {
@@ -602,6 +617,102 @@ export function disconnectChatgpt(configPathOverride?: string): { removed: boole
 }
 
 // ---------------------------------------------------------------------------
+// Cursor (ADR 0041) — user-global ~/.cursor/mcp.json, same surgical JSON
+// writer as Claude Desktop. NEVER writes project .cursor/mcp.json. NEVER
+// registers the hosted connector (a remote `url` entry is a different product
+// surface; P2 refuses to overwrite it on connect).
+// ---------------------------------------------------------------------------
+
+/**
+ * Path to Cursor's user-global MCP config. `override` / `NORTHKEEP_CURSOR_CONFIG`
+ * mirror the Claude Desktop hooks so tests never touch the real file and power
+ * users with a non-standard install can point us at theirs. The default is
+ * homedir-absolute; we never write a project-level `.cursor/mcp.json`.
+ */
+export function cursorConfigPath(override?: string): string {
+  if (override) return override;
+  const fromEnv = process.env.NORTHKEEP_CURSOR_CONFIG;
+  if (fromEnv) return fromEnv;
+  return path.join(os.homedir(), '.cursor', 'mcp.json');
+}
+
+export function cursorStatus(configPathOverride?: string): ConnectStatus {
+  const file = cursorConfigPath(configPathOverride);
+  let config: Record<string, unknown>;
+  try {
+    config = readConfig(file);
+  } catch {
+    return { connected: false };
+  }
+  const servers = isObject(config.mcpServers) ? config.mcpServers : undefined;
+  const entry = servers && isObject(servers[SERVER_NAME]) ? servers[SERVER_NAME] : undefined;
+  // `type` is optional: a hand-written stdio entry without it still counts.
+  if (!isObject(entry)) return { connected: false };
+  const env = isObject(entry.env) ? entry.env : undefined;
+  const raw = env && typeof env.NORTHKEEP_SCOPES === 'string' ? env.NORTHKEEP_SCOPES : undefined;
+  const scopes = raw
+    ? raw.split(',').map((s) => s.trim()).filter((s) => s.length > 0)
+    : undefined;
+  return scopes ? { connected: true, scopes } : { connected: true };
+}
+
+function remoteNorthkeepRefusal(file: string): Error {
+  return new Error(
+    `Refusing to modify ${file}: the existing "northkeep" entry is a remote MCP server (it has a "url"). ` +
+      `That is likely the hosted NorthKeep connector, a different product surface. ` +
+      `Remove or rename that entry in Cursor's MCP settings, then reconnect.`,
+  );
+}
+
+/**
+ * Register the bundled MCP server in Cursor's user-global mcp.json. MERGES:
+ * read → mcpServersOrThrow → P2 remote-url guard → backupOnce → write only
+ * `mcpServers.northkeep` with `{ type: "stdio", command, args, env? }`.
+ */
+export function connectCursor(
+  opts: { scopes?: string[] } = {},
+  configPathOverride?: string,
+): ConnectResult {
+  const file = cursorConfigPath(configPathOverride);
+  const config = readConfig(file);
+  const servers = mcpServersOrThrow(file, config);
+  const existing = servers[SERVER_NAME];
+  if (isObject(existing) && 'url' in existing) {
+    throw remoteNorthkeepRefusal(file);
+  }
+  const { command, args } = resolveMcpCommand();
+  const scopes = normalizeScopes(opts.scopes);
+
+  backupOnce(file);
+
+  servers[SERVER_NAME] = {
+    type: 'stdio',
+    command,
+    args,
+    ...(scopes.length ? { env: { NORTHKEEP_SCOPES: scopes.join(',') } } : {}),
+  };
+  config.mcpServers = servers;
+  writeConfig(file, config);
+
+  return { restartNeeded: true, command, args };
+}
+
+/** Remove ONLY `mcpServers.northkeep` (including a remote url-entry); leave
+ * every other key. Refuses an unparseable config. No-write when mcpServers is
+ * a non-object. */
+export function disconnectCursor(configPathOverride?: string): { removed: boolean } {
+  const file = cursorConfigPath(configPathOverride);
+  if (!fs.existsSync(file)) return { removed: false };
+  const config = readConfig(file);
+  const servers = isObject(config.mcpServers) ? config.mcpServers : undefined;
+  if (!servers || !(SERVER_NAME in servers)) return { removed: false };
+  backupOnce(file);
+  delete servers[SERVER_NAME];
+  writeConfig(file, config);
+  return { removed: true };
+}
+
+// ---------------------------------------------------------------------------
 // Umbrella dispatch (each app's writer stays explicit above).
 // ---------------------------------------------------------------------------
 
@@ -616,6 +727,12 @@ export function connect(
       return connectClaudeCode(opts);
     case 'chatgpt':
       return connectChatgpt(opts);
+    case 'cursor':
+      return connectCursor(opts);
+    default: {
+      const _exhaustive: never = target;
+      throw new Error(`Unhandled Connect target: ${String(_exhaustive)}`);
+    }
   }
 }
 
@@ -627,6 +744,12 @@ export function disconnect(target: ConnectTarget): { removed: boolean } {
       return disconnectClaudeCode();
     case 'chatgpt':
       return disconnectChatgpt();
+    case 'cursor':
+      return disconnectCursor();
+    default: {
+      const _exhaustive: never = target;
+      throw new Error(`Unhandled Connect target: ${String(_exhaustive)}`);
+    }
   }
 }
 
@@ -638,5 +761,11 @@ export function connectStatus(target: ConnectTarget): ConnectStatus {
       return claudeCodeStatus();
     case 'chatgpt':
       return chatgptStatus();
+    case 'cursor':
+      return cursorStatus();
+    default: {
+      const _exhaustive: never = target;
+      throw new Error(`Unhandled Connect target: ${String(_exhaustive)}`);
+    }
   }
 }

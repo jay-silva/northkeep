@@ -620,15 +620,29 @@ every milestone; if a limit is removed, say when and how.*
 ## M8 (Connect — memory into other apps) — current
 
 - **Connect is Mode 2: portable memory, NOT a chat firewall.** Connecting an
-  app (Claude Desktop, Claude Code) gives it your owned memory under the scope
-  you pick — but it does **not** redact what you type into that app; the app
-  still sends your whole chat to its provider. For a redaction firewall on your
-  messages, use Converse. This is stated plainly in the Connect UI.
+  app (Claude Desktop, Claude Code, ChatGPT, Cursor) gives it your owned memory
+  under the scope you pick, but it does **not** redact what you type into that
+  app; the app still sends your whole chat to its provider. For a redaction
+  firewall on your messages, use Converse. This is stated plainly in the
+  Connect UI.
 - **Connect registers the app installed at a stable path.** The entry points at
   `NorthKeep.app` where it lives; if you move or rename the app, reconnect so
   the path is rewritten.
-- **Restart required.** Claude Desktop reads MCP config only at launch — Connect
-  ends with a restart prompt; Claude Code picks it up in a new session.
+- **Restart required.** Claude Desktop and ChatGPT read MCP config only at
+  launch. Cursor needs a restart, or toggle the server in Settings → MCP.
+  Claude Code picks it up in a new session.
+- **Cursor writes the user-global config only.** Connect registers in
+  `~/.cursor/mcp.json` (absolute under the home directory). A project-level
+  `.cursor/mcp.json` can shadow that entry per workspace; we never write the
+  project file. An enterprise MCP allowlist may still block the server after
+  a successful write.
+- **We refuse a non-object `mcpServers` rather than clobber.** If that key is
+  an array, string, or number (it can hold other servers' secrets), Connect
+  throws and leaves the file untouched. Status and disconnect do not write in
+  that case.
+- **Empty scopes fail open on Connect.** Omitting `NORTHKEEP_SCOPES` means
+  full owner access. A present-but-empty `NORTHKEEP_SCOPES=` on the server is
+  deny-all. No UI path writes the empty-present form.
 - **A connected app reads your vault while it's unlocked** (the Keychain grant,
   same as any MCP client). Lock, or scope the connection down, to limit it.
 - **macOS only** for now (matches the arm64 app); the config paths are

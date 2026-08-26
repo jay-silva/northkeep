@@ -1385,6 +1385,7 @@ async function dispatch(
         target('claude-desktop', 'Claude Desktop', true),
         target('claude-code', 'Claude Code', claudeCodeAvailable()),
         target('chatgpt', 'ChatGPT', true),
+        target('cursor', 'Cursor', true),
       ],
       scopes_in_vault: scopesInVault,
     });
@@ -1392,9 +1393,17 @@ async function dispatch(
 
   const connectMatch = /^\/api\/(connect|disconnect)\/([a-z-]+)$/.exec(route);
   if (method === 'POST' && connectMatch) {
-    const target = connectMatch[2];
-    if (target !== 'claude-desktop' && target !== 'claude-code' && target !== 'chatgpt') {
-      return bad(400, 'Unknown target — must be claude-desktop, claude-code, or chatgpt.');
+    const rawTarget = connectMatch[2];
+    let target: ConnectTarget;
+    switch (rawTarget) {
+      case 'claude-desktop':
+      case 'claude-code':
+      case 'chatgpt':
+      case 'cursor':
+        target = rawTarget;
+        break;
+      default:
+        return bad(400, 'Unknown target: must be claude-desktop, claude-code, chatgpt, or cursor.');
     }
     try {
       if (connectMatch[1] === 'connect') {

@@ -33,3 +33,17 @@ describe('handleApi malformed JSON', () => {
     expect(res.body).toEqual({ error: 'Passphrase required.' });
   });
 });
+
+describe('handleApi Connect targets (M15)', () => {
+  it('POST /api/connect/unknown returns 400', async () => {
+    const res = await handleApi(
+      newSession(),
+      'POST',
+      '/api/connect/not-a-target',
+      new URLSearchParams(),
+      Buffer.from(JSON.stringify({ scopes: [] })),
+    );
+    expect(res.status).toBe(400);
+    expect((res.body as { error: string }).error).toMatch(/Unknown target/i);
+  });
+});

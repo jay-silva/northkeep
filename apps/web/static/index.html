@@ -654,9 +654,9 @@
       over, set the same sync server, then Pull.</p>
   </section>
   <section id="view-connect" hidden>
-    <p class="muted">Give the AI apps you already use access to your NorthKeep memory,
-      on your existing subscription. One click registers the memory server that ships inside
-      NorthKeep; no terminal, no config files to edit by hand.</p>
+    <p class="muted">Give the AI apps you already use (Claude Desktop, Claude Code, ChatGPT, and Cursor)
+      access to your NorthKeep memory, on your existing subscription. One click registers the memory
+      server that ships inside NorthKeep; no terminal, no config files to edit by hand.</p>
     <div class="banner" style="margin:16px 0 22px">
       <strong>Desktop Connect shares your memory. It does not redact your chat.</strong>
       <div style="margin-top:6px">Connecting hands that app your <strong>owned, portable memory</strong>
@@ -3664,6 +3664,8 @@
           ? 'Restart Claude Desktop to load it.'
           : t.id === 'chatgpt'
           ? 'Restart ChatGPT to load it (it reads MCP config at launch).'
+          : t.id === 'cursor'
+          ? 'Restart Cursor, or toggle the server in Cursor Settings → MCP.'
           : 'Open a new Claude Code session to load it.';
         await loadConnect({ [t.id]: restart });
       } catch (e) {

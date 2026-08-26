@@ -52,6 +52,7 @@ One command wires NorthKeep into the app, no hand-edited JSON:
 northkeep connect claude-desktop   # writes the MCP config for you (backs up the old one)
 northkeep connect claude-code      # or Claude Code
 northkeep connect chatgpt          # or ChatGPT (via ~/.codex/config.toml)
+northkeep connect cursor           # or Cursor (via ~/.cursor/mcp.json)
 northkeep disconnect claude-desktop
 ```
 

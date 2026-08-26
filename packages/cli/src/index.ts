@@ -922,7 +922,7 @@ share
 
 const connectGroup = program
   .command('connect')
-  .description('Connect an AI app to your NorthKeep memory over MCP (Claude Desktop, Claude Code, ChatGPT)');
+  .description('Connect an AI app to your NorthKeep memory over MCP (Claude Desktop, Claude Code, ChatGPT, Cursor)');
 
 connectGroup
   .command('claude-desktop')
@@ -941,6 +941,12 @@ connectGroup
   .description('Register NorthKeep as an MCP server in ChatGPT (via ~/.codex/config.toml)')
   .option('--scope <scope>', 'limit disclosure to these scopes (repeatable or comma-separated; omit for full access)', collectScopes, [])
   .action((options: { scope: string[] }) => connectCmd('chatgpt', options, fail));
+
+connectGroup
+  .command('cursor')
+  .description('Register NorthKeep as an MCP server in Cursor (via ~/.cursor/mcp.json)')
+  .option('--scope <scope>', 'limit disclosure to these scopes (repeatable or comma-separated; omit for full access)', collectScopes, [])
+  .action((options: { scope: string[] }) => connectCmd('cursor', options, fail));
 
 connectGroup
   .command('status', { isDefault: true })
@@ -965,6 +971,11 @@ disconnectGroup
   .command('chatgpt')
   .description('Remove NorthKeep from ChatGPT (~/.codex/config.toml)')
   .action(() => disconnectCmd('chatgpt', fail));
+
+disconnectGroup
+  .command('cursor')
+  .description('Remove NorthKeep from Cursor (~/.cursor/mcp.json)')
+  .action(() => disconnectCmd('cursor', fail));
 
 program
   .command('serve')
