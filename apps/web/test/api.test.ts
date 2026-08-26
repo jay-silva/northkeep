@@ -47,3 +47,17 @@ describe('handleApi Connect targets (M15)', () => {
     expect((res.body as { error: string }).error).toMatch(/Unknown target/i);
   });
 });
+
+describe('handleApi contract targets (M16)', () => {
+  it('POST /api/contract/install/unknown returns 400', async () => {
+    const res = await handleApi(
+      newSession(),
+      'POST',
+      '/api/contract/install/cursor',
+      new URLSearchParams(),
+      Buffer.from('{}'),
+    );
+    expect(res.status).toBe(400);
+    expect((res.body as { error: string }).error).toMatch(/Unknown target/i);
+  });
+});

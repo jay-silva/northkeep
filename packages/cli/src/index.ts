@@ -69,6 +69,12 @@ import { routingClear, routingList, routingSet } from './routingCmd.js';
 import { mcpAdd, mcpAddRemote, mcpConnect, mcpList, mcpRemove, mcpSafeRead, mcpTools } from './mcpCmd.js';
 import { toolsBudget, toolsDisable, toolsEnable, toolsGrants, toolsList, toolsRevoke } from './toolsCmd.js';
 import { collectScopes, connectCmd, connectStatusCmd, disconnectCmd } from './connectCmd.js';
+import {
+  contractInstallCmd,
+  contractPrintCmd,
+  contractStatusCmd,
+  contractUninstallCmd,
+} from './contractCmd.js';
 import { runLauncher } from './launcher.js';
 
 // Register the Node platform adapters (crypto/sqlite/storage) exactly once,
@@ -976,6 +982,39 @@ disconnectGroup
   .command('cursor')
   .description('Remove NorthKeep from Cursor (~/.cursor/mcp.json)')
   .action(() => disconnectCmd('cursor', fail));
+
+const contractGroup = program
+  .command('contract')
+  .description('Install the standing project instruction into Claude Code, Codex, or a Cursor project');
+
+contractGroup
+  .command('install')
+  .description('Install the session contract (claude, codex, all, or cursor --project <dir>)')
+  .argument('<target>', 'claude | codex | cursor | all')
+  .option('--project <dir>', 'project directory (required for cursor)')
+  .action((target: string, options: { project?: string }) =>
+    contractInstallCmd(target, options, fail),
+  );
+
+contractGroup
+  .command('uninstall')
+  .description('Remove the session contract (claude, codex, or cursor --project <dir>)')
+  .argument('<target>', 'claude | codex | cursor')
+  .option('--project <dir>', 'project directory (required for cursor)')
+  .action((target: string, options: { project?: string }) =>
+    contractUninstallCmd(target, options, fail),
+  );
+
+contractGroup
+  .command('status', { isDefault: true })
+  .description('Show whether the session contract is installed, stale, absent, or blocked')
+  .option('--project <dir>', 'also check a Cursor project rule')
+  .action((options: { project?: string }) => contractStatusCmd(options));
+
+contractGroup
+  .command('print')
+  .description('Print the canonical session contract (for pasting into Cursor User Rules)')
+  .action(() => contractPrintCmd());
 
 program
   .command('serve')

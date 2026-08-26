@@ -39,6 +39,28 @@ export {
   type ConnectTarget,
   type McpCommand,
 } from './connect.js';
+export {
+  CONTRACT_GRACEFUL_DEGRADATION,
+  CONTRACT_TEXT,
+  claudeRulesPath,
+  codexAgentsPath,
+  codexHomePath,
+  contractStatus,
+  contractStatusAll,
+  cursorGitVisibilityNote,
+  cursorRulePath,
+  installAll,
+  installContract,
+  isCodexDetected,
+  renderContract,
+  uninstallContract,
+  type ContractOpts,
+  type ContractStatusKind,
+  type ContractStatusResult,
+  type ContractTarget,
+  type InstallResult,
+  type UninstallResult,
+} from './contract.js';
 
 // Executed directly (Claude Desktop config / `northkeep serve`), not imported.
 if (process.argv[1]?.endsWith('mcp-server/dist/index.js')) {

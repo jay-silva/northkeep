@@ -665,6 +665,9 @@
         <em>messages</em>, use <strong>Converse</strong>, which masks them before they leave your Mac.</div>
     </div>
     <div id="connectCards"></div>
+    <h3 class="sect">Session contract</h3>
+    <p class="muted" style="font-size:13px;margin:0 0 12px">Installs a short standing instruction so a cold agent reads a named project at session start and writes status plus a log entry at session end. Advisory, not enforced. Does not reach Claude Desktop plain chat or ChatGPT chat.</p>
+    <div id="contractCard"></div>
   </section>
   <section id="view-sharing" hidden>
     <p class="muted"><span class="badge beta" style="margin-left:0;margin-right:8px">BETA</span>Make chosen memories usable inside the cloud AI apps you already pay for
@@ -3599,6 +3602,70 @@
       box.appendChild(connectCard(t, scopesInVault, notes[t.id]));
     }
     setConnectPill(data.targets); // keep the header pill in sync after connect/disconnect
+    loadContract();
+  }
+
+  async function loadContract() {
+    const box = $('contractCard');
+    if (!box) return;
+    box.textContent = '';
+    let data;
+    try {
+      data = await api('/api/contract');
+    } catch (e) {
+      if (e.message !== 'locked') box.appendChild(el('p', 'muted', e.message));
+      return;
+    }
+    const card = el('div', 'card');
+    card.appendChild(el('strong', '', 'Project session contract'));
+    card.appendChild(el('p', 'muted',
+      'Install for Claude Code and Codex. For Cursor, copy the text and paste it into Settings, Rules, or run northkeep contract install cursor --project <dir>.'));
+    const err = el('div', 'err');
+    for (const t of data.targets || []) {
+      const row = el('div', 'row');
+      row.style.cssText = 'justify-content:space-between;margin:12px 0 0;align-items:center';
+      const left = el('div', '');
+      left.appendChild(el('span', '', t.label + '  '));
+      left.appendChild(el('span', 'badge ' + (t.status === 'installed' ? 'private' : 'auto'),
+        String(t.status || 'absent').toUpperCase()));
+      row.appendChild(left);
+      const btns = el('div', 'row');
+      const installBtn = el('button', 'btn primary', t.status === 'installed' ? 'Reinstall' : 'Install');
+      installBtn.addEventListener('click', async () => {
+        err.textContent = '';
+        try {
+          await api('/api/contract/install/' + t.id, { method: 'POST' });
+          await loadContract();
+        } catch (e) {
+          if (e.message !== 'locked') err.textContent = e.message;
+        }
+      });
+      btns.appendChild(installBtn);
+      if (t.status === 'installed' || t.status === 'stale' || t.status === 'blocked') {
+        const removeBtn = el('button', 'btn danger', 'Remove');
+        removeBtn.addEventListener('click', async () => {
+          err.textContent = '';
+          try {
+            await api('/api/contract/uninstall/' + t.id, { method: 'POST' });
+            await loadContract();
+          } catch (e) {
+            if (e.message !== 'locked') err.textContent = e.message;
+          }
+        });
+        btns.appendChild(removeBtn);
+      }
+      row.appendChild(btns);
+      card.appendChild(row);
+      if (t.message) card.appendChild(el('p', 'muted', t.message));
+    }
+    card.appendChild(err);
+    const copyRow = el('div', 'row');
+    copyRow.style.marginTop = '12px';
+    const copyBtn = el('button', 'btn', 'Copy contract');
+    copyBtn.addEventListener('click', (e) => copyToClipboard(data.contract_text || '', e.currentTarget));
+    copyRow.appendChild(copyBtn);
+    card.appendChild(copyRow);
+    box.appendChild(card);
   }
 
   function connectCard(t, scopesInVault, note) {

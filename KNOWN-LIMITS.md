@@ -507,6 +507,27 @@ every milestone; if a limit is removed, say when and how.*
   the claim is unchanged: encrypted at rest, we store no key. The
   database alone yields no key and no plaintext.
 
+## M16 (contract installer), current
+
+- **The contract is advisory.** An agent follows it because a host rule file
+  and the tool descriptions say so. Nothing forces a session-end handoff; a
+  session that ends abruptly wrote nothing.
+- **Claude Desktop plain chat and ChatGPT chat are not covered.** Those
+  surfaces have no on-disk instruction file. Hosted Claude.ai uses the
+  connector project tools (M14), not this installer.
+- **`alwaysApply: true` on a Cursor project rule is in every chat in that
+  repo.** Only the tool calls are conditional. The text is short on purpose.
+- **`AGENTS.override.md` silently replaces `AGENTS.md`.** Status reports
+  `blocked`. Remove the override, or put the contract in it by hand.
+- **A paste into Cursor User Rules is invisible to `contract status`** and
+  will drift when the canonical text changes. Re-copy after an upgrade.
+- **Older Claude Code versions may not read `~/.claude/rules/`.** We cannot
+  detect the version. The file is still a regular in-place file (Cowork
+  skips a symlink).
+- **NorthKeep never writes `~/.claude/CLAUDE.md`** and never edits
+  `.gitignore`. A Cursor project rule may be committed; use
+  `.git/info/exclude` if it should stay personal.
+
 ## GUI — current
 
 - **The app window is a local web page with a per-session key.** While the

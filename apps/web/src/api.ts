@@ -51,14 +51,19 @@ import { EXTRACT_MODEL, createOllamaClient, createOllamaEmbedder, dedupeCandidat
 import {
   auditAsCsv,
   claudeCodeAvailable,
+  CONTRACT_TEXT,
   connect,
   connectStatus,
+  contractStatus,
   disconnect,
+  installContract,
   keychainAvailable,
   keychainDeleteMasterKey,
   keychainSetMasterKey,
   readCallLog,
+  uninstallContract,
   type ConnectTarget,
+  type ContractTarget,
 } from '@northkeep/mcp-server';
 import { redact, restore, type Replacement } from '@northkeep/redact';
 import {
@@ -1417,6 +1422,45 @@ async function dispatch(
     } catch (err) {
       // An unparseable target config (or a missing `claude` CLI on connect)
       // throws here — report it to the user rather than 500.
+      return bad(400, err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  // --- Session contract (M16, ADR 0042). Same 400-on-throw posture as Connect.
+  // Claude and Codex only: Cursor is per-project and CLI-only.
+
+  if (method === 'GET' && route === '/api/contract') {
+    const row = (id: 'claude' | 'codex', label: string) => {
+      const s = contractStatus(id);
+      return { id, label, status: s.status, path: s.path, message: s.message ?? null };
+    };
+    return ok({
+      contract_text: CONTRACT_TEXT,
+      targets: [
+        row('claude', 'Claude Code'),
+        row('codex', 'Codex'),
+      ],
+    });
+  }
+
+  const contractMatch = /^\/api\/contract\/(install|uninstall)\/([a-z-]+)$/.exec(route);
+  if (method === 'POST' && contractMatch) {
+    const rawTarget = contractMatch[2];
+    let target: ContractTarget;
+    switch (rawTarget) {
+      case 'claude':
+      case 'codex':
+        target = rawTarget;
+        break;
+      default:
+        return bad(400, 'Unknown target: must be claude or codex.');
+    }
+    try {
+      if (contractMatch[1] === 'install') {
+        return ok(installContract(target));
+      }
+      return ok(uninstallContract(target));
+    } catch (err) {
       return bad(400, err instanceof Error ? err.message : String(err));
     }
   }

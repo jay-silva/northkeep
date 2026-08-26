@@ -54,6 +54,7 @@ northkeep connect claude-code      # or Claude Code
 northkeep connect chatgpt          # or ChatGPT (via ~/.codex/config.toml)
 northkeep connect cursor           # or Cursor (via ~/.cursor/mcp.json)
 northkeep disconnect claude-desktop
+northkeep contract install all     # standing project instruction for Claude Code and Codex
 ```
 
 Restart the app afterward (it reads MCP config at launch). Now it can read and
