@@ -130,6 +130,11 @@ export interface VaultExport {
     vault_id: string;
     exported_at: string;
     chain_head: string;
+    /**
+     * Monotonic counter sealed inside the vault (ADR 0038 addendum). Missing
+     * on pre-0.4 exports; readers must treat that as 0.
+     */
+    sync_generation?: number;
   };
   memories: ExportedMemory[];
   /**
@@ -141,5 +146,13 @@ export interface VaultExport {
   shared_scopes: ExportedScopeSharing[];
 }
 
-export const SCHEMA_VERSION = '0.3';
+export const SCHEMA_VERSION = '0.4';
 export const GENESIS_HASH = '0'.repeat(64);
+
+/** Thrown when vault_meta.sync_generation is present but not a non-negative integer. */
+export class VaultSyncGenerationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'VaultSyncGenerationError';
+  }
+}

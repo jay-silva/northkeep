@@ -88,6 +88,25 @@ function reencryptError(): Error {
 }
 
 /**
+ * HTTP 412: a pushed scope has a connector tombstone the client did not
+ * outrank. Distinct from ADR 0020's 409 reencrypt_required. Clients must
+ * not treat this as "re-push".
+ *
+ * PUT /client/entries body (0.20.0):
+ *   { scopes: string[], entries: PushEntry[], shared_at?: Record<string, string> }
+ * shared_at maps scope → vault shared_at (ISO-8601). Omitted on 0.19.0 clients.
+ */
+export class ConnectorTombstoneError extends Error {
+  readonly scopes: string[];
+  constructor(scopes: string[] = []) {
+    const named = scopes.length > 0 ? ` Conflicting scopes: ${scopes.join(', ')}.` : '';
+    super(`This scope was unshared. Re-share it deliberately if you want it back.${named}`);
+    this.name = 'ConnectorTombstoneError';
+    this.scopes = scopes;
+  }
+}
+
+/**
  * "Make these scopes match": read the live (non-forgotten, non-superseded)
  * entries in each shared scope from the OPEN vault and PUT them so the server's
  * rows for those scopes become EXACTLY these. A vault entry the user forgot or
@@ -120,10 +139,14 @@ export async function pushSharedScopes(opts: {
       });
     }
   }
+  const shared_at: Record<string, string> = {};
+  for (const row of opts.vault.sharedScopeRows()) {
+    if (scopes.includes(row.scope) && row.shared_at) shared_at[row.scope] = row.shared_at;
+  }
   const res = await fetch(`${server}/client/entries`, {
     method: 'PUT',
     headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
-    body: JSON.stringify({ scopes, entries }),
+    body: JSON.stringify({ scopes, entries, shared_at }),
     redirect: 'error',
     signal: timeoutSignal(TIMEOUT_MS),
   });
@@ -134,6 +157,13 @@ export async function pushSharedScopes(opts: {
   }
   if (res.status === 401) throw new Error('The connector server rejected the connector token (401).');
   if (res.status === 409) throw reencryptError();
+  if (res.status === 412) {
+    const body = (await res.json().catch(() => ({}))) as { scopes?: unknown };
+    const named = Array.isArray(body.scopes)
+      ? body.scopes.filter((s): s is string => typeof s === 'string')
+      : [];
+    throw new ConnectorTombstoneError(named);
+  }
   if (!res.ok) throw new Error(`Connector server returned HTTP ${res.status} on push.`);
   return { pushed: entries.length, scopes };
 }

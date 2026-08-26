@@ -706,26 +706,29 @@ every milestone; if a limit is removed, say when and how.*
 - **Unshare deletes server-side, but copies already retrieved are gone.**
   Unsharing removes the rows from the connector immediately; it cannot recall
   anything an AI app already read while the scope was shared.
-- **A hostile sync server could replay an old vault to resurrect a revoked
-  share (ADR 0038 review F3).** The sync server cannot read or forge your vault
-  — but it does choose which authentic blob to serve. Serving an older one
-  restores that vault's state, and since 0.3 that state includes the
-  shared-scope marks, so a since-revoked share could come back and be re-pushed
-  to the connector by your own device. The version number is a server header,
-  not sealed inside the blob, so the client cannot prove freshness today; the
-  planned hardening is a monotonic counter inside the encrypted vault itself.
-  Our own server does not do this; the limit matters if the sync server is
-  compromised or you point at one you do not trust.
-- **Shared marks sync with the vault; a not-yet-synced device lags honestly
-  (ADR 0038).** The shared-scope list lives inside the encrypted vault, so a
-  share or unshare made on one device reaches the others with the next vault
-  sync. Until a device pulls that sync, it still holds the old marks — and a
-  device that unshared cannot stop another device from re-pushing the scope in
-  that window, because the connector accepts a push for any scope the pushing
-  vault marks shared (unshare tombstones are recorded but not enforced against
-  later pushes). The window closes when the lagging device syncs. Managing
-  sharing now requires the vault unlocked (the marks live in it) — including
-  unsharing, which previously worked while locked.
+- **A hostile sync server can still pick among equal-generation forks (ADR 0038
+  F3, residual N2).** 0.20.0 seals a monotonic `sync_generation` inside the
+  vault. Pull refuses a blob whose generation is older than the local vault, so
+  a replay of a strictly older authentic blob is rejected and the local file is
+  left unchanged. Two devices that increment from the same base produce two
+  authentic blobs with the same generation; a scalar counter cannot order those
+  forks, and a hostile sync server can still swap them. Connector tombstones
+  (Decision B) are the egress backstop for a resurrected share mark. A first
+  pull on a fresh machine has nothing to compare, so it cannot prove the blob
+  is the newest authentic one.
+- **Shared marks sync with the vault; a lagging device can still re-push until
+  tombstone enforcement is on (ADR 0038).** The shared-scope list lives inside
+  the encrypted vault, so a share or unshare reaches other devices with the
+  next vault sync. Until then the lagging device still holds the old marks.
+  `PUT /client/entries` consults `scope_tombstones` only when
+  `CONNECTOR_TOMBSTONE_ENFORCE` is on (default off until 0.20.0 clients exist).
+  When the flag is on, a push of a tombstoned scope without a newer `shared_at`
+  is refused with HTTP 412. Honest-lag timestamps remain residual: a client
+  clock that is far ahead can mint a `shared_at` that outranks a real unshare.
+  A Time Machine restore of a pre-0038 sidecar can still look like a fresh
+  private-to-shared fold if `sidecar_fold_done` was also rolled back. Managing
+  sharing requires the vault unlocked (the marks live in it), including
+  unsharing.
 - **Billing-gated in the beta.** Sharing rides the hosted subscription; a
   self-hosted connector is free. An allowlist gates the beta.
 - **Caps apply.** The connector enforces limits on how many memories, and how

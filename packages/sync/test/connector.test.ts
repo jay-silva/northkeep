@@ -102,6 +102,16 @@ describe('foldSidecarScopesIntoVault (one-time migration, ADR 0038)', () => {
     vault.setScopeShared('work', false);
     expect(foldSidecarScopesIntoVault(vault).folded).toEqual([]);
     expect(vault.sharedScopes()).toEqual(['clients']);
+
+    // Fold-done is per vault, not per sidecar file: restoring a Time Machine
+    // sidecar must not re-stamp shares.
+    fs.writeFileSync(
+      connectorConfigPath(),
+      `${JSON.stringify({ server: 'https://a.example.com', sharedScopes: ['work'] }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    expect(foldSidecarScopesIntoVault(vault).folded).toEqual([]);
+    expect(vault.sharedScopes()).toEqual(['clients']);
     vault.close();
   });
 

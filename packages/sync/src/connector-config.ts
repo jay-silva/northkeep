@@ -57,6 +57,7 @@ export function saveConnectorConfig(config: ConnectorConfig): void {
  * upgrading mid-flight keeps their existing shares without silent revocation.
  */
 export function foldSidecarScopesIntoVault(vault: Vault): { folded: string[] } {
+  if (vault.isSidecarFoldDone()) return { folded: [] };
   let raw: { sharedScopes?: unknown };
   try {
     raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as { sharedScopes?: unknown };
@@ -67,8 +68,9 @@ export function foldSidecarScopesIntoVault(vault: Vault): { folded: string[] } {
   const scopes = [...new Set(raw.sharedScopes.filter((s): s is string => typeof s === 'string' && s.trim() !== ''))].sort();
   if (scopes.length > 0) {
     for (const scope of scopes) vault.setScopeShared(scope, true);
-    vault.save();
   }
+  vault.markSidecarFoldDone();
+  vault.save();
   // Strip the key so the fold-in never runs again — a stale sidecar list
   // re-asserting itself later could resurrect a share the user has since
   // revoked on another device.

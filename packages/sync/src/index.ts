@@ -36,6 +36,7 @@ export {
   downSyncConnector,
   fetchEntitlement,
   getManifest,
+  ConnectorTombstoneError,
   pushSharedScopes,
   startPairing,
   unshareScope,

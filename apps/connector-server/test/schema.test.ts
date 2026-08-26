@@ -31,5 +31,6 @@ describe('Neon connector schema statements', () => {
       expect(all, table).toContain(`CREATE TABLE IF NOT EXISTS ${table}`);
       expect(SCHEMA_SQL, table).toContain(table);
     }
+    expect(all).toContain('scope_tombstones_account_scope');
   });
 });

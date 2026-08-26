@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   conflictRepushBaseVersion,
+  conflictRepushSyncGeneration,
   initialSyncState,
   isSyncing,
   pushRequiresConflictRecovery,
@@ -131,6 +132,11 @@ describe('runSyncAfterSave orchestration (the load-bearing conflict sequence)', 
       stashRemote: vi.fn(() => {
         calls.push('stashRemote');
       }),
+      remoteSyncGeneration: vi.fn(() => 8),
+      localSyncGeneration: vi.fn(() => 6),
+      applyConflictRepushGeneration: vi.fn((n: number) => {
+        calls.push(`applyConflictRepushGeneration(${n})`);
+      }),
       saveBaseVersion: vi.fn(async (v: number) => {
         calls.push(`saveBaseVersion(${v})`);
       }),
@@ -158,7 +164,15 @@ describe('runSyncAfterSave orchestration (the load-bearing conflict sequence)', 
     const event = await runSyncAfterSave(ports);
     expect(event).toEqual({ type: 'conflict-recovered', version: 6 });
     // Order is the contract: push, fetch, verify, stash, THEN re-push at base 5.
-    expect(calls).toEqual(['push(2)', 'fetchRemote', 'verifyRemoteOpens', 'stashRemote', 'push(5)', 'saveBaseVersion(6)']);
+    expect(calls).toEqual([
+      'push(2)',
+      'fetchRemote',
+      'verifyRemoteOpens',
+      'stashRemote',
+      'applyConflictRepushGeneration(9)',
+      'push(5)',
+      'saveBaseVersion(6)',
+    ]);
     expect(ports.stashRemote).toHaveBeenCalledTimes(1);
   });
 
@@ -209,6 +223,25 @@ describe('runSyncAfterSave orchestration (the load-bearing conflict sequence)', 
     const event = await runSyncAfterSave(ports);
     expect(event.type).toBe('error');
     expect(ports.fetchRemote).not.toHaveBeenCalled();
+  });
+});
+
+describe('conflictRepushSyncGeneration (planner N1)', () => {
+  it('sets generation to max(local, remote) + 1', () => {
+    expect(conflictRepushSyncGeneration(5, 8)).toBe(9);
+    expect(conflictRepushSyncGeneration(8, 5)).toBe(9);
+    expect(conflictRepushSyncGeneration(5, 5)).toBe(6);
+    expect(conflictRepushSyncGeneration(0, 0)).toBe(1);
+  });
+
+  it('behind-phone LWW then Mac pull would succeed (phone 5, Mac 8 → re-push 9 >= 8)', () => {
+    const phoneLocal = 5;
+    const macRemote = 8;
+    const afterFirstBump = phoneLocal + 1; // 6, the naive re-push that would loop
+    expect(afterFirstBump).toBeLessThan(macRemote);
+    const lwwGen = conflictRepushSyncGeneration(afterFirstBump, macRemote);
+    expect(lwwGen).toBe(9);
+    expect(lwwGen >= macRemote).toBe(true);
   });
 });
 

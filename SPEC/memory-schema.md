@@ -146,10 +146,11 @@ A vault export is a single JSON document:
 ```json
 {
   "northkeep_export": {
-    "schema_version": "0.3",
+    "schema_version": "0.4",
     "vault_id": "d3b0…",
     "exported_at": "2026-07-04T12:00:00.000Z",
-    "chain_head": "9f2c…"
+    "chain_head": "9f2c…",
+    "sync_generation": 0
   },
   "memories": [
     {
@@ -200,7 +201,15 @@ equivalent vault from it, including chain verification and the shared set.
 fields. Anything that changes the meaning or requiredness of an existing
 field is a major version and requires a migration note in this spec.
 
+A 0.4 vault also stores `sync_generation` in `vault_meta` (decimal integer
+string) and on the export document under `northkeep_export.sync_generation`.
+Missing on a 0.3 vault or export means 0. A 0.3-only build cannot open a
+0.4 vault.
+
 **Changelog**
+- **0.4** (2026-08-26): added `vault_meta.sync_generation` and the matching
+  export field (ADR 0038 addendum). Additive; migration seeds 0. Entry
+  fields and the hash rule are unchanged.
 - **0.3** (2026-07-28): added the `scopes` table (per-scope sharing state,
   ADR 0038) and the `shared_scopes` export key. Additive; migration creates
   the table empty. Entry fields and the hash rule are unchanged.

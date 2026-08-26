@@ -382,6 +382,15 @@ describe('classifyConnectorError', () => {
     expectSteeringClean(result.message);
   });
 
+  it('surfaces a 412 tombstone as other, never as a 409 re-push', () => {
+    const msg =
+      'This scope was unshared. Re-share it deliberately if you want it back. Conflicting scopes: work.';
+    const result = classifyConnectorError(Object.assign(new Error(msg), { name: 'ConnectorTombstoneError' }));
+    expect(result).toEqual({ kind: 'failed', errorKind: 'other', message: msg });
+    expect(result.message).not.toMatch(/409|re-encrypt|Re-push your shared scopes/i);
+    expect(result.message).not.toContain('\u2014');
+  });
+
   it('passes the connector cap message (413) through unchanged', () => {
     const msg =
       'The connector server rejected the push: over the sharing caps (too many shared memories, or a memory is too large).';

@@ -324,7 +324,8 @@ describe('C2 client push + share marking', () => {
   });
 
   it('a different account never sees these memories (scope isolation)', async () => {
-    // Re-share work for account 1 so there is something to (not) leak.
+    // Re-share after unshare: CONNECTOR_TOMBSTONE_ENFORCE is off (0.19.0
+    // compatible). Flag-on 412 cases live in tombstone-routes.test.ts.
     await withVault((vault) => pushSharedScopes({ server: base, deviceSecret, scopes: ['work'], vault }));
 
     // Account 2 pushes its own scope and reads only its own row.

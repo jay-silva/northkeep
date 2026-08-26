@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import { Vault, VaultAuthError, withFileLock } from '@northkeep/core';
+import { Vault, VaultAuthError, VaultSyncGenerationError, withFileLock } from '@northkeep/core';
 import { deriveSyncCreds } from './creds.js';
 import { assertSyncUrl, loadSyncConfig, saveSyncConfig, type SyncConfig } from './config.js';
 
@@ -155,20 +155,29 @@ function isVaultBlob(blob: Buffer): boolean {
 // --- high-level operations ---
 
 /**
- * Push the local vault to the server. Reads the raw `.nkv` bytes under the
- * vault file lock (so a concurrent save can't hand us a half-written file) and
- * uploads them with the last-known version as the optimistic-concurrency base.
- * A 409 means another machine pushed first — the caller must pull, then push.
+ * Push the local vault to the server. Under the vault file lock (non-reentrant):
+ * open with the caller's master key, increment sync_generation, save, then
+ * upload. The increment is kept even if the server returns 409 (ADR 0038
+ * addendum). Unlock-to-push: `masterKey` is required.
  */
 export async function pushVault(options: {
   vaultPath: string;
   deviceSecret: Buffer;
+  /** Copy is passed to openWithKey (which zeroes its input). */
+  masterKey: Buffer;
 }): Promise<PushResult> {
   const config = requireConfig();
   const { token } = deriveSyncCreds(options.deviceSecret);
   return withFileLock(options.vaultPath, async () => {
     if (!fs.existsSync(options.vaultPath)) {
       throw new Error('No local vault to push. Run "northkeep init" first.');
+    }
+    const vault = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey));
+    try {
+      vault.bumpSyncGeneration();
+      vault.save();
+    } finally {
+      vault.close();
     }
     const blob = fs.readFileSync(options.vaultPath);
     if (!isVaultBlob(blob)) throw new Error('Local vault file is not a NorthKeep vault.');
@@ -178,6 +187,8 @@ export async function pushVault(options: {
       );
     }
     const result = await pushBlob(config.serverUrl, token, blob, config.lastVersion);
+    // Generation already persisted; keep it on 409 so a later successful push
+    // still outranks the blob we lost the race to.
     if (result.ok) {
       saveSyncConfig({
         ...config,
@@ -237,16 +248,50 @@ export async function pullVault(options: {
           );
         }
         // Prove the pulled blob opens with our key BEFORE replacing the good vault.
+        // Opening a 0.3 pull migrates the temp file and seeds generation 0; that
+        // 0 is the compare value. Opening local to read generation does not increment.
+        let pulledGen: number;
         try {
-          Vault.openWithKey(tmpPath, Buffer.from(options.masterKey)).close();
+          const pulledVault = Vault.openWithKey(tmpPath, Buffer.from(options.masterKey));
+          try {
+            pulledGen = pulledVault.getSyncGeneration();
+          } finally {
+            pulledVault.close();
+          }
         } catch (err) {
           if (err instanceof VaultAuthError) {
             throw new Error(
-              'The pulled vault does not open with your key — refusing to replace your local vault. ' +
-                '(Wrong device secret/passphrase, a different account, or a bad download.)',
+              'The pulled vault does not open with your key, so your local vault was not replaced. ' +
+                '(Wrong device secret or passphrase, a different account, or a bad download.)',
+            );
+          }
+          if (err instanceof VaultSyncGenerationError) {
+            throw new Error(
+              'The pulled vault has an invalid sync generation. Local vault was not changed.',
             );
           }
           throw err;
+        }
+        let localGen: number;
+        try {
+          const localVault = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey));
+          try {
+            localGen = localVault.getSyncGeneration();
+          } finally {
+            localVault.close();
+          }
+        } catch (err) {
+          if (err instanceof VaultSyncGenerationError) {
+            throw new Error(
+              'This vault has an invalid sync generation. Local vault was not changed.',
+            );
+          }
+          throw err;
+        }
+        if (pulledGen < localGen) {
+          throw new Error(
+            'The pulled vault is older than this one (sync generation). Local vault was not changed.',
+          );
         }
         fs.copyFileSync(options.vaultPath, `${options.vaultPath}.bak`);
       }

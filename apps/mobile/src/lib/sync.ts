@@ -1,6 +1,6 @@
 import { fetch } from 'expo/fetch';
 import * as Crypto from 'expo-crypto';
-import { Vault, VaultAuthError, getPlatform } from '@northkeep/core';
+import { Vault, VaultAuthError, VaultSyncGenerationError, getPlatform } from '@northkeep/core';
 import { MAX_BLOB_BYTES, SubscriptionRequiredError, deriveSyncCreds } from '@northkeep/sync';
 import { createDeadline, type DeadlineScope } from './deadline';
 import { deleteIfExists, pulledTmpPath } from './paths';
@@ -152,23 +152,33 @@ export async function fetchRemoteBlob(options: {
   }
 }
 
+export type BlobOpenVerify =
+  | { ok: true; syncGeneration: number }
+  | { ok: false };
+
 /**
  * Proves a remote blob OPENS with our master key before we trust it (the same
  * defense the desktop pull runs, ADR 0009). Writes the blob to a scratch file,
  * attempts openWithKey with a COPY of the key (openWithKey zeroes its input),
- * and cleans up. Returns true on success, false on VaultAuthError (wrong
- * key/account/corrupt). Any other error propagates.
+ * reads sync_generation from the opened (possibly migrated) vault so the compare
+ * matches desktop, then deletes the tmp and returns. A 0.3 blob migrates in tmp
+ * to generation 0; that 0 is the compare value even though the caller still
+ * installs the original unmigrated bytes.
  */
-export function verifyBlobOpensWithKey(blob: Buffer, masterKey: Buffer): boolean {
+export function verifyBlobOpensWithKey(blob: Buffer, masterKey: Buffer): BlobOpenVerify {
   const platform = getPlatform();
   const tmp = pulledTmpPath();
   try {
     platform.storage.writeAtomic(tmp, blob);
     try {
-      Vault.openWithKey(tmp, Buffer.from(masterKey), platform).close();
-      return true;
+      const vault = Vault.openWithKey(tmp, Buffer.from(masterKey), platform);
+      try {
+        return { ok: true, syncGeneration: vault.getSyncGeneration() };
+      } finally {
+        vault.close();
+      }
     } catch (err) {
-      if (err instanceof VaultAuthError) return false;
+      if (err instanceof VaultAuthError) return { ok: false };
       throw err;
     }
   } finally {
@@ -201,14 +211,44 @@ export async function pullVaultMobile(options: {
     if (!options.masterKey) {
       throw new Error('Unlock the vault before pulling, so the download can be verified against your key.');
     }
-    if (!verifyBlobOpensWithKey(remote.blob, options.masterKey)) {
+    let opened: BlobOpenVerify;
+    try {
+      opened = verifyBlobOpensWithKey(remote.blob, options.masterKey);
+    } catch (err) {
+      if (err instanceof VaultSyncGenerationError) {
+        throw new Error('The pulled vault has an invalid sync generation. Local vault was not changed.');
+      }
+      throw err;
+    }
+    if (!opened.ok) {
       throw new Error(
         'The pulled vault does not open with your key, so your local vault was not replaced. ' +
           '(Wrong device secret or passphrase, a different account, or a bad download.)',
       );
     }
+    let localGen: number;
+    try {
+      const localVault = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey), platform);
+      try {
+        localGen = localVault.getSyncGeneration();
+      } finally {
+        localVault.close();
+      }
+    } catch (err) {
+      if (err instanceof VaultSyncGenerationError) {
+        throw new Error('This vault has an invalid sync generation. Local vault was not changed.');
+      }
+      throw err;
+    }
+    if (opened.syncGeneration < localGen) {
+      throw new Error(
+        'The pulled vault is older than this one (sync generation). Local vault was not changed.',
+      );
+    }
   }
   // writeAtomic keeps the previous vault as `${path}.bak` (the storage seam contract).
+  // Original bytes (possibly unmigrated 0.3) are installed; compare used the
+  // same generation desktop would after open-verify/migrate.
   platform.storage.writeAtomic(options.vaultPath, remote.blob);
   return { ok: true, version: remote.version, wroteVault: true };
 }
@@ -226,6 +266,9 @@ export async function pushVaultMobile(options: {
   deviceSecretHex: string;
   vaultPath: string;
   baseVersion: number;
+  masterKey: Buffer;
+  /** When true, upload the current bytes without incrementing (LWW re-push already set generation). */
+  skipGenerationBump?: boolean;
 }): Promise<MobilePushResult> {
   const platform = getPlatform();
   const { token } = deriveSyncCreds(Buffer.from(options.deviceSecretHex, 'hex'));
@@ -233,6 +276,15 @@ export async function pushVaultMobile(options: {
 
   if (!platform.storage.exists(options.vaultPath)) {
     throw new Error('No local vault to push. Unlock or import a vault first.');
+  }
+  if (!options.skipGenerationBump) {
+    const vault = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey), platform);
+    try {
+      vault.bumpSyncGeneration();
+      vault.save();
+    } finally {
+      vault.close();
+    }
   }
   const blob = platform.storage.readBytes(options.vaultPath);
   if (!isVaultBlob(blob)) throw new Error('Local vault file is not a NorthKeep vault.');

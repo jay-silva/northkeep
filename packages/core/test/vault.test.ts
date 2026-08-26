@@ -515,7 +515,7 @@ describe('schema migration', () => {
 
     const reopened = openVault(); // migration runs inside open
     const exported = reopened.export();
-    expect(exported.northkeep_export.schema_version).toBe('0.3');
+    expect(exported.northkeep_export.schema_version).toBe('0.4');
     expect(reopened.verifyChain().ok).toBe(true);
     expect(reopened.list()[0]!.forgotten_at).toBeNull();
     // ADR 0038 review item 1: migration must never invent a share.
@@ -534,7 +534,7 @@ describe('schema migration', () => {
     vault.close();
 
     const reopened = openVault();
-    expect(reopened.export().northkeep_export.schema_version).toBe('0.3');
+    expect(reopened.export().northkeep_export.schema_version).toBe('0.4');
     // 0.2 → 0.3 must not touch entries or the chain (unlike 0.1 → 0.2).
     expect(reopened.export().northkeep_export.chain_head).toBe(headBefore);
     expect(reopened.verifyChain().ok).toBe(true);
@@ -549,7 +549,7 @@ describe('export', () => {
     const vault = createVault();
     vault.remember({ content: 'exported fact', type: 'identity', metadata: { origin: 'test' } });
     const doc = vault.export();
-    expect(doc.northkeep_export.schema_version).toBe('0.3');
+    expect(doc.northkeep_export.schema_version).toBe('0.4');
     expect(doc.northkeep_export.vault_id).toMatch(/^[0-9a-f-]{36}$/);
     expect(doc.northkeep_export.chain_head).toMatch(/^[0-9a-f]{64}$/);
     expect(doc.memories).toHaveLength(1);
@@ -618,8 +618,98 @@ describe('scope sharing (ADR 0038)', () => {
     const vault = createVault();
     expect(() => vault.setScopeShared('  ', true)).toThrow(/empty/i);
     vault.setScopeShared('work', true);
-    vault.setScopeShared('work', true); // idempotent, updates shared_at
+    vault.setScopeShared('work', true); // already shared, no explicit stamp: keep timestamp
     expect(vault.sharedScopes()).toEqual(['work']);
+    vault.close();
+  });
+});
+
+describe('sync_generation (ADR 0038 addendum, schema 0.4)', () => {
+  it('create seeds generation 0 and save does not increment it', () => {
+    const vault = createVault();
+    expect(vault.getSyncGeneration()).toBe(0);
+    vault.remember({ content: 'a note', type: 'semantic' });
+    vault.save();
+    expect(vault.getSyncGeneration()).toBe(0);
+    vault.close();
+
+    const reopened = openVault();
+    expect(reopened.getSyncGeneration()).toBe(0);
+    expect(reopened.export().northkeep_export.sync_generation).toBe(0);
+    reopened.close();
+  });
+
+  it('bumpSyncGeneration increments by 1 and persists via the caller save', () => {
+    const vault = createVault();
+    vault.bumpSyncGeneration();
+    expect(vault.getSyncGeneration()).toBe(1);
+    vault.bumpSyncGeneration();
+    expect(vault.getSyncGeneration()).toBe(2);
+    vault.save();
+    vault.close();
+
+    const reopened = openVault();
+    expect(reopened.getSyncGeneration()).toBe(2);
+    reopened.close();
+  });
+
+  it('private→shared stamps shared_at; already-shared share add keeps the timestamp', () => {
+    const vault = createVault();
+    vault.setScopeShared('work', true);
+    const first = vault.sharedScopeRows()[0]!.shared_at;
+    expect(first).toMatch(/^\d{4}-/);
+
+    vault.setScopeShared('work', true);
+    expect(vault.sharedScopeRows()[0]!.shared_at).toBe(first);
+
+    vault.setScopeShared('work', true, '2020-01-01T00:00:00.000Z');
+    expect(vault.sharedScopeRows()[0]!.shared_at).toBe('2020-01-01T00:00:00.000Z');
+    vault.close();
+  });
+
+  it('0.3 → 0.4 migration seeds sync_generation 0 without incrementing', () => {
+    const vault = createVault();
+    vault.remember({ content: 'kept', type: 'semantic' });
+    const db = (vault as unknown as { db: import('better-sqlite3').Database }).db;
+    db.prepare("DELETE FROM vault_meta WHERE key = 'sync_generation'").run();
+    db.prepare("UPDATE vault_meta SET value = '0.3' WHERE key = 'schema_version'").run();
+    vault.save();
+    vault.close();
+
+    const reopened = openVault();
+    expect(reopened.export().northkeep_export.schema_version).toBe('0.4');
+    expect(reopened.getSyncGeneration()).toBe(0);
+    expect(reopened.list().map((e) => e.content)).toEqual(['kept']);
+    reopened.close();
+  });
+
+  it('export round-trips sync_generation on rebuild', () => {
+    const vault = createVault();
+    vault.bumpSyncGeneration();
+    vault.bumpSyncGeneration();
+    vault.setScopeShared('work', true);
+    const doc = vault.export();
+    expect(doc.northkeep_export.sync_generation).toBe(2);
+    vault.close();
+
+    fs.rmSync(vaultPath, { force: true });
+    const rebuilt = createVault();
+    rebuilt.setSyncGeneration(doc.northkeep_export.sync_generation ?? 0);
+    for (const s of doc.shared_scopes) rebuilt.setScopeShared(s.scope, true, s.shared_at ?? undefined);
+    expect(rebuilt.getSyncGeneration()).toBe(2);
+    expect(rebuilt.export().northkeep_export.sync_generation).toBe(2);
+    rebuilt.close();
+  });
+
+  it('invalid sync_generation throws so pull can fail closed', () => {
+    const vault = createVault();
+    const db = (vault as unknown as { db: import('better-sqlite3').Database }).db;
+    db.prepare("UPDATE vault_meta SET value = 'nope' WHERE key = 'sync_generation'").run();
+    expect(() => vault.getSyncGeneration()).toThrow(/invalid/);
+    db.prepare("UPDATE vault_meta SET value = '-1' WHERE key = 'sync_generation'").run();
+    expect(() => vault.getSyncGeneration()).toThrow(/invalid/);
+    db.prepare("UPDATE vault_meta SET value = '1.5' WHERE key = 'sync_generation'").run();
+    expect(() => vault.getSyncGeneration()).toThrow(/invalid/);
     vault.close();
   });
 });

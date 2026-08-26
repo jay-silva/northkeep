@@ -22,6 +22,7 @@ import {
   GENESIS_HASH,
   MEMORY_TYPES,
   SCHEMA_VERSION,
+  VaultSyncGenerationError,
   isMemoryType,
   type Embedder,
   type ExportedMemory,
@@ -135,6 +136,7 @@ export class Vault {
       setMeta.run('vault_id', uuidv4(platform.crypto));
       setMeta.run('chain_head', GENESIS_HASH);
       setMeta.run('created_at', new Date().toISOString());
+      setMeta.run('sync_generation', '0');
       const vault = new Vault(options.path, db, key, salt, kdf, platform);
       vault.save();
       return vault;
@@ -239,7 +241,7 @@ export class Vault {
 
   /**
    * In-place schema upgrades for vaults created by older releases. Steps apply
-   * SEQUENTIALLY — a 0.1 vault walks 0.1 → 0.2 → 0.3 in one open — and each
+   * SEQUENTIALLY — a 0.1 vault walks 0.1 → 0.2 → 0.3 → 0.4 in one open — and each
    * step stamps its version before the single save() at the end, so a
    * mid-migration crash re-runs from the last stamped version on next open.
    */
@@ -279,6 +281,15 @@ export class Vault {
       )`);
       this.setMeta('schema_version', '0.3');
       version = '0.3';
+    }
+    if (version === '0.3') {
+      // 0.3 → 0.4: seal a monotonic sync_generation inside the vault (ADR 0038
+      // addendum). Seed 0 if missing. Never increment here or in save().
+      if (this.getMetaOptional('sync_generation') === undefined) {
+        this.setMeta('sync_generation', '0');
+      }
+      this.setMeta('schema_version', '0.4');
+      version = '0.4';
     }
     if (version !== SCHEMA_VERSION) {
       throw new VaultSchemaError(
@@ -822,15 +833,75 @@ export class Vault {
     const s = scope.trim();
     if (s.length === 0) throw new Error('Scope must not be empty.');
     if (shared) {
+      // N6 choke point: only stamp shared_at on a private→shared transition
+      // (no row or shared=0). An already-shared row keeps its timestamp unless
+      // the caller passes an explicit sharedAt (export rebuild).
+      const existing = this.db
+        .prepare('SELECT shared, shared_at FROM scopes WHERE scope = ?')
+        .get(s) as { shared: number; shared_at: string | null } | undefined;
+      const alreadyShared = existing !== undefined && existing.shared === 1;
+      const stamp =
+        sharedAt !== undefined
+          ? sharedAt
+          : alreadyShared
+            ? existing.shared_at
+            : new Date().toISOString();
       this.db
         .prepare(
           'INSERT INTO scopes (scope, shared, shared_at) VALUES (?, 1, ?) ' +
             'ON CONFLICT(scope) DO UPDATE SET shared = 1, shared_at = excluded.shared_at',
         )
-        .run(s, sharedAt ?? new Date().toISOString());
+        .run(s, stamp);
     } else {
       this.db.prepare('DELETE FROM scopes WHERE scope = ?').run(s);
     }
+  }
+
+  /**
+   * Integer sync generation sealed in vault_meta (ADR 0038 addendum). Missing
+   * key reads as 0. Invalid value (NaN, negative, non-integer) throws so the
+   * pull path can fail closed without replacing the local vault.
+   */
+  getSyncGeneration(): number {
+    this.assertOpen();
+    const raw = this.getMetaOptional('sync_generation');
+    if (raw === undefined) return 0;
+    return parseSyncGeneration(raw);
+  }
+
+  /**
+   * Increment sync_generation by 1. Persists via the caller's next save().
+   * Integer math, never a TEXT compare.
+   */
+  bumpSyncGeneration(): void {
+    this.assertOpen();
+    this.setMeta('sync_generation', String(this.getSyncGeneration() + 1));
+  }
+
+  /**
+   * Set sync_generation to an exact non-negative integer (export rebuild and
+   * phone LWW conflict re-push). Persists via the caller's next save().
+   */
+  setSyncGeneration(value: number): void {
+    this.assertOpen();
+    if (!Number.isInteger(value) || value < 0) {
+      throw new VaultSyncGenerationError(
+        `sync_generation must be a non-negative integer, got ${String(value)}.`,
+      );
+    }
+    this.setMeta('sync_generation', String(value));
+  }
+
+  /** True after a sidecar/SecureStore fold has been applied to this vault. */
+  isSidecarFoldDone(): boolean {
+    this.assertOpen();
+    return this.getMetaOptional('sidecar_fold_done') === '1';
+  }
+
+  /** Pin the one-time sidecar fold. Persists via the caller's next save(). */
+  markSidecarFoldDone(): void {
+    this.assertOpen();
+    this.setMeta('sidecar_fold_done', '1');
   }
 
   /** Replays the hash chain over all entries in insertion order. */
@@ -895,6 +966,7 @@ export class Vault {
         vault_id: this.getMeta('vault_id'),
         exported_at: new Date().toISOString(),
         chain_head: this.getMeta('chain_head'),
+        sync_generation: this.getSyncGeneration(),
       },
       memories,
       // Sharing marks are user state, not derived cache, so invariant #4 says
@@ -911,11 +983,16 @@ export class Vault {
   }
 
   private getMeta(key: string): string {
+    const row = this.getMetaOptional(key);
+    if (row === undefined) throw new Error(`Vault is missing required metadata "${key}".`);
+    return row;
+  }
+
+  private getMetaOptional(key: string): string | undefined {
     const row = this.db.prepare('SELECT value FROM vault_meta WHERE key = ?').get(key) as
       | { value: string }
       | undefined;
-    if (!row) throw new Error(`Vault is missing required metadata "${key}".`);
-    return row.value;
+    return row?.value;
   }
 
   private setMeta(key: string, value: string): void {
@@ -1021,6 +1098,26 @@ function blobToVector(buf: Buffer): Float32Array {
 
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Parse a vault_meta sync_generation TEXT value as a non-negative integer.
+ * Rejects NaN, negatives, and non-integers (including "10.0" / "1e2") so a
+ * TEXT compare can never sneak through.
+ */
+export function parseSyncGeneration(raw: string): number {
+  if (!/^(0|[1-9]\d*)$/.test(raw)) {
+    throw new VaultSyncGenerationError(
+      `Vault sync_generation is invalid (${JSON.stringify(raw)}). Local vault was not changed.`,
+    );
+  }
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isInteger(n) || n < 0 || !Number.isSafeInteger(n)) {
+    throw new VaultSyncGenerationError(
+      `Vault sync_generation is invalid (${JSON.stringify(raw)}). Local vault was not changed.`,
+    );
+  }
+  return n;
 }
 
 function tokenize(text: string): Set<string> {

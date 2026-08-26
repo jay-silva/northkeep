@@ -123,6 +123,15 @@ export function conflictRepushBaseVersion(conflict: PushResultLike, lastKnown: n
 }
 
 /**
+ * LWW conflict re-push generation (planner N1). A phone stuck at 5 while the
+ * Mac has pushed 6–8 must not re-upload 6 (that would make the Mac refuse).
+ * Set generation to max(local, fetched remote) + 1 before re-uploading.
+ */
+export function conflictRepushSyncGeneration(localGen: number, remoteGen: number): number {
+  return Math.max(localGen, remoteGen) + 1;
+}
+
+/**
  * The side-effecting operations the sync orchestration needs, injected so the
  * SEQUENCE (the load-bearing, bug-prone part) is testable in Node with fakes
  * and never depends on Expo, the network, or a device. vault-session.tsx wires
@@ -141,11 +150,17 @@ export interface SyncAfterSavePorts {
   /** The last server version this device synced to (the optimistic-concurrency base). */
   loadBaseVersion(): Promise<number>;
   /** PUT the current local vault with X-Base-Version = baseVersion. May throw on transport error. */
-  push(baseVersion: number): Promise<PushResultLike>;
+  push(baseVersion: number, opts?: { skipGenerationBump?: boolean }): Promise<PushResultLike>;
   /** GET + structural/hash-verify the remote; returns its version, or null if the account has no vault. */
   fetchRemote(): Promise<{ version: number } | null>;
   /** Prove the just-fetched remote opens with the master key (defeats a hostile/corrupt server). */
   verifyRemoteOpens(): boolean;
+  /** Sync generation of the just-verified remote (same number desktop would compare). */
+  remoteSyncGeneration(): number;
+  /** Current local vault sync generation (after the first push's bump). */
+  localSyncGeneration(): number;
+  /** Persist generation = conflictRepushSyncGeneration(...) before the re-push. */
+  applyConflictRepushGeneration(nextGeneration: number): void;
   /** Stash the just-fetched, verified remote as the recoverable .bak (last-writer-wins). */
   stashRemote(): void;
   /** Persist the new in-sync version after a successful push. */
@@ -192,8 +207,10 @@ export async function runSyncAfterSave(ports: SyncAfterSavePorts): Promise<SyncE
     };
   }
   ports.stashRemote();
+  const nextGen = conflictRepushSyncGeneration(ports.localSyncGeneration(), ports.remoteSyncGeneration());
+  ports.applyConflictRepushGeneration(nextGen);
   const base2 = conflictRepushBaseVersion(push1, base);
-  const push2 = await ports.push(base2);
+  const push2 = await ports.push(base2, { skipGenerationBump: true });
   if (!push2.ok) {
     return {
       type: 'error',

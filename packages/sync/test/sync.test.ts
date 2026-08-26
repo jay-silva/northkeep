@@ -4,10 +4,15 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Vault, generateDeviceSecret, KDF_INTERACTIVE } from '@northkeep/core';
+import { Vault, deriveMasterKey, generateDeviceSecret, KDF_INTERACTIVE } from '@northkeep/core';
 import { deriveSyncCreds, tokenHash } from '../src/creds.js';
 import { assertSyncUrl, loadSyncConfig, setSyncServer } from '../src/config.js';
 import { pullVault, pushVault, syncState } from '../src/client.js';
+
+function masterKeyFor(vPath: string, passphrase: string, deviceSecret: Buffer): Buffer {
+  const header = Vault.readHeader(vPath);
+  return deriveMasterKey(passphrase, deviceSecret, header.salt, header.kdf);
+}
 
 // ---------- credential derivation ----------
 
@@ -161,13 +166,17 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     v.close();
   }
 
+  function keyFor(home: string): Buffer {
+    return masterKeyFor(vaultPath(home), passphrase, deviceSecret);
+  }
+
   it('A pushes; B (fresh, same device secret) pulls and opens the vault', async () => {
     // Machine A: create + seed + configure + push.
     process.env.NORTHKEEP_HOME = homeA;
     createVault(homeA, 'The user sails a boat named Windfall.');
     const { accountId } = deriveSyncCreds(deviceSecret);
     setSyncServer(fake.url(), accountId);
-    const push = await pushVault({ vaultPath: vaultPath(homeA), deviceSecret });
+    const push = await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
     expect(push.ok).toBe(true);
     expect(push.version).toBe(1);
 
@@ -197,7 +206,7 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     process.env.NORTHKEEP_HOME = homeA;
     createVault(homeA, 'first');
     setSyncServer(fake.url(), accountId);
-    expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret })).ok).toBe(true); // v1
+    expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true); // v1
 
     // B: fresh (no local vault), pull → now also at v1. Both machines synced.
     process.env.NORTHKEEP_HOME = homeB;
@@ -209,11 +218,11 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     vb.remember({ content: 'change from B', type: 'semantic' });
     vb.save();
     vb.close();
-    expect((await pushVault({ vaultPath: vaultPath(homeB), deviceSecret })).ok).toBe(true); // v2
+    expect((await pushVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeB) })).ok).toBe(true); // v2
 
     // A is still at lastVersion 1 → its push must 409 (someone moved ahead).
     process.env.NORTHKEEP_HOME = homeA;
-    const conflict = await pushVault({ vaultPath: vaultPath(homeA), deviceSecret });
+    const conflict = await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
     expect(conflict.ok).toBe(false);
     expect(conflict.conflict).toBe(true);
     expect(conflict.version).toBe(2);
@@ -225,7 +234,7 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     createVault(homeA, 'precious data');
     const { accountId } = deriveSyncCreds(deviceSecret);
     setSyncServer(fake.url(), accountId);
-    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret });
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
 
     // B has its OWN good vault (different content) and points at the SAME
     // account but a WRONG key (different passphrase → different master key).
@@ -251,7 +260,7 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     createVault(homeA, 'x');
     const { accountId } = deriveSyncCreds(deviceSecret);
     setSyncServer(fake.url(), accountId);
-    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret });
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
     const s = await syncState({ vaultPath: vaultPath(homeA), deviceSecret });
     expect(s.state).toBe('in-sync');
     expect(s.remoteVersion).toBe(1);
@@ -269,7 +278,7 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     createVault(homeA, 'x');
     const { accountId } = deriveSyncCreds(deviceSecret);
     setSyncServer(fake.url(), accountId);
-    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret });
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
     expect((await syncState({ vaultPath: vaultPath(homeA), deviceSecret })).state).toBe('in-sync');
 
     // Edit locally and do NOT push. The version numbers still agree (local v1,
@@ -294,7 +303,7 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     process.env.NORTHKEEP_HOME = homeA;
     createVault(homeA, 'seed');
     setSyncServer(fake.url(), accountId);
-    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret });
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
 
     process.env.NORTHKEEP_HOME = homeB;
     setSyncServer(fake.url(), accountId);
@@ -310,7 +319,7 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     v.remember({ content: 'newer on A', type: 'semantic' });
     v.save();
     v.close();
-    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret });
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
 
     process.env.NORTHKEEP_HOME = homeB;
     expect((await syncState({ vaultPath: vaultPath(homeB), deviceSecret })).state).toBe('behind');
@@ -321,7 +330,7 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     process.env.NORTHKEEP_HOME = homeA;
     createVault(homeA, 'seed');
     setSyncServer(fake.url(), accountId);
-    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret });
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
 
     process.env.NORTHKEEP_HOME = homeB;
     setSyncServer(fake.url(), accountId);
@@ -333,7 +342,7 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     a.remember({ content: 'A moved', type: 'semantic' });
     a.save();
     a.close();
-    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret });
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
 
     // …and B edits locally without pulling.
     process.env.NORTHKEEP_HOME = homeB;
@@ -355,7 +364,7 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     process.env.NORTHKEEP_HOME = homeA;
     createVault(homeA, 'seed');
     setSyncServer(fake.url(), accountId);
-    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret });
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
 
     process.env.NORTHKEEP_HOME = homeB;
     setSyncServer(fake.url(), accountId);
@@ -373,11 +382,52 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     createVault(homeA, 'x');
     const { accountId } = deriveSyncCreds(deviceSecret);
     setSyncServer(fake.url(), accountId);
-    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret });
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
     const cfg = loadSyncConfig();
     expect(cfg?.lastSha).toMatch(/^[0-9a-f]{64}$/);
     const onDisk = createHash('sha256').update(fs.readFileSync(vaultPath(homeA))).digest('hex');
     expect(cfg?.lastSha).toBe(onDisk);
+  });
+
+  it('refuses a pulled blob whose sync_generation is older than local (local untouched)', async () => {
+    process.env.NORTHKEEP_HOME = homeA;
+    createVault(homeA, 'server copy');
+    const { accountId } = deriveSyncCreds(deviceSecret);
+    setSyncServer(fake.url(), accountId);
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
+
+    process.env.NORTHKEEP_HOME = homeB;
+    setSyncServer(fake.url(), accountId);
+    await pullVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeA) });
+    const vb = Vault.open({ path: vaultPath(homeB), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    vb.setSyncGeneration(5);
+    vb.save();
+    vb.close();
+    const before = fs.readFileSync(vaultPath(homeB));
+
+    await expect(
+      pullVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeB) }),
+    ).rejects.toThrow(/older than this one/);
+    expect(fs.readFileSync(vaultPath(homeB)).equals(before)).toBe(true);
+    const still = Vault.open({ path: vaultPath(homeB), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    expect(still.getSyncGeneration()).toBe(5);
+    still.close();
+  });
+
+  it('accepts a pull whose sync_generation is equal or greater', async () => {
+    process.env.NORTHKEEP_HOME = homeA;
+    createVault(homeA, 'first');
+    const { accountId } = deriveSyncCreds(deviceSecret);
+    setSyncServer(fake.url(), accountId);
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
+
+    process.env.NORTHKEEP_HOME = homeB;
+    setSyncServer(fake.url(), accountId);
+    const pull = await pullVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeA) });
+    expect(pull.ok).toBe(true);
+    const opened = Vault.open({ path: vaultPath(homeB), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    expect(opened.getSyncGeneration()).toBeGreaterThanOrEqual(1);
+    opened.close();
   });
 });
 
@@ -414,7 +464,11 @@ describe('sync against a server that reports no sha256', () => {
     v.close();
     const { accountId } = deriveSyncCreds(deviceSecret);
     setSyncServer(fake.url(), accountId);
-    await pushVault({ vaultPath: vaultPath(home), deviceSecret });
+    await pushVault({
+      vaultPath: vaultPath(home),
+      deviceSecret,
+      masterKey: masterKeyFor(vaultPath(home), passphrase, deviceSecret),
+    });
 
     const s = await syncState({ vaultPath: vaultPath(home), deviceSecret });
     expect(s.state).toBe('in-sync');
@@ -432,7 +486,11 @@ describe('sync against a server that reports no sha256', () => {
       v.close();
       const { accountId } = deriveSyncCreds(deviceSecret);
       setSyncServer(fake.url(), accountId);
-      await pushVault({ vaultPath: vaultPath(seedHome), deviceSecret });
+      await pushVault({
+        vaultPath: vaultPath(seedHome),
+        deviceSecret,
+        masterKey: masterKeyFor(vaultPath(seedHome), passphrase, deviceSecret),
+      });
 
       process.env.NORTHKEEP_HOME = home;
       setSyncServer(fake.url(), accountId);

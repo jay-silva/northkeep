@@ -1,4 +1,6 @@
-/** SQLite DDL implementing SPEC/memory-schema.md v0.3. */
+/** SQLite DDL implementing SPEC/memory-schema.md v0.4.
+ * vault_meta stays key/value TEXT; sync_generation is stored as a decimal
+ * integer string (ADR 0038 addendum). */
 export const SCHEMA_DDL = `
 CREATE TABLE IF NOT EXISTS memories (
   id            TEXT PRIMARY KEY,

@@ -515,18 +515,50 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       // The remote fetched during conflict recovery, held so verify + stash act on
       // the SAME verified blob the fetch port returned.
       let pendingRemote: VerifiedRemoteBlob | null = null;
+      let pendingRemoteGen = 0;
       return runSyncAfterSave({
         hasMasterKey: () => masterKeyRef.current !== null,
         loadBaseVersion: () => loadLastSyncVersion(),
-        push: (baseVersion) =>
-          pushVaultMobile({ serverUrl, deviceSecretHex: secretHex, vaultPath: path, baseVersion }),
+        push: (baseVersion, opts) => {
+          const key = masterKeyRef.current;
+          if (!key) throw new Error('Unlock the vault before pushing.');
+          return pushVaultMobile({
+            serverUrl,
+            deviceSecretHex: secretHex,
+            vaultPath: path,
+            baseVersion,
+            masterKey: key,
+            skipGenerationBump: opts?.skipGenerationBump,
+          });
+        },
         fetchRemote: async () => {
           pendingRemote = await fetchRemoteBlob({ serverUrl, deviceSecretHex: secretHex });
           return pendingRemote === null ? null : { version: pendingRemote.version };
         },
         verifyRemoteOpens: () => {
           const key = masterKeyRef.current;
-          return pendingRemote !== null && key !== null && verifyBlobOpensWithKey(pendingRemote.blob, key);
+          if (pendingRemote === null || key === null) return false;
+          const opened = verifyBlobOpensWithKey(pendingRemote.blob, key);
+          if (!opened.ok) return false;
+          pendingRemoteGen = opened.syncGeneration;
+          return true;
+        },
+        remoteSyncGeneration: () => pendingRemoteGen,
+        localSyncGeneration: () => {
+          const key = masterKeyRef.current;
+          if (!key) throw new Error('Unlock the vault before pushing.');
+          const opened = Vault.openWithKey(path, Buffer.from(key), getPlatform());
+          try {
+            return opened.getSyncGeneration();
+          } finally {
+            opened.close();
+          }
+        },
+        applyConflictRepushGeneration: (nextGeneration) => {
+          const vault = vaultRef.current;
+          if (!vault) throw new Error('Unlock the vault before pushing.');
+          vault.setSyncGeneration(nextGeneration);
+          vault.save();
         },
         stashRemote: () => {
           if (pendingRemote !== null) stashRecoverableBak(path, pendingRemote.blob);
@@ -706,12 +738,15 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         // between the two refolds next time, an additive no-op, instead of
         // losing the list. A corrupt legacy value reads as [] and is left in
         // place rather than deleted — never destroy what wasn't folded.
-        const legacy = await loadLegacyConnectorSharedScopes();
-        if (legacy.length > 0) {
-          for (const scope of legacy) vault.setScopeShared(scope, true);
-          vault.save();
-          await clearLegacyConnectorSharedScopes();
-          await pushAfterSave();
+        if (!vault.isSidecarFoldDone()) {
+          const legacy = await loadLegacyConnectorSharedScopes();
+          if (legacy.length > 0) {
+            for (const scope of legacy) vault.setScopeShared(scope, true);
+            vault.markSidecarFoldDone();
+            vault.save();
+            await clearLegacyConnectorSharedScopes();
+            await pushAfterSave();
+          }
         }
         return vault.sharedScopes();
       },

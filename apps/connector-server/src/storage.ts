@@ -25,6 +25,7 @@
  */
 
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
+import { findTombstoneConflicts, shouldKeepTombstone, TombstoneConflictError } from './tombstones.js';
 
 /** An authorization-code record, bound to an account once the pairing code is accepted. */
 export interface StoredOAuthCode {
@@ -182,8 +183,20 @@ export interface ConnectorStorage {
    */
   replaceScopes(accountHash: string, scopes: string[], entries: SharedEntry[]): Promise<void>;
   /**
-   * Unshare: delete every row in `scope` for this account and write a
-   * content-free `scope_tombstones` row. Returns how many rows were deleted.
+   * ADR 0038 addendum: check tombstones, replaceScopes, and conditionally
+   * delete tombstones whose unshared_at <= the accepted shared_at, atomically.
+   * Throws TombstoneConflictError when any pushed scope is blocked.
+   */
+  replaceScopesAcceptingReshare(
+    accountHash: string,
+    scopes: string[],
+    entries: SharedEntry[],
+    sharedAt: Record<string, string | undefined>,
+  ): Promise<void>;
+  /**
+   * Unshare: delete every row in `scope` for this account and upsert a
+   * content-free tombstone (one row per account+scope, latest unshared_at).
+   * Returns how many rows were deleted.
    */
   deleteScope(accountHash: string, scope: string): Promise<number>;
   /** The account's unshare tombstones (audit / inspection). */
@@ -399,9 +412,36 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
       }
     }
     const list = this.tombstones.get(accountHash) ?? [];
-    list.push({ scope, unsharedAt: new Date().toISOString() });
+    const now = new Date().toISOString();
+    const existing = list.find((t) => t.scope === scope);
+    if (!existing) {
+      list.push({ scope, unsharedAt: now });
+    } else if (!shouldKeepTombstone(existing.unsharedAt, now)) {
+      existing.unsharedAt = now;
+    }
     this.tombstones.set(accountHash, list);
     return n;
+  }
+
+  async replaceScopesAcceptingReshare(
+    accountHash: string,
+    scopes: string[],
+    entries: SharedEntry[],
+    sharedAt: Record<string, string | undefined>,
+  ): Promise<void> {
+    const tombs = await this.listTombstones(accountHash);
+    const conflicts = findTombstoneConflicts(tombs, scopes, sharedAt);
+    if (conflicts.length > 0) throw new TombstoneConflictError(conflicts);
+    await this.replaceScopes(accountHash, scopes, entries);
+    const list = this.tombstones.get(accountHash) ?? [];
+    this.tombstones.set(
+      accountHash,
+      list.filter((t) => {
+        const accepted = sharedAt[t.scope];
+        if (accepted === undefined || !scopes.includes(t.scope)) return true;
+        return shouldKeepTombstone(t.unsharedAt, accepted);
+      }),
+    );
   }
 
   async listTombstones(accountHash: string): Promise<ScopeTombstone[]> {

@@ -33,6 +33,7 @@ import {
   downSyncConnector,
   fetchEntitlement,
   loadConnectorConfig,
+  ConnectorTombstoneError,
   pushSharedScopes,
   setConnectorServer,
   startPairing,
@@ -223,6 +224,7 @@ export async function handleApi(
     if (err instanceof VaultAuthError) return bad(401, err.message);
     if (err instanceof SubscriptionRequiredError)
       return bad(402, 'A $10/month subscription is required to sync on this server.');
+    if (err instanceof ConnectorTombstoneError) return bad(412, err.message);
     if (
       err instanceof BadJsonError ||
       err instanceof DeviceSecretError ||
@@ -611,8 +613,16 @@ async function dispatch(
   if (method === 'POST' && route === '/api/sync/push') {
     const deviceSecret = deviceSecretOrError();
     if (!loadSyncConfig()) return bad(400, 'Sync is not configured.');
-    const result = await pushVault({ vaultPath: session.vaultPath, deviceSecret });
-    return ok(result);
+    if (!session.isUnlocked()) {
+      return bad(423, 'Unlock the vault before pushing (needed to stamp the sync generation).');
+    }
+    const masterKey = Buffer.from(session.keyHex(), 'hex');
+    try {
+      const result = await pushVault({ vaultPath: session.vaultPath, deviceSecret, masterKey });
+      return ok(result);
+    } finally {
+      memzero(masterKey);
+    }
   }
 
   if (method === 'POST' && route === '/api/sync/pull') {
@@ -755,6 +765,7 @@ async function dispatch(
       return ok({ shared: targetScope, pushed: result.pushed, scopes: result.scopes });
     } catch (err) {
       if (err instanceof LockedError) throw err; // → 423, prompts unlock
+      if (err instanceof ConnectorTombstoneError) return bad(412, err.message);
       const msg = err instanceof Error ? err.message : String(err);
       if (/HTTP 402/.test(msg)) return bad(402, 'The connector server requires an active subscription to share.');
       return bad(400, msg);

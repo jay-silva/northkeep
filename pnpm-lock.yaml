@@ -45,6 +45,9 @@ importers:
         specifier: ^3.23.8
         version: 3.25.76
     devDependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.3.16
+        version: 0.3.16
       '@northkeep/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -916,6 +919,9 @@ packages:
 
   '@craftzdog/react-native-buffer@6.1.2':
     resolution: {integrity: sha512-KV1HitN05FHLLDG7Zb/yftDsa+mKBYBzFMQ0PMldvUicq6vWOtAvz9mDavt7Fzozh+WNqORE+yFDkkdWysZ/SA==}
+
+  '@electric-sql/pglite@0.3.16':
+    resolution: {integrity: sha512-mZkZfOd9OqTMHsK+1cje8OSzfAQcpD7JmILXTl5ahdempjUDdmg4euf1biDex5/LfQIDJ3gvCu6qDgdnDxfJmA==}
 
   '@esbuild/aix-ppc64@0.28.1':
     resolution: {integrity: sha512-Svl7tq8k/08+p6CXPpRjQ1fKX+1odH/BQbb48fV6fj3CWHhsoIOoY87w1oHXm0qEpkIK3ZfVgp0hed3XBXzXMQ==}
@@ -5419,6 +5425,8 @@ snapshots:
     transitivePeerDependencies:
       - react
       - react-native
+
+  '@electric-sql/pglite@0.3.16': {}
 
   '@esbuild/aix-ppc64@0.28.1':
     optional: true

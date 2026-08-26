@@ -49,12 +49,26 @@ export async function syncConfig(
 export async function syncPush(vaultPath: string, fail: (m: string) => never): Promise<void> {
   const deviceSecret = deviceSecretOrFail(fail);
   if (!loadSyncConfig()) fail('Sync is not configured. Run: northkeep sync config --server <url>');
+  if (!fs.existsSync(vaultPath)) fail('No local vault to push. Run "northkeep init" first.');
+
+  // Unlock-to-push (ADR 0038 addendum): same key resolution as syncPull.
+  let masterKey: Buffer;
+  const resolved = resolveMasterKey(vaultPath);
+  if (resolved) {
+    masterKey = resolved.key;
+  } else {
+    const passphrase = await getPassphrase('Passphrase (to stamp the vault before push): ');
+    const header = Vault.readHeader(vaultPath);
+    masterKey = deriveMasterKey(passphrase, deviceSecret, header.salt, header.kdf);
+  }
   let result: Awaited<ReturnType<typeof pushVault>>;
   try {
-    result = await pushVault({ vaultPath, deviceSecret });
+    result = await pushVault({ vaultPath, deviceSecret, masterKey });
   } catch (err) {
     if (err instanceof SubscriptionRequiredError) fail(SUBSCRIBE_HINT);
     throw err;
+  } finally {
+    memzero(masterKey);
   }
   if (result.ok) {
     console.log(`✓ Pushed. Server is now at version ${result.version}.`);

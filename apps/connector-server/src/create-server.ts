@@ -41,6 +41,12 @@ import { OAuthError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { parseProjectSlug } from './project-doc.js';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
 import { InMemoryConnectorStorage } from './storage.js';
+import {
+  isTombstoneEnforceOn,
+  parseSharedAtMap,
+  TOMBSTONE_USER_MESSAGE,
+  TombstoneConflictError,
+} from './tombstones.js';
 import { ConnectorOAuthProvider } from './provider.js';
 import { createMcpServer } from './mcp.js';
 import { renderConsentPage } from './consent.js';
@@ -98,7 +104,18 @@ const PER_ENTRY_CAP_MESSAGE =
 // in-handler, not silently 413'd by the parser.
 const CLIENT_BODY_LIMIT = '8mb';
 
-export function createConnectorServer(storage: ConnectorStorage): express.Express {
+export type ConnectorServerOptions = {
+  /**
+   * Override CONNECTOR_TOMBSTONE_ENFORCE (tests). Production omits this so
+   * the route reads the env at request time. Default remains off.
+   */
+  tombstoneEnforce?: boolean;
+};
+
+export function createConnectorServer(
+  storage: ConnectorStorage,
+  opts: ConnectorServerOptions = {},
+): express.Express {
   const publicUrl = (process.env.PUBLIC_URL || 'http://localhost:3000').replace(/\/$/, '');
   const issuerUrl = new URL(publicUrl);
   const mcpResourceUrl = `${publicUrl}/mcp`;
@@ -511,7 +528,7 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
       deny402(res);
       return;
     }
-    const body = req.body as { scopes?: unknown; entries?: unknown };
+    const body = req.body as { scopes?: unknown; entries?: unknown; shared_at?: unknown };
     if (!Array.isArray(body.scopes) || !Array.isArray(body.entries)) {
       res.status(400).json({ error: 'Provide a scopes[] array and an entries[] array.' });
       return;
@@ -582,7 +599,27 @@ export function createConnectorServer(storage: ConnectorStorage): express.Expres
         content: await encryptRow({ accountHash, type: e.type, content: e.content }, dek),
       })),
     );
-    await storage.replaceScopes(accountHash, scopes, encrypted);
+    const sharedAt = parseSharedAtMap(body.shared_at);
+    const enforce = opts.tombstoneEnforce ?? isTombstoneEnforceOn();
+    if (enforce) {
+      try {
+        await storage.replaceScopesAcceptingReshare(accountHash, scopes, encrypted, sharedAt);
+      } catch (err) {
+        if (err instanceof TombstoneConflictError) {
+          res.status(412).json({
+            error: TOMBSTONE_USER_MESSAGE,
+            scopes: err.conflicts,
+          });
+          return;
+        }
+        res.status(503).json({
+          error: 'Could not check share tombstones. Nothing was changed.',
+        });
+        return;
+      }
+    } else {
+      await storage.replaceScopes(accountHash, scopes, encrypted);
+    }
     await storage.appendAudit({
       ts: now,
       accountHash,

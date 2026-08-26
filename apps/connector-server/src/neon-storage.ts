@@ -8,6 +8,7 @@ import type {
   StoredOAuthCode,
   StoredOAuthToken,
 } from './storage.js';
+import { findTombstoneConflicts, TombstoneConflictError } from './tombstones.js';
 
 /**
  * Neon Postgres storage for the connector. Mirrors apps/sync-server/neon-storage.ts:
@@ -93,6 +94,16 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   scope        text NOT NULL,
   unshared_at  timestamptz NOT NULL DEFAULT now()
 )`,
+  // ADR 0038 addendum: one tombstone per (account, scope), latest unshared_at.
+  // Dedup first (keep MAX(unshared_at), then highest id on ties), then UNIQUE.
+  `DELETE FROM scope_tombstones a
+WHERE a.id NOT IN (
+  SELECT DISTINCT ON (account_hash, scope) id
+  FROM scope_tombstones
+  ORDER BY account_hash, scope, unshared_at DESC, id DESC
+)`,
+  `CREATE UNIQUE INDEX IF NOT EXISTS scope_tombstones_account_scope
+ON scope_tombstones (account_hash, scope)`,
   `CREATE TABLE IF NOT EXISTS connector_audit (
   id           bigserial PRIMARY KEY,
   ts           timestamptz NOT NULL DEFAULT now(),
@@ -122,8 +133,8 @@ export class NeonConnectorStorage implements ConnectorStorage {
   private sql: NeonQueryFunction<false, false>;
   private schemaReady: Promise<void> | null = null;
 
-  constructor(databaseUrl: string) {
-    this.sql = neon(databaseUrl);
+  constructor(databaseUrl: string, injectedSql?: NeonQueryFunction<false, false>) {
+    this.sql = injectedSql ?? neon(databaseUrl);
   }
 
   /**
@@ -370,11 +381,90 @@ export class NeonConnectorStorage implements ConnectorStorage {
     if (statements.length > 0) await this.sql.transaction(statements);
   }
 
+  async replaceScopesAcceptingReshare(
+    accountHash: string,
+    scopes: string[],
+    entries: SharedEntry[],
+    sharedAt: Record<string, string | undefined>,
+  ): Promise<void> {
+    await this.ensureSchema();
+    const tombs = await this.listTombstones(accountHash);
+    const conflicts = findTombstoneConflicts(tombs, scopes, sharedAt);
+    if (conflicts.length > 0) throw new TombstoneConflictError(conflicts);
+
+    const sharedAtJson = JSON.stringify(
+      Object.fromEntries(Object.entries(sharedAt).filter((e): e is [string, string] => typeof e[1] === 'string')),
+    );
+    const statements = [];
+    // Re-check inside the transaction (planner N5). 1/0 aborts the whole
+    // batch if a concurrent unshare landed a blocking tombstone.
+    statements.push(this.sql`
+      SELECT 1 / CASE WHEN EXISTS (
+        SELECT 1 FROM scope_tombstones t
+        WHERE t.account_hash = ${accountHash}
+          AND t.scope = ANY(${scopes})
+          AND (
+            NOT (${sharedAtJson}::jsonb ? t.scope)
+            OR ((${sharedAtJson}::jsonb ->> t.scope)::timestamptz) <= t.unshared_at
+          )
+      ) THEN 0 ELSE 1 END
+    `);
+    for (const e of entries) {
+      statements.push(this.sql`
+        INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, entry_hash)
+        VALUES (${accountHash}, ${e.entryId}, ${e.scope}, ${e.type}, ${e.content}, ${e.entryHash ?? ''})
+        ON CONFLICT (account_hash, entry_id) DO UPDATE SET
+          scope = EXCLUDED.scope, type = EXCLUDED.type, content = EXCLUDED.content,
+          entry_hash = EXCLUDED.entry_hash
+      `);
+    }
+    for (const scope of scopes) {
+      const ids = entries.filter((e) => e.scope === scope).map((e) => e.entryId);
+      if (ids.length === 0) {
+        statements.push(this.sql`
+          DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND scope = ${scope}
+            AND NOT (origin = 'connector' AND pending = true)
+        `);
+      } else {
+        statements.push(this.sql`
+          DELETE FROM shared_entries
+          WHERE account_hash = ${accountHash} AND scope = ${scope} AND entry_id <> ALL(${ids})
+            AND NOT (origin = 'connector' AND pending = true)
+        `);
+      }
+    }
+    for (const scope of scopes) {
+      const accepted = sharedAt[scope];
+      if (accepted === undefined) continue;
+      statements.push(this.sql`
+        DELETE FROM scope_tombstones
+        WHERE account_hash = ${accountHash}
+          AND scope = ${scope}
+          AND unshared_at <= ${accepted}::timestamptz
+      `);
+    }
+    try {
+      await this.sql.transaction(statements);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/division by zero|tombstone/i.test(msg)) {
+        const again = findTombstoneConflicts(await this.listTombstones(accountHash), scopes, sharedAt);
+        throw new TombstoneConflictError(again.length > 0 ? again : scopes);
+      }
+      throw err;
+    }
+  }
+
   async deleteScope(accountHash: string, scope: string): Promise<number> {
     await this.ensureSchema();
     const results = await this.sql.transaction([
       this.sql`DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND scope = ${scope} RETURNING entry_id`,
-      this.sql`INSERT INTO scope_tombstones (account_hash, scope) VALUES (${accountHash}, ${scope})`,
+      this.sql`
+        INSERT INTO scope_tombstones (account_hash, scope, unshared_at)
+        VALUES (${accountHash}, ${scope}, now())
+        ON CONFLICT (account_hash, scope) DO UPDATE SET
+          unshared_at = GREATEST(scope_tombstones.unshared_at, EXCLUDED.unshared_at)
+      `,
     ]);
     const deleted = results[0] as unknown as unknown[];
     return Array.isArray(deleted) ? deleted.length : 0;
