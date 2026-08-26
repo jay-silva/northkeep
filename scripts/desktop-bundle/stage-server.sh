@@ -59,8 +59,10 @@ pnpm --dir "$REPO_ROOT" --filter @northkeep/web deploy --prod --legacy \
 
 # ---- Prune what the running server never loads -----------------------------
 # 1. .bin shims (symlinks; nothing in the bundle execs them, and symlinks are
-#    unwelcome inside a signed Resources tree).
-rm -rf "$STAGE/node_modules/.bin"
+#    unwelcome inside a signed Resources tree). Top-level is not enough:
+#    nested copies appear too (better-sqlite3/node_modules/.bin/prebuild-install
+#    on the 0.19.0 build, pnpm 11 hoisted deploy).
+find "$STAGE" -type d -name '.bin' -prune -exec rm -rf {} +
 # 2. Foreign-platform prebuilds — for ANY package that ships a prebuilds/ dir
 #    (sodium-native, and its bare-* transitive deps). We ship arm64 macOS only;
 #    every other platform's binary is dead weight that ALSO fails notarization
