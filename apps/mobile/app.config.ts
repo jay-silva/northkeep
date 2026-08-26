@@ -20,7 +20,7 @@ const config: ExpoConfig = {
   // Expo account that owns the EAS project + the app slug (Jay is logged in as
   // this). Required so `eas init`/`eas build` resolve the right account.
   owner: 'j_silva',
-  version: '0.1.0',
+  version: '0.20.0',
   // Brand app icon (master 1024x1024 from brand/northkeep-icon-1024.png). Expo
   // generates every platform size from this at build; the top-level `icon` is
   // what iOS uses (no separate ios.icon needed on SDK 55). RGB, no alpha, so the
@@ -50,7 +50,7 @@ const config: ExpoConfig = {
     // app.config.ts (EAS only auto-bumps a static app.json), so bump this by hand
     // each TestFlight upload (2, 3, ...) or switch eas.json to appVersionSource:
     // "remote" later to have EAS track it.
-    buildNumber: '24',
+    buildNumber: '25',
     infoPlist: {
       // Export compliance (US EAR). NorthKeep is publicly available open-source
       // software (AGPL, github.com/jay-silva/northkeep) that uses only standard,
