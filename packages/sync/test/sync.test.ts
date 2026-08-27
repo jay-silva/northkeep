@@ -429,6 +429,89 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     expect(opened.getSyncGeneration()).toBeGreaterThanOrEqual(1);
     opened.close();
   });
+
+  /**
+   * Behind pull onto a vault that already exists locally: A pushed twice
+   * (server generation 2+), B already holds generation 1, B pulls. The
+   * local file is replaced and a `.bak` is written beside it.
+   */
+  it('accepts a behind pull onto an existing local vault and writes a .bak', async () => {
+    const { accountId } = deriveSyncCreds(deviceSecret);
+
+    process.env.NORTHKEEP_HOME = homeA;
+    createVault(homeA, 'A first');
+    setSyncServer(fake.url(), accountId);
+    expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+
+    // B already has a generation-1 local vault (A's first push).
+    process.env.NORTHKEEP_HOME = homeB;
+    setSyncServer(fake.url(), accountId);
+    expect((await pullVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+    const bAfterFirst = Vault.open({ path: vaultPath(homeB), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    expect(bAfterFirst.getSyncGeneration()).toBe(1);
+    bAfterFirst.close();
+
+    process.env.NORTHKEEP_HOME = homeA;
+    const va = Vault.open({ path: vaultPath(homeA), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    va.remember({ content: 'A second push', type: 'semantic' });
+    va.save();
+    va.close();
+    expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+    const aAfterSecond = Vault.open({ path: vaultPath(homeA), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    expect(aAfterSecond.getSyncGeneration()).toBeGreaterThanOrEqual(2);
+    aAfterSecond.close();
+
+    process.env.NORTHKEEP_HOME = homeB;
+    const beforeB = fs.readFileSync(vaultPath(homeB));
+    const pull = await pullVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeB) });
+    expect(pull.ok).toBe(true);
+    expect(fs.readFileSync(vaultPath(homeB)).equals(beforeB)).toBe(false);
+    expect(fs.existsSync(`${vaultPath(homeB)}.bak`)).toBe(true);
+    const opened = Vault.open({ path: vaultPath(homeB), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    const contents = opened.list().map((e) => e.content);
+    expect(opened.getSyncGeneration()).toBeGreaterThanOrEqual(2);
+    opened.close();
+    expect(contents).toContain('A second push');
+  });
+
+  /**
+   * A local remember+save must not bump sync_generation. If it did, a
+   * later pull of a newer server blob could be mistaken for a replay.
+   */
+  it('accepts a pull of a newer server blob after a local edit that was never pushed', async () => {
+    const { accountId } = deriveSyncCreds(deviceSecret);
+
+    process.env.NORTHKEEP_HOME = homeA;
+    createVault(homeA, 'shared seed');
+    setSyncServer(fake.url(), accountId);
+    expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+
+    process.env.NORTHKEEP_HOME = homeB;
+    setSyncServer(fake.url(), accountId);
+    expect((await pullVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+    const bBeforeEdit = Vault.open({ path: vaultPath(homeB), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    const genAfterPull = bBeforeEdit.getSyncGeneration();
+    bBeforeEdit.remember({ content: 'B local edit, never pushed', type: 'semantic' });
+    bBeforeEdit.save();
+    expect(bBeforeEdit.getSyncGeneration()).toBe(genAfterPull);
+    bBeforeEdit.close();
+
+    process.env.NORTHKEEP_HOME = homeA;
+    const va = Vault.open({ path: vaultPath(homeA), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    va.remember({ content: 'A newer blob', type: 'semantic' });
+    va.save();
+    va.close();
+    expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+
+    process.env.NORTHKEEP_HOME = homeB;
+    const pull = await pullVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeB) });
+    expect(pull.ok).toBe(true);
+    const opened = Vault.open({ path: vaultPath(homeB), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    const contents = opened.list().map((e) => e.content);
+    opened.close();
+    expect(contents).toContain('A newer blob');
+    expect(contents).not.toContain('B local edit, never pushed');
+  });
 });
 
 /**

@@ -716,15 +716,17 @@ every milestone; if a limit is removed, say when and how.*
   (Decision B) are the egress backstop for a resurrected share mark. A first
   pull on a fresh machine has nothing to compare, so it cannot prove the blob
   is the newest authentic one.
-- **Shared marks sync with the vault; a lagging device can still re-push until
-  tombstone enforcement is on (ADR 0038).** The shared-scope list lives inside
-  the encrypted vault, so a share or unshare reaches other devices with the
-  next vault sync. Until then the lagging device still holds the old marks.
-  `PUT /client/entries` consults `scope_tombstones` only when
-  `CONNECTOR_TOMBSTONE_ENFORCE` is on (default off until 0.20.0 clients exist).
-  When the flag is on, a push of a tombstoned scope without a newer `shared_at`
-  is refused with HTTP 412. Honest-lag timestamps remain residual: a client
-  clock that is far ahead can mint a `shared_at` that outranks a real unshare.
+- **Shared marks sync with the vault; a lagging device can still re-push a
+  scope until the next vault sync (ADR 0038).** The shared-scope list lives
+  inside the encrypted vault, so a share or unshare reaches other devices with
+  the next vault sync. Until then the lagging device still holds the old marks.
+  Hosted-service `PUT /client/entries` consults `scope_tombstones` as of
+  2026-08-26 (0.20.0): `CONNECTOR_TOMBSTONE_ENFORCE=1` is on in production. A
+  self-hosted connector still defaults the flag off unless the operator sets
+  `CONNECTOR_TOMBSTONE_ENFORCE` to `1` or `true`. When the flag is on, a push
+  of a tombstoned scope without a newer `shared_at` is refused with HTTP 412.
+  Honest-lag timestamps remain residual: a client clock that is far ahead can
+  mint a `shared_at` that outranks a real unshare.
   A Time Machine restore of a pre-0038 sidecar cannot re-stamp shares unless
   the vault itself is also rolled back (fold-done is set even when the sidecar
   was already stripped, as on a 0.19.0 upgrade). Managing

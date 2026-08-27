@@ -39,9 +39,21 @@
 <main><div class="wrap">
 
 <h1>Roadmap</h1>
-<p class="lede">What just shipped, what we are building, and where you come in. We are a small team and we do not promise dates; we promise honesty about what is real.</p>
+<p class="lede">Your memories, your projects, and your working state live on your machine and follow you across the AI apps you use.</p>
 
 <h2>Shipped</h2>
+<div class="card"><span class="tag live">Live</span>
+<h3>Projects that travel between agents</h3>
+<p>Start a project in Claude, end the session, and pick it up in Codex or Cursor. Status, next actions, and a log live in your vault, not in any one app.</p></div>
+<div class="card"><span class="tag live">Live</span>
+<h3>One-click Connect for Cursor</h3>
+<p>One click wires NorthKeep into Cursor, the same way it already does for Claude Desktop, Claude Code, and ChatGPT. You pick the scopes each app may see.</p></div>
+<div class="card"><span class="tag live">Live</span>
+<h3>The session contract</h3>
+<p>A short standing instruction tells connected agents to read the live project at the start of a session and write status when they finish. It is advisory: a session that ends abruptly wrote nothing.</p></div>
+<div class="card"><span class="tag live">Live</span>
+<h3>Sync replay hardening and share revocation</h3>
+<p>Your synced vault now carries a sealed generation counter, so a sync server that serves you an older copy of your own vault is refused. Unsharing a scope now also blocks a lagging device from re-pushing it. Honest limits: two devices that edit simultaneously produce copies the counter cannot order, and a brand-new machine's first download has nothing to compare against.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>Cloud Connect (Beta)</h3>
 <p>Your chosen memory scopes reach Claude, ChatGPT, and Manus wherever you use them, including your phone. Shared content is encrypted at rest and the server stores no key that can read it.</p></div>
@@ -80,13 +92,13 @@
 
 <h2>Up next</h2>
 <div class="card"><span class="tag">Planned</span>
+<h3>A review pass over your vault</h3>
+<p>A memory review pass that finds duplicates, contradictions, and stale facts across your vault, using a model of your choice, local by default. You approve every change.</p></div>
+<div class="card"><span class="tag">Planned</span>
 <h3>Review inbox for app-written instructions</h3>
 <p>When a connected AI app writes a standing instruction into your vault, you approve it before it takes effect.</p></div>
 
 <h2>Exploring</h2>
-<div class="card"><span class="tag">Exploring</span>
-<h3>Files and browser tools</h3>
-<p>The same approval gate, extended to reading your files and driving a browser. Both are written up and both have been through an adversarial review that sent them back for rework, so neither is close. Reading files needs a rule the operating system cannot be talked around; a browser tool needs an honest answer to what "read-only" means on the open web. We would rather be late than ship either one on a promise we cannot keep.</p></div>
 <div class="card"><span class="tag">Exploring</span>
 <h3>Windows and Intel Mac builds</h3>
 <p>Both run from source today; packaged builds are on the list.</p></div>

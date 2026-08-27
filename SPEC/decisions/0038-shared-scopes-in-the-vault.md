@@ -216,10 +216,11 @@ in the review transcript. Findings that required action, all fixed same-day:
 
 ## Addendum 2026-08-26: F3 counter + connector tombstone enforcement (0.20.0)
 
-- **Status:** **PROPOSED, KEEP WITH PATCHES** (two adversarial reviews
-  2026-08-26). First review pinned B1–B4 / M1–M2. Planner review pinned N1,
-  N3, N10 (blockers) plus N4–N6, N9. Do not implement until Jay confirms this
-  twice-patched design. Ships as 0.20.0 with a coordinated mobile build.
+- **Status:** **ACCEPTED and IMPLEMENTED** (M17, 2026-08-26). Shipped in
+  0.20.0 (`v0.20.0` / `1b9f349`). `CONNECTOR_TOMBSTONE_ENFORCE=1` flipped
+  on production 2026-08-26. Two adversarial reviews (2026-08-26) pinned
+  B1–B4 / M1–M2 and planner N1, N3, N10 plus N4–N6, N9; those patches
+  shipped with the implementation.
 - **Does not change:** Decision 3 (share marks apply account-wide after sync),
   AEAD header-as-AD, open-verify-before-replace, connector crypto wording.
 
@@ -375,13 +376,23 @@ CLI/web/mobile. Tests on `neon-storage.ts`, including the no-tombstone
 re-opens the window. A bug that refuses every push is an outage, not a
 revocation bypass; prefer the outage.
 
-### Sequencing
+### Sequencing (completed)
 
-ADR addendum (this) → two adversarial reviews recorded here → Jay confirms
-→ implementation (enforcement flag off) → Jay's per-push OK (production
-connector + sync, still dark) → EAS/TestFlight first → desktop 0.20.0 DMG →
-Jay flips `CONNECTOR_TOMBSTONE_ENFORCE` after 0.20.0 clients exist. Do not
-migrate a synced Mac vault to 0.4 until the phone build is installed.
+ADR addendum → two adversarial reviews → Jay confirmed → M17 implementation
+→ Jay's per-push OK (`f553543`, still dark) → EAS/TestFlight 25 → desktop
+0.20.0 DMG (`v0.20.0` / `1b9f349`) → Jay flipped
+`CONNECTOR_TOMBSTONE_ENFORCE=1` on production 2026-08-26. Phone and Mac are
+both on 0.20.0.
+
+### Execute-list coverage (2026-08-27)
+
+Replay refuse is pinned at `packages/sync/test/sync.test.ts` (older
+`sync_generation` leaves the local file unchanged). Behind-phone LWW is
+pinned at `apps/mobile/test/sync-flow.test.ts`. Desktop behind-pull onto an
+existing vault, and local-edit-then-pull of a newer server blob, are pinned
+in `packages/sync/test/sync.test.ts`. Residuals N2 (equal-generation forks),
+fresh machine (first pull has nothing to compare), and honest-lag timestamps
+remain in KNOWN-LIMITS by design.
 
 ### Out of this addendum
 
