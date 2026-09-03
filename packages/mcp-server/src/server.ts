@@ -25,6 +25,7 @@ import {
 import { nodePlatform } from '@northkeep/platform-node';
 import { applyTier1 } from '@northkeep/redact';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
+import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
 import { appendCallLog, type CallLogEntry } from './log.js';
 
 /**
@@ -624,12 +625,20 @@ export async function startServer(vaultPath?: string): Promise<void> {
   // This is the standalone server's entry (Claude Desktop launches it); when
   // web/cli import this package they call setPlatform in their own startup.
   setPlatform(nodePlatform());
-  const server = createServer(vaultPath);
+  const resolvedVaultPath = vaultPath ?? defaultVaultPath();
+  const server = createServer(resolvedVaultPath);
   const transport = new StdioServerTransport();
   await server.connect(transport);
   isStandaloneStdioServer = true;
-  installShutdownOnClientExit(server);
+  // ADR 0044: only the standalone process owns an engine. When these tools are
+  // embedded (web/CLI import createServer), the host runs its own.
+  const sync = createStandaloneAutoSync(resolvedVaultPath);
+  installShutdownOnClientExit(server, sync);
   console.error('northkeep MCP server ready (stdio)');
+  // A session starting is a wake: one status request, then a fast-forward
+  // pull if the server is ahead and this vault is untouched. Never blocks
+  // readiness, and failures only log.
+  void sync.auto.wake().catch(() => {});
 }
 
 /**
@@ -675,17 +684,37 @@ function scheduleObsoleteExit(detail: string): void {
 /** Set by startServer(); false when these tools are imported in-process. */
 let isStandaloneStdioServer = false;
 
-function installShutdownOnClientExit(server: { close: () => Promise<void> }): void {
+/** Longest a pending push may hold up shutdown (ADR 0044); the write stays on disk if it runs out. */
+const SHUTDOWN_FLUSH_BUDGET_MS = 1500;
+/** Hard exit backstop: the flush budget plus the transport close, with room to spare. */
+const SHUTDOWN_HARD_EXIT_MS = 3500;
+
+function installShutdownOnClientExit(
+  server: { close: () => Promise<void> },
+  sync: StandaloneAutoSync | null = null,
+): void {
   let shuttingDown = false;
   const shutdown = (reason: string, code = 0): void => {
     if (shuttingDown) return;
     shuttingDown = true;
     console.error(`northkeep MCP server exiting (${reason})`);
     // Close the transport, then leave regardless: a hung close must not be the
-    // thing that recreates the orphan this function exists to prevent.
+    // thing that recreates the orphan this function exists to prevent. A
+    // pending push gets a bounded chance first (ADR 0044) so a memory written
+    // at the end of a session reaches the other devices.
     const done = (): never => process.exit(code);
-    server.close().then(done, done);
-    setTimeout(done, 2000).unref();
+    const flushed = sync ? flushBounded(sync.auto, SHUTDOWN_FLUSH_BUDGET_MS) : Promise.resolve('flushed' as const);
+    flushed
+      .then((outcome) => {
+        // 'failed' already logged its own line inside flushBounded.
+        if (outcome === 'timeout') {
+          console.error('northkeep MCP server exiting with a push still pending (the next wake sends it)');
+        }
+        sync?.dispose();
+      })
+      .then(() => server.close())
+      .then(done, done);
+    setTimeout(done, SHUTDOWN_HARD_EXIT_MS).unref();
   };
 
   // The client disconnected, or its process died and closed the pipe.

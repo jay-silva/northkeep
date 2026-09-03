@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defaultVaultPath, setPlatform } from '@northkeep/core';
+import { defaultVaultPath, onVaultSave, setPlatform } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import { handleApi } from './api.js';
 import { handleApprove, handleConverseStream } from './converse.js';
@@ -39,6 +39,9 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Runn
   setPlatform(nodePlatform());
   const vaultPath = options.vaultPath ?? defaultVaultPath();
   const session = new UiSession(vaultPath);
+  // ADR 0044: every save in this process (GUI routes, Converse, review apply,
+  // import) schedules a debounced push through the session's engine.
+  const unsubscribeSaveHook = onVaultSave((savedPath) => session.autoSync.notifyWrite(savedPath));
   const staticDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'static');
   const indexHtml = fs.readFileSync(path.join(staticDir, 'index.html'));
 
@@ -126,13 +129,30 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Runn
   if (options.announce) {
     console.log(`NORTHKEEP_UI_URL=${url}`);
   }
+  // Launch is a wake (ADR 0044 Decision 2): with an ambient key (Keychain or
+  // env) the vault is already open, so fast-forward now rather than waiting
+  // for the page. Locked sessions wake on unlock instead. Never awaited: the
+  // shell is waiting on the ready line above.
+  if (session.isUnlocked()) {
+    session.autoSync.wake().catch(() => {});
+  }
   return {
     url,
-    close: () =>
-      new Promise<void>((resolve) => {
+    close: async () => {
+      // A write in the last five seconds may still be waiting on the debounce.
+      // Give it one bounded chance to upload before the key is zeroed; a hung
+      // server must not hold up quit.
+      await Promise.race([
+        session.autoSync.flush().catch(() => {}),
+        new Promise<void>((r) => setTimeout(r, 1500).unref()),
+      ]);
+      session.autoSync.stop();
+      unsubscribeSaveHook();
+      await new Promise<void>((resolve) => {
         session.lock();
         server.close(() => resolve());
-      }),
+      });
+    },
   };
 }
 

@@ -11,6 +11,7 @@ import {
   setSyncServer,
   subscriptionStatus,
   SubscriptionRequiredError,
+  syncAge,
   syncState,
   tokenHash,
 } from '@northkeep/sync';
@@ -124,6 +125,8 @@ export async function syncStatusCmd(vaultPath: string, fail: (m: string) => neve
   }
   const { state, localVersion, remoteVersion, baselineKnown } = await syncState({ vaultPath, deviceSecret });
   console.log(`Server: ${config.serverUrl}`);
+  // ADR 0044: staleness is visible even when nothing has failed.
+  console.log(`Last synced: ${syncAge(config.lastSyncedAt) ?? 'never'}`);
 
   // Billing state, when this server bills. A server without Stripe returns a
   // subscription payload that simply reports inactive/none; only mention it when

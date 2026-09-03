@@ -174,7 +174,7 @@ export class AutoSync {
     if (this.pushPending) this.armDebounce();
   }
 
-  /** Clear every timer. The engine accepts no more work after this. */
+  /** Clear every timer. The engine accepts no more work after this. Idempotent: a second stop() is a no-op. */
   stop(): void {
     this.stopped = true;
     this.clearDebounce();

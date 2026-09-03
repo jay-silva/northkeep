@@ -6,6 +6,7 @@ import {
   withFileLock,
 } from '@northkeep/core';
 import { resolveMasterKey } from '@northkeep/mcp-server';
+import { AutoSync, type AutoSyncEvent } from '@northkeep/sync';
 
 /**
  * In-memory UI session: the auth token and (once unlocked) the vault master
@@ -19,10 +20,32 @@ export class UiSession {
    * source is present in the environment. */
   private explicitlyLocked = false;
   readonly vaultPath: string;
+  /**
+   * The automatic sync engine for this vault (ADR 0044). Owned by the session
+   * because the engine needs the held key: it gets a COPY while unlocked and
+   * null while locked, which is how "nothing runs while locked" is enforced.
+   * server.ts wires the save hook and the lifecycle (wake at start, flush at
+   * close); api.ts drives it from the routes.
+   */
+  readonly autoSync: AutoSync;
+  /** Count of fast-forward pulls the engine has completed; routes diff it to say "pulled". */
+  private pulls = 0;
 
   constructor(vaultPath: string) {
     this.vaultPath = vaultPath;
     this.token = nodeRandomBytes(32).toString('hex');
+    this.autoSync = new AutoSync({
+      vaultPath,
+      getMasterKey: () => (this.isUnlocked() ? Buffer.from(this.heldKey!) : null),
+      onEvent: (event: AutoSyncEvent) => {
+        if (event.type === 'pulled') this.pulls += 1;
+      },
+    });
+  }
+
+  /** How many automatic pulls have landed so far (monotonic). */
+  pullCount(): number {
+    return this.pulls;
   }
 
   checkToken(candidate: string | undefined): boolean {

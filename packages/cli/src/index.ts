@@ -29,6 +29,7 @@ import {
   startServer,
 } from '@northkeep/mcp-server';
 import { redact, restore, type Replacement } from '@northkeep/redact';
+import { autoPushAfterWrite, trackSaves } from './autoPush.js';
 import { createOllamaEmbedder } from '@northkeep/librarian';
 import {
   addEndpoint,
@@ -1127,7 +1128,11 @@ async function withVault<T>(fn: (vault: Vault) => Promise<T> | T): Promise<T> {
   // Prompt BEFORE taking the file lock — a human typing must never hold the
   // lock (a concurrent MCP call would time out waiting on it).
   const passphrase = resolved === null ? await getPassphrase('Passphrase: ') : null;
-  return withFileLock(vaultPath, async () => {
+  // ADR 0044: a command that saves the vault pushes once before it returns,
+  // when a key was at hand without prompting. The key copy is taken here
+  // because openWithKey takes ownership of (and zeroes) the resolved buffer.
+  const keyForPush = resolved !== null ? Buffer.from(resolved.key) : null;
+  const { result, saved } = await trackSaves(vaultPath, () => withFileLock(vaultPath, async () => {
     let vault: Vault;
     if (resolved !== null) {
       try {
@@ -1149,7 +1154,13 @@ async function withVault<T>(fn: (vault: Vault) => Promise<T> | T): Promise<T> {
     } finally {
       vault.close();
     }
-  });
+  }));
+  try {
+    await autoPushAfterWrite({ vaultPath, masterKey: keyForPush, saved });
+  } finally {
+    if (keyForPush) memzero(keyForPush);
+  }
+  return result;
 }
 
 function printEntry(entry: MemoryEntry): void {

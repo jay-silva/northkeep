@@ -316,6 +316,7 @@
   <h1>North<span>keep</span></h1>
   <span id="countPill" class="pill">…</span>
   <span id="connectPill" class="pill" hidden></span>
+  <span id="syncPill" class="pill" hidden></span>
   <span id="ollamaPill" class="pill" hidden>local AI off</span>
   <span id="envPill" class="pill locked" hidden title="An environment variable keeps this vault open; the Lock button can't revoke it.">env override</span>
   <div class="grow"></div>
@@ -656,6 +657,9 @@
         <button class="btn" id="syncPullBtn">Pull</button>
       </div>
       <p class="muted" id="syncResult" hidden style="margin:10px 0 0;font-size:13px"></p>
+      <p class="muted" style="margin:10px 0 0;font-size:13px">NorthKeep now syncs on its own: it pushes a few
+        seconds after every change and pulls when you open or return to the app, only when this Mac has
+        nothing unsynced. The buttons stay for when you want to force it.</p>
     </div>
     <p class="muted" style="font-size:13px">A second machine needs the same
       <code>device.secret</code> file and your passphrase. Copy <code>~/.northkeep/device.secret</code>
@@ -1407,13 +1411,78 @@
     $('ollamaPill').hidden = status.ollama_available;
     $('degradedBanner').hidden = status.ollama_available;
     $('envPill').hidden = !status.env_grant;
+    updateSyncPill(status.sync_auto);
     $('lockBtn').hidden = !status.unlocked;
     $('rememberRow').hidden = !status.keychain_available;
     // No vault on disk → first-run wizard. Vault but locked → unlock dialog.
     if (noVault) showSetup();
     else if (!status.unlocked) showUnlock();
-    else { hideUnlock(); loadMemories(); loadReviewPanel(); loadScopes(); updateConnectPill(); }
+    else { hideUnlock(); loadMemories(); loadReviewPanel(); loadScopes(); updateConnectPill(); syncWake('launch'); }
   }
+
+  // --- automatic sync (ADR 0044). The engine lives in the server; this page
+  // only reports the moments that count as a wake (launch, unlock, return to
+  // the app) and shows what the engine did. A wake pulls only when this Mac
+  // has nothing unsynced, so reloading the lists after "pulled" is safe.
+  const WAKE_AWAY_MS = 60 * 1000;
+  let wakeInFlight = false, wokeOnce = false, awaySince = null;
+  function updateSyncPill(a) {
+    const pill = $('syncPill');
+    if (!a || a.phase === 'off') { pill.hidden = true; return; }
+    pill.hidden = false;
+    pill.title = a.message || '';
+    if (a.phase === 'error') {
+      pill.textContent = a.state === 'diverged' ? 'Sync needs you' : 'Sync failed';
+      pill.className = 'pill locked';
+    } else if (a.phase === 'paused') {
+      pill.textContent = 'Sync paused';
+      pill.className = 'pill locked';
+    } else if (a.phase === 'syncing' || a.phase === 'pending') {
+      pill.textContent = a.age ? 'Syncing (last ' + a.age + ')' : 'Syncing';
+      pill.className = 'pill ok';
+    } else {
+      pill.textContent = a.age ? 'Synced ' + a.age : 'Not synced yet';
+      pill.className = 'pill ok';
+    }
+  }
+  async function syncWake(reason) {
+    if (reason === 'launch') { if (wokeOnce) return; wokeOnce = true; }
+    if (wakeInFlight) return;
+    wakeInFlight = true;
+    try {
+      const r = await api('/api/sync/wake', { method: 'POST' });
+      updateSyncPill(r);
+      if (r.pulled) { loadMemories(); loadScopes(); await refreshStatus(); }
+      if (!$('view-sync').hidden) loadSyncStatus();
+    } catch (e) {
+      // A locked vault is not an error here; the unlock dialog is already up.
+    } finally { wakeInFlight = false; }
+  }
+  // Away starts at the first blur or hide and ends only when the user is
+  // actually back: a long-enough return wakes; a short return (a system
+  // dialog handing focus back, DevTools, a notification) leaves the clock
+  // running until real input arrives, so a genuine absence is never
+  // undercounted (ADR 0044 Decision 2, "at least 60 s in the background").
+  function markAway() { if (awaySince === null) awaySince = Date.now(); }
+  function markBack() {
+    if (awaySince === null) return;
+    const away = Date.now() - awaySince;
+    if (away >= WAKE_AWAY_MS) {
+      awaySince = null;
+      if (status && status.unlocked) syncWake('foreground');
+    }
+  }
+  function markPresent() { if (awaySince !== null && !document.hidden) awaySince = null; }
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) markAway(); else markBack();
+  });
+  window.addEventListener('blur', markAway);
+  window.addEventListener('focus', markBack);
+  for (const ev of ['pointerdown', 'keydown', 'wheel']) window.addEventListener(ev, markPresent, { passive: true });
+  setInterval(() => {
+    if (document.hidden || !status || !status.unlocked) return;
+    api('/api/sync/auto').then(updateSyncPill).catch(() => {});
+  }, 60 * 1000);
   // Header pill: shows which AI apps NorthKeep is currently connected to, so it
   // is clear at a glance (not only inside the Connect tab).
   function setConnectPill(targets) {
@@ -1542,6 +1611,7 @@
         passphrase: $('passphrase').value, remember: $('remember').checked } });
       $('passphrase').value = '';
       await refreshStatus();
+      syncWake('unlock');
     } catch (e) {
       $('unlockErr').textContent = e.message === 'locked' ? '' :
         'Could not unlock — check your passphrase.';
@@ -3797,7 +3867,15 @@
       if (s.server_url && !$('syncUrl').value) $('syncUrl').value = s.server_url;
       serverLine.hidden = !s.server_url;
       serverLine.textContent = s.server_url ? 'Server: ' + s.server_url : '';
-      line.textContent = syncSentence(s);
+      let sentence = syncSentence(s);
+      try {
+        const a = await api('/api/sync/auto');
+        updateSyncPill(a);
+        if (a.phase === 'error' && a.message) sentence = a.message;
+        else if (a.phase === 'paused' && a.message) sentence = sentence + ' Automatic sync is paused: ' + a.message;
+        if (a.age) sentence = 'Last synced ' + a.age + '. ' + sentence;
+      } catch (e) { /* the manual status still shows */ }
+      line.textContent = sentence;
       $('syncPushBtn').disabled = false;
       $('syncPullBtn').disabled = false;
       await loadSyncBilling();

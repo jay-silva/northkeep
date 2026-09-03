@@ -26,6 +26,7 @@ import {
   setSyncServer,
   subscriptionStatus,
   SubscriptionRequiredError,
+  syncAge,
   syncState,
   // Hosted connector / sharing (ADR 0019). These CALL the already-exported
   // @northkeep/sync client — the connector token is derived from the device
@@ -312,7 +313,28 @@ async function dispatch(
       // browser tab); in plain-browser mode it keeps native target=_blank.
       desktop: process.env.NORTHKEEP_DESKTOP === '1',
       version: APP_VERSION,
+      // ADR 0044: the automatic sync engine's view, so the header pill can say
+      // "Synced 2 min ago" or "Sync failed" without a second request.
+      sync_auto: autoSyncStatus(session),
     });
+  }
+
+  // ADR 0044: the engine's status alone (no vault open, no network), for the
+  // page's periodic pill refresh.
+  if (method === 'GET' && route === '/api/sync/auto') {
+    return ok(autoSyncStatus(session));
+  }
+
+  // ADR 0044 Decision 2: the page reports launch, unlock and return-to-
+  // foreground here. One status request; a fast-forward pull only when this
+  // Mac has nothing unsynced; a push when it is the one ahead. The engine
+  // itself refuses everything else, so this route has no policy of its own.
+  if (method === 'POST' && route === '/api/sync/wake') {
+    if (!loadSyncConfig()) return ok({ ...autoSyncStatus(session), pulled: false });
+    if (!session.isUnlocked()) return bad(423, 'Unlock the vault before syncing (needed to verify a download).');
+    const pullsBefore = session.pullCount();
+    await session.autoSync.wake();
+    return ok({ ...autoSyncStatus(session), pulled: session.pullCount() > pullsBefore });
   }
 
   // Manual, user-initiated update check (ADR 0017). Fires ONLY when the user
@@ -434,6 +456,9 @@ async function dispatch(
     if (remember === true && keychainAvailable()) {
       keychainSetMasterKey(session.keyHex());
     }
+    // Unlock is a wake (ADR 0044). Not awaited: the dialog must close at once,
+    // and the page asks /api/sync/wake for the outcome anyway.
+    session.autoSync.wake().catch(() => {});
     return ok({ unlocked: true });
   }
 
@@ -646,6 +671,8 @@ async function dispatch(
     } catch (err) {
       throw new SyncRequestError(err instanceof Error ? err.message : 'Invalid sync server URL.');
     }
+    // A server change is an explicit user action: lift any 402/403 pause.
+    session.autoSync.resume();
     return ok({ server_url: config.serverUrl, account_id: accountId });
   }
 
@@ -657,7 +684,11 @@ async function dispatch(
     }
     const masterKey = Buffer.from(session.keyHex(), 'hex');
     try {
-      const result = await pushVault({ vaultPath: session.vaultPath, deviceSecret, masterKey });
+      // Through the engine (ADR 0044): its own generation-bump save is not a
+      // new write to push, and a 402/403 pause lifts because the user acted.
+      const result = await session.autoSync.runManual(() =>
+        pushVault({ vaultPath: session.vaultPath, deviceSecret, masterKey }),
+      );
       return ok(result);
     } finally {
       memzero(masterKey);
@@ -672,7 +703,9 @@ async function dispatch(
     if (!session.isUnlocked()) return bad(423, 'Unlock the vault before pulling (needed to verify the download).');
     const masterKey = Buffer.from(session.keyHex(), 'hex');
     try {
-      const result = await pullVault({ vaultPath: session.vaultPath, deviceSecret, masterKey });
+      const result = await session.autoSync.runManual(() =>
+        pullVault({ vaultPath: session.vaultPath, deviceSecret, masterKey }),
+      );
       return ok(result);
     } finally {
       memzero(masterKey);
@@ -2069,6 +2102,26 @@ async function maybeEntitlement(deviceSecret: Buffer): Promise<string | undefine
     return undefined;
   }
 }
+/** The ADR 0044 engine's status in the shape the page renders. */
+function autoSyncStatus(session: UiSession): {
+  phase: string;
+  lastSyncedAt: string | null;
+  age: string | null;
+  state: string | null;
+  message: string | null;
+  pausedReason: string | null;
+} {
+  const st = session.autoSync.status();
+  return {
+    phase: st.phase,
+    lastSyncedAt: st.lastSyncedAt,
+    age: syncAge(st.lastSyncedAt),
+    state: st.state,
+    message: st.message,
+    pausedReason: st.pausedReason,
+  };
+}
+
 function deviceSecretOrError(): Buffer {
   try {
     return loadDeviceSecret();

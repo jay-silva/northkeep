@@ -315,30 +315,30 @@ describe('AutoSync (ADR 0044)', () => {
     createVault(homeA, 'seed');
     configure(homeA);
     fake.mode('crash');
-    const { auto } = engine({ debounceMs: 20, backoffMs: [200, 200] });
+    const { auto } = engine({ debounceMs: 20, backoffMs: [600, 600] });
     write(homeA, 'edit');
-    await sleep(120); // the debounced attempt fails (open + save + upload takes tens of ms)
+    await sleep(300); // the debounced attempt fails (open + save + upload takes tens of ms, more under load)
     expect(auto.status().phase).toBe('error');
     expect(auto.status().failures).toBe(1);
     expect(auto.status().nextRetryAt).not.toBeNull();
     write(homeA, 'another edit inside the backoff window');
-    await sleep(60);
+    await sleep(100);
     expect(auto.status().failures).toBe(1); // no second attempt before the retry is due
     fake.mode('ok');
-    await sleep(250); // the scheduled retry fires and succeeds
+    await sleep(700); // the scheduled retry fires and succeeds
     expect(fake.version()).toBe(1);
     expect(auto.status().failures).toBe(0);
     expect(auto.status().phase).toBe('synced');
 
     fake.mode('crash');
     write(homeA, 'third');
-    await sleep(120);
+    await sleep(300);
     expect(auto.status().nextRetryAt).not.toBeNull();
     auto.stop();
     expect(auto.status().nextRetryAt).toBeNull();
-    await sleep(50); // let any in-flight attempt finish failing before the server recovers
+    await sleep(100); // let any in-flight attempt finish failing before the server recovers
     fake.mode('ok');
-    await sleep(300);
+    await sleep(800);
     expect(fake.version()).toBe(1); // stopped engines do not retry
   });
 

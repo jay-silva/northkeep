@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { handleApi } from '../src/api.js';
 import { UiSession } from '../src/session.js';
 
@@ -200,5 +200,130 @@ describe('handleApi contract targets (M16)', () => {
     );
     expect(res.status).toBe(400);
     expect((res.body as { error: string }).error).toMatch(/Unknown target/i);
+  });
+});
+
+// ---------- automatic sync (ADR 0044) ----------
+
+import { createHash } from 'node:crypto';
+import { createServer, type Server } from 'node:http';
+import { KDF_INTERACTIVE, Vault, setPlatform } from '@northkeep/core';
+import { nodePlatform } from '@northkeep/platform-node';
+import { deriveSyncCreds, setSyncServer } from '@northkeep/sync';
+
+/** A one-blob ciphertext-only server with the real wire contract (see packages/sync/test/auto.test.ts). */
+function fakeSyncServer(): { server: Server; url: () => string; version: () => number } {
+  let blob: Buffer | null = null;
+  let version = 0;
+  const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(c));
+    req.on('end', () => {
+      if (req.method === 'GET' && req.url === '/api/status') {
+        if (blob === null) return void res.writeHead(404).end();
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return void res.end(JSON.stringify({ version, sha256: sha(blob), size: blob.length, updatedAt: new Date().toISOString() }));
+      }
+      if (req.method === 'GET' && req.url === '/api/blob') {
+        if (blob === null) return void res.writeHead(404).end();
+        res.writeHead(200, { 'x-version': String(version), 'x-sha256': sha(blob) });
+        return void res.end(blob);
+      }
+      if (req.method === 'PUT' && req.url === '/api/blob') {
+        const base = Number(req.headers['x-base-version'] ?? '0');
+        if (base !== version) {
+          res.writeHead(409, { 'content-type': 'application/json' });
+          return void res.end(JSON.stringify({ version }));
+        }
+        blob = Buffer.concat(chunks);
+        version += 1;
+        res.writeHead(200, { 'content-type': 'application/json' });
+        return void res.end(JSON.stringify({ version }));
+      }
+      res.writeHead(404).end();
+    });
+  });
+  return { server, url: () => `http://127.0.0.1:${(server.address() as { port: number }).port}`, version: () => version };
+}
+
+describe('handleApi automatic sync (ADR 0044)', () => {
+  const prevHome = process.env.NORTHKEEP_HOME;
+  const passphrase = 'web auto sync passphrase';
+  const deviceSecret = Buffer.alloc(32, 9);
+  let dir: string;
+  let fake: ReturnType<typeof fakeSyncServer>;
+  let session: UiSession;
+
+  const call = (method: string, route: string, body: unknown = '') =>
+    handleApi(session, method, route, new URLSearchParams(), Buffer.from(typeof body === 'string' ? body : JSON.stringify(body)));
+
+  beforeEach(async () => {
+    setPlatform(nodePlatform());
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-web-auto-'));
+    process.env.NORTHKEEP_HOME = dir;
+    fs.writeFileSync(path.join(dir, 'device.secret'), `${deviceSecret.toString('hex')}\n`, { mode: 0o600 });
+    const vaultPath = path.join(dir, 'vault.nkv');
+    const v = Vault.create({ path: vaultPath, passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    v.remember({ content: 'seed', type: 'semantic' });
+    v.save();
+    v.close();
+    session = new UiSession(vaultPath);
+    fake = fakeSyncServer();
+    await new Promise<void>((r) => fake.server.listen(0, '127.0.0.1', r));
+  });
+  afterEach(async () => {
+    session.autoSync.stop();
+    session.lock();
+    await new Promise((r) => fake.server.close(r));
+    if (prevHome === undefined) delete process.env.NORTHKEEP_HOME;
+    else process.env.NORTHKEEP_HOME = prevHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('GET /api/status carries sync_auto with phase off while sync is unconfigured', async () => {
+    await session.unlock(passphrase);
+    const res = await call('GET', '/api/status');
+    expect(res.status).toBe(200);
+    const auto = (res.body as { sync_auto: { phase: string; age: string | null } }).sync_auto;
+    expect(auto.phase).toBe('off');
+    expect(auto.age).toBeNull();
+  });
+
+  it('POST /api/sync/wake is 423 while locked (verification needs the key)', async () => {
+    setSyncServer(fake.url(), deriveSyncCreds(deviceSecret).accountId);
+    // An explicit lock also suppresses an ambient key (Keychain/env) on the dev machine.
+    session.lock();
+    const res = await call('POST', '/api/sync/wake');
+    expect(res.status).toBe(423);
+    expect(fake.version()).toBe(0);
+  });
+
+  it('a wake on an empty server pushes the vault and reports the sync time', async () => {
+    setSyncServer(fake.url(), deriveSyncCreds(deviceSecret).accountId);
+    await session.unlock(passphrase);
+    const res = await call('POST', '/api/sync/wake');
+    expect(res.status).toBe(200);
+    const body = res.body as { pulled: boolean; phase: string; lastSyncedAt: string | null; age: string | null };
+    expect(fake.version()).toBe(1);
+    expect(body.pulled).toBe(false);
+    expect(body.phase).toBe('synced');
+    expect(body.lastSyncedAt).toBeTruthy();
+    expect(body.age).toBe('just now');
+    // And the lightweight route agrees without opening the vault.
+    const auto = await call('GET', '/api/sync/auto');
+    expect((auto.body as { phase: string }).phase).toBe('synced');
+  });
+
+  it('a manual push through the route runs inside the engine and leaves it synced', async () => {
+    setSyncServer(fake.url(), deriveSyncCreds(deviceSecret).accountId);
+    await session.unlock(passphrase);
+    const res = await call('POST', '/api/sync/push');
+    expect(res.status).toBe(200);
+    expect((res.body as { ok: boolean; version: number })).toMatchObject({ ok: true, version: 1 });
+    expect(session.autoSync.status().phase).toBe('synced');
+    // A second wake finds nothing to do: still one version on the server.
+    await call('POST', '/api/sync/wake');
+    expect(fake.version()).toBe(1);
   });
 });

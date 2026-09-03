@@ -108,24 +108,45 @@ describe('M5 acceptance — sync', () => {
   });
 
   it('optimistic concurrency: a stale push conflicts, pull-then-push resolves', async () => {
-    // B edits and pushes → server v2.
-    await cli(homeB, ['remember', 'The user is planning a refit for the boat.', '--type', 'semantic']);
+    // B edits. With a stored key and sync configured the CLI pushes on its own
+    // right after the write (ADR 0044), so the server is at v2 before any
+    // explicit push; the explicit push that follows is a fresh upload (v3).
+    const bRemember = await cli(homeB, ['remember', 'The user is planning a refit for the boat.', '--type', 'semantic']);
+    expect(bRemember.code).toBe(0);
+    expect(bRemember.stderr).toContain('synced (version 2)');
     const bPush = await cli(homeB, ['sync', 'push']);
-    expect(bPush.stdout).toContain('version 2');
+    expect(bPush.stdout).toContain('version 3');
 
     // A is stale at v1 → push must conflict.
     const aConflict = await cli(homeA, ['sync', 'push']);
     expect(aConflict.code).not.toBe(0);
     expect(aConflict.stderr + aConflict.stdout).toMatch(/[Cc]onflict/);
 
-    // A pulls (its local vault is verified-then-replaced), then pushes its own change.
+    // A pulls (its local vault is verified-then-replaced), then makes its own
+    // change, which pushes on its own (v4); the explicit push after is v5.
     const aPull = await cli(homeA, ['sync', 'pull']);
-    expect(aPull.stdout).toContain('Pulled version 2');
+    expect(aPull.stdout).toContain('Pulled version 3');
     const aList = await cli(homeA, ['list']);
     expect(aList.stdout).toContain('refit'); // A now has B's change
-    await cli(homeA, ['remember', 'The user hired a rigger.', '--type', 'semantic']);
+    const aRemember = await cli(homeA, ['remember', 'The user hired a rigger.', '--type', 'semantic']);
+    expect(aRemember.stderr).toContain('synced (version 4)');
     const aPush = await cli(homeA, ['sync', 'push']);
-    expect(aPush.stdout).toContain('version 3');
+    expect(aPush.stdout).toContain('version 5');
+  });
+
+  it('a write on a stale machine is not pushed over the other device (ADR 0044: automation reports, never resolves)', async () => {
+    // B is now behind (A pushed v4 and v5). B writes: its automatic push must
+    // conflict, say so in one line, keep exit code 0, and leave the server
+    // untouched; the human resolves with pull then push, exactly as before.
+    const bRemember = await cli(homeB, ['remember', 'The user repainted the hull.', '--type', 'semantic']);
+    expect(bRemember.code).toBe(0);
+    expect(bRemember.stderr).toMatch(/both changed/);
+    const status = await fetch(`${serverUrl}/api/status`, { headers: { authorization: `Bearer ${deriveTokenFor(homeA)}` } });
+    expect(((await status.json()) as { version: number }).version).toBe(5);
+    const bPull = await cli(homeB, ['sync', 'pull']);
+    expect(bPull.stdout).toContain('Pulled version 5');
+    // B's own edit was displaced to .bak by the manual pull (documented limit), not lost.
+    expect(fs.existsSync(path.join(homeB, 'vault.nkv.bak'))).toBe(true);
   });
 });
 
