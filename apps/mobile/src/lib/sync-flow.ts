@@ -241,3 +241,90 @@ export function syncStatusLabel(status: SyncStatus): string {
       return 'Sync error';
   }
 }
+
+// ---------------------------------------------------------------------------
+// ADR 0044: wake pull (fast-forward only) and the sync age.
+// ---------------------------------------------------------------------------
+
+export type WakeAction = 'none' | 'retry-push' | 'pull' | 'check';
+
+export interface WakeInput {
+  unlocked: boolean;
+  /** Device secret and server URL are both set. */
+  configured: boolean;
+  status: SyncStatus;
+  errorKind?: SyncErrorKind;
+  /**
+   * True when a local save has happened whose push has not landed yet (set
+   * before every push, cleared when the server accepts it). Persisted so a
+   * failed push survives a relaunch: syncState resets to idle on launch, but an
+   * unpushed edit is still unpushed, and a wake pull must never bury it.
+   */
+  localDirty: boolean;
+  /** Server version from GET /api/status, or null when not fetched yet. */
+  remoteVersion: number | null;
+  /** The last server version this phone pushed to or pulled. */
+  lastSyncedVersion: number;
+}
+
+/**
+ * What a wake (unlock, or return to foreground while unlocked) should do.
+ * Pure, so every branch is tested in Node. The one rule: the phone pulls on
+ * its own only when its last push landed (nothing local is unpushed) AND the
+ * server is ahead. Anything unpushed is pushed instead, exactly like the
+ * save-then-push path; a paywall or a private server is never retried here.
+ *
+ *   locked or unconfigured            -> 'none'
+ *   a sync in flight                  -> 'none'
+ *   error: subscription / not enabled -> 'none'   (the user acts, not a timer)
+ *   error (network, server, other)    -> 'retry-push'
+ *   unpushed local save               -> 'retry-push'
+ *   remote version unknown            -> 'check'  (fetch /api/status, decide again)
+ *   server ahead                      -> 'pull'
+ *   otherwise                         -> 'none'
+ */
+export function decideWakeAction(input: WakeInput): WakeAction {
+  if (!input.unlocked || !input.configured) return 'none';
+  if (input.status === 'syncing') return 'none';
+  if (input.status === 'error') {
+    if (input.errorKind === 'subscription-required' || input.errorKind === 'not-enabled') return 'none';
+    return 'retry-push';
+  }
+  if (input.localDirty) return 'retry-push';
+  if (input.remoteVersion === null) return 'check';
+  if (input.remoteVersion > input.lastSyncedVersion) return 'pull';
+  return 'none';
+}
+
+/**
+ * "just now" / "N min ago" / "N hour(s) ago" / "N day(s) ago", rounded. The
+ * wording is identical to the desktop's syncAge (packages/sync/src/auto.ts) so
+ * the Mac and the phone describe the same moment the same way. Null when the
+ * phone has never synced.
+ */
+export function syncAgeLabel(lastSyncedAt: string | null, now: number = Date.now()): string | null {
+  if (!lastSyncedAt) return null;
+  const then = Date.parse(lastSyncedAt);
+  if (Number.isNaN(then)) return null;
+  const seconds = Math.max(0, Math.round((now - then) / 1000));
+  if (seconds < 45) return 'just now';
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return `${hours} hour${hours === 1 ? '' : 's'} ago`;
+  const days = Math.round(hours / 24);
+  return `${days} day${days === 1 ? '' : 's'} ago`;
+}
+
+/**
+ * The one-line age shown under the sync pill and in Settings: "Synced 2 min
+ * ago" while fresh, "Last synced 6 days ago" once it is over an hour old (the
+ * wording change is the staleness signal ADR 0044 asks for). Null when never.
+ */
+export function syncAgeLine(lastSyncedAt: string | null, now: number = Date.now()): string | null {
+  const label = syncAgeLabel(lastSyncedAt, now);
+  if (label === null) return null;
+  const then = Date.parse(lastSyncedAt as string);
+  const stale = now - then >= 60 * 60 * 1000;
+  return stale ? `Last synced ${label}` : `Synced ${label}`;
+}

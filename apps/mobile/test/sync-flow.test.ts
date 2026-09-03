@@ -2,13 +2,17 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   conflictRepushBaseVersion,
   conflictRepushSyncGeneration,
+  decideWakeAction,
   initialSyncState,
+  syncAgeLabel,
+  syncAgeLine,
   isSyncing,
   pushRequiresConflictRecovery,
   reduceSync,
   runSyncAfterSave,
   syncStatusLabel,
   type PushResultLike,
+  type WakeInput,
   type SyncAfterSavePorts,
   type SyncState,
 } from '../src/lib/sync-flow.js';
@@ -255,5 +259,81 @@ describe('indicator helpers', () => {
     for (const status of ['idle', 'syncing', 'synced', 'conflict-recovered', 'error'] as const) {
       expect(syncStatusLabel(status).length).toBeGreaterThan(0);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0044: the wake decision and the sync age
+// ---------------------------------------------------------------------------
+
+describe('decideWakeAction (ADR 0044 fast-forward rule)', () => {
+  const ready: WakeInput = {
+    unlocked: true,
+    configured: true,
+    status: 'synced',
+    localDirty: false,
+    remoteVersion: null,
+    lastSyncedVersion: 3,
+  };
+
+  it('does nothing while locked or unconfigured, whatever else is true', () => {
+    expect(decideWakeAction({ ...ready, unlocked: false, remoteVersion: 9 })).toBe('none');
+    expect(decideWakeAction({ ...ready, configured: false, remoteVersion: 9 })).toBe('none');
+    expect(decideWakeAction({ ...ready, unlocked: false, status: 'error', errorKind: 'network' })).toBe('none');
+  });
+
+  it('does nothing while a sync is in flight', () => {
+    expect(decideWakeAction({ ...ready, status: 'syncing', remoteVersion: 9 })).toBe('none');
+  });
+
+  it('never retries a paywall or a private server on its own', () => {
+    expect(decideWakeAction({ ...ready, status: 'error', errorKind: 'subscription-required' })).toBe('none');
+    expect(decideWakeAction({ ...ready, status: 'error', errorKind: 'not-enabled' })).toBe('none');
+  });
+
+  it('retries the push after a network, redirect, server or unclassified failure (the phone is ahead)', () => {
+    for (const errorKind of ['network', 'redirect-refused', 'other', undefined] as const) {
+      expect(decideWakeAction({ ...ready, status: 'error', errorKind, remoteVersion: 9 })).toBe('retry-push');
+    }
+  });
+
+  it('retries the push when a local save is still unpushed, even if the server looks ahead', () => {
+    expect(decideWakeAction({ ...ready, localDirty: true, remoteVersion: 9 })).toBe('retry-push');
+    expect(decideWakeAction({ ...ready, status: 'idle', localDirty: true, remoteVersion: null })).toBe('retry-push');
+  });
+
+  it('asks for a status check before deciding when the remote version is unknown', () => {
+    expect(decideWakeAction({ ...ready, remoteVersion: null })).toBe('check');
+    expect(decideWakeAction({ ...ready, status: 'idle', remoteVersion: null })).toBe('check');
+    expect(decideWakeAction({ ...ready, status: 'conflict-recovered', remoteVersion: null })).toBe('check');
+  });
+
+  it('pulls only when the server is ahead of the last landed push', () => {
+    expect(decideWakeAction({ ...ready, remoteVersion: 4 })).toBe('pull');
+    expect(decideWakeAction({ ...ready, status: 'idle', remoteVersion: 10 })).toBe('pull');
+    expect(decideWakeAction({ ...ready, remoteVersion: 3 })).toBe('none');
+    expect(decideWakeAction({ ...ready, remoteVersion: 2 })).toBe('none');
+  });
+});
+
+describe('syncAgeLabel / syncAgeLine (ADR 0044, same wording as the desktop)', () => {
+  const now = Date.parse('2026-09-03T12:00:00Z');
+
+  it('wording matches packages/sync syncAge exactly', () => {
+    expect(syncAgeLabel(null, now)).toBeNull();
+    expect(syncAgeLabel('not a date', now)).toBeNull();
+    expect(syncAgeLabel('2026-09-03T11:59:50Z', now)).toBe('just now');
+    expect(syncAgeLabel('2026-09-03T11:58:00Z', now)).toBe('2 min ago');
+    expect(syncAgeLabel('2026-09-03T09:00:00Z', now)).toBe('3 hours ago');
+    expect(syncAgeLabel('2026-09-03T11:00:00Z', now)).toBe('1 hour ago');
+    expect(syncAgeLabel('2026-09-02T11:00:00Z', now)).toBe('1 day ago');
+    expect(syncAgeLabel('2026-08-28T12:00:00Z', now)).toBe('6 days ago');
+  });
+
+  it('the line says Synced while fresh and Last synced once an hour has passed', () => {
+    expect(syncAgeLine(null, now)).toBeNull();
+    expect(syncAgeLine('2026-09-03T11:58:00Z', now)).toBe('Synced 2 min ago');
+    expect(syncAgeLine('2026-09-03T11:00:00Z', now)).toBe('Last synced 1 hour ago');
+    expect(syncAgeLine('2026-08-28T12:00:00Z', now)).toBe('Last synced 6 days ago');
   });
 });

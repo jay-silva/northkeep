@@ -7,6 +7,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
+import { AppState, type AppStateStatus } from 'react-native';
 import * as LocalAuthentication from 'expo-local-authentication';
 import {
   KDF_INTERACTIVE,
@@ -41,14 +42,19 @@ import {
   loadDeviceSecretHex,
   loadLegacyConnectorSharedScopes,
   loadLastSyncVersion,
+  loadLastSyncedAt,
+  loadLocalDirty,
   loadSyncServerUrl,
   readCachedMasterKeyHex,
   saveDeviceSecretHex,
   saveLastSyncVersion,
+  saveLastSyncedAt,
+  saveLocalDirty,
   wipeAllSecrets,
 } from './secure-store';
 import {
   fetchRemoteBlob,
+  fetchRemoteStatus,
   pullVaultMobile,
   pushVaultMobile,
   stashRecoverableBak,
@@ -56,7 +62,14 @@ import {
   type VerifiedRemoteBlob,
 } from './sync';
 import { classifySyncError } from './sync-errors';
-import { initialSyncState, reduceSync, runSyncAfterSave, type SyncEvent, type SyncState } from './sync-flow';
+import {
+  decideWakeAction,
+  initialSyncState,
+  reduceSync,
+  runSyncAfterSave,
+  type SyncEvent,
+  type SyncState,
+} from './sync-flow';
 
 /**
  * The unlock-session state machine for M6-1 (link, unlock, browse). Holds the
@@ -126,7 +139,14 @@ export interface VaultSession {
   /** clearBiometricCache: the explicit "Lock vault" action also deletes the cached key. */
   lock(opts?: { clearBiometricCache?: boolean }): Promise<void>;
   /** Pull from sync and reload; requires unlocked (the key verifies the download). */
-  pullAndReload(): Promise<{ pulled: boolean }>;
+  pullAndReload(): Promise<{ pulled: boolean; version?: number }>;
+  /**
+   * ADR 0044: ISO time of the last push or pull that landed on this phone,
+   * persisted beside the synced version. Null until the first sync. The
+   * screens turn it into "Synced 2 min ago" / "Last synced 6 days ago" with
+   * syncAgeLine (src/lib/sync-flow.ts).
+   */
+  lastSyncedAt: string | null;
   /**
    * Phase A enable-sync: run the save-then-push sequence NOW (same plumbing as
    * pushAfterSave) and return the terminal event. Throws when no device secret
@@ -204,6 +224,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
   const [biometricCacheEnabled, setBiometricCacheEnabled] = useState(false);
   const [accountIdShort, setAccountIdShort] = useState<string | null>(null);
   const [syncState, setSyncState] = useState<SyncState>(() => initialSyncState());
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
   const [isDemo, setIsDemo] = useState(false);
   // One-shot onboarding flag for backup-secret; see the interface doc. Survives
   // lock-on-background on purpose (backgrounding mid-backup must not lock a
@@ -214,6 +235,19 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
   // Ref mirror of isDemo so the memoized callbacks (lock, pushAfterSave) can read
   // the current value without being re-created on every demo toggle.
   const isDemoRef = useRef(false);
+  // Ref mirror of syncState for the wake runner (a memoized callback must read
+  // the current pill state without re-subscribing AppState on every tick).
+  const syncStateRef = useRef<SyncState>(syncState);
+  useEffect(() => {
+    syncStateRef.current = syncState;
+  }, [syncState]);
+
+  /** Record "a sync landed now" in SecureStore and in the context (ADR 0044). */
+  const markSyncedNow = useCallback(async () => {
+    const iso = new Date().toISOString();
+    await saveLastSyncedAt(iso);
+    setLastSyncedAt(iso);
+  }, []);
 
   // Bootstrap: linked or not?
   useEffect(() => {
@@ -221,7 +255,9 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     (async () => {
       const secretHex = await loadDeviceSecretHex();
       const bio = await biometricUnlockEnabled();
+      const syncedAt = await loadLastSyncedAt();
       if (!alive) return;
+      setLastSyncedAt(syncedAt);
       if (secretHex) {
         setAccountIdShort(shortAccountId(secretHex));
         setStatus('locked');
@@ -455,7 +491,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     deleteIfExists(`${path}.tmp`);
   }, []);
 
-  const pullAndReload = useCallback(async (): Promise<{ pulled: boolean }> => {
+  const pullAndReload = useCallback(async (): Promise<{ pulled: boolean; version?: number }> => {
     const key = masterKeyRef.current;
     if (!vaultRef.current || !key) throw new Error('Unlock the vault before syncing.');
     const secretHex = await loadDeviceSecretHex();
@@ -470,6 +506,9 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     });
     if (!result.ok) return { pulled: false };
     await saveLastSyncVersion(result.version);
+    // The file on disk is now the server's copy: nothing local is unpushed.
+    await saveLocalDirty(false);
+    await markSyncedNow();
     // Reopen from the freshly written file with the held key.
     vaultRef.current.close();
     vaultRef.current = null;
@@ -489,8 +528,8 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       throw err;
     }
     reloadEntries();
-    return { pulled: true };
-  }, [reloadEntries, closeSession]);
+    return { pulled: true, version: result.version };
+  }, [reloadEntries, closeSession, markSyncedNow]);
 
   /**
    * Push the just-saved local vault, resolving a two-sided conflict with the
@@ -563,10 +602,15 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         stashRemote: () => {
           if (pendingRemote !== null) stashRecoverableBak(path, pendingRemote.blob);
         },
-        saveBaseVersion: (version) => saveLastSyncVersion(version),
+        saveBaseVersion: async (version) => {
+          await saveLastSyncVersion(version);
+          // The push landed: the local save is no longer unpushed.
+          await saveLocalDirty(false);
+          await markSyncedNow();
+        },
       });
     },
-    [],
+    [markSyncedNow],
   );
 
   const pushAfterSave = useCallback(async (): Promise<void> => {
@@ -586,6 +630,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       );
       return;
     }
+    // Persisted BEFORE the push: if it fails, or the app is killed mid-flight,
+    // the next wake still knows this phone holds an unpushed edit and pushes
+    // instead of pulling over it (ADR 0044). Cleared by saveBaseVersion.
+    await saveLocalDirty(true);
     setSyncState((s) => reduceSync(s, { type: 'start' }));
     try {
       const event = await runPushSequence(serverUrl, secretHex);
@@ -620,6 +668,82 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       throw err;
     }
   }, [runPushSequence]);
+
+  /**
+   * ADR 0044 wake: on unlock, and on return to the foreground while unlocked.
+   * One status request, then a FAST-FORWARD pull when the server is ahead and
+   * nothing local is unpushed, a retry of the push when something is, and
+   * nothing at all on a paywall or a private server. Decision rules live in
+   * decideWakeAction (pure, tested); this only gathers the inputs and wires
+   * the existing pullAndReload / pushNow. Errors land in the loud pill via
+   * classifySyncError, never as a crash. The ref keeps one wake in flight.
+   *
+   * NEEDS ON-DEVICE VALIDATION: the AppState transition and the real status
+   * round-trip have only been exercised through the pure decision tests.
+   */
+  const wakeInFlightRef = useRef(false);
+  const runWake = useCallback(async (): Promise<void> => {
+    if (wakeInFlightRef.current || isDemoRef.current) return;
+    wakeInFlightRef.current = true;
+    try {
+      const unlocked = vaultRef.current !== null && masterKeyRef.current !== null;
+      const secretHex = await loadDeviceSecretHex();
+      const serverUrl = await loadSyncServerUrl();
+      const configured = Boolean(secretHex && serverUrl);
+      const lastSyncedVersion = await loadLastSyncVersion();
+      const localDirty = await loadLocalDirty();
+      const current = syncStateRef.current;
+      const base = {
+        unlocked,
+        configured,
+        status: current.status,
+        errorKind: current.errorKind,
+        localDirty,
+        lastSyncedVersion,
+      };
+      let action = decideWakeAction({ ...base, remoteVersion: null });
+      if (action === 'check') {
+        const remote = await fetchRemoteStatus({ serverUrl: serverUrl as string, deviceSecretHex: secretHex as string });
+        // No vault on the server: nothing to fast-forward to.
+        action = decideWakeAction({ ...base, remoteVersion: remote === null ? lastSyncedVersion : remote.version });
+      }
+      if (action === 'pull') {
+        setSyncState((s) => reduceSync(s, { type: 'start' }));
+        const result = await pullAndReload();
+        setSyncState((s) =>
+          reduceSync(s, result.pulled ? { type: 'synced', version: result.version ?? lastSyncedVersion } : { type: 'synced', version: lastSyncedVersion }),
+        );
+      } else if (action === 'retry-push') {
+        // pushNow updates the pill itself and rethrows the raw error; the
+        // wake has nothing further to do with it.
+        await pushNow().catch(() => undefined);
+      }
+    } catch (err) {
+      const friendly = classifySyncError(err);
+      setSyncState((s) => reduceSync(s, { type: 'error', message: friendly.message, kind: friendly.kind }));
+    } finally {
+      wakeInFlightRef.current = false;
+    }
+  }, [pullAndReload, pushNow]);
+
+  // Unlock is the main wake trigger: the app locks on background (_layout), so
+  // "back in the foreground" almost always arrives here, after the key is held.
+  useEffect(() => {
+    if (status === 'unlocked' && !isDemo) void runWake();
+  }, [status, isDemo, runWake]);
+
+  // Foreground return without a lock (the 'inactive' round trip through
+  // Control Center or a system prompt): wake if still unlocked. Locked states
+  // decide 'none' inside runWake, so this is safe to fire on every 'active'.
+  const appStateRef = useRef<AppStateStatus>(AppState.currentState);
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next: AppStateStatus) => {
+      const prev = appStateRef.current;
+      appStateRef.current = next;
+      if (next === 'active' && prev !== 'active') void runWake();
+    });
+    return () => sub.remove();
+  }, [runWake]);
 
   const addMemory = useCallback(
     async (input: RememberInput): Promise<MemoryEntry> => {
@@ -823,6 +947,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     setBiometricCacheEnabled(false);
     setAccountIdShort(null);
     setSyncState(initialSyncState());
+    setLastSyncedAt(null);
     setJustCreatedVault(false);
     setStatus('unlinked');
   }, [closeSession]);
@@ -857,6 +982,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       pullAndReload,
       pushNow,
       syncState,
+      lastSyncedAt,
       addMemory,
       editMemory,
       forgetMemory,
@@ -888,6 +1014,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       pullAndReload,
       pushNow,
       syncState,
+      lastSyncedAt,
       addMemory,
       editMemory,
       forgetMemory,

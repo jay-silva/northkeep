@@ -18,6 +18,7 @@ import {
   saveJournalCardDismissed,
 } from '../src/lib/secure-store';
 import { userFacingSyncError } from '../src/lib/sync-errors';
+import { syncAgeLine } from '../src/lib/sync-flow';
 import { useVaultSession } from '../src/lib/vault-session';
 import { ErrorNote, SyncPill, colors, type } from '../src/ui';
 
@@ -84,6 +85,7 @@ export default function Memories() {
         status={session.syncState.status}
         detail={session.syncState.detail}
         errorKind={session.syncState.errorKind}
+        ageLine={syncAgeLine(session.lastSyncedAt)}
       />
       <TextInput
         style={styles.search}

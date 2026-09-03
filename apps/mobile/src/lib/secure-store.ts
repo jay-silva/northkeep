@@ -22,6 +22,8 @@ const CACHED_MASTER_KEY = 'nk.cached_master_key_hex';
 const BIOMETRIC_FLAG_KEY = 'nk.biometric_unlock_enabled';
 const SYNC_SERVER_KEY = 'nk.sync_server_url';
 const SYNC_VERSION_KEY = 'nk.sync_last_version';
+const SYNC_SYNCED_AT_KEY = 'nk.sync_last_synced_at';
+const SYNC_LOCAL_DIRTY_KEY = 'nk.sync_local_dirty';
 const CONNECTOR_SERVER_KEY = 'nk.connector_server_url';
 const CONNECTOR_SHARED_SCOPES_KEY = 'nk.connector_shared_scopes';
 const JOURNAL_CARD_DISMISSED_KEY = 'nk.journal_card_dismissed';
@@ -96,6 +98,32 @@ export async function loadLastSyncVersion(): Promise<number> {
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
 }
 
+// --- ADR 0044: the sync age and the unpushed-edit flag ---
+
+/** ISO timestamp of the last push or pull that landed. Drives "Synced N ago". */
+export async function saveLastSyncedAt(iso: string): Promise<void> {
+  await SecureStore.setItemAsync(SYNC_SYNCED_AT_KEY, iso, BASE_OPTIONS);
+}
+
+export async function loadLastSyncedAt(): Promise<string | null> {
+  const raw = await SecureStore.getItemAsync(SYNC_SYNCED_AT_KEY, BASE_OPTIONS);
+  return raw && !Number.isNaN(Date.parse(raw)) ? raw : null;
+}
+
+/**
+ * True while a local save is waiting for its push to land. Persisted (not
+ * just in syncState) so a push that failed before a relaunch is still known
+ * to be unpushed afterwards; the wake pull refuses to run over it.
+ */
+export async function saveLocalDirty(dirty: boolean): Promise<void> {
+  if (dirty) await SecureStore.setItemAsync(SYNC_LOCAL_DIRTY_KEY, '1', BASE_OPTIONS);
+  else await SecureStore.deleteItemAsync(SYNC_LOCAL_DIRTY_KEY, BASE_OPTIONS);
+}
+
+export async function loadLocalDirty(): Promise<boolean> {
+  return (await SecureStore.getItemAsync(SYNC_LOCAL_DIRTY_KEY, BASE_OPTIONS)) === '1';
+}
+
 // --- connector sidecar (Phase B Cloud Connect: the mobile analog of the
 // desktop's ~/.northkeep/connector.json, which is node:fs-only). Holds only
 // WHERE the connector server is. Never a secret: the connector token is
@@ -164,6 +192,8 @@ export async function wipeAllSecrets(): Promise<void> {
   await SecureStore.deleteItemAsync(DEVICE_SECRET_KEY);
   await SecureStore.deleteItemAsync(SYNC_SERVER_KEY);
   await SecureStore.deleteItemAsync(SYNC_VERSION_KEY);
+  await SecureStore.deleteItemAsync(SYNC_SYNCED_AT_KEY);
+  await SecureStore.deleteItemAsync(SYNC_LOCAL_DIRTY_KEY);
   await SecureStore.deleteItemAsync(CONNECTOR_SERVER_KEY);
   await SecureStore.deleteItemAsync(CONNECTOR_SHARED_SCOPES_KEY);
   await SecureStore.deleteItemAsync(JOURNAL_CARD_DISMISSED_KEY);

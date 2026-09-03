@@ -214,10 +214,13 @@ export function SyncPill({
   status,
   detail,
   errorKind,
+  ageLine,
 }: {
   status: 'idle' | 'syncing' | 'synced' | 'conflict-recovered' | 'error';
   detail: string | null;
   errorKind?: SyncErrorKind;
+  /** ADR 0044: "Synced 2 min ago" / "Last synced 6 days ago" (syncAgeLine); hidden when null. */
+  ageLine?: string | null;
 }) {
   const map = {
     idle: { label: 'Idle', dot: colors.muted, fg: colors.muted },
@@ -259,6 +262,11 @@ export function SyncPill({
         </Text>
       </View>
       {showDetail ? <Text style={styles.syncDetail}>{detail}</Text> : null}
+      {ageLine ? (
+        <Text style={styles.syncAge} maxFontSizeMultiplier={MAX_SCALE_DENSE}>
+          {ageLine}
+        </Text>
+      ) : null}
     </View>
   );
 }
@@ -311,6 +319,7 @@ const styles = StyleSheet.create({
   syncDot: { width: 8, height: 8, borderRadius: 4 },
   syncLabel: { ...type.footnote, fontWeight: weight.semibold },
   syncDetail: { ...type.caption, color: colors.muted, fontWeight: weight.regular, lineHeight: 17, marginTop: 4 },
+  syncAge: { ...type.caption, color: colors.muted, fontWeight: weight.regular, lineHeight: 17, marginTop: 2 },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   chip: {
     paddingVertical: 8,

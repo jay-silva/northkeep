@@ -99,6 +99,45 @@ async function sha256Hex(bytes: Buffer): Promise<string> {
   return Buffer.from(new Uint8Array(digest)).toString('hex');
 }
 
+/** What GET /api/status reports: the server's version and the sha256 of the blob it holds. */
+export interface RemoteStatusMobile {
+  version: number;
+  sha256: string;
+}
+
+/**
+ * GET /api/status: a few hundred bytes, no blob. The wake pull (ADR 0044)
+ * asks this first and downloads only when the server is ahead. Same bearer,
+ * redirect refusal, 404/402 handling and deadline race as fetchRemoteBlob.
+ * Returns null when the account has no vault on the server yet.
+ */
+export async function fetchRemoteStatus(options: {
+  serverUrl: string;
+  deviceSecretHex: string;
+}): Promise<RemoteStatusMobile | null> {
+  const { token } = deriveSyncCreds(Buffer.from(options.deviceSecretHex, 'hex'));
+  const serverUrl = options.serverUrl.replace(/\/+$/, '');
+  const deadline = deadlineScope();
+  try {
+    const res = await deadline.race(
+      fetch(`${serverUrl}/api/status`, {
+        headers: { authorization: `Bearer ${token}` },
+        redirect: 'error',
+        signal: deadline.signal,
+      }),
+    );
+    if (res.status === 404) return null;
+    if (res.status === 402) throw new SubscriptionRequiredError();
+    if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on status.`);
+    const body = (await deadline.race(res.json())) as { version?: unknown; sha256?: unknown };
+    const version = typeof body.version === 'number' && Number.isInteger(body.version) ? body.version : 0;
+    const sha256 = typeof body.sha256 === 'string' ? body.sha256 : '';
+    return { version, sha256 };
+  } finally {
+    deadline.done();
+  }
+}
+
 /**
  * GET /api/blob, returning the remote vault after the structural + size +
  * transport-hash checks (exactly the checks packages/sync/src/client.ts runs).

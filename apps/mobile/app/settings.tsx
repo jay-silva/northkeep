@@ -10,6 +10,7 @@ import {
   loadSyncServerUrl,
   saveSyncServerUrl,
 } from '../src/lib/secure-store';
+import { syncAgeLabel } from '../src/lib/sync-flow';
 import { useVaultSession, syncAllowlistHash } from '../src/lib/vault-session';
 import { loadDeviceSecretHex } from '../src/lib/secure-store';
 import * as Clipboard from 'expo-clipboard';
@@ -148,6 +149,7 @@ export default function Settings() {
       <FieldLabel>This device</FieldLabel>
       <Info label="Linked" value={session.accountIdShort ? `yes (account ${session.accountIdShort})` : 'no'} />
       <Info label="Vault on this phone" value={vaultPresent === null ? 'unknown' : vaultPresent ? 'yes' : 'no'} />
+      <Info label="Last synced" value={syncAgeLabel(session.lastSyncedAt) ?? 'never'} />
       <Info label="Last synced version" value={lastVersion > 0 ? String(lastVersion) : 'never'} />
       <Info label="Sync server" value={savedUrl ?? 'not set'} />
       <Info label="Face ID unlock" value={session.biometricCacheEnabled ? 'on' : 'off'} />
