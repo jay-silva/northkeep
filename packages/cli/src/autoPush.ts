@@ -1,5 +1,5 @@
-import { onVaultSave } from '@northkeep/core';
-import { AutoSync, loadSyncConfig } from '@northkeep/sync';
+import { loadDeviceSecret, onVaultSave } from '@northkeep/core';
+import { isAutoSyncVault, loadSyncConfig, pushVault, SubscriptionRequiredError, SyncBusyError } from '@northkeep/sync';
 
 /**
  * Push-on-exit for the CLI (ADR 0044). A CLI command is a short-lived
@@ -19,57 +19,64 @@ export interface AutoPushOptions {
   /** True when the command saved the vault (see trackSaves). */
   saved: boolean;
   log?: (line: string) => void;
+  /** Tests inject the device secret; the CLI reads ~/.northkeep/device.secret. */
+  loadDeviceSecret?: () => Buffer;
 }
 
-export type AutoPushOutcome = 'pushed' | 'in-sync' | 'skipped' | 'not-configured' | 'locked' | 'failed';
+export type AutoPushOutcome = 'pushed' | 'in-sync' | 'skipped' | 'not-configured' | 'locked' | 'busy' | 'other-vault' | 'failed';
 
 export const NOT_UNLOCKED_HINT = 'sync: not pushed (unlock with "northkeep unlock" to sync automatically).';
+export const BUSY_HINT = 'sync: another NorthKeep process is syncing; your write is saved and goes with the next sync.';
+export const OTHER_VAULT_HINT = 'sync: automatic sync applies to the default vault only; use "northkeep sync push --vault" for this one.';
+/** A short-lived command must not wait behind another process's transfer (review 2026-09-03, C2). */
+export const SYNC_LOCK_WAIT_MS = 2_000;
 
 export async function autoPushAfterWrite(options: AutoPushOptions): Promise<AutoPushOutcome> {
   const log = options.log ?? ((line: string) => console.error(line));
   if (!options.saved) return 'skipped';
   if (loadSyncConfig() === null) return 'not-configured';
+  if (!isAutoSyncVault(options.vaultPath)) {
+    log(OTHER_VAULT_HINT);
+    return 'other-vault';
+  }
   if (options.masterKey === null) {
     log(NOT_UNLOCKED_HINT);
     return 'locked';
   }
-  const key = options.masterKey;
-  let outcome: AutoPushOutcome = 'in-sync';
-  const auto = new AutoSync({
-    vaultPath: options.vaultPath,
-    // A fresh copy per call: the engine zeroes what it is given.
-    getMasterKey: () => Buffer.from(key),
-    debounceMs: 0,
-    onEvent: (event) => {
-      if (event.type === 'pushed') {
-        outcome = 'pushed';
-        log(`↑ synced (version ${event.version})`);
-      } else if (event.type === 'error') {
-        outcome = 'failed';
-        log(`sync: ${event.message}. Run "northkeep sync push" later.`);
-      } else if (event.type === 'paused') {
-        outcome = 'failed';
-        log(
-          event.reason === 'subscription'
-            ? 'sync: this server requires a subscription. Run "northkeep sync subscribe".'
-            : 'sync: this server is private and does not list this account.',
-        );
-      } else if (event.type === 'diverged') {
-        outcome = 'failed';
-        log('sync: this machine and the server both changed. Run "northkeep sync pull", then "northkeep sync push".');
-      }
-    },
-  });
+  // One direct push, no engine: a command is short-lived, so there is no
+  // debounce and no retry, and it must not wait behind another process's
+  // transfer. A failure is one line; the write is on disk regardless, and the
+  // GUI or MCP engine (or the next command) picks it up.
   try {
-    auto.notifyWrite(options.vaultPath);
-    await auto.flush();
+    const result = await pushVault({
+      vaultPath: options.vaultPath,
+      deviceSecret: (options.loadDeviceSecret ?? loadDeviceSecret)(),
+      masterKey: Buffer.from(options.masterKey),
+      syncLockWaitMs: SYNC_LOCK_WAIT_MS,
+    });
+    if (result.ok) {
+      log(`↑ synced (version ${result.version})`);
+      return 'pushed';
+    }
+    log('sync: this machine and the server both changed. Run "northkeep sync pull", then "northkeep sync push".');
+    return 'failed';
   } catch (err) {
-    outcome = 'failed';
-    log(`sync: ${err instanceof Error ? err.message : String(err)}. Run "northkeep sync push" later.`);
-  } finally {
-    auto.stop();
+    if (err instanceof SyncBusyError) {
+      log(BUSY_HINT);
+      return 'busy';
+    }
+    if (err instanceof SubscriptionRequiredError) {
+      log('sync: this server requires a subscription. Run "northkeep sync subscribe".');
+      return 'failed';
+    }
+    const message = err instanceof Error ? err.message : String(err);
+    log(
+      /HTTP 403/.test(message)
+        ? 'sync: this server is private and does not list this account.'
+        : `sync: ${message}. Run "northkeep sync push" later.`,
+    );
+    return 'failed';
   }
-  return outcome;
 }
 
 /**

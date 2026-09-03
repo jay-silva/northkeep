@@ -376,7 +376,37 @@ the orchestration. Verdict: NOT CLEARED.
   upgrade-path premise (version key persists, hash key absent) inferred from
   the key history, not observed on a device.
 
-Fixes for this round: not applied at the time of writing.
+## Fixes after the third review (2026-09-03)
+
+- Upgrade path: `decideWakeAction` takes `baselineKnown`. With no stored
+  hash and nothing dirty it never pushes on its own: server at our version
+  means one `establish` push with no conflict recovery (a 409 there is
+  reported as "The server has newer changes. Pull to catch up." and the
+  baseline stays unknown); server elsewhere means `needs-pull`, the same
+  loud line and no network write. A manual pull then stores the hash.
+  Tested over the full matrix: an unknown baseline never yields
+  `retry-push` or `pull`.
+- Save during wake: `runWake` re-gathers dirty, hash and status after the
+  status request; `pullVaultMobile` re-hashes the file immediately before
+  writing and throws `LocalChangedError` if it moved; the wake then
+  re-decides (dirty pushes).
+- Generation: `pushVaultMobile` returns the generation it stamped and the
+  session vault adopts it (`setSyncGeneration`) after every push, so phone
+  blobs no longer share one generation and the replay defense holds for
+  them.
+- Desktop write during upload: after a push the engine compares the file
+  hash with the recorded one and re-arms when they differ; a manual push
+  or pull does the same. Tested with a parked upload.
+- CLI: push-on-exit is one direct push that waits at most 2 s on the sync
+  lock, then prints that another process is syncing and returns.
+- Default vault only: the engine and the CLI push-on-exit act on the
+  account's default vault path; other vaults keep manual push/pull.
+- Locks: a lock whose recorded pid is dead is stolen at once
+  (`FileLockTimeoutError` is typed; `SyncBusyError` for a short wait).
+- Nits: non-string `sha256` ignored; phone lowercases `x-sha256`.
+- KNOWN-LIMITS gains the default-vault, no-wait CLI and dead-pid lines.
+
+Fourth review: pending at the time of writing.
 
 ## Status of this record
 

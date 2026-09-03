@@ -11,6 +11,31 @@ const STALE_MS = 60_000;
 const TIMEOUT_MS = 5_000;
 const RETRY_MS = 50;
 
+/** The lock was held by someone else for longer than the caller was willing to wait. */
+export class FileLockTimeoutError extends Error {
+  constructor(lockPath: string) {
+    super(
+      `Vault is locked by another NorthKeep process (${lockPath}). ` +
+        'If nothing is running, delete the lock file and retry.',
+    );
+    this.name = 'FileLockTimeoutError';
+  }
+}
+
+/** Is the process that wrote this lock token still alive? Unknown (foreign format) counts as alive. */
+function lockOwnerAlive(token: string): boolean {
+  const pid = Number.parseInt(token.split(' ')[0] ?? '', 10);
+  if (!Number.isInteger(pid) || pid <= 0) return true;
+  if (pid === process.pid) return true;
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    // ESRCH: no such process. EPERM: it exists but is not ours; treat as alive.
+    return (err as NodeJS.ErrnoException).code !== 'ESRCH';
+  }
+}
+
 export interface FileLockOptions {
   /** How long to wait for the lock before giving up (default 5 s). */
   timeoutMs?: number;
@@ -38,7 +63,16 @@ export async function withFileLock<T>(
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       try {
         const age = Date.now() - fs.statSync(lockPath).mtimeMs;
-        if (age > staleMs) {
+        // A lock whose owner is dead (crash or kill mid-operation) is stale
+        // at once; waiting out the age window only stalls the next sync
+        // (ADR 0044 review). Age still covers a token we cannot parse.
+        let ownerDead = false;
+        try {
+          ownerDead = !lockOwnerAlive(fs.readFileSync(lockPath, 'utf8'));
+        } catch {
+          ownerDead = false;
+        }
+        if (age > staleMs || ownerDead) {
           // Steal atomically via rename: exactly one contender wins the
           // rename; losers get ENOENT and retry. A plain rm here would let
           // two stealers both remove-and-recreate (double entry).
@@ -54,12 +88,7 @@ export async function withFileLock<T>(
       } catch {
         continue; // lock vanished between exists and stat — retry immediately
       }
-      if (Date.now() > deadline) {
-        throw new Error(
-          `Vault is locked by another NorthKeep process (${lockPath}). ` +
-            'If nothing is running, delete the lock file and retry.',
-        );
-      }
+      if (Date.now() > deadline) throw new FileLockTimeoutError(lockPath);
       await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
     }
   }

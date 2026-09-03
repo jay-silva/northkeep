@@ -16,7 +16,7 @@ import { pullVault, pushVault } from '../src/client.js';
  * NORTHKEEP_HOME that pushes straight through pushVault.
  */
 
-type Mode = 'ok' | 'subscription' | 'crash' | 'slow-blob' | 'garbage-blob';
+type Mode = 'ok' | 'subscription' | 'crash' | 'slow-blob' | 'garbage-blob' | 'slow-put';
 
 function fakeServer(): {
   server: Server;
@@ -85,10 +85,14 @@ function fakeServer(): {
           res.end(JSON.stringify({ version }));
           return;
         }
-        blob = Buffer.concat(chunks);
-        version += 1;
-        res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ version }));
+        const accept = () => {
+          blob = Buffer.concat(chunks);
+          version += 1;
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ version }));
+        };
+        if (mode === 'slow-put') setTimeout(accept, 400);
+        else accept();
         return;
       }
       res.writeHead(404).end();
@@ -457,6 +461,43 @@ describe('AutoSync (ADR 0044)', () => {
     expect(auto.status().phase).toBe('error');
     expect(fs.readFileSync(backup).equals(before)).toBe(true); // untouched by the failed attempt
     expect(contents(homeA)).toContain('remote edit'); // and the live vault is intact
+  });
+
+  it('a write that lands during the upload is pushed next, not dropped', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    fake.mode('slow-put');
+    const { auto, events } = engine({ debounceMs: 20 });
+    write(homeA, 'first');
+    await sleep(120); // the first upload is in flight (400 ms), no vault lock held
+    write(homeA, 'second, during the upload');
+    await sleep(1400); // first push lands, the engine sees the bytes moved on, re-arms, second push lands
+    expect(fake.version()).toBe(2);
+    expect(events.filter((e) => e.type === 'pushed')).toHaveLength(2);
+    expect(auto.status().phase).toBe('synced');
+    expect(auto.status().state).toBe('in-sync');
+  });
+
+  it('does nothing for a vault other than the account default', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    const other = path.join(homeA, 'other.nkv');
+    const v = Vault.create({ path: other, passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    v.save();
+    v.close();
+    const auto = new AutoSync({
+      vaultPath: other,
+      getMasterKey: () => keyFor(homeA),
+      loadDeviceSecret: () => Buffer.from(deviceSecret),
+      debounceMs: 10,
+    });
+    engines.push(auto);
+    auto.notifyWrite(other);
+    await sleep(60);
+    await auto.flush();
+    await auto.wake();
+    expect(auto.status().phase).toBe('off');
+    expect(fake.version()).toBe(0);
   });
 
   it('ignores saves of other vault files', async () => {

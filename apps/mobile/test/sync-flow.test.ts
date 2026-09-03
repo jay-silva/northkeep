@@ -3,6 +3,7 @@ import {
   conflictRepushBaseVersion,
   conflictRepushSyncGeneration,
   decideWakeAction,
+  localBytesMoved,
   initialSyncState,
   syncAgeLabel,
   syncAgeLine,
@@ -231,6 +232,51 @@ describe('runSyncAfterSave orchestration (the load-bearing conflict sequence)', 
   });
 });
 
+describe('runSyncAfterSave adopts the stamped generation (third review)', () => {
+  function ports(pushResults: PushResultLike[]) {
+    const adopted: number[] = [];
+    let i = 0;
+    const p: SyncAfterSavePorts = {
+      hasMasterKey: () => true,
+      loadBaseVersion: async () => 1,
+      push: async () => pushResults[i++]!,
+      fetchRemote: async () => ({ version: 5 }),
+      verifyRemoteOpens: () => true,
+      remoteSyncGeneration: () => 5,
+      localSyncGeneration: () => 2,
+      applyConflictRepushGeneration: () => {},
+      stashRemote: () => {},
+      saveBaseVersion: async () => {},
+      adoptGeneration: (g) => {
+        adopted.push(g);
+      },
+    };
+    return { p, adopted };
+  }
+  it('hands the clean push generation to the session vault', async () => {
+    const { p, adopted } = ports([{ ok: true, conflict: false, version: 2, generation: 7 }]);
+    await runSyncAfterSave(p);
+    expect(adopted).toEqual([7]);
+  });
+  it('does nothing when the transport reports no generation (bump skipped), and tolerates a missing port', async () => {
+    const { p, adopted } = ports([{ ok: true, conflict: false, version: 2 }]);
+    await runSyncAfterSave(p);
+    expect(adopted).toEqual([]);
+    const { p: bare } = ports([{ ok: true, conflict: false, version: 2, generation: 3 }]);
+    delete (bare as Partial<SyncAfterSavePorts>).adoptGeneration;
+    await expect(runSyncAfterSave(bare)).resolves.toEqual({ type: 'synced', version: 2 });
+  });
+  it('adopts on the conflict re-push too when the transport stamped one', async () => {
+    const { p, adopted } = ports([
+      { ok: false, conflict: true, version: 5 },
+      { ok: true, conflict: false, version: 6, generation: 6 },
+    ]);
+    const ev = await runSyncAfterSave(p);
+    expect(ev.type).toBe('conflict-recovered');
+    expect(adopted).toEqual([6]);
+  });
+});
+
 describe('conflictRepushSyncGeneration (planner N1)', () => {
   it('sets generation to max(local, remote) + 1', () => {
     expect(conflictRepushSyncGeneration(5, 8)).toBe(9);
@@ -274,6 +320,7 @@ describe('decideWakeAction (ADR 0044 fast-forward rule)', () => {
     status: 'synced',
     localDirty: false,
     localChanged: false,
+    baselineKnown: true,
     remoteVersion: null,
     lastSyncedVersion: 3,
   };
@@ -294,6 +341,43 @@ describe('decideWakeAction (ADR 0044 fast-forward rule)', () => {
     // Untouched bytes: the existing fast-forward rule.
     expect(decideWakeAction({ ...ready, localChanged: false, remoteVersion: 9 })).toBe('pull');
     expect(decideWakeAction({ ...ready, localChanged: false, remoteVersion: null })).toBe('check');
+  });
+
+  it('an unknown baseline never pushes on its own (third review: the upgrade path)', () => {
+    // A phone that synced before the post-sync hash existed: stored version,
+    // no stored hash, nothing dirty. "Unknown" is not "changed".
+    const upgraded: WakeInput = { ...ready, baselineKnown: false, localChanged: true, localDirty: false, lastSyncedVersion: 1 };
+    for (const status of ['idle', 'synced', 'conflict-recovered', 'error'] as const) {
+      for (const errorKind of ['network', 'redirect-refused', 'other', undefined] as const) {
+        const base = { ...upgraded, status, errorKind };
+        expect(decideWakeAction({ ...base, remoteVersion: null })).toBe('check');
+        expect(decideWakeAction({ ...base, remoteVersion: 3 })).toBe('needs-pull');
+        expect(decideWakeAction({ ...base, remoteVersion: 1 })).toBe('establish');
+        expect(decideWakeAction({ ...base, remoteVersion: 0 })).toBe('needs-pull');
+        // Never a push with nothing unpushed, never an automatic pull.
+        for (const remoteVersion of [null, 0, 1, 2, 3, 99]) {
+          const action = decideWakeAction({ ...base, remoteVersion });
+          expect(action).not.toBe('retry-push');
+          expect(action).not.toBe('pull');
+        }
+      }
+    }
+    // A genuinely unpushed save still pushes, baseline or not.
+    expect(decideWakeAction({ ...upgraded, localDirty: true, remoteVersion: 3 })).toBe('retry-push');
+    // Paywall and private beta still win.
+    expect(decideWakeAction({ ...upgraded, status: 'error', errorKind: 'subscription-required', remoteVersion: 3 })).toBe('none');
+    expect(decideWakeAction({ ...upgraded, status: 'error', errorKind: 'not-enabled', remoteVersion: 1 })).toBe('none');
+    // Locked or unconfigured: nothing.
+    expect(decideWakeAction({ ...upgraded, unlocked: false, remoteVersion: 1 })).toBe('none');
+  });
+
+  it('localBytesMoved: the pre-install re-check refuses a moved file and only when asked', () => {
+    const h = 'c'.repeat(64);
+    expect(localBytesMoved(undefined, h)).toBe(false); // manual pull: no expectation
+    expect(localBytesMoved(undefined, null)).toBe(false);
+    expect(localBytesMoved(h, h)).toBe(false);
+    expect(localBytesMoved(h, 'd'.repeat(64))).toBe(true);
+    expect(localBytesMoved(h, null)).toBe(true);
   });
 
   it('vaultUnchangedSinceSync: unknown on either side counts as changed', () => {

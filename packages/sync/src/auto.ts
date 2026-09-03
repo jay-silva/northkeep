@@ -3,7 +3,15 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadDeviceSecret as coreLoadDeviceSecret, memzero } from '@northkeep/core';
 import { loadSyncConfig } from './config.js';
-import { LocalChangedError, pullVault, pushVault, SubscriptionRequiredError, syncState, type SyncState } from './client.js';
+import {
+  isAutoSyncVault,
+  LocalChangedError,
+  pullVault,
+  pushVault,
+  SubscriptionRequiredError,
+  syncState,
+  type SyncState,
+} from './client.js';
 
 /**
  * Automatic sync (ADR 0044). One engine per host process (GUI server, MCP
@@ -75,6 +83,8 @@ export interface AutoSyncOptions {
   maxWaitMs?: number;
   /** Retry schedule after a failure; the last value repeats. */
   backoffMs?: readonly number[];
+  /** Tests only: run for a vault that is not the account's default one. */
+  allowAnyVault?: boolean;
 }
 
 const DEFAULT_DEBOUNCE_MS = 5_000;
@@ -116,6 +126,8 @@ export class AutoSync {
   /** Serializes operations: a wake never overlaps a push. */
   private chain: Promise<void> = Promise.resolve();
   private stopped = false;
+  /** False for any vault other than the account's default one: the engine then does nothing (review 2026-09-03, C3). */
+  private readonly eligible: boolean;
 
   constructor(options: AutoSyncOptions) {
     this.vaultPath = options.vaultPath;
@@ -125,11 +137,12 @@ export class AutoSync {
     this.debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
     this.maxWaitMs = options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
     this.backoffMs = options.backoffMs ?? DEFAULT_BACKOFF_MS;
+    this.eligible = options.allowAnyVault === true || isAutoSyncVault(options.vaultPath);
   }
 
   /** Feed this from core's onVaultSave; paths that are not this vault are ignored. */
   notifyWrite(savedPath?: string): void {
-    if (this.stopped || this.inOwnOperation) return;
+    if (this.stopped || !this.eligible || this.inOwnOperation) return;
     if (savedPath !== undefined && savedPath !== this.vaultPath) return;
     this.pushPending = true;
     if (this.firstPendingAt === null) this.firstPendingAt = Date.now();
@@ -144,6 +157,7 @@ export class AutoSync {
    * nothing but a status line when both sides moved.
    */
   wake(): Promise<void> {
+    if (!this.eligible) return Promise.resolve();
     return this.enqueue(() => this.runWake());
   }
 
@@ -174,7 +188,12 @@ export class AutoSync {
           this.firstPendingAt = null;
           this.settle('in-sync');
         } else {
-          this.phase = this.pushPending ? 'pending' : 'idle';
+          // Bytes differ from the server's: a write landed during the manual
+          // operation (or it was a pull and a write followed). Push it next.
+          this.pushPending = true;
+          if (this.firstPendingAt === null) this.firstPendingAt = Date.now();
+          this.phase = 'pending';
+          this.armDebounce();
         }
       } catch (err) {
         this.phase = this.pushPending ? 'pending' : 'idle';
@@ -206,7 +225,7 @@ export class AutoSync {
   status(): AutoSyncStatus {
     const config = loadSyncConfig();
     return {
-      phase: config === null ? 'off' : this.phase,
+      phase: config === null || !this.eligible ? 'off' : this.phase,
       lastSyncedAt: config?.lastSyncedAt ?? null,
       state: this.state,
       message: this.message,
@@ -301,10 +320,7 @@ export class AutoSync {
       }
       const result = await pushVault({ vaultPath: this.vaultPath, deviceSecret, masterKey: key });
       if (result.ok) {
-        this.pushPending = false;
-        this.firstPendingAt = null;
-        this.settle('in-sync');
-        this.onEvent({ type: 'pushed', version: result.version });
+        this.afterPush(result.version);
         return;
       }
       // 409: the server moved past the base we pushed from. Re-read where we
@@ -322,10 +338,7 @@ export class AutoSync {
       if (s.state === 'ahead' || s.state === 'no-remote') {
         const again = await pushVault({ vaultPath: this.vaultPath, deviceSecret, masterKey: Buffer.from(key) });
         if (again.ok) {
-          this.pushPending = false;
-          this.firstPendingAt = null;
-          this.settle('in-sync');
-          this.onEvent({ type: 'pushed', version: again.version });
+          this.afterPush(again.version);
           return;
         }
         // Twice refused from a base the server itself reported: the server
@@ -423,6 +436,23 @@ export class AutoSync {
       memzero(key); // harmless when the 'ahead' branch already zeroed it
       this.inOwnOperation = false;
     }
+  }
+
+  /**
+   * A push landed. The upload held no vault lock, so a write may have landed
+   * meanwhile (and the save hook was ignored while our operation ran): if the
+   * file no longer hashes to what the server holds, it is pending again and
+   * goes on the next debounce (review 2026-09-03, D8).
+   */
+  private afterPush(version: number): void {
+    const recorded = loadSyncConfig()?.lastSha ?? null;
+    const now = this.localSha();
+    const stillPending = recorded !== null && now !== null && now !== recorded;
+    this.pushPending = stillPending;
+    this.firstPendingAt = stillPending ? Date.now() : null;
+    this.settle('in-sync');
+    this.onEvent({ type: 'pushed', version });
+    if (stillPending) this.armDebounce();
   }
 
   private settle(state: SyncState): void {

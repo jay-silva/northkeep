@@ -4,6 +4,7 @@ import { Vault, VaultAuthError, VaultSyncGenerationError, getPlatform } from '@n
 import { MAX_BLOB_BYTES, SubscriptionRequiredError, deriveSyncCreds } from '@northkeep/sync';
 import { createDeadline, type DeadlineScope } from './deadline';
 import { deleteIfExists, pulledTmpPath } from './paths';
+import { localBytesMoved } from './sync-flow';
 
 /**
  * The phone's sync transport: PULL (M6-1) and PUSH + conflict recovery (M6-2).
@@ -65,6 +66,16 @@ export interface MobilePushResult {
    * the way the desktop's syncState does (ADR 0044, second review).
    */
   sha256?: string;
+  /** On success, the sync generation stamped on disk before the upload (absent when the bump was skipped). */
+  generation?: number;
+}
+
+/** Thrown by pullVaultMobile when the vault file moved between the wake's decision and the install. Nothing was written. */
+export class LocalChangedError extends Error {
+  constructor() {
+    super('The vault changed while the download ran, so it was not replaced.');
+    this.name = 'LocalChangedError';
+  }
 }
 
 /** A remote blob that already passed the structural + transport-hash checks. */
@@ -200,7 +211,9 @@ export async function fetchRemoteBlob(options: {
     if (!isVaultBlob(blob)) {
       throw new Error('Downloaded data is not a NorthKeep vault (corrupt download or wrong server).');
     }
-    const claimedSha = res.headers.get('x-sha256') ?? '';
+    // Lowercased: hex casing is not integrity, and an uppercase header from a
+    // third-party server failed every download (third review).
+    const claimedSha = (res.headers.get('x-sha256') ?? '').toLowerCase();
     if (claimedSha && (await sha256Hex(blob)) !== claimedSha) {
       throw new Error('Downloaded vault failed its integrity check. Nothing was changed.');
     }
@@ -260,6 +273,13 @@ export async function pullVaultMobile(options: {
   vaultPath: string;
   /** Required when a local vault exists. A COPY is made before open-verify (openWithKey zeroes its input). */
   masterKey?: Buffer;
+  /**
+   * An automatic pull's guard: the hash of the file the wake decided on. If
+   * the file no longer hashes to it right before the install, nothing is
+   * written and LocalChangedError is thrown (a save landed during the wake).
+   * Manual pulls omit it and replace regardless.
+   */
+  expectLocalSha?: string;
 }): Promise<MobilePullResult> {
   const platform = getPlatform();
   const remote = await fetchRemoteBlob(options);
@@ -305,6 +325,11 @@ export async function pullVaultMobile(options: {
       );
     }
   }
+  // The phone's equivalent of the desktop's under-lock re-check: a save that
+  // landed while the blob downloaded must not be buried (third review).
+  if (localExists && localBytesMoved(options.expectLocalSha, await hashVaultFile(options.vaultPath))) {
+    throw new LocalChangedError();
+  }
   // writeAtomic keeps the previous vault as `${path}.bak` (the storage seam contract).
   // Original bytes (possibly unmigrated 0.3) are installed; compare used the
   // same generation desktop would after open-verify/migrate.
@@ -336,10 +361,15 @@ export async function pushVaultMobile(options: {
   if (!platform.storage.exists(options.vaultPath)) {
     throw new Error('No local vault to push. Unlock or import a vault first.');
   }
+  // The generation stamped here, returned so the session's open vault adopts
+  // it; otherwise its next save writes the old value back and the phone's
+  // generation never rises (third review: server blobs at gen 1, 1, 1).
+  let stampedGeneration: number | undefined;
   if (!options.skipGenerationBump) {
     const vault = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey), platform);
     try {
       vault.bumpSyncGeneration();
+      stampedGeneration = vault.getSyncGeneration();
       vault.save();
     } finally {
       vault.close();
@@ -386,7 +416,7 @@ export async function pushVaultMobile(options: {
     if (res.status === 402) throw new SubscriptionRequiredError();
     if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on push.`);
     const body = (await deadline.race(res.json())) as { version: number };
-    return { ok: true, conflict: false, version: body.version, sha256: uploadedSha };
+    return { ok: true, conflict: false, version: body.version, sha256: uploadedSha, generation: stampedGeneration };
   } finally {
     deadline.done();
   }

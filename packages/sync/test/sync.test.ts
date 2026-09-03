@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Vault, deriveMasterKey, generateDeviceSecret, KDF_INTERACTIVE } from '@northkeep/core';
 import { deriveSyncCreds, tokenHash } from '../src/creds.js';
 import { assertSyncUrl, loadSyncConfig, setSyncServer } from '../src/config.js';
-import { LocalChangedError, pullVault, pushVault, syncState } from '../src/client.js';
+import { LocalChangedError, pullVault, pushVault, SyncBusyError, syncState } from '../src/client.js';
 import { withFileLock } from '@northkeep/core';
 
 function masterKeyFor(vPath: string, passphrase: string, deviceSecret: Buffer): Buffer {
@@ -210,6 +210,30 @@ describe('lock scope (ADR 0044 review): the vault is free while bytes cross the 
     expect(result.ok).toBe(true);
     // The upload carried the pre-write bytes; the write shows as ahead and goes next.
     expect((await syncState({ vaultPath: vp(), deviceSecret })).state).toBe('ahead');
+  });
+
+  it('a lock left by a dead process is stolen at once, and a live syncer makes a short-wait push report busy', async () => {
+    const v = Vault.create({ path: vp(), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    v.save();
+    v.close();
+    setSyncServer(url, deriveSyncCreds(deviceSecret).accountId);
+    // Orphaned sync lock: a pid no process can have on this box.
+    fs.writeFileSync(`${vp()}.sync.lock`, `4194305 ${new Date().toISOString()} orphan\n`);
+    const started = Date.now();
+    const push = pushVault({ vaultPath: vp(), deviceSecret, masterKey: key(), syncLockWaitMs: 3_000 });
+    await new Promise((r) => setTimeout(r, 150));
+    expect(Date.now() - started).toBeLessThan(1000);
+    expect(fs.readFileSync(`${vp()}.sync.lock`, 'utf8')).not.toContain('orphan'); // stolen, ours now
+    releasePut!();
+    expect((await push).ok).toBe(true);
+    // A live holder: a second pusher with a 300 ms budget gives up with SyncBusyError, not a lock error.
+    const slow = pushVault({ vaultPath: vp(), deviceSecret, masterKey: key() });
+    await new Promise((r) => setTimeout(r, 100));
+    await expect(
+      pushVault({ vaultPath: vp(), deviceSecret, masterKey: key(), syncLockWaitMs: 300 }),
+    ).rejects.toBeInstanceOf(SyncBusyError);
+    releasePut!();
+    expect((await slow).ok).toBe(true);
   });
 
   it('expectLocalSha refuses the swap when the file changed, and keepCopyAt is written only on success', async () => {

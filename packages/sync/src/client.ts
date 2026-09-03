@@ -1,6 +1,14 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import { Vault, VaultAuthError, VaultSyncGenerationError, withFileLock } from '@northkeep/core';
+import path from 'node:path';
+import {
+  Vault,
+  VaultAuthError,
+  VaultSyncGenerationError,
+  defaultVaultPath,
+  FileLockTimeoutError,
+  withFileLock,
+} from '@northkeep/core';
 import { deriveSyncCreds } from './creds.js';
 import { assertSyncUrl, loadSyncConfig, saveSyncConfig, type SyncConfig } from './config.js';
 
@@ -164,8 +172,40 @@ function isVaultBlob(blob: Buffer): boolean {
  */
 const SYNC_LOCK_TIMEOUT_MS = BLOB_TIMEOUT_MS + 30_000;
 const SYNC_LOCK_STALE_MS = BLOB_TIMEOUT_MS + 60_000;
-function withSyncLock<T>(vaultPath: string, fn: () => Promise<T>): Promise<T> {
-  return withFileLock(`${vaultPath}.sync`, fn, { timeoutMs: SYNC_LOCK_TIMEOUT_MS, staleMs: SYNC_LOCK_STALE_MS });
+
+/** Another process on this machine is pushing or pulling and the caller chose not to wait for it. */
+export class SyncBusyError extends Error {
+  constructor() {
+    super('Another NorthKeep process is syncing this vault right now.');
+    this.name = 'SyncBusyError';
+  }
+}
+
+async function withSyncLock<T>(vaultPath: string, fn: () => Promise<T>, waitMs = SYNC_LOCK_TIMEOUT_MS): Promise<T> {
+  let acquired = false;
+  try {
+    return await withFileLock(
+      `${vaultPath}.sync`,
+      () => {
+        acquired = true;
+        return fn();
+      },
+      { timeoutMs: waitMs, staleMs: SYNC_LOCK_STALE_MS },
+    );
+  } catch (err) {
+    if (!acquired && err instanceof FileLockTimeoutError) throw new SyncBusyError();
+    throw err;
+  }
+}
+
+/**
+ * Automatic sync applies to the account's vault only (ADR 0044 review): the
+ * sync config is per account and holds one server copy, so a write to some
+ * other `--vault` must not push that file over it. Manual push/pull keep
+ * working for any path, as before.
+ */
+export function isAutoSyncVault(vaultPath: string): boolean {
+  return path.resolve(vaultPath) === path.resolve(defaultVaultPath());
 }
 
 /** Thrown by pullVault when the local vault changed between the caller's decision and the swap. Nothing was replaced. */
@@ -190,6 +230,8 @@ export async function pushVault(options: {
   deviceSecret: Buffer;
   /** Copy is passed to openWithKey (which zeroes its input). */
   masterKey: Buffer;
+  /** How long to wait for another syncer on this machine; throws SyncBusyError after. Default: longer than a transfer. */
+  syncLockWaitMs?: number;
 }): Promise<PushResult> {
   const { token } = deriveSyncCreds(options.deviceSecret);
   return withSyncLock(options.vaultPath, async () => {
@@ -232,7 +274,7 @@ export async function pushVault(options: {
       });
     }
     return result;
-  });
+  }, options.syncLockWaitMs);
 }
 
 /**
@@ -434,7 +476,7 @@ export async function syncState(options: {
   // compare bytes at all. Fall back to the version comparison instead of
   // treating "no hash" as "different", which would pin such a server to
   // ahead/diverged forever and never say in-sync again.
-  const remoteShaRaw = (remote.sha256 ?? '').toLowerCase();
+  const remoteShaRaw = typeof remote.sha256 === 'string' ? remote.sha256.toLowerCase() : '';
   const remoteSha = /^[0-9a-f]{64}$/.test(remoteShaRaw) ? remoteShaRaw : null;
   const localSha = createHash('sha256').update(fs.readFileSync(options.vaultPath)).digest('hex');
   const serverAdvanced = remote.version > config.lastVersion;

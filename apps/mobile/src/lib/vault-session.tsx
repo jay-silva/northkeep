@@ -55,6 +55,7 @@ import {
   wipeAllSecrets,
 } from './secure-store';
 import {
+  LocalChangedError,
   fetchRemoteBlob,
   fetchRemoteStatus,
   pullVaultMobile,
@@ -65,12 +66,16 @@ import {
   type VerifiedRemoteBlob,
 } from './sync';
 import { classifySyncError } from './sync-errors';
-import { decideWakeAction,
+import {
+  NEEDS_PULL_MESSAGE,
+  decideWakeAction,
   initialSyncState,
   reduceSync,
   runSyncAfterSave,
+  vaultUnchangedSinceSync,
   type SyncEvent,
-  type SyncState, vaultUnchangedSinceSync } from './sync-flow';
+  type SyncState,
+} from './sync-flow';
 
 /**
  * The unlock-session state machine for M6-1 (link, unlock, browse). Holds the
@@ -494,7 +499,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     deleteIfExists(`${path}.tmp`);
   }, []);
 
-  const pullAndReload = useCallback(async (): Promise<{ pulled: boolean; version?: number }> => {
+  const pullAndReload = useCallback(async (expectLocalSha?: string): Promise<{ pulled: boolean; version?: number }> => {
     const key = masterKeyRef.current;
     if (!vaultRef.current || !key) throw new Error('Unlock the vault before syncing.');
     const secretHex = await loadDeviceSecretHex();
@@ -506,6 +511,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       deviceSecretHex: secretHex,
       vaultPath: vaultPath(),
       masterKey: key,
+      expectLocalSha,
     });
     if (!result.ok) return { pulled: false };
     await saveLastSyncVersion(result.version);
@@ -606,6 +612,12 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         stashRemote: () => {
           if (pendingRemote !== null) stashRecoverableBak(path, pendingRemote.blob);
         },
+        adoptGeneration: (generation) => {
+          // The transport stamped this on disk in its own Vault instance; the
+          // session's open vault must carry it, or its next save writes the
+          // old value back and the phone's generation never rises.
+          vaultRef.current?.setSyncGeneration(generation);
+        },
         saveBaseVersion: async (version, sha256) => {
           await saveLastSyncVersion(version);
           // The bytes the server accepted are the new baseline for "untouched
@@ -679,6 +691,43 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
   }, [runPushSequence]);
 
   /**
+   * A phone that synced before the post-sync hash existed has no baseline.
+   * When the server is exactly where this phone last synced, our bytes extend
+   * the server's, so one push establishes the baseline safely. It runs
+   * WITHOUT the M6-2 conflict recovery: a 409 here means the server moved in
+   * the meantime and last-writer-wins would roll the other device back, so it
+   * is reported and the user pulls (third adversarial review, 2026-09-03).
+   */
+  const establishBaseline = useCallback(
+    async (serverUrl: string, secretHex: string, baseVersion: number): Promise<void> => {
+      const key = masterKeyRef.current;
+      const vault = vaultRef.current;
+      if (!key || !vault) return;
+      setSyncState((s) => reduceSync(s, { type: 'start' }));
+      const path = vaultPath();
+      await saveLocalDirty(true); // until the server accepts these bytes they are unpushed
+      const result = await pushVaultMobile({
+        serverUrl,
+        deviceSecretHex: secretHex,
+        vaultPath: path,
+        baseVersion,
+        masterKey: key,
+      });
+      if (!result.ok) {
+        setSyncState((s) => reduceSync(s, { type: 'error', message: NEEDS_PULL_MESSAGE, kind: 'other' }));
+        return;
+      }
+      if (result.generation !== undefined) vault.setSyncGeneration(result.generation);
+      await saveLastSyncVersion(result.version);
+      await saveLastSyncSha(result.sha256 ?? (await hashVaultFile(path)));
+      await saveLocalDirty(false);
+      await markSyncedNow();
+      setSyncState((s) => reduceSync(s, { type: 'synced', version: result.version }));
+    },
+    [markSyncedNow],
+  );
+
+  /**
    * ADR 0044 wake: on unlock, and on return to the foreground while unlocked.
    * One status request, then a FAST-FORWARD pull when the server is ahead and
    * nothing local is unpushed, a retry of the push when something is, and
@@ -700,29 +749,54 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       const serverUrl = await loadSyncServerUrl();
       const configured = Boolean(secretHex && serverUrl);
       const lastSyncedVersion = await loadLastSyncVersion();
-      const localDirty = await loadLocalDirty();
-      // Bytes decide: the file on disk against the hash of what the server
-      // last accepted or handed us. No baseline means changed.
-      const localChanged = !vaultUnchangedSinceSync(await loadLastSyncSha(), await hashVaultFile(vaultPath()));
-      const current = syncStateRef.current;
-      const base = {
-        unlocked,
-        configured,
-        status: current.status,
-        errorKind: current.errorKind,
-        localDirty,
-        localChanged,
-        lastSyncedVersion,
+      // Everything that can change while a request is in flight is read
+      // here, and read AGAIN after the status request (third review: a save
+      // during the wake was buried because the inputs were captured once).
+      const gather = async (remoteVersion: number | null) => {
+        const lastSha = await loadLastSyncSha();
+        const currentSha = await hashVaultFile(vaultPath());
+        const current = syncStateRef.current;
+        return {
+          currentSha,
+          input: {
+            unlocked,
+            configured,
+            status: current.status,
+            errorKind: current.errorKind,
+            localDirty: await loadLocalDirty(),
+            localChanged: !vaultUnchangedSinceSync(lastSha, currentSha),
+            baselineKnown: lastSha !== null,
+            lastSyncedVersion,
+            remoteVersion,
+          },
+        };
       };
-      let action = decideWakeAction({ ...base, remoteVersion: null });
+      let { currentSha, input } = await gather(null);
+      let action = decideWakeAction(input);
       if (action === 'check') {
         const remote = await fetchRemoteStatus({ serverUrl: serverUrl as string, deviceSecretHex: secretHex as string });
-        // No vault on the server: nothing to fast-forward to.
-        action = decideWakeAction({ ...base, remoteVersion: remote === null ? lastSyncedVersion : remote.version });
+        // No vault on the server: nothing to fast-forward to, and an unknown
+        // baseline may establish itself against it.
+        ({ currentSha, input } = await gather(remote === null ? lastSyncedVersion : remote.version));
+        action = decideWakeAction(input);
       }
       if (action === 'pull') {
         setSyncState((s) => reduceSync(s, { type: 'start' }));
-        const result = await pullAndReload();
+        let result: { pulled: boolean; version?: number };
+        try {
+          result = await pullAndReload(currentSha ?? undefined);
+        } catch (err) {
+          if (!(err instanceof LocalChangedError)) throw err;
+          // A save landed during the download. Decide once more from the new
+          // bytes: a dirty or changed vault pushes; nothing is ever buried.
+          ({ input } = await gather(input.remoteVersion));
+          if (decideWakeAction({ ...input, status: 'idle' }) === 'retry-push') {
+            await pushNow().catch(() => undefined);
+          } else {
+            setSyncState((s) => reduceSync(s, { type: 'synced', version: lastSyncedVersion }));
+          }
+          return;
+        }
         setSyncState((s) =>
           reduceSync(s, result.pulled ? { type: 'synced', version: result.version ?? lastSyncedVersion } : { type: 'synced', version: lastSyncedVersion }),
         );
@@ -730,6 +804,12 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         // pushNow updates the pill itself and rethrows the raw error; the
         // wake has nothing further to do with it.
         await pushNow().catch(() => undefined);
+      } else if (action === 'establish') {
+        await establishBaseline(serverUrl as string, secretHex as string, lastSyncedVersion);
+      } else if (action === 'needs-pull') {
+        // Unknown baseline and the server is not where we last synced: say
+        // so, loudly, and let the user pull. Never push, never auto-pull.
+        setSyncState((s) => reduceSync(s, { type: 'error', message: NEEDS_PULL_MESSAGE, kind: 'other' }));
       }
     } catch (err) {
       const friendly = classifySyncError(err);
@@ -737,7 +817,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     } finally {
       wakeInFlightRef.current = false;
     }
-  }, [pullAndReload, pushNow]);
+  }, [pullAndReload, pushNow, establishBaseline]);
 
   // Unlock is the main wake trigger: the app locks on background (_layout), so
   // "back in the foreground" almost always arrives here, after the key is held.

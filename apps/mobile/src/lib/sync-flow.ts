@@ -63,6 +63,13 @@ export interface PushResultLike {
   version: number;
   /** Hex sha256 of the bytes the server accepted, when the transport reports it (ADR 0044). */
   sha256?: string;
+  /**
+   * The sync generation the transport stamped on disk before uploading, when
+   * it bumped one. The session's open vault must adopt it, or its next save
+   * writes the old value back and the phone's generation never rises (third
+   * adversarial review, 2026-09-03).
+   */
+  generation?: number;
 }
 
 export function initialSyncState(version = 0): SyncState {
@@ -167,6 +174,11 @@ export interface SyncAfterSavePorts {
   stashRemote(): void;
   /** Persist the new in-sync version (and the hash of the accepted bytes, when known) after a successful push. */
   saveBaseVersion(version: number, sha256?: string): Promise<void>;
+  /**
+   * Carry the generation the transport stamped on disk into the session's
+   * open vault, so the next save does not overwrite it with the old value.
+   */
+  adoptGeneration?(generation: number): void;
 }
 
 /**
@@ -187,6 +199,7 @@ export async function runSyncAfterSave(ports: SyncAfterSavePorts): Promise<SyncE
   const base = await ports.loadBaseVersion();
   const push1 = await ports.push(base);
   if (push1.ok) {
+    if (push1.generation !== undefined) ports.adoptGeneration?.(push1.generation);
     await ports.saveBaseVersion(push1.version, push1.sha256);
     return { type: 'synced', version: push1.version };
   }
@@ -219,6 +232,7 @@ export async function runSyncAfterSave(ports: SyncAfterSavePorts): Promise<SyncE
       message: 'Another device is syncing at the same time. Your edit is saved here; sync again in a moment.',
     };
   }
+  if (push2.generation !== undefined) ports.adoptGeneration?.(push2.generation);
   await ports.saveBaseVersion(push2.version, push2.sha256);
   return { type: 'conflict-recovered', version: push2.version };
 }
@@ -248,7 +262,10 @@ export function syncStatusLabel(status: SyncStatus): string {
 // ADR 0044: wake pull (fast-forward only) and the sync age.
 // ---------------------------------------------------------------------------
 
-export type WakeAction = 'none' | 'retry-push' | 'pull' | 'check';
+export type WakeAction = 'none' | 'retry-push' | 'pull' | 'check' | 'establish' | 'needs-pull';
+
+/** The loud line for a phone that cannot tell whether it is behind or ahead: the user pulls. */
+export const NEEDS_PULL_MESSAGE = 'The server has newer changes. Pull to catch up.';
 
 export interface WakeInput {
   unlocked: boolean;
@@ -270,6 +287,13 @@ export interface WakeInput {
    * before sync was configured (second adversarial review, 2026-09-03).
    */
   localChanged: boolean;
+  /**
+   * False when there is no stored post-sync hash: a phone that synced before
+   * the hash existed. Then "changed" is unknowable, and unknown must never
+   * become a push with nothing unpushed (third adversarial review: the 409
+   * would trigger last-writer-wins and roll the other device back).
+   */
+  baselineKnown: boolean;
   /** Server version from GET /api/status, or null when not fetched yet. */
   remoteVersion: number | null;
   /** The last server version this phone pushed to or pulled. */
@@ -286,13 +310,15 @@ export interface WakeInput {
  *   locked or unconfigured            -> 'none'
  *   a sync in flight                  -> 'none'
  *   error: subscription / not enabled -> 'none'   (the user acts, not a timer)
- *   file differs from the post-sync    -> 'retry-push' (whatever the last status;
- *   hash, or a save is unpushed           bytes decide, not push attempts)
- *   error, nothing unpushed           -> 'check'  (a failed status check or pull
- *                                                  is not an edit; pushing here
- *                                                  would manufacture a 409 and
- *                                                  the LWW re-push would roll
- *                                                  the other device back)
+ *   a save is unpushed                -> 'retry-push'
+ *   baseline known, bytes differ      -> 'retry-push' (bytes decide, not attempts)
+ *   baseline unknown (no stored hash, a phone that synced before it existed):
+ *     remote unknown                  -> 'check'
+ *     remote == last synced version   -> 'establish' (one push WITHOUT conflict
+ *                                        recovery: the server holds what we
+ *                                        last synced, so our bytes extend it;
+ *                                        a 409 there is reported, never resolved)
+ *     anything else                   -> 'needs-pull' (say so; the user pulls)
  *   remote version unknown            -> 'check'  (fetch /api/status, decide again)
  *   server ahead                      -> 'pull'
  *   otherwise                         -> 'none'
@@ -300,10 +326,21 @@ export interface WakeInput {
 /**
  * The byte-level "untouched since sync" test. Unknown on either side counts as
  * changed: a phone that synced before the hash existed, or has no file, must
- * push (or do nothing), never be fast-forwarded over.
+ * never be fast-forwarded over.
  */
 export function vaultUnchangedSinceSync(lastSyncSha: string | null, currentSha: string | null): boolean {
   return lastSyncSha !== null && currentSha !== null && lastSyncSha === currentSha;
+}
+
+/**
+ * Did the vault file move between a wake's decision and the install? Used by
+ * pullVaultMobile right before it writes (the phone has no file lock, so this
+ * is its version of the desktop's under-lock re-check). No expectation means
+ * a manual pull, which replaces regardless (documented limit).
+ */
+export function localBytesMoved(expectedSha: string | undefined, currentSha: string | null): boolean {
+  if (expectedSha === undefined) return false;
+  return currentSha === null || currentSha !== expectedSha;
 }
 
 export function decideWakeAction(input: WakeInput): WakeAction {
@@ -312,11 +349,18 @@ export function decideWakeAction(input: WakeInput): WakeAction {
   if (input.status === 'error' && (input.errorKind === 'subscription-required' || input.errorKind === 'not-enabled')) {
     return 'none';
   }
-  // Only an unpushed local save may be pushed from a wake. An error state
-  // with nothing unpushed (a status check or a pull that failed offline) falls
-  // through to the status check, never to a push: adversarial review 2026-09-03
-  // showed the push-then-LWW path silently rolling the Mac back.
-  if (input.localDirty || input.localChanged) return 'retry-push';
+  // Only an unpushed local save, or bytes that provably differ from the
+  // baseline, may be pushed from a wake. An error state with nothing unpushed
+  // (a status check or a pull that failed offline) falls through to the
+  // status check, never to a push (first review). An unknown baseline is not
+  // "changed": it is unknowable, and pushing on it manufactured the 409 that
+  // rolled the other device back (third review).
+  if (input.localDirty) return 'retry-push';
+  if (input.baselineKnown && input.localChanged) return 'retry-push';
+  if (!input.baselineKnown) {
+    if (input.remoteVersion === null) return 'check';
+    return input.remoteVersion === input.lastSyncedVersion ? 'establish' : 'needs-pull';
+  }
   if (input.remoteVersion === null) return 'check';
   if (input.remoteVersion > input.lastSyncedVersion) return 'pull';
   return 'none';

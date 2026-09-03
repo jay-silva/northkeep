@@ -101,6 +101,17 @@ every milestone; if a limit is removed, say when and how.*
   before either syncs still produce two authentic vaults with the same sync
   generation (ADR 0038 residual N2). Automatic sync makes the window minutes
   instead of days; it does not close it.
+- **Automatic sync applies to the default vault only.** The sync config is
+  per account and holds one server copy, so a write to another `--vault` is
+  saved but not pushed; `northkeep sync push --vault` still pushes it by
+  hand, replacing the account's copy as it always did.
+- **A CLI command never waits behind another process's transfer.** If the GUI
+  or the MCP server is mid-push, `northkeep remember` prints that another
+  process is syncing and returns; the running engine notices the new bytes
+  after its own push and sends them.
+- **A lock left by a crashed process is stolen as soon as its pid is dead.**
+  Reads and writes are never blocked by a sync in progress; only other
+  syncers wait, and only for a live one.
 - **"Last synced" is per machine.** The age shown is this device's last
   successful push or pull, not proof the other device has caught up.
 

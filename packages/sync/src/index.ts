@@ -28,6 +28,8 @@ export {
   portalUrl,
   SubscriptionRequiredError,
   LocalChangedError,
+  SyncBusyError,
+  isAutoSyncVault,
   type PullResult,
   type PushResult,
   type RemoteStatus,
