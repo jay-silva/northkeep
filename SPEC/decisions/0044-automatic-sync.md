@@ -318,7 +318,65 @@ combinations with nothing unpushed never yield a push. Verdict: NOT CLEARED.
 - 409 twice: the engine now fails loudly with a message and backs off
   instead of parking on Syncing.
 
-Third review: pending at the time of writing.
+## Third adversarial review (2026-09-03, run against 3e31353..f993fad)
+
+Fresh eyes, both fix sections treated as unverified, the phone's real
+transport and decision modules run under Node with a line-for-line port of
+the orchestration. Verdict: NOT CLEARED.
+
+- KILL SHOT (phone, upgrade path). Every phone that synced before this build
+  has a stored last version and no stored hash, so the second-round rule
+  "unknown hash counts as changed" makes its first wake a `retry-push` with
+  nothing unpushed. The 409 triggers M6-2 last-writer-wins, which re-pushes
+  the phone's stale vault over everything the Mac pushed since; the Mac then
+  fast-forwards onto it. The first review's kill shot, reintroduced by the
+  second review's fix. Fix: an unknown baseline never pushes on its own. With
+  the server at the phone's last version, push once WITHOUT conflict
+  recovery to establish the baseline (a 409 there is reported, not
+  resolved); with the server ahead, do nothing automatic and say "the server
+  has newer changes, pull to catch up".
+- FLESH WOUND (phone). `runWake` captures dirty, changed and the pill status
+  before its network awaits and the pull never re-checks; a save during the
+  wake whose push fails is buried by the pull and its dirty flag cleared.
+  Fix: re-read the inputs after the status request and re-check the file
+  hash immediately before install (`expectLocalSha` on the phone too).
+- FLESH WOUND (phone, pre-existing, exposed). The phone's sync generation
+  never increases across pushes: `pushVaultMobile` bumps it in a second
+  Vault instance and the session's open instance writes the old value back
+  on the next save. Every phone blob shares one generation, so the
+  generation check, the only defense against a replay of the user's own
+  blob, is void for phone blobs on both devices. Fix: the session vault
+  adopts the stamped generation after each push.
+- FLESH WOUND (desktop, all hosts). Check 3 fails: `notifyWrite` ignores
+  saves while the engine's own operation runs, and that flag spans the whole
+  upload, so a write that lands during a push is dropped until the next
+  wake. Fix: after a push, compare the file hash with the recorded one and
+  re-arm when they differ.
+- FLESH WOUND (CLI). A writer command's push-on-exit waits on the sync lock
+  for as long as another process's push is stalled (up to 150 s). Fix: the
+  CLI waits at most 2 s, then prints that another process is syncing and
+  returns; the other engine's post-push hash check picks the write up.
+- FLESH WOUND (CLI/engine). `sync.json` is per account, the engine is per
+  vault path: a write to any `--vault` now pushes that vault over the
+  account's server copy. Fix: automatic sync applies to the default vault
+  only; other vaults keep manual push/pull.
+- SCAR TISSUE (accepted unless fixed alongside): an orphaned sync lock
+  after a crash mid-upload makes pushes and pulls wait 150 s until the
+  stale window (reads and writes unaffected); fixed cheaply by stealing a
+  lock whose recorded pid is dead. Manual Push/Pull queue behind a parked
+  automatic push for the PUT timeout. `stop()` does not cancel an in-flight
+  pull's swap. Two engines in one process would ping-pong generation bumps
+  (one engine per process is convention, not code). A no-sha replaying
+  server moves `lastVersion` and later pushes fail "refused twice" until a
+  manual pull. A non-string `sha256` throws instead of being ignored; an
+  uppercase `x-sha256` fails phone downloads (both trivial). A server wiped
+  or restored below `lastVersion` is unrecoverable from the UI (pre-existing,
+  out of scope). The 409 retry bumps the generation twice.
+- Residual: no live push with a subscribed account; no device run; the
+  upgrade-path premise (version key persists, hash key absent) inferred from
+  the key history, not observed on a device.
+
+Fixes for this round: not applied at the time of writing.
 
 ## Status of this record
 
