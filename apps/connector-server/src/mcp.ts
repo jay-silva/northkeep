@@ -618,8 +618,18 @@ export function createMcpServer(
         what_why: z.string().min(1).max(16384).optional().describe('Replacement What & Why section'),
         status: z.string().min(1).max(16384).optional().describe('Replacement Current Status section'),
         next_actions: z.string().min(1).max(16384).optional().describe('Replacement Next Actions section'),
-        log_entry: z.string().min(1).max(4096).optional().describe('New Log entry (dated, newest first)'),
-        decision: z.string().min(1).max(4096).optional().describe('New Decisions entry (dated, appended)'),
+        log_entry: z
+          .string()
+          .min(1)
+          .max(4096)
+          .optional()
+          .describe('New Log entry (newest first). Do not include a date; the tool prefixes YYYY-MM-DD.'),
+        decision: z
+          .string()
+          .min(1)
+          .max(4096)
+          .optional()
+          .describe('New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD.'),
       },
     },
     async ({ project, what_why, status, next_actions, log_entry, decision }) => {

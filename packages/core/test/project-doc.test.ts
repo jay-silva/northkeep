@@ -179,6 +179,26 @@ describe('merge semantics', () => {
     expect(getProjectSection(second, 'Log')).toContain('Started the milestone.');
   });
 
+  it('does not double-stamp a caller-dated log or decision (tool owns the date)', () => {
+    const merged = mergeProjectDoc(
+      emptyProjectDoc(),
+      {
+        logEntry: '- 2026-01-01 - Already dated by the caller.',
+        decision: '2026-01-01 - Also dated.',
+      },
+      noon,
+    );
+    expect(getProjectSection(merged, 'Log')).toBe('- 2026-08-24 - Already dated by the caller.');
+    expect(getProjectSection(merged, 'Decisions')).toBe('- 2026-08-24 - Also dated.');
+
+    const stacked = mergeProjectDoc(
+      emptyProjectDoc(),
+      { logEntry: '- 2026-01-01 - - 2026-01-02 - Stacked stamps.' },
+      noon,
+    );
+    expect(getProjectSection(stacked, 'Log')).toBe('- 2026-08-24 - Stacked stamps.');
+  });
+
   it('fills missing known sections on an empty or partial doc without dropping extras', () => {
     const partial = parseProjectDoc('## Open Questions\n\nStill open.\n');
     const merged = mergeProjectDoc(partial, { status: 'Just started.' }, noon);

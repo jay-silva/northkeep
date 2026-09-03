@@ -175,12 +175,12 @@ export function mergeProjectDoc(
 
   const date = isoDate(now);
   if (update.decision !== undefined) {
-    const line = `- ${date} - ${update.decision}`;
+    const line = datedBullet(date, update.decision);
     const existing = getProjectSection(next, 'Decisions');
     setKnownBody(next, 'Decisions', existing.length === 0 ? line : `${existing}\n${line}`);
   }
   if (update.logEntry !== undefined) {
-    const line = `- ${date} - ${update.logEntry}`;
+    const line = datedBullet(date, update.logEntry);
     const existing = getProjectSection(next, 'Log');
     setKnownBody(next, 'Log', existing.length === 0 ? line : `${line}\n${existing}`);
   }
@@ -200,6 +200,18 @@ export function assertProjectDocSize(markdown: string): void {
 
 function isoDate(now: Date): string {
   return now.toISOString().slice(0, 10);
+}
+
+/**
+ * Tool owns the date. Strip a caller-supplied leading stamp
+ * (`- YYYY-MM-DD - ` or `YYYY-MM-DD - `, repeated) so agents that
+ * date the line do not double-stamp.
+ */
+function datedBullet(date: string, text: string): string {
+  const stamp = /^(?:-\s*)?\d{4}-\d{2}-\d{2}\s*-\s*/;
+  let stripped = text.trim();
+  while (stamp.test(stripped)) stripped = stripped.replace(stamp, '').trim();
+  return `- ${date} - ${stripped}`;
 }
 
 function setKnownBody(doc: ProjectDoc, heading: ProjectSectionHeading, body: string): void {
