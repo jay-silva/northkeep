@@ -15,6 +15,8 @@ export {
 } from './crypto.js';
 export {
   Vault,
+  onVaultSave,
+  type VaultSaveListener,
   computeEntryHash,
   cosineSimilarity,
   parseSyncGeneration,

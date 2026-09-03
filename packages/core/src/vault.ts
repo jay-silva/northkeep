@@ -86,6 +86,24 @@ interface EntryRow {
   metadata: string | null;
 }
 
+/**
+ * After-save hook (ADR 0044). A host process that wants to react to vault
+ * writes (the automatic push in @northkeep/sync) registers here once; every
+ * successful save() in this process then calls it with the vault path. Purely
+ * in-process: another process writing the same file does not fire it. Listener
+ * errors are swallowed so a misbehaving observer can never fail a save.
+ */
+export type VaultSaveListener = (vaultPath: string) => void;
+const saveListeners = new Set<VaultSaveListener>();
+
+/** Register a save listener; returns the unsubscribe function. */
+export function onVaultSave(listener: VaultSaveListener): () => void {
+  saveListeners.add(listener);
+  return () => {
+    saveListeners.delete(listener);
+  };
+}
+
 export class Vault {
   private db: SqliteDb;
   private key: Buffer;
@@ -316,6 +334,13 @@ export class Vault {
     const ciphertext = encryptWithNonce(image, this.key, nonce, header, this.platform.crypto);
     // Atomic replace (temp + fsync + rename + .bak) lives behind the storage seam.
     this.platform.storage.writeAtomic(this.path, Buffer.concat([header, ciphertext]));
+    for (const listener of saveListeners) {
+      try {
+        listener(this.path);
+      } catch {
+        // An observer must never turn a completed save into a failure.
+      }
+    }
   }
 
   remember(input: RememberInput): MemoryEntry {

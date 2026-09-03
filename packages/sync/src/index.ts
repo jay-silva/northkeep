@@ -1,4 +1,13 @@
 export { timeoutSignal, withTimeout } from './abort.js';
+export {
+  AutoSync,
+  DIVERGED_MESSAGE,
+  syncAge,
+  type AutoSyncEvent,
+  type AutoSyncOptions,
+  type AutoSyncPhase,
+  type AutoSyncStatus,
+} from './auto.js';
 export { deriveConnectorToken, deriveSyncCreds, tokenHash, type SyncCreds } from './creds.js';
 export {
   assertSyncUrl,
