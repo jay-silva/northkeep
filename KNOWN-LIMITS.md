@@ -54,12 +54,46 @@ every milestone; if a limit is removed, say when and how.*
   Vercel; spoofable if you self-host directly on the internet, which
   KNOWN-LIMITS already advises against for open servers). It's a first line
   against an abusive account or a webhook flood, not a metered quota.
-- **Push before you pull on a machine you've edited.** Pulling replaces your
-  local vault with the server's copy; unpushed local edits are moved to
-  `vault.nkv.bak` (recoverable), not merged. There's no "you're ahead" warning
-  yet, so sync in one direction at a time.
+- **A manual Pull replaces the local vault.** Unpushed local edits are moved
+  to `vault.nkv.bak` (recoverable), not merged. The automatic paths (below)
+  never pull over local edits; only the Pull button and `northkeep sync pull`
+  can, and the status line says "both changed" first. Push before you pull by
+  hand on a machine you've edited.
 - **HTTPS only.** The client refuses a non-https sync server (except loopback
   for testing) so your token and blob never cross the network unprotected.
+
+## Automatic sync (ADR 0044), current
+
+- **Automatic pull is fast-forward only.** A device pulls on its own only when
+  its vault is byte-identical to what it last synced AND the server is ahead.
+  If both sides changed, nothing automatic happens: the desktop shows "both
+  changed, Pull first" and waits for you; the phone keeps its existing
+  last-writer-wins recovery for its own pushes. A vault with no recorded
+  post-sync baseline (a machine that synced before 0.20) counts as edited
+  until one manual push or pull sets the baseline.
+- **The desktop pushes a few seconds after every write**, including writes
+  that arrive through the local MCP server, but only while the vault is
+  unlocked. A write made while locked waits for the next unlock. Pushes back
+  off after a failure (30 s, 2 min, 10 min, then hourly) and stop entirely on
+  a subscription (402) or private-server (403) answer until you press Push or
+  change the server.
+- **Wake means launch, unlock, or return to the app**, not a schedule. Nothing
+  runs in the background on either device, and iOS background fetch is not
+  used. A phone left in your pocket does not sync until you open it.
+- **CLI commands push on exit only with a stored key.** `northkeep remember`
+  and friends push right after the write when `northkeep unlock` has stored
+  the key (or an env var supplies it). With a typed passphrase the command
+  says it did not push; the next unlock or `northkeep sync push` catches up.
+- **Same machine, several processes.** The GUI, the MCP server and the CLI
+  each push their own writes. They share one `sync.json`, so the second
+  process's push uses the version the first one recorded. A 409 here means
+  another device moved on, not the other local process.
+- **Equal-generation forks remain.** Two devices that edit from the same base
+  before either syncs still produce two authentic vaults with the same sync
+  generation (ADR 0038 residual N2). Automatic sync makes the window minutes
+  instead of days; it does not close it.
+- **"Last synced" is per machine.** The age shown is this device's last
+  successful push or pull, not proof the other device has caught up.
 
 ## M5b (billing) — current
 
