@@ -41,12 +41,14 @@ import {
   loadConnectorServerUrl,
   loadDeviceSecretHex,
   loadLegacyConnectorSharedScopes,
+  loadLastSyncSha,
   loadLastSyncVersion,
   loadLastSyncedAt,
   loadLocalDirty,
   loadSyncServerUrl,
   readCachedMasterKeyHex,
   saveDeviceSecretHex,
+  saveLastSyncSha,
   saveLastSyncVersion,
   saveLastSyncedAt,
   saveLocalDirty,
@@ -59,17 +61,16 @@ import {
   pushVaultMobile,
   stashRecoverableBak,
   verifyBlobOpensWithKey,
+  hashVaultFile,
   type VerifiedRemoteBlob,
 } from './sync';
 import { classifySyncError } from './sync-errors';
-import {
-  decideWakeAction,
+import { decideWakeAction,
   initialSyncState,
   reduceSync,
   runSyncAfterSave,
   type SyncEvent,
-  type SyncState,
-} from './sync-flow';
+  type SyncState, vaultUnchangedSinceSync } from './sync-flow';
 
 /**
  * The unlock-session state machine for M6-1 (link, unlock, browse). Holds the
@@ -343,6 +344,8 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
           );
         }
         await saveLastSyncVersion(pulled.version);
+        await saveLastSyncSha(pulled.sha256);
+        await saveLocalDirty(false);
       }
 
       const secret = Buffer.from(secretHex, 'hex');
@@ -506,6 +509,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     });
     if (!result.ok) return { pulled: false };
     await saveLastSyncVersion(result.version);
+    await saveLastSyncSha(result.sha256);
     // The file on disk is now the server's copy: nothing local is unpushed.
     await saveLocalDirty(false);
     await markSyncedNow();
@@ -602,9 +606,12 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         stashRemote: () => {
           if (pendingRemote !== null) stashRecoverableBak(path, pendingRemote.blob);
         },
-        saveBaseVersion: async (version) => {
+        saveBaseVersion: async (version, sha256) => {
           await saveLastSyncVersion(version);
-          // The push landed: the local save is no longer unpushed.
+          // The bytes the server accepted are the new baseline for "untouched
+          // since sync"; fall back to hashing the file if the transport did not
+          // report it. The push landed: the local save is no longer unpushed.
+          await saveLastSyncSha(sha256 ?? (await hashVaultFile(path)));
           await saveLocalDirty(false);
           await markSyncedNow();
         },
@@ -618,6 +625,12 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     // device secret anyway, but guard explicitly so no future demo edit path can
     // reach the sync server.
     if (isDemoRef.current) return;
+    // Persisted BEFORE anything else, including the "no server yet" return:
+    // a save made before sync is configured is still an unpushed edit, and
+    // the first wake after the server is set must push it, not pull over it
+    // (second adversarial review, 2026-09-03). Cleared only by saveBaseVersion
+    // or by a pull that installs the server's copy.
+    await saveLocalDirty(true);
     const secretHex = await loadDeviceSecretHex();
     const serverUrl = await loadSyncServerUrl();
     if (!secretHex || !serverUrl) {
@@ -630,10 +643,6 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       );
       return;
     }
-    // Persisted BEFORE the push: if it fails, or the app is killed mid-flight,
-    // the next wake still knows this phone holds an unpushed edit and pushes
-    // instead of pulling over it (ADR 0044). Cleared by saveBaseVersion.
-    await saveLocalDirty(true);
     setSyncState((s) => reduceSync(s, { type: 'start' }));
     try {
       const event = await runPushSequence(serverUrl, secretHex);
@@ -692,6 +701,9 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       const configured = Boolean(secretHex && serverUrl);
       const lastSyncedVersion = await loadLastSyncVersion();
       const localDirty = await loadLocalDirty();
+      // Bytes decide: the file on disk against the hash of what the server
+      // last accepted or handed us. No baseline means changed.
+      const localChanged = !vaultUnchangedSinceSync(await loadLastSyncSha(), await hashVaultFile(vaultPath()));
       const current = syncStateRef.current;
       const base = {
         unlocked,
@@ -699,6 +711,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         status: current.status,
         errorKind: current.errorKind,
         localDirty,
+        localChanged,
         lastSyncedVersion,
       };
       let action = decideWakeAction({ ...base, remoteVersion: null });

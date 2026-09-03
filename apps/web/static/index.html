@@ -1426,7 +1426,20 @@
   // has nothing unsynced, so reloading the lists after "pulled" is safe.
   const WAKE_AWAY_MS = 60 * 1000;
   let wakeInFlight = false, wokeOnce = false, awaySince = null;
+  // A pull that replaced the vault must never be silent, whichever wake did it
+  // (launch and unlock fire server-side wakes the page cannot see). Every
+  // status refresh compares the engine's last pull with the last one shown.
+  let seenPullAt = null;
+  function noticePull(a) {
+    if (!a || !a.lastPull || a.lastPull.at === seenPullAt) return;
+    seenPullAt = a.lastPull.at;
+    const out = $('syncResult');
+    out.hidden = false;
+    out.textContent = 'Pulled version ' + a.lastPull.version + ' from the server. The previous copy is kept as ' + a.lastPull.backupPath + '.';
+    loadMemories(); loadScopes();
+  }
   function updateSyncPill(a) {
+    noticePull(a);
     const pill = $('syncPill');
     if (!a || a.phase === 'off') { pill.hidden = true; return; }
     pill.hidden = false;
@@ -1456,11 +1469,7 @@
         loadMemories(); loadScopes(); await refreshStatus();
         // Say what just happened and where the displaced copy went: a pull
         // that replaces the vault must never be silent (ADR 0044 review).
-        if (r.lastPull) {
-          const out = $('syncResult');
-          out.hidden = false;
-          out.textContent = 'Pulled version ' + r.lastPull.version + ' from the server. The previous copy is kept as ' + r.lastPull.backupPath + '.';
-        }
+        noticePull(r);
       }
       if (!$('view-sync').hidden) loadSyncStatus();
     } catch (e) {

@@ -61,6 +61,8 @@ export interface PushResultLike {
   ok: boolean;
   conflict: boolean;
   version: number;
+  /** Hex sha256 of the bytes the server accepted, when the transport reports it (ADR 0044). */
+  sha256?: string;
 }
 
 export function initialSyncState(version = 0): SyncState {
@@ -163,8 +165,8 @@ export interface SyncAfterSavePorts {
   applyConflictRepushGeneration(nextGeneration: number): void;
   /** Stash the just-fetched, verified remote as the recoverable .bak (last-writer-wins). */
   stashRemote(): void;
-  /** Persist the new in-sync version after a successful push. */
-  saveBaseVersion(version: number): Promise<void>;
+  /** Persist the new in-sync version (and the hash of the accepted bytes, when known) after a successful push. */
+  saveBaseVersion(version: number, sha256?: string): Promise<void>;
 }
 
 /**
@@ -185,7 +187,7 @@ export async function runSyncAfterSave(ports: SyncAfterSavePorts): Promise<SyncE
   const base = await ports.loadBaseVersion();
   const push1 = await ports.push(base);
   if (push1.ok) {
-    await ports.saveBaseVersion(push1.version);
+    await ports.saveBaseVersion(push1.version, push1.sha256);
     return { type: 'synced', version: push1.version };
   }
   if (!pushRequiresConflictRecovery(push1)) {
@@ -217,7 +219,7 @@ export async function runSyncAfterSave(ports: SyncAfterSavePorts): Promise<SyncE
       message: 'Another device is syncing at the same time. Your edit is saved here; sync again in a moment.',
     };
   }
-  await ports.saveBaseVersion(push2.version);
+  await ports.saveBaseVersion(push2.version, push2.sha256);
   return { type: 'conflict-recovered', version: push2.version };
 }
 
@@ -261,6 +263,13 @@ export interface WakeInput {
    * unpushed edit is still unpushed, and a wake pull must never bury it.
    */
   localDirty: boolean;
+  /**
+   * True when the vault file on disk does not hash to the stored post-sync
+   * baseline, or when there is no baseline. This is the byte-level signal the
+   * desktop uses; localDirty alone tracked push ATTEMPTS and missed saves made
+   * before sync was configured (second adversarial review, 2026-09-03).
+   */
+  localChanged: boolean;
   /** Server version from GET /api/status, or null when not fetched yet. */
   remoteVersion: number | null;
   /** The last server version this phone pushed to or pulled. */
@@ -277,7 +286,8 @@ export interface WakeInput {
  *   locked or unconfigured            -> 'none'
  *   a sync in flight                  -> 'none'
  *   error: subscription / not enabled -> 'none'   (the user acts, not a timer)
- *   unpushed local save               -> 'retry-push' (whatever the last status)
+ *   file differs from the post-sync    -> 'retry-push' (whatever the last status;
+ *   hash, or a save is unpushed           bytes decide, not push attempts)
  *   error, nothing unpushed           -> 'check'  (a failed status check or pull
  *                                                  is not an edit; pushing here
  *                                                  would manufacture a 409 and
@@ -287,6 +297,15 @@ export interface WakeInput {
  *   server ahead                      -> 'pull'
  *   otherwise                         -> 'none'
  */
+/**
+ * The byte-level "untouched since sync" test. Unknown on either side counts as
+ * changed: a phone that synced before the hash existed, or has no file, must
+ * push (or do nothing), never be fast-forwarded over.
+ */
+export function vaultUnchangedSinceSync(lastSyncSha: string | null, currentSha: string | null): boolean {
+  return lastSyncSha !== null && currentSha !== null && lastSyncSha === currentSha;
+}
+
 export function decideWakeAction(input: WakeInput): WakeAction {
   if (!input.unlocked || !input.configured) return 'none';
   if (input.status === 'syncing') return 'none';
@@ -297,7 +316,7 @@ export function decideWakeAction(input: WakeInput): WakeAction {
   // with nothing unpushed (a status check or a pull that failed offline) falls
   // through to the status check, never to a push: adversarial review 2026-09-03
   // showed the push-then-LWW path silently rolling the Mac back.
-  if (input.localDirty) return 'retry-push';
+  if (input.localDirty || input.localChanged) return 'retry-push';
   if (input.remoteVersion === null) return 'check';
   if (input.remoteVersion > input.lastSyncedVersion) return 'pull';
   return 'none';

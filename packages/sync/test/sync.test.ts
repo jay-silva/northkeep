@@ -7,7 +7,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Vault, deriveMasterKey, generateDeviceSecret, KDF_INTERACTIVE } from '@northkeep/core';
 import { deriveSyncCreds, tokenHash } from '../src/creds.js';
 import { assertSyncUrl, loadSyncConfig, setSyncServer } from '../src/config.js';
-import { pullVault, pushVault, syncState } from '../src/client.js';
+import { LocalChangedError, pullVault, pushVault, syncState } from '../src/client.js';
+import { withFileLock } from '@northkeep/core';
 
 function masterKeyFor(vPath: string, passphrase: string, deviceSecret: Buffer): Buffer {
   const header = Vault.readHeader(vPath);
@@ -133,6 +134,113 @@ function fakeServer(omitSha = false): { server: Server; url: () => string; store
 function sha(buf: Buffer): string {
   return require('node:crypto').createHash('sha256').update(buf).digest('hex');
 }
+
+describe('lock scope (ADR 0044 review): the vault is free while bytes cross the network', () => {
+  const savedEnv = { ...process.env };
+  const passphrase = 'lock scope passphrase';
+  const deviceSecret = Buffer.alloc(32, 9);
+  let home: string;
+  let server: Server;
+  let url = '';
+  let blob: Buffer | null = null;
+  let version = 0;
+  let releasePut: (() => void) | null = null;
+
+  beforeEach(async () => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-lockscope-'));
+    process.env.NORTHKEEP_HOME = home;
+    blob = null;
+    version = 0;
+    server = createServer((req, res) => {
+      const chunks: Buffer[] = [];
+      req.on('data', (c: Buffer) => chunks.push(c));
+      req.on('end', () => {
+        if (req.method === 'PUT') {
+          // Hold the upload until the test says so.
+          releasePut = () => {
+            blob = Buffer.concat(chunks);
+            version += 1;
+            res.writeHead(200, { 'content-type': 'application/json' });
+            res.end(JSON.stringify({ version }));
+          };
+          return;
+        }
+        if (req.url === '/api/status') {
+          if (blob === null) return void res.writeHead(404).end();
+          res.writeHead(200, { 'content-type': 'application/json' });
+          return void res.end(JSON.stringify({ version, sha256: sha(blob), size: blob.length, updatedAt: '' }));
+        }
+        if (req.url === '/api/blob') {
+          if (blob === null) return void res.writeHead(404).end();
+          res.writeHead(200, { 'x-version': String(version), 'x-sha256': sha(blob) });
+          return void res.end(blob);
+        }
+        res.writeHead(404).end();
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    url = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  });
+  afterEach(async () => {
+    process.env = { ...savedEnv };
+    await new Promise((r) => server.close(r));
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  const vp = () => path.join(home, 'vault.nkv');
+  const key = () => masterKeyFor(vp(), passphrase, deviceSecret);
+
+  it('a push in flight does not hold the vault lock: another process reads and writes at once', async () => {
+    const v = Vault.create({ path: vp(), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    v.save();
+    v.close();
+    setSyncServer(url, deriveSyncCreds(deviceSecret).accountId);
+    const push = pushVault({ vaultPath: vp(), deviceSecret, masterKey: key() });
+    await new Promise((r) => setTimeout(r, 200)); // the PUT is now parked server-side
+    const started = Date.now();
+    await withFileLock(vp(), () => {
+      const w = Vault.openWithKey(vp(), key());
+      w.remember({ content: 'written mid-upload', type: 'semantic' });
+      w.save();
+      w.close();
+    });
+    expect(Date.now() - started).toBeLessThan(1000); // no 5 s lock wait, no failure
+    releasePut!();
+    const result = await push;
+    expect(result.ok).toBe(true);
+    // The upload carried the pre-write bytes; the write shows as ahead and goes next.
+    expect((await syncState({ vaultPath: vp(), deviceSecret })).state).toBe('ahead');
+  });
+
+  it('expectLocalSha refuses the swap when the file changed, and keepCopyAt is written only on success', async () => {
+    const v = Vault.create({ path: vp(), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    v.save();
+    v.close();
+    setSyncServer(url, deriveSyncCreds(deviceSecret).accountId);
+    const push = pushVault({ vaultPath: vp(), deviceSecret, masterKey: key() });
+    await new Promise((r) => setTimeout(r, 100));
+    releasePut!();
+    expect((await push).ok).toBe(true);
+    const staleSha = sha(fs.readFileSync(vp()));
+    const w = Vault.openWithKey(vp(), key());
+    w.remember({ content: 'local edit', type: 'semantic' });
+    w.save();
+    w.close();
+    const copy = `${vp()}.auto-pull.bak`;
+    await expect(
+      pullVault({ vaultPath: vp(), deviceSecret, masterKey: key(), expectLocalSha: staleSha, keepCopyAt: copy }),
+    ).rejects.toBeInstanceOf(LocalChangedError);
+    expect(fs.existsSync(copy)).toBe(false);
+    const still = Vault.openWithKey(vp(), key());
+    expect(still.list().map((e) => e.content)).toContain('local edit');
+    still.close();
+    // With the current hash the swap proceeds and the copy holds the displaced bytes.
+    const current = fs.readFileSync(vp());
+    const ok = await pullVault({ vaultPath: vp(), deviceSecret, masterKey: key(), expectLocalSha: sha(current), keepCopyAt: copy });
+    expect(ok.ok).toBe(true);
+    expect(fs.readFileSync(copy).equals(current)).toBe(true);
+  });
+});
 
 describe('sync round-trip (two vaults, shared device secret)', () => {
   let homeA: string;

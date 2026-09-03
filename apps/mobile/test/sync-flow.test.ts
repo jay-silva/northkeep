@@ -15,6 +15,7 @@ import {
   type WakeInput,
   type SyncAfterSavePorts,
   type SyncState,
+  vaultUnchangedSinceSync,
 } from '../src/lib/sync-flow.js';
 
 /**
@@ -153,7 +154,7 @@ describe('runSyncAfterSave orchestration (the load-bearing conflict sequence)', 
     const { ports } = makePorts();
     const event = await runSyncAfterSave(ports);
     expect(event).toEqual({ type: 'synced', version: 3 });
-    expect(ports.saveBaseVersion).toHaveBeenCalledWith(3);
+    expect(ports.saveBaseVersion).toHaveBeenCalledWith(3, undefined); // no sha from the test port; the phone hashes the file instead
     expect(ports.fetchRemote).not.toHaveBeenCalled();
     expect(ports.verifyRemoteOpens).not.toHaveBeenCalled();
     expect(ports.stashRemote).not.toHaveBeenCalled();
@@ -272,9 +273,37 @@ describe('decideWakeAction (ADR 0044 fast-forward rule)', () => {
     configured: true,
     status: 'synced',
     localDirty: false,
+    localChanged: false,
     remoteVersion: null,
     lastSyncedVersion: 3,
   };
+
+  it('bytes decide: a vault that does not hash to the post-sync baseline pushes, never pulls', () => {
+    // The onboarding path from the second adversarial review: memories saved
+    // before sync was configured (localDirty never set on the old code), first
+    // push failed on the paywall, the Mac pushed v4, the phone reopens.
+    expect(
+      decideWakeAction({ ...ready, status: 'error', errorKind: undefined, localDirty: false, localChanged: true, lastSyncedVersion: 0, remoteVersion: 4 }),
+    ).toBe('retry-push');
+    expect(decideWakeAction({ ...ready, localChanged: true, remoteVersion: 9 })).toBe('retry-push');
+    expect(decideWakeAction({ ...ready, localChanged: true, remoteVersion: null })).toBe('retry-push');
+    expect(decideWakeAction({ ...ready, localChanged: true, status: 'idle', remoteVersion: 9 })).toBe('retry-push');
+    // Paywall and private beta still win: the user acts, not a timer.
+    expect(decideWakeAction({ ...ready, localChanged: true, status: 'error', errorKind: 'subscription-required' })).toBe('none');
+    expect(decideWakeAction({ ...ready, localChanged: true, status: 'error', errorKind: 'not-enabled' })).toBe('none');
+    // Untouched bytes: the existing fast-forward rule.
+    expect(decideWakeAction({ ...ready, localChanged: false, remoteVersion: 9 })).toBe('pull');
+    expect(decideWakeAction({ ...ready, localChanged: false, remoteVersion: null })).toBe('check');
+  });
+
+  it('vaultUnchangedSinceSync: unknown on either side counts as changed', () => {
+    const h = 'a'.repeat(64);
+    expect(vaultUnchangedSinceSync(h, h)).toBe(true);
+    expect(vaultUnchangedSinceSync(h, 'b'.repeat(64))).toBe(false);
+    expect(vaultUnchangedSinceSync(null, h)).toBe(false);
+    expect(vaultUnchangedSinceSync(h, null)).toBe(false);
+    expect(vaultUnchangedSinceSync(null, null)).toBe(false);
+  });
 
   it('does nothing while locked or unconfigured, whatever else is true', () => {
     expect(decideWakeAction({ ...ready, unlocked: false, remoteVersion: 9 })).toBe('none');

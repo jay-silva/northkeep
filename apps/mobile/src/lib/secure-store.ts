@@ -24,6 +24,7 @@ const SYNC_SERVER_KEY = 'nk.sync_server_url';
 const SYNC_VERSION_KEY = 'nk.sync_last_version';
 const SYNC_SYNCED_AT_KEY = 'nk.sync_last_synced_at';
 const SYNC_LOCAL_DIRTY_KEY = 'nk.sync_local_dirty';
+const SYNC_LAST_SHA_KEY = 'nk.sync_last_sha';
 const CONNECTOR_SERVER_KEY = 'nk.connector_server_url';
 const CONNECTOR_SHARED_SCOPES_KEY = 'nk.connector_shared_scopes';
 const JOURNAL_CARD_DISMISSED_KEY = 'nk.journal_card_dismissed';
@@ -124,6 +125,23 @@ export async function loadLocalDirty(): Promise<boolean> {
   return (await SecureStore.getItemAsync(SYNC_LOCAL_DIRTY_KEY, BASE_OPTIONS)) === '1';
 }
 
+/**
+ * Hex sha256 of the vault file as it stood after the last push the server
+ * accepted or the last pull that installed its copy. The wake compares the
+ * file on disk against this before any automatic pull; null (never synced,
+ * or a phone that synced before this key existed) counts as changed, so the
+ * wake pushes rather than pulls (ADR 0044, second review).
+ */
+export async function saveLastSyncSha(sha: string | null): Promise<void> {
+  if (sha) await SecureStore.setItemAsync(SYNC_LAST_SHA_KEY, sha, BASE_OPTIONS);
+  else await SecureStore.deleteItemAsync(SYNC_LAST_SHA_KEY, BASE_OPTIONS);
+}
+
+export async function loadLastSyncSha(): Promise<string | null> {
+  const raw = await SecureStore.getItemAsync(SYNC_LAST_SHA_KEY, BASE_OPTIONS);
+  return raw && /^[0-9a-f]{64}$/.test(raw) ? raw : null;
+}
+
 // --- connector sidecar (Phase B Cloud Connect: the mobile analog of the
 // desktop's ~/.northkeep/connector.json, which is node:fs-only). Holds only
 // WHERE the connector server is. Never a secret: the connector token is
@@ -194,6 +212,7 @@ export async function wipeAllSecrets(): Promise<void> {
   await SecureStore.deleteItemAsync(SYNC_VERSION_KEY);
   await SecureStore.deleteItemAsync(SYNC_SYNCED_AT_KEY);
   await SecureStore.deleteItemAsync(SYNC_LOCAL_DIRTY_KEY);
+  await SecureStore.deleteItemAsync(SYNC_LAST_SHA_KEY);
   await SecureStore.deleteItemAsync(CONNECTOR_SERVER_KEY);
   await SecureStore.deleteItemAsync(CONNECTOR_SHARED_SCOPES_KEY);
   await SecureStore.deleteItemAsync(JOURNAL_CARD_DISMISSED_KEY);

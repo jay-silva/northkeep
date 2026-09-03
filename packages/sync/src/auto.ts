@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { loadDeviceSecret as coreLoadDeviceSecret, memzero } from '@northkeep/core';
 import { loadSyncConfig } from './config.js';
-import { pullVault, pushVault, SubscriptionRequiredError, syncState, type SyncState } from './client.js';
+import { LocalChangedError, pullVault, pushVault, SubscriptionRequiredError, syncState, type SyncState } from './client.js';
 
 /**
  * Automatic sync (ADR 0044). One engine per host process (GUI server, MCP
@@ -319,7 +319,7 @@ export class AutoSync {
         this.settle('in-sync');
         return;
       }
-      if (s.state === 'ahead') {
+      if (s.state === 'ahead' || s.state === 'no-remote') {
         const again = await pushVault({ vaultPath: this.vaultPath, deviceSecret, masterKey: Buffer.from(key) });
         if (again.ok) {
           this.pushPending = false;
@@ -328,6 +328,13 @@ export class AutoSync {
           this.onEvent({ type: 'pushed', version: again.version });
           return;
         }
+        // Twice refused from a base the server itself reported: the server
+        // was restored from a backup or wiped under us. Say so and back off
+        // rather than parking silently (review 2026-09-03, E7).
+        this.pushPending = true;
+        throw new Error(
+          'The sync server refused this base version twice; it may have been restored or reset. Pull, then Push, from the app or CLI.',
+        );
       }
       this.pushPending = true;
       this.reportState(s.state);
@@ -356,19 +363,40 @@ export class AutoSync {
         case 'behind': {
           // Fast-forward: the server is ahead and this file is untouched since
           // its last sync. pullVault verifies the download opens with our key
-          // before it replaces anything. It also leaves the old file as the
-          // rolling .bak, but the very next save (even our own generation
-          // bump) overwrites that, so an automatic pull keeps its own copy the
-          // ordinary save path never touches (adversarial review 2026-09-03).
+          // before it replaces anything, re-checks under the vault lock that
+          // the file still hashes to what we decided on (a write that landed
+          // during the download throws LocalChangedError and nothing is
+          // replaced), and keeps the displaced copy at a path ordinary saves
+          // never touch, written only when the swap happens.
           const backupPath = this.vaultPath + AUTO_PULL_BACKUP_SUFFIX;
-          fs.copyFileSync(this.vaultPath, backupPath);
-          const pulled = await pullVault({ vaultPath: this.vaultPath, deviceSecret, masterKey: key });
+          let pulled;
+          try {
+            pulled = await pullVault({
+              vaultPath: this.vaultPath,
+              deviceSecret,
+              masterKey: key,
+              expectLocalSha: s.localSha ?? undefined,
+              keepCopyAt: backupPath,
+            });
+          } catch (err) {
+            if (!(err instanceof LocalChangedError)) throw err;
+            // Someone wrote while we downloaded. Decide again from the new bytes.
+            const again = await syncState({ vaultPath: this.vaultPath, deviceSecret });
+            if (again.state === 'ahead') {
+              this.pushPending = true;
+              this.inOwnOperation = false;
+              memzero(key);
+              await this.runPush(true);
+            } else {
+              this.reportState(again.state);
+            }
+            return;
+          }
           if (pulled.ok) {
             this.lastPull = { version: pulled.version, backupPath, at: new Date().toISOString() };
             this.settle('in-sync');
             this.onEvent({ type: 'pulled', version: pulled.version, backupPath });
           } else {
-            fs.rmSync(backupPath, { force: true });
             this.settle('no-remote');
           }
           return;

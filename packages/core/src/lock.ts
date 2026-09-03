@@ -11,13 +11,23 @@ const STALE_MS = 60_000;
 const TIMEOUT_MS = 5_000;
 const RETRY_MS = 50;
 
+export interface FileLockOptions {
+  /** How long to wait for the lock before giving up (default 5 s). */
+  timeoutMs?: number;
+  /** Age after which a lock is presumed abandoned and stolen (default 60 s). */
+  staleMs?: number;
+}
+
 export async function withFileLock<T>(
   targetPath: string,
   fn: () => Promise<T> | T,
+  options: FileLockOptions = {},
 ): Promise<T> {
   const lockPath = `${targetPath}.lock`;
+  const timeoutMs = options.timeoutMs ?? TIMEOUT_MS;
+  const staleMs = options.staleMs ?? STALE_MS;
   const token = `${process.pid} ${new Date().toISOString()} ${Math.random().toString(36).slice(2)}\n`;
-  const deadline = Date.now() + TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   for (;;) {
     try {
       const fd = fs.openSync(lockPath, 'wx', 0o600);
@@ -28,7 +38,7 @@ export async function withFileLock<T>(
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
       try {
         const age = Date.now() - fs.statSync(lockPath).mtimeMs;
-        if (age > STALE_MS) {
+        if (age > staleMs) {
           // Steal atomically via rename: exactly one contender wins the
           // rename; losers get ENOENT and retry. A plain rm here would let
           // two stealers both remove-and-recreate (double entry).

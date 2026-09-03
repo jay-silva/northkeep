@@ -27,6 +27,7 @@ export {
   checkoutUrl,
   portalUrl,
   SubscriptionRequiredError,
+  LocalChangedError,
   type PullResult,
   type PushResult,
   type RemoteStatus,

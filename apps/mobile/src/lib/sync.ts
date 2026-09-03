@@ -48,7 +48,8 @@ const NKV_MAGIC = 'NKV1';
 const NKV_HEADER_LENGTH = 52;
 
 export type MobilePullResult =
-  | { ok: true; version: number; wroteVault: boolean }
+  /** sha256: hex hash of the bytes now installed at vaultPath (the post-sync baseline, ADR 0044). */
+  | { ok: true; version: number; wroteVault: boolean; sha256: string }
   | { ok: false; reason: 'no-remote' };
 
 /** Mirrors PushResult from packages/sync/src/client.ts (the pure shape the flow decisions use). */
@@ -57,6 +58,13 @@ export interface MobilePushResult {
   /** On success, the new server version; on conflict (409), the server's current version. */
   version: number;
   conflict: boolean;
+  /**
+   * On success, the hex sha256 of the exact bytes the server accepted: the
+   * file as it sits on disk after the generation stamp. Stored as the phone's
+   * post-sync baseline so a wake can tell "untouched since sync" from bytes,
+   * the way the desktop's syncState does (ADR 0044, second review).
+   */
+  sha256?: string;
 }
 
 /** A remote blob that already passed the structural + transport-hash checks. */
@@ -75,6 +83,18 @@ function isVaultBlob(blob: Buffer): boolean {
     blob.length >= NKV_HEADER_LENGTH &&
     Buffer.compare(blob.subarray(0, 4), Buffer.from(NKV_MAGIC, 'ascii')) === 0
   );
+}
+
+/**
+ * Hex sha256 of the vault file as it sits on disk, or null when there is no
+ * file. Compared against the stored post-sync hash before any automatic pull:
+ * a mismatch (or no stored hash at all) means this phone holds bytes the
+ * server never accepted, and the wake pushes instead of pulling.
+ */
+export async function hashVaultFile(vaultPath: string): Promise<string | null> {
+  const platform = getPlatform();
+  if (!platform.storage.exists(vaultPath)) return null;
+  return sha256Hex(platform.storage.readBytes(vaultPath));
 }
 
 async function sha256Hex(bytes: Buffer): Promise<string> {
@@ -289,7 +309,7 @@ export async function pullVaultMobile(options: {
   // Original bytes (possibly unmigrated 0.3) are installed; compare used the
   // same generation desktop would after open-verify/migrate.
   platform.storage.writeAtomic(options.vaultPath, remote.blob);
-  return { ok: true, version: remote.version, wroteVault: true };
+  return { ok: true, version: remote.version, wroteVault: true, sha256: await sha256Hex(remote.blob) };
 }
 
 /**
@@ -340,6 +360,8 @@ export async function pushVaultMobile(options: {
   // here claimed expo/fetch REQUIRED an ArrayBuffer and cited sha256Hex's cast
   // as precedent; both were wrong, and that cast was the bug that broke pull.
   const requestBody = new Uint8Array(blob);
+  // Hashed before the upload so the baseline is exactly what went over the wire.
+  const uploadedSha = await sha256Hex(blob);
   const deadline = deadlineScope();
   try {
     const res = await deadline.race(
@@ -364,7 +386,7 @@ export async function pushVaultMobile(options: {
     if (res.status === 402) throw new SubscriptionRequiredError();
     if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on push.`);
     const body = (await deadline.race(res.json())) as { version: number };
-    return { ok: true, conflict: false, version: body.version };
+    return { ok: true, conflict: false, version: body.version, sha256: uploadedSha };
   } finally {
     deadline.done();
   }

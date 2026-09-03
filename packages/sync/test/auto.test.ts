@@ -16,7 +16,7 @@ import { pullVault, pushVault } from '../src/client.js';
  * NORTHKEEP_HOME that pushes straight through pushVault.
  */
 
-type Mode = 'ok' | 'subscription' | 'crash';
+type Mode = 'ok' | 'subscription' | 'crash' | 'slow-blob' | 'garbage-blob';
 
 function fakeServer(): {
   server: Server;
@@ -48,8 +48,14 @@ function fakeServer(): {
           return;
         }
         res.writeHead(200, { 'content-type': 'application/json' });
-        const statusBody: Record<string, unknown> = { version, size: blob.length, updatedAt: new Date().toISOString() };
-        if (!noSha) statusBody.sha256 = sha(blob);
+        const junkStatus = mode === 'garbage-blob';
+        const junk = Buffer.concat([Buffer.from('NKV1'), Buffer.alloc(200, 9)]);
+        const statusBody: Record<string, unknown> = {
+          version: junkStatus ? version + 5 : version,
+          size: blob.length,
+          updatedAt: new Date().toISOString(),
+        };
+        if (!noSha) statusBody.sha256 = junkStatus ? sha(junk) : sha(blob);
         res.end(JSON.stringify(statusBody));
         return;
       }
@@ -58,8 +64,18 @@ function fakeServer(): {
           res.writeHead(404).end();
           return;
         }
-        res.writeHead(200, noSha ? { 'x-version': String(version) } : { 'x-version': String(version), 'x-sha256': sha(blob) });
-        res.end(blob);
+        if (mode === 'garbage-blob') {
+          const junk = Buffer.concat([Buffer.from('NKV1'), Buffer.alloc(200, 9)]);
+          res.writeHead(200, { 'x-version': String(version + 5), 'x-sha256': sha(junk) });
+          res.end(junk);
+          return;
+        }
+        const send = () => {
+          res.writeHead(200, noSha ? { 'x-version': String(version) } : { 'x-version': String(version), 'x-sha256': sha(blob!) });
+          res.end(blob);
+        };
+        if (mode === 'slow-blob') setTimeout(send, 400);
+        else send();
         return;
       }
       if (req.method === 'PUT' && req.url === '/api/blob') {
@@ -404,6 +420,43 @@ describe('AutoSync (ADR 0044)', () => {
     expect(events.some((e) => e.type === 'pulled')).toBe(false);
     expect(events.some((e) => e.type === 'diverged')).toBe(true);
     expect(contents(homeA)).toContain('local edit that must survive');
+  });
+
+  it('a write that lands during the download is never buried: the pull is refused and the edit is pushed', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    configure(homeB);
+    const { auto, events } = engine({ debounceMs: 60_000 });
+    await auto.runManual(() => pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }));
+    await otherDevicePushes('remote edit');
+    fake.mode('slow-blob');
+    const wake = auto.wake();
+    await sleep(150); // the download is in flight; the vault lock is NOT held, so this write goes through
+    write(homeA, 'written during the download');
+    await wake;
+    expect(events.some((e) => e.type === 'pulled')).toBe(false);
+    expect(contents(homeA)).toContain('written during the download');
+    expect(fs.existsSync(`${vaultPath(homeA)}.auto-pull.bak`)).toBe(false); // nothing was displaced, so no copy
+    // Both sides changed now (the server has the remote edit, we have ours): reported, not resolved.
+    expect(auto.status().state).toBe('diverged');
+  });
+
+  it('a rejected download never clobbers the auto-pull copy of an earlier pull', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    configure(homeB);
+    const { auto } = engine({ debounceMs: 60_000, backoffMs: [60_000] });
+    await auto.runManual(() => pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }));
+    const before = fs.readFileSync(vaultPath(homeA));
+    await otherDevicePushes('remote edit');
+    await auto.wake(); // a real fast-forward: the copy holds the pre-pull bytes
+    const backup = `${vaultPath(homeA)}.auto-pull.bak`;
+    expect(fs.readFileSync(backup).equals(before)).toBe(true);
+    fake.mode('garbage-blob'); // status still says the server is ahead (version + 5), the blob is junk
+    await auto.wake();
+    expect(auto.status().phase).toBe('error');
+    expect(fs.readFileSync(backup).equals(before)).toBe(true); // untouched by the failed attempt
+    expect(contents(homeA)).toContain('remote edit'); // and the live vault is intact
   });
 
   it('ignores saves of other vault files', async () => {

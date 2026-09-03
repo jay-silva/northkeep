@@ -288,8 +288,37 @@ combinations with nothing unpushed never yield a push. Verdict: NOT CLEARED.
 - Residual: no live push against the hosted server with a subscribed
   account; no device run of the phone wake; no Tauri focus run.
 
-Fixes for this round: not applied at the time of writing (review rule: a
-separate step, on request).
+## Fixes after the second review (2026-09-03)
+
+- Kill shot: the phone stores a post-sync hash of its vault file (set from
+  the exact bytes a push uploaded or a pull installed) and `decideWakeAction`
+  takes `localChanged` (unknown hash counts as changed); changed or dirty
+  means push, never pull. `pushAfterSave` marks dirty before the
+  "unconfigured" early return. Tested on the review's onboarding path.
+- Lock scope: `pushVault` snapshots and stamps under the vault lock, uploads
+  with no vault lock, records under the lock; `pullVault` downloads with no
+  vault lock, then verifies and swaps under it. A new sync lock
+  (`vault.nkv.sync.lock`, waits through a full transfer) serializes pushers
+  and pullers on one machine so two host processes never push from one base.
+  Tested: a write and a read complete in well under a second while a PUT is
+  parked server-side.
+- Fast-forward precondition: an automatic pull passes the hash it decided on
+  as `expectLocalSha`; `pullVault` re-checks under the lock and throws
+  `LocalChangedError` instead of swapping. The engine then decides again from
+  the new bytes (pushes if ahead, reports otherwise). Tested with a write
+  landing mid-download.
+- Auto-pull copy: written by `pullVault` itself (`keepCopyAt`), under the
+  lock, only on the success path. Tested against a rejected download.
+- GUI: the page diffs `lastPull.at` on every status refresh, so the "pulled
+  version N, previous copy kept at" line shows after launch and unlock wakes
+  too, and reloads the list.
+- Quit with a push in flight: the upload phase holds no vault lock, so a
+  bounded flush that gives up leaves only the sync lock, which the next
+  process steals after its stale window and which blocks no read or write.
+- 409 twice: the engine now fails loudly with a message and backs off
+  instead of parking on Syncing.
+
+Third review: pending at the time of writing.
 
 ## Status of this record
 
