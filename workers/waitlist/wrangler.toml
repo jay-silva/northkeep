@@ -1,0 +1,16 @@
+name = "northkeep-waitlist"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+[[routes]]
+pattern = "northkeep.ai/api/waitlist"
+zone_name = "northkeep.ai"
+
+[[routes]]
+pattern = "www.northkeep.ai/api/waitlist"
+zone_name = "northkeep.ai"
+
+[[ratelimits]]
+name = "WAITLIST_RATE"
+namespace_id = "1001"
+simple = { limit = 5, period = 60 }

@@ -117,6 +117,13 @@
   details[open] summary::after{content:"–"}
   details p{margin:0 0 14px;color:var(--muted)}
 
+  /* waitlist */
+  .waitlist-form{position:relative;max-width:440px}
+  .waitlist-form label[for="waitlist-email"]{display:block;font-weight:600;margin:0 0 6px}
+  .waitlist-form input[type="email"]{width:100%;padding:12px 14px;border:1px solid var(--line);
+    border-radius:10px;background:var(--bg);color:var(--ink);font:inherit;margin:0 0 14px}
+  .hp{position:absolute;left:-10000px;top:auto;width:1px;height:1px;overflow:hidden}
+
   footer{border-top:1px solid var(--line);padding:34px 0;color:var(--muted);font-size:14px}
   footer .wrap{display:flex;flex-wrap:wrap;gap:18px;align-items:center}
   footer .spacer{flex:1}
@@ -277,6 +284,25 @@
   </div>
 </section>
 
+<section id="updates">
+  <div class="wrap">
+    <h2>Get updates</h2>
+    <p class="lede">Occasional notes when something ships. Leave an address if you want them.</p>
+    <div class="card">
+      <form id="waitlist-form" class="waitlist-form" method="post" action="/api/waitlist">
+        <label for="waitlist-email">Email</label>
+        <input id="waitlist-email" name="email" type="email" required maxlength="254" autocomplete="email">
+        <label class="hp" for="waitlist-website" aria-hidden="true">Website</label>
+        <input class="hp" id="waitlist-website" name="website" type="text" tabindex="-1" autocomplete="off" aria-hidden="true">
+        <input type="hidden" name="rendered_at" id="waitlist-rendered-at" value="">
+        <button type="submit" class="btn primary">Get updates</button>
+        <p class="note">We collect only the address you enter. It arrives as a plain email to support@northkeep.ai, delivered by Resend, and lives in that inbox. No list software, no tracking pixel, no selling. To be removed, reply to any mail from us or write support@northkeep.ai.</p>
+        <p id="waitlist-status" class="muted" role="status" hidden></p>
+      </form>
+    </div>
+  </div>
+</section>
+
 <footer>
   <div class="wrap">
     <span class="brand"><img src="./northkeep-icon.png" alt="" style="width:22px;height:22px;border-radius:5px">NorthKeep</span>
@@ -297,6 +323,26 @@
   // Honor a ?theme=light|dark override for previews; otherwise follow the OS.
   var t = new URLSearchParams(location.search).get('theme');
   if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  var rendered = document.getElementById('waitlist-rendered-at');
+  if (rendered) rendered.value = String(Date.now());
+  var form = document.getElementById('waitlist-form');
+  if (form) form.addEventListener('submit', function (e) {
+    e.preventDefault();
+    var status = document.getElementById('waitlist-status');
+    var btn = form.querySelector('button[type="submit"]');
+    if (btn) btn.disabled = true;
+    fetch(form.action, { method: 'POST', headers: { 'Accept': 'application/json', 'X-Requested-With': 'fetch' }, body: new FormData(form) })
+      .then(function (r) {
+        return r.text().then(function (text) {
+          var data = null;
+          try { data = JSON.parse(text); } catch (e) { data = null; }
+          if (!data || !r.ok || !data.ok) throw new Error((data && data.error) || 'Could not send. Write support@northkeep.ai.');
+        });
+      })
+      .then(function () { if (status) { status.hidden = false; status.textContent = "You're on the list. We'll write when there's something worth sending."; } form.reset(); if (rendered) rendered.value = String(Date.now()); })
+      .catch(function (err) { if (status) { status.hidden = false; status.textContent = err.message || 'Could not send. Write support@northkeep.ai.'; } })
+      .then(function () { if (btn) btn.disabled = false; });
+  });
 </script>
 </body>
 </html>

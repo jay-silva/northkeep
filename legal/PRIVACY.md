@@ -5,7 +5,7 @@
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** support@northkeep.ai · **Effective date:** July 27, 2026
+**Contact:** support@northkeep.ai · **Effective date:** August 28, 2026
 
 NorthKeep is built on a simple promise: **your AI memory lives on your device,
 encrypted, and we never see its contents** (the exceptions are content you
@@ -60,6 +60,15 @@ privacy policy at https://stripe.com/privacy. The honest consequence: while a
 subscription is active, we can tell *which paying customer is associated with
 which encrypted vault*, but never that vault's contents, which remain
 ciphertext to us.
+
+## Website waitlist (optional)
+
+If you submit the waitlist form on northkeep.ai, your email address is
+delivered to our inbox at support@northkeep.ai by **Resend**, our email
+delivery provider. We use it only to send NorthKeep updates. It is not added
+to any marketing list. We delete it on request to the same address. The form
+sets no cookies and the site has no analytics. See Resend's privacy policy at
+https://resend.com/legal/privacy-policy.
 
 ## Shared scopes (optional connector)
 
