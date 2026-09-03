@@ -156,6 +156,64 @@ retry; it stays until the next success or user tap.
 3. Is "Synced N ago" wanted in the phone's list header, or only in Settings?
    Default: both; the header line is one short row under the status dot.
 
+## Implementation (2026-09-03, commits 3e31353..e120364, local only)
+
+- `packages/core`: `onVaultSave` after-save hook.
+- `packages/sync/src/auto.ts`: the `AutoSync` engine (debounced push, wake,
+  backoff, 402/403 pause, `runManual`, `syncAge`).
+- Desktop hosts: GUI server and page, standalone MCP server, CLI push-on-exit
+  and `sync status` age.
+- Phone: `decideWakeAction`, `fetchRemoteStatus`, wake on unlock and
+  AppState active, persisted local-dirty flag, sync age in the header and
+  Settings.
+- KNOWN-LIMITS rewritten; the M5 e2e scenario reads the automatic pushes.
+
+## Adversarial review findings (2026-09-03, run against the implementation)
+
+Fresh-eyes review with executed attacks (engine, phone decision layer, and a
+desktop-side chain test; one read-only live call to the hosted server).
+Verdict: NOT CLEARED. Nothing ships until the kill shot and the flesh wounds
+below are fixed and the fixed code is reviewed again.
+
+- KILL SHOT (phone). `decideWakeAction`'s `status === 'error'` branch returns
+  `retry-push` for any non-paywall error, without consulting `localDirty`. A
+  status check that fails with no signal leaves the phone in `error`; the next
+  wake pushes a vault with nothing new, gets a 409, and the existing M6-2
+  last-writer-wins recovery re-pushes the phone's STALE vault over the Mac's
+  newer one. The Mac then fast-forwards onto it, and one more Mac write
+  overwrites the rolling `.bak`. Both devices show Synced. This is the exact
+  outcome this ADR forbids, on a path with no user edit. Fix: retry-push only
+  when `localDirty`; a non-dirty error becomes `check`.
+- FLESH WOUND (desktop). `syncState`'s no-sha fallback (a server that omits
+  `sha256`) reports `behind` with `localChanged:false` for an edited vault, and
+  the engine pulls over the edit. Verify-opens-with-key cannot reject a replay
+  of the user's own blob, so check 6's defense does not cover this. Our server
+  always sends the sha; a hostile or third-party server reaches it. Fix: with
+  no remote sha, decide from `lastSha` versus the local file (edited since
+  sync means never pull), and lowercase any sha before comparing.
+- FLESH WOUND (desktop). Two engines on one machine (GUI plus the standalone
+  MCP server) race: `pushVault` reads `lastVersion` before taking the file
+  lock, the loser 409s, bumps its generation, and is left `pending` with no
+  timer. KNOWN-LIMITS' sentence "a 409 here means another device moved on,
+  not the other local process" is false. Fix: read the config under the lock,
+  and on 409 re-read `syncState`; if the server already holds these bytes,
+  settle; if we are merely ahead of the refreshed base, push once more.
+- FLESH WOUND (desktop). An automatic pull's displaced vault goes to the
+  rolling `vault.nkv.bak`, which the next save (including the engine's own
+  generation bump) overwrites, and nothing tells the user a pull happened.
+  Fix: an automatic pull keeps its own copy (`vault.nkv.auto-pull.bak`) and
+  the event line says so.
+- SCAR TISSUE, accept and record: trailing-edge debounce with no maximum
+  wait starves under a write stream faster than the debounce (a max wait of
+  30 s is cheap and will be added with the fixes); armed timers fire once
+  more after lock, with no network, before going quiet; while diverged each
+  write costs a generation bump and a full-blob 409; the fast-forward
+  decision and the replacement are separate lock scopes (one event-loop-turn
+  window).
+- Residual: no live sync against the hosted server with a subscribed account
+  (a throwaway bearer is 402-gated and a real push is a side effect); no
+  device run of the phone wake; no Tauri window-focus run.
+
 ## Status of this record
 
 Accepted 2026-09-03. Written the same day, after the sync-server outage.
