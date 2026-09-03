@@ -558,6 +558,35 @@ describe('sync against a server that reports no sha256', () => {
     expect(s.localChanged).toBe(false);
   });
 
+  it('with no remote hash, an edited vault is ahead, and diverged once the server moves (never behind)', async () => {
+    process.env.NORTHKEEP_HOME = home;
+    const v = Vault.create({ path: vaultPath(home), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    v.remember({ content: 'x', type: 'semantic' });
+    v.save();
+    v.close();
+    const { accountId } = deriveSyncCreds(deviceSecret);
+    setSyncServer(fake.url(), accountId);
+    const key = () => masterKeyFor(vaultPath(home), passphrase, deviceSecret);
+    await pushVault({ vaultPath: vaultPath(home), deviceSecret, masterKey: key() });
+    const edit = Vault.openWithKey(vaultPath(home), key());
+    edit.remember({ content: 'local edit', type: 'semantic' });
+    edit.save();
+    edit.close();
+    expect((await syncState({ vaultPath: vaultPath(home), deviceSecret })).state).toBe('ahead');
+    // Another device moves the server on (a direct PUT from a stale base is
+    // what a second machine's push looks like to this one).
+    const token = deriveSyncCreds(deviceSecret).token;
+    const res = await fetch(`${fake.url()}/api/blob`, {
+      method: 'PUT',
+      headers: { authorization: `Bearer ${token}`, 'x-base-version': '1' },
+      body: fs.readFileSync(vaultPath(home)),
+    });
+    expect(res.status).toBe(200);
+    const s = await syncState({ vaultPath: vaultPath(home), deviceSecret });
+    expect(s.state).toBe('diverged');
+    expect(s.localChanged).toBe(true);
+  });
+
   it('never stores an empty lastSha after a pull', async () => {
     // Seed the server from a first home, then pull into a second.
     const seedHome = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-syncNoShaSeed-'));

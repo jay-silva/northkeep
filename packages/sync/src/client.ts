@@ -166,9 +166,13 @@ export async function pushVault(options: {
   /** Copy is passed to openWithKey (which zeroes its input). */
   masterKey: Buffer;
 }): Promise<PushResult> {
-  const config = requireConfig();
   const { token } = deriveSyncCreds(options.deviceSecret);
   return withFileLock(options.vaultPath, async () => {
+    // Read the base version UNDER the lock: another process on this machine
+    // (GUI, MCP server, CLI all push their own writes, ADR 0044) may have just
+    // pushed and recorded a newer lastVersion in the shared sync.json. Reading
+    // it before the lock made the second pusher 409 against its own machine.
+    const config = requireConfig();
     if (!fs.existsSync(options.vaultPath)) {
       throw new Error('No local vault to push. Run "northkeep init" first.');
     }
@@ -385,27 +389,39 @@ export async function syncState(options: {
   // compare bytes at all. Fall back to the version comparison instead of
   // treating "no hash" as "different", which would pin such a server to
   // ahead/diverged forever and never say in-sync again.
-  const remoteSha = /^[0-9a-f]{64}$/.test(remote.sha256 ?? '') ? remote.sha256 : null;
-  if (remoteSha === null) {
-    const versionState: SyncState =
-      config.lastVersion === remote.version ? 'in-sync' : config.lastVersion > remote.version ? 'ahead' : 'behind';
-    return {
-      state: versionState,
-      localVersion: config.lastVersion,
-      remoteVersion: remote.version,
-      localChanged: false,
-      baselineKnown: config.lastSha !== null,
-    };
-  }
-
+  const remoteShaRaw = (remote.sha256 ?? '').toLowerCase();
+  const remoteSha = /^[0-9a-f]{64}$/.test(remoteShaRaw) ? remoteShaRaw : null;
   const localSha = createHash('sha256').update(fs.readFileSync(options.vaultPath)).digest('hex');
-  const localChanged = localSha !== remoteSha;
   const serverAdvanced = remote.version > config.lastVersion;
   // Did WE edit since our own last sync? A config written before lastSha
   // existed cannot prove the file is untouched, so it counts as edited: the
   // safe error is offering a merge that turns out to be unnecessary, not a
   // plain pull that buries local work.
   const editedSinceSync = config.lastSha === null || localSha !== config.lastSha;
+
+  if (remoteSha === null) {
+    // No remote hash to compare bytes against, so decide from OUR baseline
+    // alone. The old fallback compared versions only and reported "behind,
+    // unchanged" for an edited vault, which let an automatic pull bury the
+    // edit (adversarial review 2026-09-03, C1b/C6e). Edited means never
+    // behind: ahead, or diverged once the server has moved too.
+    const state: SyncState = editedSinceSync
+      ? serverAdvanced
+        ? 'diverged'
+        : 'ahead'
+      : serverAdvanced
+        ? 'behind'
+        : 'in-sync';
+    return {
+      state,
+      localVersion: config.lastVersion,
+      remoteVersion: remote.version,
+      localChanged: editedSinceSync || serverAdvanced,
+      baselineKnown: config.lastSha !== null,
+    };
+  }
+
+  const localChanged = localSha !== remoteSha;
 
   const state: SyncState = !localChanged
     ? 'in-sync'

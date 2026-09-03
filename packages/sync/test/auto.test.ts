@@ -18,10 +18,17 @@ import { pullVault, pushVault } from '../src/client.js';
 
 type Mode = 'ok' | 'subscription' | 'crash';
 
-function fakeServer(): { server: Server; url: () => string; version: () => number; mode: (m: Mode) => void } {
+function fakeServer(): {
+  server: Server;
+  url: () => string;
+  version: () => number;
+  mode: (m: Mode) => void;
+  omitSha: (v: boolean) => void;
+} {
   let blob: Buffer | null = null;
   let version = 0;
   let mode: Mode = 'ok';
+  let noSha = false;
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
@@ -41,7 +48,9 @@ function fakeServer(): { server: Server; url: () => string; version: () => numbe
           return;
         }
         res.writeHead(200, { 'content-type': 'application/json' });
-        res.end(JSON.stringify({ version, sha256: sha(blob), size: blob.length, updatedAt: new Date().toISOString() }));
+        const statusBody: Record<string, unknown> = { version, size: blob.length, updatedAt: new Date().toISOString() };
+        if (!noSha) statusBody.sha256 = sha(blob);
+        res.end(JSON.stringify(statusBody));
         return;
       }
       if (req.method === 'GET' && req.url === '/api/blob') {
@@ -49,7 +58,7 @@ function fakeServer(): { server: Server; url: () => string; version: () => numbe
           res.writeHead(404).end();
           return;
         }
-        res.writeHead(200, { 'x-version': String(version), 'x-sha256': sha(blob) });
+        res.writeHead(200, noSha ? { 'x-version': String(version) } : { 'x-version': String(version), 'x-sha256': sha(blob) });
         res.end(blob);
         return;
       }
@@ -75,6 +84,9 @@ function fakeServer(): { server: Server; url: () => string; version: () => numbe
     version: () => version,
     mode: (m) => {
       mode = m;
+    },
+    omitSha: (v) => {
+      noSha = v;
     },
   };
 }
@@ -340,6 +352,58 @@ describe('AutoSync (ADR 0044)', () => {
     fake.mode('ok');
     await sleep(800);
     expect(fake.version()).toBe(1); // stopped engines do not retry
+  });
+
+  it('a fast-forward pull keeps its own copy that a later save does not overwrite', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    configure(homeB);
+    const { auto, events } = engine({ debounceMs: 60_000 });
+    await auto.runManual(() => pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }));
+    const before = fs.readFileSync(vaultPath(homeA));
+    await otherDevicePushes('remote edit');
+    await auto.wake();
+    const pulled = events.find((e) => e.type === 'pulled');
+    expect(pulled && pulled.type === 'pulled' ? pulled.backupPath : null).toBe(`${vaultPath(homeA)}.auto-pull.bak`);
+    expect(fs.readFileSync(`${vaultPath(homeA)}.auto-pull.bak`).equals(before)).toBe(true);
+    expect(auto.status().lastPull?.version).toBe(2);
+    write(homeA, 'a later local save'); // rolls vault.nkv.bak, must not touch the auto-pull copy
+    expect(fs.readFileSync(`${vaultPath(homeA)}.auto-pull.bak`).equals(before)).toBe(true);
+  });
+
+  it('a write stream faster than the debounce still pushes within the maximum wait', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    const auto = new AutoSync({
+      vaultPath: vaultPath(homeA),
+      getMasterKey: () => keyFor(homeA),
+      loadDeviceSecret: () => Buffer.from(deviceSecret),
+      debounceMs: 80,
+      maxWaitMs: 250,
+    });
+    engines.push(auto);
+    unsubscribe = onVaultSave((p) => auto.notifyWrite(p));
+    const started = Date.now();
+    while (Date.now() - started < 600) {
+      write(homeA, `burst ${Date.now()}`);
+      await sleep(30);
+    }
+    expect(fake.version()).toBeGreaterThanOrEqual(1); // pushed mid-stream, not only after it stopped
+  });
+
+  it('with no remote hash, an edited vault is never fast-forwarded (no-sha server)', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    configure(homeB);
+    const { auto, events } = engine({ debounceMs: 60_000 });
+    await auto.runManual(() => pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }));
+    write(homeA, 'local edit that must survive');
+    await otherDevicePushes('remote edit');
+    fake.omitSha(true);
+    await auto.wake();
+    expect(events.some((e) => e.type === 'pulled')).toBe(false);
+    expect(events.some((e) => e.type === 'diverged')).toBe(true);
+    expect(contents(homeA)).toContain('local edit that must survive');
   });
 
   it('ignores saves of other vault files', async () => {

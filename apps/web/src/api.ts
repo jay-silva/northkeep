@@ -2110,6 +2110,7 @@ function autoSyncStatus(session: UiSession): {
   state: string | null;
   message: string | null;
   pausedReason: string | null;
+  lastPull: { version: number; backupPath: string; at: string } | null;
 } {
   const st = session.autoSync.status();
   return {
@@ -2119,6 +2120,7 @@ function autoSyncStatus(session: UiSession): {
     state: st.state,
     message: st.message,
     pausedReason: st.pausedReason,
+    lastPull: st.lastPull,
   };
 }
 

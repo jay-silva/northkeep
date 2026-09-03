@@ -1,6 +1,7 @@
 export { timeoutSignal, withTimeout } from './abort.js';
 export {
   AutoSync,
+  AUTO_PULL_BACKUP_SUFFIX,
   DIVERGED_MESSAGE,
   syncAge,
   type AutoSyncEvent,

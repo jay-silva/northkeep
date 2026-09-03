@@ -54,7 +54,7 @@ export function describeEvent(event: AutoSyncEvent): string {
     case 'pushed':
       return `northkeep MCP server synced: pushed version ${event.version}`;
     case 'pulled':
-      return `northkeep MCP server synced: pulled version ${event.version}`;
+      return `northkeep MCP server synced: pulled version ${event.version} (previous copy kept at ${event.backupPath})`;
     case 'in-sync':
       return 'northkeep MCP server synced: in sync';
     case 'diverged':

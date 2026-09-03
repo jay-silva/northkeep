@@ -277,8 +277,12 @@ export interface WakeInput {
  *   locked or unconfigured            -> 'none'
  *   a sync in flight                  -> 'none'
  *   error: subscription / not enabled -> 'none'   (the user acts, not a timer)
- *   error (network, server, other)    -> 'retry-push'
- *   unpushed local save               -> 'retry-push'
+ *   unpushed local save               -> 'retry-push' (whatever the last status)
+ *   error, nothing unpushed           -> 'check'  (a failed status check or pull
+ *                                                  is not an edit; pushing here
+ *                                                  would manufacture a 409 and
+ *                                                  the LWW re-push would roll
+ *                                                  the other device back)
  *   remote version unknown            -> 'check'  (fetch /api/status, decide again)
  *   server ahead                      -> 'pull'
  *   otherwise                         -> 'none'
@@ -286,10 +290,13 @@ export interface WakeInput {
 export function decideWakeAction(input: WakeInput): WakeAction {
   if (!input.unlocked || !input.configured) return 'none';
   if (input.status === 'syncing') return 'none';
-  if (input.status === 'error') {
-    if (input.errorKind === 'subscription-required' || input.errorKind === 'not-enabled') return 'none';
-    return 'retry-push';
+  if (input.status === 'error' && (input.errorKind === 'subscription-required' || input.errorKind === 'not-enabled')) {
+    return 'none';
   }
+  // Only an unpushed local save may be pushed from a wake. An error state
+  // with nothing unpushed (a status check or a pull that failed offline) falls
+  // through to the status check, never to a push: adversarial review 2026-09-03
+  // showed the push-then-LWW path silently rolling the Mac back.
   if (input.localDirty) return 'retry-push';
   if (input.remoteVersion === null) return 'check';
   if (input.remoteVersion > input.lastSyncedVersion) return 'pull';

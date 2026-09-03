@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import { loadDeviceSecret as coreLoadDeviceSecret, memzero } from '@northkeep/core';
 import { loadSyncConfig } from './config.js';
 import { pullVault, pushVault, SubscriptionRequiredError, syncState, type SyncState } from './client.js';
@@ -40,11 +41,14 @@ export interface AutoSyncStatus {
   nextRetryAt: number | null;
   /** Why the engine is paused, when it is. */
   pausedReason: 'subscription' | 'private' | null;
+  /** The last automatic pull this engine made, with where the displaced copy went. */
+  lastPull: { version: number; backupPath: string; at: string } | null;
 }
 
 export type AutoSyncEvent =
   | { type: 'pushed'; version: number }
-  | { type: 'pulled'; version: number }
+  /** backupPath: where the displaced local vault was copied before the pull replaced it. */
+  | { type: 'pulled'; version: number; backupPath: string }
   | { type: 'in-sync' }
   | { type: 'diverged' }
   | { type: 'error'; message: string }
@@ -62,11 +66,21 @@ export interface AutoSyncOptions {
   onEvent?: (event: AutoSyncEvent) => void;
   /** Push debounce after a write. ADR 0044 default: 5 s. */
   debounceMs?: number;
+  /**
+   * Longest a write may wait behind a stream of newer writes before it is
+   * pushed anyway. A pure trailing-edge debounce starves under a session
+   * that saves faster than the debounce (adversarial review 2026-09-03, C3c).
+   * Default 30 s.
+   */
+  maxWaitMs?: number;
   /** Retry schedule after a failure; the last value repeats. */
   backoffMs?: readonly number[];
 }
 
 const DEFAULT_DEBOUNCE_MS = 5_000;
+const DEFAULT_MAX_WAIT_MS = 30_000;
+/** Suffix of the copy an automatic pull keeps beside the vault (never overwritten by an ordinary save). */
+export const AUTO_PULL_BACKUP_SUFFIX = '.auto-pull.bak';
 const DEFAULT_BACKOFF_MS: readonly number[] = [30_000, 120_000, 600_000, 3_600_000];
 
 /** The exact message the GUI and CLI show for the one case automation refuses. */
@@ -79,7 +93,12 @@ export class AutoSync {
   private readonly loadDeviceSecret: () => Buffer;
   private readonly onEvent: (event: AutoSyncEvent) => void;
   private readonly debounceMs: number;
+  private readonly maxWaitMs: number;
   private readonly backoffMs: readonly number[];
+  /** When the oldest unpushed write happened; bounds the debounce. */
+  private firstPendingAt: number | null = null;
+  /** The last automatic pull, for status lines ("pulled v7, previous copy kept at ..."). */
+  private lastPull: { version: number; backupPath: string; at: string } | null = null;
 
   private phase: AutoSyncPhase = 'idle';
   private state: SyncState | null = null;
@@ -104,6 +123,7 @@ export class AutoSync {
     this.loadDeviceSecret = options.loadDeviceSecret ?? coreLoadDeviceSecret;
     this.onEvent = options.onEvent ?? (() => {});
     this.debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
+    this.maxWaitMs = options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
     this.backoffMs = options.backoffMs ?? DEFAULT_BACKOFF_MS;
   }
 
@@ -112,6 +132,7 @@ export class AutoSync {
     if (this.stopped || this.inOwnOperation) return;
     if (savedPath !== undefined && savedPath !== this.vaultPath) return;
     this.pushPending = true;
+    if (this.firstPendingAt === null) this.firstPendingAt = Date.now();
     if (this.pausedReason !== null) return; // stays pending until resume()
     if (this.phase !== 'syncing') this.phase = 'pending';
     this.armDebounce();
@@ -150,6 +171,7 @@ export class AutoSync {
         const config = loadSyncConfig();
         if (config?.lastSha !== null && config?.lastSha === this.localSha()) {
           this.pushPending = false;
+          this.firstPendingAt = null;
           this.settle('in-sync');
         } else {
           this.phase = this.pushPending ? 'pending' : 'idle';
@@ -191,6 +213,7 @@ export class AutoSync {
       failures: this.failures,
       nextRetryAt: this.nextRetryAt,
       pausedReason: this.pausedReason,
+      lastPull: this.lastPull,
     };
   }
 
@@ -205,10 +228,14 @@ export class AutoSync {
   private armDebounce(): void {
     if (this.stopped) return;
     this.clearDebounce();
+    // Trailing-edge debounce, capped: a write never waits more than maxWaitMs
+    // behind newer writes.
+    const deadline = (this.firstPendingAt ?? Date.now()) + this.maxWaitMs;
+    const delay = Math.max(0, Math.min(this.debounceMs, deadline - Date.now()));
     this.debounceTimer = setTimeout(() => {
       this.debounceTimer = null;
       void this.enqueue(() => this.runPush());
-    }, this.debounceMs);
+    }, delay);
     unrefTimer(this.debounceTimer);
   }
 
@@ -268,21 +295,41 @@ export class AutoSync {
       // pending flag) is nothing to upload.
       if (config?.lastSha !== null && config?.lastSha === this.localSha()) {
         this.pushPending = false;
+        this.firstPendingAt = null;
         this.settle('in-sync');
         return;
       }
       const result = await pushVault({ vaultPath: this.vaultPath, deviceSecret, masterKey: key });
       if (result.ok) {
         this.pushPending = false;
+        this.firstPendingAt = null;
         this.settle('in-sync');
         this.onEvent({ type: 'pushed', version: result.version });
         return;
       }
-      // 409: another device moved the server on. Our file now carries a fresh
-      // generation from the attempt, so syncState reads it as edited; the only
-      // automatic outcome is to say so. The human resolves it, as before.
-      this.pushPending = true;
+      // 409: the server moved past the base we pushed from. Re-read where we
+      // stand. If the server already holds these bytes there is nothing to do;
+      // if another process on this machine merely refreshed the base, push
+      // once more from it; a real two-sided change is reported, never
+      // resolved here. The human resolves it, as before.
       const s = await syncState({ vaultPath: this.vaultPath, deviceSecret });
+      if (s.state === 'in-sync') {
+        this.pushPending = false;
+        this.firstPendingAt = null;
+        this.settle('in-sync');
+        return;
+      }
+      if (s.state === 'ahead') {
+        const again = await pushVault({ vaultPath: this.vaultPath, deviceSecret, masterKey: Buffer.from(key) });
+        if (again.ok) {
+          this.pushPending = false;
+          this.firstPendingAt = null;
+          this.settle('in-sync');
+          this.onEvent({ type: 'pushed', version: again.version });
+          return;
+        }
+      }
+      this.pushPending = true;
       this.reportState(s.state);
     } catch (err) {
       this.fail(err, () => this.runPush(true));
@@ -309,12 +356,19 @@ export class AutoSync {
         case 'behind': {
           // Fast-forward: the server is ahead and this file is untouched since
           // its last sync. pullVault verifies the download opens with our key
-          // before it replaces anything, and keeps the old file as .bak.
+          // before it replaces anything. It also leaves the old file as the
+          // rolling .bak, but the very next save (even our own generation
+          // bump) overwrites that, so an automatic pull keeps its own copy the
+          // ordinary save path never touches (adversarial review 2026-09-03).
+          const backupPath = this.vaultPath + AUTO_PULL_BACKUP_SUFFIX;
+          fs.copyFileSync(this.vaultPath, backupPath);
           const pulled = await pullVault({ vaultPath: this.vaultPath, deviceSecret, masterKey: key });
           if (pulled.ok) {
+            this.lastPull = { version: pulled.version, backupPath, at: new Date().toISOString() };
             this.settle('in-sync');
-            this.onEvent({ type: 'pulled', version: pulled.version });
+            this.onEvent({ type: 'pulled', version: pulled.version, backupPath });
           } else {
+            fs.rmSync(backupPath, { force: true });
             this.settle('no-remote');
           }
           return;

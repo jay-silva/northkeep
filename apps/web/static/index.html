@@ -1452,7 +1452,16 @@
     try {
       const r = await api('/api/sync/wake', { method: 'POST' });
       updateSyncPill(r);
-      if (r.pulled) { loadMemories(); loadScopes(); await refreshStatus(); }
+      if (r.pulled) {
+        loadMemories(); loadScopes(); await refreshStatus();
+        // Say what just happened and where the displaced copy went: a pull
+        // that replaces the vault must never be silent (ADR 0044 review).
+        if (r.lastPull) {
+          const out = $('syncResult');
+          out.hidden = false;
+          out.textContent = 'Pulled version ' + r.lastPull.version + ' from the server. The previous copy is kept as ' + r.lastPull.backupPath + '.';
+        }
+      }
       if (!$('view-sync').hidden) loadSyncStatus();
     } catch (e) {
       // A locked vault is not an error here; the unlock dialog is already up.

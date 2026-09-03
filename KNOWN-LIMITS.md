@@ -85,9 +85,18 @@ every milestone; if a limit is removed, say when and how.*
   the key (or an env var supplies it). With a typed passphrase the command
   says it did not push; the next unlock or `northkeep sync push` catches up.
 - **Same machine, several processes.** The GUI, the MCP server and the CLI
-  each push their own writes. They share one `sync.json`, so the second
-  process's push uses the version the first one recorded. A 409 here means
-  another device moved on, not the other local process.
+  each push their own writes. They take turns on the vault's file lock and
+  read the shared `sync.json` under it, so the second process pushes from the
+  version the first one recorded. A 409 that survives that is another
+  device; the engine re-checks and pushes once more only when the server
+  already agrees with this machine's base.
+- **An automatic pull keeps the displaced vault as `vault.nkv.auto-pull.bak`.**
+  The rolling `vault.nkv.bak` is overwritten by the next save, so it is not a
+  reliable record of what a fast-forward replaced; the `.auto-pull.bak` copy
+  is written only by automatic pulls and only overwritten by the next one.
+- **A write stream faster than the debounce still pushes within 30 s.** The
+  desktop coalesces writes for 5 s, but no write waits more than 30 s behind
+  newer ones.
 - **Equal-generation forks remain.** Two devices that edit from the same base
   before either syncs still produce two authentic vaults with the same sync
   generation (ADR 0038 residual N2). Automatic sync makes the window minutes

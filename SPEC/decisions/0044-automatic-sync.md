@@ -214,6 +214,30 @@ below are fixed and the fixed code is reviewed again.
   (a throwaway bearer is 402-gated and a real push is a side effect); no
   device run of the phone wake; no Tauri window-focus run.
 
+## Fixes after the first review (2026-09-03)
+
+- Kill shot: `decideWakeAction` pushes from a wake only when `localDirty`;
+  an error state with nothing unpushed goes to the status check and can only
+  fast-forward or do nothing. Tested for every error kind.
+- No-sha fallback: `syncState` with no remote hash decides from the local
+  baseline alone (edited means ahead or diverged, never behind) and lowercases
+  any hash before comparing. Tested against a no-sha server in both the
+  client and the engine suites.
+- Same-machine race: `pushVault` reads `sync.json` under the file lock; on a
+  409 the engine re-reads `syncState`, settles when the server already holds
+  these bytes, pushes once more when merely ahead of a refreshed base, and
+  reports anything else. KNOWN-LIMITS sentence corrected.
+- Displaced copy: an automatic pull first copies the vault to
+  `vault.nkv.auto-pull.bak`, which ordinary saves never touch; the event, the
+  MCP stderr line, the GUI result line and `status().lastPull` all name it.
+- Scar accepted and mitigated: the debounce now has a 30 s maximum wait.
+- Scars accepted as-is: the one extra timer tick after lock (no network);
+  the generation bump plus 409 per write while diverged (0038 design); the
+  one-turn window between the fast-forward decision and the replacement.
+
+Second review: pending at the time of writing; its verdict is recorded below
+when it lands.
+
 ## Status of this record
 
 Accepted 2026-09-03. Written the same day, after the sync-server outage.

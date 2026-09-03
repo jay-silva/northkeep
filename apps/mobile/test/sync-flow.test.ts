@@ -291,9 +291,15 @@ describe('decideWakeAction (ADR 0044 fast-forward rule)', () => {
     expect(decideWakeAction({ ...ready, status: 'error', errorKind: 'not-enabled' })).toBe('none');
   });
 
-  it('retries the push after a network, redirect, server or unclassified failure (the phone is ahead)', () => {
+  it('an error with nothing unpushed is not a push: it checks the server, then fast-forwards or does nothing', () => {
+    // A failed status check or pull leaves the phone in 'error' with its last
+    // push landed. Pushing here manufactured a 409 and the LWW re-push rolled
+    // the Mac back (adversarial review 2026-09-03). Only a dirty vault pushes.
     for (const errorKind of ['network', 'redirect-refused', 'other', undefined] as const) {
-      expect(decideWakeAction({ ...ready, status: 'error', errorKind, remoteVersion: 9 })).toBe('retry-push');
+      expect(decideWakeAction({ ...ready, status: 'error', errorKind, localDirty: false, remoteVersion: null })).toBe('check');
+      expect(decideWakeAction({ ...ready, status: 'error', errorKind, localDirty: false, remoteVersion: 9 })).toBe('pull');
+      expect(decideWakeAction({ ...ready, status: 'error', errorKind, localDirty: false, remoteVersion: ready.lastSyncedVersion })).toBe('none');
+      expect(decideWakeAction({ ...ready, status: 'error', errorKind, localDirty: true, remoteVersion: 9 })).toBe('retry-push');
     }
   });
 
