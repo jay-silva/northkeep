@@ -125,7 +125,10 @@ function buildHeader(s: Buffer, opslimit: number, memlimit: number, nonce: Buffe
   return header;
 }
 
-describe('Argon2id KDF (sodium crypto_pwhash contract)', () => {
+// 60 s: the pure-JS Argon2id legs run the production 256 MiB parameters and
+// took over 5 s on a slow GitHub runner (CI flaked 2026-09-03). Correctness,
+// not speed, is what these prove.
+describe('Argon2id KDF (sodium crypto_pwhash contract)', { timeout: 60_000 }, () => {
   // --- Always-on legs: no node:crypto.argon2Sync needed, so they run in CI. ---
 
   it('the noble pure-JS Argon2id (the DEVICE backend) matches sodium-native, incl. odd memlimit', () => {
