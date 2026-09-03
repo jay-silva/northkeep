@@ -705,7 +705,11 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       if (!key || !vault) return;
       setSyncState((s) => reduceSync(s, { type: 'start' }));
       const path = vaultPath();
-      await saveLocalDirty(true); // until the server accepts these bytes they are unpushed
+      // NOT marked dirty: establish runs only when nothing is unpushed. If the
+      // server refuses (it moved meanwhile) the baseline simply stays unknown
+      // and the next wake says "pull to catch up" again; marking dirty here
+      // would turn that next wake into a retry-push with conflict recovery,
+      // the exact path establish exists to avoid.
       const result = await pushVaultMobile({
         serverUrl,
         deviceSecretHex: secretHex,
@@ -790,8 +794,13 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
           // A save landed during the download. Decide once more from the new
           // bytes: a dirty or changed vault pushes; nothing is ever buried.
           ({ input } = await gather(input.remoteVersion));
-          if (decideWakeAction({ ...input, status: 'idle' }) === 'retry-push') {
+          const next = decideWakeAction({ ...input, status: 'idle' });
+          if (next === 'retry-push') {
             await pushNow().catch(() => undefined);
+          } else if (next === 'establish') {
+            await establishBaseline(serverUrl as string, secretHex as string, lastSyncedVersion);
+          } else if (next === 'needs-pull') {
+            setSyncState((s) => reduceSync(s, { type: 'error', message: NEEDS_PULL_MESSAGE, kind: 'other' }));
           } else {
             setSyncState((s) => reduceSync(s, { type: 'synced', version: lastSyncedVersion }));
           }
