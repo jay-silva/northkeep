@@ -3,6 +3,20 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
+## Site waitlist, current
+
+- **Spam floor, not a wall.** The form uses a honeypot, a short time check,
+  and a per-IP rate limit. Determined bots can still flood
+  support@northkeep.ai.
+- **No double opt-in.** Anyone can submit someone else's address. Removal is
+  a reply to that inbox.
+- **Rate limiting is per Cloudflare location.** The wrangler `ratelimits`
+  binding is ~5 requests per 60 seconds per location, so the global ceiling
+  is higher than 5/min.
+- **Delivery is via Resend.** The Worker posts to Resend; the message lands
+  in support@northkeep.ai (a Google Workspace alias). Cloudflare Email
+  Sending / Email Routing are not used for this path.
+
 ## M5 (vault sync) — current
 
 - **The sync server can't read your memories, but it does hold your
@@ -527,6 +541,24 @@ every milestone; if a limit is removed, say when and how.*
 - **NorthKeep never writes `~/.claude/CLAUDE.md`** and never edits
   `.gitignore`. A Cursor project rule may be committed; use
   `.git/info/exclude` if it should stay personal.
+
+## Memory review pass, current
+
+- **The model is a finder, not a judge.** You approve every change. A
+  proposed quote that is not an exact substring of the stored memory is
+  dropped before you see it. The screen then shows vault text loaded by
+  id, not the model's paraphrase.
+- **Local Ollama is the default.** A first run on a large vault is slow
+  on qwen2.5:14b. That is accepted. If Ollama is down, the local path
+  refuses loudly and does not fall back to an API.
+- **A cloud review is an explicit per-run send.** Confirming it sends
+  the full text of every included memory to the named provider (label,
+  host, and model on the consent panel). Consent is not remembered. You
+  pay the provider. Local remains the default; neither path hops to the
+  other.
+- **The pass reviews whatever vault is open locally.** `project:`
+  documents are excluded in v1. Shared scopes stay in. A first run on a
+  large vault is slow.
 
 ## GUI — current
 

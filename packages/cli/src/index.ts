@@ -75,6 +75,14 @@ import {
   contractStatusCmd,
   contractUninstallCmd,
 } from './contractCmd.js';
+import {
+  reviewAccept,
+  reviewForget,
+  reviewKeep,
+  reviewReject,
+  reviewRun,
+  reviewShow,
+} from './reviewCmd.js';
 import { runLauncher } from './launcher.js';
 
 // Register the Node platform adapters (crypto/sqlite/storage) exactly once,
@@ -1015,6 +1023,58 @@ contractGroup
   .command('print')
   .description('Print the canonical session contract (for pasting into Cursor User Rules)')
   .action(() => contractPrintCmd());
+
+const reviewGroup = program
+  .command('review')
+  .description('Run a memory review pass over your vault (local model; you approve every change)');
+
+reviewGroup
+  .command('show', { isDefault: true })
+  .description('Show the latest review pass report')
+  .action(async () => {
+    await reviewShow(withVault);
+  });
+
+reviewGroup
+  .command('run')
+  .description('Run a memory review pass (writes a local report; does not change the vault)')
+  .action(async () => {
+    await reviewRun(withVault);
+  });
+
+reviewGroup
+  .command('accept')
+  .description('Accept a contradiction, undated, or stale proposal (supersedes that memory)')
+  .argument('<proposal-id>', 'proposal id from "northkeep review show"')
+  .action(async (proposalId: string) => {
+    await reviewAccept(proposalId, withVault);
+  });
+
+reviewGroup
+  .command('reject')
+  .description('Reject a proposal (vault untouched)')
+  .argument('<proposal-id>', 'proposal id from "northkeep review show"')
+  .action(async (proposalId: string) => {
+    await reviewReject(proposalId, withVault);
+  });
+
+reviewGroup
+  .command('keep')
+  .description('Keep one member of a duplicate cluster (vault untouched)')
+  .argument('<proposal-id>', 'proposal id from "northkeep review show"')
+  .argument('<entry-id>', 'memory id of the member to keep')
+  .action(async (proposalId: string, entryId: string) => {
+    await reviewKeep(proposalId, entryId, withVault);
+  });
+
+reviewGroup
+  .command('forget')
+  .description('Forget one member of a duplicate cluster')
+  .argument('<proposal-id>', 'proposal id from "northkeep review show"')
+  .argument('<entry-id>', 'memory id of the member to forget')
+  .action(async (proposalId: string, entryId: string) => {
+    await reviewForget(proposalId, entryId, withVault);
+  });
 
 program
   .command('serve')

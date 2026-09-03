@@ -11,6 +11,9 @@ import type { Embedder } from '@northkeep/core';
 const DEFAULT_URL = 'http://127.0.0.1:11434';
 export const EXTRACT_MODEL = process.env.NORTHKEEP_EXTRACT_MODEL ?? 'llama3.2:3b';
 export const EMBED_MODEL = process.env.NORTHKEEP_EMBED_MODEL ?? 'nomic-embed-text';
+/** Default review-pass model. Override with NORTHKEEP_REVIEW_MODEL (tests / pinning). */
+export const REVIEW_MODEL_PREFERRED = process.env.NORTHKEEP_REVIEW_MODEL ?? 'qwen2.5:14b';
+export const REVIEW_MODEL_FALLBACK = 'qwen2.5:7b';
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', 'localhost', '::1', '[::1]']);
 
@@ -36,7 +39,7 @@ export interface OllamaClient {
   /** True when Ollama is reachable AND the extraction model is pulled. */
   available(): Promise<boolean>;
   /** Generate with format=json; returns the raw response text. */
-  generateJson(prompt: string): Promise<string>;
+  generateJson(prompt: string, opts?: { model?: string; timeoutMs?: number }): Promise<string>;
   /**
    * Embed `text` with EMBED_MODEL (nomic-embed-text) via the loopback Ollama.
    * Returns the raw vector. Throws if the server errors or returns no vector —
@@ -92,18 +95,18 @@ export function createOllamaClient(): OllamaClient {
         return false;
       }
     },
-    async generateJson(prompt: string): Promise<string> {
+    async generateJson(prompt: string, opts?: { model?: string; timeoutMs?: number }): Promise<string> {
       const res = await fetch(`${base}/api/generate`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          model: EXTRACT_MODEL,
+          model: opts?.model ?? EXTRACT_MODEL,
           prompt,
           format: 'json',
           stream: false,
           options: { temperature: 0.1 },
         }),
-        signal: AbortSignal.timeout(120_000),
+        signal: AbortSignal.timeout(opts?.timeoutMs ?? 120_000),
         redirect: 'error',
       });
       if (!res.ok) throw new Error(`Ollama returned HTTP ${res.status}.`);
@@ -205,4 +208,59 @@ export async function ollamaState(): Promise<'not-installed' | 'no-models' | 're
     // ECONNREFUSED / DNS / timeout — the port isn't answering: treat as absent.
     return 'not-installed';
   }
+}
+
+/**
+ * True when loopback Ollama lists `tag` (exact name, or a name that starts
+ * with that tag). Standalone on purpose: not part of OllamaClient, so existing
+ * fixtures that only implement available + generateJson keep compiling.
+ */
+export async function hasOllamaModel(tag: string): Promise<boolean> {
+  const base = ollamaUrl();
+  try {
+    const res = await fetch(`${base}/api/tags`, {
+      signal: AbortSignal.timeout(2000),
+      redirect: 'error',
+    });
+    if (!res.ok) return false;
+    const body = (await res.json()) as { models?: Array<{ name?: string }> };
+    return (body.models ?? []).some((m) => {
+      const name = m.name ?? '';
+      return name === tag || name.startsWith(`${tag}-`);
+    });
+  } catch {
+    return false;
+  }
+}
+
+const REVIEW_REFUSE_REMEDY =
+  'Start Ollama with: brew services start ollama. Then pull a review model: ollama pull qwen2.5:14b';
+
+/**
+ * Pick the local review-pass model. If NORTHKEEP_REVIEW_MODEL is set, that
+ * exact tag is required (tests / override) and missing is a loud refuse.
+ * Otherwise try qwen2.5:14b, then qwen2.5:7b. Never silent-degrade, never
+ * hop to an API. Review preflight uses this, not available().
+ */
+export async function resolveReviewModel(): Promise<string> {
+  const state = await ollamaState();
+  if (state === 'not-installed') {
+    throw new Error(
+      `Ollama is not running. The memory review pass needs a local model. ${REVIEW_REFUSE_REMEDY}`,
+    );
+  }
+  const override = process.env.NORTHKEEP_REVIEW_MODEL;
+  if (override !== undefined && override.length > 0) {
+    if (!(await hasOllamaModel(override))) {
+      throw new Error(
+        `Review model "${override}" is not available on this Mac. Pull it with: ollama pull ${override}. ${REVIEW_REFUSE_REMEDY}`,
+      );
+    }
+    return override;
+  }
+  if (await hasOllamaModel('qwen2.5:14b')) return 'qwen2.5:14b';
+  if (await hasOllamaModel(REVIEW_MODEL_FALLBACK)) return REVIEW_MODEL_FALLBACK;
+  throw new Error(
+    `Neither qwen2.5:14b nor qwen2.5:7b is available. ${REVIEW_REFUSE_REMEDY}`,
+  );
 }

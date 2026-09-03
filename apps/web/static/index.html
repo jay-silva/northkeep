@@ -517,6 +517,14 @@
     </div>
     <div class="chips" id="typeChips"></div>
     <div class="chips" id="scopeChips"></div>
+    <div class="row" style="margin:10px 0 12px">
+      <button class="btn" id="reviewPassBtn">Review pass</button>
+      <button class="btn" id="reviewApiBtn">Review with a cloud model…</button>
+      <span class="muted" id="reviewPassHint">Find duplicates, contradictions, and stale facts. You approve every change.</span>
+    </div>
+    <div id="reviewPassStatus" class="muted" style="min-height:18px;margin:0 0 8px"></div>
+    <div class="err" id="reviewPassErr"></div>
+    <div id="reviewPanel" hidden></div>
     <div id="memList"></div>
   </section>
   <section id="view-import" hidden>
@@ -771,6 +779,21 @@
     </div>
   </div>
 </div>
+<div class="overlay" id="reviewApiOverlay" hidden>
+  <div class="dialog" style="width:520px">
+    <h2>Send memories to a cloud model?</h2>
+    <p id="reviewApiEmpty" hidden>No cloud model is configured. Add one under Settings, then come back.</p>
+    <div id="reviewApiForm">
+      <select id="reviewApiEndpoint" style="width:100%;margin-bottom:12px"></select>
+      <div id="reviewApiDetails"></div>
+    </div>
+    <div class="err" id="reviewApiErr"></div>
+    <div class="row" style="justify-content:flex-end">
+      <button class="btn" id="reviewApiCancel">Cancel</button>
+      <button class="btn primary" id="reviewApiConfirm" hidden>Send</button>
+    </div>
+  </div>
+</div>
 <div class="overlay" id="unshareConfirmOverlay" hidden>
   <div class="dialog" style="width:460px">
     <h2 id="unshareConfirmTitle">Stop sharing this scope?</h2>
@@ -947,7 +970,7 @@
   let currentSub = 'import';
   function runLoader(v) {
     if (v === 'activity') loadLog();
-    else if (v === 'memories') loadMemories();
+    else if (v === 'memories') { loadMemories(); loadReviewPanel(); }
     else if (v === 'converse') openConverse();
     else if (v === 'sync') loadSyncStatus();
     else if (v === 'connect') loadConnect();
@@ -1389,7 +1412,7 @@
     // No vault on disk → first-run wizard. Vault but locked → unlock dialog.
     if (noVault) showSetup();
     else if (!status.unlocked) showUnlock();
-    else { hideUnlock(); loadMemories(); loadScopes(); updateConnectPill(); }
+    else { hideUnlock(); loadMemories(); loadReviewPanel(); loadScopes(); updateConnectPill(); }
   }
   // Header pill: shows which AI apps NorthKeep is currently connected to, so it
   // is clear at a glance (not only inside the Connect tab).
@@ -2035,6 +2058,332 @@
     if (cls) n.className = cls;
     if (text !== undefined) n.textContent = text;
     return n;
+  }
+
+  // --- memory review pass (ADR 0043). Model text is always textContent.
+  let reviewPolling = null;
+  let reviewApiPreflight = null;
+  function setReviewButtonsDisabled(disabled) {
+    $('reviewPassBtn').disabled = disabled;
+    $('reviewApiBtn').disabled = disabled;
+  }
+  function closeReviewApiConsent() {
+    $('reviewApiOverlay').hidden = true;
+    reviewApiPreflight = null;
+  }
+  $('reviewPassBtn').addEventListener('click', async () => {
+    $('reviewPassErr').textContent = '';
+    $('reviewPassStatus').textContent = 'Running a review pass. This can take a while on a large vault.';
+    setReviewButtonsDisabled(true);
+    try {
+      const started = await api('/api/review/run', { method: 'POST', json: {} });
+      pollReviewJob(started.job_id);
+    } catch (ex) {
+      if (ex.message !== 'locked') {
+        $('reviewPassErr').textContent = ex.message;
+        $('reviewPassStatus').textContent = '';
+      }
+      setReviewButtonsDisabled(false);
+    }
+  });
+  $('reviewApiBtn').addEventListener('click', () => { openReviewApiConsent(); });
+  $('reviewApiCancel').addEventListener('click', closeReviewApiConsent);
+  $('reviewApiEndpoint').addEventListener('change', () => { loadReviewApiPreflight(); });
+  $('reviewApiConfirm').addEventListener('click', async () => {
+    if (!reviewApiPreflight) return;
+    $('reviewApiErr').textContent = '';
+    const confirmBtn = $('reviewApiConfirm');
+    confirmBtn.disabled = true;
+    try {
+      const host = reviewApiPreflight.endpoint.host;
+      const started = await api('/api/review/run', {
+        method: 'POST',
+        json: {
+          mode: 'api',
+          endpoint_id: reviewApiPreflight.endpoint.id,
+          selection_fingerprint: reviewApiPreflight.selection_fingerprint,
+        },
+      });
+      closeReviewApiConsent();
+      $('reviewPassErr').textContent = '';
+      $('reviewPassStatus').textContent = 'Sending memories to ' + host + '…';
+      setReviewButtonsDisabled(true);
+      pollReviewJob(started.job_id);
+    } catch (ex) {
+      confirmBtn.disabled = false;
+      if (ex.status === 409) {
+        $('reviewApiErr').textContent = 'Vault changed since you reviewed the consent panel. Open it again.';
+        return;
+      }
+      if (ex.message !== 'locked') $('reviewApiErr').textContent = ex.message;
+    }
+  });
+
+  async function openReviewApiConsent() {
+    $('reviewApiErr').textContent = '';
+    reviewApiPreflight = null;
+    $('reviewApiConfirm').hidden = true;
+    $('reviewApiConfirm').disabled = false;
+    $('reviewApiDetails').replaceChildren();
+    $('reviewApiEndpoint').replaceChildren();
+    $('reviewApiEmpty').hidden = true;
+    $('reviewApiForm').hidden = true;
+    $('reviewApiOverlay').hidden = false;
+    let options;
+    try {
+      options = await api('/api/review/api-options');
+    } catch (ex) {
+      if (ex.message !== 'locked') $('reviewApiErr').textContent = ex.message;
+      return;
+    }
+    const endpoints = options.endpoints || [];
+    if (endpoints.length === 0) {
+      $('reviewApiEmpty').hidden = false;
+      return;
+    }
+    $('reviewApiForm').hidden = false;
+    for (const ep of endpoints) {
+      const opt = document.createElement('option');
+      opt.value = ep.id;
+      opt.textContent = ep.label + ' (' + ep.host + ')';
+      $('reviewApiEndpoint').appendChild(opt);
+    }
+    await loadReviewApiPreflight();
+  }
+
+  async function loadReviewApiPreflight() {
+    const endpointId = $('reviewApiEndpoint').value;
+    $('reviewApiErr').textContent = '';
+    $('reviewApiDetails').replaceChildren();
+    $('reviewApiConfirm').hidden = true;
+    reviewApiPreflight = null;
+    if (!endpointId) return;
+    let data;
+    try {
+      data = await api('/api/review/preflight', { method: 'POST', json: { endpoint_id: endpointId } });
+    } catch (ex) {
+      if (ex.message !== 'locked') $('reviewApiErr').textContent = ex.message;
+      return;
+    }
+    reviewApiPreflight = data;
+    renderReviewApiDetails(data);
+    $('reviewApiConfirm').textContent = 'Send ' + data.memory_count + ' memories to ' + data.endpoint.host;
+    $('reviewApiConfirm').hidden = false;
+  }
+
+  function renderReviewApiDetails(data) {
+    const box = $('reviewApiDetails');
+    box.replaceChildren();
+    const dest = el('p');
+    dest.appendChild(document.createTextNode('Destination: '));
+    dest.appendChild(document.createTextNode(data.endpoint.label));
+    dest.appendChild(document.createTextNode(' ('));
+    dest.appendChild(document.createTextNode(data.endpoint.host));
+    dest.appendChild(document.createTextNode('), model '));
+    dest.appendChild(document.createTextNode(data.endpoint.model));
+    box.appendChild(dest);
+    const intro = el('p');
+    intro.textContent = 'This run will send ' + data.memory_count + ' memories in these scopes:';
+    box.appendChild(intro);
+    const list = document.createElement('ul');
+    list.style.margin = '0 0 12px';
+    list.style.paddingLeft = '18px';
+    for (const s of data.scopes || []) {
+      const li = document.createElement('li');
+      li.textContent = s.scope + ': ' + s.count + (s.shared ? ' (Shared)' : '');
+      list.appendChild(li);
+    }
+    if ((data.scopes || []).length === 0) {
+      const li = document.createElement('li');
+      li.textContent = 'None';
+      list.appendChild(li);
+    }
+    box.appendChild(list);
+    box.appendChild(el('p', 'muted',
+      'Shared scopes are already visible to apps you connected. This send is a new egress to ' +
+      data.endpoint.host + ', on top of Cloud Connect.'));
+    box.appendChild(el('p', 'muted', 'Project documents are not included.'));
+    box.appendChild(el('p', 'muted', 'The model cannot write to your vault. You still approve every change.'));
+    box.appendChild(el('p', 'muted', 'This choice is not remembered. You will see this panel every time.'));
+  }
+
+  function pollReviewJob(jobId) {
+    if (reviewPolling) clearInterval(reviewPolling);
+    reviewPolling = setInterval(async () => {
+      try {
+        const p = await api('/api/review/progress/' + jobId);
+        if (p.progress) {
+          $('reviewPassStatus').textContent = p.progress;
+        } else if (p.batches_total > 0) {
+          $('reviewPassStatus').textContent = 'Review pass: batch ' + p.batches_done + ' of ' + p.batches_total;
+        }
+        if (p.done) {
+          clearInterval(reviewPolling);
+          reviewPolling = null;
+          setReviewButtonsDisabled(false);
+          if (p.error) {
+            $('reviewPassErr').textContent = p.error;
+            $('reviewPassStatus').textContent = '';
+            return;
+          }
+          $('reviewPassStatus').textContent = 'Review pass finished. Nothing was written to the vault.';
+          await loadReviewPanel();
+        }
+      } catch (ex) {
+        clearInterval(reviewPolling);
+        reviewPolling = null;
+        setReviewButtonsDisabled(false);
+        if (ex.message !== 'locked') $('reviewPassErr').textContent = ex.message;
+      }
+    }, 800);
+  }
+
+  async function loadReviewPanel() {
+    const panel = $('reviewPanel');
+    panel.replaceChildren();
+    panel.hidden = true;
+    let data;
+    try {
+      data = await api('/api/review/report');
+    } catch (ex) {
+      if (ex.status === 404) return;
+      if (ex.message !== 'locked') $('reviewPassErr').textContent = ex.message;
+      return;
+    }
+    const proposals = data.proposals || [];
+    panel.hidden = false;
+    panel.appendChild(el('h3', 'sect', 'Review pass'));
+    if (data.sent_to && data.sent_to.label && data.sent_to.host) {
+      panel.appendChild(el('p', 'muted', 'Sent to ' + data.sent_to.label + ' (' + data.sent_to.host + ')'));
+    }
+    if (proposals.length === 0) {
+      panel.appendChild(el('p', 'muted', 'No proposals from the last review pass.'));
+      return;
+    }
+    const live = data.live_entries || {};
+    for (const p of proposals) {
+      panel.appendChild(renderReviewProposal(p, live));
+    }
+  }
+
+  function renderReviewProposal(p, live) {
+    const card = el('div', 'card');
+    card.style.marginBottom = '12px';
+    const head = el('div', 'prov');
+    head.appendChild(el('span', 'tag', p.kind));
+    head.appendChild(el('span', undefined, p.status));
+    head.appendChild(el('span', undefined, p.id));
+    card.appendChild(head);
+    if (p.explanation) {
+      const note = el('p', 'muted');
+      note.style.margin = '8px 0';
+      note.textContent = p.explanation;
+      card.appendChild(note);
+    }
+    const buttons = el('div', 'row');
+    buttons.style.marginTop = '10px';
+    switch (p.kind) {
+      case 'duplicate': {
+        for (const id of p.entry_ids) {
+          card.appendChild(renderReviewEntry(id, live, p.member_decisions && p.member_decisions[id]));
+          const row = el('div', 'row');
+          row.style.margin = '6px 0 10px';
+          const decision = (p.member_decisions && p.member_decisions[id]) || 'pending';
+          if (p.status === 'pending' && decision === 'pending') {
+            const keep = el('button', 'btn', 'Keep');
+            keep.addEventListener('click', () => reviewAction('/api/review/' + p.id + '/keep', { entry_id: id }));
+            const forget = el('button', 'btn danger', 'Forget');
+            forget.addEventListener('click', () => {
+              if (!confirm('Forget this memory? Its content is removed permanently; the deletion itself stays on the record.')) return;
+              reviewAction('/api/review/' + p.id + '/forget', { entry_id: id });
+            });
+            row.append(keep, forget);
+          } else {
+            row.appendChild(el('span', 'muted', decision));
+          }
+          card.appendChild(row);
+        }
+        break;
+      }
+      case 'contradiction': {
+        const sides = el('div', 'row');
+        sides.style.alignItems = 'flex-start';
+        sides.style.gap = '12px';
+        for (const id of p.entry_ids.slice(0, 2)) {
+          const col = el('div');
+          col.style.flex = '1';
+          col.appendChild(renderReviewEntry(id, live, null));
+          sides.appendChild(col);
+        }
+        card.appendChild(sides);
+        if (p.proposed_content) {
+          const prop = el('p');
+          prop.style.margin = '8px 0';
+          const lab = el('strong', undefined, 'Proposed: ');
+          prop.append(lab, document.createTextNode(p.proposed_content));
+          card.appendChild(prop);
+        }
+        if (p.status === 'pending') {
+          const accept = el('button', 'btn primary', 'Accept');
+          accept.addEventListener('click', () => reviewAction('/api/review/' + p.id + '/accept'));
+          const reject = el('button', 'btn', 'Reject');
+          reject.addEventListener('click', () => reviewAction('/api/review/' + p.id + '/reject'));
+          buttons.append(accept, reject);
+        }
+        break;
+      }
+      case 'undated':
+      case 'stale': {
+        const id = p.target_entry_id || p.entry_ids[0];
+        if (id) card.appendChild(renderReviewEntry(id, live, null));
+        if (p.proposed_content) {
+          const prop = el('p');
+          prop.style.margin = '8px 0';
+          const lab = el('strong', undefined, 'Proposed: ');
+          prop.append(lab, document.createTextNode(p.proposed_content));
+          card.appendChild(prop);
+        }
+        if (p.status === 'pending') {
+          const accept = el('button', 'btn primary', 'Accept');
+          accept.addEventListener('click', () => reviewAction('/api/review/' + p.id + '/accept'));
+          const reject = el('button', 'btn', 'Reject');
+          reject.addEventListener('click', () => reviewAction('/api/review/' + p.id + '/reject'));
+          buttons.append(accept, reject);
+        }
+        break;
+      }
+      default:
+        card.appendChild(el('p', 'muted', 'Unknown proposal kind.'));
+    }
+    if (buttons.childNodes.length > 0) card.appendChild(buttons);
+    return card;
+  }
+
+  function renderReviewEntry(id, live, decision) {
+    const wrap = el('div');
+    wrap.style.margin = '8px 0';
+    const meta = el('div', 'prov');
+    const e = live[id];
+    meta.appendChild(el('span', undefined, (id || '').slice(0, 8)));
+    if (e && e.scope) meta.appendChild(el('span', undefined, e.scope));
+    if (decision) meta.appendChild(el('span', 'tag', decision));
+    wrap.appendChild(meta);
+    const body = el('div', 'content');
+    body.textContent = e && e.content ? e.content : '(not in this vault)';
+    wrap.appendChild(body);
+    return wrap;
+  }
+
+  async function reviewAction(route, json) {
+    $('reviewPassErr').textContent = '';
+    try {
+      await api(route, { method: 'POST', json: json || {} });
+      await loadReviewPanel();
+      await loadMemories();
+      await refreshStatus();
+    } catch (ex) {
+      if (ex.message !== 'locked') $('reviewPassErr').textContent = ex.message;
+    }
   }
   // --- md-render-start (extracted verbatim by apps/web/test/markdown.test.ts —
   // keep this block self-contained: it may use only document.createElement,

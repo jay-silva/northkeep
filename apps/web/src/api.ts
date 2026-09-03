@@ -13,6 +13,7 @@ import {
   loadDeviceSecret,
   memzero,
   northkeepHome,
+  type MemoryEntry,
   type MemoryType,
 } from '@northkeep/core';
 import {
@@ -48,7 +49,24 @@ import {
   type MemoryCandidate,
 } from '@northkeep/importers';
 import { extractText, ExtractionError, UnsupportedFileTypeError } from '@northkeep/extract';
-import { EXTRACT_MODEL, createOllamaClient, createOllamaEmbedder, dedupeCandidates, ollamaState, runImport } from '@northkeep/librarian';
+import {
+  EXTRACT_MODEL,
+  acceptProposal,
+  assembleReviewReport,
+  createOllamaClient,
+  createOllamaEmbedder,
+  dedupeCandidates,
+  forgetDuplicateMember,
+  keepDuplicateMember,
+  loadReviewReport,
+  ollamaState,
+  rejectProposal,
+  resolveReviewModel,
+  runImport,
+  runReviewPass,
+  saveReviewReport,
+  selectReviewEntries,
+} from '@northkeep/librarian';
 import {
   auditAsCsv,
   claudeCodeAvailable,
@@ -73,6 +91,9 @@ import {
   classifyEndpoint,
   createAnthropicProvider,
   createOpenAICompatibleProvider,
+  createReviewApiGenerator,
+  listReviewApiEndpoints,
+  reviewSelectionFingerprint,
   detectHardware,
   getEndpoint,
   getEndpointKey,
@@ -179,6 +200,24 @@ interface PullJob {
   error?: string;
 }
 const pullJobs = new Map<string, PullJob>();
+
+interface ReviewJob {
+  id: string;
+  createdAt: number;
+  status: 'running' | 'done' | 'failed';
+  batches_done: number;
+  batches_total: number;
+  error?: string;
+  progress?: string;
+}
+const reviewJobs = new Map<string, ReviewJob>();
+
+function evictStaleReviewJobs(): void {
+  const now = Date.now();
+  for (const [id, job] of reviewJobs) {
+    if (now - job.createdAt > JOB_TTL_MS) reviewJobs.delete(id);
+  }
+}
 
 /**
  * Sign-ins waiting for the user to confirm the destination. Keyed by server id,
@@ -1476,6 +1515,102 @@ async function dispatch(
     }
   }
 
+  if (method === 'GET' && route === '/api/review/api-options') {
+    const endpoints = listReviewApiEndpoints().map((e) => ({
+      id: e.id,
+      label: e.label,
+      host: new URL(e.baseUrl).host,
+      model: e.model,
+    }));
+    return ok({ endpoints });
+  }
+
+  if (method === 'POST' && route === '/api/review/preflight') {
+    return reviewPreflight(session, body);
+  }
+
+  if (method === 'POST' && route === '/api/review/run') {
+    return startReviewRun(session, body);
+  }
+
+  if (method === 'GET' && route === '/api/review/report') {
+    const report = loadReviewReport();
+    if (report === null) return bad(404, 'No review pass report yet.');
+    return ok(
+      await session.withVault((vault) => {
+        const live = vault.list({ includeForgotten: true, includeSuperseded: true });
+        const byId = new Map(live.map((e) => [e.id, e]));
+        return {
+          ...report,
+          live_entries: Object.fromEntries(
+            [...new Set(report.proposals.flatMap((p) => p.entry_ids))]
+              .map((id) => {
+                const e = byId.get(id);
+                return [
+                  id,
+                  e
+                    ? { id: e.id, content: e.content, scope: e.scope, type: e.type, created_at: e.created_at }
+                    : { id, content: '', scope: '', type: '', created_at: '', missing: true },
+                ];
+              }),
+          ),
+        };
+      }),
+    );
+  }
+
+  const reviewJobMatch = /^\/api\/review\/(?:job|progress)\/([0-9a-f-]{36})$/.exec(route);
+  if (method === 'GET' && reviewJobMatch) {
+    const job = reviewJobs.get(reviewJobMatch[1]!);
+    if (!job) return bad(404, 'Unknown review job.');
+    return ok({
+      status: job.status,
+      batches_done: job.batches_done,
+      batches_total: job.batches_total,
+      done: job.status !== 'running',
+      error: job.error,
+      progress: job.progress,
+    });
+  }
+
+  const reviewAct = /^\/api\/review\/([0-9a-f]{4,8})\/(accept|reject|keep|forget)$/.exec(route);
+  if (method === 'POST' && reviewAct) {
+    const proposalId = reviewAct[1]!;
+    const action = reviewAct[2]!;
+    const report = loadReviewReport();
+    if (report === null) return bad(404, 'No review pass report yet.');
+    if (action === 'reject') {
+      rejectProposal(report, proposalId);
+      saveReviewReport(report);
+      return ok({ ok: true, report });
+    }
+    if (action === 'keep') {
+      const { entry_id } = parseJson<{ entry_id?: string }>(body);
+      if (typeof entry_id !== 'string' || entry_id.length < 4) {
+        return bad(400, 'entry_id is required.');
+      }
+      keepDuplicateMember(report, proposalId, entry_id);
+      saveReviewReport(report);
+      return ok({ ok: true, report });
+    }
+    return ok(
+      await session.withVault((vault) => {
+        if (action === 'accept') {
+          acceptProposal(vault, report, proposalId);
+        } else {
+          const { entry_id } = parseJson<{ entry_id?: string }>(body);
+          if (typeof entry_id !== 'string' || entry_id.length < 4) {
+            throw new BadJsonError('entry_id is required.');
+          }
+          forgetDuplicateMember(vault, report, proposalId, entry_id);
+        }
+        vault.save();
+        saveReviewReport(report);
+        return { ok: true };
+      }),
+    );
+  }
+
   if (method === 'POST' && route === '/api/import/upload') {
     return startImport(session, query, body);
   }
@@ -1657,6 +1792,207 @@ async function startImport(
     fs.rmSync(tempPath, { force: true });
   }
   return ok({ job_id: job.id, total: job.total, status: job.status, error: job.error });
+}
+
+function reviewApiHost(baseUrl: string): string {
+  return new URL(baseUrl).host;
+}
+
+function snapshotReviewSelection(
+  entries: MemoryEntry[],
+  shared: string[],
+): {
+  selected: MemoryEntry[];
+  scopes: Array<{ scope: string; count: number; shared: boolean }>;
+  memory_count: number;
+  selection_fingerprint: string;
+} {
+  const selected = selectReviewEntries(entries);
+  const counts = new Map<string, number>();
+  for (const e of selected) {
+    counts.set(e.scope, (counts.get(e.scope) ?? 0) + 1);
+  }
+  const sharedSet = new Set(shared);
+  const scopes = [...counts.entries()]
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+    .map(([scope, count]) => ({ scope, count, shared: sharedSet.has(scope) }));
+  return {
+    selected,
+    scopes,
+    memory_count: selected.length,
+    selection_fingerprint: reviewSelectionFingerprint(scopes, selected.length),
+  };
+}
+
+function requireBoundedReviewEndpoint(endpointId: string):
+  | { ok: true; endpoint: NonNullable<ReturnType<typeof getEndpoint>>; host: string }
+  | { ok: false; response: ApiResponse } {
+  if (endpointId.length === 0) {
+    return { ok: false, response: bad(400, 'endpoint_id is required.') };
+  }
+  const endpoint = getEndpoint(endpointId);
+  if (!endpoint) {
+    return { ok: false, response: bad(400, 'Unknown endpoint.') };
+  }
+  let tier: ReturnType<typeof classifyEndpoint>['tier'];
+  try {
+    tier = classifyEndpoint(endpoint.baseUrl).tier;
+  } catch {
+    return { ok: false, response: bad(400, 'That endpoint is local. Use Review pass for on-device models.') };
+  }
+  if (tier !== 'bounded') {
+    return { ok: false, response: bad(400, 'That endpoint is local. Use Review pass for on-device models.') };
+  }
+  return { ok: true, endpoint, host: reviewApiHost(endpoint.baseUrl) };
+}
+
+async function reviewPreflight(session: UiSession, body: Buffer): Promise<ApiResponse> {
+  const { endpoint_id } = parseJson<{ endpoint_id?: string }>(body);
+  if (typeof endpoint_id !== 'string' || endpoint_id.length === 0) {
+    return bad(400, 'endpoint_id is required.');
+  }
+  const checked = requireBoundedReviewEndpoint(endpoint_id);
+  if (!checked.ok) return checked.response;
+  const snapshot = await session.withVault((vault) => ({
+    entries: vault.list(),
+    shared: vault.sharedScopes(),
+  }));
+  const selection = snapshotReviewSelection(snapshot.entries, snapshot.shared);
+  return ok({
+    endpoint: {
+      id: checked.endpoint.id,
+      label: checked.endpoint.label,
+      host: checked.host,
+      model: checked.endpoint.model,
+    },
+    memory_count: selection.memory_count,
+    scopes: selection.scopes,
+    selection_fingerprint: selection.selection_fingerprint,
+    project_docs_excluded: true,
+  });
+}
+
+async function startReviewRun(session: UiSession, body: Buffer): Promise<ApiResponse> {
+  const parsed = parseJson<{
+    mode?: string;
+    endpoint_id?: string;
+    selection_fingerprint?: string;
+  }>(body);
+  if (parsed.mode === 'api') {
+    return startReviewApiRun(session, parsed);
+  }
+  evictStaleReviewJobs();
+  const started_at = new Date().toISOString();
+  const snapshot = await session.withVault((vault) => ({
+    entries: vault.list(),
+  }));
+  const selected = selectReviewEntries(snapshot.entries);
+  const job: ReviewJob = {
+    id: randomUUID(),
+    createdAt: Date.now(),
+    status: 'running',
+    batches_done: 0,
+    batches_total: 0,
+  };
+  reviewJobs.set(job.id, job);
+
+  void (async () => {
+    try {
+      const model = await resolveReviewModel();
+      const result = await runReviewPass(selected, createOllamaClient(), {
+        model,
+        onProgress: (done, total) => {
+          job.batches_done = done;
+          job.batches_total = total;
+        },
+      });
+      const report = assembleReviewReport({
+        model: result.model,
+        started_at,
+        finished_at: new Date().toISOString(),
+        entry_count: selected.length,
+        drops: result.drops,
+        proposals: result.proposals,
+        previous: loadReviewReport(),
+      });
+      saveReviewReport(report);
+      job.batches_done = result.batches;
+      job.batches_total = result.batches;
+      job.status = 'done';
+    } catch (err: unknown) {
+      job.status = 'failed';
+      job.error = err instanceof Error ? err.message : String(err);
+    }
+  })();
+
+  return ok({ job_id: job.id, status: job.status });
+}
+
+async function startReviewApiRun(
+  session: UiSession,
+  parsed: { endpoint_id?: string; selection_fingerprint?: string },
+): Promise<ApiResponse> {
+  if (typeof parsed.endpoint_id !== 'string' || parsed.endpoint_id.length === 0) {
+    return bad(400, 'endpoint_id is required.');
+  }
+  if (typeof parsed.selection_fingerprint !== 'string' || parsed.selection_fingerprint.length === 0) {
+    return bad(400, 'selection_fingerprint is required.');
+  }
+  const checked = requireBoundedReviewEndpoint(parsed.endpoint_id);
+  if (!checked.ok) return checked.response;
+  const snapshot = await session.withVault((vault) => ({
+    entries: vault.list(),
+    shared: vault.sharedScopes(),
+  }));
+  const selection = snapshotReviewSelection(snapshot.entries, snapshot.shared);
+  if (selection.selection_fingerprint !== parsed.selection_fingerprint) {
+    return bad(409, 'Vault changed since you reviewed the consent panel. Open it again.');
+  }
+
+  evictStaleReviewJobs();
+  const started_at = new Date().toISOString();
+  const job: ReviewJob = {
+    id: randomUUID(),
+    createdAt: Date.now(),
+    status: 'running',
+    batches_done: 0,
+    batches_total: 0,
+    progress: `Sending memories to ${checked.host}…`,
+  };
+  reviewJobs.set(job.id, job);
+
+  void (async () => {
+    try {
+      const generator = createReviewApiGenerator(checked.endpoint);
+      const result = await runReviewPass(selection.selected, generator, {
+        model: checked.endpoint.model,
+        onProgress: (done, total) => {
+          job.batches_done = done;
+          job.batches_total = total;
+          job.progress = `Review pass via ${checked.host}: batch ${done} of ${total}`;
+        },
+      });
+      const report = assembleReviewReport({
+        model: checked.endpoint.model,
+        started_at,
+        finished_at: new Date().toISOString(),
+        entry_count: selection.selected.length,
+        drops: result.drops,
+        proposals: result.proposals,
+        previous: loadReviewReport(),
+        sent_to: { label: checked.endpoint.label, host: checked.host },
+      });
+      saveReviewReport(report);
+      job.batches_done = result.batches;
+      job.batches_total = result.batches;
+      job.status = 'done';
+    } catch (err: unknown) {
+      job.status = 'failed';
+      job.error = err instanceof Error ? err.message : String(err);
+    }
+  })();
+
+  return ok({ job_id: job.id, status: job.status });
 }
 
 function publicEntry(entry: {

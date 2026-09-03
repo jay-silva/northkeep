@@ -252,3 +252,8 @@ export {
   type AddEndpointInput,
   type EndpointConfig,
 } from './settings.js';
+export {
+  createReviewApiGenerator,
+  listReviewApiEndpoints,
+  reviewSelectionFingerprint,
+} from './reviewApi.js';
