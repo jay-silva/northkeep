@@ -1,7 +1,8 @@
 # ADR 0044 — Automatic sync: push after write, fast-forward pull on wake
 
 - **Date:** 2026-09-03
-- **Status:** DRAFT for Jay's review. No product code until accepted.
+- **Status:** Accepted by Jay 2026-09-03 ("Push and accepted"). Becomes the
+  next milestone. Product code follows this record.
 - **Deciders:** Jay (product owner), adversarial reviewer
 - **Extends:** ADR 0009 (sync protocol), ADR 0038 addendum 2026-08-26
   (sync generation counter, phone last-writer-wins), M6-2 mobile conflict
@@ -145,15 +146,17 @@ retry; it stays until the next success or user tap.
 - The GUI sync panel gains the age line and the "behind and edited" state.
 - The CLI is unchanged except that `northkeep sync status` reports the age.
 
-## Open questions for Jay
+## Open questions, with the defaults that apply unless Jay overrides
 
 1. Desktop debounce at 5 s, or longer (30 s) to keep Claude Code sessions to
-   one push per session pause?
+   one push per session pause? Default: 5 s.
 2. Should the desktop also pull on window focus, or only on launch and
-   unlock? Focus is the most useful and the noisiest.
+   unlock? Focus is the most useful and the noisiest. Default: yes, after
+   at least 60 s in the background.
 3. Is "Synced N ago" wanted in the phone's list header, or only in Settings?
+   Default: both; the header line is one short row under the status dot.
 
 ## Status of this record
 
-Draft. Written 2026-09-03 after the sync-server outage. Becomes a milestone
-when Jay accepts it; product code follows acceptance, not this draft.
+Accepted 2026-09-03. Written the same day, after the sync-server outage.
+The defaults above stand until Jay says otherwise.
