@@ -235,8 +235,61 @@ below are fixed and the fixed code is reviewed again.
   the generation bump plus 409 per write while diverged (0038 design); the
   one-turn window between the fast-forward decision and the replacement.
 
-Second review: pending at the time of writing; its verdict is recorded below
-when it lands.
+## Second adversarial review (2026-09-03, run against 3e31353..8293200)
+
+Fresh eyes again, no knowledge of the first pass, every claimed fix attacked
+directly. First kill shot confirmed closed: 120 status, error and version
+combinations with nothing unpushed never yield a push. Verdict: NOT CLEARED.
+
+- KILL SHOT (phone). `localDirty` tracks push ATTEMPTS, not bytes. It is set
+  only inside `pushAfterSave`, after the early return for "no server URL".
+  Memories saved before sync is configured, or while the first push fails
+  (402 before subscribing, 403, offline; the URL is kept either way), are
+  never flagged. The next wake sees server version above the phone's 0,
+  decides `pull`, the generation check passes, and those memories go to the
+  rolling `.bak` with the pill reading Synced. Plausible onboarding path:
+  enable sync on the phone, get 402, subscribe on the Mac, reopen the phone.
+  Fix: the phone decides from bytes like the desktop (a stored post-sync hash
+  of the vault file compared before any automatic pull), or marks dirty on
+  every save including unconfigured ones and clears it only on a landed push
+  or an installed pull.
+- FLESH WOUND (desktop, all hosts). `pushVault` and `pullVault` hold the vault
+  file lock across the network call (up to 120 s) while `withFileLock` gives
+  up after 5 s. With every write now pushing, a slow or hung server makes
+  every other process's reads and writes fail for the duration (executed:
+  CLI `remember` blocked 13 s, a second `remember` and a `list` failed after
+  5.7 s; the GUI's own status call failed during an unlock pull and the page
+  said "Could not unlock"). Fix: scope the lock. Push: snapshot and bump under
+  the lock, upload outside, record under the lock. Pull: download outside,
+  verify and swap under the lock, re-checking the local hash before the swap.
+- FLESH WOUND (desktop). The fast-forward precondition is decided outside the
+  critical section: a write by another process that holds the lock while the
+  wake decides `behind` is buried by the pull, and `.auto-pull.bak` (copied
+  before the lock) lacks it. Closed by the same lock restructuring.
+- FLESH WOUND (desktop). A failed automatic pull attempt overwrites
+  `vault.nkv.auto-pull.bak` with the current vault because the copy is taken
+  before `pullVault`; `lastPull` keeps pointing at it. Fix: copy to a temp
+  name and promote on success.
+- FLESH WOUND (GUI). The "a pull is never silent" line only shows on a
+  foreground wake; the server-side wakes on unlock and launch are invisible
+  to the page's `pulled` diff. Fix: the page diffs `lastPull.at`.
+- FLESH WOUND (desktop). Quit with a push in flight exits with the lock file
+  held (bounded flush gives up at 1.5 s); the next process fails every vault
+  operation for up to 60 s. Closed by the lock restructuring.
+- FLESH WOUND (minor). A 409 that re-checks to `ahead` twice (server restored
+  from a backup or wiped) parks the engine `pending` with no message and no
+  retry; the pill says Syncing forever. Fix: report it and back off.
+- SCAR TISSUE: uppercase `x-sha256` from a third-party server fails every
+  pull (ours is lowercase); a hostile no-sha server can move `lastVersion` by
+  replaying our own blob at a forged version; the 409 retry bumps the
+  generation twice for one logical push; a phone crash between the push's
+  200 and the SecureStore write manufactures an LWW (M6-2 design); the
+  `withFileLock` 5 s timeout and 60 s stale window predate this ADR.
+- Residual: no live push against the hosted server with a subscribed
+  account; no device run of the phone wake; no Tauri focus run.
+
+Fixes for this round: not applied at the time of writing (review rule: a
+separate step, on request).
 
 ## Status of this record
 
