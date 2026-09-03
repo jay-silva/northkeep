@@ -1,0 +1,51 @@
+name: Hosted probe
+
+# Watches the two hosted servers so an outage is a red workflow and an email
+# within 15 minutes, not a phone banner a week later (2026-09-03: the sync
+# server crashed on every route for six days unnoticed). No secrets are used;
+# see scripts/probe-hosted.sh for what each check proves.
+#
+# GitHub pauses scheduled workflows after 60 days without a commit on the
+# default branch. Re-enable it from the Actions tab if the repo goes quiet.
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'apps/sync-server/**'
+      - 'apps/connector-server/**'
+      - 'scripts/probe-hosted.sh'
+      - '.github/workflows/hosted-probe.yml'
+
+concurrency:
+  group: hosted-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      # Pushing main IS the deploy (Vercel Git integration). Give the build a
+      # head start, then keep probing for up to five minutes so a slow deploy
+      # is not reported as an outage.
+      - name: Post-deploy smoke (retry while Vercel builds)
+        if: github.event_name == 'push'
+        run: |
+          sleep 60
+          for attempt in 1 2 3 4 5 6; do
+            if scripts/probe-hosted.sh; then exit 0; fi
+            echo "attempt $attempt failed; retrying in 45s"
+            sleep 45
+          done
+          echo "Production is still failing five minutes after the push."
+          exit 1
+
+      - name: Scheduled probe
+        if: github.event_name != 'push'
+        run: scripts/probe-hosted.sh
