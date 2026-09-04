@@ -58,8 +58,9 @@ every milestone; if a limit is removed, say when and how.*
   to `vault.nkv.bak` (recoverable), not merged. The automatic paths (below)
   never pull over local edits; only the Pull button and `northkeep sync pull`
   can, and the status line first says the vault differs from the server's
-  newer copy (or, with no recorded baseline, that the server changed and this
-  vault may have). Push before you pull by hand on a machine you've edited.
+  newer copy (the CLI adds, when this machine has no recorded baseline, that
+  the server changed and this vault may have). Push before you pull by hand
+  on a machine you've edited.
 - **HTTPS only.** The client refuses a non-https sync server (except loopback
   for testing) so your token and blob never cross the network unprotected.
 
@@ -78,7 +79,9 @@ every milestone; if a limit is removed, say when and how.*
   phone's first automatic establish push does too).
 - **An import on the phone is a write.** It replaces the phone's vault after
   a confirmation, keeps the replaced vault as `vault.nkv.pre-import.bak`
-  (overwritten only by the next import), and is pushed on the next wake; if
+  (exactly one copy, replaced by the next import, deleted by "Sign out and
+  wipe" along with every other copy beside the vault), and is pushed on the
+  next wake; if
   another device pushed newer content meanwhile, the phone's conflict
   recovery keeps the import and the displaced server copy lands in the
   phone's `.conflict.bak`.

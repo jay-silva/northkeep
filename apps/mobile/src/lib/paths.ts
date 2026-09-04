@@ -63,6 +63,25 @@ export function preImportBakPath(vaultFileUri: string): string {
   return `${vaultFileUri}.pre-import.bak`;
 }
 
+/**
+ * Every file that can sit beside the vault: the rolling `.bak`, the write
+ * temp, the pull temp, the automatic-pull copy, the conflict stash and the
+ * pre-import copy, each with the rolling `.bak` writeAtomic may leave beside
+ * it. "Sign out and wipe" deletes all of them (eleventh review: the
+ * pre-import and auto-pull copies used to survive the wipe).
+ */
+export function vaultSidecarPaths(vaultFileUri: string): string[] {
+  const bases = [
+    `${vaultFileUri}.bak`,
+    `${vaultFileUri}.tmp`,
+    `${vaultFileUri}.pulled.tmp`,
+    `${vaultFileUri}.auto-pull.bak`,
+    `${vaultFileUri}.conflict.bak`,
+    `${vaultFileUri}.pre-import.bak`,
+  ];
+  return bases.flatMap((b) => [b, `${b}.bak`]);
+}
+
 /** Scratch path used by the pull flow for verify-before-replace. */
 export function pulledTmpPath(): string {
   return new File(Paths.cache, `${VAULT_FILENAME}.pulled.tmp`).uri;

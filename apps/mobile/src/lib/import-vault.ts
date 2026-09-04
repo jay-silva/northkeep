@@ -1,7 +1,7 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
 import { getPlatform } from '@northkeep/core';
-import { preImportBakPath, vaultPath } from './paths';
+import { deleteIfExists, preImportBakPath, vaultPath } from './paths';
 import { saveLocalDirty } from './secure-store';
 import { vaultGate } from './vault-gate';
 
@@ -96,11 +96,15 @@ export async function importVaultFile(options: ImportVaultOptions = {}): Promise
     let keptCopyAt: string | null = null;
     if (storage.exists(target)) {
       keptCopyAt = preImportBakPath(target);
+      // writeAtomic rolls an existing file to `.bak`; remove the previous copy
+      // first so the only copy is the documented one (no `.pre-import.bak.bak`).
+      deleteIfExists(keptCopyAt);
+      deleteIfExists(`${keptCopyAt}.bak`);
       storage.writeAtomic(keptCopyAt, storage.readBytes(target));
     }
     storage.writeAtomic(target, bytes);
+    kept = keptCopyAt; // recorded before afterInstall so a throwing reopen cannot hide where the copy went
     await options.afterInstall?.();
-    kept = keptCopyAt;
   });
   return { ok: true, bytes: bytes.length, keptCopyAt: kept };
 }

@@ -32,7 +32,7 @@ import {
 } from '@northkeep/sync';
 import { DEFAULT_CONNECTOR_SERVER_URL, allowlistHashFromToken } from './connect-flow';
 import { DEMO_MEMORIES, DEMO_PASSPHRASE } from './demo-vault';
-import { deleteIfExists, demoVaultPath, recoverVaultFileIfMissing, vaultPath } from './paths';
+import { deleteIfExists, demoVaultPath, recoverVaultFileIfMissing, vaultPath, vaultSidecarPaths } from './paths';
 import {
   biometricUnlockEnabled,
   cacheMasterKeyHex,
@@ -1396,8 +1396,9 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     closeSession();
     await wipeAllSecrets();
     deleteIfExists(vaultPath());
-    deleteIfExists(`${vaultPath()}.bak`);
-    deleteIfExists(`${vaultPath()}.tmp`);
+    // Every copy beside the vault too: the wipe alert promises the vault copy
+    // is gone, and the auto-pull and pre-import copies are vault ciphertext.
+    for (const sidecar of vaultSidecarPaths(vaultPath())) deleteIfExists(sidecar);
     setBiometricCacheEnabled(false);
     setAccountIdShort(null);
     setSyncState(initialSyncState());

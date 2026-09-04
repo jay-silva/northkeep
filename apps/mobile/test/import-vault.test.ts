@@ -302,6 +302,18 @@ describe('the import keeps the replaced vault at its own path (tenth review)', (
     expect(files.get(`${VAULT_PATH}.pre-import.bak`)!.equals(nkv('OLD-VAULT'))).toBe(true);
   });
 
+  it('a second import replaces the copy without leaving a rolling .bak beside it', async () => {
+    files.set(VAULT_PATH, nkv('ORIGINAL'));
+    files.set(PICKED_URI, nkv('IMPORT-ONE'));
+    picked = { canceled: false, assets: [{ uri: PICKED_URI }] };
+    expect((await importVaultFile()).ok).toBe(true);
+    files.set(PICKED_URI, nkv('IMPORT-TWO'));
+    picked = { canceled: false, assets: [{ uri: PICKED_URI }] };
+    expect((await importVaultFile()).ok).toBe(true);
+    expect(files.get(`${VAULT_PATH}.pre-import.bak`)!.equals(nkv('IMPORT-ONE'))).toBe(true);
+    expect(files.has(`${VAULT_PATH}.pre-import.bak.bak`)).toBe(false);
+  });
+
   it('keeps nothing on a phone that had no vault, and says so', async () => {
     files.set(PICKED_URI, nkv('FRESH'));
     picked = { canceled: false, assets: [{ uri: PICKED_URI }] };

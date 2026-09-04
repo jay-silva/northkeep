@@ -157,7 +157,7 @@ retry; it stays until the next success or user tap.
   warning.
 - A phone build (buildNumber bump, TestFlight) and a Mac release. Batch with
   the next milestone per the EAS batching rule.
-- The GUI sync panel gains the age line and the diverged message with the baseline hedge.
+- The GUI sync panel gains the age line and a diverged message that never asserts this Mac changed.
 - The CLI is unchanged except that `northkeep sync status` reports the age.
 
 ## Open questions, with the defaults that apply unless Jay overrides
@@ -795,7 +795,27 @@ promised on a phone that had no vault). KNOWN-LIMITS line 60 carries both
 status phrasings. Decision 2 says no indicator asserts that this machine
 changed. The fix note's grep claim corrected.
 
-The code has cleared every executed attack across ten rounds. What remains
+## Eleventh adversarial review (2026-09-04, run against 3e31353..9c383a0)
+
+Focused on the import copy plus the battery. The copy survives the wake's
+stamp (proved through the real import and push path), a failing copy write
+leaves the vault untouched with the flag set, a save queued behind an
+import lands on the reopened vault. Verdict: CLEARED WITH WOUNDS: "Sign out
+and wipe" left the pre-import copy (and the older auto-pull copy) on disk,
+unreadable without the device secret but contrary to the alert; the copy
+rolled an undocumented `.pre-import.bak.bak`; ADR Consequences claimed a GUI
+hedge that was never built; KNOWN-LIMITS attributed both diverged phrasings
+to every status line.
+
+## Fixes after the eleventh review (2026-09-04)
+
+The wipe deletes every sidecar beside the vault (rolling backup, temps,
+auto-pull, conflict and pre-import copies, each with its own rolling
+`.bak`). The import removes the previous copy before writing the new one,
+so exactly one documented copy exists, and records where it went before the
+reopen runs. The two doc lines corrected.
+
+The code has cleared every executed attack across eleven rounds. What remains
 is rule 2 of the review skill: one live push and one live pull against the
 hosted server with Jay's own account, which no throwaway credential can
 perform (an unknown bearer is answered 402, not 401).
