@@ -3864,7 +3864,11 @@
       case 'ahead': return '↑ You have local changes — Push to upload.';
       // Both sides moved. Pull first: it keeps the current vault as vault.nkv.bak,
       // so the local work is recoverable either way.
-      case 'diverged': return '⚠ This Mac and the server both changed — Pull first (your current vault is kept as a .bak), then Push.';
+      // Hedge when this machine has no recorded post-sync baseline: it cannot
+      // know whether it changed, only that the server did (seventh review).
+      case 'diverged': return s.baselineKnown !== true
+        ? '⚠ The server has newer changes and this Mac may have changed too. Pull first (your current vault is kept as a .bak), then Push.'
+        : '⚠ This Mac and the server both changed. Pull first (your current vault is kept as a .bak), then Push.';
       case 'no-remote': return 'Nothing uploaded yet — Push to start.';
       case 'no-local': return 'No local vault; Pull to download version ' + s.remoteVersion + '.';
       case 'no-config': return 'Set a sync server above to start.';

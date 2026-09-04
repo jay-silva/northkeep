@@ -155,6 +155,18 @@ export interface VaultSession {
   /** Pull from sync and reload; requires unlocked (the key verifies the download). */
   pullAndReload(): Promise<{ pulled: boolean; version?: number }>;
   /**
+   * Hand this to importVaultFile as its `afterInstall` (ADR 0044, seventh
+   * review kill shot). It runs INSIDE the vault gate, between the imported
+   * bytes landing and the first chance a queued save gets, and closes the
+   * Vault instance opened from the PREVIOUS file so it cannot save its own
+   * content back over the import. It then tries to reopen with the key already
+   * held: an import of the same vault (a newer copy AirDropped from the Mac)
+   * comes straight back unlocked, and a foreign one simply leaves the phone
+   * locked so the user unlocks it with its own passphrase. Never takes the
+   * gate (it is not reentrant) and never throws.
+   */
+  reopenAfterImport(): Promise<void>;
+  /**
    * ADR 0044 (fourth review): does this phone hold bytes the server has never
    * accepted? A manual pull REPLACES the vault, so the screen that offers one
    * (pull-to-refresh on Memories) asks first when this is true. An absent
@@ -520,7 +532,35 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     deleteIfExists(`${path}.tmp`);
   }, []);
 
-  const pullAndReload = useCallback(async (expectLocalSha?: string): Promise<{ pulled: boolean; version?: number }> => {
+  /**
+   * The session half of an import (ADR 0044, seventh review kill shot). Called
+   * by importVaultFile from inside the vault gate, right after the write.
+   *
+   * The old Vault instance points at bytes that are no longer on disk, so it
+   * is closed FIRST, unconditionally: leaving it open is the fourth review's
+   * second phone wound (its next save writes pre-import content back over the
+   * import). Reopening with the held key is best effort, and a failure is the
+   * EXPECTED path rather than an error: a vault from another lineage does not
+   * open with the key derived for this one, and the phone should just sit
+   * locked. MUST NOT take the vault gate (not reentrant) and must not throw.
+   */
+  const reopenAfterImport = useCallback(async (): Promise<void> => {
+    if (!vaultRef.current) return; // nothing open (fresh-phone import): nothing to close
+    // closeSession zeroes the session key, so take a copy before it runs.
+    // openWithSessionKey takes ownership of the buffer it is handed.
+    const keyCopy = masterKeyRef.current ? Buffer.from(masterKeyRef.current) : null;
+    closeSession();
+    setStatus((prev) => (prev === 'unlocked' ? 'locked' : prev));
+    if (!keyCopy) return;
+    try {
+      openWithSessionKey(keyCopy); // sets the vault, the key and status 'unlocked'
+    } catch {
+      // A different vault: stay locked, key already zeroed by openWithSessionKey.
+      // The imported file is intact on disk; the user unlocks it normally.
+    }
+  }, [closeSession, openWithSessionKey]);
+
+  const pullAndReload = useCallback(async (expectLocalSha?: string, keepDisplacedCopy?: boolean): Promise<{ pulled: boolean; version?: number }> => {
     const key = masterKeyRef.current;
     if (!vaultRef.current || !key) throw new Error('Unlock the vault before syncing.');
     const secretHex = await loadDeviceSecretHex();
@@ -533,6 +573,12 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       vaultPath: vaultPath(),
       masterKey: key,
       expectLocalSha,
+      // Only an AUTOMATIC pull keeps the durable `.auto-pull.bak` copy (ADR
+      // 0044, seventh review). The wake's pull and its repair fast-forward
+      // pass true; the manual pull-to-refresh (memories.tsx, which calls this
+      // with no arguments) keeps today's behaviour, because the user asked for
+      // the replacement and was warned when anything was unpushed.
+      keepDisplacedCopy,
       // Runs INSIDE the vault gate, between the write and the first chance any
       // queued save gets to run. That is what closes the fourth review's second
       // phone wound: the OLD Vault instance can no longer save pre-pull content
@@ -947,7 +993,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         setSyncState((s) => reduceSync(s, { type: 'start' }));
         let result: { pulled: boolean; version?: number };
         try {
-          result = await pullAndReload(currentSha ?? undefined);
+          result = await pullAndReload(currentSha ?? undefined, true);
         } catch (err) {
           if (!(err instanceof LocalChangedError)) throw err;
           // A save landed during the download. Decide once more from the new
@@ -1055,7 +1101,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
           // the install (LocalChangedError), exactly like the wake pull.
           setSyncState((s) => reduceSync(s, { type: 'start' }));
           try {
-            const result = await pullAndReload(repaired.sha ?? undefined);
+            const result = await pullAndReload(repaired.sha ?? undefined, true);
             setSyncState((s) =>
               reduceSync(s, { type: 'synced', version: result.version ?? remote?.version ?? lastSyncedVersion }),
             );
@@ -1388,6 +1434,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       unlockWithBiometrics,
       lock,
       pullAndReload,
+      reopenAfterImport,
       hasUnpushedChanges,
       pushNow,
       syncState,
@@ -1421,6 +1468,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       unlockWithBiometrics,
       lock,
       pullAndReload,
+      reopenAfterImport,
       hasUnpushedChanges,
       pushNow,
       syncState,

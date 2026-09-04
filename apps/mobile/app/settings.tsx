@@ -71,10 +71,19 @@ export default function Settings() {
     setError(null);
     setNotice(null);
     try {
-      const result = await importVaultFile();
+      const result = await importVaultFile({ afterInstall: session.reopenAfterImport });
       if (result.ok) {
         setVaultPresent(true);
-        setNotice('Vault file imported. Unlock it with your passphrase.');
+        // The import closed the open vault under the gate (ADR 0044, seventh
+        // review). A vault of the same lineage reopened with the key already
+        // held and the session is still unlocked; anything else left the phone
+        // locked, and leaving Settings rendering as though nothing happened is
+        // the "stranded session" wound from the fourth review. Route to unlock.
+        if (session.status !== 'unlocked') {
+          router.replace('/unlock');
+          return;
+        }
+        setNotice('Vault file imported.');
       } else if (result.reason === 'not-a-vault') {
         setError('That file is not a NorthKeep vault (.nkv).');
       }
@@ -137,6 +146,9 @@ export default function Settings() {
         placeholderTextColor={colors.muted}
       />
       <Button title="Save server" kind={savedUrl === null ? 'secondary' : 'primary'} onPress={() => void onSaveServer()} disabled={serverUrl.trim().length === 0} />
+      <Text style={styles.footnote}>
+        An automatic pull keeps the previous copy as vault.nkv.auto-pull.bak.
+      </Text>
 
       <FieldLabel>Cloud Connect</FieldLabel>
       <Button title="Cloud Connect" kind="secondary" onPress={() => router.push('/sharing')} />

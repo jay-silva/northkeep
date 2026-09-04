@@ -83,8 +83,9 @@ background). On wake the device:
    runs the same verify-opens-with-key and structural checks the manual pull
    runs, and reloads.
 4. If the server is ahead and the local vault HAS changed, does nothing
-   automatic. The indicator shows "behind and edited"; the user chooses, as
-   today.
+   automatic. The state is `diverged`; the indicator says both changed (or,
+   when this machine has no recorded baseline, that the server changed and
+   this machine may have) and the user chooses, as today.
 
 Wake pulls run only while unlocked, because verification needs the key. A
 locked app on wake shows "last synced N ago" and pulls after unlock.
@@ -143,7 +144,7 @@ retry; it stays until the next success or user tap.
   warning.
 - A phone build (buildNumber bump, TestFlight) and a Mac release. Batch with
   the next milestone per the EAS batching rule.
-- The GUI sync panel gains the age line and the "behind and edited" state.
+- The GUI sync panel gains the age line and the diverged message with the baseline hedge.
 - The CLI is unchanged except that `northkeep sync status` reports the age.
 
 ## Open questions, with the defaults that apply unless Jay overrides
@@ -632,7 +633,77 @@ Verdict: NOT CLEARED.
   directory before touching the CLI (the third review's harness overwrote
   the real `sync.json`; restored, nothing left the machine).
 
-Seventh review: pending at the time of writing.
+## Seventh adversarial review (2026-09-04, run against 3e31353..6a020cc)
+
+Fresh eyes on Opus, three tracks, every harness under a temp home (the real
+`sync.json` verified byte-identical before and after). Every prior kill
+shot held under execution: the gate at all six wake await points on both
+the pull and the repair branch, the one-call baseline under a real
+SecureStore failure, one generation per push, replay refused, the pause
+expiry, the MCP exit lines in real processes, all six desktop checks, eleven
+`sync.json` forgeries, eight hostile-server shapes, symlinks. Verdict: NOT
+CLEARED.
+
+- KILL SHOT (phone). Round six routed "bytes moved, nothing dirty" to a
+  repair that fast-forwards from the server. A vault the user imports by
+  hand (Settings, Import vault file) is exactly that shape: `importVaultFile`
+  writes the file with no gate, no dirty flag and no baseline. The next wake
+  pulls the server's copy over the import, keeps no durable copy, and the
+  pill reads Synced. Before this ADR an import was pushed, which is what the
+  user wanted. Fix: an import is a user write. It runs under the gate and
+  sets dirty before the write; the baseline is kept (its version gives the
+  push its base, its generation puts the import above what the phone last
+  synced, and a known baseline keeps the refresh pull's warning), so the
+  next wake reads dirty and moved and pushes it. And repair's fast-forward
+  keeps a durable copy like the desktop's.
+- FLESH WOUND (phone). An automatic pull keeps no `.auto-pull.bak` on the
+  phone; only the one-deep rolling `.bak`. Fix: the install copies the
+  displaced file to `vault.nkv.auto-pull.bak` under the gate on the success
+  path, exactly as the desktop does.
+- FLESH WOUND (claims). The "one rule" wording ("byte-identical to what it
+  last synced AND the server is ahead") is false for the repair
+  fast-forward, which runs because the bytes are not identical and can run
+  when the server is at the same version. Reword: the phone repairs a torn
+  baseline only when nothing was written by the user (dirty is the user's
+  signal, set before every save) and keeps a durable copy.
+- FLESH WOUND (desktop). A torn desktop baseline (a kill between the pull's
+  rename and the config write, inside the lock) reports "both changed" on a
+  machine with no local edits; a manual pull recovers with a `.bak`.
+  Recorded as a scar: the window is microseconds inside the file lock.
+- FLESH WOUND (GUI). `syncSentence` ignores `baselineKnown` and asserts
+  "this Mac and the server both changed" when that is unknowable. Fix:
+  hedge like the CLI does.
+- FLESH WOUND (ADR text). Decision 2 named a "behind and edited" indicator
+  that does not exist; the condition is `diverged`. Corrected in place.
+- SCAR TISSUE: the pause expiry has no host knob (ten minutes, engine
+  tested); a perfect `sync.json` forgery pulls over an edit; a no-sha
+  replaying server moves `lastVersion`; CLI-vs-CLI stranding with no engine
+  on the machine; `localChanged` reads true on the no-sha path for an
+  untouched file (cosmetic); the symlinked vault's `.auto-pull.bak` sits
+  beside the target.
+- Residual, and the cap: the push/pull protocol is unverified against the
+  real server with a real account (a throwaway bearer is 402-gated). That
+  caps any verdict at CLEARED WITH WOUNDS until Jay's own account makes
+  one live push and one live pull.
+
+## Fixes after the seventh review (2026-09-04)
+
+- Phone import runs under the gate, sets dirty before the write, keeps the
+  baseline, and closes and reopens the session vault in the same gated
+  section; the next wake pushes the import (tested at the decision level
+  with the session's exact inputs and through the real secure-store module).
+- Automatic pulls on the phone (the wake's pull and the repair fast-forward)
+  pass `keepDisplacedCopy` and the install copies the previous file to
+  `vault.nkv.auto-pull.bak` under the gate on the success path; manual
+  pull-to-refresh does not. Settings says so in one line.
+- GUI: the diverged sentence hedges unless the baseline is definitely known.
+  ADR Decision 2 and Consequences no longer name a "behind and edited"
+  state. KNOWN-LIMITS states the repair exception to the one rule and the
+  phone's durable copy.
+- Scars recorded: the desktop's microsecond torn-baseline window inside the
+  file lock (manual pull recovers); the pause expiry has no host knob.
+
+Eighth review: pending at the time of writing.
 
 ## Status of this record
 

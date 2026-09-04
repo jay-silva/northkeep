@@ -3,7 +3,7 @@ import * as Crypto from 'expo-crypto';
 import { Vault, VaultAuthError, VaultSyncGenerationError, getPlatform } from '@northkeep/core';
 import { MAX_BLOB_BYTES, SubscriptionRequiredError, deriveSyncCreds } from '@northkeep/sync';
 import { createDeadline, type DeadlineScope } from './deadline';
-import { deleteIfExists, pulledTmpPath } from './paths';
+import { autoPullBakPath, deleteIfExists, pulledTmpPath } from './paths';
 import { loadSyncBaseline, saveLocalDirty, savePendingStampSha, saveSyncBaseline } from './secure-store';
 import { localBytesMoved, nextPushGenerationWithPending, pulledBlobIsReplay } from './sync-flow';
 import { vaultGate } from './vault-gate';
@@ -300,6 +300,13 @@ export async function pullVaultMobile(options: {
    * adversarial review). It must not call anything that takes the gate again.
    */
   afterInstall?: (installed: { version: number; sha256: string }) => Promise<void> | void;
+  /**
+   * AUTOMATIC pulls only (the wake's pull and its repair fast-forward): keep
+   * the displaced vault at `${vaultPath}.auto-pull.bak`, a copy no later save
+   * rewrites. Manual pull-to-refresh leaves it unset and keeps today's
+   * behaviour (ADR 0044, seventh review flesh wound).
+   */
+  keepDisplacedCopy?: boolean;
 }): Promise<MobilePullResult> {
   const platform = getPlatform();
   // The download runs with the gate RELEASED: it is up to 120 s of network and
@@ -322,6 +329,7 @@ async function installPulledBlob(
     masterKey?: Buffer;
     expectLocalSha?: string;
     afterInstall?: (installed: { version: number; sha256: string }) => Promise<void> | void;
+    keepDisplacedCopy?: boolean;
   },
   remote: VerifiedRemoteBlob,
 ): Promise<MobilePullResult> {
@@ -387,6 +395,25 @@ async function installPulledBlob(
   // landed while the blob downloaded must not be buried (third review).
   if (localExists && localBytesMoved(options.expectLocalSha, await hashVaultFile(options.vaultPath))) {
     throw new LocalChangedError();
+  }
+  // THE DURABLE COPY (ADR 0044, seventh review flesh wound). Last thing before
+  // the write, after every check has passed, so it is made only on the success
+  // path and only for an automatic pull. The rolling `${path}.bak` writeAtomic
+  // keeps is not enough on its own: the next save rewrites it, so a wake pull
+  // the user wanted to undo an hour later left nothing behind.
+  //
+  // Best effort on purpose. writeAtomic still leaves the displaced image at
+  // `${path}.bak`, so a failure here degrades to today's behaviour rather than
+  // to data loss, while throwing would turn a missing backup into a refusal to
+  // install a blob that already passed verify. (The second automatic pull
+  // leaves a harmless `${path}.auto-pull.bak.bak`, the same artifact
+  // stashRecoverableBak documents below.)
+  if (options.keepDisplacedCopy && localExists) {
+    try {
+      platform.storage.writeAtomic(autoPullBakPath(options.vaultPath), platform.storage.readBytes(options.vaultPath));
+    } catch {
+      // Keep going: the install is still safe and `${path}.bak` still holds it.
+    }
   }
   // writeAtomic keeps the previous vault as `${path}.bak` (the storage seam contract).
   // Original bytes (possibly unmigrated 0.3) are installed; compare used the

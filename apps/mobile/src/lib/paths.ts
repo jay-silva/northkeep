@@ -35,6 +35,24 @@ export function demoVaultPath(): string {
   return new File(Paths.cache, DEMO_VAULT_FILENAME).uri;
 }
 
+/**
+ * The durable copy an AUTOMATIC pull keeps of the vault it displaced (ADR 0044,
+ * seventh review flesh wound; the desktop already keeps one).
+ *
+ * The storage seam's rolling `${path}.bak` is not that copy: it is rewritten by
+ * the very next save, so a wake pull that installed the wrong thing left the
+ * user nothing to go back to a minute later. This path is written only by an
+ * automatic install (the wake's pull and repair branches) and by nothing else,
+ * so it survives every later save.
+ *
+ * Manual pull-to-refresh keeps today's behaviour: the user asked for the
+ * replacement, was warned when anything was unpushed, and the rolling `.bak`
+ * is still there.
+ */
+export function autoPullBakPath(vaultFileUri: string): string {
+  return `${vaultFileUri}.auto-pull.bak`;
+}
+
 /** Scratch path used by the pull flow for verify-before-replace. */
 export function pulledTmpPath(): string {
   return new File(Paths.cache, `${VAULT_FILENAME}.pulled.tmp`).uri;

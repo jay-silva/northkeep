@@ -66,6 +66,13 @@ every milestone; if a limit is removed, say when and how.*
 
 - **Automatic pull is fast-forward only.** A device pulls on its own only when
   its vault is byte-identical to what it last synced AND the server is ahead.
+  The one exception is the phone's baseline repair: when the bytes differ
+  from the recorded baseline but the phone recorded no user write (the dirty
+  flag is set before every save), the baseline is treated as torn and the
+  phone re-records it from the server, fast-forwarding if the server moved;
+  a hand-imported vault sets the flag, so it is pushed, not repaired over.
+  Both kinds of automatic pull keep the displaced file as
+  `vault.nkv.auto-pull.bak`.
   If both sides changed, nothing automatic happens: the desktop shows "both
   changed, Pull first" and waits for you; the phone keeps its existing
   last-writer-wins recovery for its own pushes. A vault with no recorded

@@ -26,7 +26,7 @@ export default function Onboarding() {
     setError(null);
     setImporting(true);
     try {
-      const result = await importVaultFile();
+      const result = await importVaultFile({ afterInstall: session.reopenAfterImport });
       if (result.ok) {
         Alert.alert(
           'Vault file imported',
