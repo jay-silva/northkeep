@@ -491,7 +491,46 @@ standalone MCP process and a real SIGKILLed pusher. Verdict: NOT CLEARED.
   is inert for that window; the phone's connector down-sync holds the gate
   across its HTTP calls.
 
-Fifth review: pending at the time of writing.
+## Fifth adversarial review (2026-09-04, run against 3e31353..4919e7e)
+
+Fresh eyes on Opus; phone orchestration re-ported; saves landed at six wake
+await points including inside the native digest window; real CLI and MCP
+processes. Verdict: NOT CLEARED. Everything from the fourth round held:
+the gate closes every interleave (no memory lost at any await point), the
+desktop grows the generation by exactly one across five failed retries and
+the manual pull that follows succeeds, all six ADR checks pass on the
+desktop, forged `sync.json` in four spellings never yields a pull.
+
+- KILL SHOT (phone). The fourth review's generation fix was applied on the
+  desktop only. `preparePushMobile` still bumps the generation on every
+  attempt, and `installPulledBlob` still compares an incoming blob with the
+  local stamp instead of what the phone last synced. On the establish path
+  that is terminal: establish inflates the stamp, never sets dirty, never
+  establishes the baseline, so every wake says "pull to catch up" while the
+  pull refuses every honest blob as a replay. The only escape is a save,
+  which LWW-pushes the stale vault over the other device. Trigger: a failing
+  PUT with a reachable status endpoint, exactly the 2026-08-28 outage. Fix:
+  mirror the desktop. The phone stores `lastSyncGeneration`; the push bumps
+  only when the stamp is not already ahead of it (one bump per logical
+  push); the install's replay check compares with `lastSyncGeneration`
+  (null means inert), never with the local stamp.
+- FLESH WOUND (claims). KNOWN-LIMITS says one bump per push and a replay
+  check against the last synced copy; both are false for the phone until
+  the fix above. The refresh-pull line omits that the pull can be refused.
+- FLESH WOUND (MCP wording). `flushBounded` reads `phase === 'pending'`,
+  but a debounced push that has started uploading is `syncing`, so a
+  stranded write logs the "sync still running" line. Fix: treat pending
+  and syncing with a pending write as "push still pending".
+- FLESH WOUND (phone wording). A conflict with the phone's own establish
+  push is reported as another device.
+- SCAR TISSUE: a permanently failing wake pull retries on the backoff
+  ladder forever, flipping the pill (bounded by hourly); `writeAtomic`
+  replaces a symlinked vault path with a regular file on the first save
+  (pre-existing storage seam).
+- Residual: no live push with a subscribed account (the push/pull protocol
+  itself is unverified against reality); no device run.
+
+Fixes for this round: applied next; see below.
 
 ## Status of this record
 
