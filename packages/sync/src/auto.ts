@@ -110,7 +110,7 @@ const DEFAULT_BACKOFF_MS: readonly number[] = [30_000, 120_000, 600_000, 3_600_0
 
 /** The exact message the GUI and CLI show for the one case automation refuses. */
 export const DIVERGED_MESSAGE =
-  'This machine and the server both changed. Pull first (your current vault is kept as a .bak), then Push.';
+  "This machine's vault differs from the server's newer copy. Pull first (your current vault is kept as a .bak), then Push.";
 
 export class AutoSync {
   private readonly vaultPath: string;

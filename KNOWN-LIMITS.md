@@ -64,21 +64,21 @@ every milestone; if a limit is removed, say when and how.*
 
 ## Automatic sync (ADR 0044), current
 
-- **Automatic pull is fast-forward only.** A device pulls on its own only when
-  its vault is byte-identical to what it last synced AND the server is ahead.
-  The one exception is the phone's baseline repair: when the bytes differ
-  from the recorded baseline but the phone recorded no user write (the dirty
-  flag is set before every save), the baseline is treated as torn and the
-  phone re-records it from the server, fast-forwarding if the server moved;
-  a hand-imported vault sets the flag, so it is pushed, not repaired over.
-  Both kinds of automatic pull keep the displaced file as
-  `vault.nkv.auto-pull.bak`.
-  If both sides changed, nothing automatic happens: the desktop shows "both
-  changed, Pull first" and waits for you; the phone keeps its existing
-  last-writer-wins recovery for its own pushes. A vault with no recorded
-  post-sync baseline (a machine that synced before 0.20) counts as edited
-  until a push or pull sets the baseline (the phone's first automatic
-  establish push does too).
+- **Automatic pull replaces only what you did not write.** On the Mac a
+  device pulls on its own only when its vault is byte-identical to what it
+  last synced and the server is ahead; anything else is reported and left to
+  you. The phone has one more branch: it records a dirty flag before every
+  write you make (saves, edits, forgets, imports), so bytes that moved with
+  nothing dirty can only be a torn baseline, and the phone repairs that from
+  the server, fast-forwarding whenever the server's copy differs, even at the
+  same version. Both devices keep the displaced file as
+  `vault.nkv.auto-pull.bak` (two deep). A vault with no recorded post-sync
+  baseline counts as edited until a push or pull sets the baseline (the
+  phone's first automatic establish push does too).
+- **An import on the phone is a write.** It replaces the phone's vault after
+  a confirmation and is pushed on the next wake; if another device pushed
+  newer content meanwhile, the phone's conflict recovery keeps the import and
+  the displaced server copy lands in the phone's `.conflict.bak`.
 - **The desktop pushes a few seconds after every write**, including writes
   that arrive through the local MCP server, but only while the vault is
   unlocked. A write made while locked waits for the next unlock. Pushes back

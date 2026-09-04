@@ -67,7 +67,21 @@ export default function Settings() {
     }
   }
 
-  async function onImport() {
+  function onImport() {
+    // An import is a user write: it replaces this phone's vault and the next
+    // wake pushes it (ADR 0044, eighth review). Say so before the picker opens,
+    // the way pull-to-refresh warns before it replaces.
+    Alert.alert(
+      'Import a vault file',
+      'The file replaces the vault on this phone and is pushed to your sync server the next time the app wakes; the copy the server holds now is kept on this phone as a backup. A vault from a different account locks this phone until you wipe it and pull.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Import', style: 'destructive', onPress: () => void runImport() },
+      ],
+    );
+  }
+
+  async function runImport() {
     setError(null);
     setNotice(null);
     try {
@@ -83,7 +97,7 @@ export default function Settings() {
           router.replace('/unlock');
           return;
         }
-        setNotice('Vault file imported.');
+        setNotice('Vault file imported. It is pushed to your sync server on the next wake.');
       } else if (result.reason === 'not-a-vault') {
         setError('That file is not a NorthKeep vault (.nkv).');
       }

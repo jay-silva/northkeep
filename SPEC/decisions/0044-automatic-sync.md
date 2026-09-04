@@ -38,17 +38,29 @@ without changing what happens when two devices disagree.
 
 ## The one rule that makes this safe
 
-**Automatic pull is fast-forward only.** A device pulls on its own only when
-its local vault is unchanged since its last sync AND the server is ahead. If
-the local vault has changed, the device pushes instead (which is what it
-already does after a save). If both have changed, nothing automatic happens
-beyond what M6-2 already does on the phone (last-writer-wins with a
-recoverable `.bak`), and the desktop keeps punting to the human exactly as
-today. No automatic path ever replaces a locally edited vault.
+**Automatic pull replaces only what the user did not write.** On the
+desktop that means: a device pulls on its own only when its vault is
+byte-identical to what it last synced and the server is ahead; anything
+else is reported and left to the human. On the phone the same rule has one
+more branch, added by the sixth review: the phone records a dirty flag under
+the vault gate before every user write (saves, imports, edits, forgets), so
+"bytes moved with nothing dirty" can only be a torn baseline (an install
+whose bookkeeping did not complete), and the phone repairs it from the
+server, fast-forwarding whenever the server's copy differs, whatever its
+version. Every automatic install on either device keeps the displaced file
+as `vault.nkv.auto-pull.bak`.
+
+What this rule does not cover, on purpose: the phone's conflict recovery
+(M6-2, ADR 0038) still resolves a real two-sided change last-writer-wins,
+and the desktop then fast-forwards onto whatever the phone pushed, because
+the phone's re-push carries a higher generation. A newer Mac write can
+therefore leave the server through a phone conflict; it survives in the
+phone's `.conflict.bak` and the Mac's `.auto-pull.bak`. That is ADR 0038's
+residual N2, kept by Decision 4, and this ADR does not claim otherwise.
 
 This is what removes the KNOWN-LIMITS warning "push before you pull on a
-machine you've edited" from the automatic paths: the automatic pull refuses
-to run in the one case that warning exists for.
+machine you've edited" from the automatic paths: they never pull over a
+user write.
 
 ## Decision 1: The Mac pushes after every vault write
 
@@ -703,7 +715,41 @@ CLEARED.
 - Scars recorded: the desktop's microsecond torn-baseline window inside the
   file lock (manual pull recovers); the pause expiry has no host knob.
 
-Eighth review: pending at the time of writing.
+## Eighth adversarial review (2026-09-04, run against 3e31353..b6d2b3f)
+
+Fresh eyes on Opus; the real `importVaultFile` through a picker shim; every
+prior kill-shot scenario re-run; 447 repo tests; real CLI and MCP processes;
+the real `sync.json` byte-identical before and after. Verdict: CLEARED WITH
+WOUNDS. No kill shot survived execution.
+
+- FLESH WOUND (phone). The import became an unwarned automatic push that
+  can roll another device's newer content off the server through the
+  phone's conflict recovery. Fix: a confirmation before the picker that
+  says exactly that, and a notice after.
+- FLESH WOUND (claims). The ADR's "one rule" section was still absolute;
+  both sentences of the KNOWN-LIMITS correction were false against the
+  repair branch (it fast-forwards whenever the server's copy differs, at
+  any version); the GUI's hedge missed the torn-baseline case. Fix: the
+  rule is restated as "automatic pull replaces only what the user did not
+  write" with the repair branch and the ADR 0038 N2 residual admitted in
+  the same section; KNOWN-LIMITS matches; every diverged sentence (engine,
+  GUI, CLI) now says the vault differs from the server's newer copy and
+  never asserts that this machine changed.
+- SCAR TISSUE (recorded): a foreign-lineage import locks the phone until a
+  wipe and pull (the confirm names it); `.auto-pull.bak` is two deep; the
+  Settings note sits under the server field; event ordering prints "in
+  sync" before "pushed".
+- Residual: the push/pull protocol is unverified against the hosted server
+  with a real account, which caps any verdict at CLEARED WITH WOUNDS until
+  Jay's account makes one live push and one live pull.
+
+## Fixes after the eighth review (2026-09-04)
+
+Import confirmation and notice on the phone; neutral diverged wording in
+the engine, the GUI and the CLI; the one rule restated with the repair
+branch and the N2 residual; KNOWN-LIMITS matched. Suites green.
+
+Ninth review: pending at the time of writing.
 
 ## Status of this record
 
