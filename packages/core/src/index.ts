@@ -33,6 +33,13 @@ export type { VaultStorage } from './vault-storage.js';
 export {
   PROJECT_DOC_MAX_CHARS,
   PROJECT_DOC_CAP_MESSAGE,
+  PROJECT_LOG_KEEP_ENTRIES,
+  PROJECT_LOG_ARCHIVE_HEADING,
+  formatLogArchive,
+  isProjectLogArchive,
+  rollProjectLog,
+  splitLogEntries,
+  type RolledProjectDoc,
   PROJECT_SCOPE_PREFIX,
   PROJECT_SLUG_PATTERN,
   PROJECT_SECTION_HEADINGS,

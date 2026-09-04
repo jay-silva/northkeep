@@ -307,6 +307,43 @@ describe('project tools', () => {
     vault.close();
   });
 
+  it('rolls the oldest Log entries into an archive memory instead of refusing, and project_get history returns it', async () => {
+    const mcp = await connect();
+    const long = (i: number) => `session ${i} ${'y'.repeat(700)}`;
+    let archivedTotal = 0;
+    let lastPayload: { archived?: { entries: number; memory_id: string }; content: string } | null = null;
+    for (let i = 1; i <= 30; i += 1) {
+      const res = await mcp.callTool({
+        name: 'project_update',
+        arguments: { project: 'demo-roll', status: 'Rolling.', log_entry: long(i) },
+      });
+      expect(res.isError).toBeFalsy();
+      lastPayload = JSON.parse(toolText(res)) as typeof lastPayload;
+      if (lastPayload?.archived) archivedTotal += lastPayload.archived.entries;
+    }
+    expect(archivedTotal).toBeGreaterThan(0);
+    expect(lastPayload!.content.length).toBeLessThanOrEqual(16384);
+    expect(lastPayload!.content).toContain('session 30 ');
+    expect(lastPayload!.content).not.toContain('session 1 y');
+
+    const plain = JSON.parse(
+      toolText(await mcp.callTool({ name: 'project_get', arguments: { project: 'demo-roll' } })),
+    ) as { archives?: unknown };
+    expect(plain.archives).toBeUndefined();
+    const withHistory = JSON.parse(
+      toolText(await mcp.callTool({ name: 'project_get', arguments: { project: 'demo-roll', history: true } })),
+    ) as { archives: Array<{ content: string; type: string; scope: string }> };
+    expect(withHistory.archives.length).toBeGreaterThan(0);
+    expect(withHistory.archives[0]!.content.startsWith('## Log archive: demo-roll')).toBe(true);
+    expect(withHistory.archives[0]!.type).toBe('episodic');
+    expect(withHistory.archives[0]!.scope).toBe('project:demo-roll');
+    expect(withHistory.archives.map((a) => a.content).join('\n')).toContain('session 1 y');
+
+    const vault = openVault();
+    expect(vault.verifyChain().ok).toBe(true);
+    vault.close();
+  });
+
   it('resolves duplicate live working docs to the newest', async () => {
     (() => {
       const vault = openVault();

@@ -19,7 +19,9 @@ export const PROJECT_STANDING_INSTRUCTION =
   'When I name a project, read it from NorthKeep with project_get at the start of the session. ' +
   'When a working session on that project ends, call project_update with the new Current Status, ' +
   'Next Actions, and a log entry describing what was done. Use project_list to see what is in flight. ' +
-  'Do not store a separate index memory; the list is the index.';
+  'The live document keeps only its newest log entries; call project_get with history: true when you ' +
+  'need older ones. Keep log entries to a few hundred characters and put detail in its own episodic ' +
+  'memory in the project scope. Do not store a separate index memory; the list is the index.';
 
 /** Honesty note shown next to the standing instruction. */
 export const PROJECT_HONESTY_NOTE =

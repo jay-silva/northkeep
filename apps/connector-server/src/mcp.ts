@@ -36,7 +36,11 @@ import {
   PROJECT_SLUG_PATTERN,
   firstNonEmptyLine,
   getProjectSection,
+  assertProjectDocSize,
+  formatLogArchive,
+  isProjectLogArchive,
   mergeProjectDoc,
+  rollProjectLog,
   parseProjectDoc,
   parseProjectSlug,
   projectScope,
@@ -548,12 +552,15 @@ export function createMcpServer(
       title: 'Read a shared project',
       description:
         'Read the live project document when the user names a project. Call this at session start so ' +
-        'you pick up Current Status, Next Actions, and the Log. You cannot create a project here.',
+        'you pick up Current Status, Next Actions, and the Log. You cannot create a project here. The ' +
+        'live document keeps only its newest Log entries; pass history: true to also get the archive ' +
+        'memories holding older entries, newest first.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
+        history: z.boolean().optional().describe('Also return the Log archives for this project (older entries), newest first'),
       },
     },
-    async ({ project }) => {
+    async ({ project, history }) => {
       const auditFail = async (): Promise<void> => {
         await storage.appendAudit({
           ts: new Date().toISOString(),
@@ -589,16 +596,24 @@ export function createMcpServer(
           isError: true,
         };
       }
+      const archives = history
+        ? all
+            .filter((e) => e.scope === scope && e.type === 'episodic' && isProjectLogArchive(e.content))
+            .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+        : [];
       await storage.appendAudit({
         ts: new Date().toISOString(),
         accountHash,
         tool: 'project_get',
         params: {},
         ok: true,
-        resultCount: 1,
-        resultIds: [picked.entryId],
+        resultCount: 1 + archives.length,
+        resultIds: [picked.entryId, ...archives.map((a) => a.entryId)],
       });
-      return { content: [{ type: 'text', text: picked.content }] };
+      const text = archives.length === 0
+        ? picked.content
+        : `${picked.content}\n\n---\n\n${archives.map((a) => a.content).join('\n\n---\n\n')}`;
+      return { content: [{ type: 'text', text }] };
     },
   );
 
@@ -610,9 +625,11 @@ export function createMcpServer(
         'Update a shared project document. Call this when a working session ends, with the new ' +
         'Current Status, Next Actions, and a log entry describing what was done. Optional What & Why ' +
         'replacement and a dated decision. Updates merge into the existing sections; they do not ' +
-        'replace the whole document. Documents over 16384 characters are refused: prune the Log and ' +
-        'try again. NorthKeep will not silently truncate. You cannot create a project here; the ' +
-        'project scope must already be shared from NorthKeep with a live working document.',
+        'replace the whole document. The live document keeps only its newest Log entries; older ones ' +
+        'roll into an archive memory in the project scope (the result says so), so a log entry is ' +
+        'never refused for size. Only hand-written sections over 16384 characters are refused. ' +
+        'NorthKeep never truncates. You cannot create a project here; the project scope must already ' +
+        'be shared from NorthKeep with a live working document.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         what_why: z.string().min(1).max(16384).optional().describe('Replacement What & Why section'),
@@ -623,7 +640,7 @@ export function createMcpServer(
           .min(1)
           .max(4096)
           .optional()
-          .describe('New Log entry (newest first). Do not include a date; the tool prefixes YYYY-MM-DD.'),
+          .describe('New Log entry (newest first), a few hundred characters at most; put detail in its own episodic memory in the project scope. Do not include a date; the tool prefixes YYYY-MM-DD.'),
         decision: z
           .string()
           .min(1)
@@ -691,6 +708,7 @@ export function createMcpServer(
         };
       }
       let markdown: string;
+      let archivedEntries: string[] = [];
       try {
         const merged = mergeProjectDoc(parseProjectDoc(base.content), toProjectUpdate({
           what_why,
@@ -699,7 +717,12 @@ export function createMcpServer(
           log_entry,
           decision,
         }));
-        markdown = serializeProjectDoc(merged);
+        // ADR 0045: roll the oldest Log entries into an archive memory rather
+        // than refuse; only hand-written sections can still be too long.
+        const rolled = rollProjectLog(merged);
+        markdown = serializeProjectDoc(rolled.doc);
+        assertProjectDocSize(markdown);
+        archivedEntries = rolled.archived;
       } catch (err) {
         await auditFail();
         const text = err instanceof Error && err.message === PROJECT_DOC_CAP_MESSAGE
@@ -711,7 +734,8 @@ export function createMcpServer(
       }
       const overwrite = base.pending === true;
       const existing = await storage.listEntries(accountHash);
-      if (!overwrite && existing.length >= MAX_SHARED_ENTRIES) {
+      const rowsNeeded = (overwrite ? 0 : 1) + (archivedEntries.length > 0 ? 1 : 0);
+      if (rowsNeeded > 0 && existing.length + rowsNeeded > MAX_SHARED_ENTRIES) {
         await auditFail();
         return {
           content: [
@@ -734,20 +758,40 @@ export function createMcpServer(
         pending: true,
         createdAt: new Date().toISOString(),
       });
+      let archiveId: string | null = null;
+      if (archivedEntries.length > 0) {
+        archiveId = `conn_${randomUUID().replace(/-/g, '')}`;
+        await storage.putEntry(accountHash, {
+          entryId: archiveId,
+          scope,
+          type: '',
+          content: await encryptRow(
+            { accountHash, type: 'episodic', content: formatLogArchive(project, archivedEntries) },
+            dek,
+          ),
+          entryHash: '',
+          origin: 'connector',
+          pending: true,
+          createdAt: new Date().toISOString(),
+        });
+      }
       await storage.appendAudit({
         ts: new Date().toISOString(),
         accountHash,
         tool: 'project_update',
         params: {},
         ok: true,
-        resultCount: 1,
-        resultIds: [entryId],
+        resultCount: archiveId ? 2 : 1,
+        resultIds: archiveId ? [entryId, archiveId] : [entryId],
       });
+      const rolledNote = archiveId
+        ? ` Archived ${archivedEntries.length} older log entries to ${archiveId}; project_get with history: true shows them.`
+        : '';
       return {
         content: [
           {
             type: 'text',
-            text: `Updated project "${project}". It will sync into the vault. (id: ${entryId})`,
+            text: `Updated project "${project}". It will sync into the vault. (id: ${entryId})${rolledNote}`,
           },
         ],
       };

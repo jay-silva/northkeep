@@ -14,8 +14,13 @@ export const PROJECT_SCOPE_PREFIX = 'project:';
 /** Slug half of `project:<slug>`. Fits inside the existing MCP scopeSchema. */
 export const PROJECT_SLUG_PATTERN = /^[a-z0-9-]{1,40}$/;
 
+/** How many Log entries the live document keeps once it has to roll (ADR 0045). */
+export const PROJECT_LOG_KEEP_ENTRIES = 10;
+/** First line of an archive memory holding rolled Log entries; project_get --history lists these. */
+export const PROJECT_LOG_ARCHIVE_HEADING = '## Log archive';
+
 export const PROJECT_DOC_CAP_MESSAGE =
-  'This project document exceeds 16384 characters. Prune older entries from the Log, then try again. NorthKeep will not silently truncate.';
+  `This project document exceeds ${PROJECT_DOC_MAX_CHARS} characters even after rolling its Log. Shorten What & Why, Current Status, or Next Actions, then try again. NorthKeep will not silently truncate.`;
 
 export const PROJECT_SECTION_HEADINGS = [
   'What & Why',
@@ -185,10 +190,9 @@ export function mergeProjectDoc(
     setKnownBody(next, 'Log', existing.length === 0 ? line : `${line}\n${existing}`);
   }
 
-  const serialized = serializeProjectDoc(next);
-  if (serialized.length > PROJECT_DOC_MAX_CHARS) {
-    throw new Error(PROJECT_DOC_CAP_MESSAGE);
-  }
+  // Size is NOT enforced here (ADR 0045): the host rolls the Log with
+  // rollProjectLog and then asserts. A document whose hand-written sections
+  // alone exceed the cap still fails, from assertProjectDocSize.
   return next;
 }
 
@@ -196,6 +200,81 @@ export function assertProjectDocSize(markdown: string): void {
   if (markdown.length > PROJECT_DOC_MAX_CHARS) {
     throw new Error(PROJECT_DOC_CAP_MESSAGE);
   }
+}
+
+/**
+ * The Log section as entries, in document order (newest first). An entry is a
+ * top-level bullet (`- `) and every following line until the next one, so a
+ * multi-line entry stays whole. Text before the first bullet is its own item.
+ */
+export function splitLogEntries(body: string): string[] {
+  const entries: string[] = [];
+  let current: string[] | null = null;
+  for (const line of body.split('\n')) {
+    if (/^- /.test(line)) {
+      if (current) entries.push(current.join('\n'));
+      current = [line];
+    } else if (current) {
+      current.push(line);
+    } else if (line.trim().length > 0) {
+      current = [line];
+    }
+  }
+  if (current) entries.push(current.join('\n'));
+  return entries.map((e) => e.replace(/\n+$/, ''));
+}
+
+export interface RolledProjectDoc {
+  doc: ProjectDoc;
+  /** Entries moved out of the live document, oldest first. Empty when nothing rolled. */
+  archived: string[];
+}
+
+/**
+ * Keep the live document under the cap by rolling the oldest Log entries out
+ * (ADR 0045). Nothing rolls while the document fits. When it does not, the
+ * newest `keep` entries stay; if the document still does not fit, fewer stay,
+ * down to one. If it still does not fit, the hand-written sections are the
+ * problem and the caller's assertProjectDocSize reports it. Decisions never
+ * roll: they are short and a cold session needs them.
+ */
+export function rollProjectLog(
+  doc: ProjectDoc,
+  options: { maxChars?: number; keep?: number } = {},
+): RolledProjectDoc {
+  const maxChars = options.maxChars ?? PROJECT_DOC_MAX_CHARS;
+  const keepAtMost = Math.max(1, options.keep ?? PROJECT_LOG_KEEP_ENTRIES);
+  if (serializeProjectDoc(doc).length <= maxChars) return { doc, archived: [] };
+  const entries = splitLogEntries(getProjectSection(doc, 'Log'));
+  if (entries.length <= 1) return { doc, archived: [] };
+  for (let keep = Math.min(keepAtMost, entries.length - 1); keep >= 1; keep -= 1) {
+    const next: ProjectDoc = { preamble: doc.preamble, sections: doc.sections.map((s) => ({ ...s })) };
+    ensureKnownSections(next);
+    setKnownBody(next, 'Log', entries.slice(0, keep).join('\n'));
+    if (serializeProjectDoc(next).length <= maxChars) {
+      return { doc: next, archived: entries.slice(keep).reverse() };
+    }
+  }
+  // Even one entry does not fit: roll everything but the newest and let the
+  // caller's size assertion name the real problem.
+  const next: ProjectDoc = { preamble: doc.preamble, sections: doc.sections.map((s) => ({ ...s })) };
+  ensureKnownSections(next);
+  setKnownBody(next, 'Log', entries[0]!);
+  return { doc: next, archived: entries.slice(1).reverse() };
+}
+
+/** The content of the archive memory that holds rolled entries (oldest first). */
+export function formatLogArchive(project: string, archived: string[], now: Date = new Date()): string {
+  return (
+    `${PROJECT_LOG_ARCHIVE_HEADING}: ${project}\n\n` +
+    `Rolled ${isoDate(now)} out of the live project document, which keeps only its newest ` +
+    `entries. Oldest first. Read with project_get history, or search this scope.\n\n` +
+    archived.join('\n')
+  );
+}
+
+export function isProjectLogArchive(content: string): boolean {
+  return content.startsWith(`${PROJECT_LOG_ARCHIVE_HEADING}:`) || content.startsWith(`${PROJECT_LOG_ARCHIVE_HEADING}\n`);
 }
 
 function isoDate(now: Date): string {

@@ -11,6 +11,12 @@ import {
   parseProjectSlug,
   projectScope,
   serializeProjectDoc,
+  assertProjectDocSize,
+  rollProjectLog,
+  splitLogEntries,
+  formatLogArchive,
+  isProjectLogArchive,
+  PROJECT_LOG_KEEP_ENTRIES,
 } from '../src/project-doc.js';
 
 const SAMPLE = `## What & Why
@@ -223,9 +229,13 @@ describe('merge semantics', () => {
 
 describe('size cap', () => {
   it('refuses a merge that would pass 16 KiB, with a prune-the-Log message', () => {
+    // ADR 0045: merge no longer enforces size; the host rolls, then asserts.
     const huge = 'x'.repeat(PROJECT_DOC_MAX_CHARS);
-    expect(() => mergeProjectDoc(emptyProjectDoc(), { status: huge })).toThrow(PROJECT_DOC_CAP_MESSAGE);
-    expect(PROJECT_DOC_CAP_MESSAGE).toMatch(/Prune older entries from the Log/);
+    const merged = mergeProjectDoc(emptyProjectDoc(), { status: huge });
+    const rolled = rollProjectLog(merged);
+    expect(rolled.archived).toEqual([]); // nothing in the Log to roll
+    expect(() => assertProjectDocSize(serializeProjectDoc(rolled.doc))).toThrow(PROJECT_DOC_CAP_MESSAGE);
+    expect(PROJECT_DOC_CAP_MESSAGE).toMatch(/Shorten What & Why, Current Status, or Next Actions/);
     expect(PROJECT_DOC_CAP_MESSAGE).not.toMatch(/[—–]/);
   });
 
@@ -234,5 +244,63 @@ describe('size cap', () => {
     const merged = mergeProjectDoc(emptyProjectDoc(), { status });
     expect(getProjectSection(merged, 'Current Status')).toBe(status);
     expect(serializeProjectDoc(merged).length).toBeLessThanOrEqual(PROJECT_DOC_MAX_CHARS);
+  });
+});
+
+describe('Log rolling (ADR 0045)', () => {
+  const entry = (i: number) => `- 2026-09-${String(1 + (i % 28)).padStart(2, '0')} - entry ${i} ${'x'.repeat(600)}`;
+  function bigDoc(n: number) {
+    let doc = emptyProjectDoc();
+    doc = mergeProjectDoc(doc, { status: 'Status.', nextActions: '- [ ] one' });
+    const lines = [];
+    for (let i = n; i >= 1; i -= 1) lines.push(entry(i)); // newest first, like the tool writes
+    doc.sections.find((s) => s.title === 'Log')!.body = lines.join('\n');
+    return doc;
+  }
+
+  it('does nothing while the document fits', () => {
+    const doc = bigDoc(5);
+    const rolled = rollProjectLog(doc);
+    expect(rolled.archived).toEqual([]);
+    expect(serializeProjectDoc(rolled.doc)).toBe(serializeProjectDoc(doc));
+  });
+
+  it('keeps the newest entries and returns the rest oldest first, whole entries only', () => {
+    const doc = bigDoc(40); // ~24 KB of Log
+    const rolled = rollProjectLog(doc);
+    const kept = splitLogEntries(getProjectSection(rolled.doc, 'Log'));
+    expect(kept).toHaveLength(PROJECT_LOG_KEEP_ENTRIES);
+    expect(kept[0]).toContain('entry 40 ');
+    expect(kept[kept.length - 1]).toContain('entry 31 ');
+    expect(rolled.archived).toHaveLength(30);
+    expect(rolled.archived[0]).toContain('entry 1 ');
+    expect(rolled.archived[29]).toContain('entry 30 ');
+    expect(serializeProjectDoc(rolled.doc).length).toBeLessThanOrEqual(PROJECT_DOC_MAX_CHARS);
+    for (const e of rolled.archived) expect(e.startsWith('- ')).toBe(true);
+    expect(getProjectSection(rolled.doc, 'Decisions')).toBe(getProjectSection(doc, 'Decisions'));
+  });
+
+  it('keeps a multi-line entry together', () => {
+    const body = ['- 2026-09-03 - newest', '- 2026-09-02 - middle', '  continued line', '- 2026-09-01 - oldest'].join('\n');
+    expect(splitLogEntries(body)).toEqual(['- 2026-09-03 - newest', '- 2026-09-02 - middle\n  continued line', '- 2026-09-01 - oldest']);
+  });
+
+  it('keeps fewer than ten when the rest of the document is large, down to one', () => {
+    let doc = bigDoc(40);
+    doc = mergeProjectDoc(doc, { status: 'S'.repeat(PROJECT_DOC_MAX_CHARS - 4000) });
+    const rolled = rollProjectLog(doc);
+    const kept = splitLogEntries(getProjectSection(rolled.doc, 'Log'));
+    expect(kept.length).toBeGreaterThanOrEqual(1);
+    expect(kept.length).toBeLessThan(PROJECT_LOG_KEEP_ENTRIES);
+    expect(serializeProjectDoc(rolled.doc).length).toBeLessThanOrEqual(PROJECT_DOC_MAX_CHARS);
+  });
+
+  it('formats an archive the reader can recognise', () => {
+    const text = formatLogArchive('demo', ['- 2026-09-01 - a', '- 2026-09-02 - b'], new Date('2026-09-04T00:00:00Z'));
+    expect(text.startsWith('## Log archive: demo')).toBe(true);
+    expect(text).toContain('Rolled 2026-09-04');
+    expect(text.endsWith('- 2026-09-01 - a\n- 2026-09-02 - b')).toBe(true);
+    expect(isProjectLogArchive(text)).toBe(true);
+    expect(isProjectLogArchive('## Current Status\n\nnope')).toBe(false);
   });
 });

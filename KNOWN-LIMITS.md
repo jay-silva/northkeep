@@ -64,6 +64,19 @@ every milestone; if a limit is removed, say when and how.*
 - **HTTPS only.** The client refuses a non-https sync server (except loopback
   for testing) so your token and blob never cross the network unprotected.
 
+## Project documents (ADR 0045), current
+
+- **The live project document keeps only its newest Log entries.** When an
+  update would push the document past 16384 characters, the oldest entries
+  roll into an archive memory in the same project scope (one archive per
+  roll, oldest first, headed `## Log archive: <project>`). `project_get`
+  returns the live document; `project_get` with `history: true` adds the
+  archives. Nothing is summarized or dropped. Only hand-written sections that
+  are too long on their own are refused.
+- **The Command Repo file is separate.** `projects/<name>.md` in the command
+  repo is maintained by hand and keeps its full log; the vault document is
+  the shared index agents load at session start.
+
 ## Automatic sync (ADR 0044), current
 
 - **Automatic pull replaces only what you did not write.** On the Mac a

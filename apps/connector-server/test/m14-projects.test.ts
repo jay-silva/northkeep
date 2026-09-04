@@ -411,6 +411,37 @@ describe('M14 connector project tools (step 4)', () => {
     expect((await storage.listEntries(account)).some((r) => r.scope === 'project:never-shared')).toBe(false);
   });
 
+  it('rolls the Log into a pending episodic archive instead of refusing (ADR 0045)', async () => {
+    const token = await connectAiApp();
+    const lines: string[] = [];
+    for (let i = 40; i >= 1; i -= 1) lines.push(`- 2026-09-01 - session ${i} ${'y'.repeat(500)}`);
+    await seedEncryptedEntry(storage, account, connToken, {
+      entryId: 'roll-live',
+      scope: 'project:roll',
+      type: 'working',
+      content: `## Current Status\n\nRolling.\n\n## Log\n\n${lines.join('\n')}`,
+      createdAt: new Date().toISOString(),
+    });
+    const res = await mcpCall(token, 'project_update', { project: 'roll', log_entry: 'session 41 newest' });
+    expect(res.isError).toBeFalsy();
+    expect(res.text).toMatch(/Archived \d+ older log entries to conn_/);
+    const pending = await storage.listPendingEntries(account);
+    const rows = await decryptedPendingEntries(storage, account, connToken);
+    const archive = rows.find((r) => r.scope === 'project:roll' && r.type === 'episodic');
+    expect(archive).toBeTruthy();
+    expect(archive!.content.startsWith('## Log archive: roll')).toBe(true);
+    expect(archive!.content).toContain('session 1 ');
+    const live = rows.find((r) => r.scope === 'project:roll' && r.type === 'working');
+    expect(live!.content).toContain('session 41 newest');
+    expect(live!.content).not.toContain('session 1 y');
+    expect(live!.content.length).toBeLessThanOrEqual(PROJECT_DOC_MAX_CHARS);
+    expect(pending.length).toBeGreaterThan(0);
+
+    const got = await mcpCall(token, 'project_get', { project: 'roll', history: true });
+    expect(got.isError).toBeFalsy();
+    expect(got.text).toContain('## Log archive: roll');
+  });
+
   it('memory_remember stays at 8 KiB even in a project scope', async () => {
     const token = await connectAiApp();
     const huge = await mcpCall(token, 'memory_remember', {

@@ -7,6 +7,9 @@ import {
   VaultAuthError,
   VaultSchemaError,
   assertProjectDocSize,
+  formatLogArchive,
+  isProjectLogArchive,
+  rollProjectLog,
   defaultVaultPath,
   emptyProjectDoc,
   firstNonEmptyLine,
@@ -501,12 +504,14 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       description:
         'Read the live project document when the user names a project. Call this at session start so ' +
         'you pick up Current Status, Next Actions, and the Log. If more than one live working memory ' +
-        'exists in the scope, the newest wins.',
+        'exists in the scope, the newest wins. The live document keeps only its newest Log entries; ' +
+        'pass history: true to also get the archive memories holding older entries, newest first.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
+        history: z.boolean().optional().describe('Also return the Log archives for this project (older entries), newest first'),
       },
     },
-    async ({ project }) =>
+    async ({ project, history }) =>
       run(ctx, 'project_get', { scope: `project:${project}` }, vaultPath, (vault, granted) => {
         if (!isValidProjectSlug(project)) {
           throw new Error(`Invalid project slug "${project}".`);
@@ -517,8 +522,15 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         if (!live) {
           throw new Error(`No live project document for "${project}".`);
         }
+        const archives = history
+          ? vault
+              .list({ type: 'episodic', scope, allowedScopes: granted })
+              .filter((e) => isProjectLogArchive(e.content))
+              .reverse()
+              .map((e) => publicEntry(e))
+          : undefined;
         return {
-          payload: { project, ...publicEntry(live) },
+          payload: { project, ...publicEntry(live), ...(archives ? { archives } : {}) },
           result_id: live.id,
           disclosed_scopes: [live.scope],
         };
@@ -545,7 +557,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           .min(1)
           .max(4096)
           .optional()
-          .describe('New Log entry (newest first). Do not include a date; the tool prefixes YYYY-MM-DD.'),
+          .describe('New Log entry (newest first), a few hundred characters at most; put detail in its own episodic memory in the project scope. Do not include a date; the tool prefixes YYYY-MM-DD.'),
         decision: z
           .string()
           .min(1)
@@ -588,8 +600,25 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           const update = toProjectUpdate({ what_why, status, next_actions, log_entry, decision });
           const live = newestLiveWorking(vault, scope, granted);
           const merged = mergeProjectDoc(live ? parseProjectDoc(live.content) : emptyProjectDoc(), update);
-          const content = serializeProjectDoc(merged);
+          // ADR 0045: the live document keeps only its newest Log entries.
+          // Older ones roll into an archive memory in the same scope, so the
+          // cap never refuses a log entry; it can only refuse hand-written
+          // sections that are too long on their own.
+          const rolled = rollProjectLog(merged);
+          const content = serializeProjectDoc(rolled.doc);
           assertProjectDocSize(content);
+          let archived: { entries: number; memory_id: string } | undefined;
+          if (rolled.archived.length > 0) {
+            const archive = vault.remember({
+              content: formatLogArchive(project, rolled.archived),
+              type: 'episodic',
+              scope,
+              source: 'mcp',
+              sourceModel: 'project-log-roll',
+              confidence: 0.9,
+            });
+            archived = { entries: rolled.archived.length, memory_id: archive.id };
+          }
           if (!live) {
             const entry = vault.remember({
               content,
@@ -601,7 +630,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             });
             vault.save();
             return {
-              payload: { created: true, project, ...publicEntry(entry) },
+              payload: { created: true, project, ...(archived ? { archived } : {}), ...publicEntry(entry) },
               result_id: entry.id,
               disclosed_scopes: [entry.scope],
             };
@@ -609,7 +638,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           const edited = vault.editMemory(live.id, { content }, granted);
           vault.save();
           return {
-            payload: { created: false, project, ...publicEntry(edited) },
+            payload: { created: false, project, ...(archived ? { archived } : {}), ...publicEntry(edited) },
             result_id: edited.id,
             disclosed_scopes: [edited.scope],
           };
