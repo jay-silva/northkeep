@@ -48,6 +48,7 @@ import {
   loadSyncServerUrl,
   readCachedMasterKeyHex,
   saveDeviceSecretHex,
+  saveLastSyncGeneration,
   saveLastSyncSha,
   saveLastSyncVersion,
   saveLastSyncedAt,
@@ -64,12 +65,14 @@ import {
   stashRecoverableBak,
   uploadPreparedMobile,
   verifyBlobOpensWithKey,
+  hashBytes,
   hashVaultFile,
   type VerifiedRemoteBlob,
 } from './sync';
 import { classifySyncError } from './sync-errors';
 import {
   NEEDS_PULL_MESSAGE,
+  conflictDisplacedOwnUpload,
   decideWakeAction,
   establishBaseVersion,
   hasUnpushedBytes,
@@ -694,13 +697,22 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
           stashRemote: () => {
             if (pendingRemote !== null) stashRecoverableBak(path, pendingRemote.blob);
           },
+          // Wording only (ADR 0044, fifth review): a re-push that displaces
+          // THIS PHONE's own earlier upload (typically its establish push)
+          // must not be reported as another device changing the vault. The
+          // stored sha is still the one the last accepted push wrote, because
+          // saveBaseVersion has not run for the re-push yet.
+          displacedRemoteWasOwnUpload: async () => {
+            if (pendingRemote === null) return false;
+            return conflictDisplacedOwnUpload(await hashBytes(pendingRemote.blob), await loadLastSyncSha());
+          },
           adoptGeneration: (generation) => {
             // The transport stamped this on disk in its own Vault instance; the
             // session's open vault must carry it, or its next save writes the
             // old value back and the phone's generation never rises.
             vaultRef.current?.setSyncGeneration(generation);
           },
-          saveBaseVersion: async (version, sha256) => {
+          saveBaseVersion: async (version, sha256, generation) => {
             // NOTE: a save that queued behind this push's stamp-and-read (the
             // gate is released before the PUT) has already rewritten the file, so
             // this stored hash can be older than disk. That is intentional and
@@ -712,6 +724,12 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
             // since sync"; fall back to hashing the file if the transport did not
             // report it. The push landed: the local save is no longer unpushed.
             await saveLastSyncSha(sha256 ?? (await hashVaultFile(path)));
+            // The generation sealed in the bytes the server just accepted.
+            // The next push bumps against it (one bump per logical push) and
+            // the next pull's replay check compares to it. Recorded ONLY here,
+            // on acceptance: writing it on an attempt would make the phone
+            // refuse honest blobs, which is the bug this fixes.
+            if (generation !== undefined) await saveLastSyncGeneration(generation);
             await saveLocalDirty(false);
             await markSyncedNow();
           },
@@ -823,6 +841,11 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         if (result.generation !== undefined) vaultRef.current?.setSyncGeneration(result.generation);
         await saveLastSyncVersion(result.version);
         await saveLastSyncSha(result.sha256 ?? (await hashVaultFile(path)));
+        // The establish push is the one that most needed a baseline and never
+        // set one: without this the stamp inflated on every retry, the wake
+        // kept saying "pull to catch up", and the pull refused every honest
+        // blob as a replay (ADR 0044, fifth review kill shot).
+        if (result.generation !== undefined) await saveLastSyncGeneration(result.generation);
         await saveLocalDirty(false);
         await markSyncedNow();
         setSyncState((s) => reduceSync(s, { type: 'synced', version: result.version }));

@@ -112,9 +112,7 @@ every milestone; if a limit is removed, say when and how.*
 - **A lock left by a crashed process is stolen as soon as its pid is dead.**
   Reads and writes are never blocked by a sync in progress; only other
   syncers wait, and only for a live one.
-- **The phone's pull-to-refresh is a manual pull.** It replaces the phone's
-  vault with the server's copy after a warning when the phone holds unpushed
-  bytes; the displaced copy is kept as a backup.
+- **The phone's pull-to-refresh is a manual pull.** It replaces the phone's vault with the server's copy after a warning when the phone holds unpushed bytes; the displaced copy is kept as a backup. It is refused, with the vault untouched, when the server's copy is older than what the phone last synced.
 - **A push bumps the sync generation once, not once per attempt.** The
   generation is stamped when a push is prepared and kept if the upload fails
   or the server answers 409 (ADR 0038); the retries that follow reuse that

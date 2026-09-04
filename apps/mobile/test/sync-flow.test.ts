@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   NEEDS_PULL_MESSAGE,
+  conflictDisplacedOwnUpload,
   conflictRepushBaseVersion,
   conflictRepushSyncGeneration,
   decideWakeAction,
@@ -8,6 +9,8 @@ import {
   hasUnpushedBytes,
   localBytesMoved,
   initialSyncState,
+  nextPushGeneration,
+  pulledBlobIsReplay,
   syncAgeLabel,
   syncAgeLine,
   isSyncing,
@@ -158,7 +161,7 @@ describe('runSyncAfterSave orchestration (the load-bearing conflict sequence)', 
     const { ports } = makePorts();
     const event = await runSyncAfterSave(ports);
     expect(event).toEqual({ type: 'synced', version: 3 });
-    expect(ports.saveBaseVersion).toHaveBeenCalledWith(3, undefined); // no sha from the test port; the phone hashes the file instead
+    expect(ports.saveBaseVersion).toHaveBeenCalledWith(3, undefined, undefined); // no sha/generation from the test port
     expect(ports.fetchRemote).not.toHaveBeenCalled();
     expect(ports.verifyRemoteOpens).not.toHaveBeenCalled();
     expect(ports.stashRemote).not.toHaveBeenCalled();
@@ -510,5 +513,245 @@ describe('syncAgeLabel / syncAgeLine (ADR 0044, same wording as the desktop)', (
     expect(syncAgeLine('2026-09-03T11:58:00Z', now)).toBe('Synced 2 min ago');
     expect(syncAgeLine('2026-09-03T11:00:00Z', now)).toBe('Last synced 1 hour ago');
     expect(syncAgeLine('2026-08-28T12:00:00Z', now)).toBe('Last synced 6 days ago');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0044, FIFTH REVIEW (the phone kill shot): one bump per logical push, and
+// a replay check measured against what this phone last SYNCED rather than
+// against the local file's stamp.
+// ---------------------------------------------------------------------------
+
+describe('nextPushGeneration (one bump per logical push)', () => {
+  it('no baseline: bumps from the current stamp (and keeps bumping, deliberately)', () => {
+    // Null means "we cannot tell a fresh stamp from an unlanded one". Stamping
+    // low is the worse error, so it bumps; the inflation is harmless because
+    // the replay check no longer reads the local stamp.
+    expect(nextPushGeneration(0, null)).toBe(1);
+    expect(nextPushGeneration(7, null)).toBe(8);
+  });
+
+  it('stamp BEHIND the baseline (restored from an older copy): stamps last + 1, never current + 1', () => {
+    // current + 1 would put the vault BELOW the copy the server already holds,
+    // and the next pull would then read as a replay.
+    expect(nextPushGeneration(2, 9)).toBe(10);
+    expect(nextPushGeneration(0, 4)).toBe(5);
+  });
+
+  it('stamp EQUAL to the baseline (the ordinary first attempt): bumps once', () => {
+    expect(nextPushGeneration(5, 5)).toBe(6);
+  });
+
+  it('stamp AHEAD of the baseline (a previous attempt stamped and never landed): does not bump again', () => {
+    expect(nextPushGeneration(6, 5)).toBeNull();
+    expect(nextPushGeneration(9, 5)).toBeNull();
+  });
+});
+
+describe('pulledBlobIsReplay (the yardstick is lastSyncGeneration, not the local stamp)', () => {
+  it('is inert with no baseline: a phone that predates the key accepts any honest blob', () => {
+    expect(pulledBlobIsReplay(0, null)).toBe(false);
+    expect(pulledBlobIsReplay(2, null)).toBe(false);
+  });
+
+  it('refuses only what is older than the copy this phone last synced', () => {
+    expect(pulledBlobIsReplay(4, 5)).toBe(true);
+    expect(pulledBlobIsReplay(5, 5)).toBe(false);
+    expect(pulledBlobIsReplay(6, 5)).toBe(false);
+  });
+});
+
+/**
+ * A fake phone: the vault's generation stamp on disk, plus the persisted
+ * lastSyncGeneration. `push` runs exactly the rule preparePushMobile runs
+ * (nextPushGeneration then read back), and `saveBaseVersion` records the
+ * generation only on the pushes the fake server accepts.
+ */
+function fakePhone(initial: { stamp: number; lastSyncGeneration: number | null }) {
+  const disk = { stamp: initial.stamp, lastSyncGeneration: initial.lastSyncGeneration };
+  let attempts = 0;
+  /** Queue of server outcomes: 'fail' throws (a 500), a number is the accepted version. */
+  function ports(outcomes: Array<'fail' | number>): SyncAfterSavePorts {
+    return {
+      hasMasterKey: () => true,
+      loadBaseVersion: async () => 5,
+      push: async (_base, opts) => {
+        let generation: number | undefined;
+        if (!opts?.skipGenerationBump) {
+          const next = nextPushGeneration(disk.stamp, disk.lastSyncGeneration);
+          if (next !== null) disk.stamp = next;
+          generation = disk.stamp;
+        }
+        const outcome = outcomes[attempts++]!;
+        if (outcome === 'fail') throw new Error('Sync server returned HTTP 500 on push.');
+        return { ok: true, conflict: false, version: outcome, generation };
+      },
+      fetchRemote: async () => ({ version: 0 }),
+      verifyRemoteOpens: () => true,
+      remoteSyncGeneration: () => 0,
+      localSyncGeneration: () => disk.stamp,
+      applyConflictRepushGeneration: () => {},
+      stashRemote: () => {},
+      saveBaseVersion: async (_v, _sha, generation) => {
+        if (generation !== undefined) disk.lastSyncGeneration = generation;
+      },
+    };
+  }
+  return { disk, ports, attemptCount: () => attempts };
+}
+
+describe('four failed attempts then a success stamp EXACTLY one bump (the kill shot)', () => {
+  it('with a baseline, a push retried five times gains one generation, not five', async () => {
+    const phone = fakePhone({ stamp: 5, lastSyncGeneration: 5 });
+    const outcomes: Array<'fail' | number> = ['fail', 'fail', 'fail', 'fail', 9];
+    // Four failures: the caller catches the transport error and tries again on
+    // the next wake, exactly as pushAfterSave / runWake do.
+    for (let i = 0; i < 4; i += 1) {
+      await expect(runSyncAfterSave(phone.ports(outcomes))).rejects.toThrow(/HTTP 500/);
+      // Still exactly one bump after every failed attempt.
+      expect(phone.disk.stamp).toBe(6);
+      // And nothing is recorded until the server accepts: a baseline written
+      // on an attempt would make the phone refuse honest blobs.
+      expect(phone.disk.lastSyncGeneration).toBe(5);
+    }
+    const event = await runSyncAfterSave(phone.ports(outcomes));
+    expect(event).toEqual({ type: 'synced', version: 9 });
+    expect(phone.attemptCount()).toBe(5);
+    expect(phone.disk.stamp).toBe(6); // one bump for five attempts
+    expect(phone.disk.lastSyncGeneration).toBe(6); // recorded only on acceptance
+  });
+
+  it('the accepted bytes set the baseline, so the NEXT logical push bumps again (once)', async () => {
+    const phone = fakePhone({ stamp: 5, lastSyncGeneration: 5 });
+    await runSyncAfterSave(phone.ports([7]));
+    expect(phone.disk).toEqual({ stamp: 6, lastSyncGeneration: 6 });
+    await runSyncAfterSave(phone.ports([8]));
+    expect(phone.disk).toEqual({ stamp: 7, lastSyncGeneration: 7 });
+  });
+});
+
+describe('the fifth review A2 scenario: a failed establish must not wedge the pull', () => {
+  it('stored version 5, no hash, establish 500s three times, then the Mac pushes gen 2 / version 9', async () => {
+    // The phone has synced before the post-sync hash existed: version 5, no
+    // baseline of any kind. Its establish push fails three times against the
+    // outage. With no lastSyncGeneration there IS no baseline to hold the
+    // stamp still, so it inflates: 6, 7, 8. That is deliberate and now inert.
+    const phone = fakePhone({ stamp: 5, lastSyncGeneration: null });
+    for (let i = 0; i < 3; i += 1) {
+      await expect(runSyncAfterSave(phone.ports(['fail', 'fail', 'fail']))).rejects.toThrow(/HTTP 500/);
+    }
+    expect(phone.disk.stamp).toBe(8);
+    expect(phone.disk.lastSyncGeneration).toBeNull(); // nothing landed, nothing recorded
+
+    // The Mac then pushes: server version 9, blob at sync generation 2.
+    const wake: WakeInput = {
+      unlocked: true,
+      configured: true,
+      status: 'error',
+      localDirty: false,
+      localChanged: false,
+      baselineKnown: false,
+      remoteVersion: 9,
+      lastSyncedVersion: 5,
+    };
+    expect(decideWakeAction(wake)).toBe('needs-pull');
+
+    // The manual pull the pill asks for MUST succeed: generation 2 is not
+    // older than what this phone last synced (nothing).
+    expect(pulledBlobIsReplay(2, phone.disk.lastSyncGeneration)).toBe(false);
+
+    // The counterfactual that names the defect: measured against the LOCAL
+    // stamp the same honest blob was refused, and the phone had no way out
+    // but a save that LWW-pushed its stale vault over the Mac.
+    expect(2 < phone.disk.stamp).toBe(true);
+  });
+});
+
+describe('conflict wording: the phone must not blame another device for its own upload', () => {
+  it('conflictDisplacedOwnUpload matches only on an equal, known pair of hashes', () => {
+    expect(conflictDisplacedOwnUpload('aa', 'aa')).toBe(true);
+    expect(conflictDisplacedOwnUpload('aa', 'bb')).toBe(false);
+    expect(conflictDisplacedOwnUpload(null, 'aa')).toBe(false);
+    expect(conflictDisplacedOwnUpload('aa', null)).toBe(false);
+    expect(conflictDisplacedOwnUpload(null, null)).toBe(false);
+  });
+
+  it('the pill says the phone replaced its own upload, and still names the copy', () => {
+    const s = reduceSync(initialSyncState(4), {
+      type: 'conflict-recovered',
+      version: 6,
+      displacedOwnUpload: true,
+    });
+    expect(s.detail).toMatch(/this phone's earlier upload was replaced/i);
+    expect(s.detail).not.toMatch(/another device/i);
+    expect(s.detail).toMatch(/\.conflict\.bak/);
+    expect(s.detail).not.toMatch(/—/); // no em dash in user-facing copy
+  });
+
+  it('a genuine other-device conflict keeps the original wording', () => {
+    const s = reduceSync(initialSyncState(4), { type: 'conflict-recovered', version: 6 });
+    expect(s.detail).toMatch(/another device/i);
+  });
+
+  it('runSyncAfterSave asks the port before the re-push and carries the answer into the event', async () => {
+    const order: string[] = [];
+    const pushResults: PushResultLike[] = [
+      { ok: false, conflict: true, version: 5 },
+      { ok: true, conflict: false, version: 6 },
+    ];
+    let i = 0;
+    const ports: SyncAfterSavePorts = {
+      hasMasterKey: () => true,
+      loadBaseVersion: async () => 2,
+      push: async () => {
+        order.push('push');
+        return pushResults[i++]!;
+      },
+      fetchRemote: async () => ({ version: 5 }),
+      verifyRemoteOpens: () => true,
+      remoteSyncGeneration: () => 5,
+      localSyncGeneration: () => 2,
+      applyConflictRepushGeneration: () => {},
+      stashRemote: () => {},
+      displacedRemoteWasOwnUpload: async () => {
+        order.push('displacedRemoteWasOwnUpload');
+        return true;
+      },
+      saveBaseVersion: async () => {
+        order.push('saveBaseVersion');
+      },
+    };
+    const event = await runSyncAfterSave(ports);
+    expect(event).toEqual({ type: 'conflict-recovered', version: 6, displacedOwnUpload: true });
+    // Asked BEFORE the re-push and before saveBaseVersion overwrites the hash it reads.
+    expect(order).toEqual(['push', 'displacedRemoteWasOwnUpload', 'push', 'saveBaseVersion']);
+  });
+});
+
+describe('the conflict re-push records a baseline even though it skipped the bump', () => {
+  it('falls back to the generation applyConflictRepushGeneration just wrote', async () => {
+    const recorded: Array<number | undefined> = [];
+    const pushResults: PushResultLike[] = [
+      { ok: false, conflict: true, version: 5 },
+      { ok: true, conflict: false, version: 6 }, // skipGenerationBump: no generation reported
+    ];
+    let i = 0;
+    const ports: SyncAfterSavePorts = {
+      hasMasterKey: () => true,
+      loadBaseVersion: async () => 2,
+      push: async () => pushResults[i++]!,
+      fetchRemote: async () => ({ version: 5 }),
+      verifyRemoteOpens: () => true,
+      remoteSyncGeneration: () => 8,
+      localSyncGeneration: () => 6,
+      applyConflictRepushGeneration: () => {},
+      stashRemote: () => {},
+      saveBaseVersion: async (_v, _sha, generation) => {
+        recorded.push(generation);
+      },
+    };
+    await runSyncAfterSave(ports);
+    // max(6, 8) + 1 = 9, the value written to the file before the re-push.
+    expect(recorded).toEqual([9]);
   });
 });

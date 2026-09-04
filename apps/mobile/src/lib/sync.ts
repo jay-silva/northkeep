@@ -4,7 +4,8 @@ import { Vault, VaultAuthError, VaultSyncGenerationError, getPlatform } from '@n
 import { MAX_BLOB_BYTES, SubscriptionRequiredError, deriveSyncCreds } from '@northkeep/sync';
 import { createDeadline, type DeadlineScope } from './deadline';
 import { deleteIfExists, pulledTmpPath } from './paths';
-import { localBytesMoved } from './sync-flow';
+import { loadLastSyncGeneration, saveLastSyncGeneration } from './secure-store';
+import { localBytesMoved, nextPushGeneration, pulledBlobIsReplay } from './sync-flow';
 import { vaultGate } from './vault-gate';
 
 /**
@@ -67,7 +68,12 @@ export interface MobilePushResult {
    * the way the desktop's syncState does (ADR 0044, second review).
    */
   sha256?: string;
-  /** On success, the sync generation stamped on disk before the upload (absent when the bump was skipped). */
+  /**
+   * On success, the sync generation sealed in the bytes the server accepted
+   * (whether this push stamped it or an earlier attempt did). The caller
+   * records it as the phone's new lastSyncGeneration. Absent when the bump
+   * was skipped (the conflict re-push, which already knows its own value).
+   */
   generation?: number;
 }
 
@@ -107,6 +113,11 @@ export async function hashVaultFile(vaultPath: string): Promise<string | null> {
   const platform = getPlatform();
   if (!platform.storage.exists(vaultPath)) return null;
   return sha256Hex(platform.storage.readBytes(vaultPath));
+}
+
+/** Hex sha256 of arbitrary bytes. Exported so callers can hash a fetched blob (the conflict wording check). */
+export async function hashBytes(bytes: Buffer): Promise<string> {
+  return sha256Hex(bytes);
 }
 
 async function sha256Hex(bytes: Buffer): Promise<string> {
@@ -316,6 +327,8 @@ async function installPulledBlob(
 ): Promise<MobilePullResult> {
   const platform = getPlatform();
   const localExists = platform.storage.exists(options.vaultPath);
+  /** The generation sealed in the blob we install: the new lastSyncGeneration. Null when no key could read it. */
+  let installedGeneration: number | null = null;
   if (localExists) {
     if (!options.masterKey) {
       throw new Error('Unlock the vault before pulling, so the download can be verified against your key.');
@@ -335,24 +348,39 @@ async function installPulledBlob(
           '(Wrong device secret or passphrase, a different account, or a bad download.)',
       );
     }
-    let localGen: number;
-    try {
-      const localVault = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey), platform);
-      try {
-        localGen = localVault.getSyncGeneration();
-      } finally {
-        localVault.close();
-      }
-    } catch (err) {
-      if (err instanceof VaultSyncGenerationError) {
-        throw new Error('This vault has an invalid sync generation. Local vault was not changed.');
-      }
-      throw err;
-    }
-    if (opened.syncGeneration < localGen) {
+    installedGeneration = opened.syncGeneration;
+    // THE REPLAY CHECK, and the yardstick is the whole fix (ADR 0044, fifth
+    // review). It compares the incoming blob against the generation of what
+    // this phone LAST SYNCED, never against the local file's own stamp.
+    //
+    // The local stamp is the wrong yardstick because it inflates with every
+    // unpushed edit and every push that never landed, and it establishes
+    // nothing about what the server ever held. A phone whose establish push
+    // failed four times sits four generations above every honest blob out
+    // there, so comparing to it refused the very pull that would have
+    // unwedged it: the pill said "pull to catch up" forever while the pull
+    // called every real blob a replay.
+    //
+    // What this gives up: a null baseline reads as 0 and accepts anything.
+    // That is a phone that predates the key, or one whose only sync so far
+    // was a first pull carrying no key to read the installed generation with.
+    // Either way the next push, or this pull, records a real baseline and the
+    // check bites from then on.
+    if (pulledBlobIsReplay(opened.syncGeneration, await loadLastSyncGeneration())) {
       throw new Error(
-        'The pulled vault is older than this one (sync generation). Local vault was not changed.',
+        'The pulled vault is older than the copy this phone last synced (sync generation). ' +
+          'Local vault was not changed.',
       );
+    }
+  } else if (options.masterKey) {
+    // Fresh phone with a key in hand: verify anyway, purely to learn the
+    // generation we are about to install. Nothing local to protect, so a
+    // failed verify is not fatal here; the baseline simply stays null.
+    try {
+      const opened = verifyBlobOpensWithKey(remote.blob, options.masterKey);
+      if (opened.ok) installedGeneration = opened.syncGeneration;
+    } catch {
+      installedGeneration = null;
     }
   }
   // The phone's equivalent of the desktop's under-lock re-check: a save that
@@ -364,6 +392,10 @@ async function installPulledBlob(
   // Original bytes (possibly unmigrated 0.3) are installed; compare used the
   // same generation desktop would after open-verify/migrate.
   platform.storage.writeAtomic(options.vaultPath, remote.blob);
+  // The generation this phone has now synced. Written HERE rather than through
+  // afterInstall so no pull path can forget it (both callers install, only one
+  // does the session bookkeeping), and still inside the gate with the write.
+  await saveLastSyncGeneration(installedGeneration);
   const installed = { version: remote.version, sha256: await sha256Hex(remote.blob) };
   // Still under the gate: the session reopen and the SecureStore bookkeeping.
   await options.afterInstall?.(installed);
@@ -384,7 +416,7 @@ export interface PreparedPush {
   body: Uint8Array<ArrayBuffer>;
   /** Hex sha256 of those bytes: the phone's post-sync baseline once the server accepts them. */
   sha256: string;
-  /** The sync generation stamped on disk before the read (absent when the bump was skipped). */
+  /** The sync generation in the bytes below, stamped or already there (absent when the bump was skipped). */
   generation?: number;
   /** The X-Base-Version this push must send. */
   baseVersion: number;
@@ -412,13 +444,32 @@ export async function preparePushMobile(options: {
     // The generation stamped here is returned so the session's open vault
     // adopts it; otherwise its next save writes the old value back and the
     // phone's generation never rises (third review: server blobs at gen 1, 1, 1).
+    //
+    // ONE BUMP PER LOGICAL PUSH, however many attempts it takes (ADR 0044,
+    // fifth review; mirrors packages/sync/src/client.ts pushVault). The old
+    // code bumped unconditionally, so four failed PUTs cost four generations:
+    // on the establish path that inflated the stamp past every honest blob
+    // while never setting a baseline, and the phone wedged. nextPushGeneration
+    // holds the rule (and its null-baseline case); see src/lib/sync-flow.ts.
     let stampedGeneration: number | undefined;
     if (!options.skipGenerationBump) {
+      const lastSyncGeneration = await loadLastSyncGeneration();
       const vault = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey), platform);
       try {
-        vault.bumpSyncGeneration();
+        const next = nextPushGeneration(vault.getSyncGeneration(), lastSyncGeneration);
+        if (next !== null) {
+          vault.setSyncGeneration(next);
+          vault.save();
+        }
+        // OUTSIDE the branch on purpose, and this line is the linchpin of the
+        // whole fix. Whether or not we stamped, this is the generation in the
+        // bytes we are about to upload, and it is what the caller records as
+        // the new lastSyncGeneration once the server accepts them. Move it
+        // inside the `if` and a retry (which correctly does not bump) reports
+        // no generation, the baseline goes stale, the next push stops bumping
+        // against it, and the wedge comes back with every Node test still
+        // green: nothing off-device can reach this line.
         stampedGeneration = vault.getSyncGeneration();
-        vault.save();
       } finally {
         vault.close();
       }

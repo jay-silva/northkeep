@@ -530,7 +530,28 @@ desktop, forged `sync.json` in four spellings never yields a pull.
 - Residual: no live push with a subscribed account (the push/pull protocol
   itself is unverified against reality); no device run.
 
-Fixes for this round: applied next; see below.
+## Fixes after the fifth review (2026-09-04)
+
+- Phone mirrors the desktop: `lastSyncGeneration` stored on every accepted
+  push and every install; `preparePushMobile` bumps once per logical push
+  (`nextPushGeneration`, restore-from-older stamps above the baseline);
+  `installPulledBlob` compares the pulled generation with
+  `lastSyncGeneration ?? 0` and never with the local stamp. Tested on the
+  fifth review's A2 scenario: three failed establishes inflate the stamp to
+  8, the next wake says pull, and the Mac's generation-2 blob is accepted.
+- A conflict that displaces this phone's own earlier upload says so when the
+  displaced blob hashes to the recorded baseline; otherwise the existing
+  wording stands (recorded: not always provable by hash).
+- MCP shutdown reads the engine's `pushPending` flag, not the phase, so a
+  push mid-upload at exit logs "push still pending"; tested with phase
+  `syncing`.
+- KNOWN-LIMITS: the refresh pull line says it can be refused when the
+  server's copy is older than what the phone last synced.
+- Recorded: the read-back of the stamped generation in `preparePushMobile`
+  has no off-device coverage; a permanently failing wake pull retries on the
+  backoff ladder (hourly at most).
+
+Sixth review: pending at the time of writing.
 
 ## Status of this record
 

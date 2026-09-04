@@ -51,6 +51,8 @@ export interface AutoSyncStatus {
   pausedReason: 'subscription' | 'private' | null;
   /** The last automatic pull this engine made, with where the displaced copy went. */
   lastPull: { version: number; backupPath: string; at: string } | null;
+  /** A write is waiting to be pushed (pending, or mid-upload with the debounce drained). */
+  pushPending: boolean;
 }
 
 export type AutoSyncEvent =
@@ -233,6 +235,7 @@ export class AutoSync {
       nextRetryAt: this.nextRetryAt,
       pausedReason: this.pausedReason,
       lastPull: this.lastPull,
+      pushPending: this.pushPending,
     };
   }
 

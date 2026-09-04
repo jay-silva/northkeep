@@ -9,11 +9,12 @@ import { describeEvent, flushBounded } from '../src/auto-sync.js';
 describe('flushBounded', () => {
   function fakeEngine(
     flushMs: number | 'hang',
-    phase: 'pending' | 'idle' = 'pending',
+    phase: 'pending' | 'idle' | 'syncing' = 'pending',
+    pushPending: boolean = phase === 'pending',
   ): {
     flush: () => Promise<void>;
     stop: () => void;
-    status: () => { phase: 'pending' | 'idle' };
+    status: () => { phase: 'pending' | 'idle' | 'syncing'; pushPending: boolean };
     stopped: number;
     flushed: number;
   } {
@@ -23,7 +24,7 @@ describe('flushBounded', () => {
       stop() {
         e.stopped += 1;
       },
-      status: () => ({ phase }),
+      status: () => ({ phase, pushPending }),
       flush() {
         e.flushed += 1;
         if (flushMs === 'hang') return new Promise<void>(() => {});
@@ -64,13 +65,25 @@ describe('flushBounded', () => {
     expect(e.stopped).toBe(1);
   });
 
+  it("a push already uploading at exit ('syncing') still counts as pending in the timeout line", async () => {
+    // A debounced push that has started its upload reads 'syncing', not
+    // 'pending'; the old phase check logged "a sync was still running" for a
+    // genuinely stranded write (fifth review, M2).
+    const lines: string[] = [];
+    const e = fakeEngine('hang', 'syncing', true);
+    await expect(flushBounded(e, 60, (l) => lines.push(l))).resolves.toBe('timeout');
+    expect(lines.join('\n')).toMatch(/push still pending/);
+    expect(lines.join('\n')).not.toMatch(/sync was still running/);
+    expect(e.stopped).toBe(1);
+  });
+
   it("resolves 'failed' and logs one line when the flush throws (the write is on disk; the next wake sends it)", async () => {
     let stopped = 0;
     const lines: string[] = [];
     const e = {
       flush: () => Promise.reject(new Error('HTTP 500')),
       stop: () => void (stopped += 1),
-      status: () => ({ phase: 'pending' as const }),
+      status: () => ({ phase: 'pending' as const, pushPending: true }),
     };
     await expect(flushBounded(e, 500, (l) => lines.push(l))).resolves.toBe('failed');
     expect(lines).toEqual(['northkeep MCP server sync failed at exit: HTTP 500']);

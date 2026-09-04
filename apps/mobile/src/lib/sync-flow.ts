@@ -53,7 +53,16 @@ export interface SyncState {
 export type SyncEvent =
   | { type: 'start' }
   | { type: 'synced'; version: number }
-  | { type: 'conflict-recovered'; version: number }
+  | {
+      type: 'conflict-recovered';
+      version: number;
+      /**
+       * True when the blob the re-push displaced is the one THIS PHONE
+       * uploaded moments earlier. Set only when true, so the common
+       * other-device case stays a two-field event.
+       */
+      displacedOwnUpload?: boolean;
+    }
   | { type: 'error'; message: string; kind?: SyncErrorKind };
 
 /** The minimal shape a push result must expose for the decision helpers. */
@@ -96,9 +105,14 @@ export function reduceSync(state: SyncState, event: SyncEvent): SyncState {
       return {
         status: 'conflict-recovered',
         version: event.version,
-        detail:
-          'Another device had also changed this vault. Your edit was kept and pushed; ' +
-          "the other device's version was backed up on this phone (.conflict.bak).",
+        detail: event.displacedOwnUpload
+          ? // Naming another device here was a false alarm about the user's
+            // own data: the displaced blob is this phone's own earlier upload
+            // (ADR 0044, fifth review).
+            "This phone's earlier upload was replaced by the newer save; " +
+            'a copy is kept on this phone (.conflict.bak).'
+          : 'Another device had also changed this vault. Your edit was kept and pushed; ' +
+            "the other device's version was backed up on this phone (.conflict.bak).",
       };
     case 'error':
       return { ...state, status: 'error', detail: event.message, errorKind: event.kind };
@@ -141,6 +155,80 @@ export function conflictRepushSyncGeneration(localGen: number, remoteGen: number
 }
 
 /**
+ * What a push should stamp on the vault, or null for "leave the stamp alone".
+ * Mirrors packages/sync/src/client.ts pushVault exactly (ADR 0044, fourth
+ * review on the desktop, fifth on the phone).
+ *
+ * ONE BUMP PER LOGICAL PUSH, however many attempts it takes. Bumping on every
+ * attempt let a phone with one pending write gain a generation per retry;
+ * once any other device pushed, that phone sat above every honest blob, its
+ * pull refused as a replay and its push 409ing, with no way out but a save
+ * that LWW-pushed the stale vault over the other device.
+ *
+ *   lastSyncGeneration === null   -> bump (currentStamp + 1)
+ *   currentStamp <= last          -> last + 1
+ *   currentStamp > last           -> null (a previous attempt already stamped
+ *                                   it and never landed; do not stamp again)
+ *
+ * `last + 1` rather than `currentStamp + 1` in the middle case is what a vault
+ * RESTORED FROM AN OLDER COPY needs: stamping from its own low value would put
+ * it below the copy the server already holds, and the next pull would read as
+ * a replay.
+ *
+ * A null baseline counts as "bump" on purpose, and it re-bumps on every
+ * attempt: with no baseline there is no way to tell a fresh stamp from an
+ * unlanded one, and stamping low is the worse error. The inflation costs
+ * nothing now, because the pull's replay check reads lastSyncGeneration and
+ * not the local stamp (see pulledBlobIsReplay).
+ */
+export function nextPushGeneration(currentStamp: number, lastSyncGeneration: number | null): number | null {
+  if (lastSyncGeneration === null) return currentStamp + 1;
+  if (currentStamp <= lastSyncGeneration) return lastSyncGeneration + 1;
+  return null;
+}
+
+/**
+ * Is an incoming blob older than the copy this phone LAST SYNCED? The replay
+ * check, and the yardstick is the whole point: `lastSyncGeneration`, never the
+ * local file's own stamp.
+ *
+ * The local stamp is wrong because it inflates with unpushed edits and with
+ * pushes that never landed, and it establishes nothing about what the server
+ * ever held. A phone whose establish push failed four times sits four
+ * generations above every honest blob on the server, so comparing against it
+ * refuses the very pull that would have unwedged the phone (ADR 0044, fifth
+ * review kill shot). The question this check exists to answer is "is the
+ * server handing me back something older than the copy I already had FROM
+ * it?", and only lastSyncGeneration answers that.
+ *
+ * A null baseline reads as 0 and accepts anything: that is a phone that
+ * predates the key, or one whose only sync so far was a first pull with no
+ * key to read the installed generation with. The next push, or the next pull
+ * against an existing local vault, records a real baseline and the check
+ * bites from then on.
+ */
+export function pulledBlobIsReplay(pulledGeneration: number, lastSyncGeneration: number | null): boolean {
+  return pulledGeneration < (lastSyncGeneration ?? 0);
+}
+
+/**
+ * Did the conflict re-push displace bytes THIS PHONE uploaded moments earlier
+ * (typically its own establish push), rather than another device's edit?
+ * Compares the displaced blob's hash with the hash of what this phone last
+ * synced. Drives the pill wording: telling the user another device changed
+ * the vault when nothing of the sort happened is a false alarm about their
+ * own data (ADR 0044, fifth review).
+ *
+ * `lastSyncedSha` is written by pulls as well as pushes, so it is strictly
+ * "what this phone last synced", a superset of "what this phone last
+ * uploaded". A false positive needs the server to 409 while handing back
+ * byte-identical content, which is not reachable in practice.
+ */
+export function conflictDisplacedOwnUpload(displacedSha: string | null, lastSyncedSha: string | null): boolean {
+  return displacedSha !== null && lastSyncedSha !== null && displacedSha === lastSyncedSha;
+}
+
+/**
  * The side-effecting operations the sync orchestration needs, injected so the
  * SEQUENCE (the load-bearing, bug-prone part) is testable in Node with fakes
  * and never depends on Expo, the network, or a device. vault-session.tsx wires
@@ -180,8 +268,22 @@ export interface SyncAfterSavePorts {
   applyConflictRepushGeneration(nextGeneration: number): void | Promise<void>;
   /** Stash the just-fetched, verified remote as the recoverable .bak (last-writer-wins). */
   stashRemote(): void;
-  /** Persist the new in-sync version (and the hash of the accepted bytes, when known) after a successful push. */
-  saveBaseVersion(version: number, sha256?: string): Promise<void>;
+  /**
+   * Is the blob we just stashed this phone's OWN earlier upload rather than
+   * another device's edit? Drives the pill wording only (see
+   * conflictDisplacedOwnUpload). Asked BEFORE the re-push, because
+   * saveBaseVersion overwrites the hash the answer is drawn from. Optional:
+   * absent means "assume another device", the pre-existing wording.
+   */
+  displacedRemoteWasOwnUpload?(): boolean | Promise<boolean>;
+  /**
+   * Persist the new in-sync baseline after a push the server accepted: the
+   * version, the hash of the accepted bytes, and the sync generation sealed
+   * inside them. That generation is what the next push bumps against and what
+   * the next pull's replay check compares to, so it MUST be recorded on every
+   * accepted push and never before one (ADR 0044, fifth review).
+   */
+  saveBaseVersion(version: number, sha256?: string, generation?: number): Promise<void>;
   /**
    * Carry the generation the transport stamped on disk into the session's
    * open vault, so the next save does not overwrite it with the old value.
@@ -208,7 +310,7 @@ export async function runSyncAfterSave(ports: SyncAfterSavePorts): Promise<SyncE
   const push1 = await ports.push(base);
   if (push1.ok) {
     if (push1.generation !== undefined) ports.adoptGeneration?.(push1.generation);
-    await ports.saveBaseVersion(push1.version, push1.sha256);
+    await ports.saveBaseVersion(push1.version, push1.sha256, push1.generation);
     return { type: 'synced', version: push1.version };
   }
   if (!pushRequiresConflictRecovery(push1)) {
@@ -230,6 +332,9 @@ export async function runSyncAfterSave(ports: SyncAfterSavePorts): Promise<SyncE
     };
   }
   ports.stashRemote();
+  // Asked before the re-push: saveBaseVersion below overwrites the stored hash
+  // this answer is drawn from.
+  const displacedOwnUpload = (await ports.displacedRemoteWasOwnUpload?.()) === true;
   const nextGen = conflictRepushSyncGeneration(await ports.localSyncGeneration(), ports.remoteSyncGeneration());
   await ports.applyConflictRepushGeneration(nextGen);
   const base2 = conflictRepushBaseVersion(push1, base);
@@ -241,8 +346,16 @@ export async function runSyncAfterSave(ports: SyncAfterSavePorts): Promise<SyncE
     };
   }
   if (push2.generation !== undefined) ports.adoptGeneration?.(push2.generation);
-  await ports.saveBaseVersion(push2.version, push2.sha256);
-  return { type: 'conflict-recovered', version: push2.version };
+  // The re-push skips the bump, so the transport may report no generation. It
+  // does not need to: applyConflictRepushGeneration wrote exactly `nextGen` to
+  // the file under a FIFO gate, so that IS the generation in the accepted
+  // bytes. Recording it here is what keeps a conflict re-push from leaving the
+  // baseline stale (and reading it back would mean an extra openWithKey, which
+  // can migrate and therefore write).
+  await ports.saveBaseVersion(push2.version, push2.sha256, push2.generation ?? nextGen);
+  return displacedOwnUpload
+    ? { type: 'conflict-recovered', version: push2.version, displacedOwnUpload: true }
+    : { type: 'conflict-recovered', version: push2.version };
 }
 
 /** True while a sync is in flight; the indicator shows a spinner and mutations wait. */

@@ -25,6 +25,7 @@ const SYNC_VERSION_KEY = 'nk.sync_last_version';
 const SYNC_SYNCED_AT_KEY = 'nk.sync_last_synced_at';
 const SYNC_LOCAL_DIRTY_KEY = 'nk.sync_local_dirty';
 const SYNC_LAST_SHA_KEY = 'nk.sync_last_sha';
+const SYNC_LAST_GENERATION_KEY = 'nk.sync_last_generation';
 const CONNECTOR_SERVER_KEY = 'nk.connector_server_url';
 const CONNECTOR_SHARED_SCOPES_KEY = 'nk.connector_shared_scopes';
 const JOURNAL_CARD_DISMISSED_KEY = 'nk.journal_card_dismissed';
@@ -142,6 +143,38 @@ export async function loadLastSyncSha(): Promise<string | null> {
   return raw && /^[0-9a-f]{64}$/.test(raw) ? raw : null;
 }
 
+/**
+ * The sync generation sealed inside the bytes this phone LAST SYNCED: the
+ * generation the server accepted on the last successful push, or the one
+ * carried by the last blob a pull installed. The mobile analog of the
+ * desktop's `sync.json` `lastGeneration` (packages/sync/src/config.ts), and
+ * it is load-bearing in two places (ADR 0044, fifth review):
+ *
+ *   - the push decides whether to bump against it, so a push retried four
+ *     times gains ONE generation rather than four;
+ *   - the pull's replay check compares an incoming blob against it, rather
+ *     than against the local file's stamp (which inflates with unpushed
+ *     edits and establishes nothing).
+ *
+ * Null on a phone that predates this key, and on a phone whose only sync so
+ * far was a first pull with no key to read the installed generation with.
+ * Null means "no baseline": the push bumps, and the replay check is inert.
+ */
+export async function saveLastSyncGeneration(generation: number | null): Promise<void> {
+  if (generation === null) await SecureStore.deleteItemAsync(SYNC_LAST_GENERATION_KEY, BASE_OPTIONS);
+  else await SecureStore.setItemAsync(SYNC_LAST_GENERATION_KEY, String(generation), BASE_OPTIONS);
+}
+
+export async function loadLastSyncGeneration(): Promise<number | null> {
+  const raw = await SecureStore.getItemAsync(SYNC_LAST_GENERATION_KEY, BASE_OPTIONS);
+  if (raw === null) return null;
+  const parsed = Number(raw);
+  // A corrupt or negative value reads as "no baseline", never as 0: 0 is a
+  // real baseline that would refuse honest blobs, and a garbled key must
+  // never be able to wedge a pull.
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+}
+
 // --- connector sidecar (Phase B Cloud Connect: the mobile analog of the
 // desktop's ~/.northkeep/connector.json, which is node:fs-only). Holds only
 // WHERE the connector server is. Never a secret: the connector token is
@@ -213,6 +246,7 @@ export async function wipeAllSecrets(): Promise<void> {
   await SecureStore.deleteItemAsync(SYNC_SYNCED_AT_KEY);
   await SecureStore.deleteItemAsync(SYNC_LOCAL_DIRTY_KEY);
   await SecureStore.deleteItemAsync(SYNC_LAST_SHA_KEY);
+  await SecureStore.deleteItemAsync(SYNC_LAST_GENERATION_KEY);
   await SecureStore.deleteItemAsync(CONNECTOR_SERVER_KEY);
   await SecureStore.deleteItemAsync(CONNECTOR_SHARED_SCOPES_KEY);
   await SecureStore.deleteItemAsync(JOURNAL_CARD_DISMISSED_KEY);

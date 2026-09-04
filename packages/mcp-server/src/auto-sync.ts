@@ -79,7 +79,7 @@ export type FlushOutcome = 'flushed' | 'failed' | 'timeout';
 export interface FlushableEngine {
   flush(): Promise<void>;
   stop(): void;
-  status(): { phase: AutoSyncPhase };
+  status(): { phase: AutoSyncPhase; pushPending: boolean };
 }
 
 export async function flushBounded(
@@ -92,7 +92,10 @@ export async function flushBounded(
   // a pull) was still running, and saying "a push still pending" there told
   // the user a write of theirs was stranded when none was (ADR 0044 fourth
   // review).
-  const pushWasPending = auto.status().phase === 'pending';
+  // A debounced push that has already started uploading reads 'syncing', not
+  // 'pending', so ask the engine whether a write is still unpushed rather
+  // than reading the phase (fifth review, M2).
+  const pushWasPending = auto.status().pushPending;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<FlushOutcome>((resolve) => {
     timer = setTimeout(() => resolve('timeout'), budgetMs);
