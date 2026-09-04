@@ -749,7 +749,32 @@ Import confirmation and notice on the phone; neutral diverged wording in
 the engine, the GUI and the CLI; the one rule restated with the repair
 branch and the N2 residual; KNOWN-LIMITS matched. Suites green.
 
-Ninth review: pending at the time of writing.
+## Ninth adversarial review (2026-09-04, run against 3e31353..437f17f)
+
+Fresh eyes on Opus; the full prior battery re-run (repo suite 1400 green,
+real CLI and MCP processes, phone harness through the real import); the
+real `sync.json` byte-identical before and after. Verdict: CLEARED WITH
+WOUNDS, all three wounds wording: the MCP server's diverged line still
+asserted "both changed" (the eighth-review record's list of surfaces
+missed it); the import confirmation promised the server's copy as a
+backup when what is kept is this phone's previous vault, until the next
+change; KNOWN-LIMITS line 60 still described the old status wording.
+Scars: `DIVERGED_MESSAGE`'s comment claimed the GUI and CLI show it
+verbatim; two tracked tests pinned the old wording. Residual unchanged:
+the hosted push/pull protocol with a real account, which caps the verdict.
+
+## Fixes after the ninth review (2026-09-04)
+
+MCP diverged line neutral (its test updated); import confirmation says the
+phone's current vault is kept as `vault.nkv.bak` until the next change;
+KNOWN-LIMITS line 60 matched; the constant's comment corrected. Grep over
+the repo for "both changed" now finds only the CLI push-on-exit line after a
+409, where this machine demonstrably just wrote.
+
+The code has cleared every executed attack across nine rounds. What remains
+is rule 2 of the review skill: one live push and one live pull against the
+hosted server with Jay's own account, which no throwaway credential can
+perform (an unknown bearer is answered 402, not 401).
 
 ## Status of this record
 

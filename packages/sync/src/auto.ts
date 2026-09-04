@@ -108,7 +108,7 @@ export const PAUSE_RETRY_MS = 600_000;
 export const AUTO_PULL_BACKUP_SUFFIX = '.auto-pull.bak';
 const DEFAULT_BACKOFF_MS: readonly number[] = [30_000, 120_000, 600_000, 3_600_000];
 
-/** The exact message the GUI and CLI show for the one case automation refuses. */
+/** The engine's wording for the one case automation refuses. The GUI and CLI phrase the same fact their own way; none asserts that this machine changed. */
 export const DIVERGED_MESSAGE =
   "This machine's vault differs from the server's newer copy. Pull first (your current vault is kept as a .bak), then Push.";
 

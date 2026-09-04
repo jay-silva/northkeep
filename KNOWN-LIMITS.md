@@ -57,8 +57,8 @@ every milestone; if a limit is removed, say when and how.*
 - **A manual Pull replaces the local vault.** Unpushed local edits are moved
   to `vault.nkv.bak` (recoverable), not merged. The automatic paths (below)
   never pull over local edits; only the Pull button and `northkeep sync pull`
-  can, and the status line says "both changed" first. Push before you pull by
-  hand on a machine you've edited.
+  can, and the status line first says the vault differs from the server's
+  newer copy. Push before you pull by hand on a machine you've edited.
 - **HTTPS only.** The client refuses a non-https sync server (except loopback
   for testing) so your token and blob never cross the network unprotected.
 

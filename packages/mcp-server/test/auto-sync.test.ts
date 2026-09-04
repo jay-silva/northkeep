@@ -135,7 +135,7 @@ describe('describeEvent', () => {
   it('names versions and reasons, never content', () => {
     expect(describeEvent({ type: 'pushed', version: 7 })).toContain('pushed version 7');
     expect(describeEvent({ type: 'pulled', version: 8 })).toContain('pulled version 8');
-    expect(describeEvent({ type: 'diverged' })).toMatch(/both changed/);
+    expect(describeEvent({ type: 'diverged' })).toMatch(/differs from the server's newer copy/);
     expect(describeEvent({ type: 'error', message: 'HTTP 500' })).toContain('HTTP 500');
     expect(describeEvent({ type: 'paused', reason: 'subscription' })).toContain('subscription required');
     expect(describeEvent({ type: 'paused', reason: 'private' })).toContain('private server');
