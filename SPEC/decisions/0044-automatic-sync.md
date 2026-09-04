@@ -406,7 +406,65 @@ the orchestration. Verdict: NOT CLEARED.
 - Nits: non-string `sha256` ignored; phone lowercases `x-sha256`.
 - KNOWN-LIMITS gains the default-vault, no-wait CLI and dead-pid lines.
 
-Fourth review: pending at the time of writing.
+## Fourth adversarial review (2026-09-03, run against 3e31353..2f387a1)
+
+Fresh eyes, all three fix sections attacked; phone orchestration re-ported
+line for line, with a hook that lands a save inside the hash window; a real
+standalone MCP process and a real SIGKILLed pusher. Verdict: NOT CLEARED.
+
+- KILL SHOT (phone). The install re-check is not atomic: `hashVaultFile`
+  reads the bytes, then awaits the native digest; a save landing in that
+  window is hashed as absent, the install overwrites it, and the save's own
+  conflict re-push then overwrites the rolling `.bak`. The memory exists
+  nowhere while the pill says "Your edit was kept and pushed". Fix: an
+  in-process vault gate (async mutex) that every mutation and the install
+  (hash, write, reopen) take, so a save and an install never interleave;
+  the push's stamp-and-read takes it too, the network call does not.
+- KILL SHOT (desktop). Every automatic retry bumps and saves the sync
+  generation before uploading, so an offline Mac with one pending write
+  gains a generation per backoff tick. If any other device pushes meanwhile
+  the Mac is `diverged`, the manual pull is refused as "older than this one
+  (sync generation)" and the push 409s: no UI or CLI path out. Fix: record
+  the generation of the last synced bytes in `sync.json` (`lastGeneration`);
+  bump only when the file's stamp is not already ahead of it (one bump per
+  logical push, however many attempts); and make the pull's replay check
+  compare the pulled generation against `lastGeneration`, which is the
+  question it exists to answer, not against the local stamp.
+- FLESH WOUND (phone). After a refused install the re-decision forces
+  `status: 'idle'` and can start a second `runSyncAfterSave` while the
+  save's own push runs: six PUTs for one edit, a double stash, a stored sha
+  that no longer matches disk, a false "another device is syncing" line.
+  Fix: never start a push from the wake while one is in flight.
+- FLESH WOUND (phone). Between `writeAtomic` and the session reopen the old
+  vault instance can save pre-pull content over the installed file. Closed
+  by the same gate.
+- FLESH WOUND (phone). The needs-pull line says "newer changes" when the
+  server is restored below us or empty, and points at pull-to-refresh,
+  which replaces the vault with no warning and no re-check; on the upgrade
+  path that buries a pre-0044 unpushed edit after one more save. Fix: honest
+  wording ("The server's copy differs from this phone's"), the refresh pull
+  warns when the phone has unpushed bytes, and KNOWN-LIMITS names the
+  phone's refresh as a manual pull that replaces.
+- FLESH WOUND (phone). Unknown baseline against an empty server: establish
+  pushes from the stored version and is refused; the pill says pull, the
+  pull finds nothing, every later save reports a conflict. Fix: establish
+  against an empty server pushes from base 0.
+- SCAR TISSUE: establish holds only until the next save, after which an
+  unknown-baseline phone that is days behind LWW-pushes its stale vault
+  (recoverable from two `.bak` copies; by M6-2 design). A replayed latest own
+  blob at a forged version moves the stored version (false conflict next).
+  A foreign live pid holding the sync lock is never stolen inside the wait
+  because the wait is shorter than the stale window (fix: wait longer than
+  stale). A symlinked or differently cased default vault path is "another
+  vault" (fix: realpath). `flushBounded` says "push still pending" when only
+  a wake was parked (fix wording). `sync.json` is written non-atomically
+  (fix: temp and rename). Two engines in one process ping-pong; `stop()` does
+  not cancel an in-flight pull's swap; no-sha replay moves `lastVersion`
+  (all recorded before).
+- Residual: no device run; no live push with a subscribed account; the
+  digest-window width on a device is inferred.
+
+Fixes for this round: not applied at the time of writing.
 
 ## Status of this record
 
