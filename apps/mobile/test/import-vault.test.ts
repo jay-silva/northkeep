@@ -153,7 +153,7 @@ describe('an import is a user write: the next wake PUSHES it', () => {
 
     files.set(PICKED_URI, nkv('imported'));
     picked = { canceled: false, assets: [{ uri: PICKED_URI }] };
-    expect(await importVaultFile()).toEqual({ ok: true, bytes: 128 });
+    expect(await importVaultFile()).toEqual({ ok: true, bytes: 128, keptCopyAt: `${VAULT_PATH}.pre-import.bak` });
 
     // The server is at the version we last synced: nothing is "ahead", and the
     // bytes on disk are not the ones the baseline names.
@@ -283,5 +283,32 @@ describe('importVaultFile, through the real secure-store', () => {
     expect(await loadLocalDirty()).toBe(false);
     expect(files.has(VAULT_PATH)).toBe(false);
     expect(calls).toEqual([]);
+  });
+});
+describe('the import keeps the replaced vault at its own path (tenth review)', () => {
+  it('writes vault.nkv.pre-import.bak with the previous bytes, and a later rolling .bak rewrite leaves it alone', async () => {
+    files.set(VAULT_PATH, nkv('OLD-VAULT'));
+    files.set(PICKED_URI, nkv('IMPORTED'));
+    picked = { canceled: false, assets: [{ uri: PICKED_URI }] };
+    const result = await importVaultFile();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.keptCopyAt).toBe(`${VAULT_PATH}.pre-import.bak`);
+    expect(files.get(`${VAULT_PATH}.pre-import.bak`)!.equals(nkv('OLD-VAULT'))).toBe(true);
+    // The next wake's generation stamp saves the vault, which rewrites the rolling .bak.
+    const platform = (await import('@northkeep/core')).getPlatform();
+    platform.storage.writeAtomic(VAULT_PATH, nkv('IMPORTED-STAMPED'));
+    expect(files.get(`${VAULT_PATH}.bak`)!.equals(nkv('IMPORTED'))).toBe(true);
+    expect(files.get(`${VAULT_PATH}.pre-import.bak`)!.equals(nkv('OLD-VAULT'))).toBe(true);
+  });
+
+  it('keeps nothing on a phone that had no vault, and says so', async () => {
+    files.set(PICKED_URI, nkv('FRESH'));
+    picked = { canceled: false, assets: [{ uri: PICKED_URI }] };
+    const result = await importVaultFile();
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.keptCopyAt).toBeNull();
+    expect(files.has(`${VAULT_PATH}.pre-import.bak`)).toBe(false);
   });
 });

@@ -1,7 +1,7 @@
 import * as DocumentPicker from 'expo-document-picker';
 import { File } from 'expo-file-system';
 import { getPlatform } from '@northkeep/core';
-import { vaultPath } from './paths';
+import { preImportBakPath, vaultPath } from './paths';
 import { saveLocalDirty } from './secure-store';
 import { vaultGate } from './vault-gate';
 
@@ -47,7 +47,7 @@ import { vaultGate } from './vault-gate';
  */
 
 export type ImportResult =
-  | { ok: true; bytes: number }
+  | { ok: true; bytes: number; /** Where the replaced vault was kept, or null on a phone that had none. */ keptCopyAt: string | null }
   | { ok: false; reason: 'canceled' | 'not-a-vault' };
 
 const NKV_MAGIC = [0x4e, 0x4b, 0x56, 0x31]; // "NKV1"
@@ -79,6 +79,7 @@ export async function importVaultFile(options: ImportVaultOptions = {}): Promise
     bytes.length > NKV_MAGIC.length && NKV_MAGIC.every((b, i) => bytes[i] === b);
   if (!looksLikeVault) return { ok: false, reason: 'not-a-vault' };
 
+  let kept: string | null = null;
   await vaultGate.run(async () => {
     // DIRTY FIRST, and this ordering is the fix. If the flag write lands and
     // the file write then fails, the next wake sees dirty with unmoved bytes
@@ -86,14 +87,20 @@ export async function importVaultFile(options: ImportVaultOptions = {}): Promise
     // imported bytes on disk with nothing dirty, which is the exact torn-
     // baseline shape that fast-forwards the server's copy over the import.
     await saveLocalDirty(true);
-    // writeAtomic keeps any existing vault as .bak (storage seam contract), so a
-    // mistaken import of the right shape is still recoverable ON THIS PHONE.
-    // Note what changed with the fix, and do not overclaim it: the next wake
-    // now PUSHES the import, so undoing a mistake means restoring from .bak
-    // before the phone wakes, or pulling the mistake back off the server the
-    // same way any other unwanted push is undone.
-    getPlatform().storage.writeAtomic(vaultPath(), bytes);
+    // Keep the vault being replaced at its own path. The rolling .bak is not
+    // enough: the next automatic wake stamps the import's sync generation and
+    // saves, which rewrites .bak with the import itself (tenth review). This
+    // copy is written only here and only overwritten by the next import.
+    const storage = getPlatform().storage;
+    const target = vaultPath();
+    let keptCopyAt: string | null = null;
+    if (storage.exists(target)) {
+      keptCopyAt = preImportBakPath(target);
+      storage.writeAtomic(keptCopyAt, storage.readBytes(target));
+    }
+    storage.writeAtomic(target, bytes);
     await options.afterInstall?.();
+    kept = keptCopyAt;
   });
-  return { ok: true, bytes: bytes.length };
+  return { ok: true, bytes: bytes.length, keptCopyAt: kept };
 }

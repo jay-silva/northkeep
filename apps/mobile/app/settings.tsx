@@ -73,7 +73,10 @@ export default function Settings() {
     // the way pull-to-refresh warns before it replaces.
     Alert.alert(
       'Import a vault file',
-      'The file replaces the vault on this phone and is pushed to your sync server the next time the app wakes. The vault this phone holds now is kept as a backup (vault.nkv.bak) until the next change. A vault from a different account locks this phone until you wipe it and pull.',
+      (vaultPresent
+        ? 'The file replaces the vault on this phone and is pushed to your sync server the next time the app wakes. The vault this phone holds now is kept as vault.nkv.pre-import.bak until your next import. '
+        : 'The file becomes this phone\'s vault and is pushed to your sync server the next time the app wakes. ') +
+        'A vault from a different account locks this phone until you wipe it and pull.',
       [
         { text: 'Cancel', style: 'cancel' },
         { text: 'Import', style: 'destructive', onPress: () => void runImport() },
@@ -97,7 +100,11 @@ export default function Settings() {
           router.replace('/unlock');
           return;
         }
-        setNotice('Vault file imported. It is pushed to your sync server on the next wake.');
+        setNotice(
+          result.keptCopyAt
+            ? 'Vault file imported. It is pushed to your sync server on the next wake; the previous vault is kept as vault.nkv.pre-import.bak.'
+            : 'Vault file imported. It is pushed to your sync server on the next wake.',
+        );
       } else if (result.reason === 'not-a-vault') {
         setError('That file is not a NorthKeep vault (.nkv).');
       }

@@ -95,9 +95,10 @@ background). On wake the device:
    runs the same verify-opens-with-key and structural checks the manual pull
    runs, and reloads.
 4. If the server is ahead and the local vault HAS changed, does nothing
-   automatic. The state is `diverged`; the indicator says both changed (or,
-   when this machine has no recorded baseline, that the server changed and
-   this machine may have) and the user chooses, as today.
+   automatic. The state is `diverged`; the indicator says the vault differs
+   from the server's newer copy (or, when this machine has no recorded
+   baseline, that the server changed and this machine may have) and the user
+   chooses, as today. No indicator asserts that this machine changed.
 
 Wake pulls run only while unlocked, because verification needs the key. A
 locked app on wake shows "last synced N ago" and pulls after unlock.
@@ -767,11 +768,34 @@ the hosted push/pull protocol with a real account, which caps the verdict.
 
 MCP diverged line neutral (its test updated); import confirmation says the
 phone's current vault is kept as `vault.nkv.bak` until the next change;
-KNOWN-LIMITS line 60 matched; the constant's comment corrected. Grep over
-the repo for "both changed" now finds only the CLI push-on-exit line after a
-409, where this machine demonstrably just wrote.
+KNOWN-LIMITS line 60 matched; the constant's comment corrected. In tracked
+code, "both changed" now survives only in the CLI push-on-exit line after a
+409 (where this machine demonstrably just wrote) and the test that pins it;
+the ADR's review records quote the old wording historically.
 
-The code has cleared every executed attack across nine rounds. What remains
+## Tenth adversarial review (2026-09-04, run against 3e31353..eb983fc)
+
+Focused on the ninth round's fixes plus the full battery, with a side-by-side
+run at the previous commit to prove no regression; the MCP line verified
+from a real spawned process on a torn baseline. Verdict: CLEARED WITH
+WOUNDS. The MCP fix held; two wording fixes had half-landed: the import
+confirmation still promised a `.bak` that the next wake's generation stamp
+rewrites (proved through the real import and push path), KNOWN-LIMITS line
+60 matched only the known-baseline status string, and Decision 2 still said
+the indicator "says both changed". Scars: the fix note overclaimed its grep;
+the untracked attack battery is not a green gate and its plain vitest
+config skips every phone suite; the installed 0.20.0 app still shows the
+old wording until the next desktop build.
+
+## Fixes after the tenth review (2026-09-04)
+
+The import keeps the replaced vault at `vault.nkv.pre-import.bak`, written
+only by imports, and the confirmation and the notice name it (nothing is
+promised on a phone that had no vault). KNOWN-LIMITS line 60 carries both
+status phrasings. Decision 2 says no indicator asserts that this machine
+changed. The fix note's grep claim corrected.
+
+The code has cleared every executed attack across ten rounds. What remains
 is rule 2 of the review skill: one live push and one live pull against the
 hosted server with Jay's own account, which no throwaway credential can
 perform (an unknown bearer is answered 402, not 401).

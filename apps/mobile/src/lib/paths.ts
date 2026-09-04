@@ -53,6 +53,16 @@ export function autoPullBakPath(vaultFileUri: string): string {
   return `${vaultFileUri}.auto-pull.bak`;
 }
 
+/**
+ * Where an import keeps the vault it replaced. Separate from the rolling
+ * `.bak`, which the next automatic wake rewrites when it stamps the import's
+ * sync generation (tenth review): this copy is written only by imports and
+ * only overwritten by the next import.
+ */
+export function preImportBakPath(vaultFileUri: string): string {
+  return `${vaultFileUri}.pre-import.bak`;
+}
+
 /** Scratch path used by the pull flow for verify-before-replace. */
 export function pulledTmpPath(): string {
   return new File(Paths.cache, `${VAULT_FILENAME}.pulled.tmp`).uri;
