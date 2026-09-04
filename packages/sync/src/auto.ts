@@ -1,8 +1,8 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadDeviceSecret as coreLoadDeviceSecret, memzero } from '@northkeep/core';
-import { loadSyncConfig } from './config.js';
+import { loadDeviceSecret as coreLoadDeviceSecret, memzero, Vault, withFileLock } from '@northkeep/core';
+import { loadSyncConfig, saveSyncConfig } from './config.js';
 import {
   isAutoSyncVault,
   LocalChangedError,
@@ -377,6 +377,10 @@ export class AutoSync {
       // resolved here. The human resolves it, as before.
       const s = await syncState({ vaultPath: this.vaultPath, deviceSecret });
       if (s.state === 'in-sync') {
+        // The server already holds these bytes: a previous push landed but
+        // its record step was lost (a process that exited mid-upload). Repair
+        // the record so the next push has the right base.
+        this.repairRecord(s, key);
         this.pushPending = false;
         this.firstPendingAt = null;
         this.settle('in-sync');
@@ -472,6 +476,7 @@ export class AutoSync {
           await this.runPush(true);
           return;
         case 'in-sync':
+          this.repairRecord(s, key);
           this.settle('in-sync');
           return;
         default:
@@ -502,6 +507,41 @@ export class AutoSync {
     this.settle('in-sync');
     this.onEvent({ type: 'pushed', version });
     if (stillPending) this.armDebounce();
+  }
+
+  /**
+   * Bytes match the server but the recorded version or hash does not: a push
+   * landed and the process exited before recording it (the sync.json write
+   * runs after the upload). Record what the server reports, with the
+   * generation read from the file, so nothing later reads as diverged.
+   */
+  private repairRecord(
+    s: { remoteVersion: number | null; remoteSha: string | null; localSha: string | null },
+    key: Buffer,
+  ): void {
+    const config = loadSyncConfig();
+    if (!config || s.remoteVersion === null) return;
+    const sha = s.remoteSha ?? s.localSha;
+    if (config.lastVersion === s.remoteVersion && config.lastSha === sha) return;
+    try {
+      let generation: number | null = config.lastGeneration;
+      const vault = Vault.openWithKey(this.vaultPath, Buffer.from(key));
+      try {
+        generation = vault.getSyncGeneration();
+      } finally {
+        vault.close();
+      }
+      saveSyncConfig({
+        ...config,
+        lastVersion: s.remoteVersion,
+        lastSha: sha,
+        lastGeneration: generation,
+        lastSyncedAt: new Date().toISOString(),
+      });
+      this.onEvent({ type: 'in-sync' });
+    } catch {
+      // Best effort: a failed repair leaves the old record, which the next wake retries.
+    }
   }
 
   private settle(state: SyncState): void {

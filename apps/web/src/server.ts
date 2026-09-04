@@ -144,7 +144,7 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Runn
       // server must not hold up quit.
       await Promise.race([
         session.autoSync.flush().catch(() => {}),
-        new Promise<void>((r) => setTimeout(r, 1500).unref()),
+        new Promise<void>((r) => setTimeout(r, 10_000).unref()), // long enough for an upload in flight to record itself
       ]);
       session.autoSync.stop();
       unsubscribeSaveHook();

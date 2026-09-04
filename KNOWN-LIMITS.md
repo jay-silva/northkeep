@@ -141,6 +141,11 @@ every milestone; if a limit is removed, say when and how.*
   or the MCP server is mid-push, `northkeep remember` prints that another
   process is syncing and returns; the running engine notices the new bytes
   after its own push and sends them.
+- **A process that exits while its push is uploading may leave the record
+  behind the server by one version.** The next wake (every host runs one at
+  start) finds the bytes already in sync and repairs the record. A write that
+  lands before that wake reads as diverged and is left to you; it is intact
+  locally. Shutdown waits up to 10 s for an upload in flight.
 - **A lock left by a crashed process is stolen as soon as its pid is dead.**
   Reads and writes are never blocked by a sync in progress; only other
   syncers wait, and only for a live one.

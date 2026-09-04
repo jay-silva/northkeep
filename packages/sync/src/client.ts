@@ -553,10 +553,12 @@ export async function syncState(options: {
   baselineKnown: boolean;
   /** sha256 of the local file as read for this answer (null when there is none). An automatic pull passes it back as expectLocalSha. */
   localSha: string | null;
+  /** The server's sha256 as reported by /api/status (lowercased), null when absent. */
+  remoteSha: string | null;
 }> {
   const config = loadSyncConfig();
   if (!config) {
-    return { state: 'no-config', localVersion: 0, remoteVersion: null, localChanged: false, baselineKnown: true, localSha: null };
+    return { state: 'no-config', localVersion: 0, remoteVersion: null, localChanged: false, baselineKnown: true, localSha: null, remoteSha: null };
   }
   const { token } = deriveSyncCreds(options.deviceSecret);
   const remote = await remoteStatus(config.serverUrl, token);
@@ -569,6 +571,7 @@ export async function syncState(options: {
       localChanged: localExists,
       baselineKnown: config.lastSha !== null,
       localSha: localExists ? createHash('sha256').update(fs.readFileSync(options.vaultPath)).digest('hex') : null,
+      remoteSha: null,
     };
   }
   if (!localExists) {
@@ -579,6 +582,7 @@ export async function syncState(options: {
       localChanged: false,
       baselineKnown: true,
       localSha: null,
+      remoteSha: typeof remote.sha256 === 'string' ? remote.sha256.toLowerCase() : null,
     };
   }
 
@@ -617,6 +621,7 @@ export async function syncState(options: {
       localChanged: editedSinceSync || serverAdvanced,
       baselineKnown: config.lastSha !== null,
       localSha,
+      remoteSha: null,
     };
   }
 
@@ -636,6 +641,7 @@ export async function syncState(options: {
     localChanged,
     baselineKnown: config.lastSha !== null,
     localSha,
+    remoteSha,
   };
 }
 

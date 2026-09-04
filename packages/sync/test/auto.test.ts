@@ -740,6 +740,43 @@ describe('AutoSync (ADR 0044)', () => {
     expect(fake.version()).toBe(0);
   });
 
+  it('repairs a record whose push landed but was never recorded (exit mid-upload), on wake and on the 409 path', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    const { auto } = engine({ debounceMs: 20 });
+    write(homeA, 'first');
+    await sleep(150);
+    await auto.flush();
+    expect(fake.version()).toBe(1);
+    // Simulate the lost record step: the server has v1 with these bytes, sync.json still says v0.
+    const cfgPath = path.join(homeA, 'sync.json');
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    fs.writeFileSync(cfgPath, JSON.stringify({ ...cfg, lastVersion: 0, lastSha: 'f'.repeat(64), lastGeneration: null }));
+    await auto.wake();
+    const repaired = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    expect(repaired.lastVersion).toBe(1);
+    expect(repaired.lastSha).toBe(cfg.lastSha);
+    expect(repaired.lastGeneration).toBe(cfg.lastGeneration);
+    // The next write pushes from the repaired base without a false diverged.
+    write(homeA, 'second');
+    await sleep(150);
+    await auto.flush();
+    expect(fake.version()).toBe(2);
+    expect(auto.status().state).toBe('in-sync');
+
+    // Same tear, but the next event is a write rather than a wake. After the
+    // write the bytes no longer match the server, so the 409 reads as a real
+    // two-sided change and is reported, never resolved (recorded residual: a
+    // wake, which every host runs at start, is what repairs a torn record).
+    fs.writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(cfgPath, 'utf8')), lastVersion: 1 }));
+    write(homeA, 'third');
+    await sleep(150);
+    await auto.flush();
+    expect(fake.version()).toBe(2);
+    expect(auto.status().state).toBe('diverged');
+    expect(contents(homeA)).toContain('third'); // the write is intact locally
+  });
+
   it('ignores saves of other vault files', async () => {
     createVault(homeA, 'seed');
     configure(homeA);

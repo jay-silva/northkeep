@@ -714,9 +714,9 @@ function scheduleObsoleteExit(detail: string): void {
 let isStandaloneStdioServer = false;
 
 /** Longest a pending push may hold up shutdown (ADR 0044); the write stays on disk if it runs out. */
-const SHUTDOWN_FLUSH_BUDGET_MS = 1500;
+const SHUTDOWN_FLUSH_BUDGET_MS = 10_000; // an upload of a few MB finishes well inside this; a hung server still cannot hold exit past it
 /** Hard exit backstop: the flush budget plus the transport close, with room to spare. */
-const SHUTDOWN_HARD_EXIT_MS = 3500;
+const SHUTDOWN_HARD_EXIT_MS = 12_000;
 
 function installShutdownOnClientExit(
   server: { close: () => Promise<void> },

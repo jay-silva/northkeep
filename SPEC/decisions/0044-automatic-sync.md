@@ -828,6 +828,20 @@ three-phase `pushVault` writes. Not exercised live: a real 409 and the
 phone's new client (the phone ran the shipped 0.20.0 build). Those wait for
 the next phone build's first wake, the hand-run acceptance test.
 
+## Found in use (2026-09-04): the torn record after an exit mid-upload
+
+The ADR 0045 live test closed its MCP client while the server's push was
+still uploading. The upload landed (server v14) but the process exited
+before the record step, leaving `sync.json` at v13 with the old hash: bytes
+in sync, record stale. A later write would then have read as diverged with
+no way out short of a manual pull. Fixes: the engine repairs a stale record
+whenever a wake or a 409 finds the bytes already in sync (records the
+server's version and hash and the file's generation); the MCP and GUI
+shutdown budgets are 10 s so an upload in flight normally records itself.
+Residual, recorded: a write that lands after a torn record and before any
+wake (only the CLI, which has no wake) still reads as diverged and is
+reported for the human; the write is intact locally.
+
 The code has cleared every executed attack across eleven rounds, and the
 hosted push and pull have now run for a real account. What remains
 is rule 2 of the review skill: one live push and one live pull against the
