@@ -166,10 +166,18 @@ export interface SyncAfterSavePorts {
   verifyRemoteOpens(): boolean;
   /** Sync generation of the just-verified remote (same number desktop would compare). */
   remoteSyncGeneration(): number;
-  /** Current local vault sync generation (after the first push's bump). */
-  localSyncGeneration(): number;
-  /** Persist generation = conflictRepushSyncGeneration(...) before the re-push. */
-  applyConflictRepushGeneration(nextGeneration: number): void;
+  /**
+   * Current local vault sync generation (after the first push's bump). May be
+   * async: on the phone this reads the vault file under the in-process vault
+   * gate (src/lib/vault-gate.ts).
+   */
+  localSyncGeneration(): number | Promise<number>;
+  /**
+   * Persist generation = conflictRepushSyncGeneration(...) before the re-push.
+   * May be async, and is AWAITED: it is a vault write, so on the phone it runs
+   * under the vault gate and the re-push's read must not start before it lands.
+   */
+  applyConflictRepushGeneration(nextGeneration: number): void | Promise<void>;
   /** Stash the just-fetched, verified remote as the recoverable .bak (last-writer-wins). */
   stashRemote(): void;
   /** Persist the new in-sync version (and the hash of the accepted bytes, when known) after a successful push. */
@@ -222,8 +230,8 @@ export async function runSyncAfterSave(ports: SyncAfterSavePorts): Promise<SyncE
     };
   }
   ports.stashRemote();
-  const nextGen = conflictRepushSyncGeneration(ports.localSyncGeneration(), ports.remoteSyncGeneration());
-  ports.applyConflictRepushGeneration(nextGen);
+  const nextGen = conflictRepushSyncGeneration(await ports.localSyncGeneration(), ports.remoteSyncGeneration());
+  await ports.applyConflictRepushGeneration(nextGen);
   const base2 = conflictRepushBaseVersion(push1, base);
   const push2 = await ports.push(base2, { skipGenerationBump: true });
   if (!push2.ok) {
@@ -264,8 +272,17 @@ export function syncStatusLabel(status: SyncStatus): string {
 
 export type WakeAction = 'none' | 'retry-push' | 'pull' | 'check' | 'establish' | 'needs-pull';
 
-/** The loud line for a phone that cannot tell whether it is behind or ahead: the user pulls. */
-export const NEEDS_PULL_MESSAGE = 'The server has newer changes. Pull to catch up.';
+/**
+ * The loud line for a phone that cannot tell whether it is behind or ahead:
+ * the user decides. Deliberately NOT "the server has newer changes": the
+ * server may have been restored below us, or wiped, and the phone genuinely
+ * cannot tell which. Saying "newer" while pointing at a pull that REPLACES
+ * this phone's vault is how a pre-0044 unpushed edit got buried (fourth
+ * adversarial review, 2026-09-03). The line names the replacement and the
+ * backup instead.
+ */
+export const NEEDS_PULL_MESSAGE =
+  "The server's copy differs from this phone's. Pull to replace this phone's vault; a copy is kept.";
 
 export interface WakeInput {
   unlocked: boolean;
@@ -341,6 +358,37 @@ export function vaultUnchangedSinceSync(lastSyncSha: string | null, currentSha: 
 export function localBytesMoved(expectedSha: string | undefined, currentSha: string | null): boolean {
   if (expectedSha === undefined) return false;
   return currentSha === null || currentSha !== expectedSha;
+}
+
+/**
+ * Does this phone hold bytes the server has never accepted? True when a save
+ * is waiting for its push (`localDirty`) OR when the file does not hash to the
+ * stored post-sync baseline. An ABSENT baseline counts as unpushed on purpose:
+ * that is the upgrade path (a phone that synced before the hash key existed),
+ * and it is exactly the case where a silent replace buries an edit.
+ *
+ * Used by the manual pull-to-refresh, which REPLACES the vault, to decide
+ * whether to ask first (ADR 0044, fourth review).
+ */
+export function hasUnpushedBytes(input: {
+  localDirty: boolean;
+  lastSyncSha: string | null;
+  currentSha: string | null;
+}): boolean {
+  if (input.localDirty) return true;
+  return !vaultUnchangedSinceSync(input.lastSyncSha, input.currentSha);
+}
+
+/**
+ * The base version an `establish` push sends. Normally the version this phone
+ * last synced to: the server holds those bytes, so ours extend them. But an
+ * EMPTY server (GET /api/status 404, remoteVersion null) holds nothing, and
+ * pushing a stored version at it is refused forever: the pill says pull, the
+ * pull finds nothing, and every later save reports a conflict (fourth review).
+ * An empty server is base 0, the same base a fresh phone's first push sends.
+ */
+export function establishBaseVersion(remoteVersion: number | null, lastSyncedVersion: number): number {
+  return remoteVersion === null ? 0 : lastSyncedVersion;
 }
 
 export function decideWakeAction(input: WakeInput): WakeAction {

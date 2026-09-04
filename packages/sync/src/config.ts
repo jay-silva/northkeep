@@ -25,6 +25,18 @@ export interface SyncConfig {
    * "cannot prove the local file is untouched".
    */
   lastSha: string | null;
+  /**
+   * The vault's `sync_generation` as it stood in the bytes this machine last
+   * pushed or pulled. Two things lean on it (ADR 0044 fourth review):
+   * `pushVault` bumps the generation only when the local file is not already
+   * ahead of this, so a retry that follows a failed upload does not add a
+   * second bump; and `pullVault` compares an incoming blob's generation
+   * against this rather than against the local file's stamp, because "is this
+   * a replay of something older than what I last synced?" is the question the
+   * check exists to answer. Null on configs written before this field existed
+   * and on a server change; the first push or pull records one.
+   */
+  lastGeneration: number | null;
 }
 
 export function syncConfigPath(): string {
@@ -41,16 +53,45 @@ export function loadSyncConfig(): SyncConfig | null {
       lastVersion: Number.isInteger(parsed.lastVersion) ? parsed.lastVersion : 0,
       lastSyncedAt: typeof parsed.lastSyncedAt === 'string' ? parsed.lastSyncedAt : null,
       lastSha: typeof parsed.lastSha === 'string' ? parsed.lastSha : null,
+      lastGeneration: Number.isInteger(parsed.lastGeneration) ? parsed.lastGeneration : null,
     };
   } catch {
     return null;
   }
 }
 
+/**
+ * Write the config atomically: a temp file in the same directory, then a
+ * rename. A kill (or a power cut) in the middle of a plain writeFileSync
+ * leaves a truncated `sync.json`, which `loadSyncConfig` cannot parse, and
+ * every command then says "Sync is not configured" with the server URL and
+ * the baseline gone (ADR 0044 fourth review). The rename is atomic within the
+ * directory, so a reader sees either the old file or the new one.
+ */
 export function saveSyncConfig(config: SyncConfig): void {
   const target = syncConfigPath();
-  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(target, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  const dir = path.dirname(target);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = path.join(dir, `.sync.json.tmp-${process.pid}-${Date.now()}`);
+  try {
+    const fd = fs.openSync(tmp, 'wx', 0o600);
+    try {
+      fs.writeFileSync(fd, `${JSON.stringify(config, null, 2)}\n`);
+      // Best effort: on a crash of the machine (not the process) the rename
+      // could otherwise land before the bytes. A filesystem that refuses
+      // fsync must not fail the save.
+      try {
+        fs.fsyncSync(fd);
+      } catch {
+        // ignore
+      }
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.renameSync(tmp, target);
+  } finally {
+    if (fs.existsSync(tmp)) fs.rmSync(tmp, { force: true });
+  }
 }
 
 /**
@@ -86,6 +127,7 @@ export function setSyncServer(serverUrl: string, accountId: string): SyncConfig 
     lastVersion: existing && existing.accountId === accountId ? existing.lastVersion : 0,
     lastSyncedAt: existing && existing.accountId === accountId ? existing.lastSyncedAt : null,
     lastSha: existing && existing.accountId === accountId ? existing.lastSha : null,
+    lastGeneration: existing && existing.accountId === accountId ? existing.lastGeneration : null,
   };
   saveSyncConfig(config);
   return config;

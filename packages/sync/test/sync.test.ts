@@ -3,11 +3,20 @@ import { createServer, type Server } from 'node:http';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { Vault, deriveMasterKey, generateDeviceSecret, KDF_INTERACTIVE } from '@northkeep/core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { Vault, deriveMasterKey, defaultVaultPath, generateDeviceSecret, KDF_INTERACTIVE } from '@northkeep/core';
 import { deriveSyncCreds, tokenHash } from '../src/creds.js';
-import { assertSyncUrl, loadSyncConfig, setSyncServer } from '../src/config.js';
-import { LocalChangedError, pullVault, pushVault, SyncBusyError, syncState } from '../src/client.js';
+import { assertSyncUrl, loadSyncConfig, saveSyncConfig, setSyncServer } from '../src/config.js';
+import {
+  isAutoSyncVault,
+  LocalChangedError,
+  pullVault,
+  pushVault,
+  SyncBusyError,
+  SYNC_LOCK_STALE_MS,
+  SYNC_LOCK_TIMEOUT_MS,
+  syncState,
+} from '../src/client.js';
 import { withFileLock } from '@northkeep/core';
 
 function masterKeyFor(vPath: string, passphrase: string, deviceSecret: Buffer): Buffer {
@@ -302,6 +311,15 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     return masterKeyFor(vaultPath(home), passphrase, deviceSecret);
   }
 
+  function readGeneration(home: string): number {
+    const v = Vault.open({ path: vaultPath(home), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    try {
+      return v.getSyncGeneration();
+    } finally {
+      v.close();
+    }
+  }
+
   it('A pushes; B (fresh, same device secret) pulls and opens the vault', async () => {
     // Machine A: create + seed + configure + push.
     process.env.NORTHKEEP_HOME = homeA;
@@ -535,15 +553,113 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     vb.setSyncGeneration(5);
     vb.save();
     vb.close();
+    // What makes it a replay is that B ALREADY SYNCED generation 5: the check
+    // is against the last synced copy, not against the local file's stamp
+    // (ADR 0044 fourth review).
+    const cfgPath = path.join(homeB, 'sync.json');
+    const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+    fs.writeFileSync(cfgPath, JSON.stringify({ ...cfg, lastGeneration: 5 }));
     const before = fs.readFileSync(vaultPath(homeB));
 
     await expect(
       pullVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeB) }),
-    ).rejects.toThrow(/older than this one/);
+    ).rejects.toThrow(/older than the copy this machine last synced/);
     expect(fs.readFileSync(vaultPath(homeB)).equals(before)).toBe(true);
     const still = Vault.open({ path: vaultPath(homeB), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
     expect(still.getSyncGeneration()).toBe(5);
     still.close();
+  });
+
+  /**
+   * A blob whose generation matches what we last synced is not a replay of
+   * something older, even when the local file's own stamp is higher because
+   * a push of ours never landed. Under the old rule (compare to the local
+   * stamp) this pull was refused and the machine had no way out.
+   */
+  it('accepts a pulled blob at the generation this machine last synced, even when the local stamp is higher', async () => {
+    process.env.NORTHKEEP_HOME = homeA;
+    createVault(homeA, 'server copy');
+    const { accountId } = deriveSyncCreds(deviceSecret);
+    setSyncServer(fake.url(), accountId);
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
+
+    process.env.NORTHKEEP_HOME = homeB;
+    setSyncServer(fake.url(), accountId);
+    await pullVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeA) });
+    expect(loadSyncConfig()?.lastGeneration).toBe(1);
+    // A stamp from a push that never reached the server.
+    const vb = Vault.open({ path: vaultPath(homeB), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    vb.setSyncGeneration(4);
+    vb.save();
+    vb.close();
+
+    const pull = await pullVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeB) });
+    expect(pull.ok).toBe(true);
+    expect(fs.existsSync(`${vaultPath(homeB)}.bak`)).toBe(true);
+    expect(loadSyncConfig()?.lastGeneration).toBe(1);
+  });
+
+  /**
+   * One bump per LOGICAL push. A 409 keeps the stamp (ADR 0038), and the
+   * retry that follows must not add a second one, or a machine that cannot
+   * reach the server climbs out of range of every other device's copy.
+   */
+  it('bumps the sync generation once per logical push, not once per attempt', async () => {
+    const { accountId } = deriveSyncCreds(deviceSecret);
+    process.env.NORTHKEEP_HOME = homeA;
+    createVault(homeA, 'A first');
+    setSyncServer(fake.url(), accountId);
+    expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+    expect(loadSyncConfig()?.lastGeneration).toBe(1);
+
+    // Another device moves the server on, so A's pushes now 409.
+    process.env.NORTHKEEP_HOME = homeB;
+    setSyncServer(fake.url(), accountId);
+    expect((await pullVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+    const vb = Vault.open({ path: vaultPath(homeB), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    vb.remember({ content: 'from B', type: 'semantic' });
+    vb.save();
+    vb.close();
+    expect((await pushVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeB) })).ok).toBe(true);
+
+    process.env.NORTHKEEP_HOME = homeA;
+    const va = Vault.open({ path: vaultPath(homeA), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    va.remember({ content: 'A pending write', type: 'semantic' });
+    va.save();
+    va.close();
+    const genBefore = readGeneration(homeA);
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const r = await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
+      expect(r.conflict).toBe(true);
+    }
+    expect(readGeneration(homeA)).toBe(genBefore + 1);
+    // Nothing landed, so the recorded baseline is still the last push's.
+    expect(loadSyncConfig()?.lastGeneration).toBe(1);
+  });
+
+  /** A vault restored from an older copy must not be stamped below the copy the server holds. */
+  it('stamps above the last synced generation when the local file is behind it', async () => {
+    const { accountId } = deriveSyncCreds(deviceSecret);
+    process.env.NORTHKEEP_HOME = homeA;
+    createVault(homeA, 'A first');
+    setSyncServer(fake.url(), accountId);
+    for (let i = 0; i < 3; i += 1) {
+      const v = Vault.open({ path: vaultPath(homeA), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+      v.remember({ content: `edit ${i}`, type: 'semantic' });
+      v.save();
+      v.close();
+      expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+    }
+    expect(loadSyncConfig()?.lastGeneration).toBe(3);
+
+    // A restore from an older backup: the file's stamp is behind the server's.
+    const restored = Vault.open({ path: vaultPath(homeA), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    restored.setSyncGeneration(0);
+    restored.save();
+    restored.close();
+    expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+    expect(readGeneration(homeA)).toBe(4);
+    expect(loadSyncConfig()?.lastGeneration).toBe(4);
   });
 
   it('accepts a pull whose sync_generation is equal or greater', async () => {
@@ -768,5 +884,116 @@ describe('sync config', () => {
     expect(cfg.accountId).toBe('acct123');
     const raw = fs.readFileSync(path.join(home, 'sync.json'), 'utf8');
     expect(raw).not.toMatch(/token/i);
+  });
+});
+
+/**
+ * ADR 0044 fourth review: a symlinked or differently cased path to the
+ * default vault IS the default vault. Comparing spellings made the engine
+ * treat it as "another vault" and stop syncing it entirely, silently.
+ */
+describe('isAutoSyncVault (real paths, not spellings)', () => {
+  const savedEnv = { ...process.env };
+  let home: string;
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-autopath-'));
+    process.env.NORTHKEEP_HOME = home;
+  });
+  afterEach(() => {
+    process.env = { ...savedEnv };
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('accepts the default path itself, before and after the file exists', () => {
+    expect(isAutoSyncVault(defaultVaultPath())).toBe(true);
+    fs.writeFileSync(defaultVaultPath(), 'NKV1 not really a vault');
+    expect(isAutoSyncVault(defaultVaultPath())).toBe(true);
+  });
+
+  it('accepts a symlink that points at the default vault', () => {
+    fs.writeFileSync(defaultVaultPath(), 'NKV1 not really a vault');
+    const link = path.join(home, 'link.nkv');
+    fs.symlinkSync(defaultVaultPath(), link);
+    expect(isAutoSyncVault(link)).toBe(true);
+  });
+
+  it('accepts a symlinked DIRECTORY on the way to the default vault', () => {
+    fs.writeFileSync(defaultVaultPath(), 'NKV1 not really a vault');
+    const linkDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-autolink-'));
+    const via = path.join(linkDir, 'home');
+    fs.symlinkSync(home, via);
+    try {
+      expect(isAutoSyncVault(path.join(via, 'vault.nkv'))).toBe(true);
+    } finally {
+      fs.rmSync(linkDir, { recursive: true, force: true });
+    }
+  });
+
+  it.runIf(process.platform === 'darwin')('accepts a differently cased spelling on a case-insensitive filesystem', () => {
+    fs.writeFileSync(defaultVaultPath(), 'NKV1 not really a vault');
+    expect(isAutoSyncVault(path.join(home, 'VAULT.NKV'))).toBe(true);
+  });
+
+  it('still refuses a genuinely different vault', () => {
+    fs.writeFileSync(defaultVaultPath(), 'NKV1 not really a vault');
+    const other = path.join(home, 'other.nkv');
+    fs.writeFileSync(other, 'NKV1 other');
+    expect(isAutoSyncVault(other)).toBe(false);
+  });
+});
+
+/**
+ * ADR 0044 fourth review: sync.json was written in place, so a kill in the
+ * middle left a truncated file that loadSyncConfig cannot parse, and every
+ * command then said "Sync is not configured" with the server and the
+ * baseline gone.
+ */
+describe('saveSyncConfig is atomic', () => {
+  const savedEnv = { ...process.env };
+  let home: string;
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-cfgatomic-'));
+    process.env.NORTHKEEP_HOME = home;
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+    process.env = { ...savedEnv };
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('round-trips lastGeneration and leaves no temp file behind', () => {
+    setSyncServer('https://sync.example.com', 'acct');
+    saveSyncConfig({ ...loadSyncConfig()!, lastGeneration: 7 });
+    expect(loadSyncConfig()?.lastGeneration).toBe(7);
+    expect(fs.readdirSync(home).filter((f) => f.startsWith('.sync.json.tmp'))).toEqual([]);
+  });
+
+  it('leaves the previous config intact and parseable when the write dies before the rename', () => {
+    setSyncServer('https://sync.example.com', 'acct');
+    const cfgPath = path.join(home, 'sync.json');
+    const before = fs.readFileSync(cfgPath, 'utf8');
+    vi.spyOn(fs, 'renameSync').mockImplementation(() => {
+      throw new Error('killed mid-write');
+    });
+    expect(() => saveSyncConfig({ ...loadSyncConfig()!, lastVersion: 99 })).toThrow(/killed mid-write/);
+    vi.restoreAllMocks();
+    expect(fs.readFileSync(cfgPath, 'utf8')).toBe(before);
+    expect(loadSyncConfig()).not.toBeNull();
+    expect(loadSyncConfig()?.lastVersion).toBe(0);
+    expect(fs.readdirSync(home).filter((f) => f.startsWith('.sync.json.tmp'))).toEqual([]);
+  });
+});
+
+/**
+ * ADR 0044 fourth review: a foreign process that is alive but has held the
+ * sync lock past the stale window is only stolen inside the wait loop, so a
+ * wait shorter than the stale window meant such a lock was never stolen.
+ */
+describe('sync lock windows', () => {
+  it('waits longer than the stale window, by a clear margin', () => {
+    expect(SYNC_LOCK_TIMEOUT_MS).toBeGreaterThanOrEqual(SYNC_LOCK_STALE_MS + 15_000);
+    expect(SYNC_LOCK_STALE_MS).toBeGreaterThan(120_000); // a full blob transfer is never stolen
   });
 });

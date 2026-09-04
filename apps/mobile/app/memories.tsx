@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  Alert,
   FlatList,
   Pressable,
   RefreshControl,
@@ -55,10 +56,35 @@ export default function Memories() {
   const showJournalCard =
     journalDismissed === false && !hasConversationsScope(session.entries) && query.trim().length === 0;
 
+  /**
+   * Pull-to-refresh is a MANUAL pull, and a manual pull REPLACES this phone's
+   * vault with the server's copy (the automatic wake pull never does; it is
+   * fast-forward only). When this phone holds bytes the server has not
+   * accepted, replacing them silently is how a pre-0044 unpushed edit got
+   * buried (ADR 0044, fourth review), so ask first. The displaced vault is
+   * still recoverable from the .bak the atomic write leaves.
+   */
+  async function confirmReplace(): Promise<boolean> {
+    if (!(await session.hasUnpushedChanges())) return true;
+    return new Promise<boolean>((resolve) => {
+      Alert.alert(
+        "Replace this phone's vault with the server's copy?",
+        'Unpushed changes on this phone are kept in a backup.',
+        [
+          { text: 'Cancel', style: 'cancel', onPress: () => resolve(false) },
+          { text: 'Replace', style: 'destructive', onPress: () => resolve(true) },
+        ],
+        { onDismiss: () => resolve(false) },
+      );
+    });
+  }
+
   async function onRefresh() {
     setRefreshing(true);
     setError(null);
     try {
+      // Cancel does nothing at all: no pull, no error line, no state change.
+      if (!(await confirmReplace())) return;
       const { pulled } = await session.pullAndReload();
       if (!pulled) setError('No vault on the sync server yet. Sync from your computer first.');
     } catch (err) {

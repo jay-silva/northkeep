@@ -5,6 +5,7 @@ import { MAX_BLOB_BYTES, SubscriptionRequiredError, deriveSyncCreds } from '@nor
 import { createDeadline, type DeadlineScope } from './deadline';
 import { deleteIfExists, pulledTmpPath } from './paths';
 import { localBytesMoved } from './sync-flow';
+import { vaultGate } from './vault-gate';
 
 /**
  * The phone's sync transport: PULL (M6-1) and PUSH + conflict recovery (M6-2).
@@ -280,11 +281,40 @@ export async function pullVaultMobile(options: {
    * Manual pulls omit it and replace regardless.
    */
   expectLocalSha?: string;
+  /**
+   * Run INSIDE the vault gate, immediately after the bytes are installed and
+   * before any queued save can run: the session's close-and-reopen and the
+   * SecureStore version/sha/dirty writes. Without it the old Vault instance
+   * could save pre-pull content over the file we just installed (fourth
+   * adversarial review). It must not call anything that takes the gate again.
+   */
+  afterInstall?: (installed: { version: number; sha256: string }) => Promise<void> | void;
 }): Promise<MobilePullResult> {
   const platform = getPlatform();
+  // The download runs with the gate RELEASED: it is up to 120 s of network and
+  // touches no local file. Everything after it is one atomic gated section.
   const remote = await fetchRemoteBlob(options);
   if (remote === null) return { ok: false, reason: 'no-remote' };
 
+  return vaultGate.run(async () => installPulledBlob(options, remote));
+}
+
+/**
+ * The install half of a pull. ALWAYS called inside the vault gate: the
+ * re-hash, the verify, the write and the caller's reopen must not interleave
+ * with a save. `hashVaultFile` awaits a native digest, and that await is the
+ * exact window the fourth review's kill shot walked through.
+ */
+async function installPulledBlob(
+  options: {
+    vaultPath: string;
+    masterKey?: Buffer;
+    expectLocalSha?: string;
+    afterInstall?: (installed: { version: number; sha256: string }) => Promise<void> | void;
+  },
+  remote: VerifiedRemoteBlob,
+): Promise<MobilePullResult> {
+  const platform = getPlatform();
   const localExists = platform.storage.exists(options.vaultPath);
   if (localExists) {
     if (!options.masterKey) {
@@ -334,64 +364,104 @@ export async function pullVaultMobile(options: {
   // Original bytes (possibly unmigrated 0.3) are installed; compare used the
   // same generation desktop would after open-verify/migrate.
   platform.storage.writeAtomic(options.vaultPath, remote.blob);
-  return { ok: true, version: remote.version, wroteVault: true, sha256: await sha256Hex(remote.blob) };
+  const installed = { version: remote.version, sha256: await sha256Hex(remote.blob) };
+  // Still under the gate: the session reopen and the SecureStore bookkeeping.
+  await options.afterInstall?.(installed);
+  return { ok: true, version: installed.version, wroteVault: true, sha256: installed.sha256 };
 }
 
 /**
- * PUT the local vault to the server with X-Base-Version optimistic concurrency,
- * mirroring packages/sync/src/client.ts pushBlob. Reads the CURRENT bytes at
- * `vaultPath` (the just-saved, chain-valid image) through the storage seam.
- * A 409 means another device pushed first: ok=false, conflict=true, and version
- * is the server's current version (the base for the conflict re-push). Never
- * echoes response bodies in errors.
+ * The bytes a push will upload, plus everything read off the local vault to
+ * produce them. Produced under the vault gate by preparePushMobile; consumed
+ * (over the network, with the gate RELEASED) by uploadPreparedMobile.
  */
-export async function pushVaultMobile(options: {
-  serverUrl: string;
-  deviceSecretHex: string;
+export interface PreparedPush {
+  /**
+   * The exact body to PUT. `Uint8Array<ArrayBuffer>` (not the default
+   * `ArrayBufferLike`) because fetch's BodyInit rejects a view that might sit
+   * on a SharedArrayBuffer; the copy below is what guarantees it does not.
+   */
+  body: Uint8Array<ArrayBuffer>;
+  /** Hex sha256 of those bytes: the phone's post-sync baseline once the server accepts them. */
+  sha256: string;
+  /** The sync generation stamped on disk before the read (absent when the bump was skipped). */
+  generation?: number;
+  /** The X-Base-Version this push must send. */
+  baseVersion: number;
+}
+
+/**
+ * The LOCAL half of a push: stamp the sync generation, read the bytes, hash
+ * them. Runs inside the vault gate, so a save can neither land between the
+ * stamp and the read (uploading a half-written image) nor be overwritten by
+ * the stamp. The gate is released the moment the bytes are in hand, so a save
+ * queued behind a push waits for the READ, not for the PUT.
+ */
+export async function preparePushMobile(options: {
   vaultPath: string;
   baseVersion: number;
   masterKey: Buffer;
-  /** When true, upload the current bytes without incrementing (LWW re-push already set generation). */
+  /** When true, read the current bytes without incrementing (LWW re-push already set generation). */
   skipGenerationBump?: boolean;
+}): Promise<PreparedPush> {
+  return vaultGate.run(async () => {
+    const platform = getPlatform();
+    if (!platform.storage.exists(options.vaultPath)) {
+      throw new Error('No local vault to push. Unlock or import a vault first.');
+    }
+    // The generation stamped here is returned so the session's open vault
+    // adopts it; otherwise its next save writes the old value back and the
+    // phone's generation never rises (third review: server blobs at gen 1, 1, 1).
+    let stampedGeneration: number | undefined;
+    if (!options.skipGenerationBump) {
+      const vault = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey), platform);
+      try {
+        vault.bumpSyncGeneration();
+        stampedGeneration = vault.getSyncGeneration();
+        vault.save();
+      } finally {
+        vault.close();
+      }
+    }
+    const blob = platform.storage.readBytes(options.vaultPath);
+    if (!isVaultBlob(blob)) throw new Error('Local vault file is not a NorthKeep vault.');
+    if (blob.length > MAX_BLOB_BYTES) {
+      throw new Error(
+        `Vault is ${(blob.length / 1024 / 1024).toFixed(1)} MB, over the ${MAX_BLOB_BYTES / 1024 / 1024} MB sync limit.`,
+      );
+    }
+    return {
+      // A plain Uint8Array, for the same reason sha256Hex uses one: expo/fetch
+      // normalizes the body in JS (an ArrayBuffer body is wrapped as a
+      // Uint8Array before it reaches native), so this is the form native
+      // actually receives. A previous comment claimed expo/fetch REQUIRED an
+      // ArrayBuffer; it was wrong, and that cast was the bug that broke pull.
+      body: new Uint8Array(blob),
+      // Hashed before the upload so the baseline is exactly what went over the wire.
+      sha256: await sha256Hex(blob),
+      generation: stampedGeneration,
+      baseVersion: options.baseVersion,
+    };
+  });
+}
+
+/**
+ * The NETWORK half of a push. Holds no gate: a PUT can park for the full
+ * 120 s deadline, and blocking every save on the phone for that long is the
+ * lock-scope mistake the desktop already made (second review). A 409 means
+ * another device pushed first: ok=false, conflict=true, and version is the
+ * server's current version (the base for the conflict re-push). Never echoes
+ * response bodies in errors.
+ */
+export async function uploadPreparedMobile(options: {
+  serverUrl: string;
+  deviceSecretHex: string;
+  prepared: PreparedPush;
 }): Promise<MobilePushResult> {
-  const platform = getPlatform();
   const { token } = deriveSyncCreds(Buffer.from(options.deviceSecretHex, 'hex'));
   const serverUrl = options.serverUrl.replace(/\/+$/, '');
+  const { body, sha256: uploadedSha, generation, baseVersion } = options.prepared;
 
-  if (!platform.storage.exists(options.vaultPath)) {
-    throw new Error('No local vault to push. Unlock or import a vault first.');
-  }
-  // The generation stamped here, returned so the session's open vault adopts
-  // it; otherwise its next save writes the old value back and the phone's
-  // generation never rises (third review: server blobs at gen 1, 1, 1).
-  let stampedGeneration: number | undefined;
-  if (!options.skipGenerationBump) {
-    const vault = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey), platform);
-    try {
-      vault.bumpSyncGeneration();
-      stampedGeneration = vault.getSyncGeneration();
-      vault.save();
-    } finally {
-      vault.close();
-    }
-  }
-  const blob = platform.storage.readBytes(options.vaultPath);
-  if (!isVaultBlob(blob)) throw new Error('Local vault file is not a NorthKeep vault.');
-  if (blob.length > MAX_BLOB_BYTES) {
-    throw new Error(
-      `Vault is ${(blob.length / 1024 / 1024).toFixed(1)} MB, over the ${MAX_BLOB_BYTES / 1024 / 1024} MB sync limit.`,
-    );
-  }
-
-  // A plain Uint8Array, for the same reason sha256Hex uses one: expo/fetch
-  // normalizes the body in JS (an ArrayBuffer body is wrapped as a Uint8Array
-  // before it reaches native), so this is the form native actually receives —
-  // stating it directly beats relying on that conversion. The previous comment
-  // here claimed expo/fetch REQUIRED an ArrayBuffer and cited sha256Hex's cast
-  // as precedent; both were wrong, and that cast was the bug that broke pull.
-  const requestBody = new Uint8Array(blob);
-  // Hashed before the upload so the baseline is exactly what went over the wire.
-  const uploadedSha = await sha256Hex(blob);
   const deadline = deadlineScope();
   try {
     const res = await deadline.race(
@@ -400,9 +470,9 @@ export async function pushVaultMobile(options: {
         headers: {
           authorization: `Bearer ${token}`,
           'content-type': 'application/octet-stream',
-          'x-base-version': String(options.baseVersion),
+          'x-base-version': String(baseVersion),
         },
-        body: requestBody,
+        body,
         redirect: 'error',
         signal: deadline.signal,
       }),
@@ -410,16 +480,42 @@ export async function pushVaultMobile(options: {
     // Each body read is raced too: res.json() is text() + JSON.parse, and
     // text() has the same never-settles-on-error behavior as arrayBuffer().
     if (res.status === 409) {
-      const body = (await deadline.race(res.json().catch(() => ({})))) as { version?: number };
-      return { ok: false, conflict: true, version: body.version ?? options.baseVersion };
+      const conflictBody = (await deadline.race(res.json().catch(() => ({})))) as { version?: number };
+      return { ok: false, conflict: true, version: conflictBody.version ?? baseVersion };
     }
     if (res.status === 402) throw new SubscriptionRequiredError();
     if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on push.`);
-    const body = (await deadline.race(res.json())) as { version: number };
-    return { ok: true, conflict: false, version: body.version, sha256: uploadedSha, generation: stampedGeneration };
+    const okBody = (await deadline.race(res.json())) as { version: number };
+    return { ok: true, conflict: false, version: okBody.version, sha256: uploadedSha, generation };
   } finally {
     deadline.done();
   }
+}
+
+/**
+ * Prepare-then-upload in one call, kept for the callers and tests that do not
+ * need the two phases apart. New orchestration should call the two halves
+ * directly, so it can see exactly where the gate is released.
+ */
+export async function pushVaultMobile(options: {
+  serverUrl: string;
+  deviceSecretHex: string;
+  vaultPath: string;
+  baseVersion: number;
+  masterKey: Buffer;
+  skipGenerationBump?: boolean;
+}): Promise<MobilePushResult> {
+  const prepared = await preparePushMobile({
+    vaultPath: options.vaultPath,
+    baseVersion: options.baseVersion,
+    masterKey: options.masterKey,
+    skipGenerationBump: options.skipGenerationBump,
+  });
+  return uploadPreparedMobile({
+    serverUrl: options.serverUrl,
+    deviceSecretHex: options.deviceSecretHex,
+    prepared,
+  });
 }
 
 /** The durable recovery slot for a conflict-displaced remote (see below). */

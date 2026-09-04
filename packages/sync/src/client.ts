@@ -167,11 +167,17 @@ function isVaultBlob(blob: Buffer): boolean {
  * machine across their whole operation, so two host processes never push
  * from the same base, while the vault's own file lock is held only for the
  * local snapshot and the final swap. Readers and writers of the vault are
- * therefore never blocked by a slow or hung server. It waits longer than a
- * blob transfer can take, and is stolen only well after that.
+ * therefore never blocked by a slow or hung server.
+ *
+ * The wait MUST be longer than the stale window. A foreign process that is
+ * alive but has held the lock past the stale window is only stolen from
+ * inside the wait loop, so a wait shorter than the window meant such a lock
+ * was never stolen and every sync failed busy until that process exited
+ * (ADR 0044 fourth review). Stale stays above a full blob transfer so a
+ * genuinely slow upload is not stolen out from under itself.
  */
-const SYNC_LOCK_TIMEOUT_MS = BLOB_TIMEOUT_MS + 30_000;
-const SYNC_LOCK_STALE_MS = BLOB_TIMEOUT_MS + 60_000;
+export const SYNC_LOCK_STALE_MS = BLOB_TIMEOUT_MS + 60_000;
+export const SYNC_LOCK_TIMEOUT_MS = SYNC_LOCK_STALE_MS + 30_000;
 
 /** Another process on this machine is pushing or pulling and the caller chose not to wait for it. */
 export class SyncBusyError extends Error {
@@ -205,7 +211,26 @@ async function withSyncLock<T>(vaultPath: string, fn: () => Promise<T>, waitMs =
  * working for any path, as before.
  */
 export function isAutoSyncVault(vaultPath: string): boolean {
-  return path.resolve(vaultPath) === path.resolve(defaultVaultPath());
+  return canonicalPath(vaultPath) === canonicalPath(defaultVaultPath());
+}
+
+/**
+ * The real path when the file exists, the resolved path otherwise. A symlink
+ * to the default vault, or (on a case-insensitive filesystem) a differently
+ * cased spelling of it, IS the default vault, and comparing the spellings
+ * would have called it "another vault" and silently stopped syncing it
+ * (ADR 0044 fourth review). `realpathSync.native` is what normalises case;
+ * it throws for a path that does not exist yet, and can throw EACCES on a
+ * directory we may not traverse, so both fall back to `path.resolve`.
+ */
+function canonicalPath(p: string): string {
+  const resolved = path.resolve(p);
+  try {
+    const real = fs.realpathSync.native ?? fs.realpathSync;
+    return real(resolved);
+  } catch {
+    return resolved;
+  }
 }
 
 /** Thrown by pullVault when the local vault changed between the caller's decision and the swap. Nothing was replaced. */
@@ -240,10 +265,34 @@ export async function pushVault(options: {
       if (!fs.existsSync(options.vaultPath)) {
         throw new Error('No local vault to push. Run "northkeep init" first.');
       }
+      // One bump per LOGICAL push, however many attempts it takes. Bumping on
+      // every attempt let an offline machine with one pending write gain a
+      // generation per backoff tick; once any other device pushed, that
+      // machine was diverged with its pull refused as a replay and its push
+      // 409ing, with no way out (ADR 0044 fourth review). The file is already
+      // ahead of `lastGeneration` exactly when a previous attempt stamped it
+      // and never landed, so that is the case that must not bump again. A
+      // null `lastGeneration` (a config written before the field, or a fresh
+      // server) counts as "bump": with no baseline we cannot tell a fresh
+      // stamp from an unlanded one, and stamping low would be the worse
+      // error. A stamp inflated that way costs nothing any more, because the
+      // pull's replay check reads `lastGeneration` and not the local stamp.
+      let stampedGeneration: number;
       const vault = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey));
       try {
-        vault.bumpSyncGeneration();
-        vault.save();
+        const current = vault.getSyncGeneration();
+        const last = config.lastGeneration;
+        if (last === null) {
+          vault.bumpSyncGeneration();
+          vault.save();
+        } else if (current <= last) {
+          // last + 1, not current + 1: a vault restored from an older copy
+          // would otherwise be stamped BELOW the copy the server already
+          // holds, and the next pull would read as a replay.
+          vault.setSyncGeneration(last + 1);
+          vault.save();
+        }
+        stampedGeneration = vault.getSyncGeneration();
       } finally {
         vault.close();
       }
@@ -254,7 +303,7 @@ export async function pushVault(options: {
           `Vault is ${(blob.length / 1024 / 1024).toFixed(1)} MB, over the ${MAX_BLOB_BYTES / 1024 / 1024} MB sync limit.`,
         );
       }
-      return { config, blob };
+      return { config, blob, stampedGeneration };
     });
     // The upload holds no vault lock: a hung server must not take the vault
     // away from every other process on this machine (review 2026-09-03).
@@ -270,6 +319,10 @@ export async function pushVault(options: {
           // landed during the upload simply differs from this hash, reads as
           // "ahead" on the next syncState, and is pushed next.
           lastSha: sha256Hex(snapshot.blob),
+          // The generation sealed inside the bytes the server now holds. The
+          // next push compares against it to decide whether to bump, and the
+          // next pull compares an incoming blob against it to spot a replay.
+          lastGeneration: snapshot.stampedGeneration,
         });
       });
     }
@@ -325,6 +378,11 @@ export async function pullVault(options: {
       const tmpPath = `${options.vaultPath}.pulled.tmp`;
       fs.writeFileSync(tmpPath, pulled.blob, { mode: 0o600 });
       const localExists = fs.existsSync(options.vaultPath);
+      // The generation sealed in the bytes that end up on disk, recorded in
+      // sync.json below. On the localExists path it is read from the temp
+      // file AFTER the open-verify (which may migrate it), and that same file
+      // is renamed into place, so it is the installed generation exactly.
+      let installedGeneration: number | null = null;
       try {
         if (localExists) {
           if (options.expectLocalSha !== undefined) {
@@ -359,27 +417,50 @@ export async function pullVault(options: {
             }
             throw err;
           }
-          let localGen: number;
-          try {
-            const localVault = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey));
-            try {
-              localGen = localVault.getSyncGeneration();
-            } finally {
-              localVault.close();
-            }
-          } catch (err) {
-            if (err instanceof VaultSyncGenerationError) {
-              throw new Error('This vault has an invalid sync generation. Local vault was not changed.');
-            }
-            throw err;
-          }
-          if (pulledGen < localGen) {
-            throw new Error('The pulled vault is older than this one (sync generation). Local vault was not changed.');
+          installedGeneration = pulledGen;
+          // The replay check compares the incoming blob against the
+          // generation of what THIS MACHINE LAST SYNCED, not against the
+          // local file's own stamp. That is the question the check exists to
+          // answer ("is the server handing me back something older than the
+          // copy I already had from it?"), and the local stamp is the wrong
+          // yardstick: a machine that stamped a push which never landed sits
+          // above every honest blob out there, so comparing to it refused
+          // the very pull that would have unwedged it (ADR 0044 fourth
+          // review). What this gives up: a `lastGeneration` of null reads as
+          // 0 and accepts anything. That is a config written before the
+          // field existed, or a machine whose only sync so far was the very
+          // first pull on an empty home, which carries no key to read the
+          // installed generation with. Either way the next push, or the next
+          // pull once a local vault exists to verify against, records a real
+          // baseline and the check bites from then on.
+          const lastSyncedGeneration = (loadSyncConfig() ?? config).lastGeneration ?? 0;
+          if (pulledGen < lastSyncedGeneration) {
+            throw new Error(
+              'The pulled vault is older than the copy this machine last synced (sync generation). Local vault was not changed.',
+            );
           }
           if (options.keepCopyAt) fs.copyFileSync(options.vaultPath, options.keepCopyAt);
           fs.copyFileSync(options.vaultPath, `${options.vaultPath}.bak`);
         }
         fs.renameSync(tmpPath, options.vaultPath);
+        if (installedGeneration === null && options.masterKey) {
+          // Fresh machine: nothing was verified above, so read the generation
+          // back off the installed file. Without a key we cannot, and the
+          // baseline stays null (see the replay check).
+          try {
+            const installed = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey));
+            try {
+              installedGeneration = installed.getSyncGeneration();
+            } finally {
+              installed.close();
+            }
+          } catch {
+            // The vault is already installed and this read is only a baseline;
+            // a key that does not open it leaves the baseline unknown rather
+            // than failing a pull that has already succeeded.
+            installedGeneration = null;
+          }
+        }
       } finally {
         if (fs.existsSync(tmpPath)) fs.rmSync(tmpPath, { force: true });
         // openWithKey above may migrate, and migrate() calls save(), whose
@@ -401,6 +482,7 @@ export async function pullVault(options: {
         // the next syncState() read "edited since sync" and report diverged where
         // behind is correct. Reading it back is authoritative and costs one read.
         lastSha: sha256Hex(fs.readFileSync(options.vaultPath)),
+        lastGeneration: installedGeneration,
       });
       return { ok: true, version: pulled.version, wroteVault: true };
     });

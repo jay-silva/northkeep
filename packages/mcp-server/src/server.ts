@@ -705,11 +705,9 @@ function installShutdownOnClientExit(
     const done = (): never => process.exit(code);
     const flushed = sync ? flushBounded(sync.auto, SHUTDOWN_FLUSH_BUDGET_MS) : Promise.resolve('flushed' as const);
     flushed
-      .then((outcome) => {
-        // 'failed' already logged its own line inside flushBounded.
-        if (outcome === 'timeout') {
-          console.error('northkeep MCP server exiting with a push still pending (the next wake sends it)');
-        }
+      .then(() => {
+        // 'failed' and 'timeout' both log their own line inside flushBounded,
+        // which is the only place that knows whether a push was pending.
         sync?.dispose();
       })
       .then(() => server.close())

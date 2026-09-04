@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
+  NEEDS_PULL_MESSAGE,
   conflictRepushBaseVersion,
   conflictRepushSyncGeneration,
   decideWakeAction,
+  establishBaseVersion,
+  hasUnpushedBytes,
   localBytesMoved,
   initialSyncState,
   syncAgeLabel,
@@ -432,6 +435,59 @@ describe('decideWakeAction (ADR 0044 fast-forward rule)', () => {
     expect(decideWakeAction({ ...ready, status: 'idle', remoteVersion: 10 })).toBe('pull');
     expect(decideWakeAction({ ...ready, remoteVersion: 3 })).toBe('none');
     expect(decideWakeAction({ ...ready, remoteVersion: 2 })).toBe('none');
+  });
+});
+
+describe('establishBaseVersion (ADR 0044, fourth review)', () => {
+  it('pushes from the stored version when the server holds a vault at it', () => {
+    expect(establishBaseVersion(4, 4)).toBe(4);
+    expect(establishBaseVersion(0, 0)).toBe(0);
+  });
+
+  it('pushes from base 0 against an EMPTY server, whatever this phone last synced', () => {
+    // The bug: establish against a 404 server sent our stored version, the
+    // server refused it forever, the pill said pull, the pull found nothing,
+    // and every later save reported a conflict.
+    expect(establishBaseVersion(null, 7)).toBe(0);
+    expect(establishBaseVersion(null, 0)).toBe(0);
+    expect(establishBaseVersion(null, 1_000_000)).toBe(0);
+  });
+});
+
+describe('hasUnpushedBytes (the manual pull-to-refresh confirmation)', () => {
+  const synced = 'a'.repeat(64);
+  const edited = 'b'.repeat(64);
+
+  it('is false only when the file still hashes to the stored baseline and nothing is dirty', () => {
+    expect(hasUnpushedBytes({ localDirty: false, lastSyncSha: synced, currentSha: synced })).toBe(false);
+  });
+
+  it('is true when the bytes moved, when a push is still pending, or both', () => {
+    expect(hasUnpushedBytes({ localDirty: false, lastSyncSha: synced, currentSha: edited })).toBe(true);
+    expect(hasUnpushedBytes({ localDirty: true, lastSyncSha: synced, currentSha: synced })).toBe(true);
+    expect(hasUnpushedBytes({ localDirty: true, lastSyncSha: synced, currentSha: edited })).toBe(true);
+  });
+
+  it('an ABSENT baseline counts as unpushed: that is the upgrade path the warning exists for', () => {
+    expect(hasUnpushedBytes({ localDirty: false, lastSyncSha: null, currentSha: synced })).toBe(true);
+    expect(hasUnpushedBytes({ localDirty: false, lastSyncSha: null, currentSha: null })).toBe(true);
+    expect(hasUnpushedBytes({ localDirty: false, lastSyncSha: synced, currentSha: null })).toBe(true);
+  });
+});
+
+describe('NEEDS_PULL_MESSAGE wording (ADR 0044, fourth review)', () => {
+  it('does not claim the server is newer, and names the replacement and the backup', () => {
+    // The phone cannot tell "ahead" from "restored below us" from "wiped", so
+    // it must not say "newer", and it must say that a pull REPLACES.
+    expect(NEEDS_PULL_MESSAGE).toBe(
+      "The server's copy differs from this phone's. Pull to replace this phone's vault; a copy is kept.",
+    );
+    expect(NEEDS_PULL_MESSAGE).not.toMatch(/newer/i);
+    expect(NEEDS_PULL_MESSAGE).toMatch(/differs/i);
+    expect(NEEDS_PULL_MESSAGE).toMatch(/replace/i);
+    expect(NEEDS_PULL_MESSAGE).toMatch(/copy is kept/i);
+    // House style: no em dashes in user-facing copy.
+    expect(NEEDS_PULL_MESSAGE).not.toContain('\u2014');
   });
 });
 

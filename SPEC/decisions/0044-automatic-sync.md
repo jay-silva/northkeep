@@ -464,7 +464,34 @@ standalone MCP process and a real SIGKILLed pusher. Verdict: NOT CLEARED.
 - Residual: no device run; no live push with a subscribed account; the
   digest-window width on a device is inferred.
 
-Fixes for this round: not applied at the time of writing.
+## Fixes after the fourth review (2026-09-04)
+
+- Phone gate: `vault-gate.ts`, a FIFO async mutex. Every mutation, the
+  whole install (re-hash, verify, write, reopen, the version/sha/dirty
+  writes) and the push's stamp-and-read run under it; network calls run
+  outside it (`preparePushMobile` then `uploadPreparedMobile`). A save can
+  no longer interleave with an install at any await point.
+- Phone: no wake push while one is in flight (`pushInFlightRef`); establish
+  against an empty server pushes from base 0; the needs-pull line reads
+  "The server's copy differs from this phone's. Pull to replace this phone's
+  vault; a copy is kept." and pull-to-refresh asks first when the phone
+  holds unpushed bytes.
+- Desktop generation: `sync.json` records `lastGeneration`; `pushVault`
+  bumps once per logical push (never again on a retry; a restore from an
+  older copy stamps above the recorded baseline); `pullVault`'s replay
+  check compares the pulled generation with what this machine last synced,
+  not with the local stamp. Tested on the review's offline-retries scenario:
+  the generation grows by exactly one and the manual pull then succeeds.
+- Sync lock waits 30 s longer than its stale window; `isAutoSyncVault`
+  compares real paths; `sync.json` is written atomically; the MCP shutdown
+  line distinguishes a pending push from a parked wake. KNOWN-LIMITS
+  updated, including the phone's refresh pull.
+- Known and recorded: on a fresh machine the first pull carries no key, so
+  `lastGeneration` is null until the next push or pull and the replay check
+  is inert for that window; the phone's connector down-sync holds the gate
+  across its HTTP calls.
+
+Fifth review: pending at the time of writing.
 
 ## Status of this record
 

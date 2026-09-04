@@ -1,5 +1,5 @@
 import { onVaultSave } from '@northkeep/core';
-import { AutoSync, type AutoSyncEvent } from '@northkeep/sync';
+import { AutoSync, type AutoSyncEvent, type AutoSyncPhase } from '@northkeep/sync';
 import { resolveMasterKey } from './key.js';
 
 /**
@@ -76,11 +76,23 @@ export type FlushOutcome = 'flushed' | 'failed' | 'timeout';
  * (logged on stderr; the write stays on disk and the next wake pushes it),
  * 'timeout' when the budget ran out. The engine is stopped in every case.
  */
+export interface FlushableEngine {
+  flush(): Promise<void>;
+  stop(): void;
+  status(): { phase: AutoSyncPhase };
+}
+
 export async function flushBounded(
-  auto: Pick<AutoSync, 'flush' | 'stop'>,
+  auto: FlushableEngine,
   budgetMs: number,
   log: (line: string) => void = (line) => console.error(line),
 ): Promise<FlushOutcome> {
+  // Whether there was anything to push at all, captured before the flush
+  // changes it. A timeout with nothing pending means a wake (a status call or
+  // a pull) was still running, and saying "a push still pending" there told
+  // the user a write of theirs was stranded when none was (ADR 0044 fourth
+  // review).
+  const pushWasPending = auto.status().phase === 'pending';
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<FlushOutcome>((resolve) => {
     timer = setTimeout(() => resolve('timeout'), budgetMs);
@@ -93,7 +105,15 @@ export async function flushBounded(
     },
   );
   try {
-    return await Promise.race([flush, timeout]);
+    const outcome = await Promise.race([flush, timeout]);
+    if (outcome === 'timeout') {
+      log(
+        pushWasPending
+          ? 'northkeep MCP server exiting with a push still pending (the next wake sends it)'
+          : 'northkeep MCP server exiting while a sync was still running',
+      );
+    }
+    return outcome;
   } finally {
     if (timer !== null) clearTimeout(timer);
     auto.stop();

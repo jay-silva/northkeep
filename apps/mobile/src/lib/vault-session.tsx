@@ -58,9 +58,11 @@ import {
   LocalChangedError,
   fetchRemoteBlob,
   fetchRemoteStatus,
+  preparePushMobile,
   pullVaultMobile,
   pushVaultMobile,
   stashRecoverableBak,
+  uploadPreparedMobile,
   verifyBlobOpensWithKey,
   hashVaultFile,
   type VerifiedRemoteBlob,
@@ -69,6 +71,8 @@ import { classifySyncError } from './sync-errors';
 import {
   NEEDS_PULL_MESSAGE,
   decideWakeAction,
+  establishBaseVersion,
+  hasUnpushedBytes,
   initialSyncState,
   reduceSync,
   runSyncAfterSave,
@@ -76,6 +80,7 @@ import {
   type SyncEvent,
   type SyncState,
 } from './sync-flow';
+import { vaultGate } from './vault-gate';
 
 /**
  * The unlock-session state machine for M6-1 (link, unlock, browse). Holds the
@@ -146,6 +151,14 @@ export interface VaultSession {
   lock(opts?: { clearBiometricCache?: boolean }): Promise<void>;
   /** Pull from sync and reload; requires unlocked (the key verifies the download). */
   pullAndReload(): Promise<{ pulled: boolean; version?: number }>;
+  /**
+   * ADR 0044 (fourth review): does this phone hold bytes the server has never
+   * accepted? A manual pull REPLACES the vault, so the screen that offers one
+   * (pull-to-refresh on Memories) asks first when this is true. An absent
+   * baseline counts as unpushed: that is the upgrade path, which is exactly
+   * where a silent replace buried a pre-0044 edit.
+   */
+  hasUnpushedChanges(): Promise<boolean>;
   /**
    * ADR 0044: ISO time of the last push or pull that landed on this phone,
    * persisted beside the synced version. Null until the first sync. The
@@ -342,15 +355,25 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
             'No vault on this phone yet. Set your sync server in Settings, or import a vault file.',
           );
         }
-        const pulled = await pullVaultMobile({ serverUrl, deviceSecretHex: secretHex, vaultPath: path });
+        // The version/sha/dirty bookkeeping runs under the vault gate with the
+        // install, exactly like pullAndReload: no session vault exists yet on
+        // this path, but the claim "the whole install is one gated section"
+        // must hold everywhere, not only where it is currently reachable.
+        const pulled = await pullVaultMobile({
+          serverUrl,
+          deviceSecretHex: secretHex,
+          vaultPath: path,
+          afterInstall: async (installed) => {
+            await saveLastSyncVersion(installed.version);
+            await saveLastSyncSha(installed.sha256);
+            await saveLocalDirty(false);
+          },
+        });
         if (!pulled.ok) {
           throw new Error(
             'Your sync account has no vault yet. Sync from your computer first, or import a vault file.',
           );
         }
-        await saveLastSyncVersion(pulled.version);
-        await saveLastSyncSha(pulled.sha256);
-        await saveLocalDirty(false);
       }
 
       const secret = Buffer.from(secretHex, 'hex');
@@ -512,34 +535,56 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       vaultPath: vaultPath(),
       masterKey: key,
       expectLocalSha,
+      // Runs INSIDE the vault gate, between the write and the first chance any
+      // queued save gets to run. That is what closes the fourth review's second
+      // phone wound: the OLD Vault instance can no longer save pre-pull content
+      // over the file we just installed, because the reopen happens before the
+      // save is let through. The SecureStore bookkeeping sits here too, so a
+      // save can never see "installed file, stale baseline". Nothing in here
+      // may take the gate again (it is not reentrant).
+      afterInstall: async (installed) => {
+        await saveLastSyncVersion(installed.version);
+        await saveLastSyncSha(installed.sha256);
+        // The file on disk is now the server's copy: nothing local is unpushed.
+        await saveLocalDirty(false);
+        await markSyncedNow();
+        // Reopen from the freshly written file with the held key.
+        vaultRef.current?.close();
+        vaultRef.current = null;
+        try {
+          const reopenKey = Buffer.from(key);
+          vaultRef.current = Vault.openWithKey(vaultPath(), reopenKey);
+        } catch (err) {
+          // The vault is already closed and nulled by this point, so a throw
+          // here (a native sqlite failure, a bad header, a migration error)
+          // would strand the session at status 'unlocked' with no vault: the UI
+          // keeps claiming unlocked while every action fails with "Unlock the
+          // vault first", and there is no route back because the lock screen
+          // never shows. Drop to locked so the user can simply unlock again.
+          // The vault file on disk is intact either way (the previous image is
+          // at .bak).
+          closeSession();
+          setStatus('locked');
+          throw err;
+        }
+      },
     });
     if (!result.ok) return { pulled: false };
-    await saveLastSyncVersion(result.version);
-    await saveLastSyncSha(result.sha256);
-    // The file on disk is now the server's copy: nothing local is unpushed.
-    await saveLocalDirty(false);
-    await markSyncedNow();
-    // Reopen from the freshly written file with the held key.
-    vaultRef.current.close();
-    vaultRef.current = null;
-    try {
-      const reopenKey = Buffer.from(key);
-      vaultRef.current = Vault.openWithKey(vaultPath(), reopenKey);
-    } catch (err) {
-      // The vault is already closed and nulled by this point, so a throw here
-      // (a native sqlite failure, a bad header, a migration error) would strand
-      // the session at status 'unlocked' with no vault: the UI keeps claiming
-      // unlocked while every action fails with "Unlock the vault first", and
-      // there is no route back because the lock screen never shows. Drop to
-      // locked so the user can simply unlock again. The vault file on disk is
-      // intact either way — the previous image is at .bak.
-      closeSession();
-      setStatus('locked');
-      throw err;
-    }
     reloadEntries();
     return { pulled: true, version: result.version };
   }, [reloadEntries, closeSession, markSyncedNow]);
+
+  /**
+   * The unpushed-bytes test for the manual pull's confirmation. Bytes and the
+   * persisted dirty flag, the same two signals the wake decides on.
+   */
+  const hasUnpushedChanges = useCallback(async (): Promise<boolean> => {
+    return hasUnpushedBytes({
+      localDirty: await loadLocalDirty(),
+      lastSyncSha: await loadLastSyncSha(),
+      currentSha: await hashVaultFile(vaultPath()),
+    });
+  }, []);
 
   /**
    * Push the just-saved local vault, resolving a two-sided conflict with the
@@ -558,137 +603,184 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
    * terminal event; transport errors (network, 402, 403, unexpected HTTP)
    * propagate to the caller.
    */
+  /**
+   * How many pushes are in flight (a counter, not a flag, so the entry points
+   * can nest: pushAfterSave wraps runPushSequence, which pushNow also uses).
+   *
+   * A wake must never START a push while one is running. The refused-install
+   * re-decision used to force `status: 'idle'` and could fire a second
+   * runSyncAfterSave alongside the save's own push: six PUTs for one edit, a
+   * double stash, a stored sha that no longer matched disk, and a false
+   * "another device is syncing" line (ADR 0044, fourth review). syncStateRef is
+   * not enough on its own, because it lags React's batching; this ref is set
+   * synchronously, before the first await.
+   */
+  const pushInFlightRef = useRef(0);
+  const trackPush = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
+    pushInFlightRef.current += 1;
+    try {
+      return await fn();
+    } finally {
+      pushInFlightRef.current -= 1;
+    }
+  }, []);
+
   const runPushSequence = useCallback(
-    async (serverUrl: string, secretHex: string): Promise<SyncEvent> => {
-      const path = vaultPath();
-      // The remote fetched during conflict recovery, held so verify + stash act on
-      // the SAME verified blob the fetch port returned.
-      let pendingRemote: VerifiedRemoteBlob | null = null;
-      let pendingRemoteGen = 0;
-      return runSyncAfterSave({
-        hasMasterKey: () => masterKeyRef.current !== null,
-        loadBaseVersion: () => loadLastSyncVersion(),
-        push: (baseVersion, opts) => {
-          const key = masterKeyRef.current;
-          if (!key) throw new Error('Unlock the vault before pushing.');
-          return pushVaultMobile({
-            serverUrl,
-            deviceSecretHex: secretHex,
-            vaultPath: path,
-            baseVersion,
-            masterKey: key,
-            skipGenerationBump: opts?.skipGenerationBump,
-          });
-        },
-        fetchRemote: async () => {
-          pendingRemote = await fetchRemoteBlob({ serverUrl, deviceSecretHex: secretHex });
-          return pendingRemote === null ? null : { version: pendingRemote.version };
-        },
-        verifyRemoteOpens: () => {
-          const key = masterKeyRef.current;
-          if (pendingRemote === null || key === null) return false;
-          const opened = verifyBlobOpensWithKey(pendingRemote.blob, key);
-          if (!opened.ok) return false;
-          pendingRemoteGen = opened.syncGeneration;
-          return true;
-        },
-        remoteSyncGeneration: () => pendingRemoteGen,
-        localSyncGeneration: () => {
-          const key = masterKeyRef.current;
-          if (!key) throw new Error('Unlock the vault before pushing.');
-          const opened = Vault.openWithKey(path, Buffer.from(key), getPlatform());
-          try {
-            return opened.getSyncGeneration();
-          } finally {
-            opened.close();
-          }
-        },
-        applyConflictRepushGeneration: (nextGeneration) => {
-          const vault = vaultRef.current;
-          if (!vault) throw new Error('Unlock the vault before pushing.');
-          vault.setSyncGeneration(nextGeneration);
-          vault.save();
-        },
-        stashRemote: () => {
-          if (pendingRemote !== null) stashRecoverableBak(path, pendingRemote.blob);
-        },
-        adoptGeneration: (generation) => {
-          // The transport stamped this on disk in its own Vault instance; the
-          // session's open vault must carry it, or its next save writes the
-          // old value back and the phone's generation never rises.
-          vaultRef.current?.setSyncGeneration(generation);
-        },
-        saveBaseVersion: async (version, sha256) => {
-          await saveLastSyncVersion(version);
-          // The bytes the server accepted are the new baseline for "untouched
-          // since sync"; fall back to hashing the file if the transport did not
-          // report it. The push landed: the local save is no longer unpushed.
-          await saveLastSyncSha(sha256 ?? (await hashVaultFile(path)));
-          await saveLocalDirty(false);
-          await markSyncedNow();
-        },
-      });
-    },
-    [markSyncedNow],
+    async (serverUrl: string, secretHex: string): Promise<SyncEvent> =>
+      trackPush(async () => {
+        const path = vaultPath();
+        // The remote fetched during conflict recovery, held so verify + stash act on
+        // the SAME verified blob the fetch port returned.
+        let pendingRemote: VerifiedRemoteBlob | null = null;
+        let pendingRemoteGen = 0;
+        return runSyncAfterSave({
+          hasMasterKey: () => masterKeyRef.current !== null,
+          loadBaseVersion: () => loadLastSyncVersion(),
+          push: async (baseVersion, opts) => {
+            const key = masterKeyRef.current;
+            if (!key) throw new Error('Unlock the vault before pushing.');
+            // Prepare-then-upload, explicitly, so the gate scope is visible right
+            // here: the stamp-and-read runs under the vault gate and the gate is
+            // RELEASED before the PUT. A save queued behind this push proceeds as
+            // soon as the bytes are read, not after the network round trip.
+            const prepared = await preparePushMobile({
+              vaultPath: path,
+              baseVersion,
+              masterKey: key,
+              skipGenerationBump: opts?.skipGenerationBump,
+            });
+            // Adopt the stamped generation now rather than after the upload: it
+            // shrinks the window in which the session's own save could write the
+            // pre-bump value back from "a network round trip" to one microtask.
+            if (prepared.generation !== undefined) vaultRef.current?.setSyncGeneration(prepared.generation);
+            return uploadPreparedMobile({ serverUrl, deviceSecretHex: secretHex, prepared });
+          },
+          fetchRemote: async () => {
+            pendingRemote = await fetchRemoteBlob({ serverUrl, deviceSecretHex: secretHex });
+            return pendingRemote === null ? null : { version: pendingRemote.version };
+          },
+          verifyRemoteOpens: () => {
+            const key = masterKeyRef.current;
+            if (pendingRemote === null || key === null) return false;
+            const opened = verifyBlobOpensWithKey(pendingRemote.blob, key);
+            if (!opened.ok) return false;
+            pendingRemoteGen = opened.syncGeneration;
+            return true;
+          },
+          remoteSyncGeneration: () => pendingRemoteGen,
+          // Reads the vault FILE, so it takes the gate: an install must not be
+          // half-written underneath it.
+          localSyncGeneration: () =>
+            vaultGate.run(() => {
+              const key = masterKeyRef.current;
+              if (!key) throw new Error('Unlock the vault before pushing.');
+              const opened = Vault.openWithKey(path, Buffer.from(key), getPlatform());
+              try {
+                return opened.getSyncGeneration();
+              } finally {
+                opened.close();
+              }
+            }),
+          // A vault WRITE, so it belongs to the gate. runSyncAfterSave awaits it,
+          // and the gate is FIFO, so the re-push's preparePushMobile (which takes
+          // the gate again, after this section) always reads the stamped file.
+          applyConflictRepushGeneration: (nextGeneration) =>
+            vaultGate.run(() => {
+              const vault = vaultRef.current;
+              if (!vault) throw new Error('Unlock the vault before pushing.');
+              vault.setSyncGeneration(nextGeneration);
+              vault.save();
+            }),
+          stashRemote: () => {
+            if (pendingRemote !== null) stashRecoverableBak(path, pendingRemote.blob);
+          },
+          adoptGeneration: (generation) => {
+            // The transport stamped this on disk in its own Vault instance; the
+            // session's open vault must carry it, or its next save writes the
+            // old value back and the phone's generation never rises.
+            vaultRef.current?.setSyncGeneration(generation);
+          },
+          saveBaseVersion: async (version, sha256) => {
+            // NOTE: a save that queued behind this push's stamp-and-read (the
+            // gate is released before the PUT) has already rewritten the file, so
+            // this stored hash can be older than disk. That is intentional and
+            // safe: it makes `localChanged` true, and localChanged (not the
+            // dirty flag, which this clears) is the load-bearing signal that
+            // sends the next wake to a push instead of a pull.
+            await saveLastSyncVersion(version);
+            // The bytes the server accepted are the new baseline for "untouched
+            // since sync"; fall back to hashing the file if the transport did not
+            // report it. The push landed: the local save is no longer unpushed.
+            await saveLastSyncSha(sha256 ?? (await hashVaultFile(path)));
+            await saveLocalDirty(false);
+            await markSyncedNow();
+          },
+        });
+      }),
+    [markSyncedNow, trackPush],
   );
 
-  const pushAfterSave = useCallback(async (): Promise<void> => {
-    // Hard guarantee: the demo never touches the network. It has no persisted
-    // device secret anyway, but guard explicitly so no future demo edit path can
-    // reach the sync server.
-    if (isDemoRef.current) return;
-    // Persisted BEFORE anything else, including the "no server yet" return:
-    // a save made before sync is configured is still an unpushed edit, and
-    // the first wake after the server is set must push it, not pull over it
-    // (second adversarial review, 2026-09-03). Cleared only by saveBaseVersion
-    // or by a pull that installs the server's copy.
-    await saveLocalDirty(true);
-    const secretHex = await loadDeviceSecretHex();
-    const serverUrl = await loadSyncServerUrl();
-    if (!secretHex || !serverUrl) {
-      // Saved locally; there is simply nowhere to push yet. Say so, don't error loudly.
-      setSyncState((s) =>
-        reduceSync(s, {
-          type: 'error',
-          message: 'Saved on this phone. Turn on sync in Settings to push it to your other devices.',
-        }),
-      );
-      return;
-    }
-    setSyncState((s) => reduceSync(s, { type: 'start' }));
-    try {
-      const event = await runPushSequence(serverUrl, secretHex);
-      setSyncState((s) => reduceSync(s, event));
-    } catch (err) {
-      // A thrown transport error (network, 402, unexpected HTTP): the local
-      // save already succeeded, so surface it without losing the edit.
-      // classifySyncError keeps the server's CLI-flavored 402 copy off the
-      // screen (WS4) and tags the kind for distinct presentation.
-      const friendly = classifySyncError(err);
-      setSyncState((s) => reduceSync(s, { type: 'error', message: friendly.message, kind: friendly.kind }));
-    }
-  }, [runPushSequence]);
+  const pushAfterSave = useCallback(async (): Promise<void> =>
+    trackPush(async () => {
+      // Hard guarantee: the demo never touches the network. It has no persisted
+      // device secret anyway, but guard explicitly so no future demo edit path can
+      // reach the sync server.
+      if (isDemoRef.current) return;
+      // Persisted BEFORE anything else, including the "no server yet" return:
+      // a save made before sync is configured is still an unpushed edit, and
+      // the first wake after the server is set must push it, not pull over it
+      // (second adversarial review, 2026-09-03). Cleared only by saveBaseVersion
+      // or by a pull that installs the server's copy.
+      await saveLocalDirty(true);
+      const secretHex = await loadDeviceSecretHex();
+      const serverUrl = await loadSyncServerUrl();
+      if (!secretHex || !serverUrl) {
+        // Saved locally; there is simply nowhere to push yet. Say so, don't error loudly.
+        setSyncState((s) =>
+          reduceSync(s, {
+            type: 'error',
+            message: 'Saved on this phone. Turn on sync in Settings to push it to your other devices.',
+          }),
+        );
+        return;
+      }
+      setSyncState((s) => reduceSync(s, { type: 'start' }));
+      try {
+        const event = await runPushSequence(serverUrl, secretHex);
+        setSyncState((s) => reduceSync(s, event));
+      } catch (err) {
+        // A thrown transport error (network, 402, unexpected HTTP): the local
+        // save already succeeded, so surface it without losing the edit.
+        // classifySyncError keeps the server's CLI-flavored 402 copy off the
+        // screen (WS4) and tags the kind for distinct presentation.
+        const friendly = classifySyncError(err);
+        setSyncState((s) => reduceSync(s, { type: 'error', message: friendly.message, kind: friendly.kind }));
+      }
+    }),
+  [runPushSequence, trackPush]);
 
   /** Phase A enable-sync first push. See the VaultSession interface doc. */
-  const pushNow = useCallback(async (): Promise<SyncEvent> => {
-    if (isDemoRef.current) throw new Error('The demo vault never syncs.');
-    const secretHex = await loadDeviceSecretHex();
-    const serverUrl = await loadSyncServerUrl();
-    if (!secretHex) throw new Error('No device secret on this phone yet. Create or link a vault first.');
-    if (!serverUrl) throw new Error('No sync server configured yet.');
-    setSyncState((s) => reduceSync(s, { type: 'start' }));
-    try {
-      const event = await runPushSequence(serverUrl, secretHex);
-      setSyncState((s) => reduceSync(s, event));
-      return event;
-    } catch (err) {
-      const friendly = classifySyncError(err);
-      setSyncState((s) => reduceSync(s, { type: 'error', message: friendly.message, kind: friendly.kind }));
-      // Rethrow the RAW error: the enable-sync flow classifies it itself and
-      // must distinguish 402 from 403 from network.
-      throw err;
-    }
-  }, [runPushSequence]);
+  const pushNow = useCallback(async (): Promise<SyncEvent> =>
+    trackPush(async () => {
+      if (isDemoRef.current) throw new Error('The demo vault never syncs.');
+      const secretHex = await loadDeviceSecretHex();
+      const serverUrl = await loadSyncServerUrl();
+      if (!secretHex) throw new Error('No device secret on this phone yet. Create or link a vault first.');
+      if (!serverUrl) throw new Error('No sync server configured yet.');
+      setSyncState((s) => reduceSync(s, { type: 'start' }));
+      try {
+        const event = await runPushSequence(serverUrl, secretHex);
+        setSyncState((s) => reduceSync(s, event));
+        return event;
+      } catch (err) {
+        const friendly = classifySyncError(err);
+        setSyncState((s) => reduceSync(s, { type: 'error', message: friendly.message, kind: friendly.kind }));
+        // Rethrow the RAW error: the enable-sync flow classifies it itself and
+        // must distinguish 402 from 403 from network.
+        throw err;
+      }
+    }),
+  [runPushSequence, trackPush]);
 
   /**
    * A phone that synced before the post-sync hash existed has no baseline.
@@ -699,36 +791,43 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
    * is reported and the user pulls (third adversarial review, 2026-09-03).
    */
   const establishBaseline = useCallback(
-    async (serverUrl: string, secretHex: string, baseVersion: number): Promise<void> => {
-      const key = masterKeyRef.current;
-      const vault = vaultRef.current;
-      if (!key || !vault) return;
-      setSyncState((s) => reduceSync(s, { type: 'start' }));
-      const path = vaultPath();
-      // NOT marked dirty: establish runs only when nothing is unpushed. If the
-      // server refuses (it moved meanwhile) the baseline simply stays unknown
-      // and the next wake says "pull to catch up" again; marking dirty here
-      // would turn that next wake into a retry-push with conflict recovery,
-      // the exact path establish exists to avoid.
-      const result = await pushVaultMobile({
-        serverUrl,
-        deviceSecretHex: secretHex,
-        vaultPath: path,
-        baseVersion,
-        masterKey: key,
-      });
-      if (!result.ok) {
-        setSyncState((s) => reduceSync(s, { type: 'error', message: NEEDS_PULL_MESSAGE, kind: 'other' }));
-        return;
-      }
-      if (result.generation !== undefined) vault.setSyncGeneration(result.generation);
-      await saveLastSyncVersion(result.version);
-      await saveLastSyncSha(result.sha256 ?? (await hashVaultFile(path)));
-      await saveLocalDirty(false);
-      await markSyncedNow();
-      setSyncState((s) => reduceSync(s, { type: 'synced', version: result.version }));
-    },
-    [markSyncedNow],
+    async (serverUrl: string, secretHex: string, baseVersion: number): Promise<void> =>
+      trackPush(async () => {
+        const key = masterKeyRef.current;
+        if (!key || !vaultRef.current) return;
+        setSyncState((s) => reduceSync(s, { type: 'start' }));
+        const path = vaultPath();
+        // NOT marked dirty: establish runs only when nothing is unpushed. If the
+        // server refuses (it moved meanwhile) the baseline simply stays unknown
+        // and the next wake says so again; marking dirty here would turn that
+        // next wake into a retry-push with conflict recovery, the exact path
+        // establish exists to avoid.
+        //
+        // baseVersion comes from establishBaseVersion at the call site: an
+        // EMPTY server is base 0, not our stored version (fourth review).
+        // pushVaultMobile is prepare-then-upload, so the stamp-and-read here
+        // runs under the vault gate and the PUT does not.
+        const result = await pushVaultMobile({
+          serverUrl,
+          deviceSecretHex: secretHex,
+          vaultPath: path,
+          baseVersion,
+          masterKey: key,
+        });
+        if (!result.ok) {
+          setSyncState((s) => reduceSync(s, { type: 'error', message: NEEDS_PULL_MESSAGE, kind: 'other' }));
+          return;
+        }
+        // Re-read the handle: an install during the upload closes the old
+        // instance, and stamping a closed vault is the stale-handle bug.
+        if (result.generation !== undefined) vaultRef.current?.setSyncGeneration(result.generation);
+        await saveLastSyncVersion(result.version);
+        await saveLastSyncSha(result.sha256 ?? (await hashVaultFile(path)));
+        await saveLocalDirty(false);
+        await markSyncedNow();
+        setSyncState((s) => reduceSync(s, { type: 'synced', version: result.version }));
+      }),
+    [markSyncedNow, trackPush],
   );
 
   /**
@@ -777,13 +876,23 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       };
       let { currentSha, input } = await gather(null);
       let action = decideWakeAction(input);
+      // The status request said the account has NO vault on the server. The
+      // decision inputs cannot carry that (gather substitutes our own version
+      // so an unknown baseline can establish itself), but the establish push
+      // must know: base = our stored version is refused forever against an
+      // empty server, and the user is then told to pull something that is not
+      // there (ADR 0044, fourth review). Kept as its own flag.
+      let remoteAbsent = false;
       if (action === 'check') {
         const remote = await fetchRemoteStatus({ serverUrl: serverUrl as string, deviceSecretHex: secretHex as string });
+        remoteAbsent = remote === null;
         // No vault on the server: nothing to fast-forward to, and an unknown
         // baseline may establish itself against it.
         ({ currentSha, input } = await gather(remote === null ? lastSyncedVersion : remote.version));
         action = decideWakeAction(input);
       }
+      // An empty server is base 0, the same base a fresh phone's first push sends.
+      const establishBase = establishBaseVersion(remoteAbsent ? null : input.remoteVersion, lastSyncedVersion);
       if (action === 'pull') {
         setSyncState((s) => reduceSync(s, { type: 'start' }));
         let result: { pulled: boolean; version?: number };
@@ -795,10 +904,14 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
           // bytes: a dirty or changed vault pushes; nothing is ever buried.
           ({ input } = await gather(input.remoteVersion));
           const next = decideWakeAction({ ...input, status: 'idle' });
+          // Forcing status 'idle' above is what let this branch start a SECOND
+          // push beside the save's own: six PUTs for one edit (fourth review).
+          // A push already in flight owns the pill; this wake adds nothing.
+          if (pushInFlightRef.current > 0) return;
           if (next === 'retry-push') {
             await pushNow().catch(() => undefined);
           } else if (next === 'establish') {
-            await establishBaseline(serverUrl as string, secretHex as string, lastSyncedVersion);
+            await establishBaseline(serverUrl as string, secretHex as string, establishBase);
           } else if (next === 'needs-pull') {
             setSyncState((s) => reduceSync(s, { type: 'error', message: NEEDS_PULL_MESSAGE, kind: 'other' }));
           } else {
@@ -810,11 +923,16 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
           reduceSync(s, result.pulled ? { type: 'synced', version: result.version ?? lastSyncedVersion } : { type: 'synced', version: lastSyncedVersion }),
         );
       } else if (action === 'retry-push') {
+        // Never start a push from a wake while one is in flight: the running
+        // push is already carrying these bytes, and a second one duplicates
+        // the PUTs and the conflict stash (fourth review). Leave the pill to it.
+        if (pushInFlightRef.current > 0) return;
         // pushNow updates the pill itself and rethrows the raw error; the
         // wake has nothing further to do with it.
         await pushNow().catch(() => undefined);
       } else if (action === 'establish') {
-        await establishBaseline(serverUrl as string, secretHex as string, lastSyncedVersion);
+        if (pushInFlightRef.current > 0) return;
+        await establishBaseline(serverUrl as string, secretHex as string, establishBase);
       } else if (action === 'needs-pull') {
         // Unknown baseline and the server is not where we last synced: say
         // so, loudly, and let the user pull. Never push, never auto-pull.
@@ -849,10 +967,20 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
 
   const addMemory = useCallback(
     async (input: RememberInput): Promise<MemoryEntry> => {
-      const vault = vaultRef.current;
-      if (!vault) throw new Error('Unlock the vault before adding a memory.');
-      const entry = vault.remember(input); // appends to the hash chain
-      vault.save(); // serialize -> encrypt -> atomic write + .bak
+      // Under the vault gate: a save and a pull install must never interleave
+      // (ADR 0044, fourth review kill shot). The Vault handle is read INSIDE
+      // the section, never captured before it: an install that ran while this
+      // save waited closed the old instance and opened a new one, and writing
+      // through the stale handle is the very bug the gate exists to stop. The
+      // gate is released before pushAfterSave, which takes it again for the
+      // stamp-and-read (it is not reentrant).
+      const entry = await vaultGate.run(() => {
+        const vault = vaultRef.current;
+        if (!vault) throw new Error('Unlock the vault before adding a memory.');
+        const added = vault.remember(input); // appends to the hash chain
+        vault.save(); // serialize -> encrypt -> atomic write + .bak
+        return added;
+      });
       reloadEntries();
       await pushAfterSave();
       return entry;
@@ -865,12 +993,16 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       id: string,
       patch: { content?: string; scope?: string; type?: MemoryEntry['type'] },
     ): Promise<MemoryEntry> => {
-      const vault = vaultRef.current;
-      if (!vault) throw new Error('Unlock the vault before editing a memory.');
-      // editMemory supersedes by appending a new entry (append-only; the chain
-      // stays valid, ADR 0015). No-op patches return the original unchanged.
-      const entry = vault.editMemory(id, patch);
-      vault.save();
+      // Under the vault gate; the handle is read inside (see addMemory).
+      const entry = await vaultGate.run(() => {
+        const vault = vaultRef.current;
+        if (!vault) throw new Error('Unlock the vault before editing a memory.');
+        // editMemory supersedes by appending a new entry (append-only; the
+        // chain stays valid, ADR 0015). No-op patches return the original.
+        const edited = vault.editMemory(id, patch);
+        vault.save();
+        return edited;
+      });
       reloadEntries();
       await pushAfterSave();
       return entry;
@@ -880,12 +1012,16 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
 
   const forgetMemory = useCallback(
     async (id: string): Promise<MemoryEntry> => {
-      const vault = vaultRef.current;
-      if (!vault) throw new Error('Unlock the vault before forgetting a memory.');
-      // forget tombstones in place (content blanked, row + hashes kept so the
-      // chain and the "forgotten on this date" fact both survive).
-      const entry = vault.forget(id);
-      vault.save();
+      // Under the vault gate; the handle is read inside (see addMemory).
+      const entry = await vaultGate.run(() => {
+        const vault = vaultRef.current;
+        if (!vault) throw new Error('Unlock the vault before forgetting a memory.');
+        // forget tombstones in place (content blanked, row + hashes kept so the
+        // chain and the "forgotten on this date" fact both survive).
+        const forgotten = vault.forget(id);
+        vault.save();
+        return forgotten;
+      });
       reloadEntries();
       await pushAfterSave();
       return entry;
@@ -970,9 +1106,15 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
           const legacy = await loadLegacyConnectorSharedScopes();
           switch (legacy.status) {
             case 'ok': {
-              for (const scope of legacy.scopes) vault.setScopeShared(scope, true);
-              vault.markSidecarFoldDone();
-              vault.save();
+              // The vault WRITE runs under the gate (handle read inside); the
+              // SecureStore delete and the push stay outside it.
+              await vaultGate.run(() => {
+                const open = vaultRef.current;
+                if (!open) return;
+                for (const scope of legacy.scopes) open.setScopeShared(scope, true);
+                open.markSidecarFoldDone();
+                open.save();
+              });
               await clearLegacyConnectorSharedScopes();
               if (legacy.scopes.length > 0) await pushAfterSave();
               break;
@@ -980,8 +1122,12 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
             case 'absent':
               // Already-migrated 0.19.0 install (legacy key gone). Mark done so a
               // later restore of the old key cannot re-stamp shares.
-              vault.markSidecarFoldDone();
-              vault.save();
+              await vaultGate.run(() => {
+                const open = vaultRef.current;
+                if (!open) return;
+                open.markSidecarFoldDone();
+                open.save();
+              });
               break;
             case 'corrupt':
               // Leave unmarked and do not delete: a later readable value can still fold.
@@ -992,16 +1138,23 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
             }
           }
         }
-        return vault.sharedScopes();
+        // Re-read the handle: the awaits above (the gated fold-in, the
+        // SecureStore delete, the push) give a pull install room to close the
+        // instance captured at the top of this function.
+        const open = vaultRef.current;
+        return open ? open.sharedScopes() : [];
       },
       save: async (scopes: string[]): Promise<void> => {
-        const vault = vaultRef.current;
-        if (!vault) throw new Error('Unlock the vault before changing sharing.');
-        const want = new Set(scopes);
-        const have = new Set(vault.sharedScopes());
-        for (const scope of want) if (!have.has(scope)) vault.setScopeShared(scope, true);
-        for (const scope of have) if (!want.has(scope)) vault.setScopeShared(scope, false);
-        vault.save();
+        // Under the vault gate; the handle is read inside (see addMemory).
+        await vaultGate.run(() => {
+          const vault = vaultRef.current;
+          if (!vault) throw new Error('Unlock the vault before changing sharing.');
+          const want = new Set(scopes);
+          const have = new Set(vault.sharedScopes());
+          for (const scope of want) if (!have.has(scope)) vault.setScopeShared(scope, true);
+          for (const scope of have) if (!want.has(scope)) vault.setScopeShared(scope, false);
+          vault.save();
+        });
         // Same save-then-push every vault mutation runs: this is what carries
         // the mark (or unmark) to the sync server and on to the other devices.
         await pushAfterSave();
@@ -1011,15 +1164,24 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
   );
 
   const connectorDownSync = useCallback(async (): Promise<DownSyncResult> => {
-    const vault = vaultRef.current;
-    if (!vault) throw new Error('Unlock the vault before syncing app-written memories.');
+    if (!vaultRef.current) throw new Error('Unlock the vault before syncing app-written memories.');
     const { secret, server } = await connectorContext();
     let result: DownSyncResult;
     try {
       const entitlement = await maybeConnectorEntitlement(secret);
-      // downSyncConnector appends/tombstones on the open vault and save()s it
-      // BEFORE acking, so a failure after save is retried as a no-op (dedupe).
-      result = await downSyncConnector({ server, deviceSecret: secret, vault, entitlement });
+      // DELIBERATE EXCEPTION to "network outside the gate": downSyncConnector
+      // lives in @northkeep/sync and interleaves its own HTTP with vault
+      // saves, so the two halves cannot be split from here (this change is
+      // apps/mobile only). The whole call takes the gate instead. The trade is
+      // the safe one: an UNGATED save during a pull install corrupts, while a
+      // save queued behind a user-initiated down-sync is merely slow.
+      result = await vaultGate.run(async () => {
+        const vault = vaultRef.current;
+        if (!vault) throw new Error('Unlock the vault before syncing app-written memories.');
+        // downSyncConnector appends/tombstones on the open vault and save()s it
+        // BEFORE acking, so a failure after save is retried as a no-op (dedupe).
+        return downSyncConnector({ server, deviceSecret: secret, vault, entitlement });
+      });
     } finally {
       memzero(secret);
     }
@@ -1082,6 +1244,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       unlockWithBiometrics,
       lock,
       pullAndReload,
+      hasUnpushedChanges,
       pushNow,
       syncState,
       lastSyncedAt,
@@ -1114,6 +1277,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       unlockWithBiometrics,
       lock,
       pullAndReload,
+      hasUnpushedChanges,
       pushNow,
       syncState,
       lastSyncedAt,

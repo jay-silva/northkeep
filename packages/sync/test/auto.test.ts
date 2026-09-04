@@ -24,11 +24,14 @@ function fakeServer(): {
   version: () => number;
   mode: (m: Mode) => void;
   omitSha: (v: boolean) => void;
+  conflictOnce: () => void;
 } {
   let blob: Buffer | null = null;
   let version = 0;
   let mode: Mode = 'ok';
   let noSha = false;
+  /** Answer exactly one PUT with a 409 at the current version, then behave. */
+  let conflictNext = false;
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
@@ -80,6 +83,12 @@ function fakeServer(): {
       }
       if (req.method === 'PUT' && req.url === '/api/blob') {
         const base = Number(req.headers['x-base-version'] ?? '0');
+        if (conflictNext) {
+          conflictNext = false;
+          res.writeHead(409, { 'content-type': 'application/json' });
+          res.end(JSON.stringify({ version }));
+          return;
+        }
         if (base !== version) {
           res.writeHead(409, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ version }));
@@ -107,6 +116,9 @@ function fakeServer(): {
     },
     omitSha: (v) => {
       noSha = v;
+    },
+    conflictOnce: () => {
+      conflictNext = true;
     },
   };
 }
@@ -161,6 +173,25 @@ describe('AutoSync (ADR 0044)', () => {
     v.remember({ content, type: 'semantic' });
     v.save();
     v.close();
+  }
+  /** The sync generation sealed in a vault file (the live one, or a .bak beside it). */
+  function generationAt(vp: string): number {
+    const header = Vault.readHeader(vp);
+    const v = Vault.openWithKey(vp, deriveMasterKey(passphrase, deviceSecret, header.salt, header.kdf));
+    try {
+      return v.getSyncGeneration();
+    } finally {
+      v.close();
+    }
+  }
+  function contentsAt(vp: string): string[] {
+    const header = Vault.readHeader(vp);
+    const v = Vault.openWithKey(vp, deriveMasterKey(passphrase, deviceSecret, header.salt, header.kdf));
+    try {
+      return v.list().map((e) => e.content);
+    } finally {
+      v.close();
+    }
   }
   function contents(home: string): string[] {
     const v = Vault.openWithKey(vaultPath(home), keyFor(home));
@@ -476,6 +507,69 @@ describe('AutoSync (ADR 0044)', () => {
     expect(events.filter((e) => e.type === 'pushed')).toHaveLength(2);
     expect(auto.status().phase).toBe('synced');
     expect(auto.status().state).toBe('in-sync');
+  });
+
+  /**
+   * E10, the fourth review's desktop kill shot. An offline Mac with one
+   * pending write used to gain a generation per backoff tick. Once any other
+   * device pushed, the Mac was diverged with its manual pull refused as a
+   * replay ("older than this one") and its push 409ing: no way out from the
+   * UI or the CLI. One logical push must cost exactly one generation.
+   */
+  it('an offline retry loop costs exactly one generation, and the manual pull that follows still works', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    configure(homeB);
+    const { auto } = engine({ debounceMs: 20, backoffMs: [40, 40] });
+    await auto.runManual(() => pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }));
+    const genBefore = generationAt(vaultPath(homeA));
+    expect(loadSyncConfig()?.lastGeneration).toBe(genBefore);
+
+    // The server goes away with one write unpushed; the engine retries.
+    fake.mode('crash');
+    write(homeA, 'the pending local edit');
+    await sleep(500);
+    expect(auto.status().failures).toBeGreaterThanOrEqual(2); // several attempts, not one
+    auto.stop();
+    await sleep(120); // let the attempt in flight finish failing
+    fake.mode('ok');
+
+    expect(generationAt(vaultPath(homeA))).toBe(genBefore + 1);
+
+    // Another device pushes: it bumps from the same base, so its generation
+    // is no higher than ours.
+    await otherDevicePushes('remote edit');
+
+    const localBytes = fs.readFileSync(vaultPath(homeA));
+    const pull = await pullVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
+    expect(pull.ok).toBe(true);
+    expect(contents(homeA)).toContain('remote edit');
+    // The local edit is recoverable from the .bak the pull left behind.
+    const bak = `${vaultPath(homeA)}.bak`;
+    expect(fs.readFileSync(bak).equals(localBytes)).toBe(true);
+    expect(contentsAt(bak)).toContain('the pending local edit');
+  });
+
+  /**
+   * The 409 retry (another process on this machine refreshed the base) is one
+   * logical push too: the second attempt reuses the stamp the first made.
+   */
+  it('the 409 retry pushes once more without a second generation bump', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    const { auto, events } = engine({ debounceMs: 20 });
+    await auto.runManual(() => pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }));
+    const genBefore = generationAt(vaultPath(homeA));
+
+    fake.conflictOnce();
+    write(homeA, 'an edit whose first PUT is refused');
+    await sleep(400);
+
+    expect(fake.version()).toBe(2); // the retry landed
+    expect(events.filter((e) => e.type === 'pushed')).toHaveLength(1);
+    expect(generationAt(vaultPath(homeA))).toBe(genBefore + 1);
+    expect(loadSyncConfig()?.lastGeneration).toBe(genBefore + 1);
+    expect(auto.status().phase).toBe('synced');
   });
 
   it('does nothing for a vault other than the account default', async () => {

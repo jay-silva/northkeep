@@ -112,6 +112,14 @@ every milestone; if a limit is removed, say when and how.*
 - **A lock left by a crashed process is stolen as soon as its pid is dead.**
   Reads and writes are never blocked by a sync in progress; only other
   syncers wait, and only for a live one.
+- **The phone's pull-to-refresh is a manual pull.** It replaces the phone's
+  vault with the server's copy after a warning when the phone holds unpushed
+  bytes; the displaced copy is kept as a backup.
+- **A push bumps the sync generation once, not once per attempt.** The
+  generation is stamped when a push is prepared and kept if the upload fails
+  or the server answers 409 (ADR 0038); the retries that follow reuse that
+  stamp instead of adding one each, so a machine that is offline for a day
+  does not climb out of range of every other device's copy.
 - **"Last synced" is per machine.** The age shown is this device's last
   successful push or pull, not proof the other device has caught up.
 
@@ -794,14 +802,19 @@ every milestone; if a limit is removed, say when and how.*
   anything an AI app already read while the scope was shared.
 - **A hostile sync server can still pick among equal-generation forks (ADR 0038
   F3, residual N2).** 0.20.0 seals a monotonic `sync_generation` inside the
-  vault. Pull refuses a blob whose generation is older than the local vault, so
-  a replay of a strictly older authentic blob is rejected and the local file is
-  left unchanged. Two devices that increment from the same base produce two
+  vault. Pull refuses a blob whose generation is older than the copy this
+  machine last synced, so a replay of a strictly older authentic blob is
+  rejected and the local file is left unchanged. (It is measured against the
+  last synced copy, not against the local file's own stamp: a machine holding
+  a push that never landed sits above every honest blob, and comparing to it
+  would refuse the pull that unwedges it.) Two devices that increment from the same base produce two
   authentic blobs with the same generation; a scalar counter cannot order those
   forks, and a hostile sync server can still swap them. Connector tombstones
   (Decision B) are the egress backstop for a resurrected share mark. A first
   pull on a fresh machine has nothing to compare, so it cannot prove the blob
-  is the newest authentic one.
+  is the newest authentic one: it has no local vault to verify against and so
+  no key to read the installed generation with, which leaves the replay check
+  inert until the next push or pull records a baseline.
 - **Shared marks sync with the vault; a lagging device can still re-push a
   scope until the next vault sync (ADR 0038).** The shared-scope list lives
   inside the encrypted vault, so a share or unshare reaches other devices with
