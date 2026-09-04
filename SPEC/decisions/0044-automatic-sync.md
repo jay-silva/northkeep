@@ -815,7 +815,21 @@ auto-pull, conflict and pre-import copies, each with its own rolling
 so exactly one documented copy exists, and records where it went before the
 reopen runs. The two doc lines corrected.
 
-The code has cleared every executed attack across eleven rounds. What remains
+## Live verification (2026-09-04, Jay's own account)
+
+The residual every review carried is closed. From the Mac, with the repo's
+current CLI: `northkeep sync push` answered "Pushed. Server is now at
+version 9." The phone then opened and pulled; Jay: "phone just worked". A
+read-only `northkeep sync status` afterwards reported "In sync, this vault
+and the server hold the same bytes", which is the byte comparison against
+the server's `sha256` for a real account (lowercase, matching the local
+file), and `sync.json` recorded `lastGeneration: 9`, a field only the new
+three-phase `pushVault` writes. Not exercised live: a real 409 and the
+phone's new client (the phone ran the shipped 0.20.0 build). Those wait for
+the next phone build's first wake, the hand-run acceptance test.
+
+The code has cleared every executed attack across eleven rounds, and the
+hosted push and pull have now run for a real account. What remains
 is rule 2 of the review skill: one live push and one live pull against the
 hosted server with Jay's own account, which no throwaway credential can
 perform (an unknown bearer is answered 402, not 401).
