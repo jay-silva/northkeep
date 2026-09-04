@@ -233,6 +233,32 @@ function canonicalPath(p: string): string {
   }
 }
 
+/**
+ * The file a vault path really names: a symlink's target, resolved even when
+ * the target does not exist yet. A vault that is a symlink (into iCloud, onto
+ * an external disk) must survive a pull the way it survives a save: renaming
+ * the downloaded copy over the LINK replaces it with a regular file, and
+ * `isAutoSyncVault` would then call it another vault and switch automatic sync
+ * off in silence (ADR 0044 sixth review). platform-node's writeAtomic resolves
+ * the same way, so both directions land on the same file.
+ */
+export function resolveVaultLink(vaultPath: string): string {
+  try {
+    if (!fs.lstatSync(vaultPath).isSymbolicLink()) return vaultPath;
+  } catch {
+    return vaultPath;
+  }
+  try {
+    return fs.realpathSync(vaultPath);
+  } catch {
+    try {
+      return path.resolve(path.dirname(vaultPath), fs.readlinkSync(vaultPath));
+    } catch {
+      return vaultPath;
+    }
+  }
+}
+
 /** Thrown by pullVault when the local vault changed between the caller's decision and the swap. Nothing was replaced. */
 export class LocalChangedError extends Error {
   constructor() {
@@ -375,7 +401,10 @@ export async function pullVault(options: {
     }
 
     return withFileLock(options.vaultPath, () => {
-      const tmpPath = `${options.vaultPath}.pulled.tmp`;
+      // Everything the swap writes goes beside the REAL file, so a symlinked
+      // vault keeps its link (see resolveVaultLink).
+      const targetPath = resolveVaultLink(options.vaultPath);
+      const tmpPath = `${targetPath}.pulled.tmp`;
       fs.writeFileSync(tmpPath, pulled.blob, { mode: 0o600 });
       const localExists = fs.existsSync(options.vaultPath);
       // The generation sealed in the bytes that end up on disk, recorded in
@@ -440,9 +469,9 @@ export async function pullVault(options: {
             );
           }
           if (options.keepCopyAt) fs.copyFileSync(options.vaultPath, options.keepCopyAt);
-          fs.copyFileSync(options.vaultPath, `${options.vaultPath}.bak`);
+          fs.copyFileSync(options.vaultPath, `${targetPath}.bak`);
         }
-        fs.renameSync(tmpPath, options.vaultPath);
+        fs.renameSync(tmpPath, targetPath);
         if (installedGeneration === null && options.masterKey) {
           // Fresh machine: nothing was verified above, so read the generation
           // back off the installed file. Without a key we cannot, and the

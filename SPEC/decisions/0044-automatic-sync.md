@@ -606,7 +606,33 @@ Verdict: NOT CLEARED.
 - Residual: the push/pull protocol is unverified against reality; no device
   run.
 
-Fixes for this round: applied next; see below.
+## Fixes after the sixth review (2026-09-04)
+
+- Phone: the baseline is one JSON value (`nk.sync_baseline`: version, sha,
+  generation, pending stamp) written in one call; legacy keys migrate once
+  and are wiped with everything else. `localDirty` is set under the gate
+  before every save and cleared only inside the gated section that records
+  an accepted push or a completed install, and only when the accepted sha
+  still equals the file. `decideWakeAction`: dirty and moved bytes push;
+  dirty without moved bytes clears the flag; moved bytes without dirty is a
+  torn baseline and repairs (status sha equals the file: record the baseline
+  with no network write; else fast-forward, safe because nothing is
+  unpushed). A stamped-but-unlanded push is not re-stamped while the
+  baseline is null. Tested on the review's D1 and E1 scenarios: the other
+  device's write stays on the server.
+- Engine: a 402/403 pause expires after 10 minutes for wake and write on
+  every host (one attempt; a fresh refusal re-pauses); `runManual` and
+  `resume()` still lift it at once. MCP exit says "push still pending (sync
+  paused: ...)" instead of nothing. A write during a failing manual push or
+  pull is re-armed. The MCP server logs when its vault is not the default.
+- Storage: `writeAtomic` and the pull's swap write through a symlinked
+  vault path instead of replacing the link.
+- KNOWN-LIMITS corrected for all four false claims.
+- Review process: every attack harness sets `NORTHKEEP_HOME` to a temp
+  directory before touching the CLI (the third review's harness overwrote
+  the real `sync.json`; restored, nothing left the machine).
+
+Seventh review: pending at the time of writing.
 
 ## Status of this record
 

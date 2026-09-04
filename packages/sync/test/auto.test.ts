@@ -16,7 +16,7 @@ import { pullVault, pushVault } from '../src/client.js';
  * NORTHKEEP_HOME that pushes straight through pushVault.
  */
 
-type Mode = 'ok' | 'subscription' | 'crash' | 'slow-blob' | 'garbage-blob' | 'slow-put';
+type Mode = 'ok' | 'subscription' | 'crash' | 'slow-blob' | 'garbage-blob' | 'slow-put' | 'slow-fail-put';
 
 function fakeServer(): {
   server: Server;
@@ -82,6 +82,12 @@ function fakeServer(): {
         return;
       }
       if (req.method === 'PUT' && req.url === '/api/blob') {
+        // A PUT that is parked and then fails: status and blob keep working,
+        // so a write can land while a manual push is in flight and losing.
+        if (mode === 'slow-fail-put') {
+          setTimeout(() => res.writeHead(500).end(), 300);
+          return;
+        }
         const base = Number(req.headers['x-base-version'] ?? '0');
         if (conflictNext) {
           conflictNext = false;
@@ -220,7 +226,9 @@ describe('AutoSync (ADR 0044)', () => {
       process.env.NORTHKEEP_HOME = homeA;
     }
   }
-  function engine(opts: { locked?: () => boolean; debounceMs?: number; backoffMs?: number[] } = {}): {
+  function engine(
+    opts: { locked?: () => boolean; debounceMs?: number; backoffMs?: number[]; pauseRetryMs?: number } = {},
+  ): {
     auto: AutoSync;
     events: AutoSyncEvent[];
   } {
@@ -232,6 +240,8 @@ describe('AutoSync (ADR 0044)', () => {
       onEvent: (e) => events.push(e),
       debounceMs: opts.debounceMs ?? 30,
       backoffMs: opts.backoffMs ?? [40, 40],
+      // Ten minutes in production; tests that care set their own.
+      pauseRetryMs: opts.pauseRetryMs ?? 600_000,
     });
     // Wire it the way the hosts do: core's save hook feeds notifyWrite.
     unsubscribe = onVaultSave((p) => auto.notifyWrite(p));
@@ -372,6 +382,106 @@ describe('AutoSync (ADR 0044)', () => {
     await auto.flush();
     expect(fake.version()).toBe(1);
     expect(auto.status().phase).toBe('synced');
+  });
+
+  /**
+   * The sixth review's MCP kill shot. One 402 paused the engine and nothing on
+   * a headless host ever called resume(), so the session could not push again
+   * for its lifetime. A pause now expires: the next write or wake after
+   * pauseRetryMs lifts it and tries once.
+   */
+  it('a pause expires: a write more than pauseRetryMs later lifts it and pushes', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    fake.mode('subscription');
+    const { auto } = engine({ debounceMs: 20, pauseRetryMs: 300 });
+    write(homeA, 'edit');
+    await sleep(80);
+    await auto.flush();
+    expect(auto.status().phase).toBe('paused');
+    expect(auto.status().pausedReason).toBe('subscription');
+
+    fake.mode('ok');
+    // Inside the window: a write is recorded but must not retry the paywall.
+    write(homeA, 'second, still inside the pause window');
+    expect(auto.status().phase).toBe('paused');
+    await sleep(200);
+    expect(fake.version()).toBe(0);
+
+    // Past the window: the next write lifts the pause and the push goes.
+    await sleep(250);
+    write(homeA, 'third, after the pause expired');
+    expect(auto.status().pausedReason).toBeNull();
+    await sleep(200);
+    await auto.flush();
+    expect(fake.version()).toBe(1);
+    expect(auto.status().phase).toBe('synced');
+  });
+
+  it('an expired pause lets wake try once, and a fresh 402 pauses again with its own event', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    fake.mode('subscription');
+    const { auto, events } = engine({ debounceMs: 20, pauseRetryMs: 200 });
+    write(homeA, 'edit');
+    await sleep(80);
+    await auto.flush();
+    expect(auto.status().pausedReason).toBe('subscription');
+    expect(events.filter((e) => e.type === 'paused')).toHaveLength(1);
+
+    await sleep(250); // past pauseRetryMs
+    await auto.wake(); // lifts the pause, tries, and is refused again
+    expect(auto.status().phase).toBe('paused');
+    expect(auto.status().pausedReason).toBe('subscription');
+    expect(events.filter((e) => e.type === 'paused')).toHaveLength(2);
+    expect(auto.status().pushPending).toBe(true);
+    expect(fake.version()).toBe(0);
+
+    // And the re-pause starts a fresh window: an immediate wake does nothing.
+    fake.mode('ok');
+    await auto.wake();
+    expect(fake.version()).toBe(0);
+    expect(auto.status().phase).toBe('paused');
+  });
+
+  /**
+   * The sixth review's desktop flesh wound. notifyWrite is ignored while the
+   * engine runs its own operation, so a write that landed during a manual push
+   * was only ever noticed by the success path's hash check. When the push
+   * FAILED, nothing re-armed and the write sat there until something else
+   * happened to push.
+   */
+  it('a write during a FAILING manual push is re-armed, not dropped', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    configure(homeB);
+    const { auto } = engine({ debounceMs: 20 });
+    await auto.runManual(() => pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }));
+    expect(fake.version()).toBe(1);
+
+    fake.mode('slow-fail-put');
+    const failing = auto.runManual(() =>
+      pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }),
+    );
+    await sleep(120); // the PUT is parked; the vault lock is free
+    write(homeA, 'landed during the failing push');
+    await expect(failing).rejects.toThrow();
+    expect(auto.status().pushPending).toBe(true);
+    expect(auto.status().phase).toBe('pending');
+
+    fake.mode('ok');
+    await sleep(300); // the re-armed debounce fires on its own: no flush, no wake
+    expect(fake.version()).toBe(2);
+    expect(auto.status().phase).toBe('synced');
+
+    // The write really reached the server, not just the local file.
+    process.env.NORTHKEEP_HOME = homeB;
+    try {
+      expect((await pullVault({ vaultPath: vaultPath(homeB), deviceSecret })).ok).toBe(true);
+    } finally {
+      process.env.NORTHKEEP_HOME = homeA;
+    }
+    expect(contents(homeB)).toContain('landed during the failing push');
   });
 
   it('a server failure backs off and retries; a write during backoff waits; stop() clears the retry', async () => {
@@ -570,6 +680,42 @@ describe('AutoSync (ADR 0044)', () => {
     expect(generationAt(vaultPath(homeA))).toBe(genBefore + 1);
     expect(loadSyncConfig()?.lastGeneration).toBe(genBefore + 1);
     expect(auto.status().phase).toBe('synced');
+  });
+
+  /**
+   * A vault that is a symlink (into iCloud, onto an external disk) must stay a
+   * symlink. Renaming the pulled copy over the link replaced it with a regular
+   * file, and isAutoSyncVault's realpath check then read it as another vault
+   * and switched automatic sync off in silence (sixth review, hosts).
+   */
+  it('a fast-forward pull writes through a symlinked vault instead of replacing it', async () => {
+    const store = path.join(homeA, 'store');
+    fs.mkdirSync(store);
+    const real = path.join(store, 'real.nkv');
+    const v = Vault.create({ path: real, passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    v.remember({ content: 'seed', type: 'semantic' });
+    v.save();
+    v.close();
+    fs.symlinkSync(real, vaultPath(homeA));
+    configure(homeA);
+    configure(homeB);
+
+    const { auto, events } = engine({ debounceMs: 10_000 });
+    // A push saves the vault (generation bump): the link survives that too.
+    await auto.runManual(() => pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }));
+    expect(fs.lstatSync(vaultPath(homeA)).isSymbolicLink()).toBe(true);
+
+    await otherDevicePushes('written on the phone');
+    await auto.wake();
+
+    expect(events.some((e) => e.type === 'pulled')).toBe(true);
+    expect(fs.lstatSync(vaultPath(homeA)).isSymbolicLink()).toBe(true);
+    expect(fs.realpathSync(vaultPath(homeA))).toBe(fs.realpathSync(real));
+    expect(contents(homeA)).toContain('written on the phone');
+    // The displaced copy and the rolling backup both sit beside the real file.
+    expect(fs.existsSync(`${real}.auto-pull.bak`)).toBe(true);
+    expect(fs.existsSync(`${real}.bak`)).toBe(true);
+    expect(fs.existsSync(`${vaultPath(homeA)}.pulled.tmp`)).toBe(false);
   });
 
   it('does nothing for a vault other than the account default', async () => {

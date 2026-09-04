@@ -8,6 +8,7 @@ import {
   LocalChangedError,
   pullVault,
   pushVault,
+  resolveVaultLink,
   SubscriptionRequiredError,
   syncState,
   type SyncState,
@@ -28,9 +29,14 @@ import {
  * A vault with no recorded post-sync baseline counts as changed.
  *
  * Failures back off (30 s, 2 min, 10 min, then hourly). A 402 (subscription)
- * or 403 (private server) pauses the engine until `resume()`, which the manual
- * push/pull routes and the server-config route call: retrying a paywall is
- * noise. Every timer is cleared on stop() and nothing runs while locked.
+ * or 403 (private server) pauses the engine: retrying a paywall is noise.
+ * `resume()` lifts it at once, and the manual push/pull routes and the
+ * server-config route call it. A pause ALSO expires after PAUSE_RETRY_MS
+ * (10 min): the next wake() or notifyWrite() after that lifts it and makes one
+ * more attempt, because a headless host (the standalone MCP server) has no
+ * button to press and would otherwise never push again for the life of the
+ * session (sixth review, MCP kill shot). A fresh 402 pauses again for another
+ * ten minutes. Every timer is cleared on stop() and nothing runs while locked.
  */
 
 export type AutoSyncPhase = 'off' | 'idle' | 'pending' | 'syncing' | 'synced' | 'error' | 'paused';
@@ -87,10 +93,17 @@ export interface AutoSyncOptions {
   backoffMs?: readonly number[];
   /** Tests only: run for a vault that is not the account's default one. */
   allowAnyVault?: boolean;
+  /**
+   * How long a 402/403 pause holds before a wake or a write may try again.
+   * ADR 0044 default: 10 minutes. Overridable for tests only.
+   */
+  pauseRetryMs?: number;
 }
 
 const DEFAULT_DEBOUNCE_MS = 5_000;
 const DEFAULT_MAX_WAIT_MS = 30_000;
+/** How long a 402/403 pause holds before a wake or a write is allowed one more attempt. */
+export const PAUSE_RETRY_MS = 600_000;
 /** Suffix of the copy an automatic pull keeps beside the vault (never overwritten by an ordinary save). */
 export const AUTO_PULL_BACKUP_SUFFIX = '.auto-pull.bak';
 const DEFAULT_BACKOFF_MS: readonly number[] = [30_000, 120_000, 600_000, 3_600_000];
@@ -107,6 +120,9 @@ export class AutoSync {
   private readonly debounceMs: number;
   private readonly maxWaitMs: number;
   private readonly backoffMs: readonly number[];
+  private readonly pauseRetryMs: number;
+  /** When the current pause started; null when not paused. */
+  private pausedAt: number | null = null;
   /** When the oldest unpushed write happened; bounds the debounce. */
   private firstPendingAt: number | null = null;
   /** The last automatic pull, for status lines ("pulled v7, previous copy kept at ..."). */
@@ -139,6 +155,7 @@ export class AutoSync {
     this.debounceMs = options.debounceMs ?? DEFAULT_DEBOUNCE_MS;
     this.maxWaitMs = options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
     this.backoffMs = options.backoffMs ?? DEFAULT_BACKOFF_MS;
+    this.pauseRetryMs = options.pauseRetryMs ?? PAUSE_RETRY_MS;
     this.eligible = options.allowAnyVault === true || isAutoSyncVault(options.vaultPath);
   }
 
@@ -148,7 +165,8 @@ export class AutoSync {
     if (savedPath !== undefined && savedPath !== this.vaultPath) return;
     this.pushPending = true;
     if (this.firstPendingAt === null) this.firstPendingAt = Date.now();
-    if (this.pausedReason !== null) return; // stays pending until resume()
+    this.expirePause();
+    if (this.pausedReason !== null) return; // stays pending until resume() or the pause expires
     if (this.phase !== 'syncing') this.phase = 'pending';
     this.armDebounce();
   }
@@ -160,6 +178,9 @@ export class AutoSync {
    */
   wake(): Promise<void> {
     if (!this.eligible) return Promise.resolve();
+    // A pause older than pauseRetryMs is lifted here, so a headless host gets
+    // one more attempt per ten minutes instead of nothing for the session.
+    this.expirePause();
     return this.enqueue(() => this.runWake());
   }
 
@@ -184,21 +205,26 @@ export class AutoSync {
       this.phase = 'syncing';
       try {
         result = await op();
-        const config = loadSyncConfig();
-        if (config?.lastSha !== null && config?.lastSha === this.localSha()) {
+        if (this.matchesRecordedSha()) {
           this.pushPending = false;
           this.firstPendingAt = null;
           this.settle('in-sync');
         } else {
           // Bytes differ from the server's: a write landed during the manual
           // operation (or it was a pull and a write followed). Push it next.
-          this.pushPending = true;
-          if (this.firstPendingAt === null) this.firstPendingAt = Date.now();
-          this.phase = 'pending';
-          this.armDebounce();
+          this.rearmAfterManual();
         }
       } catch (err) {
-        this.phase = this.pushPending ? 'pending' : 'idle';
+        // The same question on the failure path. A write that landed while a
+        // manual Push or Pull was failing was swallowed by inOwnOperation and
+        // then dropped, because only the success path re-checked the hash
+        // (sixth review, desktop flesh wound). The op failing says nothing
+        // about whether the bytes on disk still match the server's.
+        if (this.matchesRecordedSha()) {
+          this.phase = this.pushPending ? 'pending' : 'idle';
+        } else {
+          this.rearmAfterManual();
+        }
         throw err;
       } finally {
         this.inOwnOperation = false;
@@ -211,6 +237,7 @@ export class AutoSync {
   resume(): void {
     if (this.pausedReason === null) return;
     this.pausedReason = null;
+    this.pausedAt = null;
     this.failures = 0;
     this.message = null;
     this.phase = this.pushPending ? 'pending' : 'idle';
@@ -240,6 +267,24 @@ export class AutoSync {
   }
 
   // --- internals ---
+
+  /**
+   * True when the file on disk still hashes to the sha recorded for the last
+   * sync, i.e. there is nothing to push. A missing config or a null lastSha
+   * counts as "not matching", so a machine with no baseline pushes.
+   */
+  private matchesRecordedSha(): boolean {
+    const config = loadSyncConfig();
+    return config?.lastSha !== null && config?.lastSha === this.localSha();
+  }
+
+  /** Mark a write pending after a manual operation and put it on the debounce. */
+  private rearmAfterManual(): void {
+    this.pushPending = true;
+    if (this.firstPendingAt === null) this.firstPendingAt = Date.now();
+    this.phase = 'pending';
+    this.armDebounce();
+  }
 
   private enqueue(op: () => Promise<void>): Promise<void> {
     const next = this.chain.then(op, op);
@@ -312,10 +357,9 @@ export class AutoSync {
     this.inOwnOperation = true;
     try {
       const deviceSecret = this.loadDeviceSecret();
-      const config = loadSyncConfig();
       // A write that left the bytes identical to the last sync (or a stale
       // pending flag) is nothing to upload.
-      if (config?.lastSha !== null && config?.lastSha === this.localSha()) {
+      if (this.matchesRecordedSha()) {
         this.pushPending = false;
         this.firstPendingAt = null;
         this.settle('in-sync');
@@ -384,7 +428,9 @@ export class AutoSync {
           // during the download throws LocalChangedError and nothing is
           // replaced), and keeps the displaced copy at a path ordinary saves
           // never touch, written only when the swap happens.
-          const backupPath = this.vaultPath + AUTO_PULL_BACKUP_SUFFIX;
+          // Beside the real file, which is where the rolling .bak lands too
+          // when the vault is a symlink.
+          const backupPath = resolveVaultLink(this.vaultPath) + AUTO_PULL_BACKUP_SUFFIX;
           let pulled;
           try {
             pulled = await pullVault({
@@ -498,8 +544,22 @@ export class AutoSync {
     this.scheduleRetry(retry);
   }
 
+  /**
+   * Lift a pause that has held longer than pauseRetryMs, so the next wake or
+   * write makes one more attempt. A fresh 402/403 pauses again, emitting the
+   * same 'paused' event, so a host that logs events still says why. Called
+   * only from wake() and notifyWrite(): flush() at exit must NOT lift a pause,
+   * because reporting the still-pending write is what the exit line is for.
+   */
+  private expirePause(): void {
+    if (this.pausedReason === null || this.pausedAt === null) return;
+    if (Date.now() - this.pausedAt < this.pauseRetryMs) return;
+    this.resume();
+  }
+
   private pause(reason: 'subscription' | 'private', message: string): void {
     this.pausedReason = reason;
+    this.pausedAt = Date.now();
     this.phase = 'paused';
     this.message = message;
     this.clearDebounce();

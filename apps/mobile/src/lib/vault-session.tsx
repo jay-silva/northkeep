@@ -45,14 +45,13 @@ import {
   loadLastSyncVersion,
   loadLastSyncedAt,
   loadLocalDirty,
+  loadSyncBaseline,
   loadSyncServerUrl,
   readCachedMasterKeyHex,
   saveDeviceSecretHex,
-  saveLastSyncGeneration,
-  saveLastSyncSha,
-  saveLastSyncVersion,
   saveLastSyncedAt,
   saveLocalDirty,
+  saveSyncBaseline,
   wipeAllSecrets,
 } from './secure-store';
 import {
@@ -73,6 +72,7 @@ import { classifySyncError } from './sync-errors';
 import {
   NEEDS_PULL_MESSAGE,
   conflictDisplacedOwnUpload,
+  decideRepair,
   decideWakeAction,
   establishBaseVersion,
   hasUnpushedBytes,
@@ -358,19 +358,14 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
             'No vault on this phone yet. Set your sync server in Settings, or import a vault file.',
           );
         }
-        // The version/sha/dirty bookkeeping runs under the vault gate with the
-        // install, exactly like pullAndReload: no session vault exists yet on
-        // this path, but the claim "the whole install is one gated section"
-        // must hold everywhere, not only where it is currently reachable.
+        // The baseline bookkeeping is inside pullVaultMobile now, under the
+        // vault gate with the install and written as ONE value (ADR 0044,
+        // sixth review): no pull path can record it in pieces, and no pull
+        // path can forget it.
         const pulled = await pullVaultMobile({
           serverUrl,
           deviceSecretHex: secretHex,
           vaultPath: path,
-          afterInstall: async (installed) => {
-            await saveLastSyncVersion(installed.version);
-            await saveLastSyncSha(installed.sha256);
-            await saveLocalDirty(false);
-          },
         });
         if (!pulled.ok) {
           throw new Error(
@@ -542,14 +537,11 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       // queued save gets to run. That is what closes the fourth review's second
       // phone wound: the OLD Vault instance can no longer save pre-pull content
       // over the file we just installed, because the reopen happens before the
-      // save is let through. The SecureStore bookkeeping sits here too, so a
-      // save can never see "installed file, stale baseline". Nothing in here
-      // may take the gate again (it is not reentrant).
-      afterInstall: async (installed) => {
-        await saveLastSyncVersion(installed.version);
-        await saveLastSyncSha(installed.sha256);
-        // The file on disk is now the server's copy: nothing local is unpushed.
-        await saveLocalDirty(false);
+      // save is let through. The baseline itself is written by the install
+      // (one value, one call, under this same gate), so a save can never see
+      // "installed file, stale baseline" and no half-written baseline can
+      // exist at all. Nothing in here may take the gate again (not reentrant).
+      afterInstall: async () => {
         await markSyncedNow();
         // Reopen from the freshly written file with the held key.
         vaultRef.current?.close();
@@ -714,23 +706,47 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
           },
           saveBaseVersion: async (version, sha256, generation) => {
             // NOTE: a save that queued behind this push's stamp-and-read (the
-            // gate is released before the PUT) has already rewritten the file, so
-            // this stored hash can be older than disk. That is intentional and
-            // safe: it makes `localChanged` true, and localChanged (not the
-            // dirty flag, which this clears) is the load-bearing signal that
-            // sends the next wake to a push instead of a pull.
-            await saveLastSyncVersion(version);
-            // The bytes the server accepted are the new baseline for "untouched
-            // since sync"; fall back to hashing the file if the transport did not
-            // report it. The push landed: the local save is no longer unpushed.
-            await saveLastSyncSha(sha256 ?? (await hashVaultFile(path)));
-            // The generation sealed in the bytes the server just accepted.
-            // The next push bumps against it (one bump per logical push) and
-            // the next pull's replay check compares to it. Recorded ONLY here,
-            // on acceptance: writing it on an attempt would make the phone
-            // refuse honest blobs, which is the bug this fixes.
-            if (generation !== undefined) await saveLastSyncGeneration(generation);
-            await saveLocalDirty(false);
+            // gate is released before the PUT) has already rewritten the file,
+            // so this stored hash can be older than disk. That is intentional:
+            // a wake then sees the dirty flag that save set AND moved bytes,
+            // which is the one combination that pushes. It only holds because
+            // the flag write below refuses to clear a flag that belongs to
+            // that save.
+            //
+            // Under the gate, and in this order (ADR 0044, sixth review): the
+            // dirty flag first, then ONE baseline write. If the baseline write
+            // fails, the next wake sees "bytes moved, user wrote nothing" and
+            // repairs from the server (the server holds exactly these bytes,
+            // so the repair records the baseline with no network write). The
+            // old three-key write could tear and leave the sha naming bytes
+            // the server had never seen.
+            await vaultGate.run(async () => {
+              const fileSha = await hashVaultFile(path);
+              const sha = sha256 ?? fileSha;
+              // THE FLAG IS CLEARED ONLY IF THE ACCEPTED BYTES ARE STILL THE
+              // BYTES ON DISK. The gate is released before the PUT, so a save
+              // can land while it is in flight: that save set the flag under
+              // the gate before writing, and clearing it here would erase the
+              // one signal that says its bytes are unpushed. The wake would
+              // then see moved bytes with nothing dirty, call it a torn
+              // baseline, and fast-forward the server's copy over the save.
+              // A transport that reports no sha cannot be checked, so the flag
+              // simply stays set; the next wake clears it with no network once
+              // the file hashes to the baseline.
+              if (sha256 !== undefined && fileSha === sha256) await saveLocalDirty(false);
+              await saveSyncBaseline({
+                version,
+                sha,
+                // The generation sealed in the bytes the server just accepted.
+                // The next push bumps against it (one bump per logical push)
+                // and the next pull's replay check compares to it. Recorded
+                // ONLY on acceptance: writing it on an attempt would make the
+                // phone refuse honest blobs.
+                generation: generation ?? (await loadSyncBaseline())?.generation ?? null,
+                // The push landed, so nothing is stamped-but-unlanded.
+                pendingStampSha: null,
+              });
+            });
             await markSyncedNow();
           },
         });
@@ -839,14 +855,25 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         // Re-read the handle: an install during the upload closes the old
         // instance, and stamping a closed vault is the stale-handle bug.
         if (result.generation !== undefined) vaultRef.current?.setSyncGeneration(result.generation);
-        await saveLastSyncVersion(result.version);
-        await saveLastSyncSha(result.sha256 ?? (await hashVaultFile(path)));
+        // The same gated, dirty-then-one-baseline-write the ordinary push runs.
         // The establish push is the one that most needed a baseline and never
         // set one: without this the stamp inflated on every retry, the wake
         // kept saying "pull to catch up", and the pull refused every honest
         // blob as a replay (ADR 0044, fifth review kill shot).
-        if (result.generation !== undefined) await saveLastSyncGeneration(result.generation);
-        await saveLocalDirty(false);
+        await vaultGate.run(async () => {
+          const fileSha = await hashVaultFile(path);
+          const sha = result.sha256 ?? fileSha;
+          // Same rule as the ordinary push (see saveBaseVersion): establish
+          // never sets the flag itself, so anything it cleared would be a save
+          // that landed during the upload.
+          if (result.sha256 !== undefined && fileSha === result.sha256) await saveLocalDirty(false);
+          await saveSyncBaseline({
+            version: result.version,
+            sha,
+            generation: result.generation ?? (await loadSyncBaseline())?.generation ?? null,
+            pendingStampSha: null,
+          });
+        });
         await markSyncedNow();
         setSyncState((s) => reduceSync(s, { type: 'synced', version: result.version }));
       }),
@@ -960,6 +987,84 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         // Unknown baseline and the server is not where we last synced: say
         // so, loudly, and let the user pull. Never push, never auto-pull.
         setSyncState((s) => reduceSync(s, { type: 'error', message: NEEDS_PULL_MESSAGE, kind: 'other' }));
+      } else if (action === 'clear-dirty') {
+        // The flag says a save is unpushed, but the file hashes to the
+        // baseline: the push landed and only the flag write failed. Clear it,
+        // under the gate (a save landing meanwhile must not have its flag
+        // erased) and only after re-checking the hash inside the section. No
+        // network (ADR 0044, sixth review).
+        await vaultGate.run(async () => {
+          const baseline = await loadSyncBaseline();
+          const sha = await hashVaultFile(vaultPath());
+          if (vaultUnchangedSinceSync(baseline?.sha ?? null, sha)) await saveLocalDirty(false);
+        });
+      } else if (action === 'repair') {
+        // A TORN BASELINE (ADR 0044, sixth review kill shot): the bytes on disk
+        // are not the ones the baseline names, and the user wrote none of them.
+        // Nothing here is unpushed, so nothing can be lost either way, and a
+        // push here is the exact move that rolled the other device's write off
+        // the server. Repair from the server instead.
+        if (pushInFlightRef.current > 0) return;
+        const remote = await fetchRemoteStatus({
+          serverUrl: serverUrl as string,
+          deviceSecretHex: secretHex as string,
+        });
+        // Re-read the file under the gate: the status round trip is a window,
+        // and a save inside it makes this a real edit rather than a tear.
+        const repaired = await vaultGate.run(
+          async (): Promise<{ plan: 'edited' | 'no-remote' | 'fast-forward' | 'recorded'; sha: string | null }> => {
+          const sha = await hashVaultFile(vaultPath());
+          // A save landed during the status round trip: this is a real edit
+          // after all, and its own push is already on its way. Leave it.
+          if (await loadLocalDirty()) return { plan: 'edited', sha };
+          // The account has no vault on the server: there is nothing to
+          // fast-forward to and nothing to record a baseline from. Do nothing
+          // rather than push bytes the user did not write. The next wake costs
+          // one status request, the same as an ordinary check.
+          if (remote === null) return { plan: 'no-remote', sha };
+          if (decideRepair(remote.sha256.toLowerCase(), sha) === 'fast-forward') {
+            return { plan: 'fast-forward', sha };
+          }
+          // The server holds exactly these bytes: record the baseline and stop.
+          // No network write, nothing overwritten. The generation is read off a
+          // COPY of the file (verifyBlobOpensWithKey writes a scratch file and
+          // opens THAT), never by opening the live one: openWithKey can
+          // migrate, and a migration would move the bytes out from under the
+          // sha we are about to record and leave the phone repairing forever.
+          const key = masterKeyRef.current;
+          let generation: number | null = null;
+          if (key !== null) {
+            try {
+              const opened = verifyBlobOpensWithKey(getPlatform().storage.readBytes(vaultPath()), key);
+              if (opened.ok) generation = opened.syncGeneration;
+            } catch {
+              generation = null; // an unreadable stamp is "no baseline", never a wrong one
+            }
+          }
+          await saveSyncBaseline({ version: remote.version, sha, generation, pendingStampSha: null });
+          return { plan: 'recorded', sha };
+        },
+        );
+        if (repaired.plan === 'recorded') {
+          await markSyncedNow();
+          setSyncState((s) => reduceSync(s, { type: 'synced', version: remote?.version ?? lastSyncedVersion }));
+        } else if (repaired.plan === 'fast-forward') {
+          // Nothing is unpushed, so the ordinary fast-forward pull is safe: it
+          // installs the server's copy and records the baseline itself. The
+          // hash is passed so a save landing during the download still aborts
+          // the install (LocalChangedError), exactly like the wake pull.
+          setSyncState((s) => reduceSync(s, { type: 'start' }));
+          try {
+            const result = await pullAndReload(repaired.sha ?? undefined);
+            setSyncState((s) =>
+              reduceSync(s, { type: 'synced', version: result.version ?? remote?.version ?? lastSyncedVersion }),
+            );
+          } catch (err) {
+            if (!(err instanceof LocalChangedError)) throw err;
+            // A save landed mid-download; nothing was written. Its own push
+            // carries it, and the next wake re-decides from the new bytes.
+          }
+        }
       }
     } catch (err) {
       const friendly = classifySyncError(err);
@@ -997,9 +1102,17 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       // through the stale handle is the very bug the gate exists to stop. The
       // gate is released before pushAfterSave, which takes it again for the
       // stamp-and-read (it is not reentrant).
-      const entry = await vaultGate.run(() => {
+      const entry = await vaultGate.run(async () => {
         const vault = vaultRef.current;
         if (!vault) throw new Error('Unlock the vault before adding a memory.');
+        // "The user wrote something", set UNDER THE GATE and BEFORE the save
+        // (ADR 0044, sixth review kill shot). A wake pushes only when this is
+        // set AND the bytes moved; moved bytes on their own are a torn
+        // baseline, not an edit. Setting it after the save (or outside the
+        // gate) leaves a window where the bytes have moved and the flag says
+        // the user wrote nothing, which is the repair path for an edit that
+        // really is unpushed.
+        await saveLocalDirty(true);
         const added = vault.remember(input); // appends to the hash chain
         vault.save(); // serialize -> encrypt -> atomic write + .bak
         return added;
@@ -1017,9 +1130,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       patch: { content?: string; scope?: string; type?: MemoryEntry['type'] },
     ): Promise<MemoryEntry> => {
       // Under the vault gate; the handle is read inside (see addMemory).
-      const entry = await vaultGate.run(() => {
+      const entry = await vaultGate.run(async () => {
         const vault = vaultRef.current;
         if (!vault) throw new Error('Unlock the vault before editing a memory.');
+        await saveLocalDirty(true); // under the gate, before the save (see addMemory)
         // editMemory supersedes by appending a new entry (append-only; the
         // chain stays valid, ADR 0015). No-op patches return the original.
         const edited = vault.editMemory(id, patch);
@@ -1036,9 +1150,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
   const forgetMemory = useCallback(
     async (id: string): Promise<MemoryEntry> => {
       // Under the vault gate; the handle is read inside (see addMemory).
-      const entry = await vaultGate.run(() => {
+      const entry = await vaultGate.run(async () => {
         const vault = vaultRef.current;
         if (!vault) throw new Error('Unlock the vault before forgetting a memory.');
+        await saveLocalDirty(true); // under the gate, before the save (see addMemory)
         // forget tombstones in place (content blanked, row + hashes kept so the
         // chain and the "forgotten on this date" fact both survive).
         const forgotten = vault.forget(id);
@@ -1131,9 +1246,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
             case 'ok': {
               // The vault WRITE runs under the gate (handle read inside); the
               // SecureStore delete and the push stay outside it.
-              await vaultGate.run(() => {
+              await vaultGate.run(async () => {
                 const open = vaultRef.current;
                 if (!open) return;
+                await saveLocalDirty(true); // under the gate, before the save (see addMemory)
                 for (const scope of legacy.scopes) open.setScopeShared(scope, true);
                 open.markSidecarFoldDone();
                 open.save();
@@ -1145,9 +1261,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
             case 'absent':
               // Already-migrated 0.19.0 install (legacy key gone). Mark done so a
               // later restore of the old key cannot re-stamp shares.
-              await vaultGate.run(() => {
+              await vaultGate.run(async () => {
                 const open = vaultRef.current;
                 if (!open) return;
+                await saveLocalDirty(true); // under the gate, before the save (see addMemory)
                 open.markSidecarFoldDone();
                 open.save();
               });
@@ -1169,9 +1286,10 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       },
       save: async (scopes: string[]): Promise<void> => {
         // Under the vault gate; the handle is read inside (see addMemory).
-        await vaultGate.run(() => {
+        await vaultGate.run(async () => {
           const vault = vaultRef.current;
           if (!vault) throw new Error('Unlock the vault before changing sharing.');
+          await saveLocalDirty(true); // under the gate, before the save (see addMemory)
           const want = new Set(scopes);
           const have = new Set(vault.sharedScopes());
           for (const scope of want) if (!have.has(scope)) vault.setScopeShared(scope, true);
@@ -1201,6 +1319,9 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       result = await vaultGate.run(async () => {
         const vault = vaultRef.current;
         if (!vault) throw new Error('Unlock the vault before syncing app-written memories.');
+        // downSyncConnector saves the vault inside this section, so the flag is
+        // set here, before it, like every other mutation (see addMemory).
+        await saveLocalDirty(true);
         // downSyncConnector appends/tombstones on the open vault and save()s it
         // BEFORE acking, so a failure after save is retried as a no-op (dedupe).
         return downSyncConnector({ server, deviceSecret: secret, vault, entitlement });

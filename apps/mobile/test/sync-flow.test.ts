@@ -4,13 +4,17 @@ import {
   conflictDisplacedOwnUpload,
   conflictRepushBaseVersion,
   conflictRepushSyncGeneration,
+  decideRepair,
   decideWakeAction,
   establishBaseVersion,
   hasUnpushedBytes,
   localBytesMoved,
   initialSyncState,
   nextPushGeneration,
+  nextPushGenerationWithPending,
+  parseSyncBaseline,
   pulledBlobIsReplay,
+  serializeSyncBaseline,
   syncAgeLabel,
   syncAgeLine,
   isSyncing,
@@ -19,6 +23,7 @@ import {
   runSyncAfterSave,
   syncStatusLabel,
   type PushResultLike,
+  type SyncBaseline,
   type WakeInput,
   type SyncAfterSavePorts,
   type SyncState,
@@ -331,19 +336,27 @@ describe('decideWakeAction (ADR 0044 fast-forward rule)', () => {
     lastSyncedVersion: 3,
   };
 
-  it('bytes decide: a vault that does not hash to the post-sync baseline pushes, never pulls', () => {
+  it('BOTH signals push: the user wrote something AND the bytes moved', () => {
     // The onboarding path from the second adversarial review: memories saved
-    // before sync was configured (localDirty never set on the old code), first
-    // push failed on the paywall, the Mac pushed v4, the phone reopens.
+    // before sync was configured, first push failed on the paywall, the Mac
+    // pushed v4, the phone reopens. The save set the dirty flag under the gate
+    // before it wrote, so both signals are present and it pushes.
+    const edited = { ...ready, localDirty: true, localChanged: true };
     expect(
-      decideWakeAction({ ...ready, status: 'error', errorKind: undefined, localDirty: false, localChanged: true, lastSyncedVersion: 0, remoteVersion: 4 }),
+      decideWakeAction({ ...edited, status: 'error', errorKind: undefined, lastSyncedVersion: 0, remoteVersion: 4 }),
     ).toBe('retry-push');
-    expect(decideWakeAction({ ...ready, localChanged: true, remoteVersion: 9 })).toBe('retry-push');
-    expect(decideWakeAction({ ...ready, localChanged: true, remoteVersion: null })).toBe('retry-push');
-    expect(decideWakeAction({ ...ready, localChanged: true, status: 'idle', remoteVersion: 9 })).toBe('retry-push');
+    expect(decideWakeAction({ ...edited, remoteVersion: 9 })).toBe('retry-push');
+    expect(decideWakeAction({ ...edited, remoteVersion: null })).toBe('retry-push');
+    expect(decideWakeAction({ ...edited, status: 'idle', remoteVersion: 9 })).toBe('retry-push');
     // Paywall and private beta still win: the user acts, not a timer.
-    expect(decideWakeAction({ ...ready, localChanged: true, status: 'error', errorKind: 'subscription-required' })).toBe('none');
-    expect(decideWakeAction({ ...ready, localChanged: true, status: 'error', errorKind: 'not-enabled' })).toBe('none');
+    expect(decideWakeAction({ ...edited, status: 'error', errorKind: 'subscription-required' })).toBe('none');
+    expect(decideWakeAction({ ...edited, status: 'error', errorKind: 'not-enabled' })).toBe('none');
+    // MOVED BYTES ALONE ARE NOT AN EDIT (sixth review kill shot). They are a
+    // torn baseline, and pushing them uploads a vault holding nothing the user
+    // wrote; the 409 and the LWW re-push then roll the other device back.
+    expect(decideWakeAction({ ...ready, localDirty: false, localChanged: true, remoteVersion: 9 })).toBe('repair');
+    expect(decideWakeAction({ ...ready, localDirty: false, localChanged: true, remoteVersion: null })).toBe('repair');
+    expect(decideWakeAction({ ...ready, localDirty: false, localChanged: true, lastSyncedVersion: 0, remoteVersion: 4 })).toBe('repair');
     // Untouched bytes: the existing fast-forward rule.
     expect(decideWakeAction({ ...ready, localChanged: false, remoteVersion: 9 })).toBe('pull');
     expect(decideWakeAction({ ...ready, localChanged: false, remoteVersion: null })).toBe('check');
@@ -418,13 +431,22 @@ describe('decideWakeAction (ADR 0044 fast-forward rule)', () => {
       expect(decideWakeAction({ ...ready, status: 'error', errorKind, localDirty: false, remoteVersion: null })).toBe('check');
       expect(decideWakeAction({ ...ready, status: 'error', errorKind, localDirty: false, remoteVersion: 9 })).toBe('pull');
       expect(decideWakeAction({ ...ready, status: 'error', errorKind, localDirty: false, remoteVersion: ready.lastSyncedVersion })).toBe('none');
-      expect(decideWakeAction({ ...ready, status: 'error', errorKind, localDirty: true, remoteVersion: 9 })).toBe('retry-push');
+      // Dirty with UNMOVED bytes: the push landed and only the flag write
+      // failed. Clear the flag, no network.
+      expect(decideWakeAction({ ...ready, status: 'error', errorKind, localDirty: true, remoteVersion: 9 })).toBe('clear-dirty');
+      expect(
+        decideWakeAction({ ...ready, status: 'error', errorKind, localDirty: true, localChanged: true, remoteVersion: 9 }),
+      ).toBe('retry-push');
     }
   });
 
-  it('retries the push when a local save is still unpushed, even if the server looks ahead', () => {
-    expect(decideWakeAction({ ...ready, localDirty: true, remoteVersion: 9 })).toBe('retry-push');
-    expect(decideWakeAction({ ...ready, status: 'idle', localDirty: true, remoteVersion: null })).toBe('retry-push');
+  it('retries the push when a local save is still unpushed AND its bytes are on disk, even if the server looks ahead', () => {
+    const unpushed = { ...ready, localDirty: true, localChanged: true };
+    expect(decideWakeAction({ ...unpushed, remoteVersion: 9 })).toBe('retry-push');
+    expect(decideWakeAction({ ...unpushed, status: 'idle', remoteVersion: null })).toBe('retry-push');
+    // The flag without the bytes is a stale flag, not an unpushed save.
+    expect(decideWakeAction({ ...ready, localDirty: true, remoteVersion: 9 })).toBe('clear-dirty');
+    expect(decideWakeAction({ ...ready, status: 'idle', localDirty: true, remoteVersion: null })).toBe('clear-dirty');
   });
 
   it('asks for a status check before deciding when the remote version is unknown', () => {
@@ -568,7 +590,16 @@ describe('pulledBlobIsReplay (the yardstick is lastSyncGeneration, not the local
  * generation only on the pushes the fake server accepts.
  */
 function fakePhone(initial: { stamp: number; lastSyncGeneration: number | null }) {
-  const disk = { stamp: initial.stamp, lastSyncGeneration: initial.lastSyncGeneration };
+  const disk = {
+    stamp: initial.stamp,
+    lastSyncGeneration: initial.lastSyncGeneration,
+    /** The persisted pending stamp (sixth review): part of the one baseline value. */
+    pendingStampSha: null as string | null,
+    /** Stand-in for the vault's user content, so a real save moves the file hash. */
+    content: 'v1',
+  };
+  /** The file hash: content plus the generation stamp, exactly what a stamp-and-save moves. */
+  const fileSha = () => `${disk.content}@${disk.stamp}`;
   let attempts = 0;
   /** Queue of server outcomes: 'fail' throws (a 500), a number is the accepted version. */
   function ports(outcomes: Array<'fail' | number>): SyncAfterSavePorts {
@@ -578,9 +609,16 @@ function fakePhone(initial: { stamp: number; lastSyncGeneration: number | null }
       push: async (_base, opts) => {
         let generation: number | undefined;
         if (!opts?.skipGenerationBump) {
-          const next = nextPushGeneration(disk.stamp, disk.lastSyncGeneration);
+          // Exactly what preparePushMobile runs.
+          const next = nextPushGenerationWithPending({
+            currentStamp: disk.stamp,
+            lastSyncGeneration: disk.lastSyncGeneration,
+            currentSha: fileSha(),
+            pendingStampSha: disk.pendingStampSha,
+          });
           if (next !== null) disk.stamp = next;
           generation = disk.stamp;
+          if (disk.lastSyncGeneration === null) disk.pendingStampSha = fileSha();
         }
         const outcome = outcomes[attempts++]!;
         if (outcome === 'fail') throw new Error('Sync server returned HTTP 500 on push.');
@@ -593,11 +631,14 @@ function fakePhone(initial: { stamp: number; lastSyncGeneration: number | null }
       applyConflictRepushGeneration: () => {},
       stashRemote: () => {},
       saveBaseVersion: async (_v, _sha, generation) => {
+        // The one baseline write: the generation lands and the pending stamp
+        // is cleared, because those bytes are no longer unlanded.
         if (generation !== undefined) disk.lastSyncGeneration = generation;
+        disk.pendingStampSha = null;
       },
     };
   }
-  return { disk, ports, attemptCount: () => attempts };
+  return { disk, ports, fileSha, attemptCount: () => attempts };
 }
 
 describe('four failed attempts then a success stamp EXACTLY one bump (the kill shot)', () => {
@@ -624,9 +665,9 @@ describe('four failed attempts then a success stamp EXACTLY one bump (the kill s
   it('the accepted bytes set the baseline, so the NEXT logical push bumps again (once)', async () => {
     const phone = fakePhone({ stamp: 5, lastSyncGeneration: 5 });
     await runSyncAfterSave(phone.ports([7]));
-    expect(phone.disk).toEqual({ stamp: 6, lastSyncGeneration: 6 });
+    expect(phone.disk).toMatchObject({ stamp: 6, lastSyncGeneration: 6, pendingStampSha: null });
     await runSyncAfterSave(phone.ports([8]));
-    expect(phone.disk).toEqual({ stamp: 7, lastSyncGeneration: 7 });
+    expect(phone.disk).toMatchObject({ stamp: 7, lastSyncGeneration: 7, pendingStampSha: null });
   });
 });
 
@@ -640,7 +681,12 @@ describe('the fifth review A2 scenario: a failed establish must not wedge the pu
     for (let i = 0; i < 3; i += 1) {
       await expect(runSyncAfterSave(phone.ports(['fail', 'fail', 'fail']))).rejects.toThrow(/HTTP 500/);
     }
-    expect(phone.disk.stamp).toBe(8);
+    // ONE bump for three failed establishes (ADR 0044, sixth review). The
+    // pending stamp is what holds it: the first attempt stamped 6 and recorded
+    // the hash of those bytes, and the next two found the file still hashing
+    // to it. Before the fix this read 8, and an inflated stamp is what floated
+    // the phone above every honest blob on the server.
+    expect(phone.disk.stamp).toBe(6);
     expect(phone.disk.lastSyncGeneration).toBeNull(); // nothing landed, nothing recorded
 
     // The Mac then pushes: server version 9, blob at sync generation 2.
@@ -753,5 +799,428 @@ describe('the conflict re-push records a baseline even though it skipped the bum
     await runSyncAfterSave(ports);
     // max(6, 8) + 1 = 9, the value written to the file before the re-push.
     expect(recorded).toEqual([9]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// ADR 0044, SIXTH REVIEW KILL SHOT (phone): the torn baseline.
+//
+// The install wrote the server's bytes and the baseline bookkeeping after it
+// failed or was interrupted (one SecureStore write throwing is enough; the
+// device locking during a wake pull will do it). The stored sha then named the
+// OLD bytes, `localChanged` read true, and the wake pushed a vault holding
+// nothing the user wrote. The 409 and the M6-2 last-writer-wins re-push rolled
+// the other device's committed write off the server, and both pills said
+// Synced.
+// ---------------------------------------------------------------------------
+
+describe('the baseline is ONE value: parse, serialize, and what a bad one reads as', () => {
+  const sha = 'a'.repeat(64);
+  const other = 'b'.repeat(64);
+
+  it('round-trips version, sha, generation and the pending stamp', () => {
+    const baseline: SyncBaseline = { version: 7, sha, generation: 3, pendingStampSha: other };
+    expect(parseSyncBaseline(serializeSyncBaseline(baseline))).toEqual(baseline);
+    expect(parseSyncBaseline(serializeSyncBaseline({ version: 0, sha: null, generation: null }))).toEqual({
+      version: 0,
+      sha: null,
+      generation: null,
+      pendingStampSha: null,
+    });
+  });
+
+  it('bad JSON and bad fields read as NULL, never as a partial baseline', () => {
+    // Null is "baseline unknown", which the wake routes to establish/needs-pull
+    // and never to a push. A HALF-trusted baseline is the torn state this value
+    // exists to make impossible, so nothing is salvaged from a bad one.
+    expect(parseSyncBaseline(null)).toBeNull();
+    expect(parseSyncBaseline('')).toBeNull();
+    expect(parseSyncBaseline('{')).toBeNull();
+    expect(parseSyncBaseline('"a string"')).toBeNull();
+    expect(parseSyncBaseline('[1,2]')).toBeNull();
+    expect(parseSyncBaseline('null')).toBeNull();
+    expect(parseSyncBaseline(JSON.stringify({ sha, generation: 1 }))).toBeNull(); // no version
+    expect(parseSyncBaseline(JSON.stringify({ version: -1, sha, generation: 1 }))).toBeNull();
+    expect(parseSyncBaseline(JSON.stringify({ version: 1.5, sha, generation: 1 }))).toBeNull();
+    expect(parseSyncBaseline(JSON.stringify({ version: '3', sha, generation: 1 }))).toBeNull();
+    expect(parseSyncBaseline(JSON.stringify({ version: 3, sha: 'not-a-hash', generation: 1 }))).toBeNull();
+    expect(parseSyncBaseline(JSON.stringify({ version: 3, sha: sha.toUpperCase(), generation: 1 }))).toBeNull();
+    expect(parseSyncBaseline(JSON.stringify({ version: 3, sha, generation: -2 }))).toBeNull();
+    expect(parseSyncBaseline(JSON.stringify({ version: 3, sha, generation: 'x' }))).toBeNull();
+    expect(parseSyncBaseline(JSON.stringify({ version: 3, sha, generation: 1, pendingStampSha: 'nope' }))).toBeNull();
+    // Generation 0 is a REAL baseline and must survive: reading it as null
+    // would make the replay check inert on a freshly created vault.
+    expect(parseSyncBaseline(JSON.stringify({ version: 3, sha, generation: 0 }))).toEqual({
+      version: 3,
+      sha,
+      generation: 0,
+      pendingStampSha: null,
+    });
+  });
+});
+
+describe('decideRepair (how a torn baseline is healed)', () => {
+  const sha = 'c'.repeat(64);
+  it('records the baseline when the server holds exactly these bytes: no network write', () => {
+    expect(decideRepair(sha, sha)).toBe('record-baseline');
+  });
+  it('fast-forwards otherwise, which is safe because nothing here is unpushed', () => {
+    expect(decideRepair('d'.repeat(64), sha)).toBe('fast-forward');
+    expect(decideRepair(null, sha)).toBe('fast-forward');
+    expect(decideRepair(sha, null)).toBe('fast-forward');
+    expect(decideRepair('', sha)).toBe('fast-forward'); // a server that reports no sha
+  });
+});
+
+describe('the decideWakeAction matrix: dirty x changed x baselineKnown', () => {
+  const base: WakeInput = {
+    unlocked: true,
+    configured: true,
+    status: 'synced',
+    localDirty: false,
+    localChanged: false,
+    baselineKnown: true,
+    remoteVersion: null,
+    lastSyncedVersion: 3,
+  };
+
+  it('every combination, against the four invariants the kill shot turns on', () => {
+    for (const localDirty of [false, true]) {
+      for (const localChanged of [false, true]) {
+        for (const baselineKnown of [false, true]) {
+          for (const remoteVersion of [null, 0, 3, 9]) {
+            const input = { ...base, localDirty, localChanged, baselineKnown, remoteVersion };
+            const action = decideWakeAction(input);
+
+            // 1. A PULL only when the vault is clean, the baseline is known,
+            //    and the server is ahead. Fast-forward only, as ever.
+            if (action === 'pull') {
+              expect({ localDirty, localChanged, baselineKnown }).toEqual({
+                localDirty: false,
+                localChanged: false,
+                baselineKnown: true,
+              });
+              expect(remoteVersion !== null && remoteVersion > input.lastSyncedVersion).toBe(true);
+            }
+            // 2. A PUSH only when the user wrote something AND the bytes moved.
+            if (action === 'retry-push') expect({ localDirty, localChanged }).toEqual({ localDirty: true, localChanged: true });
+            // 3. REPAIR only on the torn-baseline shape.
+            if (action === 'repair') {
+              expect({ localDirty, localChanged, baselineKnown }).toEqual({
+                localDirty: false,
+                localChanged: true,
+                baselineKnown: true,
+              });
+            }
+            // 4. CLEAR-DIRTY exactly when the flag is set and the bytes are not.
+            if (action === 'clear-dirty') expect({ localDirty, localChanged }).toEqual({ localDirty: true, localChanged: false });
+
+            // And the converses, so a rule cannot go missing rather than wrong.
+            if (localDirty && localChanged) expect(action).toBe('retry-push');
+            if (localDirty && !localChanged) expect(action).toBe('clear-dirty');
+            if (!localDirty && localChanged && baselineKnown) expect(action).toBe('repair');
+          }
+        }
+      }
+    }
+  });
+
+  it('an unknown baseline still establishes or asks: the rules the third and fourth reviews set', () => {
+    const unknown = { ...base, baselineKnown: false, localChanged: true };
+    expect(decideWakeAction({ ...unknown, remoteVersion: null })).toBe('check');
+    expect(decideWakeAction({ ...unknown, remoteVersion: 3 })).toBe('establish');
+    expect(decideWakeAction({ ...unknown, remoteVersion: 9 })).toBe('needs-pull');
+    // Never repair on an unknown baseline: there is no baseline to be torn.
+    for (const remoteVersion of [null, 0, 3, 9]) {
+      expect(decideWakeAction({ ...unknown, remoteVersion })).not.toBe('repair');
+    }
+  });
+
+  it('locked, unconfigured, syncing and the paywall still win over every combination', () => {
+    for (const localDirty of [false, true]) {
+      for (const localChanged of [false, true]) {
+        const on = { ...base, localDirty, localChanged, remoteVersion: 9 };
+        expect(decideWakeAction({ ...on, unlocked: false })).toBe('none');
+        expect(decideWakeAction({ ...on, configured: false })).toBe('none');
+        expect(decideWakeAction({ ...on, status: 'syncing' })).toBe('none');
+        expect(decideWakeAction({ ...on, status: 'error', errorKind: 'subscription-required' })).toBe('none');
+        expect(decideWakeAction({ ...on, status: 'error', errorKind: 'not-enabled' })).toBe('none');
+      }
+    }
+  });
+});
+
+/**
+ * A two-device world driven through the SHIPPED pure decisions
+ * (decideWakeAction, decideRepair, vaultUnchangedSinceSync, parse/serialize),
+ * with a fake SecureStore whose baseline write can be made to throw exactly
+ * once. That single throw is the whole defect now that the baseline is one
+ * value.
+ *
+ * The claim under test is about the SERVER: the other device's committed write
+ * must still be there afterwards.
+ */
+function makeWorld(options: { serverContent: string; serverVersion: number; phoneFile: string }) {
+  // A stand-in hash: hex, 64 chars, and distinct per content, which is all the
+  // decisions look at (parseSyncBaseline rejects anything that is not a hash).
+  const shaOf = (content: string) => Buffer.from(content, 'utf8').toString('hex').padEnd(64, '0').slice(0, 64);
+  const server = { version: options.serverVersion, content: options.serverContent };
+  const phone = { file: options.phoneFile };
+  const store = { baseline: null as string | null, dirty: false };
+  let failNextBaselineWrite = false;
+  const actions: string[] = [];
+
+  function writeBaseline(next: SyncBaseline): void {
+    if (failNextBaselineWrite) {
+      failNextBaselineWrite = false;
+      // One SecureStore setItemAsync throw. The device locking mid-wake does it.
+      throw new Error('SecureStore write failed');
+    }
+    store.baseline = serializeSyncBaseline(next);
+  }
+
+  /** The gated install, in the order installPulledBlob runs it: bytes, dirty, baseline. */
+  function install(): void {
+    phone.file = server.content;
+    store.dirty = false;
+    writeBaseline({ version: server.version, sha: shaOf(server.content), generation: null, pendingStampSha: null });
+  }
+
+  /** A user edit: the flag is set under the gate BEFORE the save, then the bytes move. */
+  function edit(content: string): void {
+    store.dirty = true;
+    phone.file = content;
+  }
+
+  function wake(): string {
+    const baseline = parseSyncBaseline(store.baseline);
+    const currentSha = shaOf(phone.file);
+    const action = decideWakeAction({
+      unlocked: true,
+      configured: true,
+      status: 'idle',
+      localDirty: store.dirty,
+      localChanged: !vaultUnchangedSinceSync(baseline?.sha ?? null, currentSha),
+      baselineKnown: (baseline?.sha ?? null) !== null,
+      remoteVersion: server.version,
+      lastSyncedVersion: baseline?.version ?? 0,
+    });
+    actions.push(action);
+    if (action === 'pull') {
+      install();
+    } else if (action === 'clear-dirty') {
+      store.dirty = false;
+    } else if (action === 'repair') {
+      if (decideRepair(shaOf(server.content), currentSha) === 'record-baseline') {
+        writeBaseline({ version: server.version, sha: currentSha, generation: null, pendingStampSha: null });
+      } else {
+        install();
+      }
+    } else if (action === 'retry-push') {
+      finishPush(pushPrepared());
+    }
+    return action;
+  }
+
+  /**
+   * The upload half: the bytes are read and hashed under the gate, the gate is
+   * RELEASED, and the PUT goes out. On a 409 the M6-2 last-writer-wins re-push
+   * puts the phone's bytes on the server either way. This is the move that must
+   * not happen for a vault holding nothing the user wrote.
+   */
+  function pushPrepared(): { sha: string; version: number } {
+    const sha = shaOf(phone.file);
+    server.content = phone.file;
+    server.version += 1;
+    return { sha, version: server.version };
+  }
+
+  /** The bookkeeping after the server accepts, in the shipped order and with its guard. */
+  function finishPush(accepted: { sha: string; version: number }): void {
+    // Only if the accepted bytes are still the bytes on disk: a save that
+    // landed during the upload owns the flag.
+    if (shaOf(phone.file) === accepted.sha) store.dirty = false;
+    writeBaseline({ version: accepted.version, sha: accepted.sha, generation: null, pendingStampSha: null });
+  }
+
+  return {
+    server,
+    phone,
+    store,
+    actions,
+    wake,
+    edit,
+    shaOf,
+    pushPrepared,
+    finishPush,
+    failBaselineWriteOnce: () => {
+      failNextBaselineWrite = true;
+    },
+  };
+}
+
+describe('D1: a wake pull whose baseline write fails must NOT push the installed bytes back', () => {
+  it('repairs from the server, and the other device\'s write is still there', () => {
+    // The phone is in sync at version 3. The Mac then commits a write: the
+    // server is at version 4 holding "mac-write".
+    const world = makeWorld({ serverContent: 'mac-write', serverVersion: 4, phoneFile: 'shared-v3' });
+    world.store.baseline = serializeSyncBaseline({
+      version: 3,
+      sha: world.shaOf('shared-v3'),
+      generation: 2,
+      pendingStampSha: null,
+    });
+
+    // Wake 1: clean and behind, so it fast-forwards. The bytes land, and then
+    // the baseline write throws (the device locked).
+    world.failBaselineWriteOnce();
+    expect(() => world.wake()).toThrow(/SecureStore/);
+    expect(world.actions).toEqual(['pull']);
+    expect(world.phone.file).toBe('mac-write'); // the install happened
+    expect(parseSyncBaseline(world.store.baseline)?.sha).toBe(world.shaOf('shared-v3')); // TORN: names the old bytes
+
+    // Wake 2: the bytes moved but the user wrote nothing. This is the wake that
+    // used to push, 409, and roll the Mac's write off the server.
+    expect(world.wake()).toBe('repair');
+    expect(world.actions).not.toContain('retry-push');
+    // THE CLAIM: the Mac's committed write is still on the server, untouched,
+    // and the server version never moved.
+    expect(world.server).toEqual({ version: 4, content: 'mac-write' });
+    // And the baseline is healed with no network write, so the phone settles.
+    expect(parseSyncBaseline(world.store.baseline)).toEqual({
+      version: 4,
+      sha: world.shaOf('mac-write'),
+      generation: null,
+      pendingStampSha: null,
+    });
+    expect(world.wake()).toBe('none');
+  });
+
+  it('a REAL unpushed edit still pushes: the fix does not swallow the user\'s write', () => {
+    const world = makeWorld({ serverContent: 'shared-v3', serverVersion: 3, phoneFile: 'shared-v3' });
+    world.store.baseline = serializeSyncBaseline({
+      version: 3,
+      sha: world.shaOf('shared-v3'),
+      generation: 2,
+      pendingStampSha: null,
+    });
+    world.edit('phone-memory'); // dirty set under the gate, before the save
+    expect(world.wake()).toBe('retry-push');
+    expect(world.server).toEqual({ version: 4, content: 'phone-memory' });
+    expect(world.wake()).toBe('none');
+  });
+
+  it('a push that landed with only its dirty-flag write lost clears the flag, without a network call', () => {
+    const world = makeWorld({ serverContent: 'phone-memory', serverVersion: 4, phoneFile: 'phone-memory' });
+    world.store.baseline = serializeSyncBaseline({
+      version: 4,
+      sha: world.shaOf('phone-memory'),
+      generation: 3,
+      pendingStampSha: null,
+    });
+    world.store.dirty = true; // the flag write failed after the baseline landed
+    expect(world.wake()).toBe('clear-dirty');
+    expect(world.server).toEqual({ version: 4, content: 'phone-memory' }); // no push
+    expect(world.store.dirty).toBe(false);
+    expect(world.wake()).toBe('none');
+  });
+});
+
+describe('a save that lands DURING a push keeps its unpushed flag', () => {
+  it('the accepted push does not clear the later save\'s flag, and the next wake pushes it', () => {
+    // The gate is released before the PUT, so a save can land while it is in
+    // flight. If the push's bookkeeping clears that save's flag, the next wake
+    // sees moved bytes with nothing dirty, calls it a torn baseline, and
+    // fast-forwards the server's copy over the save.
+    const world = makeWorld({ serverContent: 'shared-v3', serverVersion: 3, phoneFile: 'shared-v3' });
+    world.store.baseline = serializeSyncBaseline({
+      version: 3,
+      sha: world.shaOf('shared-v3'),
+      generation: 2,
+      pendingStampSha: null,
+    });
+    world.edit('A');
+    const accepted = world.pushPrepared(); // bytes read and uploaded; gate released
+    world.edit('B'); // the save lands while the PUT is in flight
+    world.finishPush(accepted); // the server accepted A's bytes
+    expect(world.store.dirty).toBe(true); // B's flag survives
+
+    expect(world.wake()).toBe('retry-push');
+    expect(world.server.content).toBe('B');
+    expect(world.phone.file).toBe('B');
+    expect(world.wake()).toBe('none');
+  });
+});
+
+describe('E1: a torn baseline while the server has moved on again fast-forwards', () => {
+  it('installs the server copy instead of pushing, and the server is never written', () => {
+    const world = makeWorld({ serverContent: 'mac-write', serverVersion: 4, phoneFile: 'shared-v3' });
+    world.store.baseline = serializeSyncBaseline({
+      version: 3,
+      sha: world.shaOf('shared-v3'),
+      generation: 2,
+      pendingStampSha: null,
+    });
+    world.failBaselineWriteOnce();
+    expect(() => world.wake()).toThrow(/SecureStore/);
+
+    // The Mac commits again while the phone sits torn: the server's sha no
+    // longer equals the phone's file, so recording the baseline would be a lie.
+    world.server.content = 'mac-write-2';
+    world.server.version = 5;
+
+    expect(world.wake()).toBe('repair');
+    expect(world.actions).not.toContain('retry-push');
+    // Nothing was pushed; the phone fast-forwarded onto the Mac's newer write.
+    expect(world.server).toEqual({ version: 5, content: 'mac-write-2' });
+    expect(world.phone.file).toBe('mac-write-2');
+    expect(parseSyncBaseline(world.store.baseline)?.version).toBe(5);
+    expect(world.wake()).toBe('none');
+  });
+});
+
+describe('the pending stamp: a failed establish with no baseline bumps exactly once', () => {
+  const sha = (n: string) => n.repeat(64).slice(0, 64);
+
+  it('nextPushGenerationWithPending does not re-bump bytes an earlier attempt stamped', () => {
+    // No baseline, nothing stamped yet: bump.
+    expect(
+      nextPushGenerationWithPending({ currentStamp: 5, lastSyncGeneration: null, currentSha: sha('a'), pendingStampSha: null }),
+    ).toBe(6);
+    // The same bytes an earlier attempt stamped: do not bump again.
+    expect(
+      nextPushGenerationWithPending({ currentStamp: 6, lastSyncGeneration: null, currentSha: sha('a'), pendingStampSha: sha('a') }),
+    ).toBeNull();
+    // A real save moved the file: bump once for the new logical push.
+    expect(
+      nextPushGenerationWithPending({ currentStamp: 6, lastSyncGeneration: null, currentSha: sha('b'), pendingStampSha: sha('a') }),
+    ).toBe(7);
+    // With a baseline the pending stamp is irrelevant: nextPushGeneration rules.
+    expect(
+      nextPushGenerationWithPending({ currentStamp: 5, lastSyncGeneration: 5, currentSha: sha('a'), pendingStampSha: sha('a') }),
+    ).toBe(6);
+    expect(
+      nextPushGenerationWithPending({ currentStamp: 7, lastSyncGeneration: 5, currentSha: sha('a'), pendingStampSha: null }),
+    ).toBeNull();
+    // No file to hash: fall back to the old rule rather than skipping a bump.
+    expect(
+      nextPushGenerationWithPending({ currentStamp: 5, lastSyncGeneration: null, currentSha: null, pendingStampSha: sha('a') }),
+    ).toBe(6);
+  });
+
+  it('three failed establishes leave the stamp one above where it started', async () => {
+    const phone = fakePhone({ stamp: 5, lastSyncGeneration: null });
+    for (let i = 0; i < 3; i += 1) {
+      await expect(runSyncAfterSave(phone.ports(['fail', 'fail', 'fail']))).rejects.toThrow(/HTTP 500/);
+      expect(phone.disk.stamp).toBe(6);
+      expect(phone.disk.lastSyncGeneration).toBeNull();
+    }
+    // The fourth attempt lands: the baseline is recorded and the pending stamp
+    // is cleared, so the NEXT logical push bumps again, once.
+    const event = await runSyncAfterSave(phone.ports(['fail', 'fail', 'fail', 9, 10]));
+    expect(event).toEqual({ type: 'synced', version: 9 });
+    expect(phone.disk).toMatchObject({ stamp: 6, lastSyncGeneration: 6, pendingStampSha: null });
+    await runSyncAfterSave(phone.ports(['fail', 'fail', 'fail', 9, 10]));
+    expect(phone.disk).toMatchObject({ stamp: 7, lastSyncGeneration: 7 });
   });
 });

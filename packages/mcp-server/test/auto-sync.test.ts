@@ -1,5 +1,9 @@
-import { describe, expect, it } from 'vitest';
-import { describeEvent, flushBounded } from '../src/auto-sync.js';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { defaultVaultPath } from '@northkeep/core';
+import { createStandaloneAutoSync, describeEvent, flushBounded, OTHER_VAULT_NOTICE } from '../src/auto-sync.js';
 
 /**
  * ADR 0044 in the standalone stdio server: shutdown gives a pending push a
@@ -9,12 +13,17 @@ import { describeEvent, flushBounded } from '../src/auto-sync.js';
 describe('flushBounded', () => {
   function fakeEngine(
     flushMs: number | 'hang',
-    phase: 'pending' | 'idle' | 'syncing' = 'pending',
+    phase: 'pending' | 'idle' | 'syncing' | 'paused' = 'pending',
     pushPending: boolean = phase === 'pending',
+    pausedReason: 'subscription' | 'private' | null = null,
   ): {
     flush: () => Promise<void>;
     stop: () => void;
-    status: () => { phase: 'pending' | 'idle' | 'syncing'; pushPending: boolean };
+    status: () => {
+      phase: 'pending' | 'idle' | 'syncing' | 'paused';
+      pushPending: boolean;
+      pausedReason: 'subscription' | 'private' | null;
+    };
     stopped: number;
     flushed: number;
   } {
@@ -24,7 +33,7 @@ describe('flushBounded', () => {
       stop() {
         e.stopped += 1;
       },
-      status: () => ({ phase, pushPending }),
+      status: () => ({ phase, pushPending, pausedReason }),
       flush() {
         e.flushed += 1;
         if (flushMs === 'hang') return new Promise<void>(() => {});
@@ -77,13 +86,44 @@ describe('flushBounded', () => {
     expect(e.stopped).toBe(1);
   });
 
+  /**
+   * The sixth review's MCP kill shot, exit half. A paused engine's flush
+   * returns at once without uploading, so the session used to end with an
+   * unpushed write and no line at all: the one path that stranded a write was
+   * the one path that said nothing.
+   */
+  it('says why when the engine is paused and a write is still pending at exit', async () => {
+    const lines: string[] = [];
+    const e = fakeEngine(5, 'paused', true, 'subscription');
+    await expect(flushBounded(e, 500, (l) => lines.push(l))).resolves.toBe('flushed');
+    expect(lines).toEqual([
+      'northkeep MCP server exiting with a push still pending (sync paused: subscription required)',
+    ]);
+    expect(e.stopped).toBe(1);
+  });
+
+  it('names the private-server pause the same way the event line does', async () => {
+    const lines: string[] = [];
+    const e = fakeEngine(5, 'paused', true, 'private');
+    await flushBounded(e, 500, (l) => lines.push(l));
+    expect(lines.join('\n')).toContain('private server');
+    expect(lines.join('\n')).toContain('push still pending');
+  });
+
+  it('stays quiet when the engine is paused with nothing pending', async () => {
+    const lines: string[] = [];
+    const e = fakeEngine(5, 'paused', false, 'subscription');
+    await expect(flushBounded(e, 500, (l) => lines.push(l))).resolves.toBe('flushed');
+    expect(lines).toEqual([]);
+  });
+
   it("resolves 'failed' and logs one line when the flush throws (the write is on disk; the next wake sends it)", async () => {
     let stopped = 0;
     const lines: string[] = [];
     const e = {
       flush: () => Promise.reject(new Error('HTTP 500')),
       stop: () => void (stopped += 1),
-      status: () => ({ phase: 'pending' as const, pushPending: true }),
+      status: () => ({ phase: 'pending' as const, pushPending: true, pausedReason: null }),
     };
     await expect(flushBounded(e, 500, (l) => lines.push(l))).resolves.toBe('failed');
     expect(lines).toEqual(['northkeep MCP server sync failed at exit: HTTP 500']);
@@ -100,5 +140,45 @@ describe('describeEvent', () => {
     expect(describeEvent({ type: 'paused', reason: 'subscription' })).toContain('subscription required');
     expect(describeEvent({ type: 'paused', reason: 'private' })).toContain('private server');
     expect(describeEvent({ type: 'in-sync' })).toContain('in sync');
+  });
+});
+
+/**
+ * ADR 0044: the engine does nothing for a vault other than the account's
+ * default one. It used to do that in silence, so a session started with
+ * --vault never synced and never said why (sixth review, hosts).
+ */
+describe('createStandaloneAutoSync', () => {
+  const savedEnv = { ...process.env };
+  let home: string;
+
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-mcp-auto-'));
+    process.env.NORTHKEEP_HOME = home;
+  });
+  afterEach(() => {
+    process.env = { ...savedEnv };
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  it('logs one line at startup for a vault that is not the default one', () => {
+    const lines: string[] = [];
+    const sync = createStandaloneAutoSync(path.join(home, 'other.nkv'), (l) => lines.push(l));
+    try {
+      expect(lines).toEqual([OTHER_VAULT_NOTICE]);
+      expect(lines[0]).toContain('default vault only');
+    } finally {
+      sync.dispose();
+    }
+  });
+
+  it('says nothing for the default vault', () => {
+    const lines: string[] = [];
+    const sync = createStandaloneAutoSync(defaultVaultPath(), (l) => lines.push(l));
+    try {
+      expect(lines).toEqual([]);
+    } finally {
+      sync.dispose();
+    }
   });
 });

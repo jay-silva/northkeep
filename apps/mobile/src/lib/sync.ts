@@ -4,8 +4,8 @@ import { Vault, VaultAuthError, VaultSyncGenerationError, getPlatform } from '@n
 import { MAX_BLOB_BYTES, SubscriptionRequiredError, deriveSyncCreds } from '@northkeep/sync';
 import { createDeadline, type DeadlineScope } from './deadline';
 import { deleteIfExists, pulledTmpPath } from './paths';
-import { loadLastSyncGeneration, saveLastSyncGeneration } from './secure-store';
-import { localBytesMoved, nextPushGeneration, pulledBlobIsReplay } from './sync-flow';
+import { loadSyncBaseline, saveLocalDirty, savePendingStampSha, saveSyncBaseline } from './secure-store';
+import { localBytesMoved, nextPushGenerationWithPending, pulledBlobIsReplay } from './sync-flow';
 import { vaultGate } from './vault-gate';
 
 /**
@@ -366,7 +366,7 @@ async function installPulledBlob(
     // was a first pull carrying no key to read the installed generation with.
     // Either way the next push, or this pull, records a real baseline and the
     // check bites from then on.
-    if (pulledBlobIsReplay(opened.syncGeneration, await loadLastSyncGeneration())) {
+    if (pulledBlobIsReplay(opened.syncGeneration, (await loadSyncBaseline())?.generation ?? null)) {
       throw new Error(
         'The pulled vault is older than the copy this phone last synced (sync generation). ' +
           'Local vault was not changed.',
@@ -392,12 +392,27 @@ async function installPulledBlob(
   // Original bytes (possibly unmigrated 0.3) are installed; compare used the
   // same generation desktop would after open-verify/migrate.
   platform.storage.writeAtomic(options.vaultPath, remote.blob);
-  // The generation this phone has now synced. Written HERE rather than through
-  // afterInstall so no pull path can forget it (both callers install, only one
-  // does the session bookkeeping), and still inside the gate with the write.
-  await saveLastSyncGeneration(installedGeneration);
   const installed = { version: remote.version, sha256: await sha256Hex(remote.blob) };
-  // Still under the gate: the session reopen and the SecureStore bookkeeping.
+  // THE BOOKKEEPING, in this order, inside the gate, and written HERE rather
+  // than through afterInstall so no pull path can forget it (ADR 0044, sixth
+  // review kill shot). Both callers install; only one does the session reopen.
+  //
+  // Dirty FIRST, baseline SECOND. The file on disk is now the server's copy,
+  // so nothing the user wrote is on it; clearing dirty first means that if the
+  // baseline write then fails, the next wake sees "bytes moved, user wrote
+  // nothing" and REPAIRS instead of pushing. The reverse order leaves a torn
+  // baseline looking dirty-and-changed, which is the push that rolled the
+  // other device's write off the server.
+  await saveLocalDirty(false);
+  // ONE write: version, sha and generation can no longer describe different
+  // moments. pendingStampSha is cleared because the file is the server's copy.
+  await saveSyncBaseline({
+    version: installed.version,
+    sha: installed.sha256,
+    generation: installedGeneration,
+    pendingStampSha: null,
+  });
+  // Still under the gate: the session reopen and the rest of the bookkeeping.
   await options.afterInstall?.(installed);
   return { ok: true, version: installed.version, wroteVault: true, sha256: installed.sha256 };
 }
@@ -452,11 +467,23 @@ export async function preparePushMobile(options: {
     // while never setting a baseline, and the phone wedged. nextPushGeneration
     // holds the rule (and its null-baseline case); see src/lib/sync-flow.ts.
     let stampedGeneration: number | undefined;
+    // Null until we know we may need it: the hash of the file BEFORE the stamp,
+    // which is how a re-stamp of bytes an earlier failed attempt already
+    // stamped is recognized (ADR 0044, sixth review; see
+    // nextPushGenerationWithPending).
+    let lastSyncGeneration: number | null = null;
     if (!options.skipGenerationBump) {
-      const lastSyncGeneration = await loadLastSyncGeneration();
+      const baseline = await loadSyncBaseline();
+      lastSyncGeneration = baseline?.generation ?? null;
+      const preStampSha = await hashVaultFile(options.vaultPath);
       const vault = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey), platform);
       try {
-        const next = nextPushGeneration(vault.getSyncGeneration(), lastSyncGeneration);
+        const next = nextPushGenerationWithPending({
+          currentStamp: vault.getSyncGeneration(),
+          lastSyncGeneration,
+          currentSha: preStampSha,
+          pendingStampSha: baseline?.pendingStampSha ?? null,
+        });
         if (next !== null) {
           vault.setSyncGeneration(next);
           vault.save();
@@ -481,6 +508,13 @@ export async function preparePushMobile(options: {
         `Vault is ${(blob.length / 1024 / 1024).toFixed(1)} MB, over the ${MAX_BLOB_BYTES / 1024 / 1024} MB sync limit.`,
       );
     }
+    const sha256 = await sha256Hex(blob);
+    // The pending stamp, recorded only while there is no generation baseline
+    // to hold the stamp still. These are bytes this phone STAMPED and the
+    // server has not accepted; if the next prepare finds the file still
+    // hashing to this, it must not bump again. Cleared by the baseline write
+    // that follows an accepted push.
+    if (!options.skipGenerationBump && lastSyncGeneration === null) await savePendingStampSha(sha256);
     return {
       // A plain Uint8Array, for the same reason sha256Hex uses one: expo/fetch
       // normalizes the body in JS (an ArrayBuffer body is wrapped as a
@@ -489,7 +523,7 @@ export async function preparePushMobile(options: {
       // ArrayBuffer; it was wrong, and that cast was the bug that broke pull.
       body: new Uint8Array(blob),
       // Hashed before the upload so the baseline is exactly what went over the wire.
-      sha256: await sha256Hex(blob),
+      sha256,
       generation: stampedGeneration,
       baseVersion: options.baseVersion,
     };

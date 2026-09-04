@@ -70,13 +70,16 @@ every milestone; if a limit is removed, say when and how.*
   changed, Pull first" and waits for you; the phone keeps its existing
   last-writer-wins recovery for its own pushes. A vault with no recorded
   post-sync baseline (a machine that synced before 0.20) counts as edited
-  until one manual push or pull sets the baseline.
+  until a push or pull sets the baseline (the phone's first automatic
+  establish push does too).
 - **The desktop pushes a few seconds after every write**, including writes
   that arrive through the local MCP server, but only while the vault is
   unlocked. A write made while locked waits for the next unlock. Pushes back
-  off after a failure (30 s, 2 min, 10 min, then hourly) and stop entirely on
-  a subscription (402) or private-server (403) answer until you press Push or
-  change the server.
+  off after a failure (30 s, 2 min, 10 min, then hourly). A subscription (402)
+  or private-server (403) answer pauses them: pressing Push or changing the
+  server lifts the pause at once, and otherwise the next write or wake more
+  than ten minutes later tries once more, so a headless host (the MCP server)
+  is not stuck for the life of the session.
 - **Wake means launch, unlock, or return to the app**, not a schedule. Nothing
   runs in the background on either device, and iOS background fetch is not
   used. A phone left in your pocket does not sync until you open it.
@@ -94,6 +97,8 @@ every milestone; if a limit is removed, say when and how.*
   The rolling `vault.nkv.bak` is overwritten by the next save, so it is not a
   reliable record of what a fast-forward replaced; the `.auto-pull.bak` copy
   is written only by automatic pulls and only overwritten by the next one.
+  Both sit beside the vault file itself, which for a vault that is a symlink
+  means beside the file the link points at.
 - **A write stream faster than the debounce still pushes within 30 s.** The
   desktop coalesces writes for 5 s, but no write waits more than 30 s behind
   newer ones.
@@ -104,7 +109,8 @@ every milestone; if a limit is removed, say when and how.*
 - **Automatic sync applies to the default vault only.** The sync config is
   per account and holds one server copy, so a write to another `--vault` is
   saved but not pushed; `northkeep sync push --vault` still pushes it by
-  hand, replacing the account's copy as it always did.
+  hand, replacing the account's copy as it always did. The standalone MCP
+  server says so once on stderr when it starts on another vault.
 - **A CLI command never waits behind another process's transfer.** If the GUI
   or the MCP server is mid-push, `northkeep remember` prints that another
   process is syncing and returns; the running engine notices the new bytes
@@ -117,7 +123,12 @@ every milestone; if a limit is removed, say when and how.*
   generation is stamped when a push is prepared and kept if the upload fails
   or the server answers 409 (ADR 0038); the retries that follow reuse that
   stamp instead of adding one each, so a machine that is offline for a day
-  does not climb out of range of every other device's copy.
+  does not climb out of range of every other device's copy. One exception: a
+  device that has never synced may stamp more than once until its first
+  accepted push, because there is no recorded baseline yet to reuse.
+- **A write that lands while a manual Push or Pull is failing is pushed on the
+  next debounce, not dropped.** The failed operation is still reported to you;
+  the write behind it is not lost with it.
 - **"Last synced" is per machine.** The age shown is this device's last
   successful push or pull, not proof the other device has caught up.
 

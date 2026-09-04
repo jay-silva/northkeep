@@ -1,5 +1,5 @@
 import { onVaultSave } from '@northkeep/core';
-import { AutoSync, type AutoSyncEvent, type AutoSyncPhase } from '@northkeep/sync';
+import { AutoSync, isAutoSyncVault, type AutoSyncEvent, type AutoSyncPhase } from '@northkeep/sync';
 import { resolveMasterKey } from './key.js';
 
 /**
@@ -20,10 +20,18 @@ export interface StandaloneAutoSync {
   dispose(): void;
 }
 
+/** Said once at startup when this server was pointed at something other than the account's default vault. */
+export const OTHER_VAULT_NOTICE =
+  'northkeep MCP server: automatic sync applies to the default vault only; this vault syncs by hand';
+
 export function createStandaloneAutoSync(
   vaultPath: string,
   log: (line: string) => void = (line) => console.error(line),
 ): StandaloneAutoSync {
+  // The engine refuses a non-default vault on its own, but silently: a session
+  // launched with --vault then never syncs and says nothing about it (sixth
+  // review, hosts). One line, at startup, so the reason is in the log.
+  if (!isAutoSyncVault(vaultPath)) log(OTHER_VAULT_NOTICE);
   const auto = new AutoSync({
     vaultPath,
     // resolveMasterKey returns a fresh Buffer per call (documented in key.ts),
@@ -48,6 +56,11 @@ export function createStandaloneAutoSync(
   };
 }
 
+/** Why a paused engine is paused, in the wording the event line already uses. */
+function pauseReasonText(reason: 'subscription' | 'private'): string {
+  return reason === 'subscription' ? 'subscription required' : 'private server';
+}
+
 /** One stderr line per engine event, in the server's existing voice. */
 export function describeEvent(event: AutoSyncEvent): string {
   switch (event.type) {
@@ -62,7 +75,7 @@ export function describeEvent(event: AutoSyncEvent): string {
     case 'error':
       return `northkeep MCP server sync failed: ${event.message}`;
     case 'paused':
-      return `northkeep MCP server sync paused: ${event.reason === 'subscription' ? 'subscription required' : 'private server'}`;
+      return `northkeep MCP server sync paused: ${pauseReasonText(event.reason)}`;
   }
 }
 
@@ -79,7 +92,7 @@ export type FlushOutcome = 'flushed' | 'failed' | 'timeout';
 export interface FlushableEngine {
   flush(): Promise<void>;
   stop(): void;
-  status(): { phase: AutoSyncPhase; pushPending: boolean };
+  status(): { phase: AutoSyncPhase; pushPending: boolean; pausedReason: 'subscription' | 'private' | null };
 }
 
 export async function flushBounded(
@@ -95,7 +108,13 @@ export async function flushBounded(
   // A debounced push that has already started uploading reads 'syncing', not
   // 'pending', so ask the engine whether a write is still unpushed rather
   // than reading the phase (fifth review, M2).
-  const pushWasPending = auto.status().pushPending;
+  const before = auto.status();
+  const pushWasPending = before.pushPending;
+  // A paused engine's flush returns at once without uploading anything, so
+  // without this the session ends with an unpushed write and no line at all
+  // (sixth review, MCP kill shot: the exit notice was suppressed on exactly
+  // the path that stranded the write).
+  const pausedReason = before.pausedReason;
   let timer: ReturnType<typeof setTimeout> | null = null;
   const timeout = new Promise<FlushOutcome>((resolve) => {
     timer = setTimeout(() => resolve('timeout'), budgetMs);
@@ -109,7 +128,11 @@ export async function flushBounded(
   );
   try {
     const outcome = await Promise.race([flush, timeout]);
-    if (outcome === 'timeout') {
+    if (pausedReason !== null && pushWasPending) {
+      log(
+        `northkeep MCP server exiting with a push still pending (sync paused: ${pauseReasonText(pausedReason)})`,
+      );
+    } else if (outcome === 'timeout') {
       log(
         pushWasPending
           ? 'northkeep MCP server exiting with a push still pending (the next wake sends it)'

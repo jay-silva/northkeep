@@ -188,6 +188,146 @@ export function nextPushGeneration(currentStamp: number, lastSyncGeneration: num
 }
 
 /**
+ * THE BASELINE: what this phone last synced, as ONE value (ADR 0044, sixth
+ * review kill shot).
+ *
+ * It used to be three SecureStore keys written one after another. A failure or
+ * an interruption between them (one `setItemAsync` throw is enough, and the
+ * device locking during a wake pull will do it) left the version, the sha and
+ * the generation describing different moments: most dangerously a sha naming
+ * the bytes the install had just replaced. `localChanged` then read true for a
+ * vault holding nothing the user wrote, the wake pushed it, and the 409 plus
+ * the M6-2 re-push rolled the other device's committed write off the server.
+ *
+ * One JSON value written in one call cannot tear: either the whole baseline
+ * moves or none of it does.
+ */
+export interface SyncBaseline {
+  /** The server version this phone last pushed to or pulled. */
+  version: number;
+  /** Hex sha256 of the vault file as it stood at that moment. Null when unknown. */
+  sha: string | null;
+  /** The sync generation sealed in those bytes. Null means "no baseline" (see nextPushGeneration). */
+  generation: number | null;
+  /**
+   * Hex sha256 of bytes a push STAMPED but the server never accepted, and only
+   * while there is no generation baseline to hold the stamp still. Without it a
+   * failed establish bumped the stamp on every attempt, and an inflated stamp
+   * is what wedged the phone in the fifth review. Cleared when a push lands.
+   */
+  pendingStampSha?: string | null;
+}
+
+const HEX_SHA_RE = /^[0-9a-f]{64}$/;
+
+function validSha(value: unknown): value is string {
+  return typeof value === 'string' && HEX_SHA_RE.test(value);
+}
+
+/**
+ * Parse the stored baseline. Bad JSON, a non-object, or ANY field out of shape
+ * reads as null, never as a partial baseline: a half-trusted baseline is the
+ * torn state this value exists to make impossible. Null reads as "baseline
+ * unknown", which decideWakeAction routes to establish/needs-pull, and those
+ * never push on their own.
+ *
+ * Pure and here rather than in secure-store.ts so the validation is testable
+ * under Node (secure-store.ts imports expo-secure-store).
+ */
+export function parseSyncBaseline(raw: string | null): SyncBaseline | null {
+  if (raw === null) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
+  const value = parsed as Record<string, unknown>;
+  if (!Number.isInteger(value.version) || (value.version as number) < 0) return null;
+  if (!(value.sha === null || value.sha === undefined || validSha(value.sha))) return null;
+  if (
+    !(
+      value.generation === null ||
+      value.generation === undefined ||
+      (Number.isInteger(value.generation) && (value.generation as number) >= 0)
+    )
+  ) {
+    return null;
+  }
+  if (!(value.pendingStampSha === null || value.pendingStampSha === undefined || validSha(value.pendingStampSha))) {
+    return null;
+  }
+  return {
+    version: value.version as number,
+    sha: validSha(value.sha) ? value.sha : null,
+    generation: typeof value.generation === 'number' ? value.generation : null,
+    pendingStampSha: validSha(value.pendingStampSha) ? value.pendingStampSha : null,
+  };
+}
+
+/** Serialize a baseline for its single SecureStore write. */
+export function serializeSyncBaseline(baseline: SyncBaseline): string {
+  return JSON.stringify({
+    version: baseline.version,
+    sha: baseline.sha,
+    generation: baseline.generation,
+    pendingStampSha: baseline.pendingStampSha ?? null,
+  });
+}
+
+/**
+ * How a torn baseline is repaired. The phone holds bytes that do not match its
+ * stored sha and the user wrote none of them, so nothing here is unpushed and
+ * nothing can be lost either way.
+ *
+ *   the server's sha equals the file  -> 'record-baseline': the file IS what the
+ *                                        server holds; write the baseline from
+ *                                        the status response. No network write.
+ *   anything else                     -> 'fast-forward': pull the server's copy
+ *                                        and install it, which records too.
+ */
+export type RepairPlan = 'record-baseline' | 'fast-forward';
+
+export function decideRepair(statusSha: string | null, currentSha: string | null): RepairPlan {
+  return statusSha !== null && currentSha !== null && statusSha === currentSha
+    ? 'record-baseline'
+    : 'fast-forward';
+}
+
+/**
+ * `nextPushGeneration` with the null-baseline guard the fifth review's fix left
+ * open (ADR 0044, sixth review flesh wound). With no generation baseline there
+ * is nothing to tell a fresh stamp from one a failed attempt already wrote, so
+ * the old rule bumped on every attempt: three failed establishes cost three
+ * generations and floated the phone above every honest blob.
+ *
+ * The pending stamp closes it: a push that stamps without landing records the
+ * hash of the bytes it stamped, and the next prepare that finds the file still
+ * hashing to it does not bump again. A real save moves the file, so the hash
+ * stops matching and the next push bumps once, correctly.
+ */
+export function nextPushGenerationWithPending(input: {
+  currentStamp: number;
+  lastSyncGeneration: number | null;
+  /** Hash of the vault file as it stands BEFORE this push stamps it. */
+  currentSha: string | null;
+  pendingStampSha: string | null | undefined;
+}): number | null {
+  const next = nextPushGeneration(input.currentStamp, input.lastSyncGeneration);
+  if (next === null) return null;
+  if (
+    input.lastSyncGeneration === null &&
+    input.pendingStampSha != null &&
+    input.currentSha !== null &&
+    input.currentSha === input.pendingStampSha
+  ) {
+    return null;
+  }
+  return next;
+}
+
+/**
  * Is an incoming blob older than the copy this phone LAST SYNCED? The replay
  * check, and the yardstick is the whole point: `lastSyncGeneration`, never the
  * local file's own stamp.
@@ -383,7 +523,28 @@ export function syncStatusLabel(status: SyncStatus): string {
 // ADR 0044: wake pull (fast-forward only) and the sync age.
 // ---------------------------------------------------------------------------
 
-export type WakeAction = 'none' | 'retry-push' | 'pull' | 'check' | 'establish' | 'needs-pull';
+export type WakeAction =
+  | 'none'
+  | 'retry-push'
+  | 'pull'
+  | 'check'
+  | 'establish'
+  | 'needs-pull'
+  /**
+   * The bytes moved but the user wrote nothing: a TORN BASELINE (ADR 0044,
+   * sixth review kill shot). The install wrote the server's bytes and the
+   * baseline write that follows it failed, so the stored sha names the old
+   * bytes. Pushing here uploads a vault holding nothing the user wrote, and
+   * the 409 plus the M6-2 re-push rolls the other device's write off the
+   * server. The caller repairs from the server instead (decideRepair).
+   */
+  | 'repair'
+  /**
+   * A save is flagged unpushed but the file hashes to the baseline: the push
+   * landed and only the flag write failed. The caller clears the flag. No
+   * network.
+   */
+  | 'clear-dirty';
 
 /**
  * The loud line for a phone that cannot tell whether it is behind or ahead:
@@ -440,8 +601,11 @@ export interface WakeInput {
  *   locked or unconfigured            -> 'none'
  *   a sync in flight                  -> 'none'
  *   error: subscription / not enabled -> 'none'   (the user acts, not a timer)
- *   a save is unpushed                -> 'retry-push'
- *   baseline known, bytes differ      -> 'retry-push' (bytes decide, not attempts)
+ *   user wrote AND bytes moved        -> 'retry-push'
+ *   user wrote, bytes unmoved         -> 'clear-dirty' (the push landed; only
+ *                                        the flag write failed. No network.)
+ *   bytes moved, user wrote nothing,
+ *     baseline known                  -> 'repair'  (a torn baseline; see below)
  *   baseline unknown (no stored hash, a phone that synced before it existed):
  *     remote unknown                  -> 'check'
  *     remote == last synced version   -> 'establish' (one push WITHOUT conflict
@@ -510,18 +674,23 @@ export function decideWakeAction(input: WakeInput): WakeAction {
   if (input.status === 'error' && (input.errorKind === 'subscription-required' || input.errorKind === 'not-enabled')) {
     return 'none';
   }
-  // Only an unpushed local save, or bytes that provably differ from the
-  // baseline, may be pushed from a wake. An error state with nothing unpushed
-  // (a status check or a pull that failed offline) falls through to the
-  // status check, never to a push (first review). An unknown baseline is not
-  // "changed": it is unknowable, and pushing on it manufactured the 409 that
-  // rolled the other device back (third review).
+  // A PUSH NEEDS BOTH SIGNALS (ADR 0044, sixth review kill shot). `localDirty`
+  // says the user wrote something; `localChanged` says the bytes on disk moved
+  // away from the baseline. Either one alone used to push, and moved bytes
+  // alone is exactly what a torn baseline looks like: the install landed the
+  // server's copy and the bookkeeping write after it failed, so the phone
+  // pushed a vault holding nothing the user wrote and the LWW re-push rolled
+  // the other device's write off the server.
+  if (input.localDirty && !input.localChanged) return 'clear-dirty';
   if (input.localDirty) return 'retry-push';
-  if (input.baselineKnown && input.localChanged) return 'retry-push';
+  // An unknown baseline is not "changed": it is unknowable, and pushing on it
+  // manufactured the 409 that rolled the other device back (third review).
   if (!input.baselineKnown) {
     if (input.remoteVersion === null) return 'check';
     return input.remoteVersion === input.lastSyncedVersion ? 'establish' : 'needs-pull';
   }
+  // Known baseline, nothing the user wrote, and the bytes moved anyway.
+  if (input.localChanged) return 'repair';
   if (input.remoteVersion === null) return 'check';
   if (input.remoteVersion > input.lastSyncedVersion) return 'pull';
   return 'none';

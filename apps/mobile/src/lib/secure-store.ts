@@ -1,4 +1,7 @@
 import * as SecureStore from 'expo-secure-store';
+import { parseSyncBaseline, serializeSyncBaseline, type SyncBaseline } from './sync-flow';
+
+export type { SyncBaseline };
 
 /**
  * All secret material on the phone lives here (ADR: device linking & mobile
@@ -21,6 +24,9 @@ const DEVICE_SECRET_KEY = 'nk.device_secret_hex';
 const CACHED_MASTER_KEY = 'nk.cached_master_key_hex';
 const BIOMETRIC_FLAG_KEY = 'nk.biometric_unlock_enabled';
 const SYNC_SERVER_KEY = 'nk.sync_server_url';
+const SYNC_BASELINE_KEY = 'nk.sync_baseline';
+// Legacy, read once and deleted: the three keys the baseline used to be split
+// across (ADR 0044, sixth review kill shot).
 const SYNC_VERSION_KEY = 'nk.sync_last_version';
 const SYNC_SYNCED_AT_KEY = 'nk.sync_last_synced_at';
 const SYNC_LOCAL_DIRTY_KEY = 'nk.sync_local_dirty';
@@ -90,14 +96,76 @@ export async function loadSyncServerUrl(): Promise<string | null> {
   return SecureStore.getItemAsync(SYNC_SERVER_KEY, BASE_OPTIONS);
 }
 
+/**
+ * THE BASELINE, read as one value (ADR 0044, sixth review kill shot). Bad JSON
+ * or any field out of shape reads as null, i.e. "baseline unknown", which the
+ * wake routes to establish/needs-pull and never to a push.
+ *
+ * READ-COMPAT: a phone upgrading from the three-key layout has no new key yet.
+ * The first read assembles the baseline from the legacy keys, writes it once,
+ * and deletes them. A failure anywhere in that migration is swallowed: the
+ * caller still gets the assembled value, and the next read re-migrates.
+ */
+export async function loadSyncBaseline(): Promise<SyncBaseline | null> {
+  const raw = await SecureStore.getItemAsync(SYNC_BASELINE_KEY, BASE_OPTIONS);
+  if (raw !== null) return parseSyncBaseline(raw);
+  return migrateLegacyBaseline();
+}
+
+async function migrateLegacyBaseline(): Promise<SyncBaseline | null> {
+  const rawVersion = await SecureStore.getItemAsync(SYNC_VERSION_KEY, BASE_OPTIONS);
+  const rawSha = await SecureStore.getItemAsync(SYNC_LAST_SHA_KEY, BASE_OPTIONS);
+  const rawGeneration = await SecureStore.getItemAsync(SYNC_LAST_GENERATION_KEY, BASE_OPTIONS);
+  if (rawVersion === null && rawSha === null && rawGeneration === null) return null;
+  const version = Number(rawVersion);
+  const generation = Number(rawGeneration);
+  const baseline: SyncBaseline = {
+    version: Number.isInteger(version) && version >= 0 ? version : 0,
+    sha: rawSha !== null && /^[0-9a-f]{64}$/.test(rawSha) ? rawSha : null,
+    generation: rawGeneration !== null && Number.isInteger(generation) && generation >= 0 ? generation : null,
+    pendingStampSha: null,
+  };
+  try {
+    await saveSyncBaseline(baseline);
+    await SecureStore.deleteItemAsync(SYNC_VERSION_KEY, BASE_OPTIONS);
+    await SecureStore.deleteItemAsync(SYNC_LAST_SHA_KEY, BASE_OPTIONS);
+    await SecureStore.deleteItemAsync(SYNC_LAST_GENERATION_KEY, BASE_OPTIONS);
+  } catch {
+    // The legacy keys are still there; the next read migrates again.
+  }
+  return baseline;
+}
+
+/**
+ * THE ONE WRITE. Every install and every accepted push records its baseline
+ * with this call and no other, so there is no window in which the version, the
+ * sha and the generation describe different moments.
+ */
+export async function saveSyncBaseline(baseline: SyncBaseline): Promise<void> {
+  await SecureStore.setItemAsync(SYNC_BASELINE_KEY, serializeSyncBaseline(baseline), BASE_OPTIONS);
+}
+
+/**
+ * Merge one field into the baseline. Thin wrappers below use it so existing
+ * callers keep working; anything that records a landed sync must use
+ * saveSyncBaseline instead, or it is writing the baseline in pieces again.
+ */
+async function patchSyncBaseline(patch: Partial<SyncBaseline>): Promise<void> {
+  const current = (await loadSyncBaseline()) ?? { version: 0, sha: null, generation: null, pendingStampSha: null };
+  await saveSyncBaseline({ ...current, ...patch });
+}
+
 export async function saveLastSyncVersion(version: number): Promise<void> {
-  await SecureStore.setItemAsync(SYNC_VERSION_KEY, String(version), BASE_OPTIONS);
+  await patchSyncBaseline({ version });
 }
 
 export async function loadLastSyncVersion(): Promise<number> {
-  const raw = await SecureStore.getItemAsync(SYNC_VERSION_KEY, BASE_OPTIONS);
-  const parsed = raw === null ? NaN : Number(raw);
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : 0;
+  return (await loadSyncBaseline())?.version ?? 0;
+}
+
+/** The hash of bytes a push stamped but the server never accepted (see SyncBaseline). */
+export async function savePendingStampSha(sha: string | null): Promise<void> {
+  await patchSyncBaseline({ pendingStampSha: sha });
 }
 
 // --- ADR 0044: the sync age and the unpushed-edit flag ---
@@ -132,15 +200,17 @@ export async function loadLocalDirty(): Promise<boolean> {
  * file on disk against this before any automatic pull; null (never synced,
  * or a phone that synced before this key existed) counts as changed, so the
  * wake pushes rather than pulls (ADR 0044, second review).
+ *
+ * A THIN WRAPPER over the single baseline value since the sixth review: it
+ * read-modify-writes one field. Anything recording a landed sync must call
+ * saveSyncBaseline once instead.
  */
 export async function saveLastSyncSha(sha: string | null): Promise<void> {
-  if (sha) await SecureStore.setItemAsync(SYNC_LAST_SHA_KEY, sha, BASE_OPTIONS);
-  else await SecureStore.deleteItemAsync(SYNC_LAST_SHA_KEY, BASE_OPTIONS);
+  await patchSyncBaseline({ sha: sha && /^[0-9a-f]{64}$/.test(sha) ? sha : null });
 }
 
 export async function loadLastSyncSha(): Promise<string | null> {
-  const raw = await SecureStore.getItemAsync(SYNC_LAST_SHA_KEY, BASE_OPTIONS);
-  return raw && /^[0-9a-f]{64}$/.test(raw) ? raw : null;
+  return (await loadSyncBaseline())?.sha ?? null;
 }
 
 /**
@@ -159,20 +229,18 @@ export async function loadLastSyncSha(): Promise<string | null> {
  * Null on a phone that predates this key, and on a phone whose only sync so
  * far was a first pull with no key to read the installed generation with.
  * Null means "no baseline": the push bumps, and the replay check is inert.
+ *
+ * A THIN WRAPPER over the single baseline value (see saveLastSyncSha).
  */
 export async function saveLastSyncGeneration(generation: number | null): Promise<void> {
-  if (generation === null) await SecureStore.deleteItemAsync(SYNC_LAST_GENERATION_KEY, BASE_OPTIONS);
-  else await SecureStore.setItemAsync(SYNC_LAST_GENERATION_KEY, String(generation), BASE_OPTIONS);
+  await patchSyncBaseline({ generation });
 }
 
 export async function loadLastSyncGeneration(): Promise<number | null> {
-  const raw = await SecureStore.getItemAsync(SYNC_LAST_GENERATION_KEY, BASE_OPTIONS);
-  if (raw === null) return null;
-  const parsed = Number(raw);
-  // A corrupt or negative value reads as "no baseline", never as 0: 0 is a
-  // real baseline that would refuse honest blobs, and a garbled key must
-  // never be able to wedge a pull.
-  return Number.isInteger(parsed) && parsed >= 0 ? parsed : null;
+  // A corrupt value reads as "no baseline", never as 0: 0 is a real baseline
+  // that would refuse honest blobs, and a garbled value must never be able to
+  // wedge a pull. parseSyncBaseline enforces that for the whole value.
+  return (await loadSyncBaseline())?.generation ?? null;
 }
 
 // --- connector sidecar (Phase B Cloud Connect: the mobile analog of the
@@ -242,6 +310,7 @@ export async function wipeAllSecrets(): Promise<void> {
   await SecureStore.deleteItemAsync(BIOMETRIC_FLAG_KEY);
   await SecureStore.deleteItemAsync(DEVICE_SECRET_KEY);
   await SecureStore.deleteItemAsync(SYNC_SERVER_KEY);
+  await SecureStore.deleteItemAsync(SYNC_BASELINE_KEY);
   await SecureStore.deleteItemAsync(SYNC_VERSION_KEY);
   await SecureStore.deleteItemAsync(SYNC_SYNCED_AT_KEY);
   await SecureStore.deleteItemAsync(SYNC_LOCAL_DIRTY_KEY);
