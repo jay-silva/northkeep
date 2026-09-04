@@ -551,7 +551,62 @@ desktop, forged `sync.json` in four spellings never yields a pull.
   has no off-device coverage; a permanently failing wake pull retries on the
   backoff ladder (hourly at most).
 
-Sixth review: pending at the time of writing.
+## Sixth adversarial review (2026-09-04, run against 3e31353..46242a7)
+
+Fresh eyes on Opus, three parallel tracks. The fifth round's fixes held:
+one generation per logical push on the phone, the establish wedge closed,
+replay refused on automatic and manual pulls, nothing lost at any of the
+six wake await points, all six desktop checks, eight server forgeries.
+Verdict: NOT CLEARED.
+
+- KILL SHOT (phone). A torn baseline: the install writes the server's bytes
+  and then the baseline bookkeeping (version, sha, generation) can fail or
+  be interrupted, and a single SecureStore write failure (the device locking
+  during a wake pull is enough) is a trigger. The stored sha then names the
+  old bytes, `localChanged` reads true, and the next wake pushes a vault
+  holding nothing the user wrote; the 409 and the LWW re-push roll the other
+  device's committed write off the server, and the Mac fast-forwards onto
+  the rollback. Both pills read Synced. Fix: `localChanged` alone never
+  pushes. A wake pushes only when the user edited (dirty, set under the gate
+  BEFORE the save) AND the bytes moved; dirty without moved bytes clears
+  dirty; moved bytes without dirty is a torn baseline and is repaired from
+  the server (status sha equals the file: record the baseline; else a
+  fast-forward pull, which is safe because nothing is unpushed). The
+  baseline is one JSON value written once, not three keys.
+- KILL SHOT (MCP host). A single 402 or 403 pauses the engine and nothing on
+  the standalone server ever resumes it; the session cannot push for its
+  lifetime, and the exit notice is suppressed on exactly that path. Fix: a
+  pause expires (10 min) for wake and write on headless hosts, and the exit
+  line reports a paused engine with a pending write.
+- FLESH WOUND (desktop). A write landing during a FAILED manual push or pull
+  is dropped: the failure path neither re-checks the hash nor re-arms.
+- FLESH WOUND (phone). A stale generation baseline makes the next push skip
+  its bump (same root as the kill shot).
+- FLESH WOUND (claims). KNOWN-LIMITS: "once, not once per attempt" is false
+  for a phone with no baseline (each failed establish bumps); "until one
+  manual push or pull" is false (an automatic establish sets it); "pushes a
+  few seconds after every change" is false inside the failed-manual-sync
+  window. The ADR's null-generation note understated the window.
+- FLESH WOUND (hosts). The MCP server disables automatic sync for a
+  non-default vault with no stderr line; a file-symlinked default vault is
+  replaced by a regular file on the first write, so the realpath fix is
+  inert for file symlinks.
+- SCAR TISSUE: `sync.json` is unauthenticated (a forged `lastSha` equal to
+  the current unpushed bytes pulls over them; 0600 beside the vault);
+  `notifyWrite` compares raw paths; CLI-vs-CLI stranding with no engine on
+  the machine; a truncated `sync.json` sends the engine silently off;
+  event ordering prints "in sync" before "pushed".
+- INCIDENT (review process). The third review's CLI attacks ran the real
+  CLI without `NORTHKEEP_HOME`, overwrote `~/.northkeep/sync.json` with a
+  loopback fake server and pushed Jay's real vault (ciphertext) to it, and
+  wrote test memories into the real vault. Nothing left the machine. The
+  server URL was restored and the base version reset to the hosted server's;
+  the vault contents are being checked. Every future attack harness must
+  set `NORTHKEEP_HOME` to a temp directory before touching the CLI.
+- Residual: the push/pull protocol is unverified against reality; no device
+  run.
+
+Fixes for this round: applied next; see below.
 
 ## Status of this record
 
