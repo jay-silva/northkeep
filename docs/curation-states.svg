@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="1120" viewBox="0 0 1440 1120" role="img" aria-labelledby="title desc">
+<title id="title">NorthKeep curation: supporting review states</title>
+<desc id="desc">Historical design artifact using synthetic examples: choosing a collection, comparing repeated memories, reviewing history before restore, and handling incomplete, stale or empty results.</desc>
+<defs><style>text{font-family:Arial,sans-serif;font-size:15px;fill:#24221c}.serif{font-family:Georgia,serif;font-size:25px}.small{font-size:12px}.muted{fill:#6d685d}.label{font-size:12px;font-weight:bold;letter-spacing:1px}.green{fill:#2f6a54}.white{fill:#fffdf8}.panel{fill:#fffdf8;stroke:#d6cfc1}.field{fill:#f6f4ef;stroke:#e6e0d4}.button{fill:#2f6a54}</style></defs>
+<rect width="1440" height="1120" fill="#eae6dd"/><text x="24" y="34" class="label">NORTHKEEP / REVIEW STATES</text><text x="1416" y="34" text-anchor="end" class="small muted">HISTORICAL DESIGN · SYNTHETIC DATA</text>
+<rect x="24" y="54" width="680" height="420" rx="10" class="panel"/>
+<text x="48" y="88" class="label green">CHOOSE A COLLECTION</text><text x="48" y="125" class="serif">What would you like to review?</text>
+<text x="48" y="155" class="muted">Start with one collection. You can review another later.</text>
+<rect x="48" y="177" width="632" height="54" rx="5" fill="#e6efe8"/><circle cx="69" cy="204" r="8" fill="#2f6a54"/><text x="91" y="209">Writing preferences</text><text x="660" y="209" text-anchor="end" class="small muted">24 memories · Private</text>
+<rect x="48" y="240" width="632" height="54" rx="5" class="field"/><circle cx="69" cy="267" r="8" fill="none" stroke="#6d685d"/><text x="91" y="272">General knowledge</text><text x="660" y="272" text-anchor="end" class="small muted">16 memories · Shared</text>
+<text x="48" y="327" class="green">Review on this device</text><text x="48" y="352" class="small muted">Local review is ready. No memories are sent for this review.</text>
+<text x="48" y="380" class="small muted">Project documents are excluded from this review.</text>
+<rect x="48" y="403" width="165" height="46" rx="6" class="button"/><text x="130" y="432" text-anchor="middle" class="white">Review 24 memories</text>
+<text x="258" y="432" class="muted">Cancel</text>
+
+<rect x="728" y="54" width="688" height="420" rx="10" class="panel"/>
+<text x="752" y="88" class="label green">COMPARE REPEATED MEMORIES</text><text x="752" y="125" class="serif">Choose what stays.</text>
+<text x="752" y="155" class="muted">These entries contain the same wording. Compare their context.</text>
+<rect x="752" y="177" width="640" height="88" rx="5" class="field"/>
+<text x="768" y="203" class="small muted">Writing preferences · Imported conversation · Aug 12</text><text x="768" y="235">“Use plain language in summaries.”</text>
+<rect x="752" y="276" width="640" height="88" rx="5" class="field"/>
+<text x="768" y="302" class="small muted">Writing preferences · Saved conversation · Sep 04</text><text x="768" y="334">“Use plain language in summaries.”</text>
+<text x="752" y="391" class="small muted">Keep Aug 12 active; remove Sep 04 from current memories.</text>
+<rect x="752" y="403" width="258" height="46" rx="6" class="button"/><text x="881" y="432" text-anchor="middle" class="white">Review removal of Sep 04 entry</text><text x="1050" y="432" class="muted">Keep both</text>
+
+<rect x="24" y="496" width="680" height="594" rx="10" class="panel"/>
+<text x="48" y="530" class="label green">CHANGE HISTORY</text><text x="48" y="568" class="serif">How you like summaries</text>
+<text x="48" y="599" class="small muted">Saved from a suggestion you edited · Today</text>
+<text x="48" y="635" class="label muted">CURRENT VERSION</text><rect x="48" y="652" width="632" height="92" rx="5" fill="#e6efe8"/>
+<text x="64" y="681"><tspan x="64">I prefer short summaries by default. For technical reviews,</tspan><tspan x="64" dy="25">include the reasoning and examples.</tspan></text>
+<text x="48" y="784" class="label muted">PREVIOUS VERSION · RECORDED AUG 12</text><rect x="48" y="802" width="632" height="72" rx="5" class="field"/>
+<text x="64" y="843">Keep my summaries short, usually three sentences.</text>
+<text x="48" y="912">Restore this wording as a new version?</text><text x="48" y="940" class="small muted">The current version stays in history. Other memories are unchanged.</text>
+<rect x="48" y="972" width="221" height="46" rx="6" class="button"/><text x="158" y="1001" text-anchor="middle" class="white">Restore previous wording</text><text x="310" y="1001" class="muted">Keep current version</text>
+<text x="48" y="1057" class="small muted">If this memory changes elsewhere, refresh before restoring.</text>
+
+<rect x="728" y="496" width="688" height="180" rx="10" class="panel"/>
+<text x="752" y="528" class="label green">RUNNING / PARTIAL RESULTS</text><text x="752" y="562" class="serif">Reviewing your collection</text>
+<rect x="752" y="580" width="640" height="6" rx="3" fill="#e6e0d4"/><rect x="752" y="580" width="426" height="6" rx="3" fill="#2f6a54"/>
+<text x="752" y="614">16 of 24 checked · 2 suggestions so far</text><text x="752" y="647" class="small muted">Some memories could not be compared. Results will be marked incomplete.</text>
+<rect x="728" y="692" width="688" height="180" rx="10" class="panel"/>
+<text x="752" y="724" class="label" fill="#6f5a2c">CHANGED SINCE REVIEW</text><text x="752" y="758" class="serif">This suggestion needs a fresh look.</text>
+<text x="752" y="790" class="muted">One of its source memories changed. Nothing was saved.</text>
+<rect x="752" y="809" width="191" height="44" rx="6" class="button"/><text x="847" y="837" text-anchor="middle" class="white">Review latest memories</text>
+<rect x="728" y="888" width="688" height="202" rx="10" class="panel"/>
+<text x="752" y="920" class="label green">NO SUGGESTIONS</text><text x="752" y="956" class="serif">Nothing to review from this pass.</text>
+<text x="752" y="988" class="muted">24 memories checked. A review can still miss things.</text>
+<rect x="752" y="1018" width="158" height="46" rx="6" class="button"/><text x="831" y="1047" text-anchor="middle" class="white">Browse memories</text><text x="955" y="1047" class="green">Review another collection</text>
+</svg>

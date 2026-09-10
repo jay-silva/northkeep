@@ -1,5 +1,16 @@
 import { canonicalJson } from './canonical.js';
 import {
+  CONSOLIDATION_CONTENT_MAX_CHARS,
+  CONSOLIDATION_METADATA_KEY,
+  CONSOLIDATION_METADATA_VERSION,
+  CONSOLIDATION_REQUEST_MAX_BYTES,
+  exactCanonicalJson,
+  type ConsolidationHistoryItem,
+  type ConsolidationRequest,
+  type ConsolidationResult,
+  type RestoreConsolidationRequest,
+} from './consolidation.js';
+import {
   KDF_MODERATE,
   NONCE_BYTES,
   SALT_BYTES,
@@ -85,6 +96,32 @@ interface EntryRow {
   entry_hash: string;
   metadata: string | null;
 }
+
+interface ConsolidationMetadata {
+  version: number;
+  kind: 'consolidate';
+  operation_id: string;
+  request_hash: string;
+  result_id: string;
+  source_ids: string[];
+  source_hashes: string[];
+  source_snapshot_hashes: string[];
+}
+
+interface RestoreMetadata {
+  version: number;
+  kind: 'restore';
+  operation_id: string;
+  request_hash: string;
+  result_id: string;
+  consolidation_result_id: string;
+  original_id: string;
+  source_ids: string[];
+  restored_ids: string[];
+  original_metadata: Record<string, unknown> | null;
+}
+
+type CurationMetadata = ConsolidationMetadata | RestoreMetadata;
 
 /**
  * After-save hook (ADR 0044). A host process that wants to react to vault
@@ -509,6 +546,464 @@ export class Vault {
     return this.supersedeEntry(old, changes);
   }
 
+  /** Atomically replaces 2-8 exact private source snapshots with one linked head. */
+  consolidateMemories(request: ConsolidationRequest): ConsolidationResult {
+    this.assertOpen();
+    const requestHash = this.consolidationRequestHash('consolidate', request);
+    const retry = this.findConsolidationOperation(request.operation_id);
+    if (retry !== null) {
+      if (retry.kind !== 'consolidate' || retry.requestHash !== requestHash) {
+        throw new Error('Operation id was already used for a different consolidation request.');
+      }
+      return this.validateConsolidationRetry(retry, request);
+    }
+    this.assertConsolidationRequest(request);
+
+    const now = new Date().toISOString();
+    const resultId = uuidv4(this.platform.crypto);
+    const result: MemoryEntry = {
+      id: resultId,
+      type: request.sources[0]!.type,
+      content: request.content,
+      scope: request.sources[0]!.scope,
+      source: 'northkeep:consolidation',
+      source_model: null,
+      confidence: 1,
+      created_at: now,
+      valid_from: now,
+      superseded_at: null,
+      superseded_by: null,
+      forgotten_at: null,
+      prev_hash: this.getMeta('chain_head'),
+      entry_hash: '',
+      metadata: {
+        [CONSOLIDATION_METADATA_KEY]: {
+          version: CONSOLIDATION_METADATA_VERSION,
+          kind: 'consolidate',
+          operation_id: request.operation_id,
+          request_hash: requestHash,
+          result_id: resultId,
+          source_ids: request.sources.map((source) => source.id),
+          source_hashes: request.sources.map((source) => source.entry_hash),
+          source_snapshot_hashes: request.sources.map((source) => this.snapshotHash(source)),
+        },
+      },
+    };
+    result.entry_hash = computeEntryHash(result, this.platform.crypto);
+
+    const insert = this.prepareEntryInsert();
+    const mark = this.db.prepare(
+      `UPDATE memories SET superseded_at = ?, superseded_by = ?
+       WHERE id = ? AND forgotten_at IS NULL AND superseded_at IS NULL`,
+    );
+    this.db.transaction(() => {
+      this.assertSourcesStillApplicable(request.sources);
+      insert.run(this.entryParams(result));
+      for (const source of request.sources) {
+        if (mark.run(now, result.id, source.id).changes !== 1) {
+          throw new Error(`Memory ${source.id} changed before consolidation could be applied.`);
+        }
+      }
+      this.setMeta('chain_head', result.entry_hash);
+    })();
+    return { operation_id: request.operation_id, kind: 'consolidate', result, sources: request.sources, restored_entries: [] };
+  }
+
+  /** Restores complete copies of a consolidation's historical sources atomically. */
+  restoreConsolidation(request: RestoreConsolidationRequest): ConsolidationResult {
+    this.assertOpen();
+    const requestHash = this.consolidationRequestHash('restore', request);
+    const retry = this.findConsolidationOperation(request.operation_id);
+    if (retry !== null) {
+      if (retry.kind !== 'restore' || retry.requestHash !== requestHash) {
+        throw new Error('Operation id was already used for a different consolidation request.');
+      }
+      return this.validateRestoreRetry(retry, request);
+    }
+    this.assertOperationId(request.operation_id);
+    if (request.vault_id !== this.getVaultId()) throw new Error('Vault id does not match this vault.');
+    if (request.result_id !== request.expected_result.id) throw new Error('Result id does not match its snapshot.');
+    const result = this.getEntry(request.result_id);
+    if (!result || exactCanonicalJson(result) !== exactCanonicalJson(request.expected_result)) {
+      throw new Error('Consolidated result changed after confirmation.');
+    }
+    const lineage = this.readConsolidationMetadata(result, 'consolidate');
+    if (lineage.result_id !== result.id || result.forgotten_at !== null || result.superseded_at !== null) {
+      throw new Error('Consolidated result is not an unrestored operation head.');
+    }
+    if (this.isScopeShared(result.scope) || result.scope.startsWith('project:')) {
+      throw new Error('Consolidation restore requires a private, non-project scope.');
+    }
+    const sources = this.validatePersistedConsolidation(result, lineage).storedSources;
+    const now = new Date().toISOString();
+    const restoredIds = sources.map(() => uuidv4(this.platform.crypto));
+    const restored: MemoryEntry[] = [];
+    let previous = this.getMeta('chain_head');
+    for (let index = 0; index < sources.length; index += 1) {
+      const source = sources[index]!;
+      const id = restoredIds[index]!;
+      const entry: MemoryEntry = {
+        id,
+        type: source.type,
+        content: source.content,
+        scope: source.scope,
+        source: 'northkeep:consolidation-recovery',
+        source_model: source.source_model,
+        confidence: source.confidence,
+        created_at: now,
+        valid_from: source.valid_from,
+        superseded_at: null,
+        superseded_by: null,
+        forgotten_at: null,
+        prev_hash: previous,
+        entry_hash: '',
+        metadata: this.restoredMetadata(source.metadata, {
+          version: CONSOLIDATION_METADATA_VERSION,
+          kind: 'restore',
+          operation_id: request.operation_id,
+          request_hash: requestHash,
+          result_id: id,
+          consolidation_result_id: result.id,
+          original_id: source.id,
+          source_ids: lineage.source_ids,
+          restored_ids: restoredIds,
+        }),
+      };
+      entry.entry_hash = computeEntryHash(entry, this.platform.crypto);
+      restored.push(entry);
+      previous = entry.entry_hash;
+    }
+    const insert = this.prepareEntryInsert();
+    const mark = this.db.prepare(
+      `UPDATE memories SET superseded_at = ?, superseded_by = ?
+       WHERE id = ? AND forgotten_at IS NULL AND superseded_at IS NULL`,
+    );
+    this.db.transaction(() => {
+      const current = this.getEntry(result.id);
+      if (!current || exactCanonicalJson(current) !== exactCanonicalJson(request.expected_result)) {
+        throw new Error('Consolidated result changed before restore could be applied.');
+      }
+      for (const source of sources) {
+        const live = this.getEntry(source.id);
+        if (!live || exactCanonicalJson(live) !== exactCanonicalJson(source) || computeEntryHash(live, this.platform.crypto) !== live.entry_hash || live.forgotten_at !== null || live.superseded_by !== result.id || live.superseded_at !== result.created_at) {
+          throw new Error(`Consolidation source ${source.id} changed before restore could be applied.`);
+        }
+      }
+      for (const entry of restored) insert.run(this.entryParams(entry));
+      if (mark.run(now, restored[0]!.id, result.id).changes !== 1) {
+        throw new Error('Consolidated result changed before restore could be applied.');
+      }
+      this.setMeta('chain_head', restored.at(-1)!.entry_hash);
+    })();
+    const updatedResult = { ...result, superseded_at: now, superseded_by: restored[0]!.id };
+    return { operation_id: request.operation_id, kind: 'restore', result: updatedResult, sources, restored_entries: restored };
+  }
+
+  consolidationHistory(): ConsolidationHistoryItem[] {
+    this.assertOpen();
+    const entries = this.list({ includeForgotten: true, includeSuperseded: true });
+    const items: ConsolidationHistoryItem[] = [];
+    for (const result of entries) {
+      const meta = this.tryReadConsolidationMetadata(result);
+      if (!meta || meta.kind !== 'consolidate' || meta.result_id !== result.id) continue;
+      const sources = this.validatePersistedConsolidation(result, meta, true).storedSources;
+      const restored = entries.filter((entry) => {
+        const recovery = this.tryReadConsolidationMetadata(entry);
+        return recovery?.kind === 'restore' && recovery.consolidation_result_id === result.id && recovery.result_id === entry.id;
+      });
+      if (restored.length === meta.source_ids.length) this.validateRestoredSet(restored, meta.source_ids, result.id, true);
+      items.push({
+        operation_id: meta.operation_id,
+        result,
+        sources,
+        restored_entries: restored,
+        can_restore: result.forgotten_at === null && result.superseded_at === null && !result.scope.startsWith('project:') && !this.isScopeShared(result.scope) && sources.every((source) => source.forgotten_at === null && !this.isScopeShared(source.scope)),
+      });
+    }
+    return items;
+  }
+
+  private assertConsolidationRequest(request: ConsolidationRequest): void {
+    this.assertOperationId(request.operation_id);
+    if (request.vault_id !== this.getVaultId()) throw new Error('Vault id does not match this vault.');
+    if (request.sources.length < 2 || request.sources.length > 8) {
+      throw new Error('Consolidation requires 2-8 source memories.');
+    }
+    if (request.content.trim().length === 0) throw new Error('Consolidated content must not be empty.');
+    if (request.content.length > CONSOLIDATION_CONTENT_MAX_CHARS) {
+      throw new Error(`Consolidated content exceeds ${CONSOLIDATION_CONTENT_MAX_CHARS} characters.`);
+    }
+    if (new TextEncoder().encode(exactCanonicalJson(request)).length > CONSOLIDATION_REQUEST_MAX_BYTES) {
+      throw new Error('Consolidation request exceeds 256 KiB.');
+    }
+    const ids = new Set(request.sources.map((source) => source.id));
+    if (ids.size !== request.sources.length) throw new Error('Consolidation sources must be unique.');
+    const first = request.sources[0]!;
+    if (first.scope.startsWith('project:')) throw new Error('Project memories cannot be consolidated.');
+    if (this.isScopeShared(first.scope)) throw new Error('Shared memories cannot be consolidated.');
+    for (const source of request.sources) {
+      if (source.scope !== first.scope) throw new Error('Consolidation sources must share one scope.');
+      if (source.type !== first.type) throw new Error('Consolidation sources must share one type.');
+      this.assertSourceMetadataAuthentic(source);
+    }
+    this.assertSourcesStillApplicable(request.sources);
+  }
+
+  private assertSourcesStillApplicable(sources: MemoryEntry[]): void {
+    for (const expected of sources) {
+      const current = this.getEntry(expected.id);
+      if (!current || exactCanonicalJson(current) !== exactCanonicalJson(expected)) {
+        throw new Error(`Memory ${expected.id} changed after confirmation.`);
+      }
+      if (current.forgotten_at !== null || current.superseded_at !== null) {
+        throw new Error(`Memory ${expected.id} is not live.`);
+      }
+      if (current.scope.startsWith('project:') || this.isScopeShared(current.scope)) {
+        throw new Error(`Memory ${expected.id} is not in a private, non-project scope.`);
+      }
+    }
+  }
+
+  private consolidationRequestHash(kind: 'consolidate' | 'restore', request: ConsolidationRequest | RestoreConsolidationRequest): string {
+    const exact = exactCanonicalJson({ action: kind, version: CONSOLIDATION_METADATA_VERSION, request });
+    if (new TextEncoder().encode(exact).length > CONSOLIDATION_REQUEST_MAX_BYTES) {
+      throw new Error('Consolidation request exceeds 256 KiB.');
+    }
+    return blake2bHex(
+      exact,
+      this.platform.crypto,
+    );
+  }
+
+  private snapshotHash(entry: MemoryEntry): string {
+    return blake2bHex(exactCanonicalJson(entry), this.platform.crypto);
+  }
+
+  private assertOperationId(value: string): void {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(value)) {
+      throw new Error('Operation id must be a lowercase RFC 4122 UUID.');
+    }
+  }
+
+  private getEntry(id: string): MemoryEntry | null {
+    const row = this.db.prepare('SELECT * FROM memories WHERE id = ?').get(id) as EntryRow | undefined;
+    return row ? rowToEntry(row) : null;
+  }
+
+  private isScopeShared(scope: string): boolean {
+    const row = this.db.prepare('SELECT shared FROM scopes WHERE scope = ?').get(scope) as { shared: number } | undefined;
+    return row?.shared === 1;
+  }
+
+  private prepareEntryInsert() {
+    return this.db.prepare(
+      `INSERT INTO memories
+       (id, type, content, scope, source, source_model, confidence, created_at,
+        valid_from, superseded_at, superseded_by, forgotten_at, prev_hash, entry_hash, metadata)
+       VALUES (@id, @type, @content, @scope, @source, @source_model, @confidence,
+               @created_at, @valid_from, @superseded_at, @superseded_by, @forgotten_at,
+               @prev_hash, @entry_hash, @metadata)`,
+    );
+  }
+
+  private entryParams(entry: MemoryEntry): Record<string, unknown> {
+    return { ...entry, metadata: entry.metadata === null ? null : JSON.stringify(entry.metadata) };
+  }
+
+  private restoredMetadata(original: Record<string, unknown> | null, recovery: Omit<RestoreMetadata, 'original_metadata'>): Record<string, unknown> {
+    const metadata = original === null
+      ? {}
+      : (JSON.parse(JSON.stringify(original)) as Record<string, unknown>);
+    metadata[CONSOLIDATION_METADATA_KEY] = { ...recovery, original_metadata: original };
+    return metadata;
+  }
+
+  private assertSourceMetadataAuthentic(entry: MemoryEntry): void {
+    if (!entry.metadata || !Object.hasOwn(entry.metadata, CONSOLIDATION_METADATA_KEY)) return;
+    const metadata = this.tryReadConsolidationMetadata(entry);
+    if (!metadata) throw new Error('Source contains malformed reserved consolidation metadata.');
+    const original = this.getEntry(metadata.result_id);
+    if (!original || computeEntryHash(original, this.platform.crypto) !== original.entry_hash) {
+      throw new Error('Source contains unauthenticated consolidation metadata.');
+    }
+    const originalMetadata = this.tryReadConsolidationMetadata(original);
+    if (!originalMetadata || exactCanonicalJson(originalMetadata) !== exactCanonicalJson(metadata)) {
+      throw new Error('Source contains copied metadata without its recorded operation result.');
+    }
+    let cursor = original;
+    const seen = new Set<string>();
+    while (cursor.id !== entry.id) {
+      if (seen.has(cursor.id) || cursor.superseded_by === null) {
+        throw new Error('Source consolidation metadata is not on its recorded edit lineage.');
+      }
+      seen.add(cursor.id);
+      const next = this.getEntry(cursor.superseded_by);
+      if (!next) throw new Error('Source consolidation metadata has incomplete edit lineage.');
+      cursor = next;
+    }
+  }
+
+  private tryReadConsolidationMetadata(entry: MemoryEntry): CurationMetadata | null {
+    const raw = entry.metadata?.[CONSOLIDATION_METADATA_KEY];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+    const value = raw as Record<string, unknown>;
+    if (value.version !== CONSOLIDATION_METADATA_VERSION || (value.kind !== 'consolidate' && value.kind !== 'restore')) {
+      throw new Error('Malformed reserved consolidation metadata.');
+    }
+    const strings = ['operation_id', 'request_hash', 'result_id'];
+    if (strings.some((key) => typeof value[key] !== 'string')) throw new Error('Malformed reserved consolidation metadata.');
+    this.assertOperationId(value.operation_id as string);
+    if (!/^[0-9a-f]{64}$/.test(value.request_hash as string)) throw new Error('Malformed reserved consolidation metadata.');
+    if (value.kind === 'consolidate') {
+      if (!isStringArray(value.source_ids) || !isStringArray(value.source_hashes) || !isStringArray(value.source_snapshot_hashes)) {
+        throw new Error('Malformed reserved consolidation metadata.');
+      }
+      if (value.source_ids.length < 2 || value.source_ids.length > 8 || value.source_ids.length !== value.source_hashes.length || value.source_ids.length !== value.source_snapshot_hashes.length) {
+        throw new Error('Malformed reserved consolidation metadata.');
+      }
+      if (new Set(value.source_ids).size !== value.source_ids.length) throw new Error('Malformed reserved consolidation metadata.');
+      return value as unknown as ConsolidationMetadata;
+    }
+    if (typeof value.consolidation_result_id !== 'string' || typeof value.original_id !== 'string' || !isStringArray(value.source_ids) || !isStringArray(value.restored_ids) || value.source_ids.length !== value.restored_ids.length || !Object.hasOwn(value, 'original_metadata') || (value.original_metadata !== null && (typeof value.original_metadata !== 'object' || Array.isArray(value.original_metadata)))) {
+      throw new Error('Malformed reserved consolidation metadata.');
+    }
+    return value as unknown as RestoreMetadata;
+  }
+
+  private readConsolidationMetadata(entry: MemoryEntry, kind: 'consolidate'): ConsolidationMetadata;
+  private readConsolidationMetadata(entry: MemoryEntry, kind: 'restore'): RestoreMetadata;
+  private readConsolidationMetadata(entry: MemoryEntry, kind: CurationMetadata['kind']): CurationMetadata {
+    const metadata = this.tryReadConsolidationMetadata(entry);
+    if (!metadata || metadata.kind !== kind) throw new Error(`Memory ${entry.id} has no valid ${kind} lineage.`);
+    if (metadata.result_id !== entry.id) throw new Error('Copied or malformed operation metadata is not an operation result.');
+    if (entry.forgotten_at === null && computeEntryHash(entry, this.platform.crypto) !== entry.entry_hash) {
+      throw new Error('Operation result hash is invalid.');
+    }
+    return metadata;
+  }
+
+  private findConsolidationOperation(operationId: string): { kind: CurationMetadata['kind']; requestHash: string; entries: MemoryEntry[] } | null {
+    this.assertOperationId(operationId);
+    const matches: MemoryEntry[] = [];
+    let kind: CurationMetadata['kind'] | null = null;
+    let requestHash: string | null = null;
+    for (const entry of this.list({ includeForgotten: true, includeSuperseded: true })) {
+      const metadata = this.tryReadConsolidationMetadata(entry);
+      if (!metadata || metadata.operation_id !== operationId || metadata.result_id !== entry.id) continue;
+      if ((kind !== null && kind !== metadata.kind) || (requestHash !== null && requestHash !== metadata.request_hash)) {
+        throw new Error('Ambiguous consolidation operation metadata.');
+      }
+      kind = metadata.kind;
+      requestHash = metadata.request_hash;
+      matches.push(entry);
+    }
+    return kind === null ? null : { kind, requestHash: requestHash!, entries: matches };
+  }
+
+  private validateConsolidationRetry(operation: { entries: MemoryEntry[] }, request: ConsolidationRequest): ConsolidationResult {
+    if (operation.entries.length !== 1) throw new Error('Malformed consolidation operation result set.');
+    const result = operation.entries[0]!;
+    const meta = this.readConsolidationMetadata(result, 'consolidate');
+    if (meta.source_ids.join('\0') !== request.sources.map((source) => source.id).join('\0') || meta.source_snapshot_hashes.some((hash, i) => hash !== this.snapshotHash(request.sources[i]!))) {
+      throw new Error('Persisted consolidation does not match the complete request.');
+    }
+    const sources = this.validatePersistedConsolidation(result, meta).originalSnapshots;
+    if (exactCanonicalJson(sources) !== exactCanonicalJson(request.sources) || result.content !== request.content) throw new Error('Persisted consolidation result does not match the complete request.');
+    return { operation_id: meta.operation_id, kind: 'consolidate', result, sources, restored_entries: [] };
+  }
+
+  private validateRestoreRetry(operation: { entries: MemoryEntry[] }, request: RestoreConsolidationRequest): ConsolidationResult {
+    const firstMeta = this.readConsolidationMetadata(operation.entries[0]!, 'restore');
+    this.validateRestoredSet(operation.entries, firstMeta.source_ids, firstMeta.consolidation_result_id);
+    const result = this.getEntry(firstMeta.consolidation_result_id);
+    if (!result || result.superseded_by !== firstMeta.restored_ids[0]) throw new Error('Persisted restore result link is invalid.');
+    const expected = { ...result, superseded_at: null, superseded_by: null };
+    if (request.result_id !== result.id || exactCanonicalJson(expected) !== exactCanonicalJson(request.expected_result)) {
+      throw new Error('Persisted restore does not match the complete request.');
+    }
+    const consolidateMeta = this.readConsolidationMetadata(expected, 'consolidate');
+    if (exactCanonicalJson(firstMeta.source_ids) !== exactCanonicalJson(consolidateMeta.source_ids)) throw new Error('Persisted restore source membership is invalid.');
+    const sources = this.validatePersistedConsolidation(expected, consolidateMeta).storedSources;
+    const byId = new Map(operation.entries.map((entry) => [entry.id, entry]));
+    const restored = firstMeta.restored_ids.map((id) => byId.get(id)!);
+    return { operation_id: firstMeta.operation_id, kind: 'restore', result, sources, restored_entries: restored };
+  }
+
+  private validatePersistedConsolidation(result: MemoryEntry, meta: ConsolidationMetadata, allowForgotten = false): { storedSources: MemoryEntry[]; originalSnapshots: MemoryEntry[] } {
+    if (!result.metadata || Object.keys(result.metadata).length !== 1 || result.source !== 'northkeep:consolidation' || result.source_model !== null || result.confidence !== 1 || result.valid_from !== result.created_at || result.forgotten_at !== null || computeEntryHash(result, this.platform.crypto) !== result.entry_hash) {
+      throw new Error('Persisted consolidation result shape is invalid.');
+    }
+    const storedSources = meta.source_ids.map((id, index) => {
+      const source = this.getEntry(id);
+      const forgottenOkay = allowForgotten && source?.forgotten_at !== null;
+      if (!source || (!forgottenOkay && (source.forgotten_at !== null || computeEntryHash(source, this.platform.crypto) !== source.entry_hash)) || source.entry_hash !== meta.source_hashes[index] || source.superseded_by !== result.id || source.superseded_at !== result.created_at || source.type !== result.type || source.scope !== result.scope) {
+        throw new Error('Persisted consolidation lineage is incomplete or invalid.');
+      }
+      return source;
+    });
+    const originalSnapshots = storedSources.map((source, index) => {
+      const snapshot = { ...source, superseded_at: null, superseded_by: null };
+      if (source.forgotten_at === null && this.snapshotHash(snapshot) !== meta.source_snapshot_hashes[index]) throw new Error('Persisted consolidation source snapshot is invalid.');
+      return snapshot;
+    });
+    if (storedSources.every((source) => source.forgotten_at === null)) {
+      const recomputed = this.consolidationRequestHash('consolidate', { vault_id: this.getVaultId(), operation_id: meta.operation_id, sources: originalSnapshots, content: result.content });
+      if (recomputed !== meta.request_hash) throw new Error('Persisted consolidation request fingerprint is invalid.');
+    }
+    return { storedSources, originalSnapshots };
+  }
+
+  private validateRestoredSet(entries: MemoryEntry[], sourceIds: string[], consolidationResultId: string, allowSuperseded = false): void {
+    if (entries.length !== sourceIds.length) throw new Error('Persisted restore result set is incomplete.');
+    const first = this.readConsolidationMetadata(entries[0]!, 'restore');
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+    if (new Set(sourceIds).size !== sourceIds.length || new Set(first.restored_ids).size !== first.restored_ids.length || first.restored_ids.some((id) => !byId.has(id))) {
+      throw new Error('Persisted restore result set is invalid.');
+    }
+    const consolidationResult = this.getEntry(consolidationResultId);
+    if (!consolidationResult || consolidationResult.superseded_at !== entries[0]!.created_at || consolidationResult.superseded_by !== first.restored_ids[0]) {
+      throw new Error('Persisted restore result relationship is invalid.');
+    }
+    for (let index = 0; index < first.restored_ids.length; index += 1) {
+      const entry = byId.get(first.restored_ids[index]!)!;
+      const meta = this.readConsolidationMetadata(entry, 'restore');
+      if (meta.operation_id !== first.operation_id || meta.request_hash !== first.request_hash || meta.consolidation_result_id !== consolidationResultId || meta.original_id !== sourceIds[index] || exactCanonicalJson(meta.restored_ids) !== exactCanonicalJson(first.restored_ids) || exactCanonicalJson(meta.source_ids) !== exactCanonicalJson(sourceIds)) {
+        throw new Error('Persisted restore metadata is inconsistent.');
+      }
+      if (index > 0 && entry.prev_hash !== byId.get(first.restored_ids[index - 1]!)!.entry_hash) {
+        throw new Error('Persisted restore insertion links are invalid.');
+      }
+      const original = this.getEntry(sourceIds[index]!);
+      const forgottenOriginalOkay = allowSuperseded && original?.forgotten_at !== null;
+      if (!original || (!forgottenOriginalOkay && (original.forgotten_at !== null || computeEntryHash(original, this.platform.crypto) !== original.entry_hash))) {
+        throw new Error('Persisted restore original is missing or invalid.');
+      }
+      if (forgottenOriginalOkay) continue;
+      const supersededOkay = allowSuperseded && entry.superseded_at !== null && entry.superseded_by !== null;
+      if (entry.type !== original.type || entry.content !== original.content || entry.scope !== original.scope || entry.source !== 'northkeep:consolidation-recovery' || entry.source_model !== original.source_model || entry.confidence !== original.confidence || entry.valid_from !== original.valid_from || entry.forgotten_at !== null || (!supersededOkay && (entry.superseded_at !== null || entry.superseded_by !== null)) || entry.created_at !== entries[0]!.created_at || exactCanonicalJson(meta.original_metadata) !== exactCanonicalJson(original.metadata)) {
+        throw new Error('Persisted restored entry does not reproduce its original source.');
+      }
+      if (supersededOkay) {
+        const successor = this.getEntry(entry.superseded_by!);
+        if (!successor || successor.created_at !== entry.superseded_at) throw new Error('Persisted restored entry edit link is invalid.');
+        this.assertSourceMetadataAuthentic(successor);
+      }
+      const expectedMetadata = original.metadata === null
+        ? {}
+        : (JSON.parse(JSON.stringify(original.metadata)) as Record<string, unknown>);
+      expectedMetadata[CONSOLIDATION_METADATA_KEY] = meta;
+      if (exactCanonicalJson(entry.metadata) !== exactCanonicalJson(expectedMetadata)) {
+        throw new Error('Persisted restored entry metadata is invalid.');
+      }
+    }
+    const predecessor = this.db.prepare(
+      'SELECT entry_hash FROM memories WHERE rowid < (SELECT rowid FROM memories WHERE id = ?) ORDER BY rowid DESC LIMIT 1',
+    ).get(first.restored_ids[0]) as { entry_hash: string } | undefined;
+    if (entries[0]!.prev_hash !== (predecessor?.entry_hash ?? GENESIS_HASH)) {
+      throw new Error('Persisted restore first insertion link is invalid.');
+    }
+  }
+
   /**
    * Resolves the single live, non-superseded entry named by a full id or an
    * unambiguous prefix, honoring the read-side scope allowlist. Same id guards
@@ -882,6 +1377,12 @@ export class Vault {
     }
   }
 
+  /** Bind local review state to the vault, even if another file replaces its path. */
+  getVaultId(): string {
+    this.assertOpen();
+    return this.getMeta('vault_id');
+  }
+
   /**
    * Integer sync generation sealed in vault_meta (ADR 0038 addendum). Missing
    * key reads as 0. Invalid value (NaN, negative, non-integer) throws so the
@@ -1076,6 +1577,10 @@ function rowToEntry(row: EntryRow): MemoryEntry {
     forgotten_at: row.forgotten_at ?? null,
     metadata: row.metadata === null ? null : (JSON.parse(row.metadata) as Record<string, unknown>),
   };
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === 'string');
 }
 
 const TYPE_PRIORITY: Record<string, number> = {

@@ -81,6 +81,7 @@ import {
   reviewForget,
   reviewKeep,
   reviewReject,
+  reviewRejectRemaining,
   reviewRun,
   reviewShow,
 } from './reviewCmd.js';
@@ -1033,30 +1034,44 @@ reviewGroup
   .command('show', { isDefault: true })
   .description('Show the latest review pass report')
   .action(async () => {
-    await reviewShow(withVault);
+    await reviewShow(withVault, vaultPathOpt());
   });
 
 reviewGroup
   .command('run')
   .description('Run a memory review pass (writes a local report; does not change the vault)')
   .action(async () => {
-    await reviewRun(withVault);
+    await reviewRun(withVault, vaultPathOpt());
   });
 
 reviewGroup
   .command('accept')
   .description('Accept a contradiction, undated, or stale proposal (supersedes that memory)')
   .argument('<proposal-id>', 'proposal id from "northkeep review show"')
-  .action(async (proposalId: string) => {
-    await reviewAccept(proposalId, withVault);
+  .requiredOption('--report <uuid>', 'exact report id from "northkeep review show"')
+  .requiredOption('--fingerprint <sha256>', 'exact proposal fingerprint from "northkeep review show"')
+  .option('--operation <uuid>', 'reuse this operation id for an exact retry')
+  .action(async (proposalId: string, options: { report: string; fingerprint: string; operation?: string }) => {
+    await reviewAccept(proposalId, { reportId: options.report, fingerprint: options.fingerprint, operationId: options.operation }, withVault, vaultPathOpt());
   });
 
 reviewGroup
   .command('reject')
   .description('Reject a proposal (vault untouched)')
   .argument('<proposal-id>', 'proposal id from "northkeep review show"')
-  .action(async (proposalId: string) => {
-    await reviewReject(proposalId, withVault);
+  .requiredOption('--report <uuid>', 'exact report id from "northkeep review show"')
+  .requiredOption('--fingerprint <sha256>', 'exact proposal fingerprint from "northkeep review show"')
+  .option('--operation <uuid>', 'reuse this operation id for an exact retry')
+  .action(async (proposalId: string, options: { report: string; fingerprint: string; operation?: string }) => {
+    await reviewReject(proposalId, { reportId: options.report, fingerprint: options.fingerprint, operationId: options.operation }, withVault, vaultPathOpt());
+  });
+
+reviewGroup
+  .command('reject-remaining')
+  .description('Hides pending proposals; keeps every memory')
+  .requiredOption('--report <uuid>', 'exact report id from "northkeep review show"')
+  .action(async (options: { report: string }) => {
+    await reviewRejectRemaining(options.report, withVault, vaultPathOpt());
   });
 
 reviewGroup
@@ -1064,8 +1079,11 @@ reviewGroup
   .description('Keep one member of a duplicate cluster (vault untouched)')
   .argument('<proposal-id>', 'proposal id from "northkeep review show"')
   .argument('<entry-id>', 'memory id of the member to keep')
-  .action(async (proposalId: string, entryId: string) => {
-    await reviewKeep(proposalId, entryId, withVault);
+  .requiredOption('--report <uuid>', 'exact report id from "northkeep review show"')
+  .requiredOption('--fingerprint <sha256>', 'exact proposal fingerprint from "northkeep review show"')
+  .option('--operation <uuid>', 'reuse this operation id for an exact retry')
+  .action(async (proposalId: string, entryId: string, options: { report: string; fingerprint: string; operation?: string }) => {
+    await reviewKeep(proposalId, entryId, { reportId: options.report, fingerprint: options.fingerprint, operationId: options.operation }, withVault, vaultPathOpt());
   });
 
 reviewGroup
@@ -1073,8 +1091,12 @@ reviewGroup
   .description('Forget one member of a duplicate cluster')
   .argument('<proposal-id>', 'proposal id from "northkeep review show"')
   .argument('<entry-id>', 'memory id of the member to forget')
-  .action(async (proposalId: string, entryId: string) => {
-    await reviewForget(proposalId, entryId, withVault);
+  .argument('<survivor-id>', 'memory id of the member that must remain live')
+  .requiredOption('--report <uuid>', 'exact report id from "northkeep review show"')
+  .requiredOption('--fingerprint <sha256>', 'exact proposal fingerprint from "northkeep review show"')
+  .option('--operation <uuid>', 'reuse this operation id for an exact retry')
+  .action(async (proposalId: string, entryId: string, survivorId: string, options: { report: string; fingerprint: string; operation?: string }) => {
+    await reviewForget(proposalId, entryId, survivorId, { reportId: options.report, fingerprint: options.fingerprint, operationId: options.operation }, withVault, vaultPathOpt());
   });
 
 program

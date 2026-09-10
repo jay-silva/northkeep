@@ -20,6 +20,7 @@ import {
   parseReviewResponse,
   proposalFingerprint,
   rejectProposal,
+  rejectRemaining,
   resolveReviewModel,
   reviewReportPath,
   runReviewPass,
@@ -38,7 +39,7 @@ function mem(partial: Partial<MemoryEntry> & Pick<MemoryEntry, 'id' | 'content'>
     source: 'test',
     source_model: null,
     confidence: 1,
-    created_at: '2026-01-01T00:00:00Z',
+    created_at: '2026-01-01T00:00:00.000Z',
     valid_from: null,
     superseded_at: null,
     superseded_by: null,
@@ -62,16 +63,16 @@ const LIVE_14B_DUPLICATE_SHAPE = {
     {
       kind: 'duplicate',
       entry_ids: [
-        'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
-        'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+        'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        'bbbbbbbb-bbbb-4bbb-9bbb-bbbbbbbbbbbb',
       ],
       quotes: [
         {
-          entry_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+          entry_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
           quote: 'Jay is a paramedic in Bourne.',
         },
         {
-          entry_id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+          entry_id: 'bbbbbbbb-bbbb-4bbb-9bbb-bbbbbbbbbbbb',
           quote: 'Jay works as a paramedic in Bourne.',
         },
       ],
@@ -85,11 +86,11 @@ const LIVE_14B_DUPLICATE_SHAPE = {
 
 function rawProposal(over: Record<string, unknown>): Record<string, unknown> {
   return {
-    kind: 'undated',
-    entry_ids: ['aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'],
-    quotes: [{ entry_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', quote: 'Jay is a paramedic' }],
+    kind: 'stale',
+    entry_ids: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+    quotes: [{ entry_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', quote: 'Jay is a paramedic' }],
     explanation: 'needs a date',
-    target_entry_id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+    target_entry_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     proposed_content: 'Jay is a paramedic (since 2010).',
     auto_apply: true,
     ...over,
@@ -97,15 +98,15 @@ function rawProposal(over: Record<string, unknown>): Record<string, unknown> {
 }
 
 const ENTRY_A = mem({
-  id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
   content: 'Jay is a paramedic in Bourne.',
 });
 const ENTRY_B = mem({
-  id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
+  id: 'bbbbbbbb-bbbb-4bbb-9bbb-bbbbbbbbbbbb',
   content: 'Jay works as a paramedic in Bourne.',
 });
 const ENTRY_C = mem({
-  id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+  id: 'cccccccc-cccc-4ccc-accc-cccccccccccc',
   content: 'Jay lives in Dartmouth.',
 });
 
@@ -126,7 +127,7 @@ describe('parseReviewResponse + validateProposals', () => {
     const result = validateProposals({ proposals: [rawProposal({})], auto_apply: true }, [ENTRY_A]);
     expect(result.proposals).toHaveLength(1);
     expect(result.proposals[0]).not.toHaveProperty('auto_apply');
-    expect(result.proposals[0]!.kind).toBe('undated');
+    expect(result.proposals[0]!.kind).toBe('stale');
     expect(result.proposals[0]!.id).toMatch(/^[0-9a-f]{8}$/);
   });
 
@@ -256,8 +257,22 @@ describe('parseReviewResponse + validateProposals', () => {
       }
       return rawProposal({ kind, explanation: kind });
     });
-    const result = validateProposals({ proposals: raw }, [ENTRY_A, ENTRY_B, ENTRY_C]);
+    const result = validateProposals({ proposals: raw }, [ENTRY_A, ENTRY_B, ENTRY_C], {
+      includeUndated: true,
+    });
     expect(result.proposals.map((p) => p.kind).sort()).toEqual([...kinds].sort());
+  });
+
+  it('drops undated model output by default', () => {
+    const dropped = validateProposals({ proposals: [rawProposal({ kind: 'undated' })] }, [ENTRY_A]);
+    expect(dropped.proposals).toHaveLength(0);
+    expect(dropped.drops.undated_disabled).toBe(1);
+
+    const kept = validateProposals({ proposals: [rawProposal({ kind: 'undated' })] }, [ENTRY_A], {
+      includeUndated: true,
+    });
+    expect(kept.proposals).toHaveLength(1);
+    expect(kept.proposals[0]!.kind).toBe('undated');
   });
 });
 
@@ -273,33 +288,82 @@ describe('selectReviewEntries', () => {
   });
 });
 
-describe('runReviewPass batching and zero vault writes', () => {
-  it('isolates a failing batch so other batches survive', async () => {
-    const long = 'x'.repeat(11_000);
-    const a = mem({ id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', content: `${long} ALPHA unique` });
-    const b = mem({ id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', content: `${long} BETA unique` });
-    const ollama = {
-      generateJson: async (prompt: string) => {
-        if (prompt.includes('ALPHA unique')) return 'not-json';
-        return JSON.stringify({
-          proposals: [
-            {
-              kind: 'undated',
-              entry_ids: [b.id],
-              quotes: [{ entry_id: b.id, quote: 'BETA unique' }],
-              explanation: 'date this',
-              target_entry_id: b.id,
-              proposed_content: 'BETA unique (2020).',
-            },
-          ],
-        });
+describe('runReviewPass clustering and zero vault writes', () => {
+  it('emits an exact-hash duplicate with zero generateJson calls', async () => {
+    const a = mem({ id: 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', content: 'Jay is a paramedic.' });
+    const b = mem({ id: 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb', content: 'Jay is a paramedic.' });
+    let calls = 0;
+    const result = await runReviewPass([a, b], {
+      generateJson: async () => {
+        calls += 1;
+        return '{"proposals":[]}';
       },
-    };
-    const result = await runReviewPass([a, b], ollama);
-    expect(result.batches).toBe(2);
-    expect(result.drops.parse_failed).toBe(1);
+    });
+    expect(calls).toBe(0);
+    expect(result.batches).toBe(0);
     expect(result.proposals).toHaveLength(1);
-    expect(result.proposals[0]!.kind).toBe('undated');
+    expect(result.proposals[0]!.kind).toBe('duplicate');
+    expect(result.proposals[0]!.quotes.map((q) => q.quote)).toEqual([a.content, b.content]);
+  });
+
+  it('does not call generateJson on a unique 40-entry vault', async () => {
+    const entries = Array.from({ length: 40 }, (_, i) =>
+      mem({
+        id: `${String(i).padStart(8, '0')}-0000-0000-0000-000000000000`,
+        content: `Unique fact number ${i} about something distinct.`,
+      }),
+    );
+    let calls = 0;
+    const result = await runReviewPass(entries, {
+      generateJson: async () => {
+        calls += 1;
+        return '{"proposals":[]}';
+      },
+    });
+    expect(calls).toBe(0);
+    expect(result.batches).toBe(0);
+    expect(result.proposals).toHaveLength(0);
+  });
+
+  it('sends only a paraphrase pair to the model when fake embeddings are close', async () => {
+    const extra = mem({
+      id: 'cccccccc-cccc-cccc-cccc-cccccccccccc',
+      content: 'Jay lives in Dartmouth.',
+    });
+    let calls = 0;
+    let prompt = '';
+    const close = new Float32Array([1, 0, 0]);
+    const far = new Float32Array([0, 1, 0]);
+    const result = await runReviewPass([ENTRY_A, ENTRY_B, extra], {
+      generateJson: async (text) => {
+        calls += 1;
+        prompt = text;
+        return '{"proposals":[]}';
+      },
+    }, {
+      embed: async (content) => {
+        if (content === ENTRY_A.content || content === ENTRY_B.content) return close;
+        return far;
+      },
+    });
+    expect(calls).toBe(1);
+    expect(result.batches).toBe(1);
+    expect(prompt).toContain(ENTRY_A.id);
+    expect(prompt).toContain(ENTRY_B.id);
+    expect(prompt).not.toContain(extra.id);
+  });
+
+  it('drops undated model output from a pack (undated_disabled)', async () => {
+    const result = await runReviewPass([ENTRY_A, ENTRY_B], {
+      generateJson: async () =>
+        JSON.stringify({
+          proposals: [rawProposal({ kind: 'undated', entry_ids: [ENTRY_A.id], quotes: [{ entry_id: ENTRY_A.id, quote: 'Jay is a paramedic' }] })],
+        }),
+    }, {
+      embed: async () => new Float32Array([1, 0, 0]),
+    });
+    expect(result.proposals).toHaveLength(0);
+    expect(result.drops.undated_disabled).toBe(1);
   });
 
   it('does not write the vault during a run', async () => {
@@ -372,25 +436,33 @@ describe('review report store', () => {
     };
     const first = assembleReviewReport({
       model: 'qwen2.5:14b',
-      started_at: '2026-08-27T00:00:00Z',
+      started_at: '2026-08-27T00:00:00.000Z',
       entry_count: 1,
       drops: {},
       proposals: [proposal],
+      vault_id: '11111111-1111-4111-8111-111111111111',
+      vault_path: reviewReportPath(),
+      selected_scopes: ['personal'],
+      source_entries: [ENTRY_A],
     });
     first.proposals[0]!.status = 'rejected';
     first.rejected_fingerprints.push(proposalFingerprint(proposal));
     saveReviewReport(first);
     expect(fs.statSync(reviewReportPath()).mode & 0o777).toBe(0o600);
     const loaded = loadReviewReport();
-    expect(loaded?.schema).toBe('northkeep-review-report/1');
+    expect(loaded?.schema).toBe('northkeep-review-report/2');
 
     const again = assembleReviewReport({
       model: 'qwen2.5:14b',
-      started_at: '2026-08-27T01:00:00Z',
+      started_at: '2026-08-27T01:00:00.000Z',
       entry_count: 1,
       drops: {},
       proposals: [{ ...proposal, id: 'eeff0011', status: 'pending' }],
       previous: loaded,
+      vault_id: '11111111-1111-4111-8111-111111111111',
+      vault_path: reviewReportPath(),
+      selected_scopes: ['personal'],
+      source_entries: [ENTRY_A],
     });
     expect(again.proposals).toHaveLength(0);
     expect(again.drops.rejected_fingerprint).toBe(1);
@@ -398,12 +470,42 @@ describe('review report store', () => {
     expect(loaded?.sent_to).toBeUndefined();
   });
 
+  it('changes fingerprint when quote text changes; different id sets do not collide', () => {
+    const base: Pick<ReviewProposal, 'kind' | 'entry_ids' | 'proposed_content' | 'quotes'> = {
+      kind: 'duplicate',
+      entry_ids: [ENTRY_A.id, ENTRY_B.id],
+      proposed_content: null,
+      quotes: [
+        { entry_id: ENTRY_A.id, quote: ENTRY_A.content },
+        { entry_id: ENTRY_B.id, quote: ENTRY_B.content },
+      ],
+    };
+    const editedQuote = {
+      ...base,
+      quotes: [
+        { entry_id: ENTRY_A.id, quote: 'Jay is a paramedic' },
+        { entry_id: ENTRY_B.id, quote: ENTRY_B.content },
+      ],
+    };
+    const otherIds = {
+      ...base,
+      entry_ids: [ENTRY_A.id, ENTRY_C.id],
+      quotes: [
+        { entry_id: ENTRY_A.id, quote: ENTRY_A.content },
+        { entry_id: ENTRY_C.id, quote: ENTRY_C.content },
+      ],
+    };
+    expect(proposalFingerprint(base)).not.toBe(proposalFingerprint(editedQuote));
+    expect(proposalFingerprint(base)).not.toBe(proposalFingerprint(otherIds));
+    expect(proposalFingerprint(editedQuote)).not.toBe(proposalFingerprint(otherIds));
+  });
+
   it('loads an old report that has no sent_to (local)', () => {
     home();
     const raw = {
       schema: 'northkeep-review-report/1',
       model: 'qwen2.5:14b',
-      started_at: '2026-08-27T00:00:00Z',
+      started_at: '2026-08-27T00:00:00.000Z',
       entry_count: 0,
       drops: {},
       proposals: [],
@@ -420,11 +522,15 @@ describe('review report store', () => {
     home();
     const report = assembleReviewReport({
       model: 'gpt-4o-mini',
-      started_at: '2026-08-27T00:00:00Z',
+      started_at: '2026-08-27T00:00:00.000Z',
       entry_count: 2,
       drops: {},
       proposals: [],
       sent_to: { label: 'OpenAI', host: 'api.openai.com' },
+      vault_id: '11111111-1111-4111-8111-111111111111',
+      vault_path: reviewReportPath(),
+      selected_scopes: ['personal'],
+      source_entries: [ENTRY_A, ENTRY_B],
     });
     expect(report.sent_to).toEqual({ label: 'OpenAI', host: 'api.openai.com' });
     saveReviewReport(report);
@@ -438,11 +544,11 @@ describe('review report store', () => {
     saveReviewReport({
       schema: 'northkeep-review-report/1',
       model: 'qwen2.5:14b',
-      started_at: '2026-08-27T00:00:00Z',
+      started_at: '2026-08-27T00:00:00.000Z',
       entry_count: 0,
       drops: {},
       proposals: [],
-      rejected_fingerprints: ['already-there'],
+      rejected_fingerprints: ['a'.repeat(64)],
     });
     const before = fs.readFileSync(reviewReportPath(), 'utf8');
     const server = http.createServer((_req, res) => {
@@ -483,7 +589,7 @@ describe('apply helpers', () => {
       const live = vault.remember({ content: 'Jay is a paramedic in Bourne.', type: 'semantic' });
       const report = assembleReviewReport({
         model: 'fixture',
-        started_at: '2026-08-27T00:00:00Z',
+        started_at: '2026-08-27T00:00:00.000Z',
         entry_count: 1,
         drops: {},
         proposals: [
@@ -498,7 +604,7 @@ describe('apply helpers', () => {
             status: 'pending',
           },
           {
-            id: 'rej00002',
+            id: 'bee00002',
             kind: 'undated',
             entry_ids: [live.id],
             quotes: [{ entry_id: live.id, quote: 'Bourne' }],
@@ -508,21 +614,18 @@ describe('apply helpers', () => {
             status: 'pending',
           },
         ],
+        vault_id: vault.getVaultId(),
+        vault_path: path.join(dir, 'vault.nkv'),
+        selected_scopes: ['personal'],
+        source_entries: [live],
       });
       const beforeExport = JSON.stringify(vault.export().memories);
-      rejectProposal(report, 'rej00002');
+      rejectProposal(report, 'bee00002');
       expect(JSON.stringify(vault.export().memories)).toBe(beforeExport);
-      expect(report.proposals.find((p) => p.id === 'rej00002')!.status).toBe('rejected');
+      expect(report.proposals.find((p) => p.id === 'bee00002')!.status).toBe('rejected');
 
-      acceptProposal(vault, report, 'ace00001');
-      const all = vault.list({ includeSuperseded: true });
-      const original = all.find((e) => e.id === live.id)!;
-      expect(original.superseded_at).not.toBeNull();
-      expect(original.content).toBe('Jay is a paramedic in Bourne.');
-      const current = vault.list();
-      expect(current).toHaveLength(1);
-      expect(current[0]!.content).toBe('Jay is a paramedic in Bourne (as of 2026).');
-      expect(report.proposals.find((p) => p.id === 'ace00001')!.status).toBe('accepted');
+      expect(() => acceptProposal(vault, report, 'ace00001')).toThrow(/Use applyReviewAction/);
+      expect(vault.list()[0]!.content).toBe('Jay is a paramedic in Bourne.');
     } finally {
       vault.close();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -536,12 +639,12 @@ describe('apply helpers', () => {
       const b = vault.remember({ content: 'Jay works as a paramedic in Bourne.', type: 'semantic' });
       const report = assembleReviewReport({
         model: 'fixture',
-        started_at: '2026-08-27T00:00:00Z',
+        started_at: '2026-08-27T00:00:00.000Z',
         entry_count: 2,
         drops: {},
         proposals: [
           {
-            id: 'dup00001',
+            id: 'd0a00001',
             kind: 'duplicate',
             entry_ids: [a.id, b.id],
             quotes: [
@@ -555,21 +658,25 @@ describe('apply helpers', () => {
             status: 'pending',
           },
         ],
+        vault_id: vault.getVaultId(),
+        vault_path: path.join(dir, 'vault.nkv'),
+        selected_scopes: ['personal'],
+        source_entries: [a, b],
       });
       const before = JSON.stringify(vault.export().memories);
-      keepDuplicateMember(report, 'dup00001', a.id);
+      keepDuplicateMember(report, 'd0a00001', a.id);
       expect(JSON.stringify(vault.export().memories)).toBe(before);
       expect(report.proposals[0]!.member_decisions![a.id]).toBe('kept');
 
-      forgetDuplicateMember(vault, report, 'dup00001', b.id);
-      const forgotten = vault.list({ includeForgotten: true }).find((e) => e.id === b.id)!;
-      expect(forgotten.forgotten_at).not.toBeNull();
-      expect(forgotten.content).toBe('');
+      expect(() => forgetDuplicateMember(vault, report, 'd0a00001', b.id)).toThrow(/Use applyReviewAction/);
+      const unchanged = vault.list().find((e) => e.id === b.id)!;
+      expect(unchanged.forgotten_at).toBeNull();
+      expect(unchanged.content).toBe('Jay works as a paramedic in Bourne.');
       const other = vault.list().find((e) => e.id === a.id)!;
       expect(other.content).toBe('Jay is a paramedic in Bourne.');
       expect(other.forgotten_at).toBeNull();
-      expect(report.proposals[0]!.member_decisions![b.id]).toBe('forgotten');
-      expect(report.proposals[0]!.status).toBe('resolved');
+      expect(report.proposals[0]!.member_decisions![b.id]).toBe('pending');
+      expect(report.proposals[0]!.status).toBe('pending');
     } finally {
       vault.close();
       fs.rmSync(dir, { recursive: true, force: true });
@@ -583,12 +690,12 @@ describe('apply helpers', () => {
       const b = vault.remember({ content: 'Jay works as a paramedic in Bourne.', type: 'semantic' });
       const report = assembleReviewReport({
         model: 'fixture',
-        started_at: '2026-08-27T00:00:00Z',
+        started_at: '2026-08-27T00:00:00.000Z',
         entry_count: 2,
         drops: {},
         proposals: [
           {
-            id: 'dup00002',
+            id: 'd0a00002',
             kind: 'duplicate',
             entry_ids: [a.id, b.id],
             quotes: [
@@ -602,7 +709,7 @@ describe('apply helpers', () => {
             status: 'pending',
           },
           {
-            id: 'sta00003',
+            id: '5aa00003',
             kind: 'stale',
             entry_ids: [a.id],
             quotes: [{ entry_id: a.id, quote: 'paramedic' }],
@@ -612,9 +719,72 @@ describe('apply helpers', () => {
             status: 'pending',
           },
         ],
+        vault_id: vault.getVaultId(),
+        vault_path: path.join(dir, 'vault.nkv'),
+        selected_scopes: ['personal'],
+        source_entries: [a, b],
       });
-      expect(() => acceptProposal(vault, report, 'dup00002')).toThrow(/Cannot accept a duplicate/);
-      expect(() => keepDuplicateMember(report, 'sta00003', a.id)).toThrow(/Cannot keep a stale/);
+      expect(() => acceptProposal(vault, report, 'd0a00002')).toThrow(/Use applyReviewAction/);
+      expect(() => keepDuplicateMember(report, '5aa00003', a.id)).toThrow(/Cannot keep a stale/);
+    } finally {
+      vault.close();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejectProposal on a duplicate keeps every member; rejectRemaining leaves memories byte-identical', () => {
+    const { vault, dir } = openVault();
+    try {
+      const a = vault.remember({ content: 'Jay is a paramedic in Bourne.', type: 'semantic' });
+      const b = vault.remember({ content: 'Jay is a paramedic in Bourne!', type: 'semantic' });
+      const c = vault.remember({ content: 'Jay lives in Dartmouth.', type: 'semantic' });
+      const report = assembleReviewReport({
+        model: 'fixture',
+        started_at: '2026-09-09T00:00:00.000Z',
+        entry_count: 3,
+        drops: {},
+        proposals: [
+          {
+            id: 'd0a00009',
+            kind: 'duplicate',
+            entry_ids: [a.id, b.id],
+            quotes: [
+              { entry_id: a.id, quote: a.content },
+              { entry_id: b.id, quote: b.content },
+            ],
+            explanation: 'exact',
+            target_entry_id: null,
+            proposed_content: null,
+            member_decisions: { [a.id]: 'pending', [b.id]: 'pending' },
+            status: 'pending',
+          },
+          {
+            id: '5aa00009',
+            kind: 'stale',
+            entry_ids: [c.id],
+            quotes: [{ entry_id: c.id, quote: 'Dartmouth' }],
+            explanation: 'old',
+            target_entry_id: c.id,
+            proposed_content: 'Jay lives in Dartmouth (2026).',
+            status: 'pending',
+          },
+        ],
+        vault_id: vault.getVaultId(),
+        vault_path: path.join(dir, 'vault.nkv'),
+        selected_scopes: ['personal'],
+        source_entries: [a, b, c],
+      });
+      const before = JSON.stringify(vault.export().memories);
+      rejectProposal(report, 'd0a00009');
+      expect(JSON.stringify(vault.export().memories)).toBe(before);
+      expect(vault.list().map((e) => e.id).sort()).toEqual([a.id, b.id, c.id].sort());
+      expect(report.proposals.find((p) => p.id === 'd0a00009')!.status).toBe('rejected');
+
+      const n = rejectRemaining(report);
+      expect(n).toBe(1);
+      const after = vault.export();
+      expect(JSON.stringify(after.memories)).toBe(before);
+      expect(report.proposals.every((p) => p.status === 'rejected')).toBe(true);
     } finally {
       vault.close();
       fs.rmSync(dir, { recursive: true, force: true });

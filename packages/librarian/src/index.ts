@@ -22,7 +22,6 @@ export {
 export { dedupeCandidates, jaccard, tokenize, type DedupeResult } from './dedupe.js';
 export { runImport, type ImportRunOptions, type ImportRunResult } from './import.js';
 export {
-  batchReviewEntries,
   runReviewPass,
   selectReviewEntries,
   type ReviewPassOptions,
@@ -43,16 +42,34 @@ export {
 export {
   REVIEW_REPORT_SCHEMA,
   assembleReviewReport,
+  assertReportVault,
   findProposal,
   loadReviewReport,
   proposalFingerprint,
+  operationFingerprint,
   reviewReportPath,
   saveReviewReport,
   type ReviewReport,
 } from './reviewReport.js';
 export {
+  applyReviewAction,
+  recordReviewDecision,
+  reconcileReviewOperations,
+  restoreReviewOperation,
+  type RestoreRequest,
+  type ReviewActionRequest,
+} from './reviewSession.js';
+export {
   acceptProposal,
   forgetDuplicateMember,
   keepDuplicateMember,
   rejectProposal,
+  rejectRemaining,
 } from './reviewApply.js';
+export {
+  selectConsolidationEntries,
+  suggestConsolidations,
+  type ConsolidationGroup,
+  type ConsolidationOptions,
+  type ConsolidationSuggestionResult,
+} from './consolidation.js';

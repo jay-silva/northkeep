@@ -37,6 +37,19 @@ function openVault(passphrase = PASSPHRASE, secret = deviceSecret): Vault {
 }
 
 describe('vault lifecycle', () => {
+  it('keeps its identity across saves and reopen without exporting memory content', () => {
+    const vault = createVault();
+    const id = vault.getVaultId();
+    expect(id).toBe(vault.export().northkeep_export.vault_id);
+    vault.remember({ type: 'semantic', content: 'Synthetic identity test.' });
+    vault.save();
+    vault.close();
+    const reopened = openVault();
+    expect(reopened.getVaultId()).toBe(id);
+    reopened.close();
+    expect(() => reopened.getVaultId()).toThrow();
+  });
+
   it('creates an encrypted file that is not a SQLite database', () => {
     const vault = createVault();
     vault.close();

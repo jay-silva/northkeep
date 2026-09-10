@@ -3,6 +3,15 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
+## Guided consolidation, owner acceptance pending
+
+- Consolidation covers 2-8 same-type memories in one private, non-project collection. It does not organize shared collections or coordinate project work.
+- Suggestions use the installed local review model, never an automatic cloud fallback. Work is limited to 24 packs of up to eight memories; oversized entries and comparisons across packs are not silently counted as complete.
+- Grounded source quotes do not prove that proposed wording preserves meaning. A real local-model probe preserved the technical-review exception but also returned an invalid single-source group, which was rejected. Numeric preferences remained a question, not an invented replacement. Review every proposal.
+- Originals remain encrypted history. Restoration creates new copies, and refuses incompatible or missing history. It does not reverse unrelated edits or recover forgotten content.
+- Version 0.21.0 core open/read/export/save was exercised with synthetic consolidated and restored vaults. This is not certification of every older desktop/mobile interface. The encrypted format is unchanged; grouped lineage is a new metadata convention.
+- Sync remains whole-vault replacement, not per-entry conflict merging. Separate devices must still sync before editing. Local portability tests are not a live hosted-sync acceptance test.
+
 ## Site waitlist, current
 
 - **Spam floor, not a wall.** The form uses a honeypot, a short time check,
@@ -646,21 +655,58 @@ every milestone; if a limit is removed, say when and how.*
 
 ## Memory review pass, current
 
+- **Cluster first, then the model.** Exact matches (only CRLF line
+  endings are normalized; case, punctuation, signs, and decimals remain)
+  within one scope and memory type become duplicate proposals with
+  no model call. Near-duplicates are packed only when local
+  `nomic-embed-text` is present, and only those packs go to the model.
+  Cosine is a packer, not a same-fact detector. If there are no packs,
+  the model is not called. Exact matches still work without nomic.
+  Missing nomic skips the near-dup path only; it does not hop to an
+  API. Review embeddings stay in RAM for the run and are not written
+  into the vault.
+- **Undated is off.** The pass does not ask for undated facts. The
+  validator drops them. Stale and contradiction findings are only
+  proposed inside a related pack.
 - **The model is a finder, not a judge.** You approve every change. A
   proposed quote that is not an exact substring of the stored memory is
-  dropped before you see it. The screen then shows vault text loaded by
-  id, not the model's paraphrase.
+  dropped before you see it. A replacement must quote its target. The
+  screen shows the reviewed source snapshot, not the model's paraphrase.
+  Ambiguous disagreements can become questions for the user. This does not claim zero retention
+  by a cloud provider on the optional API path.
+- **Dismiss hides; it does not forget.** Dismiss and Dismiss remaining
+  reject pending proposals and keep every memory. There is no
+  accept-all and no forget-all.
+- **Search stays usable.** Collection review has its own queue and
+  evidence/editor workspace; searching and browsing memories remain separate.
+- **Coverage is not correctness.** Missing or invalid embeddings, oversized
+  entries, invalid model output, and split comparison groups make a pass
+  incomplete. Even a complete pass can miss issues or suggest a bad correction.
+  No quality percentage or general accuracy claim is established by the small
+  synthetic evaluation script.
+- **One confirmed change at a time.** Edited wording is previewed before
+  saving; duplicate removal explicitly retains another active member. No
+  automatic acceptance, bulk removal, or many-to-one consolidation.
+- **Recovery is local and revision-bound.** Review receipts are private
+  plaintext workflow files under NORTHKEEP_HOME (mode 0600), not encrypted
+  vault entries, and may retain reviewed content after a memory is forgotten.
+  They do not sync or travel with vault exports. Restoration creates a new
+  version or recovered memory; it refuses if the recorded result has changed.
+  Legacy reports are read-only and require a fresh review to apply changes.
 - **Local Ollama is the default.** A first run on a large vault is slow
   on qwen2.5:14b. That is accepted. If Ollama is down, the local path
   refuses loudly and does not fall back to an API.
 - **A cloud review is an explicit per-run send.** Confirming it sends
-  the full text of every included memory to the named provider (label,
-  host, and model on the consent panel). Consent is not remembered. You
-  pay the provider. Local remains the default; neither path hops to the
-  other.
-- **The pass reviews whatever vault is open locally.** `project:`
-  documents are excluded in v1. Shared scopes stay in. A first run on a
-  large vault is slow.
+  pack text to the named provider (label, host, and model on the
+  consent panel). Clustering still happens on this machine first, so
+  the cloud model sees packs, not a 25-slice of the vault. Consent
+  still names the full selected count (over-consent, not a leak).
+  Consent is not remembered. You pay the provider. Local remains the
+  default; neither path hops to the other.
+- **Review is collection-selected in the local vault.** `project:`
+  documents remain excluded. Shared collections can be selected explicitly;
+  no scope membership is changed by review. Project handoffs and concurrent
+  agent coordination are separate, later milestones.
 
 ## GUI — current
 
@@ -777,9 +823,9 @@ every milestone; if a limit is removed, say when and how.*
 - **Connect is Mode 2: portable memory, NOT a chat firewall.** Connecting an
   app (Claude Desktop, Claude Code, ChatGPT, Cursor) gives it your owned memory
   under the scope you pick, but it does **not** redact what you type into that
-  app; the app still sends your whole chat to its provider. For a redaction
-  firewall on your messages, use Converse. This is stated plainly in the
-  Connect UI.
+  app; the app still sends your whole chat to its provider. The memory-focused
+  interface removes the Converse destination and does not provide a chat
+  firewall through Connect. Legacy command-line packages remain separate.
 - **Connect registers the app installed at a stable path.** The entry points at
   `NorthKeep.app` where it lives; if you move or rename the app, reconnect so
   the path is rewritten.

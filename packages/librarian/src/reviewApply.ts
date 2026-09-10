@@ -1,34 +1,10 @@
 /**
  * Apply helpers for a memory review pass (ADR 0043). The model never calls these.
- * Accept uses Vault.editMemory (ADR 0015 supersede). Forget uses Vault.forget.
- * Keep and reject are vault no-ops. Re-validate at apply time (P4).
+ * Report-only transformations. Vault mutations must use reviewSession (ADR 0046).
  */
-import type { MemoryEntry, Vault } from '@northkeep/core';
+import type { Vault } from '@northkeep/core';
 import { findProposal, proposalFingerprint, type ReviewReport } from './reviewReport.js';
 import type { ReviewKind, ReviewProposal } from './reviewSchema.js';
-
-const VAULT_CHANGED = 'Vault changed since this report. Run the pass again.';
-
-function liveById(vault: Vault): Map<string, MemoryEntry> {
-  const map = new Map<string, MemoryEntry>();
-  for (const e of vault.list()) map.set(e.id, e);
-  return map;
-}
-
-function revalidate(proposal: ReviewProposal, live: Map<string, MemoryEntry>): void {
-  for (const id of proposal.entry_ids) {
-    if (!live.has(id)) throw new Error(VAULT_CHANGED);
-  }
-  for (const q of proposal.quotes) {
-    const entry = live.get(q.entry_id);
-    if (entry === undefined || !entry.content.includes(q.quote)) {
-      throw new Error(VAULT_CHANGED);
-    }
-  }
-  if (proposal.target_entry_id !== null && !live.has(proposal.target_entry_id)) {
-    throw new Error(VAULT_CHANGED);
-  }
-}
 
 function assertPending(proposal: ReviewProposal): void {
   if (proposal.status !== 'pending') {
@@ -42,6 +18,7 @@ function assertKind(kind: ReviewKind, allowed: ReviewKind[], action: string): vo
     case 'contradiction':
     case 'undated':
     case 'stale':
+    case 'question':
       if (!allowed.includes(kind)) {
         throw new Error(`Cannot ${action} a ${kind} proposal.`);
       }
@@ -61,17 +38,9 @@ function resolveMember(proposal: ReviewProposal, entryId: string): string {
   return matches[0]!;
 }
 
-export function acceptProposal(vault: Vault, report: ReviewReport, proposalId: string): ReviewProposal {
-  const proposal = findProposal(report, proposalId);
-  assertPending(proposal);
-  assertKind(proposal.kind, ['contradiction', 'undated', 'stale'], 'accept');
-  if (proposal.target_entry_id === null || proposal.proposed_content === null) {
-    throw new Error('This proposal has no confirmed replacement text.');
-  }
-  revalidate(proposal, liveById(vault));
-  vault.editMemory(proposal.target_entry_id, { content: proposal.proposed_content });
-  proposal.status = 'accepted';
-  return proposal;
+/** @deprecated The old unjournaled mutation path is deliberately disabled. */
+export function acceptProposal(_vault: Vault, _report: ReviewReport, _proposalId: string): ReviewProposal {
+  throw new Error('Use applyReviewAction with report/vault identity and an operation ID.');
 }
 
 export function rejectProposal(report: ReviewReport, proposalId: string): ReviewProposal {
@@ -83,6 +52,13 @@ export function rejectProposal(report: ReviewReport, proposalId: string): Review
     report.rejected_fingerprints.push(fp);
   }
   return proposal;
+}
+
+/** Vault no-op: reject every pending proposal. Returns how many were dismissed. */
+export function rejectRemaining(report: ReviewReport): number {
+  const pending = report.proposals.filter((p) => p.status === 'pending').map((p) => p.id);
+  for (const id of pending) rejectProposal(report, id);
+  return pending.length;
 }
 
 export function keepDuplicateMember(
@@ -104,32 +80,14 @@ export function keepDuplicateMember(
   return proposal;
 }
 
+/** @deprecated The old unjournaled mutation path is deliberately disabled. */
 export function forgetDuplicateMember(
-  vault: Vault,
-  report: ReviewReport,
-  proposalId: string,
-  entryId: string,
+  _vault: Vault,
+  _report: ReviewReport,
+  _proposalId: string,
+  _entryId: string,
 ): ReviewProposal {
-  const proposal = findProposal(report, proposalId);
-  assertKind(proposal.kind, ['duplicate'], 'forget');
-  assertPending(proposal);
-  const member = resolveMember(proposal, entryId);
-  const decisions = proposal.member_decisions ?? {};
-  if ((decisions[member] ?? 'pending') !== 'pending') {
-    throw new Error(`Member ${member.slice(0, 8)} is already ${decisions[member]}.`);
-  }
-  const live = liveById(vault);
-  const entry = live.get(member);
-  if (entry === undefined) throw new Error(VAULT_CHANGED);
-  const quote = proposal.quotes.find((q) => q.entry_id === member);
-  if (quote !== undefined && !entry.content.includes(quote.quote)) {
-    throw new Error(VAULT_CHANGED);
-  }
-  vault.forget(member);
-  decisions[member] = 'forgotten';
-  proposal.member_decisions = decisions;
-  if (everyMemberDecided(proposal)) proposal.status = 'resolved';
-  return proposal;
+  throw new Error('Use applyReviewAction with report/vault identity and an operation ID.');
 }
 
 function everyMemberDecided(proposal: ReviewProposal): boolean {

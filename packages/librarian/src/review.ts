@@ -6,31 +6,41 @@ import { isProjectScope, type MemoryEntry } from '@northkeep/core';
 import type { OllamaClient } from './ollama.js';
 import { REVIEW_MODEL_PREFERRED } from './ollama.js';
 import {
+  clusterReviewEntries,
+  makeExactDuplicateProposal,
+  splitReviewPack,
+} from './reviewCluster.js';
+import {
   extractRawProposals,
   parseReviewResponse,
   validateProposals,
   type ReviewProposal,
 } from './reviewSchema.js';
 
-const BATCH_MAX_ENTRIES = 25;
-const BATCH_MAX_CHARS = 12_000;
 const REVIEW_TIMEOUT_MS = 300_000;
 const DATA_BEGIN = '===BEGIN MEMORY DATA===';
 const DATA_END = '===END MEMORY DATA===';
+const NOMIC_STATUS = 'Near-duplicate clustering needs nomic-embed-text. Exact matches only.';
+const MAX_REVIEW_ENTRY_CHARS = 12_000;
 
-const SYSTEM_INSTRUCTIONS = `You review a snapshot of personal memories and propose edits. You have no tools and cannot write to the vault.
+const SYSTEM_INSTRUCTIONS = `You review a small pack of personal memories and propose edits. You have no tools and cannot write to the vault.
 
 Copy quotes as exact substrings from the entry content. Do not paraphrase.
 
 Return JSON only, in exactly this shape:
-{"proposals":[{"kind":"duplicate"|"contradiction"|"undated"|"stale","entry_ids":["..."],"quotes":[{"entry_id":"...","quote":"..."}],"explanation":"...","target_entry_id":null,"proposed_content":null}]}
+{"proposals":[{"kind":"duplicate"|"contradiction"|"stale"|"question","entry_ids":["..."],"quotes":[{"entry_id":"...","quote":"..."}],"explanation":"...","target_entry_id":null,"proposed_content":null,"question":null}]}
 
 Rules:
-- duplicate: two or more live entries that state the same fact. Include every member id and a quote from each. Leave target_entry_id and proposed_content null.
-- contradiction: two entries that cannot both be true. Two id-linked quotes required. Set target_entry_id to the entry to update and proposed_content to the corrected text.
-- undated: a fact that needs a date. One quote. Set target_entry_id and proposed_content (the same fact with an inferred date).
-- stale: a fact that looks expired. One quote. Set target_entry_id and proposed_content.
-- Cite only ids listed in the data section. Do not invent ids.
+- Only propose a finding supported by entries inside this pack. Do not invent pairs from outside the pack. Cite only ids listed in the data section.
+- duplicate: two or more entries in this pack that state the same fact. Include every member id and a quote from each. Leave target_entry_id and proposed_content null.
+- contradiction: two entries in this pack that cannot both be true. Two id-linked quotes required. Propose corrected text only when the entries establish it; otherwise emit a question.
+- stale: an entry is explicitly superseded by another fact. Use stated effective dates or source statements, never created_at alone. Quote the target and set target_entry_id and proposed_content only when the replacement is established.
+- contradiction and stale must include target_entry_id in entry_ids and quote that target entry itself.
+- question: the entries appear inconsistent but the pack does not establish a correction. Set a concise question, leave target_entry_id and proposed_content null, and quote every listed entry.
+- created_at is only when NorthKeep recorded a memory. It is not an effective date, truth ranking, or authority signal.
+- A temporary exception, one-time event, conditional statement, or narrower scope is not necessarily a reversal. When uncertain, emit a question instead of forcing a replacement.
+- If nothing in this pack is a same-fact duplicate, a contradiction, or a stale replacement, return {"proposals":[]}.
+- Do not propose undated facts.
 - explanation is a short note for the user. It is never applied as a write.`;
 
 export interface ReviewPassResult {
@@ -38,35 +48,28 @@ export interface ReviewPassResult {
   drops: Record<string, number>;
   model: string;
   batches: number;
+  coverage: {
+    selected: number;
+    compared: number;
+    skipped: number;
+    failed: number;
+    /** Processing completed without unavailable, skipped, or failed review work. */
+    complete: boolean;
+  };
 }
 
 export interface ReviewPassOptions {
   model?: string;
   timeoutMs?: number;
   onProgress?: (done: number, total: number) => void;
+  onStatus?: (msg: string) => void;
+  /** RAM-only embedder. Never persist. Missing means exact-hash only. */
+  embed?: (text: string) => Promise<ArrayLike<number>>;
 }
 
 /** Live entries only (caller uses vault.list()). Drop project: docs. Shared stays in. */
 export function selectReviewEntries(entries: MemoryEntry[]): MemoryEntry[] {
   return entries.filter((e) => !isProjectScope(e.scope));
-}
-
-export function batchReviewEntries(entries: MemoryEntry[]): MemoryEntry[][] {
-  const batches: MemoryEntry[][] = [];
-  let current: MemoryEntry[] = [];
-  let chars = 0;
-  for (const e of entries) {
-    const size = e.content.length + 64;
-    if (current.length > 0 && (current.length >= BATCH_MAX_ENTRIES || chars + size > BATCH_MAX_CHARS)) {
-      batches.push(current);
-      current = [];
-      chars = 0;
-    }
-    current.push(e);
-    chars += size;
-  }
-  if (current.length > 0) batches.push(current);
-  return batches;
 }
 
 function formatDataSection(entries: MemoryEntry[]): string {
@@ -94,9 +97,42 @@ async function generateBatch(
   return ollama.generateJson(prompt, { model: opts.model, timeoutMs: opts.timeoutMs });
 }
 
+async function embedSingletons(
+  singletons: MemoryEntry[],
+  embed: (text: string) => Promise<ArrayLike<number>>,
+): Promise<{ embeddings: Map<string, Float32Array>; failed: Set<string> }> {
+  const map = new Map<string, Float32Array>();
+  const failed = new Set<string>();
+  let dimensions: number | null = null;
+  for (const entry of singletons) {
+    try {
+      const vec = await embed(entry.content);
+      const value = Float32Array.from(vec);
+      const magnitude = value.reduce((sum, component) => sum + component * component, 0);
+      if (
+        value.length === 0 ||
+        !value.every(Number.isFinite) ||
+        !Number.isFinite(magnitude) ||
+        magnitude === 0 ||
+        (dimensions !== null && value.length !== dimensions)
+      ) {
+        failed.add(entry.id);
+        continue;
+      }
+      dimensions ??= value.length;
+      map.set(entry.id, value);
+    } catch {
+      failed.add(entry.id);
+    }
+  }
+  return { embeddings: map, failed };
+}
+
 /**
  * Run the review pass over a snapshot. Does not write the vault. Does not
- * write the report (the caller saves).
+ * write the report (the caller saves). Cluster-first: exact hash emits
+ * duplicates with no model; cosine packs (when embed is provided) are the
+ * only generateJson inputs.
  */
 export async function runReviewPass(
   entries: MemoryEntry[],
@@ -105,13 +141,109 @@ export async function runReviewPass(
 ): Promise<ReviewPassResult> {
   const model = opts?.model ?? REVIEW_MODEL_PREFERRED;
   const timeoutMs = opts?.timeoutMs ?? REVIEW_TIMEOUT_MS;
-  const batches = batchReviewEntries(entries);
   const proposals: ReviewProposal[] = [];
   const drops: Record<string, number> = {};
+  const usedIds = new Set<string>();
+  const comparedIds = new Set<string>();
+  const skippedIds = new Set<string>();
+  const failedIds = new Set<string>();
 
-  for (let i = 0; i < batches.length; i++) {
-    const batch = batches[i]!;
-    const prompt = reviewPrompt(batch);
+  const prelim = clusterReviewEntries(entries);
+  for (const cluster of prelim) {
+    if (cluster.kind === 'exact') {
+      proposals.push(makeExactDuplicateProposal(cluster.members, usedIds));
+      for (const member of cluster.members) comparedIds.add(member.id);
+    }
+  }
+  const exactIds = new Set(
+    prelim.filter((c) => c.kind === 'exact').flatMap((c) => c.members.map((m) => m.id)),
+  );
+  const singletons = entries.filter((e) => !exactIds.has(e.id));
+  const representatives = prelim
+    .filter((cluster) => cluster.kind === 'exact')
+    .map((cluster) => cluster.members[0]!);
+  const semanticEntries = [...singletons, ...representatives];
+
+  const finish = (batches: number): ReviewPassResult => {
+    const compared = [...comparedIds].filter(
+      (id) => !skippedIds.has(id) && !failedIds.has(id),
+    ).length;
+    return {
+      proposals,
+      drops,
+      model,
+      batches,
+      coverage: {
+        selected: entries.length,
+        compared,
+        skipped: skippedIds.size,
+        failed: failedIds.size,
+        complete:
+          skippedIds.size === 0 &&
+          failedIds.size === 0 &&
+          drops.semantic_unavailable === undefined &&
+          drops.pack_split_gap === undefined &&
+          compared === entries.length,
+      },
+    };
+  };
+
+  if (opts?.embed === undefined) {
+    opts?.onStatus?.(NOMIC_STATUS);
+    for (const entry of singletons) skippedIds.add(entry.id);
+    for (const entry of representatives) failedIds.add(entry.id);
+    if (representatives.length > 0) drops.semantic_unavailable = representatives.length;
+    if (singletons.length > 0) drops.embedding_unavailable = singletons.length;
+    return finish(0);
+  }
+
+  opts?.onStatus?.('Creating semantic review comparisons.');
+  const embeddable = semanticEntries.filter((entry) => {
+    if (entry.content.length <= MAX_REVIEW_ENTRY_CHARS) return true;
+    skippedIds.add(entry.id);
+    return false;
+  });
+  const embedded = await embedSingletons(embeddable, opts.embed);
+  for (const id of embedded.failed) failedIds.add(id);
+  if (embedded.failed.size > 0) {
+    drops.embedding_failed = embedded.failed.size;
+    opts?.onStatus?.(`${embedded.failed.size} memories could not be compared because embeddings failed.`);
+  }
+  const packed = clusterReviewEntries(semanticEntries, embedded.embeddings).filter(
+    (c) => c.kind === 'candidate' || c.kind === 'related',
+  );
+  const packedIds = new Set(packed.flatMap((cluster) => cluster.members.map((member) => member.id)));
+  for (const id of embedded.embeddings.keys()) {
+    if (!packedIds.has(id)) comparedIds.add(id);
+  }
+
+  const modelPacks: MemoryEntry[][] = [];
+  for (const cluster of packed) {
+    const split = splitReviewPack(cluster.members);
+    modelPacks.push(...split.packs);
+    for (const skipped of split.skipped) skippedIds.add(skipped.id);
+    if (split.splitCount > 0) {
+      drops.pack_split = (drops.pack_split ?? 0) + split.splitCount;
+      drops.pack_split_gap = (drops.pack_split_gap ?? 0) + split.splitCount;
+      for (const member of cluster.members) failedIds.add(member.id);
+    }
+  }
+
+  if (modelPacks.length === 0) {
+    if (skippedIds.size > 0) {
+      drops.oversized_entry = skippedIds.size;
+      opts?.onStatus?.(`${skippedIds.size} memories were too large for a bounded review pack.`);
+    }
+    return finish(0);
+  }
+
+  if (drops.pack_split_gap !== undefined) {
+    opts?.onStatus?.('Some related memories required separate review packs and are counted as incomplete comparisons.');
+  }
+
+  for (let i = 0; i < modelPacks.length; i++) {
+    const pack = modelPacks[i]!;
+    const prompt = reviewPrompt(pack);
     let parsed: unknown | null = null;
     for (let attempt = 0; attempt < 2 && parsed === null; attempt++) {
       try {
@@ -123,15 +255,28 @@ export async function runReviewPass(
     }
     if (parsed === null || extractRawProposals(parsed) === null) {
       drops.parse_failed = (drops.parse_failed ?? 0) + 1;
-      opts?.onProgress?.(i + 1, batches.length);
+      for (const entry of pack) failedIds.add(entry.id);
+      opts?.onStatus?.(`Review batch ${i + 1} failed validation after retry.`);
+      opts?.onProgress?.(i + 1, modelPacks.length);
       continue;
     }
-    const result = validateProposals(parsed, batch);
+    const result = validateProposals(parsed, pack);
     proposals.push(...result.proposals);
     mergeDrops(drops, result.drops);
-    opts?.onProgress?.(i + 1, batches.length);
+    if (Object.keys(result.drops).length > 0) {
+      for (const entry of pack) failedIds.add(entry.id);
+      opts?.onStatus?.(`Review batch ${i + 1} contained invalid findings and has incomplete coverage.`);
+    } else {
+      for (const entry of pack) comparedIds.add(entry.id);
+    }
+    opts?.onProgress?.(i + 1, modelPacks.length);
   }
 
-  return { proposals, drops, model, batches: batches.length };
+  if (skippedIds.size > 0) {
+    drops.oversized_entry = skippedIds.size;
+    opts?.onStatus?.(`${skippedIds.size} memories were too large for a bounded review pack.`);
+  }
+  for (const id of failedIds) comparedIds.delete(id);
+  for (const id of skippedIds) comparedIds.delete(id);
+  return finish(modelPacks.length);
 }
-

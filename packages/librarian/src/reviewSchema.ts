@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto';
 import type { MemoryEntry } from '@northkeep/core';
 
-export const REVIEW_KINDS = ['duplicate', 'contradiction', 'undated', 'stale'] as const;
+export const REVIEW_KINDS = ['duplicate', 'contradiction', 'undated', 'stale', 'question'] as const;
 export type ReviewKind = (typeof REVIEW_KINDS)[number];
 
 export type ProposalStatus = 'pending' | 'accepted' | 'rejected' | 'resolved';
@@ -25,6 +25,8 @@ export interface ReviewProposal {
   explanation: string;
   target_entry_id: string | null;
   proposed_content: string | null;
+  /** User-facing unresolved question. Never applied as replacement content. */
+  question?: string | null;
   member_decisions?: Record<string, MemberDecision>;
   status: ProposalStatus;
 }
@@ -66,7 +68,8 @@ export function extractRawProposals(parsed: unknown): unknown[] | null {
   return proposals;
 }
 
-function assignProposalId(used: Set<string>, seed: string): string {
+/** 8 lowercase hex, stable for a seed, unique within `used`. */
+export function assignProposalId(used: Set<string>, seed: string): string {
   let n = 0;
   for (;;) {
     const id = createHash('sha256').update(`${seed}:${n}`).digest('hex').slice(0, 8);
@@ -117,11 +120,20 @@ function readStringIds(raw: unknown): string[] {
   return raw.filter((id): id is string => typeof id === 'string' && id.length > 0);
 }
 
+export interface ValidateProposalsOptions {
+  /** When false (default), undated proposals are dropped. Kind stays in the union. */
+  includeUndated?: boolean;
+}
+
 /**
  * Validate raw model proposals against a live snapshot. Invalid proposals are
  * dropped and counted by reason. Assigned ids are 8 lowercase hex.
  */
-export function validateProposals(raw: unknown, entries: MemoryEntry[]): ValidateResult {
+export function validateProposals(
+  raw: unknown,
+  entries: MemoryEntry[],
+  opts?: ValidateProposalsOptions,
+): ValidateResult {
   const drops: Record<string, number> = {};
   const list = extractRawProposals(raw);
   if (list === null) {
@@ -131,6 +143,7 @@ export function validateProposals(raw: unknown, entries: MemoryEntry[]): Validat
   const byId = new Map(entries.map((e) => [e.id, e]));
   const usedIds = new Set<string>();
   const proposals: ReviewProposal[] = [];
+  const includeUndated = opts?.includeUndated === true;
 
   for (const item of list) {
     if (item === null || typeof item !== 'object') {
@@ -144,12 +157,17 @@ export function validateProposals(raw: unknown, entries: MemoryEntry[]): Validat
       explanation?: unknown;
       target_entry_id?: unknown;
       proposed_content?: unknown;
+      question?: unknown;
     };
     if (typeof rec.kind !== 'string' || !isReviewKind(rec.kind)) {
       bump(drops, 'unknown_kind');
       continue;
     }
     const kind: ReviewKind = rec.kind;
+    if (kind === 'undated' && !includeUndated) {
+      bump(drops, 'undated_disabled');
+      continue;
+    }
     const entryIds = readStringIds(rec.entry_ids);
     const quotes = readQuotes(rec.quotes);
     const explanation = typeof rec.explanation === 'string' ? rec.explanation : '';
@@ -160,6 +178,10 @@ export function validateProposals(raw: unknown, entries: MemoryEntry[]): Validat
     const proposed =
       typeof rec.proposed_content === 'string' && rec.proposed_content.length > 0
         ? rec.proposed_content
+        : null;
+    const question =
+      typeof rec.question === 'string' && rec.question.trim().length > 0
+        ? rec.question
         : null;
 
     const cited = new Set<string>([...entryIds, ...quotes.map((q) => q.entry_id)]);
@@ -180,6 +202,7 @@ export function validateProposals(raw: unknown, entries: MemoryEntry[]): Validat
       explanation,
       target,
       proposed,
+      question,
       byId,
       drops,
       usedIds,
@@ -198,12 +221,13 @@ function acceptByKind(
     explanation: string;
     target: string | null;
     proposed: string | null;
+    question: string | null;
     byId: Map<string, MemoryEntry>;
     drops: Record<string, number>;
     usedIds: Set<string>;
   },
 ): ReviewProposal | null {
-  const { entryIds, quotes, explanation, target, proposed, byId, drops, usedIds } = ctx;
+  const { entryIds, quotes, explanation, target, proposed, question, byId, drops, usedIds } = ctx;
   const goodQuotes = quotes.filter((q) => validQuote(q, byId, drops));
 
   switch (kind) {
@@ -244,6 +268,14 @@ function acceptByKind(
         bump(drops, 'missing_target');
         return null;
       }
+      if (!entryIds.includes(target)) {
+        bump(drops, 'target_not_listed');
+        return null;
+      }
+      if (!linked.some((quote) => quote.entry_id === target)) {
+        bump(drops, 'missing_target_quote');
+        return null;
+      }
       if (proposed === null) {
         bump(drops, 'missing_proposed_content');
         return null;
@@ -269,18 +301,57 @@ function acceptByKind(
         bump(drops, 'missing_target');
         return null;
       }
+      if (!entryIds.includes(target)) {
+        bump(drops, 'target_not_listed');
+        return null;
+      }
+      const targetQuote = goodQuotes.find((quote) => quote.entry_id === target);
+      if (targetQuote === undefined) {
+        bump(drops, 'missing_target_quote');
+        return null;
+      }
       if (proposed === null) {
         bump(drops, 'missing_proposed_content');
         return null;
       }
-      const ids = [...new Set([...entryIds, goodQuotes[0]!.entry_id, target])];
+      const ids = [...new Set(entryIds)];
       return finishProposal(usedIds, {
         kind,
         entry_ids: ids,
-        quotes: [goodQuotes[0]!],
+        quotes: [targetQuote],
         explanation,
         target_entry_id: target,
         proposed_content: proposed,
+        status: 'pending',
+      });
+    }
+    case 'question': {
+      if (question === null) {
+        bump(drops, 'missing_question');
+        return null;
+      }
+      const ids = [...new Set(entryIds)];
+      if (ids.length < 2) {
+        bump(drops, 'insufficient_question_members');
+        return null;
+      }
+      if (goodQuotes.length < 2) {
+        bump(drops, 'missing_quote');
+        return null;
+      }
+      const quotedIds = new Set(goodQuotes.map((quote) => quote.entry_id));
+      if (!ids.every((id) => quotedIds.has(id))) {
+        bump(drops, 'insufficient_question_quotes');
+        return null;
+      }
+      return finishProposal(usedIds, {
+        kind,
+        entry_ids: ids,
+        quotes: goodQuotes.filter((quote) => ids.includes(quote.entry_id)),
+        explanation,
+        target_entry_id: null,
+        proposed_content: null,
+        question,
         status: 'pending',
       });
     }
@@ -292,10 +363,10 @@ function acceptByKind(
   }
 }
 
-function finishProposal(
+export function finishProposal(
   usedIds: Set<string>,
   draft: Omit<ReviewProposal, 'id'>,
 ): ReviewProposal {
-  const seed = `${draft.kind}|${[...draft.entry_ids].sort().join(',')}|${draft.proposed_content ?? ''}|${draft.explanation}`;
+  const seed = `${draft.kind}|${[...draft.entry_ids].sort().join(',')}|${draft.proposed_content ?? ''}|${draft.question ?? ''}|${draft.explanation}`;
   return { id: assignProposalId(usedIds, seed), ...draft };
 }

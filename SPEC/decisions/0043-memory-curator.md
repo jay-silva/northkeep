@@ -1,10 +1,9 @@
 # ADR 0043 — Memory review pass (unnamed): local report, user-approved supersede
 
 - **Date:** 2026-08-27
-- **Status:** Accepted. KEEP WITH PATCHES (P1–P8 plus 2026-08-27 addendum).
-  Implementation is in this checkout (`packages/librarian` review pass,
-  `northkeep review`, web Review pass). P8 API path is being implemented
-  per this addendum.
+- **Status:** Accepted. KEEP WITH PATCHES (P1–P8 plus 2026-08-27
+  addenda and 2026-09-09 local-curator addendum). Jay: "do it"
+  2026-09-09 after CLEARED WITH WOUNDS; wounds folded below.
 - **Deciders:** Jay (product owner; confirmed the plan that this ADR is
   written before any curator product code), adversarial reviewer, Cursor
 - **Extends:** ADR 0015 (edit = supersession, never in-place mutation),
@@ -364,7 +363,164 @@ egress. If the panel omits that, the user cannot consent to it.
 shared scopes are already visible to connected apps, and that this
 send is a new egress to `{host}`, on top of Cloud Connect.
 
+## Addendum (2026-09-09, local curator: cluster first, dismiss, search stays usable)
+
+Jay 2026-09-09: the shipped pass did a poor job on a real vault, and
+the report buried search under a wall of cards. Improving the pass by
+sending memories to a cloud model is the wrong move. Quality work is
+on-device. The existing P8 API path is not this milestone and is not
+how we make the curator good. Local never hops to API (P8 / AP1
+unchanged).
+
+### Why the shipped pass failed
+
+`batchReviewEntries` feeds the local model independent 25-entry /
+12_000-character slices of the whole vault and asks for all four
+kinds equally. Cross-batch duplicates are invisible. Undated
+proposals flood a vault that is undated by design. P4 stops
+fabricated quotes; it does not stop low-value ones.
+
+The GUI puts `#reviewPanel` between the search box and `#memList` and
+renders every proposal, including resolved ones. Duplicate clusters
+have Keep / Forget per member and no Dismiss. Search still runs
+(`GET /api/memories?q=`). The user cannot see the results.
+
+### P9 — Cluster first, on this machine
+
+The 25-slice whole-vault dump is retired as the driver of
+`runReviewPass`.
+
+1. Exact / normalized-text-hash duplicates become duplicate proposals
+   with **no model call**. Quotes are exact substrings of stored
+   content (full `content` is valid under P4). Normalize for the hash
+   only: Unicode NFC, lowercase, collapse whitespace, strip
+   punctuation. Homoglyphs must not hash-collide.
+2. Near-duplicates become **candidate packs** only when the local
+   embedder (`nomic-embed-text`) is present. Only those packs are sent
+   to the local model. The model is asked whether the pack is the
+   same fact (duplicate), cannot-both-be-true (contradiction, two
+   id-linked quotes), a stale replacement inside the pack, or not a
+   finding. It is not asked to invent pairs from the rest of the
+   vault. It is not asked for undated.
+3. Cosine hits are never auto-emitted as duplicates. Same-topic junk
+   is how the shipped pass failed. Exact hash is the only no-model
+   emit. Cosine is a packer, not a same-fact detector.
+4. If there are no candidate packs, do not call the model. The report
+   may still contain exact-hash duplicates.
+5. Review embeddings are RAM-only for the run. Do not `put` new
+   vectors into the vault SQLite image and do not `save()` as part of
+   clustering. A persisted fill rides the encrypted `.nkv` through
+   sync and can crowd the 4 MB cap. Existing search-cache hits may
+   be read; misses are embedded in memory and discarded when the run
+   ends. Plaintext embeddings never leave.
+6. A model pack is capped (8 members or 12_000 characters). Oversized
+   clusters split with a one-member overlap so a pair is not cut
+   apart, and the split is counted in `drops`. The pass never falls
+   back to a random 25-slice of the vault.
+7. `runReviewPass` still takes a snapshot, not a `Vault` handle (P1).
+   Clustering lives inside `runReviewPass`. Optional `embed` is a
+   function over text, not a vault write.
+
+Pinned thresholds after the 2026-09-09 review (local heuristics; tune
+without a new ADR if they stay on-device and do not auto-apply):
+
+- Normalized hash exact: duplicate, no model
+- Cosine ≥ 0.90: candidate pack, send to model
+- Cosine 0.78–0.90: related pack, send to model
+- Below the cosine floor: do not send, do not propose
+- Jaccard is not a substitute when nomic is missing. Import's 0.6
+  floor and a draft 0.85 floor both miss real paraphrases (executed:
+  0.75 / 0.60 on the planted pair). Do not pack on Jaccard alone.
+- Review tokenizer keeps numbers (1–2 digit tokens stay). Import
+  tokenize drops them, so "14 units" and "15 units" would collide.
+  Do not reuse `dedupe.ts` tokenize here.
+
+Missing `nomic-embed-text` is a loud skip of the near-dup path, not a
+silent Jaccard continue. Exact-hash duplicates still emit. Progress
+says so. No API hop. The whole pass does not refuse; it just does not
+ask the model about paraphrases it cannot see.
+
+### P10 — Undated off by default
+
+The schema keeps the `undated` kind so an old report still renders.
+The prompt does not ask for it. The validator drops `undated` unless
+an explicit flag is on. That flag stays off in this milestone.
+Staleness is only proposed inside a related pack, and only when a
+later memory looks like a replacement.
+
+### P6 reading — Dismiss is a vault no-op
+
+P6 forbids batch **writes**: no accept-all, no forget-all, no
+auto-apply. Reject is already a vault no-op and records a fingerprint
+so the same proposal is hidden on the next run.
+
+- Dismiss one item calls existing `rejectProposal`.
+- Duplicate clusters gain Dismiss: reject the cluster, every member
+  kept. The user is not forced through Keep / Forget on junk.
+- Dismiss remaining loops pending proposals through `rejectProposal`.
+  Label: "Dismiss remaining." Never "Forget remaining." Copy says it
+  keeps every memory and hides the rest of this report.
+- Hide / collapse of the queue is UI-only and writes nothing.
+
+Fingerprints include the proposal's quotes (verbatim vault
+substrings) as well as kind, ids, and proposed content. A dismissed
+exact-dup whose member text later changes gets a new fingerprint and
+may resurface. Old quote-less fingerprints in an existing report file
+become inert; that is a one-time cost.
+
+There is still no accept-all and no forget-all.
+
+### Search stays usable
+
+When a report exists, Memories shows a one-line bar (`Review: N
+pending`) plus Review items / Dismiss remaining. After a run the
+queue does **not** auto-expand. Expanded, it is height-capped so
+`#memList` stays on screen. Default list is `pending` only. Typing in
+search still loads memories. The report does not gate the search API.
+
+### What this addendum does not do
+
+It does not add, expand, or rely on the P8 API path as a quality
+lever. Clustering lives inside `runReviewPass`, so a P8 run (if the
+user still chooses one) sends packs rather than 25-slices: less
+leaves, not more. Consent still names the full selected count this
+milestone (over-consent, not a leak). It does not change which hosts
+qualify. It does not persist review embeddings into the `.nkv`. Speed
+is still not a reason to default to an API model (Honest limits).
+
+Mobile, connector, scheduled runs, auto-apply, naming: still out.
+
+### Acceptance test (Jay, this machine, after implementation)
+
+Replace the planted-undated requirement from the original test.
+
+1. Planted exact duplicate pair: appears with **no** model call.
+   Dismiss the cluster: both memories remain. Forget one member still
+   works as today.
+2. Planted paraphrase pair: the model is called once, on that pack
+   only (requires nomic).
+3. Planted unique undated fact: **not** proposed.
+4. Planted dated contradiction inside a related pack: still proposed,
+   two id-linked exact quotes.
+5. Zero vault writes during the run (entry count and chain head
+   unchanged). Review must not grow the embeddings table.
+6. Stop Ollama: loud refuse, no API call, no vault write.
+7. Open a report with many pending items: search box and results
+   visible; typing search updates results without dismissing anything.
+8. Dismiss remaining: vault unchanged; bar shows 0 pending; dismissed
+   fingerprints do not resurface on the next local run unless the
+   cited text changed.
+
+## Adversarial review (2026-09-09, against this addendum)
+
+Assumptions plus executed clustering, fingerprint, and cache attacks.
+Verdict: **CLEARED WITH WOUNDS**. Wounds folded above. Scars accepted:
+undated stays off; homoglyphs only reach the model if cosine is up;
+cosine 0.90 is a packer not a judge; Dismiss remaining is reject,
+never forget.
+
 ## Out of this ADR
 
 Auto-apply. Background or scheduled runs. Connector or mobile curation.
-Naming. Resurrecting ADR 0036/0037, Show HN, or track-m.
+Naming. Resurrecting ADR 0036/0037, Show HN, or track-m. Using a
+cloud model to make the review pass good.

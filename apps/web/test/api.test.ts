@@ -2,6 +2,9 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { KDF_INTERACTIVE, Vault, ensureDeviceSecret, generateDeviceSecret } from '@northkeep/core';
+import { assembleReviewReport, loadReviewReport, proposalFingerprint, saveReviewReport } from '@northkeep/librarian';
 import { handleApi } from '../src/api.js';
 import { UiSession } from '../src/session.js';
 
@@ -79,7 +82,7 @@ describe('handleApi review pass (ADR 0043)', () => {
     expect(missing.status).toBe(404);
   });
 
-  it('GET /api/review/report is 404 when no report exists', async () => {
+  it('GET /api/review/report is locked before checking report existence', async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-review-web-'));
     process.env.NORTHKEEP_HOME = dir;
     const res = await handleApi(
@@ -89,6 +92,19 @@ describe('handleApi review pass (ADR 0043)', () => {
       new URLSearchParams(),
       Buffer.from(''),
     );
+    expect(res.status).toBe(423);
+  });
+
+  it('GET /api/review/report is 404 when unlocked and no report exists', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-review-web-'));
+    process.env.NORTHKEEP_HOME = dir;
+    const vaultPath = path.join(dir, 'vault.nkv');
+    const passphrase = 'a strong test passphrase';
+    const { secret } = ensureDeviceSecret();
+    Vault.create({ path: vaultPath, passphrase, deviceSecret: secret, kdf: KDF_INTERACTIVE }).close();
+    const session = new UiSession(vaultPath);
+    await session.unlock(passphrase);
+    const res = await handleApi(session, 'GET', '/api/review/report', new URLSearchParams(), Buffer.alloc(0));
     expect(res.status).toBe(404);
   });
 
@@ -147,6 +163,7 @@ describe('handleApi review pass (ADR 0043)', () => {
           mode: 'api',
           endpoint_id: 'local-ollama',
           selection_fingerprint: 'abc',
+          scopes: ['personal'],
         }),
       ),
     );
@@ -168,7 +185,7 @@ describe('handleApi review pass (ADR 0043)', () => {
     expect((res.body as { error: string }).error).toMatch(/selection_fingerprint/);
   });
 
-  it('POST /api/review/run with no body stays on the local path', async () => {
+  it('POST /api/review/run requires explicit scopes without selecting a provider', async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-review-web-'));
     process.env.NORTHKEEP_HOME = dir;
     const res = await handleApi(
@@ -178,13 +195,76 @@ describe('handleApi review pass (ADR 0043)', () => {
       new URLSearchParams(),
       Buffer.from(''),
     );
-    // Local path: started job (200), locked (423), or no vault on this
-    // throwaway session (500). Never an API-path 400, never a silent hop.
-    expect(res.status).not.toBe(400);
+    expect(res.status).toBe(400);
     const err = (res.body as { error?: string }).error ?? '';
     expect(err).not.toMatch(/endpoint_id|selection_fingerprint|That endpoint is local/);
-    if (res.status === 200) {
-      expect((res.body as { job_id?: string }).job_id).toEqual(expect.any(String));
+    expect(err).toMatch(/scopes/);
+  });
+
+  it('POST per-proposal reject uses exact bindings and leaves vault memories unchanged', async () => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-review-web-'));
+    process.env.NORTHKEEP_HOME = dir;
+    const vaultPath = path.join(dir, 'vault.nkv');
+    const passphrase = 'a strong test passphrase';
+    const { secret } = ensureDeviceSecret();
+    const vault = Vault.create({
+      path: vaultPath,
+      passphrase: 'a strong test passphrase',
+      deviceSecret: secret,
+      kdf: KDF_INTERACTIVE,
+    });
+    try {
+      const a = vault.remember({ content: 'Jay is a paramedic in Bourne.', type: 'semantic' });
+      const b = vault.remember({ content: 'Jay is a paramedic in Bourne!', type: 'semantic' });
+      vault.save();
+      const before = JSON.stringify(vault.export().memories);
+      const report = assembleReviewReport({
+          model: 'fixture',
+          started_at: '2026-09-09T00:00:00.000Z',
+          entry_count: 2,
+          drops: {},
+          proposals: [
+            {
+              id: 'd0a0beb1',
+              kind: 'duplicate',
+              entry_ids: [a.id, b.id],
+              quotes: [
+                { entry_id: a.id, quote: a.content },
+                { entry_id: b.id, quote: b.content },
+              ],
+              explanation: 'exact',
+              target_entry_id: null,
+              proposed_content: null,
+              member_decisions: { [a.id]: 'pending', [b.id]: 'pending' },
+              status: 'pending',
+            },
+          ],
+          vault_id: vault.getVaultId(),
+          vault_path: vaultPath,
+          selected_scopes: ['personal'],
+          source_entries: [a, b],
+        });
+      saveReviewReport(report, vaultPath);
+      const session = new UiSession(vaultPath);
+      await session.unlock(passphrase);
+      const out = await handleApi(
+        session,
+        'POST',
+        '/api/review/d0a0beb1/reject',
+        new URLSearchParams(),
+        Buffer.from(JSON.stringify({
+          report_id: report.report_id,
+          proposal_fingerprint: proposalFingerprint(report.proposals[0]!),
+          operation_id: randomUUID(),
+        })),
+      );
+      expect(out.status).toBe(200);
+      expect((out.body as { ok: boolean }).ok).toBe(true);
+      expect(JSON.stringify(vault.export().memories)).toBe(before);
+      const loaded = loadReviewReport(vaultPath);
+      expect(loaded?.proposals[0]?.status).toBe('rejected');
+    } finally {
+      vault.close();
     }
   });
 });
@@ -207,7 +287,7 @@ describe('handleApi contract targets (M16)', () => {
 
 import { createHash } from 'node:crypto';
 import { createServer, type Server } from 'node:http';
-import { KDF_INTERACTIVE, Vault, setPlatform } from '@northkeep/core';
+import { setPlatform } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import { deriveSyncCreds, setSyncServer } from '@northkeep/sync';
 

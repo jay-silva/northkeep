@@ -52,21 +52,28 @@ import {
 import { extractText, ExtractionError, UnsupportedFileTypeError } from '@northkeep/extract';
 import {
   EXTRACT_MODEL,
-  acceptProposal,
+  EMBED_MODEL,
+  assertReportVault,
+  applyReviewAction,
+  recordReviewDecision,
   assembleReviewReport,
   createOllamaClient,
   createOllamaEmbedder,
   dedupeCandidates,
-  forgetDuplicateMember,
-  keepDuplicateMember,
+  hasOllamaModel,
   loadReviewReport,
+  proposalFingerprint,
+  operationFingerprint,
+  reconcileReviewOperations,
   ollamaState,
-  rejectProposal,
+  rejectRemaining,
   resolveReviewModel,
   runImport,
   runReviewPass,
   saveReviewReport,
+  restoreReviewOperation,
   selectReviewEntries,
+  type ReviewReport,
 } from '@northkeep/librarian';
 import {
   auditAsCsv,
@@ -129,6 +136,7 @@ import {
   getDefaultEndpoint,
 } from '@northkeep/converse';
 import { LockedError, type UiSession } from './session.js';
+import { handleCurationApi } from './curationApi.js';
 
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 
@@ -210,14 +218,23 @@ interface ReviewJob {
   batches_total: number;
   error?: string;
   progress?: string;
+  vaultPath: string;
 }
 const reviewJobs = new Map<string, ReviewJob>();
+const activeReviewVaults = new Set<string>();
 
 function evictStaleReviewJobs(): void {
   const now = Date.now();
   for (const [id, job] of reviewJobs) {
     if (now - job.createdAt > JOB_TTL_MS) reviewJobs.delete(id);
   }
+}
+
+function requireV2Report(vaultPath: string): ReviewReport {
+  const report = loadReviewReport(vaultPath);
+  if (report === null) throw new BadJsonError('No valid review report.');
+  if (report.schema !== 'northkeep-review-report/2') throw new BadJsonError('This report is read-only. Run a fresh review.');
+  return report;
 }
 
 /**
@@ -265,6 +282,14 @@ export async function handleApi(
     if (err instanceof SubscriptionRequiredError)
       return bad(402, 'A $10/month subscription is required to sync on this server.');
     if (err instanceof ConnectorTombstoneError) return bad(412, err.message);
+    if (route.startsWith('/api/review/') && err instanceof Error) {
+      // In particular, EIO after the vault save is uncertain, not a malformed request.
+      // The client must keep its operation ID for an idempotent retry.
+      if (typeof (err as NodeJS.ErrnoException).code === 'string') return bad(500, err.message);
+      if (/changed|obsolete|stale|different vault|interrupted|reconcil|not pending|corrupt|strict validation|already (?:used|restored|been restored|running)/i.test(err.message)) return bad(409, err.message);
+      if (err instanceof BadJsonError || /must be|must name|must change|required|cannot be accepted|only (?:duplicate|a question)|no (?:restorable|review proposal|current review)|read-only|full .*id/i.test(err.message)) return bad(400, err.message);
+      return bad(500, err.message);
+    }
     if (
       err instanceof BadJsonError ||
       err instanceof DeviceSecretError ||
@@ -283,6 +308,8 @@ async function dispatch(
   query: URLSearchParams,
   body: Buffer,
 ): Promise<ApiResponse> {
+  const curation = await handleCurationApi(session, method, route, body);
+  if (curation !== null) return curation;
   if (method === 'GET' && route === '/api/status') {
     const unlocked = session.isUnlocked();
     let counts: Record<string, number> = {};
@@ -1566,15 +1593,32 @@ async function dispatch(
     return startReviewRun(session, body);
   }
 
+  if (method === 'GET' && route === '/api/review/collections') {
+    return ok(await session.withVault((vault) => {
+      const entries = selectReviewEntries(vault.list());
+      const shared = new Set(vault.sharedScopes());
+      const counts = new Map<string, number>();
+      for (const entry of entries) counts.set(entry.scope, (counts.get(entry.scope) ?? 0) + 1);
+      return {
+        vault_id: vault.getVaultId(),
+        collections: [...counts].sort(([a], [b]) => a.localeCompare(b)).map(([scope, count]) => ({ scope, count, shared: shared.has(scope) })),
+        project_docs_excluded: true,
+      };
+    }));
+  }
+
   if (method === 'GET' && route === '/api/review/report') {
-    const report = loadReviewReport();
-    if (report === null) return bad(404, 'No review pass report yet.');
-    return ok(
-      await session.withVault((vault) => {
+    const payload = await session.withVault((vault) => {
+        const report = loadReviewReport(session.vaultPath);
+        if (report === null) return null;
+        if (report.schema !== 'northkeep-review-report/2') return { ...report, read_only: true };
+        assertReportVault(report, session.vaultPath, vault.getVaultId());
+        reconcileReviewOperations(vault, report, session.vaultPath);
         const live = vault.list({ includeForgotten: true, includeSuperseded: true });
         const byId = new Map(live.map((e) => [e.id, e]));
         return {
           ...report,
+          proposals: report.proposals.map((proposal) => ({ ...proposal, proposal_fingerprint: proposalFingerprint(proposal) })),
           live_entries: Object.fromEntries(
             [...new Set(report.proposals.flatMap((p) => p.entry_ids))]
               .map((id) => {
@@ -1582,20 +1626,42 @@ async function dispatch(
                 return [
                   id,
                   e
-                    ? { id: e.id, content: e.content, scope: e.scope, type: e.type, created_at: e.created_at }
+                    ? { ...e }
                     : { id, content: '', scope: '', type: '', created_at: '', missing: true },
                 ];
               }),
           ),
         };
-      }),
-    );
+      });
+    return payload === null ? bad(404, 'No review pass report yet.') : ok(payload);
+  }
+
+  if (method === 'GET' && route === '/api/review/history') {
+    return ok(await session.withVault((vault) => {
+      const report = loadReviewReport(session.vaultPath);
+      if (report === null || report.schema !== 'northkeep-review-report/2') throw new BadJsonError('No current review history.');
+      assertReportVault(report, session.vaultPath, vault.getVaultId());
+      reconcileReviewOperations(vault, report, session.vaultPath);
+      return { report_id: report.report_id, operations: report.operations.filter((op) => op.status === 'committed') };
+    }));
+  }
+
+  if (method === 'POST' && route === '/api/review/restore') {
+    const request = parseJson<{report_id?:string;operation_id?:string;receipt_id?:string;expected_head_id?:string;expected_content?:string}>(body);
+    return ok(await session.withVault((vault) => {
+      const report = requireV2Report(session.vaultPath);
+      assertReportVault(report, session.vaultPath, vault.getVaultId());
+      reconcileReviewOperations(vault, report, session.vaultPath);
+      const receipt = restoreReviewOperation(vault, report, session.vaultPath, vault.getVaultId(), request as Parameters<typeof restoreReviewOperation>[4]);
+      return { ok: true, receipt };
+    }));
   }
 
   const reviewJobMatch = /^\/api\/review\/(?:job|progress)\/([0-9a-f-]{36})$/.exec(route);
   if (method === 'GET' && reviewJobMatch) {
+    if (!session.isUnlocked()) return bad(423, 'Vault is locked.');
     const job = reviewJobs.get(reviewJobMatch[1]!);
-    if (!job) return bad(404, 'Unknown review job.');
+    if (!job || path.resolve(job.vaultPath) !== path.resolve(session.vaultPath)) return bad(404, 'Unknown review job.');
     return ok({
       status: job.status,
       batches_done: job.batches_done,
@@ -1606,42 +1672,25 @@ async function dispatch(
     });
   }
 
-  const reviewAct = /^\/api\/review\/([0-9a-f]{4,8})\/(accept|reject|keep|forget)$/.exec(route);
+  const reviewAct = /^\/api\/review\/([0-9a-f]{8})\/(accept|reject|keep|forget|unresolved)$/.exec(route);
   if (method === 'POST' && reviewAct) {
     const proposalId = reviewAct[1]!;
     const action = reviewAct[2]!;
-    const report = loadReviewReport();
-    if (report === null) return bad(404, 'No review pass report yet.');
-    if (action === 'reject') {
-      rejectProposal(report, proposalId);
-      saveReviewReport(report);
-      return ok({ ok: true, report });
-    }
-    if (action === 'keep') {
-      const { entry_id } = parseJson<{ entry_id?: string }>(body);
-      if (typeof entry_id !== 'string' || entry_id.length < 4) {
-        return bad(400, 'entry_id is required.');
+    const request = parseJson<Record<string, unknown>>(body) as unknown as Parameters<typeof applyReviewAction>[6];
+    return ok(await session.withVault((vault) => {
+      const report = requireV2Report(session.vaultPath);
+      assertReportVault(report, session.vaultPath, vault.getVaultId());
+      reconcileReviewOperations(vault, report, session.vaultPath);
+      const proposal = report.proposals.find((p) => p.id === proposalId);
+      if (!proposal) throw new BadJsonError('Unknown proposal.');
+      if (request.report_id !== report.report_id || request.proposal_fingerprint !== proposalFingerprint(proposal)) throw new BadJsonError('Obsolete or changed review action.');
+      if (action === 'accept' || action === 'forget') {
+        const receipt = applyReviewAction(vault, report, session.vaultPath, vault.getVaultId(), proposalId, action, request);
+        return { ok: true, receipt };
       }
-      keepDuplicateMember(report, proposalId, entry_id);
-      saveReviewReport(report);
-      return ok({ ok: true, report });
-    }
-    return ok(
-      await session.withVault((vault) => {
-        if (action === 'accept') {
-          acceptProposal(vault, report, proposalId);
-        } else {
-          const { entry_id } = parseJson<{ entry_id?: string }>(body);
-          if (typeof entry_id !== 'string' || entry_id.length < 4) {
-            throw new BadJsonError('entry_id is required.');
-          }
-          forgetDuplicateMember(vault, report, proposalId, entry_id);
-        }
-        vault.save();
-        saveReviewReport(report);
-        return { ok: true };
-      }),
-    );
+      const receipt = recordReviewDecision(vault, report, session.vaultPath, vault.getVaultId(), proposalId, action as 'reject' | 'keep' | 'unresolved', request);
+      return { ok: true, receipt };
+    }));
   }
 
   if (method === 'POST' && route === '/api/import/upload') {
@@ -1880,7 +1929,7 @@ function requireBoundedReviewEndpoint(endpointId: string):
 }
 
 async function reviewPreflight(session: UiSession, body: Buffer): Promise<ApiResponse> {
-  const { endpoint_id } = parseJson<{ endpoint_id?: string }>(body);
+  const { endpoint_id, scopes } = parseJson<{ endpoint_id?: string; scopes?: string[] }>(body);
   if (typeof endpoint_id !== 'string' || endpoint_id.length === 0) {
     return bad(400, 'endpoint_id is required.');
   }
@@ -1889,8 +1938,13 @@ async function reviewPreflight(session: UiSession, body: Buffer): Promise<ApiRes
   const snapshot = await session.withVault((vault) => ({
     entries: vault.list(),
     shared: vault.sharedScopes(),
+    vault_id: vault.getVaultId(),
   }));
   const selection = snapshotReviewSelection(snapshot.entries, snapshot.shared);
+  if (!Array.isArray(scopes) || scopes.length === 0 || !scopes.every((s) => typeof s === 'string') || new Set(scopes).size !== scopes.length) return bad(400, 'scopes must be a non-empty array of unique collection names.');
+  const available = new Set(selection.selected.map((e) => e.scope));
+  if (scopes.some((scope) => !available.has(scope))) return bad(400, 'A selected collection does not exist or cannot be reviewed.');
+  const selected = selection.selected.filter((e) => scopes.includes(e.scope));
   return ok({
     endpoint: {
       id: checked.endpoint.id,
@@ -1898,11 +1952,26 @@ async function reviewPreflight(session: UiSession, body: Buffer): Promise<ApiRes
       host: checked.host,
       model: checked.endpoint.model,
     },
-    memory_count: selection.memory_count,
-    scopes: selection.scopes,
-    selection_fingerprint: selection.selection_fingerprint,
+    memory_count: selected.length,
+    scopes: selection.scopes.filter((item) => scopes.includes(item.scope)),
+    selection_fingerprint: operationFingerprint({vault_id:snapshot.vault_id,scopes:[...scopes].sort(),entries:selected,endpoint:checked.endpoint}),
     project_docs_excluded: true,
   });
+}
+
+/** RAM-only nomic embed for packing. Never writes the vault or the cache table. */
+async function ramReviewEmbed(
+  client: { embed: (text: string) => Promise<number[]> },
+): Promise<((text: string) => Promise<ArrayLike<number>>) | undefined> {
+  if (!(await hasOllamaModel(EMBED_MODEL))) return undefined;
+  const cache = new Map<string, number[]>();
+  return async (text: string) => {
+    const hit = cache.get(text);
+    if (hit) return hit;
+    const vec = await client.embed(text);
+    cache.set(text, vec);
+    return vec;
+  };
 }
 
 async function startReviewRun(session: UiSession, body: Buffer): Promise<ApiResponse> {
@@ -1910,51 +1979,84 @@ async function startReviewRun(session: UiSession, body: Buffer): Promise<ApiResp
     mode?: string;
     endpoint_id?: string;
     selection_fingerprint?: string;
+    scopes?: string[];
   }>(body);
   if (parsed.mode === 'api') {
     return startReviewApiRun(session, parsed);
   }
   evictStaleReviewJobs();
+  if (!Array.isArray(parsed.scopes) || parsed.scopes.length === 0 || !parsed.scopes.every((s) => typeof s === 'string') || new Set(parsed.scopes).size !== parsed.scopes.length) return bad(400, 'scopes must be a non-empty array of unique collection names.');
+  const vaultKey = path.resolve(session.vaultPath);
+  if (activeReviewVaults.has(vaultKey)) return bad(409, 'A review is already running for this vault.');
   const started_at = new Date().toISOString();
-  const snapshot = await session.withVault((vault) => ({
-    entries: vault.list(),
-  }));
-  const selected = selectReviewEntries(snapshot.entries);
+  const snapshot = await session.withVault((vault) => {
+    const previous = loadReviewReport(session.vaultPath);
+    if (previous?.schema === 'northkeep-review-report/2') reconcileReviewOperations(vault, previous, session.vaultPath);
+    return { entries: vault.list(), vault_id: vault.getVaultId(), report_id: previous?.schema === 'northkeep-review-report/2' ? previous.report_id : null };
+  });
+  const available = new Set(selectReviewEntries(snapshot.entries).map((e) => e.scope));
+  if (parsed.scopes.some((scope) => !available.has(scope))) return bad(400, 'A selected collection does not exist or cannot be reviewed.');
+  const selected = selectReviewEntries(snapshot.entries).filter((e) => parsed.scopes!.includes(e.scope));
+  // Check again after acquiring the snapshot: another request may have started while awaiting the lock.
+  if (activeReviewVaults.has(vaultKey)) return bad(409, 'A review is already running for this vault.');
+  activeReviewVaults.add(vaultKey);
   const job: ReviewJob = {
     id: randomUUID(),
     createdAt: Date.now(),
     status: 'running',
     batches_done: 0,
     batches_total: 0,
+    vaultPath: session.vaultPath,
   };
   reviewJobs.set(job.id, job);
 
   void (async () => {
     try {
       const model = await resolveReviewModel();
-      const result = await runReviewPass(selected, createOllamaClient(), {
+      const ollama = createOllamaClient();
+      const embed = await ramReviewEmbed(ollama);
+      const result = await runReviewPass(selected, ollama, {
         model,
+        embed,
         onProgress: (done, total) => {
           job.batches_done = done;
           job.batches_total = total;
         },
+        onStatus: (msg) => {
+          job.progress = msg;
+        },
       });
-      const report = assembleReviewReport({
+      await session.withVault((vault) => {
+        if (reviewJobs.get(job.id) !== job || job.vaultPath !== session.vaultPath) throw new Error('Review job no longer owns this vault.');
+        const current = selectReviewEntries(vault.list()).filter((entry) => parsed.scopes!.includes(entry.scope));
+        if (vault.getVaultId() !== snapshot.vault_id || operationFingerprint(current) !== operationFingerprint(selected)) throw new Error('Vault changed while review was running.');
+        const previous = loadReviewReport(session.vaultPath);
+        if ((previous?.schema === 'northkeep-review-report/2' ? previous.report_id : null) !== snapshot.report_id) throw new Error('Review report changed while review was running.');
+        if (previous?.schema === 'northkeep-review-report/2') reconcileReviewOperations(vault, previous, session.vaultPath);
+        const report = assembleReviewReport({
         model: result.model,
         started_at,
         finished_at: new Date().toISOString(),
         entry_count: selected.length,
         drops: result.drops,
         proposals: result.proposals,
-        previous: loadReviewReport(),
+        previous,
+        vault_id: snapshot.vault_id,
+        vault_path: session.vaultPath,
+        selected_scopes: parsed.scopes,
+        source_entries: selected,
+        coverage: result.coverage,
       });
-      saveReviewReport(report);
+        saveReviewReport(report, session.vaultPath);
+      });
       job.batches_done = result.batches;
       job.batches_total = result.batches;
       job.status = 'done';
     } catch (err: unknown) {
       job.status = 'failed';
       job.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      activeReviewVaults.delete(vaultKey);
     }
   })();
 
@@ -1963,7 +2065,7 @@ async function startReviewRun(session: UiSession, body: Buffer): Promise<ApiResp
 
 async function startReviewApiRun(
   session: UiSession,
-  parsed: { endpoint_id?: string; selection_fingerprint?: string },
+  parsed: { endpoint_id?: string; selection_fingerprint?: string; scopes?: string[] },
 ): Promise<ApiResponse> {
   if (typeof parsed.endpoint_id !== 'string' || parsed.endpoint_id.length === 0) {
     return bad(400, 'endpoint_id is required.');
@@ -1971,18 +2073,30 @@ async function startReviewApiRun(
   if (typeof parsed.selection_fingerprint !== 'string' || parsed.selection_fingerprint.length === 0) {
     return bad(400, 'selection_fingerprint is required.');
   }
+  if (!Array.isArray(parsed.scopes) || parsed.scopes.length === 0 || !parsed.scopes.every((s) => typeof s === 'string') || new Set(parsed.scopes).size !== parsed.scopes.length) return bad(400, 'scopes must be a non-empty array of unique collection names.');
   const checked = requireBoundedReviewEndpoint(parsed.endpoint_id);
   if (!checked.ok) return checked.response;
-  const snapshot = await session.withVault((vault) => ({
-    entries: vault.list(),
-    shared: vault.sharedScopes(),
-  }));
-  const selection = snapshotReviewSelection(snapshot.entries, snapshot.shared);
-  if (selection.selection_fingerprint !== parsed.selection_fingerprint) {
+  const snapshot = await session.withVault((vault) => {
+    const previous = loadReviewReport(session.vaultPath);
+    if (previous?.schema === 'northkeep-review-report/2') reconcileReviewOperations(vault, previous, session.vaultPath);
+    return {
+      entries: vault.list(), shared: vault.sharedScopes(), vault_id: vault.getVaultId(),
+      report_id: previous?.schema === 'northkeep-review-report/2' ? previous.report_id : null,
+    };
+  });
+  const baseSelection = snapshotReviewSelection(snapshot.entries, snapshot.shared);
+  const available = new Set(baseSelection.selected.map((e) => e.scope));
+  if (parsed.scopes.some((scope) => !available.has(scope))) return bad(400, 'A selected collection does not exist or cannot be reviewed.');
+  const selected = baseSelection.selected.filter((e) => parsed.scopes!.includes(e.scope));
+  const boundFingerprint = operationFingerprint({vault_id:snapshot.vault_id,scopes:[...parsed.scopes].sort(),entries:selected,endpoint:checked.endpoint});
+  if (boundFingerprint !== parsed.selection_fingerprint) {
     return bad(409, 'Vault changed since you reviewed the consent panel. Open it again.');
   }
 
   evictStaleReviewJobs();
+  const vaultKey = path.resolve(session.vaultPath);
+  if (activeReviewVaults.has(vaultKey)) return bad(409, 'A review is already running for this vault.');
+  activeReviewVaults.add(vaultKey);
   const started_at = new Date().toISOString();
   const job: ReviewJob = {
     id: randomUUID(),
@@ -1991,37 +2105,54 @@ async function startReviewApiRun(
     batches_done: 0,
     batches_total: 0,
     progress: `Sending memories to ${checked.host}…`,
+    vaultPath: session.vaultPath,
   };
   reviewJobs.set(job.id, job);
 
   void (async () => {
     try {
       const generator = createReviewApiGenerator(checked.endpoint);
-      const result = await runReviewPass(selection.selected, generator, {
+      const embed = await ramReviewEmbed(createOllamaClient());
+      const result = await runReviewPass(selected, generator, {
         model: checked.endpoint.model,
+        embed,
         onProgress: (done, total) => {
           job.batches_done = done;
           job.batches_total = total;
           job.progress = `Review pass via ${checked.host}: batch ${done} of ${total}`;
         },
+        onStatus: (msg) => {
+          job.progress = msg;
+        },
       });
-      const report = assembleReviewReport({
+      await session.withVault((vault) => {
+        if (reviewJobs.get(job.id) !== job || job.vaultPath !== session.vaultPath) throw new Error('Review job no longer owns this vault.');
+        const current = selectReviewEntries(vault.list()).filter((entry) => parsed.scopes!.includes(entry.scope));
+        if (vault.getVaultId() !== snapshot.vault_id || operationFingerprint(current) !== operationFingerprint(selected)) throw new Error('Vault changed while review was running.');
+        const previous = loadReviewReport(session.vaultPath);
+        if ((previous?.schema === 'northkeep-review-report/2' ? previous.report_id : null) !== snapshot.report_id) throw new Error('Review report changed while review was running.');
+        if (previous?.schema === 'northkeep-review-report/2') reconcileReviewOperations(vault, previous, session.vaultPath);
+        const report = assembleReviewReport({
         model: checked.endpoint.model,
         started_at,
         finished_at: new Date().toISOString(),
-        entry_count: selection.selected.length,
+        entry_count: selected.length,
         drops: result.drops,
         proposals: result.proposals,
-        previous: loadReviewReport(),
-        sent_to: { label: checked.endpoint.label, host: checked.host },
+        previous,
+        sent_to: { label: checked.endpoint.label, host: checked.host, endpoint_id: checked.endpoint.id, model: checked.endpoint.model },
+        vault_id:snapshot.vault_id,vault_path:session.vaultPath,selected_scopes:parsed.scopes,source_entries:selected,coverage:result.coverage,
       });
-      saveReviewReport(report);
+        saveReviewReport(report,session.vaultPath);
+      });
       job.batches_done = result.batches;
       job.batches_total = result.batches;
       job.status = 'done';
     } catch (err: unknown) {
       job.status = 'failed';
       job.error = err instanceof Error ? err.message : String(err);
+    } finally {
+      activeReviewVaults.delete(vaultKey);
     }
   })();
 

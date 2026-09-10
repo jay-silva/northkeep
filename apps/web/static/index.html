@@ -46,10 +46,10 @@
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
     font: 15px/1.5 var(--sans); -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
-  header { display: flex; align-items: center; gap: 14px; padding: 16px 28px;
+  header { display: flex; align-items: center; gap: 14px; min-height:72px; padding: 0 28px;
     background: var(--panel); border-bottom: 1px solid var(--line);
     position: sticky; top: 0; z-index: 5; }
-  header h1 { margin: 0; font: 500 22px/1 var(--serif); letter-spacing: -.01em; }
+  header h1 { margin: 0; font: 500 25px/1 var(--serif); letter-spacing: -.01em; }
   header h1 span { color: var(--accent); }
   .grow { flex: 1; }
   .pill { font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px; background: var(--chip); color: var(--muted); }
@@ -58,14 +58,15 @@
   /* Left rail + content. `--header-h` is measured at runtime (the header grows
      when a pill appears), so the sticky rail always starts flush under it. */
   .shell { display: flex; align-items: flex-start; }
-  #sidebar { flex: none; width: 212px; box-sizing: border-box; padding: 14px 0 24px;
+  #sidebar { flex: none; width: 212px; box-sizing: border-box; padding: 20px 0 24px;
     background: var(--panel); border-right: 1px solid var(--line);
     position: sticky; top: var(--header-h); min-height: calc(100vh - var(--header-h));
     max-height: calc(100vh - var(--header-h)); overflow-y: auto; }
   nav { display: flex; flex-direction: column; gap: 2px; padding: 0 10px; }
   nav button { border: 0; background: none; width: 100%; text-align: left; cursor: pointer;
-    display: flex; align-items: center; border-radius: 8px;
-    padding: 9px 12px; font: 400 15px/1.25 var(--sans); color: var(--muted); }
+    display: flex; align-items: center; gap:11px; border-radius: 10px;
+    min-height:44px; padding: 10px 14px; font: 400 15px/1.25 var(--sans); color: var(--muted); }
+  nav button svg { width:19px; height:19px; flex:none; fill:none; stroke:currentColor; stroke-width:1.6; stroke-linecap:round; stroke-linejoin:round; }
   nav button:hover { background: var(--chip); color: var(--ink); }
   nav button.active { background: var(--chip); color: var(--ink); font-weight: 600;
     box-shadow: inset 2px 0 0 var(--accent); }
@@ -93,21 +94,73 @@
   /* Settings sub-items sit directly under the Settings button in the rail. */
   #settingsNav { padding: 2px 10px 0; }
   #settingsNav button { padding-left: 26px; font-size: 14px; }
-  main { flex: 1; min-width: 0; max-width: 840px; margin: 0 auto; padding: 24px 28px 64px; }
+  .nav-disclosure::after { content:'›'; margin-left:auto; font-size:19px; line-height:1; transition:transform .16s ease-out; }
+  .nav-disclosure[aria-expanded="true"]::after { transform:rotate(90deg); }
+  #connectNavChildren { display:grid; gap:2px; }
+  #connectNavChildren[hidden] { display:none; }
+  main { flex: 1; min-width: 0; max-width: 840px; margin: 0 auto; padding: 32px 32px 64px; }
   /* Narrow windows: the rail lies down into a scrollable strip above content. */
   @media (max-width: 720px) {
     .shell { display: block; }
     #sidebar { position: static; width: auto; min-height: 0; max-height: none;
       border-right: 0; border-bottom: 1px solid var(--line); padding: 8px 0; }
-    nav { flex-direction: row; flex-wrap: wrap; }
-    nav button { width: auto; }
-    .nav-label { padding: 10px 12px 4px; width: 100%; }
+    nav { flex-direction: row; flex-wrap: nowrap; overflow-x:auto; scrollbar-width:none; }
+    nav::-webkit-scrollbar { display:none; }
+    nav button { width: auto; flex:none; }
+    nav button svg { display:none; }
+    #mainNav { flex-wrap:wrap; }
+    #connectNavChildren { order:5; width:100%; display:flex; border-top:1px solid var(--line); padding-top:4px; }
+    #connectNavChildren[hidden] { display:none; }
+    .nav-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
     nav button.sub { padding-left: 12px; }
     /* Ends the Connect run so Settings can't read as one of its children. */
-    .nav-break { display: block; width: 100%; height: 0; }
+    .nav-break { display:none; }
+    #settingsNav { flex-direction:row; flex-wrap:nowrap; overflow-x:auto; padding:2px 10px 4px; scrollbar-width:none; }
+    main { padding:24px 18px 44px; }
   }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
     padding: 15px 18px; margin-bottom: 12px; }
+  .page-head { display:flex; align-items:flex-start; justify-content:space-between; gap:24px; margin-bottom:28px; }
+  .page-head h2 { margin:0 0 5px; font:500 34px/1.08 var(--serif); letter-spacing:-.02em; }
+  .page-head p { margin:0; max-width:70ch; }
+  .settings-intro { margin-bottom:20px; }
+  .vault-summary { min-height:66px; padding:16px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; }
+  .vault-summary strong { font:500 20px/1.2 var(--serif); }
+  .memory-workspace { display:grid; grid-template-columns:240px minmax(0,1fr); min-height:510px; }
+  body:has(#view-memories:not([hidden])) main { max-width:1500px; width:100%; }
+  .collection-rail { border-right:1px solid var(--line); padding:16px 14px 18px 0; }
+  .collection-rail .review-meta-title { margin-top:0; }
+  .collection-rail .chips { display:grid; gap:2px; margin:0; }
+  .collection-rail .chips button { width:100%; min-height:74px; border:0; border-bottom:1px solid var(--line); border-radius:0; text-align:left; padding:13px 12px; background:transparent; color:var(--ink); }
+  .collection-rail .chips button strong,.collection-rail .chips button small { display:block; }
+  .collection-rail .chips button strong { font:600 15px/1.25 var(--sans); }
+  .collection-rail .chips button small { margin-top:4px; color:var(--muted); font:400 12px/1.35 var(--sans); }
+  .collection-rail .chips button.on { background:color-mix(in srgb,var(--accent) 17%,var(--panel)); color:var(--ink); box-shadow:inset 3px 0 0 var(--accent); }
+  .memory-pane { min-width:0; padding:22px 0 24px 26px; }
+  #memList > .card { margin:0; padding:22px 0; border:0; border-bottom:1px solid var(--line); border-radius:0; background:transparent; }
+  #memList > .card > .content { max-width:72ch; font:500 22px/1.5 var(--serif); }
+  #memList .prov { align-items:center; margin-top:12px; gap:8px 14px; }
+  .memory-toolbar { display:flex; align-items:flex-start; gap:12px; margin-bottom:24px; }
+  .memory-toolbar > div { flex:1; }
+  .memory-toolbar h3 { margin:0 0 3px; font:500 27px/1.2 var(--serif); }
+  .memory-search { display:flex; gap:10px; margin-bottom:4px; }
+  .memory-search select { min-height:46px; max-width:150px; }
+  .memory-search input { min-width:0; }
+  .memory-search input { width:100%; min-height:46px; }
+  .memory-edit { min-width:44px; margin-left:auto; border:0!important; background:transparent!important; color:var(--muted)!important; padding-inline:6px!important; text-decoration:underline; text-underline-offset:4px; }
+  .memory-actions { display:flex; align-items:center; gap:8px; }
+  .memory-actions > summary { min-width:44px; min-height:44px; justify-content:center; display:flex; align-items:center; cursor:pointer; color:var(--muted); text-decoration:underline; text-underline-offset:4px; list-style:none; }
+  .memory-actions > summary::-webkit-details-marker { display:none; }
+  .memory-actions[open] > summary { color:var(--ink); }
+  .memory-actions:not([open]) > :not(summary) { display:none; }
+  .memory-actions .memory-action-buttons { display:flex; gap:6px; flex-wrap:wrap; }
+  .memory-actions > .muted { width:100%; }
+  .memory-actions .btn { min-height:44px; }
+  #collectionSelect { display:none; width:100%; margin-bottom:14px; }
+  #addMemCard[hidden] { display:none; }
+  .review-mode { padding:22px 0; border-top:1px solid var(--line); }
+  .review-mode:first-of-type { border-top:0; padding-top:0; }
+  details.review-mode > summary { min-height:44px; display:flex; align-items:center; cursor:pointer; font-weight:600; color:var(--ink); }
   #countPill { background: #e6efe8; color: var(--ok); display: inline-flex; align-items: center; gap: 7px; }
   #countPill::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: var(--ok); flex: none; }
   .prov { font: 500 12px/1.4 var(--sans); color: var(--muted); margin-top: 6px; display: flex; flex-wrap: wrap; gap: 9px 16px; }
@@ -118,13 +171,13 @@
   input[type=text] { flex: 1; min-width: 200px; }
   ::placeholder { color: #a49c8b; }
   button.btn { font: 500 14px/1 var(--sans); border: 1px solid var(--line); background: var(--panel); color: var(--ink);
-    border-radius: 10px; padding: 9px 16px; cursor: pointer; }
+    border-radius: 10px; min-height:44px; padding: 9px 16px; cursor: pointer; }
   button.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
   button.btn.danger { color: var(--danger); border-color: var(--danger-line); }
   button.btn:disabled { opacity: .5; cursor: default; }
   .chips { display: flex; gap: 6px; flex-wrap: wrap; margin: 10px 0; }
   .chips button { font-size: 12px; border: 1px solid var(--line); background: var(--panel);
-    color: var(--muted); border-radius: 999px; padding: 3px 11px; cursor: pointer; }
+    color: var(--muted); border-radius: 999px; min-height:44px; padding: 7px 13px; cursor: pointer; }
   .chips button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
   .banner { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line);
     border-radius: 12px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; }
@@ -294,6 +347,133 @@
   .toolask .ask-status { margin: 11px 0 0; font-size: 12.5px; color: var(--muted); }
   .epline { display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
     border-bottom: 1px solid var(--line); padding: 9px 2px; font-size: 13px; }
+  /* Memory curation follows the approved Meridian review workspace. */
+  .review-launch { margin: 18px 0 14px; padding: 18px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+  .review-launch h2, .review-detail h2, .review-state h2 { margin: 0; font: 500 27px/1.15 var(--serif); letter-spacing: -.015em; }
+  .review-launch-head { display:flex; align-items:flex-start; gap:18px; justify-content:space-between; }
+  .review-actions, .review-detail-actions { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  .review-collections { display:grid; gap:8px; margin:16px 0 12px; }
+  .review-choice { display:grid; grid-template-columns:22px 1fr auto; align-items:center; gap:10px; min-height:54px; padding:7px 14px; border:1px solid var(--line); border-radius:8px; background:var(--panel); cursor:pointer; }
+  .review-choice:has(input:checked) { background:color-mix(in srgb, var(--accent) 16%, var(--panel)); border-color:var(--accent); color:var(--ink); }
+  .review-choice input { accent-color:var(--accent); }
+  .review-choice small { color:var(--muted); font-size:12px; }
+  .review-choice:has(input:checked) small { color:var(--ink); }
+  .review-readiness { margin:10px 0 3px; color:var(--ok); font-size:14px; }
+  .review-workspace { margin:18px 0 22px; border-top:1px solid var(--line); }
+  .review-summary { display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; padding:16px 0; border-bottom:1px solid var(--line); }
+  .review-summary strong { display:block; margin-top:3px; }
+  .review-progress { height:6px; border-radius:5px; background:var(--line); overflow:hidden; margin-top:10px; }
+  .review-progress > i { display:block; height:100%; width:0; background:var(--accent); }
+  .review-grid { display:grid; grid-template-columns:minmax(210px, 29%) minmax(0, 1fr); min-height:410px; }
+  .review-queue { border-right:1px solid var(--line); padding:16px 14px 16px 0; }
+  .review-queue-head { display:flex; justify-content:space-between; gap:10px; margin-bottom:8px; font:600 11px/1 var(--sans); letter-spacing:.1em; color:var(--muted); text-transform:uppercase; }
+  .review-queue button { display:block; width:100%; min-height:78px; text-align:left; border:0; border-bottom:1px solid var(--line); background:none; color:var(--ink); padding:12px 10px; cursor:pointer; }
+  .review-queue button[aria-selected=true] { background:color-mix(in srgb, var(--accent) 16%, var(--panel)); color:var(--ink); box-shadow:inset 3px 0 0 var(--accent); }
+  .review-queue button small { display:block; color:var(--muted); margin-bottom:7px; font-size:11px; text-transform:uppercase; letter-spacing:.07em; }
+  .review-queue button strong, .review-queue button > span { display:block; }
+  .review-queue button strong { margin-bottom:5px; line-height:1.3; }
+  .review-queue button > span { font-size:12px; line-height:1.4; }
+  .review-detail { padding:18px 0 20px 22px; min-width:0; }
+  .review-kind { color:var(--accent); font-size:11px; font-weight:600; letter-spacing:.09em; text-transform:uppercase; }
+  .review-explanation { color:var(--muted); line-height:1.5; max-width:70ch; }
+  .review-sources { display:grid; gap:9px; margin:12px 0 20px; }
+  .review-source { background:var(--chip); border-radius:8px; padding:12px 14px; }
+  .review-source .prov { margin:0 0 7px; }
+  .review-editor { width:100%; min-height:104px; line-height:1.5; resize:vertical; border-color:#8ca793; }
+  .review-meta-title { margin:20px 0 8px; font:600 11px/1 var(--sans); text-transform:uppercase; letter-spacing:.1em; color:var(--muted); }
+  .review-state { padding:32px 12px; text-align:center; }
+  .review-state p { color:var(--muted); line-height:1.55; }
+  .review-receipt { border-bottom:1px solid var(--line); padding:14px 0; }
+  .review-compare { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:10px 0; }
+  .review-compare > div { background:var(--chip); border-radius:8px; padding:12px; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .review-compare small { display:block; color:var(--muted); margin-bottom:6px; }
+  .review-live { min-height:18px; margin:5px 0; font-size:13px; color:var(--muted); }
+  .review-live.bad { color:var(--danger); }
+  .review-dup-row { display:grid; grid-template-columns:22px 1fr; gap:8px; align-items:start; }
+  .review-dup-row input { margin-top:16px; accent-color:var(--accent); }
+  .review-dialog { width:min(560px, calc(100vw - 32px)); max-height:calc(100vh - 32px); overflow:auto; }
+  button.btn, .review-queue button, .review-choice { min-height:44px; }
+  :focus-visible { outline:3px solid color-mix(in srgb, var(--accent) 65%, transparent); outline-offset:2px; }
+  @media (max-width: 600px) {
+    header { flex-wrap:nowrap; gap:8px; padding:10px 14px; }
+    header #countPill, header #connectPill, header #syncPill, header #ollamaPill, header #envPill { display:none; }
+    .header-actions { display:flex; gap:6px; flex:none; }
+    header .btn { padding-left:12px; padding-right:12px; }
+    .review-launch-head, .review-summary { grid-template-columns:1fr; display:grid; }
+    .review-grid { display:block; }
+    .review-queue { border-right:0; padding-right:0; }
+    .review-detail { display:none; padding:16px 0; }
+    .review-workspace.detail-open .review-queue { display:none; }
+    .review-workspace.detail-open .review-detail { display:block; }
+    .review-compare { grid-template-columns:1fr; }
+    .review-choice { grid-template-columns:22px minmax(0,1fr); }
+    .review-choice small { grid-column:2; }
+    .page-head { display:grid; }
+    .page-head h2 { font-size:29px; }
+    .memory-workspace { display:block; }
+    .vault-summary { align-items:flex-start; flex-wrap:wrap; }
+    .collection-rail { display:none; }
+    .memory-pane { padding:16px 0 24px; }
+    #collectionSelect { display:block; min-height:44px; }
+    .memory-toolbar { flex-wrap:wrap; }
+    #memList > .card > .content { font-size:20px; }
+    .memory-edit { margin-left:0; }
+    .memory-actions { width:100%; }
+    .memory-actions .memory-action-buttons { width:100%; }
+  }
+  /* Guided consolidation: a calm reading desk with a scrollable suggestion rail. */
+  @media not (prefers-color-scheme: dark) {
+    #view-memories, #view-curation, #curationDialogOverlay { --muted: #6d675c; }
+    #view-memories ::placeholder, #view-curation ::placeholder { color: #6d675c; opacity: 1; }
+  }
+  .curation-head { display:flex; align-items:flex-start; justify-content:space-between; gap:20px; margin-bottom:24px; }
+  .curation-head h2 { margin:0 0 5px; font:500 34px/1.08 var(--serif); letter-spacing:-.02em; }
+  .curation-head p { margin:0; max-width:58ch; }
+  .curation-intro { max-width:680px; }
+  .curation-field { display:grid; gap:7px; margin:18px 0; }
+  .curation-field > span, .curation-label { font-size:12px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+  .curation-field select, .curation-field textarea { width:100%; }
+  .curation-field textarea { min-height:112px; resize:vertical; line-height:1.55; }
+  .curation-note { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:13px; }
+  .curation-note::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--ok); flex:none; }
+  .curation-stage { border-top:1px solid var(--line); margin-top:22px; }
+  body:has(#view-curation:not([hidden])) main { max-width:1500px; width:100%; }
+  .curation-summary { display:flex; align-items:center; gap:12px; padding:15px 0; border-bottom:1px solid var(--line); }
+  .curation-summary strong { font-family:var(--serif); font-size:20px; font-weight:500; }
+  .curation-summary .grow { min-width:10px; }
+  .curation-grid { display:grid; grid-template-columns:240px minmax(0, 1fr); min-height:520px; }
+  .curation-queue { max-height:660px; overflow-y:auto; border-right:1px solid var(--line); padding:14px 14px 14px 0; scrollbar-color:var(--muted) var(--panel); }
+  .curation-queue button { width:100%; min-height:94px; padding:13px 12px; text-align:left; color:var(--ink); background:transparent; border:0; border-bottom:1px solid var(--line); cursor:pointer; }
+  .curation-queue button[aria-current=true] { background:color-mix(in srgb, var(--accent) 17%, var(--panel)); color:var(--ink); box-shadow:inset 3px 0 0 var(--accent); }
+  .curation-queue button small, .curation-queue button span { display:block; color:var(--muted); }
+  .curation-queue button strong { display:block; margin:5px 0; line-height:1.3; }
+  .curation-detail { min-width:0; padding:20px 0 30px 24px; }
+  .curation-back { display:none; }
+  .curation-detail h3 { margin:2px 0 6px; font:500 27px/1.15 var(--serif); }
+  .curation-comparison { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1.08fr); gap:18px; align-items:start; margin-top:20px; }
+  .curation-source { padding:14px 0; border-bottom:1px solid var(--line); }
+  .curation-source:last-child { border-bottom:0; }
+  .curation-source .content { margin-top:8px; line-height:1.6; }
+  .curation-proposal { margin-top:24px; padding:18px; background:var(--chip); border-radius:12px; }
+  .curation-proposal textarea { width:100%; min-height:126px; margin-top:9px; resize:vertical; line-height:1.6; background:var(--panel); }
+  .curation-explanation { margin:12px 0 0; color:var(--muted); }
+  .curation-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
+  .curation-empty { padding:48px 12px; text-align:center; color:var(--muted); }
+  .curation-dialog { width:min(700px, calc(100vw - 32px)); max-height:calc(100vh - 32px); overflow:auto; }
+  .curation-preview-block { margin:14px 0; }
+  .curation-preview-block .content { padding:12px 14px; margin-top:7px; background:var(--chip); border-radius:10px; }
+  @media (max-width:600px) {
+    .curation-head { display:grid; }
+    .curation-head h2 { font-size:29px; }
+    .curation-grid { display:block; }
+    .curation-queue { border-right:0; max-height:none; padding-right:0; }
+    .curation-detail { display:none; padding:16px 0 28px; }
+    .curation-back { display:inline-flex; }
+    .curation-comparison { grid-template-columns:1fr; }
+    .curation-stage.detail-open .curation-queue { display:none; }
+    .curation-stage.detail-open .curation-detail { display:block; }
+    .curation-summary { align-items:flex-start; flex-wrap:wrap; }
+  }
   /* Connect-a-model wizard provider cards + the concierge suggestion tip. */
   .cwcard { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
     margin-bottom: 8px; padding: 12px 14px; }
@@ -320,21 +500,23 @@
   <span id="ollamaPill" class="pill" hidden>local AI off</span>
   <span id="envPill" class="pill locked" hidden title="An environment variable keeps this vault open; the Lock button can't revoke it.">env override</span>
   <div class="grow"></div>
-  <button class="btn" id="exportBtn">Export</button>
-  <button class="btn" id="lockBtn" hidden>Lock</button>
+  <div class="header-actions"><button class="btn" id="exportBtn">Export</button><button class="btn" id="lockBtn" hidden>Lock</button></div>
 </header>
 <div class="shell">
 <aside id="sidebar">
-<nav id="mainNav">
-  <button data-view="converse">Converse</button>
-  <button data-view="memories" class="active">Memories</button>
-  <div class="nav-label">Connect</div>
-  <button data-view="connect" class="sub">Desktop</button>
-  <button data-view="sharing" class="sub">Cloud<span class="badge beta">BETA</span></button>
+<nav id="mainNav" aria-label="Main navigation">
+  <button data-view="memories" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6M9 16h6"/></svg>Memories</button>
+  <button data-view="curation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v5H5zM5 13h14v7H5zM8 6.5h8M8 16.5h5"/></svg>Review</button>
+  <button id="connectToggle" class="nav-disclosure" type="button" aria-expanded="false" aria-controls="connectNavChildren"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 15l6-6M8 17l-1 1a4 4 0 0 1-5-5l4-4a4 4 0 0 1 5 0M16 7l1-1a4 4 0 0 1 5 5l-4 4a4 4 0 0 1-5 0"/></svg>Connect</button>
+  <div id="connectNavChildren" hidden>
+    <button data-view="connect" class="sub">Desktop</button>
+    <button data-view="sharing" class="sub">Cloud<span class="badge beta">BETA</span></button>
+  </div>
   <div class="nav-break"></div>
-  <button data-view="settings">Settings</button>
+  <button data-view="settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v3m0 14v3M2 12h3m14 0h3M5 5l2 2m10 10 2 2M5 19l2-2M17 7l2-2"/></svg>Settings</button>
 </nav>
 <nav id="settingsNav" hidden>
+  <button data-sub="models">Models</button>
   <button data-sub="import" class="active">Import</button>
   <button data-sub="activity">Activity</button>
   <button data-sub="mcp">Tools</button>
@@ -347,7 +529,7 @@
     <strong>Local AI is not running.</strong> Imports will use rough pattern-matching instead of
     the on-device model. Fix: <code>brew services start ollama</code>
   </div>
-  <section id="view-converse" hidden>
+  <section id="view-converse" hidden inert aria-hidden="true">
     <div class="modeswitch" id="convModeSwitch">
       <button data-mode="talk" class="active">Converse</button>
       <button data-mode="redact">Redact</button>
@@ -411,8 +593,8 @@
           <div class="err" id="epErr"></div>
           <div class="row"><button class="btn primary" id="epAdd">Add endpoint</button></div>
         </details>
-        <h3 class="sect">Auto-routing rules</h3>
-        <div class="card">
+        <h3 class="sect" hidden>Auto-routing rules</h3>
+        <div class="card" hidden>
           <p class="muted" style="margin:0 0 10px;font-size:13px">When <strong>✦ Auto</strong> is on,
             these decide which endpoint answers each kind of message. No matching rule → your default
             endpoint. A conversation pinned <em>Private only</em> skips any routing rule that would send it to a
@@ -498,7 +680,8 @@
     </div>
   </section>
   <section id="view-memories">
-    <div class="card" id="addMemCard">
+    <div class="page-head"><div><h2>Memories</h2><p class="muted">Find what matters and keep it organized by collection.</p></div><button class="btn primary" id="addMemoryToggle" type="button" aria-expanded="false" aria-controls="addMemCard">Add memory</button></div>
+    <div class="card" id="addMemCard" hidden>
       <h3 class="sect" style="margin-top:0">Add a memory</h3>
       <textarea id="addMemContent" rows="3" placeholder="Something you want your vault to remember…"
         style="width:100%;font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 13px;resize:vertical"></textarea>
@@ -513,22 +696,66 @@
       <div class="err" id="addMemErr"></div>
       <div class="muted" id="addMemOk" style="font-size:13px;min-height:18px"></div>
     </div>
-    <div class="row">
-      <input type="text" id="q" placeholder="Search your memory… (keyword search)">
+    <div class="vault-summary"><strong>Your memory vault</strong><span class="muted" id="memoryVaultSummary">Loading collections…</span></div>
+    <div class="memory-workspace">
+      <aside class="collection-rail" id="collectionRail"><div class="review-meta-title">Collections</div><div class="chips" id="scopeChips"></div></aside>
+      <div class="memory-pane">
+        <select id="collectionSelect" aria-label="Collection"></select>
+        <div class="memory-toolbar"><div><h3 id="memoryCollectionTitle">All memories</h3><span class="muted" id="memoryCollectionMeta">Every collection</span><span class="muted" id="memoryCollectionPrivacy"></span><div class="muted" id="memoryCollectionReviewHint" role="status"></div></div><button class="btn" id="reviewCurrentCollectionBtn" type="button" disabled>Review collection</button></div>
+        <div class="memory-search"><input type="text" id="q" aria-label="Search memories" placeholder="Search these memories"><select id="typeChips" aria-label="Memory type"></select></div>
+        <div id="memList"></div>
+      </div>
     </div>
-    <div class="chips" id="typeChips"></div>
-    <div class="chips" id="scopeChips"></div>
-    <div class="row" style="margin:10px 0 12px">
-      <button class="btn" id="reviewPassBtn">Review pass</button>
-      <button class="btn" id="reviewApiBtn">Review with a cloud model…</button>
-      <span class="muted" id="reviewPassHint">Find duplicates, contradictions, and stale facts. You approve every change.</span>
-    </div>
-    <div id="reviewPassStatus" class="muted" style="min-height:18px;margin:0 0 8px"></div>
-    <div class="err" id="reviewPassErr"></div>
-    <div id="reviewPanel" hidden></div>
-    <div id="memList"></div>
   </section>
+  <section id="view-curation" hidden>
+    <div class="page-head"><div><h2>Review</h2><p class="muted">Review suggestions, check the sources, and decide what to keep.</p></div></div>
+    <details class="review-mode" id="detailedReview"><summary>Detailed memory review</summary>
+    <div class="review-launch" id="reviewLaunch">
+      <div class="review-launch-head">
+        <div><h2>Make room for what matters.</h2><p class="muted">Review suggestions, check the sources, and decide what to keep.</p></div>
+        <button class="btn" id="reviewHistoryBtn">Change history</button>
+      </div>
+      <div id="reviewCollectionPicker">
+        <div class="review-meta-title">Choose a collection</div>
+        <div class="review-collections" id="reviewCollections"></div>
+        <div class="review-readiness" id="reviewReadiness">Checking whether local review is ready…</div>
+        <p class="muted" id="reviewExclusions" style="font-size:12px;margin:5px 0 12px"></p>
+      </div>
+      <div class="review-actions">
+        <button class="btn primary" id="reviewPassBtn" disabled>Start review</button>
+        <button class="btn" id="reviewApiBtn" disabled>Review with a cloud model…</button>
+        <button class="btn" id="reviewChangeCollectionBtn" hidden>Change collection</button>
+      </div>
+      <div id="reviewPassStatus" class="review-live" role="status" aria-live="polite"></div>
+    </div>
+    <div class="err" id="reviewPassErr"></div>
+    <div id="reviewPanel" class="review-workspace" hidden>
+      <div class="review-summary"><div><span class="review-kind">Reviewing</span><strong id="reviewSummaryTitle"></strong><div class="review-progress" id="reviewProgress" hidden><i></i></div></div><div class="muted" id="reviewCoverage"></div></div>
+      <div class="review-grid"><div class="review-queue"><div class="review-queue-head"><span>Suggestions</span><span id="reviewQueueCount"></span></div><div id="reviewQueue"></div></div><div class="review-detail" id="reviewDetail"></div></div>
+    </div>
+    </details>
+    <div class="review-mode" id="curationGuided">
+    <div class="curation-head">
+      <div><h3>Consolidate related memories</h3><p class="muted">Combine related memories into one clear version. Nothing changes until you inspect the exact result and confirm it.</p></div>
+      <button class="btn" id="curationHistoryBtn">Consolidation history</button>
+    </div>
+    <div id="curationSetup" class="curation-intro">
+      <label class="curation-field"><span>Private collection</span><select id="curationScope"><option value="">Loading collections…</option></select></label>
+      <label class="curation-field"><span>What should this review focus on?</span><textarea id="curationInstruction" placeholder="For example: combine repeated preferences, preserve dates, and flag anything uncertain."></textarea></label>
+      <div class="curation-note">Suggestions are generated on this device. Your memories do not go to a cloud model.</div>
+      <div class="curation-actions"><button class="btn primary" id="curationStartBtn" disabled>Find suggestions</button></div>
+      <div class="review-live" id="curationStatus" role="status" aria-live="polite"></div>
+    </div>
+    <div class="err" id="curationErr" role="alert"></div>
+    <div id="curationStage" class="curation-stage" hidden>
+      <div class="curation-summary"><strong id="curationTitle"></strong><span class="muted" id="curationCoverage"></span><span class="grow"></span><button class="btn" id="curationNewBtn">New review</button></div>
+      <div class="curation-grid"><div class="curation-queue"><div class="review-queue-head"><span>Suggestions</span><span id="curationCount"></span></div><div id="curationQueue"></div></div><div id="curationDetail" class="curation-detail"></div></div>
+    </div>
+    </div>
+  </section>
+  <section id="view-models" hidden><div class="page-head settings-intro"><div><h2>Models</h2><p class="muted">Manage the local and cloud models available for memory review.</p></div></div><div id="modelsHome"></div></section>
   <section id="view-import" hidden>
+    <div class="page-head settings-intro"><div><h2>Import</h2><p class="muted">Bring your memories with you from another AI.</p></div></div>
     <div class="row" style="margin-bottom:12px">
       <select id="importScope"><option value="personal">scope: personal</option></select>
       <button class="btn" id="pickFolder">Choose a folder…</button>
@@ -567,6 +794,7 @@
     </div>
   </section>
   <section id="view-activity" hidden>
+    <div class="page-head settings-intro"><div><h2>Activity</h2><p class="muted">See when an AI app accessed your vault.</p></div></div>
     <div class="row" style="justify-content:space-between">
       <p class="muted" style="flex:1">Every call an AI app has made to your vault — who asked,
         under which scope grant, and which memories were disclosed. Never the content itself.</p>
@@ -576,6 +804,7 @@
     <div id="logList"></div>
   </section>
   <section id="view-mcp" hidden>
+    <div class="page-head settings-intro"><div><h2>Tools</h2><p class="muted">Manage the tools NorthKeep can offer during supported workflows.</p></div></div>
     <p class="muted">MCP servers your chat can use as tools. Nothing here is reachable by a model.
       A server is either a program on this Mac or a service you sign in to. Naming a program
       yourself needs your passphrase, and so does signing in to a remote service, so knowing this
@@ -624,6 +853,7 @@
       <code>northkeep mcp add &lt;id&gt; --command &lt;absolute path&gt;</code></p>
   </section>
   <section id="view-sync" hidden>
+    <div class="page-head settings-intro"><div><h2>Sync</h2><p class="muted">Keep your encrypted vault current across your machines.</p></div></div>
     <p class="muted">Sync your encrypted vault across machines. The server only ever stores
       ciphertext — it can't read your memories.</p>
     <h3 class="sect">Sync server</h3>
@@ -666,6 +896,7 @@
       over, set the same sync server, then Pull.</p>
   </section>
   <section id="view-connect" hidden>
+    <div class="page-head"><div><h2>Desktop</h2><p class="muted">Bring your memory to the AI apps you use on this Mac.</p></div></div>
     <p class="muted">Give the AI apps you already use (Claude Desktop, Claude Code, ChatGPT, and Cursor)
       access to your NorthKeep memory, on your existing subscription. One click registers the memory
       server that ships inside NorthKeep; no terminal, no config files to edit by hand.</p>
@@ -673,8 +904,8 @@
       <strong>Desktop Connect shares your memory. It does not redact your chat.</strong>
       <div style="margin-top:6px">Connecting hands that app your <strong>owned, portable memory</strong>
         under the scope you pick. It does <strong>not</strong> change what you type into that app —
-        the app still sends your whole chat to its provider. For a privacy firewall on your
-        <em>messages</em>, use <strong>Converse</strong>, which masks them before they leave your Mac.</div>
+        the app still sends your whole chat to its provider. Connecting NorthKeep does not
+        add a privacy firewall to your messages.</div>
     </div>
     <div id="connectCards"></div>
     <h3 class="sect">Session contract</h3>
@@ -682,6 +913,7 @@
     <div id="contractCard"></div>
   </section>
   <section id="view-sharing" hidden>
+    <div class="page-head"><div><h2>Cloud</h2><p class="muted">Choose which collections your connected AI apps can read.</p></div><span class="badge beta">BETA</span></div>
     <p class="muted"><span class="badge beta" style="margin-left:0;margin-right:8px">BETA</span>Make chosen memories usable inside the cloud AI apps you already pay for
       (Claude, ChatGPT, and others) by copying them to NorthKeep's connector server.
       Everything is private by default. You share one scope at a time, on purpose.</p>
@@ -755,6 +987,7 @@
     </div>
   </section>
   <section id="view-about" hidden>
+    <div class="page-head settings-intro"><div><h2>About</h2><p class="muted">Version and update information for this installation.</p></div></div>
     <h3 class="sect" style="margin-top:0">About NorthKeep</h3>
     <p class="muted">You're running NorthKeep <strong>v<span id="aboutVersion">…</span></strong>.</p>
     <button class="btn primary" id="checkUpdateBtn">Check for updates</button>
@@ -796,6 +1029,20 @@
       <button class="btn" id="reviewApiCancel">Cancel</button>
       <button class="btn primary" id="reviewApiConfirm" hidden>Send</button>
     </div>
+  </div>
+</div>
+<div class="overlay" id="reviewDialogOverlay" hidden>
+  <div class="dialog review-dialog" role="dialog" aria-modal="true" aria-labelledby="reviewDialogTitle">
+    <h2 id="reviewDialogTitle">Review change</h2>
+    <div id="reviewDialogBody"></div>
+    <div class="err" id="reviewDialogErr" role="alert"></div>
+    <div class="row" id="reviewDialogActions" style="justify-content:flex-end"></div>
+  </div>
+</div>
+<div class="overlay" id="curationDialogOverlay" hidden>
+  <div class="dialog curation-dialog" role="dialog" aria-modal="true" aria-labelledby="curationDialogTitle">
+    <h2 id="curationDialogTitle">Confirm consolidation</h2><div id="curationDialogBody"></div>
+    <div class="err" id="curationDialogErr" role="alert"></div><div class="row" id="curationDialogActions" style="justify-content:flex-end"></div>
   </div>
 </div>
 <div class="overlay" id="unshareConfirmOverlay" hidden>
@@ -865,14 +1112,14 @@
         <input type="text" id="setupEpModel" placeholder="Model (e.g. llama3.2:3b)">
         <button class="btn primary" id="setupManualAdd" style="width:100%;margin-bottom:8px">Add endpoint</button>
       </div>
-      <button class="btn" id="setupSkip" style="width:100%">Skip — add one later under Converse → Manage endpoints</button>
+      <button class="btn" id="setupSkip" style="width:100%">Skip — add one later under Settings → Models</button>
     </div>
     <div id="setupStepTour" hidden>
       <h2>You're all set</h2>
       <p>Here's where everything lives:</p>
       <ul style="margin:0 0 16px 18px;line-height:1.9;font-size:14px;color:var(--muted)">
         <li><strong>Memories</strong> — everything NorthKeep knows about you, on this Mac. Browse, search, edit, or add.</li>
-        <li><strong>Converse</strong> — talk to an AI with your memory and the redaction firewall in front. You can attach files safely too. Its <strong>Redact</strong> mode scrubs sensitive text you're pasting into an AI outside NorthKeep.</li>
+        <li><strong>Models</strong> — manage the local or cloud models available for detailed memory review under Settings.</li>
         <li><strong>Connect</strong> — <strong>Desktop</strong> plugs your memory into the AI apps on this Mac in one click; <strong>Cloud</strong> copies chosen scopes to NorthKeep's connector server so the AI apps you use on the web can read them.</li>
         <li><strong>Settings</strong> — import your history from ChatGPT or Claude, review activity, and set up sync across devices.</li>
       </ul>
@@ -968,14 +1215,14 @@
     openExternal(a.href);
   });
 
-  // --- views: top-level tabs, plus a Settings group holding Import/Activity/Sync
-  // No 'redact' here: it is a mode inside Converse now, not a section of its own.
-  const sections = ['converse', 'memories', 'connect', 'sharing', 'import', 'activity', 'mcp', 'sync', 'about'];
+  // --- views: top-level tabs, plus a Settings group.
+  const sections = ['memories', 'curation', 'connect', 'sharing', 'models', 'import', 'activity', 'mcp', 'sync', 'about'];
   let currentSub = 'import';
   function runLoader(v) {
     if (v === 'activity') loadLog();
-    else if (v === 'memories') { loadMemories(); loadReviewPanel(); }
-    else if (v === 'converse') openConverse();
+    else if (v === 'memories') loadMemories();
+    else if (v === 'curation') { loadReviewPanel(); loadReviewCollections(); loadCurationCollections(); }
+    else if (v === 'models') loadProviders();
     else if (v === 'sync') loadSyncStatus();
     else if (v === 'connect') loadConnect();
     else if (v === 'sharing') loadSharing();
@@ -1337,21 +1584,28 @@
       runLoader(currentSub);
     } else {
       $('settingsNav').hidden = true;
-      // Entering Converse always lands on the conversation, never on whichever
-      // mode you left behind last time.
-      if (v === 'converse') setConvMode('talk');
       showSection(v);
       runLoader(v);
     }
   }
-  document.querySelectorAll('#mainNav button').forEach((b) =>
-    b.addEventListener('click', () => showTop(b.dataset.view)));
+  $('mainNav').addEventListener('click', (event) => {
+    const button = event.target.closest('button[data-view]');
+    if (button && $('mainNav').contains(button)) showTop(button.dataset.view);
+  });
+  $('connectToggle').addEventListener('click', () => {
+    const expanded = $('connectToggle').getAttribute('aria-expanded') === 'true';
+    $('connectToggle').setAttribute('aria-expanded', String(!expanded));
+    $('connectNavChildren').hidden = expanded;
+  });
   document.querySelectorAll('#settingsNav button').forEach((b) => b.addEventListener('click', () => {
     currentSub = b.dataset.sub;
     document.querySelectorAll('#settingsNav button').forEach((x) => x.classList.toggle('active', x === b));
     showSection(currentSub);
     runLoader(currentSub);
   }));
+  $('modelsHome').appendChild($('managePanel'));
+  $('managePanel').hidden = false;
+  $('curationGuided').after($('detailedReview'));
 
   // Converse mode switch. Redact used to be its own tab; it is a pane in here
   // now, so nothing routes to it through showTop/showSection any more.
@@ -1520,7 +1774,7 @@
     try { const c = await api('/api/connect'); setConnectPill(c.targets); }
     catch { /* locked or transient — leave the pill as-is */ }
   }
-  function showUnlock() { $('unlockOverlay').hidden = false; $('passphrase').focus(); }
+  function showUnlock() { clearCurationSensitive(); clearMemorySensitive(); clearDetailedReviewSensitive(); $('unlockOverlay').hidden = false; $('passphrase').focus(); }
   function hideUnlock() { $('unlockOverlay').hidden = true; }
 
   // --- first-run setup wizard (M7d): create vault → back up the device key
@@ -1616,8 +1870,7 @@
   async function finishSetup() {
     hideSetup();
     await refreshStatus().catch(() => {});
-    // Done → land on Converse. loadProviders preselects Auto with 2+ endpoints.
-    document.querySelector('nav button[data-view="converse"]').click();
+    showTop('memories');
   }
   $('unlockBtn').addEventListener('click', doUnlock);
   $('passphrase').addEventListener('keydown', (e) => { if (e.key === 'Enter') doUnlock(); });
@@ -1658,21 +1911,83 @@
 
   // --- memories
   const TYPES = ['episodic', 'semantic', 'procedural', 'working', 'identity'];
+  const MEMORY_TYPE_LABELS = { episodic:'Event', semantic:'Preference', procedural:'Procedure', working:'Working note', identity:'About me' };
   let filterType = '', filterScope = '', searchTimer = null;
   let knownScopes = [];
-  $('typeChips').innerHTML = ['all', ...TYPES].map((t) =>
-    `<button data-t="${t === 'all' ? '' : t}" class="${t === 'all' ? 'on' : ''}">${t}</button>`).join('');
-  $('typeChips').addEventListener('click', (e) => {
-    if (e.target.tagName !== 'BUTTON') return;
-    filterType = e.target.dataset.t;
-    [...$('typeChips').children].forEach((c) => c.classList.toggle('on', c === e.target));
+  let memorySharedScopes = null;
+  function memoryPrivacyLabel(scope) {
+    if (!scope) return '';
+    return memorySharedScopes === null ? ' · Sharing status unavailable' : memorySharedScopes.has(scope) ? ' · Shared' : ' · Private';
+  }
+  let memoryScopeEpoch = 0, scopeLoadSequence = 0, memoryLoadSequence = 0, addScopeTouched = false;
+  function clearMemorySensitive() {
+    memoryScopeEpoch += 1;
+    scopeLoadSequence += 1;
+    memoryLoadSequence += 1;
+    filterScope = '';
+    knownScopes = [];
+    memorySharedScopes = null;
+    $('memoryCollectionPrivacy').textContent = '';
+    addScopeTouched = false;
+    $('scopeChips').replaceChildren();
+    $('collectionSelect').replaceChildren();
+    $('memList').replaceChildren();
+    $('q').value = '';
+    $('addMemContent').value = '';
+    $('addMemNewScope').value = '';
+    $('addMemScope').replaceChildren();
+    $('importScope').replaceChildren();
+    $('memoryCollectionTitle').textContent = 'All memories';
+    $('memoryCollectionMeta').textContent = 'Every collection';
+    $('memoryVaultSummary').textContent = 'Vault locked';
+    $('reviewCurrentCollectionBtn').disabled = true;
+  }
+  $('addMemoryToggle').addEventListener('click', () => {
+    const expanded = $('addMemoryToggle').getAttribute('aria-expanded') === 'true';
+    $('addMemoryToggle').setAttribute('aria-expanded', String(!expanded));
+    $('addMemCard').hidden = expanded;
+    if (!expanded) {
+      if (!addScopeTouched && !$('addMemContent').value.trim() && filterScope && Array.from($('addMemScope').options).some((option) => option.value === filterScope)) {
+        $('addMemScope').value = filterScope;
+        $('addMemNewScope').hidden = true;
+      }
+      $('addMemContent').focus();
+    }
+  });
+  $('typeChips').innerHTML = '<option value="">All types</option>' + TYPES.map((type) =>
+    `<option value="${type}">${MEMORY_TYPE_LABELS[type]}</option>`).join('');
+  $('typeChips').addEventListener('change', () => {
+    filterType = $('typeChips').value;
     loadMemories();
   });
   async function loadScopes() {
-    const { scopes } = await api('/api/scopes');
+    const lockEpoch = memoryScopeEpoch;
+    const requestId = ++scopeLoadSequence;
+    const [{ scopes }, all] = await Promise.all([api('/api/scopes'), api('/api/memories?')]);
+    if (lockEpoch !== memoryScopeEpoch || requestId !== scopeLoadSequence || !status.unlocked) return;
+    const sharing = await api('/api/share/status').catch(() => null);
+    if (lockEpoch !== memoryScopeEpoch || requestId !== scopeLoadSequence || !status.unlocked) return;
+    memorySharedScopes = Array.isArray(sharing?.shared_scopes) ? new Set(sharing.shared_scopes) : null;
+    $('memoryCollectionPrivacy').textContent = memoryPrivacyLabel(filterScope);
     knownScopes = scopes;
-    $('scopeChips').innerHTML = ['all scopes', ...scopes].map((s, i) =>
-      `<button data-s="${i === 0 ? '' : esc(s)}" class="${i === 0 ? 'on' : ''}">${esc(s)}</button>`).join('');
+    const counts = new Map();
+    for (const memory of all.memories || []) counts.set(memory.scope, (counts.get(memory.scope) || 0) + 1);
+    const totalCount = (all.memories || []).length;
+    $('memoryVaultSummary').textContent = totalCount + ' ' + (totalCount === 1 ? 'memory' : 'memories') + ' · ' + scopes.length + ' ' + (scopes.length === 1 ? 'collection' : 'collections');
+    $('scopeChips').replaceChildren();
+    for (const scope of ['', ...scopes]) {
+      const button = el('button', filterScope === scope ? 'on' : undefined);
+      const count = scope ? (counts.get(scope) || 0) : totalCount;
+      button.append(el('strong', undefined, scope || 'All memories'), el('small', undefined, count + ' ' + (count === 1 ? 'memory' : 'memories') + memoryPrivacyLabel(scope)));
+      button.type = 'button'; button.dataset.s = scope; $('scopeChips').appendChild(button);
+    }
+    $('collectionSelect').replaceChildren();
+    for (const scope of ['', ...scopes]) {
+      const option = el('option', undefined, scope || 'All memories');
+      option.value = scope;
+      $('collectionSelect').appendChild(option);
+    }
+    $('collectionSelect').value = filterScope;
     const sel = $('importScope');
     sel.innerHTML = [...new Set(['personal', ...scopes])].map((s) =>
       `<option value="${esc(s)}">scope: ${esc(s)}</option>`).join('');
@@ -1680,6 +1995,7 @@
     // sentinel. Options are built with createElement/textContent (never
     // innerHTML) so a vault scope name can't inject markup.
     const add = $('addMemScope');
+    const previousAddScope = add.value;
     add.textContent = '';
     for (const s of [...new Set(['personal', ...scopes])]) {
       const o = el('option', undefined, s);
@@ -1689,13 +2005,20 @@
     const newOpt = el('option', undefined, '+ new scope…');
     newOpt.value = NEW_SCOPE;
     add.appendChild(newOpt);
-    add.value = 'personal';
-    $('addMemNewScope').hidden = true;
+    const preferredAddScope = previousAddScope;
+    add.value = [...add.options].some((option) => option.value === preferredAddScope) ? preferredAddScope : 'personal';
+    $('addMemNewScope').hidden = add.value !== NEW_SCOPE;
   }
   $('scopeChips').addEventListener('click', (e) => {
-    if (e.target.tagName !== 'BUTTON') return;
-    filterScope = e.target.dataset.s;
-    [...$('scopeChips').children].forEach((c) => c.classList.toggle('on', c === e.target));
+    const button = e.target.closest('button');
+    if (!button || !$('scopeChips').contains(button)) return;
+    filterScope = button.dataset.s;
+    [...$('scopeChips').children].forEach((c) => c.classList.toggle('on', c === button));
+    loadMemories();
+  });
+  $('collectionSelect').addEventListener('change', () => {
+    filterScope = $('collectionSelect').value;
+    [...$('scopeChips').children].forEach((button) => button.classList.toggle('on', button.dataset.s === filterScope));
     loadMemories();
   });
   $('q').addEventListener('input', () => {
@@ -1703,12 +2026,19 @@
     searchTimer = setTimeout(loadMemories, 250);
   });
   async function loadMemories() {
+    const requestId = ++memoryLoadSequence;
     const qs = new URLSearchParams();
     if ($('q').value.trim()) qs.set('q', $('q').value.trim());
     if (filterType) qs.set('type', filterType);
     if (filterScope) qs.set('scope', filterScope);
     const resp = await api('/api/memories?' + qs);
+    if (requestId !== memoryLoadSequence || !status.unlocked) return;
     const memories = resp.memories;
+    $('memoryCollectionTitle').textContent = filterScope || 'All memories';
+    $('memoryCollectionPrivacy').textContent = memoryPrivacyLabel(filterScope);
+    $('memoryCollectionMeta').textContent = memories.length + ' ' + (memories.length === 1 ? 'memory' : 'memories');
+    $('reviewCurrentCollectionBtn').disabled = !filterScope;
+    if ($('collectionSelect').value !== filterScope) $('collectionSelect').value = filterScope;
     const q = $('q').value.trim();
     // Search-mode note: loud when semantic degraded to keyword (invariant #6).
     let note = '';
@@ -1732,7 +2062,7 @@
         <div class="card" id="mem-${esc(m.id)}">
           <div class="content">${esc(m.content)}</div>
           <div class="prov">
-            <span class="tag">${esc(m.type)}</span>
+            <span>${esc(MEMORY_TYPE_LABELS[m.type] || m.type)}</span>
             <span>${esc(m.scope)}</span>
             ${isLiveProjectDoc(m)
               ? `<span class="badge project" title="Live project document. Agents read this at session start and update it when a session ends.">LIVE PROJECT</span>`
@@ -1743,14 +2073,15 @@
             ${String(m.source).startsWith('connector') && m.type === 'procedural'
               ? `<span class="badge auto" title="This memory INSTRUCTS your AI apps how to behave in future conversations. Review it carefully. Forget it to revoke the instruction everywhere.">STANDING INSTRUCTION</span>`
               : ''}
-            <span>conf ${esc(m.confidence)}</span>
-            <span>${esc(m.created_at.slice(0, 10))}</span>
-            <span>${esc(m.id.slice(0, 8))}</span>
-            ${m.relevance !== undefined ? `<span>rel ${esc(m.relevance)}</span>` : ''}
-            <span class="grow"></span>
-            <button class="btn" data-edit="${esc(m.id)}" style="font-size:12px;padding:5px 12px;border-radius:8px">Edit</button>
-            <button class="btn" data-rescope="${esc(m.id)}" data-scope="${esc(m.scope)}" style="font-size:12px;padding:5px 12px;border-radius:8px">Move scope</button>
-            <button class="btn danger" data-forget="${esc(m.id)}" style="font-size:12px;padding:5px 12px;border-radius:8px">Forget</button>
+            <button class="btn memory-edit" data-edit="${esc(m.id)}">Edit</button>
+            <details class="memory-actions">
+              <summary>More</summary>
+              <div class="memory-action-buttons">
+                <button class="btn" data-rescope="${esc(m.id)}" data-scope="${esc(m.scope)}">Move scope</button>
+                <button class="btn danger" data-forget="${esc(m.id)}">Forget</button>
+              </div>
+              <span class="muted">Confidence ${esc(m.confidence)} · ${esc(m.created_at.slice(0, 10))} · ${esc(m.id.slice(0, 8))}${m.relevance !== undefined ? ' · Relevance ' + esc(m.relevance) : ''}</span>
+            </details>
           </div>
         </div>`).join(''));
     for (const m of memories) {
@@ -1883,6 +2214,7 @@
   $('addMemType').addEventListener('change', updateTypeHelp);
   updateTypeHelp();
   $('addMemScope').addEventListener('change', () => {
+    addScopeTouched = true;
     const isNew = $('addMemScope').value === NEW_SCOPE;
     $('addMemNewScope').hidden = !isNew;
     if (isNew) $('addMemNewScope').focus();
@@ -1902,6 +2234,7 @@
     try {
       await api('/api/memories', { method: 'POST', json: { content, type, scope } });
       $('addMemContent').value = '';
+      addScopeTouched = false;
       $('addMemNewScope').value = '';
       $('addMemNewScope').hidden = true;
       $('addMemOk').textContent = '✓ Remembered under scope “' + scope + '”.';
@@ -2148,23 +2481,178 @@
     return n;
   }
 
-  // --- memory review pass (ADR 0043). Model text is always textContent.
+  // --- guided consolidation. Model and memory text only enter text nodes.
+  let curationSession = null;
+  let curationSelectedId = null;
+  let curationLastFocus = null;
+  let curationPreview = null;
+  let curationRequestSequence = 0;
+  const curationPendingOperations = new Map();
+  function clearCurationSensitive(){curationRequestSequence+=1;curationSession=null;curationSelectedId=null;curationPreview=null;curationPendingOperations.clear();$('curationInstruction').value='';$('curationScope').replaceChildren(el('option',undefined,'Loading collections…'));$('curationQueue').replaceChildren();$('curationDetail').replaceChildren();$('curationDialogBody').replaceChildren();$('curationDialogActions').replaceChildren();$('curationErr').textContent='';$('curationStatus').textContent='';$('curationCoverage').textContent='';$('curationTitle').textContent='';$('curationCount').textContent='';$('curationStage').classList.remove('detail-open');$('curationStage').hidden=true;$('curationSetup').hidden=false;$('curationDialogOverlay').hidden=true;document.querySelector('header').inert=false;document.querySelector('.shell').inert=false;}
+  function curationDate(entry) { const raw=entry.created_at||entry.updated_at||entry.recorded_at; if(!raw)return 'Date not recorded'; const date=new Date(raw); return Number.isNaN(date.getTime())?String(raw):date.toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'}); }
+  function curationSourceNode(entry, removable, group) {
+    const node=el('div','curation-source'); const meta=el('div','prov');
+    meta.append(el('span',undefined,entry.source||entry.source_type||'Saved memory'),el('span',undefined,curationDate(entry)));
+    node.append(meta,el('div','content',entry.content||''));
+    if(removable){const remove=el('button','btn','Remove source');remove.type='button';remove.style.marginTop='10px';remove.addEventListener('click',()=>{group.sources=group.sources.filter((source)=>source.id!==entry.id);group.proposed_content=null;group.draftInvalid=true;renderCurationDetail(group);});node.appendChild(remove);}
+    return node;
+  }
+  async function loadCurationCollections(preferredScope = '') {
+    const select = $('curationScope');
+    if (curationSession && !preferredScope) return [];
+    const requestId = ++curationRequestSequence;
+    const previousScope = preferredScope || select.value;
+    $('curationStartBtn').disabled = true;
+    try {
+      const data = await api('/api/curation/collections');
+      if (requestId !== curationRequestSequence || !status.unlocked) return [];
+      const collections = data.collections || [];
+      select.replaceChildren();
+      for (const collection of collections) {
+        const option = el('option', undefined, collection.scope + ' · ' + collection.count + ' memories');
+        option.value = collection.scope;
+        select.appendChild(option);
+      }
+      if (collections.some((collection) => collection.scope === previousScope)) select.value = previousScope;
+      const unavailable = (data.excluded_shared || 0) + (data.excluded_projects || 0);
+      $('curationStatus').textContent = unavailable ? unavailable + ' shared or project memories are excluded. Consolidation is private-only.' : '';
+      $('curationStartBtn').disabled = !select.value;
+      return collections;
+    } catch (ex) {
+      if (requestId !== curationRequestSequence || !status.unlocked) return [];
+      select.replaceChildren(el('option', undefined, 'Collections unavailable'));
+      if (ex.message !== 'locked') $('curationErr').textContent = ex.message;
+      return [];
+    }
+  }
+  $('curationScope').addEventListener('change',()=>{$('curationStartBtn').disabled=!$('curationScope').value;});
+  $('curationNewBtn').addEventListener('click',()=>{curationRequestSequence+=1;curationSession=null;curationSelectedId=null;curationPreview=null;$('curationStage').classList.remove('detail-open');$('curationStage').hidden=true;$('curationSetup').hidden=false;$('curationErr').textContent='';$('curationInstruction').focus();});
+  $('curationStartBtn').addEventListener('click',async()=>{const scope=$('curationScope').value;const instruction=$('curationInstruction').value.trim();if(!scope)return;const requestId=++curationRequestSequence;$('curationErr').textContent='';$('curationStatus').textContent='Comparing this collection on your device…';$('curationStartBtn').disabled=true;try{const data=await api('/api/curation/suggest',{method:'POST',json:{scope,instruction}});if(requestId!==curationRequestSequence||scope!==$('curationScope').value||instruction!==$('curationInstruction').value.trim())return;curationSession=data;curationSelectedId=data.groups&&data.groups[0]&&data.groups[0].id;$('curationSetup').hidden=true;$('curationStage').hidden=false;renderCurationSession();}catch(ex){if(requestId===curationRequestSequence&&ex.message!=='locked')$('curationErr').textContent=ex.message;}finally{if(requestId===curationRequestSequence){$('curationStartBtn').disabled=!$('curationScope').value;$('curationStatus').textContent='';}}});
+  function renderCurationSession(){const groups=curationSession.groups||[];$('curationTitle').textContent=curationSession.scope;const coverage=curationSession.coverage||{};const incomplete=coverage.complete===false||coverage.skipped>0||coverage.failed>0;$('curationCoverage').textContent=(coverage.compared||0)+' compared · '+groups.length+' suggestions'+(incomplete?' · Incomplete':'');if(incomplete)$('curationErr').textContent='This review is incomplete: '+(coverage.skipped||0)+' skipped and '+(coverage.failed||0)+' failed. Only reviewed memories appear below.';$('curationCount').textContent=groups.length+' remaining';const queue=$('curationQueue');queue.replaceChildren();if(!groups.length){queue.appendChild(el('p','curation-empty','No consolidation suggestions remain.'));$('curationDetail').replaceChildren();return;}if(!groups.some((group)=>group.id===curationSelectedId))curationSelectedId=groups[0].id;groups.forEach((group,index)=>{const button=el('button');button.type='button';button.setAttribute('aria-current',String(group.id===curationSelectedId));const first=group.sources&&group.sources[0];button.append(el('small',undefined,(group.sources||[]).length+' source memories'),el('strong',undefined,group.question||'Consolidation '+(index+1)),el('span',undefined,first&&first.content?first.content.slice(0,88):'Review needed'));button.addEventListener('click',()=>{curationSelectedId=group.id;renderCurationSession();$('curationStage').classList.add('detail-open');});queue.appendChild(button);});renderCurationDetail(groups.find((group)=>group.id===curationSelectedId));}
+  function renderCurationDetail(group){const detail=$('curationDetail');detail.replaceChildren();if(!group)return;const back=el('button','btn curation-back','‹ Suggestions');back.addEventListener('click',()=>$('curationStage').classList.remove('detail-open'));detail.appendChild(back);detail.append(el('h3',undefined,group.question||'Review this consolidation'),el('p','curation-explanation',group.explanation||'Compare the full source memories with the proposed result.'));const comparison=el('div','curation-comparison');const sourceColumn=el('div');sourceColumn.appendChild(el('div','curation-label','Source memories'));const sources=el('div');(group.sources||[]).forEach((source)=>sources.appendChild(curationSourceNode(source,true,group)));sourceColumn.appendChild(sources);const proposed=el('div','curation-proposal');proposed.appendChild(el('div','curation-label','Proposed memory'));const editor=el('textarea');editor.setAttribute('aria-label','Exact proposed memory');editor.value=group.proposed_content||'';editor.placeholder='Write the exact consolidated memory you want saved.';editor.addEventListener('input',()=>{group.proposed_content=editor.value;group.draftInvalid=false;});proposed.appendChild(editor);if(group.draftInvalid)proposed.appendChild(el('p','err','Source selection changed. Review the remaining sources and write the exact result before previewing.'));const sourceCount=(group.sources||[]).length;proposed.appendChild(el('p','curation-explanation',sourceCount+' '+(sourceCount===1?'original':'originals')+' kept in history · 1 active memory'));const actions=el('div','curation-actions');const preview=el('button','btn primary','Preview consolidation');preview.addEventListener('click',()=>{if(!editor.value.trim()){editor.focus();return;}openCurationApplyPreview(group,editor.value);});const keep=el('button','btn','Keep separate');keep.addEventListener('click',()=>{curationSession.groups=curationSession.groups.filter((item)=>item.id!==group.id);renderCurationSession();});actions.append(preview,keep);proposed.appendChild(actions);comparison.append(sourceColumn,proposed);detail.appendChild(comparison);}
+  function openCurationDialog(title,buildBody,confirmLabel,onConfirm,danger){curationLastFocus=document.activeElement;$('curationDialogTitle').textContent=title;$('curationDialogBody').replaceChildren();$('curationDialogActions').replaceChildren();$('curationDialogErr').textContent='';buildBody($('curationDialogBody'));const cancel=el('button','btn','Cancel');cancel.addEventListener('click',closeCurationDialog);const confirm=el('button','btn '+(danger?'danger':'primary'),confirmLabel);confirm.addEventListener('click',async()=>{confirm.disabled=true;cancel.disabled=true;try{await onConfirm();}finally{if(confirm.isConnected){confirm.disabled=false;cancel.disabled=false;}}});$('curationDialogActions').append(cancel,confirm);document.querySelector('header').inert=true;document.querySelector('.shell').inert=true;$('curationDialogOverlay').hidden=false;cancel.focus();}
+  function closeCurationDialog(){$('curationDialogOverlay').hidden=true;curationPreview=null;document.querySelector('header').inert=false;document.querySelector('.shell').inert=false;if(curationLastFocus&&curationLastFocus.isConnected)curationLastFocus.focus();}
+  function addCurationPreview(body,sources,content){const sourceBlock=el('div','curation-preview-block');sourceBlock.appendChild(el('div','curation-label','Source memories · '+sources.length));sources.forEach((source)=>sourceBlock.appendChild(curationSourceNode(source,false)));const resultBlock=el('div','curation-preview-block');resultBlock.append(el('div','curation-label','Result · 1 memory'),el('div','content',content));body.append(sourceBlock,resultBlock);}
+  function openCurationApplyPreview(group,content){curationPreview={vault_id:curationSession.vault_id,sources:(group.sources||[]).map((source)=>({...source})),content};openCurationDialog('Confirm consolidation',(body)=>addCurationPreview(body,curationPreview.sources,curationPreview.content),'Confirm consolidation',applyCurationPreview,false);}
+  async function applyCurationPreview(){const snapshot=curationPreview;if(!snapshot)return;const payload={vault_id:snapshot.vault_id,sources:snapshot.sources.map((source)=>({...source})),content:snapshot.content};const key='apply:'+JSON.stringify(payload);const operationId=curationPendingOperations.get(key)||crypto.randomUUID();curationPendingOperations.set(key,operationId);try{await api('/api/curation/apply',{method:'POST',json:{...payload,operation_id:operationId}});curationPendingOperations.delete(key);closeCurationDialog();curationSession.groups=curationSession.groups.filter((group)=>group.id!==curationSelectedId);await loadMemories();renderCurationSession();}catch(ex){if(ex.status&&ex.status>=400&&ex.status<500)curationPendingOperations.delete(key);$('curationDialogErr').textContent=ex.status===409?'These memories changed after this preview. Close it, review the current sources, and preview again.':ex.message;}}
+  $('curationHistoryBtn').addEventListener('click',async()=>{$('curationErr').textContent='';let history;try{history=await api('/api/curation/history');}catch(ex){if(ex.message!=='locked')$('curationErr').textContent=ex.message;return;}openCurationDialog('Consolidation history',(body)=>{if(!(history.items||[]).length){body.appendChild(el('p','muted','No consolidations yet.'));return;}for(const item of history.items||[]){const receipt=el('div','review-receipt');receipt.appendChild(el('strong',undefined,'Consolidation change'));addCurationPreview(receipt,item.sources||[],item.result&&item.result.content||'');const inspect=el('button','btn','Inspect');inspect.addEventListener('click',()=>openCurationHistoryItem(history.vault_id,item));receipt.appendChild(inspect);body.appendChild(receipt);}},'Close',closeCurationDialog,false);});
+  function openCurationHistoryItem(vaultId,item){openCurationDialog(item.can_restore?'Preview exact restore':'Consolidation receipt',(body)=>{addCurationPreview(body,item.sources||[],item.result&&item.result.content||'');if(item.can_restore){const block=el('div','curation-preview-block');block.appendChild(el('div','curation-label','Restore as new copies · '+(item.sources||[]).length+' memories'));(item.sources||[]).forEach((entry)=>block.appendChild(curationSourceNode(entry,false)));body.appendChild(block);}},item.can_restore?'Restore as new copies':'Close',item.can_restore?()=>restoreCurationItem(vaultId,item):closeCurationDialog,false);}
+  async function restoreCurationItem(vaultId,item){const expectedResult={...item.result};const payload={vault_id:vaultId,result_id:item.result.id,expected_result:expectedResult};const key='restore:'+JSON.stringify(payload);const operationId=curationPendingOperations.get(key)||crypto.randomUUID();curationPendingOperations.set(key,operationId);try{await api('/api/curation/restore',{method:'POST',json:{...payload,operation_id:operationId}});curationPendingOperations.delete(key);closeCurationDialog();await loadMemories();}catch(ex){if(ex.status&&ex.status>=400&&ex.status<500)curationPendingOperations.delete(key);$('curationDialogErr').textContent=ex.status===409?'This result changed after the receipt was loaded. Close this preview and reopen history.':ex.message;}}
+  $('curationDialogOverlay').addEventListener('keydown',(event)=>{if(event.key==='Escape'){event.preventDefault();closeCurationDialog();return;}if(event.key!=='Tab')return;const focusable=Array.from($('curationDialogOverlay').querySelectorAll('button:not([disabled]),textarea,select,input')).filter((node)=>!node.hidden&&node.getClientRects().length>0);if(!focusable.length)return;const first=focusable[0],last=focusable[focusable.length-1];if(event.shiftKey&&document.activeElement===first){event.preventDefault();last.focus();}else if(!event.shiftKey&&document.activeElement===last){event.preventDefault();first.focus();}});
+
+  // --- trustworthy memory review (ADR 0046). All supplied text stays text.
   let reviewPolling = null;
   let reviewApiPreflight = null;
+  let reviewReport = null;
+  let reviewSelectedId = null;
+  let reviewSelectedScopes = [];
+  let reviewCollectionLoadSequence = 0;
+  let reviewRequestSequence = 0;
+  let reviewLastFocus = null;
+  const reviewPendingOperations = new Map();
+  function clearDetailedReviewSensitive() {
+    reviewRequestSequence += 1;
+    reviewCollectionLoadSequence += 1;
+    if (reviewPolling) clearInterval(reviewPolling);
+    reviewPolling = null;
+    reviewApiPreflight = null;
+    reviewReport = null;
+    reviewSelectedId = null;
+    reviewSelectedScopes = [];
+    reviewPendingOperations.clear();
+    $('reviewCollections').replaceChildren();
+    $('reviewQueue').replaceChildren();
+    $('reviewDetail').replaceChildren();
+    $('reviewDialogBody').replaceChildren();
+    $('reviewDialogActions').replaceChildren();
+    $('reviewApiDetails').replaceChildren();
+    $('reviewPanel').hidden = true;
+    $('reviewApiOverlay').hidden = true;
+    $('reviewDialogOverlay').hidden = true;
+    $('detailedReview').open = false;
+    document.querySelector('header').inert = false;
+    document.querySelector('.shell').inert = false;
+  }
   function setReviewButtonsDisabled(disabled) {
     $('reviewPassBtn').disabled = disabled;
     $('reviewApiBtn').disabled = disabled;
   }
   function closeReviewApiConsent() {
+    reviewRequestSequence += 1;
     $('reviewApiOverlay').hidden = true;
     reviewApiPreflight = null;
+    if (reviewLastFocus) reviewLastFocus.focus();
   }
+  function selectedReviewScopes() {
+    return Array.from($('reviewCollections').querySelectorAll('input:checked')).map((n) => n.value);
+  }
+  async function loadReviewCollections() {
+    const requestId = ++reviewCollectionLoadSequence;
+    const box = $('reviewCollections');
+    box.replaceChildren();
+    try {
+      const data = await api('/api/review/collections');
+      if (requestId !== reviewCollectionLoadSequence || !status.unlocked) return [];
+      for (const collection of data.collections || []) {
+        const label = el('label', 'review-choice');
+        const radio = el('input'); radio.type = 'radio'; radio.name = 'review-collection'; radio.value = collection.scope;
+        radio.addEventListener('change', () => {
+          reviewSelectedScopes = selectedReviewScopes();
+          $('reviewPassBtn').disabled = false; $('reviewApiBtn').disabled = false;
+          $('reviewPassBtn').textContent = 'Review ' + collection.count + ' ' + (collection.count === 1 ? 'memory' : 'memories');
+        });
+        label.append(radio, el('span', undefined, collection.scope), el('small', undefined, collection.count + ' memories · ' + (collection.shared ? 'Shared' : 'Private')));
+        box.appendChild(label);
+      }
+      $('reviewReadiness').textContent = (data.collections || []).length ? 'Choose a collection. Local model availability is checked when review starts.' : 'There are no eligible collections to review.';
+      $('reviewExclusions').textContent = data.project_docs_excluded ? 'Project documents are excluded from this review.' : '';
+      return data.collections || [];
+    } catch (ex) {
+      if (requestId !== reviewCollectionLoadSequence) return [];
+      $('reviewReadiness').textContent = 'Collections could not be loaded.';
+      $('reviewPassErr').textContent = ex.message === 'locked' ? '' : ex.message;
+      return [];
+    }
+  }
+  $('reviewCurrentCollectionBtn').addEventListener('click', async () => {
+    const scope = filterScope;
+    if (!scope) return;
+    reviewRequestSequence += 1;
+    const lockEpoch = memoryScopeEpoch;
+    $('memoryCollectionReviewHint').textContent = 'Checking review availability…';
+    const collections = await loadCurationCollections(scope);
+    if (!status.unlocked || lockEpoch !== memoryScopeEpoch || scope !== filterScope) return;
+    const eligible = collections.find((collection) => collection.scope === scope);
+    if (!eligible) {
+      $('memoryCollectionReviewHint').textContent = String(scope).startsWith('project:')
+        ? 'Project collections are excluded from consolidation.'
+        : 'This collection is not currently eligible for consolidation.';
+      return;
+    }
+    curationSession = null;
+    curationSelectedId = null;
+    curationPreview = null;
+    $('curationStage').hidden = true;
+    $('curationSetup').hidden = false;
+    $('curationErr').textContent = '';
+    $('memoryCollectionReviewHint').textContent = '';
+    document.querySelectorAll('#mainNav button').forEach((button) => button.classList.toggle('active', button.dataset.view === 'curation'));
+    $('settingsNav').hidden = true;
+    showSection('curation');
+    $('detailedReview').open = false;
+    $('curationGuided').scrollIntoView({ block: 'start' });
+    $('curationInstruction').focus();
+  });
   $('reviewPassBtn').addEventListener('click', async () => {
+    const scopes = selectedReviewScopes();
+    if (!scopes.length) return;
     $('reviewPassErr').textContent = '';
-    $('reviewPassStatus').textContent = 'Running a review pass. This can take a while on a large vault.';
+    $('reviewPassStatus').textContent = 'Reviewing your collection. You can keep browsing memories below.';
     setReviewButtonsDisabled(true);
     try {
-      const started = await api('/api/review/run', { method: 'POST', json: {} });
+      reviewSelectedScopes = scopes;
+      const started = await api('/api/review/run', { method: 'POST', json: { scopes } });
+      showReviewRunning();
       pollReviewJob(started.job_id);
     } catch (ex) {
       if (ex.message !== 'locked') {
@@ -2174,6 +2662,12 @@
       setReviewButtonsDisabled(false);
     }
   });
+  $('reviewChangeCollectionBtn').addEventListener('click', async () => {
+    $('reviewCollectionPicker').hidden = false; $('reviewChangeCollectionBtn').hidden = true; $('reviewPanel').hidden = true;
+    reviewSelectedScopes = []; $('reviewPassBtn').textContent = 'Start review'; $('reviewPassBtn').disabled = true; $('reviewApiBtn').disabled = true; $('reviewPassStatus').textContent = '';
+    await loadReviewCollections();
+  });
+  $('reviewHistoryBtn').addEventListener('click', openReviewHistory);
   $('reviewApiBtn').addEventListener('click', () => { openReviewApiConsent(); });
   $('reviewApiCancel').addEventListener('click', closeReviewApiConsent);
   $('reviewApiEndpoint').addEventListener('change', () => { loadReviewApiPreflight(); });
@@ -2187,6 +2681,7 @@
       const started = await api('/api/review/run', {
         method: 'POST',
         json: {
+          scopes: reviewSelectedScopes.length ? reviewSelectedScopes : selectedReviewScopes(),
           mode: 'api',
           endpoint_id: reviewApiPreflight.endpoint.id,
           selection_fingerprint: reviewApiPreflight.selection_fingerprint,
@@ -2208,6 +2703,10 @@
   });
 
   async function openReviewApiConsent() {
+    const requestId = ++reviewRequestSequence;
+    reviewSelectedScopes = selectedReviewScopes();
+    if (!reviewSelectedScopes.length) return;
+    reviewLastFocus = document.activeElement;
     $('reviewApiErr').textContent = '';
     reviewApiPreflight = null;
     $('reviewApiConfirm').hidden = true;
@@ -2217,10 +2716,13 @@
     $('reviewApiEmpty').hidden = true;
     $('reviewApiForm').hidden = true;
     $('reviewApiOverlay').hidden = false;
+    $('reviewApiCancel').focus();
     let options;
     try {
       options = await api('/api/review/api-options');
+      if (requestId !== reviewRequestSequence || !status.unlocked || $('reviewApiOverlay').hidden) return;
     } catch (ex) {
+      if (requestId !== reviewRequestSequence) return;
       if (ex.message !== 'locked') $('reviewApiErr').textContent = ex.message;
       return;
     }
@@ -2240,6 +2742,7 @@
   }
 
   async function loadReviewApiPreflight() {
+    const requestId = ++reviewRequestSequence;
     const endpointId = $('reviewApiEndpoint').value;
     $('reviewApiErr').textContent = '';
     $('reviewApiDetails').replaceChildren();
@@ -2248,8 +2751,10 @@
     if (!endpointId) return;
     let data;
     try {
-      data = await api('/api/review/preflight', { method: 'POST', json: { endpoint_id: endpointId } });
+      data = await api('/api/review/preflight', { method: 'POST', json: { endpoint_id: endpointId, scopes: reviewSelectedScopes } });
+      if (requestId !== reviewRequestSequence || !status.unlocked || $('reviewApiOverlay').hidden) return;
     } catch (ex) {
+      if (requestId !== reviewRequestSequence) return;
       if (ex.message !== 'locked') $('reviewApiErr').textContent = ex.message;
       return;
     }
@@ -2304,6 +2809,8 @@
           $('reviewPassStatus').textContent = p.progress;
         } else if (p.batches_total > 0) {
           $('reviewPassStatus').textContent = 'Review pass: batch ' + p.batches_done + ' of ' + p.batches_total;
+          const pct = Math.round((p.batches_done / p.batches_total) * 100);
+          $('reviewProgress').hidden = false; $('reviewProgress').firstElementChild.style.width = pct + '%';
         }
         if (p.done) {
           clearInterval(reviewPolling);
@@ -2326,153 +2833,171 @@
     }, 800);
   }
 
+  function showReviewRunning() {
+    $('reviewCollectionPicker').hidden = true; $('reviewChangeCollectionBtn').hidden = false;
+    $('reviewPanel').hidden = false; $('reviewSummaryTitle').textContent = reviewSelectedScopes.join(', ');
+    $('reviewCoverage').textContent = 'Checking memories…'; $('reviewProgress').hidden = false;
+    $('reviewProgress').firstElementChild.style.width = '4%';
+    const queue = $('reviewQueue'); queue.replaceChildren();
+    const state = el('div', 'review-state'); state.append(el('h2', undefined, 'Reviewing your collection'), el('p', undefined, 'Suggestions will appear here when the pass finishes. Search and browse remain available.'));
+    queue.appendChild(state); $('reviewDetail').replaceChildren();
+  }
+
   async function loadReviewPanel() {
+    const requestId = ++reviewRequestSequence;
     const panel = $('reviewPanel');
-    panel.replaceChildren();
-    panel.hidden = true;
     let data;
     try {
       data = await api('/api/review/report');
+      if (requestId !== reviewRequestSequence || !status.unlocked) return;
     } catch (ex) {
-      if (ex.status === 404) return;
+      if (requestId !== reviewRequestSequence) return;
+      if (ex.status === 404) {
+        panel.hidden = true;
+        loadReviewCollections();
+        return;
+      }
       if (ex.message !== 'locked') $('reviewPassErr').textContent = ex.message;
       return;
     }
-    const proposals = data.proposals || [];
+    reviewReport = data;
+    reviewSelectedScopes = data.selected_scopes || [];
+    $('reviewCollectionPicker').hidden = true; $('reviewChangeCollectionBtn').hidden = false;
+    $('reviewSummaryTitle').textContent = (data.selected_scopes || []).join(', ') + ' · ' + data.entry_count + ' memories';
+    renderReviewCoverage(data.coverage || {});
+    const proposals = (data.proposals || []).filter((p) => p.status === 'pending');
     panel.hidden = false;
-    panel.appendChild(el('h3', 'sect', 'Review pass'));
-    if (data.sent_to && data.sent_to.label && data.sent_to.host) {
-      panel.appendChild(el('p', 'muted', 'Sent to ' + data.sent_to.label + ' (' + data.sent_to.host + ')'));
-    }
-    if (proposals.length === 0) {
-      panel.appendChild(el('p', 'muted', 'No proposals from the last review pass.'));
+    const pending = proposals.filter((p) => p.status === 'pending');
+    $('reviewQueueCount').textContent = pending.length + ' pending';
+    const queue = $('reviewQueue'); queue.replaceChildren();
+    if (pending.length === 0) {
+      const state = el('div', 'review-state');
+      state.append(el('h2', undefined, 'Nothing to review from this pass.'), el('p', undefined, (data.coverage && data.coverage.compared || 0) + ' memories compared. A review can still miss things.'));
+      const choose = el('button', 'btn', 'Review another collection'); choose.addEventListener('click', () => $('reviewChangeCollectionBtn').click()); state.appendChild(choose); queue.appendChild(state);
+      $('reviewDetail').replaceChildren();
       return;
     }
-    const live = data.live_entries || {};
-    for (const p of proposals) {
-      panel.appendChild(renderReviewProposal(p, live));
-    }
+    if (!pending.some((p) => p.id === reviewSelectedId)) reviewSelectedId = pending[0].id;
+    pending.forEach((p, index) => {
+      const button = el('button'); button.type = 'button'; button.setAttribute('role', 'option'); button.setAttribute('aria-selected', String(p.id === reviewSelectedId));
+      button.append(el('small', undefined, reviewKindLabel(p.kind)), el('strong', undefined, proposalTitle(p, index)), el('span', 'muted', (p.entry_ids || []).length + ' sources · Needs your judgment'));
+      button.addEventListener('click', () => { reviewSelectedId = p.id; renderReviewQueueSelection(pending); renderReviewDetail(p); });
+      queue.appendChild(button);
+    });
+    renderReviewDetail(pending.find((p) => p.id === reviewSelectedId));
   }
-
-  function renderReviewProposal(p, live) {
-    const card = el('div', 'card');
-    card.style.marginBottom = '12px';
-    const head = el('div', 'prov');
-    head.appendChild(el('span', 'tag', p.kind));
-    head.appendChild(el('span', undefined, p.status));
-    head.appendChild(el('span', undefined, p.id));
-    card.appendChild(head);
-    if (p.explanation) {
-      const note = el('p', 'muted');
-      note.style.margin = '8px 0';
-      note.textContent = p.explanation;
-      card.appendChild(note);
-    }
-    const buttons = el('div', 'row');
-    buttons.style.marginTop = '10px';
-    switch (p.kind) {
-      case 'duplicate': {
-        for (const id of p.entry_ids) {
-          card.appendChild(renderReviewEntry(id, live, p.member_decisions && p.member_decisions[id]));
-          const row = el('div', 'row');
-          row.style.margin = '6px 0 10px';
-          const decision = (p.member_decisions && p.member_decisions[id]) || 'pending';
-          if (p.status === 'pending' && decision === 'pending') {
-            const keep = el('button', 'btn', 'Keep');
-            keep.addEventListener('click', () => reviewAction('/api/review/' + p.id + '/keep', { entry_id: id }));
-            const forget = el('button', 'btn danger', 'Forget');
-            forget.addEventListener('click', () => {
-              if (!confirm('Forget this memory? Its content is removed permanently; the deletion itself stays on the record.')) return;
-              reviewAction('/api/review/' + p.id + '/forget', { entry_id: id });
-            });
-            row.append(keep, forget);
-          } else {
-            row.appendChild(el('span', 'muted', decision));
-          }
-          card.appendChild(row);
-        }
-        break;
-      }
-      case 'contradiction': {
-        const sides = el('div', 'row');
-        sides.style.alignItems = 'flex-start';
-        sides.style.gap = '12px';
-        for (const id of p.entry_ids.slice(0, 2)) {
-          const col = el('div');
-          col.style.flex = '1';
-          col.appendChild(renderReviewEntry(id, live, null));
-          sides.appendChild(col);
-        }
-        card.appendChild(sides);
-        if (p.proposed_content) {
-          const prop = el('p');
-          prop.style.margin = '8px 0';
-          const lab = el('strong', undefined, 'Proposed: ');
-          prop.append(lab, document.createTextNode(p.proposed_content));
-          card.appendChild(prop);
-        }
-        if (p.status === 'pending') {
-          const accept = el('button', 'btn primary', 'Accept');
-          accept.addEventListener('click', () => reviewAction('/api/review/' + p.id + '/accept'));
-          const reject = el('button', 'btn', 'Reject');
-          reject.addEventListener('click', () => reviewAction('/api/review/' + p.id + '/reject'));
-          buttons.append(accept, reject);
-        }
-        break;
-      }
-      case 'undated':
-      case 'stale': {
-        const id = p.target_entry_id || p.entry_ids[0];
-        if (id) card.appendChild(renderReviewEntry(id, live, null));
-        if (p.proposed_content) {
-          const prop = el('p');
-          prop.style.margin = '8px 0';
-          const lab = el('strong', undefined, 'Proposed: ');
-          prop.append(lab, document.createTextNode(p.proposed_content));
-          card.appendChild(prop);
-        }
-        if (p.status === 'pending') {
-          const accept = el('button', 'btn primary', 'Accept');
-          accept.addEventListener('click', () => reviewAction('/api/review/' + p.id + '/accept'));
-          const reject = el('button', 'btn', 'Reject');
-          reject.addEventListener('click', () => reviewAction('/api/review/' + p.id + '/reject'));
-          buttons.append(accept, reject);
-        }
-        break;
-      }
-      default:
-        card.appendChild(el('p', 'muted', 'Unknown proposal kind.'));
-    }
-    if (buttons.childNodes.length > 0) card.appendChild(buttons);
-    return card;
+  function renderReviewCoverage(c) {
+    const incomplete = c.complete === false || c.skipped > 0 || c.failed > 0;
+    $('reviewCoverage').textContent = (c.compared || 0) + ' checked · ' + (reviewReport.proposals || []).filter((p) => p.status === 'pending').length + ' suggestions' + (incomplete ? ' · Incomplete' : '');
+    $('reviewProgress').hidden = true;
+    if (incomplete) $('reviewPassStatus').textContent = (c.skipped || c.failed) ? 'Some memories could not be compared: ' + (c.skipped || 0) + ' skipped, ' + (c.failed || 0) + ' failed. Review only covers the memories checked.' : 'This review is incomplete. Some comparisons were not completed, even though no individual memory was skipped or failed.';
   }
-
-  function renderReviewEntry(id, live, decision) {
-    const wrap = el('div');
-    wrap.style.margin = '8px 0';
+  function reviewKindLabel(kind) { return ({duplicate:'Possible repeat', contradiction:'Possible update', stale:'May be outdated', undated:'Date missing', question:'Question for you'})[kind] || 'Suggestion'; }
+  function proposalTitle(p, index) { return p.title || p.question || (p.kind === 'duplicate' ? 'Choose what stays' : 'Suggestion ' + (index + 1)); }
+  function renderReviewQueueSelection(pending) {
+    Array.from($('reviewQueue').children).forEach((b, i) => b.setAttribute('aria-selected', String(pending[i].id === reviewSelectedId)));
+  }
+  function liveReviewEntry(id) {
+    return reviewReport.live_entries && reviewReport.live_entries[id];
+  }
+  function sourceEntry(id) {
+    const snapshots = reviewReport.source_entries || [];
+    const snapshot = (Array.isArray(snapshots) ? snapshots.find((e) => e.id === id) : snapshots[id]);
+    const live = liveReviewEntry(id);
+    if (!snapshot) return { id, missing:true };
+    return {...snapshot, _liveChanged:!live || live.missing || live.content!==snapshot.content || live.scope!==snapshot.scope || live.type!==snapshot.type || live.superseded_at!==snapshot.superseded_at || live.superseded_by!==snapshot.superseded_by || live.forgotten_at!==snapshot.forgotten_at};
+  }
+  function formatReviewDate(entry) {
+    const value = entry.created_at || entry.updated_at || entry.recorded_at;
+    if (!value) return 'Date not recorded';
+    const d = new Date(value); return Number.isNaN(d.getTime()) ? String(value) : 'Recorded ' + d.toLocaleDateString(undefined, {month:'short', day:'numeric', year:'numeric'});
+  }
+  function renderReviewSource(entry) {
+    const wrap = el('div', 'review-source');
     const meta = el('div', 'prov');
-    const e = live[id];
-    meta.appendChild(el('span', undefined, (id || '').slice(0, 8)));
-    if (e && e.scope) meta.appendChild(el('span', undefined, e.scope));
-    if (decision) meta.appendChild(el('span', 'tag', decision));
-    wrap.appendChild(meta);
-    const body = el('div', 'content');
-    body.textContent = e && e.content ? e.content : '(not in this vault)';
-    wrap.appendChild(body);
+    meta.append(el('span', undefined, entry.scope || 'Unknown collection'), el('span', undefined, entry.source || entry.source_type || 'Saved memory'), el('span', undefined, formatReviewDate(entry)), el('span', undefined, entry.type || 'memory'));
+    if(entry.valid_from) meta.appendChild(el('span',undefined,'Validity start '+formatReviewDate({recorded_at:entry.valid_from}).replace('Recorded ','')));
+    if(entry._liveChanged) meta.appendChild(el('span','tag','Changed since review'));
+    wrap.append(meta, el('div', 'content', entry.missing ? 'This source is no longer in the current vault.' : entry.content || ''));
     return wrap;
   }
-
-  async function reviewAction(route, json) {
+  function renderReviewDetail(p) {
+    const detail = $('reviewDetail'); detail.replaceChildren(); if (!p) return;
+    const back = el('button', 'btn', '‹ Suggestions'); back.addEventListener('click', () => $('reviewPanel').classList.remove('detail-open')); detail.appendChild(back);
+    detail.append(el('div', 'review-kind', reviewKindLabel(p.kind)), el('h2', undefined, proposalTitle(p, 0)), el('p', 'review-explanation', p.explanation || 'Compare the source memories before deciding.'));
+    detail.appendChild(el('div', 'review-meta-title', 'What your memories say'));
+    detail.appendChild(el('p', 'muted', 'Recorded and validity dates describe stored versions. A later timestamp alone does not prove a fact changed.'));
+    const sources = el('div', 'review-sources'); const allIds = p.entry_ids || (p.target_entry_id ? [p.target_entry_id] : []); const ids=p.kind==='duplicate'?allIds.filter((id)=>{const live=liveReviewEntry(id);return (!p.member_decisions||p.member_decisions[id]!=='forgotten')&&live&&!live.missing&&!live.forgotten_at&&!live.superseded_at;}):allIds;
+    ids.forEach((id) => sources.appendChild(renderReviewSource(sourceEntry(id)))); detail.appendChild(sources);
+    if (p.kind === 'duplicate') renderDuplicateDecision(detail, p, ids);
+    else renderEditableDecision(detail, p, ids);
+    $('reviewPanel').classList.add('detail-open');
+  }
+  function renderEditableDecision(detail, p, ids) {
+    let target = p.target_entry_id || ids[0] || '';
+    if (p.kind === 'question') {
+      detail.appendChild(el('div', 'review-meta-title', 'Your answer'));
+      detail.appendChild(el('p', 'review-explanation', p.question || 'How should this memory read going forward? Your answer is not sent to a model.'));
+      const targetSelect = el('select'); targetSelect.setAttribute('aria-label', 'Memory to update'); targetSelect.style.marginBottom = '8px';
+      ids.forEach((id) => { const o = el('option', undefined, (sourceEntry(id).content || id).slice(0, 80)); o.value = id; targetSelect.appendChild(o); });
+      targetSelect.addEventListener('change', () => { target = targetSelect.value; }); detail.appendChild(targetSelect);
+    } else detail.appendChild(el('div', 'review-meta-title', 'Suggested wording'));
+    const editor = el('textarea', 'review-editor'); editor.setAttribute('aria-label',p.kind==='question'?'Exact answer to save':'Exact suggested wording to save'); editor.value = p.proposed_content || ''; editor.placeholder = p.kind === 'question' ? 'Write the exact wording you want saved…' : 'Edit the exact wording before saving…'; detail.appendChild(editor);
+    detail.appendChild(el('p', 'muted', 'This exact text will be shown and saved. No model runs when you apply it.'));
+    const actions = el('div', 'review-detail-actions');
+    const save = el('button', 'btn primary', p.kind === 'question' ? 'Preview answer' : 'Preview this wording');
+    save.addEventListener('click', () => { const content = editor.value.trim(); if (!content) { editor.focus(); return; } confirmReviewSave(p, target, content); });
+    const unresolved = el('button', 'btn', 'Leave unresolved'); unresolved.addEventListener('click', () => reviewAction(p, 'unresolved'));
+    const dismiss = el('button', 'btn', 'Dismiss'); dismiss.addEventListener('click', () => reviewAction(p, 'reject'));
+    actions.append(save, unresolved, dismiss); detail.appendChild(actions);
+  }
+  function renderDuplicateDecision(detail, p, ids) {
+    detail.appendChild(el('div', 'review-meta-title', 'Choose the original that stays active'));
+    const group = el('div'); let survivor = ids[0] || '';
+    ids.forEach((id, index) => { const row = el('label', 'review-dup-row'); const radio = el('input'); radio.type='radio'; radio.name='review-survivor'; radio.value=id; radio.checked=index===0; radio.addEventListener('change',()=>{survivor=id;}); row.append(radio, renderReviewSource(sourceEntry(id))); group.appendChild(row); }); detail.appendChild(group);
+    const removalSelect = el('select'); removalSelect.setAttribute('aria-label','Repeated memory to remove');
+    function fillRemovalChoices(){ const previous=removalSelect.value; removalSelect.replaceChildren(); ids.filter((id)=>id!==survivor).forEach((id)=>{const o=el('option',undefined,(sourceEntry(id).content||id).slice(0,80));o.value=id;removalSelect.appendChild(o);}); if(Array.from(removalSelect.options).some((o)=>o.value===previous))removalSelect.value=previous; }
+    group.querySelectorAll('input').forEach((radio)=>radio.addEventListener('change',fillRemovalChoices)); fillRemovalChoices(); detail.appendChild(removalSelect);
+    const actions = el('div', 'review-detail-actions'); const remove = el('button', 'btn danger', 'Review one removal');
+    remove.addEventListener('click', () => { const removed = removalSelect.value; if (removed) confirmDuplicateRemoval(p, survivor, removed); });
+    const keep = el('button', 'btn', 'Keep all'); keep.addEventListener('click', () => reviewAction(p, 'reject')); actions.append(remove, keep); detail.appendChild(actions);
+  }
+  function openReviewDialog(title, buildBody, confirmLabel, onConfirm, danger) {
+    reviewLastFocus = document.activeElement; $('reviewDialogTitle').textContent = title; $('reviewDialogBody').replaceChildren(); $('reviewDialogActions').replaceChildren(); $('reviewDialogErr').textContent=''; buildBody($('reviewDialogBody'));
+    const cancel=el('button','btn','Cancel'); cancel.addEventListener('click',closeReviewDialog); const confirm=el('button','btn '+(danger?'danger':'primary'),confirmLabel); confirm.addEventListener('click',onConfirm); $('reviewDialogActions').append(cancel,confirm); $('reviewDialogOverlay').hidden=false; cancel.focus();
+  }
+  function closeReviewDialog(){ $('reviewDialogOverlay').hidden=true; if(reviewLastFocus&&reviewLastFocus.isConnected) reviewLastFocus.focus(); else $('reviewHistoryBtn').focus(); }
+  function confirmReviewSave(p,target,content){ openReviewDialog('Save this exact wording?', (body)=>{ body.appendChild(el('p','muted','The current version remains in history.')); const box=el('div','review-source content',content); body.appendChild(box); }, 'Save this wording', async()=>{ if(await reviewAction(p,'accept',{content,target_entry_id:target})) closeReviewDialog(); }, false); }
+  function confirmDuplicateRemoval(p,survivor,removed){ openReviewDialog('Remove one repeated memory?', (body)=>{ body.append(el('p','muted','The retained original stays active. The removed entry can be restored from change history.')); const compare=el('div','review-compare'); const left=el('div'); left.append(el('small',undefined,'STAYS ACTIVE'),document.createTextNode(sourceEntry(survivor).content||'')); const right=el('div'); right.append(el('small',undefined,'REMOVED FROM CURRENT MEMORIES'),document.createTextNode(sourceEntry(removed).content||'')); compare.append(left,right); body.appendChild(compare); }, 'Remove this one', async()=>{ if(await reviewAction(p,'forget',{entry_id:removed,survivor_id:survivor})) closeReviewDialog(); }, true); }
+  async function reviewAction(proposal, action, extra) {
     $('reviewPassErr').textContent = '';
+    const base = { report_id:reviewReport.report_id, proposal_fingerprint:proposal.proposal_fingerprint, ...(extra || {}) };
+    const key = proposal.id + ':' + action + ':' + JSON.stringify(base);
+    const operationId = reviewPendingOperations.get(key) || crypto.randomUUID(); reviewPendingOperations.set(key, operationId);
     try {
-      await api(route, { method: 'POST', json: json || {} });
+      await api('/api/review/' + proposal.id + '/' + action, { method:'POST', json:{...base,operation_id:operationId} });
+      reviewPendingOperations.delete(key);
       await loadReviewPanel();
       await loadMemories();
       await refreshStatus();
+      const outcome = action === 'accept' ? 'Saved your wording. View Change history to inspect or restore it.' : action === 'forget' ? 'Removed one repeated memory. View Change history to inspect or restore it.' : action === 'unresolved' ? 'Left unresolved. No memory was changed.' : 'Dismissed this suggestion. No memory was changed.';
+      const coverageNote = $('reviewPassStatus').textContent;
+      $('reviewPassStatus').textContent = outcome + (coverageNote ? ' ' + coverageNote : '');
+      return true;
     } catch (ex) {
+      if (ex.status && ex.status >= 400 && ex.status < 500) reviewPendingOperations.delete(key);
       if (ex.message !== 'locked') $('reviewPassErr').textContent = ex.message;
+      if (!$('reviewDialogOverlay').hidden && ex.message !== 'locked') $('reviewDialogErr').textContent = ex.message;
+      return false;
     }
   }
+  async function openReviewHistory() {
+    const requestId=reviewRequestSequence; let history; try { history=await api('/api/review/history'); if(requestId!==reviewRequestSequence||!status.unlocked)return; } catch(ex){ if(requestId!==reviewRequestSequence)return; $('reviewPassErr').textContent=ex.message==='locked'?'':ex.message; return; }
+    openReviewDialog('Change history', (body)=>{ const ops=(history.operations||[]).filter((o)=>o.status==='committed'&&['accept','forget','restore'].includes(o.action)); const restored=new Set(ops.filter((o)=>o.action==='restore').map((o)=>o.restores_receipt_id)); if(!ops.length){body.appendChild(el('p','muted','No saved review changes yet.'));return;} ops.forEach((receipt)=>{ const item=el('div','review-receipt'); item.appendChild(el('strong',undefined,receipt.action==='forget'?'Removed repeated memory':receipt.action==='restore'?'Restored wording':'Saved wording')); const beforeEntry=(receipt.before||[])[0]; const liveHead=(receipt.after||[]).find((entry)=>entry.id!==(beforeEntry&&beforeEntry.id)&&!entry.superseded_at); const compare=el('div','review-compare'); const before=el('div'); before.append(el('small',undefined,'BEFORE'),document.createTextNode((receipt.before||[]).map((e)=>e.content).join('\n\n')||'No previous text')); const after=el('div'); after.append(el('small',undefined,'AFTER'),document.createTextNode(receipt.action==='forget'?'Removed from current memories':liveHead&&liveHead.content||'Result no longer active')); compare.append(before,after); item.appendChild(compare); if(receipt.action!=='restore'&&!restored.has(receipt.receipt_id)){const restore=el('button','btn','Preview restore'); restore.addEventListener('click',()=>confirmRestore(history.report_id,receipt)); item.appendChild(restore);} body.appendChild(item); }); }, 'Close', closeReviewDialog, false);
+  }
+  function confirmRestore(reportId,receipt){ const before=(receipt.before||[])[0]; const after=receipt.after||[]; const head=receipt.action==='forget' ? after[0] : after.find((entry)=>entry.id!==(before&&before.id)&&!entry.superseded_at); const expectedContent=receipt.action==='forget' ? before&&before.content : head&&head.content; openReviewDialog('Restore this wording as a new version?',(body)=>{const compare=el('div','review-compare'); const current=el('div');current.append(el('small',undefined,'CURRENT'),document.createTextNode(receipt.action==='forget'?'Removed from active memories':head&&head.content||'Result no longer active'));const previous=el('div');previous.append(el('small',undefined,'RESTORE'),document.createTextNode(before&&before.content||''));compare.append(current,previous);body.append(compare,el('p','muted','Other memories are unchanged. If this memory changed elsewhere, the restore will be refused.'));},'Restore previous wording',async()=>{const key='restore:'+reportId+':'+receipt.receipt_id+':'+String(head&&head.id)+':'+String(expectedContent);const operationId=reviewPendingOperations.get(key)||crypto.randomUUID();reviewPendingOperations.set(key,operationId);try{await api('/api/review/restore',{method:'POST',json:{report_id:reportId,operation_id:operationId,receipt_id:receipt.receipt_id,expected_head_id:head&&head.id,expected_content:expectedContent}});reviewPendingOperations.delete(key);closeReviewDialog();await loadReviewPanel();await loadMemories();const coverageNote=$('reviewPassStatus').textContent;$('reviewPassStatus').textContent='Restored the previous wording as a new version.'+(coverageNote?' '+coverageNote:'');}catch(ex){if(ex.status&&ex.status>=400&&ex.status<500)reviewPendingOperations.delete(key);$('reviewDialogErr').textContent=ex.message;}},false); }
+  $('reviewDialogOverlay').addEventListener('keydown',(e)=>{ if(e.key==='Escape'){e.preventDefault();closeReviewDialog();return;} if(e.key!=='Tab')return; const focusable=Array.from($('reviewDialogOverlay').querySelectorAll('button:not([disabled]),textarea,select,input')).filter((n)=>!n.hidden&&n.getClientRects().length>0); if(!focusable.length)return; const first=focusable[0],last=focusable[focusable.length-1]; if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();} });
+  $('reviewApiOverlay').addEventListener('keydown',(e)=>{ if(e.key==='Escape'){e.preventDefault();closeReviewApiConsent();return;} if(e.key!=='Tab')return; const focusable=Array.from($('reviewApiOverlay').querySelectorAll('button:not([disabled]),select')).filter((n)=>!n.hidden&&n.getClientRects().length>0); if(!focusable.length)return; const first=focusable[0],last=focusable[focusable.length-1]; if(e.shiftKey&&document.activeElement===first){e.preventDefault();last.focus();}else if(!e.shiftKey&&document.activeElement===last){e.preventDefault();first.focus();} });
   // --- md-render-start (extracted verbatim by apps/web/test/markdown.test.ts —
   // keep this block self-contained: it may use only document.createElement,
   // createTextNode, textContent, appendChild, className, and the numeric
