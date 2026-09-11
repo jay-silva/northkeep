@@ -4,10 +4,9 @@ This milestone improves memory review. The owner accepted it locally on 2026-09-
 
 ## Try it with synthetic memories
 
-Run these commands in Terminal. They compile the changed packages with the already installed TypeScript compiler; they do not install dependencies or contact a model provider.
+Run these commands in Terminal from the repository root. They compile the changed packages with the already installed TypeScript compiler; they do not install dependencies or contact a model provider.
 
 ```sh
-cd /Users/jsilva/Claude/Projects/NorthKeep/northkeep
 node node_modules/typescript/bin/tsc -p packages/core/tsconfig.json
 node node_modules/typescript/bin/tsc -p packages/librarian/tsconfig.json
 node node_modules/typescript/bin/tsc -p apps/web/tsconfig.json

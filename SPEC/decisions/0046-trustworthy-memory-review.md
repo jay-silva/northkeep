@@ -1,6 +1,6 @@
 # ADR 0046: Trustworthy memory review
 
-Status: implemented and verified locally; owner acceptance and release pending. Screen designs approved by the user in this conversation. Extends 0043 and 0015. This is the first curation milestone; project coordination is later work.
+Status: implemented, verified, and accepted locally by the owner on 2026-09-10; release pending. Screen designs approved by the owner. Extends 0043 and 0015. This is the first curation milestone; local project coordination is implemented separately in ADR 0048.
 
 ## Boundaries
 

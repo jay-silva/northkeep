@@ -4,10 +4,9 @@ This runs an isolated sample vault and a deterministic local model stub. It neve
 
 ## Start the sample
 
-Run in Terminal with the existing dependencies:
+Run in Terminal from the repository root with the existing dependencies:
 
 ```sh
-cd /Users/jsilva/Claude/Projects/NorthKeep/northkeep
 node node_modules/typescript/bin/tsc -p packages/core/tsconfig.json
 node node_modules/typescript/bin/tsc -p packages/librarian/tsconfig.json
 node node_modules/typescript/bin/tsc -p apps/web/tsconfig.json
