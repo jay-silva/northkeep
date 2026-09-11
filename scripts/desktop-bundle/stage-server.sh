@@ -12,8 +12,10 @@
 # tree gets copied into a signed .app where every Mach-O must be a plain
 # file, and because native addon loaders (better-sqlite3's `bindings`,
 # sodium-native's node-gyp-build) walk the real filesystem.
-# VERIFIED (2026-07-11, pnpm 11.9.0): the hoisted legacy deploy carries every
-# workspace package's dist/ — the ADR's fallback staging script is not needed.
+# Use pnpm's shared-lockfile deployment. Legacy deploy ignores the lockfile
+# and can silently select dependency versions that were never tested.
+# The injection setting applies only to this command; pnpm converts workspace
+# links to copied packages in the deployment's frozen lockfile.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -32,7 +34,11 @@ if [ -e "$STAGE" ]; then
   echo "stage-server: could not clear $STAGE (something is writing into it)" >&2
   exit 1
 fi
-echo "stage-server: pnpm deploy (prod, legacy, hoisted) -> $STAGE"
+if [ ! -f "$REPO_ROOT/pnpm-lock.yaml" ]; then
+  echo "stage-server: pnpm-lock.yaml missing; refusing an unlocked deployment" >&2
+  exit 1
+fi
+echo "stage-server: pnpm deploy (prod, shared lockfile, hoisted) -> $STAGE"
 
 # `pnpm deploy --prod --filter` rewrites node_modules/.pnpm-workspace-state-v1.json
 # at the repo root (records dev:false + filteredInstall:true), after which every
@@ -54,8 +60,9 @@ restore_ws_state() {
 }
 trap restore_ws_state EXIT
 
-pnpm --dir "$REPO_ROOT" --filter @northkeep/web deploy --prod --legacy \
-  --config.node-linker=hoisted "$STAGE"
+pnpm --dir "$REPO_ROOT" --filter @northkeep/web deploy --prod \
+  --config.force-legacy-deploy=false --config.shared-workspace-lockfile=true \
+  --config.inject-workspace-packages=true --config.node-linker=hoisted "$STAGE"
 
 # ---- Prune what the running server never loads -----------------------------
 # 1. .bin shims (symlinks; nothing in the bundle execs them, and symlinks are

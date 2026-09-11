@@ -10,7 +10,7 @@ tree. arm64 (Apple Silicon) only; requires macOS 13.5+ at runtime.
 | --- | --- |
 | `build.sh` | Orchestrates everything below, then runs `tauri build`. This is the only command you normally run. |
 | `fetch-node.sh` | Downloads the pinned Node (see `NODE_VERSION` inside — the single place the version is pinned), verifies it against nodejs.org's published `SHASUMS256.txt`, extracts just the `node` binary to `apps/desktop/src-tauri/binaries/northkeep-server-aarch64-apple-darwin` (Tauri externalBin naming). Tarballs are cached in `apps/desktop/.node-cache/`; re-runs are offline. |
-| `stage-server.sh` | Assembles the self-contained server tree at `apps/desktop/src-tauri/server-tree/` via `pnpm deploy --prod --legacy --config.node-linker=hoisted` (real files, no symlinks, native prebuilds on disk), prunes foreign-platform prebuilds and `.bin`, and verifies the essentials. |
+| `stage-server.sh` | Assembles the self-contained server tree at `apps/desktop/src-tauri/server-tree/` via shared-lockfile `pnpm deploy --prod` with command-local workspace injection and hoisted linking (real files, no symlinks, native prebuilds on disk), prunes foreign-platform prebuilds and `.bin`, and verifies the essentials. Missing lockfiles are refused. Legacy deployment is disabled because it can resolve untested dependency versions. |
 | `presign.sh` | With `APPLE_SIGNING_IDENTITY` set: codesigns every `*.node` addon and the Node sidecar (`--options runtime --timestamp`) before Tauri bundles them — notarization rejects unsigned Mach-Os in Resources. Skips gracefully when unset. |
 
 Bundle configuration lives in `apps/desktop/src-tauri/tauri.bundle.conf.json`
@@ -29,7 +29,7 @@ scripts/desktop-bundle/build.sh --bundles app  # .app only (faster)
 Artifacts:
 
 - `apps/desktop/src-tauri/target/release/bundle/macos/NorthKeep.app`
-- `apps/desktop/src-tauri/target/release/bundle/dmg/Northkeep_<ver>_aarch64.dmg`
+- `apps/desktop/src-tauri/target/release/bundle/dmg/NorthKeep_<ver>_aarch64.dmg`
 
 The unsigned app runs fine on the build machine. On any *other* machine
 Gatekeeper will refuse it — that is what signing + notarization is for.
@@ -69,7 +69,7 @@ After the first signed build, verify (these are ADR 0012's acceptance items):
 
 ```sh
 spctl -a -vv apps/desktop/src-tauri/target/release/bundle/macos/NorthKeep.app
-xcrun stapler validate apps/desktop/src-tauri/target/release/bundle/dmg/Northkeep_*.dmg
+xcrun stapler validate apps/desktop/src-tauri/target/release/bundle/dmg/NorthKeep_*.dmg
 # if the DMG itself is not stapled (only the .app), staple it manually:
 #   xcrun notarytool submit <dmg> --apple-id "$APPLE_ID" --password "$APPLE_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
 #   xcrun stapler staple <dmg>

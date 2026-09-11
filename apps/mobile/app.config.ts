@@ -4,15 +4,9 @@ import type { ExpoConfig } from 'expo/config';
  * Expo app config (app.config.ts instead of app.json so decisions can carry
  * comments). Track M, milestone M6-2 (07-MOBILE-LAUNCH-PLAN.md).
  *
- * EAS-BUILD READY, DEVICE-UNVALIDATED: this file has been proven to bundle via
- * `npx expo export --platform ios` (Metro resolves every workspace package,
- * native module, and shim). What has NOT happened here: `expo prebuild`, the
- * native CocoaPods/Gradle compile, and any on-device run. Those only happen on
- * an EAS build against Jay's Apple account (invariant #3 / ADR 0023).
- *
- * The EAS `projectId` is intentionally absent: `eas init` (run by Jay, logged in
- * as owner `j_silva`) creates the project on Expo's side and writes
- * `extra.eas.projectId` here. Do NOT invent one.
+ * The existing EAS project is linked in extra.eas.projectId below.
+ * Run the free local checks before proposing an owner-run EAS build.
+ * A successful Metro export does not verify a native build or device behavior.
  */
 const config: ExpoConfig = {
   name: 'NorthKeep',
@@ -20,7 +14,7 @@ const config: ExpoConfig = {
   // Expo account that owns the EAS project + the app slug (Jay is logged in as
   // this). Required so `eas init`/`eas build` resolve the right account.
   owner: 'j_silva',
-  version: '0.21.0',
+  version: '0.22.0',
   // Brand app icon (master 1024x1024 from brand/northkeep-icon-1024.png). Expo
   // generates every platform size from this at build; the top-level `icon` is
   // what iOS uses (no separate ios.icon needed on SDK 55). RGB, no alpha, so the
@@ -50,7 +44,7 @@ const config: ExpoConfig = {
     // app.config.ts (EAS only auto-bumps a static app.json), so bump this by hand
     // each TestFlight upload (2, 3, ...) or switch eas.json to appVersionSource:
     // "remote" later to have EAS track it.
-    buildNumber: '26',
+    buildNumber: '27',
     infoPlist: {
       // Export compliance (US EAR). NorthKeep is publicly available open-source
       // software (AGPL, github.com/jay-silva/northkeep) that uses only standard,
