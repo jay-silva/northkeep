@@ -27,6 +27,20 @@ import {
 } from './crypto.js';
 import type { CryptoProvider } from './crypto-provider.js';
 import { getPlatform, type Platform } from './platform-context.js';
+import {
+  PROJECT_HANDOFF_METADATA_KEY,
+  PROJECT_HANDOFF_METADATA_VERSION,
+  ProjectHandoffError,
+  applyProjectUpdate,
+  getProjectView,
+  readProjectHandoffMetadata,
+  type ProjectCheckpointRequest,
+  type ProjectCheckpointResult,
+  type ProjectHandoffMetadata,
+  type ProjectUpdateRequest,
+  type ProjectView,
+} from './project-handoff.js';
+import { emptyProjectDoc, formatLogArchive, projectScope, serializeProjectDoc } from './project-doc.js';
 import type { SqliteDb } from './sqlite-driver.js';
 import { SCHEMA_DDL } from './schema.js';
 import {
@@ -544,6 +558,92 @@ export class Vault {
       (changes.type !== undefined && changes.type !== old.type);
     if (!wouldChange) return old; // nothing actually differs
     return this.supersedeEntry(old, changes);
+  }
+
+  /** Atomic revision-bound project update used by the legacy local project tool. */
+  updateProject(request: ProjectUpdateRequest, allowedScopes?: string[]): ProjectView {
+    this.assertOpen();
+    return this.writeProject(request, allowedScopes, null).current;
+  }
+
+  /** Atomic, idempotent checkpoint/wrap mutation. The caller persists with one save(). */
+  checkpointProject(request: ProjectCheckpointRequest, allowedScopes?: string[]): ProjectCheckpointResult {
+    this.assertOpen();
+    let scope:string;try{scope=projectScope(request.project);}catch{throw new ProjectHandoffError('invalid_request','Project slug is invalid.');}
+    if(allowedScopes!==undefined&&!allowedScopes.includes(scope))throw new ProjectHandoffError('scope_denied','Project scope is outside this connection grant.');
+    if (request.vault_id !== this.getVaultId()) throw new ProjectHandoffError('invalid_request', 'Vault id does not match this vault.');
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.operation_id)) throw new ProjectHandoffError('invalid_request', 'Operation id must be a lowercase RFC 4122 UUID.');
+    if (request.mode !== 'checkpoint' && request.mode !== 'wrap') throw new ProjectHandoffError('invalid_request', 'Invalid project handoff mode.');
+    if (typeof request.expected_revision !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.expected_revision) || typeof request.status !== 'string' || typeof request.completed !== 'string' || typeof request.next_actions !== 'string') throw new ProjectHandoffError('invalid_request','Checkpoint requires a valid revision, status, completed work, and next actions.');
+    if(request.completed.trim().length===0||/[\r]/.test(request.completed)||/^\n|\n$/.test(request.completed)||/^( {0,3})#{1,6}[ \t]+\S/m.test(request.completed))throw new ProjectHandoffError('invalid_request','Completed work is invalid.');
+    const logical = {
+      vault_id: request.vault_id, project: request.project, mode: request.mode,
+      expected_revision: request.expected_revision, status: request.status, completed: request.completed,
+      next_actions: request.next_actions,
+      ...(request.decision !== undefined ? { decision: request.decision } : {}),
+      ...(request.open_questions !== undefined ? { open_questions: request.open_questions } : {}),
+      ...(request.files !== undefined ? { files: request.files } : {}),
+    };
+    const fingerprint = blake2bHex(exactCanonicalJson(logical), this.platform.crypto);
+    const update:ProjectUpdateRequest={project:request.project,expected_revision:request.expected_revision,status:request.status,next_actions:request.next_actions,log_entry:`${request.mode==='checkpoint'?'Checkpoint':'Wrap up'}: ${request.completed}`,...(request.decision!==undefined?{decision:request.decision}:{}),...(request.open_questions!==undefined?{open_questions:request.open_questions}:{}),...(request.files!==undefined?{files:request.files}:{})};
+    const matches: Array<{entry:MemoryEntry;meta:ProjectHandoffMetadata}> = []; const copied:Array<{entry:MemoryEntry;raw:Record<string,unknown>}>=[];
+    for (const entry of this.list({ includeForgotten:true, includeSuperseded:true, allowedScopes })) {
+      const raw=entry.metadata?.[PROJECT_HANDOFF_METADATA_KEY];
+      if(!raw||typeof raw!=='object'||Array.isArray(raw)||(raw as Record<string,unknown>).operation_id!==request.operation_id)continue;
+      if((raw as Record<string,unknown>).result_id!==entry.id){copied.push({entry,raw:raw as Record<string,unknown>});continue;}
+      let meta:ProjectHandoffMetadata|null;
+      try { meta=readProjectHandoffMetadata(entry); } catch { throw new ProjectHandoffError('operation_conflict','Malformed or copied project handoff receipt.'); }
+      if(meta?.operation_id===request.operation_id)matches.push({entry,meta});
+    }
+    if(!matches.length&&copied.length)throw new ProjectHandoffError('operation_conflict','Operation receipt metadata exists without its original result.');
+    if (matches.length) {
+      if (matches.length!==1) throw new ProjectHandoffError('operation_conflict','Ambiguous project handoff operation.');
+      const {entry,meta}=matches[0]!;
+      for(const copy of copied){let cursor=entry;const seen=new Set<string>();while(cursor.id!==copy.entry.id&&cursor.superseded_by){if(seen.has(cursor.id))break;seen.add(cursor.id);const next=this.getEntry(cursor.superseded_by);if(!next)break;cursor=next;}if(cursor.id!==copy.entry.id||copy.entry.scope!==entry.scope||exactCanonicalJson(copy.raw)!==exactCanonicalJson(meta))throw new ProjectHandoffError('operation_conflict','Unrelated copied project handoff receipt metadata was found.');}
+      if(meta.result_id!==entry.id||meta.project!==request.project||meta.base_revision!==request.expected_revision||meta.mode!==request.mode||meta.request_fingerprint!==fingerprint)throw new ProjectHandoffError('operation_conflict','Operation id was already used for a different project request.');
+      if(entry.scope!==scope||entry.type!=='working'||entry.source!=='northkeep:project-handoff'||entry.forgotten_at!==null||entry.created_at!==meta.saved_at||computeEntryHash(entry,this.platform.crypto)!==entry.entry_hash)throw new ProjectHandoffError('operation_conflict','Persisted project handoff result is invalid.');
+      const base=this.getEntry(meta.base_revision);if(!base||base.scope!==scope||base.superseded_by!==entry.id||base.superseded_at!==entry.created_at)throw new ProjectHandoffError('operation_conflict','Persisted project handoff lineage is invalid.');
+      const expected=applyProjectUpdate(base.content,update,new Date(meta.saved_at));
+      if(entry.content!==expected.content||new Set(meta.archive_ids).size!==meta.archive_ids.length||meta.archive_ids.length!==(expected.archives.length?1:0))throw new ProjectHandoffError('operation_conflict','Persisted project handoff content does not match its request.');
+      for(const id of meta.archive_ids){const archive=this.getEntry(id);const expectedContent=formatLogArchive(request.project,expected.archives,new Date(meta.saved_at));if(!archive||archive.scope!==scope||archive.type!=='episodic'||archive.source!=='northkeep:project-log-archive'||archive.created_at!==meta.saved_at||archive.content!==expectedContent||computeEntryHash(archive,this.platform.crypto)!==archive.entry_hash)throw new ProjectHandoffError('operation_conflict','Project handoff receipt archive is invalid.');}
+      const receipt={operation_id:meta.operation_id,project:meta.project,mode:meta.mode,base_revision:meta.base_revision,result_revision:meta.result_id,request_fingerprint:meta.request_fingerprint,archive_ids:[...meta.archive_ids],saved_at:meta.saved_at,local_only:true as const};
+      return {receipt,current:getProjectView(this,request.project,allowedScopes,{history:true}),replayed:true};
+    }
+    return this.writeProject(update,allowedScopes,{operation_id:request.operation_id,mode:request.mode,fingerprint});
+  }
+
+  private writeProject(request:ProjectUpdateRequest,allowedScopes:string[]|undefined,handoff:{operation_id:string;mode:'checkpoint'|'wrap';fingerprint:string}|null):ProjectCheckpointResult {
+    let scope:string;try{scope=projectScope(request.project);}catch{throw new ProjectHandoffError('invalid_request','Project slug is invalid.');}
+    if(allowedScopes!==undefined&&!allowedScopes.includes(scope))throw new ProjectHandoffError('scope_denied','Project scope is outside this connection grant.');
+    if(!Object.hasOwn(request,'expected_revision')||(request.expected_revision!==null&&(typeof request.expected_revision!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.expected_revision))))throw new ProjectHandoffError('invalid_request','expected_revision must be an exact revision UUID or null for creation.');
+    const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','files'] as const;
+    if(!updateKeys.some((key)=>request[key]!==undefined))throw new ProjectHandoffError('invalid_request','Project update has no changes.');
+    let receipt!:ProjectCheckpointResult['receipt'];
+    this.db.transaction(()=>{
+      const heads=this.list({type:'working',scope,allowedScopes});
+      if(heads.length>1)throw new ProjectHandoffError('project_conflict','Project has multiple current documents.');
+      const old=heads[0]??null;
+      if(!old&&request.expected_revision!==null)throw new ProjectHandoffError('not_found','Project was not found.');
+      if(old&&request.expected_revision!==old.id){let current:ProjectView|undefined;try{current=getProjectView(this,request.project,allowedScopes,{history:true});}catch{}throw new ProjectHandoffError('stale_project','Project changed after it was read.',current);}
+      if(!old&&request.expected_revision!==null)throw new ProjectHandoffError('stale_project','Project revision is stale.');
+      const base=old?.content??serializeProjectDoc(emptyProjectDoc()); const merged=applyProjectUpdate(base,request); const now=new Date().toISOString();
+      const insert=this.prepareEntryInsert(); const archiveIds:string[]=[]; let chain=this.getMeta('chain_head');
+      if(merged.archives.length){const archive=this.makeProjectEntry('episodic',formatLogArchive(request.project,merged.archives,new Date(now)),scope,'northkeep:project-log-archive',null,chain,now);insert.run(this.entryParams(archive));chain=archive.entry_hash;archiveIds.push(archive.id);}
+      const resultId=uuidv4(this.platform.crypto);
+      let meta:Record<string,unknown>|null=null;
+      if(handoff){meta=old?.metadata?JSON.parse(JSON.stringify(old.metadata)) as Record<string,unknown>:{};delete meta[PROJECT_HANDOFF_METADATA_KEY];meta[PROJECT_HANDOFF_METADATA_KEY]={version:PROJECT_HANDOFF_METADATA_VERSION,operation_id:handoff.operation_id,result_id:resultId,project:request.project,base_revision:request.expected_revision as string,mode:handoff.mode,request_fingerprint:handoff.fingerprint,archive_ids:archiveIds,saved_at:now};}
+      else if(old?.metadata){meta=JSON.parse(JSON.stringify(old.metadata)) as Record<string,unknown>;delete meta[PROJECT_HANDOFF_METADATA_KEY];if(Object.keys(meta).length===0)meta=null;}
+      const head=this.makeProjectEntry('working',merged.content,scope,handoff?'northkeep:project-handoff':'northkeep:project-update',meta,chain,now,resultId);insert.run(this.entryParams(head));
+      if(old){const changed=this.db.prepare('UPDATE memories SET superseded_at=?, superseded_by=? WHERE id=? AND forgotten_at IS NULL AND superseded_at IS NULL').run(now,head.id,old.id).changes;if(changed!==1)throw new ProjectHandoffError('stale_project','Project changed before the update could be applied.');}
+      this.setMeta('chain_head',head.entry_hash);
+      receipt={operation_id:handoff?.operation_id??'',project:request.project,mode:handoff?.mode??'checkpoint',base_revision:request.expected_revision??'',result_revision:head.id,request_fingerprint:handoff?.fingerprint??'',archive_ids:archiveIds,saved_at:now,local_only:true};
+    })();
+    return {receipt,current:getProjectView(this,request.project,allowedScopes,{history:true}),replayed:false};
+  }
+
+  private makeProjectEntry(type:MemoryType,content:string,scope:string,source:string,metadata:Record<string,unknown>|null,prevHash:string,now:string,id=uuidv4(this.platform.crypto)):MemoryEntry {
+    const entry:MemoryEntry={id,type,content,scope,source,source_model:null,confidence:1,created_at:now,valid_from:now,superseded_at:null,superseded_by:null,forgotten_at:null,prev_hash:prevHash,entry_hash:'',metadata:metadata===null?null:JSON.parse(JSON.stringify(metadata)) as Record<string,unknown>};
+    entry.entry_hash=computeEntryHash(entry,this.platform.crypto); return entry;
   }
 
   /** Atomically replaces 2-8 exact private source snapshots with one linked head. */

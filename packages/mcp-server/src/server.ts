@@ -3,27 +3,22 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import {
   MEMORY_TYPES,
+  ProjectHandoffError,
   Vault,
   VaultAuthError,
   VaultSchemaError,
-  assertProjectDocSize,
-  formatLogArchive,
-  isProjectLogArchive,
-  rollProjectLog,
   defaultVaultPath,
-  emptyProjectDoc,
-  firstNonEmptyLine,
-  getProjectSection,
-  isProjectScope,
+  getProjectView,
   isValidProjectSlug,
-  mergeProjectDoc,
-  parseProjectDoc,
+  listProjectViews,
   projectScope,
-  serializeProjectDoc,
   setPlatform,
   withFileLock,
   type MemoryEntry,
   type MemoryType,
+  type ProjectCheckpointRequest,
+  type ProjectFileReference,
+  type ProjectUpdateRequest,
 } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import { applyTier1 } from '@northkeep/redact';
@@ -96,6 +91,40 @@ function ok(payload: unknown): ToolOk {
 
 function err(message: string): ToolOk {
   return { content: [{ type: 'text', text: message }], isError: true };
+}
+
+const projectIdentifierKeys = new Set([
+  'id', 'revision', 'vault_id', 'project', 'scope', 'updated_at', 'checked_at',
+  'operation_id', 'base_revision', 'result_revision', 'request_fingerprint',
+  'saved_at', 'type', 'access', 'mode',
+]);
+
+function maskProjectPayload(value: unknown, key?: string): unknown {
+  if (returnRedactionTier() === 0) return value;
+  if (typeof value === 'string') {
+    return key && projectIdentifierKeys.has(key) ? value : applyTier1(value).text;
+  }
+  if (Array.isArray(value)) return value.map((item) => maskProjectPayload(item));
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([childKey, child]) => [
+        childKey,
+        maskProjectPayload(child, childKey),
+      ]),
+    );
+  }
+  return value;
+}
+
+function receivingProjectView(view: ReturnType<typeof getProjectView>) {
+  return {
+    ...view,
+    files: view.files?.map((file) => file.access === 'reported_available'
+      ? { type: file.type, label: file.label, locator: file.locator, access: 'unverified' as const }
+      : file),
+    file_access_note:
+      'File availability is reported from earlier work and must be checked again in this receiving environment.',
+  };
 }
 
 function publicEntry(entry: MemoryEntry) {
@@ -192,11 +221,29 @@ async function run(
       result_ids: outcome.result_ids,
       disclosed_scopes: outcome.disclosed_scopes,
     });
-    return ok(outcome.payload);
+    return ok(tool.startsWith('project_') ? maskProjectPayload(outcome.payload) : outcome.payload);
   } catch (error) {
-    const denied = error instanceof ScopeDeniedError;
+    const denied = error instanceof ScopeDeniedError ||
+      (error instanceof ProjectHandoffError && error.code === 'scope_denied');
     const message = error instanceof Error ? error.message : String(error);
-    appendCallLog({ ...base, ok: false, denied, error: message.slice(0, 200) });
+    appendCallLog({
+      ...base,
+      ok: false,
+      denied,
+      error: tool.startsWith('project_')
+        ? (error instanceof ProjectHandoffError ? error.code : denied ? 'scope_denied' : 'project_error')
+        : message.slice(0, 200),
+    });
+    if (error instanceof ProjectHandoffError) {
+      const payload = {
+        error: {
+          code: error.code,
+          message: error.message,
+          ...(error.current ? { current: error.current } : {}),
+        },
+      };
+      return { ...ok(maskProjectPayload(payload)), isError: true };
+    }
     return err(message);
   }
 }
@@ -225,41 +272,19 @@ function assertGrantedScope(scope: string, granted: string[] | undefined): void 
   }
 }
 
-/** Newest live `working` entry in a scope. `list` is insertion order, so last wins. */
-function newestLiveWorking(
-  vault: Vault,
-  scope: string,
-  granted: string[] | undefined,
-): MemoryEntry | undefined {
-  const rows = vault.list({ type: 'working', scope, allowedScopes: granted });
-  return rows.length === 0 ? undefined : rows[rows.length - 1];
+function refuseProjectWriteUnderTier1(): void {
+  if (returnRedactionTier() === 1) {
+    throw new ProjectHandoffError(
+      'invalid_request',
+      'Project writes are disabled while NORTHKEEP_REDACT_TIER=1 because masked text cannot be written back exactly.',
+    );
+  }
 }
 
-function liveProjectIndex(vault: Vault, granted: string[] | undefined): MemoryEntry[] {
-  const rows = vault.list({ type: 'working', allowedScopes: granted }).filter((e) => isProjectScope(e.scope));
-  const byScope = new Map<string, MemoryEntry>();
-  for (const row of rows) byScope.set(row.scope, row);
-  return [...byScope.values()].sort((a, b) => a.scope.localeCompare(b.scope));
-}
-
-function statusFirstLine(content: string): string {
-  return firstNonEmptyLine(getProjectSection(parseProjectDoc(content), 'Current Status'));
-}
-
-function toProjectUpdate(args: {
-  what_why?: string;
-  status?: string;
-  next_actions?: string;
-  log_entry?: string;
-  decision?: string;
-}) {
-  return {
-    whatWhy: args.what_why,
-    status: args.status,
-    nextActions: args.next_actions,
-    logEntry: args.log_entry,
-    decision: args.decision,
-  };
+function assertProjectGranted(scope: string, granted: string[] | undefined): void {
+  if (granted !== undefined && !granted.includes(scope)) {
+    throw new ProjectHandoffError('scope_denied', 'Project scope is outside this connection grant.');
+  }
 }
 
 export function createServer(vaultPath: string = defaultVaultPath()): McpServer {
@@ -480,19 +505,15 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     },
     async () =>
       run(ctx, 'project_list', {}, vaultPath, (vault, granted) => {
-        const docs = liveProjectIndex(vault, granted);
-        const projects = docs.map((entry) => ({
-          project: entry.scope.slice('project:'.length),
-          scope: entry.scope,
-          status: statusFirstLine(entry.content),
-          id: entry.id,
-          updated_at: entry.created_at,
+        const projects = listProjectViews(vault, granted).map((project) => ({
+          ...project,
+          id: project.revision,
         }));
         return {
           payload: { projects },
           result_count: projects.length,
-          result_ids: docs.map((e) => e.id),
-          disclosed_scopes: distinctScopes(docs.map((e) => e.scope)),
+          result_ids: projects.flatMap((project) => project.revision ? [project.revision] : []),
+          disclosed_scopes: distinctScopes(projects.map((project) => project.scope)),
         };
       }),
   );
@@ -502,9 +523,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     {
       title: 'Read a project',
       description:
-        'Read the live project document when the user names a project. Call this at session start so ' +
-        'you pick up Current Status, Next Actions, and the Log. If more than one live working memory ' +
-        'exists in the scope, the newest wins. The live document keeps only its newest Log entries; ' +
+        'Read the current project document when the user names a project. Call this at session start so ' +
+        'you pick up Current Status, Next Actions, and the Log. Conflicting current documents are refused. ' +
+        'The live document keeps only its newest Log entries; ' +
         'pass history: true to also get the archive memories holding older entries, newest first.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
@@ -516,23 +537,42 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         if (!isValidProjectSlug(project)) {
           throw new Error(`Invalid project slug "${project}".`);
         }
-        const scope = projectScope(project);
-        assertGrantedScope(scope, granted);
-        const live = newestLiveWorking(vault, scope, granted);
-        if (!live) {
-          throw new Error(`No live project document for "${project}".`);
-        }
-        const archives = history
-          ? vault
-              .list({ type: 'episodic', scope, allowedScopes: granted })
-              .filter((e) => isProjectLogArchive(e.content))
-              .reverse()
-              .map((e) => publicEntry(e))
-          : undefined;
+        const view = getProjectView(vault, project, granted, { history });
         return {
-          payload: { project, ...publicEntry(live), ...(archives ? { archives } : {}) },
-          result_id: live.id,
-          disclosed_scopes: [live.scope],
+          payload: {
+            ...view,
+            id: view.revision,
+            type: 'working',
+            created_at: view.updated_at,
+            ...(history ? {
+              archives: view.archives.map((archive) => ({
+                ...archive, type: 'episodic', scope: view.scope, created_at: archive.updated_at,
+              })),
+            } : { archives: undefined }),
+          },
+          result_id: view.revision,
+          disclosed_scopes: [view.scope],
+        };
+      }),
+  );
+
+  server.registerTool(
+    'project_resume',
+    {
+      title: 'Resume a project',
+      description: 'Read a revision-bound project handoff view, including recent working history and Log archives.',
+      inputSchema: {
+        project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
+        history: z.boolean().optional().default(true),
+      },
+    },
+    async ({ project, history }) =>
+      run(ctx, 'project_resume', { scope: `project:${project}` }, vaultPath, (vault, granted) => {
+        const view = getProjectView(vault, project, granted, { history });
+        return {
+          payload: receivingProjectView(view),
+          result_id: view.revision,
+          disclosed_scopes: [view.scope],
         };
       }),
   );
@@ -549,9 +589,10 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'try again. NorthKeep will not silently truncate.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
+        expected_revision: idSchema.nullable().describe('Revision returned by project_get/resume, or null only when creating'),
         what_why: z.string().min(1).max(16384).optional().describe('Replacement What & Why section'),
         status: z.string().min(1).max(16384).optional().describe('Replacement Current Status section'),
-        next_actions: z.string().min(1).max(16384).optional().describe('Replacement Next Actions section'),
+        next_actions: z.string().max(16384).optional().describe('Replacement Next Actions section; empty clears it'),
         log_entry: z
           .string()
           .min(1)
@@ -564,9 +605,18 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           .max(4096)
           .optional()
           .describe('New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD.'),
+        open_questions: z.string().max(16384).optional(),
+        files: z.array(z.object({
+          type: z.string().min(1).max(32),
+          label: z.string().min(1).max(512),
+          locator: z.string().min(1).max(4096),
+          access: z.enum(['reported_available', 'unavailable', 'unverified']),
+          checked_at: z.string().max(64).optional(),
+          context: z.string().max(2048).optional(),
+        })).max(40).optional(),
       },
     },
-    async ({ project, what_why, status, next_actions, log_entry, decision }) =>
+    async ({ project, expected_revision, what_why, status, next_actions, log_entry, decision, open_questions, files }) =>
       run(
         ctx,
         'project_update',
@@ -581,6 +631,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         },
         vaultPath,
         (vault, granted) => {
+          refuseProjectWriteUnderTier1();
           if (!isValidProjectSlug(project)) {
             throw new Error(`Invalid project slug "${project}".`);
           }
@@ -589,62 +640,76 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             status === undefined &&
             next_actions === undefined &&
             log_entry === undefined &&
-            decision === undefined
+            decision === undefined &&
+            open_questions === undefined &&
+            files === undefined
           ) {
             throw new Error(
-              'Provide at least one of what_why, status, next_actions, log_entry, or decision.',
+              'Provide at least one project field to update.',
             );
           }
           const scope = projectScope(project);
-          assertGrantedScope(scope, granted);
-          const update = toProjectUpdate({ what_why, status, next_actions, log_entry, decision });
-          const live = newestLiveWorking(vault, scope, granted);
-          const merged = mergeProjectDoc(live ? parseProjectDoc(live.content) : emptyProjectDoc(), update);
-          // ADR 0045: the live document keeps only its newest Log entries.
-          // Older ones roll into an archive memory in the same scope, so the
-          // cap never refuses a log entry; it can only refuse hand-written
-          // sections that are too long on their own.
-          const rolled = rollProjectLog(merged);
-          const content = serializeProjectDoc(rolled.doc);
-          assertProjectDocSize(content);
-          let archived: { entries: number; memory_id: string } | undefined;
-          if (rolled.archived.length > 0) {
-            const archive = vault.remember({
-              content: formatLogArchive(project, rolled.archived),
-              type: 'episodic',
-              scope,
-              source: 'mcp',
-              sourceModel: 'project-log-roll',
-              confidence: 0.9,
-            });
-            archived = { entries: rolled.archived.length, memory_id: archive.id };
-          }
-          if (!live) {
-            const entry = vault.remember({
-              content,
-              type: 'working',
-              scope,
-              source: 'mcp',
-              sourceModel: 'mcp-client',
-              confidence: 0.9,
-            });
-            vault.save();
-            return {
-              payload: { created: true, project, ...(archived ? { archived } : {}), ...publicEntry(entry) },
-              result_id: entry.id,
-              disclosed_scopes: [entry.scope],
-            };
-          }
-          const edited = vault.editMemory(live.id, { content }, granted);
+          assertProjectGranted(scope, granted);
+          const request: ProjectUpdateRequest = {
+            project, expected_revision, what_why, status, next_actions, log_entry, decision,
+            open_questions, files: files as ProjectFileReference[] | undefined,
+          };
+          const current = vault.updateProject(request, granted);
           vault.save();
           return {
-            payload: { created: false, project, ...(archived ? { archived } : {}), ...publicEntry(edited) },
-            result_id: edited.id,
-            disclosed_scopes: [edited.scope],
+            payload: {
+              ...current, id: current.revision, type: 'working', created_at: current.updated_at,
+              created: expected_revision === null,
+            },
+            result_id: current.revision,
+            disclosed_scopes: [scope],
           };
         },
       ),
   );
+
+  const checkpointSchema = {
+    vault_id: idSchema,
+    project: projectSlugSchema,
+    operation_id: z.string().uuid(),
+    expected_revision: idSchema,
+    status: z.string().min(1).max(16384),
+    completed: z.string().min(1).max(4096),
+    next_actions: z.string().max(16384),
+    decision: z.string().min(1).max(4096).optional(),
+    open_questions: z.string().max(16384).optional(),
+    files: z.array(z.object({
+      type: z.string().min(1).max(32), label: z.string().min(1).max(512),
+      locator: z.string().min(1).max(4096),
+      access: z.enum(['reported_available', 'unavailable', 'unverified']),
+      checked_at: z.string().max(64).optional(), context: z.string().max(2048).optional(),
+    })).max(40).optional(),
+  };
+  const registerHandoff = (name: 'project_checkpoint' | 'project_wrap', mode: 'checkpoint' | 'wrap') => {
+    server.registerTool(name, {
+      title: mode === 'checkpoint' ? 'Checkpoint project' : 'Wrap up project',
+      description: 'Atomically save a revision-bound project handoff. Retrying the same operation id is safe.',
+      inputSchema: checkpointSchema,
+    }, async (args) => run(ctx, name, {
+      scope: `project:${args.project}`, id: args.operation_id,
+      content_chars: args.status.length + args.completed.length + args.next_actions.length,
+    }, vaultPath, (vault, granted) => {
+      refuseProjectWriteUnderTier1();
+      const scope = projectScope(args.project);
+      assertProjectGranted(scope, granted);
+      const request: ProjectCheckpointRequest = {
+        ...args, mode, files: args.files as ProjectFileReference[] | undefined,
+      };
+      const result = vault.checkpointProject(request, granted);
+      if (!result.replayed) vault.save();
+      return {
+        payload: result, result_id: result.receipt.result_revision,
+        disclosed_scopes: [scope],
+      };
+    }));
+  };
+  registerHandoff('project_checkpoint', 'checkpoint');
+  registerHandoff('project_wrap', 'wrap');
 
   return server;
 }

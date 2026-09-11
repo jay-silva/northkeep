@@ -3,7 +3,14 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
-## Guided consolidation, owner acceptance pending
+## Local Projects handoffs, accepted locally
+
+- Revision checks and durable retry receipts coordinate writes against one local vault. Hosted project tools and whole-vault sync retain their existing conflict behavior. A local save does not certify delivery.
+- File references describe caller-reported access. Resume treats reported availability as unverified for the receiving assistant. The UI displays and preserves references; structured project tools can edit them. No file or URL is opened automatically.
+- Lock clears drafts and pending request text. Browser retry convenience requires the retained draft; saved operation receipts remain in the vault. Forgetting a receipt removes its retry guarantee. History shows at most 20 saved versions and 20 log archives.
+- The real Codex to Claude Desktop test used local tools and a disposable MCP client. It did not upgrade installed assistant configuration or certify hosted sync or packaged mobile.
+
+## Guided consolidation, accepted locally
 
 - Consolidation covers 2-8 same-type memories in one private, non-project collection. It does not organize shared collections or coordinate project work.
 - Suggestions use the installed local review model, never an automatic cloud fallback. Work is limited to 24 packs of up to eight memories; oversized entries and comparisons across packs are not silently counted as complete.
@@ -618,7 +625,7 @@ every milestone; if a limit is removed, say when and how.*
   `project_update` without a fresh `project_get` each merge against the
   document they last read. Status, Next Actions, and What & Why replace;
   the later write wins those sections. Log and Decisions append, so both
-  sides' entries survive. Same class of race as two local sessions.
+  sides' entries survive. The revision-bound local tools introduced in ADR 0048 refuse this stale-write race. Hosted tools remain unchanged.
 - **Share is write access.** Sharing a project scope lets the connected
   AI update that project. Unshare deletes the scope's rows, including a
   not-yet-delivered project update. The revoke wins.

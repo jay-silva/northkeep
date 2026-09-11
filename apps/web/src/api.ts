@@ -137,6 +137,7 @@ import {
 } from '@northkeep/converse';
 import { LockedError, type UiSession } from './session.js';
 import { handleCurationApi } from './curationApi.js';
+import { handleProjectsApi } from './projectsApi.js';
 
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 
@@ -308,6 +309,8 @@ async function dispatch(
   query: URLSearchParams,
   body: Buffer,
 ): Promise<ApiResponse> {
+  const projects = await handleProjectsApi(session, method, route, body);
+  if (projects !== null) return projects;
   const curation = await handleCurationApi(session, method, route, body);
   if (curation !== null) return curation;
   if (method === 'GET' && route === '/api/status') {

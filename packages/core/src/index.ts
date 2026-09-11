@@ -1,6 +1,7 @@
 export * from './types.js';
 export * from './canonical.js';
 export * from './consolidation.js';
+export * from './project-handoff.js';
 export {
   KDF_INTERACTIVE,
   KDF_MODERATE,

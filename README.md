@@ -16,14 +16,19 @@ NorthKeep works two ways:
   those apps and you set, per app, exactly what it may read. It does **not**
   redact what you type into that app, that's ownership and portability, not a
   firewall on your keystrokes.
-- **Converse**, you talk *through* NorthKeep instead (the **Chat** tab in the
-  app), and it masks sensitive data out of your message *before* it leaves the
+- **Converse**, you talk *through* NorthKeep instead (via `northkeep converse`), and it masks sensitive data out of your message *before* it leaves the
   machine, then restores it locally in the reply. This is the real privacy
   firewall, against a local model (free, and with tools off nothing leaves
   your network) or a cloud model with your own key.
 
 > **One-line version:** connect NorthKeep to the AI apps you already pay for,
 > or converse through NorthKeep when privacy has to be absolute.
+
+## Local workspace
+
+Memories groups your vault by collection. Projects brings together current status, next actions, decisions, questions and file references, with Resume, Checkpoint and Wrap up. Local project saves check for newer changes before writing and retain saved versions. File references do not open or verify their targets. Review handles memory curation; Connect groups assistant setup.
+
+The Projects implementation is local and owner accepted. Its handoff checks cover one local vault; existing hosted sync behavior is unchanged.
 
 ## Install
 
@@ -75,7 +80,7 @@ someone else's app, for that, use Converse.
 
 ## Converse, talk to any model, privately (Mode 2: the firewall)
 
-Converse, the **Chat** tab in the app, or `northkeep converse` in the terminal,
+Converse, available through `northkeep converse` in the terminal,
 is a chat surface where the privacy runs itself. On every message NorthKeep
 retrieves relevant memory,
 masks secrets *before* anything leaves the machine, calls the model you picked,

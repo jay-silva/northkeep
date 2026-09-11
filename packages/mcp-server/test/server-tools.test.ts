@@ -29,6 +29,7 @@ let prevHome: string | undefined;
 let prevKey: string | undefined;
 let prevScopes: string | undefined;
 let prevKeychain: string | undefined;
+let prevRedactionTier: string | undefined;
 let client: Client | undefined;
 
 beforeEach(() => {
@@ -38,6 +39,7 @@ beforeEach(() => {
   prevKey = process.env.NORTHKEEP_MASTER_KEY;
   prevScopes = process.env.NORTHKEEP_SCOPES;
   prevKeychain = process.env.NORTHKEEP_NO_KEYCHAIN;
+  prevRedactionTier = process.env.NORTHKEEP_REDACT_TIER;
   process.env.NORTHKEEP_HOME = home;
   process.env.NORTHKEEP_NO_KEYCHAIN = '1';
   delete process.env.NORTHKEEP_SCOPES;
@@ -68,6 +70,8 @@ afterEach(async () => {
   else process.env.NORTHKEEP_SCOPES = prevScopes;
   if (prevKeychain === undefined) delete process.env.NORTHKEEP_NO_KEYCHAIN;
   else process.env.NORTHKEEP_NO_KEYCHAIN = prevKeychain;
+  if (prevRedactionTier === undefined) delete process.env.NORTHKEEP_REDACT_TIER;
+  else process.env.NORTHKEEP_REDACT_TIER = prevRedactionTier;
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -242,6 +246,7 @@ describe('project tools', () => {
       name: 'project_update',
       arguments: {
         project: 'demo-m13',
+        expected_revision: null,
         what_why: 'Prove cold-start handoff.',
         status: 'Writing the tools.',
         next_actions: '- [ ] Verify in Claude Desktop',
@@ -256,6 +261,7 @@ describe('project tools', () => {
       scope: string;
       type: string;
       content: string;
+      revision: string;
     };
     expect(createdPayload.created).toBe(true);
     expect(createdPayload.scope).toBe('project:demo-m13');
@@ -281,6 +287,7 @@ describe('project tools', () => {
       name: 'project_update',
       arguments: {
         project: 'demo-m13',
+        expected_revision: createdPayload.revision,
         status: 'Tools landed.',
         next_actions: '- [ ] Run acceptance',
         log_entry: 'Merged a session-end update.',
@@ -310,18 +317,17 @@ describe('project tools', () => {
   it('rolls the oldest Log entries into an archive memory instead of refusing, and project_get history returns it', async () => {
     const mcp = await connect();
     const long = (i: number) => `session ${i} ${'y'.repeat(700)}`;
-    let archivedTotal = 0;
-    let lastPayload: { archived?: { entries: number; memory_id: string }; content: string } | null = null;
+    let revision: string | null = null;
+    let lastPayload: { revision: string; content: string } | null = null;
     for (let i = 1; i <= 30; i += 1) {
       const res = await mcp.callTool({
         name: 'project_update',
-        arguments: { project: 'demo-roll', status: 'Rolling.', log_entry: long(i) },
+        arguments: { project: 'demo-roll', expected_revision: revision, status: 'Rolling.', log_entry: long(i) },
       });
       expect(res.isError).toBeFalsy();
       lastPayload = JSON.parse(toolText(res)) as typeof lastPayload;
-      if (lastPayload?.archived) archivedTotal += lastPayload.archived.entries;
+      revision = lastPayload!.revision;
     }
-    expect(archivedTotal).toBeGreaterThan(0);
     expect(lastPayload!.content.length).toBeLessThanOrEqual(16384);
     expect(lastPayload!.content).toContain('session 30 ');
     expect(lastPayload!.content).not.toContain('session 1 y');
@@ -332,11 +338,9 @@ describe('project tools', () => {
     expect(plain.archives).toBeUndefined();
     const withHistory = JSON.parse(
       toolText(await mcp.callTool({ name: 'project_get', arguments: { project: 'demo-roll', history: true } })),
-    ) as { archives: Array<{ content: string; type: string; scope: string }> };
+    ) as { archives: Array<{ content: string; id: string; updated_at: string }> };
     expect(withHistory.archives.length).toBeGreaterThan(0);
     expect(withHistory.archives[0]!.content.startsWith('## Log archive: demo-roll')).toBe(true);
-    expect(withHistory.archives[0]!.type).toBe('episodic');
-    expect(withHistory.archives[0]!.scope).toBe('project:demo-roll');
     expect(withHistory.archives.map((a) => a.content).join('\n')).toContain('session 1 y');
 
     const vault = openVault();
@@ -344,7 +348,7 @@ describe('project tools', () => {
     vault.close();
   });
 
-  it('resolves duplicate live working docs to the newest', async () => {
+  it('reports duplicate live working docs as a conflict', async () => {
     (() => {
       const vault = openVault();
       vault.remember({
@@ -363,16 +367,14 @@ describe('project tools', () => {
 
     const mcp = await connect();
     const listed = JSON.parse(toolText(await mcp.callTool({ name: 'project_list', arguments: {} }))) as {
-      projects: Array<{ project: string; status: string }>;
+      projects: Array<{ project: string; status: string | null }>;
     };
     expect(listed.projects.filter((p) => p.project === 'dup')).toHaveLength(1);
-    expect(listed.projects.find((p) => p.project === 'dup')?.status).toBe('Newest wins.');
+    expect(listed.projects.find((p) => p.project === 'dup')?.status).toBeNull();
 
-    const got = JSON.parse(
-      toolText(await mcp.callTool({ name: 'project_get', arguments: { project: 'dup' } })),
-    ) as { content: string };
-    expect(got.content).toContain('Newest wins.');
-    expect(got.content).not.toContain('Older duplicate.');
+    const got = await mcp.callTool({ name: 'project_get', arguments: { project: 'dup' } });
+    expect(got.isError).toBe(true);
+    expect(JSON.parse(toolText(got)).error.code).toBe('project_conflict');
   });
 
   it('denies project_get and project_update outside the grant', async () => {
@@ -396,14 +398,14 @@ describe('project tools', () => {
 
     const get = await mcp.callTool({ name: 'project_get', arguments: { project: 'secret' } });
     expect(get.isError).toBe(true);
-    expect(toolText(get)).toMatch(/not granted/);
+    expect(toolText(get)).toMatch(/outside this connection grant/);
 
     const update = await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'secret', status: 'nope' },
+      arguments: { project: 'secret', expected_revision: null, status: 'nope' },
     });
     expect(update.isError).toBe(true);
-    expect(toolText(update)).toMatch(/not granted/);
+    expect(toolText(update)).toMatch(/outside this connection grant/);
 
     const vault = openVault();
     expect(vault.list({ scope: 'project:secret' })[0]?.content).toContain('Secret project.');
@@ -414,10 +416,10 @@ describe('project tools', () => {
     const mcp = await connect();
     const result = await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'huge', status: 'z'.repeat(PROJECT_DOC_MAX_CHARS) },
+      arguments: { project: 'huge', expected_revision: null, status: 'z'.repeat(PROJECT_DOC_MAX_CHARS) },
     });
     expect(result.isError).toBe(true);
-    expect(toolText(result)).toBe(PROJECT_DOC_CAP_MESSAGE);
+    expect(toolText(result)).toContain(PROJECT_DOC_CAP_MESSAGE);
     const vault = openVault();
     expect(vault.list({ scope: 'project:huge' })).toHaveLength(0);
     vault.close();
@@ -429,6 +431,7 @@ describe('project tools', () => {
       name: 'project_update',
       arguments: {
         project: 'auditme',
+        expected_revision: null,
         status: 'UNIQUE-STATUS-PHRASE',
         log_entry: 'UNIQUE-LOG-PHRASE',
       },
@@ -442,6 +445,87 @@ describe('project tools', () => {
     expect(rows.find((r) => r.tool === 'project_update')?.disclosed_scopes).toEqual(['project:auditme']);
     expect(rows.find((r) => r.tool === 'project_get')?.disclosed_scopes).toEqual(['project:auditme']);
     expect(rows.find((r) => r.tool === 'project_list')?.result_count).toBe(1);
+  });
+
+  it('coordinates two clients with revision conflicts and idempotent checkpoint retries', async () => {
+    const first = await connect();
+    const secondServer = createServer(vaultPath);
+    const [secondClientTransport, secondServerTransport] = InMemoryTransport.createLinkedPair();
+    const second = new Client({ name: 'second-handoff-client', version: '1.0' });
+    await Promise.all([second.connect(secondClientTransport), secondServer.connect(secondServerTransport)]);
+    try {
+      const created = JSON.parse(toolText(await first.callTool({
+        name: 'project_update',
+        arguments: { project: 'handoff', expected_revision: null, status: 'Ready.', next_actions: 'Continue.' },
+      }))) as { revision: string; vault_id: string };
+      const a = JSON.parse(toolText(await first.callTool({ name: 'project_resume', arguments: { project: 'handoff' } }))) as { revision: string; vault_id: string };
+      const b = JSON.parse(toolText(await second.callTool({ name: 'project_resume', arguments: { project: 'handoff' } }))) as { revision: string };
+      expect(a.revision).toBe(created.revision);
+      expect(b.revision).toBe(created.revision);
+      const request = {
+        vault_id: a.vault_id, project: 'handoff', operation_id: '11111111-1111-4111-8111-111111111111',
+        expected_revision: a.revision, status: 'Checkpointed.', completed: 'Finished integration.', next_actions: 'Review.',
+      };
+      const saved = JSON.parse(toolText(await first.callTool({ name: 'project_checkpoint', arguments: request }))) as { replayed: boolean; current: { revision: string } };
+      expect(saved.replayed).toBe(false);
+      const replayed = JSON.parse(toolText(await second.callTool({ name: 'project_checkpoint', arguments: request }))) as { replayed: boolean; current: { revision: string } };
+      expect(replayed.replayed).toBe(true);
+      expect(replayed.current.revision).toBe(saved.current.revision);
+      const stale = await second.callTool({
+        name: 'project_wrap',
+        arguments: { ...request, operation_id: '22222222-2222-4222-8222-222222222222', completed: 'Stale wrap.' },
+      });
+      expect(stale.isError).toBe(true);
+      const stalePayload = JSON.parse(toolText(stale)) as { error: { code: string; current: { revision: string } } };
+      expect(stalePayload.error.code).toBe('stale_project');
+      expect(stalePayload.error.current.revision).toBe(saved.current.revision);
+    } finally {
+      await second.close();
+    }
+  });
+
+  it('enforces grants before handoff receipts and refuses Tier 1 project writes', async () => {
+    const mcp = await connect();
+    const created = JSON.parse(toolText(await mcp.callTool({
+      name: 'project_update',
+      arguments: {
+        project: 'protected', expected_revision: null,
+        status: 'AWS AKIAIOSFODNN7EXAMPLE rotated.', next_actions: '',
+        files: [
+          { type: 'local_path', label: 'Observed.txt', locator: '/tmp/observed.txt', access: 'reported_available', checked_at: '2026-09-10T12:00:00.000Z', context: 'Checked by the authoring assistant.' },
+          { type: 'local_path', label: 'Missing.txt', locator: '/tmp/missing.txt', access: 'unavailable' },
+        ],
+      },
+    }))) as { revision: string; vault_id: string };
+    const receiverView = JSON.parse(toolText(await mcp.callTool({
+      name: 'project_resume', arguments: { project: 'protected' },
+    }))) as { files: Array<Record<string, unknown>>; file_access_note: string; files_text: string };
+    expect(receiverView.files[0]).toMatchObject({ label: 'Observed.txt', access: 'unverified' });
+    expect(receiverView.files[0]).not.toHaveProperty('checked_at');
+    expect(receiverView.files[0]).not.toHaveProperty('context');
+    expect(receiverView.files[1]).toMatchObject({ label: 'Missing.txt', access: 'unavailable' });
+    expect(receiverView.file_access_note).toMatch(/checked again in this receiving environment/);
+    expect(receiverView.files_text).toContain('reported_available');
+    process.env.NORTHKEEP_SCOPES = 'personal';
+    const denied = await mcp.callTool({
+      name: 'project_checkpoint',
+      arguments: {
+        vault_id: created.vault_id, project: 'protected', operation_id: '33333333-3333-4333-8333-333333333333',
+        expected_revision: created.revision, status: 'No.', completed: 'No.', next_actions: '',
+      },
+    });
+    expect(denied.isError).toBe(true);
+    expect(JSON.parse(toolText(denied)).error.code).toBe('scope_denied');
+    process.env.NORTHKEEP_SCOPES = 'project:protected';
+    process.env.NORTHKEEP_REDACT_TIER = '1';
+    const resumed = toolText(await mcp.callTool({ name: 'project_resume', arguments: { project: 'protected' } }));
+    expect(resumed).not.toContain('AKIAIOSFODNN7EXAMPLE');
+    const refused = await mcp.callTool({
+      name: 'project_update',
+      arguments: { project: 'protected', expected_revision: created.revision, status: 'masked round trip' },
+    });
+    expect(refused.isError).toBe(true);
+    expect(JSON.parse(toolText(refused)).error.code).toBe('invalid_request');
   });
 });
 

@@ -462,6 +462,68 @@
   .curation-dialog { width:min(700px, calc(100vw - 32px)); max-height:calc(100vh - 32px); overflow:auto; }
   .curation-preview-block { margin:14px 0; }
   .curation-preview-block .content { padding:12px 14px; margin-top:7px; background:var(--chip); border-radius:10px; }
+  /* Projects: a reading desk for revision-bound handoffs (ADR 0048). */
+  body:has(#view-projects:not([hidden])) main { max-width:1500px; width:100%; }
+  .projects-summary { min-height:66px; padding:15px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+  .projects-summary strong { font:500 20px/1.2 var(--serif); }
+  .projects-workspace { display:grid; grid-template-columns:260px minmax(0,1fr); min-height:620px; }
+  .projects-rail { border-right:1px solid var(--line); padding:16px 14px 20px 0; }
+  .project-choice { width:100%; min-height:92px; padding:15px 12px; border:0; border-bottom:1px solid var(--line); border-radius:0; background:transparent; text-align:left; color:var(--muted); }
+  .project-choice strong,.project-choice small { display:block; }
+  .project-choice strong { margin-bottom:5px; color:var(--ink); font-weight:600; }
+  .project-choice small { display:-webkit-box; overflow:hidden; font-size:12px; line-height:1.35; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
+  .project-choice[aria-current=true] { background:color-mix(in srgb,var(--accent) 17%,var(--panel)); box-shadow:inset 1px 0 var(--accent); color:var(--ink); }
+  .projects-pane { min-width:0; padding:24px 0 30px 28px; }
+  .projects-mobile-select { display:none; width:100%; min-height:44px; margin-bottom:18px; }
+  .project-detail-head { display:flex; justify-content:space-between; align-items:flex-start; gap:18px; margin-bottom:23px; }
+  #view-projects .project-detail-head h2 { margin:0 0 6px; font:500 27px/1.15 var(--serif); letter-spacing:-.015em; }
+  #view-projects .project-section h3,#view-projects .project-empty h3 { font:500 22px/1.2 var(--serif); }
+  .project-actions { display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
+  .project-facts { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(220px,.8fr); gap:28px; padding:22px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
+  .project-status-copy { max-width:38ch; margin:0; font:500 22px/1.45 var(--serif); white-space:pre-wrap; overflow-wrap:anywhere; }
+  .project-next { padding:17px 18px; border-radius:12px; background:var(--chip); white-space:pre-wrap; overflow-wrap:anywhere; }
+  .project-next strong { display:block; margin-bottom:5px; }
+  .project-section { padding:24px 0; border-bottom:1px solid var(--line); }
+  .project-section-head { display:flex; align-items:baseline; justify-content:space-between; gap:12px; margin-bottom:12px; }
+  .project-section-head h3 { margin:0; }
+  .project-clean { margin:0; padding:0; list-style:none; }
+  .project-clean li { padding:9px 0; border-top:1px solid var(--line); white-space:pre-wrap; overflow-wrap:anywhere; }
+  .project-clean li:first-child { border-top:0; }
+  .project-file { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; padding:12px 0; border-top:1px solid var(--line); }
+  .project-file:first-child { border-top:0; }
+  .project-file strong,.project-file small { display:block; }
+  .project-file small { color:var(--muted); overflow-wrap:anywhere; }
+  .project-history summary { display:flex; align-items:center; gap:10px; min-height:44px; cursor:pointer; font-weight:600; list-style:none; }
+  .project-history summary::-webkit-details-marker { display:none; }
+  .project-history summary::before { content:'›'; font-size:15px; transition:transform .16s ease-out; }
+  .project-history[open] summary::before { transform:rotate(90deg); }
+  .project-event { display:grid; grid-template-columns:100px minmax(0,1fr); gap:14px; padding:13px 0; border-top:1px solid var(--line); }
+  .project-event time { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+  .project-event p { margin:0; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .project-operation { margin:0 0 22px; padding:20px; border:1px solid var(--line); border-radius:14px; background:var(--panel); animation:project-reveal .28s cubic-bezier(.16,1,.3,1); }
+  @keyframes project-reveal { from { clip-path:inset(0 0 100% 0); filter:blur(2px); } to { clip-path:inset(0); filter:blur(0); } }
+  .project-operation-head { display:flex; justify-content:space-between; align-items:flex-start; gap:16px; margin-bottom:16px; }
+  .project-operation-head h3 { margin:0 0 5px; }
+  .project-review-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px 18px; }
+  .project-field { display:flex; flex-direction:column; gap:6px; }
+  .project-field.wide { grid-column:1/-1; }
+  .project-field span { font-size:12px; font-weight:600; color:var(--muted); }
+  .project-field textarea { width:100%; min-height:92px; resize:vertical; }
+  .project-field textarea.compact { min-height:68px; }
+  .project-review-line { display:grid; grid-template-columns:130px minmax(0,1fr); gap:12px; padding:10px 0; border-top:1px solid var(--line); }
+  .project-review-line > span:first-child { color:var(--muted); font-size:12px; }
+  .project-review-line > span:last-child { white-space:pre-wrap; overflow-wrap:anywhere; }
+  .project-operation-foot { display:flex; justify-content:flex-end; align-items:center; gap:10px; flex-wrap:wrap; margin-top:17px; padding-top:16px; border-top:1px solid var(--line); }
+  .project-notice { margin-bottom:15px; padding:13px 15px; border:1px solid var(--warn-line); border-radius:12px; background:var(--warn-bg); color:var(--warn-ink); }
+  .project-notice.danger { border-color:var(--danger-line); background:var(--danger-bg); color:var(--danger); }
+  .project-compare { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+  .project-compare > div { padding:15px; border:1px solid var(--line); border-radius:12px; }
+  .project-compare h4 { margin:0 0 7px; }
+  .project-receipt { display:grid; grid-template-columns:1fr auto; align-items:center; gap:16px; padding:14px 16px; border-radius:12px; background:var(--ok-bg); }
+  .project-empty { max-width:60ch; padding:42px 0; }
+  .project-empty h3 { font-size:24px; }
+  .project-revision { color:var(--muted); font:12px/1.4 var(--mono); overflow-wrap:anywhere; }
+  #projectLive { min-height:1px; }
   @media (max-width:600px) {
     .curation-head { display:grid; }
     .curation-head h2 { font-size:29px; }
@@ -473,6 +535,27 @@
     .curation-stage.detail-open .curation-queue { display:none; }
     .curation-stage.detail-open .curation-detail { display:block; }
     .curation-summary { align-items:flex-start; flex-wrap:wrap; }
+    .projects-workspace { display:block; min-height:0; }
+    .projects-rail { display:none; }
+    .projects-pane { padding:0; }
+    .projects-mobile-select { display:block; }
+    .project-detail-head,.project-operation-head { display:block; }
+    .project-actions { justify-content:flex-start; margin-top:16px; }
+    .project-facts,.project-review-grid,.project-compare { grid-template-columns:1fr; }
+    .project-field.wide { grid-column:auto; }
+    .project-review-line { grid-template-columns:1fr; gap:2px; }
+    .project-operation-foot { justify-content:flex-start; }
+    .project-event { grid-template-columns:74px minmax(0,1fr); }
+    .project-operation { padding:17px; }
+  }
+  @media (max-width:430px) {
+    .project-actions { display:grid; grid-template-columns:1fr 1fr; width:100%; }
+    .project-actions .primary { grid-column:1/-1; }
+    .project-receipt { grid-template-columns:1fr; }
+  }
+  @media (prefers-reduced-motion:reduce) {
+    .project-operation { animation:none; }
+    .project-history summary::before { transition:none; }
   }
   /* Connect-a-model wizard provider cards + the concierge suggestion tip. */
   .cwcard { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
@@ -506,6 +589,7 @@
 <aside id="sidebar">
 <nav id="mainNav" aria-label="Main navigation">
   <button data-view="memories" class="active"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h8l4 4v14H6zM14 3v5h4M9 12h6M9 16h6"/></svg>Memories</button>
+  <button data-view="projects"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h6l2 2h8v11H4zM4 7V5h7l2 2"/></svg>Projects</button>
   <button data-view="curation"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v5H5zM5 13h14v7H5zM8 6.5h8M8 16.5h5"/></svg>Review</button>
   <button id="connectToggle" class="nav-disclosure" type="button" aria-expanded="false" aria-controls="connectNavChildren"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 15l6-6M8 17l-1 1a4 4 0 0 1-5-5l4-4a4 4 0 0 1 5 0M16 7l1-1a4 4 0 0 1 5 5l-4 4a4 4 0 0 1-5 0"/></svg>Connect</button>
   <div id="connectNavChildren" hidden>
@@ -704,6 +788,18 @@
         <div class="memory-toolbar"><div><h3 id="memoryCollectionTitle">All memories</h3><span class="muted" id="memoryCollectionMeta">Every collection</span><span class="muted" id="memoryCollectionPrivacy"></span><div class="muted" id="memoryCollectionReviewHint" role="status"></div></div><button class="btn" id="reviewCurrentCollectionBtn" type="button" disabled>Review collection</button></div>
         <div class="memory-search"><input type="text" id="q" aria-label="Search memories" placeholder="Search these memories"><select id="typeChips" aria-label="Memory type"></select></div>
         <div id="memList"></div>
+      </div>
+    </div>
+  </section>
+  <section id="view-projects" hidden>
+    <div class="page-head"><div><h2>Projects</h2><p class="muted">Pick up the work with its latest state, evidence, and next move.</p></div></div>
+    <div class="projects-summary"><strong id="projectsSummaryTitle">Projects</strong><span class="muted" id="projectsSummaryMeta">Loading…</span><span class="pill" id="projectsLocalPill">Local vault</span></div>
+    <div class="projects-workspace">
+      <aside class="projects-rail" aria-label="Projects"><div class="review-meta-title">Projects</div><div id="projectList"></div></aside>
+      <div class="projects-pane">
+        <select class="projects-mobile-select" id="projectSelect" aria-label="Project"></select>
+        <div id="projectLive" role="status" aria-live="polite"></div>
+        <div id="projectDetail"></div>
       </div>
     </div>
   </section>
@@ -1192,7 +1288,7 @@
     });
     const data = await res.json().catch(() => ({}));
     if (res.status === 423) { showUnlock(); throw new Error('locked'); }
-    if (!res.ok) { const e = new Error(data.error || ('HTTP ' + res.status)); e.status = res.status; throw e; }
+    if (!res.ok) { const e = new Error(data.error || ('HTTP ' + res.status)); e.status = res.status; e.code = data.code; e.current = data.current; throw e; }
     return data;
   }
 
@@ -1216,11 +1312,12 @@
   });
 
   // --- views: top-level tabs, plus a Settings group.
-  const sections = ['memories', 'curation', 'connect', 'sharing', 'models', 'import', 'activity', 'mcp', 'sync', 'about'];
+  const sections = ['memories', 'projects', 'curation', 'connect', 'sharing', 'models', 'import', 'activity', 'mcp', 'sync', 'about'];
   let currentSub = 'import';
   function runLoader(v) {
     if (v === 'activity') loadLog();
     else if (v === 'memories') loadMemories();
+    else if (v === 'projects') loadProjects();
     else if (v === 'curation') { loadReviewPanel(); loadReviewCollections(); loadCurationCollections(); }
     else if (v === 'models') loadProviders();
     else if (v === 'sync') loadSyncStatus();
@@ -1577,6 +1674,7 @@
   });
   function showSection(v) { sections.forEach((s) => { $('view-' + s).hidden = s !== v; }); }
   function showTop(v) {
+    if (v !== 'projects') invalidateProjectView();
     document.querySelectorAll('#mainNav button').forEach((x) => x.classList.toggle('active', x.dataset.view === v));
     if (v === 'settings') {
       $('settingsNav').hidden = false;
@@ -1774,7 +1872,7 @@
     try { const c = await api('/api/connect'); setConnectPill(c.targets); }
     catch { /* locked or transient — leave the pill as-is */ }
   }
-  function showUnlock() { clearCurationSensitive(); clearMemorySensitive(); clearDetailedReviewSensitive(); $('unlockOverlay').hidden = false; $('passphrase').focus(); }
+  function showUnlock() { clearCurationSensitive(); clearMemorySensitive(); clearDetailedReviewSensitive(); clearProjectsSensitive(); $('unlockOverlay').hidden = false; $('passphrase').focus(); }
   function hideUnlock() { $('unlockOverlay').hidden = true; }
 
   // --- first-run setup wizard (M7d): create vault → back up the device key
@@ -1942,6 +2040,308 @@
     $('memoryVaultSummary').textContent = 'Vault locked';
     $('reviewCurrentCollectionBtn').disabled = true;
   }
+
+  // --- Projects: revision-bound resume, checkpoint and wrap (ADR 0048).
+  // All vault text is rendered through textContent. File references are
+  // descriptive only: this surface never opens or verifies them.
+  let projectLoadSequence = 0, projectActionSequence = 0;
+  let projectIndex = [], currentProjectSlug = '', currentProject = null;
+  let projectReview = null, projectReturnFocus = null;
+  const projectPendingOperations = new Map();
+
+  function invalidateProjectView() {
+    projectLoadSequence += 1;
+    projectActionSequence += 1;
+    projectReview = null;
+    $('projectLive').replaceChildren();
+  }
+
+  function clearProjectsSensitive() {
+    invalidateProjectView();
+    projectIndex = [];
+    currentProjectSlug = '';
+    currentProject = null;
+    projectReturnFocus = null;
+    projectPendingOperations.clear();
+    $('projectList').replaceChildren();
+    $('projectSelect').replaceChildren();
+    $('projectDetail').replaceChildren();
+    $('projectsSummaryMeta').textContent = 'Vault locked';
+  }
+
+  function projectLines(value) {
+    if (Array.isArray(value)) return value.map((item) => String(item));
+    if (typeof value !== 'string') return [];
+    return value.split('\n').map((line) => line.replace(/^\s*[-*]\s+/, '').trim()).filter(Boolean);
+  }
+
+  function projectDate(value) {
+    const date = new Date(value || '');
+    if (Number.isNaN(date.getTime())) return 'Date unavailable';
+    return date.toLocaleString([], { month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+  }
+
+  function projectName(slug) {
+    return String(slug || '').split('-').filter(Boolean).map((part) => part[0].toUpperCase() + part.slice(1)).join(' ');
+  }
+
+  function projectPill(text, kind) {
+    return el('span', 'pill ' + (kind || ''), text);
+  }
+
+  function projectFocusPanel(panel) {
+    const heading = panel.querySelector('h3');
+    if (heading) { heading.tabIndex = -1; heading.focus(); }
+    panel.scrollIntoView({ behavior:'smooth', block:'start' });
+  }
+
+  function closeProjectOperation() {
+    projectReview = null;
+    $('projectLive').replaceChildren();
+    if (projectReturnFocus && projectReturnFocus.isConnected) projectReturnFocus.focus();
+    projectReturnFocus = null;
+  }
+
+  async function loadProjects(preferredSlug = '') {
+    const requestId = ++projectLoadSequence;
+    $('projectsSummaryMeta').textContent = 'Loading…';
+    let data;
+    try { data = await api('/api/projects'); }
+    catch (ex) {
+      if (requestId === projectLoadSequence && ex.message !== 'locked') {
+        $('projectsSummaryMeta').textContent = 'Projects unavailable';
+        $('projectDetail').replaceChildren(el('p', 'err', ex.message));
+      }
+      return;
+    }
+    if (requestId !== projectLoadSequence || !status.unlocked || $('view-projects').hidden) return;
+    projectIndex = Array.isArray(data.projects) ? data.projects : [];
+    $('projectsSummaryTitle').textContent = projectIndex.length ? 'In progress' : 'Projects';
+    $('projectsSummaryMeta').textContent = projectIndex.length + ' ' + (projectIndex.length === 1 ? 'project' : 'projects');
+    renderProjectChoices();
+    if (!projectIndex.length) { renderProjectsEmpty(); return; }
+    const usable = projectIndex.filter((item) => !item.conflict);
+    const chosen = projectIndex.some((item) => item.project === preferredSlug)
+      ? preferredSlug : (projectIndex.some((item) => item.project === currentProjectSlug) ? currentProjectSlug : (usable[0]?.project || projectIndex[0].project));
+    await loadProject(chosen);
+  }
+
+  function renderProjectChoices() {
+    const list = $('projectList'), select = $('projectSelect');
+    list.replaceChildren(); select.replaceChildren();
+    for (const item of projectIndex) {
+      const button = el('button', 'project-choice');
+      button.type = 'button'; button.dataset.project = item.project;
+      button.setAttribute('aria-current', String(item.project === currentProjectSlug));
+      const secondary = item.conflict ? 'Multiple live project documents need attention.' : (item.status || 'No current status yet.');
+      const secondaryNode = el('small', undefined, secondary); secondaryNode.title = secondary;
+      button.append(el('strong', undefined, projectName(item.project)), secondaryNode);
+      button.appendChild(projectPill(item.conflict ? 'Needs attention' : 'Project', item.conflict ? 'locked' : ''));
+      button.addEventListener('click', () => loadProject(item.project));
+      list.appendChild(button);
+      const option = el('option', undefined, projectName(item.project) + (item.conflict ? ' — needs attention' : ''));
+      option.value = item.project; select.appendChild(option);
+    }
+    if (currentProjectSlug) select.value = currentProjectSlug;
+  }
+
+  function renderProjectsEmpty() {
+    currentProjectSlug = ''; currentProject = null;
+    $('projectSelect').hidden = true;
+    const box = el('div', 'project-empty');
+    box.append(el('h3', undefined, 'Your active projects will appear here.'),
+      el('p', 'muted', 'Start a project through a connected assistant. NorthKeep will keep its current status, next actions, decisions, and session history together.'));
+    $('projectDetail').replaceChildren(box);
+  }
+
+  async function loadProject(slug) {
+    const requestId = ++projectLoadSequence;
+    projectActionSequence += 1; projectReview = null; $('projectLive').replaceChildren();
+    currentProjectSlug = slug; renderProjectChoices();
+    $('projectSelect').hidden = false; $('projectSelect').value = slug;
+    $('projectDetail').replaceChildren(el('p', 'muted', 'Loading project…'));
+    try {
+      const data = await api('/api/projects/' + encodeURIComponent(slug));
+      if (requestId !== projectLoadSequence || !status.unlocked || $('view-projects').hidden || currentProjectSlug !== slug) return;
+      currentProject = data; renderProjectChoices(); renderProjectDetail(data);
+    } catch (ex) {
+      if (requestId !== projectLoadSequence || ex.message === 'locked') return;
+      currentProject = null;
+      const box = el('div', 'project-empty');
+      box.append(el('h3', undefined, ex.status === 409 ? 'This project needs attention.' : 'Project unavailable.'),
+        el('p', ex.status === 409 ? 'project-notice danger' : 'err', ex.message));
+      $('projectDetail').replaceChildren(box);
+    }
+  }
+
+  function renderProjectDetail(project) {
+    const root = $('projectDetail'); root.replaceChildren();
+    const head = el('div', 'project-detail-head');
+    const unavailable = Array.isArray(project.files) && project.files.some((file) => file.access === 'unavailable');
+    const title = el('div'); const state = el('div', 'row'); state.append(projectPill(unavailable ? 'Needs attention' : 'Ready to resume', unavailable ? 'locked' : 'ok'), el('span', 'project-revision', 'Updated ' + projectDate(project.updated_at))); title.append(el('h2', undefined, projectName(project.project)), state);
+    const actions = el('div', 'project-actions');
+    for (const [action, label, primary] of [['checkpoint','Checkpoint',false],['wrap','Wrap up',false],['resume','Resume',true]]) {
+      const button = el('button', 'btn' + (primary ? ' primary' : ''), label); button.type = 'button'; button.dataset.projectAction = action;
+      button.addEventListener('click', (event) => openProjectAction(action, event.currentTarget)); actions.appendChild(button);
+    }
+    head.append(title, actions); root.appendChild(head);
+    const facts = el('div', 'project-facts');
+    const statusBox = el('div'); statusBox.append(el('div', 'review-meta-title', 'Current summary'), el('p', 'project-status-copy', project.status || 'No current status yet.'));
+    const next = el('div', 'project-next'); next.append(el('strong', undefined, 'Next actions'), el('span', undefined, project.next_actions || 'No next action recorded.'));
+    facts.append(statusBox, next); root.appendChild(facts);
+    const decisions = projectLines(project.decisions), questions = projectLines(project.open_questions);
+    const decisionSection = el('section', 'project-section');
+    const decisionHead = el('div', 'project-section-head'); decisionHead.append(el('h3', undefined, 'Decisions and open questions'), el('span', 'muted', (decisions.length + questions.length) + ' items'));
+    const items = el('ul', 'project-clean');
+    decisions.forEach((line) => items.appendChild(el('li', undefined, 'Decision: ' + line)));
+    questions.forEach((line) => items.appendChild(el('li', undefined, 'Open: ' + line)));
+    if (!items.children.length) items.appendChild(el('li', 'muted', 'No decisions or open questions recorded.'));
+    decisionSection.append(decisionHead, items); root.appendChild(decisionSection);
+    root.appendChild(renderProjectFiles(project.files));
+    root.appendChild(renderProjectHistory(project));
+  }
+
+  function renderProjectFiles(files) {
+    const section = el('section', 'project-section');
+    const values = Array.isArray(files) ? files : [];
+    const head = el('div', 'project-section-head'); head.append(el('h3', undefined, 'Files'), el('span', 'muted', values.length ? values.length + ' ' + (values.length === 1 ? 'reference' : 'references') : 'None recorded'));
+    const body = el('div');
+    for (const file of values) {
+      const row = el('div', 'project-file'); const copy = el('div');
+      copy.append(el('strong', undefined, file.label), el('small', undefined, file.locator));
+      const statusText = file.access === 'reported_available' ? 'Reported available' : file.access === 'unavailable' ? 'Reported unavailable' : 'Unverified for this assistant';
+      const detail = [statusText, file.context, file.checked_at ? projectDate(file.checked_at) : ''].filter(Boolean).join(' · ');
+      row.append(copy, projectPill(detail, file.access === 'reported_available' ? 'ok' : file.access === 'unavailable' ? 'locked' : ''));
+      body.appendChild(row);
+    }
+    if (!values.length) body.appendChild(el('p', 'muted', 'No file references recorded.'));
+    section.append(head, body); return section;
+  }
+
+  function renderProjectHistory(project) {
+    const section = el('section', 'project-section'); const details = el('details', 'project-history');
+    const history = Array.isArray(project.history) ? project.history : [], archives = Array.isArray(project.archives) ? project.archives : [], log = projectLines(project.log);
+    details.appendChild(el('summary', undefined, 'Session history · ' + (history.length + log.length) + ' recent' + (archives.length ? ' · ' + archives.length + ' archived' : '')));
+    const body = el('div');
+    for (const entry of log) {
+      const row = el('div', 'project-event'); row.append(el('time', undefined, 'Current'), el('p', undefined, entry)); body.appendChild(row);
+    }
+    for (const entry of [...history, ...archives]) {
+      const row = el('div', 'project-event'); row.append(el('time', undefined, projectDate(entry.updated_at)), el('p', undefined, (entry.mode ? entry.mode[0].toUpperCase() + entry.mode.slice(1) + '\n' : '') + entry.content)); body.appendChild(row);
+    }
+    if (!history.length && !archives.length && !log.length) body.appendChild(el('p', 'muted', 'No earlier sessions recorded.'));
+    details.appendChild(body); section.appendChild(details); return section;
+  }
+
+  function openProjectAction(action, trigger) {
+    if (!currentProject) return;
+    projectReturnFocus = trigger; projectReview = null;
+    if (action === 'resume') { renderResumeBrief(currentProject); return; }
+    renderProjectEditor(action, currentProject);
+  }
+
+  function projectOperation(title, description) {
+    const panel = el('section', 'project-operation');
+    const head = el('div', 'project-operation-head'); const copy = el('div'); copy.append(el('h3', undefined, title), el('p', 'muted', description)); head.appendChild(copy); panel.appendChild(head); return panel;
+  }
+
+  function renderResumeBrief(project) {
+    const panel = projectOperation('Resume brief', 'A read-only brief based on the saved project. File access must be checked by the assistant resuming the work.');
+    const files = Array.isArray(project.files) ? project.files : [];
+    if (files.length) panel.appendChild(el('div', 'project-notice', 'File access is caller-reported. Every reference remains unverified for this assistant until it checks access itself.'));
+    for (const [label, value] of [['Where the work stands', project.status || 'No current status yet.'], ['Start here', project.next_actions || 'No next action recorded.'], ['Carry forward', [...projectLines(project.decisions), ...projectLines(project.open_questions)].join('\n') || 'Nothing else recorded.'], ['File references', files.map((file) => file.label + ': unverified for this assistant').join('\n') || 'No file references recorded.']]) {
+      const line = el('div', 'project-review-line'); line.append(el('span', undefined, label), el('span', undefined, value)); panel.appendChild(line);
+    }
+    const foot = el('div', 'project-operation-foot'); foot.append(el('span', 'muted', 'Read-only. No assistant was contacted.'), projectCloseButton('Close brief')); panel.appendChild(foot);
+    $('projectLive').replaceChildren(panel); projectFocusPanel(panel);
+  }
+
+  function projectField(label, value, compact) {
+    const wrap = el('label', 'project-field'); const name = el('span', undefined, label); const input = el('textarea', compact ? 'compact' : ''); input.value = value || ''; wrap.append(name, input); return { wrap, input };
+  }
+
+  function renderProjectEditor(mode, project, preserved = null) {
+    const panel = projectOperation(mode === 'wrap' ? 'Review wrap up' : 'Review checkpoint', 'Draft the exact handoff. NorthKeep will check for newer changes before saving on this device.');
+    const grid = el('div', 'project-review-grid');
+    const statusField = projectField('Current status', project.status || '', false);
+    const completedField = projectField('Completed this session', '', false);
+    const nextField = projectField('Next actions (may be empty)', project.next_actions || '', false);
+    const questionsField = projectField('Open questions', preserved ? preserved.open_questions : (typeof project.open_questions === 'string' ? project.open_questions : projectLines(project.open_questions).join('\n')), true);
+    const decisionField = projectField('Decision to add (optional)', preserved ? preserved.decision : '', true);
+    if (preserved) completedField.input.value = preserved.completed;
+    statusField.wrap.classList.add('wide'); completedField.wrap.classList.add('wide'); nextField.wrap.classList.add('wide');
+    grid.append(statusField.wrap, completedField.wrap, nextField.wrap, questionsField.wrap, decisionField.wrap); panel.appendChild(grid);
+    panel.appendChild(el('p', 'muted', 'Existing file references are preserved. This form does not open, verify, or change them.'));
+    const err = el('div', 'err'); err.setAttribute('role', 'alert'); panel.appendChild(err);
+    const foot = el('div', 'project-operation-foot'); const cancel = projectCloseButton('Cancel'); const review = el('button', 'btn primary', 'Review ' + (mode === 'wrap' ? 'wrap up' : 'checkpoint'));
+    review.addEventListener('click', () => {
+      if (!statusField.input.value.trim() || !completedField.input.value.trim()) { err.textContent = 'Current status and completed work are required.'; return; }
+      projectReview = { mode, slug:project.project, vault_id:project.vault_id, expected_revision:preserved ? preserved.expected_revision : project.revision, status:statusField.input.value, completed:completedField.input.value, next_actions:nextField.input.value, open_questions:questionsField.input.value, decision:decisionField.input.value };
+      renderProjectConfirmation();
+    });
+    foot.append(cancel, review); panel.appendChild(foot); $('projectLive').replaceChildren(panel); statusField.input.focus(); panel.scrollIntoView({ behavior:'smooth', block:'start' });
+  }
+
+  function renderProjectConfirmation() {
+    const draft = projectReview; if (!draft) return;
+    const panel = projectOperation('Confirm ' + (draft.mode === 'wrap' ? 'wrap up' : 'checkpoint'), 'Review the exact text below. Saving updates this project on this device.');
+    for (const [label, value] of [['Completed', draft.completed], ['Current status', draft.status], ['Next actions', draft.next_actions || '(empty)'], ['Open questions', draft.open_questions || '(none)'], ['Decision', draft.decision || '(none)']]) {
+      const line = el('div', 'project-review-line'); line.append(el('span', undefined, label), el('span', undefined, value)); panel.appendChild(line);
+    }
+    const err = el('div', 'err'); err.setAttribute('role', 'alert'); panel.appendChild(err);
+    const foot = el('div', 'project-operation-foot'); const back = el('button', 'btn', 'Back to edit'); back.addEventListener('click', () => renderProjectEditorFromDraft(draft));
+    const save = el('button', 'btn primary', 'Save on this device'); save.addEventListener('click', () => saveProjectDraft(save, err)); foot.append(back, save); panel.appendChild(foot);
+    $('projectLive').replaceChildren(panel); projectFocusPanel(panel);
+  }
+
+  function renderProjectEditorFromDraft(draft) {
+    renderProjectEditor(draft.mode, { ...currentProject, status:draft.status, next_actions:draft.next_actions, open_questions:draft.open_questions }, draft);
+  }
+
+  async function saveProjectDraft(button, err) {
+    const draft = projectReview; if (!draft) return;
+    const payload = { vault_id:draft.vault_id, expected_revision:draft.expected_revision, status:draft.status, completed:draft.completed, next_actions:draft.next_actions, open_questions:draft.open_questions, ...(draft.decision.trim() ? { decision:draft.decision } : {}) };
+    const key = draft.mode + ':' + draft.slug + ':' + JSON.stringify(payload);
+    const operationId = projectPendingOperations.get(key) || crypto.randomUUID(); projectPendingOperations.set(key, operationId);
+    const requestId = ++projectActionSequence; button.disabled = true; err.textContent = '';
+    try {
+      const result = await api('/api/projects/' + encodeURIComponent(draft.slug) + '/' + draft.mode, { method:'POST', json:{ ...payload, operation_id:operationId } });
+      projectPendingOperations.delete(key);
+      if (requestId !== projectActionSequence || !status.unlocked || $('view-projects').hidden || currentProjectSlug !== draft.slug) return;
+      currentProject = result.current; renderProjectChoices(); renderProjectDetail(currentProject); renderProjectReceipt(result);
+    } catch (ex) {
+      if (ex.status && ex.status >= 400 && ex.status < 500) projectPendingOperations.delete(key);
+      if (requestId !== projectActionSequence || ex.message === 'locked') return;
+      if (ex.status === 409 && ex.current) { renderProjectConflict(draft, ex.current, ex.message); return; }
+      err.textContent = ex.status >= 500 || !ex.status ? 'The save result is uncertain. Retry this exact draft to check it safely. ' + ex.message : ex.message;
+      button.disabled = false;
+    }
+  }
+
+  function renderProjectReceipt(result) {
+    projectReview = null;
+    const panel = projectOperation(result.replayed ? 'Saved handoff found' : 'Handoff saved', result.replayed ? 'NorthKeep found the original result for this exact retry.' : 'The project was updated from the version you reviewed.');
+    const receipt = el('div', 'project-receipt'); const copy = el('div'); copy.append(el('strong', undefined, result.receipt.mode === 'wrap' ? 'Wrap up saved on this device' : 'Checkpoint saved on this device'), el('small', 'muted', 'Saved ' + projectDate(result.receipt.saved_at)));
+    receipt.append(copy, projectPill(result.replayed ? 'Replayed safely' : 'Saved', 'ok')); panel.appendChild(receipt);
+    const foot = el('div', 'project-operation-foot'); foot.appendChild(projectCloseButton('Done')); panel.appendChild(foot); $('projectLive').replaceChildren(panel); projectFocusPanel(panel);
+  }
+
+  function renderProjectConflict(draft, latest, message) {
+    currentProject = latest; renderProjectChoices(); renderProjectDetail(latest);
+    const panel = projectOperation('Another assistant updated this project', message || 'The project changed after this draft was opened. Nothing was overwritten.');
+    panel.appendChild(el('div', 'project-notice danger', 'Save blocked. Your draft is preserved below beside the latest status.'));
+    const draftText = 'Completed\n' + draft.completed + '\n\nCurrent status\n' + draft.status + '\n\nNext actions\n' + (draft.next_actions || '(empty)') + '\n\nOpen questions\n' + (draft.open_questions || '(none)') + (draft.decision ? '\n\nDecision\n' + draft.decision : '');
+    const latestText = 'Current status\n' + (latest.status || 'No current status yet.') + '\n\nNext actions\n' + (latest.next_actions || '(empty)') + '\n\nOpen questions\n' + (projectLines(latest.open_questions).join('\n') || '(none)');
+    const compare = el('div', 'project-compare'); const yours = el('div'); yours.append(el('h4', undefined, 'Your preserved draft'), el('p', undefined, draftText), el('div', 'project-revision', 'Based on the version you opened')); const current = el('div'); current.append(el('h4', undefined, 'Latest update'), el('p', undefined, latestText), el('div', 'project-revision', 'Updated ' + projectDate(latest.updated_at))); compare.append(yours, current); panel.appendChild(compare);
+    const foot = el('div', 'project-operation-foot'); const keep = projectCloseButton('Keep latest update'); const resume = el('button', 'btn primary', 'Resume from latest'); resume.addEventListener('click', () => { currentProject = latest; renderResumeBrief(latest); }); foot.append(keep, resume); panel.appendChild(foot); $('projectLive').replaceChildren(panel); projectFocusPanel(panel);
+  }
+
+  function projectCloseButton(label) {
+    const button = el('button', 'btn', label); button.type = 'button'; button.addEventListener('click', closeProjectOperation); return button;
+  }
+
+  $('projectSelect').addEventListener('change', () => loadProject($('projectSelect').value));
+  $('projectLive').addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); closeProjectOperation(); } });
   $('addMemoryToggle').addEventListener('click', () => {
     const expanded = $('addMemoryToggle').getAttribute('aria-expanded') === 'true';
     $('addMemoryToggle').setAttribute('aria-expanded', String(!expanded));

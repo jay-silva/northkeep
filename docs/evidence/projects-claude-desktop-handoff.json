@@ -1,0 +1,18 @@
+{
+  "evidence_kind": "observed synthetic Claude Desktop wrap read back through local MCP",
+  "transport": "session-created MCP acceptance client; installed connector configuration unchanged",
+  "project": "handoff-sample",
+  "revision": "6b9876c5-ae8f-4824-872f-e57e494ca868",
+  "status": "Handoff verified on the Claude Desktop side. The synthetic draft carried over with its uncertainty intact and the final theme count remains unconfirmed.",
+  "next_actions": "Recover or supply the audio index before any final theme count is reported.",
+  "open_questions": "Can the audio index be recovered?",
+  "files": [
+    {
+      "type": "local_path",
+      "label": "Audio index.csv",
+      "locator": "missing/Audio index.csv",
+      "access": "unavailable"
+    }
+  ],
+  "log": "- 2026-09-11 - Wrap up: Read the handoff client script, ran resume against the disposable fixture, and confirmed that the checkpoint status, next actions, open question, and the unavailable Audio index.csv entry all survived the handoff.\n- 2026-09-11 - Checkpoint: Drafted three synthetic themes; the audio index could not be accessed."
+}
