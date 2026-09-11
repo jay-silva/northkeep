@@ -144,6 +144,11 @@
   .memory-toolbar > div { flex:1; }
   .memory-toolbar h3 { margin:0 0 3px; font:500 27px/1.2 var(--serif); }
   .memory-search { display:flex; gap:10px; margin-bottom:4px; }
+  .memory-search-status { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:14px 0; margin-bottom:12px; border-bottom:1px solid var(--line); }
+  .memory-search-status p { margin:4px 0 0; font-size:13px; line-height:1.5; }
+  .memory-search-status button { flex-shrink:0; min-height:44px; }
+  .memory-search-status a { display:inline-block; min-height:44px; padding-top:10px; }
+  @media(max-width:600px) { .memory-search-status { align-items:stretch; flex-direction:column; gap:12px; } }
   .memory-search select { min-height:46px; max-width:150px; }
   .memory-search input { min-width:0; }
   .memory-search input { width:100%; min-height:46px; }
@@ -468,9 +473,10 @@
   .projects-summary strong { font:500 20px/1.2 var(--serif); }
   .projects-workspace { display:grid; grid-template-columns:260px minmax(0,1fr); min-height:620px; }
   .projects-rail { border-right:1px solid var(--line); padding:16px 14px 20px 0; }
-  .project-choice { width:100%; min-height:92px; padding:15px 12px; border:0; border-bottom:1px solid var(--line); border-radius:0; background:transparent; text-align:left; color:var(--muted); }
-  .project-choice strong,.project-choice small { display:block; }
-  .project-choice strong { margin-bottom:5px; color:var(--ink); font-weight:600; }
+  .project-choice { display:grid; grid-template-columns:minmax(0,1fr); align-content:start; gap:8px; width:100%; min-height:112px; padding:16px 12px; border:0; border-bottom:1px solid var(--line); border-radius:0; background:transparent; text-align:left; color:var(--muted); }
+  .project-choice strong,.project-choice small { display:block; min-width:0; max-width:100%; overflow-wrap:anywhere; }
+  .project-choice .pill { justify-self:start; }
+  .project-choice strong { margin:0; color:var(--ink); font-size:14px; line-height:1.4; font-weight:600; }
   .project-choice small { display:-webkit-box; overflow:hidden; font-size:12px; line-height:1.35; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
   .project-choice[aria-current=true] { background:color-mix(in srgb,var(--accent) 17%,var(--panel)); box-shadow:inset 1px 0 var(--accent); color:var(--ink); }
   .projects-pane { min-width:0; padding:24px 0 30px 28px; }
@@ -787,6 +793,7 @@
         <select id="collectionSelect" aria-label="Collection"></select>
         <div class="memory-toolbar"><div><h3 id="memoryCollectionTitle">All memories</h3><span class="muted" id="memoryCollectionMeta">Every collection</span><span class="muted" id="memoryCollectionPrivacy"></span><div class="muted" id="memoryCollectionReviewHint" role="status"></div></div><button class="btn" id="reviewCurrentCollectionBtn" type="button" disabled>Review collection</button></div>
         <div class="memory-search"><input type="text" id="q" aria-label="Search memories" placeholder="Search these memories"><select id="typeChips" aria-label="Memory type"></select></div>
+        <div id="memorySearchStatus" class="memory-search-status" hidden><div role="status" aria-live="polite"><strong id="memorySearchTitle"></strong><p class="muted" id="memorySearchDetail"></p><a id="localSearchInstall" href="https://ollama.com/download" target="_blank" rel="noopener noreferrer" hidden>Install Ollama</a></div><button type="button" class="btn primary" id="localSearchAction" hidden></button></div>
         <div id="memList"></div>
       </div>
     </div>
@@ -1672,7 +1679,7 @@
       out.textContent = (e && e.message) || 'Could not check for updates.';
     } finally { btn.disabled = false; }
   });
-  function showSection(v) { sections.forEach((s) => { $('view-' + s).hidden = s !== v; }); }
+  function showSection(v) { if (v !== 'memories') stopLocalSearchView(); sections.forEach((s) => { $('view-' + s).hidden = s !== v; }); }
   function showTop(v) {
     if (v !== 'projects') invalidateProjectView();
     document.querySelectorAll('#mainNav button').forEach((x) => x.classList.toggle('active', x.dataset.view === v));
@@ -1757,7 +1764,7 @@
   async function refreshStatus() {
     status = await api('/api/status');
     const noVault = status.vault_exists === false;
-    $('countPill').textContent = status.unlocked ? status.total + ' memories'
+    $('countPill').textContent = status.unlocked ? (status.memory_total ?? status.total) + ' memories'
       : (noVault ? 'welcome' : 'locked');
     $('countPill').className = 'pill ' + (status.unlocked ? 'ok' : 'locked');
     $('ollamaPill').hidden = status.ollama_available;
@@ -2019,6 +2026,10 @@
   }
   let memoryScopeEpoch = 0, scopeLoadSequence = 0, memoryLoadSequence = 0, addScopeTouched = false;
   function clearMemorySensitive() {
+    clearTimeout(searchTimer);
+    stopLocalSearchView();
+    localSearchJob = null;
+    $('memorySearchStatus').hidden = true;
     memoryScopeEpoch += 1;
     scopeLoadSequence += 1;
     memoryLoadSequence += 1;
@@ -2363,26 +2374,30 @@
   async function loadScopes() {
     const lockEpoch = memoryScopeEpoch;
     const requestId = ++scopeLoadSequence;
-    const [{ scopes }, all] = await Promise.all([api('/api/scopes'), api('/api/memories?')]);
+    const [{ scopes }, all] = await Promise.all([api('/api/scopes'), api('/api/memories?exclude_projects=1')]);
     if (lockEpoch !== memoryScopeEpoch || requestId !== scopeLoadSequence || !status.unlocked) return;
     const sharing = await api('/api/share/status').catch(() => null);
     if (lockEpoch !== memoryScopeEpoch || requestId !== scopeLoadSequence || !status.unlocked) return;
     memorySharedScopes = Array.isArray(sharing?.shared_scopes) ? new Set(sharing.shared_scopes) : null;
+    const resetProjectFilter = filterScope.startsWith('project:');
+    if (resetProjectFilter) { filterScope = ''; memoryLoadSequence += 1; }
     $('memoryCollectionPrivacy').textContent = memoryPrivacyLabel(filterScope);
     knownScopes = scopes;
+    const memoryScopes = scopes.filter((scope) => !scope.startsWith('project:'));
+    const visibleMemories = (all.memories || []).filter((memory) => !memory.scope.startsWith('project:'));
     const counts = new Map();
-    for (const memory of all.memories || []) counts.set(memory.scope, (counts.get(memory.scope) || 0) + 1);
-    const totalCount = (all.memories || []).length;
-    $('memoryVaultSummary').textContent = totalCount + ' ' + (totalCount === 1 ? 'memory' : 'memories') + ' · ' + scopes.length + ' ' + (scopes.length === 1 ? 'collection' : 'collections');
+    for (const memory of visibleMemories) counts.set(memory.scope, (counts.get(memory.scope) || 0) + 1);
+    const totalCount = visibleMemories.length;
+    $('memoryVaultSummary').textContent = totalCount + ' ' + (totalCount === 1 ? 'memory' : 'memories') + ' · ' + memoryScopes.length + ' ' + (memoryScopes.length === 1 ? 'collection' : 'collections');
     $('scopeChips').replaceChildren();
-    for (const scope of ['', ...scopes]) {
+    for (const scope of ['', ...memoryScopes]) {
       const button = el('button', filterScope === scope ? 'on' : undefined);
       const count = scope ? (counts.get(scope) || 0) : totalCount;
       button.append(el('strong', undefined, scope || 'All memories'), el('small', undefined, count + ' ' + (count === 1 ? 'memory' : 'memories') + memoryPrivacyLabel(scope)));
       button.type = 'button'; button.dataset.s = scope; $('scopeChips').appendChild(button);
     }
     $('collectionSelect').replaceChildren();
-    for (const scope of ['', ...scopes]) {
+    for (const scope of ['', ...memoryScopes]) {
       const option = el('option', undefined, scope || 'All memories');
       option.value = scope;
       $('collectionSelect').appendChild(option);
@@ -2408,6 +2423,7 @@
     const preferredAddScope = previousAddScope;
     add.value = [...add.options].some((option) => option.value === preferredAddScope) ? preferredAddScope : 'personal';
     $('addMemNewScope').hidden = add.value !== NEW_SCOPE;
+    if (resetProjectFilter) await loadMemories();
   }
   $('scopeChips').addEventListener('click', (e) => {
     const button = e.target.closest('button');
@@ -2423,12 +2439,16 @@
   });
   $('q').addEventListener('input', () => {
     clearTimeout(searchTimer);
+    memoryLoadSequence += 1;
+    stopLocalSearchView();
+    $('memorySearchStatus').hidden = true;
     searchTimer = setTimeout(loadMemories, 250);
   });
   async function loadMemories() {
     const requestId = ++memoryLoadSequence;
-    const qs = new URLSearchParams();
-    if ($('q').value.trim()) qs.set('q', $('q').value.trim());
+    const qs = new URLSearchParams({ exclude_projects: '1' });
+    const requestedQuery = $('q').value.trim();
+    if (requestedQuery) qs.set('q', requestedQuery);
     if (filterType) qs.set('type', filterType);
     if (filterScope) qs.set('scope', filterScope);
     const resp = await api('/api/memories?' + qs);
@@ -2439,16 +2459,8 @@
     $('memoryCollectionMeta').textContent = memories.length + ' ' + (memories.length === 1 ? 'memory' : 'memories');
     $('reviewCurrentCollectionBtn').disabled = !filterScope;
     if ($('collectionSelect').value !== filterScope) $('collectionSelect').value = filterScope;
-    const q = $('q').value.trim();
-    // Search-mode note: loud when semantic degraded to keyword (invariant #6).
-    let note = '';
-    if (q && resp.search_mode === 'semantic') {
-      note = '<p class="muted" style="margin:0 0 8px">✦ searching by meaning</p>';
-    } else if (q && resp.search_mode === 'keyword') {
-      note = '<p class="muted" style="margin:0 0 8px">⚠ semantic search unavailable — using keyword'
-        + (resp.semantic_reason ? ' (' + esc(resp.semantic_reason) + ')' : '')
-        + '. Start Ollama + pull nomic-embed-text for meaning-based search.</p>';
-    }
+    const q = requestedQuery;
+    void renderMemorySearchStatus(resp, q);
     const isLiveProjectDoc = (m) => {
       if (m.type !== 'working' || !String(m.scope).startsWith('project:')) return false;
       const peers = memories.filter((x) => x.scope === m.scope && x.type === 'working');
@@ -2456,7 +2468,7 @@
       const newest = peers.reduce((a, b) => (a.created_at > b.created_at ? a : b));
       return newest.id === m.id;
     };
-    $('memList').innerHTML = note + (memories.length === 0
+    $('memList').innerHTML = (memories.length === 0
       ? '<p class="muted">No memories match.</p>'
       : memories.map((m) => `
         <div class="card" id="mem-${esc(m.id)}">
@@ -2493,6 +2505,114 @@
       if (contentDiv) renderMarkdown(contentDiv, m.content);
     }
   }
+  let localSearchEpoch = 0, localSearchBusy = false, localSearchPoll = null;
+  let localSearchJob = null, localSearchDeadline = 0;
+  function stopLocalSearchView() {
+    localSearchEpoch += 1;
+    clearTimeout(localSearchPoll);
+    localSearchPoll = null;
+    localSearchBusy = false;
+  }
+  function localSearchViewActive(epoch) {
+    return epoch === localSearchEpoch && status.unlocked && !$('view-memories').hidden;
+  }
+  function showLocalSearchState(title, detail, action = '', label = '') {
+    $('memorySearchStatus').hidden = false;
+    $('memorySearchTitle').textContent = title;
+    $('memorySearchDetail').textContent = detail;
+    const button = $('localSearchAction');
+    button.hidden = !action;
+    button.dataset.action = action;
+    button.textContent = label;
+    button.disabled = localSearchBusy;
+    $('localSearchInstall').hidden = true;
+  }
+  async function renderMemorySearchStatus(response, query) {
+    if (localSearchBusy) return;
+    stopLocalSearchView();
+    const epoch = localSearchEpoch;
+    if (!query) { $('memorySearchStatus').hidden = true; return; }
+    if (response.search_mode === 'semantic') {
+      showLocalSearchState('Searching by meaning', 'Results are ranked using the local search model.');
+      return;
+    }
+    if (response.semantic_reason === 'empty query') {
+      showLocalSearchState('No searchable words yet', 'Try a longer keyword.');
+      return;
+    }
+    showLocalSearchState('Using keyword search', 'Checking local search availability…');
+    try {
+      const info = await api('/api/local/search/status');
+      if (!localSearchViewActive(epoch)) return;
+      if (localSearchJob && Date.now() < localSearchDeadline) {
+        localSearchBusy = true;
+        showLocalSearchState('Downloading the search model', 'Keyword search is still available.');
+        void pollSearchModel(localSearchJob, epoch);
+      } else if (info.runtime !== 'running') {
+        showLocalSearchState('Search by meaning is off', 'Keyword search still works. Start Ollama to search by meaning on this Mac.', info.can_start ? 'start' : '', 'Start local search');
+        $('localSearchInstall').hidden = false;
+      } else if (info.embedding_model !== 'installed') {
+        showLocalSearchState('Download the search model', 'Ollama is running. Download the search model to enable search by meaning.', info.can_start ? 'pull' : '', 'Download search model');
+      } else {
+        showLocalSearchState('Using keyword search', 'The local search model is available. Try this search again.', 'retry', 'Retry search');
+      }
+    } catch {
+      if (localSearchViewActive(epoch)) showLocalSearchState('Using keyword search', 'Could not check local search. Try again.', 'retry', 'Retry search');
+    }
+  }
+  async function pollSearchModel(id, epoch) {
+    if (!localSearchViewActive(epoch)) return;
+    if (Date.now() >= localSearchDeadline) {
+      localSearchBusy = false; localSearchJob = null;
+      showLocalSearchState('Download is taking longer than expected', 'Check Ollama, then retry the download.', 'pull', 'Retry download');
+      return;
+    }
+    try {
+      const job = await api('/api/local/search/pull/' + encodeURIComponent(id));
+      if (!localSearchViewActive(epoch)) return;
+      if (job.done) {
+        localSearchBusy = false; localSearchJob = null;
+        if (job.error) { showLocalSearchState('Search model download failed', 'Check your connection and try again.', 'pull', 'Retry download'); return; }
+        showLocalSearchState('Search by meaning is ready', 'Searching your memories again…');
+        await loadMemories();
+        return;
+      }
+      const progress = job.total > 0 ? Math.min(100, Math.round(job.completed / job.total * 100)) + '% downloaded. ' : '';
+      showLocalSearchState('Downloading the search model', progress + 'Keyword search is still available.');
+      localSearchPoll = setTimeout(() => { void pollSearchModel(id, epoch); }, 1000);
+    } catch {
+      if (!localSearchViewActive(epoch)) return;
+      localSearchBusy = false;
+      showLocalSearchState('Could not check the download', 'Retry to reconnect to the existing download.', 'pull', 'Check download');
+    }
+  }
+  $('localSearchAction').addEventListener('click', async () => {
+    if (localSearchBusy || !status.unlocked) return;
+    const action = $('localSearchAction').dataset.action;
+    if (action === 'retry') { await loadMemories(); return; }
+    if (action !== 'start' && action !== 'pull') return;
+    stopLocalSearchView();
+    const epoch = localSearchEpoch;
+    localSearchBusy = true;
+    showLocalSearchState(action === 'start' ? 'Starting local search…' : 'Starting the model download…', 'Keyword search is still available.');
+    try {
+      const result = await api('/api/local/search/' + action, { method: 'POST' });
+      if (!localSearchViewActive(epoch)) return;
+      if (action === 'pull') {
+        localSearchJob = result.job_id; localSearchDeadline = Date.now() + 61 * 60 * 1000;
+        await pollSearchModel(localSearchJob, epoch);
+      } else {
+        localSearchBusy = false;
+        await loadMemories();
+      }
+    } catch {
+      if (!localSearchViewActive(epoch)) return;
+      localSearchBusy = false;
+      showLocalSearchState(action === 'start' ? 'Could not start Ollama' : 'Could not start the download', action === 'start' ? 'Open the Ollama app and try again. If it is not installed, install it first.' : 'Check Ollama and your connection, then try again.', action, action === 'start' ? 'Try starting again' : 'Retry download');
+      $('localSearchInstall').hidden = action !== 'start';
+    }
+  });
+
   $('memList').addEventListener('click', async (e) => {
     const d = e.target.dataset || {};
     if (d.edit) { openEdit(d.edit, e.target); return; }

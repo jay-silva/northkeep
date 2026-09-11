@@ -138,6 +138,7 @@ import {
 import { LockedError, type UiSession } from './session.js';
 import { handleCurationApi } from './curationApi.js';
 import { handleProjectsApi } from './projectsApi.js';
+import { handleLocalSearchApi } from './local-search.js';
 
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 
@@ -313,15 +314,19 @@ async function dispatch(
   if (projects !== null) return projects;
   const curation = await handleCurationApi(session, method, route, body);
   if (curation !== null) return curation;
+  const localSearch = await handleLocalSearchApi(session, method, route, body);
+  if (localSearch !== null) return localSearch;
   if (method === 'GET' && route === '/api/status') {
     const unlocked = session.isUnlocked();
     let counts: Record<string, number> = {};
     let total = 0;
+    let memoryTotal = 0;
     if (unlocked) {
       await session.withVault((vault) => {
         for (const entry of vault.list()) {
           counts[entry.type] = (counts[entry.type] ?? 0) + 1;
           total += 1;
+          if (!entry.scope.startsWith('project:')) memoryTotal += 1;
         }
       });
     }
@@ -329,6 +334,7 @@ async function dispatch(
     return ok({
       unlocked,
       total,
+      memory_total: memoryTotal,
       counts,
       // First-run detection (M7d): no vault on disk → the page shows the
       // setup wizard instead of the unlock dialog.
@@ -509,8 +515,12 @@ async function dispatch(
     const typeParam = query.get('type') ?? undefined;
     const type = typeParam && isMemoryType(typeParam) ? (typeParam as MemoryType) : undefined;
     const scope = query.get('scope') ?? undefined;
+    const excludeProjects = query.get('exclude_projects') === '1';
     return ok(
       await session.withVault(async (vault) => {
+        const allowedScopes = excludeProjects
+          ? vault.scopes().filter((candidate) => !candidate.startsWith('project:'))
+          : undefined;
         if (q.length > 0) {
           // Semantic search when the local embedder is up; retrieveSemantic
           // degrades to keyword on its own and tells us which happened, so the
@@ -518,6 +528,7 @@ async function dispatch(
           const r = await vault.retrieveSemantic(q, createOllamaEmbedder(), {
             type,
             scope,
+            allowedScopes,
             limit: 50,
           });
           return {
@@ -529,7 +540,7 @@ async function dispatch(
             })),
           };
         }
-        return { memories: vault.list({ type, scope }).map(publicEntry).reverse() };
+        return { memories: vault.list({ type, scope, allowedScopes }).map(publicEntry).reverse() };
       }),
     );
   }

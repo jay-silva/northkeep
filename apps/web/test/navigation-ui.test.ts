@@ -87,6 +87,55 @@ describe('navigation UI', () => {
     expect(context.title()).toBe('unchanged');
   });
 
+  it('invalidates an older search as soon as the user types, before debounce fires', async () => {
+    let resolveOld!: (value: unknown) => void;
+    const oldResponse = new Promise(resolve => { resolveOld = resolve; });
+    const context = vm.createContext({ oldResponse, URLSearchParams });
+    const binding = script.match(/\$\('q'\)\.addEventListener\('input',[\s\S]*?\}\);/)?.[0];
+    expect(binding).toBeTruthy();
+    vm.runInContext(`
+      let memoryLoadSequence=0, filterType='', filterScope='', searchTimer;
+      const status={unlocked:true};
+      const nodes=new Map();
+      const $=(id)=>{if(!nodes.has(id))nodes.set(id,{value:id==='q'?'d':'',textContent:'unchanged',innerHTML:'unchanged',addEventListener(event,fn){this[event]=fn;}});return nodes.get(id);};
+      const api=()=>this.oldResponse;
+      const clearTimeout=()=>{}; const stopLocalSearchView=()=>{}; const setTimeout=(fn)=>{this.scheduled=fn;return 1;};
+      ${functionSource('loadMemories')}
+      ${binding}
+      this.start=loadMemories;
+      this.type=()=>{$('q').value='dog';$('q').input();};
+      this.result=()=>$('memList').innerHTML;
+      this.title=()=>$('memoryCollectionTitle').textContent;
+    `, context);
+    const pending = context.start();
+    context.type();
+    resolveOld({memories:[],search_mode:'keyword',semantic_reason:'empty query'});
+    await pending;
+    expect(context.result()).toBe('unchanged');
+    expect(context.title()).toBe('unchanged');
+    expect(context.scheduled).toBeTypeOf('function');
+  });
+
+  it('keeps project collections out of Memories counts and navigation without losing scope choices', async () => {
+    const context = vm.createContext({});
+    vm.runInContext(`
+      let memoryScopeEpoch=0,scopeLoadSequence=0,filterScope='',knownScopes=[],memorySharedScopes;
+      const status={unlocked:true}; const NEW_SCOPE='+new';
+      const makeNode=(text='')=>({text, textContent:'',value:'',children:[],options:[],dataset:{},replaceChildren(){this.children=[];this.options=[];},append(...nodes){this.children.push(...nodes);},appendChild(node){this.children.push(node);this.options.push(node);return node;}});
+      const nodes=new Map(); const $=(id)=>{if(!nodes.has(id))nodes.set(id,makeNode());return nodes.get(id);};
+      const el=(tag,klass,text)=>makeNode(text); const esc=(text)=>text; const memoryPrivacyLabel=()=>'';
+      const api=async(route)=>route==='/api/scopes'?{scopes:['personal','project:garden']}:
+        route==='/api/share/status'?{shared_scopes:[]}:{memories:[{scope:'personal'},{scope:'project:garden'}]};
+      ${functionSource('loadScopes')}
+      this.load=loadScopes;this.nodes=nodes;this.known=()=>knownScopes;
+    `, context);
+    await context.load();
+    expect(context.nodes.get('memoryVaultSummary').textContent).toBe('1 memory · 1 collection');
+    expect(context.nodes.get('collectionSelect').children.map((n: {value:string})=>n.value)).toEqual(['','personal']);
+    expect(context.nodes.get('scopeChips').children.map((n: {dataset:{s:string}})=>n.dataset.s)).toEqual(['','personal']);
+    expect(context.known()).toContain('project:garden');
+  });
+
   it('does not render delayed scopes or counts after a newer scope refresh starts', async () => {
     let resolveOldScopes!: (value: unknown) => void;
     let resolveOldMemories!: (value: unknown) => void;
@@ -118,7 +167,7 @@ describe('navigation UI', () => {
     const scopes = functionSource('loadScopes');
     expect(scopes).toContain("api('/api/scopes')");
     expect(scopes).not.toContain('/api/curation/collections');
-    expect(scopes).toContain("api('/api/memories?')");
+    expect(scopes).toContain("api('/api/memories?exclude_projects=1')");
     expect(scopes).toContain('const counts = new Map()');
   });
 
