@@ -147,3 +147,9 @@ Core, MCP and HTTP write paths received independent review after implementation.
 ## Publication documentation review, 2026-09-11
 
 Independent read-only review checked the affected README, Known Limits and ADR claims against core, librarian, web, local MCP and hosted connector code. It found stale owner-acceptance wording in ADR 0046 and the earlier raw-request-byte wording in this Decision. Both were corrected and re-reviewed. Final verdict: CLEAR for the reviewed documentation. No code or tests ran in this pass; prior implementation and native-client acceptance evidence remains separately recorded. Hosted and distributed guarantees remain outside this milestone.
+
+## Final upgrade adversarial review, 2026-09-11
+
+Review of be12502 found that a schema-compatible 0.21.0 MCP process can survive an app update and retain its unversioned project writer. The release control requires full shutdown of NorthKeep and all local assistant hosts before installation, restart afterward, and fresh schema discovery plus read-only Resume before project writes. README, Known Limits, the upgrade guide and announcement drafts carry this requirement. The reviewer rechecked it and returned CLEAR WITH LIMITS: the control is manual, not automatic process retirement.
+
+The reviewer passed 67 targeted tests and core, librarian, MCP, web and CLI typechecks in a credential-free isolated checkout. Its HTTP tests were sandbox-blocked; the parent subsequently passed all 12 isolated HTTP cases with loopback access. No production data or deployment was involved. The parent also reran the full regression suite: 1,578 passed and one skipped across 121 files. The complete report is in `docs/evidence/final-upgrade-review.md`.

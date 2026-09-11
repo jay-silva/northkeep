@@ -5,6 +5,7 @@ every milestone; if a limit is removed, say when and how.*
 
 ## Local Projects handoffs, accepted locally
 
+- **Restart connected AI apps when updating.** An assistant left running across an update can keep the previous local MCP process. Version 0.21.0 uses the same vault schema and can still write projects without revision checks until that process exits. Quit NorthKeep and every connected local AI app before replacing the app, then reopen them and verify the new tools before continuing project work. Closing a window alone is not sufficient. The new guarantees apply to current local connections; the updater does not forcibly retire an old process.
 - Revision checks and durable retry receipts coordinate writes against one local vault. Hosted project tools and whole-vault sync retain their existing conflict behavior. A local save does not certify delivery.
 - File references describe caller-reported access. Resume treats reported availability as unverified for the receiving assistant. The UI displays and preserves references; structured project tools can edit them. No file or URL is opened automatically.
 - Lock clears drafts and pending request text. Browser retry convenience requires the retained draft; saved operation receipts remain in the vault. Forgetting a receipt removes its retry guarantee. History shows at most 20 saved versions and 20 log archives.

@@ -32,6 +32,8 @@ The Projects implementation is local and owner accepted. Its handoff checks cove
 
 ## Install
 
+**Updating to the Memories and Projects workspace:** fully quit NorthKeep and every locally connected AI app before installing, then reopen them and verify the new project tools before continuing work. An app left running can retain the previous project writer. Follow the [upgrade steps](docs/update-memory-projects.md). The replacement installer is not yet published; the current download remains 0.21.0.
+
 **The Mac app (recommended).** Download the signed, notarized DMG, drag
 NorthKeep to Applications, and open it, a native window wraps the whole thing,
 no terminal required. It also installs a global `northkeep` command. *Apple
