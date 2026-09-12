@@ -57,6 +57,7 @@ import {
   applyReviewAction,
   recordReviewDecision,
   assembleReviewReport,
+  createCachedEmbedder,
   createOllamaClient,
   createOllamaEmbedder,
   dedupeCandidates,
@@ -139,6 +140,12 @@ import { LockedError, type UiSession } from './session.js';
 import { handleCurationApi } from './curationApi.js';
 import { handleProjectsApi } from './projectsApi.js';
 import { handleLocalSearchApi } from './local-search.js';
+
+// One process-wide embedding memo for Memories search. session.withVault opens
+// the vault fresh per request, so the vault's own embedding table never
+// survives between searches; without this every query re-embeds every
+// candidate (~20 s on an 859-memory vault). RAM only; cleared on lock.
+const searchEmbedder = createCachedEmbedder(createOllamaEmbedder());
 
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 
@@ -501,6 +508,7 @@ async function dispatch(
   if (method === 'POST' && route === '/api/lock') {
     const { forgetKeychain } = parseJson<{ forgetKeychain?: boolean }>(body);
     session.lock();
+    searchEmbedder.clear(); // vectors derive from plaintext; nothing outlives the unlocked session
     let keychainCleared = false;
     if (forgetKeychain === true && keychainAvailable()) {
       keychainCleared = keychainDeleteMasterKey() === 'removed';
@@ -525,7 +533,7 @@ async function dispatch(
           // Semantic search when the local embedder is up; retrieveSemantic
           // degrades to keyword on its own and tells us which happened, so the
           // UI can say so (invariant #6 — never silently worse).
-          const r = await vault.retrieveSemantic(q, createOllamaEmbedder(), {
+          const r = await vault.retrieveSemantic(q, searchEmbedder, {
             type,
             scope,
             allowedScopes,

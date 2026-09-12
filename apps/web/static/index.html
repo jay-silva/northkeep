@@ -148,6 +148,9 @@
   .memory-search-status p { margin:4px 0 0; font-size:13px; line-height:1.5; }
   .memory-search-status button { flex-shrink:0; min-height:44px; }
   .memory-search-status a { display:inline-block; min-height:44px; padding-top:10px; }
+  /* Author display rules above beat the UA `[hidden]{display:none}` (same trap as nav[hidden]);
+     without these the status strip and its Install link render even when hidden. */
+  .memory-search-status[hidden], .memory-search-status a[hidden] { display:none; }
   @media(max-width:600px) { .memory-search-status { align-items:stretch; flex-direction:column; gap:12px; } }
   .memory-search select { min-height:46px; max-width:150px; }
   .memory-search input { min-width:0; }
@@ -187,6 +190,7 @@
   .banner { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line);
     border-radius: 12px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; }
   .muted { color: var(--muted); overflow-wrap: anywhere; }
+  a { color: var(--accent); }
   .overlay { position: fixed; inset: 0; background: color-mix(in srgb, var(--bg) 82%, transparent);
     backdrop-filter: blur(4px); display: flex; align-items: center; justify-content: center; z-index: 10; }
   .overlay[hidden] { display: none; } /* explicit display beats the hidden attr otherwise */
@@ -2451,6 +2455,9 @@
     if (requestedQuery) qs.set('q', requestedQuery);
     if (filterType) qs.set('type', filterType);
     if (filterScope) qs.set('scope', filterScope);
+    // Say so while the search runs: the first pass after launch embeds every
+    // candidate and can take a while; a silent page reads as broken.
+    if (requestedQuery && !localSearchBusy) showLocalSearchState('Searching…', 'The first search after NorthKeep opens can take a moment while it reads your memories.');
     const resp = await api('/api/memories?' + qs);
     if (requestId !== memoryLoadSequence || !status.unlocked) return;
     const memories = resp.memories;

@@ -75,6 +75,7 @@ describe('navigation UI', () => {
       const elements=new Map();
       const api=()=>oldResponse;
       const oldResponse=this.oldResponse;
+      let localSearchBusy=false; const showLocalSearchState=()=>{};
       ${functionSource('loadMemories')}
       this.start=loadMemories;
       this.advance=()=>{ filterScope='second'; memoryLoadSequence+=1; };
@@ -100,6 +101,7 @@ describe('navigation UI', () => {
       const $=(id)=>{if(!nodes.has(id))nodes.set(id,{value:id==='q'?'d':'',textContent:'unchanged',innerHTML:'unchanged',addEventListener(event,fn){this[event]=fn;}});return nodes.get(id);};
       const api=()=>this.oldResponse;
       const clearTimeout=()=>{}; const stopLocalSearchView=()=>{}; const setTimeout=(fn)=>{this.scheduled=fn;return 1;};
+      let localSearchBusy=false; const showLocalSearchState=()=>{};
       ${functionSource('loadMemories')}
       ${binding}
       this.start=loadMemories;

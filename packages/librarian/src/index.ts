@@ -13,6 +13,7 @@ export {
   type OllamaClient,
   type PullProgress,
 } from './ollama.js';
+export { createCachedEmbedder, type CachedEmbedder } from './embedCache.js';
 export {
   extractFromConversation,
   heuristicExtract,
