@@ -139,13 +139,46 @@ import {
 import { LockedError, type UiSession } from './session.js';
 import { handleCurationApi } from './curationApi.js';
 import { handleProjectsApi } from './projectsApi.js';
-import { handleLocalSearchApi } from './local-search.js';
+import { handleLocalSearchApi, type LocalSearchStatus } from './local-search.js';
+import { createSearchWarmer, type SearchWarmer } from './search-warm.js';
 
 // One process-wide embedding memo for Memories search. session.withVault opens
 // the vault fresh per request, so the vault's own embedding table never
 // survives between searches; without this every query re-embeds every
 // candidate (~20 s on an 859-memory vault). RAM only; cleared on lock.
 const searchEmbedder = createCachedEmbedder(createOllamaEmbedder());
+
+// Warm that cache when NorthKeep opens (owner decision 2026-09-12): once the
+// vault is unlocked, bring the local runtime up through the gated start route
+// and embed every searchable memory OUTSIDE the vault lock. One warmer per
+// session; poked from /api/status, reset on lock.
+const warmers = new WeakMap<UiSession, SearchWarmer>();
+function searchWarmerFor(session: UiSession): SearchWarmer {
+  let warmer = warmers.get(session);
+  if (warmer) return warmer;
+  const localSearch = async (method: 'GET' | 'POST', route: string): Promise<LocalSearchStatus> => {
+    const r = await handleLocalSearchApi(session, method, route, Buffer.alloc(0));
+    if (!r || r.status !== 200) throw new Error(`local search ${route} refused`);
+    return r.body as LocalSearchStatus;
+  };
+  warmer = createSearchWarmer({
+    isUnlocked: () => session.isUnlocked(),
+    status: () => localSearch('GET', '/api/local/search/status'),
+    start: async () => { await localSearch('POST', '/api/local/search/start'); },
+    listContents: () =>
+      session.withVault((vault) =>
+        vault
+          .list({ allowedScopes: vault.scopes().filter((s) => !s.startsWith('project:')) })
+          .filter((entry) => entry.superseded_at === null)
+          .map((entry) => entry.content),
+      ),
+    embed: (text) => searchEmbedder.embed(text),
+    now: () => Date.now(),
+    retryAfterMs: 60_000,
+  });
+  warmers.set(session, warmer);
+  return warmer;
+}
 
 const MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 
@@ -338,6 +371,7 @@ async function dispatch(
       });
     }
     const ollama = await createOllamaClient().available().catch(() => false);
+    if (unlocked) searchWarmerFor(session).poke();
     return ok({
       unlocked,
       total,
@@ -509,6 +543,7 @@ async function dispatch(
     const { forgetKeychain } = parseJson<{ forgetKeychain?: boolean }>(body);
     session.lock();
     searchEmbedder.clear(); // vectors derive from plaintext; nothing outlives the unlocked session
+    searchWarmerFor(session).reset();
     let keychainCleared = false;
     if (forgetKeychain === true && keychainAvailable()) {
       keychainCleared = keychainDeleteMasterKey() === 'removed';
