@@ -78,7 +78,7 @@ afterAll(async () => {
 describe('M1 acceptance — MCP server', () => {
   let storedId = '';
 
-  it('exposes the four memory tools', async () => {
+  it('exposes the memory and project tools', async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
@@ -87,9 +87,12 @@ describe('M1 acceptance — MCP server', () => {
       'memory_list',
       'memory_remember',
       'memory_retrieve',
+      'project_checkpoint',
       'project_get',
       'project_list',
+      'project_resume',
       'project_update',
+      'project_wrap',
     ]);
   });
 
