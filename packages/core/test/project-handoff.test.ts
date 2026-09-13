@@ -103,3 +103,35 @@ describe('project handoff core',()=>{
     const view=getProjectView(v,'demo',undefined,{history:true});expect(view.history).toHaveLength(20);expect(view.history[0]!.id).toBe(ids.at(-1));expect(view.history.at(-1)!.id).toBe(ids[5]);v.close();
   });
 });
+
+describe('project title and delete (owner requests 2026-09-13)',()=>{
+  it('sets, replaces, removes a display title as a level-1 heading and keeps owned sections intact',()=>{
+    const v=vault();const base=seed(v);
+    expect(base.title).toBeNull();
+    const titled=v.updateProject({project:'demo',expected_revision:base.revision,title:'Binks Hill STR'});
+    expect(titled.title).toBe('Binks Hill STR');expect(titled.content.startsWith('# Binks Hill STR\n\n## What & Why')).toBe(true);
+    expect(titled.status).toBe('Starting.');expect(listProjectViews(v)[0]).toMatchObject({title:'Binks Hill STR',status:'Starting.'});
+    const renamed=v.updateProject({project:'demo',expected_revision:titled.revision,title:'  Binks Hill (Lincoln NH)  ',status:'Corrected.'});
+    expect(renamed.title).toBe('Binks Hill (Lincoln NH)');expect(renamed.status).toBe('Corrected.');expect((renamed.content.match(/^# /gm)||[]).length).toBe(1);
+    const cleared=v.updateProject({project:'demo',expected_revision:renamed.revision,title:''});
+    expect(cleared.title).toBeNull();expect(cleared.content.startsWith('## What & Why')).toBe(true);expect(cleared.status).toBe('Corrected.');
+    for(const bad of ['Log','Current Status','a\nb','x'.repeat(121)]) expect(()=>v.updateProject({project:'demo',expected_revision:cleared.revision,title:bad})).toThrowError(expect.objectContaining({code:'invalid_request'}));
+    expect(()=>v.updateProject({project:'demo',expected_revision:base.revision,title:'Stale'})).toThrowError(expect.objectContaining({code:'stale_project'}));
+    v.close();
+  });
+
+  it('deletes a project by forgetting every entry in its scope, once',()=>{
+    const v=vault();const base=seed(v);
+    v.updateProject({project:'demo',expected_revision:base.revision,status:'Second revision.'});
+    v.remember({type:'semantic',scope:'personal',content:'Unrelated fact.',source:'test'});
+    const before=v.list({scope:'project:demo',includeSuperseded:true});expect(before.length).toBe(2);
+    expect(v.deleteProject('demo')).toBe(2);
+    expect(v.list({scope:'project:demo',includeSuperseded:true,includeForgotten:true}).every((e)=>e.forgotten_at!==null)).toBe(true);
+    expect(listProjectViews(v).find((p)=>p.project==='demo')).toBeUndefined();
+    expect(()=>getProjectView(v,'demo')).toThrowError(expect.objectContaining({code:'not_found'}));
+    expect(()=>v.deleteProject('demo')).toThrowError(expect.objectContaining({code:'not_found'}));
+    expect(()=>v.deleteProject('demo',['project:other'])).toThrowError(expect.objectContaining({code:'scope_denied'}));
+    expect(v.list({scope:'personal'}).length).toBe(1);
+    v.close();
+  });
+});

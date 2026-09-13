@@ -2153,11 +2153,11 @@
       button.setAttribute('aria-current', String(item.project === currentProjectSlug));
       const secondary = item.conflict ? 'Multiple live project documents need attention.' : (item.status || 'No current status yet.');
       const secondaryNode = el('small', undefined, secondary); secondaryNode.title = secondary;
-      button.append(el('strong', undefined, projectName(item.project)), secondaryNode);
+      button.append(el('strong', undefined, item.title || projectName(item.project)), secondaryNode);
       button.appendChild(projectPill(item.conflict ? 'Needs attention' : 'Project', item.conflict ? 'locked' : ''));
       button.addEventListener('click', () => loadProject(item.project));
       list.appendChild(button);
-      const option = el('option', undefined, projectName(item.project) + (item.conflict ? ' — needs attention' : ''));
+      const option = el('option', undefined, (item.title || projectName(item.project)) + (item.conflict ? ' — needs attention' : ''));
       option.value = item.project; select.appendChild(option);
     }
     if (currentProjectSlug) select.value = currentProjectSlug;
@@ -2196,10 +2196,10 @@
     const root = $('projectDetail'); root.replaceChildren();
     const head = el('div', 'project-detail-head');
     const unavailable = Array.isArray(project.files) && project.files.some((file) => file.access === 'unavailable');
-    const title = el('div'); const state = el('div', 'row'); state.append(projectPill(unavailable ? 'Needs attention' : 'Ready to resume', unavailable ? 'locked' : 'ok'), el('span', 'project-revision', 'Updated ' + projectDate(project.updated_at))); title.append(el('h2', undefined, projectName(project.project)), state);
+    const title = el('div'); const state = el('div', 'row'); state.append(projectPill(unavailable ? 'Needs attention' : 'Ready to resume', unavailable ? 'locked' : 'ok'), el('span', 'project-revision', 'Updated ' + projectDate(project.updated_at))); title.append(el('h2', undefined, project.title || projectName(project.project)), state);
     const actions = el('div', 'project-actions');
-    for (const [action, label, primary] of [['checkpoint','Checkpoint',false],['wrap','Wrap up',false],['resume','Resume',true]]) {
-      const button = el('button', 'btn' + (primary ? ' primary' : ''), label); button.type = 'button'; button.dataset.projectAction = action;
+    for (const [action, label, primary] of [['edit','Edit',false],['delete','Delete',false],['checkpoint','Checkpoint',false],['wrap','Wrap up',false],['resume','Resume',true]]) {
+      const button = el('button', 'btn' + (primary ? ' primary' : '') + (action === 'delete' ? ' danger' : ''), label); button.type = 'button'; button.dataset.projectAction = action;
       button.addEventListener('click', (event) => openProjectAction(action, event.currentTarget)); actions.appendChild(button);
     }
     head.append(title, actions); root.appendChild(head);
@@ -2255,7 +2255,62 @@
     if (!currentProject) return;
     projectReturnFocus = trigger; projectReview = null;
     if (action === 'resume') { renderResumeBrief(currentProject); return; }
+    if (action === 'edit') { renderProjectCorrection(currentProject); return; }
+    if (action === 'delete') { confirmProjectDelete(currentProject); return; }
     renderProjectEditor(action, currentProject);
+  }
+
+  // Owner request 2026-09-13: fix a wrong title or summary in place. A plain
+  // revision-bound update: no checkpoint receipt, no log entry, new revision.
+  function renderProjectCorrection(project) {
+    const panel = projectOperation('Edit project', 'Correct the title or the current summary. The saved version stays in history.');
+    const grid = el('div', 'project-review-grid');
+    const titleField = projectField('Title (leave empty to use the project name)', project.title || '', true);
+    titleField.input.rows = 1; titleField.input.maxLength = 120; titleField.input.placeholder = projectName(project.project);
+    const statusField = projectField('Current summary', project.status || '', false);
+    titleField.wrap.classList.add('wide'); statusField.wrap.classList.add('wide');
+    grid.append(titleField.wrap, statusField.wrap); panel.appendChild(grid);
+    const err = el('div', 'err'); err.setAttribute('role', 'alert'); panel.appendChild(err);
+    const foot = el('div', 'project-operation-foot'); const cancel = projectCloseButton('Cancel'); const save = el('button', 'btn primary', 'Save changes');
+    save.addEventListener('click', async () => {
+      const title = titleField.input.value.replace(/[\r\n]+/g, ' ').trim(); const status = statusField.input.value;
+      if (!status.trim()) { err.textContent = 'Current summary cannot be empty.'; return; }
+      if (title === (project.title || '') && status === (project.status || '')) { err.textContent = 'Nothing changed.'; return; }
+      save.disabled = true; err.textContent = '';
+      try {
+        const body = { expected_revision: project.revision };
+        if (title !== (project.title || '')) body.title = title;
+        if (status !== (project.status || '')) body.status = status;
+        await api('/api/projects/' + encodeURIComponent(project.project) + '/update', { method: 'POST', json: body });
+        $('projectLive').replaceChildren();
+        await loadProjects(project.project);
+      } catch (ex) {
+        save.disabled = false;
+        err.textContent = ex.status === 409 ? 'This project changed since you opened it. Reload it and try again.' : (ex.message === 'locked' ? '' : ex.message);
+      }
+    });
+    foot.append(cancel, save); panel.appendChild(foot); $('projectLive').replaceChildren(panel); titleField.input.focus(); panel.scrollIntoView({ behavior:'smooth', block:'start' });
+  }
+
+  // Owner request 2026-09-13: delete a project from the app. Every entry in the
+  // project's scope is forgotten (tombstoned, chain intact) after a confirmation
+  // that names the project.
+  function confirmProjectDelete(project) {
+    const name = project.title || projectName(project.project);
+    openReviewDialog('Delete this project?', (body) => {
+      body.append(el('p', 'muted', 'Every saved version, log archive and handoff receipt for this project will be removed from current memories on this device. Connected assistants will no longer find it. This cannot be undone from the app.'));
+      const box = el('div', 'review-source'); box.append(el('small', undefined, 'PROJECT'), document.createTextNode(' ' + name + ' (' + project.project + ')')); body.appendChild(box);
+    }, 'Delete ' + name, async () => {
+      try {
+        await api('/api/projects/' + encodeURIComponent(project.project), { method: 'DELETE' });
+        closeReviewDialog();
+        currentProjectSlug = ''; currentProject = null; $('projectLive').replaceChildren();
+        await loadProjects();
+        await refreshStatus();
+      } catch (ex) {
+        $('reviewDialogErr').textContent = ex.message === 'locked' ? 'Unlock the vault first.' : ex.message;
+      }
+    }, true);
   }
 
   function projectOperation(title, description) {

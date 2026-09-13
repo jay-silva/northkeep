@@ -566,6 +566,30 @@ export class Vault {
     return this.writeProject(request, allowedScopes, null).current;
   }
 
+  /**
+   * Forgets every entry in a project's scope: the live document, its earlier
+   * revisions, log archives and handoff receipts. Same tombstone semantics as
+   * forget() per entry (content blanked, chain intact), inside one transaction.
+   * The caller persists with one save(). Returns the number of entries forgotten.
+   */
+  deleteProject(project: string, allowedScopes?: string[]): number {
+    this.assertOpen();
+    let scope: string;
+    try { scope = projectScope(project); } catch { throw new ProjectHandoffError('invalid_request', 'Project slug is invalid.'); }
+    if (allowedScopes !== undefined && !allowedScopes.includes(scope)) throw new ProjectHandoffError('scope_denied', 'Project scope is outside this connection grant.');
+    let count = 0;
+    this.db.transaction(() => {
+      const entries = this.list({ scope, includeSuperseded: true, allowedScopes });
+      if (!entries.some((e) => e.type === 'working' && !e.forgotten_at)) throw new ProjectHandoffError('not_found', 'Project was not found.');
+      for (const entry of entries) {
+        if (entry.forgotten_at) continue;
+        this.forget(entry.id, allowedScopes);
+        count += 1;
+      }
+    })();
+    return count;
+  }
+
   /** Atomic, idempotent checkpoint/wrap mutation. The caller persists with one save(). */
   checkpointProject(request: ProjectCheckpointRequest, allowedScopes?: string[]): ProjectCheckpointResult {
     this.assertOpen();
@@ -616,7 +640,7 @@ export class Vault {
     let scope:string;try{scope=projectScope(request.project);}catch{throw new ProjectHandoffError('invalid_request','Project slug is invalid.');}
     if(allowedScopes!==undefined&&!allowedScopes.includes(scope))throw new ProjectHandoffError('scope_denied','Project scope is outside this connection grant.');
     if(!Object.hasOwn(request,'expected_revision')||(request.expected_revision!==null&&(typeof request.expected_revision!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.expected_revision))))throw new ProjectHandoffError('invalid_request','expected_revision must be an exact revision UUID or null for creation.');
-    const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','files'] as const;
+    const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','files','title'] as const;
     if(!updateKeys.some((key)=>request[key]!==undefined))throw new ProjectHandoffError('invalid_request','Project update has no changes.');
     let receipt!:ProjectCheckpointResult['receipt'];
     this.db.transaction(()=>{

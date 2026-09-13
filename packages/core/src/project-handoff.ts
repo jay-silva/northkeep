@@ -2,6 +2,7 @@ import { exactCanonicalJson } from './consolidation.js';
 import {
   PROJECT_DOC_MAX_CHARS,
   PROJECT_DOC_CAP_MESSAGE,
+  PROJECT_SECTION_HEADINGS,
   formatLogArchive,
   getProjectSection,
   parseProjectDoc,
@@ -42,6 +43,8 @@ export interface ProjectView {
   revision: string;
   updated_at: string;
   content: string;
+  /** Owner-set display title (level-1 heading), or null when the slug is the name. */
+  title: string | null;
   what_why: string;
   status: string;
   next_actions: string;
@@ -53,7 +56,7 @@ export interface ProjectView {
   history: ProjectRevision[];
   archives: ProjectArchive[];
 }
-export interface ProjectSummary { project:string; scope:string; status:string|null; revision:string|null; updated_at:string|null; conflict:boolean }
+export interface ProjectSummary { project:string; scope:string; title:string|null; status:string|null; revision:string|null; updated_at:string|null; conflict:boolean }
 
 export interface ProjectCheckpointRequest {
   vault_id:string; project:string; mode:ProjectHandoffMode; operation_id:string; expected_revision:string;
@@ -62,6 +65,8 @@ export interface ProjectCheckpointRequest {
 export interface ProjectUpdateRequest {
   project:string; expected_revision:string|null; what_why?:string; status?:string; next_actions?:string;
   decision?:string; log_entry?:string; open_questions?:string; files?:ProjectFileReference[];
+  /** Display title, kept as a level-1 heading at the top of the document. Empty string removes it. */
+  title?:string;
 }
 export interface ProjectHandoffReceipt {
   operation_id:string; project:string; mode:ProjectHandoffMode; base_revision:string; result_revision:string;
@@ -116,6 +121,7 @@ export function applyProjectUpdate(content:string, request:ProjectUpdateRequest,
   const doc=parseProjectDoc(content); for(const h of ['What & Why','Current Status','Next Actions','Decisions','Log','Open Questions','Files']) owned(doc,h);
   const replacements:[string,string|undefined,boolean][]=[['What & Why',request.what_why,false],['Current Status',request.status,false],['Next Actions',request.next_actions,true],['Open Questions',request.open_questions,true]];
   for(const [heading,value,empty] of replacements) if(value!==undefined){assertProjectText(value,heading,empty);setSection(doc,heading,value);}
+  if(request.title!==undefined)setProjectTitle(doc,request.title);
   const date=now.toISOString().slice(0,10);
   if(request.decision!==undefined){assertProjectText(request.decision,'decision',false);const old=owned(doc,'Decisions');setSection(doc,'Decisions',`${old}${old?'\n':''}- ${date} - ${request.decision}`);}
   if(request.log_entry!==undefined){assertProjectText(request.log_entry,'log_entry',false);const old=owned(doc,'Log');setSection(doc,'Log',`- ${date} - ${request.log_entry}${old?'\n'+old:''}`);}
@@ -133,6 +139,22 @@ export function readProjectHandoffMetadata(entry:MemoryEntry):ProjectHandoffMeta
 }
 export function projectReceiptMode(entry:MemoryEntry):ProjectHandoffMode|undefined { try{return readProjectHandoffMetadata(entry)?.mode;}catch{return undefined;} }
 
+/** The display title is a level-1 heading that opens the document; owned sections stay level 2. */
+export function getProjectTitle(doc:ProjectDoc):string|null {
+  const first=doc.sections[0]; return first&&first.level===1?first.title:null;
+}
+export const PROJECT_TITLE_MAX_CHARS=120;
+function setProjectTitle(doc:ProjectDoc, title:string):void {
+  const value=title.trim();
+  if(value.length>PROJECT_TITLE_MAX_CHARS)fail(`Project title is too long (${PROJECT_TITLE_MAX_CHARS} characters max).`);
+  if(/[\r\n]/.test(value))fail('Project title must be a single line.');
+  if((PROJECT_SECTION_HEADINGS as readonly string[]).includes(value)||value==='Log archive')fail('Project title cannot be the name of a document section.');
+  const first=doc.sections[0]; const hasTitle=first!==undefined&&first.level===1;
+  if(value.length===0){ if(hasTitle){ if(first.body.length>0){doc.preamble=[doc.preamble,first.body].filter((s)=>s.length>0).join('\n\n');} doc.sections.shift(); } return; }
+  if(hasTitle){first.title=value;return;}
+  doc.sections.unshift({level:1,title:value,body:''});
+}
+
 export function getProjectView(vault:ProjectVaultReader, project:string, allowedScopes?:string[], options:{history?:boolean}={}):ProjectView {
   const scope=projectScope(project); if(allowedScopes!==undefined&&!allowedScopes.includes(scope))throw new ProjectHandoffError('scope_denied','Project scope is outside this connection grant.');
   const all=vault.list({scope,includeSuperseded:true,allowedScopes}); const live=all.filter((e)=>e.type==='working'&&!e.forgotten_at&&!e.superseded_at);
@@ -141,9 +163,9 @@ export function getProjectView(vault:ProjectVaultReader, project:string, allowed
   const fileText=owned(doc,'Files'); const entries=all.filter((e)=>!e.forgotten_at);
   const history=options.history?entries.filter((e)=>e.type==='working'&&e.superseded_at).reverse().slice(0,20).map((e)=>({id:e.id,updated_at:e.created_at,content:e.content,...(projectReceiptMode(e)?{mode:projectReceiptMode(e)}:{})})):[];
   const archives=options.history?entries.filter((e)=>e.type==='episodic'&&e.content.startsWith('## Log archive')).reverse().slice(0,20).map((e)=>({id:e.id,updated_at:e.created_at,content:e.content})):[];
-  return {vault_id:vault.getVaultId(),project,scope,shared:vault.sharedScopes().includes(scope),revision:head.id,updated_at:head.created_at,content:head.content,what_why:owned(doc,'What & Why'),status:owned(doc,'Current Status'),next_actions:owned(doc,'Next Actions'),decisions:owned(doc,'Decisions'),open_questions:owned(doc,'Open Questions'),files:parseProjectFiles(fileText),files_text:fileText,log:owned(doc,'Log'),history,archives};
+  return {vault_id:vault.getVaultId(),project,scope,shared:vault.sharedScopes().includes(scope),revision:head.id,updated_at:head.created_at,content:head.content,title:getProjectTitle(doc),what_why:owned(doc,'What & Why'),status:owned(doc,'Current Status'),next_actions:owned(doc,'Next Actions'),decisions:owned(doc,'Decisions'),open_questions:owned(doc,'Open Questions'),files:parseProjectFiles(fileText),files_text:fileText,log:owned(doc,'Log'),history,archives};
 }
 export function listProjectViews(vault:ProjectVaultReader,allowedScopes?:string[]):ProjectSummary[]{
   const groups=new Map<string,MemoryEntry[]>(); for(const e of vault.list({type:'working',allowedScopes})){const p=parseProjectSlug(e.scope);if(p){const a=groups.get(p)||[];a.push(e);groups.set(p,a);}}
-  return [...groups].sort(([a],[b])=>a.localeCompare(b)).map(([project,heads])=>heads.length!==1?{project,scope:projectScope(project),status:null,revision:null,updated_at:null,conflict:true}:{project,scope:projectScope(project),status:getProjectSection(parseProjectDoc(heads[0]!.content),'Current Status')||null,revision:heads[0]!.id,updated_at:heads[0]!.created_at,conflict:false});
+  return [...groups].sort(([a],[b])=>a.localeCompare(b)).map(([project,heads])=>heads.length!==1?{project,scope:projectScope(project),title:null,status:null,revision:null,updated_at:null,conflict:true}:(()=>{const doc=parseProjectDoc(heads[0]!.content);return {project,scope:projectScope(project),title:getProjectTitle(doc),status:getProjectSection(doc,'Current Status')||null,revision:heads[0]!.id,updated_at:heads[0]!.created_at,conflict:false};})());
 }
