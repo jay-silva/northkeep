@@ -398,8 +398,11 @@
   .review-compare small { display:block; color:var(--muted); margin-bottom:6px; }
   .review-live { min-height:18px; margin:5px 0; font-size:13px; color:var(--muted); }
   .review-live.bad { color:var(--danger); }
-  .review-dup-row { display:grid; grid-template-columns:22px 1fr; gap:8px; align-items:start; }
-  .review-dup-row input { margin-top:16px; accent-color:var(--accent); }
+  .review-dup-group { display:grid; gap:9px; }
+  .review-dup-row { display:grid; grid-template-columns:22px 1fr; gap:10px; align-items:start; cursor:pointer; }
+  .review-dup-row input { margin:16px 0 0; accent-color:var(--accent); }
+  .review-dup-row .review-source { margin:0; }
+  .review-removal-select { display:block; margin:14px 0 12px; max-width:100%; }
   .review-dialog { width:min(560px, calc(100vw - 32px)); max-height:calc(100vh - 32px); overflow:auto; }
   button.btn, .review-queue button, .review-choice { min-height:44px; }
   :focus-visible { outline:3px solid color-mix(in srgb, var(--accent) 65%, transparent); outline-offset:2px; }
@@ -3171,7 +3174,11 @@
     $('curationInstruction').focus();
   });
   $('reviewPassBtn').addEventListener('click', async () => {
-    const scopes = selectedReviewScopes();
+    // After a report loads the picker is hidden and its radios are gone, but
+    // the collection is remembered from the report; use it rather than
+    // silently doing nothing.
+    const picked = selectedReviewScopes();
+    const scopes = picked.length ? picked : reviewSelectedScopes;
     if (!scopes.length) return;
     $('reviewPassErr').textContent = '';
     $('reviewPassStatus').textContent = 'Reviewing your collection. You can keep browsing memories below.';
@@ -3231,7 +3238,8 @@
 
   async function openReviewApiConsent() {
     const requestId = ++reviewRequestSequence;
-    reviewSelectedScopes = selectedReviewScopes();
+    const picked = selectedReviewScopes();
+    if (picked.length) reviewSelectedScopes = picked;
     if (!reviewSelectedScopes.length) return;
     reviewLastFocus = document.activeElement;
     $('reviewApiErr').textContent = '';
@@ -3390,6 +3398,11 @@
     reviewReport = data;
     reviewSelectedScopes = data.selected_scopes || [];
     $('reviewCollectionPicker').hidden = true; $('reviewChangeCollectionBtn').hidden = false;
+    // The loaded report names its collection, so a re-run needs no re-pick.
+    if (reviewSelectedScopes.length) {
+      $('reviewPassBtn').textContent = 'Review ' + data.entry_count + ' ' + (data.entry_count === 1 ? 'memory' : 'memories');
+      setReviewButtonsDisabled(false);
+    }
     $('reviewSummaryTitle').textContent = (data.selected_scopes || []).join(', ') + ' · ' + data.entry_count + ' memories';
     renderReviewCoverage(data.coverage || {});
     const proposals = (data.proposals || []).filter((p) => p.status === 'pending');
@@ -3480,15 +3493,17 @@
   }
   function renderDuplicateDecision(detail, p, ids) {
     detail.appendChild(el('div', 'review-meta-title', 'Choose the original that stays active'));
-    const group = el('div'); let survivor = ids[0] || '';
+    const group = el('div', 'review-dup-group'); let survivor = ids[0] || '';
     ids.forEach((id, index) => { const row = el('label', 'review-dup-row'); const radio = el('input'); radio.type='radio'; radio.name='review-survivor'; radio.value=id; radio.checked=index===0; radio.addEventListener('change',()=>{survivor=id;}); row.append(radio, renderReviewSource(sourceEntry(id))); group.appendChild(row); }); detail.appendChild(group);
-    const removalSelect = el('select'); removalSelect.setAttribute('aria-label','Repeated memory to remove');
+    const removalSelect = el('select', 'review-removal-select'); removalSelect.setAttribute('aria-label','Repeated memory to remove');
     function fillRemovalChoices(){ const previous=removalSelect.value; removalSelect.replaceChildren(); ids.filter((id)=>id!==survivor).forEach((id)=>{const o=el('option',undefined,(sourceEntry(id).content||id).slice(0,80));o.value=id;removalSelect.appendChild(o);}); if(Array.from(removalSelect.options).some((o)=>o.value===previous))removalSelect.value=previous; }
     group.querySelectorAll('input').forEach((radio)=>radio.addEventListener('change',fillRemovalChoices)); fillRemovalChoices(); detail.appendChild(removalSelect);
     const actions = el('div', 'review-detail-actions'); const remove = el('button', 'btn danger', 'Review one removal');
     remove.addEventListener('click', () => { const removed = removalSelect.value; if (removed) confirmDuplicateRemoval(p, survivor, removed); });
-    const keep = el('button', 'btn', 'Keep all'); keep.addEventListener('click', () => reviewAction(p, 'reject')); actions.append(remove, keep); detail.appendChild(actions);
+    const removeAll = el('button', 'btn danger', 'Remove all'); removeAll.addEventListener('click', () => confirmDuplicateRemoveAll(p, ids));
+    const keep = el('button', 'btn', 'Keep all'); keep.addEventListener('click', () => reviewAction(p, 'reject')); actions.append(remove, removeAll, keep); detail.appendChild(actions);
   }
+  function confirmDuplicateRemoveAll(p, ids){ openReviewDialog('Remove every memory in this group?', (body)=>{ body.append(el('p','muted', ids.length + ' memories will be removed from current memories, one at a time. Each removal is recorded separately and can be restored from change history.')); const list=el('div','review-sources'); ids.forEach((id)=>{ const box=el('div','review-source'); box.append(el('small',undefined,'REMOVED FROM CURRENT MEMORIES'),document.createTextNode(' '),document.createTextNode(sourceEntry(id).content||'')); list.appendChild(box); }); body.appendChild(list); }, 'Remove all ' + ids.length, async()=>{ for (const id of ids) { if (!(await reviewAction(p,'forget',{entry_id:id}))) return; } $('reviewPassStatus').textContent = 'Removed ' + ids.length + ' repeated memories. View Change history to inspect or restore them.'; closeReviewDialog(); }, true); }
   function openReviewDialog(title, buildBody, confirmLabel, onConfirm, danger) {
     reviewLastFocus = document.activeElement; $('reviewDialogTitle').textContent = title; $('reviewDialogBody').replaceChildren(); $('reviewDialogActions').replaceChildren(); $('reviewDialogErr').textContent=''; buildBody($('reviewDialogBody'));
     const cancel=el('button','btn','Cancel'); cancel.addEventListener('click',closeReviewDialog); const confirm=el('button','btn '+(danger?'danger':'primary'),confirmLabel); confirm.addEventListener('click',onConfirm); $('reviewDialogActions').append(cancel,confirm); $('reviewDialogOverlay').hidden=false; cancel.focus();

@@ -241,7 +241,9 @@ function receipt(value: unknown): value is ReviewReceipt {
   if (value.action === 'forget' && (value.before.length !== 1 || value.after.length !== 1)) return false;
   if (value.action === 'restore' && value.before.length !== 1) return false;
   if ((value.action === 'accept' || value.action === 'forget') && value.proposal_before === undefined) return false;
-  if ((value.action === 'forget') !== (value.survivor_id !== undefined)) return false;
+  // Only a forget receipt may name a survivor, and it need not: "Remove all"
+  // forgets every member of a group, so the last removal has no survivor.
+  if (value.survivor_id !== undefined && value.action !== 'forget') return false;
   if ((value.action === 'restore') !== (value.restores_receipt_id !== undefined)) return false;
   return value.survivor_id === undefined || value.survivor_id !== value.before[0]?.id;
 }

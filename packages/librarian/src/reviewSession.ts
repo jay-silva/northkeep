@@ -140,16 +140,19 @@ export function applyReviewAction(
   } else {
     if (proposal.kind !== 'duplicate') throw new Error('Only duplicate proposals can forget a member.');
     if (!req.entry_id || !proposal.entry_ids.includes(req.entry_id)) throw new Error('entry_id must name a duplicate member.');
-    if (!req.survivor_id || req.survivor_id === req.entry_id || !proposal.entry_ids.includes(req.survivor_id)) {
+    // survivor_id is optional: "Remove all" (owner request 2026-09-13) forgets
+    // every member one receipt at a time, so the last one has no survivor.
+    // When given it must still be a different, live member of the group.
+    if (req.survivor_id !== undefined && (req.survivor_id === req.entry_id || !proposal.entry_ids.includes(req.survivor_id))) {
       throw new Error('survivor_id must name a different duplicate member.');
     }
-    assertSources(report, vault, [req.entry_id, req.survivor_id]);
+    assertSources(report, vault, req.survivor_id ? [req.entry_id, req.survivor_id] : [req.entry_id]);
     before.push(beforeAll.get(req.entry_id)!);
     vault.forget(req.entry_id);
     after.push(currentById(vault).get(req.entry_id)!);
     const decisions = proposal.member_decisions ?? {};
     decisions[req.entry_id] = 'forgotten';
-    decisions[req.survivor_id] = 'kept';
+    if (req.survivor_id) decisions[req.survivor_id] = 'kept';
     proposal.member_decisions = decisions;
     if (proposal.entry_ids.every((id) => (decisions[id] ?? 'pending') !== 'pending')) proposal.status = 'resolved';
   }

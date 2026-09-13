@@ -171,6 +171,46 @@ describe('curation over the real HTTP/session boundary', () => {
     expect(memories()).toEqual(after);
   });
 
+  it('removes every duplicate member without a survivor (Remove all), each restorable', async () => {
+    const vault = Vault.open({ path: vaultPath, passphrase, deviceSecret });
+    const members = Array.from({ length: 2 }, () => vault.remember({
+      type: 'semantic', scope: 'removeall', content: 'Stale repeated fact.', source: 'synthetic-test',
+    }));
+    vault.save();
+    const duplicate: ReviewProposal = {
+      id: 'ffffffff', kind: 'duplicate', entry_ids: members.map((e) => e.id),
+      quotes: members.map((e) => ({ entry_id: e.id, quote: e.content })),
+      explanation: 'Exact repeats.', target_entry_id: null, proposed_content: null, status: 'pending',
+      member_decisions: Object.fromEntries(members.map((e) => [e.id, 'pending' as const])),
+    };
+    const report = assembleReviewReport({
+      vault_id: vault.getVaultId(), vault_path: vaultPath, selected_scopes: ['removeall'],
+      source_entries: members, model: 'synthetic-test', started_at: new Date().toISOString(),
+      entry_count: 2, drops: {}, proposals: [duplicate],
+      coverage: { selected: 2, compared: 2, skipped: 0, failed: 0, complete: true },
+    });
+    saveReviewReport(report, vaultPath);
+    vault.close();
+    const base = { report_id: report.report_id, proposal_fingerprint: proposalFingerprint(duplicate) };
+    // A survivor naming a non-member or the entry itself is still refused.
+    const bogus = await request('/api/review/ffffffff/forget', { ...base, operation_id: randomUUID(), entry_id: members[0]!.id, survivor_id: members[0]!.id });
+    expect(bogus.status).toBe(400);
+    const first = await request('/api/review/ffffffff/forget', { ...base, operation_id: randomUUID(), entry_id: members[0]!.id });
+    expect(first.status, JSON.stringify(first.data)).toBe(200);
+    const second = await request('/api/review/ffffffff/forget', { ...base, operation_id: randomUUID(), entry_id: members[1]!.id });
+    expect(second.status, JSON.stringify(second.data)).toBe(200);
+    expect(memories().filter((e) => e.scope === 'removeall' && !e.forgotten_at && !e.superseded_at)).toHaveLength(0);
+    const panel = await request('/api/review/report');
+    const resolved = (panel.data.proposals as ReviewProposal[]).find((p) => p.id === 'ffffffff');
+    expect(resolved?.status).toBe('resolved');
+    const restored = await request('/api/review/restore', {
+      report_id: report.report_id, operation_id: randomUUID(), receipt_id: second.data.receipt.receipt_id,
+      expected_head_id: members[1]!.id, expected_content: members[1]!.content,
+    });
+    expect(restored.status, JSON.stringify(restored.data)).toBe(200);
+    expect(memories().filter((e) => e.scope === 'removeall' && !e.forgotten_at && !e.superseded_at)).toHaveLength(1);
+  });
+
   it('accepts an exact user-written question answer only for a cited target', async () => {
     const vault = Vault.open({ path: vaultPath, passphrase, deviceSecret });
     const first = vault.remember({ type: 'semantic', scope: 'questions', content: 'Workshop at 9.', source: 'synthetic-test' });
