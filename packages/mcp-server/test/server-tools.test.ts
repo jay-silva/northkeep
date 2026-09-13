@@ -1,4 +1,6 @@
 import fs from 'node:fs';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -30,6 +32,7 @@ let prevKey: string | undefined;
 let prevScopes: string | undefined;
 let prevKeychain: string | undefined;
 let prevRedactionTier: string | undefined;
+let prevOllamaUrl: string | undefined;
 let client: Client | undefined;
 
 beforeEach(() => {
@@ -40,6 +43,10 @@ beforeEach(() => {
   prevScopes = process.env.NORTHKEEP_SCOPES;
   prevKeychain = process.env.NORTHKEEP_NO_KEYCHAIN;
   prevRedactionTier = process.env.NORTHKEEP_REDACT_TIER;
+  prevOllamaUrl = process.env.NORTHKEEP_OLLAMA_URL;
+  // No live embedder in tests: retrieval degrades to keyword unless a test
+  // points this at its own fake server. Port 9 refuses immediately.
+  process.env.NORTHKEEP_OLLAMA_URL = 'http://127.0.0.1:9';
   process.env.NORTHKEEP_HOME = home;
   process.env.NORTHKEEP_NO_KEYCHAIN = '1';
   delete process.env.NORTHKEEP_SCOPES;
@@ -72,6 +79,8 @@ afterEach(async () => {
   else process.env.NORTHKEEP_NO_KEYCHAIN = prevKeychain;
   if (prevRedactionTier === undefined) delete process.env.NORTHKEEP_REDACT_TIER;
   else process.env.NORTHKEEP_REDACT_TIER = prevRedactionTier;
+  if (prevOllamaUrl === undefined) delete process.env.NORTHKEEP_OLLAMA_URL;
+  else process.env.NORTHKEEP_OLLAMA_URL = prevOllamaUrl;
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -543,5 +552,55 @@ describe('project standing-instruction copy', () => {
     expect(PROJECT_STANDING_INSTRUCTION).toContain('project_get');
     expect(PROJECT_STANDING_INSTRUCTION).toContain('project_update');
     expect(PROJECT_STANDING_INSTRUCTION).toContain('project_list');
+  });
+});
+
+describe('owner requests 2026-09-13: project title and search by meaning', () => {
+  it('project_update accepts a title and project_get returns it', async () => {
+    const mcp = await connect();
+    const created = await mcp.callTool({ name: 'project_update', arguments: {
+      project: 'titled', expected_revision: null, status: 'Starting.', next_actions: '', log_entry: 'Created.',
+    } });
+    expect(created.isError).toBeFalsy();
+    const revision = (JSON.parse(toolText(created)) as { revision: string }).revision;
+    const titled = await mcp.callTool({ name: 'project_update', arguments: {
+      project: 'titled', expected_revision: revision, title: 'Binks Hill STR',
+    } });
+    expect(titled.isError, toolText(titled)).toBeFalsy();
+    const got = JSON.parse(toolText(await mcp.callTool({ name: 'project_get', arguments: { project: 'titled' } }))) as { title: string | null; content: string; status: string };
+    expect(got.title).toBe('Binks Hill STR');
+    expect(got.content.startsWith('# Binks Hill STR\n\n## What & Why')).toBe(true);
+    expect(got.status).toBe('Starting.');
+    const bad = await mcp.callTool({ name: 'project_update', arguments: { project: 'titled', expected_revision: (JSON.parse(toolText(titled)) as { revision: string }).revision, title: 'Log' } });
+    expect(bad.isError).toBeTruthy();
+  });
+
+  it('memory_retrieve says keyword when the embedder is unreachable and semantic when it answers', async () => {
+    const mcp = await connect();
+    await mcp.callTool({ name: 'memory_remember', arguments: { content: 'The user has a small dog named Albus.', type: 'semantic', scope: 'personal' } });
+    const keyword = JSON.parse(toolText(await mcp.callTool({ name: 'memory_retrieve', arguments: { query: 'dog' } }))) as { search_mode: string; results: unknown[]; note?: string };
+    expect(keyword.search_mode).toBe('keyword');
+    expect(keyword.results).toHaveLength(1);
+    expect(keyword.note).toContain('keyword');
+    await mcp.close(); client = undefined;
+
+    // A fake loopback embedder: every text gets the same unit vector, so
+    // ranking is by meaning in shape (mode semantic) without a real model.
+    const fake = http.createServer((req, res) => {
+      res.setHeader('content-type', 'application/json');
+      if (req.url === '/api/tags') { res.end(JSON.stringify({ models: [{ name: 'nomic-embed-text:latest' }] })); return; }
+      res.end(JSON.stringify({ embeddings: [[1, 0, 0]] }));
+    });
+    await new Promise<void>((resolve) => fake.listen(0, '127.0.0.1', resolve));
+    process.env.NORTHKEEP_OLLAMA_URL = `http://127.0.0.1:${(fake.address() as AddressInfo).port}`;
+    try {
+      const mcp2 = await connect();
+      const semantic = JSON.parse(toolText(await mcp2.callTool({ name: 'memory_retrieve', arguments: { query: 'Dogs' } }))) as { search_mode: string; results: unknown[]; note?: string };
+      expect(semantic.search_mode).toBe('semantic');
+      expect(semantic.results).toHaveLength(1);
+      expect(semantic.note).toBeUndefined();
+    } finally {
+      await new Promise<void>((resolve) => fake.close(() => resolve()));
+    }
   });
 });

@@ -21,6 +21,7 @@ import {
   type ProjectUpdateRequest,
 } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
+import { createCachedEmbedder, createOllamaEmbedder } from '@northkeep/librarian';
 import { applyTier1 } from '@northkeep/redact';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
@@ -139,13 +140,51 @@ function publicEntry(entry: MemoryEntry) {
   };
 }
 
+/**
+ * Search by meaning for memory_retrieve (owner request 2026-09-13): the same
+ * loopback Ollama embedder the app uses, memoized per process so a long-lived
+ * server pays the embedding cost once. RAM only; nothing new leaves the machine
+ * (the redaction tier already talks to the same loopback runtime).
+ */
+const searchEmbedder = createCachedEmbedder({
+  model: createOllamaEmbedder().model,
+  // Resolve the loopback URL per call, not at module load: the URL comes from
+  // the environment and tests point it at a fake or a closed port after import.
+  embed: (text) => createOllamaEmbedder().embed(text),
+});
+let preEmbedInFlight: Promise<void> | null = null;
+
+/** Embed the live candidates for a retrieve OUTSIDE the vault lock; best effort, never throws. */
+async function preEmbedForRetrieve(
+  vaultPath: string,
+  filter: { type?: MemoryType; scope?: string },
+): Promise<void> {
+  if (preEmbedInFlight) { await preEmbedInFlight; return; }
+  preEmbedInFlight = (async () => {
+    let contents: string[];
+    try {
+      contents = await withVault(vaultPath, (vault) =>
+        vault.list({ type: filter.type, scope: filter.scope, allowedScopes: grantedScopes() })
+          .filter((entry) => entry.superseded_at === null)
+          .map((entry) => entry.content));
+    } catch { return; }
+    for (const text of contents) {
+      try { await searchEmbedder.embed(text); } catch { return; }
+    }
+  })().finally(() => { preEmbedInFlight = null; });
+  await preEmbedInFlight;
+}
+
 async function withVault<T>(
   vaultPath: string,
-  fn: (vault: Vault) => T,
+  fn: (vault: Vault) => T | Promise<T>,
 ): Promise<T> {
   const resolved = resolveMasterKey(vaultPath);
   if (resolved === null) throw new LockedError();
-  return withFileLock(vaultPath, () => {
+  // The callback may be async (semantic retrieval awaits the loopback
+  // embedder); await it BEFORE close, and hold the file lock across the await,
+  // exactly as the web session does.
+  return withFileLock(vaultPath, async () => {
     let vault: Vault;
     try {
       vault = Vault.openWithKey(vaultPath, resolved.key);
@@ -164,7 +203,7 @@ async function withVault<T>(
       throw err;
     }
     try {
-      return fn(vault);
+      return await fn(vault);
     } finally {
       vault.close();
     }
@@ -200,7 +239,7 @@ async function run(
   tool: string,
   params: LogParams,
   vaultPath: string,
-  fn: (vault: Vault, granted: string[] | undefined) => RunOutcome,
+  fn: (vault: Vault, granted: string[] | undefined) => RunOutcome | Promise<RunOutcome>,
 ): Promise<ToolOk> {
   const granted = grantedScopes();
   const base = {
@@ -308,7 +347,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       description:
         "Search the user's personal memory vault for facts, preferences, past events, and " +
         'how they like things done. Call this at the start of a conversation and whenever ' +
-        'personal context would help. Returns entries ranked by relevance (keyword + recency).',
+        'personal context would help. Returns entries ranked by meaning when the local search ' +
+        'model is available (search_mode "semantic"), otherwise by keyword + recency ' +
+        '(search_mode "keyword"); the response says which.',
       inputSchema: {
         query: z.string().max(1024).describe('What you want to know about the user'),
         type: typeEnum.optional().describe('Restrict to one memory type'),
@@ -316,33 +357,41 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         limit: z.number().int().min(1).max(25).optional().describe('Max results (default 8)'),
       },
     },
-    async ({ query, type, scope, limit }) =>
-      run(
+    async ({ query, type, scope, limit }) => {
+      // Embed the candidates OUTSIDE the vault lock first (memoized per
+      // process), so the ranking inside the lock is cache hits and the lock is
+      // never held across a slow loopback call (ADR 0044 lesson).
+      await preEmbedForRetrieve(vaultPath, { type: type as MemoryType | undefined, scope });
+      return run(
         ctx,
         'memory_retrieve',
         { query_terms: query.split(/\s+/).filter(Boolean).length, type, scope, limit },
         vaultPath,
-        (vault, granted) => {
-          const results = vault.retrieve(query, {
+        async (vault, granted) => {
+          const r = await vault.retrieveSemantic(query, searchEmbedder, {
             type: type as MemoryType,
             scope,
             limit,
             allowedScopes: granted,
           });
+          const results = r.results;
           const entries = maskContent(
-            results.map((r) => ({ ...publicEntry(r.entry), relevance: Number(r.score.toFixed(3)) })),
+            results.map((s) => ({ ...publicEntry(s.entry), relevance: Number(s.score.toFixed(3)) })),
           );
+          const note = results.length === 0
+            ? (r.mode === 'semantic'
+              ? 'No matching memories. Ranked by meaning; try describing it differently.'
+              : `No matching memories. Search by meaning was unavailable (${r.reason ?? 'unknown'}); retrieval was keyword-based, try different words.`)
+            : (r.mode === 'keyword' ? `Search by meaning was unavailable (${r.reason ?? 'unknown'}); results are keyword-ranked.` : undefined);
           return {
-            payload: {
-              results: entries,
-              note: results.length === 0 ? 'No matching memories. Retrieval is keyword-based; try different words.' : undefined,
-            },
+            payload: { results: entries, search_mode: r.mode, note },
             result_count: results.length,
-            result_ids: results.map((r) => r.entry.id),
-            disclosed_scopes: distinctScopes(results.map((r) => r.entry.scope)),
+            result_ids: results.map((s) => s.entry.id),
+            disclosed_scopes: distinctScopes(results.map((s) => s.entry.scope)),
           };
         },
-      ),
+      );
+    },
   );
 
   server.registerTool(
@@ -590,6 +639,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         expected_revision: idSchema.nullable().describe('Revision returned by project_get/resume, or null only when creating'),
+        title: z.string().max(120).optional().describe('Display title shown in the app (single line, up to 120 characters). Empty string removes it and the slug is shown instead.'),
         what_why: z.string().min(1).max(16384).optional().describe('Replacement What & Why section'),
         status: z.string().min(1).max(16384).optional().describe('Replacement Current Status section'),
         next_actions: z.string().max(16384).optional().describe('Replacement Next Actions section; empty clears it'),
@@ -616,13 +666,14 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         })).max(40).optional(),
       },
     },
-    async ({ project, expected_revision, what_why, status, next_actions, log_entry, decision, open_questions, files }) =>
+    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, files }) =>
       run(
         ctx,
         'project_update',
         {
           scope: `project:${project}`,
           content_chars:
+            (title?.length ?? 0) +
             (what_why?.length ?? 0) +
             (status?.length ?? 0) +
             (next_actions?.length ?? 0) +
@@ -636,6 +687,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             throw new Error(`Invalid project slug "${project}".`);
           }
           if (
+            title === undefined &&
             what_why === undefined &&
             status === undefined &&
             next_actions === undefined &&
@@ -651,7 +703,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           const scope = projectScope(project);
           assertProjectGranted(scope, granted);
           const request: ProjectUpdateRequest = {
-            project, expected_revision, what_why, status, next_actions, log_entry, decision,
+            project, expected_revision, title, what_why, status, next_actions, log_entry, decision,
             open_questions, files: files as ProjectFileReference[] | undefined,
           };
           const current = vault.updateProject(request, granted);
@@ -733,6 +785,10 @@ export async function startServer(vaultPath?: string): Promise<void> {
   // pull if the server is ahead and this vault is untouched. Never blocks
   // readiness, and failures only log.
   void sync.auto.wake().catch(() => {});
+  // Warm search by meaning for the first memory_retrieve (owner decision
+  // 2026-09-12: loading the local model on open is allowed). Embeds outside
+  // the vault lock; a stopped runtime or locked vault just means "not now".
+  void preEmbedForRetrieve(resolvedVaultPath, {}).catch(() => {});
 }
 
 /**

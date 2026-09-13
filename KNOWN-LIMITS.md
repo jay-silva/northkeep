@@ -519,8 +519,15 @@ every milestone; if a limit is removed, say when and how.*
 - **Conversation logs are not stored.** The vault keeps distilled memories
   and the content-free audit trail; the chat transcript itself lives only in
   session memory and is gone when the session ends (sync of any kind is M5).
-- **Retrieval is still keyword-based** (M1 limit, unchanged) — memory
-  injection misses synonyms until semantic retrieval lands.
+- **Retrieval by meaning needs the local embedder running.** Since 2026-09-13
+  `memory_retrieve` ranks by meaning through the loopback Ollama embedder
+  (`nomic-embed-text`) when it is reachable and says `search_mode: "semantic"`;
+  when it is not, the tool falls back to keyword + recency, says
+  `search_mode: "keyword"` with the reason, and misses synonyms exactly as
+  before. Vectors are memoized in the server process (RAM only, never
+  exported); the first retrieve after a cold start on a large vault can take
+  tens of seconds while they are computed, and the standalone server starts
+  computing them at launch.
 - **API keys need the macOS Keychain.** On other platforms (or
   `NORTHKEEP_NO_KEYCHAIN=1`) keys are env-var-only for scripting — NorthKeep
   refuses to write them to files.
