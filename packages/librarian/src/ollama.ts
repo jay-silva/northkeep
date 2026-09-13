@@ -226,7 +226,13 @@ export async function hasOllamaModel(tag: string): Promise<boolean> {
     const body = (await res.json()) as { models?: Array<{ name?: string }> };
     return (body.models ?? []).some((m) => {
       const name = m.name ?? '';
-      return name === tag || name.startsWith(`${tag}-`);
+      // Ollama reports an untagged pull as "<name>:latest" (seen with
+      // nomic-embed-text on 0.31). A bare tag must accept that implicit form,
+      // the same rule the local-search status check uses (ADR 0049); an
+      // explicit tag still requires exact equality.
+      if (name === tag) return true;
+      if (!tag.includes(':') && name === `${tag}:latest`) return true;
+      return name.startsWith(`${tag}-`);
     });
   } catch {
     return false;

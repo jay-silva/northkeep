@@ -813,6 +813,22 @@ describe('hasOllamaModel + resolveReviewModel', () => {
     return { port, close: () => new Promise<void>((r) => server.close(() => r())) };
   }
 
+  it('accepts the implicit :latest form of a bare tag, exact tags stay exact', async () => {
+    // Ollama 0.31 reports an untagged pull as "nomic-embed-text:latest"; the
+    // review pass used to read that as "model missing" and skip every memory.
+    const server = await tagsServer(['nomic-embed-text:latest', 'qwen2.5:14b']);
+    process.env.NORTHKEEP_OLLAMA_URL = `http://127.0.0.1:${server.port}`;
+    try {
+      expect(await hasOllamaModel('nomic-embed-text')).toBe(true);
+      expect(await hasOllamaModel('nomic-embed-text:latest')).toBe(true);
+      expect(await hasOllamaModel('nomic-embed-text:v2')).toBe(false);
+      expect(await hasOllamaModel('qwen2.5')).toBe(false);
+      expect(await hasOllamaModel('qwen2.5:7b')).toBe(false);
+    } finally {
+      await server.close();
+    }
+  });
+
   it('picks 14b when present, 7b when only 7b, throws when neither', async () => {
     const both = await tagsServer(['qwen2.5:14b', 'qwen2.5:7b']);
     process.env.NORTHKEEP_OLLAMA_URL = `http://127.0.0.1:${both.port}`;
