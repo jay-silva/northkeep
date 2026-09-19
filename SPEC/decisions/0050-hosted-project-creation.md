@@ -850,7 +850,8 @@ fresh device secret makes a never-paired device call `/client/pending`
 and creates an account row. A queued forget naming a private entry in a
 held scope is applied (pre-existing M14 forget path; the server only
 holds vault ids for pushed rows). A group with an invalid type string
-throws mid-fold and nothing is saved or acked (pre-existing). An app
+used to throw mid-fold (pre-existing); the fix round holds or drops such
+rows instead. An app
 that forgets its own pending create leaves the slug dead on the hosted
 side until a device sync drains the forget. The purge leaves a queued
 forget for a row that never landed. A forget-queued non-pending row keeps
@@ -865,9 +866,12 @@ a scope writable until the next sync.
    as omitted, matching local; `memory_remember` refuses a tombstoned
    scope unconditionally. Tests for each.
 2. Fold: trim every pending row's scope before grouping, so the project
-   rule sees the scope the vault would store; a row whose type is not a
-   valid memory type is held with its group, never thrown on. Tests for
-   the whitespace variants and the mixed-type group.
+   rule sees the scope the vault would store; a row whose trimmed scope is
+   empty is dropped unacked. A row whose type is not a valid memory type
+   never throws: in an unshared project scope it holds its whole group;
+   anywhere else it is dropped unapplied and unacked and counted in a new
+   `DownSyncResult.skipped`. Tests for the whitespace variants, the blank
+   scope, and the mixed-type groups in both kinds of scope.
 3. Residual updated: the flag-off line now says `project_get` hides the
    reopened scope; the forged-marker and semantic-with-create cases are
    recorded above.
