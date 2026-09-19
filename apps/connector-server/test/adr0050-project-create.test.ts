@@ -188,7 +188,7 @@ describe('ADR 0050 hosted project_create', () => {
     const create = tools.find((t) => t.name === 'project_create')!;
     expect(create.description).toContain('only when the user asks');
     expect(create.description).toMatch(/Shared with this app/i);
-    expect(create.description).not.toContain('—');
+    expect(create.description).not.toContain('\u2014');
     // project_update no longer claims creation is impossible here.
     const update = tools.find((t) => t.name === 'project_update')!;
     expect(update.description).not.toMatch(/cannot create a project/i);
@@ -353,7 +353,7 @@ describe('ADR 0050 hosted project_create', () => {
     });
     expect(res.isError).toBe(true);
     expect(res.text).toBe(TOMBSTONE_USER_MESSAGE);
-    expect(res.text).not.toContain('—');
+    expect(res.text).not.toContain('\u2014');
     expect(await rowsIn('project:shortlived')).toHaveLength(0);
   });
 });
@@ -377,7 +377,7 @@ describe('ADR 0050 memory_remember writability', () => {
     expect(res.text).toMatch(/Nothing was saved/);
     expect(res.text).toMatch(/no memory from the vault yet/);
     expect(res.text).not.toMatch(/is not a scope you have shared/);
-    expect(res.text).not.toContain('—');
+    expect(res.text).not.toContain('\u2014');
     expect(await rowsIn('project:pendingonly')).toHaveLength(before);
 
     const unknown = await mcpCall(token, 'memory_remember', {
