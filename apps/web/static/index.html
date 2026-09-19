@@ -5625,8 +5625,13 @@
     $('shareSyncBtn').disabled = true;
     try {
       const r = await api('/api/share/sync', { method: 'POST' });
-      out.textContent = 'Done. Pulled back ' + r.added + ' new, ' + r.forgotten + ' forgotten, ' +
+      var text = 'Done. Pulled back ' + r.added + ' new, ' + r.forgotten + ' forgotten, ' +
         r.deduped + ' already present. Re-pushed ' + r.pushed + ' memories to the connector server.';
+      // Held rows are the whole point of a sync that pulled nothing: a connected
+      // app wrote to a project this device keeps private.
+      (r.held_messages || []).forEach(function (m) { text += '\n' + m; });
+      out.style.whiteSpace = 'pre-line';
+      out.textContent = text;
     } catch (e) {
       out.hidden = true;
       err.textContent = e.message === 'locked'

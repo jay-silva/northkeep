@@ -32,9 +32,12 @@ import {
   // @northkeep/sync client — the connector token is derived from the device
   // secret inside them and is never returned to the page.
   foldSidecarScopesIntoVault,
+  connectorPairedAt,
   downSyncConnector,
   fetchEntitlement,
+  holdMessage,
   loadConnectorConfig,
+  markConnectorPaired,
   ConnectorTombstoneError,
   pushSharedScopes,
   setConnectorServer,
@@ -958,6 +961,9 @@ async function dispatch(
     const deviceSecret = deviceSecretOrError();
     const entitlement = await maybeEntitlement(deviceSecret);
     const code = await startPairing({ server: config.server, deviceSecret, entitlement });
+    // This device now has an account on that server, which is what lets a later
+    // sync fold from an empty shared list (ADR 0050 Decision 5).
+    markConnectorPaired();
     return ok({ code, mcp_url: mcpUrl(config.server), expires_in_seconds: 600 });
   }
 
@@ -971,15 +977,21 @@ async function dispatch(
     const entitlement = await maybeEntitlement(deviceSecret);
     const result = await session.withVault(async (vault) => {
       foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
-      const scopes = vault.sharedScopes();
-      if (scopes.length === 0) return null;
+      // ADR 0050 Decision 5: a project created in a connected app arrives only
+      // through the fold and is not shared until the fold marks it, so a paired
+      // device folds first and reads the shared list afterwards. A device that
+      // never paired has no account on that server and makes no call at all.
+      if (vault.sharedScopes().length === 0 && connectorPairedAt() === null) return null;
       const down = await downSyncConnector({ server: config.server, deviceSecret, vault, entitlement });
       // Re-read after the slow down-sync so a scope unshared mid-sync (on this
-      // device or arriving via vault sync) is never re-pushed.
+      // device or arriving via vault sync) is never re-pushed, and a scope the
+      // fold just marked is.
+      const scopes = vault.sharedScopes();
+      if (scopes.length === 0) return { down, push: null };
       const push = await pushSharedScopes({
         server: config.server,
         deviceSecret,
-        scopes: vault.sharedScopes(),
+        scopes,
         vault,
         entitlement,
       });
@@ -990,8 +1002,11 @@ async function dispatch(
       added: result.down.added,
       forgotten: result.down.forgotten,
       deduped: result.down.deduped,
-      pushed: result.push.pushed,
-      scopes: result.push.scopes,
+      held: result.down.held,
+      held_scopes: result.down.held_scopes,
+      held_messages: result.down.held_scopes.map((s) => holdMessage(heldSlug(s))),
+      pushed: result.push?.pushed ?? 0,
+      scopes: result.push?.scopes ?? [],
     });
   }
 
@@ -2271,6 +2286,11 @@ class ShareRequestError extends Error {}
 /** The URL the user pastes into an AI app to add the connector: server + /mcp. */
 function mcpUrl(server: string): string {
   return server.replace(/\/$/, '') + '/mcp';
+}
+
+/** The slug holdMessage wants, from the scope the fold reports. */
+function heldSlug(scope: string): string {
+  return scope.startsWith('project:') ? scope.slice('project:'.length) : scope;
 }
 
 /**

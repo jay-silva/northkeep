@@ -407,3 +407,134 @@ describe('handleApi automatic sync (ADR 0044)', () => {
     expect(fake.version()).toBe(1);
   });
 });
+
+// --- ADR 0050 Decision 5: the desktop sync folds before it reads the list ---
+
+import { vi } from 'vitest';
+import { emptyProjectDoc, mergeProjectDoc, serializeProjectDoc } from '@northkeep/core/project-doc';
+import { holdMessage, markConnectorPaired, setConnectorServer } from '@northkeep/sync';
+
+function projectMarkdown(status: string): string {
+  return serializeProjectDoc(
+    mergeProjectDoc(emptyProjectDoc(), { whatWhy: 'Made in a connected app.', status, logEntry: 'Seeded.' }),
+  );
+}
+
+/** Records every request and answers the three connector routes the sync touches. */
+function stubConnector(entries: Array<{ server_id: string; scope: string; type: string; content: string }>): {
+  calls: string[];
+  puts: Array<{ scopes: string[]; entries: Array<{ scope: string }> }>;
+} {
+  const calls: string[] = [];
+  const puts: Array<{ scopes: string[]; entries: Array<{ scope: string }> }> = [];
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    calls.push(url);
+    if (url.endsWith('/client/pending')) {
+      return new Response(JSON.stringify({ entries, forgets: [] }), { status: 200 });
+    }
+    if (url.endsWith('/client/ack')) return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    if (url.endsWith('/client/entries')) {
+      puts.push(JSON.parse(String(init?.body ?? '{}')) as { scopes: string[]; entries: Array<{ scope: string }> });
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }
+    if (url.endsWith('/pair/start')) {
+      return new Response(JSON.stringify({ pairing_code: 'ABCD1234' }), { status: 200 });
+    }
+    throw new Error(`unexpected fetch ${url}`);
+  });
+  return { calls, puts };
+}
+
+describe('POST /api/share/sync and /api/share/pair (ADR 0050 Decision 5)', () => {
+  const prevHome = process.env.NORTHKEEP_HOME;
+  const passphrase = 'web share sync passphrase';
+  const deviceSecret = Buffer.alloc(32, 7);
+  let dir: string;
+  let session: UiSession;
+
+  const call = (method: string, route: string, body: unknown = '') =>
+    handleApi(session, method, route, new URLSearchParams(), Buffer.from(typeof body === 'string' ? body : JSON.stringify(body)));
+
+  beforeEach(async () => {
+    setPlatform(nodePlatform());
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-web-share-'));
+    process.env.NORTHKEEP_HOME = dir;
+    fs.writeFileSync(path.join(dir, 'device.secret'), `${deviceSecret.toString('hex')}\n`, { mode: 0o600 });
+    const vaultPath = path.join(dir, 'vault.nkv');
+    const v = Vault.create({ path: vaultPath, passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+    v.save();
+    v.close();
+    session = new UiSession(vaultPath);
+    setConnectorServer('http://127.0.0.1:9');
+    await session.unlock(passphrase);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    session.autoSync.stop();
+    session.lock();
+    if (prevHome === undefined) delete process.env.NORTHKEEP_HOME;
+    else process.env.NORTHKEEP_HOME = prevHome;
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('is 400 with nothing shared only when this device never paired, and calls nothing', async () => {
+    const { calls } = stubConnector([]);
+    const res = await call('POST', '/api/share/sync');
+    expect(res.status).toBe(400);
+    expect((res.body as { error: string }).error).toBe('No scopes are shared yet.');
+    expect(calls).toEqual([]);
+  });
+
+  it('folds and pushes the newly marked scope in the same run once this device has paired', async () => {
+    markConnectorPaired();
+    const { puts } = stubConnector([
+      {
+        server_id: 'conn_create_1',
+        scope: 'project:hosted-thing',
+        type: 'working',
+        content: projectMarkdown('Started in the app.'),
+      },
+    ]);
+    const res = await call('POST', '/api/share/sync');
+    expect(res.status).toBe(200);
+    const body = res.body as { added: number; held: number; scopes: string[] };
+    expect(body.added).toBe(1);
+    expect(body.held).toBe(0);
+    expect(body.scopes).toContain('project:hosted-thing');
+    expect(puts).toHaveLength(1);
+    expect(puts[0]!.scopes).toContain('project:hosted-thing');
+  });
+
+  it('reports a held scope with its message and skips the push when nothing ended up shared', async () => {
+    markConnectorPaired();
+    await session.withVault((vault) => {
+      vault.remember({ content: 'Private note.', type: 'episodic', scope: 'project:held-one' });
+      vault.save();
+    });
+    const { puts } = stubConnector([
+      {
+        server_id: 'conn_create_2',
+        scope: 'project:held-one',
+        type: 'working',
+        content: projectMarkdown('From the app.'),
+      },
+    ]);
+    const res = await call('POST', '/api/share/sync');
+    expect(res.status).toBe(200);
+    const body = res.body as { held: number; held_scopes: string[]; held_messages: string[]; pushed: number };
+    expect(body.held).toBe(1);
+    expect(body.held_scopes).toEqual(['project:held-one']);
+    expect(body.held_messages).toEqual([holdMessage('held-one')]);
+    expect(body.pushed).toBe(0);
+    expect(puts).toEqual([]);
+  });
+
+  it('records the pairing so the next sync folds from an empty shared list', async () => {
+    stubConnector([]);
+    const res = await call('POST', '/api/share/pair');
+    expect(res.status).toBe(200);
+    const after = await call('POST', '/api/share/sync');
+    expect(after.status).toBe(200);
+  });
+});
