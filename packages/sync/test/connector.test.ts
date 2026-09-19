@@ -6,8 +6,11 @@ import { KDF_INTERACTIVE, Vault, generateDeviceSecret } from '@northkeep/core';
 import {
   assertConnectorUrl,
   connectorConfigPath,
+  connectorPairedAt,
   foldSidecarScopesIntoVault,
   loadConnectorConfig,
+  markConnectorPaired,
+  saveConnectorConfig,
   setConnectorServer,
 } from '../src/connector-config.js';
 
@@ -188,5 +191,91 @@ describe('foldSidecarScopesIntoVault (one-time migration, ADR 0038)', () => {
     expect(foldSidecarScopesIntoVault(vault).folded).toEqual(['work']);
     expect(vault.sharedScopes()).toEqual(['work']);
     vault.close();
+  });
+});
+
+/**
+ * ADR 0050 Decision 5. `paired_at` is the device-local signal that this device
+ * has an account on the configured server, which is what lets a sync fold from
+ * an empty shared list without creating one.
+ */
+describe('paired_at marker (ADR 0050)', () => {
+  it('is null before pairing and round-trips through load and save', () => {
+    setConnectorServer('https://connector.example.com');
+    expect(connectorPairedAt()).toBeNull();
+    expect(loadConnectorConfig()).toEqual({ server: 'https://connector.example.com' });
+
+    markConnectorPaired(new Date('2026-09-19T12:00:00.000Z'));
+    expect(connectorPairedAt()).toBe('2026-09-19T12:00:00.000Z');
+    expect(loadConnectorConfig()).toEqual({
+      server: 'https://connector.example.com',
+      paired_at: '2026-09-19T12:00:00.000Z',
+    });
+    expect(fs.statSync(connectorConfigPath()).mode & 0o777).toBe(0o600);
+
+    saveConnectorConfig({ server: 'https://connector.example.com', paired_at: '2026-01-02T03:04:05.000Z' });
+    expect(connectorPairedAt()).toBe('2026-01-02T03:04:05.000Z');
+  });
+
+  it('refuses to mark a device that has no connector server, and writes no file', () => {
+    expect(() => markConnectorPaired()).toThrow(/connector server/i);
+    expect(fs.existsSync(connectorConfigPath())).toBe(false);
+  });
+
+  it('a different server clears the marker; the same server keeps it', () => {
+    setConnectorServer('https://a.example.com');
+    markConnectorPaired(new Date('2026-09-19T12:00:00.000Z'));
+
+    // Same URL (trailing slash normalises to the stored value): a pairing with
+    // this server is still good.
+    expect(setConnectorServer('https://a.example.com/').paired_at).toBe('2026-09-19T12:00:00.000Z');
+    expect(connectorPairedAt()).toBe('2026-09-19T12:00:00.000Z');
+
+    // A pairing belongs to one server, so B has no pairing on this device.
+    expect(setConnectorServer('https://b.example.com').paired_at).toBeUndefined();
+    expect(connectorPairedAt()).toBeNull();
+    const raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as Record<string, unknown>;
+    expect('paired_at' in raw).toBe(false);
+  });
+
+  it('survives the ADR 0038 sidecar fold-in, which rewrites the same file', () => {
+    fs.mkdirSync(path.dirname(connectorConfigPath()), { recursive: true });
+    fs.writeFileSync(
+      connectorConfigPath(),
+      `${JSON.stringify(
+        { server: 'https://a.example.com', sharedScopes: ['work'], paired_at: '2026-09-19T12:00:00.000Z' },
+        null,
+        2,
+      )}\n`,
+      { mode: 0o600 },
+    );
+    const vault = makeVault();
+    expect(foldSidecarScopesIntoVault(vault).folded).toEqual(['work']);
+    expect(connectorPairedAt()).toBe('2026-09-19T12:00:00.000Z');
+    vault.close();
+  });
+
+  it('marking preserves an unmigrated legacy sharedScopes key', () => {
+    fs.mkdirSync(path.dirname(connectorConfigPath()), { recursive: true });
+    fs.writeFileSync(
+      connectorConfigPath(),
+      `${JSON.stringify({ server: 'https://a.example.com', sharedScopes: ['work'] }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    markConnectorPaired(new Date('2026-09-19T12:00:00.000Z'));
+    const raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as Record<string, unknown>;
+    expect(raw.sharedScopes).toEqual(['work']);
+    expect(raw.paired_at).toBe('2026-09-19T12:00:00.000Z');
+  });
+
+  it('ignores a non-string paired_at on disk', () => {
+    fs.mkdirSync(path.dirname(connectorConfigPath()), { recursive: true });
+    fs.writeFileSync(
+      connectorConfigPath(),
+      `${JSON.stringify({ server: 'https://a.example.com', paired_at: 17 }, null, 2)}\n`,
+      { mode: 0o600 },
+    );
+    expect(connectorPairedAt()).toBeNull();
+    expect(loadConnectorConfig()).toEqual({ server: 'https://a.example.com' });
   });
 });

@@ -39,7 +39,9 @@ export {
 export {
   assertConnectorUrl,
   connectorConfigPath,
+  connectorPairedAt,
   foldSidecarScopesIntoVault,
+  markConnectorPaired,
   loadConnectorConfig,
   saveConnectorConfig,
   setConnectorServer,
@@ -49,6 +51,7 @@ export {
   downSyncConnector,
   fetchEntitlement,
   getManifest,
+  holdMessage,
   ConnectorTombstoneError,
   pushSharedScopes,
   startPairing,
