@@ -1004,6 +1004,7 @@ async function dispatch(
       held: result.down.held,
       held_scopes: result.down.held_scopes,
       held_messages: result.down.held_scopes.map((s) => holdMessage(heldSlug(s))),
+      skipped: result.down.skipped,
       pushed: result.push?.pushed ?? 0,
       scopes: result.push?.scopes ?? [],
     });

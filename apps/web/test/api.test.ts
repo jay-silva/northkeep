@@ -530,6 +530,18 @@ describe('POST /api/share/sync and /api/share/pair (ADR 0050 Decision 5)', () =>
     expect(puts).toEqual([]);
   });
 
+  it('returns the skipped count so a dropped row is never silent', async () => {
+    markConnectorPaired();
+    await session.withVault((vault) => {
+      vault.setScopeShared('work', true);
+      vault.save();
+    });
+    stubConnector([{ server_id: 'conn_bad', scope: 'work', type: 'Working', content: 'Not a stored type.' }]);
+    const res = await call('POST', '/api/share/sync');
+    expect(res.status).toBe(200);
+    expect((res.body as { skipped: number }).skipped).toBe(1);
+  });
+
   it('records the pairing so the next sync folds from an empty shared list', async () => {
     stubConnector([]);
     const res = await call('POST', '/api/share/pair');

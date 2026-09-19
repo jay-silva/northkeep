@@ -797,7 +797,7 @@ export function createMcpServer(
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         what_why: z.string().min(1).max(16384).optional().describe('Replacement What & Why section'),
         status: z.string().min(1).max(16384).optional().describe('Replacement Current Status section'),
-        next_actions: z.string().min(1).max(16384).optional().describe('Replacement Next Actions section'),
+        next_actions: z.string().max(16384).optional().describe('Replacement Next Actions section; empty clears it'),
         log_entry: z
           .string()
           .min(1)

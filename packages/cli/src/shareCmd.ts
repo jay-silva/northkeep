@@ -188,8 +188,11 @@ export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => ne
     return;
   }
   console.log(
-    `✓ Down-synced: ${result.down.added} added, ${result.down.forgotten} forgotten, ${result.down.deduped} already present, ${result.down.held} held.`,
+    `✓ Down-synced: ${result.down.added} added, ${result.down.forgotten} forgotten, ${result.down.deduped} already present, ${result.down.held} held, ${result.down.skipped} skipped.`,
   );
+  if (result.down.skipped > 0) {
+    console.log('  Skipped memories had a type NorthKeep does not store; the app that wrote them can forget them.');
+  }
   for (const scope of result.down.held_scopes) console.log(`  ${holdMessage(heldSlug(scope))}`);
   if (result.push === null) {
     console.log(NOTHING_SHARED);

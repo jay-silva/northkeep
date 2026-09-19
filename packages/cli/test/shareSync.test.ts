@@ -120,6 +120,18 @@ describe('shareSyncCmd (ADR 0050 Decision 5)', () => {
     vault.close();
   });
 
+  it('reports rows skipped for an unknown type instead of dropping them silently', async () => {
+    const vault = makeVault();
+    markConnectorPaired();
+    vault.setScopeShared('work', true);
+    vault.save();
+    stubConnector([{ server_id: 'conn_bad', scope: 'work', type: 'Working', content: 'Not a stored type.' }]);
+    await shareSyncCmd(withVaultOf(vault), failHard);
+    expect(lines.some((l) => l.includes('1 skipped'))).toBe(true);
+    expect(lines.some((l) => l.includes('Skipped memories had a type NorthKeep does not store'))).toBe(true);
+    vault.close();
+  });
+
   it('prints the hold message for a scope the fold would not mark', async () => {
     const vault = makeVault();
     markConnectorPaired();

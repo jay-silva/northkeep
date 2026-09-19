@@ -875,3 +875,25 @@ a scope writable until the next sync.
 3. Residual updated: the flag-off line now says `project_get` hides the
    reopened scope; the forged-marker and semantic-with-create cases are
    recorded above.
+
+### 2026-09-19 fresh attack on the fix round
+
+One fresh-eyes attacker against the fixed tip: **CLEARED WITH WOUNDS**.
+All three fix-round claims held under execution: a 33-input corpus gave
+identical outcomes and messages between the hosted validator and core's
+`assertProjectText`; every text refusal ran before any storage read and
+left a content-free audit row; the tombstone refusal held for the exact
+and every trim-padded scope name; the fold held nine padded spellings of
+a private project and applied a padded empty scope under its trimmed
+name; the 233 shipped tests passed. Two wounds, fixed directly by the
+lead with one test each: hosted `project_update` still refused an empty
+`next_actions` that local accepts (schema `min(1)` dropped; empty
+clears); `DownSyncResult.skipped` reached no surface (CLI line, desktop
+JSON and mobile summary now report it). Scar tissue recorded: rows with a
+blank scope or empty content are dropped uncounted and re-sent on every
+sync; pads that `trim()` does not strip (U+200B, U+0085, U+180E, U+200E)
+land the app's document in a visually identical lookalike scope beside a
+private project, unmarked and unpushed, reachable only from a server
+that does not trim; zod-layer refusals use the MCP validation wording
+rather than core's; `^` under the `m` flag also matches after U+2028 and
+U+2029, an over-refusal identical on both sides.

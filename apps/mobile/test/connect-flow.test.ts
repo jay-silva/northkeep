@@ -508,6 +508,14 @@ describe('classifyConnectorError', () => {
 });
 
 describe('connectorSyncSummary', () => {
+  it('names skipped rows so a dropped memory is never silent', () => {
+    expect(connectorSyncSummary({ added: 0, forgotten: 0, deduped: 0, skipped: 1 })).toContain(
+      '1 memory was skipped: its type is not one NorthKeep stores.',
+    );
+    expect(connectorSyncSummary({ added: 0, forgotten: 0, deduped: 0, skipped: 2 })).toContain('2 memories were skipped');
+    expect(connectorSyncSummary({ added: 0, forgotten: 0, deduped: 0, skipped: 0 })).not.toContain('skipped');
+  });
+
   it('reads naturally for the common cases', () => {
     expect(connectorSyncSummary({ added: 0, forgotten: 0, deduped: 0 })).toBe(
       'No new memories from your AI apps. Your shared scopes were pushed back so the server matches your vault.',

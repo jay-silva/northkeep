@@ -273,6 +273,8 @@ export interface ConnectorDownSyncCounts {
   held: number;
   /** The unshared project scopes those rows are for. */
   held_scopes: string[];
+  /** Rows dropped unapplied because their type is not one the vault stores. */
+  skipped?: number;
 }
 
 export type ConnectorSyncOutcome =
@@ -366,7 +368,7 @@ export async function runConnectorSyncNow(ports: ConnectorSyncPorts): Promise<Co
  * where the closing "pushed back" sentence would be a lie.
  */
 export function connectorSyncSummary(
-  r: { added: number; forgotten: number; deduped: number; held_scopes?: readonly string[] },
+  r: { added: number; forgotten: number; deduped: number; held_scopes?: readonly string[]; skipped?: number },
   opts?: { pushedBack?: boolean },
 ): string {
   const memories = (n: number) => (n === 1 ? '1 new memory' : `${n} new memories`);
@@ -390,5 +392,12 @@ export function connectorSyncSummary(
   // A held project is the whole point of a sync that landed nothing: say which
   // one, and what sharing it would do.
   for (const scope of r.held_scopes ?? []) parts.push(holdMessage(heldSlug(scope)));
+  if ((r.skipped ?? 0) > 0) {
+    parts.push(
+      r.skipped === 1
+        ? '1 memory was skipped: its type is not one NorthKeep stores.'
+        : `${r.skipped} memories were skipped: their type is not one NorthKeep stores.`,
+    );
+  }
   return parts.join(' ');
 }
