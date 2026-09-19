@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, onTestFinished } from 'vitest';
 import { randomUUID } from 'node:crypto';
 import { KDF_INTERACTIVE, Vault, ensureDeviceSecret, generateDeviceSecret } from '@northkeep/core';
 import { assembleReviewReport, loadReviewReport, proposalFingerprint, saveReviewReport } from '@northkeep/librarian';
@@ -85,8 +85,29 @@ describe('handleApi review pass (ADR 0043)', () => {
   it('GET /api/review/report is locked before checking report existence', async () => {
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-review-web-'));
     process.env.NORTHKEEP_HOME = dir;
+    // An ambient key source (a Keychain entry on the developer's Mac, or an
+    // exported passphrase) counts as an unlock, and the session then opens the
+    // vault instead of refusing. Cut every ambient source for this test.
+    const grants = {
+      NORTHKEEP_PASSPHRASE: process.env.NORTHKEEP_PASSPHRASE,
+      NORTHKEEP_MASTER_KEY: process.env.NORTHKEEP_MASTER_KEY,
+      NORTHKEEP_NO_KEYCHAIN: process.env.NORTHKEEP_NO_KEYCHAIN,
+    };
+    delete process.env.NORTHKEEP_PASSPHRASE;
+    delete process.env.NORTHKEEP_MASTER_KEY;
+    process.env.NORTHKEEP_NO_KEYCHAIN = '1';
+    // A real vault that this session never unlocks: the route reads the header
+    // before the lock check, so a missing file was a 500, not a 423.
+    const vaultPath = path.join(dir, 'vault.nkv');
+    Vault.create({ path: vaultPath, passphrase: 'pw', deviceSecret: generateDeviceSecret(), kdf: KDF_INTERACTIVE }).close();
+    onTestFinished(() => {
+      for (const [k, v] of Object.entries(grants)) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+    });
     const res = await handleApi(
-      newSession(),
+      new UiSession(vaultPath),
       'GET',
       '/api/review/report',
       new URLSearchParams(),
