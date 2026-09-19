@@ -897,3 +897,12 @@ private project, unmarked and unpushed, reachable only from a server
 that does not trim; zod-layer refusals use the MCP validation wording
 rather than core's; `^` under the `m` flag also matches after U+2028 and
 U+2029, an over-refusal identical on both sides.
+A narrow fresh check of the two lead fixes cleared them with one
+cosmetic wound, accepted: the hosted refusal messages name the argument
+(`next_actions`) where core names the heading (`Next Actions`); the
+accept and refuse behaviour is identical, and the argument name is the
+more useful wording for an API caller.
+
+**Status after review: implemented on branch `adr-0050/finish`, pending
+Jay's acceptance test (docs/hosted-project-create-acceptance.md), then a
+merge to main and the connector deploy on his explicit OK.**
