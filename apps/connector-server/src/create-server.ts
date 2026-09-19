@@ -22,7 +22,7 @@
  *     POST   /consent            (pairing code -> account binding -> auth code)
  *     POST   /mcp                (bearer-protected, stateless MCP; account-scoped tools:
  *                                 memory_retrieve/list/remember/forget + search/fetch
- *                                 + project_list/get/update)
+ *                                 + project_list/get/create/update)
  *     GET    /mcp                (405 — stateless, no server-initiated stream)
  *     GET    /client/manifest    (Bearer connector_token -> [{entry_id,entry_hash,scope}])
  *     PUT    /client/entries     (Bearer; "make these scopes match" batch push)
@@ -110,6 +110,12 @@ export type ConnectorServerOptions = {
    * the route reads the env at request time. Default remains off.
    */
   tombstoneEnforce?: boolean;
+  /**
+   * Test seam: awaited between the pending-rows read and the tombstone read in
+   * GET /client/pending, so a test can interleave real route calls and prove the
+   * order (ADR 0050 Decision 3). Production omits it.
+   */
+  betweenPendingReads?: () => Promise<void>;
 };
 
 export function createConnectorServer(
@@ -601,24 +607,28 @@ export function createConnectorServer(
     );
     const sharedAt = parseSharedAtMap(body.shared_at);
     const enforce = opts.tombstoneEnforce ?? isTombstoneEnforceOn();
-    if (enforce) {
-      try {
-        await storage.replaceScopesAcceptingReshare(accountHash, scopes, encrypted, sharedAt);
-      } catch (err) {
-        if (err instanceof TombstoneConflictError) {
+    // ADR 0050 Decision 3: always attempt the accepting path so a deliberate
+    // re-share clears the tombstone in both flag states. Only the 412 refusal
+    // is behind the flag; with it off a conflict falls back to a plain replace
+    // and leaves the tombstone standing.
+    try {
+      await storage.replaceScopesAcceptingReshare(accountHash, scopes, encrypted, sharedAt);
+    } catch (err) {
+      if (err instanceof TombstoneConflictError) {
+        if (enforce) {
           res.status(412).json({
             error: TOMBSTONE_USER_MESSAGE,
             scopes: err.conflicts,
           });
           return;
         }
+        await storage.replaceScopes(accountHash, scopes, encrypted);
+      } else {
         res.status(503).json({
           error: 'Could not check share tombstones. Nothing was changed.',
         });
         return;
       }
-    } else {
-      await storage.replaceScopes(accountHash, scopes, encrypted);
     }
     await storage.appendAudit({
       ts: now,
@@ -681,10 +691,19 @@ export function createConnectorServer(
       deny402(res);
       return;
     }
-    const [pending, forgets] = await Promise.all([
-      storage.listPendingEntries(accountHash),
-      storage.listPendingForgets(accountHash),
-    ]);
+    // Order is load-bearing (ADR 0050 Decision 3). A re-share deletes the
+    // tombstone before the app can write, so a tombstone read that FOLLOWS the
+    // pending read can never name a row written after that re-share.
+    // Sequential awaits, never Promise.all.
+    const pending = await storage.listPendingEntries(accountHash);
+    await opts.betweenPendingReads?.();
+    const tombstonedScopes = new Set((await storage.listTombstones(accountHash)).map((t) => t.scope));
+    const forgets = await storage.listPendingForgets(accountHash);
+    // Unshare deletes every row in the scope, so a pending row still sitting in
+    // a tombstoned one was written after the revoke: withhold it and drain it.
+    const purged = pending.filter((e) => tombstonedScopes.has(e.scope));
+    for (const e of purged) await storage.deleteEntry(accountHash, e.entryId);
+    const live = pending.filter((e) => !tombstonedScopes.has(e.scope));
     // A pending row that already has a queued forget must NEVER be delivered as a
     // fresh entry — otherwise a forgotten-before-delivery memory would land in the
     // vault. It still rides in `forgets` so the server row is drained.
@@ -692,7 +711,7 @@ export function createConnectorServer(
     // Legacy gate (ADR 0020 crypto review): a non-encrypted row is served/synced
     // ONLY when self-host opted in. On the hosted deploy it is silently dropped,
     // so a DB-writer cannot inject a chosen-plaintext memory into a vault.
-    const deliverable = pending.filter(
+    const deliverable = live.filter(
       (e) => !forgottenSet.has(e.entryId) && (isEncryptedRow(e.content) || allowLegacyPlaintext),
     );
     // ADR 0020: decrypt each connector-born row for the desktop with the DEK
