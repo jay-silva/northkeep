@@ -1,12 +1,15 @@
 import { loadDeviceSecret, type Vault } from '@northkeep/core';
 import {
+  connectorPairedAt,
   deriveConnectorToken,
   deriveSyncCreds,
   downSyncConnector,
   fetchEntitlement,
   foldSidecarScopesIntoVault,
+  holdMessage,
   loadConnectorConfig,
   loadSyncConfig,
+  markConnectorPaired,
   pushSharedScopes,
   setConnectorServer,
   startPairing,
@@ -147,11 +150,23 @@ export async function sharePushCmd(withVault: WithVault, fail: (m: string) => ne
   );
 }
 
+const NOTHING_SHARED = 'No scopes are shared yet. Run: northkeep share add <scope>';
+
+/** The slug holdMessage wants, from the scope the fold reports. */
+function heldSlug(scope: string): string {
+  return scope.startsWith('project:') ? scope.slice('project:'.length) : scope;
+}
+
 /**
  * `northkeep share sync` — pull memories/forgets created inside the AI apps back
  * into the vault (down-sync), then re-push so the server's rows match the vault
  * (ADR 0019, phase C3). One vault-open path handles both, so the pushed rows
  * reflect the just-applied down-sync.
+ *
+ * ADR 0050 Decision 5: a project created in a connected app reaches this device
+ * only through the fold, and its scope is not shared until the fold marks it.
+ * So a paired device runs the fold even with nothing shared, and the shared list
+ * is read again afterwards so that same run pushes the newly marked scope.
  */
 export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => never): Promise<void> {
   const cfg = requireConfig(fail);
@@ -159,21 +174,29 @@ export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => ne
   const entitlement = await maybeEntitlement(deviceSecret);
   const result = await withVault(async (vault) => {
     foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
-    const scopes = vault.sharedScopes();
-    if (scopes.length === 0) return null;
+    // A device that never started a pairing has no account on that server, so
+    // asking for pending rows would create one (and 402 on a gated server).
+    if (vault.sharedScopes().length === 0 && connectorPairedAt() === null) return null;
     const down = await downSyncConnector({ server: cfg.server, deviceSecret, vault, entitlement });
+    const scopes = vault.sharedScopes();
+    if (scopes.length === 0) return { down, push: null };
     // Re-push so each newly down-synced row is rehashed server-side under its
     // vault id with pending cleared, and any forgotten row is reconciled away.
     const push = await pushSharedScopes({ server: cfg.server, deviceSecret, scopes, vault, entitlement });
     return { down, push };
   });
   if (result === null) {
-    console.log('No scopes are shared yet. Run: northkeep share add <scope>');
+    console.log(NOTHING_SHARED);
     return;
   }
   console.log(
-    `✓ Down-synced: ${result.down.added} added, ${result.down.forgotten} forgotten, ${result.down.deduped} already present.`,
+    `✓ Down-synced: ${result.down.added} added, ${result.down.forgotten} forgotten, ${result.down.deduped} already present, ${result.down.held} held.`,
   );
+  for (const scope of result.down.held_scopes) console.log(`  ${holdMessage(heldSlug(scope))}`);
+  if (result.push === null) {
+    console.log(NOTHING_SHARED);
+    return;
+  }
   console.log(
     `✓ Re-pushed ${result.push.pushed} memories across ${result.push.scopes.length} shared scope(s) to ${cfg.server}.`,
   );
@@ -261,6 +284,9 @@ export async function shareCodeCmd(fail: (m: string) => never): Promise<void> {
   } catch (err) {
     fail(err instanceof Error ? err.message : String(err));
   }
+  // This device now has an account on that server, which is what lets a later
+  // sync fold from an empty shared list (ADR 0050 Decision 5).
+  markConnectorPaired();
   console.log(`Pairing code: ${code}`);
   console.log('');
   console.log('Enter this code when connecting NorthKeep in Claude or ChatGPT.');
