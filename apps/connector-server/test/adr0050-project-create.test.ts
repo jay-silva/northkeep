@@ -3,7 +3,12 @@ import crypto from 'node:crypto';
 import net from 'node:net';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
-import { PROJECT_DOC_CAP_MESSAGE, PROJECT_DOC_MAX_CHARS } from '@northkeep/core/project-doc';
+import {
+  PROJECT_DOC_CAP_MESSAGE,
+  PROJECT_DOC_MAX_CHARS,
+  getProjectSection,
+  parseProjectDoc,
+} from '@northkeep/core/project-doc';
 import { deriveConnectorToken, startPairing, tokenHash } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
@@ -477,5 +482,155 @@ describe('ADR 0050 the lost race to an unshare', () => {
     expect(body.entries.some((e) => e.scope === 'project:lostrace')).toBe(false);
     expect(JSON.stringify(body)).not.toContain(LATE);
     expect(await rowsIn('project:lostrace')).toHaveLength(0);
+  });
+});
+
+/**
+ * One token for the whole fix-round block: the connector rate-limits per
+ * account, and a fresh OAuth dance per test exhausts the window.
+ */
+let cachedToken: string | null = null;
+async function appToken(): Promise<string> {
+  if (cachedToken === null) cachedToken = await connectAiApp();
+  return cachedToken;
+}
+
+/**
+ * Fix round item 1: the hosted tools mirror core's assertProjectText, so a
+ * document that lands in the vault parses there. Every refusal stores nothing
+ * and records an audit failure.
+ */
+const HEADING = 'why\n\n## Current Status\n\nsmuggled';
+const FORMAT = (field: string): string => `${field} contains unsupported section formatting.`;
+
+function auditSince(before: number) {
+  return storage.auditRows().slice(before);
+}
+
+describe('ADR 0050 hosted text validation', () => {
+  const badCreates: Array<[string, Record<string, unknown>, string]> = [
+    ['a heading in what_why', { what_why: HEADING, status: 'ok' }, FORMAT('what_why')],
+    ['a heading in status', { what_why: 'ok', status: HEADING }, FORMAT('status')],
+    ['a heading in next_actions', { what_why: 'ok', status: 'ok', next_actions: HEADING }, FORMAT('next_actions')],
+    ['a carriage return', { what_why: 'line one\r\nline two', status: 'ok' }, FORMAT('what_why')],
+    ['a leading newline', { what_why: 'ok', status: '\nleading' }, FORMAT('status')],
+    ['a trailing newline', { what_why: 'ok', status: 'ok', next_actions: 'trailing\n' }, FORMAT('next_actions')],
+    ['whitespace-only what_why', { what_why: '   ', status: 'ok' }, 'what_why must not be empty.'],
+    ['whitespace-only status', { what_why: 'ok', status: ' \t ' }, 'status must not be empty.'],
+    ['whitespace-only next_actions', { what_why: 'ok', status: 'ok', next_actions: '  ' }, 'next_actions cannot contain only whitespace.'],
+  ];
+
+  for (const [label, fields, message] of badCreates) {
+    it(`project_create refuses ${label}, stores nothing, audits the failure`, async () => {
+      const token = await appToken();
+      const slug = `bad${badCreates.findIndex(([l]) => l === label)}`;
+      const auditBefore = storage.auditRows().length;
+      const res = await mcpCall(token, 'project_create', { project: slug, ...fields });
+      expect(res.isError).toBe(true);
+      expect(res.text).toBe(message);
+      expect(await rowsIn(`project:${slug}`)).toHaveLength(0);
+      const appended = auditSince(auditBefore).filter((r) => r.tool === 'project_create');
+      expect(appended).toHaveLength(1);
+      expect(appended[0]!.ok).toBe(false);
+    });
+  }
+
+  const badUpdates: Array<[string, Record<string, unknown>, string]> = [
+    ['a heading in what_why', { what_why: HEADING }, FORMAT('what_why')],
+    ['a heading in status', { status: HEADING }, FORMAT('status')],
+    ['a heading in next_actions', { next_actions: HEADING }, FORMAT('next_actions')],
+    ['a heading in log_entry', { log_entry: HEADING }, FORMAT('log_entry')],
+    ['a heading in decision', { decision: HEADING }, FORMAT('decision')],
+    ['a carriage return', { status: 'line one\r\nline two' }, FORMAT('status')],
+    ['a leading newline', { status: '\nleading' }, FORMAT('status')],
+    ['a trailing newline', { status: 'trailing\n' }, FORMAT('status')],
+    ['whitespace-only what_why', { what_why: '   ' }, 'what_why must not be empty.'],
+    ['whitespace-only status', { status: ' \t ' }, 'status must not be empty.'],
+  ];
+
+  it('project_update refuses every unsupported field and leaves the document byte-identical', async () => {
+    const token = await appToken();
+    const scope = 'project:guarded';
+    const ORIGINAL = '## What & Why\n\nGuarded.\n\n## Current Status\n\nUnchanged.';
+    await seedEncryptedEntry(storage, account, connToken, {
+      entryId: 'vault-row-guarded',
+      scope,
+      type: 'working',
+      content: ORIGINAL,
+      pending: false,
+      createdAt: new Date().toISOString(),
+    });
+    const before = (await rowsIn(scope)).map((e) => e.content);
+
+    for (const [label, fields, message] of badUpdates) {
+      const auditBefore = storage.auditRows().length;
+      const res = await mcpCall(token, 'project_update', { project: 'guarded', ...fields });
+      expect(res.isError, label).toBe(true);
+      expect(res.text, label).toBe(message);
+      const appended = auditSince(auditBefore).filter((r) => r.tool === 'project_update');
+      expect(appended, label).toHaveLength(1);
+      expect(appended[0]!.ok, label).toBe(false);
+    }
+
+    const after = await rowsIn(scope);
+    expect(after.map((e) => e.content)).toEqual(before);
+    const plain = (await decryptedEntries(storage, account, connToken)).find(
+      (e) => e.entryId === 'vault-row-guarded',
+    )!;
+    expect(plain.content).toBe(ORIGINAL);
+  });
+
+  it('project_create accepts an empty next_actions and treats it as omitted', async () => {
+    const token = await appToken();
+    const empty = await mcpCall(token, 'project_create', {
+      project: 'emptynext',
+      what_why: 'Why it exists.',
+      status: 'Just started.',
+      next_actions: '',
+    });
+    expect(empty.isError).toBeFalsy();
+    const omitted = await mcpCall(token, 'project_create', {
+      project: 'omittednext',
+      what_why: 'Why it exists.',
+      status: 'Just started.',
+    });
+    expect(omitted.isError).toBeFalsy();
+
+    const rows = await decryptedEntries(storage, account, connToken);
+    const withEmpty = rows.find((e) => e.entryId === createIdFor('project:emptynext'))!;
+    const withOmitted = rows.find((e) => e.entryId === createIdFor('project:omittednext'))!;
+    expect(withEmpty.content).toBe(withOmitted.content);
+    expect(getProjectSection(parseProjectDoc(withEmpty.content), 'Next Actions')).toBe('');
+  });
+});
+
+describe('ADR 0050 memory_remember and the tombstone', () => {
+  it('refuses a tombstoned scope even when it holds a non-pending row', async () => {
+    const token = await appToken();
+    const scope = 'project:revoked';
+    // Unshare first: it deletes every row in the scope and writes the
+    // tombstone. The row below is the flag-off stale push that reopened it.
+    expect((await unshare(scope)).status).toBe(200);
+    await seedEncryptedEntry(storage, account, connToken, {
+      entryId: 'stale-push-revoked',
+      scope,
+      type: 'working',
+      content: '## Current Status\n\nPushed back by a stale device.\n',
+      pending: false,
+      createdAt: new Date().toISOString(),
+    });
+    const before = (await rowsIn(scope)).length;
+    const auditBefore = storage.auditRows().length;
+
+    const res = await mcpCall(token, 'memory_remember', {
+      content: 'A note the app wants to slip into a revoked scope.',
+      type: 'semantic',
+      scope,
+    });
+    expect(res.text).toBe(TOMBSTONE_USER_MESSAGE);
+    expect(await rowsIn(scope)).toHaveLength(before);
+    const appended = auditSince(auditBefore).filter((r) => r.tool === 'memory_remember');
+    expect(appended).toHaveLength(1);
+    expect(appended[0]!.ok).toBe(false);
   });
 });
