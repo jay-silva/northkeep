@@ -243,7 +243,7 @@ afterAll(async () => {
 });
 
 describe('M14 push-path cap (step 3)', () => {
-  it('413 names both caps; ordinary 8 KiB still applies outside slug-valid project working rows', async () => {
+  it('413 names both caps; ordinary 8 KiB still applies outside slug-valid project scopes', async () => {
     const nineK = 'x'.repeat(9 * 1024);
 
     const ordinary = await pushEntries(
@@ -255,11 +255,18 @@ describe('M14 push-path cap (step 3)', () => {
     expect(ordinaryBody.error).toContain('8192');
     expect(ordinaryBody.error).toContain('65536');
 
-    const projectSemantic = await pushEntries(
-      ['project:northkeep'],
-      [{ entry_id: 'proj-sem', scope: 'project:northkeep', type: 'semantic', content: nineK }],
+    // ADR 0045 addendum: a Log archive (episodic) in a project scope may exceed
+    // 8 KiB; it gets the project cap like the document does.
+    const projectArchive = await pushEntries(
+      ['project:archcap'],
+      [{ entry_id: 'proj-arch', scope: 'project:archcap', type: 'episodic', content: `## Log archive: archcap\n\n${nineK}` }],
     );
-    expect(projectSemantic.status).toBe(413);
+    expect(projectArchive.status).toBe(200);
+    const archiveHuge = await pushEntries(
+      ['project:archcap'],
+      [{ entry_id: 'proj-arch-huge', scope: 'project:archcap', type: 'episodic', content: 'z'.repeat(64 * 1024 + 1) }],
+    );
+    expect(archiveHuge.status).toBe(413);
 
     const prefixOnly = await pushEntries(
       ['project:foo_bar'],
@@ -268,7 +275,7 @@ describe('M14 push-path cap (step 3)', () => {
     expect(prefixOnly.status).toBe(413);
 
     expect((await storage.listEntries(account)).some((r) => r.entryId === 'ord-big')).toBe(false);
-    expect((await storage.listEntries(account)).some((r) => r.entryId === 'proj-sem')).toBe(false);
+    expect((await storage.listEntries(account)).some((r) => r.entryId === 'proj-arch-huge')).toBe(false);
     expect((await storage.listEntries(account)).some((r) => r.entryId === 'prefix')).toBe(false);
   });
 

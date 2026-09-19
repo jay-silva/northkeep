@@ -94,11 +94,11 @@ const OAUTH_BROWSER_PREFIXES = ['/register', '/token', '/revoke'];
 // per-account TOTAL across not-pushed scopes would need an extra read (noted).
 const MAX_SHARED_ENTRIES = 5000;
 const MAX_CONTENT_BYTES = 8 * 1024; // 8 KB per ordinary entry
-const MAX_PROJECT_DOC_BYTES = 64 * 1024; // 64 KB: working-type rows in valid project scopes only
+const MAX_PROJECT_DOC_BYTES = 64 * 1024; // 64 KB: every row in a valid project scope (ADR 0045 addendum)
 const MAX_TOTAL_CONTENT_BYTES = 4 * 1024 * 1024; // ~4 MB of content per push
 const PER_ENTRY_CAP_MESSAGE =
   `A memory exceeds the per-entry content cap (${MAX_CONTENT_BYTES} bytes ordinarily, ` +
-  `${MAX_PROJECT_DOC_BYTES} bytes for a project-scope working document).`;
+  `${MAX_PROJECT_DOC_BYTES} bytes for a row in a project scope).`;
 // Body parser ceiling for the push: above the 4 MB content cap so a legitimate
 // max payload (JSON key/id/hash overhead per row) is measured by the real cap
 // in-handler, not silently 413'd by the parser.
@@ -563,8 +563,9 @@ export function createConnectorServer(
         return;
       }
       const bytes = Buffer.byteLength(e.content, 'utf8');
-      const perEntryCap =
-        parseProjectSlug(e.scope) !== null && e.type === 'working' ? MAX_PROJECT_DOC_BYTES : MAX_CONTENT_BYTES;
+      // A project scope holds the document and its Log archives (ADR 0045); an
+      // archive over 8 KiB used to refuse the whole push, silently on the desktop.
+      const perEntryCap = parseProjectSlug(e.scope) !== null ? MAX_PROJECT_DOC_BYTES : MAX_CONTENT_BYTES;
       if (bytes > perEntryCap) {
         res.status(413).json({ error: PER_ENTRY_CAP_MESSAGE });
         return;

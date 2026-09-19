@@ -108,6 +108,8 @@ truncated.
 
 ## Decision 6: 64 KiB cap only for working-type rows in valid project scopes
 
+*Amended by the ADR 0045 addendum of 2026-09-19: the cap now covers every row in a valid project scope, because Log archives exceeded 8 KiB and refused the push.*
+
 `PUT /client/entries` keeps the ordinary 8192-byte per-entry cap and the
 4 MB per-push total. The per-entry cap of 65536 bytes applies only when
 `parseProjectSlug(scope) !== null` and `type === 'working'`. The 413

@@ -661,7 +661,9 @@ every milestone; if a limit is removed, say when and how.*
 - **Share is write access.** Sharing a project scope lets the connected
   AI update that project. Unshare deletes the scope's rows, including a
   not-yet-delivered project update. The revoke wins.
-- **The 64 KiB push cap is only for project-scope working rows.** Ordinary
+- **The 64 KiB push cap applies to every row in a project scope** (the
+  document and its Log archives, since 2026-09-19; before that only the
+  document, and an archive over 8 KiB refused the whole push). Ordinary
   memories stay at 8 KiB per entry. The 4 MB per-push total and the
   `memory_remember` 8 KiB cap are unchanged. The merged document is still
   refused at 16384 characters.

@@ -81,3 +81,22 @@ From Claude Code with the NorthKeep project scope granted:
 - KNOWN-LIMITS gains the roll rule and the "one archive per roll" note.
 - The Command Repo file `projects/<name>.md` is unaffected; it keeps the
   full log by hand, as before.
+
+## Addendum 2026-09-19: archives and the connector push cap
+
+Two archives rolled from `project:northkeep` on 2026-09-11 and 2026-09-16
+were 10947 and 8270 bytes. The connector's push route capped every
+non-document row at 8192 bytes (ADR 0040 Decision 6), so every share
+sync since 2026-09-11 was refused with a 413 at the re-push step, after
+the down-sync had already applied. The desktop showed only the generic
+"over the sharing caps" line. This contradicted Decision 1's promise that
+a log entry is never refused for size: the live document was fine, the
+archive it produced was not.
+
+Decision: every row in a slug-valid project scope gets the 64 KiB cap,
+not only the working document. Archives are project content, the scope
+is bounded by the same roll that creates them, and `memory_remember` into
+a project scope is separately capped at 8 KiB by the tool itself. ADR
+0040 Decision 6 is amended accordingly. Found during the ADR 0050 hosted
+acceptance; fixed the same day with a route test that pushes a 9 KiB
+archive (accepted) and a 64 KiB + 1 archive (refused).
