@@ -50,6 +50,7 @@ import {
 import { z } from 'zod';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
 import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
+import { firstProjectTextError } from './project-text.js';
 import { TOMBSTONE_USER_MESSAGE } from './tombstones.js';
 
 const MAX_RESULTS = 20;
@@ -333,6 +334,12 @@ export function createMcpServer(
         };
       }
       const targetScope = (scope ?? '').trim();
+      // Unshare is the revoke: a connected app must not write into a scope the
+      // user revoked, even when a stale push left a non-pending row behind.
+      if ((await tombstonedScopes()).has(targetScope)) {
+        await auditFail();
+        return { content: [{ type: 'text', text: TOMBSTONE_USER_MESSAGE }] };
+      }
       const existing = await storage.listEntries(accountHash);
       const scopeRows = targetScope ? existing.filter((e) => e.scope === targetScope) : [];
       // ADR 0050 Decision 2: a scope is writable only when it holds a row the
@@ -672,7 +679,7 @@ export function createMcpServer(
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
         what_why: z.string().min(1).max(16384).describe('What this project is and why it exists'),
         status: z.string().min(1).max(16384).describe('Where the project stands right now'),
-        next_actions: z.string().min(1).max(16384).optional().describe('The next concrete actions'),
+        next_actions: z.string().max(16384).optional().describe('The next concrete actions'),
       },
     },
     async ({ project, what_why, status, next_actions }) => {
@@ -694,6 +701,16 @@ export function createMcpServer(
       if (!PROJECT_SLUG_PATTERN.test(project ?? '')) {
         return refuse(`Invalid project slug "${project ?? ''}".`);
       }
+      // Core's rule, before any storage read: text the vault would refuse must
+      // never land as the first document in a scope.
+      const textError = firstProjectTextError([
+        ['what_why', what_why, false],
+        ['status', status, false],
+        ['next_actions', next_actions, true],
+      ]);
+      if (textError !== null) return refuse(textError);
+      // An empty next_actions is the local tool's "omitted", not an empty body.
+      const nextActions = next_actions === '' ? undefined : next_actions;
       const scope = projectScope(project);
       if ((await tombstonedScopes()).has(scope)) return refuse(TOMBSTONE_USER_MESSAGE);
 
@@ -726,7 +743,7 @@ export function createMcpServer(
           mergeProjectDoc(emptyProjectDoc(), {
             whatWhy: what_why,
             status,
-            nextActions: next_actions,
+            nextActions,
           }),
         );
         assertProjectDocSize(markdown);
@@ -831,6 +848,17 @@ export function createMcpServer(
           ],
           isError: true,
         };
+      }
+      const updateTextError = firstProjectTextError([
+        ['what_why', what_why, false],
+        ['status', status, false],
+        ['next_actions', next_actions, true],
+        ['log_entry', log_entry, false],
+        ['decision', decision, false],
+      ]);
+      if (updateTextError !== null) {
+        await auditFail();
+        return { content: [{ type: 'text', text: updateTextError }], isError: true };
       }
       const scope = projectScope(project);
       // The revoke wins over a write that raced it, whatever the enforcement
