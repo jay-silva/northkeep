@@ -804,3 +804,70 @@ pre-create slugs; `saveConnectorConfig` drops unknown keys.
 Implementation follows. The post-implementation review verifies each pin
 against shipped code, on the in-memory store and, for the Neon
 statements, by review of the SQL, and records its result here.
+
+### 2026-09-19 post-implementation review (two fresh-eyes attackers, against shipped code)
+
+Two attackers, each in a detached worktree from the integration tip with
+a temporary NORTHKEEP_HOME: one on the network boundary (hosted tools,
+routes, local `project_create`, contract), one on the vault side (fold,
+config marker, CLI, desktop, mobile). Both verdicts: **CLEARED WITH
+WOUNDS**. Every row of the claims table held under execution, including
+the real CLI binary against the real in-memory connector server with a
+real encrypted create row. No attack moved private content off the
+machine, undid a revoke with enforcement on, produced two rows for one
+slug, or leaked an existing document through a refusal.
+
+**Wounds, all executed.**
+
+1. Hosted `project_create` and `project_update` accept section headings,
+   carriage returns and whitespace-only text in their fields; core's
+   `assertProjectText` refuses the same input locally. A hosted create
+   with `## Current Status` inside `what_why` lands, is marked Shared,
+   and local `project_get` then refuses the project as having duplicate
+   sections. The update half has been open since M14; the create is a new
+   entry point and the first document in the scope.
+2. `memory_remember` does not read tombstones. Reachable only with
+   `CONNECTOR_TOMBSTONE_ENFORCE` off (a stale device's push reopens rows
+   under a standing tombstone); with it on the state is unreachable. The
+   flag-off residual text was also stale: `project_get` now hides such a
+   scope.
+3. The two `project_create` signatures differ: hosted `next_actions`
+   refuses an empty string, local accepts it; hosted drops an unknown
+   `title` silently.
+4. The fold's hold is bypassed by an untrimmed scope name: a pending
+   working row in `' project:plan'` fails `parseProjectSlug`, takes the
+   non-project path, and `vault.remember` trims the scope, landing a
+   second live working document inside the user's private project. No
+   disclosure (no mark, no push), but `project_get` then refuses the
+   project. Reachable only from a buggy or hostile server, since the real
+   server trims and slug-validates; the fold is the enforcement point and
+   must not depend on that.
+
+**Scar tissue recorded.** A `semantic` row arriving with the create into
+an empty scope is applied and the scope marked (content is app-authored;
+the fold trusts Decision 2). A forged or restored `paired_at` beside a
+fresh device secret makes a never-paired device call `/client/pending`
+and creates an account row. A queued forget naming a private entry in a
+held scope is applied (pre-existing M14 forget path; the server only
+holds vault ids for pushed rows). A group with an invalid type string
+throws mid-fold and nothing is saved or acked (pre-existing). An app
+that forgets its own pending create leaves the slug dead on the hosted
+side until a device sync drains the forget. The purge leaves a queued
+forget for a row that never landed. A forget-queued non-pending row keeps
+a scope writable until the next sync.
+
+### Fix round, 2026-09-19
+
+1. Connector: port the six-line `assertProjectText` rule into the hosted
+   tools and apply it to every text field of `project_create` and
+   `project_update` (headings, carriage returns, leading or trailing
+   newline, whitespace-only); hosted `next_actions` treats an empty string
+   as omitted, matching local; `memory_remember` refuses a tombstoned
+   scope unconditionally. Tests for each.
+2. Fold: trim every pending row's scope before grouping, so the project
+   rule sees the scope the vault would store; a row whose type is not a
+   valid memory type is held with its group, never thrown on. Tests for
+   the whitespace variants and the mixed-type group.
+3. Residual updated: the flag-off line now says `project_get` hides the
+   reopened scope; the forged-marker and semantic-with-create cases are
+   recorded above.
