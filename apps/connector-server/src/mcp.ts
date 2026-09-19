@@ -29,11 +29,12 @@
  * (counts + disclosed ids, never text — mirrors packages/mcp-server/src/log.ts).
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   PROJECT_DOC_CAP_MESSAGE,
   PROJECT_SLUG_PATTERN,
+  emptyProjectDoc,
   firstNonEmptyLine,
   getProjectSection,
   assertProjectDocSize,
@@ -49,6 +50,7 @@ import {
 import { z } from 'zod';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
 import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
+import { TOMBSTONE_USER_MESSAGE } from './tombstones.js';
 
 const MAX_RESULTS = 20;
 const MAX_REMEMBER_BYTES = 8 * 1024; // mirrors the ordinary push per-entry content cap
@@ -172,10 +174,26 @@ export function createMcpServer(
     return { ...e, type: plain.type, content: plain.content };
   }
 
-  /** The account's non-hidden entries, decrypted (legacy rows dropped unless allowed). */
+  /**
+   * Scopes the user unshared (ADR 0038). Read fresh per call so a tombstone
+   * written during this request is seen. ADR 0050 Decision 3: the check never
+   * honours CONNECTOR_TOMBSTONE_ENFORCE; unshare is the revoke.
+   */
+  async function tombstonedScopes(): Promise<Set<string>> {
+    return new Set((await storage.listTombstones(accountHash)).map((t) => t.scope));
+  }
+
+  /**
+   * The account's non-hidden entries, decrypted (legacy rows dropped unless
+   * allowed). A row whose scope has a tombstone is excluded: a write that lost
+   * the race to an unshare must never be shown (ADR 0050 Decision 3).
+   */
   async function visibleEntries(): Promise<SharedEntry[]> {
     const hidden = new Set(await storage.listPendingForgets(accountHash));
-    const all = (await storage.listEntries(accountHash)).filter((e) => !hidden.has(e.entryId));
+    const unshared = await tombstonedScopes();
+    const all = (await storage.listEntries(accountHash)).filter(
+      (e) => !hidden.has(e.entryId) && !unshared.has(e.scope),
+    );
     const decrypted = await Promise.all(all.map(decryptEntry));
     return decrypted.filter((e): e is SharedEntry => e !== null);
   }
@@ -316,11 +334,26 @@ export function createMcpServer(
       }
       const targetScope = (scope ?? '').trim();
       const existing = await storage.listEntries(accountHash);
-      const sharesScope = existing.some((e) => e.scope === targetScope);
-      if (!targetScope || !sharesScope) {
+      const scopeRows = targetScope ? existing.filter((e) => e.scope === targetScope) : [];
+      // ADR 0050 Decision 2: a scope is writable only when it holds a row the
+      // user's device pushed or acked. `pending` is the one column both stores
+      // maintain identically; `origin` survives an ack and would lie here.
+      const writable = scopeRows.some((e) => e.pending !== true);
+      if (!targetScope || scopeRows.length === 0) {
         await auditFail();
         return {
           content: [{ type: 'text', text: `Nothing was saved: "${targetScope}" is not a scope you have shared. Ask the user to share it in NorthKeep first.` }],
+        };
+      }
+      if (!writable) {
+        await auditFail();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Nothing was saved: "${targetScope}" has no memory from the vault yet. Ask the user to add a memory to it, or re-share it, in NorthKeep.`,
+            },
+          ],
         };
       }
       // Per-account row cap: the AI could otherwise create rows without limit
@@ -457,7 +490,11 @@ export function createMcpServer(
     async ({ id }) => {
       const entryId = (id ?? '').trim();
       const hidden = new Set(await storage.listPendingForgets(accountHash));
-      const stored = entryId && !hidden.has(entryId) ? await storage.getEntry(accountHash, entryId) : null;
+      const found = entryId && !hidden.has(entryId) ? await storage.getEntry(accountHash, entryId) : null;
+      // fetch reads by id, so it does not inherit the visibleEntries tombstone
+      // filter. An unshared scope must be not-found here too (ADR 0050).
+      const unshared = await tombstonedScopes();
+      const stored = found && !unshared.has(found.scope) ? found : null;
       let row: SharedEntry | null;
       try {
         row = stored ? await decryptEntry(stored) : null;
@@ -552,7 +589,7 @@ export function createMcpServer(
       title: 'Read a shared project',
       description:
         'Read the live project document when the user names a project. Call this at session start so ' +
-        'you pick up Current Status, Next Actions, and the Log. You cannot create a project here. The ' +
+        'you pick up Current Status, Next Actions, and the Log. The ' +
         'live document keeps only its newest Log entries; pass history: true to also get the archive ' +
         'memories holding older entries, newest first.',
       inputSchema: {
@@ -617,6 +654,115 @@ export function createMcpServer(
     },
   );
 
+  // ---- project_create (ADR 0050) ----------------------------------------
+  // Decision 3, in order, nothing stored unless every check passes: slug before
+  // any storage read, then the unconditional tombstone check, then "no working
+  // document in this scope", then the cap, then the document size.
+  server.registerTool(
+    'project_create',
+    {
+      title: 'Create a project',
+      description:
+        'Create a project with project_create only when the user asks for one; never create one to ' +
+        'hold notes that belong in an existing project or in a memory. Give What & Why and the ' +
+        'Current Status; Log and Decisions start empty. The project becomes Shared with this app ' +
+        'when it lands in the user\u2019s vault, so everything later written into it is visible here. ' +
+        'Use project_update to change a project that already exists.',
+      inputSchema: {
+        project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
+        what_why: z.string().min(1).max(16384).describe('What this project is and why it exists'),
+        status: z.string().min(1).max(16384).describe('Where the project stands right now'),
+        next_actions: z.string().min(1).max(16384).optional().describe('The next concrete actions'),
+      },
+    },
+    async ({ project, what_why, status, next_actions }) => {
+      const auditFail = async (): Promise<void> => {
+        await storage.appendAudit({
+          ts: new Date().toISOString(),
+          accountHash,
+          tool: 'project_create',
+          params: {},
+          ok: false,
+          resultCount: 0,
+          resultIds: [],
+        });
+      };
+      const refuse = async (text: string) => {
+        await auditFail();
+        return { content: [{ type: 'text' as const, text }], isError: true as const };
+      };
+      if (!PROJECT_SLUG_PATTERN.test(project ?? '')) {
+        return refuse(`Invalid project slug "${project ?? ''}".`);
+      }
+      const scope = projectScope(project);
+      if ((await tombstonedScopes()).has(scope)) return refuse(TOMBSTONE_USER_MESSAGE);
+
+      // Every stored row, including pending ones and rows with a queued forget:
+      // visibleEntries() hides a forget-queued row, which would read as empty.
+      const existing = await storage.listEntries(accountHash);
+      const inScope = existing.filter((e) => e.scope === scope);
+      let hasWorkingDoc: boolean;
+      try {
+        const types = await Promise.all(
+          inScope.map(async (e) =>
+            isEncryptedRow(e.content) ? (await decryptRow(e.content, accountHash, dek)).type : e.type,
+          ),
+        );
+        hasWorkingDoc = types.includes('working');
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError) return reencryptResult('project_create');
+        throw err;
+      }
+      if (hasWorkingDoc) return refuse('Project already exists; use project_update.');
+
+      if (existing.length + 1 > MAX_SHARED_ENTRIES) {
+        return refuse(
+          `Nothing was saved: this account is at the shared-memory cap (${MAX_SHARED_ENTRIES}). Ask the user to remove some shared memories in NorthKeep first.`,
+        );
+      }
+      let markdown: string;
+      try {
+        markdown = serializeProjectDoc(
+          mergeProjectDoc(emptyProjectDoc(), {
+            whatWhy: what_why,
+            status,
+            nextActions: next_actions,
+          }),
+        );
+        assertProjectDocSize(markdown);
+      } catch (err) {
+        return refuse(err instanceof Error ? err.message : 'Nothing was saved: the document could not be built.');
+      }
+      // Deterministic per scope so two concurrent creates collapse into one row
+      // on the (account, entry id) upsert, which no lock could do on Neon.
+      const entryId = `conn_create_${createHash('sha256').update(scope).digest('hex').slice(0, 32)}`;
+      await storage.putEntry(accountHash, {
+        entryId,
+        scope,
+        type: '',
+        content: await encryptRow({ accountHash, type: 'working', content: markdown }, dek),
+        entryHash: '',
+        origin: 'connector',
+        pending: true,
+        createdAt: new Date().toISOString(),
+      });
+      await storage.appendAudit({
+        ts: new Date().toISOString(),
+        accountHash,
+        tool: 'project_create',
+        params: {},
+        ok: true,
+        resultCount: 1,
+        resultIds: [entryId],
+      });
+      return {
+        content: [
+          { type: 'text', text: `Created project "${project}". It will sync into the vault. (id: ${entryId})` },
+        ],
+      };
+    },
+  );
+
   server.registerTool(
     'project_update',
     {
@@ -628,8 +774,8 @@ export function createMcpServer(
         'replace the whole document. The live document keeps only its newest Log entries; older ones ' +
         'roll into an archive memory in the project scope (the result says so), so a log entry is ' +
         'never refused for size. Only hand-written sections over 16384 characters are refused. ' +
-        'NorthKeep never truncates. You cannot create a project here; the project scope must already ' +
-        'be shared from NorthKeep with a live working document.',
+        'NorthKeep never truncates. This tool only updates a project that already has a live document; ' +
+        'use project_create for a new project.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         what_why: z.string().min(1).max(16384).optional().describe('Replacement What & Why section'),
@@ -686,6 +832,13 @@ export function createMcpServer(
           isError: true,
         };
       }
+      const scope = projectScope(project);
+      // The revoke wins over a write that raced it, whatever the enforcement
+      // flag says (ADR 0050 Decision 3). Only a re-share from NorthKeep reopens.
+      if ((await tombstonedScopes()).has(scope)) {
+        await auditFail();
+        return { content: [{ type: 'text', text: TOMBSTONE_USER_MESSAGE }], isError: true };
+      }
       let all: SharedEntry[];
       try {
         all = await visibleEntries();
@@ -693,7 +846,6 @@ export function createMcpServer(
         if (err instanceof ConnectorCryptoError) return reencryptResult('project_update');
         throw err;
       }
-      const scope = projectScope(project);
       const base = selectProjectWorkingDoc(all.filter((e) => e.scope === scope));
       if (!base) {
         await auditFail();
@@ -701,7 +853,7 @@ export function createMcpServer(
           content: [
             {
               type: 'text',
-              text: `Nothing was saved: no live project document for "${project}". Cloud cannot create a project; share the project from NorthKeep first.`,
+              text: `Nothing was saved: no live project document for "${project}". Use project_create to start one, or ask the user to share the project from NorthKeep.`,
             },
           ],
           isError: true,
