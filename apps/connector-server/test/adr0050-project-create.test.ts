@@ -314,11 +314,16 @@ describe('ADR 0050 hosted project_create', () => {
       mcpCall(token, 'project_create', { project: 'racy', what_why: 'first', status: 'first' }),
       mcpCall(token, 'project_create', { project: 'racy', what_why: 'second', status: 'second' }),
     ]);
-    const created = results.filter((r) => !r.isError);
-    expect(created.length).toBeGreaterThanOrEqual(1);
+    // In-memory these serialized in practice, so the deterministic id is what
+    // the claim rests on: whichever way they land there is one row under it,
+    // and the only refusal allowed is the duplicate one.
     const rows = await rowsIn('project:racy');
     expect(rows).toHaveLength(1);
     expect(rows[0]!.entryId).toBe(createIdFor('project:racy'));
+    for (const r of results) {
+      if (r.isError) expect(r.text).toBe('Project already exists; use project_update.');
+      else expect(r.text).toContain(createIdFor('project:racy'));
+    }
   });
 
   it('unshare deletes a not-yet-delivered create', async () => {

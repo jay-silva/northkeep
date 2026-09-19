@@ -609,8 +609,8 @@ export function createConnectorServer(
     const enforce = opts.tombstoneEnforce ?? isTombstoneEnforceOn();
     // ADR 0050 Decision 3: always attempt the accepting path so a deliberate
     // re-share clears the tombstone in both flag states. Only the 412 refusal
-    // is behind the flag; with it off a conflict falls back to a plain replace,
-    // which accepts the push as 0.19.0 did and leaves the tombstone standing.
+    // is behind the flag; with it off a conflict falls back to a plain replace
+    // and leaves the tombstone standing.
     try {
       await storage.replaceScopesAcceptingReshare(accountHash, scopes, encrypted, sharedAt);
     } catch (err) {
@@ -693,8 +693,8 @@ export function createConnectorServer(
     }
     // Order is load-bearing (ADR 0050 Decision 3). A re-share deletes the
     // tombstone before the app can write, so a tombstone read that FOLLOWS the
-    // pending read can never name a row written after that re-share. Reversed,
-    // it would destroy that row. Sequential awaits, never Promise.all.
+    // pending read can never name a row written after that re-share.
+    // Sequential awaits, never Promise.all.
     const pending = await storage.listPendingEntries(accountHash);
     await opts.betweenPendingReads?.();
     const tombstonedScopes = new Set((await storage.listTombstones(accountHash)).map((t) => t.scope));
