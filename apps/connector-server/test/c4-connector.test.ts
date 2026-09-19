@@ -223,6 +223,11 @@ describe('C4 ChatGPT search/fetch tools', () => {
     expect(names).toContain('memory_list');
     expect(names).toContain('memory_remember');
     expect(names).toContain('memory_forget');
+    // The project tools, including hosted creation (ADR 0050).
+    expect(names).toContain('project_list');
+    expect(names).toContain('project_get');
+    expect(names).toContain('project_create');
+    expect(names).toContain('project_update');
   });
 
   it('search → ids → fetch(id) returns the full account-scoped record', async () => {

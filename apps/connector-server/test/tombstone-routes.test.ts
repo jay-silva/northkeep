@@ -154,3 +154,82 @@ describe.sequential('PUT /client/entries tombstones (flag on)', () => {
     );
   });
 });
+
+/**
+ * ADR 0050 Decision 3: the push route always attempts
+ * replaceScopesAcceptingReshare, so a deliberate re-share clears the tombstone
+ * in BOTH flag states. Only the 412 refusal stays behind the flag. Fresh scope
+ * names: the flag-on block above is a sequence over "work" and "ops".
+ */
+describe('PUT /client/entries clear-on-reshare is unconditional (ADR 0050)', () => {
+  it('a later shared_at clears the tombstone with the flag off', async () => {
+    const account = tokenHash(connToken);
+    expect((await put(baseOff, { scopes: ['reshare-off'], entries: [entry('reshare-off', 'ro1')] })).status).toBe(200);
+    expect((await unshare(baseOff, 'reshare-off')).status).toBe(200);
+    const tomb = (await storageOff.listTombstones(account)).find((t) => t.scope === 'reshare-off');
+    expect(tomb).toBeDefined();
+
+    const later = new Date(Date.parse(tomb!.unsharedAt) + 60_000).toISOString();
+    const res = await put(baseOff, {
+      scopes: ['reshare-off'],
+      entries: [entry('reshare-off', 'ro2')],
+      shared_at: { 'reshare-off': later },
+    });
+    expect(res.status).toBe(200);
+    expect((await storageOff.listTombstones(account)).some((t) => t.scope === 'reshare-off')).toBe(false);
+    expect((await storageOff.listEntries(account)).some((e) => e.entryId === 'ro2')).toBe(true);
+  });
+
+  it('an earlier shared_at is accepted and keeps the tombstone with the flag off', async () => {
+    const account = tokenHash(connToken);
+    expect((await put(baseOff, { scopes: ['stale-off'], entries: [entry('stale-off', 'so1')] })).status).toBe(200);
+    expect((await unshare(baseOff, 'stale-off')).status).toBe(200);
+    const tomb = (await storageOff.listTombstones(account)).find((t) => t.scope === 'stale-off');
+    expect(tomb).toBeDefined();
+
+    const earlier = new Date(Date.parse(tomb!.unsharedAt) - 60_000).toISOString();
+    const res = await put(baseOff, {
+      scopes: ['stale-off'],
+      entries: [entry('stale-off', 'so2')],
+      shared_at: { 'stale-off': earlier },
+    });
+    expect(res.status).toBe(200);
+    // Accepted as 0.19.0 did, but the revoke record stands.
+    expect((await storageOff.listTombstones(account)).some((t) => t.scope === 'stale-off')).toBe(true);
+    expect((await storageOff.listEntries(account)).some((e) => e.entryId === 'so2')).toBe(true);
+  });
+
+  it('the same earlier shared_at is 412 with the flag on, and stores nothing', async () => {
+    const account = tokenHash(connToken);
+    expect((await put(baseOn, { scopes: ['stale-on'], entries: [entry('stale-on', 'sn1')] })).status).toBe(200);
+    expect((await unshare(baseOn, 'stale-on')).status).toBe(200);
+    const tomb = (await storageOn.listTombstones(account)).find((t) => t.scope === 'stale-on');
+    expect(tomb).toBeDefined();
+
+    const earlier = new Date(Date.parse(tomb!.unsharedAt) - 60_000).toISOString();
+    const res = await put(baseOn, {
+      scopes: ['stale-on'],
+      entries: [entry('stale-on', 'sn2')],
+      shared_at: { 'stale-on': earlier },
+    });
+    expect(res.status).toBe(412);
+    expect((await storageOn.listTombstones(account)).some((t) => t.scope === 'stale-on')).toBe(true);
+    expect((await storageOn.listEntries(account)).some((e) => e.entryId === 'sn2')).toBe(false);
+  });
+
+  it('an ordinary push into a scope with no tombstones is unchanged in both flag states', async () => {
+    const account = tokenHash(connToken);
+    for (const [base, store, id] of [
+      [baseOff, storageOff, 'plain-off'],
+      [baseOn, storageOn, 'plain-on'],
+    ] as const) {
+      const res = await put(base, { scopes: [id], entries: [entry(id, id)] });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { ok: boolean; upserted: number };
+      expect(body.ok).toBe(true);
+      expect(body.upserted).toBe(1);
+      expect((await store.listEntries(account)).some((e) => e.entryId === id)).toBe(true);
+      expect((await store.listTombstones(account)).some((t) => t.scope === id)).toBe(false);
+    }
+  });
+});
