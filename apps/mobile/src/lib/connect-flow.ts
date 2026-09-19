@@ -25,6 +25,7 @@
 
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
+import { holdMessage } from '@northkeep/sync';
 import { classifySyncError, type SyncErrorKind } from './sync-errors';
 
 /** The hosted production connector server (apps/connector-server on Vercel). */
@@ -55,6 +56,13 @@ export const NOTHING_SHARED_MESSAGE = 'No scopes are shared yet. Share a scope f
  */
 export const SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE =
   'Nothing was pushed back: every scope was unshared while the sync ran.';
+
+/**
+ * The same skip on a paired phone that had nothing shared to begin with (ADR
+ * 0050): saying a scope was unshared mid-sync would be untrue there.
+ */
+export const SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE =
+  'Nothing was pushed back: no scope is shared yet.';
 
 /**
  * Shown with the push failure after a partially successful sync-now: the
@@ -108,6 +116,11 @@ export function mcpUrlFor(server: string): string {
 export function formatPairingCountdown(secondsLeft: number): string {
   const s = Math.max(0, Math.floor(secondsLeft));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+}
+
+/** The slug holdMessage wants, from the scope the fold reports. */
+function heldSlug(scope: string): string {
+  return scope.startsWith('project:') ? scope.slice('project:'.length) : scope;
 }
 
 /** One row of the Sharing screen's scope list. */
@@ -251,31 +264,42 @@ export async function runUnshareScope(
   return { kind: 'unshared', scope, deleted };
 }
 
+/** The down-sync counts every outcome carries, including the ADR 0050 holds. */
+export interface ConnectorDownSyncCounts {
+  added: number;
+  forgotten: number;
+  deduped: number;
+  /** Rows left pending because their unshared project scope is not accepting them. */
+  held: number;
+  /** The unshared project scopes those rows are for. */
+  held_scopes: string[];
+}
+
 export type ConnectorSyncOutcome =
-  | { kind: 'synced'; added: number; forgotten: number; deduped: number; pushed: number }
-  | {
+  | ({ kind: 'synced'; pushed: number } & ConnectorDownSyncCounts)
+  | ({
       /**
        * The down-sync landed, but every scope was unshared while it ran, so the
        * write-back push was skipped (pushing the stale list would re-upload
        * plaintext the user just revoked). The screen reports the skip honestly.
        */
       kind: 'synced-no-push';
-      added: number;
-      forgotten: number;
-      deduped: number;
-    }
-  | {
+      /**
+       * Why the push was skipped: the user revoked every scope while the sync
+       * ran, or nothing was shared in the first place (a paired phone folding
+       * for a hosted project it then held).
+       */
+      reason: 'unshared-mid-sync' | 'nothing-shared';
+    } & ConnectorDownSyncCounts)
+  | ({
       /**
        * The down-sync landed its memories in the vault, then the write-back
        * push failed. Split outcome so the screen can say BOTH halves: the
        * memories arrived AND the re-push failed (suggest running sync again).
        */
       kind: 'partially-synced';
-      added: number;
-      forgotten: number;
-      deduped: number;
       pushFailure: ConnectorFailure;
-    }
+    } & ConnectorDownSyncCounts)
   | { kind: 'nothing-shared'; message: string }
   | ConnectorFailure;
 
@@ -286,9 +310,16 @@ export interface ConnectorSyncPorts {
    * (wired to VaultSession.connectorDownSync, which also refreshes the entry
    * list and runs the normal push-after-save so the vault change syncs).
    */
-  downSync(): Promise<{ added: number; forgotten: number; deduped: number }>;
+  downSync(): Promise<ConnectorDownSyncCounts>;
   /** The write-back re-push so the server's rows match the just-updated vault. */
   pushScopes(scopes: string[]): Promise<{ pushed: number }>;
+  /**
+   * Whether this phone has started a pairing with the connector server (ADR
+   * 0050 Decision 5). A paired phone folds even with nothing shared, because a
+   * project created in a connected app arrives only that way. An unpaired one
+   * has no account on that server and must not create one.
+   */
+  paired(): Promise<boolean>;
 }
 
 /**
@@ -304,8 +335,10 @@ export interface ConnectorSyncPorts {
  */
 export async function runConnectorSyncNow(ports: ConnectorSyncPorts): Promise<ConnectorSyncOutcome> {
   const scopes = await ports.store.load();
-  if (scopes.length === 0) return { kind: 'nothing-shared', message: NOTHING_SHARED_MESSAGE };
-  let down: { added: number; forgotten: number; deduped: number };
+  if (scopes.length === 0 && !(await ports.paired())) {
+    return { kind: 'nothing-shared', message: NOTHING_SHARED_MESSAGE };
+  }
+  let down: ConnectorDownSyncCounts;
   try {
     down = await ports.downSync();
   } catch (err) {
@@ -313,8 +346,12 @@ export async function runConnectorSyncNow(ports: ConnectorSyncPorts): Promise<Co
   }
   // Fresh list, not the one loaded before the slow down-sync: only scopes the
   // user STILL shares may be pushed (revocation honesty; see the doc above).
+  // The fold can also have ADDED a scope here, and that one is pushed.
   const fresh = await ports.store.load();
-  if (fresh.length === 0) return { kind: 'synced-no-push', ...down };
+  if (fresh.length === 0) {
+    const reason = scopes.length === 0 ? 'nothing-shared' : 'unshared-mid-sync';
+    return { kind: 'synced-no-push', reason, ...down };
+  }
   try {
     const { pushed } = await ports.pushScopes(fresh);
     return { kind: 'synced', ...down, pushed };
@@ -331,11 +368,7 @@ export async function runConnectorSyncNow(ports: ConnectorSyncPorts): Promise<Co
  * where the closing "pushed back" sentence would be a lie.
  */
 export function connectorSyncSummary(
-  r: {
-    added: number;
-    forgotten: number;
-    deduped: number;
-  },
+  r: { added: number; forgotten: number; deduped: number; held_scopes?: readonly string[] },
   opts?: { pushedBack?: boolean },
 ): string {
   const memories = (n: number) => (n === 1 ? '1 new memory' : `${n} new memories`);
@@ -356,5 +389,8 @@ export function connectorSyncSummary(
   if (opts?.pushedBack !== false) {
     parts.push('Your shared scopes were pushed back so the server matches your vault.');
   }
+  // A held project is the whole point of a sync that landed nothing: say which
+  // one, and what sharing it would do.
+  for (const scope of r.held_scopes ?? []) parts.push(holdMessage(heldSlug(scope)));
   return parts.join(' ');
 }

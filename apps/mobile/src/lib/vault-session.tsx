@@ -48,6 +48,7 @@ import {
   loadSyncBaseline,
   loadSyncServerUrl,
   readCachedMasterKeyHex,
+  saveConnectorPairedAt,
   saveDeviceSecretHex,
   saveLastSyncedAt,
   saveLocalDirty,
@@ -1386,7 +1387,11 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     const { secret, server } = await connectorContext();
     try {
       const entitlement = await maybeConnectorEntitlement(secret);
-      return await startPairing({ server, deviceSecret: secret, entitlement });
+      const code = await startPairing({ server, deviceSecret: secret, entitlement });
+      // This phone now has an account on that server, which is what lets a
+      // later sync fold from an empty shared list (ADR 0050 Decision 5).
+      await saveConnectorPairedAt();
+      return code;
     } finally {
       memzero(secret);
     }

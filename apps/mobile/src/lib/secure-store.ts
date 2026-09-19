@@ -34,6 +34,7 @@ const SYNC_LAST_SHA_KEY = 'nk.sync_last_sha';
 const SYNC_LAST_GENERATION_KEY = 'nk.sync_last_generation';
 const CONNECTOR_SERVER_KEY = 'nk.connector_server_url';
 const CONNECTOR_SHARED_SCOPES_KEY = 'nk.connector_shared_scopes';
+const CONNECTOR_PAIRED_AT_KEY = 'nk.connector_paired_at';
 const JOURNAL_CARD_DISMISSED_KEY = 'nk.journal_card_dismissed';
 
 const BASE_OPTIONS: SecureStore.SecureStoreOptions = {
@@ -255,7 +256,30 @@ export async function loadLastSyncGeneration(): Promise<number | null> {
 // source (read once, folded into the vault, deleted). ---
 
 export async function saveConnectorServerUrl(url: string): Promise<void> {
+  // A pairing belongs to one server, so a different URL drops the marker;
+  // setting the same URL again keeps it (same rule as the desktop sidecar).
+  const current = await SecureStore.getItemAsync(CONNECTOR_SERVER_KEY, BASE_OPTIONS);
+  if (current !== url) await clearConnectorPairedAt();
   await SecureStore.setItemAsync(CONNECTOR_SERVER_KEY, url, BASE_OPTIONS);
+}
+
+/**
+ * Record that this phone started a pairing with the configured connector
+ * server (ADR 0050 Decision 5). Not a secret: it only says this device has an
+ * account there, which is what lets a sync fold from an empty shared list
+ * without creating one.
+ */
+export async function saveConnectorPairedAt(at: Date = new Date()): Promise<void> {
+  await SecureStore.setItemAsync(CONNECTOR_PAIRED_AT_KEY, at.toISOString(), BASE_OPTIONS);
+}
+
+/** When this phone last started a pairing with the configured server, or null. */
+export async function loadConnectorPairedAt(): Promise<string | null> {
+  return SecureStore.getItemAsync(CONNECTOR_PAIRED_AT_KEY, BASE_OPTIONS);
+}
+
+export async function clearConnectorPairedAt(): Promise<void> {
+  await SecureStore.deleteItemAsync(CONNECTOR_PAIRED_AT_KEY, BASE_OPTIONS);
 }
 
 export async function loadConnectorServerUrl(): Promise<string | null> {
@@ -318,5 +342,6 @@ export async function wipeAllSecrets(): Promise<void> {
   await SecureStore.deleteItemAsync(SYNC_LAST_GENERATION_KEY);
   await SecureStore.deleteItemAsync(CONNECTOR_SERVER_KEY);
   await SecureStore.deleteItemAsync(CONNECTOR_SHARED_SCOPES_KEY);
+  await SecureStore.deleteItemAsync(CONNECTOR_PAIRED_AT_KEY);
   await SecureStore.deleteItemAsync(JOURNAL_CARD_DISMISSED_KEY);
 }

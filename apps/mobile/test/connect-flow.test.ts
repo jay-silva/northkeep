@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
+import { holdMessage } from '@northkeep/sync';
 import {
   CONNECTOR_NETWORK_MESSAGE,
   CONNECTOR_PRIVATE_BETA_MESSAGE,
@@ -10,6 +11,7 @@ import {
   PAIRING_CODE_TTL_SECONDS,
   SYNC_PUSH_FAILED_FOLLOWUP,
   SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE,
+  SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE,
   classifyConnectorError,
   connectorSyncSummary,
   formatPairingCountdown,
@@ -250,6 +252,7 @@ describe('runConnectorSyncNow', () => {
     const { store } = memStore([]);
     const outcome = await runConnectorSyncNow({
       store,
+      paired: async () => false,
       downSync: async () => {
         throw new Error('must not be called');
       },
@@ -265,9 +268,10 @@ describe('runConnectorSyncNow', () => {
     const calls: string[] = [];
     const outcome = await runConnectorSyncNow({
       store,
+      paired: async () => false,
       downSync: async () => {
         calls.push('down');
-        return { added: 3, forgotten: 1, deduped: 2 };
+        return { added: 3, forgotten: 1, deduped: 2, held: 0, held_scopes: [] };
       },
       pushScopes: async (scopes) => {
         calls.push(`push:${scopes.join(',')}`);
@@ -275,7 +279,15 @@ describe('runConnectorSyncNow', () => {
       },
     });
     expect(calls).toEqual(['down', 'push:conversations']);
-    expect(outcome).toEqual({ kind: 'synced', added: 3, forgotten: 1, deduped: 2, pushed: 9 });
+    expect(outcome).toEqual({
+      kind: 'synced',
+      added: 3,
+      forgotten: 1,
+      deduped: 2,
+      held: 0,
+      held_scopes: [],
+      pushed: 9,
+    });
   });
 
   it('pushes the FRESH scope list when the store changed during the slow down-sync', async () => {
@@ -287,9 +299,10 @@ describe('runConnectorSyncNow', () => {
     const pushedWith: string[][] = [];
     const outcome = await runConnectorSyncNow({
       store,
+      paired: async () => false,
       downSync: async () => {
         await store.save(['conversations']); // unshare completed mid-sync
-        return { added: 1, forgotten: 0, deduped: 0 };
+        return { added: 1, forgotten: 0, deduped: 0, held: 0, held_scopes: [] };
       },
       pushScopes: async (scopes) => {
         pushedWith.push(scopes);
@@ -297,29 +310,47 @@ describe('runConnectorSyncNow', () => {
       },
     });
     expect(pushedWith).toEqual([['conversations']]);
-    expect(outcome).toEqual({ kind: 'synced', added: 1, forgotten: 0, deduped: 0, pushed: 2 });
+    expect(outcome).toEqual({
+      kind: 'synced',
+      added: 1,
+      forgotten: 0,
+      deduped: 0,
+      held: 0,
+      held_scopes: [],
+      pushed: 2,
+    });
   });
 
   it('skips the push entirely when every scope was unshared mid-sync, and says so', async () => {
     const { store } = memStore(['conversations']);
     const outcome = await runConnectorSyncNow({
       store,
+      paired: async () => false,
       downSync: async () => {
         await store.save([]); // the last share was revoked while syncing
-        return { added: 2, forgotten: 0, deduped: 1 };
+        return { added: 2, forgotten: 0, deduped: 1, held: 0, held_scopes: [] };
       },
       pushScopes: async () => {
         throw new Error('push must not be called with nothing shared');
       },
     });
-    expect(outcome).toEqual({ kind: 'synced-no-push', added: 2, forgotten: 0, deduped: 1 });
+    expect(outcome).toEqual({
+      kind: 'synced-no-push',
+      reason: 'unshared-mid-sync',
+      added: 2,
+      forgotten: 0,
+      deduped: 1,
+      held: 0,
+      held_scopes: [],
+    });
   });
 
   it('reports a partial sync when the down-sync landed but the write-back push failed', async () => {
     const { store } = memStore(['conversations']);
     const outcome = await runConnectorSyncNow({
       store,
-      downSync: async () => ({ added: 3, forgotten: 1, deduped: 0 }),
+      paired: async () => false,
+      downSync: async () => ({ added: 3, forgotten: 1, deduped: 0, held: 0, held_scopes: [] }),
       pushScopes: async () => {
         throw new TypeError('Network request failed');
       },
@@ -339,10 +370,84 @@ describe('runConnectorSyncNow', () => {
     }
   });
 
+  // --- ADR 0050 Decision 5: a paired phone folds from an empty shared list ---
+
+  it('folds and pushes the newly marked scope when paired with nothing shared', async () => {
+    // A project created in a connected app arrives only through the fold, which
+    // marks its scope; the push that follows must carry that fresh list.
+    const { store } = memStore([]);
+    const pushedWith: string[][] = [];
+    const outcome = await runConnectorSyncNow({
+      store,
+      paired: async () => true,
+      downSync: async () => {
+        await store.save(['project:hosted-thing']); // the fold marked it
+        return { added: 1, forgotten: 0, deduped: 0, held: 0, held_scopes: [] };
+      },
+      pushScopes: async (scopes) => {
+        pushedWith.push(scopes);
+        return { pushed: 1 };
+      },
+    });
+    expect(pushedWith).toEqual([['project:hosted-thing']]);
+    expect(outcome).toMatchObject({ kind: 'synced', added: 1, pushed: 1 });
+  });
+
+  it('still refuses without a pairing, and never calls the connector', async () => {
+    const { store } = memStore([]);
+    const outcome = await runConnectorSyncNow({
+      store,
+      paired: async () => false,
+      downSync: async () => {
+        throw new Error('must not be called');
+      },
+      pushScopes: async () => {
+        throw new Error('must not be called');
+      },
+    });
+    expect(outcome).toEqual({ kind: 'nothing-shared', message: NOTHING_SHARED_MESSAGE });
+  });
+
+  it('reports a held project and says the push was skipped because nothing is shared', async () => {
+    const { store } = memStore([]);
+    const outcome = await runConnectorSyncNow({
+      store,
+      paired: async () => true,
+      downSync: async () => ({
+        added: 0,
+        forgotten: 0,
+        deduped: 0,
+        held: 1,
+        held_scopes: ['project:held-one'],
+      }),
+      pushScopes: async () => {
+        throw new Error('push must not be called with nothing shared');
+      },
+    });
+    expect(outcome).toEqual({
+      kind: 'synced-no-push',
+      reason: 'nothing-shared',
+      added: 0,
+      forgotten: 0,
+      deduped: 0,
+      held: 1,
+      held_scopes: ['project:held-one'],
+    });
+    if (outcome.kind === 'synced-no-push') {
+      const summary = connectorSyncSummary(outcome, { pushedBack: false });
+      expect(summary).toContain(holdMessage('held-one'));
+      // The slug, not the scope: "project project:held-one" would be the bug.
+      expect(summary).not.toContain('project:project:');
+      expect(summary).not.toContain('—');
+      expect(SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE).not.toContain('—');
+    }
+  });
+
   it('classifies the down-sync 402 (which has no "HTTP 402" token) neutrally', async () => {
     const { store } = memStore(['conversations']);
     const outcome = await runConnectorSyncNow({
       store,
+      paired: async () => false,
       downSync: async () => {
         throw new Error('The connector server requires an active subscription (402) to down-sync.');
       },
