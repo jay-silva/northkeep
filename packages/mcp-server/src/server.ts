@@ -720,6 +720,67 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       ),
   );
 
+  server.registerTool(
+    'project_create',
+    {
+      title: 'Create a project',
+      description:
+        'Create a project only when the user asks for one; never to hold notes that belong in an existing ' +
+        'project or in a memory. What & Why and Current Status are required: a project with neither is not ' +
+        'a project. Log and Decisions start empty, because the first log entry belongs to the first session ' +
+        'that does work. Use project_update to change a project that already exists.',
+      inputSchema: {
+        project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
+        title: z.string().max(120).optional().describe('Display title shown in the app (single line, up to 120 characters).'),
+        what_why: z.string().min(1).max(16384).describe('What & Why section: what this project is and why it exists'),
+        status: z.string().min(1).max(16384).describe('Current Status section: where the project stands right now'),
+        next_actions: z.string().max(16384).optional().describe('Next Actions section'),
+      },
+    },
+    async ({ project, title, what_why, status, next_actions }) =>
+      run(
+        ctx,
+        'project_create',
+        {
+          scope: `project:${project}`,
+          content_chars:
+            (title?.length ?? 0) + what_why.length + status.length + (next_actions?.length ?? 0),
+        },
+        vaultPath,
+        (vault, granted) => {
+          refuseProjectWriteUnderTier1();
+          if (!isValidProjectSlug(project)) {
+            throw new Error(`Invalid project slug "${project}".`);
+          }
+          const scope = projectScope(project);
+          assertProjectGranted(scope, granted);
+          const request: ProjectUpdateRequest = {
+            project, expected_revision: null, title, what_why, status, next_actions,
+          };
+          let current;
+          try {
+            current = vault.updateProject(request, granted);
+          } catch (error) {
+            // Core reads an existing head as a stale revision. A create says so in its
+            // own words, and carries no current view, so a refusal returns no document.
+            if (error instanceof ProjectHandoffError && error.code === 'stale_project') {
+              throw new ProjectHandoffError('stale_project', 'Project already exists; use project_update.');
+            }
+            throw error;
+          }
+          vault.save();
+          return {
+            payload: {
+              ...current, id: current.revision, type: 'working', created_at: current.updated_at,
+              created: true,
+            },
+            result_id: current.revision,
+            disclosed_scopes: [scope],
+          };
+        },
+      ),
+  );
+
   const checkpointSchema = {
     vault_id: idSchema,
     project: projectSlugSchema,

@@ -60,7 +60,14 @@ describe('CONTRACT_TEXT', () => {
     expect(CONTRACT_TEXT).toContain('project_get');
     expect(CONTRACT_TEXT).toContain('project_update');
     expect(CONTRACT_TEXT).toContain('project_list');
+    expect(CONTRACT_TEXT).toContain('project_create');
     expect(CONTRACT_TEXT).toContain(PROJECT_STANDING_INSTRUCTION);
+    // ADR 0050 Decision 7: one sentence, on every surface.
+    expect(CONTRACT_TEXT).toContain(
+      'Create a project with project_create only when the user asks for one; never create one to hold notes that belong in an existing project or in a memory.',
+    );
+    expect(CONTRACT_TEXT).not.toContain('On a hosted surface');
+    expect(CONTRACT_TEXT).not.toContain('never create a project there');
     expect(CONTRACT_GRACEFUL_DEGRADATION).toBe(
       'If the NorthKeep project tools are unavailable, disabled, or a call returns a scope or permission error, mention it once and continue without them; never retry in a loop and never block the session on it.',
     );

@@ -445,15 +445,22 @@ describe('project tools', () => {
         log_entry: 'UNIQUE-LOG-PHRASE',
       },
     });
+    await mcp.callTool({
+      name: 'project_create',
+      arguments: { project: 'auditnew', what_why: 'UNIQUE-CREATE-WHY', status: 'UNIQUE-CREATE-STATUS' },
+    });
     await mcp.callTool({ name: 'project_get', arguments: { project: 'auditme' } });
     await mcp.callTool({ name: 'project_list', arguments: {} });
     const raw = fs.readFileSync(path.join(home, 'mcp-calls.log'), 'utf8');
     expect(raw).not.toContain('UNIQUE-STATUS-PHRASE');
     expect(raw).not.toContain('UNIQUE-LOG-PHRASE');
+    expect(raw).not.toContain('UNIQUE-CREATE-WHY');
+    expect(raw).not.toContain('UNIQUE-CREATE-STATUS');
     const rows = readCallLog();
     expect(rows.find((r) => r.tool === 'project_update')?.disclosed_scopes).toEqual(['project:auditme']);
+    expect(rows.find((r) => r.tool === 'project_create')?.disclosed_scopes).toEqual(['project:auditnew']);
     expect(rows.find((r) => r.tool === 'project_get')?.disclosed_scopes).toEqual(['project:auditme']);
-    expect(rows.find((r) => r.tool === 'project_list')?.result_count).toBe(1);
+    expect(rows.find((r) => r.tool === 'project_list')?.result_count).toBe(2);
   });
 
   it('coordinates two clients with revision conflicts and idempotent checkpoint retries', async () => {
@@ -535,6 +542,121 @@ describe('project tools', () => {
     });
     expect(refused.isError).toBe(true);
     expect(JSON.parse(toolText(refused)).error.code).toBe('invalid_request');
+  });
+});
+
+describe('project_create (ADR 0050 Decision 1, local)', () => {
+  it('creates a project and the title round-trips through project_get', async () => {
+    const mcp = await connect();
+    const created = await mcp.callTool({
+      name: 'project_create',
+      arguments: {
+        project: 'adr-0050',
+        title: 'Hosted project creation',
+        what_why: 'Prove a connected app can start a project.',
+        status: 'Tool written.',
+        next_actions: '- [ ] Fold it on sync',
+      },
+    });
+    expect(created.isError, toolText(created)).toBeFalsy();
+    const payload = JSON.parse(toolText(created)) as {
+      created: boolean; scope: string; type: string; revision: string; content: string;
+    };
+    expect(payload.created).toBe(true);
+    expect(payload.scope).toBe('project:adr-0050');
+    expect(payload.type).toBe('working');
+
+    const got = JSON.parse(
+      toolText(await mcp.callTool({ name: 'project_get', arguments: { project: 'adr-0050' } })),
+    ) as { title: string | null; content: string; status: string };
+    expect(got.title).toBe('Hosted project creation');
+    expect(got.status).toBe('Tool written.');
+    expect(got.content).toContain('Prove a connected app can start a project.');
+    // Log and Decisions start empty: the first entry belongs to the first session.
+    const doc = parseProjectDoc(got.content);
+    expect(getProjectSection(doc, 'Log')).toBe('');
+    expect(getProjectSection(doc, 'Next Actions')).toBe('- [ ] Fold it on sync');
+
+    const vault = openVault();
+    expect(vault.list({ scope: 'project:adr-0050', type: 'working' })).toHaveLength(1);
+    expect(vault.verifyChain().ok).toBe(true);
+    vault.close();
+  });
+
+  it('refuses when a live document already exists, and leaves it alone', async () => {
+    const mcp = await connect();
+    const first = await mcp.callTool({
+      name: 'project_create',
+      arguments: { project: 'taken', what_why: 'First writer.', status: 'Held.' },
+    });
+    expect(first.isError).toBeFalsy();
+
+    const second = await mcp.callTool({
+      name: 'project_create',
+      arguments: { project: 'taken', what_why: 'Second writer.', status: 'Should not land.' },
+    });
+    expect(second.isError).toBe(true);
+    const error = (JSON.parse(toolText(second)) as { error: { code: string; message: string; current?: unknown } }).error;
+    expect(error.message).toBe('Project already exists; use project_update.');
+    expect(error.current).toBeUndefined();
+
+    const vault = openVault();
+    const live = vault.list({ scope: 'project:taken', type: 'working' });
+    expect(live).toHaveLength(1);
+    expect(live[0]!.content).toContain('First writer.');
+    expect(live[0]!.content).not.toContain('Second writer.');
+    vault.close();
+
+    // project_update with a null revision keeps its own mapping.
+    const updated = await mcp.callTool({
+      name: 'project_update',
+      arguments: { project: 'taken', expected_revision: null, status: 'Still stale.' },
+    });
+    expect(updated.isError).toBe(true);
+    expect(JSON.parse(toolText(updated)).error.message).toBe('Project changed after it was read.');
+  });
+
+  it('refuses outside the grant and writes nothing', async () => {
+    process.env.NORTHKEEP_SCOPES = 'personal';
+    const mcp = await connect();
+    const denied = await mcp.callTool({
+      name: 'project_create',
+      arguments: { project: 'ungranted', what_why: 'Out of grant.', status: 'Out of grant.' },
+    });
+    expect(denied.isError).toBe(true);
+    expect(toolText(denied)).toMatch(/outside this connection grant/);
+    const vault = openVault();
+    expect(vault.list({ scope: 'project:ungranted' })).toHaveLength(0);
+    vault.close();
+  });
+
+  it('refuses under NORTHKEEP_REDACT_TIER=1 and writes nothing', async () => {
+    process.env.NORTHKEEP_REDACT_TIER = '1';
+    const mcp = await connect();
+    const refused = await mcp.callTool({
+      name: 'project_create',
+      arguments: { project: 'masked', what_why: 'Masked text cannot round-trip.', status: 'Refused.' },
+    });
+    expect(refused.isError).toBe(true);
+    expect(JSON.parse(toolText(refused)).error.code).toBe('invalid_request');
+    const vault = openVault();
+    expect(vault.list({ scope: 'project:masked' })).toHaveLength(0);
+    vault.close();
+  });
+
+  it('refuses an invalid slug and writes nothing', async () => {
+    const mcp = await connect();
+    // The slug pattern is the same in the tool schema and in core, so zod refuses
+    // first; either way nothing reaches the vault.
+    const refused = await mcp.callTool({
+      name: 'project_create',
+      arguments: { project: 'Not A Slug', what_why: 'Bad slug.', status: 'Bad slug.' },
+    });
+    expect(refused.isError).toBe(true);
+    expect(toolText(refused)).toMatch(/slug/i);
+    const vault = openVault();
+    expect(vault.list({ scope: 'project:Not A Slug' })).toHaveLength(0);
+    vault.close();
   });
 });
 

@@ -59,7 +59,7 @@ export const CONTRACT_GRACEFUL_DEGRADATION =
 
 /**
  * Canonical contract. Composed from PROJECT_STANDING_INSTRUCTION plus the
- * anti-spam, no-false-pass, no-secrets, hosted-surface, and P6 lines.
+ * anti-spam, no-false-pass, no-secrets, when-to-create, and P6 lines.
  * No em dashes. Under 2048 bytes.
  */
 export const CONTRACT_TEXT =
@@ -68,7 +68,7 @@ export const CONTRACT_TEXT =
   'If you are unsure whether the work is a tracked project, call project_list once and match; if nothing matches, do nothing. ' +
   'Do not claim a project was updated unless the project_update call succeeded. ' +
   'Never write secrets, credentials, PHI, or personal identifying information into a project document. ' +
-  'On a hosted surface, use the NorthKeep connector project tools if they are present; never create a project there. ' +
+  'Create a project with project_create only when the user asks for one; never create one to hold notes that belong in an existing project or in a memory. ' +
   CONTRACT_GRACEFUL_DEGRADATION;
 
 export const CLAUDE_CONTRACT_FILENAME = 'northkeep-projects.md';
