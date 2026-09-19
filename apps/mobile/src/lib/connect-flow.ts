@@ -314,10 +314,8 @@ export interface ConnectorSyncPorts {
   /** The write-back re-push so the server's rows match the just-updated vault. */
   pushScopes(scopes: string[]): Promise<{ pushed: number }>;
   /**
-   * Whether this phone has started a pairing with the connector server (ADR
-   * 0050 Decision 5). A paired phone folds even with nothing shared, because a
-   * project created in a connected app arrives only that way. An unpaired one
-   * has no account on that server and must not create one.
+   * Whether this phone has started a pairing (ADR 0050 Decision 5). An
+   * unpaired phone has no account on that server and must not create one.
    */
   paired(): Promise<boolean>;
 }

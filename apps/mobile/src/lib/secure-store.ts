@@ -1,5 +1,6 @@
 import * as SecureStore from 'expo-secure-store';
 import { parseSyncBaseline, serializeSyncBaseline, type SyncBaseline } from './sync-flow';
+import { DEFAULT_CONNECTOR_SERVER_URL } from './connect-flow';
 
 export type { SyncBaseline };
 
@@ -258,7 +259,9 @@ export async function loadLastSyncGeneration(): Promise<number | null> {
 export async function saveConnectorServerUrl(url: string): Promise<void> {
   // A pairing belongs to one server, so a different URL drops the marker;
   // setting the same URL again keeps it (same rule as the desktop sidecar).
-  const current = await SecureStore.getItemAsync(CONNECTOR_SERVER_KEY, BASE_OPTIONS);
+  // An unset key means this phone is on the default, which is what it paired
+  // with, so re-saving the default must not clear the marker.
+  const current = (await SecureStore.getItemAsync(CONNECTOR_SERVER_KEY, BASE_OPTIONS)) ?? DEFAULT_CONNECTOR_SERVER_URL;
   if (current !== url) await clearConnectorPairedAt();
   await SecureStore.setItemAsync(CONNECTOR_SERVER_KEY, url, BASE_OPTIONS);
 }

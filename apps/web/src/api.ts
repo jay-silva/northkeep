@@ -977,10 +977,9 @@ async function dispatch(
     const entitlement = await maybeEntitlement(deviceSecret);
     const result = await session.withVault(async (vault) => {
       foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
-      // ADR 0050 Decision 5: a project created in a connected app arrives only
-      // through the fold and is not shared until the fold marks it, so a paired
-      // device folds first and reads the shared list afterwards. A device that
-      // never paired has no account on that server and makes no call at all.
+      // ADR 0050 Decision 5: a hosted project arrives only through the fold,
+      // which marks its scope. A device that never paired has no account on
+      // that server, so it makes no call at all.
       if (vault.sharedScopes().length === 0 && connectorPairedAt() === null) return null;
       const down = await downSyncConnector({ server: config.server, deviceSecret, vault, entitlement });
       // Re-read after the slow down-sync so a scope unshared mid-sync (on this

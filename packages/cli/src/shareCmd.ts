@@ -163,10 +163,8 @@ function heldSlug(scope: string): string {
  * (ADR 0019, phase C3). One vault-open path handles both, so the pushed rows
  * reflect the just-applied down-sync.
  *
- * ADR 0050 Decision 5: a project created in a connected app reaches this device
- * only through the fold, and its scope is not shared until the fold marks it.
- * So a paired device runs the fold even with nothing shared, and the shared list
- * is read again afterwards so that same run pushes the newly marked scope.
+ * ADR 0050 Decision 5: a project created in a connected app arrives only through
+ * the fold, which marks its scope, so the shared list is read after the fold.
  */
 export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => never): Promise<void> {
   const cfg = requireConfig(fail);
