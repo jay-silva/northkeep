@@ -1,4 +1,4 @@
-import { parseProjectSlug, type MemoryType, type Vault } from '@northkeep/core';
+import { isMemoryType, parseProjectSlug, type MemoryType, type Vault } from '@northkeep/core';
 import { deriveConnectorToken } from './creds.js';
 import { assertConnectorUrl } from './connector-config.js';
 import { timeoutSignal } from './abort.js';
@@ -217,6 +217,25 @@ export interface DownSyncResult {
   forgotten: number;
   /** Connector-born memories skipped because an identical live vault entry existed. */
   deduped: number;
+  /** Rows left pending because their unshared project scope is not accepting them. */
+  held: number;
+  /** The unshared project scopes those rows are for, sorted and unique. */
+  held_scopes: string[];
+  /** Rows dropped unapplied and unacked because their type is not a memory type. */
+  skipped: number;
+}
+
+/**
+ * What every sync surface tells the user about a held scope (ADR 0050
+ * Decision 4). The second sentence is the one the fifth review required: the
+ * user is choosing to let the app's document win.
+ */
+export function holdMessage(slug: string): string {
+  return (
+    `A connected app wrote to project ${slug}, which is private on this device. ` +
+    `Share project:${slug} in NorthKeep to accept it. ` +
+    "Sharing it lets the app's document replace the one on this device; the current one stays in history."
+  );
 }
 
 /**
@@ -259,9 +278,55 @@ export async function downSyncConnector(opts: {
   const acked: Array<{ server_id: string; local_entry_id: string }> = [];
   let added = 0;
   let deduped = 0;
+  let held = 0;
+  let skipped = 0;
+  const heldScopes = new Set<string>();
 
-  for (const e of entries) {
-    if (!e.server_id || !e.content) continue;
+  // ADR 0050 Decision 4: classify each scope BEFORE any dedupe or apply, because
+  // an unshared project scope must not be reached by the M14 path at all.
+  const groups = new Map<string, PendingEntry[]>();
+  for (const raw of entries) {
+    if (!raw.server_id || !raw.content) continue;
+    // vault.remember trims the scope, so a padded name would take the
+    // non-project path and land inside a private project. The type is left
+    // verbatim: only an exact memory type may be applied.
+    const scope = typeof raw.scope === 'string' ? raw.scope.trim() : '';
+    if (!scope) continue;
+    const e: PendingEntry = { ...raw, scope };
+    const group = groups.get(scope);
+    if (group) group.push(e);
+    else groups.set(scope, [e]);
+  }
+  const sharedHere = new Set(opts.vault.sharedScopes());
+  const applicable: PendingEntry[] = [];
+  /** Scopes the fold marks Shared once their rows are applied. */
+  const toMark: string[] = [];
+
+  for (const [scope, group] of groups) {
+    const allTyped = group.every((e) => isMemoryType(e.type));
+    if (parseProjectSlug(scope) === null || sharedHere.has(scope)) {
+      for (const e of group) {
+        // Fail closed per row: remember() would throw and abort the whole fold,
+        // leaving nothing saved and nothing acked.
+        if (!isMemoryType(e.type)) skipped++;
+        else applicable.push(e);
+      }
+      continue;
+    }
+    const empty = opts.vault.list({ scope }).length === 0;
+    const workingRows = group.filter((e) => e.type === 'working');
+    // The scope was empty and the app sent exactly one document: nothing private
+    // can ride along on the push that follows, so the mark discloses nothing.
+    if (allTyped && empty && workingRows.length === 1) {
+      applicable.push(...group);
+      toMark.push(scope);
+      continue;
+    }
+    held += group.length;
+    heldScopes.add(scope);
+  }
+
+  for (const e of applicable) {
     // Dedupe against LIVE (non-forgotten, non-superseded) entries in the scope so
     // a re-run never creates a second copy of the same connector memory.
     const dup = opts.vault.list({ scope: e.scope }).find((v) => v.content === e.content);
@@ -293,6 +358,10 @@ export async function downSyncConnector(opts: {
     added++;
   }
 
+  // The mark rides the same save that precedes the ack. Marking after the ack
+  // would leave a crash window whose residual never heals (ADR 0050).
+  for (const scope of toMark) opts.vault.setScopeShared(scope, true);
+
   // Apply forgets: tombstone the vault entry if it is still live. Every forget is
   // acked regardless so the server drains its queue and deletes the row (no
   // resurrection on a later push).
@@ -322,7 +391,7 @@ export async function downSyncConnector(opts: {
   });
   if (!ackRes.ok) throw new Error(`Connector server returned HTTP ${ackRes.status} on ack.`);
 
-  return { added, forgotten, deduped };
+  return { added, forgotten, deduped, held, held_scopes: [...heldScopes].sort(), skipped };
 }
 
 /**

@@ -604,9 +604,10 @@ every milestone; if a limit is removed, say when and how.*
 - **The contract is advisory.** An agent updates the project because its
   tools and a standing instruction tell it to. Nothing forces a session-end
   handoff; a session that ends abruptly wrote nothing.
-- **Cloud agents can update a shared project (M14).** Claude.ai via Cloud
-  Connect can call `project_list`, `project_get`, and `project_update` on a
-  shared project scope. After `northkeep share sync`, local agents see one
+- **Cloud agents can create and update a project (M14, ADR 0050).**
+  Claude.ai via Cloud Connect can call `project_list`, `project_get`,
+  `project_update`, and `project_create`; the first three need a shared
+  project scope, and creation is covered in the M14 section below. After `northkeep share sync`, local agents see one
   live working document via `project_get`. Mobile has no project tools yet.
   ChatGPT still sees a shared project through `search` / `fetch` and the
   generic memory tools; it does not have to use the project tools.
@@ -624,6 +625,29 @@ every milestone; if a limit is removed, say when and how.*
 
 ## M14 (connector project tools), current
 
+- **A connected app can create a project.** `project_create` writes the
+  new document from the app, on the hosted and the local server alike.
+- **A created project reaches the vault only on a share sync.** It lands
+  when the user runs a share sync on a device that has paired with the
+  connector. Nothing arrives on its own.
+- **An empty project scope is marked Shared on arrival, with no dialog.**
+  A project scope with no live entry on that device is marked Shared when
+  the app's document arrives, and receives exactly the rows the app wrote.
+  This is the one named exception to "sharing is loudly confirmed"; the
+  Shared badge and unshare are the controls.
+- **A scope that already holds anything holds the app's rows.** The rows
+  stay pending and are offered on every sync until the user shares the
+  scope in NorthKeep. Sharing then lets the app's document replace the
+  one on that device; the local document stays in history.
+- **Unshare is still the revoke.** A project created after an unshare is
+  refused until the user re-shares the scope deliberately.
+- **A shared scope whose live memories were all forgotten refuses app
+  writes.** The scope's only rows are then the app's own pending ones, so
+  writes are refused until a memory is added or the scope is re-shared.
+  The scope is still shared; the refusal says so.
+- **A device that never paired does not fetch hosted creates.** The
+  pairing marker is per device. A second device receives the project
+  through vault sync, or folds it once it pairs.
 - **An old desktop client shadows instead of superseding.** A client that
   predates M14 folds a project update as a new working memory. Newest-wins
   then shows the folded document; the prior document remains live in the

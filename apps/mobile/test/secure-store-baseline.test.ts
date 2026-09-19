@@ -30,8 +30,12 @@ const {
   loadLastSyncVersion,
   loadLastSyncGeneration,
   savePendingStampSha,
+  saveConnectorPairedAt,
+  loadConnectorPairedAt,
+  saveConnectorServerUrl,
   wipeAllSecrets,
 } = await import('../src/lib/secure-store.js');
+const { DEFAULT_CONNECTOR_SERVER_URL } = await import('../src/lib/connect-flow.js');
 
 const SHA = 'a'.repeat(64);
 const OTHER = 'b'.repeat(64);
@@ -135,5 +139,25 @@ describe('the baseline is written in ONE call, and the legacy keys fold in once'
     expect((await loadSyncBaseline())?.pendingStampSha).toBe(OTHER);
     await wipeAllSecrets();
     expect(await loadSyncBaseline()).toBeNull();
+  });
+
+  // ADR 0050 Decision 5: a pairing belongs to one connector server.
+  it('keeps the pairing marker when the connector server is unchanged', async () => {
+    await saveConnectorPairedAt(new Date('2026-09-19T00:00:00.000Z'));
+    // Nothing stored means this phone is on the default, which is what it paired with.
+    await saveConnectorServerUrl(DEFAULT_CONNECTOR_SERVER_URL);
+    expect(await loadConnectorPairedAt()).toBe('2026-09-19T00:00:00.000Z');
+    await saveConnectorServerUrl(DEFAULT_CONNECTOR_SERVER_URL);
+    expect(await loadConnectorPairedAt()).toBe('2026-09-19T00:00:00.000Z');
+  });
+
+  it('drops the pairing marker when the connector server changes, and on a wipe', async () => {
+    await saveConnectorPairedAt();
+    await saveConnectorServerUrl('https://connector.example.test');
+    expect(await loadConnectorPairedAt()).toBeNull();
+
+    await saveConnectorPairedAt();
+    await wipeAllSecrets();
+    expect(await loadConnectorPairedAt()).toBeNull();
   });
 });

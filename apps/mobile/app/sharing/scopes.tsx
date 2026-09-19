@@ -4,6 +4,7 @@ import { Redirect, useLocalSearchParams } from 'expo-router';
 import {
   SYNC_PUSH_FAILED_FOLLOWUP,
   SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE,
+  SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE,
   connectorSyncSummary,
   runConnectorSyncNow,
   runShareScope,
@@ -12,8 +13,7 @@ import {
   type ConnectorFailure,
   type SharedScopeStore,
 } from '../../src/lib/connect-flow';
-import {
-} from '../../src/lib/secure-store';
+import { loadConnectorPairedAt } from '../../src/lib/secure-store';
 import { useVaultSession } from '../../src/lib/vault-session';
 import { Button, ErrorNote, FieldLabel, colors, type } from '../../src/ui';
 
@@ -132,16 +132,19 @@ export default function ManageScopes() {
         store,
         downSync: () => session.connectorDownSync(),
         pushScopes: (scopes) => session.connectorPushScopes(scopes),
+        paired: async () => (await loadConnectorPairedAt()) !== null,
       });
       setConnectorBusy(null);
       if (outcome.kind === 'synced') {
         setSyncResult(connectorSyncSummary(outcome));
       } else if (outcome.kind === 'synced-no-push') {
-        // Every scope was unshared while the sync ran; the push was skipped so
-        // no revoked plaintext went back up. Say so honestly.
-        setSyncResult(
-          `${connectorSyncSummary(outcome, { pushedBack: false })} ${SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE}`,
-        );
+        // Nothing is shared now, so the push was skipped and no revoked
+        // plaintext went back up. Which of the two reasons it was matters.
+        const skipped =
+          outcome.reason === 'nothing-shared'
+            ? SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE
+            : SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE;
+        setSyncResult(`${connectorSyncSummary(outcome, { pushedBack: false })} ${skipped}`);
         setSharedScopes(await store.load());
       } else if (outcome.kind === 'partially-synced') {
         // Both halves stay visible: the memories arrived AND the re-push failed.

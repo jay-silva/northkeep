@@ -41,8 +41,16 @@ disagree, CLAUDE.md wins.
    redaction floor before they are sent, and only per call or under a grant the
    user created at a live prompt and can revoke. Default is private; sharing is
    per-scope, opt-in, loudly confirmed, badge-visible, and reversible with
-   server-side deletion. Under (c) NorthKeep sends only those arguments: never
-   the vault, never the transcript. This invariant bounds what NORTHKEEP
+   server-side deletion. One named exception to "loudly confirmed" (ADR
+   0050): an unshared project scope with no live entry on this device, when
+   a connected app's rows for it arrive and exactly one of them is the
+   project document, is marked Shared without a dialog and receives exactly
+   those rows; from then on it is an ordinary shared scope (everything later
+   written into it is pushed, badge-visible, unshare revokes it). Any other
+   rows a connected app sends to an unshared project scope are held,
+   unapplied, until the user shares the scope.
+   Under (c) NorthKeep sends only those arguments: never the vault, never
+   the transcript. This invariant bounds what NORTHKEEP
    transmits — a tool server running on this machine is outside that boundary
    rather than an exception to it, because a local program the user installed
    may forward what it is given (many wrap a cloud API) and that is its egress,

@@ -411,6 +411,16 @@ describe('M14 connector project tools (step 4)', () => {
     expect((await storage.listEntries(account)).some((r) => r.scope === 'project:never-shared')).toBe(false);
   });
 
+  it('project_update accepts an empty next_actions and clears the section, matching local', async () => {
+    const token = await connectAiApp();
+    const set = await mcpCall(token, 'project_update', { project: 'northkeep', next_actions: 'Do the thing.' });
+    expect(set.isError).toBe(false);
+    const cleared = await mcpCall(token, 'project_update', { project: 'northkeep', next_actions: '' });
+    expect(cleared.isError).toBe(false);
+    const got = await mcpCall(token, 'project_get', { project: 'northkeep' });
+    expect(getProjectSection(parseProjectDoc(got.text), 'Next Actions')).toBe('');
+  });
+
   it('rolls the Log into a pending episodic archive instead of refusing (ADR 0045)', async () => {
     const token = await connectAiApp();
     const lines: string[] = [];

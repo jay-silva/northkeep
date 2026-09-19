@@ -19,6 +19,13 @@ import { northkeepHome, type Vault } from '@northkeep/core';
 export interface ConnectorConfig {
   /** Connector server base URL (https, or loopback for tests). */
   server: string;
+  /**
+   * ISO-8601 time of the last successful pairing start with `server` (ADR
+   * 0050). Device-local, not vault state, and not a secret: it only says this
+   * device has an account on that server, which is what lets a sync fold from
+   * an empty shared list without creating one.
+   */
+  paired_at?: string;
 }
 
 export function connectorConfigPath(): string {
@@ -27,9 +34,14 @@ export function connectorConfigPath(): string {
 
 export function loadConnectorConfig(): ConnectorConfig | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as { server?: unknown };
+    const parsed = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as {
+      server?: unknown;
+      paired_at?: unknown;
+    };
     if (typeof parsed.server !== 'string') return null;
-    return { server: parsed.server };
+    const config: ConnectorConfig = { server: parsed.server };
+    if (typeof parsed.paired_at === 'string') config.paired_at = parsed.paired_at;
+    return config;
   } catch {
     return null;
   }
@@ -37,8 +49,37 @@ export function loadConnectorConfig(): ConnectorConfig | null {
 
 export function saveConnectorConfig(config: ConnectorConfig): void {
   const target = connectorConfigPath();
+  const body: Record<string, unknown> = { server: config.server };
+  if (config.paired_at !== undefined) body.paired_at = config.paired_at;
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(target, `${JSON.stringify({ server: config.server }, null, 2)}\n`, { mode: 0o600 });
+  fs.writeFileSync(target, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
+}
+
+/**
+ * Record that this device paired with the configured server (ADR 0050
+ * Decision 5). Merges into the raw file rather than going through
+ * saveConnectorConfig, which drops keys an older sidecar may still carry.
+ */
+export function markConnectorPaired(now: Date = new Date()): void {
+  const existing = loadConnectorConfig();
+  if (existing === null) {
+    throw new Error('Set a connector server first, then pair. No connector server is configured on this device.');
+  }
+  let raw: Record<string, unknown> = {};
+  try {
+    raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as Record<string, unknown>;
+  } catch {
+    // Unreachable while loadConnectorConfig succeeded; rebuild from it anyway.
+    raw = { server: existing.server };
+  }
+  const target = connectorConfigPath();
+  fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(target, `${JSON.stringify({ ...raw, paired_at: now.toISOString() }, null, 2)}\n`, { mode: 0o600 });
+}
+
+/** When this device last paired with the configured server, or null. */
+export function connectorPairedAt(): string | null {
+  return loadConnectorConfig()?.paired_at ?? null;
 }
 
 /**
@@ -119,6 +160,9 @@ export function assertConnectorUrl(rawUrl: string): URL {
  * Set (or change) the connector server. A pre-0038 sidecar's sharedScopes key
  * is preserved verbatim until foldSidecarScopesIntoVault runs — rewriting it
  * away here would silently drop shares before they reach the vault.
+ *
+ * A pairing belongs to one server, so a different URL clears `paired_at`;
+ * setting the same URL again keeps it.
  */
 export function setConnectorServer(serverUrl: string): ConnectorConfig {
   const url = assertConnectorUrl(serverUrl);
@@ -129,8 +173,12 @@ export function setConnectorServer(serverUrl: string): ConnectorConfig {
   } catch {
     // No existing file — start fresh.
   }
+  const next: Record<string, unknown> = { ...raw, server };
+  if (raw.server !== server) delete next.paired_at;
   const target = connectorConfigPath();
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
-  fs.writeFileSync(target, `${JSON.stringify({ ...raw, server }, null, 2)}\n`, { mode: 0o600 });
-  return { server };
+  fs.writeFileSync(target, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+  const config: ConnectorConfig = { server };
+  if (typeof next.paired_at === 'string') config.paired_at = next.paired_at;
+  return config;
 }

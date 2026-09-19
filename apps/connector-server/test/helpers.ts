@@ -89,3 +89,111 @@ export async function decryptedPendingEntries(
 ): Promise<SharedEntry[]> {
   return decryptEntryList(storage, accountHash, connToken, await storage.listPendingEntries(accountHash));
 }
+
+/**
+ * Run the full pair -> register -> authorize -> consent -> token dance against a
+ * running connector and return an MCP access token. Tests that drive real tool
+ * calls need a real token; there is no shortcut past the OAuth flow.
+ */
+export async function connectAiApp(base: string, deviceSecret: Uint8Array): Promise<string> {
+  const { startPairing } = await import('@northkeep/sync');
+  const crypto = await import('node:crypto');
+  const b64url = (b: Buffer): string => b.toString('base64url');
+  const redirectUri = 'http://localhost:9999/callback';
+  const resource = `${base}/mcp`;
+  const pairingCode = await startPairing({ server: base, deviceSecret: deviceSecret as never });
+  const as = (await fetch(`${base}/.well-known/oauth-authorization-server`).then((r) => r.json())) as {
+    registration_endpoint: string;
+  };
+  const reg = (await fetch(as.registration_endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      client_name: 'nk-test-client',
+      redirect_uris: [redirectUri],
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+      scope: 'mcp',
+    }),
+  }).then((r) => r.json())) as { client_id: string };
+  const verifier = b64url(crypto.randomBytes(32));
+  const challenge = b64url(crypto.createHash('sha256').update(verifier).digest());
+  const state = b64url(crypto.randomBytes(8));
+  const authUrl = new URL(`${base}/authorize`);
+  authUrl.search = new URLSearchParams({
+    response_type: 'code',
+    client_id: reg.client_id,
+    redirect_uri: redirectUri,
+    code_challenge: challenge,
+    code_challenge_method: 'S256',
+    scope: 'mcp',
+    state,
+    resource,
+  }).toString();
+  await fetch(authUrl);
+  const consent = await fetch(`${base}/consent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    redirect: 'manual',
+    body: new URLSearchParams({
+      client_id: reg.client_id,
+      redirect_uri: redirectUri,
+      code_challenge: challenge,
+      state,
+      scope: 'mcp',
+      resource,
+      pairing_code: pairingCode,
+    }).toString(),
+  });
+  const location = consent.headers.get('location');
+  const code = location ? new URL(location).searchParams.get('code') : '';
+  const tok = (await fetch(`${base}/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      grant_type: 'authorization_code',
+      code: code ?? '',
+      redirect_uri: redirectUri,
+      client_id: reg.client_id,
+      code_verifier: verifier,
+      resource,
+    }),
+  }).then((r) => r.json())) as { access_token?: string };
+  return tok.access_token ?? '';
+}
+
+/** One tool call over POST /mcp, returning the first text block. */
+export async function mcpToolCall(
+  base: string,
+  token: string,
+  name: string,
+  args: Record<string, unknown>,
+): Promise<{ text: string; isError: boolean }> {
+  const resp = await fetch(`${base}/mcp`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Accept: 'application/json, text/event-stream',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+  });
+  const ct = resp.headers.get('content-type') || '';
+  const raw = await resp.text();
+  let msg: any = null;
+  if (ct.includes('text/event-stream')) {
+    const line = raw.split('\n').find((l) => l.startsWith('data:'));
+    msg = line ? JSON.parse(line.slice(5).trim()) : null;
+  } else {
+    try {
+      msg = JSON.parse(raw);
+    } catch {
+      msg = null;
+    }
+  }
+  return {
+    text: msg?.result?.content?.[0]?.text || msg?.error?.message || '',
+    isError: msg?.result?.isError === true || Boolean(msg?.error),
+  };
+}
