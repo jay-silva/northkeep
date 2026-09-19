@@ -483,3 +483,120 @@ describe('holdMessage', () => {
     );
   });
 });
+
+/**
+ * ADR 0050 fix round, item 2. The fold is the enforcement point: a hostile or
+ * buggy server may pad a scope or invent a type, and neither may reach past
+ * the hold or abort the fold.
+ */
+describe('downSyncConnector scope and type normalisation (ADR 0050 fix round)', () => {
+  it.each([[' project:plan'], ['project:plan '], ['project:plan\n'], ['\tproject:plan']])(
+    'holds a padded scope %j instead of landing a second document in a private project',
+    async (paddedScope) => {
+      const vault = makeVault();
+      vault.remember({ content: projectMarkdown('Local doc.'), type: 'working', scope: 'project:plan' });
+      const stub = stubServer({
+        entries: [{ server_id: 'conn_pad', scope: paddedScope, type: 'working', content: projectMarkdown('App doc.') }],
+      });
+
+      const result = await fold(vault);
+
+      expect(result.held).toBe(1);
+      expect(result.held_scopes).toEqual(['project:plan']);
+      expect(result.added).toBe(0);
+      expect(result.deduped).toBe(0);
+      expect(result.skipped).toBe(0);
+      expect(vault.sharedScopes()).toEqual([]);
+      expect(ackedIds(stub)).toEqual([]);
+      const live = vault.list({ scope: 'project:plan', type: 'working' });
+      expect(live).toHaveLength(1);
+      expect(live[0]!.content).toContain('Local doc.');
+      expect(vault.list({ scope: 'project:plan' })).toHaveLength(1);
+      vault.close();
+    },
+  );
+
+  it('applies and marks a padded scope under its trimmed name when the project is empty', async () => {
+    const vault = makeVault();
+    const stub = stubServer({
+      entries: [{ server_id: 'conn_padnew', scope: ' project:new', type: 'working', content: projectMarkdown('Created in the app.') }],
+    });
+
+    const result = await fold(vault);
+
+    expect(result.added).toBe(1);
+    expect(result.held).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(vault.sharedScopes()).toEqual(['project:new']);
+    const live = vault.list({ scope: 'project:new', type: 'working' });
+    expect(live).toHaveLength(1);
+    expect(live[0]!.scope).toBe('project:new');
+    expect(ackedIds(stub)).toEqual(['conn_padnew']);
+    expect(vault.verifyChain().ok).toBe(true);
+    vault.close();
+  });
+
+  it('holds a group whose second row has an invalid type, without throwing', async () => {
+    const vault = makeVault();
+    const stub = stubServer({
+      entries: [
+        { server_id: 'conn_good', scope: 'project:mixed', type: 'working', content: projectMarkdown('App doc.') },
+        { server_id: 'conn_bad', scope: 'project:mixed', type: ' working', content: 'Padded type.' },
+      ],
+    });
+
+    const result = await fold(vault);
+
+    expect(result.held).toBe(2);
+    expect(result.held_scopes).toEqual(['project:mixed']);
+    expect(result.added).toBe(0);
+    expect(result.skipped).toBe(0);
+    expect(vault.list({ scope: 'project:mixed' })).toHaveLength(0);
+    expect(vault.sharedScopes()).toEqual([]);
+    expect(ackedIds(stub)).toEqual([]);
+    vault.close();
+  });
+
+  it('drops a blank-scope row without acking it, and applies the row beside it', async () => {
+    const vault = makeVault();
+    const stub = stubServer({
+      entries: [
+        { server_id: 'conn_blank', scope: '   ', type: 'semantic', content: 'No scope at all.' },
+        { server_id: 'conn_scoped', scope: 'work', type: 'semantic', content: 'A real note.' },
+      ],
+    });
+
+    const result = await fold(vault);
+
+    expect(result.added).toBe(1);
+    expect(result.skipped).toBe(0);
+    expect(result.held).toBe(0);
+    expect(ackedIds(stub)).toEqual(['conn_scoped']);
+    expect(vault.list().some((e) => e.content === 'No scope at all.')).toBe(false);
+    vault.close();
+  });
+
+  it('skips an invalid-type row in a shared non-project scope and applies the rest', async () => {
+    const vault = makeVault();
+    vault.remember({ content: 'Existing work note.', type: 'semantic', scope: 'work' });
+    vault.setScopeShared('work', true);
+    const stub = stubServer({
+      entries: [
+        { server_id: 'conn_badtype', scope: 'work', type: ' working', content: 'Padded type.' },
+        { server_id: 'conn_okrow', scope: 'work', type: 'semantic', content: 'An accepted note.' },
+      ],
+    });
+
+    const result = await fold(vault);
+
+    expect(result.skipped).toBe(1);
+    expect(result.added).toBe(1);
+    expect(result.held).toBe(0);
+    expect(ackedIds(stub)).toEqual(['conn_okrow']);
+    const live = vault.list({ scope: 'work' });
+    expect(live).toHaveLength(2);
+    expect(live.some((e) => e.content === 'Padded type.')).toBe(false);
+    expect(vault.verifyChain().ok).toBe(true);
+    vault.close();
+  });
+});

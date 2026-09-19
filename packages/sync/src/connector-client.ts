@@ -1,4 +1,4 @@
-import { parseProjectSlug, type MemoryType, type Vault } from '@northkeep/core';
+import { isMemoryType, parseProjectSlug, type MemoryType, type Vault } from '@northkeep/core';
 import { deriveConnectorToken } from './creds.js';
 import { assertConnectorUrl } from './connector-config.js';
 import { timeoutSignal } from './abort.js';
@@ -221,6 +221,8 @@ export interface DownSyncResult {
   held: number;
   /** The unshared project scopes those rows are for, sorted and unique. */
   held_scopes: string[];
+  /** Rows dropped unapplied and unacked because their type is not a memory type. */
+  skipped: number;
 }
 
 /**
@@ -277,16 +279,23 @@ export async function downSyncConnector(opts: {
   let added = 0;
   let deduped = 0;
   let held = 0;
+  let skipped = 0;
   const heldScopes = new Set<string>();
 
   // ADR 0050 Decision 4: classify each scope BEFORE any dedupe or apply, because
   // an unshared project scope must not be reached by the M14 path at all.
   const groups = new Map<string, PendingEntry[]>();
-  for (const e of entries) {
-    if (!e.server_id || !e.content) continue;
-    const group = groups.get(e.scope);
+  for (const raw of entries) {
+    if (!raw.server_id || !raw.content) continue;
+    // vault.remember trims the scope, so a padded name would take the
+    // non-project path and land inside a private project. The type is left
+    // verbatim: only an exact memory type may be applied.
+    const scope = typeof raw.scope === 'string' ? raw.scope.trim() : '';
+    if (!scope) continue;
+    const e: PendingEntry = { ...raw, scope };
+    const group = groups.get(scope);
     if (group) group.push(e);
-    else groups.set(e.scope, [e]);
+    else groups.set(scope, [e]);
   }
   const sharedHere = new Set(opts.vault.sharedScopes());
   const applicable: PendingEntry[] = [];
@@ -294,15 +303,21 @@ export async function downSyncConnector(opts: {
   const toMark: string[] = [];
 
   for (const [scope, group] of groups) {
+    const allTyped = group.every((e) => isMemoryType(e.type));
     if (parseProjectSlug(scope) === null || sharedHere.has(scope)) {
-      applicable.push(...group);
+      for (const e of group) {
+        // Fail closed per row: remember() would throw and abort the whole fold,
+        // leaving nothing saved and nothing acked.
+        if (!isMemoryType(e.type)) skipped++;
+        else applicable.push(e);
+      }
       continue;
     }
     const empty = opts.vault.list({ scope }).length === 0;
     const workingRows = group.filter((e) => e.type === 'working');
     // The scope was empty and the app sent exactly one document: nothing private
     // can ride along on the push that follows, so the mark discloses nothing.
-    if (empty && workingRows.length === 1) {
+    if (allTyped && empty && workingRows.length === 1) {
       applicable.push(...group);
       toMark.push(scope);
       continue;
@@ -376,7 +391,7 @@ export async function downSyncConnector(opts: {
   });
   if (!ackRes.ok) throw new Error(`Connector server returned HTTP ${ackRes.status} on ack.`);
 
-  return { added, forgotten, deduped, held, held_scopes: [...heldScopes].sort() };
+  return { added, forgotten, deduped, held, held_scopes: [...heldScopes].sort(), skipped };
 }
 
 /**
