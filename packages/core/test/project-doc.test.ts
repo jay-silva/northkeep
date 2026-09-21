@@ -17,6 +17,9 @@ import {
   formatLogArchive,
   isProjectLogArchive,
   PROJECT_LOG_KEEP_ENTRIES,
+  formatProjectDraftLine,
+  isProjectDraft,
+  setProjectDraft,
 } from '../src/project-doc.js';
 
 const SAMPLE = `## What & Why
@@ -302,5 +305,51 @@ describe('Log rolling (ADR 0045)', () => {
     expect(text.endsWith('- 2026-09-01 - a\n- 2026-09-02 - b')).toBe(true);
     expect(isProjectLogArchive(text)).toBe(true);
     expect(isProjectLogArchive('## Current Status\n\nnope')).toBe(false);
+  });
+});
+
+describe('draft line detection (ADR 0052 Decision 4)', () => {
+  const BODY = '\n\n## What & Why\n\nWhy this exists.';
+  const LINE = formatProjectDraftLine('claude-code', new Date('2026-09-21T00:00:00Z'));
+
+  // An invisible character in front of the line must not hide a draft: the
+  // document is still unverified whatever a paste or a hand edit left there.
+  const INVISIBLES: Array<[string, string]> = [
+    ['none', ''],
+    ['BOM', '﻿'],
+    ['NBSP', ' '],
+    ['zero width space', '​'],
+    ['zero width non-joiner', '‌'],
+    ['zero width joiner', '‍'],
+    ['word joiner', '⁠'],
+    ['tab and spaces', '\t  '],
+    ['BOM then zero width space', '﻿​'],
+  ];
+
+  for (const [label, prefix] of INVISIBLES) {
+    it(`reads a draft line prefixed with ${label}, and clears it again`, () => {
+      const doc = parseProjectDoc(`${prefix}${LINE}${BODY}`);
+      expect(isProjectDraft(doc)).toBe(true);
+      setProjectDraft(doc, false, LINE);
+      expect(isProjectDraft(doc)).toBe(false);
+      expect(serializeProjectDoc(doc).startsWith('## What & Why')).toBe(true);
+      expect(getProjectSection(doc, 'What & Why')).toBe('Why this exists.');
+    });
+  }
+
+  it('does not read a draft where the marker is not the first visible line', () => {
+    expect(isProjectDraft(parseProjectDoc(`Preamble.\n${LINE}${BODY}`))).toBe(false);
+    expect(isProjectDraft(parseProjectDoc(`​Preamble.\n${LINE}${BODY}`))).toBe(false);
+    expect(isProjectDraft(parseProjectDoc(`Draft, unverified​: bootstrapped by x on 2026-09-21.${BODY}`))).toBe(false);
+    expect(isProjectDraft(parseProjectDoc(`## What & Why\n\n${LINE}`))).toBe(false);
+  });
+
+  it('adds the line to a document that already has a preamble, and removes only that line', () => {
+    const doc = parseProjectDoc(`​Keep this note.${BODY}`);
+    setProjectDraft(doc, true, LINE);
+    expect(isProjectDraft(doc)).toBe(true);
+    setProjectDraft(doc, false, LINE);
+    expect(isProjectDraft(doc)).toBe(false);
+    expect(doc.preamble).toBe('​Keep this note.');
   });
 });

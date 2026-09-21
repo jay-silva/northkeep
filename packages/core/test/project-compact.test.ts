@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KDF_INTERACTIVE, generateDeviceSecret } from '../src/crypto.js';
+import { PROJECT_PROVENANCE_METADATA_KEY, readProjectProvenance } from '../src/project-handoff.js';
+import type { MemoryEntry } from '../src/types.js';
 import { Vault } from '../src/vault.js';
 
 const PASS = 'synthetic project compaction passphrase';
@@ -302,5 +304,119 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
     const twenty = sizeAfter(20, 'twenty');
     console.log(`bounded history: 6 updates = ${six} bytes, 20 updates = ${twenty} bytes (${(twenty / six).toFixed(2)}x)`);
     expect(twenty / six).toBeLessThan(1.5);
+  });
+});
+
+describe('compaction keeps the writer block (ADR 0051 addendum, ADR 0052)', () => {
+  const WRITER = { host: 'claude-code', host_version: '0.24.0', session_id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' };
+
+  /** Every row of this project, blanked ones included. */
+  function rows(v: Vault): MemoryEntry[] {
+    return v.list({ scope: 'project:demo', includeSuperseded: true, includeForgotten: true })
+      .filter((e) => e.type === 'working');
+  }
+  function blanked(v: Vault): MemoryEntry[] {
+    return rows(v).filter((e) => e.forgotten_at !== null);
+  }
+  function seedWithWriter(v: Vault, revisions: number, size = 64): string {
+    let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'x'.repeat(size), next_actions: '- [ ] Begin', writer: WRITER }).revision;
+    for (let i = 0; i < revisions; i += 1) {
+      revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `${i} `.padEnd(size, 'y'), writer: WRITER }).revision;
+    }
+    return revision;
+  }
+
+  it('answers with the original host and session after automatic and manual compaction', () => {
+    const v = vault();
+    seedWithWriter(v, 12);
+    const automatic = blanked(v);
+    expect(automatic.length).toBeGreaterThan(0);
+    v.compactProjectHistory({ keep: 1 });
+    const all = blanked(v);
+    expect(all.length).toBeGreaterThan(automatic.length);
+    for (const row of all) {
+      expect(row.content).toBe('');
+      expect(Object.keys(row.metadata!)).toEqual([PROJECT_PROVENANCE_METADATA_KEY]);
+      expect(readProjectProvenance(row)).toMatchObject({ host: 'claude-code', host_version: '0.24.0', model: null, session_id: WRITER.session_id });
+    }
+    expect(v.verifyChain().ok).toBe(true);
+    v.close();
+  });
+
+  it('survives a save, an export and a reopen', () => {
+    const v = vault();
+    seedWithWriter(v, 12);
+    v.compactProjectHistory({ keep: 1 });
+    v.save();
+    const exported = v.export().memories.filter((m) => m.validity.forgotten_at !== null);
+    expect(exported.length).toBeGreaterThan(0);
+    for (const entry of exported) expect(Object.keys(entry.metadata!)).toEqual([PROJECT_PROVENANCE_METADATA_KEY]);
+    v.close();
+    const reopened = Vault.open({ path: vaultPath, passphrase: PASS, deviceSecret: secret, kdf: KDF_INTERACTIVE });
+    expect(reopened.verifyChain().ok).toBe(true);
+    const kept = reopened.list({ scope: 'project:demo', includeSuperseded: true, includeForgotten: true }).filter((e) => e.forgotten_at !== null);
+    for (const row of kept) expect(readProjectProvenance(row)?.session_id).toBe(WRITER.session_id);
+    reopened.close();
+  });
+
+  it('leaves a revision written without a writer with null metadata', () => {
+    const v = vault();
+    seedProject(v, 'demo', 12);
+    for (const row of blanked(v)) expect(row.metadata).toBeNull();
+    expect(v.verifyChain().ok).toBe(true);
+    v.close();
+  });
+
+  it('strips every key but the writer block, and counts only content in bytes_freed', () => {
+    const v = vault();
+    let revision = seedWithWriter(v, 5);
+    const oldest = v.list({ scope: 'project:demo', includeSuperseded: true })
+      .filter((e) => e.type === 'working' && e.superseded_at !== null)[0]!;
+    // Raw SQL: no supported write leaves a receipt on a compactable revision,
+    // because a receipt names its own row and receiptReferences then keeps it.
+    const db = (v as unknown as { db: import('better-sqlite3').Database }).db;
+    const planted = { ...oldest.metadata, leftover: { note: 'should not survive' } };
+    db.prepare('UPDATE memories SET metadata = ? WHERE id = ?').run(JSON.stringify(planted), oldest.id);
+    // One more write pushes that row past the automatic keep of five.
+    revision = v.updateProject({ project: 'demo', expected_revision: revision, status: 'One more.', writer: WRITER }).revision;
+    const after = rows(v).find((e) => e.id === oldest.id)!;
+    expect(after.forgotten_at).not.toBeNull();
+    expect(Object.keys(after.metadata!)).toEqual([PROJECT_PROVENANCE_METADATA_KEY]);
+    expect(v.verifyChain().ok).toBe(true);
+
+    const doomed = v.list({ scope: 'project:demo', includeSuperseded: true })
+      .filter((e) => e.type === 'working' && e.superseded_at !== null).slice(0, 3);
+    const contentBytes = doomed.reduce((sum, e) => sum + Buffer.byteLength(e.content, 'utf8'), 0);
+    const result = v.compactProjectHistory({ keep: 2 });
+    expect(result.blanked).toBe(3);
+    expect(result.bytes_freed).toBe(contentBytes);
+    v.close();
+  });
+
+  it('fails verification when a blanked row carries anything but a well-formed writer block', () => {
+    const v = vault();
+    seedWithWriter(v, 12);
+    const victim = blanked(v)[0]!;
+    const db = (v as unknown as { db: import('better-sqlite3').Database }).db;
+    const write = (metadata: unknown): void => {
+      db.prepare('UPDATE memories SET metadata = ? WHERE id = ?').run(JSON.stringify(metadata), victim.id);
+    };
+    const block = victim.metadata![PROJECT_PROVENANCE_METADATA_KEY];
+    for (const tampered of [
+      { [PROJECT_PROVENANCE_METADATA_KEY]: block, smuggled: 'extra' },
+      { smuggled: 'extra' },
+      { [PROJECT_PROVENANCE_METADATA_KEY]: { ...(block as Record<string, unknown>), host: 42 } },
+      { [PROJECT_PROVENANCE_METADATA_KEY]: { ...(block as Record<string, unknown>), model: 'claude' } },
+      { [PROJECT_PROVENANCE_METADATA_KEY]: { ...(block as Record<string, unknown>), extra: true } },
+      { [PROJECT_PROVENANCE_METADATA_KEY]: 'not an object' },
+    ]) {
+      write(tampered);
+      const checked = v.verifyChain();
+      expect(checked.ok, JSON.stringify(tampered)).toBe(false);
+      expect(checked.error).toContain('metadata beyond its writer block');
+    }
+    write({ [PROJECT_PROVENANCE_METADATA_KEY]: block });
+    expect(v.verifyChain().ok).toBe(true);
+    v.close();
   });
 });
