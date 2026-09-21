@@ -57,9 +57,9 @@ host reading that same name back, then the second host's own name after its
 wrap. The two session ids differ.
 
 ```
-step 1 after the Claude Code wrap: last_writer.host = claude-code session_id = c75814ce-655c-4956-a047-2391fb6fae6b
+step 1 after the Claude Code wrap: last_writer.host = claude-code session_id = e0ee9eaf-8af7-448e-9c26-bce6e4151dca
 step 1 Codex resume sees: last_writer.host = claude-code
-step 1 after the Codex wrap: last_writer.host = codex-mcp-client session_id = 6c58d366-6c1a-42bc-9f24-f70fb0fb7b9d
+step 1 after the Codex wrap: last_writer.host = codex-mcp-client session_id = 25ad462e-281c-48fc-b454-6f06e1daa5bc
 ```
 
 ## Step 2: the chain verifies, and an edited writer block breaks it
@@ -92,8 +92,8 @@ the failure is the ordinary content hash failure, with no new mechanism.
 ```
 step 2 copy before the edit: chain ok = true
 step 2 copy after editing the live head writer block: chain ok = false
-step 2 reported: Entry 04a17e5e-7c68-4e1a-a481-b28fabd5d0d6 hash does not match its content.
-step 2 an unrelated metadata key instead: Entry 04a17e5e-7c68-4e1a-a481-b28fabd5d0d6 hash does not match its content.
+step 2 reported: Entry e2761aa4-a11e-4753-8e13-cba6cff06a0a hash does not match its content.
+step 2 an unrelated metadata key instead: Entry e2761aa4-a11e-4753-8e13-cba6cff06a0a hash does not match its content.
 ```
 
 Read that last line as the limit of the step. The hash covers the whole row, so
@@ -114,8 +114,8 @@ Successful output: one open session, named by the host that read, with the time
 of that read and the fixed note. A session never lists itself.
 
 ```
-step 3 Claude Code read revision 04a17e5e-7c68-4e1a-a481-b28fabd5d0d6 and wrote nothing
-step 3 open session: claude-code 3127825d-9d34-448c-b9a9-eff03a34577d last read 2026-09-21T20:51:33.558Z
+step 3 Claude Code read revision e2761aa4-a11e-4753-8e13-cba6cff06a0a and wrote nothing
+step 3 open session: claude-code 0f413734-7072-47d2-a692-003ae8f3dac4 last read 2026-09-21T20:57:00.832Z
 step 3 note: These sessions read this project and did not write back. Nothing was recorded on their behalf.
 ```
 
@@ -141,7 +141,7 @@ step 4 default resume payload, ASCII at the cap: 20083 bytes, target under 24576
 step 4 invariants: content key = false | files_text key = false | any revision carries text = false | history entries = 0
 step 4 revisions carried: 8 summaries
 step 4 with history: true: 31009 bytes
-step 4 one revision read: 3aff0edf-6966-4b6f-86e9-d5ac89bd560c is 1946 characters of text
+step 4 one revision read: 513b3482-28d2-4deb-bac7-02603ccfc6ff is 1946 characters of text
 step 4 CJK document at the cap: 16384 characters, 48862 bytes
 step 4 default resume payload, CJK at the cap: 49974 bytes
 step 4 CJK invariants: content key = false | files_text key = false | any revision carries text = false
@@ -154,6 +154,10 @@ what the step prints as `invariants`, is this: the default brief carries no
 `content` key, no `files_text` key, no revision text inside its summaries, no
 `history`, and for an ASCII document at the cap a payload under 24,000 bytes,
 inside the ADR's 24 KB target.
+
+That said, these numbers are stable for a fixed script: the same 20,083,
+31,009 and 1,946 came back from three independent fresh homes on this branch,
+and only the ids moved between the runs.
 
 The CJK line is reported, not claimed. The cap counts characters and the 24 KB
 target counts bytes, so a document at the cap made of three-byte characters is
@@ -185,17 +189,27 @@ node docs/adr-0052-acceptance.mjs injected
 Successful output: either the write is refused as `invalid_request`, because
 the server passed the raw name through and `validateProjectWriter` refused it,
 or the server tamed the name first and the write lands under the clean name.
-The step prints which happened. Either way the last line is `false`.
+The step prints which happened, then reads a real writer block back through
+`project_get` and tests every string in it.
 
 ```
 step 4b create refused: invalid_request | the server passed the raw name through and core refused it
-step 4b project_get on that project: not_found
+step 4b project_get before a clean write: not_found | creating it from a clean host so there is a block to read
+step 4b project_get last_writer = {"version":1,"host":"claude-code","host_version":"0.24.0","model":null,"session_id":"88e1973f-fdb9-4186-8132-22f2af2ed730","recorded_at":"2026-09-21T20:57:18.729Z"}
+step 4b the test fires on the raw handshake name: true | strings checked in the block: 4
 step 4b writer block carries a forbidden character: false
 ```
 
 On this branch the server tames only `[\x00-\x1f,"]`, so U+0085 survives the
-handshake and core refuses the write with zero mutation: the project is never
-created, which is why `project_get` reports `not_found`.
+handshake and core refuses the write with zero mutation. That refusal leaves no
+project behind, so the step creates one from a clean host and reads its block
+back: a `false` on the last line that came from an absent row would prove
+nothing. The line above it is the control. It runs the same test against the
+raw handshake name and must print `true`, so a `false` below it means the block
+was read and found clean rather than the test being dead.
+
+The clean write leaves the `injected` project behind, which is why it appears
+in the compaction table at the end of this document.
 
 ## Step 2c: a compacted revision keeps its writer block and nothing else
 
@@ -213,11 +227,11 @@ verification.
 
 ```
 step 2 superseded revisions: 28 of which blanked: 20
-step 2 oldest blanked revision 84032504-2d52-4083-a3e9-f7350c582fe4 keeps host claude-code session 9573e680-5da8-48d1-854f-aacb1452b25c | text length 0
+step 2 oldest blanked revision ca9562d1-c641-42db-af86-6724b47ee765 keeps host claude-code session 48df49ba-f932-4f03-a0ff-4e83944bbdce | text length 0
 step 2 metadata keys on that row: northkeep_provenance_v1
 step 2 chain with the kept blocks: ok = true
 step 2 after smuggling a second key onto that blanked row: ok = false
-step 2 reported: Forgotten entry 84032504-2d52-4083-a3e9-f7350c582fe4 carries metadata beyond its writer block.
+step 2 reported: Forgotten entry ca9562d1-c641-42db-af86-6724b47ee765 carries metadata beyond its writer block.
 ```
 
 The arithmetic, which moves with step 4: 29 writes on `acceptance` (a create,
@@ -288,6 +302,7 @@ Project                    Revisions  Kept  To blank         Bytes
 acceptance                         8     8         0             0
 acceptance-cjk                     1     1         0             0
 bootstrapped                       1     1         0             0
+injected                           0     0         0             0
 Total                                              0             0
 
 Dry run: nothing changed. Add --yes to compact.

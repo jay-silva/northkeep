@@ -196,12 +196,22 @@ async function injected() {
   }
   await ghost.close();
 
+  // The refusal mutated nothing, so a clean host must create the project for
+  // there to be a block to read back. Otherwise the check tests an absent row.
   const reader = await connectAs('claude-code', '0.24.0');
-  const seen = await reader.callTool({ name: 'project_get', arguments: { project: 'injected' } });
-  const block = seen.isError ? null : JSON.parse(seen.content[0].text).last_writer;
-  console.log('step 4b project_get on that project:',
-    seen.isError ? JSON.parse(seen.content[0].text).error.code : `last_writer = ${JSON.stringify(block)}`);
+  const first = await reader.callTool({ name: 'project_get', arguments: { project: 'injected' } });
+  if (first.isError) {
+    console.log('step 4b project_get before a clean write:', JSON.parse(first.content[0].text).error.code,
+      '| creating it from a clean host so there is a block to read');
+    await call(reader, 'project_create', {
+      project: 'injected', what_why: 'Read back after the refused write.', status: 'Written by a clean host.',
+    });
+  }
+  const block = (await call(reader, 'project_get', { project: 'injected' })).json.last_writer;
   const strings = Object.values(block ?? {}).filter((value) => typeof value === 'string');
+  console.log('step 4b project_get last_writer =', JSON.stringify(block));
+  console.log('step 4b the test fires on the raw handshake name:', FORBIDDEN_WRITER_CHARS.test(nasty),
+    '| strings checked in the block:', strings.length);
   console.log('step 4b writer block carries a forbidden character:',
     strings.some((value) => FORBIDDEN_WRITER_CHARS.test(value)));
   await reader.close();
