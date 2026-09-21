@@ -661,13 +661,16 @@ every milestone; if a limit is removed, say when and how.*
 - **Share is write access.** Sharing a project scope lets the connected
   AI update that project. Unshare deletes the scope's rows, including a
   not-yet-delivered project update. The revoke wins.
-- **Project history grows the vault until you compact it (ADR 0051).**
-  Every project update keeps the prior document as a superseded revision.
-  `northkeep projects compact` (dry run by default, `--yes` to apply)
-  blanks all but the newest five revisions per project, keeping any a
-  handoff receipt still names; the text of older revisions is gone after
-  that. The desktop has the same operation at `POST /api/projects/compact`;
-  a button follows an approved mock.
+- **A project keeps its newest five revisions; older ones are blanked
+  automatically (ADR 0051).** Every project update supersedes the prior
+  document, and at that moment the vault blanks all but the newest five
+  superseded revisions of that project, keeping any a handoff receipt
+  still names. The text of older revisions is gone. The live document and
+  its Log archives are never touched. `northkeep projects compact` (dry
+  run by default, `--yes` to apply) does the same on demand, for vaults
+  with history from before this rule or for a different keep count; the
+  desktop has it at `POST /api/projects/compact`, a button follows an
+  approved mock.
 - **The whole-vault sync cap is 4 MB and cannot be raised on the hosted
   server as deployed.** Vercel refuses request bodies over 4.5 MB before
   the sync server runs (probed 2026-09-21). A larger vault needs a

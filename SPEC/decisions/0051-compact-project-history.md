@@ -2,8 +2,9 @@
 
 - **Date:** 2026-09-21
 - **Status:** Accepted by Jay ("Do option 1 and raise the cap to 8 MB",
-  2026-09-21). Option 1 implemented the same day; the cap raise was
-  found impossible on the current transport (Decision 3) and is not done.
+  then "make it automatic", 2026-09-21). Option 1 and automatic
+  compaction implemented the same day; the cap raise was found impossible
+  on the current transport (Decision 3) and is not done.
 - **Deciders:** Jay (product owner), Claude Code
 - **Extends:** ADR 0039 (projects as vault memories), ADR 0045 (log
   rolling), ADR 0048 (handoff receipts)
@@ -60,7 +61,7 @@ size after the save.
 What is lost: the text of project revisions older than the newest five.
 The live document, its Log archives (separate episodic rows), and the
 newest five revisions remain, which is what "recoverable in history" has
-meant in practice. Compaction is not automatic; the user runs it.
+meant in practice. Decision 4 makes it automatic; the command remains.
 
 ## Decision 2: Surfaces
 
@@ -92,6 +93,32 @@ and framing. Raising the real ceiling needs a different transport
 server-side). That adds a networked path and a dependency, so it needs
 its own ADR and an adversarial review, and it is not part of this
 decision. Compaction is what keeps the vault under the cap.
+
+## Decision 4: Compaction is automatic (Jay, "make it automatic", 2026-09-21)
+
+Manual compaction would have left every other user's vault growing the
+way Jay's did until it hit the cap. So the rule runs at the moment
+history is created. Whenever a `working` row in a slug-valid project
+scope is superseded, by the local project tools, a `memory_edit`, or a
+hosted update arriving through the fold, the vault compacts that one
+project immediately: keep the newest five revisions plus any a handoff
+receipt names, blank the rest, and `VACUUM` only when something was
+blanked. History is therefore bounded at all times, per project, on
+every device that writes.
+
+Why this shape and not a threshold: a size trigger fires at an
+unpredictable moment and still lets history pile up; a setting first is
+not a fix. Five is the same number the manual command keeps, so an
+automatic run never removes anything a manual run would have kept. The
+manual command stays for vaults that already carry history and for a
+different keep count. Existing vaults compact on their next project
+write.
+
+The automatic path does not verify the chain on every write (the manual
+command still checks before and after); the chain is unaffected because
+blanking uses the forget tombstone, which the chain already tolerates.
+`lastAutoCompaction()` lets a surface report what a write blanked; no
+surface shows it yet.
 
 ## Acceptance (Jay)
 
