@@ -15,16 +15,27 @@ every milestone; if a limit is removed, say when and how.*
 
 - **The writer is host reported, not verified.** Every project write records
   the name a client presented in its MCP handshake, so any process can
-  present any name. Once written the record is inside the hash chain and
-  tamper evident, which is attribution plus integrity, never proof of
-  identity.
-- **No model is recorded.** The provenance block's `model` is always null,
-  because no MCP host exposes a model identifier in its handshake and
-  NorthKeep will not guess one.
+  present any name. The record is protected by the same chain that protects
+  every memory: an edit that does not re-hash the tail is detected. That
+  chain is unkeyed by design, so the record is tamper evident, not tamper
+  proof. It is tamper evident on the live document and on every older
+  revision that still holds its text. Compaction keeps the writer block
+  when it blanks a revision's text, but a blanked row is skipped by the
+  chain check, so on a compacted revision the writer is attribution that
+  survived and not evidence: it can be changed there without detection.
+- **No model is recorded in the provenance block.** Its `model` is always
+  null, because no MCP host exposes a model identifier in its handshake and
+  NorthKeep will not guess one. Converse's own call log rows do record the
+  model you chose for that turn. That is a different record, and this limit
+  is about the provenance block only.
 - **Open sessions are derived from this machine's call log.** A session that
   read a project and never wrote back is only visible if it ran through a
   local MCP server on this Mac. Reads through the hosted claude.ai connector
   are never in that log, and a session on another Mac is not seen either.
+- **Open sessions come from successful reads only.** A denied or failed read
+  never opens a session, and a log row without a valid session id or host is
+  skipped. If the call log cannot be read at all, resume omits the open
+  session list and says so in a note rather than guessing or failing.
 - **A generic memory edit drops the writer block.** Editing a project head
   with `memory_edit` mints a revision that the previous session did not
   write, so the provenance block is removed rather than copied. That
