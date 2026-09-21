@@ -36,6 +36,7 @@ import {
   getProjectView,
   projectProvenanceBlock,
   readProjectHandoffMetadata,
+  readProjectProvenance,
   validateProjectWriter,
   type ProjectCheckpointRequest,
   type ProjectCheckpointResult,
@@ -700,10 +701,20 @@ export class Vault {
     return { ids: blanking.map((row) => row.id), bytes, candidates: candidates.length };
   }
 
-  /** Tombstones the named rows exactly as forget() does. Runs in the caller's transaction. */
+  /**
+   * Tombstones the named rows the way forget() does, with one exception: the
+   * writer block survives the text. Who wrote a revision is the record ADR 0052
+   * publishes, and compacting history must not silently delete it. Every other
+   * key, the handoff receipt included, still goes. Runs in the caller's
+   * transaction.
+   */
   private blankRevisions(ids: string[], forgottenAt: string): void {
-    const blank = this.db.prepare("UPDATE memories SET content = '', metadata = NULL, forgotten_at = ? WHERE id = ?");
-    for (const id of ids) blank.run(forgottenAt, id);
+    const read = this.db.prepare('SELECT metadata FROM memories WHERE id = ?');
+    const blank = this.db.prepare("UPDATE memories SET content = '', metadata = ?, forgotten_at = ? WHERE id = ?");
+    for (const id of ids) {
+      const row = read.get(id) as { metadata: string | null } | undefined;
+      blank.run(keptProvenanceMetadata(row?.metadata ?? null), forgottenAt, id);
+    }
   }
 
   /**
@@ -1757,12 +1768,17 @@ export class Vault {
         return { ok: false, error: `Entry ${entry.id} breaks the chain: prev_hash mismatch.` };
       }
       // Forgotten entries keep their original hashes for linkage, but their
-      // content is blanked so the content check no longer applies.
+      // content is blanked so the content check no longer applies. What they may
+      // still carry is checked structurally instead: nothing, or the lone writer
+      // block compaction keeps (ADR 0051 addendum). The block's own fields cannot
+      // be re-hashed once the content is gone; this catches shape, not a swap.
       if (entry.forgotten_at === null) {
         const expected = computeEntryHash(entry, this.platform.crypto);
         if (entry.entry_hash !== expected) {
           return { ok: false, error: `Entry ${entry.id} hash does not match its content.` };
         }
+      } else if (entry.metadata !== null && !isProvenanceOnlyMetadata(entry.metadata)) {
+        return { ok: false, error: `Forgotten entry ${entry.id} carries metadata beyond its writer block.` };
       }
       prev = entry.entry_hash;
     }
@@ -1891,6 +1907,29 @@ function rowToEntry(row: EntryRow): MemoryEntry {
     forgotten_at: row.forgotten_at ?? null,
     metadata: row.metadata === null ? null : (JSON.parse(row.metadata) as Record<string, unknown>),
   };
+}
+
+/**
+ * The metadata a blanked revision keeps, serialized: a lone, well-formed writer
+ * block, or null. A malformed block is dropped rather than kept, so a blanked
+ * row can never carry something verifyChain would then reject.
+ */
+function keptProvenanceMetadata(raw: string | null): string | null {
+  if (raw === null) return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const block = (parsed as Record<string, unknown>)[PROJECT_PROVENANCE_METADATA_KEY];
+  if (block === undefined) return null;
+  const only = { [PROJECT_PROVENANCE_METADATA_KEY]: block };
+  return isProvenanceOnlyMetadata(only) ? JSON.stringify(only) : null;
+}
+
+/** Exactly one key, the writer block, and a block a reader accepts. */
+function isProvenanceOnlyMetadata(metadata: Record<string, unknown>): boolean {
+  const keys = Object.keys(metadata);
+  if (keys.length !== 1 || keys[0] !== PROJECT_PROVENANCE_METADATA_KEY) return false;
+  return readProjectProvenance({ metadata } as MemoryEntry) !== null;
 }
 
 function isStringArray(value: unknown): value is string[] {
