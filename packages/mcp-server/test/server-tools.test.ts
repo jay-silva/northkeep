@@ -744,6 +744,17 @@ describe('owner requests 2026-09-13: project title and search by meaning', () =>
   });
 });
 
+describe('tool descriptions', () => {
+  it('state facts and use no em dashes', async () => {
+    const mcp = await connect();
+    const { tools } = await mcp.listTools();
+    expect(tools.length).toBeGreaterThan(0);
+    for (const tool of tools) {
+      expect(tool.description ?? '', tool.name).not.toMatch(/[—–]/);
+    }
+  });
+});
+
 describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
   /** A second server in this process, so two session ids exist side by side. */
   async function connectSecond(name: string): Promise<Client> {

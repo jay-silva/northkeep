@@ -474,7 +474,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     {
       title: 'List memories',
       description:
-        "Browse the user's memory vault without a search query — newest last. " +
+        "Browse the user's memory vault without a search query; newest last. " +
         'Useful for "what do you know about me?" style questions.',
       inputSchema: {
         type: typeEnum.optional().describe('Filter by memory type'),
