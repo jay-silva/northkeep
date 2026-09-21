@@ -680,6 +680,13 @@ describe('project standing-instruction copy', () => {
     expect(PROJECT_STANDING_INSTRUCTION).toContain('project_list');
   });
 
+  it('names what project_wrap actually takes, which is completed work', () => {
+    expect(PROJECT_STANDING_INSTRUCTION).toContain(
+      'the new Current Status, Next Actions, and the completed work.',
+    );
+    expect(PROJECT_STANDING_INSTRUCTION).not.toContain('log entry describing');
+  });
+
   it('carries the bootstrap recipe verbatim (ADR 0052 Decision 5)', () => {
     expect(PROJECT_BOOTSTRAP_INSTRUCTION).toBe(
       'To bootstrap a project from a codebase, read in this order and stop when the sections are full: ' +
@@ -864,5 +871,188 @@ describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
       name: 'project_resume', arguments: { project: 'lighter', history: true },
     }));
     expect(full).toContain('FIRST-REVISION-TEXT');
+  });
+});
+
+describe('project provenance (ADR 0052 Decision 1, 3 and 4)', () => {
+  /** A second server in this process, so a second session id exists. */
+  async function connectAs(name: string): Promise<Client> {
+    const server = createServer(vaultPath);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const mcp = new Client({ name, version: '2.0' });
+    await Promise.all([mcp.connect(clientTransport), server.connect(serverTransport)]);
+    return mcp;
+  }
+
+  async function createProject(mcp: Client, project: string, args: Record<string, unknown> = {}) {
+    return JSON.parse(toolText(await mcp.callTool({
+      name: 'project_create',
+      arguments: { project, what_why: 'Provenance fixture.', status: 'Started.', ...args },
+    }))) as { revision: string; vault_id: string; draft: boolean; last_writer: { host: string } | null };
+  }
+
+  it('a wrap records the handshake host and this session, and a second server writes another session', async () => {
+    const mcp = await connect();
+    const created = await createProject(mcp, 'provenance');
+    expect(created.last_writer?.host).toBe('m13-test');
+
+    const wrapped = JSON.parse(toolText(await mcp.callTool({
+      name: 'project_wrap',
+      arguments: {
+        vault_id: created.vault_id, project: 'provenance',
+        operation_id: '55555555-5555-4555-8555-555555555555',
+        expected_revision: created.revision, status: 'Done.', completed: 'Closed out.', next_actions: '',
+      },
+    }))) as { current: { revision: string; last_writer: { host: string; host_version: string | null; model: null; session_id: string } } };
+    const writer = wrapped.current.last_writer;
+    expect(writer.host).toBe('m13-test');
+    expect(writer.host_version).toBe('1.0');
+    expect(writer.model).toBeNull();
+    const wrapRow = readCallLog().find((row) => row.tool === 'project_wrap');
+    expect(writer.session_id).toBe(wrapRow?.session_id);
+
+    const other = await connectAs('codex-mcp-client');
+    try {
+      const second = JSON.parse(toolText(await other.callTool({
+        name: 'project_update',
+        arguments: { project: 'provenance', expected_revision: wrapped.current.revision, status: 'Reopened.' },
+      }))) as { last_writer: { host: string; host_version: string | null; session_id: string } };
+      expect(second.last_writer.host).toBe('codex-mcp-client');
+      expect(second.last_writer.host_version).toBe('2.0');
+      expect(second.last_writer.session_id).not.toBe(writer.session_id);
+    } finally {
+      await other.close();
+    }
+  });
+
+  it('project_create draft: true shows in the list, a wrap clears it, and the slug cannot be created twice', async () => {
+    const mcp = await connect();
+    const created = await createProject(mcp, 'drafted', { draft: true });
+    expect(created.draft).toBe(true);
+
+    const listed = JSON.parse(toolText(await mcp.callTool({ name: 'project_list', arguments: {} }))) as {
+      projects: Array<{ project: string; draft: boolean; last_writer_host: string | null }>;
+    };
+    const row = listed.projects.find((p) => p.project === 'drafted');
+    expect(row?.draft).toBe(true);
+    expect(row?.last_writer_host).toBe('m13-test');
+
+    const wrapped = JSON.parse(toolText(await mcp.callTool({
+      name: 'project_wrap',
+      arguments: {
+        vault_id: created.vault_id, project: 'drafted',
+        operation_id: '66666666-6666-4666-8666-666666666666',
+        expected_revision: created.revision, status: 'Verified.', completed: 'Checked every claim.', next_actions: '',
+      },
+    }))) as { current: { draft: boolean } };
+    expect(wrapped.current.draft).toBe(false);
+    const after = JSON.parse(toolText(await mcp.callTool({ name: 'project_list', arguments: {} }))) as typeof listed;
+    expect(after.projects.find((p) => p.project === 'drafted')?.draft).toBe(false);
+
+    const again = await mcp.callTool({
+      name: 'project_create',
+      arguments: { project: 'drafted', what_why: 'Second try.', status: 'Second try.' },
+    });
+    expect(again.isError).toBe(true);
+    expect((JSON.parse(toolText(again)) as { error: { code: string } }).error.code).toBe('stale_project');
+  });
+
+  it('project_get returns one prior revision in full, and refuses one from another scope', async () => {
+    const mcp = await connect();
+    const created = await createProject(mcp, 'revised', { status: 'OLD-STATUS-TEXT' });
+    await mcp.callTool({
+      name: 'project_update',
+      arguments: { project: 'revised', expected_revision: created.revision, status: 'New status.' },
+    });
+    const other = await createProject(mcp, 'elsewhere');
+
+    const prior = JSON.parse(toolText(await mcp.callTool({
+      name: 'project_get', arguments: { project: 'revised', revision: created.revision },
+    }))) as { id: string; content: string; scope: string };
+    expect(prior.id).toBe(created.revision);
+    expect(prior.scope).toBe('project:revised');
+    expect(prior.content).toContain('OLD-STATUS-TEXT');
+
+    const foreign = await mcp.callTool({
+      name: 'project_get', arguments: { project: 'revised', revision: other.revision },
+    });
+    expect(foreign.isError).toBe(true);
+    expect((JSON.parse(toolText(foreign)) as { error: { code: string } }).error.code).toBe('not_found');
+
+    // Compaction blanks a superseded revision; the row survives, the text does not.
+    const vault = openVault();
+    vault.forget(created.revision);
+    vault.save();
+    vault.close();
+    const compacted = await mcp.callTool({
+      name: 'project_get', arguments: { project: 'revised', revision: created.revision },
+    });
+    expect(compacted.isError).toBe(true);
+    expect(toolText(compacted)).toMatch(/compacted away/);
+  });
+
+  it('the default resume brief of a busy project stays small and carries the new fields', async () => {
+    const mcp = await connect();
+    const created = await createProject(mcp, 'busy', { status: 'Started.' });
+    let revision = created.revision;
+    const update = async (args: Record<string, unknown>): Promise<void> => {
+      const result = await mcp.callTool({
+        name: 'project_update', arguments: { project: 'busy', expected_revision: revision, ...args },
+      });
+      expect(result.isError, toolText(result)).toBeFalsy();
+      revision = (JSON.parse(toolText(result)) as { revision: string }).revision;
+    };
+    for (let i = 0; i < 20; i += 1) await update({ log_entry: `Session ${i} did some work on the busy project.` });
+    await update({ status: `PRIOR-REVISION-TEXT ${'status detail. '.repeat(900)}`.slice(0, 12000) });
+    // A long Current Status plus a long Log entry pushes the document past its
+    // cap, so each of these writes rolls older entries into an archive memory.
+    for (let i = 0; i < 3; i += 1) {
+      await update({ log_entry: `Long session ${i}. ${'Rolled log detail. '.repeat(210)}`.slice(0, 4000) });
+    }
+    await update({ status: 'Trimmed back down.' });
+
+    const brief = toolText(await mcp.callTool({ name: 'project_resume', arguments: { project: 'busy' } }));
+    const parsed = JSON.parse(brief) as {
+      revisions: Array<{ id: string; chars: number; writer?: { host: string } }>;
+      archive_summary: { count: number; oldest: string | null; newest: string | null };
+      last_writer: { host: string } | null;
+      draft: boolean;
+      history: unknown[];
+      archives: unknown[];
+    };
+    expect(parsed.archive_summary.count).toBe(3);
+    expect(parsed.revisions).toHaveLength(5);
+    expect(parsed.revisions[0]?.writer?.host).toBe('m13-test');
+    expect(parsed.last_writer?.host).toBe('m13-test');
+    expect(parsed.draft).toBe(false);
+    expect(parsed.history).toEqual([]);
+    expect(parsed.archives).toEqual([]);
+    expect(brief).not.toContain('PRIOR-REVISION-TEXT');
+    // Measured 2026-09-21: 10,556 bytes by default against 84,738 with history.
+    const bytes = Buffer.byteLength(brief, 'utf8');
+    expect(bytes).toBeLessThan(24 * 1024);
+
+    const full = toolText(await mcp.callTool({
+      name: 'project_resume', arguments: { project: 'busy', history: true },
+    }));
+    expect(full).toContain('PRIOR-REVISION-TEXT');
+    expect(Buffer.byteLength(full, 'utf8')).toBeGreaterThan(bytes);
+  });
+
+  it('Tier-1 masking leaves the writer block intact, even a host name shaped like an address', async () => {
+    // A host presents whatever name it likes, and the record of who wrote a
+    // revision is an identifier, not vault content: masking it would lose it.
+    const writerClient = await connectAs('agent-bot@relay.example.com');
+    await createProject(writerClient, 'masked-writer');
+    await writerClient.close();
+
+    process.env.NORTHKEEP_REDACT_TIER = '1';
+    const reader = await connect();
+    const view = JSON.parse(toolText(await reader.callTool({
+      name: 'project_get', arguments: { project: 'masked-writer' },
+    }))) as { last_writer: { host: string; host_version: string | null; recorded_at: string } };
+    expect(view.last_writer.host).toBe('agent-bot@relay.example.com');
+    expect(view.last_writer.host_version).toBe('2.0');
+    expect(Number.isFinite(Date.parse(view.last_writer.recorded_at))).toBe(true);
   });
 });
