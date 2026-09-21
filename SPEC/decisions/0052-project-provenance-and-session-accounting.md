@@ -169,11 +169,17 @@ acceptance test. A change that grows a default read fails acceptance.
    handshake name, so this is attribution, never verified identity. The
    record is protected by the same chain that protects every memory: the
    block is inside `computeEntryHash`, so an edit that does not re-hash
-   the tail is detected by `northkeep verify`. The chain has been unkeyed
-   by design since M0, which makes it tamper-evident, not tamper-proof: a
-   writer who rewrites every later hash produces a chain that verifies.
+   the tail is detected by the chain verdict `northkeep list` prints. The
+   chain has been unkeyed by design since M0, which makes it
+   tamper-evident, not tamper-proof: a writer who rewrites every later
+   hash produces a chain that verifies. The evidence is also uneven, and
+   the boundary is exact. On the live head and on every revision that
+   still holds its text, an altered writer block fails verification.
    Compaction keeps the writer block when it blanks a revision's text
-   (ADR 0051 addendum), so a blanked revision still says who wrote it.
+   (ADR 0051 addendum), but `verifyChain` skips the hash check for a
+   forgotten row, so on a compacted revision the block is attribution that
+   survived, not evidence: swapping one well-formed host or session id for
+   another there is undetectable.
 2. A session that read a project on this machine and never wrote back is
    visible at the next resume. Per machine; hosted reads are not seen.
 3. The provenance block never carries a model identity. `model` is null
@@ -208,8 +214,9 @@ Named here so a later reader knows these were seen and left, not missed.
 1. Wrap a disposable project from Claude Code, then resume from Codex:
    the brief shows `last_writer.host` `claude-code` with a session id,
    then after a Codex wrap shows `codex-mcp-client`.
-2. `northkeep verify` passes; edit a provenance block in a copy of the
-   vault and verify fails.
+2. `northkeep list` reports the chain intact; edit a provenance block on
+   a live head in a copy of the vault and the same command reports it
+   broken. The full script is docs/adr-0052-acceptance.md.
 3. Resume from Claude Code and quit without writing; resume from Codex:
    `open_sessions` lists the Claude Code session id and time.
 4. `project_resume` with defaults on a project whose document sits at the
@@ -256,7 +263,7 @@ writer block. Unknown MCP tool arguments are stripped silently rather
 than refused; the web routes refuse them.
 
 **Confirmed by execution, not amended.** Raw SQL that changed the host in
-a stored block made `northkeep verify` report `ok:false`, "hash does not
+a stored block made `verifyChain` report `ok:false`, "hash does not
 match its content"; deleting the block did the same. `writer`,
 `session_id` and `recorded_at` sent as MCP arguments were stripped and the
 block still named the real handshake host. A cross-project or personal
