@@ -138,14 +138,17 @@ for the record only.
 
 ```
 step 4 ASCII document at the cap: 16384 characters, 16384 bytes
-step 4 default resume payload, ASCII at the cap: 20083 bytes, target under 24576
-step 4 invariants: content key = false | files_text key = false | any revision carries text = false | history entries = 0
-step 4 revisions carried: 8 summaries
+step 4 default resume payload, ASCII at the cap: 20083 bytes
 step 4 with history: true: 31009 bytes
-step 4 one revision read: 513b3482-28d2-4deb-bac7-02603ccfc6ff is 1946 characters of text
+step 4 ASCII invariants hold: no content key, no files_text key, no revision text, no history, brief is 65% of history:true
+step 4 revisions carried: 8 summaries
+step 4 one revision read: 60a83498-2a85-4a04-a11b-2c98e543a79d is 1946 characters of text
+step 4 quote-heavy ASCII document at the cap: 16384 characters, 16384 bytes
+step 4 default resume payload, quote-heavy at the cap: 33746 bytes
+step 4 quote-heavy invariants hold: no content key, no files_text key, no revision text, no history, brief is 99% of history:true
 step 4 CJK document at the cap: 16384 characters, 48862 bytes
 step 4 default resume payload, CJK at the cap: 49974 bytes
-step 4 CJK invariants: content key = false | files_text key = false | any revision carries text = false
+step 4 CJK invariants hold: no content key, no files_text key, no revision text, no history, brief is 99% of history:true
 ```
 
 The byte counts are not the check, and no byte number is a published claim.
