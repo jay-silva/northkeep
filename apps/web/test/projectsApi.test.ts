@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { handleProjectsApi } from '../src/projectsApi.js';
 import { ProjectHandoffError } from '@northkeep/core';
@@ -46,5 +49,54 @@ describe('project edit and delete routes (owner requests 2026-09-13)', () => {
     const missing = await handleProjectsApi(sessionFor(vault), 'DELETE', '/api/projects/gone', Buffer.alloc(0));
     expect(missing?.status).toBe(404); expect(saves).toBe(1);
     expect((await handleProjectsApi(sessionFor(vault), 'DELETE', '/api/projects/sample/checkpoint', Buffer.alloc(0)))?.status).toBe(405);
+  });
+});
+
+describe('project compaction route (ADR 0051)', () => {
+  const result = { projects: [{ project: 'demo', candidates: 9, kept: 5, blanked: 4, bytes_freed: 4096 }], blanked: 4, bytes_freed: 4096 };
+  function vaultFor(calls: unknown[], saves: { count: number }, vaultPath = '') {
+    return { path: vaultPath, compactProjectHistory: (options: unknown) => { calls.push(options); return result; }, save: () => { saves.count++; } };
+  }
+  function sessionFor(vault: Record<string, unknown>, unlocked = true) {
+    return { isUnlocked: () => unlocked, withVault: async (fn: (v: typeof vault) => unknown) => fn(vault) } as never;
+  }
+
+  it('is 423 when the vault is locked, without touching it', async () => {
+    const calls: unknown[] = []; const saves = { count: 0 };
+    const response = await handleProjectsApi(sessionFor(vaultFor(calls, saves), false), 'POST', '/api/projects/compact', Buffer.from('{}'));
+    expect(response?.status).toBe(423);
+    expect(calls).toHaveLength(0); expect(saves.count).toBe(0);
+  });
+
+  it('previews by default and does not save', async () => {
+    const calls: unknown[] = []; const saves = { count: 0 };
+    const response = await handleProjectsApi(sessionFor(vaultFor(calls, saves)), 'POST', '/api/projects/compact', Buffer.from(JSON.stringify({ project: 'demo', keep: 5 })));
+    expect(response?.status).toBe(200);
+    expect(response?.body).toEqual(result);
+    expect(calls[0]).toEqual({ project: 'demo', keep: 5, dryRun: true });
+    expect(saves.count).toBe(0);
+  });
+
+  it('saves on a real run and reports the vault file size after', async () => {
+    const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-web-compact-'));
+    const vaultPath = path.join(directory, 'vault.nkv');
+    fs.writeFileSync(vaultPath, Buffer.alloc(2048));
+    const calls: unknown[] = []; const saves = { count: 0 };
+    const response = await handleProjectsApi(sessionFor(vaultFor(calls, saves, vaultPath)), 'POST', '/api/projects/compact', Buffer.from(JSON.stringify({ dry_run: false })));
+    expect(response?.status).toBe(200);
+    expect(response?.body).toEqual({ ...result, file_bytes_after: 2048 });
+    expect(calls[0]).toEqual({ dryRun: false });
+    expect(saves.count).toBe(1);
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  it('refuses a bad keep, an unknown field and a non-POST without touching the vault', async () => {
+    const calls: unknown[] = []; const saves = { count: 0 };
+    const session = sessionFor(vaultFor(calls, saves));
+    for (const payload of [{ keep: 0 }, { keep: 1001 }, { keep: '5' }, { project: 'Not A Slug' }, { surprise: true }, { dry_run: 'no' }]) {
+      expect((await handleProjectsApi(session, 'POST', '/api/projects/compact', Buffer.from(JSON.stringify(payload))))?.status).toBe(400);
+    }
+    expect((await handleProjectsApi(session, 'GET', '/api/projects/compact', Buffer.alloc(0)))?.status).toBe(405);
+    expect(calls).toHaveLength(0); expect(saves.count).toBe(0);
   });
 });

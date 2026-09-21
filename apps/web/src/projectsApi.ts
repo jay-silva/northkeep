@@ -1,9 +1,15 @@
 /** Projects routes inherit server.ts session-token checks and require an unlocked vault. */
+import fs from 'node:fs';
 import { getProjectView, listProjectViews, ProjectHandoffError, type ProjectCheckpointRequest, type ProjectUpdateRequest } from '@northkeep/core';
 import type { UiSession } from './session.js';
 
 interface Response { status: number; body: unknown }
 const reply = (status: number, body: unknown): Response => ({ status, body });
+
+/** The saved vault's size, or null when it cannot be read; never fails a completed save. */
+function fileBytes(vaultPath: string): number | null {
+  try { return fs.statSync(vaultPath).size; } catch { return null; }
+}
 
 export async function handleProjectsApi(session: UiSession, method: string, route: string, body: Buffer): Promise<Response | null> {
   if (route !== '/api/projects' && !route.startsWith('/api/projects/')) return null;
@@ -11,6 +17,35 @@ export async function handleProjectsApi(session: UiSession, method: string, rout
     if (!session.isUnlocked()) return reply(423, { error: 'Vault is locked.', code: 'locked' });
     if (method === 'GET' && route === '/api/projects') {
       return reply(200, await session.withVault(vault => ({ vault_id: vault.getVaultId(), projects: listProjectViews(vault) })));
+    }
+    if (route === '/api/projects/compact') {
+      // ADR 0051 Decision 2. Preview by default: the caller asks for a real run
+      // with dry_run false, because blanked revision text does not come back.
+      if (method !== 'POST') return reply(405, { error: 'Method not allowed.', code: 'invalid_request' });
+      if (body.length > 4 * 1024) return reply(400, { error: 'Compaction request is too large.', code: 'invalid_request' });
+      let input: Record<string, unknown> = {};
+      if (body.length > 0) {
+        try {
+          const parsed: unknown = JSON.parse(body.toString('utf8'));
+          if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+          input = parsed as Record<string, unknown>;
+        } catch { return reply(400, { error: 'A JSON object is required.', code: 'invalid_request' }); }
+      }
+      if (Object.keys(input).some(key => !['project', 'keep', 'dry_run'].includes(key))) return reply(400, { error: 'Unexpected compaction field.', code: 'invalid_request' });
+      if (input.project !== undefined && (typeof input.project !== 'string' || !/^[a-z0-9-]{1,40}$/.test(input.project))) return reply(400, { error: 'project must be a project name.', code: 'invalid_request' });
+      if (input.keep !== undefined && (typeof input.keep !== 'number' || !Number.isInteger(input.keep) || input.keep < 1 || input.keep > 1000)) return reply(400, { error: 'keep must be a whole number between 1 and 1000.', code: 'invalid_request' });
+      if (input.dry_run !== undefined && typeof input.dry_run !== 'boolean') return reply(400, { error: 'dry_run must be true or false.', code: 'invalid_request' });
+      const dryRun = input.dry_run !== false;
+      return reply(200, await session.withVault(vault => {
+        const result = vault.compactProjectHistory({
+          ...(input.project !== undefined ? { project: input.project as string } : {}),
+          ...(input.keep !== undefined ? { keep: input.keep as number } : {}),
+          dryRun,
+        });
+        if (dryRun) return result;
+        vault.save();
+        return { ...result, file_bytes_after: fileBytes(vault.path) };
+      }));
     }
     const match = /^\/api\/projects\/([a-z0-9-]{1,40})(?:\/(checkpoint|wrap|update))?$/.exec(route);
     if (!match) return reply(404, { error: 'Project route not found.', code: 'not_found' });
