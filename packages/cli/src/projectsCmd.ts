@@ -3,7 +3,7 @@ import type { ProjectCompactionResult } from '@northkeep/core';
 import type { WithVault } from './shareCmd.js';
 
 /**
- * `northkeep projects compact` — free the space old project revisions take up
+ * `northkeep projects compact`: free the space old project revisions take up
  * (ADR 0051). A run without --yes reports what would go and changes nothing,
  * because the text of those revisions is not recoverable afterwards.
  */
