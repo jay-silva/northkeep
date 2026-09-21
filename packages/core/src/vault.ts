@@ -40,7 +40,7 @@ import {
   type ProjectUpdateRequest,
   type ProjectView,
 } from './project-handoff.js';
-import { emptyProjectDoc, formatLogArchive, projectScope, serializeProjectDoc } from './project-doc.js';
+import { emptyProjectDoc, formatLogArchive, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
 import type { SqliteDb } from './sqlite-driver.js';
 import { SCHEMA_DDL } from './schema.js';
 import {
@@ -153,6 +153,25 @@ export function onVaultSave(listener: VaultSaveListener): () => void {
   return () => {
     saveListeners.delete(listener);
   };
+}
+
+/** Superseded project revisions kept per scope by default (ADR 0051). */
+export const PROJECT_COMPACT_DEFAULT_KEEP = 5;
+export const PROJECT_COMPACT_MAX_KEEP = 1000;
+
+export interface ProjectCompaction {
+  project: string;
+  /** Superseded, not-yet-forgotten revisions considered in this scope. */
+  candidates: number;
+  kept: number;
+  blanked: number;
+  bytes_freed: number;
+}
+
+export interface ProjectCompactionResult {
+  projects: ProjectCompaction[];
+  blanked: number;
+  bytes_freed: number;
 }
 
 export class Vault {
@@ -588,6 +607,95 @@ export class Vault {
       }
     })();
     return count;
+  }
+
+  /**
+   * Blanks old superseded project revisions (ADR 0051 Decision 1). Candidates
+   * are `working` rows in slug-valid project scopes that are superseded and not
+   * already forgotten; the newest `keep` per scope stay, as does any revision a
+   * handoff receipt in that scope still names, so replay and lineage keep
+   * working. Blanking uses the same tombstone UPDATE as forget(), so the hash
+   * chain and the export stay valid. VACUUM releases the freed pages, without
+   * which the next save() would re-serialize them. The caller persists with one
+   * save().
+   */
+  compactProjectHistory(options: { project?: string; keep?: number; dryRun?: boolean } = {}): ProjectCompactionResult {
+    this.assertOpen();
+    const keep = options.keep ?? PROJECT_COMPACT_DEFAULT_KEEP;
+    if (!Number.isInteger(keep) || keep < 1 || keep > PROJECT_COMPACT_MAX_KEEP) {
+      throw new Error(`Keep must be a whole number between 1 and ${PROJECT_COMPACT_MAX_KEEP}.`);
+    }
+    const only = options.project === undefined ? null : projectScope(options.project);
+    const scopes = (this.db
+      .prepare("SELECT DISTINCT scope FROM memories WHERE scope LIKE 'project:%' ORDER BY scope")
+      .all() as Array<{ scope: string }>)
+      .map((row) => row.scope)
+      .filter((scope) => parseProjectSlug(scope) !== null && (only === null || scope === only));
+    if (only !== null && !scopes.includes(only)) scopes.push(only);
+
+    const projects: ProjectCompaction[] = [];
+    const doomed: string[] = [];
+    for (const scope of scopes) {
+      const candidates = this.db
+        .prepare(
+          "SELECT id, content FROM memories WHERE scope = ? AND type = 'working' " +
+            'AND superseded_at IS NOT NULL AND forgotten_at IS NULL ORDER BY created_at DESC, rowid DESC',
+        )
+        .all(scope) as Array<{ id: string; content: string }>;
+      const referenced = this.receiptReferences(scope);
+      const blanking = candidates.slice(keep).filter((row) => !referenced.has(row.id));
+      let bytes = 0;
+      for (const row of blanking) bytes += Buffer.byteLength(row.content, 'utf8');
+      doomed.push(...blanking.map((row) => row.id));
+      projects.push({
+        project: parseProjectSlug(scope)!,
+        candidates: candidates.length,
+        kept: candidates.length - blanking.length,
+        blanked: blanking.length,
+        bytes_freed: bytes,
+      });
+    }
+    const result: ProjectCompactionResult = {
+      projects,
+      blanked: doomed.length,
+      bytes_freed: projects.reduce((sum, p) => sum + p.bytes_freed, 0),
+    };
+    if (options.dryRun === true || doomed.length === 0) return result;
+
+    const forgottenAt = new Date().toISOString();
+    const blank = this.db.prepare("UPDATE memories SET content = '', metadata = NULL, forgotten_at = ? WHERE id = ?");
+    this.db.transaction(() => {
+      for (const id of doomed) blank.run(forgottenAt, id);
+    })();
+    // VACUUM rebuilds the image so serialize() drops the freed pages. It cannot
+    // run inside a transaction, hence after it.
+    this.db.exec('VACUUM');
+    const chain = this.verifyChain();
+    if (!chain.ok) throw new Error(`Compaction was abandoned because the vault chain no longer verifies: ${chain.error}`);
+    return result;
+  }
+
+  /** Revision ids a handoff receipt in this scope still names (base, result, archives). */
+  private receiptReferences(scope: string): Set<string> {
+    const referenced = new Set<string>();
+    const rows = this.db
+      .prepare('SELECT metadata FROM memories WHERE scope = ? AND metadata IS NOT NULL')
+      .all(scope) as Array<{ metadata: string }>;
+    for (const row of rows) {
+      let meta: unknown;
+      try { meta = JSON.parse(row.metadata); } catch { continue; }
+      if (!meta || typeof meta !== 'object') continue;
+      const receipt = (meta as Record<string, unknown>)[PROJECT_HANDOFF_METADATA_KEY];
+      if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt)) continue;
+      const fields = receipt as Record<string, unknown>;
+      for (const key of ['base_revision', 'result_id']) {
+        if (typeof fields[key] === 'string') referenced.add(fields[key] as string);
+      }
+      if (Array.isArray(fields.archive_ids)) {
+        for (const id of fields.archive_ids) if (typeof id === 'string') referenced.add(id);
+      }
+    }
+    return referenced;
   }
 
   /** Atomic, idempotent checkpoint/wrap mutation. The caller persists with one save(). */

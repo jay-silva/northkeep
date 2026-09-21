@@ -17,7 +17,11 @@ export {
 } from './crypto.js';
 export {
   Vault,
+  PROJECT_COMPACT_DEFAULT_KEEP,
+  PROJECT_COMPACT_MAX_KEEP,
   onVaultSave,
+  type ProjectCompaction,
+  type ProjectCompactionResult,
   type VaultSaveListener,
   computeEntryHash,
   cosineSimilarity,
