@@ -1147,7 +1147,7 @@ describe('project provenance (ADR 0052 Decision 1, 3 and 4)', () => {
     expect(Buffer.byteLength(full, 'utf8')).toBeGreaterThan(bytes);
   });
 
-  it('a 14.5 KB document with 25 updates and 3 archives resumes under 24 KB', async () => {
+  it('ASCII fixture at the document cap: the resume brief measured in UTF-8 bytes, under 24,000', async () => {
     const mcp = await connect();
     const created = await createProject(mcp, 'heavy', { status: 'PRIOR-REVISION-TEXT held the status once.' });
     let revision = created.revision;
@@ -1251,6 +1251,44 @@ describe('project provenance (ADR 0052 Decision 1, 3 and 4)', () => {
       expect(provider).not.toContain(raw);
     }
     expect(brief.split(String.fromCharCode(10)).some((l) => l.trimStart().startsWith('## '))).toBe(false);
+  });
+
+  it('CJK fixture at the document cap: the resume brief measured in UTF-8 bytes, under 60,000', async () => {
+    // Round 2: the cap is characters, so a CJK document under it is roughly
+    // three times its size on the wire. The bound has to be stated in bytes.
+    const mcp = await connect();
+    const created = await createProject(mcp, 'cjk', { status: 'PRIOR-REVISION-TEXT held the status once.' });
+    let revision = created.revision;
+    const update = async (args: Record<string, unknown>): Promise<void> => {
+      const result = await mcp.callTool({
+        name: 'project_update', arguments: { project: 'cjk', expected_revision: revision, ...args },
+      });
+      expect(result.isError, toolText(result)).toBeFalsy();
+      revision = (JSON.parse(toolText(result)) as { revision: string }).revision;
+    };
+    const HAN = '漢';
+    for (let i = 0; i < 25; i += 1) await update({ log_entry: `${i}. ${HAN.repeat(1000)}` });
+    await update({ status: HAN.repeat(200), what_why: HAN.repeat(9000) });
+
+    const doc = JSON.parse(toolText(await mcp.callTool({
+      name: 'project_get', arguments: { project: 'cjk' },
+    }))) as { content: string };
+    // Pin the fixture: a smaller document would pass this test for free.
+    expect(doc.content.length).toBeGreaterThan(14000);
+    expect(doc.content.length).toBeLessThanOrEqual(PROJECT_DOC_MAX_CHARS);
+
+    const brief = toolText(await mcp.callTool({ name: 'project_resume', arguments: { project: 'cjk' } }));
+    const parsed = JSON.parse(brief) as {
+      archive_summary: { count: number }; content?: string; files_text?: string;
+    };
+    expect(parsed.archive_summary.count).toBeGreaterThanOrEqual(3);
+    expect(parsed.content).toBeUndefined();
+    expect(parsed.files_text).toBeUndefined();
+    expect(brief).not.toContain('PRIOR-REVISION-TEXT');
+
+    const bytes = Buffer.byteLength(brief, 'utf8');
+    console.log(`CJK resume payload: ${bytes} UTF-8 bytes, document ${doc.content.length} chars / ${Buffer.byteLength(doc.content, 'utf8')} bytes, archives ${parsed.archive_summary.count}`);
+    expect(bytes).toBeLessThan(60000);
   });
 
   it('Tier-1 masking leaves the writer block intact, even a host name shaped like an address', async () => {
