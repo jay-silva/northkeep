@@ -944,10 +944,28 @@ describe('project provenance (ADR 0052 Decision 1, 3 and 4)', () => {
         operation_id: '66666666-6666-4666-8666-666666666666',
         expected_revision: created.revision, status: 'Verified.', completed: 'Checked every claim.', next_actions: '',
       },
-    }))) as { current: { draft: boolean } };
+    }))) as { current: { draft: boolean; revision: string } };
     expect(wrapped.current.draft).toBe(false);
     const after = JSON.parse(toolText(await mcp.callTool({ name: 'project_list', arguments: {} }))) as typeof listed;
     expect(after.projects.find((p) => p.project === 'drafted')?.draft).toBe(false);
+
+    // A retry from another host must replay, not conflict: the writer is
+    // outside the request fingerprint, and clearing the draft line ignores it.
+    const other = await connectAs('codex-mcp-client');
+    try {
+      const replay = JSON.parse(toolText(await other.callTool({
+        name: 'project_wrap',
+        arguments: {
+          vault_id: created.vault_id, project: 'drafted',
+          operation_id: '66666666-6666-4666-8666-666666666666',
+          expected_revision: created.revision, status: 'Verified.', completed: 'Checked every claim.', next_actions: '',
+        },
+      }))) as { replayed: boolean; receipt: { result_revision: string }; current: { revision: string } };
+      expect(replay.replayed).toBe(true);
+      expect(replay.receipt.result_revision).toBe(wrapped.current.revision);
+    } finally {
+      await other.close();
+    }
 
     const again = await mcp.callTool({
       name: 'project_create',

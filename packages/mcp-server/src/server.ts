@@ -810,7 +810,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         draft: z
           .boolean()
           .optional()
-          .describe('Mark the document a draft: it opens with a line saying it was bootstrapped by this host on this date and is unverified. Use it when you built the document from a codebase rather than from the user. project_wrap clears the line, and so does project_update with draft: false.'),
+          .describe('Mark the document a draft: it opens with a line saying it was bootstrapped by this host on this date and is unverified. Use it when you built the document from a codebase rather than from the user. project_wrap clears the line.'),
       },
     },
     async ({ project, title, what_why, status, next_actions, draft }) =>

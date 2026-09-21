@@ -169,8 +169,9 @@ Tool arguments added in `packages/mcp-server/src/server.ts`:
 
 - `project_create` gains `draft` (boolean, optional). True opens the
   document with the draft preamble line, naming the writing host and the
-  date. `project_wrap` clears it, as does `project_update` with
-  `draft: false`.
+  date. `project_wrap` clears it. Core also clears it on an update with
+  `draft: false`, which this wave deliberately does not expose as an MCP
+  argument, so the tool description does not mention it.
 - `project_get` gains `revision` (memory id, optional). It returns that one
   earlier working revision in full instead of the current document, after
   the connection grant is asserted here and again in core. A revision in
