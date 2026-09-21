@@ -1,8 +1,9 @@
-# ADR 0051: Compact project history, and an 8 MB sync cap
+# ADR 0051: Compact project history; the sync cap stays at 4 MB
 
 - **Date:** 2026-09-21
 - **Status:** Accepted by Jay ("Do option 1 and raise the cap to 8 MB",
-  2026-09-21). Implemented the same day.
+  2026-09-21). Option 1 implemented the same day; the cap raise was
+  found impossible on the current transport (Decision 3) and is not done.
 - **Deciders:** Jay (product owner), Claude Code
 - **Extends:** ADR 0039 (projects as vault memories), ADR 0045 (log
   rolling), ADR 0048 (handoff receipts)
@@ -73,14 +74,24 @@ meant in practice. Compaction is not automatic; the user runs it.
   the surface.
 - Mobile: none. The phone receives the compacted vault through sync.
 
-## Decision 3: The sync cap becomes 8 MB
+## Decision 3: The sync cap stays at 4 MB, because the platform caps it at 4.5 MB
 
-`MAX_BLOB_BYTES` in the sync server goes from 4 MB to 8 MB, and every
-place that quotes the number to the user (desktop status, mobile, CLI,
-KNOWN-LIMITS) follows. This is a bridge, not the fix: at the observed
-growth rate it buys months, and compaction is what keeps the file small.
-The Vercel request body limit and Neon row size were checked to allow
-8 MB before this was chosen.
+Jay asked for 8 MB. Before changing the constant, the deployed sync
+server was probed read-only with a throwaway token: a 3 MB body reached
+our code (our own 404 for an unknown path), a 5 MB body was refused by
+Vercel with `FUNCTION_PAYLOAD_TOO_LARGE` before our handler ran. Vercel
+functions cap request bodies at 4.5 MB. That is where ADR 0009's "~4 MB"
+came from, and why it named Vercel Blob as the scale path.
+
+So an 8 MB `MAX_BLOB_BYTES` would be a false claim: a vault between
+4.5 MB and 8 MB would pass our check and fail one layer earlier with a
+platform error the app cannot explain. The constant stays at 4 MB, with
+about half a megabyte of headroom under the platform limit for headers
+and framing. Raising the real ceiling needs a different transport
+(client uploads to Vercel Blob, or chunked uploads reassembled
+server-side). That adds a networked path and a dependency, so it needs
+its own ADR and an adversarial review, and it is not part of this
+decision. Compaction is what keeps the vault under the cap.
 
 ## Acceptance (Jay)
 
