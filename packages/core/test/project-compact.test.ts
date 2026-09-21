@@ -266,6 +266,26 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
     v.close();
   });
 
+  it('reports nothing and keeps every row when the write it rode in on rolls back', () => {
+    const v = vault();
+    const revision = seedProject(v, 'demo', 8);
+    const before = survivingRevisions(v, 'project:demo');
+    expect(before).toHaveLength(5);
+
+    // The blanking runs inside the supersession transaction, so a failure after
+    // it must undo both. Injected at setMeta, the last step of the write.
+    const internals = v as unknown as { setMeta: (key: string, value: string) => void };
+    const original = internals.setMeta.bind(internals);
+    internals.setMeta = (key, value) => { throw new Error(`injected failure at ${key}=${value.slice(0, 8)}`); };
+    expect(() => v.updateProject({ project: 'demo', expected_revision: revision, status: 'Doomed.' })).toThrow(/injected failure/);
+    internals.setMeta = original;
+
+    expect(survivingRevisions(v, 'project:demo')).toEqual(before);
+    expect(v.lastAutoCompaction()).toBeNull();
+    expect(v.verifyChain().ok).toBe(true);
+    v.close();
+  });
+
   it('keeps the saved file flat: twenty 10 KB updates weigh about what six do', () => {
     const body = 'z'.repeat(10 * 1024);
     const sizeAfter = (updates: number, name: string): number => {
