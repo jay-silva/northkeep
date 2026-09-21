@@ -17,9 +17,10 @@ in-process MCP clients with different handshake names (`claude-code` and
 
 ## Setup, once, at the top of the shell
 
+Run these from the checkout you are reviewing, with its packages already built
+(`pnpm -r build` if they are not).
+
 ```bash
-cd ~/Claude/Projects/NorthKeep/northkeep
-pnpm -r build
 export NORTHKEEP_HOME=$(mktemp -d)
 export NORTHKEEP_PASSPHRASE='adr 0052 acceptance passphrase'
 export NORTHKEEP_NO_KEYCHAIN=1
@@ -51,9 +52,9 @@ host reading that same name back, then the second host's own name after its
 wrap. The two session ids differ.
 
 ```
-step 1 after the Claude Code wrap: last_writer.host = claude-code session_id = 52ef188a-fbf8-44d7-90ea-449c7d112f82
+step 1 after the Claude Code wrap: last_writer.host = claude-code session_id = 48847de4-ae2d-43aa-b89f-e57f9a71ba1f
 step 1 Codex resume sees: last_writer.host = claude-code
-step 1 after the Codex wrap: last_writer.host = codex-mcp-client session_id = 486ffab4-5c96-4578-9642-71cb23d148bd
+step 1 after the Codex wrap: last_writer.host = codex-mcp-client session_id = 579fdae4-dae4-4f79-8510-9ce2d354d95a
 ```
 
 ## Step 2: the chain verifies, and an edited writer block breaks it
@@ -86,8 +87,14 @@ the failure is the ordinary content hash failure, with no new mechanism.
 ```
 step 2 copy before the edit: chain ok = true
 step 2 copy after editing the live head writer block: chain ok = false
-step 2 reported: Entry b916e812-8311-4169-833f-a3c2dce95646 hash does not match its content.
+step 2 reported: Entry 58bdf509-656c-4735-88cd-af63101dc4ce hash does not match its content.
+step 2 an unrelated metadata key instead: Entry 58bdf509-656c-4735-88cd-af63101dc4ce hash does not match its content.
 ```
+
+Read that last line as the limit of the step. The hash covers the whole row, so
+an unrelated metadata key fails with the identical message. What this proves is
+that the writer block cannot be changed without breaking the chain, not that the
+chain says which field moved.
 
 Run `node docs/adr-0052-acceptance.mjs compacted` after step 4, when the
 project has compacted revisions to look at. It is written up below as step 2c.
@@ -102,8 +109,8 @@ Successful output: one open session, named by the host that read, with the time
 of that read and the fixed note. A session never lists itself.
 
 ```
-step 3 Claude Code read revision b916e812-8311-4169-833f-a3c2dce95646 and wrote nothing
-step 3 open session: claude-code 47c6cbd4-0bb4-4d49-9bf9-bdeea168fac1 last read 2026-09-21T19:23:06.489Z
+step 3 Claude Code read revision 58bdf509-656c-4735-88cd-af63101dc4ce and wrote nothing
+step 3 open session: claude-code 63282f5a-29ea-47f1-b599-7f068bd158af last read 2026-09-21T19:26:18.267Z
 step 3 note: These sessions read this project and did not write back. Nothing was recorded on their behalf.
 ```
 
@@ -126,16 +133,17 @@ content-free summaries and no history, a much larger payload with
 step 4 default resume payload: 7668 bytes, target under 24576
 step 4 revisions carried: 8 summaries, history entries: 0
 step 4 with history: true: 18244 bytes
-step 4 one revision read: 424bc2bf-7b70-4e8d-a2c9-08e1127ddf08 is 1877 characters of text
+step 4 one revision read: 5f6f9bdb-e912-4a1b-b127-b464589fe0a6 is 1877 characters of text
 ```
 
 Eight summaries rather than five: ADR 0051 compaction keeps the newest five plus
 any revision a handoff receipt still names, and the two wraps in step 1 left
 three such revisions.
 
-To measure the real project instead, run the same call against your own home
-rather than the temporary one. That measurement is yours to make; this document
-does not open `~/.northkeep`.
+To measure the real `northkeep` project, do it as a read and nothing else: one
+`project_resume` with defaults from any connected host, and count the bytes of
+what comes back. Do not run this step's script against your own home; it writes
+25 updates, which would make a real project's history.
 
 ## Step 2c: a compacted revision keeps its writer block and nothing else
 
@@ -152,12 +160,18 @@ a chain that verifies. Smuggling a second key onto a blanked row fails
 verification.
 
 ```
-step 2 blanked revisions: 19 | first one keeps host claude-code session 504f2135-631b-47b5-af58-d52fe9ddde0d | text length 0
+step 2 superseded revisions: 27 of which blanked: 19
+step 2 oldest blanked revision 0a237784-dc80-4ac1-84f7-f81f08640333 keeps host claude-code session 5842de36-98ed-40c2-ae9e-8718e31f86e0 | text length 0
 step 2 metadata keys on that row: northkeep_provenance_v1
 step 2 chain with the kept blocks: ok = true
 step 2 after smuggling a second key onto that blanked row: ok = false
-step 2 reported: Forgotten entry cf967f9a-38a4-445a-853c-75bca4e4ae8d carries metadata beyond its writer block.
+step 2 reported: Forgotten entry 0a237784-dc80-4ac1-84f7-f81f08640333 carries metadata beyond its writer block.
 ```
+
+The arithmetic: 28 writes leave 27 superseded revisions, 8 keep their text (the
+newest five plus the three the two handoff receipts name), so 19 are blanked.
+The row named above is the oldest of them, which is the one that has been
+compacted longest.
 
 What this check does not cover: a blanked row has no content left, so its entry
 hash cannot be recomputed, and swapping one well-formed host or session id for

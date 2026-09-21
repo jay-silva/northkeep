@@ -83,12 +83,19 @@ async function tamper() {
   console.log('step 2 copy before the edit: chain ok =', vault.verifyChain().ok);
   const head = vault.list({ scope: 'project:acceptance' }).find((entry) => entry.type === 'working');
   const block = { ...head.metadata.northkeep_provenance_v1, host: 'not-the-writer' };
+  // Raw SQLite on a private handle: no supported write forges a writer block,
+  // which is the point of the step. TS private is compile-time only.
   const db = vault.db;
-  db.prepare('UPDATE memories SET metadata = ? WHERE id = ?')
-    .run(JSON.stringify({ ...head.metadata, northkeep_provenance_v1: block }), head.id);
+  const write = (metadata) => db.prepare('UPDATE memories SET metadata = ? WHERE id = ?')
+    .run(JSON.stringify(metadata), head.id);
+  write({ ...head.metadata, northkeep_provenance_v1: block });
   const checked = vault.verifyChain();
   console.log('step 2 copy after editing the live head writer block: chain ok =', checked.ok);
   console.log('step 2 reported:', checked.error);
+  // The same failure for an unrelated key: the hash covers the whole row, not
+  // the block specifically. Said out loud so the step is not read as more.
+  write({ ...head.metadata, unrelated_key: 'changed' });
+  console.log('step 2 an unrelated metadata key instead:', vault.verifyChain().error);
   vault.close();
   fs.rmSync(copy);
 }
@@ -158,16 +165,21 @@ async function compacted() {
   const header = Vault.readHeader(copy);
   const key = deriveMasterKey(process.env.NORTHKEEP_PASSPHRASE, loadDeviceSecret(), header.salt, header.kdf);
   const vault = Vault.openWithKey(copy, key);
-  const blanked = vault.list({ scope: 'project:acceptance', includeSuperseded: true, includeForgotten: true })
-    .filter((entry) => entry.forgotten_at !== null);
-  const writer = blanked[0].metadata.northkeep_provenance_v1;
-  console.log('step 2 blanked revisions:', blanked.length, '| first one keeps host', writer.host,
-    'session', writer.session_id, '| text length', blanked[0].content.length);
-  console.log('step 2 metadata keys on that row:', Object.keys(blanked[0].metadata).join(', '));
+  const revisions = vault.list({ scope: 'project:acceptance', includeSuperseded: true, includeForgotten: true })
+    .filter((entry) => entry.type === 'working' && entry.superseded_at !== null)
+    .sort((a, b) => a.created_at.localeCompare(b.created_at));
+  const blanked = revisions.filter((entry) => entry.forgotten_at !== null);
+  const oldest = blanked[0];
+  const writer = oldest.metadata.northkeep_provenance_v1;
+  console.log('step 2 superseded revisions:', revisions.length, 'of which blanked:', blanked.length);
+  console.log('step 2 oldest blanked revision', oldest.id, 'keeps host', writer.host,
+    'session', writer.session_id, '| text length', oldest.content.length);
+  console.log('step 2 metadata keys on that row:', Object.keys(oldest.metadata).join(', '));
   console.log('step 2 chain with the kept blocks: ok =', vault.verifyChain().ok);
+  // Raw SQLite on a private handle again: compaction is the only writer here.
   const db = vault.db;
   db.prepare('UPDATE memories SET metadata = ? WHERE id = ?')
-    .run(JSON.stringify({ northkeep_provenance_v1: writer, smuggled: 'extra' }), blanked[0].id);
+    .run(JSON.stringify({ northkeep_provenance_v1: writer, smuggled: 'extra' }), oldest.id);
   const checked = vault.verifyChain();
   console.log('step 2 after smuggling a second key onto that blanked row: ok =', checked.ok);
   console.log('step 2 reported:', checked.error);
