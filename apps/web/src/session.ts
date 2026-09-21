@@ -1,4 +1,4 @@
-import { timingSafeEqual, randomBytes as nodeRandomBytes } from 'node:crypto';
+import { timingSafeEqual, randomBytes as nodeRandomBytes, randomUUID } from 'node:crypto';
 import {
   Vault,
   deriveMasterKey,
@@ -14,6 +14,10 @@ import { AutoSync, type AutoSyncEvent } from '@northkeep/sync';
  */
 export class UiSession {
   readonly token: string;
+  /** Identifies this app process as the writer of a project save (ADR 0052
+   * Decision 2). Minted once so every write in one run shares an id; it is
+   * never accepted from a request, so a browser cannot forge attribution. */
+  readonly sessionId: string;
   private heldKey: Buffer | null = null;
   /** True after an explicit lock, until the next explicit unlock — suppresses
    * ambient (Keychain/env) re-caching so "Lock" isn't a no-op when a key
@@ -34,6 +38,7 @@ export class UiSession {
   constructor(vaultPath: string) {
     this.vaultPath = vaultPath;
     this.token = nodeRandomBytes(32).toString('hex');
+    this.sessionId = randomUUID();
     this.autoSync = new AutoSync({
       vaultPath,
       getMasterKey: () => (this.isUnlocked() ? Buffer.from(this.heldKey!) : null),
