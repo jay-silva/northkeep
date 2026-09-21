@@ -912,6 +912,31 @@ describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
     expect(readCallLog().length).toBe(before + 1);
   });
 
+  it('a call log that cannot be appended fails every tool closed, resume included (audit-ledger behaviour)', async () => {
+    // Not specific to resume: appendCallLog throws in run(), so no tool can
+    // return a result the ledger did not record. Documented, not asserted as
+    // desirable. The message may name the call log path and nothing else.
+    const mcp = await connect();
+    await mcp.callTool({
+      name: 'project_update',
+      arguments: { project: 'nopath', expected_revision: null, status: 'SECRET-STATUS-TEXT', next_actions: '' },
+    });
+    fs.rmSync(callLogPath(), { force: true });
+    fs.mkdirSync(callLogPath());
+    let text: string;
+    try {
+      const result = await mcp.callTool({ name: 'project_resume', arguments: { project: 'nopath' } });
+      text = toolText(result);
+      expect(result.isError).toBe(true);
+    } finally {
+      fs.rmSync(callLogPath(), { recursive: true, force: true });
+    }
+    expect(text).not.toContain(vaultPath);
+    expect(text).not.toContain('SECRET-STATUS-TEXT');
+    expect(text).not.toContain('nopath');
+    console.log(`unreadable call log, resume error text: ${text.replace(/\s+/g, ' ').slice(0, 200)}`);
+  });
+
   it('an open session keeps its host and id through Tier-1 masking, and carries no new line', async () => {
     const mcp = await connect();
     await mcp.callTool({
