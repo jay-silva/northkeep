@@ -141,8 +141,12 @@ function maskProjectPayload(value: unknown, key?: string): unknown {
 }
 
 function receivingProjectView(view: ReturnType<typeof getProjectView>) {
+  // The document is already here as parsed sections and files, so carrying
+  // content and files_text as well serialized it twice and pushed a busy
+  // project past the 24 KB brief budget. project_get returns the full text.
+  const { content: _content, files_text: _files_text, ...rest } = view;
   return {
-    ...view,
+    ...rest,
     files: view.files?.map((file) => file.access === 'reported_available'
       ? { type: file.type, label: file.label, locator: file.locator, access: 'unverified' as const }
       : file),
@@ -669,11 +673,12 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       title: 'Resume a project',
       description:
         'Read a revision-bound project handoff view. Call this at session start. It returns the current ' +
-        'document, the files reported by earlier work, the host and session that wrote it last, whether ' +
-        'it is still a draft, a content-free list of the newest prior revisions, a count of the Log ' +
-        'archives, and any sessions that read this project on this machine and did not write back. ' +
-        'The text of prior revisions and archives is not included: pass history: true for all of it, or ' +
-        'project_get with one revision id for one of them.',
+        'document as parsed sections, the files reported by earlier work, the host and session that ' +
+        'wrote it last, whether it is still a draft, a content-free list of the newest prior revisions, ' +
+        'a count of the Log archives, and any sessions that read this project on this machine and did ' +
+        'not write back. The document is not repeated as one block of text: project_get returns the ' +
+        'full document text. The text of prior revisions and archives is not included either: pass ' +
+        'history: true for all of it, or project_get with one revision id for one of them.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         history: z

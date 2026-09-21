@@ -532,13 +532,15 @@ describe('project tools', () => {
     }))) as { revision: string; vault_id: string };
     const receiverView = JSON.parse(toolText(await mcp.callTool({
       name: 'project_resume', arguments: { project: 'protected' },
-    }))) as { files: Array<Record<string, unknown>>; file_access_note: string; files_text: string };
+    }))) as { files: Array<Record<string, unknown>>; file_access_note: string; files_text?: string; content?: string };
     expect(receiverView.files[0]).toMatchObject({ label: 'Observed.txt', access: 'unverified' });
     expect(receiverView.files[0]).not.toHaveProperty('checked_at');
     expect(receiverView.files[0]).not.toHaveProperty('context');
     expect(receiverView.files[1]).toMatchObject({ label: 'Missing.txt', access: 'unavailable' });
     expect(receiverView.file_access_note).toMatch(/checked again in this receiving environment/);
-    expect(receiverView.files_text).toContain('reported_available');
+    // The parsed files survive; the raw section text and the document do not.
+    expect(receiverView.files_text).toBeUndefined();
+    expect(receiverView.content).toBeUndefined();
     process.env.NORTHKEEP_SCOPES = 'personal';
     const denied = await mcp.callTool({
       name: 'project_checkpoint',
@@ -1113,6 +1115,56 @@ describe('project provenance (ADR 0052 Decision 1, 3 and 4)', () => {
     }));
     expect(full).toContain('PRIOR-REVISION-TEXT');
     expect(Buffer.byteLength(full, 'utf8')).toBeGreaterThan(bytes);
+  });
+
+  it('a 14.5 KB document with 25 updates and 3 archives resumes under 24 KB', async () => {
+    const mcp = await connect();
+    const created = await createProject(mcp, 'heavy', { status: 'PRIOR-REVISION-TEXT held the status once.' });
+    let revision = created.revision;
+    const update = async (args: Record<string, unknown>): Promise<void> => {
+      const result = await mcp.callTool({
+        name: 'project_update', arguments: { project: 'heavy', expected_revision: revision, ...args },
+      });
+      expect(result.isError, toolText(result)).toBeFalsy();
+      revision = (JSON.parse(toolText(result)) as { revision: string }).revision;
+    };
+    // Long Log entries push the document past its cap, so older entries roll
+    // into archive memories; What & Why never rolls, so it holds the bulk.
+    for (let i = 0; i < 25; i += 1) {
+      await update({ log_entry: `Session ${i}. ${'Log detail that earns its place. '.repeat(60)}`.slice(0, 1100) });
+    }
+    await update({
+      status: 'Trimmed back down.',
+      what_why: `Why this project exists. ${'Background detail worth keeping. '.repeat(360)}`.slice(0, 10000),
+    });
+
+    const doc = JSON.parse(toolText(await mcp.callTool({
+      name: 'project_get', arguments: { project: 'heavy' },
+    }))) as { content: string };
+    // Pin the fixture: a smaller document would pass this test for free.
+    expect(doc.content.length).toBeGreaterThan(14000);
+    expect(doc.content.length).toBeLessThanOrEqual(PROJECT_DOC_MAX_CHARS);
+
+    const brief = toolText(await mcp.callTool({ name: 'project_resume', arguments: { project: 'heavy' } }));
+    const parsed = JSON.parse(brief) as {
+      archive_summary: { count: number }; revisions: unknown[]; content?: string; files_text?: string;
+    };
+    expect(parsed.archive_summary.count).toBeGreaterThanOrEqual(3);
+    expect(parsed.content).toBeUndefined();
+    expect(parsed.files_text).toBeUndefined();
+    expect(brief).not.toContain('PRIOR-REVISION-TEXT');
+
+    const full = toolText(await mcp.callTool({
+      name: 'project_resume', arguments: { project: 'heavy', history: true },
+    }));
+    const withHistory = JSON.parse(full) as { history: Array<{ content: string }> };
+    expect(withHistory.history.some((r) => r.content.includes('PRIOR-REVISION-TEXT'))).toBe(true);
+
+    const bytes = Buffer.byteLength(brief, 'utf8');
+    // Measured 2026-09-21: 33,657 bytes while the view spread content and
+    // files_text, 17,928 once both are dropped.
+    console.log(`resume payload: default ${bytes} bytes, history ${Buffer.byteLength(full, 'utf8')} bytes, document ${doc.content.length} chars, archives ${parsed.archive_summary.count}`);
+    expect(bytes).toBeLessThan(24000);
   });
 
   it('Tier-1 masking leaves the writer block intact, even a host name shaped like an address', async () => {
