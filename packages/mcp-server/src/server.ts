@@ -29,7 +29,12 @@ import { applyTier1 } from '@northkeep/redact';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
 import { appendCallLog, readCallLog, type CallLogEntry } from './log.js';
-import { OPEN_SESSIONS_NOTE, openSessions } from './open-sessions.js';
+import type { OpenSession } from './open-sessions.js';
+import {
+  OPEN_SESSIONS_NOTE,
+  OPEN_SESSIONS_UNREADABLE_NOTE,
+  openSessions,
+} from './open-sessions.js';
 
 /**
  * The MCP surface. Stdio transport; stdout is protocol, so all diagnostics go
@@ -136,8 +141,12 @@ function maskProjectPayload(value: unknown, key?: string): unknown {
 }
 
 function receivingProjectView(view: ReturnType<typeof getProjectView>) {
+  // The document is already here as parsed sections and files, so carrying
+  // content and files_text as well serialized it twice and pushed a busy
+  // project past the 24 KB brief budget. project_get returns the full text.
+  const { content: _content, files_text: _files_text, ...rest } = view;
   return {
-    ...view,
+    ...rest,
     files: view.files?.map((file) => file.access === 'reported_available'
       ? { type: file.type, label: file.label, locator: file.locator, access: 'unverified' as const }
       : file),
@@ -664,11 +673,12 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       title: 'Resume a project',
       description:
         'Read a revision-bound project handoff view. Call this at session start. It returns the current ' +
-        'document, the files reported by earlier work, the host and session that wrote it last, whether ' +
-        'it is still a draft, a content-free list of the newest prior revisions, a count of the Log ' +
-        'archives, and any sessions that read this project on this machine and did not write back. ' +
-        'The text of prior revisions and archives is not included: pass history: true for all of it, or ' +
-        'project_get with one revision id for one of them.',
+        'document as parsed sections, the files reported by earlier work, the host and session that ' +
+        'wrote it last, whether it is still a draft, a content-free list of the newest prior revisions, ' +
+        'a count of the Log archives, and any sessions that read this project on this machine and did ' +
+        'not write back. The document is not repeated as one block of text: project_get returns the ' +
+        'full document text. The text of prior revisions and archives is not included either: pass ' +
+        'history: true for all of it, or project_get with one revision id for one of them.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         history: z
@@ -680,16 +690,26 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     },
     async ({ project, history }) => {
       const scope = `project:${project}`;
-      // Read the log before the call, so this session's own resume row is not
-      // in it; the vault is never written by a resume.
-      const open = openSessions(readCallLog(), scope, ctx.session_id, new Date());
       return run(ctx, 'project_resume', { scope }, vaultPath, (vault, granted) => {
         const view = getProjectView(vault, project, granted, { history });
+        // Derived inside the call, so a log this machine cannot read costs the
+        // session list and not the resume. This session's own row is still
+        // absent: run appends it only after this returns.
+        let open: OpenSession[] | null;
+        try {
+          open = openSessions(readCallLog(), scope, ctx.session_id, new Date());
+        } catch {
+          open = null;
+        }
         return {
           payload: {
             ...receivingProjectView(view),
-            open_sessions: open,
-            ...(open.length > 0 ? { open_sessions_note: OPEN_SESSIONS_NOTE } : {}),
+            ...(open === null
+              ? { open_sessions_note: OPEN_SESSIONS_UNREADABLE_NOTE }
+              : {
+                ...{ open_sessions: open },
+                ...(open.length > 0 ? { open_sessions_note: OPEN_SESSIONS_NOTE } : {}),
+              }),
           },
           result_id: view.revision,
           disclosed_scopes: [view.scope],
