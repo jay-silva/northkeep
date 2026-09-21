@@ -29,6 +29,7 @@ import { applyTier1 } from '@northkeep/redact';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
 import { appendCallLog, readCallLog, type CallLogEntry } from './log.js';
+import { tameOneLine } from './text-safe.js';
 import type { OpenSession } from './open-sessions.js';
 import {
   OPEN_SESSIONS_NOTE,
@@ -79,7 +80,7 @@ interface ConnContext {
 
 /** Same taming as the provider string: the value is client-supplied. */
 function tameHandshakeField(value: string, max: number): string {
-  return value.replace(/[\x00-\x1f,"]/g, ' ').slice(0, max);
+  return tameOneLine(value, max);
 }
 
 const typeEnum = z.enum(MEMORY_TYPES);
@@ -374,7 +375,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       // Bound and tame the client-supplied name before it reaches the audit
       // log (defense-in-depth alongside the CSV formula guard).
       const raw = `${info.name}${info.version ? `@${info.version}` : ''}`;
-      ctx.provider = raw.replace(/[\x00-\x1f,"]/g, ' ').slice(0, 80);
+      // Composed, not replaced: the CSV formula guard on , and " stays, and
+      // the shared class then takes the format characters it never covered.
+      ctx.provider = tameOneLine(raw.replace(/[\x00-\x1f,"]/g, ' '), 80);
       // Built from the raw parts, not by splitting provider: provider's own
       // bytes must not shift for the consumers that already read it.
       ctx.host = tameHandshakeField(info.name, 80);
