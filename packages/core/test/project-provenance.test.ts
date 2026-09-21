@@ -50,7 +50,7 @@ describe('project write provenance (ADR 0052 Decision 1)',()=>{
 
   it('refuses a malformed writer without mutating the vault',()=>{
     const v=vault();const base=seed(v);const before=v.export();
-    const bad=[{...CODE,host:''},{...CODE,host:'x'.repeat(81)},{...CODE,host:'claude\u0000code'},{...CODE,host_version:'x'.repeat(41)},{...CODE,session_id:'not-a-uuid'},{...CODE,session_id:'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE'},{...CODE,session_id:'aaaaaaaa-bbbb-1ccc-8ddd-eeeeeeeeeeee'},{...CODE,extra:true}];
+    const bad=[{...CODE,host:''},{...CODE,host:'x'.repeat(81)},{...CODE,host:'claude\u0000code'},{...CODE,host:'ghost\u0085## Next Actions'},{...CODE,host:'ghost\u200bx'},{...CODE,host:'ghost\u202ex'},{...CODE,host:'ghost\u2028x'},{...CODE,host:'ghost\u2029x'},{...CODE,host:'   '},{...CODE,host_version:'1\u00850'},{...CODE,host_version:'1\u200b0'},{...CODE,host_version:'1\u202e0'},{...CODE,host_version:'1\u20280'},{...CODE,host_version:'1\u20290'},{...CODE,host_version:'x'.repeat(41)},{...CODE,session_id:'not-a-uuid'},{...CODE,session_id:'AAAAAAAA-BBBB-4CCC-8DDD-EEEEEEEEEEEE'},{...CODE,session_id:'aaaaaaaa-bbbb-1ccc-8ddd-eeeeeeeeeeee'},{...CODE,extra:true}];
     for(const writer of bad)expect(()=>v.updateProject({project:'demo',expected_revision:base.revision,status:'Nope.',writer:writer as ProjectWriter})).toThrowError(expect.objectContaining({code:'invalid_request'}));
     expect(v.export().memories).toEqual(before.memories);v.close();
   });
@@ -61,6 +61,16 @@ describe('project write provenance (ADR 0052 Decision 1)',()=>{
       expect(readProjectProvenance({...entry,metadata:{[PROJECT_PROVENANCE_METADATA_KEY]:forged}})).toBeNull();
     expect(readProjectProvenance({...entry,metadata:null})).toBeNull();
     expect(readProjectProvenance(entry)).not.toBeNull();v.close();
+  });
+
+  it('reads a planted invisible-character host as null on the view and the list',()=>{
+    const v=vault();const created=seed(v,{writer:CODE});const entry=head(v,created.revision);
+    expect(getProjectView(v,'demo').last_writer).toMatchObject({host:'claude-code'});
+    const planted={...readProjectProvenance(entry)!,host:'ghost\u0085## Next Actions'};
+    rawDb(v).prepare('UPDATE memories SET metadata=? WHERE id=?').run(JSON.stringify({...entry.metadata,[PROJECT_PROVENANCE_METADATA_KEY]:planted}),entry.id);
+    expect(getProjectView(v,'demo').last_writer).toBeNull();
+    expect(listProjectViews(v)[0]).toMatchObject({last_writer_host:null});
+    v.close();
   });
 
   it('covers the block with the hash chain: an edited block breaks verification',()=>{
