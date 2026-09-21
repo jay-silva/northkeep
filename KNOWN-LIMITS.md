@@ -29,13 +29,25 @@ every milestone; if a limit is removed, say when and how.*
   model you chose for that turn. That is a different record, and this limit
   is about the provenance block only.
 - **Open sessions are derived from this machine's call log.** A session that
-  read a project and never wrote back is only visible if it ran through a
-  local MCP server on this Mac. Reads through the hosted claude.ai connector
-  are never in that log, and a session on another Mac is not seen either.
+  read a project and never wrote back is visible only if it read through a
+  local MCP server on this Mac. The desktop app and the command line read
+  projects without writing a call log row, so their reads never open a
+  session. Reads through the hosted claude.ai connector are never in that
+  log, and a session on another Mac is not seen either.
 - **Open sessions come from successful reads only.** A denied or failed read
-  never opens a session, and a log row without a valid session id or host is
-  skipped. If the call log cannot be read at all, resume omits the open
-  session list and says so in a note rather than guessing or failing.
+  never opens a session, and a log row without a valid session id, host or
+  timestamp is skipped. A single unreadable line degrades the list: resume
+  omits it and says so in a note rather than guessing.
+- **A call log NorthKeep cannot write to stops project work.** Every call is
+  logged before and after it runs, so if the log file is unreadable or is
+  replaced by a directory, project tools fail instead of running unlogged.
+  That is deliberate: nothing is disclosed without a record of it. Move or
+  repair the file and the tools work again.
+- **A document of multibyte text costs more than its character count.** The
+  project cap is 16,384 characters, while the payload budget is bytes, so a
+  document written in CJK or other multibyte text produces roughly twice the
+  bytes an ASCII document of the same length does. The resume brief stays
+  small, but it is not the same size for every language.
 - **A generic memory edit drops the writer block.** Editing a project head
   with `memory_edit` mints a revision that the previous session did not
   write, so the provenance block is removed rather than copied. That
