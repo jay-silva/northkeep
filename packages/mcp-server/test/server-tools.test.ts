@@ -1218,7 +1218,7 @@ describe('project provenance (ADR 0052 Decision 1, 3 and 4)', () => {
     const bytes = Buffer.byteLength(brief, 'utf8');
     // Measured 2026-09-21: 33,657 bytes while the view spread content and
     // files_text, 17,928 once both are dropped.
-    console.log(`resume payload: default ${bytes} bytes, history ${Buffer.byteLength(full, 'utf8')} bytes, document ${doc.content.length} chars, archives ${parsed.archive_summary.count}`);
+    console.log(`ASCII resume payload: default ${bytes} UTF-8 bytes, history ${Buffer.byteLength(full, 'utf8')} bytes, document ${doc.content.length} chars, archives ${parsed.archive_summary.count}`);
     expect(bytes).toBeLessThan(24000);
   });
 

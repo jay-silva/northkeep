@@ -78,7 +78,10 @@ interface ConnContext {
   session_id: string;
 }
 
-/** Same taming as the provider string: the value is client-supplied. */
+/**
+ * The shared one-line class, and only that: host and host_version land in JSON
+ * provenance, never a CSV cell, so they do not need provider's , and " strip.
+ */
 function tameHandshakeField(value: string, max: number): string {
   return tameOneLine(value, max);
 }
