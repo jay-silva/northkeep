@@ -1,20 +1,27 @@
 import { exactCanonicalJson } from './consolidation.js';
 import {
   PROJECT_DOC_MAX_CHARS,
+  PROJECT_LOG_ARCHIVE_HEADING,
   PROJECT_DOC_CAP_MESSAGE,
   PROJECT_SECTION_HEADINGS,
   formatLogArchive,
+  formatProjectDraftLine,
   getProjectSection,
+  isProjectDraft,
   parseProjectDoc,
   parseProjectSlug,
   projectScope,
   rollProjectLog,
   serializeProjectDoc,
+  setProjectDraft,
   type ProjectDoc,
 } from './project-doc.js';
 import type { MemoryEntry } from './types.js';
 
 export const PROJECT_HANDOFF_METADATA_KEY = 'northkeep_project_handoff_v1';
+/** Reserved metadata key for the writer of a project head (ADR 0052 Decision 1). */
+export const PROJECT_PROVENANCE_METADATA_KEY = 'northkeep_provenance_v1';
+export const PROJECT_REVISION_SUMMARY_LIMIT = 20;
 export const PROJECT_HANDOFF_METADATA_VERSION = 1;
 export const PROJECT_HISTORY_LIMIT = 20;
 export const PROJECT_FILE_LIMIT = 40;
@@ -33,7 +40,13 @@ export interface ProjectFileReference {
   context?: string;
 }
 
+/** Host-reported writer of a project write. Any process can present any name. */
+export interface ProjectWriter { host: string; host_version?: string | null; session_id: string }
+export interface ProjectProvenance { version: 1; host: string; host_version: string | null; model: null; session_id: string; recorded_at: string }
+
 export interface ProjectRevision { id: string; updated_at: string; content: string; mode?: ProjectHandoffMode }
+export interface ProjectRevisionSummary { id: string; updated_at: string; mode?: ProjectHandoffMode; writer?: { host: string; host_version: string | null; session_id: string }; chars: number }
+export interface ProjectArchiveSummary { count: number; oldest: string | null; newest: string | null }
 export interface ProjectArchive { id: string; updated_at: string; content: string }
 export interface ProjectView {
   vault_id: string;
@@ -55,18 +68,27 @@ export interface ProjectView {
   log: string;
   history: ProjectRevision[];
   archives: ProjectArchive[];
+  /** Always present, content free, newest first (ADR 0052 Decision 3). */
+  revisions: ProjectRevisionSummary[];
+  archive_summary: ProjectArchiveSummary;
+  last_writer: ProjectProvenance | null;
+  draft: boolean;
 }
-export interface ProjectSummary { project:string; scope:string; title:string|null; status:string|null; revision:string|null; updated_at:string|null; conflict:boolean }
+export interface ProjectSummary { project:string; scope:string; title:string|null; status:string|null; revision:string|null; updated_at:string|null; conflict:boolean; last_writer_host:string|null; draft:boolean }
 
 export interface ProjectCheckpointRequest {
   vault_id:string; project:string; mode:ProjectHandoffMode; operation_id:string; expected_revision:string;
   status:string; completed:string; next_actions:string; decision?:string; open_questions?:string; files?:ProjectFileReference[];
+  writer?:ProjectWriter;
 }
 export interface ProjectUpdateRequest {
   project:string; expected_revision:string|null; what_why?:string; status?:string; next_actions?:string;
   decision?:string; log_entry?:string; open_questions?:string; files?:ProjectFileReference[];
   /** Display title, kept as a level-1 heading at the top of the document. Empty string removes it. */
   title?:string;
+  writer?:ProjectWriter;
+  /** True only on creation; false removes the draft line from an existing document. */
+  draft?:boolean;
 }
 export interface ProjectHandoffReceipt {
   operation_id:string; project:string; mode:ProjectHandoffMode; base_revision:string; result_revision:string;
@@ -83,7 +105,7 @@ export class ProjectHandoffError extends Error {
   constructor(public readonly code:ProjectHandoffErrorCode, message:string, public readonly current?:ProjectView) { super(message); this.name='ProjectHandoffError'; }
 }
 
-interface ProjectVaultReader { list(filter?:Record<string,unknown>):MemoryEntry[]; getVaultId():string; sharedScopes():string[] }
+export interface ProjectVaultReader { list(filter?:Record<string,unknown>):MemoryEntry[]; getVaultId():string; sharedScopes():string[] }
 
 function fail(message:string):never { throw new ProjectHandoffError('invalid_request',message); }
 export function assertProjectText(value:string, field:string, allowEmpty:boolean):void {
@@ -117,6 +139,35 @@ export function parseProjectFiles(text:string):ProjectFileReference[]|null {
 }
 export function formatProjectFiles(files:ProjectFileReference[]):string { return `${FILES_FENCE}\n${exactCanonicalJson(validateProjectFileReferences(files))}\n\`\`\``; }
 
+const SESSION_ID_PATTERN=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const CONTROL_CHARS=/[\u0000-\u001f\u007f]/;
+/** Refuses rather than sanitizes: a host that sends junk should learn it did. */
+export function validateProjectWriter(writer:ProjectWriter):{host:string;host_version:string|null;session_id:string}{
+  if(!writer||typeof writer!=='object'||Array.isArray(writer))fail('writer is malformed.');
+  const allowed=new Set(['host','host_version','session_id']); if(Object.keys(writer).some((key)=>!allowed.has(key)))fail('writer has unsupported fields.');
+  if(typeof writer.host!=='string'||writer.host.length<1||writer.host.length>80||CONTROL_CHARS.test(writer.host))fail('writer host must be 1 to 80 characters without control characters.');
+  if(writer.host_version!==undefined&&writer.host_version!==null&&(typeof writer.host_version!=='string'||writer.host_version.length>40||CONTROL_CHARS.test(writer.host_version)))fail('writer host_version must be at most 40 characters without control characters, or null.');
+  if(typeof writer.session_id!=='string'||!SESSION_ID_PATTERN.test(writer.session_id))fail('writer session_id must be a lowercase RFC 4122 v4 UUID.');
+  return {host:writer.host,host_version:writer.host_version??null,session_id:writer.session_id};
+}
+export function projectProvenanceBlock(writer:ProjectWriter,recordedAt:string):ProjectProvenance{
+  const valid=validateProjectWriter(writer);
+  return {version:1,host:valid.host,host_version:valid.host_version,model:null,session_id:valid.session_id,recorded_at:recordedAt};
+}
+/** Null for absent or malformed blocks. A read of the record never fails the read. */
+export function readProjectProvenance(entry:MemoryEntry):ProjectProvenance|null{
+  const raw=entry.metadata?.[PROJECT_PROVENANCE_METADATA_KEY];
+  if(!raw||typeof raw!=='object'||Array.isArray(raw))return null;
+  const m=raw as Record<string,unknown>; const keys=new Set(['version','host','host_version','model','session_id','recorded_at']);
+  if(Object.keys(m).length!==keys.size||Object.keys(m).some((key)=>!keys.has(key)))return null;
+  if(m.version!==1||m.model!==null)return null;
+  if(typeof m.host!=='string'||m.host.length<1||m.host.length>80||CONTROL_CHARS.test(m.host))return null;
+  if(m.host_version!==null&&(typeof m.host_version!=='string'||m.host_version.length>40||CONTROL_CHARS.test(m.host_version)))return null;
+  if(typeof m.session_id!=='string'||!SESSION_ID_PATTERN.test(m.session_id))return null;
+  if(typeof m.recorded_at!=='string'||!Number.isFinite(Date.parse(m.recorded_at)))return null;
+  return {version:1,host:m.host,host_version:m.host_version as string|null,model:null,session_id:m.session_id,recorded_at:m.recorded_at};
+}
+
 export function applyProjectUpdate(content:string, request:ProjectUpdateRequest, now=new Date()):{content:string;archives:string[]} {
   const doc=parseProjectDoc(content); for(const h of ['What & Why','Current Status','Next Actions','Decisions','Log','Open Questions','Files']) owned(doc,h);
   const replacements:[string,string|undefined,boolean][]=[['What & Why',request.what_why,false],['Current Status',request.status,false],['Next Actions',request.next_actions,true],['Open Questions',request.open_questions,true]];
@@ -126,6 +177,12 @@ export function applyProjectUpdate(content:string, request:ProjectUpdateRequest,
   if(request.decision!==undefined){assertProjectText(request.decision,'decision',false);const old=owned(doc,'Decisions');setSection(doc,'Decisions',`${old}${old?'\n':''}- ${date} - ${request.decision}`);}
   if(request.log_entry!==undefined){assertProjectText(request.log_entry,'log_entry',false);const old=owned(doc,'Log');setSection(doc,'Log',`- ${date} - ${request.log_entry}${old?'\n'+old:''}`);}
   if(request.files!==undefined)setSection(doc,'Files',formatProjectFiles(request.files));
+  if(request.draft!==undefined){
+    if(typeof request.draft!=='boolean')fail('draft must be a boolean.');
+    if(request.draft&&request.expected_revision!==null)fail('draft can only be set when a project is created.');
+    const host=request.writer!==undefined?validateProjectWriter(request.writer).host:'unknown host';
+    setProjectDraft(doc,request.draft,formatProjectDraftLine(host,now));
+  }
   const rolled=rollProjectLog(doc); const result=serializeProjectDoc(rolled.doc); if (result.length > PROJECT_DOC_MAX_CHARS) fail(PROJECT_DOC_CAP_MESSAGE); return {content:result,archives:rolled.archived};
 }
 
@@ -161,11 +218,36 @@ export function getProjectView(vault:ProjectVaultReader, project:string, allowed
   if(live.length===0)throw new ProjectHandoffError('not_found','Project was not found.'); if(live.length>1)throw new ProjectHandoffError('project_conflict','Project has multiple current documents.');
   const head=live[0]!; const doc=parseProjectDoc(head.content); for(const h of ['What & Why','Current Status','Next Actions','Decisions','Log','Open Questions','Files'])owned(doc,h);
   const fileText=owned(doc,'Files'); const entries=all.filter((e)=>!e.forgotten_at);
-  const history=options.history?entries.filter((e)=>e.type==='working'&&e.superseded_at).reverse().slice(0,20).map((e)=>({id:e.id,updated_at:e.created_at,content:e.content,...(projectReceiptMode(e)?{mode:projectReceiptMode(e)}:{})})):[];
-  const archives=options.history?entries.filter((e)=>e.type==='episodic'&&e.content.startsWith('## Log archive')).reverse().slice(0,20).map((e)=>({id:e.id,updated_at:e.created_at,content:e.content})):[];
-  return {vault_id:vault.getVaultId(),project,scope,shared:vault.sharedScopes().includes(scope),revision:head.id,updated_at:head.created_at,content:head.content,title:getProjectTitle(doc),what_why:owned(doc,'What & Why'),status:owned(doc,'Current Status'),next_actions:owned(doc,'Next Actions'),decisions:owned(doc,'Decisions'),open_questions:owned(doc,'Open Questions'),files:parseProjectFiles(fileText),files_text:fileText,log:owned(doc,'Log'),history,archives};
+  const priors=entries.filter((e)=>e.type==='working'&&e.superseded_at).reverse();
+  const archiveRows=entries.filter((e)=>e.type==='episodic'&&e.content.startsWith(PROJECT_LOG_ARCHIVE_HEADING)).reverse();
+  const history=options.history?priors.slice(0,PROJECT_REVISION_SUMMARY_LIMIT).map((e)=>({id:e.id,updated_at:e.created_at,content:e.content,...(projectReceiptMode(e)?{mode:projectReceiptMode(e)}:{})})):[];
+  const archives=options.history?archiveRows.slice(0,PROJECT_REVISION_SUMMARY_LIMIT).map((e)=>({id:e.id,updated_at:e.created_at,content:e.content})):[];
+  const revisions=priors.slice(0,PROJECT_REVISION_SUMMARY_LIMIT).map((e)=>projectRevisionSummary(e));
+  const stamps=archiveRows.map((e)=>e.created_at);
+  const archive_summary={count:archiveRows.length,oldest:stamps.length?stamps[stamps.length-1]!:null,newest:stamps.length?stamps[0]!:null};
+  return {vault_id:vault.getVaultId(),project,scope,shared:vault.sharedScopes().includes(scope),revision:head.id,updated_at:head.created_at,content:head.content,title:getProjectTitle(doc),what_why:owned(doc,'What & Why'),status:owned(doc,'Current Status'),next_actions:owned(doc,'Next Actions'),decisions:owned(doc,'Decisions'),open_questions:owned(doc,'Open Questions'),files:parseProjectFiles(fileText),files_text:fileText,log:owned(doc,'Log'),history,archives,revisions,archive_summary,last_writer:readProjectProvenance(head),draft:isProjectDraft(doc)};
+}
+
+function projectRevisionSummary(entry:MemoryEntry):ProjectRevisionSummary{
+  const mode=projectReceiptMode(entry); const writer=readProjectProvenance(entry);
+  return {id:entry.id,updated_at:entry.created_at,...(mode?{mode}:{}),...(writer?{writer:{host:writer.host,host_version:writer.host_version,session_id:writer.session_id}}:{}),chars:entry.content.length};
+}
+
+/**
+ * One prior or current working revision in full. Rows outside this exact scope
+ * are not found rather than denied, so a probe learns nothing about them.
+ */
+export function getProjectRevision(vault:ProjectVaultReader,project:string,revisionId:string,allowedScopes?:string[]):ProjectRevision{
+  let scope:string; try{scope=projectScope(project);}catch{throw new ProjectHandoffError('invalid_request','Project slug is invalid.');}
+  if(allowedScopes!==undefined&&!allowedScopes.includes(scope))throw new ProjectHandoffError('scope_denied','Project scope is outside this connection grant.');
+  if(typeof revisionId!=='string'||revisionId.length===0)throw new ProjectHandoffError('invalid_request','Revision id is invalid.');
+  const row=vault.list({scope,includeSuperseded:true,includeForgotten:true,allowedScopes}).find((e)=>e.id===revisionId&&e.scope===scope&&e.type==='working');
+  if(row&&row.forgotten_at)throw new ProjectHandoffError('not_found','That project revision was compacted away: its text is gone and only the row remains.');
+  if(!row)throw new ProjectHandoffError('not_found','Project revision was not found.');
+  const mode=projectReceiptMode(row);
+  return {id:row.id,updated_at:row.created_at,content:row.content,...(mode?{mode}:{})};
 }
 export function listProjectViews(vault:ProjectVaultReader,allowedScopes?:string[]):ProjectSummary[]{
   const groups=new Map<string,MemoryEntry[]>(); for(const e of vault.list({type:'working',allowedScopes})){const p=parseProjectSlug(e.scope);if(p){const a=groups.get(p)||[];a.push(e);groups.set(p,a);}}
-  return [...groups].sort(([a],[b])=>a.localeCompare(b)).map(([project,heads])=>heads.length!==1?{project,scope:projectScope(project),title:null,status:null,revision:null,updated_at:null,conflict:true}:(()=>{const doc=parseProjectDoc(heads[0]!.content);return {project,scope:projectScope(project),title:getProjectTitle(doc),status:getProjectSection(doc,'Current Status')||null,revision:heads[0]!.id,updated_at:heads[0]!.created_at,conflict:false};})());
+  return [...groups].sort(([a],[b])=>a.localeCompare(b)).map(([project,heads])=>heads.length!==1?{project,scope:projectScope(project),title:null,status:null,revision:null,updated_at:null,conflict:true,last_writer_host:null,draft:false}:(()=>{const head=heads[0]!;const doc=parseProjectDoc(head.content);return {project,scope:projectScope(project),title:getProjectTitle(doc),status:getProjectSection(doc,'Current Status')||null,revision:head.id,updated_at:head.created_at,conflict:false,last_writer_host:readProjectProvenance(head)?.host??null,draft:isProjectDraft(doc)};})());
 }
