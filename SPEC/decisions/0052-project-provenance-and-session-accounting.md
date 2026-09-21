@@ -54,12 +54,15 @@ northkeep_provenance_v1: {
 The block is written from a caller-supplied `writer` on the request
 (`{ host, host_version?, session_id }`), validated in core, and never
 inherited from the previous head: a write without a writer carries no
-block. Metadata is inside `computeEntryHash`, so the block is
-tamper-evident under the existing chain verification with no new
-mechanism. It is not part of the handoff request fingerprint, so an exact
-retry from the same operation id still returns the original receipt.
-Receipt validation and compaction ignore the key. The `source` column is
-unchanged; receipts pin it.
+block. Metadata is inside `computeEntryHash`, so the block rides the
+existing hash chain with no new mechanism. That chain is unkeyed, and
+verification skips a forgotten row, so the evidence it gives is bounded:
+Claim 1 states the boundary and this decision does not restate it. The
+block is not part of the handoff request fingerprint, so an exact retry
+from the same operation id still returns the original receipt. Receipt
+validation ignores the key, and compaction keeps the block when it blanks
+a revision's text (ADR 0051 addendum). The `source` column is unchanged;
+receipts pin it.
 
 A generic edit of a project head (`memory_edit`, ADR 0015 supersession)
 copies metadata verbatim by design. It now strips the provenance block
