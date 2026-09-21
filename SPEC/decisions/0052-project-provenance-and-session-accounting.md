@@ -1,8 +1,8 @@
 # ADR 0052: Project provenance, session accounting, a lighter resume brief, and draft projects
 
 - **Date:** 2026-09-21
-- **Status:** Accepted pending Jay's acceptance run; adversarial review
-  2026-09-21 NOT CLEARED, amendments applied, fresh pass pending. Jay
+- **Status:** Accepted pending Jay's acceptance run; two adversarial
+  passes NOT CLEARED, amendments applied, third pass pending. Jay
   chose wave 1 ("M-C+E and M-F together") on 2026-09-21 after the
   migration-prerequisite scoping.
 - **Deciders:** Jay (product owner), Claude Code
@@ -51,6 +51,17 @@ northkeep_provenance_v1: {
 }
 ```
 
+`host` and `host_version` pass one sanitizer before they are stored:
+every Unicode `Cc` and `Cf` code point plus `U+2028` and `U+2029` is
+removed, runs of whitespace collapse to a single space, the result is
+trimmed and cut to 80 characters (40 for the version), and an empty
+result is refused. Core's `validateProjectWriter`
+(packages/core/src/project-handoff.ts:145-151) refuses those classes
+rather than accepting them quietly, and `readProjectProvenance`
+(project-handoff.ts:158-169) returns null for a stored block that
+violates them, so a block written before this rule reads as absent
+rather than as a record.
+
 The block is written from a caller-supplied `writer` on the request
 (`{ host, host_version?, session_id }`), validated in core, and never
 inherited from the previous head: a write without a writer carries no
@@ -97,16 +108,28 @@ validates a stored block (packages/core/src/project-handoff.ts:158-168):
 1. Only a row that recorded a successful read counts (`ok: true`). A
    denied or failed read never opens a session.
 2. The session id must be a lowercase RFC 4122 v4, or the row is skipped.
-3. The host is taken only from a string handshake name, with control
-   characters stripped and the result cut to 80 characters. A row whose
-   host is empty after that is skipped. A row whose handshake field is
+3. The host is taken only from a string handshake name and passes the
+   Decision 1 sanitizer. The class `[\u0000-\u001f\u007f]` the first
+   amendment used missed `U+0085`, `U+2028` and `U+2029`, each of which a
+   Markdown reader treats as a line break, so a handshake name could
+   still carry a multi-line block into the brief. A row whose host is
+   empty after sanitizing is skipped, and a row whose handshake field is
    not a string is skipped, never thrown on.
-4. Rows are sorted by timestamp, and the newest three survive.
-5. The whole derivation runs inside the `project_resume` call, wrapped in
-   a try/catch. On failure the response omits `open_sessions` and carries
-   a note that the call log could not be read. A malformed line can
-   degrade the brief and can never break resume, and the call is logged
-   like any other.
+4. `ts` must match strict ISO-8601 UTC, parse to a finite time, and be at
+   most five minutes in the future, or the row is skipped. `Date.parse`
+   alone accepts trailing parenthesized junk and still returns a time, so
+   the accepted string rather than the parsed one used to reach the
+   brief, unbounded in length. Every stamp the brief reports
+   (`opened_at`, `last_read_at`) is re-emitted from the parsed value with
+   `toISOString()`, never echoed.
+5. Rows are sorted by timestamp, and the newest three survive.
+6. The whole derivation runs inside the `project_resume` call, wrapped in
+   a try/catch. A malformed line can degrade the brief and can never
+   break resume: the response then omits `open_sessions` and carries a
+   note that the call log could not be read, and the call is logged like
+   any other. That is not the case of an unreadable log *file*, which
+   fails every tool before the derivation is reached; see the scar tissue
+   below.
 
 The call log is per machine and the hosted connector never touches it,
 so hosted sessions are invisible here. Stated in KNOWN-LIMITS.
@@ -126,11 +149,13 @@ The resume brief also omits `content` and `files_text`. `ProjectView`
 carries the whole document in `content` and again in its parsed sections
 (packages/core/src/project-handoff.ts:228), so a resume that spread the
 view serialized the document twice. `project_get` keeps both fields; only
-the resume brief drops them. Target, restated: the default resume payload
-stays under 24 KB for any document under the cap
+the resume brief drops them. Target, restated in bytes, because the cap is
+characters and the budget is bytes: the default resume payload stays
+under 24,000 UTF-8 bytes for an ASCII document at the cap
 (`PROJECT_DOC_MAX_CHARS`, 16,384, packages/core/src/project-doc.ts:10),
-measured in acceptance at the cap rather than on whichever project
-happens to be small today.
+and about 2x the ASCII figure for CJK-heavy documents. The test measures
+both fixtures at the cap and reports the CJK figure, rather than
+measuring whichever project happens to be small today.
 
 ## Decision 4: Draft projects
 
@@ -138,8 +163,10 @@ happens to be small today.
 preamble line, `Draft, unverified: bootstrapped by <host> on <YYYY-MM-DD>.`,
 host from the writer or `unknown host`. `ProjectView` and
 `ProjectSummary` gain `draft`. The line is removed by a `project_wrap`
-(a human-closed session) or by `project_update` with `draft: false`.
-`project_checkpoint` and other updates keep it. `draft: true` on an
+(a human-closed session) or by `project_update` with `draft: false`,
+which Decision 4 named and the first implementation did not expose.
+`project_update` therefore takes `draft` as an MCP argument, where only
+`false` is meaningful. `project_checkpoint` and other updates keep it. `draft: true` on an
 existing document is refused as `invalid_request`; a second create of the
 same slug is already refused.
 
@@ -183,8 +210,10 @@ acceptance test. A change that grows a default read fails acceptance.
    forgotten row, so on a compacted revision the block is attribution that
    survived, not evidence: swapping one well-formed host or session id for
    another there is undetectable.
-2. A session that read a project on this machine and never wrote back is
-   visible at the next resume. Per machine; hosted reads are not seen.
+2. A session that read a project through a local MCP server on this Mac
+   and never wrote back is visible at the next resume. Narrower than "on
+   this machine": the GUI and the CLI read projects without writing a
+   call-log row, so their reads are invisible here, as are hosted reads.
 3. The provenance block never carries a model identity. `model` is null
    until a host exposes one through the handshake. This is a claim about
    the block and nothing else: Converse's own call-log rows record the
@@ -199,7 +228,7 @@ Named here so a later reader knows these were seen and left, not missed.
 - **Draft state is document text, not a field.** A generic `memory_edit`
   that rewrites the preamble changes whether a project reads as a draft
   (`isProjectDraft` tests the first non-empty preamble line,
-  packages/core/src/project-doc.ts:286-288). That same path already drops
+  packages/core/src/project-doc.ts:303-305). That same path already drops
   the provenance block (Decision 1), so the revision carries no writer to
   contradict. Making draft a field is a schema change and is out of scope.
 - **Unknown MCP arguments are stripped by the schema, not refused.** A
@@ -207,6 +236,24 @@ Named here so a later reader knows these were seen and left, not missed.
   removed by zod and the server writes the real handshake values. This is
   house-wide MCP behaviour, not a choice this ADR makes. The web routes,
   which are not schema-stripped the same way, refuse the field by name.
+- **One session id per server process.** The id is minted once at
+  `createServer`, so a long-lived host collapses every conversation it
+  holds into a single id. Claude Code spawns a server per session and so
+  keeps them apart; Claude Desktop and Codex may not. The list is a list
+  of processes that did not write, which is narrower than a list of
+  conversations, and the brief does not claim otherwise.
+- **An unreadable call log fails closed for every tool.** `appendCallLog`
+  (packages/mcp-server/src/log.ts:84) throws when the log path is a
+  directory or is unreadable, and every tool call logs through it
+  (packages/mcp-server/src/server.ts:283 and 296), so resume fails rather
+  than degrading. Kept deliberately: no unlogged disclosure. The cost is
+  that a broken log file blocks project work until it is moved, and the
+  failure names the path.
+- **Decision 5's enforcement is the avoided question.** The call log
+  shows 0 `project_wrap` and 0 `project_checkpoint` calls in 2.5 months.
+  Nothing here makes a host call either one. The contract install is
+  Jay's action, so the behaviour change is a hope with a mechanism behind
+  it, not a mechanism.
 - **A zero-width prefix is handled by normalization.** `U+200B` before
   the draft prefix survives `trim()`, so `isProjectDraft` strips
   zero-width characters first. The same normalization covers the BOM and
@@ -223,8 +270,10 @@ Named here so a later reader knows these were seen and left, not missed.
 3. Resume from Claude Code and quit without writing; resume from Codex:
    `open_sessions` lists the Claude Code session id and time.
 4. `project_resume` with defaults on a project whose document sits at the
-   16,384-character cap: payload under 24 KB, and no `content` or
-   `files_text` in it. `project_get` with a `revision` id returns that old
+   16,384-character cap, run twice, once on ASCII and once on CJK text:
+   the ASCII payload is under 24,000 UTF-8 bytes, the CJK payload is
+   about twice that and the test prints it, and neither carries `content`
+   or `files_text`. `project_get` with a `revision` id returns that old
    text in full.
 5. Create a project with `draft: true`: the list shows it as draft; wrap
    it once; draft is gone; create the same slug again: refused.
@@ -306,22 +355,87 @@ provenance block on blanked revisions (ADR 0051 addendum), and the
 `isProjectDraft` normalization. A fresh adversarial pass runs against the
 amended branch before Jay's acceptance run is treated as final.
 
+## Adversarial review (2026-09-21, second pass, against the amended branch)
+
+Fresh-eyes subagent, against the amended code, every vault under a
+temporary `NORTHKEEP_HOME`. Verdict: **NOT CLEARED**.
+
+**Kill shot.** Strings derived from the call log were still echoed. The
+control class `[\u0000-\u001f\u007f]`
+(packages/mcp-server/src/open-sessions.ts:35) misses `U+0085`, `U+2028`
+and `U+2029`, so a handshake name carrying them survived sanitizing
+(`hostOf`, open-sessions.ts:59-63) and arrived as a multi-line block in
+the writer block on the head and in the resume brief. Separately,
+`opened_at` and `last_read_at` echoed the row's own `ts` after nothing but
+`Date.parse` (open-sessions.ts:80-84, echoed at :128), and `Date.parse`
+accepts a valid stamp followed by parenthesized junk, so the payload was
+attacker-sized.
+
+**Flesh wounds.**
+
+1. An unreadable call log (a directory at the path, or mode 000) fails
+   resume rather than degrading it, because `appendCallLog` (log.ts:84)
+   throws for every tool before the fail-soft derivation is reached.
+2. The 24 KB target is per character. CJK text at the cap measured 49,472
+   to 50,627 bytes, and the ASCII acceptance test cannot see it.
+3. `project_update` had no `draft` argument although Decision 4 named one,
+   so the only way out of draft state was a wrap.
+4. Claim 2 said "on this machine" while GUI and CLI reads write no
+   call-log row, which makes the claim wider than the mechanism.
+5. One session id per server process collapses many conversations into one
+   id on a long-lived host.
+6. A row stamped 2099 pinned the list, the newest-three sort having no
+   upper bound on time.
+7. Acceptance step 4's pasted byte figure did not reproduce.
+8. The citation `project-doc.ts:286-288` had drifted; `isProjectDraft` is
+   at 303-305.
+
+**Verified holding, not amended.** Claim 1's live and compacted boundary
+exactly as worded; receipt replay on an exact retry; the draft prefixes;
+the web routes' forgery refusals; concurrency; zero writes from a GUI or
+CLI read.
+
+### Binding amendments (applied), second pass
+
+1. `ts` must match strict ISO-8601 UTC, parse finite, and sit at most five
+   minutes in the future; every stamp the brief reports is re-emitted with
+   `toISOString()` rather than echoed. Decision 2, rule 4.
+2. `host` and `host_version` pass one sanitizer removing Unicode `Cc` and
+   `Cf` plus `U+2028` and `U+2029`, collapsing whitespace, capped at 80.
+   Core's `validateProjectWriter` refuses those classes and
+   `readProjectProvenance` returns null for a stored block that violates
+   them. Decision 1 and Decision 2, rule 3. Closes the kill shot, with
+   wounds 6 and 8.
+3. `project_update` gains `draft`, where only `false` is meaningful.
+   Decision 4 and the implementation notes. Closes wound 3.
+4. The payload bound is stated in UTF-8 bytes and measured on ASCII and
+   CJK fixtures at the cap: ASCII under 24,000 bytes, and about 2x the
+   ASCII figure for CJK-heavy documents. The cap is characters, the budget
+   is bytes. Decision 3 and acceptance step 4. Closes wounds 2 and 7.
+5. Claim 2 becomes "a session that read a project through a local MCP
+   server on this Mac and never wrote back". Closes wound 4.
+6. An unreadable call log stays fail-closed for every tool, accepted as
+   scar tissue: no unlogged disclosure. Wound 1 is answered by a decision,
+   not a fix, and wound 5 and Decision 5's unenforced contract join it
+   there. A third pass runs before Jay's acceptance run is final.
+
 ## Implementation notes
 
 Tool arguments added in `packages/mcp-server/src/server.ts`:
 
 - `project_create` gains `draft` (boolean, optional). True opens the
   document with the draft preamble line, naming the writing host and the
-  date. `project_wrap` clears it. Core also clears it on an update with
-  `draft: false`, which this wave deliberately does not expose as an MCP
-  argument, so the tool description does not mention it.
+  date. `project_wrap` clears it, and `project_update` gains `draft` for
+  the same purpose, where only `draft: false` is meaningful; `draft: true`
+  on an existing document is refused as `invalid_request`.
 - `project_get` gains `revision` (memory id, optional). It returns that one
   earlier working revision in full instead of the current document, after
   the connection grant is asserted here and again in core. A revision in
   another project's scope reads as `not_found`, and a compacted revision
   says its text is gone.
 
-No other tool gained an argument. `project_update`, `project_create`,
+`project_update` gained `draft`; no other argument was added.
+`project_update`, `project_create`,
 `project_checkpoint` and `project_wrap` all pass the connection's handshake
 name, handshake version and session id as the request `writer`; nothing
 about the model is sent, because nothing about the model is known.
