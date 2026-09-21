@@ -108,7 +108,8 @@ The writer mirrors its own write, after the vault save succeeds:
 
 - MCP server: after `project_wrap`, `project_checkpoint`,
   `project_update`, `project_create`. CLI: after
-  `northkeep projects update`.
+  `northkeep projects update`, which is a new subcommand proposed here:
+  `projects` today has only `compact` (packages/cli/src/index.ts:881-893).
 - Desktop: not in M-A. It writes through the same routes and gets the
   same hook behind a Projects-page control once Jay approves a mock.
 
@@ -319,9 +320,8 @@ file it did not create.
 - No read-back: a hand edit never becomes a vault write, and import is a
   separate command against a directory NorthKeep did not generate.
 - No remote, push, pull, `git init`, branch or tag creation, merge
-  conflict handling, or file watcher.
-- No mirroring of memories outside project scopes, and none of
-  superseded revisions. ADR 0051 blanks those anyway.
+  conflict handling, or file watcher. No mirroring of memories outside
+  project scopes, and none of superseded revisions.
 - No desktop or mobile surface in M-A, no per-project opt-out, no
   redaction of the exported text, no recursive or zip import, and no
   format other than the Markdown section convention above.

@@ -78,9 +78,10 @@ the date it was created, so a bootstrap nobody confirmed does not sit
 unverified forever.
 
 Surfaces: a read-only `project_board` MCP tool, and
-`northkeep projects board [--stale-days N]` beside the existing
-`projects compact` command (packages/cli/src/index.ts:881-893). The tool
-takes only `stale_days`. It performs no write of any kind.
+`northkeep projects board [--stale-days N] [--json]` beside the existing
+`projects compact` command (packages/cli/src/index.ts:881-893). Both are
+new; `projects` today has only `compact`. The tool takes only
+`stale_days`. Neither performs a write of any kind.
 
 The report is slugs, dates, ids, one-line statuses. Never a whole
 document, never a Log, never a Decisions body. The default payload
