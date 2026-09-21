@@ -95,6 +95,23 @@ describe('downSyncConnector project fold (M14)', () => {
     vault.close();
   });
 
+  it('bounds project history: twenty folds leave five superseded revisions with content', async () => {
+    const vault = makeVault();
+    vault.remember({ content: projectMarkdown('Fold 0.'), type: 'working', scope: 'project:northkeep' });
+    vault.setScopeShared('project:northkeep', true);
+    for (let i = 1; i <= 20; i += 1) {
+      stubPending([
+        { server_id: `conn_bound${i}`, scope: 'project:northkeep', type: 'working', content: projectMarkdown(`Fold ${i}.`) },
+      ]);
+      await downSyncConnector({ server: 'http://127.0.0.1:9', deviceSecret, vault });
+    }
+    const history = vault.list({ scope: 'project:northkeep', type: 'working', includeSuperseded: true });
+    expect(history.filter((e) => e.superseded_at !== null && e.content.length > 0)).toHaveLength(5);
+    expect(vault.lastAutoCompaction()).toEqual({ project: 'northkeep', blanked: 1, bytes_freed: expect.any(Number) });
+    expect(vault.verifyChain().ok).toBe(true);
+    vault.close();
+  });
+
   it('dedupes identical content without a second write', async () => {
     const vault = makeVault();
     const same = projectMarkdown('Already here.');

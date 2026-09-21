@@ -174,6 +174,13 @@ export interface ProjectCompactionResult {
   bytes_freed: number;
 }
 
+/** What the last write compacted automatically (ADR 0051 Decision 4). */
+export interface AutoCompaction {
+  project: string;
+  blanked: number;
+  bytes_freed: number;
+}
+
 export class Vault {
   private db: SqliteDb;
   private key: Buffer;
@@ -182,6 +189,7 @@ export class Vault {
   private readonly platform: Platform;
   readonly path: string;
   private closed = false;
+  private autoCompaction: AutoCompaction | null = null;
 
   private constructor(
     vaultPath: string,
@@ -636,23 +644,14 @@ export class Vault {
     const projects: ProjectCompaction[] = [];
     const doomed: string[] = [];
     for (const scope of scopes) {
-      const candidates = this.db
-        .prepare(
-          "SELECT id, content FROM memories WHERE scope = ? AND type = 'working' " +
-            'AND superseded_at IS NOT NULL AND forgotten_at IS NULL ORDER BY created_at DESC, rowid DESC',
-        )
-        .all(scope) as Array<{ id: string; content: string }>;
-      const referenced = this.receiptReferences(scope);
-      const blanking = candidates.slice(keep).filter((row) => !referenced.has(row.id));
-      let bytes = 0;
-      for (const row of blanking) bytes += Buffer.byteLength(row.content, 'utf8');
-      doomed.push(...blanking.map((row) => row.id));
+      const plan = this.planScopeCompaction(scope, keep);
+      doomed.push(...plan.ids);
       projects.push({
         project: parseProjectSlug(scope)!,
-        candidates: candidates.length,
-        kept: candidates.length - blanking.length,
-        blanked: blanking.length,
-        bytes_freed: bytes,
+        candidates: plan.candidates,
+        kept: plan.candidates - plan.ids.length,
+        blanked: plan.ids.length,
+        bytes_freed: plan.bytes,
       });
     }
     const result: ProjectCompactionResult = {
@@ -668,9 +667,8 @@ export class Vault {
     if (!before.ok) throw new Error(`Nothing was compacted: this vault's chain does not verify (${before.error}).`);
 
     const forgottenAt = new Date().toISOString();
-    const blank = this.db.prepare("UPDATE memories SET content = '', metadata = NULL, forgotten_at = ? WHERE id = ?");
     this.db.transaction(() => {
-      for (const id of doomed) blank.run(forgottenAt, id);
+      this.blankRevisions(doomed, forgottenAt);
     })();
     // VACUUM rebuilds the image so serialize() drops the freed pages. It cannot
     // run inside a transaction, hence after it.
@@ -678,6 +676,61 @@ export class Vault {
     const chain = this.verifyChain();
     if (!chain.ok) throw new Error(`Compaction was abandoned unsaved because the vault chain no longer verifies: ${chain.error}`);
     return result;
+  }
+
+  /**
+   * Picks the superseded project revisions this scope may lose: everything past
+   * the newest `keep`, minus any a handoff receipt still names. Pure selection,
+   * so both the manual operation and the automatic path share one rule.
+   */
+  private planScopeCompaction(scope: string, keep: number): { ids: string[]; bytes: number; candidates: number } {
+    const candidates = this.db
+      .prepare(
+        "SELECT id, content FROM memories WHERE scope = ? AND type = 'working' " +
+          'AND superseded_at IS NOT NULL AND forgotten_at IS NULL ORDER BY created_at DESC, rowid DESC',
+      )
+      .all(scope) as Array<{ id: string; content: string }>;
+    const referenced = this.receiptReferences(scope);
+    const blanking = candidates.slice(keep).filter((row) => !referenced.has(row.id));
+    let bytes = 0;
+    for (const row of blanking) bytes += Buffer.byteLength(row.content, 'utf8');
+    return { ids: blanking.map((row) => row.id), bytes, candidates: candidates.length };
+  }
+
+  /** Tombstones the named rows exactly as forget() does. Runs in the caller's transaction. */
+  private blankRevisions(ids: string[], forgottenAt: string): void {
+    const blank = this.db.prepare("UPDATE memories SET content = '', metadata = NULL, forgotten_at = ? WHERE id = ?");
+    for (const id of ids) blank.run(forgottenAt, id);
+  }
+
+  /**
+   * ADR 0051 Decision 4: history stays bounded at every write. Runs inside the
+   * caller's transaction, and deliberately skips verifyChain, which is too slow
+   * for a write path; the manual operation keeps those checks.
+   */
+  private autoCompactScope(scope: string): AutoCompaction | null {
+    const project = parseProjectSlug(scope);
+    if (project === null) return null;
+    const plan = this.planScopeCompaction(scope, PROJECT_COMPACT_DEFAULT_KEEP);
+    if (plan.ids.length === 0) return null;
+    this.blankRevisions(plan.ids, new Date().toISOString());
+    return { project, blanked: plan.ids.length, bytes_freed: plan.bytes };
+  }
+
+  /**
+   * Publishes what was blanked, once the supersession has actually committed, and
+   * reclaims the pages. A rolled-back write never reaches here, so the report can
+   * never name rows that still hold content.
+   */
+  private finishAutoCompaction(report: AutoCompaction | null): void {
+    if (report === null) return;
+    this.autoCompaction = report;
+    if (this.db.inTransaction !== true) this.db.exec('VACUUM');
+  }
+
+  /** What the last write compacted automatically, or null if it compacted nothing. */
+  lastAutoCompaction(): AutoCompaction | null {
+    return this.autoCompaction;
   }
 
   /** Revision ids a handoff receipt in this scope still names (base, result, archives). */
@@ -756,6 +809,8 @@ export class Vault {
     const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','files','title'] as const;
     if(!updateKeys.some((key)=>request[key]!==undefined))throw new ProjectHandoffError('invalid_request','Project update has no changes.');
     let receipt!:ProjectCheckpointResult['receipt'];
+    let auto:AutoCompaction|null=null;
+    this.autoCompaction=null;
     this.db.transaction(()=>{
       const heads=this.list({type:'working',scope,allowedScopes});
       if(heads.length>1)throw new ProjectHandoffError('project_conflict','Project has multiple current documents.');
@@ -772,9 +827,11 @@ export class Vault {
       else if(old?.metadata){meta=JSON.parse(JSON.stringify(old.metadata)) as Record<string,unknown>;delete meta[PROJECT_HANDOFF_METADATA_KEY];if(Object.keys(meta).length===0)meta=null;}
       const head=this.makeProjectEntry('working',merged.content,scope,handoff?'northkeep:project-handoff':'northkeep:project-update',meta,chain,now,resultId);insert.run(this.entryParams(head));
       if(old){const changed=this.db.prepare('UPDATE memories SET superseded_at=?, superseded_by=? WHERE id=? AND forgotten_at IS NULL AND superseded_at IS NULL').run(now,head.id,old.id).changes;if(changed!==1)throw new ProjectHandoffError('stale_project','Project changed before the update could be applied.');}
+      if(old)auto=this.autoCompactScope(scope);
       this.setMeta('chain_head',head.entry_hash);
       receipt={operation_id:handoff?.operation_id??'',project:request.project,mode:handoff?.mode??'checkpoint',base_revision:request.expected_revision??'',result_revision:head.id,request_fingerprint:handoff?.fingerprint??'',archive_ids:archiveIds,saved_at:now,local_only:true};
     })();
+    this.finishAutoCompaction(auto);
     return {receipt,current:getProjectView(this,request.project,allowedScopes,{history:true}),replayed:false};
   }
 
@@ -1302,6 +1359,8 @@ export class Vault {
           : (JSON.parse(JSON.stringify(old.metadata)) as Record<string, unknown>),
     };
     next.entry_hash = computeEntryHash(next, this.platform.crypto);
+    this.autoCompaction = null;
+    let auto: AutoCompaction | null = null;
 
     const insert = this.db.prepare(
       `INSERT INTO memories
@@ -1321,7 +1380,11 @@ export class Vault {
       });
       this.setMeta('chain_head', next.entry_hash);
       markSuperseded.run(now, next.id, old.id);
+      // The superseded row keeps the old scope and type, so a project document
+      // edited or moved away still leaves a revision behind in its project scope.
+      if (old.type === 'working') auto = this.autoCompactScope(old.scope);
     })();
+    this.finishAutoCompaction(auto);
     return next;
   }
 
