@@ -18,6 +18,7 @@ import {
 } from '@northkeep/core';
 import { readCallLog } from '../src/log.js';
 import {
+  PROJECT_BOOTSTRAP_INSTRUCTION,
   PROJECT_HONESTY_NOTE,
   PROJECT_STANDING_INSTRUCTION,
 } from '../src/project-recipe.js';
@@ -671,9 +672,25 @@ describe('project standing-instruction copy', () => {
   it('has no em dashes and no steering', () => {
     expectSteeringClean(PROJECT_STANDING_INSTRUCTION);
     expectSteeringClean(PROJECT_HONESTY_NOTE);
-    expect(PROJECT_STANDING_INSTRUCTION).toContain('project_get');
+    expectSteeringClean(PROJECT_BOOTSTRAP_INSTRUCTION);
+    expect(PROJECT_STANDING_INSTRUCTION).toContain('project_resume');
+    expect(PROJECT_STANDING_INSTRUCTION).toContain('project_wrap');
+    expect(PROJECT_STANDING_INSTRUCTION).toContain('project_checkpoint');
     expect(PROJECT_STANDING_INSTRUCTION).toContain('project_update');
     expect(PROJECT_STANDING_INSTRUCTION).toContain('project_list');
+  });
+
+  it('carries the bootstrap recipe verbatim (ADR 0052 Decision 5)', () => {
+    expect(PROJECT_BOOTSTRAP_INSTRUCTION).toBe(
+      'To bootstrap a project from a codebase, read in this order and stop when the sections are full: ' +
+        'README, the newest 30 commits of git log, any CHANGELOG, ADR or docs folder, then package or build ' +
+        'files for the stack. Fill What & Why from the README\'s own words. Fill Current Status from the newest ' +
+        'commits and tags, and date every claim "as of <date>". Fill Next Actions from TODOs, open issues and ' +
+        'unfinished branches. Fill Decisions from ADRs and commit messages that explain a choice. Anything you ' +
+        'inferred rather than read, mark "unverified". Do not run the code, do not fetch URLs, do not read .env ' +
+        'or secret files. Then call project_create with draft: true. Keep the whole document under 6,000 ' +
+        'characters; detail goes into episodic memories in the project scope, one per source you read.',
+    );
   });
 });
 
