@@ -12,6 +12,9 @@ export interface CallLogEntry {
   tool: string;
   /** MCP client that made the call (from its initialize handshake). */
   provider?: string;
+  /** One id per server process (ADR 0052), so a session that read a project
+   * and never wrote back is derivable from these rows alone. */
+  session_id?: string;
   /** Scopes this connection was granted (undefined = full/owner access). */
   granted_scopes?: string[];
   /** Redaction tier applied to returned content (0 = none). */

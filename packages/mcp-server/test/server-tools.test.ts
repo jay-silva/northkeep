@@ -18,6 +18,7 @@ import {
 } from '@northkeep/core';
 import { readCallLog } from '../src/log.js';
 import {
+  PROJECT_BOOTSTRAP_INSTRUCTION,
   PROJECT_HONESTY_NOTE,
   PROJECT_STANDING_INSTRUCTION,
 } from '../src/project-recipe.js';
@@ -671,9 +672,25 @@ describe('project standing-instruction copy', () => {
   it('has no em dashes and no steering', () => {
     expectSteeringClean(PROJECT_STANDING_INSTRUCTION);
     expectSteeringClean(PROJECT_HONESTY_NOTE);
-    expect(PROJECT_STANDING_INSTRUCTION).toContain('project_get');
+    expectSteeringClean(PROJECT_BOOTSTRAP_INSTRUCTION);
+    expect(PROJECT_STANDING_INSTRUCTION).toContain('project_resume');
+    expect(PROJECT_STANDING_INSTRUCTION).toContain('project_wrap');
+    expect(PROJECT_STANDING_INSTRUCTION).toContain('project_checkpoint');
     expect(PROJECT_STANDING_INSTRUCTION).toContain('project_update');
     expect(PROJECT_STANDING_INSTRUCTION).toContain('project_list');
+  });
+
+  it('carries the bootstrap recipe verbatim (ADR 0052 Decision 5)', () => {
+    expect(PROJECT_BOOTSTRAP_INSTRUCTION).toBe(
+      'To bootstrap a project from a codebase, read in this order and stop when the sections are full: ' +
+        'README, the newest 30 commits of git log, any CHANGELOG, ADR or docs folder, then package or build ' +
+        'files for the stack. Fill What & Why from the README\'s own words. Fill Current Status from the newest ' +
+        'commits and tags, and date every claim "as of <date>". Fill Next Actions from TODOs, open issues and ' +
+        'unfinished branches. Fill Decisions from ADRs and commit messages that explain a choice. Anything you ' +
+        'inferred rather than read, mark "unverified". Do not run the code, do not fetch URLs, do not read .env ' +
+        'or secret files. Then call project_create with draft: true. Keep the whole document under 6,000 ' +
+        'characters; detail goes into episodic memories in the project scope, one per source you read.',
+    );
   });
 });
 
@@ -724,5 +741,128 @@ describe('owner requests 2026-09-13: project title and search by meaning', () =>
     } finally {
       await new Promise<void>((resolve) => fake.close(() => resolve()));
     }
+  });
+});
+
+describe('tool descriptions', () => {
+  it('state facts and use no em dashes', async () => {
+    const mcp = await connect();
+    const { tools } = await mcp.listTools();
+    expect(tools.length).toBeGreaterThan(0);
+    for (const tool of tools) {
+      expect(tool.description ?? '', tool.name).not.toMatch(/[—–]/);
+    }
+  });
+});
+
+describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
+  /** A second server in this process, so two session ids exist side by side. */
+  async function connectSecond(name: string): Promise<Client> {
+    const server = createServer(vaultPath);
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    const mcp = new Client({ name, version: '1.0' });
+    await Promise.all([mcp.connect(clientTransport), server.connect(serverTransport)]);
+    return mcp;
+  }
+
+  function sessionIds(tool: string): string[] {
+    return readCallLog().filter((r) => r.tool === tool).map((r) => r.session_id ?? '');
+  }
+
+  it('writes one session id per server process on every row', async () => {
+    const mcp = await connect();
+    await mcp.callTool({ name: 'memory_list', arguments: {} });
+    await mcp.callTool({ name: 'memory_list', arguments: {} });
+    const mine = sessionIds('memory_list');
+    expect(mine).toHaveLength(2);
+    expect(mine[0]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(mine[1]).toBe(mine[0]);
+
+    const other = await connectSecond('second-session-client');
+    try {
+      await other.callTool({ name: 'memory_list', arguments: {} });
+    } finally {
+      await other.close();
+    }
+    const all = sessionIds('memory_list');
+    expect(all[2]).not.toBe(all[0]);
+  });
+
+  it('resume lists a session that read and never wrote back, with the note', async () => {
+    const mcp = await connect();
+    await mcp.callTool({
+      name: 'project_update',
+      arguments: { project: 'openish', expected_revision: null, status: 'Started.', next_actions: '' },
+    });
+    const first = JSON.parse(toolText(await mcp.callTool({
+      name: 'project_resume', arguments: { project: 'openish' },
+    }))) as { open_sessions: unknown[]; open_sessions_note?: string };
+    // Its own read is not an open session, and the note is absent when empty.
+    expect(first.open_sessions).toEqual([]);
+    expect(first.open_sessions_note).toBeUndefined();
+
+    const other = await connectSecond('codex-mcp-client');
+    let second: { open_sessions: Array<{ session_id: string; host: string }>; open_sessions_note?: string };
+    try {
+      second = JSON.parse(toolText(await other.callTool({
+        name: 'project_resume', arguments: { project: 'openish' },
+      }))) as typeof second;
+    } finally {
+      await other.close();
+    }
+    expect(second.open_sessions).toHaveLength(1);
+    expect(second.open_sessions[0]?.host).toBe('m13-test');
+    expect(second.open_sessions[0]?.session_id).toBe(sessionIds('project_update')[0]);
+    expect(second.open_sessions_note).toBe(
+      'These sessions read this project and did not write back. Nothing was recorded on their behalf.',
+    );
+  });
+
+  it('a wrap closes the reading session, so the next resume lists nobody', async () => {
+    const mcp = await connect();
+    const created = JSON.parse(toolText(await mcp.callTool({
+      name: 'project_update',
+      arguments: { project: 'wrapped', expected_revision: null, status: 'Started.', next_actions: '' },
+    }))) as { revision: string; vault_id: string };
+    await mcp.callTool({ name: 'project_resume', arguments: { project: 'wrapped' } });
+    await mcp.callTool({
+      name: 'project_wrap',
+      arguments: {
+        vault_id: created.vault_id, project: 'wrapped',
+        operation_id: '44444444-4444-4444-8444-444444444444',
+        expected_revision: created.revision, status: 'Done.', completed: 'Closed out.', next_actions: '',
+      },
+    });
+    const other = await connectSecond('codex-mcp-client');
+    try {
+      const view = JSON.parse(toolText(await other.callTool({
+        name: 'project_resume', arguments: { project: 'wrapped' },
+      }))) as { open_sessions: unknown[]; open_sessions_note?: string };
+      expect(view.open_sessions).toEqual([]);
+      expect(view.open_sessions_note).toBeUndefined();
+    } finally {
+      await other.close();
+    }
+  });
+
+  it('resume defaults to no history and returns it on request', async () => {
+    const mcp = await connect();
+    const created = JSON.parse(toolText(await mcp.callTool({
+      name: 'project_update',
+      arguments: { project: 'lighter', expected_revision: null, status: 'FIRST-REVISION-TEXT', next_actions: '' },
+    }))) as { revision: string };
+    await mcp.callTool({
+      name: 'project_update',
+      arguments: { project: 'lighter', expected_revision: created.revision, status: 'Second revision.' },
+    });
+    const brief = toolText(await mcp.callTool({ name: 'project_resume', arguments: { project: 'lighter' } }));
+    expect(brief).not.toContain('FIRST-REVISION-TEXT');
+    const parsed = JSON.parse(brief) as { history: unknown[]; archives: unknown[] };
+    expect(parsed.history).toEqual([]);
+    expect(parsed.archives).toEqual([]);
+    const full = toolText(await mcp.callTool({
+      name: 'project_resume', arguments: { project: 'lighter', history: true },
+    }));
+    expect(full).toContain('FIRST-REVISION-TEXT');
   });
 });
