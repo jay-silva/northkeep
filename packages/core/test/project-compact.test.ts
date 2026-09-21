@@ -153,6 +153,18 @@ describe('compactProjectHistory', () => {
     reopened.close();
   });
 
+  it('refuses to compact a vault whose chain is already broken, without mutating it', () => {
+    const v = vault();
+    seedProject(v, 'demo', 9);
+    const victim = liveRevisions(v, 'demo')[0]!;
+    const db = (v as unknown as { db: import('better-sqlite3').Database }).db;
+    db.prepare('UPDATE memories SET content = ? WHERE id = ?').run('Tampered without rehashing.', victim);
+    const before = v.export();
+    expect(() => v.compactProjectHistory({})).toThrow(/chain does not verify/);
+    expect(v.export().memories).toEqual(before.memories);
+    v.close();
+  });
+
   it('compacts only the named project', () => {
     const v = vault();
     seedProject(v, 'alpha', 8);

@@ -36,16 +36,23 @@ export async function handleProjectsApi(session: UiSession, method: string, rout
       if (input.keep !== undefined && (typeof input.keep !== 'number' || !Number.isInteger(input.keep) || input.keep < 1 || input.keep > 1000)) return reply(400, { error: 'keep must be a whole number between 1 and 1000.', code: 'invalid_request' });
       if (input.dry_run !== undefined && typeof input.dry_run !== 'boolean') return reply(400, { error: 'dry_run must be true or false.', code: 'invalid_request' });
       const dryRun = input.dry_run !== false;
-      return reply(200, await session.withVault(vault => {
-        const result = vault.compactProjectHistory({
-          ...(input.project !== undefined ? { project: input.project as string } : {}),
-          ...(input.keep !== undefined ? { keep: input.keep as number } : {}),
-          dryRun,
-        });
-        if (dryRun) return result;
-        vault.save();
-        return { ...result, file_bytes_after: fileBytes(vault.path) };
-      }));
+      try {
+        return reply(200, await session.withVault(vault => {
+          const result = vault.compactProjectHistory({
+            ...(input.project !== undefined ? { project: input.project as string } : {}),
+            ...(input.keep !== undefined ? { keep: input.keep as number } : {}),
+            dryRun,
+          });
+          if (dryRun) return result;
+          vault.save();
+          return { ...result, file_bytes_after: fileBytes(vault.path) };
+        }));
+      } catch (error) {
+        if (error instanceof Error && error.name === 'LockedError') throw error;
+        // The vault is reopened per request and closed again, so a refusal here
+        // left nothing behind: say what happened instead of advising a retry.
+        return reply(500, { error: error instanceof Error ? error.message : 'Compaction failed.', code: 'compaction_failed' });
+      }
     }
     const match = /^\/api\/projects\/([a-z0-9-]{1,40})(?:\/(checkpoint|wrap|update))?$/.exec(route);
     if (!match) return reply(404, { error: 'Project route not found.', code: 'not_found' });

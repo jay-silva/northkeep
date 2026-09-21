@@ -662,6 +662,11 @@ export class Vault {
     };
     if (options.dryRun === true || doomed.length === 0) return result;
 
+    // Check the chain BEFORE mutating: a vault that was already broken must
+    // say so and keep its rows, so the post-VACUUM check below is meaningful.
+    const before = this.verifyChain();
+    if (!before.ok) throw new Error(`Nothing was compacted: this vault's chain does not verify (${before.error}).`);
+
     const forgottenAt = new Date().toISOString();
     const blank = this.db.prepare("UPDATE memories SET content = '', metadata = NULL, forgotten_at = ? WHERE id = ?");
     this.db.transaction(() => {
@@ -671,7 +676,7 @@ export class Vault {
     // run inside a transaction, hence after it.
     this.db.exec('VACUUM');
     const chain = this.verifyChain();
-    if (!chain.ok) throw new Error(`Compaction was abandoned because the vault chain no longer verifies: ${chain.error}`);
+    if (!chain.ok) throw new Error(`Compaction was abandoned unsaved because the vault chain no longer verifies: ${chain.error}`);
     return result;
   }
 

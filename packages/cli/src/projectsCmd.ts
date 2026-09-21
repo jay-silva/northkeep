@@ -69,4 +69,5 @@ export async function projectsCompactCmd(
   );
   console.log(`  Vault file is now ${megabytes(outcome.fileBytes!)}.`);
   console.log('  The live document, its log archives and the newest revisions are untouched.');
+  console.log('  Note: the previous vault state remains in vault.nkv.bak until the next write.');
 }
