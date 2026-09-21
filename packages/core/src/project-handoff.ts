@@ -142,12 +142,15 @@ export function formatProjectFiles(files:ProjectFileReference[]):string { return
 const SESSION_ID_PATTERN=/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 /** Invisible characters steer whoever reads the block back, so they never enter it. */
 const UNSAFE_WRITER_CHARS=/[\p{Cc}\p{Cf}\u2028\u2029]/u;
+/** A lone surrogate half is not a character; JSON escapes it and a reader sees a gap. */
+const UNPAIRED_SURROGATE=/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+const unsafeWriterText=(value:string):boolean=>UNSAFE_WRITER_CHARS.test(value)||UNPAIRED_SURROGATE.test(value);
 /** Refuses rather than sanitizes: a host that sends junk should learn it did. */
 export function validateProjectWriter(writer:ProjectWriter):{host:string;host_version:string|null;session_id:string}{
   if(!writer||typeof writer!=='object'||Array.isArray(writer))fail('writer is malformed.');
   const allowed=new Set(['host','host_version','session_id']); if(Object.keys(writer).some((key)=>!allowed.has(key)))fail('writer has unsupported fields.');
-  if(typeof writer.host!=='string'||writer.host.length<1||writer.host.length>80||writer.host.trim().length===0||UNSAFE_WRITER_CHARS.test(writer.host))fail('writer host must be 1 to 80 characters, not blank, without control, format or line separator characters.');
-  if(writer.host_version!==undefined&&writer.host_version!==null&&(typeof writer.host_version!=='string'||writer.host_version.length>40||UNSAFE_WRITER_CHARS.test(writer.host_version)))fail('writer host_version must be at most 40 characters without control, format or line separator characters, or null.');
+  if(typeof writer.host!=='string'||writer.host.length<1||writer.host.length>80||writer.host.trim().length===0||unsafeWriterText(writer.host))fail('writer host must be 1 to 80 characters, not blank, without control, format, line separator or unpaired surrogate characters.');
+  if(writer.host_version!==undefined&&writer.host_version!==null&&(typeof writer.host_version!=='string'||writer.host_version.length>40||unsafeWriterText(writer.host_version)))fail('writer host_version must be at most 40 characters without control, format, line separator or unpaired surrogate characters, or null.');
   if(typeof writer.session_id!=='string'||!SESSION_ID_PATTERN.test(writer.session_id))fail('writer session_id must be a lowercase RFC 4122 v4 UUID.');
   return {host:writer.host,host_version:writer.host_version??null,session_id:writer.session_id};
 }
@@ -162,8 +165,8 @@ export function readProjectProvenance(entry:MemoryEntry):ProjectProvenance|null{
   const m=raw as Record<string,unknown>; const keys=new Set(['version','host','host_version','model','session_id','recorded_at']);
   if(Object.keys(m).length!==keys.size||Object.keys(m).some((key)=>!keys.has(key)))return null;
   if(m.version!==1||m.model!==null)return null;
-  if(typeof m.host!=='string'||m.host.length<1||m.host.length>80||m.host.trim().length===0||UNSAFE_WRITER_CHARS.test(m.host))return null;
-  if(m.host_version!==null&&(typeof m.host_version!=='string'||m.host_version.length>40||UNSAFE_WRITER_CHARS.test(m.host_version)))return null;
+  if(typeof m.host!=='string'||m.host.length<1||m.host.length>80||m.host.trim().length===0||unsafeWriterText(m.host))return null;
+  if(m.host_version!==null&&(typeof m.host_version!=='string'||m.host_version.length>40||unsafeWriterText(m.host_version)))return null;
   if(typeof m.session_id!=='string'||!SESSION_ID_PATTERN.test(m.session_id))return null;
   if(typeof m.recorded_at!=='string'||!Number.isFinite(Date.parse(m.recorded_at)))return null;
   return {version:1,host:m.host,host_version:m.host_version as string|null,model:null,session_id:m.session_id,recorded_at:m.recorded_at};

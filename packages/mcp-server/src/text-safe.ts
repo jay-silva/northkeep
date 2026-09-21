@@ -10,11 +10,24 @@
  */
 const UNSAFE_CODE_POINTS = /[\p{Cc}\p{Cf}\u2028\u2029]/gu;
 
+/** A surrogate half without its partner: not a character, and JSON escapes it as one. */
+const UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 /**
  * Removes rather than substitutes, so a terminator cannot survive as a gap the
- * eye still reads as a break. Caps by code point: slice would halve a pair.
+ * eye still reads as a break. Caps in UTF-16 units, the unit core's writer
+ * validation counts, without splitting a pair.
  */
 export function tameOneLine(input: string, max: number): string {
-  const stripped = input.replace(UNSAFE_CODE_POINTS, '').replace(/\s+/g, ' ').trim();
-  return [...stripped].slice(0, max).join('');
+  const stripped = input
+    .replace(UNSAFE_CODE_POINTS, '')
+    .replace(UNPAIRED_SURROGATE, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  let out = '';
+  for (const cp of stripped) {
+    if (out.length + cp.length > max) break;
+    out += cp;
+  }
+  return out;
 }

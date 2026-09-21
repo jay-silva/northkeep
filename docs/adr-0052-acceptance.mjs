@@ -128,6 +128,18 @@ async function fillToCap(client, project, revision, filler) {
   })).json;
 }
 
+/** The invariant is structural: the brief never carries the body or old text. Throws on failure. */
+function assertBrief(label, brief, briefBytes, fullBytes) {
+  const problems = [];
+  if ('content' in brief) problems.push('content key present');
+  if ('files_text' in brief) problems.push('files_text key present');
+  if (brief.revisions.some((r) => 'content' in r)) problems.push('a revision summary carries text');
+  if (brief.history.length !== 0) problems.push('history returned by default');
+  if (!(briefBytes < fullBytes)) problems.push(`brief ${briefBytes} bytes is not smaller than history:true ${fullBytes}`);
+  if (problems.length) throw new Error(`step 4 ${label} invariant failed: ${problems.join('; ')}`);
+  console.log(`step 4 ${label} invariants hold: no content key, no files_text key, no revision text, no history, brief is ${(briefBytes / fullBytes * 100).toFixed(0)}% of history:true`);
+}
+
 async function payload() {
   const code = await connectAs('claude-code', '0.24.0');
   const view = (await call(code, 'project_get', { project: 'acceptance' })).json;
@@ -142,18 +154,30 @@ async function payload() {
   console.log('step 4 ASCII document at the cap:', atCap.content.length, 'characters,',
     Buffer.byteLength(atCap.content, 'utf8'), 'bytes');
   const brief = await call(code, 'project_resume', { project: 'acceptance' });
-  console.log('step 4 default resume payload, ASCII at the cap:',
-    Buffer.byteLength(brief.text, 'utf8'), 'bytes, target under', 24 * 1024);
-  console.log('step 4 invariants: content key =', 'content' in brief.json,
-    '| files_text key =', 'files_text' in brief.json,
-    '| any revision carries text =', brief.json.revisions.some((r) => 'content' in r),
-    '| history entries =', brief.json.history.length);
-  console.log('step 4 revisions carried:', brief.json.revisions.length, 'summaries');
   const full = await call(code, 'project_resume', { project: 'acceptance', history: true });
-  console.log('step 4 with history: true:', Buffer.byteLength(full.text, 'utf8'), 'bytes');
+  const briefBytes = Buffer.byteLength(brief.text, 'utf8');
+  const fullBytes = Buffer.byteLength(full.text, 'utf8');
+  console.log('step 4 default resume payload, ASCII at the cap:', briefBytes, 'bytes');
+  console.log('step 4 with history: true:', fullBytes, 'bytes');
+  assertBrief('ASCII', brief.json, briefBytes, fullBytes);
+  console.log('step 4 revisions carried:', brief.json.revisions.length, 'summaries');
   const older = brief.json.revisions[0].id;
   const one = (await call(code, 'project_get', { project: 'acceptance', revision: older })).json;
   console.log('step 4 one revision read:', one.id, 'is', one.content.length, 'characters of text');
+
+  // JSON escaping doubles a quote, so a quote-heavy document is the ASCII worst case.
+  const quoted = (await call(code, 'project_create', {
+    project: 'acceptance-quotes', what_why: 'A document at the cap made of quote characters.',
+    status: 'Filled to the cap.',
+  })).json;
+  const quotedAtCap = await fillToCap(code, 'acceptance-quotes', quoted.revision, '"');
+  console.log('step 4 quote-heavy ASCII document at the cap:', quotedAtCap.content.length, 'characters,',
+    Buffer.byteLength(quotedAtCap.content, 'utf8'), 'bytes');
+  const quotedBrief = await call(code, 'project_resume', { project: 'acceptance-quotes' });
+  const quotedFull = await call(code, 'project_resume', { project: 'acceptance-quotes', history: true });
+  const quotedBriefBytes = Buffer.byteLength(quotedBrief.text, 'utf8');
+  console.log('step 4 default resume payload, quote-heavy at the cap:', quotedBriefBytes, 'bytes');
+  assertBrief('quote-heavy', quotedBrief.json, quotedBriefBytes, Buffer.byteLength(quotedFull.text, 'utf8'));
 
   // The cap counts characters; the target counts bytes. Reported, not claimed.
   const cjk = (await call(code, 'project_create', {
@@ -164,11 +188,10 @@ async function payload() {
   console.log('step 4 CJK document at the cap:', cjkAtCap.content.length, 'characters,',
     Buffer.byteLength(cjkAtCap.content, 'utf8'), 'bytes');
   const cjkBrief = await call(code, 'project_resume', { project: 'acceptance-cjk' });
-  console.log('step 4 default resume payload, CJK at the cap:',
-    Buffer.byteLength(cjkBrief.text, 'utf8'), 'bytes');
-  console.log('step 4 CJK invariants: content key =', 'content' in cjkBrief.json,
-    '| files_text key =', 'files_text' in cjkBrief.json,
-    '| any revision carries text =', cjkBrief.json.revisions.some((r) => 'content' in r));
+  const cjkFull = await call(code, 'project_resume', { project: 'acceptance-cjk', history: true });
+  const cjkBriefBytes = Buffer.byteLength(cjkBrief.text, 'utf8');
+  console.log('step 4 default resume payload, CJK at the cap:', cjkBriefBytes, 'bytes');
+  assertBrief('CJK', cjkBrief.json, cjkBriefBytes, Buffer.byteLength(cjkFull.text, 'utf8'));
   await code.close();
 }
 

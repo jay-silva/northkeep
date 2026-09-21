@@ -43,11 +43,12 @@ every milestone; if a limit is removed, say when and how.*
   replaced by a directory, project tools fail instead of running unlogged.
   That is deliberate: nothing is disclosed without a record of it. Move or
   repair the file and the tools work again.
-- **A document of multibyte text costs more than its character count.** The
-  project cap is 16,384 characters, while the payload budget is bytes, so a
-  document written in CJK or other multibyte text produces roughly twice the
-  bytes an ASCII document of the same length does. The resume brief stays
-  small, but it is not the same size for every language.
+- **The resume brief has no byte guarantee, only a shape guarantee.** The
+  project cap is 16,384 characters and a brief is bytes of JSON, so a
+  document of quote characters roughly doubles under escaping and a CJK
+  document roughly triples. What holds is the shape: the default brief
+  never carries the document body, never prior revision text, and is
+  always smaller than the same call with `history: true`.
 - **A generic memory edit drops the writer block.** Editing a project head
   with `memory_edit` mints a revision that the previous session did not
   write, so the provenance block is removed rather than copied. That

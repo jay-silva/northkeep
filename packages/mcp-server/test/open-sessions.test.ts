@@ -329,14 +329,34 @@ describe('tameOneLine removes every terminator and format character', () => {
     });
   }
 
-  it('keeps a plain name intact and caps by code point, not UTF-16 unit', () => {
+  it('keeps a plain name intact and caps in UTF-16 units without cutting a pair', () => {
     expect(tameOneLine('claude-code', 80)).toBe('claude-code');
-    // Astral code points: a UTF-16 slice would cut one in half.
+    // Astral code points take two units: a cap of 3 fits one whole pair, never half of the second.
     const grin = String.fromCodePoint(0x1f600);
-    expect(tameOneLine(grin.repeat(4), 2)).toBe(grin.repeat(2));
+    expect(tameOneLine(grin.repeat(4), 3)).toBe(grin);
+    expect(tameOneLine(grin.repeat(4), 4)).toBe(grin.repeat(2));
   });
 
   it('collapses a run of whitespace and trims', () => {
     expect(tameOneLine(`  a${String.fromCharCode(9, 10)}  b  `, 80)).toBe('a b');
+  });
+});
+
+describe('tameOneLine drops unpaired surrogates and caps in UTF-16 units', () => {
+  it('removes a lone high or low surrogate half', () => {
+    expect(tameOneLine('gh\ud800ost', 80)).toBe('ghost');
+    expect(tameOneLine('ghost\udc00', 80)).toBe('ghost');
+    expect(tameOneLine('gh\ud83d\ude00ost', 80)).toBe('gh\ud83d\ude00ost');
+  });
+
+  it('never exceeds the cap in UTF-16 units and never splits a pair', () => {
+    const emoji = '\ud83d\ude00'.repeat(60);
+    const tamed = tameOneLine(emoji, 80);
+    expect(tamed.length).toBeLessThanOrEqual(80);
+    expect(tamed).toBe('\ud83d\ude00'.repeat(40));
+    // 41 units of ASCII leave 39: nineteen whole pairs fit, the twentieth would split.
+    const mixed = tameOneLine('a'.repeat(41) + emoji, 80);
+    expect(mixed.length).toBe(79);
+    expect(mixed).toBe('a'.repeat(41) + '\ud83d\ude00'.repeat(19));
   });
 });

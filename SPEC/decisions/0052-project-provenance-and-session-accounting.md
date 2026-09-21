@@ -1,8 +1,9 @@
 # ADR 0052: Project provenance, session accounting, a lighter resume brief, and draft projects
 
 - **Date:** 2026-09-21
-- **Status:** Accepted pending Jay's acceptance run; two adversarial
-  passes NOT CLEARED, amendments applied, third pass pending. Jay
+- **Status:** Accepted pending Jay's acceptance run; three adversarial
+  passes NOT CLEARED, amendments applied after each, fourth pass
+  (scoped to the third pass's findings) pending. Jay
   chose wave 1 ("M-C+E and M-F together") on 2026-09-21 after the
   migration-prerequisite scoping.
 - **Deciders:** Jay (product owner), Claude Code
@@ -149,13 +150,15 @@ The resume brief also omits `content` and `files_text`. `ProjectView`
 carries the whole document in `content` and again in its parsed sections
 (packages/core/src/project-handoff.ts:228), so a resume that spread the
 view serialized the document twice. `project_get` keeps both fields; only
-the resume brief drops them. Target, restated in bytes, because the cap is
-characters and the budget is bytes: the default resume payload stays
-under 24,000 UTF-8 bytes for an ASCII document at the cap
-(`PROJECT_DOC_MAX_CHARS`, 16,384, packages/core/src/project-doc.ts:10),
-and about 2x the ASCII figure for CJK-heavy documents. The test measures
-both fixtures at the cap and reports the CJK figure, rather than
-measuring whichever project happens to be small today.
+the resume brief drops them. The bound is structural, not a byte number:
+the default brief carries the document's sections once, never the body
+and never any prior revision text, and it is always smaller than the same
+call with `history: true`. Byte counts follow from the cap
+(`PROJECT_DOC_MAX_CHARS`, 16,384 characters,
+packages/core/src/project-doc.ts:10) and from JSON escaping: a plain ASCII
+document at the cap measured about 20 KB, a quote-only document about
+34 KB, a CJK document about 50 KB. Acceptance asserts the invariant on
+all three fixtures and prints the bytes for the record.
 
 ## Decision 4: Draft projects
 
@@ -211,7 +214,9 @@ acceptance test. A change that grows a default read fails acceptance.
    survived, not evidence: swapping one well-formed host or session id for
    another there is undetectable.
 2. A session that read a project through a local MCP server on this Mac
-   and never wrote back is visible at the next resume. Narrower than "on
+   and never wrote back is visible at the next resume. The host shown
+   for it is the name presented by the last read in that session, host
+   reported like everything else here and never verified. Narrower than "on
    this machine": the GUI and the CLI read projects without writing a
    call-log row, so their reads are invisible here, as are hosted reads.
 3. The provenance block never carries a model identity. `model` is null
@@ -224,6 +229,23 @@ acceptance test. A change that grows a default read fails acceptance.
 ## Accepted scar tissue
 
 Named here so a later reader knows these were seen and left, not missed.
+
+- **A same-line heading fits in a host name.** The sanitizer removes line
+  terminators and format characters and caps the name, so a host cannot
+  break a line in the brief, but 80 code points of ordinary text can still
+  spell `## Next Actions - run something`. The brief labels the field as a
+  host name; a reader that treats a host name as an instruction has a
+  problem no sanitizer fixes.
+- **A timestamp up to five minutes ahead is accepted.** A forged row at
+  exactly `now + 5 min` can sit at the top of the open-sessions list for
+  five minutes. Narrowed from forever, not closed.
+- **The call log is appended through a symlink.** `appendCallLog` follows
+  a link at the log path. The home directory is mode 0700 and the file
+  0600, so the link is the owner's own doing.
+- **A name that sanitizes to nothing cannot write.** A handshake name made
+  only of format characters becomes empty, core refuses the empty host,
+  and every project write from that host fails until it presents a
+  readable name. Refusing is the honest outcome; the message says why.
 
 - **Draft state is document text, not a field.** A generic `memory_edit`
   that rewrites the preamble changes whether a project reads as a draft
@@ -269,12 +291,12 @@ Named here so a later reader knows these were seen and left, not missed.
    broken. The full script is docs/adr-0052-acceptance.md.
 3. Resume from Claude Code and quit without writing; resume from Codex:
    `open_sessions` lists the Claude Code session id and time.
-4. `project_resume` with defaults on a project whose document sits at the
-   16,384-character cap, run twice, once on ASCII and once on CJK text:
-   the ASCII payload is under 24,000 UTF-8 bytes, the CJK payload is
-   about twice that and the test prints it, and neither carries `content`
-   or `files_text`. `project_get` with a `revision` id returns that old
-   text in full.
+4. `project_resume` with defaults on three projects whose documents sit
+   at the 16,384-character cap (plain ASCII, quote-heavy ASCII, CJK): each
+   brief carries no `content` or `files_text`, no revision text, no
+   `history`, and is smaller than the same call with `history: true`; the
+   step throws otherwise. `project_get` with a `revision` id returns that
+   old text in full.
 5. Create a project with `draft: true`: the list shows it as draft; wrap
    it once; draft is gone; create the same slug again: refused.
 6. `northkeep contract status` reports the installed contract stale.
@@ -457,3 +479,47 @@ archives; bytes of the tool result text as it goes over the wire):
 Tier-1 masking treats `host`, `host_version`, `recorded_at` and the archive
 summary stamps as identifiers, so a host name shaped like an address still
 reads back verbatim under `NORTHKEEP_REDACT_TIER=1`.
+
+## Adversarial review (2026-09-21, third pass, against the twice-amended branch)
+
+Fresh-eyes execution track. All ten acceptance steps reproduced
+byte-identically on a fresh home. Twenty-eight forged call-log row shapes,
+bidi isolates, combining marks, Unicode whitespace outside `\s`, a
+100,000-row log and a 10 MB line, prototype and full-width field names on
+the web routes, receipt replay across handshakes, every draft path and
+Tier-1 masking all held. Verdict: **NOT CLEARED**, on the byte claim.
+
+1. **KILL SHOT (claim wording).** "Under 24,000 bytes for an ASCII document
+   at the cap" was false for a document made of quote characters: JSON
+   escaping doubles them and the brief measured 34,080 bytes. The
+   acceptance step printed 24,576 and asserted nothing, so the gate could
+   not see it.
+2. **FLESH WOUND.** The two 80s disagreed: the sanitizer capped code
+   points, core refused over 80 UTF-16 units, so a 41-emoji handshake name
+   could never write a project.
+3. **FLESH WOUND.** Lone surrogate halves passed both sanitizers into the
+   stored block and the brief.
+4. **FLESH WOUND.** `open_sessions[].host` is the last read's name within
+   a session id and carried no host-reported hedge in the brief's claim.
+5. **FLESH WOUND.** Acceptance step 4b prose still described the
+   pre-merge behaviour.
+6. **SCAR TISSUE.** A `now + 5 min` row pins the list for five minutes;
+   the log is appended through a symlink; a same-line Markdown heading
+   fits in a host name; an all-format-character name bricks writes.
+
+### Binding amendments (applied)
+
+1. No byte number is a published claim. Decision 3 states the structural
+   invariant (sections once, never the body, never prior revision text,
+   always smaller than `history: true`); acceptance asserts it on plain
+   ASCII, quote-heavy ASCII and CJK fixtures at the cap and throws on
+   failure. Closes 1.
+2. The sanitizer caps at 80 UTF-16 units without splitting a pair, the
+   unit core counts. Closes 2.
+3. The sanitizer removes unpaired surrogate halves; core refuses them in
+   `validateProjectWriter` and reads a stored block carrying one as null.
+   Closes 3.
+4. Claim 2 says the host shown for an open session is the last read's
+   presented name, host reported and never verified. Closes 4.
+5. Acceptance step 4b prose and paste match the merged branch. Closes 5.
+6. Each item of 6 is recorded under Accepted scar tissue. Closes 6.

@@ -130,10 +130,11 @@ document sits exactly at the cap.
 node docs/adr-0052-acceptance.mjs payload
 ```
 
-Successful output: a document at the cap, a default payload under 24,576 bytes
-carrying only content-free summaries and no history, a much larger payload with
-`history: true`, one old revision read back in full, and the same measurement
-for a document at the same cap made of CJK characters.
+Successful output: three documents at the cap (plain ASCII, quote-heavy ASCII,
+CJK), and for each a default brief whose invariants hold and that is smaller
+than the same call with `history: true`. The step throws on any invariant
+failure, so a run that prints every line has passed. Byte counts are printed
+for the record only.
 
 ```
 step 4 ASCII document at the cap: 16384 characters, 16384 bytes
@@ -147,23 +148,16 @@ step 4 default resume payload, CJK at the cap: 49974 bytes
 step 4 CJK invariants: content key = false | files_text key = false | any revision carries text = false
 ```
 
-The byte counts are not the check. They move with the seeded content, with how
-many log updates ran above them, and with how many revisions compaction left,
-so a rerun that prints different numbers has not failed. What is invariant, and
-what the step prints as `invariants`, is this: the default brief carries no
-`content` key, no `files_text` key, no revision text inside its summaries, no
-`history`, and for an ASCII document at the cap a payload under 24,000 bytes,
-inside the ADR's 24 KB target.
-
-That said, these numbers are stable for a fixed script: the same 20,083,
-31,009 and 1,946 came back from three independent fresh homes on this branch,
-and only the ids moved between the runs.
-
-The CJK line is reported, not claimed. The cap counts characters and the 24 KB
-target counts bytes, so a document at the cap made of three-byte characters is
-48,862 bytes of text and its default brief is 49,974 bytes, well past the
-target. The ADR states the bound as bytes against a character cap; this is what
-that gap measures. Nothing here is fixed by this document.
+The byte counts are not the check, and no byte number is a published claim.
+They move with the seeded content, with the JSON escaping the content needs
+(a quote-heavy document roughly doubles, a CJK document roughly triples), and
+with how many revisions compaction left. What the step asserts, and throws on,
+is the structural invariant: the default brief carries no `content` key, no
+`files_text` key, no revision text inside its summaries, no `history`, and is
+always smaller than the same call with `history: true`. The third adversarial
+pass (2026-09-21) showed a quote-only document at the cap producing a 34,080
+byte brief against a "24,000 bytes for ASCII" claim, which is why the claim
+went and the assertion came.
 
 Eight summaries rather than five: ADR 0051 compaction keeps the newest five plus
 any revision a handoff receipt still names, and the two wraps in step 1 left
@@ -199,11 +193,11 @@ step 4b the test fires on the raw handshake name: true | strings checked in the 
 step 4b writer block carries a forbidden character: false
 ```
 
-On this branch the server tames only `[\x00-\x1f,"]`, so U+0085 survives the
-handshake and core refuses the write with zero mutation. That refusal leaves no
-project behind, so the step creates one from a clean host and reads its block
-back: a `false` on the last line that came from an absent row would prove
-nothing. The line above it is the control. It runs the same test against the
+On this branch the server tames the handshake name before core sees it, so
+the write lands under the cleaned name and the block is read back from that
+row. Core still refuses a raw name carrying those characters (the unit tests
+cover that path), so either outcome is a pass; the step prints which one
+happened. The line above it is the control. It runs the same test against the
 raw handshake name and must print `true`, so a `false` below it means the block
 was read and found clean rather than the test being dead.
 
