@@ -66,6 +66,7 @@ import {
   shareStatusCmd,
   shareSyncCmd,
 } from './shareCmd.js';
+import { projectsCompactCmd } from './projectsCmd.js';
 import { routingClear, routingList, routingSet } from './routingCmd.js';
 import { mcpAdd, mcpAddRemote, mcpConnect, mcpList, mcpRemove, mcpSafeRead, mcpTools } from './mcpCmd.js';
 import { toolsBudget, toolsDisable, toolsEnable, toolsGrants, toolsList, toolsRevoke } from './toolsCmd.js';
@@ -875,6 +876,20 @@ sync
   .description('Show your sync id (a second machine needs the same device.secret)')
   .action(() => {
     syncId(fail);
+  });
+
+const projects = program
+  .command('projects')
+  .description('Work with project documents stored in your vault');
+
+projects
+  .command('compact')
+  .description('Free the space old project revisions take up, keeping the newest few and any a handoff receipt still needs')
+  .option('--project <slug>', 'compact one project instead of all of them')
+  .option('--keep <n>', 'how many old revisions to keep per project (default 5)')
+  .option('--yes', 'actually compact; without it this is a preview')
+  .action(async (options: { project?: string; keep?: string; yes?: boolean }) => {
+    await projectsCompactCmd(options, withVault, fail);
   });
 
 const share = program
