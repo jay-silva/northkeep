@@ -536,6 +536,9 @@
   .project-empty { max-width:60ch; padding:42px 0; }
   .project-empty h3 { font-size:24px; }
   .project-revision { color:var(--muted); font:12px/1.4 var(--mono); overflow-wrap:anywhere; }
+  .project-writer { color:var(--muted); font-size:12px; line-height:1.4; overflow-wrap:anywhere; }
+  .project-choice .project-writer { font-size:11px; }
+  .project-choice .row { justify-self:start; }
   #projectLive { min-height:1px; }
   @media (max-width:600px) {
     .curation-head { display:grid; }
@@ -2107,6 +2110,19 @@
     return el('span', 'pill ' + (kind || ''), text);
   }
 
+  // ADR 0052: the head's recorded writer is host-reported attribution, not
+  // verified identity, so the copy says who wrote it and when, nothing more.
+  function projectWriterLine(project) {
+    const writer = project && project.last_writer;
+    if (!writer || !writer.host) return null;
+    const who = writer.host + (writer.host_version ? ' ' + writer.host_version : '');
+    return el('p', 'project-writer', 'Last written by ' + who + ', ' + projectDate(writer.recorded_at));
+  }
+
+  function projectDraftBanner() {
+    return el('p', 'project-notice', 'Draft. This document was bootstrapped automatically and has not been wrapped up by a person yet.');
+  }
+
   function projectFocusPanel(panel) {
     const heading = panel.querySelector('h3');
     if (heading) { heading.tabIndex = -1; heading.focus(); }
@@ -2154,7 +2170,11 @@
       const secondary = item.conflict ? 'Multiple live project documents need attention.' : (item.status || 'No current status yet.');
       const secondaryNode = el('small', undefined, secondary); secondaryNode.title = secondary;
       button.append(el('strong', undefined, item.title || projectName(item.project)), secondaryNode);
-      button.appendChild(projectPill(item.conflict ? 'Needs attention' : 'Project', item.conflict ? 'locked' : ''));
+      if (item.last_writer_host) button.appendChild(el('small', 'project-writer', 'last: ' + item.last_writer_host));
+      const badges = el('div', 'row');
+      badges.appendChild(projectPill(item.conflict ? 'Needs attention' : 'Project', item.conflict ? 'locked' : ''));
+      if (item.draft) badges.appendChild(projectPill('Draft', ''));
+      button.appendChild(badges);
       button.addEventListener('click', () => loadProject(item.project));
       list.appendChild(button);
       const option = el('option', undefined, (item.title || projectName(item.project)) + (item.conflict ? ' — needs attention' : ''));
@@ -2197,12 +2217,14 @@
     const head = el('div', 'project-detail-head');
     const unavailable = Array.isArray(project.files) && project.files.some((file) => file.access === 'unavailable');
     const title = el('div'); const state = el('div', 'row'); state.append(projectPill(unavailable ? 'Needs attention' : 'Ready to resume', unavailable ? 'locked' : 'ok'), el('span', 'project-revision', 'Updated ' + projectDate(project.updated_at))); title.append(el('h2', undefined, project.title || projectName(project.project)), state);
+    const writerLine = projectWriterLine(project); if (writerLine) title.appendChild(writerLine);
     const actions = el('div', 'project-actions');
     for (const [action, label, primary] of [['edit','Edit',false],['delete','Delete',false],['checkpoint','Checkpoint',false],['wrap','Wrap up',false],['resume','Resume',true]]) {
       const button = el('button', 'btn' + (primary ? ' primary' : '') + (action === 'delete' ? ' danger' : ''), label); button.type = 'button'; button.dataset.projectAction = action;
       button.addEventListener('click', (event) => openProjectAction(action, event.currentTarget)); actions.appendChild(button);
     }
     head.append(title, actions); root.appendChild(head);
+    if (project.draft) root.appendChild(projectDraftBanner());
     const facts = el('div', 'project-facts');
     const statusBox = el('div'); statusBox.append(el('div', 'review-meta-title', 'Current summary'), el('p', 'project-status-copy', project.status || 'No current status yet.'));
     const next = el('div', 'project-next'); next.append(el('strong', undefined, 'Next actions'), el('span', undefined, project.next_actions || 'No next action recorded.'));
@@ -2239,15 +2261,26 @@
   function renderProjectHistory(project) {
     const section = el('section', 'project-section'); const details = el('details', 'project-history');
     const history = Array.isArray(project.history) ? project.history : [], archives = Array.isArray(project.archives) ? project.archives : [], log = projectLines(project.log);
-    details.appendChild(el('summary', undefined, 'Session history · ' + (history.length + log.length) + ' recent' + (archives.length ? ' · ' + archives.length + ' archived' : '')));
+    // ADR 0052: saved versions are listed from content-free summaries. Older
+    // revision text can be blanked by compaction, so the rows never show it.
+    const revisions = Array.isArray(project.revisions) && project.revisions.length ? project.revisions : null;
+    const saved = revisions || history;
+    details.appendChild(el('summary', undefined, 'Session history · ' + (saved.length + log.length) + ' recent' + (archives.length ? ' · ' + archives.length + ' archived' : '')));
     const body = el('div');
     for (const entry of log) {
       const row = el('div', 'project-event'); row.append(el('time', undefined, 'Current'), el('p', undefined, entry)); body.appendChild(row);
     }
-    for (const entry of [...history, ...archives]) {
-      const row = el('div', 'project-event'); row.append(el('time', undefined, projectDate(entry.updated_at)), el('p', undefined, (entry.mode ? entry.mode[0].toUpperCase() + entry.mode.slice(1) + '\n' : '') + entry.content)); body.appendChild(row);
+    for (const entry of saved) {
+      const lines = [];
+      if (entry.mode) lines.push(entry.mode[0].toUpperCase() + entry.mode.slice(1));
+      if (revisions) { if (entry.writer && entry.writer.host) lines.push('Written by ' + entry.writer.host); }
+      else if (entry.content) lines.push(entry.content);
+      const row = el('div', 'project-event'); row.append(el('time', undefined, projectDate(entry.updated_at)), el('p', undefined, lines.join('\n') || 'Saved version')); body.appendChild(row);
     }
-    if (!history.length && !archives.length && !log.length) body.appendChild(el('p', 'muted', 'No earlier sessions recorded.'));
+    for (const entry of archives) {
+      const row = el('div', 'project-event'); row.append(el('time', undefined, projectDate(entry.updated_at)), el('p', undefined, entry.content)); body.appendChild(row);
+    }
+    if (!saved.length && !archives.length && !log.length) body.appendChild(el('p', 'muted', 'No earlier sessions recorded.'));
     details.appendChild(body); section.appendChild(details); return section;
   }
 

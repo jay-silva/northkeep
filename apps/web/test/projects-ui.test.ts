@@ -162,3 +162,98 @@ describe('Projects handoff UI', () => {
     expect(projects).not.toMatch(/method:\s*'POST'[\s\S]{0,120}\/api\/projects['"]/);
   });
 });
+
+// ADR 0052 wave 2: provenance and draft state on the Projects page. Each test
+// slices one named function and runs it against a minimal element factory.
+describe('Projects provenance and draft state (ADR 0052)', () => {
+  const elFactory = `
+    function el(tag, cls, text) {
+      return { tag, cls, text, children: [], attrs: {}, dataset: {}, title: '',
+        append(...nodes) { this.children.push(...nodes); },
+        appendChild(node) { this.children.push(node); return node; },
+        setAttribute(key, value) { this.attrs[key] = value; },
+        replaceChildren(...nodes) { this.children = nodes; },
+        addEventListener() {} };
+    }`;
+
+  function textOf(node: { text?: string; children?: unknown[] }): string {
+    const own = node.text ? String(node.text) : '';
+    const kids = (node.children ?? []) as { text?: string; children?: unknown[] }[];
+    return [own, ...kids.map(textOf)].filter(Boolean).join('\n');
+  }
+
+  function run(setup: string, body: string) {
+    const context = vm.createContext({ JSON });
+    vm.runInContext(`${elFactory}\n${setup}\nthis.result = (() => { ${body} })();`, context);
+    return (context as { result: unknown }).result;
+  }
+
+  it('renders the last writer line with the host, version and a local time', () => {
+    const line = run(
+      `${functionSource('projectDate')}\n${functionSource('projectWriterLine')}`,
+      `return projectWriterLine({ last_writer: { host: 'claude-code', host_version: '0.17.0', recorded_at: '2026-09-21T15:04:00Z' } });`,
+    ) as { cls: string; text: string };
+    expect(line.cls).toBe('project-writer');
+    expect(line.text).toContain('Last written by claude-code 0.17.0, ');
+    expect(line.text).not.toContain('Date unavailable');
+  });
+
+  it('omits the version when absent and renders no line at all without a writer', () => {
+    const [withoutVersion, missing] = run(
+      `${functionSource('projectDate')}\n${functionSource('projectWriterLine')}`,
+      `return [projectWriterLine({ last_writer: { host: 'northkeep-app', host_version: null, recorded_at: '2026-09-21T15:04:00Z' } }), projectWriterLine({ last_writer: null })];`,
+    ) as [{ text: string }, null];
+    expect(withoutVersion.text).toContain('Last written by northkeep-app, ');
+    expect(missing).toBeNull();
+  });
+
+  it('says a draft was bootstrapped and not wrapped up by a person', () => {
+    const banner = run(functionSource('projectDraftBanner'), 'return projectDraftBanner();') as { cls: string; text: string };
+    expect(banner.cls).toBe('project-notice');
+    expect(banner.text).toBe('Draft. This document was bootstrapped automatically and has not been wrapped up by a person yet.');
+  });
+
+  it('badges draft rows only, and shows the last writer host when one is recorded', () => {
+    const setup = `
+      const lists = { projectList: el('div'), projectSelect: el('select') };
+      const $ = (id) => lists[id];
+      const currentProjectSlug = '';
+      const loadProject = () => {};
+      ${functionSource('projectName')}
+      ${functionSource('projectPill')}
+      const projectIndex = [
+        { project: 'field-notes', title: 'Field Notes', status: 'Ready', conflict: false, draft: true, last_writer_host: 'claude-code' },
+        { project: 'trail-journal', title: 'Trail Journal', status: 'Ready', conflict: false, draft: false, last_writer_host: null },
+      ];
+      ${functionSource('renderProjectChoices')}`;
+    const rows = run(setup, 'renderProjectChoices(); return lists.projectList.children;') as { children: unknown[] }[];
+    expect(rows).toHaveLength(2);
+    const draftRow = textOf(rows[0]!), plainRow = textOf(rows[1]!);
+    expect(draftRow).toContain('Draft');
+    expect(draftRow).toContain('last: claude-code');
+    expect(plainRow).not.toContain('Draft');
+    expect(plainRow).not.toContain('last:');
+  });
+
+  it('lists saved versions from content-free summaries, never their text', () => {
+    const setup = `
+      ${functionSource('projectLines')}
+      ${functionSource('projectDate')}
+      ${functionSource('renderProjectHistory')}`;
+    const section = run(setup, `return renderProjectHistory({
+      log: '- Current entry',
+      history: [{ id: 'a', updated_at: '2026-09-20T10:00:00Z', content: 'SECRET REVISION BODY', mode: 'wrap' }],
+      revisions: [
+        { id: 'a', updated_at: '2026-09-20T10:00:00Z', mode: 'wrap', writer: { host: 'claude-code', host_version: null, session_id: 's' }, chars: 20 },
+        { id: 'b', updated_at: '2026-09-19T10:00:00Z', chars: 12 },
+      ],
+      archives: [],
+    });`) as { children: unknown[] };
+    const text = textOf(section);
+    expect(text).toContain('Wrap');
+    expect(text).toContain('Written by claude-code');
+    expect(text).not.toContain('SECRET REVISION BODY');
+    expect(text).toContain('Current entry');
+    expect(text).toContain('Session history · 3 recent');
+  });
+});
