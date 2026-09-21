@@ -288,8 +288,8 @@ naming `@northkeep/core`, export refuses.
 
 **Git not installed, or not on PATH.** `execFile` fails with `ENOENT`.
 The first export to a path probes `git --version` and stores nothing on
-failure; later runs report "git is not available, export skipped" once
-per process, never aborting the vault write.
+failure; later runs report it once per process, never aborting the vault
+write.
 
 **Git fails mid-commit.** The vault write is already saved before the
 mirror runs (Decision 4). An export failure is reported, never fatal,
@@ -332,17 +332,17 @@ file it did not create.
   archives at 20 (project-handoff.ts:165), so a project with more loses
   its oldest from `<slug>.log.md`. They stay in the vault; lifting this
   needs a new unbounded core accessor, not in M-A.
-- **The mirror is stale between writes from other devices.** A phone
-  write arriving by sync mirrors on the next local write or export.
+- **The mirror is stale between writes from other devices** until the
+  next local write or `projects export`.
 - **Plaintext on disk is readable by anything that can read the folder**:
-  Spotlight, Time Machine, any cloud folder sync pointed at that path,
-  and a remote the user later adds and pushes to.
+  Spotlight, Time Machine, a cloud folder sync, or a remote the user
+  later adds and pushes to.
 - **A conflicted project is never exported** and its last good
   `<slug>.md` stays on disk, so that one file can be older than its
   header's revision suggests. The INDEX row says `conflict`.
 - **Commit identity is git's.** NorthKeep never sets `user.name` or
-  `user.email`; a repository without one fails at commit, which the
-  Decision 7 precondition check reports first.
+  `user.email`; a repository without one fails at commit, reported by
+  Decision 7's precondition check.
 
 ## Acceptance (Jay, from the CLI)
 
