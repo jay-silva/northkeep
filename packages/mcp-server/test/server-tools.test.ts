@@ -1197,6 +1197,32 @@ describe('project provenance (ADR 0052 Decision 1, 3 and 4)', () => {
     expect(bytes).toBeLessThan(24000);
   });
 
+  it('project_update clears a draft with draft false and refuses draft true with the core message', async () => {
+    const mcp = await connect();
+    const created = await createProject(mcp, 'draftable', { draft: true });
+    expect(created.draft).toBe(true);
+
+    const cleared = await mcp.callTool({
+      name: 'project_update',
+      arguments: { project: 'draftable', expected_revision: created.revision, draft: false },
+    });
+    expect(cleared.isError, toolText(cleared)).toBeFalsy();
+    const after = JSON.parse(toolText(cleared)) as { revision: string; draft: boolean };
+    expect(after.draft).toBe(false);
+
+    const refused = await mcp.callTool({
+      name: 'project_update',
+      arguments: { project: 'draftable', expected_revision: after.revision, draft: true },
+    });
+    expect(refused.isError).toBe(true);
+    const body = toolText(refused);
+    const parsed = JSON.parse(body) as { error: { code: string; message: string } };
+    expect(parsed.error.code).toBe('invalid_request');
+    expect(parsed.error.message).toContain('draft can only be set when a project is created.');
+    // The server-side emptiness guard must not fire before core sees draft.
+    expect(body).not.toContain('Provide at least one project field');
+  });
+
   it('a handshake name carrying NEL, LS and a BOM reaches neither the writer block nor the call log', async () => {
     // Round 2: the handshake class stopped at U+001F, so these terminators
     // went straight into the provenance a later brief reads back.

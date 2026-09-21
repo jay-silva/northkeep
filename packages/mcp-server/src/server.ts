@@ -751,6 +751,10 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           .optional()
           .describe('New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD.'),
         open_questions: z.string().max(16384).optional(),
+        draft: z
+          .boolean()
+          .optional()
+          .describe('Only false is meaningful on a project that already exists: it clears the draft line. Passing true is refused; a draft can only be marked when the project is created.'),
         files: z.array(z.object({
           type: z.string().min(1).max(32),
           label: z.string().min(1).max(512),
@@ -761,7 +765,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         })).max(40).optional(),
       },
     },
-    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, files }) =>
+    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, draft, files }) =>
       run(
         ctx,
         'project_update',
@@ -789,6 +793,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             log_entry === undefined &&
             decision === undefined &&
             open_questions === undefined &&
+            draft === undefined &&
             files === undefined
           ) {
             throw new Error(
@@ -800,6 +805,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           const request: ProjectUpdateRequest = {
             project, expected_revision, title, what_why, status, next_actions, log_entry, decision,
             open_questions, files: files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
+            ...(draft !== undefined ? { draft } : {}),
           };
           const current = vault.updateProject(request, granted);
           vault.save();
