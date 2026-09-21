@@ -91,7 +91,7 @@ so hosted sessions are invisible here. Stated in KNOWN-LIMITS.
 ## Decision 3: The default resume brief is small; everything else is one call away
 
 `project_resume` defaults `history` to false. The view always carries
-`revisions`, the newest twenty prior revisions as summaries (`id`,
+`revisions`, up to twenty prior revisions as summaries (five in practice once ADR 0051 compaction has run) (`id`,
 `updated_at`, `mode` when a receipt names one, `writer` host and session
 when present, `chars`) with no content, and `archive_summary`
 (`{ count, oldest, newest }`). `history: true` still returns full
