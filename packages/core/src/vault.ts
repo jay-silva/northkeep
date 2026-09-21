@@ -30,10 +30,13 @@ import { getPlatform, type Platform } from './platform-context.js';
 import {
   PROJECT_HANDOFF_METADATA_KEY,
   PROJECT_HANDOFF_METADATA_VERSION,
+  PROJECT_PROVENANCE_METADATA_KEY,
   ProjectHandoffError,
   applyProjectUpdate,
   getProjectView,
+  projectProvenanceBlock,
   readProjectHandoffMetadata,
+  validateProjectWriter,
   type ProjectCheckpointRequest,
   type ProjectCheckpointResult,
   type ProjectHandoffMetadata,
@@ -765,6 +768,7 @@ export class Vault {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.operation_id)) throw new ProjectHandoffError('invalid_request', 'Operation id must be a lowercase RFC 4122 UUID.');
     if (request.mode !== 'checkpoint' && request.mode !== 'wrap') throw new ProjectHandoffError('invalid_request', 'Invalid project handoff mode.');
     if (typeof request.expected_revision !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.expected_revision) || typeof request.status !== 'string' || typeof request.completed !== 'string' || typeof request.next_actions !== 'string') throw new ProjectHandoffError('invalid_request','Checkpoint requires a valid revision, status, completed work, and next actions.');
+    if(request.writer!==undefined)validateProjectWriter(request.writer);
     if(request.completed.trim().length===0||/[\r]/.test(request.completed)||/^\n|\n$/.test(request.completed)||/^( {0,3})#{1,6}[ \t]+\S/m.test(request.completed))throw new ProjectHandoffError('invalid_request','Completed work is invalid.');
     const logical = {
       vault_id: request.vault_id, project: request.project, mode: request.mode,
@@ -775,7 +779,8 @@ export class Vault {
       ...(request.files !== undefined ? { files: request.files } : {}),
     };
     const fingerprint = blake2bHex(exactCanonicalJson(logical), this.platform.crypto);
-    const update:ProjectUpdateRequest={project:request.project,expected_revision:request.expected_revision,status:request.status,next_actions:request.next_actions,log_entry:`${request.mode==='checkpoint'?'Checkpoint':'Wrap up'}: ${request.completed}`,...(request.decision!==undefined?{decision:request.decision}:{}),...(request.open_questions!==undefined?{open_questions:request.open_questions}:{}),...(request.files!==undefined?{files:request.files}:{})};
+    // draft:false is derived from the mode, so replay rebuilds the same content.
+    const update:ProjectUpdateRequest={project:request.project,expected_revision:request.expected_revision,status:request.status,next_actions:request.next_actions,log_entry:`${request.mode==='checkpoint'?'Checkpoint':'Wrap up'}: ${request.completed}`,...(request.decision!==undefined?{decision:request.decision}:{}),...(request.open_questions!==undefined?{open_questions:request.open_questions}:{}),...(request.files!==undefined?{files:request.files}:{}),...(request.mode==='wrap'?{draft:false}:{}),...(request.writer!==undefined?{writer:request.writer}:{})};
     const matches: Array<{entry:MemoryEntry;meta:ProjectHandoffMetadata}> = []; const copied:Array<{entry:MemoryEntry;raw:Record<string,unknown>}>=[];
     for (const entry of this.list({ includeForgotten:true, includeSuperseded:true, allowedScopes })) {
       const raw=entry.metadata?.[PROJECT_HANDOFF_METADATA_KEY];
@@ -806,7 +811,8 @@ export class Vault {
     let scope:string;try{scope=projectScope(request.project);}catch{throw new ProjectHandoffError('invalid_request','Project slug is invalid.');}
     if(allowedScopes!==undefined&&!allowedScopes.includes(scope))throw new ProjectHandoffError('scope_denied','Project scope is outside this connection grant.');
     if(!Object.hasOwn(request,'expected_revision')||(request.expected_revision!==null&&(typeof request.expected_revision!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.expected_revision))))throw new ProjectHandoffError('invalid_request','expected_revision must be an exact revision UUID or null for creation.');
-    const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','files','title'] as const;
+    if(request.writer!==undefined)validateProjectWriter(request.writer);
+    const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','files','title','draft'] as const;
     if(!updateKeys.some((key)=>request[key]!==undefined))throw new ProjectHandoffError('invalid_request','Project update has no changes.');
     let receipt!:ProjectCheckpointResult['receipt'];
     let auto:AutoCompaction|null=null;
@@ -822,9 +828,12 @@ export class Vault {
       const insert=this.prepareEntryInsert(); const archiveIds:string[]=[]; let chain=this.getMeta('chain_head');
       if(merged.archives.length){const archive=this.makeProjectEntry('episodic',formatLogArchive(request.project,merged.archives,new Date(now)),scope,'northkeep:project-log-archive',null,chain,now);insert.run(this.entryParams(archive));chain=archive.entry_hash;archiveIds.push(archive.id);}
       const resultId=uuidv4(this.platform.crypto);
-      let meta:Record<string,unknown>|null=null;
-      if(handoff){meta=old?.metadata?JSON.parse(JSON.stringify(old.metadata)) as Record<string,unknown>:{};delete meta[PROJECT_HANDOFF_METADATA_KEY];meta[PROJECT_HANDOFF_METADATA_KEY]={version:PROJECT_HANDOFF_METADATA_VERSION,operation_id:handoff.operation_id,result_id:resultId,project:request.project,base_revision:request.expected_revision as string,mode:handoff.mode,request_fingerprint:handoff.fingerprint,archive_ids:archiveIds,saved_at:now};}
-      else if(old?.metadata){meta=JSON.parse(JSON.stringify(old.metadata)) as Record<string,unknown>;delete meta[PROJECT_HANDOFF_METADATA_KEY];if(Object.keys(meta).length===0)meta=null;}
+      // Both reserved blocks are rebuilt from this write, never inherited.
+      const built:Record<string,unknown>=old?.metadata?JSON.parse(JSON.stringify(old.metadata)) as Record<string,unknown>:{};
+      delete built[PROJECT_HANDOFF_METADATA_KEY];delete built[PROJECT_PROVENANCE_METADATA_KEY];
+      if(handoff)built[PROJECT_HANDOFF_METADATA_KEY]={version:PROJECT_HANDOFF_METADATA_VERSION,operation_id:handoff.operation_id,result_id:resultId,project:request.project,base_revision:request.expected_revision as string,mode:handoff.mode,request_fingerprint:handoff.fingerprint,archive_ids:archiveIds,saved_at:now};
+      if(request.writer!==undefined)built[PROJECT_PROVENANCE_METADATA_KEY]=projectProvenanceBlock(request.writer,now);
+      const meta:Record<string,unknown>|null=Object.keys(built).length===0?null:built;
       const head=this.makeProjectEntry('working',merged.content,scope,handoff?'northkeep:project-handoff':'northkeep:project-update',meta,chain,now,resultId);insert.run(this.entryParams(head));
       if(old){const changed=this.db.prepare('UPDATE memories SET superseded_at=?, superseded_by=? WHERE id=? AND forgotten_at IS NULL AND superseded_at IS NULL').run(now,head.id,old.id).changes;if(changed!==1)throw new ProjectHandoffError('stale_project','Project changed before the update could be applied.');}
       if(old)auto=this.autoCompactScope(scope);
@@ -1358,6 +1367,11 @@ export class Vault {
           ? null
           : (JSON.parse(JSON.stringify(old.metadata)) as Record<string, unknown>),
     };
+    // A generic edit is not the recorded writer, so the block never carries over.
+    if (next.metadata !== null && PROJECT_PROVENANCE_METADATA_KEY in next.metadata) {
+      delete next.metadata[PROJECT_PROVENANCE_METADATA_KEY];
+      if (Object.keys(next.metadata).length === 0) next.metadata = null;
+    }
     next.entry_hash = computeEntryHash(next, this.platform.crypto);
     this.autoCompaction = null;
     let auto: AutoCompaction | null = null;

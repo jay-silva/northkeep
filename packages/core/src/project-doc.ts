@@ -273,6 +273,34 @@ export function formatLogArchive(project: string, archived: string[], now: Date 
   );
 }
 
+/**
+ * A draft project opens with one preamble line (ADR 0052 Decision 4), before
+ * any title heading, so every reader sees the document is unverified.
+ */
+export const PROJECT_DRAFT_LINE_PREFIX = 'Draft, unverified:';
+
+export function formatProjectDraftLine(host: string, now: Date = new Date()): string {
+  return `${PROJECT_DRAFT_LINE_PREFIX} bootstrapped by ${host} on ${isoDate(now)}.`;
+}
+
+export function isProjectDraft(doc: ProjectDoc): boolean {
+  return firstNonEmptyLine(doc.preamble).startsWith(PROJECT_DRAFT_LINE_PREFIX);
+}
+
+/** Adds or removes the draft line in place, keeping any other preamble text. */
+export function setProjectDraft(doc: ProjectDoc, draft: boolean, line: string): void {
+  const already = isProjectDraft(doc);
+  if (draft === already) return;
+  if (draft) {
+    doc.preamble = [line, doc.preamble].filter((part) => part.length > 0).join('\n\n');
+    return;
+  }
+  const lines = doc.preamble.split('\n');
+  const at = lines.findIndex((text) => text.trim().length > 0);
+  lines.splice(at, 1);
+  doc.preamble = trimSectionBody(lines.join('\n'));
+}
+
 export function isProjectLogArchive(content: string): boolean {
   return content.startsWith(`${PROJECT_LOG_ARCHIVE_HEADING}:`) || content.startsWith(`${PROJECT_LOG_ARCHIVE_HEADING}\n`);
 }
