@@ -172,3 +172,115 @@ describe('compactProjectHistory', () => {
     v.close();
   });
 });
+
+/** Superseded working revisions in a scope that still hold their content. */
+function survivingRevisions(v: Vault, scope: string): string[] {
+  return v.list({ scope, includeSuperseded: true })
+    .filter((e) => e.type === 'working' && e.superseded_at !== null && e.content.length > 0)
+    .map((e) => e.id);
+}
+
+describe('automatic compaction (ADR 0051 Decision 4)', () => {
+  it('leaves five superseded revisions with content after twenty updates, and forgets the rest', () => {
+    const v = vault();
+    let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: 'Go' }).revision;
+    const superseded: string[] = [];
+    for (let i = 0; i < 20; i += 1) {
+      superseded.push(revision);
+      revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Revision ${i}.` }).revision;
+    }
+    expect(survivingRevisions(v, 'project:demo')).toEqual(superseded.slice(-5));
+    const rows = v.list({ scope: 'project:demo', includeSuperseded: true, includeForgotten: true })
+      .filter((e) => e.type === 'working' && e.superseded_at !== null);
+    expect(rows).toHaveLength(20);
+    const forgotten = rows.filter((e) => e.forgotten_at !== null);
+    expect(forgotten).toHaveLength(15);
+    for (const row of forgotten) expect(row.content).toBe('');
+    expect(v.list({ scope: 'project:demo' }).filter((e) => e.type === 'working' && !e.superseded_at)).toHaveLength(1);
+    expect(v.verifyChain().ok).toBe(true);
+    v.close();
+  });
+
+  it('keeps the revisions a checkpoint receipt names, and the checkpoint still replays', () => {
+    const v = vault();
+    const request = {
+      vault_id: '', project: 'demo', mode: 'checkpoint' as const,
+      operation_id: '22222222-2222-4222-8222-222222222222', expected_revision: '',
+      status: 'Ready.', completed: 'Built the core.', next_actions: 'Next.',
+    };
+    request.vault_id = v.getVaultId();
+    request.expected_revision = seedProject(v, 'demo', 3);
+    const receipt = v.checkpointProject(request).receipt;
+    let revision = receipt.result_revision;
+    for (let i = 0; i < 20; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Later ${i}.` }).revision;
+
+    const surviving = survivingRevisions(v, 'project:demo');
+    expect(surviving).toHaveLength(7); // the newest five plus the receipt's base and result
+    expect(surviving).toContain(receipt.base_revision);
+    expect(surviving).toContain(receipt.result_revision);
+
+    const replay = v.checkpointProject(request);
+    expect(replay.replayed).toBe(true);
+    expect(replay.receipt).toEqual(receipt);
+    expect(v.verifyChain().ok).toBe(true);
+    v.close();
+  });
+
+  it('never blanks anything when the superseded row is outside a project scope', () => {
+    const v = vault();
+    const note = v.remember({ type: 'working', scope: 'personal', content: 'Draft 0.' });
+    let id = note.id;
+    for (let i = 0; i < 20; i += 1) id = v.editMemory(id, { content: `Draft ${i + 1}.` }).id;
+    const rows = v.list({ scope: 'personal', includeSuperseded: true, includeForgotten: true });
+    expect(rows.filter((e) => e.forgotten_at !== null)).toHaveLength(0);
+    expect(rows.filter((e) => e.superseded_at !== null && e.content.length > 0)).toHaveLength(20);
+    expect(v.lastAutoCompaction()).toBeNull();
+    expect(v.verifyChain().ok).toBe(true);
+    v.close();
+  });
+
+  it('compacts a project document superseded through editMemory, the path the fold uses', () => {
+    const v = vault();
+    const head = v.remember({ type: 'working', scope: 'project:demo', content: '## Current Status\n\nFolded 0.' });
+    let id = head.id;
+    for (let i = 0; i < 20; i += 1) id = v.editMemory(id, { content: `## Current Status\n\nFolded ${i + 1}.` }).id;
+    expect(survivingRevisions(v, 'project:demo')).toHaveLength(5);
+    expect(v.lastAutoCompaction()).toEqual({ project: 'demo', blanked: 1, bytes_freed: expect.any(Number) });
+    expect(v.verifyChain().ok).toBe(true);
+    v.close();
+  });
+
+  it('reports the last automatic compaction and clears it on a write that blanked nothing', () => {
+    const v = vault();
+    let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: 'Go' }).revision;
+    for (let i = 0; i < 5; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Revision ${i}.` }).revision;
+    expect(v.lastAutoCompaction()).toBeNull(); // five superseded revisions, nothing past the keep
+
+    revision = v.updateProject({ project: 'demo', expected_revision: revision, status: 'Sixth.' }).revision;
+    const report = v.lastAutoCompaction();
+    expect(report).toEqual({ project: 'demo', blanked: 1, bytes_freed: expect.any(Number) });
+    expect(report!.bytes_freed).toBeGreaterThan(0);
+
+    v.updateProject({ project: 'other', expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: 'Go' });
+    expect(v.lastAutoCompaction()).toBeNull(); // a creation supersedes nothing
+    v.close();
+  });
+
+  it('keeps the saved file flat: twenty 10 KB updates weigh about what six do', () => {
+    const body = 'z'.repeat(10 * 1024);
+    const sizeAfter = (updates: number, name: string): number => {
+      const file = path.join(directory, `${name}.nkv`);
+      const v = Vault.create({ path: file, passphrase: PASS, deviceSecret: secret, kdf: KDF_INTERACTIVE });
+      let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: body, next_actions: 'Go' }).revision;
+      for (let i = 0; i < updates; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `${i} ${body}` }).revision;
+      expect(v.verifyChain().ok).toBe(true);
+      v.save();
+      v.close();
+      return fs.statSync(file).size;
+    };
+    const six = sizeAfter(6, 'six');
+    const twenty = sizeAfter(20, 'twenty');
+    console.log(`bounded history: 6 updates = ${six} bytes, 20 updates = ${twenty} bytes (${(twenty / six).toFixed(2)}x)`);
+    expect(twenty / six).toBeLessThan(1.5);
+  });
+});
