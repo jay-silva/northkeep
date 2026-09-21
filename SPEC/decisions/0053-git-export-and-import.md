@@ -389,8 +389,7 @@ git -C ~/Claude/Projects/Command\ Repo status --short   # expect empty
 node $NK projects import --from $CR && node $NK projects list | wc -l
 ```
 
-6. **Zero model tokens.** Stop Ollama and repeat steps 1 and 5. Both
-   succeed, with no model call and no network call.
+6. **Zero model tokens.** Stop Ollama and repeat steps 1 and 5.
 7. **Git failure is not fatal.** Take `git` off `PATH` in one shell, run
    a `projects update`, and confirm the vault head changed while the CLI
    reported the export as skipped.
