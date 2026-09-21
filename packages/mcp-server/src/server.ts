@@ -29,6 +29,7 @@ import { applyTier1 } from '@northkeep/redact';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
 import { appendCallLog, readCallLog, type CallLogEntry } from './log.js';
+import { tameOneLine } from './text-safe.js';
 import type { OpenSession } from './open-sessions.js';
 import {
   OPEN_SESSIONS_NOTE,
@@ -77,9 +78,12 @@ interface ConnContext {
   session_id: string;
 }
 
-/** Same taming as the provider string: the value is client-supplied. */
+/**
+ * The shared one-line class, and only that: host and host_version land in JSON
+ * provenance, never a CSV cell, so they do not need provider's , and " strip.
+ */
 function tameHandshakeField(value: string, max: number): string {
-  return value.replace(/[\x00-\x1f,"]/g, ' ').slice(0, max);
+  return tameOneLine(value, max);
 }
 
 const typeEnum = z.enum(MEMORY_TYPES);
@@ -374,7 +378,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       // Bound and tame the client-supplied name before it reaches the audit
       // log (defense-in-depth alongside the CSV formula guard).
       const raw = `${info.name}${info.version ? `@${info.version}` : ''}`;
-      ctx.provider = raw.replace(/[\x00-\x1f,"]/g, ' ').slice(0, 80);
+      // Composed, not replaced: the CSV formula guard on , and " stays, and
+      // the shared class then takes the format characters it never covered.
+      ctx.provider = tameOneLine(raw.replace(/[\x00-\x1f,"]/g, ' '), 80);
       // Built from the raw parts, not by splitting provider: provider's own
       // bytes must not shift for the consumers that already read it.
       ctx.host = tameHandshakeField(info.name, 80);
@@ -748,6 +754,10 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           .optional()
           .describe('New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD.'),
         open_questions: z.string().max(16384).optional(),
+        draft: z
+          .boolean()
+          .optional()
+          .describe('Only false is meaningful on a project that already exists: it clears the draft line. Passing true is refused; a draft can only be marked when the project is created.'),
         files: z.array(z.object({
           type: z.string().min(1).max(32),
           label: z.string().min(1).max(512),
@@ -758,7 +768,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         })).max(40).optional(),
       },
     },
-    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, files }) =>
+    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, draft, files }) =>
       run(
         ctx,
         'project_update',
@@ -786,6 +796,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             log_entry === undefined &&
             decision === undefined &&
             open_questions === undefined &&
+            draft === undefined &&
             files === undefined
           ) {
             throw new Error(
@@ -797,6 +808,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           const request: ProjectUpdateRequest = {
             project, expected_revision, title, what_why, status, next_actions, log_entry, decision,
             open_questions, files: files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
+            ...(draft !== undefined ? { draft } : {}),
           };
           const current = vault.updateProject(request, granted);
           vault.save();

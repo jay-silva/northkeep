@@ -1,5 +1,6 @@
 import { isProjectScope, parseProjectSlug } from '@northkeep/core';
 import type { CallLogEntry } from './log.js';
+import { tameOneLine } from './text-safe.js';
 
 /**
  * Open sessions (ADR 0052 Decision 2), derived from the call log rather than
@@ -32,13 +33,18 @@ const MAX_OPEN_SESSIONS = 3;
 
 /** The shape the provenance block demands of a writer, for the same reason. */
 const SESSION_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
-const CONTROL_CHARS = /[\u0000-\u001f\u007f]/g;
 const HOST_MAX_CHARS = 80;
+
+/** Strict UTC ISO-8601. A row's ts is echoed nowhere, but it is still parsed. */
+const ISO_UTC = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/;
+/** A local clock can run a little ahead; a year ahead is a forged row. */
+const MAX_SKEW_MS = 5 * 60 * 1000;
 
 interface Tracked {
   opened_at: string;
   last_read_at: string;
-  last_write_at: string | null;
+  last_read_ms: number;
+  last_write_ms: number | null;
   host: string;
 }
 
@@ -52,18 +58,23 @@ interface ValidRow {
 
 /**
  * The handshake name half of a provider string ("name@version"), stripped of
- * control characters and capped. The call log is a plain local file, so a row
+ * every Cc and Cf code point and capped. The call log is a plain local file, so a row
  * is attacker-shaped input to a brief the model reads: a host must never carry
  * newlines into it. Null when nothing usable survives.
  */
 function hostOf(provider: unknown): string | null {
   if (typeof provider !== 'string') return null;
-  const host = (provider.split('@')[0] ?? '').replace(CONTROL_CHARS, '').slice(0, HOST_MAX_CHARS);
+  const host = tameOneLine(provider.split('@')[0] ?? '', HOST_MAX_CHARS);
   return host.length > 0 ? host : null;
 }
 
 /** Null for a row malformed in any field. A bad row is skipped, never fatal. */
-function validateRow(row: CallLogEntry, scope: string, currentSessionId: string): ValidRow | null {
+function validateRow(
+  row: CallLogEntry,
+  scope: string,
+  currentSessionId: string,
+  now: Date,
+): ValidRow | null {
   if (!row || typeof row !== 'object') return null;
   const session_id = row.session_id;
   if (typeof session_id !== 'string' || !SESSION_ID_PATTERN.test(session_id)) return null;
@@ -76,12 +87,13 @@ function validateRow(row: CallLogEntry, scope: string, currentSessionId: string)
   const isRead = row.ok === true && READ_TOOLS.has(row.tool);
   const isWrite = row.ok === true && WRITE_TOOLS.has(row.tool);
   if (!isRead && !isWrite) return null;
-  if (typeof row.ts !== 'string') return null;
+  if (typeof row.ts !== 'string' || !ISO_UTC.test(row.ts)) return null;
   const at = Date.parse(row.ts);
-  if (Number.isNaN(at)) return null;
+  if (!Number.isFinite(at) || at > now.getTime() + MAX_SKEW_MS) return null;
   const host = hostOf(row.provider);
   if (host === null) return null;
-  return { session_id, host, ts: row.ts, at, isRead };
+  // Re-serialized, never echoed: the emitted string is ours, not the log's.
+  return { session_id, host, ts: new Date(at).toISOString(), at, isRead };
 }
 
 export function openSessions(
@@ -94,7 +106,7 @@ export function openSessions(
   const cutoff = now.getTime() - days * 24 * 60 * 60 * 1000;
   const valid: ValidRow[] = [];
   for (const row of rows ?? []) {
-    const parsed = validateRow(row, scope, currentSessionId);
+    const parsed = validateRow(row, scope, currentSessionId, now);
     if (parsed !== null) valid.push(parsed);
   }
   // Derive in time order, not file order: a write appended out of order still
@@ -111,20 +123,22 @@ export function openSessions(
         tracked.set(row.session_id, {
           opened_at: row.ts,
           last_read_at: row.ts,
-          last_write_at: null,
+          last_read_ms: row.at,
+          last_write_ms: null,
           host: row.host,
         });
       } else {
         seen.last_read_at = row.ts;
+        seen.last_read_ms = row.at;
         seen.host = row.host;
       }
     } else if (seen !== undefined) {
-      seen.last_write_at = row.ts;
+      seen.last_write_ms = row.at;
     }
   }
   const open: OpenSession[] = [];
   for (const [session_id, t] of tracked) {
-    if (t.last_write_at !== null && Date.parse(t.last_write_at) >= Date.parse(t.last_read_at)) continue;
+    if (t.last_write_ms !== null && t.last_write_ms >= t.last_read_ms) continue;
     open.push({ session_id, host: t.host, opened_at: t.opened_at, last_read_at: t.last_read_at });
   }
   open.sort((a, b) => Date.parse(b.last_read_at) - Date.parse(a.last_read_at));
