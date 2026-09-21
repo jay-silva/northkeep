@@ -21,6 +21,10 @@ export interface OpenSession {
 export const OPEN_SESSIONS_NOTE =
   'These sessions read this project and did not write back. Nothing was recorded on their behalf.';
 
+/** Stands in for the list when the log cannot be read, so silence is not read as "nobody". */
+export const OPEN_SESSIONS_UNREADABLE_NOTE =
+  "Open sessions could not be read from this machine's call log.";
+
 const READ_TOOLS = new Set(['project_get', 'project_resume']);
 const WRITE_TOOLS = new Set(['project_update', 'project_checkpoint', 'project_wrap']);
 

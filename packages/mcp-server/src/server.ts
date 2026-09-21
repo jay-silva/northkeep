@@ -29,7 +29,12 @@ import { applyTier1 } from '@northkeep/redact';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
 import { appendCallLog, readCallLog, type CallLogEntry } from './log.js';
-import { OPEN_SESSIONS_NOTE, openSessions } from './open-sessions.js';
+import type { OpenSession } from './open-sessions.js';
+import {
+  OPEN_SESSIONS_NOTE,
+  OPEN_SESSIONS_UNREADABLE_NOTE,
+  openSessions,
+} from './open-sessions.js';
 
 /**
  * The MCP surface. Stdio transport; stdout is protocol, so all diagnostics go
@@ -680,16 +685,26 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     },
     async ({ project, history }) => {
       const scope = `project:${project}`;
-      // Read the log before the call, so this session's own resume row is not
-      // in it; the vault is never written by a resume.
-      const open = openSessions(readCallLog(), scope, ctx.session_id, new Date());
       return run(ctx, 'project_resume', { scope }, vaultPath, (vault, granted) => {
         const view = getProjectView(vault, project, granted, { history });
+        // Derived inside the call, so a log this machine cannot read costs the
+        // session list and not the resume. This session's own row is still
+        // absent: run appends it only after this returns.
+        let open: OpenSession[] | null;
+        try {
+          open = openSessions(readCallLog(), scope, ctx.session_id, new Date());
+        } catch {
+          open = null;
+        }
         return {
           payload: {
             ...receivingProjectView(view),
-            open_sessions: open,
-            ...(open.length > 0 ? { open_sessions_note: OPEN_SESSIONS_NOTE } : {}),
+            ...(open === null
+              ? { open_sessions_note: OPEN_SESSIONS_UNREADABLE_NOTE }
+              : {
+                ...{ open_sessions: open },
+                ...(open.length > 0 ? { open_sessions_note: OPEN_SESSIONS_NOTE } : {}),
+              }),
           },
           result_id: view.revision,
           disclosed_scopes: [view.scope],

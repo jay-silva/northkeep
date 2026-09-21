@@ -3,7 +3,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import {
@@ -11,6 +11,7 @@ import {
   PROJECT_DOC_CAP_MESSAGE,
   PROJECT_DOC_MAX_CHARS,
   Vault,
+  callLogPath,
   deriveMasterKey,
   generateDeviceSecret,
   parseProjectDoc,
@@ -23,6 +24,20 @@ import {
   PROJECT_STANDING_INSTRUCTION,
 } from '../src/project-recipe.js';
 import { createServer } from '../src/server.js';
+
+// A pass-through by default; one test flips it to prove a resume survives a
+// call log this machine cannot read at all.
+const callLogRead = vi.hoisted(() => ({ fails: false }));
+vi.mock('../src/log.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../src/log.js')>();
+  return {
+    ...actual,
+    readCallLog: (lastN?: number) => {
+      if (callLogRead.fails) throw new Error('call log unreadable');
+      return actual.readCallLog(lastN);
+    },
+  };
+});
 
 const PASSPHRASE = 'm13 server-tools passphrase';
 
@@ -82,6 +97,7 @@ afterEach(async () => {
   else process.env.NORTHKEEP_REDACT_TIER = prevRedactionTier;
   if (prevOllamaUrl === undefined) delete process.env.NORTHKEEP_OLLAMA_URL;
   else process.env.NORTHKEEP_OLLAMA_URL = prevOllamaUrl;
+  callLogRead.fails = false;
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -850,6 +866,48 @@ describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
     } finally {
       await other.close();
     }
+  });
+
+  it('a forged call-log line costs its own row, not every later resume', async () => {
+    const mcp = await connect();
+    await mcp.callTool({
+      name: 'project_update',
+      arguments: { project: 'forged', expected_revision: null, status: 'Started.', next_actions: '' },
+    });
+    const forged = [
+      { ts: '2026-09-20T09:00:00.000Z', tool: 'project_get', provider: 12345, session_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', params: { scope: 'project:forged' }, ok: true },
+      null,
+    ];
+    for (const line of forged) fs.appendFileSync(callLogPath(), `${JSON.stringify(line)}\n`);
+    const before = readCallLog().length;
+
+    const result = await mcp.callTool({ name: 'project_resume', arguments: { project: 'forged' } });
+    expect(result.isError, toolText(result)).toBeFalsy();
+    const parsed = JSON.parse(toolText(result)) as { open_sessions: unknown[]; open_sessions_note?: string };
+    expect(parsed.open_sessions).toEqual([]);
+    expect(parsed.open_sessions_note).toBeUndefined();
+    // The failure used to happen outside run, so the call was never logged.
+    expect(readCallLog().length).toBe(before + 1);
+  });
+
+  it('an unreadable call log omits open_sessions and says so, and the resume still lands', async () => {
+    const mcp = await connect();
+    await mcp.callTool({
+      name: 'project_update',
+      arguments: { project: 'nolog', expected_revision: null, status: 'Started.', next_actions: '' },
+    });
+    const before = readCallLog().length;
+    callLogRead.fails = true;
+    const result = await mcp.callTool({ name: 'project_resume', arguments: { project: 'nolog' } });
+    callLogRead.fails = false;
+    expect(result.isError, toolText(result)).toBeFalsy();
+    const parsed = JSON.parse(toolText(result)) as { open_sessions?: unknown; open_sessions_note?: string; revision: string };
+    expect(parsed.open_sessions).toBeUndefined();
+    expect(parsed.open_sessions_note).toBe(
+      "Open sessions could not be read from this machine's call log.",
+    );
+    expect(parsed.revision).toMatch(/^[0-9a-f-]{8,36}$/);
+    expect(readCallLog().length).toBe(before + 1);
   });
 
   it('resume defaults to no history and returns it on request', async () => {
