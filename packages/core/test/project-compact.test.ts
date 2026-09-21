@@ -35,19 +35,19 @@ function liveRevisions(v: Vault, project: string): string[] {
 }
 
 describe('compactProjectHistory', () => {
-  it('keeps the newest five superseded revisions and blanks the rest', () => {
+  it('keeps the newest kept superseded revisions and blanks the rest', () => {
     const v = vault();
     seedProject(v, 'demo', 12);
     const before = liveRevisions(v, 'demo');
-    expect(before).toHaveLength(12);
-    const result = v.compactProjectHistory({});
-    expect(result.projects).toEqual([{ project: 'demo', candidates: 12, kept: 5, blanked: 7, bytes_freed: expect.any(Number) }]);
-    expect(result.blanked).toBe(7);
+    expect(before).toHaveLength(5); // automatic compaction already bounded it
+    const result = v.compactProjectHistory({ keep: 2 });
+    expect(result.projects).toEqual([{ project: 'demo', candidates: 5, kept: 2, blanked: 3, bytes_freed: expect.any(Number) }]);
+    expect(result.blanked).toBe(3);
     expect(result.bytes_freed).toBeGreaterThan(0);
     const after = liveRevisions(v, 'demo');
-    expect(after).toEqual(before.slice(7));
+    expect(after).toEqual(before.slice(3));
     const blanked = v.list({ scope: 'project:demo', includeSuperseded: true, includeForgotten: true }).filter((e) => e.forgotten_at !== null);
-    expect(blanked).toHaveLength(7);
+    expect(blanked).toHaveLength(10); // seven blanked automatically, three by hand
     for (const entry of blanked) expect(entry.content).toBe('');
     expect(v.verifyChain().ok).toBe(true);
     v.close();
@@ -56,7 +56,7 @@ describe('compactProjectHistory', () => {
   it('honours keep, rejects an out-of-range keep and an invalid slug', () => {
     const v = vault();
     seedProject(v, 'demo', 8);
-    expect(v.compactProjectHistory({ keep: 1, dryRun: true }).blanked).toBe(7);
+    expect(v.compactProjectHistory({ keep: 1, dryRun: true }).blanked).toBe(4);
     for (const keep of [0, -1, 1001, 2.5]) expect(() => v.compactProjectHistory({ keep })).toThrow(Error);
     expect(() => v.compactProjectHistory({ project: 'Not A Slug' })).toThrow(Error);
     expect(v.compactProjectHistory({ project: 'never-used', dryRun: true }).projects).toEqual([
@@ -93,8 +93,8 @@ describe('compactProjectHistory', () => {
     v.forget(oldest);
     const before = v.export().memories.filter((m) => m.id !== oldest);
 
-    const result = v.compactProjectHistory({});
-    expect(result.blanked).toBe(1); // 7 superseded, one already forgotten, five kept
+    const result = v.compactProjectHistory({ keep: 2 });
+    expect(result.blanked).toBe(2); // five superseded survive automatic compaction, one was forgotten
 
     const after = new Map(v.export().memories.map((m) => [m.id, m]));
     expect(after.get(live)!.content.length).toBeGreaterThan(0);
@@ -103,7 +103,7 @@ describe('compactProjectHistory', () => {
     const archives = v.list({ scope: 'project:demo', includeSuperseded: true }).filter((e) => e.source === 'northkeep:project-log-archive');
     for (const archive of archives) expect(archive.content.length).toBeGreaterThan(0);
     const untouched = before.filter((m) => after.get(m.id)!.content === m.content);
-    expect(untouched).toHaveLength(before.length - 1);
+    expect(untouched).toHaveLength(before.length - 2);
     expect(v.verifyChain().ok).toBe(true);
     v.close();
   });
@@ -112,7 +112,7 @@ describe('compactProjectHistory', () => {
     const v = vault();
     seedProject(v, 'demo', 9);
     const before = v.export();
-    const dry = v.compactProjectHistory({ dryRun: true });
+    const dry = v.compactProjectHistory({ dryRun: true, keep: 1 });
     expect(dry.blanked).toBe(4);
     expect(dry.bytes_freed).toBeGreaterThan(0);
     const after = v.export();
@@ -121,24 +121,19 @@ describe('compactProjectHistory', () => {
     v.close();
   });
 
-  it('shrinks the saved vault file and exports the blanked revisions as forgotten', () => {
+  it('exports the blanked revisions as forgotten and reopens clean', () => {
     const v = vault();
     const body = 'z'.repeat(10 * 1024);
     let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: body, next_actions: 'Go' }).revision;
     for (let i = 0; i < 20; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `${i} ${body}` }).revision;
-    v.save();
-    const beforeBytes = fs.statSync(vaultPath).size;
 
-    const result = v.compactProjectHistory({});
-    expect(result.blanked).toBe(15);
+    const result = v.compactProjectHistory({ keep: 1 });
+    expect(result.blanked).toBe(4);
     v.save();
-    const afterBytes = fs.statSync(vaultPath).size;
-    console.log(`compaction file size: ${beforeBytes} -> ${afterBytes} bytes`);
-    expect(afterBytes).toBeLessThan(beforeBytes / 2);
 
     const exported = v.export().memories;
     const forgotten = exported.filter((m) => m.validity.forgotten_at !== null);
-    expect(forgotten).toHaveLength(15);
+    expect(forgotten).toHaveLength(19); // fifteen automatic, four by hand
     for (const entry of forgotten) {
       expect(entry.content).toBe('');
       expect(entry.metadata).toBeNull();
@@ -160,7 +155,7 @@ describe('compactProjectHistory', () => {
     const db = (v as unknown as { db: import('better-sqlite3').Database }).db;
     db.prepare('UPDATE memories SET content = ? WHERE id = ?').run('Tampered without rehashing.', victim);
     const before = v.export();
-    expect(() => v.compactProjectHistory({})).toThrow(/chain does not verify/);
+    expect(() => v.compactProjectHistory({ keep: 1 })).toThrow(/chain does not verify/);
     expect(v.export().memories).toEqual(before.memories);
     v.close();
   });
@@ -169,9 +164,10 @@ describe('compactProjectHistory', () => {
     const v = vault();
     seedProject(v, 'alpha', 8);
     seedProject(v, 'beta', 8);
-    const result = v.compactProjectHistory({ project: 'alpha' });
+    const result = v.compactProjectHistory({ project: 'alpha', keep: 1 });
+    expect(result.blanked).toBe(4);
     expect(result.projects.map((p) => p.project)).toEqual(['alpha']);
-    expect(v.list({ scope: 'project:beta', includeSuperseded: true }).filter((e) => e.type === 'working' && e.superseded_at)).toHaveLength(8);
+    expect(v.list({ scope: 'project:beta', includeSuperseded: true }).filter((e) => e.type === 'working' && e.superseded_at)).toHaveLength(5);
     expect(v.verifyChain().ok).toBe(true);
     v.close();
   });

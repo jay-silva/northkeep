@@ -98,9 +98,9 @@ describe('project handoff core',()=>{
     rawDb(v).exec("CREATE TRIGGER fail_project_head BEFORE INSERT ON memories WHEN NEW.source='northkeep:project-handoff' BEGIN SELECT RAISE(ABORT, 'forced head failure'); END");expect(()=>checkpoint(v,base.id)).toThrow();const after=v.export();expect(after.memories).toEqual(before.memories);expect(after.northkeep_export.chain_head).toBe(before.northkeep_export.chain_head);v.close();
   });
 
-  it('caps history at 20 in reverse insertion order even when timestamps tie',()=>{
+  it('returns history newest first, bounded by automatic compaction even when timestamps tie',()=>{
     const v=vault();let current=seed(v);const ids:string[]=[];for(let i=0;i<25;i++){ids.push(current.revision);current=v.updateProject({project:'demo',expected_revision:current.revision,status:`Revision ${i}`});}
-    const view=getProjectView(v,'demo',undefined,{history:true});expect(view.history).toHaveLength(20);expect(view.history[0]!.id).toBe(ids.at(-1));expect(view.history.at(-1)!.id).toBe(ids[5]);v.close();
+    const view=getProjectView(v,'demo',undefined,{history:true});expect(view.history).toHaveLength(5);expect(view.history[0]!.id).toBe(ids.at(-1));expect(view.history.at(-1)!.id).toBe(ids[20]);v.close();
   });
 });
 

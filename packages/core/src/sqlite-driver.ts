@@ -27,6 +27,8 @@ export interface SqliteDb {
   pragma(source: string): unknown;
   /** Wraps `fn` so it runs atomically; the returned function executes it. */
   transaction<T>(fn: () => T): () => T;
+  /** True while a transaction is open, where the driver reports it. VACUUM cannot run then. */
+  readonly inTransaction?: boolean;
   close(): void;
 }
 

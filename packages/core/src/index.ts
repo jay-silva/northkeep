@@ -20,6 +20,7 @@ export {
   PROJECT_COMPACT_DEFAULT_KEEP,
   PROJECT_COMPACT_MAX_KEEP,
   onVaultSave,
+  type AutoCompaction,
   type ProjectCompaction,
   type ProjectCompactionResult,
   type VaultSaveListener,
