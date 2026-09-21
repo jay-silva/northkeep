@@ -1137,7 +1137,6 @@ describe('project provenance (ADR 0052 Decision 1, 3 and 4)', () => {
     expect(parsed.history).toEqual([]);
     expect(parsed.archives).toEqual([]);
     expect(brief).not.toContain('PRIOR-REVISION-TEXT');
-    // Measured 2026-09-21: 10,556 bytes by default against 84,738 with history.
     const bytes = Buffer.byteLength(brief, 'utf8');
     expect(bytes).toBeLessThan(24 * 1024);
 
