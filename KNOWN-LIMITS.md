@@ -11,6 +11,25 @@ every milestone; if a limit is removed, say when and how.*
 - Lock clears drafts and pending request text. Browser retry convenience requires the retained draft; saved operation receipts remain in the vault. Forgetting a receipt removes its retry guarantee. History shows at most 20 saved versions and 20 log archives.
 - The real Codex to Claude Desktop test used local tools and a disposable MCP client. It did not upgrade installed assistant configuration or certify hosted sync or packaged mobile.
 
+## Project provenance and open sessions (ADR 0052), current
+
+- **The writer is host reported, not verified.** Every project write records
+  the name a client presented in its MCP handshake, so any process can
+  present any name. Once written the record is inside the hash chain and
+  tamper evident, which is attribution plus integrity, never proof of
+  identity.
+- **No model is recorded.** The provenance block's `model` is always null,
+  because no MCP host exposes a model identifier in its handshake and
+  NorthKeep will not guess one.
+- **Open sessions are derived from this machine's call log.** A session that
+  read a project and never wrote back is only visible if it ran through a
+  local MCP server on this Mac. Reads through the hosted claude.ai connector
+  are never in that log, and a session on another Mac is not seen either.
+- **A generic memory edit drops the writer block.** Editing a project head
+  with `memory_edit` mints a revision that the previous session did not
+  write, so the provenance block is removed rather than copied. That
+  revision has no writer until the next write through the project tools.
+
 ## Guided consolidation, accepted locally
 
 - Consolidation covers 2-8 same-type memories in one private, non-project collection. It does not organize shared collections or coordinate project work.

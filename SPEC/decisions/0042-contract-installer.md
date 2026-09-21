@@ -275,8 +275,9 @@ and path overrides. It never writes Jay's real `~/.claude/CLAUDE.md`,
    Codex dir; override → `blocked`.
 3. Cursor: `.mdc` `alwaysApply: true`; refuse `/`, homedir,
    ancestor-of-home; realpath traversal; non-git warn.
-4. `CONTRACT_TEXT`: no em dash, under 2048 bytes, contains the P6 clause,
-   contains the standing-instruction tool names.
+4. `CONTRACT_TEXT`: no em dash, under 4096 bytes (ADR 0052 added the
+   bootstrap paragraph, so the original 2048 no longer fits), contains the
+   P6 clause, contains the standing-instruction tool names.
 5. `connect.test.ts` green unmodified after the fs-safe move.
 
 ## Acceptance test (Jay, from this checkout)
