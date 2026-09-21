@@ -55,26 +55,28 @@ afterEach(() => {
 describe('northkeep projects compact', () => {
   it('previews the per-project table without saving', async () => {
     const before = fs.readFileSync(vaultPath);
-    await projectsCompactCmd({}, withVault, fail);
+    // Automatic compaction (ADR 0051 Decision 4) already holds the project at
+    // five revisions, so a smaller keep is what gives the command work to show.
+    await projectsCompactCmd({ keep: '2' }, withVault, fail);
     const output = lines.join('\n');
     expect(output).toContain('Project');
-    expect(output).toMatch(/demo\s+9\s+5\s+4\s/);
+    expect(output).toMatch(/demo\s+5\s+2\s+3\s/);
     expect(output).toContain('Dry run: nothing changed. Add --yes to compact.');
     expect(fs.readFileSync(vaultPath).equals(before)).toBe(true);
     const vault = openVault();
-    expect(vault.list({ scope: 'project:demo', includeSuperseded: true }).filter((e) => e.superseded_at)).toHaveLength(9);
+    expect(vault.list({ scope: 'project:demo', includeSuperseded: true }).filter((e) => e.superseded_at)).toHaveLength(5);
     vault.close();
   });
 
   it('compacts and saves with --yes, and reports the file size after', async () => {
     const before = fs.readFileSync(vaultPath);
-    await projectsCompactCmd({ yes: true }, withVault, fail);
+    await projectsCompactCmd({ yes: true, keep: '2' }, withVault, fail);
     const output = lines.join('\n');
-    expect(output).toContain('✓ Blanked 4 old project revisions');
+    expect(output).toContain('✓ Blanked 3 old project revisions');
     expect(output).toMatch(/Vault file is now [\d.]+ MB\./);
     expect(fs.readFileSync(vaultPath).equals(before)).toBe(false);
     const vault = openVault();
-    expect(vault.list({ scope: 'project:demo', includeSuperseded: true }).filter((e) => e.superseded_at)).toHaveLength(5);
+    expect(vault.list({ scope: 'project:demo', includeSuperseded: true }).filter((e) => e.superseded_at)).toHaveLength(2);
     expect(vault.verifyChain().ok).toBe(true);
     vault.close();
   });
@@ -83,7 +85,7 @@ describe('northkeep projects compact', () => {
     await expect(projectsCompactCmd({ keep: '0', yes: true }, withVault, fail)).rejects.toThrow('Keep must be a whole number');
     await expect(projectsCompactCmd({ keep: 'five' }, withVault, fail)).rejects.toThrow('Keep must be a whole number');
     const vault = openVault();
-    expect(vault.list({ scope: 'project:demo', includeSuperseded: true }).filter((e) => e.superseded_at)).toHaveLength(9);
+    expect(vault.list({ scope: 'project:demo', includeSuperseded: true }).filter((e) => e.superseded_at)).toHaveLength(5);
     vault.close();
   });
 });
