@@ -55,6 +55,7 @@
   .pill { font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px; background: var(--chip); color: var(--muted); }
   .pill.ok { background: #e6efe8; color: var(--ok); }
   .pill.locked { background: #f6e4dd; color: var(--danger); }
+  .pill.draft { background: var(--warn-bg); color: var(--warn-ink); }
   /* Left rail + content. `--header-h` is measured at runtime (the header grows
      when a pill appears), so the sticky rail always starts flush under it. */
   .shell { display: flex; align-items: flex-start; }
@@ -482,7 +483,6 @@
   .projects-rail { border-right:1px solid var(--line); padding:16px 14px 20px 0; }
   .project-choice { display:grid; grid-template-columns:minmax(0,1fr); align-content:start; gap:8px; width:100%; min-height:112px; padding:16px 12px; border:0; border-bottom:1px solid var(--line); border-radius:0; background:transparent; text-align:left; color:var(--muted); }
   .project-choice strong,.project-choice small { display:block; min-width:0; max-width:100%; overflow-wrap:anywhere; }
-  .project-choice .pill { justify-self:start; }
   .project-choice strong { margin:0; color:var(--ink); font-size:14px; line-height:1.4; font-weight:600; }
   .project-choice small { display:-webkit-box; overflow:hidden; font-size:12px; line-height:1.35; -webkit-box-orient:vertical; -webkit-line-clamp:2; }
   .project-choice[aria-current=true] { background:color-mix(in srgb,var(--accent) 17%,var(--panel)); box-shadow:inset 1px 0 var(--accent); color:var(--ink); }
@@ -2173,7 +2173,7 @@
       if (item.last_writer_host) button.appendChild(el('small', 'project-writer', 'last: ' + item.last_writer_host));
       const badges = el('div', 'row');
       badges.appendChild(projectPill(item.conflict ? 'Needs attention' : 'Project', item.conflict ? 'locked' : ''));
-      if (item.draft) badges.appendChild(projectPill('Draft', ''));
+      if (item.draft) badges.appendChild(projectPill('Draft', 'draft'));
       button.appendChild(badges);
       button.addEventListener('click', () => loadProject(item.project));
       list.appendChild(button);

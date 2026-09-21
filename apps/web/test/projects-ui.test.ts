@@ -256,4 +256,21 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
     expect(text).toContain('Current entry');
     expect(text).toContain('Session history · 3 recent');
   });
+
+  it('falls back to the older payload shape, which still carries revision text', () => {
+    const setup = `
+      ${functionSource('projectLines')}
+      ${functionSource('projectDate')}
+      ${functionSource('renderProjectHistory')}`;
+    const section = run(setup, `return renderProjectHistory({
+      log: '',
+      history: [{ id: 'a', updated_at: '2026-09-20T10:00:00Z', content: 'Older revision body', mode: 'checkpoint' }],
+      archives: [{ id: 'z', updated_at: '2026-09-01T10:00:00Z', content: 'Archived log entry' }],
+    });`) as { children: unknown[] };
+    const text = textOf(section);
+    expect(text).toContain('Checkpoint');
+    expect(text).toContain('Older revision body');
+    expect(text).toContain('Archived log entry');
+    expect(text).toContain('Session history · 1 recent · 1 archived');
+  });
 });
