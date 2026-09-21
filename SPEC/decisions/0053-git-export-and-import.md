@@ -2,10 +2,11 @@
 
 - **Date:** 2026-09-21
 - **Status:** Proposed (milestone M-A). Scoped by Jay on 2026-09-21, reviewed
-  the same day against the design, NOT CLEARED, amendments applied below. A
-  fresh pass runs before implementation: this is the first deliberate write of
-  vault plaintext to disk outside the vault, and the first git process NorthKeep
-  spawns in a user directory.
+  twice the same day against the design. NOT CLEARED twice; redesign before
+  build. The required changes are listed at the end and are deliberately not
+  folded into the Decisions above, because they change how files are written.
+  This is the first deliberate write of vault plaintext to disk outside the
+  vault, and the first git process NorthKeep spawns in a user directory.
 - **Deciders:** Jay (product owner), Claude Code
 - **Extends:** ADR 0039 (projects as vault memories), ADR 0045 (log rolling),
   ADR 0048 (revision-bound handoffs), ADR 0051 (compaction), ADR 0052
@@ -197,7 +198,7 @@ non-recursive, `<slug>.md` where the slug matches `PROJECT_SLUG_PATTERN`
    existing slug is refused by name and the run continues; import never merges.
 4. Log entries go in **oldest first** as ADR 0045 archive memories, written
    directly rather than by replaying `project_update`, which would stamp every
-   entry with today's date (`datedBullet`, project-doc.ts:317). This needs one
+   entry with today's date (`datedBullet`, project-doc.ts:334). This needs one
    new core formatter, `formatImportedLogArchive(project, entries, sourceFile)`,
    emitting the same `## Log archive: <slug>` first line as `formatLogArchive`
    (project-doc.ts:20, 267-274), because `getProjectView` finds archives by that
@@ -417,3 +418,43 @@ was re-opened and corrected. The claims table, Threats, Residual and the
 acceptance script moved with these.
 
 **Residual.** Real git behaviour against a real repository, unreachable.
+
+## Adversarial review (2026-09-21, second pass, against the amended design)
+
+Nothing built, so the attack was again against the prose and the cited code,
+plus a real git binary (git 2.54, Apple Git-157). Verdict: **NOT CLEARED**.
+
+**Kill shots.** (1) Decision 5 pins the keys that name a program at commit
+time, but `.gitattributes` in the repository selects a `filter.<name>.clean` or
+`.process` and git runs it on `add`, under the full override set. Executed on
+git 2.54: the filter ran and was handed the project document's plaintext.
+(2) `--adopt` over the command repo's 31 hand-written files keeps no backup and
+`backupOnce` (fs-safe.ts:17-22) is explicitly unused, so a mistaken first
+migration is lossy. (3) The header test cannot self-heal a mirror left stale by
+another device: the bytes differ, so export refuses that file forever, and ADR
+0051 can blank the revision the header names, so the re-render it wants is
+gone.
+
+**Flesh wounds.** (1) Re-importing NorthKeep's own export drops every
+`<slug>.log.md` and `INDEX.md`: Decision 6 matches `PROJECT_SLUG_PATTERN`
+(project-doc.ts:15), and `demo.log` holds a dot while `INDEX` is uppercase.
+(2) `remote.origin.url` is read only at the first configure, so a later remote
+is never seen. (3) The header is an HTML comment, which `parseProjectDoc` keeps
+as preamble, so on import a file that copies it is indistinguishable from one
+NorthKeep wrote. (4) `serializeProjectDoc` (project-doc.ts:137-146) returns no trailing
+newline, which Decision 2 rule 2 promises. (5) `project-doc.ts:317` had
+drifted; `datedBullet` is at 334.
+
+**Required before the next draft.** This design is not amended in place. A
+third draft must: write every file through git plumbing (`hash-object
+--no-filters`, `update-index --cacheinfo`, `write-tree`, `commit-tree`,
+`update-ref`) so no filter and no hook runs over vault plaintext; `backupOnce` every file `--adopt` overwrites; re-check remotes on
+every export and refuse when one appeared since the stored confirmation;
+recognize a stale mirror by the header's revision id being an ancestor in that
+project's vault chain, not by byte identity, and overwrite it rather than
+refusing forever; give `<slug>.log.md` and `INDEX.md` a header import
+recognizes and either skips or reattaches, so an export round-trips; and strip
+the "NorthKeep-generated" marker on import, never writing it into the vault.
+
+**Residual.** Real git behaviour against the user's own repository, and the
+cost of plumbing writes at 31 projects: unreachable until code exists.
