@@ -162,3 +162,38 @@ acceptance test. A change that grows a default read fails acceptance.
 ## Adversarial review
 
 Pending, against the merged branch.
+
+## Implementation notes
+
+Tool arguments added in `packages/mcp-server/src/server.ts`:
+
+- `project_create` gains `draft` (boolean, optional). True opens the
+  document with the draft preamble line, naming the writing host and the
+  date. `project_wrap` clears it. Core also clears it on an update with
+  `draft: false`, which this wave deliberately does not expose as an MCP
+  argument, so the tool description does not mention it.
+- `project_get` gains `revision` (memory id, optional). It returns that one
+  earlier working revision in full instead of the current document, after
+  the connection grant is asserted here and again in core. A revision in
+  another project's scope reads as `not_found`, and a compacted revision
+  says its text is gone.
+
+No other tool gained an argument. `project_update`, `project_create`,
+`project_checkpoint` and `project_wrap` all pass the connection's handshake
+name, handshake version and session id as the request `writer`; nothing
+about the model is sent, because nothing about the model is known.
+
+Measured payloads (`packages/mcp-server/test/server-tools.test.ts`,
+2026-09-21, a project with 25 updates, 20 of them small, and 3 Log
+archives; bytes of the tool result text as it goes over the wire):
+
+- `project_resume` with defaults: 10,556 bytes, under the 24 KB target,
+  carrying `revisions` (5 content-free summaries, the rest having been
+  compacted away by ADR 0051's automatic keep of 5), `archive_summary`,
+  `last_writer` and `draft`, and no prior revision text.
+- The same call with `history: true`: 84,738 bytes, eight times larger, and
+  it does contain the prior revision text.
+
+Tier-1 masking treats `host`, `host_version`, `recorded_at` and the archive
+summary stamps as identifiers, so a host name shaped like an address still
+reads back verbatim under `NORTHKEEP_REDACT_TIER=1`.

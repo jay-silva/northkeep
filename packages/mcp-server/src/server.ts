@@ -9,6 +9,7 @@ import {
   VaultAuthError,
   VaultSchemaError,
   defaultVaultPath,
+  getProjectRevision,
   getProjectView,
   isValidProjectSlug,
   listProjectViews,
@@ -20,6 +21,7 @@ import {
   type ProjectCheckpointRequest,
   type ProjectFileReference,
   type ProjectUpdateRequest,
+  type ProjectWriter,
 } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import { createCachedEmbedder, createOllamaEmbedder } from '@northkeep/librarian';
@@ -111,6 +113,9 @@ const projectIdentifierKeys = new Set([
   'operation_id', 'base_revision', 'result_revision', 'request_fingerprint',
   'saved_at', 'type', 'access', 'mode',
   'session_id', 'opened_at', 'last_read_at',
+  // Provenance and archive-summary fields are identifiers and timestamps, not
+  // vault content: masking them would corrupt the record of who wrote what.
+  'host', 'host_version', 'recorded_at', 'oldest', 'newest',
 ]);
 
 function maskProjectPayload(value: unknown, key?: string): unknown {
@@ -338,6 +343,11 @@ function assertProjectGranted(scope: string, granted: string[] | undefined): voi
   if (granted !== undefined && !granted.includes(scope)) {
     throw new ProjectHandoffError('scope_denied', 'Project scope is outside this connection grant.');
   }
+}
+
+/** Host-reported, never guessed: the handshake is all the server knows. */
+function writerFor(ctx: ConnContext): ProjectWriter {
+  return { host: ctx.host ?? 'unknown', host_version: ctx.host_version ?? null, session_id: ctx.session_id };
 }
 
 export function createServer(vaultPath: string = defaultVaultPath()): McpServer {
@@ -598,16 +608,36 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'Read the current project document when the user names a project. Call this at session start so ' +
         'you pick up Current Status, Next Actions, and the Log. Conflicting current documents are refused. ' +
         'The live document keeps only its newest Log entries; ' +
-        'pass history: true to also get the archive memories holding older entries, newest first.',
+        'pass history: true to also get the archive memories holding older entries, newest first. ' +
+        'Pass a revision id from the resume brief to read that one earlier revision in full instead.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
         history: z.boolean().optional().describe('Also return the Log archives for this project (older entries), newest first'),
+        revision: idSchema.optional().describe('Read this one earlier revision of the project in full, instead of the current document. Ids come from the revisions list in project_get or project_resume.'),
       },
     },
-    async ({ project, history }) =>
-      run(ctx, 'project_get', { scope: `project:${project}` }, vaultPath, (vault, granted) => {
+    async ({ project, history, revision }) =>
+      run(ctx, 'project_get', { scope: `project:${project}`, id: revision }, vaultPath, (vault, granted) => {
         if (!isValidProjectSlug(project)) {
           throw new Error(`Invalid project slug "${project}".`);
+        }
+        if (revision !== undefined) {
+          // The grant is asserted here as well as in core, so a revision read
+          // cannot reach the vault on a scope this connection was never given.
+          const scope = projectScope(project);
+          assertProjectGranted(scope, granted);
+          const prior = getProjectRevision(vault, project, revision, granted);
+          return {
+            // history is ignored for a single revision: the archives belong to
+            // the project, not to the revision being read.
+            payload: {
+              project, scope, id: prior.id, revision: prior.id, type: 'working',
+              created_at: prior.updated_at, updated_at: prior.updated_at,
+              content: prior.content, ...(prior.mode ? { mode: prior.mode } : {}),
+            },
+            result_id: prior.id,
+            disclosed_scopes: [scope],
+          };
         }
         const view = getProjectView(vault, project, granted, { history });
         return {
@@ -634,9 +664,11 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       title: 'Resume a project',
       description:
         'Read a revision-bound project handoff view. Call this at session start. It returns the current ' +
-        'document, the files reported by earlier work, and any sessions that read this project on this ' +
-        'machine and did not write back. Prior working revisions and Log archives are available on ' +
-        'request with history: true.',
+        'document, the files reported by earlier work, the host and session that wrote it last, whether ' +
+        'it is still a draft, a content-free list of the newest prior revisions, a count of the Log ' +
+        'archives, and any sessions that read this project on this machine and did not write back. ' +
+        'The text of prior revisions and archives is not included: pass history: true for all of it, or ' +
+        'project_get with one revision id for one of them.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         history: z
@@ -744,7 +776,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           assertProjectGranted(scope, granted);
           const request: ProjectUpdateRequest = {
             project, expected_revision, title, what_why, status, next_actions, log_entry, decision,
-            open_questions, files: files as ProjectFileReference[] | undefined,
+            open_questions, files: files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
           };
           const current = vault.updateProject(request, granted);
           vault.save();
@@ -775,9 +807,13 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         what_why: z.string().min(1).max(16384).describe('What & Why section: what this project is and why it exists'),
         status: z.string().min(1).max(16384).describe('Current Status section: where the project stands right now'),
         next_actions: z.string().max(16384).optional().describe('Next Actions section'),
+        draft: z
+          .boolean()
+          .optional()
+          .describe('Mark the document a draft: it opens with a line saying it was bootstrapped by this host on this date and is unverified. Use it when you built the document from a codebase rather than from the user. project_wrap clears the line.'),
       },
     },
-    async ({ project, title, what_why, status, next_actions }) =>
+    async ({ project, title, what_why, status, next_actions, draft }) =>
       run(
         ctx,
         'project_create',
@@ -796,6 +832,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           assertProjectGranted(scope, granted);
           const request: ProjectUpdateRequest = {
             project, expected_revision: null, title, what_why, status, next_actions,
+            writer: writerFor(ctx), ...(draft !== undefined ? { draft } : {}),
           };
           let current;
           try {
@@ -851,7 +888,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       const scope = projectScope(args.project);
       assertProjectGranted(scope, granted);
       const request: ProjectCheckpointRequest = {
-        ...args, mode, files: args.files as ProjectFileReference[] | undefined,
+        ...args, mode, files: args.files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
       };
       const result = vault.checkpointProject(request, granted);
       if (!result.replayed) vault.save();

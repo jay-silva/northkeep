@@ -18,8 +18,8 @@ export const PROJECT_INSTRUCTION_TYPE = 'procedural' as const;
 export const PROJECT_STANDING_INSTRUCTION =
   'When I name a project, read it from NorthKeep with project_resume at the start of the session. ' +
   'When a working session on that project ends, call project_wrap with the vault_id, operation_id and ' +
-  'expected_revision from that resume, the new Current Status, Next Actions, and a log entry describing ' +
-  'what was done. Call project_checkpoint the same way part-way through a long session. Use ' +
+  'expected_revision from that resume, the new Current Status, Next Actions, and the completed work. ' +
+  'Call project_checkpoint the same way part-way through a long session. Use ' +
   'project_update for a correction outside a working session. Use project_list to see what is in flight. ' +
   'The live document keeps only its newest log entries; history is available on request, so pass ' +
   'history: true when you need older ones. Keep log entries to a few hundred characters and put detail in its own episodic ' +
