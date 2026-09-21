@@ -18,7 +18,11 @@ every milestone; if a limit is removed, say when and how.*
   present any name. The record is protected by the same chain that protects
   every memory: an edit that does not re-hash the tail is detected. That
   chain is unkeyed by design, so the record is tamper evident, not tamper
-  proof. Compaction keeps the writer block when it blanks a revision's text.
+  proof. It is tamper evident on the live document and on every older
+  revision that still holds its text. Compaction keeps the writer block
+  when it blanks a revision's text, but a blanked row is skipped by the
+  chain check, so on a compacted revision the writer is attribution that
+  survived and not evidence: it can be changed there without detection.
 - **No model is recorded in the provenance block.** Its `model` is always
   null, because no MCP host exposes a model identifier in its handshake and
   NorthKeep will not guess one. Converse's own call log rows do record the
