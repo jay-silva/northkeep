@@ -283,8 +283,25 @@ export function formatProjectDraftLine(host: string, now: Date = new Date()): st
   return `${PROJECT_DRAFT_LINE_PREFIX} bootstrapped by ${host} on ${isoDate(now)}.`;
 }
 
+/**
+ * Zero-width and byte-order marks that trim() does not always remove, so a
+ * pasted or hand-edited draft line still reads as one instead of hiding.
+ */
+const LEADING_INVISIBLES = /^[\s﻿​‌‍⁠]+/;
+
+/** Index of the preamble line carrying the draft marker, or -1 when there is none. */
+function draftLineIndex(preamble: string): number {
+  const lines = preamble.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    const text = lines[i]!.replace(LEADING_INVISIBLES, '');
+    if (text.length === 0) continue;
+    return text.startsWith(PROJECT_DRAFT_LINE_PREFIX) ? i : -1;
+  }
+  return -1;
+}
+
 export function isProjectDraft(doc: ProjectDoc): boolean {
-  return firstNonEmptyLine(doc.preamble).startsWith(PROJECT_DRAFT_LINE_PREFIX);
+  return draftLineIndex(doc.preamble) !== -1;
 }
 
 /** Adds or removes the draft line in place, keeping any other preamble text. */
@@ -295,9 +312,9 @@ export function setProjectDraft(doc: ProjectDoc, draft: boolean, line: string): 
     doc.preamble = [line, doc.preamble].filter((part) => part.length > 0).join('\n\n');
     return;
   }
+  // Same finder as the detector, so a line that reads as a draft is removable.
   const lines = doc.preamble.split('\n');
-  const at = lines.findIndex((text) => text.trim().length > 0);
-  lines.splice(at, 1);
+  lines.splice(draftLineIndex(doc.preamble), 1);
   doc.preamble = trimSectionBody(lines.join('\n'));
 }
 
