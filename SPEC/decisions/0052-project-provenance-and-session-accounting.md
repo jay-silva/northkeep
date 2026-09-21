@@ -60,6 +60,12 @@ retry from the same operation id still returns the original receipt.
 Receipt validation and compaction ignore the key. The `source` column is
 unchanged; receipts pin it.
 
+A generic edit of a project head (`memory_edit`, ADR 0015 supersession)
+copies metadata verbatim by design. It now strips the provenance block
+and only that block, because a revision minted by a generic edit is not
+the previous session's write and must not be attributed to it. The
+handoff receipt still copies, as ADR 0048 requires.
+
 `ProjectView` gains `last_writer` (the head's block, or null) and
 `ProjectSummary` gains `last_writer_host`. Malformed blocks read as null.
 
