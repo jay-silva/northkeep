@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -25,7 +26,8 @@ import { createCachedEmbedder, createOllamaEmbedder } from '@northkeep/librarian
 import { applyTier1 } from '@northkeep/redact';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
-import { appendCallLog, type CallLogEntry } from './log.js';
+import { appendCallLog, readCallLog, type CallLogEntry } from './log.js';
+import { OPEN_SESSIONS_NOTE, openSessions } from './open-sessions.js';
 
 /**
  * The MCP surface. Stdio transport; stdout is protocol, so all diagnostics go
@@ -61,6 +63,16 @@ function returnRedactionTier(): 0 | 1 {
 /** Mutable connection context, filled from the MCP initialize handshake. */
 interface ConnContext {
   provider: string;
+  /** Handshake name and version apart, because provenance stores them apart. */
+  host: string;
+  host_version: string | null;
+  /** Minted per server process; identifies this session in the call log. */
+  session_id: string;
+}
+
+/** Same taming as the provider string: the value is client-supplied. */
+function tameHandshakeField(value: string, max: number): string {
+  return value.replace(/[\x00-\x1f,"]/g, ' ').slice(0, max);
 }
 
 const typeEnum = z.enum(MEMORY_TYPES);
@@ -98,6 +110,7 @@ const projectIdentifierKeys = new Set([
   'id', 'revision', 'vault_id', 'project', 'scope', 'updated_at', 'checked_at',
   'operation_id', 'base_revision', 'result_revision', 'request_fingerprint',
   'saved_at', 'type', 'access', 'mode',
+  'session_id', 'opened_at', 'last_read_at',
 ]);
 
 function maskProjectPayload(value: unknown, key?: string): unknown {
@@ -246,6 +259,7 @@ async function run(
     ts: new Date().toISOString(),
     tool,
     provider: ctx.provider,
+    session_id: ctx.session_id,
     granted_scopes: granted,
     redaction_tier: returnRedactionTier(),
     params,
@@ -328,7 +342,12 @@ function assertProjectGranted(scope: string, granted: string[] | undefined): voi
 
 export function createServer(vaultPath: string = defaultVaultPath()): McpServer {
   const server = new McpServer({ name: 'northkeep', version: '0.5.0' });
-  const ctx: ConnContext = { provider: 'unknown' };
+  const ctx: ConnContext = {
+    provider: 'unknown',
+    host: 'unknown',
+    host_version: null,
+    session_id: randomUUID(),
+  };
   // Capture the calling client's name once it completes the MCP handshake.
   server.server.oninitialized = () => {
     const info = server.server.getClientVersion();
@@ -337,6 +356,10 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       // log (defense-in-depth alongside the CSV formula guard).
       const raw = `${info.name}${info.version ? `@${info.version}` : ''}`;
       ctx.provider = raw.replace(/[\x00-\x1f,"]/g, ' ').slice(0, 80);
+      // Built from the raw parts, not by splitting provider: provider's own
+      // bytes must not shift for the consumers that already read it.
+      ctx.host = tameHandshakeField(info.name, 80);
+      ctx.host_version = info.version ? tameHandshakeField(info.version, 40) : null;
     }
   };
 
@@ -609,21 +632,38 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     'project_resume',
     {
       title: 'Resume a project',
-      description: 'Read a revision-bound project handoff view, including recent working history and Log archives.',
+      description:
+        'Read a revision-bound project handoff view. Call this at session start. It returns the current ' +
+        'document, the files reported by earlier work, and any sessions that read this project on this ' +
+        'machine and did not write back. Prior working revisions and Log archives are available on ' +
+        'request with history: true.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
-        history: z.boolean().optional().default(true),
+        history: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe('Also return prior working revisions and the Log archives for this project'),
       },
     },
-    async ({ project, history }) =>
-      run(ctx, 'project_resume', { scope: `project:${project}` }, vaultPath, (vault, granted) => {
+    async ({ project, history }) => {
+      const scope = `project:${project}`;
+      // Read the log before the call, so this session's own resume row is not
+      // in it; the vault is never written by a resume.
+      const open = openSessions(readCallLog(), scope, ctx.session_id, new Date());
+      return run(ctx, 'project_resume', { scope }, vaultPath, (vault, granted) => {
         const view = getProjectView(vault, project, granted, { history });
         return {
-          payload: receivingProjectView(view),
+          payload: {
+            ...receivingProjectView(view),
+            open_sessions: open,
+            ...(open.length > 0 ? { open_sessions_note: OPEN_SESSIONS_NOTE } : {}),
+          },
           result_id: view.revision,
           disclosed_scopes: [view.scope],
         };
-      }),
+      });
+    },
   );
 
   server.registerTool(
