@@ -3,10 +3,11 @@
 - **Date:** 2026-09-21
 - **Status:** Proposed (milestone M-D). Scoped by Jay on 2026-09-21 in two
   parts: D1 ships without a model, D2 runs on the local model only under his
-  2026-09-09 local-only decision. Reviewed 2026-09-21 against the design, NOT
-  CLEARED, amendments applied below. Both halves are inside the review gate: D1
-  publishes a claims table, and the gate covers publishing a claim as well as
-  writing code. Neither ships until a pass clears it.
+  2026-09-09 local-only decision. Reviewed twice on 2026-09-21 against the
+  design. NOT CLEARED twice; redesign before build, and the second pass's
+  required changes at the end are not folded into the Decisions above. Both
+  halves are inside the review gate: D1 publishes a claims table, and the gate
+  covers publishing a claim as well as writing code.
 - **Deciders:** Jay (product owner), Claude Code
 - **Extends:** ADR 0039 (projects as vault memories), ADR 0043 (curator: local
   model, verbatim id-linked quotes, per-proposal accept), ADR 0048
@@ -23,7 +24,7 @@
 ## Context
 
 Thirty-one projects is past the number a person holds in their head.
-`project_list` returns one row per project (server.ts:578-600, over
+`project_list` returns one row per project (server.ts:587-610, over
 `listProjectViews`, packages/core/src/project-handoff.ts:250-252) and answers
 "what exists", not "what needs me". The two questions a weekly review actually
 asks are what has gone quiet and what is due, and those are computable from data
@@ -186,7 +187,7 @@ threshold, no auto-apply, and the model cannot trigger a write. That is ADR 0043
 P6, unchanged.
 
 Accept is refused under Tier-1 masking, with the message the project write path
-already gives (`refuseProjectWriteUnderTier1`, server.ts:333-339): "Project
+already gives (`refuseProjectWriteUnderTier1`, server.ts:342-349): "Project
 writes are disabled while NORTHKEEP_REDACT_TIER=1 because masked text cannot be
 written back exactly." The board is readable under Tier-1; accepting from it is
 not, because the text the user read was masked and writing it back would persist
@@ -269,7 +270,7 @@ review.
 | The board never returns a whole project document | Output types carry no `content` field; test asserts a planted 16 KB document's body is absent from the payload |
 | The board payload is bounded by its caps: one row per project for stale and drafts, 50 dated items, 3 open sessions per project, a 120-character status and a 160-character dated line, which computes to about 40 KB of JSON at 31 projects with every cap saturated | Decision 1's caps; test builds the saturating case and asserts the payload is under the stated bound, and a second test asserts a realistic 31-project board is a few KB |
 | Pass A never skips a document for size | Decision 2's chunking rule; test extracts from a 16,384-character document and asserts no `drops.oversized_entry` and that a claim from the last section is present |
-| Accepting a finding is refused under Tier-1 | `refuseProjectWriteUnderTier1` (server.ts:333-339); test asserts the existing message and no mutation |
+| Accepting a finding is refused under Tier-1 | `refuseProjectWriteUnderTier1` (server.ts:342-349); test asserts the existing message and no mutation |
 | Ollama down refuses loudly and never falls back to an API model | ADR 0043 Decision 4 path reused; test with no Ollama asserts a refusal and zero outbound requests |
 | Every D2 finding carries two verbatim, id-linked quotes from two different projects | Substring check against stored content before display (ADR 0043 P4); test plants a fabricated quote and a same-project pair and asserts both are dropped and counted |
 | A D2 finding cannot name an entry outside the selected project scopes | Id membership check against the loaded set; test plants a finding naming a `personal:` id and asserts it is dropped |
@@ -406,3 +407,48 @@ was re-opened and corrected (8).
 
 **Residual.** Real payload sizes and real model behaviour, unreachable until D1
 and D2 exist. The pair-explosion bound stays an open question, as Threats says.
+
+## Adversarial review (2026-09-21, second pass, against the amended design)
+
+Neither half is built, so the attack was again against the prose and the cited
+code, with the cap arithmetic run against real fixtures. Verdict: **NOT
+CLEARED**.
+
+**Kill shots.** (1) `PROJECT_DOC_MAX_CHARS` is enforced only inside
+`applyProjectUpdate` (project-handoff.ts:171) by way of
+`assertProjectDocSize` (project-doc.ts:199-203), so `remember --scope
+project:x` stores a working document of any size. Executed: a 60,113-character
+document that `listProjectViews` (project-handoff.ts:250-252) returns and the
+board would read. Every D1 size claim rests on a cap that is not an invariant.
+(2) Decision 2's chunking rule leaves a chunk that is still over the limit when
+a section has no inner boundary, and `splitReviewPack`
+(packages/librarian/src/reviewCluster.ts:130) drops such a member into
+`skipped` at 144-147. Pass A's "never skips a document for size" claim fails
+on exactly the documents it was written for. (3) `project_board` puts
+unsanitized project text into a model context and a report, and nothing in the
+ADR specifies a class: ANSI escapes, bare CR, `U+2028` and fence markers all
+pass through, which is the class ADR 0052 has just had to close twice.
+
+**Flesh wounds.** (1) The payload bound fails its own saturating test:
+42,519 bytes of ASCII against "about 40 KB", 65,959 with CJK text, and 101,119
+once control characters are counted. (2) The `refuseProjectWriteUnderTier1`
+citation pointed at `assertGrantedScope`; the function is at server.ts:342-349.
+(3) Chunking on code-unit boundaries splits a surrogate pair and corrupts the
+text either side. (4) Board reads call `listProjectViews` and `getProjectView`
+without `allowedScopes`, so they bypass the connection grant that every tool
+path asserts. (5) The board is an invisible reader: it reads projects and
+writes no call-log row, which erodes ADR 0052 Claim 2 from the other side.
+
+**Required before the next draft.** A third draft must: enforce the document
+cap on every write into a project scope as a core invariant, which is a
+prerequisite and needs its own small ADR or an addendum to ADR 0039, not a line
+here; chunk on code-point boundaries with a hard cap and a stated rule for
+text that offers no break; sanitize every string entering a model context or a
+report with the same class ADR 0052 now uses (Unicode `Cc` and `Cf`, `U+2028`
+and `U+2029`, plus the data-fence markers); pass `allowedScopes` on every board
+read; and either log board reads as project reads or amend ADR 0052 Claim 2 to
+say the board does not count. The payload bound is restated in bytes from a
+saturating fixture, never from cap arithmetic.
+
+**Residual.** Real model behaviour and the pair-explosion bound, unreachable
+until D2 exists.
