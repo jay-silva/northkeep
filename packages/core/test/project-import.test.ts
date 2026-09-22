@@ -185,8 +185,10 @@ describe('Vault.importProject (the write)',()=>{
     expect(()=>v.importProject(p)).toThrowError(expect.objectContaining({code:'stale_project',message:'Project sample already has entries in this vault; delete the project from the Projects page first.'}));
     expect(v.export().memories).toEqual(before);
     expect(v.list({scope:'project:sample'}).filter((e)=>e.content.startsWith(PROJECT_LOG_ARCHIVE_HEADING))).toHaveLength(p.archives.length);
-    for(const e of v.list({scope:'project:sample'}))v.forget(e.id);
+    expect(()=>v.deleteProject('sample',['project:other'])).toThrowError(expect.objectContaining({code:'scope_denied'}));
+    expect(v.deleteProject('sample')).toBe(p.archives.length+p.overflow_parts.length);
     expect(projectScopeInUse(v,'sample')).toBe(false);
+    expect(()=>v.deleteProject('sample')).toThrowError(expect.objectContaining({code:'not_found'}));
     expect(v.importProject(p).project).toBe('sample');
     v.close();
   });

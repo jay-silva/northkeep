@@ -657,7 +657,8 @@ export class Vault {
     let count = 0;
     this.db.transaction(() => {
       const entries = this.list({ scope, includeSuperseded: true, allowedScopes });
-      if (!entries.some((e) => e.type === 'working' && !e.forgotten_at)) throw new ProjectHandoffError('not_found', 'Project was not found.');
+      // Archives or overflow left after the document was forgotten still block import, so they must be deletable.
+      if (!entries.some((e) => !e.forgotten_at)) throw new ProjectHandoffError('not_found', 'Project was not found.');
       for (const entry of entries) {
         if (entry.forgotten_at) continue;
         this.forget(entry.id, allowedScopes);
