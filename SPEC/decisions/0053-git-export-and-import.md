@@ -403,3 +403,136 @@ user's own git.
   Masking a mirror of the user's own vault to the user's own disk would write
   corrupted text the user would read as real. The Decision 4 confirmation is
   what makes that a choice rather than an oversight.
+
+## Threats
+
+Each is a finding from one of the two reviews, with its mitigation and what is
+left over.
+
+**A repository that names a program at commit time.** `.git/hooks`,
+`core.hooksPath`, `gpg.program`, `core.sshCommand` and `core.fsmonitor` each let
+a repository run someone's code as the user. Mitigated by the Decision 2 pins
+and by an owned empty hooks directory. Residual: the pins are a list, and a
+future git could add a key to it. The verb allowlist bounds how much a new key
+could reach.
+
+**A repository that names a program at add time.** `.gitattributes` selects
+`filter.<name>.clean` or `.process`, and git runs it on `git add` under the full
+override set. Executed on git 2.54 and confirmed: the process filter started and
+was handed the document. Mitigated by never running `add`: `hash-object
+--no-filters` is the only path from disk to an object, and there is no checkout,
+so smudge never runs either. Residual: none found. This is the reason the design
+changed.
+
+**A repository that names a program at index and ref time.**
+`post-index-change` fires on `update-index` and `reference-transaction` fires on
+`update-ref`, so plumbing alone does not close hooks. Mitigated by the empty
+`core.hooksPath`. Residual: none found.
+
+**The user's own `~/.gitconfig`.** `GIT_CONFIG_NOSYSTEM=1` alone leaves it in
+play, so every key above returns through it. Mitigated by `GIT_CONFIG_GLOBAL` on
+an owned empty file. Residual: a repository that relied on the global identity
+now has none, and Decision 7 refuses it with the fix.
+
+**A stale mirror that can never be healed.** Byte identity refused a file
+another device had made stale, forever, and ADR 0051 can blank the revision a
+header names. Mitigated by Decision 3: ownership is the revision chain, and a
+stale owned file is overwritten. Residual: the chain NorthKeep can see is short
+(see Residual below).
+
+**A hand edit destroyed.** Mitigated by the two `diff` checks in Decision 3,
+which refuse any owned file that differs from HEAD in the working tree or in the
+index. Residual: an edit the user made and committed is overwritten by the next
+export, by design, and is in git history.
+
+**`--adopt` over 31 hand-written files.** The second review's kill shot: no
+backup. Mitigated by `backupOnce` on every file `--adopt` overwrites
+(fs-safe.ts:17-22). Residual: `--adopt` still overwrites, and the backup is one
+copy per file.
+
+**A remote that appeared after the confirmation.** Reading
+`remote.origin.url` once at configure never saw it. Mitigated by Decision 4's
+re-read on every export, refusing the whole run. Residual: NorthKeep cannot stop
+a user pushing by hand, and does not try.
+
+**An export that does not round trip.** The first design dropped
+`<slug>.log.md` and `INDEX.md` on re-import. Mitigated by Decision 5's `kind`.
+Residual: a log reattached by import is an archive with a new provenance line,
+not the original archive row.
+
+**An INDEX cell that forges a column.** The status line is free text an agent
+wrote. Mitigated by escaping `|` and collapsing newlines (Decision 1).
+Residual: none found.
+
+**Two writers into one repository.** Mitigated by Decision 8's lock. Residual: a
+second process on another machine sharing the folder is not covered.
+
+**Symlinked paths.** `atomicWrite` writes through an existing symlink by design
+(fs-safe.ts:35-36). Mitigated by `realpathSync` on the repository and `lstat` on
+`projects/` and each target. Residual: a directory swapped between the `lstat`
+and the write is a race NorthKeep does not close.
+
+**Git missing, or failing part way.** `execFile` fails with `ENOENT`. The vault
+write is saved first (Decision 10), so any failure is reported and never fatal.
+Files already written carry their header, so the next run recognizes them and
+commits. Residual: a crash between `commit-tree` and `update-ref` leaves an
+unreferenced commit, which git garbage-collects.
+
+## Claims this ADR publishes, and where each is enforced
+
+| Claim | Enforced by |
+|---|---|
+| Two exports of an unchanged vault produce byte-identical files and one commit | `renderProjectFile` / `renderIndexFile`: no timestamp, dates from stored `created_at`, slug order from project-handoff.ts:256; `exportProjects` stops when `write-tree` returns HEAD's tree |
+| No program named by repository, global or system config runs | `runGit`: the env and `-c` list in Decision 2, with `--no-filters` and an owned empty `core.hooksPath`; the canary repo in Acceptance step 2 |
+| NorthKeep never creates a remote and never pushes | `runGit` rejects any verb outside the Decision 2 allowlist; a recording shim asserts the verbs seen across every trigger are a subset of it |
+| An export refuses when a remote changed since the confirmation | `readRemotes` compared against `export.json` in `exportProjects`, before any write |
+| Export sends nothing off the machine | No network call in the path; test runs a full export with network syscalls stubbed to throw |
+| A file NorthKeep cannot prove it wrote is never overwritten without `--adopt`, and never without a backup | `ownershipOf` classes 2 and 3; `backupOnce` on the `--adopt` path |
+| A stale mirror is healed rather than refused | `ownershipOf` class 1, matching the header revision against `ProjectView.revision` and `revisions` |
+| Nothing uncommitted is ever overwritten | `exportProjects` runs `diff --quiet HEAD` and `diff-index --cached --quiet HEAD` per owned file and skips that file |
+| The user's staged work is never committed by an export | `plumbingCommit` seeds a temporary `GIT_INDEX_FILE` from `read-tree HEAD`; test stages an unrelated file and asserts it is absent from the export commit and still staged after |
+| Export refuses a repository with no commit identity, before writing | `requireCommitIdentity`: `git var GIT_COMMITTER_IDENT` under `-c user.useConfigOnly=true` |
+| Export refuses a path that is not a work tree, or is inside NORTHKEEP_HOME or the vault directory, or is a symlink | `exportProjects` preflight; one test per refusal asserts zero files written |
+| A git failure never rolls back or blocks a vault write | Decision 10 ordering; test makes `update-ref` exit non-zero after a `project_wrap` and asserts the receipt and new head are unchanged |
+| One export at a time per repository | `acquireExportLock` |
+| Import modifies no source file and runs no git | `importProjects` opens the directory read-only; test hashes every source file before and after a 31-file import |
+| Import drops nothing | `importProjects` steps 4 and 5; test imports a file over 16,384 characters and asserts every heading is in the document, an archive, or an `## Import overflow` memory |
+| Import refuses an existing slug | `expected_revision: null` create path (ADR 0050); test asserts no write and that the other files still imported |
+| No export header ever reaches the vault | `importProjects` strips it from the preamble; test round-trips an export and asserts no stored content contains `<!-- northkeep:` |
+| Neither export nor import runs a model | No model call in either path; acceptance runs with Ollama stopped |
+
+## What this deliberately does not build
+
+No read-back: a hand edit never becomes a vault write, and import is a separate
+command. No remote, push, pull, `git init`, branch, tag, merge handling or file
+watcher. No mirroring of memories outside project scopes, and none of superseded
+revisions. No desktop or mobile surface in M-A, no per-project opt-out, no
+redaction, no recursive or zip import, no other format.
+
+## Residual (documented, accepted)
+
+- **The ownership horizon is about five revisions.** ADR 0051 Decision 4
+  compacts automatically on every project write, keeping the newest five
+  revisions plus any a handoff receipt names and blanking the rest with
+  `forgotten_at`. `getProjectView` filters forgotten rows out
+  (project-handoff.ts:224) before building `revisions`
+  (project-handoff.ts:229), so `PROJECT_REVISION_SUMMARY_LIMIT` (20,
+  project-handoff.ts:24) is not the real reach. A mirror more than about five
+  writes stale reads as class 2, unknown revision, and is refused and reported.
+  `--adopt`, which backs the file up first, is the escape.
+- **Archives beyond 20 are not mirrored.** `getProjectView` slices archives at
+  the same limit (project-handoff.ts:228), so a project with more loses its
+  oldest from the log files. They stay in the vault.
+- **The mirror is stale between writes from other devices**, and the plaintext
+  is readable by anything that can read the folder: Spotlight, Time Machine, a
+  cloud folder sync, or a remote the user later pushes to.
+- **A conflicted project is never exported**, and its last good `<slug>.md`
+  stays on disk, older than its header says. The INDEX row says `conflict`.
+- **`.git/index` is written by the exporter.** Stated in Decision 2. A user who
+  runs `git add -p` during an export sees the lock, not a corrupt index, but the
+  two indexes are reconciled by copy and not by merge.
+- **Case-insensitive filesystems.** APFS is case-insensitive by default, so two
+  slugs differing only in case would collide on one file. The slug pattern is
+  lowercase (project-doc.ts:15), so this is unreachable today.
+- **Commit identity is git's.** NorthKeep never sets one and refuses when the
+  repository has none.
