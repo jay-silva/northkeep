@@ -406,77 +406,72 @@ user's own git.
 
 ## Threats
 
-Each is a finding from one of the two reviews, with its mitigation and what is
-left over.
-
-**A repository that names a program at commit time.** `.git/hooks`,
-`core.hooksPath`, `gpg.program`, `core.sshCommand` and `core.fsmonitor` each let
-a repository run someone's code as the user. Mitigated by the Decision 2 pins
-and by an owned empty hooks directory. Residual: the pins are a list, and a
-future git could add a key to it. The verb allowlist bounds how much a new key
-could reach.
+Each is a finding from one of the two reviews, with its mitigation and its
+residual.
 
 **A repository that names a program at add time.** `.gitattributes` selects
-`filter.<name>.clean` or `.process`, and git runs it on `git add` under the full
-override set. Executed on git 2.54 and confirmed: the process filter started and
-was handed the document. Mitigated by never running `add`: `hash-object
---no-filters` is the only path from disk to an object, and there is no checkout,
-so smudge never runs either. Residual: none found. This is the reason the design
-changed.
+`filter.<name>.clean` or `.process` and git runs it on `git add`, under the full
+`-c` override set. Executed on git 2.54 and confirmed: the process filter
+started and was handed the document. Mitigated by never running `add`:
+`hash-object --no-filters` is the only path from disk to an object, and there is
+no checkout, so smudge never runs either. Residual: none found. This is why the
+design changed.
+
+**A repository that names a program at commit time.** `.git/hooks`,
+`core.hooksPath`, `gpg.program`, `core.sshCommand` and `core.fsmonitor` each run
+code as the user. Mitigated by the Decision 2 pins and an owned empty hooks
+directory. Residual: the pins are a list, and a future git could add a key to
+it; the verb allowlist bounds how far a new key could reach.
 
 **A repository that names a program at index and ref time.**
-`post-index-change` fires on `update-index` and `reference-transaction` fires on
+`post-index-change` fires on `update-index`, `reference-transaction` on
 `update-ref`, so plumbing alone does not close hooks. Mitigated by the empty
 `core.hooksPath`. Residual: none found.
 
 **The user's own `~/.gitconfig`.** `GIT_CONFIG_NOSYSTEM=1` alone leaves it in
-play, so every key above returns through it. Mitigated by `GIT_CONFIG_GLOBAL` on
+play and every key above returns through it. Mitigated by `GIT_CONFIG_GLOBAL` on
 an owned empty file. Residual: a repository that relied on the global identity
 now has none, and Decision 7 refuses it with the fix.
 
 **A stale mirror that can never be healed.** Byte identity refused a file
-another device had made stale, forever, and ADR 0051 can blank the revision a
-header names. Mitigated by Decision 3: ownership is the revision chain, and a
-stale owned file is overwritten. Residual: the chain NorthKeep can see is short
-(see Residual below).
+another device made stale, forever, and ADR 0051 can blank the revision a header
+names. Mitigated by Decision 3: ownership is the revision chain, and a stale
+owned file is overwritten. Residual: the visible chain is short, see Residual.
 
 **A hand edit destroyed.** Mitigated by the two `diff` checks in Decision 3,
-which refuse any owned file that differs from HEAD in the working tree or in the
-index. Residual: an edit the user made and committed is overwritten by the next
-export, by design, and is in git history.
+which refuse any owned file differing from HEAD in the working tree or the
+index. Residual: an edit the user committed is overwritten by the next export,
+by design, and lives in git history.
 
-**`--adopt` over 31 hand-written files.** The second review's kill shot: no
-backup. Mitigated by `backupOnce` on every file `--adopt` overwrites
-(fs-safe.ts:17-22). Residual: `--adopt` still overwrites, and the backup is one
-copy per file.
+**`--adopt` over 31 hand-written files with no backup.** Mitigated by
+`backupOnce` on every adopted file (fs-safe.ts:17-22). Residual: `--adopt` still
+overwrites, and the backup is one copy per file.
 
-**A remote that appeared after the confirmation.** Reading
-`remote.origin.url` once at configure never saw it. Mitigated by Decision 4's
-re-read on every export, refusing the whole run. Residual: NorthKeep cannot stop
-a user pushing by hand, and does not try.
+**A remote that appeared after the confirmation.** Reading `remote.origin.url`
+once at configure never saw it. Mitigated by Decision 4's re-read on every
+export, refusing the whole run. Residual: NorthKeep cannot stop a hand push, and
+does not try.
 
 **An export that does not round trip.** The first design dropped
 `<slug>.log.md` and `INDEX.md` on re-import. Mitigated by Decision 5's `kind`.
-Residual: a log reattached by import is an archive with a new provenance line,
-not the original archive row.
+Residual: a reattached log is an archive with a new provenance line, not the
+original row.
 
-**An INDEX cell that forges a column.** The status line is free text an agent
-wrote. Mitigated by escaping `|` and collapsing newlines (Decision 1).
-Residual: none found.
+**An INDEX cell that forges a column.** Mitigated by escaping `|` and collapsing
+newlines (Decision 1). Residual: none found.
 
 **Two writers into one repository.** Mitigated by Decision 8's lock. Residual: a
-second process on another machine sharing the folder is not covered.
+process on another machine sharing the folder is not covered.
 
 **Symlinked paths.** `atomicWrite` writes through an existing symlink by design
 (fs-safe.ts:35-36). Mitigated by `realpathSync` on the repository and `lstat` on
 `projects/` and each target. Residual: a directory swapped between the `lstat`
 and the write is a race NorthKeep does not close.
 
-**Git missing, or failing part way.** `execFile` fails with `ENOENT`. The vault
-write is saved first (Decision 10), so any failure is reported and never fatal.
-Files already written carry their header, so the next run recognizes them and
-commits. Residual: a crash between `commit-tree` and `update-ref` leaves an
-unreferenced commit, which git garbage-collects.
+**Git missing, or failing part way.** `execFile` fails with `ENOENT`, the vault
+write is already saved (Decision 10), and files already written carry their
+header so the next run commits them. Residual: a crash between `commit-tree` and
+`update-ref` leaves an unreferenced commit, which git garbage-collects.
 
 ## Claims this ADR publishes, and where each is enforced
 
@@ -536,3 +531,174 @@ redaction, no recursive or zip import, no other format.
   lowercase (project-doc.ts:15), so this is unreachable today.
 - **Commit identity is git's.** NorthKeep never sets one and refuses when the
   repository has none.
+
+## Acceptance (Jay, from the CLI)
+
+Throwaway vault, throwaway repository, `NORTHKEEP_HOME` set on every command.
+Step 5 copies the command repo and never touches the real one.
+
+```bash
+export NORTHKEEP_HOME=$(mktemp -d)
+export NK=~/Claude/Projects/NorthKeep/northkeep/packages/cli/dist/index.js
+export LAB=$(mktemp -d); export R=$LAB/mirror
+mkdir -p $R && git -C $R init -q
+git -C $R config user.email you@example.com && git -C $R config user.name Jay
+node $NK init && node $NK projects export --repo $R   # prints path, remotes, counts; asks once
+```
+
+1. **Byte-identical double export.** `cp -R $R/projects $LAB/a`, export again,
+   `diff -r $LAB/a $R/projects` is silent, and `git -C $R log --oneline | wc -l`
+   is still 1. `git -C $R status --short` is empty.
+2. **Nothing the repo names ever runs.** Run the canary script below. It must
+   print `(none)`.
+3. **A hand edit is refused.** `echo "note to self" >> $R/projects/demo.md`,
+   then `node $NK projects export`: that file is refused by name, the edit is
+   intact, and the other projects exported. `git -C $R add
+   projects/demo.md` and export again: still refused, because the staged check
+   catches it. Commit it and export: overwritten, and `git -C $R show HEAD~1`
+   has the edit.
+4. **A headerless file, and adopt with a backup.** `echo hi >
+   $R/projects/stranger.md`, export: refused and named. `node $NK projects
+   export --adopt`: overwritten, and `$R/projects/stranger.md.northkeep-bak`
+   holds `hi`.
+5. **Adopt a copy of the command repo, and import it.** `cp -R ~/Claude/Projects/Command\ Repo $LAB/cr` first, and work only in `$LAB/cr`.
+   `node $NK projects import --from $LAB/cr/projects` prints a 31-row plan and
+   writes nothing; `git -C $LAB/cr status --short` is empty. Re-run with
+   `--write`, then `node $NK projects export --repo $LAB/cr --adopt` and confirm
+   every overwritten file has a `.northkeep-bak` beside it.
+6. **A remote added after the confirmation.** `git -C $R remote add mirror
+   $LAB/bare.git`, then export: the whole run refuses and asks to re-confirm.
+   Re-confirm, export, and `git -C $R log --oneline` shows the new commit and no
+   push happened.
+7. **Refusals, each writing nothing:** a path inside `$NORTHKEEP_HOME`, a path
+   that is not a work tree, a repository with `user.email` unset, a symlinked
+   `projects/`, and a second export while one is running.
+8. **A staged file is not committed.** `echo x >> $R/README.md && git -C $R add
+   README.md`, run a `projects update`, and confirm `git -C $R show --stat HEAD`
+   does not list README.md while `git -C $R status --short` still shows `M `.
+9. **Git failure is not fatal.** Point the exporter at a repository whose
+   `.git` is read-only, run a `projects update`, and confirm the vault head
+   changed and the CLI reported the export as skipped.
+10. **Zero model tokens.** Stop Ollama and repeat steps 1 and 5.
+
+The canary script for step 2. It builds a hostile repository and runs the exact
+Decision 2 sequence against it.
+
+```bash
+#!/bin/bash
+set -u; LAB=$(mktemp -d); R=$LAB/repo; F=$LAB/fired; N=$LAB/nkhome
+mkdir -p $R $F $N/hooks $LAB/bin; : > $N/empty.gitconfig
+for n in hookspath fsmonitor gpg sshcommand credential diffexternal filterclean \
+         filterprocess filtersmudge editor sequenceeditor pager askpass textconv \
+         mergedriver trailercmd alternaterefs gitproxy sshvariant uploadpack; do
+  printf '#!/bin/sh\necho fired > %s/%s\ncat > /dev/null\n' "$F" "$n" > $LAB/bin/$n
+  chmod +x $LAB/bin/$n; done
+git -C $R init -q; git -C $R config user.name O; git -C $R config user.email o@e.invalid
+for h in pre-commit post-commit commit-msg prepare-commit-msg reference-transaction \
+         post-index-change post-checkout post-rewrite fsmonitor-watchman; do
+  printf '#!/bin/sh\necho fired > %s/hook-%s\n' "$F" "$h" > $R/.git/hooks/$h
+  chmod +x $R/.git/hooks/$h; done
+printf '[gpg]\n\tprogram = %s/bin/gpg\n[core]\n\teditor = %s/bin/editor\n' $LAB $LAB > $R/.git/extra.config
+cat >> $R/.git/config <<EOF
+[core]
+	hooksPath = $LAB/bin
+	fsmonitor = $LAB/bin/fsmonitor
+	sshCommand = $LAB/bin/sshcommand
+	editor = $LAB/bin/editor
+	pager = $LAB/bin/pager
+	askPass = $LAB/bin/askpass
+	gitProxy = $LAB/bin/gitproxy
+	alternateRefsCommand = $LAB/bin/alternaterefs
+	autocrlf = true
+[gpg]
+	program = $LAB/bin/gpg
+[commit]
+	gpgsign = true
+[credential]
+	helper = !$LAB/bin/credential
+[diff]
+	external = $LAB/bin/diffexternal
+[diff "nk"]
+	textconv = $LAB/bin/textconv
+[filter "nk"]
+	clean = $LAB/bin/filterclean
+	smudge = $LAB/bin/filtersmudge
+[filter "nkp"]
+	process = $LAB/bin/filterprocess
+	required = true
+[merge "nk"]
+	driver = $LAB/bin/mergedriver %O %A %B
+[trailer "nk"]
+	command = $LAB/bin/trailercmd
+[sequence]
+	editor = $LAB/bin/sequenceeditor
+[ssh]
+	variant = $LAB/bin/sshvariant
+[uploadpack]
+	packObjectsHook = $LAB/bin/uploadpack
+[include]
+	path = $R/.git/extra.config
+EOF
+printf '* filter=nk diff=nk merge=nk\n*.md filter=nkp diff=nk\n' > $R/.gitattributes
+git -C $R -c filter.nk.clean= -c filter.nkp.required=false -c core.hooksPath=$N/hooks \
+  -c commit.gpgsign=false add -A 2>/dev/null
+git -C $R -c core.hooksPath=$N/hooks -c commit.gpgsign=false commit -qm base --no-verify
+rm -f $F/*; mkdir -p $R/projects
+printf '<!-- northkeep: ... -->\n# demo\n\nplaintext body\n' > $R/projects/demo.md
+G() { env -i PATH=/usr/bin:/bin HOME=$N GIT_CONFIG_NOSYSTEM=1 \
+  GIT_CONFIG_GLOBAL=$N/empty.gitconfig GIT_ATTR_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 \
+  GIT_OPTIONAL_LOCKS=0 GIT_ASKPASS=/usr/bin/false SSH_ASKPASS=/usr/bin/false \
+  GIT_INDEX_FILE=$LAB/nk.index /usr/bin/git -C $R \
+  -c core.hooksPath=$N/hooks -c core.fsmonitor=false -c core.useBuiltinFSMonitor=false \
+  -c gpg.program=/usr/bin/false -c commit.gpgsign=false -c tag.gpgsign=false \
+  -c core.sshCommand=/usr/bin/false -c credential.helper= -c diff.external= \
+  -c core.editor=/usr/bin/false -c sequence.editor=/usr/bin/false -c core.pager=cat \
+  -c core.askPass=/usr/bin/false -c core.gitProxy= -c core.alternateRefsCommand= \
+  -c core.autocrlf=false -c core.safecrlf=false -c core.symlinks=false \
+  -c protocol.ext.allow=never -c uploadpack.packObjectsHook= -c user.useConfigOnly=true "$@"; }
+G var GIT_COMMITTER_IDENT > /dev/null || { echo "no identity: refused"; exit 1; }
+G read-tree HEAD
+B=$(G hash-object -w --no-filters -- $R/projects/demo.md)
+G update-index --add --cacheinfo 100644,$B,projects/demo.md
+T=$(G write-tree); P=$(G rev-parse HEAD)
+C=$(printf 'export: 1 project (test)\n' | G commit-tree $T -p $P)
+G update-ref -m "northkeep export" HEAD $C $P
+echo "stored bytes:"; G cat-file -p HEAD:projects/demo.md
+echo "canaries fired:"; ls -1 $F 2>/dev/null || true
+[ -z "$(ls -A $F 2>/dev/null)" ] && echo "(none)"
+```
+
+Run on git 2.54.0 (Apple Git-157) while this draft was written: `(none)`, and
+the stored bytes were the plaintext unchanged. The same repository under
+`git add` with the identical pins fired `filter.nkp.process`, which hung on the
+filter handshake. `commit-tree` with `commit.gpgsign=true` and `gpg.program`
+pointed at a canary, both unpinned, signed nothing and fired nothing, so the
+gpg pins are belt and braces rather than the load-bearing part.
+
+## Earlier drafts
+
+**First review (2026-09-21, against the design). NOT CLEARED.** Eight citations
+pointed at the wrong lines, itself the finding: a reader checking the design
+checked nothing. Hooks were not the only program a repository names
+(`gpg.program`, `core.sshCommand`, `core.fsmonitor`). `GIT_CONFIG_NOSYSTEM=1`
+left `~/.gitconfig` in play. The invariant-7 wording read as "no code runs".
+`git status --porcelain` was not an ownership test in either direction, and
+nothing refused a file NorthKeep did not write, so the first export into the
+command repo would have overwritten 31 hand-written files. "64 KiB" was
+unstated as bytes or characters. `.gitignore` could drop `projects/` silently,
+and a repository with no commit identity would fail at `commit` with the files
+already on disk. An INDEX cell holding `|` forged a column. `<slug>.log.md` was
+read from `ProjectView.archives`, empty without `history: true`. Two writers
+could export into one repository at once.
+
+**Second review (2026-09-21, against the amended design, with a real git).
+NOT CLEARED.** Kill shots: a `.gitattributes` filter ran on `add` under the full
+override set and was handed the plaintext; `--adopt` kept no backup; the header
+test could not heal a mirror another device left stale, and compaction could
+blank the revision the header named. Flesh wounds: re-importing NorthKeep's own
+export dropped `<slug>.log.md` and `INDEX.md`; `remote.origin.url` was read only
+at configure; the header was indistinguishable from a copy on import;
+`serializeProjectDoc` returns no trailing newline; one more stale citation. The
+review required a third draft rather than an amendment, listing plumbing writes,
+`backupOnce` on adopt, remote re-checks, revision-chain ownership, round-tripping
+headers, and stripping the header on import. This draft answers each of those.
