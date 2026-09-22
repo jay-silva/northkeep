@@ -212,6 +212,20 @@ describe('preflightRepository', () => {
     fs.mkdirSync(inHome, { recursive: true });
     fx(lab, inHome, ['init', '-q']);
     await expectRefusal(preflight(inHome), 'repo_in_home');
+    const vaultDir = path.join(lab.root, 'vaultdir');
+    const inVault = path.join(vaultDir, 'mirror');
+    fs.mkdirSync(inVault, { recursive: true });
+    fx(lab, inVault, ['init', '-q']);
+    await expectRefusal(
+      preflightRepository({
+        repo: inVault,
+        home: lab.home,
+        vaultPath: path.join(vaultDir, 'vault.nkv'),
+        vaultId: VAULT,
+        parseMarker: parseMarkerStub,
+      }),
+      'repo_in_home',
+    );
   });
 
   it('refuses a NorthKeep source checkout', async () => {
@@ -219,6 +233,9 @@ describe('preflightRepository', () => {
     fs.mkdirSync(path.join(repo, 'packages', 'core'), { recursive: true });
     fs.writeFileSync(path.join(repo, 'packages', 'core', 'package.json'), '{"name":"@northkeep/core"}');
     await expectRefusal(preflight(repo), 'repo_is_northkeep');
+    const root = initRepo(lab, 'rootpkg');
+    fs.writeFileSync(path.join(root, 'package.json'), '{"name":"northkeep"}');
+    await expectRefusal(preflight(root), 'repo_is_northkeep');
   });
 
   it('refuses a first export into a non-empty folder or a born HEAD', async () => {
