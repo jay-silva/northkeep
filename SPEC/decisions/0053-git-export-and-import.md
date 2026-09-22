@@ -1,9 +1,9 @@
 # ADR 0053: Git export and import for project documents
 
 - **Date:** 2026-09-22
-- **Status:** Fifth draft, pending adversarial review. Four reviews, four NOT CLEARED verdicts: two on
-  2026-09-21, two on 2026-09-22 against the third and fourth drafts. Both 2026-09-22 reviews are recorded
-  below and their amendments, approved by Jay the same day, are applied in the Decisions. Nothing is built.
+- **Status:** Sixth draft, pending first review. Five reviews, five NOT CLEARED (two 2026-09-21, three
+  2026-09-22). After the fifth, Jay approved a design change on 2026-09-22 (a bounded journal set, the index
+  lock as a precondition, a status that is never silent), applied below. Nothing is built.
 - **Deciders:** Jay (product owner), Claude Code
 - **Extends:** ADR 0039 (projects as vault memories), ADR 0045 (log rolling), ADR 0048 (revision-bound
   handoffs), ADR 0051 (compaction), ADR 0052 (provenance, draft projects)
@@ -31,8 +31,9 @@ Three new files are proposed. `packages/core/src/project-export.ts` holds the pu
 `renderProjectFile`, `renderLogFile`, `renderIndexFile` and `parseExportHeader`.
 `packages/mcp-server/src/git-plumbing.ts` holds the git runner: `runGit`, `plumbingCommit`, `readRemotes`
 and `requireCommitIdentity`. `packages/mcp-server/src/project-export-run.ts` holds everything that needs
-both, `exportProjects`, `classifyTarget`, `readJournal`, `writeJournal`, `acquireExportLock` and
-`importProjects`.
+both: `exportProjects`, `classifyTarget`, `readJournal`, `writeJournal`, `readExportState`,
+`writeExportState`, `exportStatus`, `acquireExportLock` and `importProjects`. Decision 2's evidence is
+`scripts/adr-0053-canary.sh`.
 
 ## Decision 1: What is rendered, and where (project-export.ts)
 
@@ -56,24 +57,29 @@ history. Newest archive first, newest entry first inside each; the inner reversa
 `formatLogArchive` writes entries oldest first (project-doc.ts:267-274). The renderer splits an archive body
 with `splitLogEntries` (project-doc.ts:210-225).
 
-A conflicted project (`conflict: true`, two live heads) renders slug, `conflict`, the fixed text `two live
-documents, not exported`, and empty cells; its `<slug>.md` is neither written nor removed, and the result
-names it.
+A conflicted project (two live heads) renders slug, `conflict`, `two live documents, not exported`, and
+empty cells. Its `<slug>.md` is neither written nor removed, and the result names it.
 
 ## Decision 2: Plumbing writes (git-plumbing.ts)
 
-NorthKeep writes every file itself with `atomicWrite` (packages/mcp-server/src/fs-safe.ts:31-49), which
-resolves an existing file's realpath and writes through it (lines 35-36), and chmods a new mirror `0o644`
-rather than the helper's `0o600` default (line 33), because a mirror lives in a repository the user may
-share.
+NorthKeep writes every mirror file itself with `atomicWrite` (packages/mcp-server/src/fs-safe.ts:31-49),
+which resolves an existing file's realpath and writes through it (lines 35-36). It chmods a new mirror file
+`0o644` rather than the helper's `0o600` default (line 33), because a mirror lives in a repository the user
+may share. NorthKeep's own files under `<NORTHKEEP_HOME>/export` keep `0o600`.
 
-Git never touches the working tree. The bytes on disk are recorded with plumbing, in this order, all through
-`execFile` with an args array:
+**The repository key.** `<key>` below is the SHA-256 of the UTF-8 bytes of the repository realpath, as 64
+lowercase hex characters, never truncated. The temporary index, the journal and the state file are all named
+by it, under `<NORTHKEEP_HOME>/export/`, a directory created `0o700`.
+
+Git never touches the working tree. Per file, NorthKeep renders the bytes in memory, hashes them, journals
+the blob id, and only then writes the file. All through `execFile` with an args array, in this order:
 
 ```
 git worktree list --porcelain                   # refuse if HEAD's branch is checked out elsewhere
 git read-tree HEAD                              # into a TEMPORARY index, see below
-git hash-object -w --no-filters -- <abs path>   # per file, then journaled (Decision 3)
+git hash-object --no-filters -- <abs path>      # classifyTarget's diskBlob (Decision 3)
+git hash-object -w --no-filters --stdin         # the rendered bytes; journaled, then the file is written
+git hash-object --no-filters -- <abs path>      # must equal the journaled blob, or the target is refused
 git update-index --add --cacheinfo 100644,<blob>,projects/<slug>.md
 git write-tree ; git rev-parse HEAD
 git commit-tree <tree> -p <parent>              # message on stdin
@@ -98,7 +104,7 @@ PATH=/usr/bin:/bin   HOME=<NORTHKEEP_HOME>
 GIT_CONFIG_NOSYSTEM=1   GIT_CONFIG_GLOBAL=<NORTHKEEP_HOME>/empty.gitconfig  (owned, zero bytes)
 GIT_ATTR_NOSYSTEM=1  GIT_TERMINAL_PROMPT=0  GIT_OPTIONAL_LOCKS=0
 GIT_ASKPASS=/usr/bin/false   SSH_ASKPASS=/usr/bin/false
-GIT_INDEX_FILE=<NORTHKEEP_HOME>/export/<hash of repo realpath>.index
+GIT_INDEX_FILE=<NORTHKEEP_HOME>/export/<key>.index   (omitted only for the reconcile, below)
 ```
 
 and these `-c` pins, which outrank repository config:
@@ -118,51 +124,68 @@ and these `-c` pins, which outrank repository config:
 <realpath of the repo>`, resolved with `fs.realpathSync` before the first call, and the resolved path is
 what every check and every invocation uses. Per invocation: a 10 second timeout, a bounded `maxBuffer`, and
 never while the vault file lock is held. Git 2.31 or newer is required, for `rev-parse
---path-format=absolute` (Decision 8).
+--path-format=absolute` (Decisions 2 and 8).
 
-**Repository preflight,** before anything is written, each refusing the whole run: the path is not a work
-tree (`rev-parse --show-toplevel` must succeed and equal the resolved path, and NorthKeep never runs `git
-init`); the repository is bare (`rev-parse --is-bare-repository`); the path is inside `northkeepHome()`
-(packages/core/src/platform.ts:7-9) or the vault file's directory, by prefix on a separator boundary; the
-path is a NorthKeep checkout; or `worktree list --porcelain` shows HEAD's branch checked out in another
-worktree, which the fourth review used to move that worktree's branch and leave a file staged there. A
-linked worktree of the repository being exported is allowed and normal.
+**Repository preflight,** before anything is written, each refusing the whole run:
 
-**Per-target containment,** checked per file immediately before that file is written, refusing that one
-target by name and letting the run continue:
+1. The path is not a work tree: `rev-parse --show-toplevel` must succeed and equal the resolved path.
+   NorthKeep never runs `git init`.
+2. The repository is bare (`rev-parse --is-bare-repository`).
+3. The path is inside `northkeepHome()` (packages/core/src/platform.ts:7-9) or the vault file's directory,
+   by prefix on a separator boundary, or the path is a NorthKeep checkout.
+4. `worktree list --porcelain` shows HEAD's branch checked out in another worktree, which the fourth review
+   used to move that worktree's branch and leave a file staged there. A linked worktree of the repository
+   being exported is allowed and normal.
+5. **`<git-dir>/index.lock` exists.** The git dir comes from `rev-parse --path-format=absolute --git-dir`.
+   In a linked worktree that is `.git/worktrees/<name>`, which differs from the common dir Decision 8 uses,
+   and it is where that worktree's own index and lock live. The refusal names the file: "`<path>` exists.
+   Another git process is running, or one crashed. NorthKeep will not export while it exists; remove it once
+   no git process is running." NorthKeep never removes it.
 
-1. `lstat` every path component from the repository root down, `projects` then `projects/<name>`; a symlink
+**The lock is checked twice,** in preflight and immediately before `update-ref`. If it appeared between,
+the run stops there as a failed run: HEAD does not move and the files on disk are journaled residue.
+
+**Per-target containment,** checked per file immediately before that file is written. A failure refuses that
+one target and the run continues:
+
+1. `lstat` every path component from the repository root down, `projects` then `projects/<name>`. A symlink
    anywhere refuses the target, because `atomicWrite` resolves and writes through one by design
    (fs-safe.ts:35-36).
 2. The target exists and is not a regular file, or has `st_nlink` greater than 1. The fourth review wrote
    through a hard link, changing a file outside `projects/`.
 3. `ls-tree HEAD -- projects` reports mode 160000, or a `.git` entry exists under `projects`. The fourth
-   review wrote vault plaintext inside a submodule whose remotes Decision 4 never read, and `update-index`
-   then failed, leaving the file there.
+   review wrote vault plaintext inside a submodule whose remotes Decision 4 never read.
 4. `realpath(dirname(target))` must start with `realpath(repo)` plus a separator.
+
+A containment refusal is fixed text naming the failed check and the fix, for example "projects/ is a
+symlink; NorthKeep exports only into a real directory inside the repository". It never mentions `--adopt`,
+which runs after containment and cannot pass it, and it makes the run a failed run (Decision 10).
 
 **The temporary index, the root commit, and the user's staged work.** `GIT_INDEX_FILE` points at a
 NorthKeep-owned index seeded by `read-tree HEAD`, never the repository's own, so the commit carries HEAD's
 tree plus the exported files and whatever the user had staged is not in it. When HEAD is unborn, which
 `rev-parse --verify HEAD` reports by failing, the index is seeded with `read-tree --empty`, `commit-tree`
-runs with no parent and `update-ref HEAD <commit>` with no old value; executed against a fresh `git init`.
-After `update-ref` the exporter reconciles the repository's own index with one `update-index --add
---cacheinfo 100644,<blob>,<path>` per exported path, run without `GIT_INDEX_FILE` so it lands on the default
-index. A linked worktree does have an index of its own, at `.git/worktrees/<name>/index`, which is exactly
-why the reconcile names no index file by path and lets git choose; executed there and correct.
+runs with no parent and `update-ref HEAD <commit>` with no old value; the canary script runs this path.
 
-The reconcile can fail. A stale `.git/index.lock` makes `update-index` exit 128 after `update-ref` has
-landed, leaving `git status` showing the path modified; the fourth draft's claim that this step is safe
-around that lock was false. Nothing is rolled back, because HEAD and the files on disk agree and the commit
-is correct. The run reports "committed; working index not refreshed" for those paths, names the lock, and
-the next run heals it, because Decision 3's journal still recognizes the file. A sparse index is expanded to
-a full one here, a residual rather than something avoided.
+**The reconcile.** After `update-ref`, the exporter brings the repository's own index in line with one
+`update-index --add --cacheinfo 100644,<blob>,<path>` per exported path, run without `GIT_INDEX_FILE` so git
+picks the index. A linked worktree has its own, at `.git/worktrees/<name>/index`, which is why the reconcile
+names no index file by path; the canary script runs it there. The reconcile runs on every run that passes
+preflight, including one that stops before `commit-tree` because nothing changed, so an index an earlier
+run could not refresh is refreshed by the next.
+
+**When the reconcile fails.** Only a lock that appears after the second check can make it fail: then
+`update-index` exits 128 after `update-ref` has landed. Nothing is rolled back, because HEAD, the files and
+the commit agree. The run reports "committed; working index not refreshed" for those paths and names the
+lock. While the lock persists, preflight refuses every later run. Once it is gone, the next run refreshes
+the index, and a `git checkout .` made over the stale index meanwhile restores an earlier export, which
+Decision 3's journal set recognizes. The reconcile expands a sparse index to a full one, a residual.
 
 There is no checkout step, so a smudge filter has nothing to run on: the working tree files are the ones
 NorthKeep wrote. A second export of an unchanged vault makes `write-tree` return HEAD's own tree id and the
-exporter stops before `commit-tree`; verified, no second commit.
+exporter stops before `commit-tree`, with no second commit.
 
-## Decision 3: Ownership by header and journal (project-export-run.ts, `classifyTarget`)
+## Decision 3: Ownership by header and journal set (project-export-run.ts, `classifyTarget`)
 
 Every generated file opens with one HTML comment, nothing before it:
 
@@ -177,38 +200,61 @@ the file, and never an ownership test. The fourth review killed the test it used
 advances between a crash and the next run, a vault restored from backup, and ADR 0051 blanking a revision
 each made an owned file unrecognizable forever.
 
-**The journal.** Beside `export.json`, at `<NORTHKEEP_HOME>/export/<hash of repo realpath>.json`, the
-exporter records for every path it writes the blob id it wrote there, after `hash-object -w` and before
-`update-ref`, so a crash between them leaves the residue already journaled. The journal is not the record:
-git and the vault are, and this is a hint about what NorthKeep last put on disk. Deleting it costs nothing
-permanent, because the next run treats unrecognized residue as a hand edit and `--adopt` clears that.
+**The journal** is `<NORTHKEEP_HOME>/export/<key>.json`. Per exported path it holds the last ten blob ids
+NorthKeep wrote there, newest first:
 
-**The rule.** `classifyTarget(target, { diskBlob, headBlob, journalBlob, vaultId, slug })` takes the git
+```json
+{ "version": 1, "repo": "<resolved realpath>", "vault_id": "<uuid>",
+  "paths": { "projects/demo.md": ["<blob id, newest>", "...", "<oldest of at most 10>"],
+             "INDEX.md": ["<blob id>"] } }
+```
+
+After `hash-object -w --stdin` returns a blob id and before the file is written, the exporter updates that
+path's list: a blob already present moves to the front, a new one is prepended, and the list is cut to ten.
+So repeated unchanged runs never evict history. The journal is written with `atomicWrite` at `0o600`. A file
+that fails to parse, carries another version, or names another realpath or vault reads as empty, and
+`--status` says so. Entries for a path NorthKeep removes, such as a log part no longer needed, are kept, so
+the part restored from git is still recognized.
+
+The journal is not the record: git and the vault are. It is a hint about what NorthKeep has put on disk.
+Deleting it only means residue that HEAD does not hold reads as a hand edit until `--adopt`. It holds no
+strike count and no stopped state; those live in Decision 10's state file, so deleting the journal clears
+neither.
+
+**The rule.** `classifyTarget(target, { diskBlob, headBlob, journalBlobs, vaultId, slug })` takes the git
 results as inputs, because "absent from HEAD" is a git answer no pure renderer can know. `diskBlob` is `git
 hash-object --no-filters -- <file>`, `headBlob` is `git rev-parse HEAD:projects/<name>` or null when it
-exits non-zero, and `journalBlob` is the entry for that path or null. A target is **ours** when its header
-parses and names this vault id and, for `kind document` and `kind log`, this slug (`INDEX.md` needs the
-vault id alone), and `diskBlob` equals `headBlob` or equals `journalBlob`.
+exits non-zero, and `journalBlobs` is that path's list, possibly empty. A target is **ours** when both hold:
 
-Anything else there is a **hand edit**: refused by name, reported, and the run continues. A missing file is
-neither, and is written.
+- its header parses and names this vault id and, for `kind document` and `kind log`, this slug (`INDEX.md`
+  needs the vault id alone);
+- `diskBlob` equals `headBlob` or equals any blob in `journalBlobs`.
 
-That rule covers every state the four reviews produced. Crash residue between `commit-tree` and `update-ref`
-matches `journalBlob`; a failed index reconcile, a branch staged by another worktree, and a `git checkout .`
-that restores a previous export match one or the other; a stale mirror from another device matches
-`headBlob` and is overwritten. None of it renders an old revision or depends on ADR 0051. It refuses exactly
-a file whose bytes no git object and no journal entry accounts for.
+Anything else there is a **hand edit**: refused by name with the `--adopt` command, reported, and the run
+continues. A missing file is neither, and is written. The rule reads no index state.
 
-**`--adopt`** is one rule, and it exists only on the CLI: back up anything not provably NorthKeep's with
-`backupOnce` (fs-safe.ts:17-22), which copies the file to `<name>.northkeep-bak` and only when no backup
-exists, then overwrite. The automatic trigger never adopts (Decision 10).
+**What it recognizes, without `--adopt`.** Crash residue between the file write and `update-ref` (the blob
+was journaled first). A `git checkout .` over an index a failed reconcile left stale (that index holds an
+earlier export's blob). A `git reset --hard` to an older export (the disk matches the new HEAD). A copy of an
+old mirror restored over `projects/`, or `git checkout <old> -- projects/x.md`, within the last ten writes of
+that path. A stale mirror from another device, which matches `headBlob`. Each self-heals on the next run.
+
+**The bound.** Preflight refuses while a lock exists, so the index lags HEAD by at most one export and its
+blob is among the newest two in the journal. Eleven runs under a persistent lock are eleven refusals that
+never touch the journal.
+
+**One accepted edge.** A hand-typed file byte-identical to a former render is overwritten. That costs
+nothing: the bytes are NorthKeep's own content, header included.
+
+**`--adopt`** is one rule, and it exists only on the CLI: back up anything `classifyTarget` does not call
+ours with `backupOnce` (fs-safe.ts:17-22), which copies the file to `<name>.northkeep-bak` and only when no
+backup exists, then overwrite. It does not bypass containment. The automatic trigger never adopts
+(Decision 10).
 
 **No filter runs during any of this.** `hash-object --no-filters`, `rev-parse HEAD:<path>` and `ls-tree`
-consult no attributes, which the fourth review confirmed against five attribute sources at once. Four shapes
-of `rev-parse HEAD:<path>` were executed and are inputs rather than surprises: a symlink returns the blob of
-the link text and cannot equal `diskBlob`; a directory returns a tree id while `hash-object` fails; a
-gitlink returns a commit id; and a path absent from HEAD exits 128, which is `headBlob` null. The first
-three are refused by Decision 2's containment before this runs.
+consult no attributes (the canary script). `rev-parse HEAD:<path>` returns the link-text blob for a symlink,
+a tree id for a directory, a commit id for a gitlink, and exits 128 for an absent path (`headBlob` null);
+containment refuses the first three before this runs.
 
 ## Decision 4: Remotes (git-plumbing.ts, `readRemotes`)
 
@@ -233,36 +279,33 @@ A file that merely copies a NorthKeep header is harmless, because import refuses
 
 ## Decision 6: Caps in bytes (project-export.ts)
 
-Two numbers, because the third review found the arithmetic wrong and the fourth corrected the header.
-`PROJECT_DOC_MAX_CHARS` is 16,384 (project-doc.ts:10) and JavaScript counts UTF-16 code units, so the
-largest document that cap admits is 49,152 UTF-8 bytes; the header is at most 257 bytes, two 36-character
-uuids and a 40-character slug, so such a file stays well under 64 KiB. But the cap is enforced only on the
-write paths (`assertProjectDocSize`, project-doc.ts:199-203, called from project-handoff.ts:190), so a
-document that arrived through sync is ungated and can be larger. The renderer therefore tolerates any size
-on `projects/<slug>.md`, exporting it whatever it measures and reporting a size over 65,536 bytes rather
-than refusing, because refusing would hide the one project most in need of reading.
+`PROJECT_DOC_MAX_CHARS` is 16,384 UTF-16 code units (project-doc.ts:10), at most 49,152 UTF-8 bytes; the
+header is at most 257 bytes (two 36-character uuids, a 40-character slug). The cap is enforced only on write
+paths (`assertProjectDocSize`, project-doc.ts:199-203, called from project-handoff.ts:190), so a document
+that arrived through sync can be larger. The renderer exports `projects/<slug>.md` whatever its size and
+reports one over 65,536 bytes, because refusing would hide the project most in need of reading.
 
 `projects/<slug>.log.md` has no such bound, because a project can hold many archive rows, so it is **split
 into numbered parts** with a target of 65,536 bytes each, `<slug>.log.1.md`, `<slug>.log.2.md` and so on,
-each carrying its own `kind log` header. The target is a readability choice, not a rule inherited from
-anywhere. Splits happen only on archive boundaries, so no archive is ever cut, and a single archive larger
-than the target becomes its own part, which may therefore exceed the target by at most one archive. That is
-reachable: the ADR 0045 row cap lets one archive row reach 64 KiB, which no 65,536-byte part budget can hold
-once a header is added. Refusing the project instead was rejected because `northkeep projects export` must
-be both idempotent and total. Parts number from 1 with no zero padding. A part no longer needed is unlinked
-from disk and dropped from the tree with `update-index --force-remove`, so HEAD, the index and the files on
-disk still agree, and only a class 1 part is ever removed, so a foreign file of that name survives. Nothing
+each carrying its own `kind log` header. The target is a readability choice. Splits happen only on archive
+boundaries, so no archive is ever cut, and a single archive larger than the target becomes its own part,
+which may exceed the target by at most one archive. That is reachable: the ADR 0045 row cap lets one archive
+row reach 64 KiB, which no 65,536-byte part can hold once a header is added. Refusing the project instead
+was rejected because `northkeep projects export` must be both idempotent and total. Parts number from 1 with
+no zero padding. A part no longer needed is unlinked from disk and dropped with `update-index --force-remove`
+in the temporary index and again in the reconcile, so HEAD, the index and the files on disk still agree.
+Only a part `classifyTarget` calls ours is ever removed, so a foreign file of that name survives. Nothing
 else is built: no read-back, no remote or push, no watcher, and no desktop surface in M-A.
 
 ## Decision 7: Identity and commit messages (git-plumbing.ts)
 
 Before anything is written, `requireCommitIdentity` runs `git var GIT_COMMITTER_IDENT` under the Decision 2
-environment, which includes `-c user.useConfigOnly=true`. Verified: without that pin git invents a name and
-email from the username and hostname; with it, a repository carrying no identity exits 128 with "Committer
-identity unknown". NorthKeep refuses that export before writing and names the two `git config` commands that
-fix it. NorthKeep never sets `user.name` or `user.email` and never passes `GIT_AUTHOR_*` or
-`GIT_COMMITTER_*`. Because `GIT_CONFIG_GLOBAL` points at an empty file, a repository that relied on
-`~/.gitconfig` must set its own.
+environment, which includes `-c user.useConfigOnly=true`. Without that pin git invents a name and email from
+the username and hostname; with it, a repository carrying no identity exits 128 with "Committer identity
+unknown". NorthKeep refuses that export before writing and names the two `git config` commands that fix it.
+NorthKeep never sets `user.name` or `user.email` and never passes `GIT_AUTHOR_*` or `GIT_COMMITTER_*`.
+Because `GIT_CONFIG_GLOBAL` points at an empty file, a repository that relied on `~/.gitconfig` must set its
+own.
 
 The commit subject is `wrap: <slug> (<host>, model not exposed) - <first line of completed>`, with
 `checkpoint:`, `update:` and `create:` as the analogues, and `export: <n> projects (<host>)` for a full run.
@@ -276,13 +319,12 @@ argument and never through a shell, for the reason packages/mcp-server/src/conne
 
 One lock file per repository at `<common dir>/northkeep-export.lock`, the common dir from `git rev-parse
 --path-format=absolute --git-common-dir`; the plain form returns a relative `.git` from the main worktree,
-which would have put the lock under the process working directory, and `--path-format=absolute` needs git
-2.31. Every process on that repository, and every linked worktree of it, contends for one file. It is
-created `O_EXCL` with this process's pid and start time, which elected exactly one of eight racers on APFS.
-It is stale only when the pid is not alive or the file is older than one hour; the fourth review found the
-previous rule, an OR against ten minutes, declared a live exporter stale. The `finally` block removes the
-lock only when the file still holds this process's pid. A second export waits up to 30 seconds, then reports
-that one is already running.
+which would have put the lock under the process working directory. Every process on that repository, and
+every linked worktree of it, contends for one file. It is created `O_EXCL` with this process's pid and start
+time, which elected exactly one of eight racers on APFS. It is stale only when the pid is not alive or the
+file is older than one hour. The `finally` block removes the lock only when the file still holds this
+process's pid. A second export waits up to 30 seconds, then reports that one is already running. This lock
+is NorthKeep's own and is not git's `index.lock`, which Decision 2 only ever reads.
 
 ## Decision 9: Import safety (project-export-run.ts, `importProjects`)
 
@@ -310,7 +352,7 @@ file:
    `episodic` memory in the project scope headed `## Import overflow: <slug>`, naming the source file and
    which headings moved. Nothing is dropped and every overflow is reported.
 
-## Decision 10: Trigger and scope (project-export-run.ts)
+## Decision 10: Trigger, scope, and a stopped state that is never silent (project-export-run.ts)
 
 The writer mirrors its own write after the vault save succeeds and after the vault lock is released: the MCP
 server after `project_wrap`, `project_checkpoint`, `project_update` and `project_create`, and the CLI after
@@ -319,11 +361,35 @@ packages/cli/src/index.ts:881-893). `northkeep projects export` is the idempoten
 of the export never fails the vault write: it is caught and reported.
 
 **The automatic path never adopts.** `--adopt` exists only on the CLI, where a human typed it. When an
-automatic export refuses a file, the tool payload names it and prints the exact command, `northkeep projects
-export --repo <path> --adopt`. The journal counts consecutive failed automatic exports per repository; after
-three the trigger stops and says so, and only a successful hand run clears the counter. A configured path
-that no longer resolves or no longer passes preflight disables the trigger with the same report, rather than
-failing on every write for months.
+automatic export refuses a hand edit, the tool payload names it and prints `northkeep projects export --repo
+<path> --adopt`. A containment refusal prints its own fix instead (Decision 2).
+
+**A failed run** is any run that ends in a whole-run refusal (a preflight check, the index lock, a changed
+remote list, a missing identity, a path that no longer resolves), in at least one per-target refusal (a hand
+edit or a containment check), in "committed; working index not refreshed", or in an error. Any other run is
+a success.
+
+**The state file** is `<NORTHKEEP_HOME>/export/<key>.state.json`, beside the journal and separate from it:
+
+```json
+{ "version": 1, "repo": "<resolved realpath>", "consecutive_failures": 0, "stopped_since": null,
+  "last_error": null, "last_success": { "at": "<ISO 8601>", "commit": "<commit id>" },
+  "refused": [ { "path": "projects/x.md", "reason": "hand edit" } ] }
+```
+
+It is written with `atomicWrite` at `0o600` after every run. A failed automatic run increments the count;
+any successful run resets it, clears `stopped_since` and empties `refused`. After three consecutive failed
+automatic runs the trigger stops. Deleting the journal clears neither the count nor the stopped state.
+
+**Stopped is never silent.** While stopped, every vault write that would have exported skips the export and
+carries an `export` object in its tool payload: `{ "state": "stopped", "repo", "stopped_since",
+"last_error", "run": "northkeep projects export --repo <path>" }`. Every string in it is NorthKeep's fixed
+text, an ISO time, or the path NorthKeep resolved; no git stderr and no file content reaches a tool payload.
+The CLI prints the same. A failed run short of three carries it with `"state": "failing"` and the refusals.
+
+**`northkeep projects export --status`** prints, without exporting: the configured repository, the last
+successful export time and commit, the failure count, `stopped since <time>` or `active`, the refused paths
+with reasons, and whether the journal was readable. Only a successful hand run resumes a stopped trigger.
 
 Export runs only when a repository is configured, in a new sidecar `<NORTHKEEP_HOME>/export.json` beside
 `sync.json` (packages/sync/src/config.ts:42-44) and `connector.json`
@@ -342,101 +408,94 @@ installed, and what Decision 2 buys is that the repository cannot choose which c
 The "no plaintext on disk outside the vault" property is amended, for project scopes only, opt-in, at a path
 the user chose. The sentence lives in the call log header (packages/mcp-server/src/log.ts:5-9), the call log
 itself stays content-free, and KNOWN-LIMITS.md carries the amended sentence and the residuals before this
-ships. Tier-1 return masking (ADR 0048) does not apply here: masking a mirror of the user's own vault to the
-user's own disk would write corrupted text the user would read as real.
+ships. The journal and state file hold blob ids, paths and times, never content. Tier-1 return masking
+(ADR 0048) does not apply here: masking a mirror of the user's own vault to the user's own disk would write
+corrupted text the user would read as real.
 
 ## Twelve-month post-mortems
 
-**The vault is restored from backup.** The restored vault names revisions the mirror has never seen, and
-under the fourth draft the whole mirror would have classed unknown and refused forever. Under Decision 3 the
-header test is vault id and slug, the revision is informational, and the blob test compares against HEAD and
-the journal, so every file is still ours and the next export simply overwrites with the restored content.
-Git history holds what the mirror said before.
+**The vault is restored from backup.** The header test is vault id and slug and the blob test is HEAD plus
+the journal set, so every file is still ours and the next export writes the restored content. Git history
+holds what the mirror said before.
 
-**The repository is moved.** `export.json` names a path that no longer resolves, so the trigger disables
-itself with a report naming the old path (Decision 10) rather than failing on every vault write. The user
-reconfigures, which re-asks the Decision 4 remote confirmation, and the journal keyed by the old realpath is
-never read again.
+**The repository is moved.** `export.json` names a path that no longer resolves. After three failed writes
+the trigger stops and every later write carries the status naming the old path. Reconfiguring re-asks the
+Decision 4 confirmation; the journal and state file keyed by the old realpath are never read again.
 
-**A second Mac, or the repository in a cloud-synced folder.** This joins two residuals. The lock is per
-machine, under the repository's common dir, so two machines exporting one synced folder is unsupported and
-can interleave commits; and the plaintext sits in a folder something else copies off the machine. Neither is
-detected. The supported shape is one machine per repository path.
+**A second Mac, or the repository in a cloud-synced folder.** The lock is per machine, so two machines
+exporting one synced folder can interleave commits, and the plaintext sits in a folder something else copies
+off the machine. Neither is detected. The supported shape is one machine per repository path.
 
-**History is rewritten, for example with `git filter-repo`.** If the rewrite leaves the mirror bytes alone
-this is invisible, because the blob ids do not change. If it rewrites or drops `projects/`, `headBlob`
-changes or goes null and the journal entry no longer matches, so every affected file classes as a hand edit
-and is refused by name until the user runs `--adopt`, which backs each one up first. That is the correct
-outcome: NorthKeep cannot tell a deliberate rewrite from damage.
+**History is rewritten, for example with `git filter-repo`.** If the mirror bytes are untouched the blob ids
+do not change and nothing notices. If `projects/` is rewritten or dropped, affected files class as hand edits
+until `--adopt`, which backs each up. NorthKeep cannot tell a deliberate rewrite from damage.
 
-**The user edits `INDEX.md` by hand.** It is derived, so nothing reads the edit back. Every run refuses it
-by name and exports the rest, once per write, until the user reverts it or runs `--adopt`, which backs it up
-and restores the generated content.
+**The user edits `INDEX.md` by hand, or a crashed editor leaves `index.lock`.** Each run refuses, by path or
+in preflight, naming the fix. After three the trigger stops and every write says so, until the user reverts
+the edit or removes the lock and runs `northkeep projects export` (with `--adopt` for the edit).
 
 ## Threats
 
-Each is a finding from one of the four reviews, with its mitigation and its residual. The two 2026-09-22
-reviews are recorded in full below; this is the standing list.
+Each is a finding from one of the five reviews, with its mitigation and its residual.
 
-**A repository that names a program.** At add time through a `.gitattributes` filter, at commit time through
-hooks, `gpg.program`, `core.sshCommand` or `core.fsmonitor`, at index and ref time through
-`post-index-change` and `reference-transaction`, and through `~/.gitconfig` when only
-`GIT_CONFIG_NOSYSTEM=1` is set. Mitigated by the Decision 2 allowlist, `--no-filters`, an owned empty
-`core.hooksPath`, the pins and `GIT_CONFIG_GLOBAL` on an owned empty file, executed against five attribute
-sources and nineteen keys. Residual: the pins are a list, and a future git could add a key.
+**A repository that names a program:** a `.gitattributes` filter, hooks, `gpg.program`, `core.sshCommand`,
+`core.fsmonitor`, `post-index-change` and `reference-transaction` under plumbing, and `~/.gitconfig` when
+only `GIT_CONFIG_NOSYSTEM=1` is set. Mitigated by the Decision 2 allowlist, `--no-filters`, an owned empty
+`core.hooksPath`, the pins and an owned empty `GIT_CONFIG_GLOBAL`, checked by the canary script against five
+attribute sources, 17 program keys, 21 driver keys, 24 hooks in each of two hook directories, an included
+config file and a worktree config. Residual: the pins are a list, and a future git could add a key.
 
-**Bytes written outside the repository the user confirmed.** A symlinked component, a hard link, a submodule
-or nested repository under `projects/`, or a target that is not a regular file. Mitigated by Decision 2's
-per-target containment, which refuses that target and continues. Residual: a component swapped between the
-`lstat` and the write is a race NorthKeep does not close.
+**Bytes written outside the confirmed repository** through a symlink, a hard link, a submodule or nested
+repository, or a non-regular target. Mitigated by per-target containment. Residual: a component swapped
+between the `lstat` and the write is a race NorthKeep does not close.
 
-**An uncommitted hand edit destroyed, or a mirror wedged so only a human can clear it.** The third review
-showed the cleanliness check itself ran a filter; the fourth showed three faults that left a file no rule
-could re-recognize. Mitigated by Decision 3: blob comparison with no attribute lookup, and ownership by
-header plus HEAD blob or journal blob. Residual: an edit the user committed is overwritten by the next
-export, by design, and is in git history.
+**A hand edit destroyed, or a mirror wedged so only a human can clear it.** Mitigated by Decision 3's blob
+comparison against HEAD and a ten-blob journal set, and by refusing any run while `index.lock` exists.
+Residual: an edit the user committed is overwritten by the next export, by design, and is in git history.
 
-**Two writers, or a branch someone else has checked out.** Mitigated by the Decision 8 lock in the common
-dir and by refusing when `worktree list --porcelain` shows HEAD's branch checked out elsewhere. Residual:
-two machines sharing one folder are not covered, and are stated as unsupported.
+**Two writers, or a branch checked out elsewhere.** Mitigated by the Decision 8 lock and the preflight
+`worktree list --porcelain` check. Residual: two machines sharing one folder, stated as unsupported.
+
+**A mirror that rots unnoticed.** Mitigated by Decision 10: every write while stopped carries the status,
+and `--status` reports it on demand.
 
 ## Claims this ADR publishes, and where each is enforced
 
 | Claim | Enforced by |
 |---|---|
 | Two exports of an unchanged vault produce byte-identical files and one commit | `renderProjectFile` / `renderIndexFile`: no timestamp, dates from stored `created_at`, slug order from project-handoff.ts:256; `exportProjects` stops when `write-tree` returns HEAD's tree |
-| No program named by repository, global or system config runs, including on the cleanliness check | `runGit`: the env and `-c` list in Decision 2, with `--no-filters` and an owned empty `core.hooksPath`; the canary repository in Acceptance step 2 |
+| No program named by repository, global or system config runs, including on the ownership check | `runGit`: the env and `-c` list in Decision 2, with `--no-filters` and an owned empty `core.hooksPath`; `scripts/adr-0053-canary.sh` in Acceptance step 2 |
 | NorthKeep never creates a remote and never pushes | `runGit` rejects any verb outside the Decision 2 allowlist; a recording shim asserts the verbs seen across every trigger are a subset of it |
-| A file NorthKeep cannot prove it wrote is never overwritten without `--adopt`, and never without a backup | `classifyTarget`: header vault and slug, plus `diskBlob` equal to `headBlob` or `journalBlob`; `backupOnce` on the one `--adopt` path, which the automatic trigger cannot reach |
-| Nothing uncommitted is ever overwritten, and one fault never wedges the mirror | `classifyTarget` over `hash-object --no-filters`, `rev-parse HEAD:<path>` and the journal; tests replay the crash window, a stale `index.lock` and a `checkout .` and assert the next run heals |
+| A file NorthKeep cannot prove it wrote is never overwritten without `--adopt`, and never without a backup | `classifyTarget`: header vault and slug, plus `diskBlob` equal to `headBlob` or a blob in the path's journal set; `backupOnce` on the one `--adopt` path, which the automatic trigger cannot reach |
+| One fault never wedges the mirror | journal written before the file; preflight refuses on `index.lock`; tests replay the crash window, a lock appearing before the reconcile then `checkout .`, `reset --hard` to an older export, and a restored old mirror, and assert the next run heals with no refusal |
 | The user's staged work is never committed by an export | `plumbingCommit` seeds a temporary `GIT_INDEX_FILE` from `read-tree HEAD`; test stages an unrelated file and asserts it is absent from the commit and still staged after |
-| No byte is written outside the repository whose remotes were confirmed | `exportProjects` preflight plus per-target containment: component `lstat`, regular file, `st_nlink` 1, no gitlink or nested `.git`, and `realpath(dirname)` under `realpath(repo)`; one test per refusal |
-| An export refuses while HEAD's branch is checked out in another worktree | `worktree list --porcelain` before `update-ref`; test checks the branch out elsewhere and asserts no commit |
+| No byte is written outside the repository whose remotes were confirmed | preflight plus per-target containment: component `lstat`, regular file, `st_nlink` 1, no gitlink or nested `.git`, and `realpath(dirname)` under `realpath(repo)`; one test per refusal and its message |
+| An export refuses while HEAD's branch is checked out in another worktree, or while `index.lock` exists | `worktree list --porcelain` in preflight; the lock checked in preflight and before `update-ref`; tests assert no commit and no file written |
+| A stopped mirror is never silent | the state file; every tool payload after three failures carries `export.state: "stopped"`; test makes four writes and asserts the fourth payload |
 | Export sends nothing off the machine and runs no model | No network or model call in either path; a test stubs network syscalls to throw and acceptance runs with Ollama stopped |
 | No export header ever reaches the vault | `importProjects` strips it from the preamble; test round-trips an export and asserts no stored content contains `<!-- northkeep:` |
 
 ## Residual (documented, accepted)
 
-- **The journal can be lost.** Residue from a crash that HEAD never recorded then classes as a hand edit
-  and needs `--adopt`, which backs the file up first.
+- **The journal can be lost.** Residue that HEAD never recorded then classes as a hand edit and needs
+  `--adopt`, which backs the file up first. The strike count survives in the state file.
+- **A restore older than ten writes.** `git checkout <old> -- projects/x.md`, or a copied mirror, more than
+  ten writes of that path back, classes as a hand edit. `reset --hard` never does, because HEAD moves with it.
 - **Archives beyond 20 are not mirrored.** `getProjectView` slices archives at
   `PROJECT_REVISION_SUMMARY_LIMIT` (20, project-handoff.ts:24 and 228), so a project with more loses its
   oldest from the log files. They stay in the vault.
-- **The mirror is stale between writes from other devices**, and the plaintext is readable by anything that
-  can read the folder: Spotlight, Time Machine, a cloud folder sync, or a remote. Two machines exporting one
-  synced folder is unsupported: the lock is per repository on one machine.
+- **The mirror is stale between writes from other devices**, and readable by anything that can read the
+  folder: Spotlight, Time Machine, a cloud folder sync, or a remote.
 - **A conflicted project is never exported**, and its last good `<slug>.md` stays on disk, older than its
   header says. The INDEX row says `conflict`.
-- **The repository's index is written by the exporter** (Decision 2), one `update-index --cacheinfo` per
-  exported path, which expands a sparse index to a full one and can fail on a stale `.git/index.lock`, both
-  reported rather than avoided.
-- **Case-insensitive filesystems.** Two slugs differing only in case would collide on one file on APFS. The
-  slug pattern is lowercase (project-doc.ts:15), so this is unreachable today.
+- **The reconcile writes the repository's index**, which expands a sparse index to a full one.
+- **Case-insensitive filesystems.** Slugs differing only in case would collide on APFS; the slug pattern is
+  lowercase (project-doc.ts:15), so this is unreachable today.
 - **Commit identity is git's,** and git 2.31 or newer is required.
 
 ## Acceptance (Jay, from the CLI)
 
-Throwaway vault and repository, `NORTHKEEP_HOME` set on every command. Step 5 copies the command repo.
+Throwaway vault and repository, `NORTHKEEP_HOME` set on every command. Step 6 copies the command repo.
 
 ```bash
 export NORTHKEEP_HOME=$(mktemp -d); LAB=$(mktemp -d); R=$LAB/mirror
@@ -446,154 +505,135 @@ git -C $R config user.email you@example.com; git -C $R config user.name Jay
 node $NK init && node $NK projects export --repo $R   # prints path, remotes, counts; asks once
 ```
 
-1. **A root commit, then a byte-identical double export.** The repository above is a fresh `git init`, so
-   the first export commits onto an unborn HEAD. Then `cp -R $R/projects $LAB/a`, export again, `diff -r
-   $LAB/a $R/projects` is silent, `git -C $R log --oneline | wc -l` is 1, and `git -C $R status --short` is
-   empty.
-2. **Nothing the repo names ever runs, including the ownership check.** Run the canary script below. It
-   prints `(none)`, and the disk and HEAD blob ids it prints are equal.
-3. **A hand edit is refused, and one fault heals.** `echo "note" >> $R/projects/demo.md`, export: refused by
-   name, edit intact, others exported. Restore it with `git -C $R checkout -- projects/demo.md` and export:
-   it matches HEAD, so it is overwritten silently. Then delete `$NORTHKEEP_HOME/export/*.json`'s journal
-   entries, repeat, and confirm the HEAD blob alone still heals it.
-4. **Crash residue.** Kill the exporter between `commit-tree` and `update-ref` (a `NORTHKEEP_EXPORT_CRASH=1`
-   test hook), write to the vault twice more, then export: the residue matches the journal, is overwritten
-   silently, and nothing is refused.
-5. **Containment, each refusing one target and continuing.** A symlinked `projects/x.md`, a hard-linked
-   `projects/demo.md`, a `projects` submodule in a second copy, and a directory named `projects/demo.md`.
-   Each is refused by name, the others export, and nothing is written outside `$R`.
+1. **A root commit, then a byte-identical double export.** `cp -R $R/projects $LAB/a`, export again: `diff
+   -r $LAB/a $R/projects` is silent, `git -C $R log --oneline | wc -l` is 1, `git -C $R status --short` empty.
+2. **Nothing the repo names ever runs.** From the NorthKeep repository, `bash scripts/adr-0053-canary.sh`
+   prints `(none)` under "canaries fired", `equal` on every blob line, `result: PASS`, and exits 0.
+3. **A hand edit is refused, and faults heal.** `echo "note" >> $R/projects/demo.md`, export: refused with the
+   `--adopt` command, edit intact, others exported. `git -C $R checkout -- projects/demo.md`, export:
+   overwritten silently. Delete `$NORTHKEEP_HOME/export/<key>.json` and repeat: HEAD's blob alone heals it,
+   and `--status` still shows the failure count.
+4. **Crash residue.** Kill the exporter after the file write and before `update-ref`
+   (`NORTHKEEP_EXPORT_CRASH=1`), write to the vault twice more, export: nothing is refused.
+5. **History moves.** Three vault writes, `git -C $R reset --hard HEAD~2`, export: no refusal. Copy `$LAB/a`
+   over `$R/projects`, export: recognized through the journal set, no refusal.
 6. **A copy of the command repo, imported then adopted.** `cp -R ~/Claude/Projects/Command\ Repo $LAB/cr`,
-   and work only there. The import dry run prints a 31-row plan, writes nothing, and leaves `git -C $LAB/cr
-   status --short` empty. Re-run with `--write`, then export with `--adopt`, and confirm every overwritten
-   file has a `.northkeep-bak` beside it.
-7. **A remote added after the confirmation.** `git -C $R remote add mirror $LAB/bare.git`, then export: the
-   whole run refuses and asks to re-confirm. Re-confirm, export, and `git -C $R log --oneline` shows the new
-   commit with no push.
-8. **Refusals, each writing nothing:** a path inside `$NORTHKEEP_HOME`, a path that is not a work tree, a
-   bare repository, `user.email` unset, and a second export while one is running. Then `git -C $R worktree
-   add $LAB/w2 -b $(git -C $R branch --show-current)` style collision: HEAD's branch checked out elsewhere
-   refuses the run before `update-ref`.
-9. **A staged file is not committed, and a locked index is reported.** `echo x >> $R/README.md && git -C $R
-   add README.md`, run a `projects update`: `git -C $R show --stat HEAD` omits README.md and it is still
-   staged. Then `touch $R/.git/index.lock`, run a `projects update`, and confirm the commit landed and the
-   CLI reported "committed; working index not refreshed".
-10. **A linked worktree.** `git -C $R worktree add $LAB/wt -b wtb`, point the exporter at `$LAB/wt`, run a
-    `projects update`, and confirm the commit landed, `git -C $LAB/wt status --short` is clean, and the lock
-    appeared at `$R/.git/northkeep-export.lock`.
-11. **The automatic path never adopts, and gives up.** Leave a headerless `$R/projects/stranger.md` in place
-    and make three vault writes: each reports the file and the exact `--adopt` command, and the fourth write
-    reports that the trigger has stopped. Run `node $NK projects export --adopt` by hand and confirm the
-    trigger resumes and `stranger.md.northkeep-bak` exists.
-12. **Zero model tokens.** Stop Ollama and repeat steps 1 and 6.
+   work only there. The import dry run prints a 31-row plan, writes nothing, and leaves `git -C $LAB/cr
+   status --short` empty. Re-run with `--write`, export with `--adopt`: every overwritten file has a
+   `.northkeep-bak` beside it.
+7. **Containment.** A symlinked `projects/x.md`, a symlinked `projects/`, a hard-linked `projects/demo.md`, a
+   `projects` submodule in a second copy, a directory named `projects/demo.md`: each refused with its fixed
+   message and no `--adopt` hint, the others export, nothing is written outside `$R`.
+8. **A remote added after the confirmation.** `git -C $R remote add mirror $LAB/bare.git`, export: the whole
+   run refuses until re-confirmed; then `git -C $R log --oneline` shows the new commit and nothing is pushed.
+9. **Refusals, each writing nothing:** a path inside `$NORTHKEEP_HOME`, a non-work-tree, a bare repository,
+   `user.email` unset, a concurrent export, and HEAD's branch checked out elsewhere (`git -C $R worktree add
+   --force $LAB/w2 $(git -C $R branch --show-current)`).
+10. **The index lock.** Stage an edit to `$R/README.md`, run a `projects update`: `git -C $R show --stat HEAD`
+    omits it and it stays staged. `touch $R/.git/index.lock`, `projects update`: refused before any write,
+    naming the file. Remove it. With `NORTHKEEP_EXPORT_LOCK_BEFORE_RECONCILE=1` (creates the lock after
+    `update-ref`), `projects update` reports "committed; working index not refreshed", and one more write is
+    refused. Remove the lock, `git -C $R checkout .`, export: no refusal, status shows only README.md.
+11. **A linked worktree.** `git -C $R worktree add $LAB/wt -b wtb`, export there with a `projects update`: the
+    commit lands, `git -C $LAB/wt status --short` is clean, the lock is at `$R/.git/northkeep-export.lock`,
+    and `touch $R/.git/worktrees/wt/index.lock` refuses the next run.
+12. **The automatic path never adopts, stops, and says so.** A headerless `$R/projects/stranger.md` and three
+    vault writes: each payload names it with the `--adopt` command. The fourth and fifth carry
+    `export.state: "stopped"`. `--status` prints the repo, last success time and commit, 3 failures,
+    `stopped since`, and `stranger.md: hand edit`. A hand `export --adopt` resumes the trigger, `--status`
+    shows 0 and `active`, and `stranger.md.northkeep-bak` exists.
+13. **Zero model tokens.** Stop Ollama and repeat steps 1 and 6.
 
-The canary script for step 2, a hostile repository under the exact Decision 2 sequence:
+**Canary output while this draft was written,** run twice on git 2.54.0 (Apple Git-157), APFS, as
+`TMPDIR=<scratch> bash scripts/adr-0053-canary.sh`. Both exited 0 and `diff` found the two outputs
+identical; each deleted its temp directory. The first:
 
-```bash
-#!/bin/bash
-set -u; LAB=$(mktemp -d); R=$LAB/repo; F=$LAB/fired; N=$LAB/nkhome; C=$LAB/c
-mkdir -p $R $N/hooks $LAB/hk; : > $N/empty.gitconfig; : > $F
-printf '#!/bin/sh\necho "FIRED $0 $*" >> %s\ncat > /dev/null\nexit 0\n' $F > $C; chmod +x $C
-git -C $R init -q; git -C $R config user.name O; git -C $R config user.email o@e.invalid
-for h in pre-commit post-commit commit-msg prepare-commit-msg reference-transaction post-index-change \
-         post-checkout post-rewrite fsmonitor-watchman; do cp $C $R/.git/hooks/$h; cp $C $LAB/hk/$h; done
-for k in core.fsmonitor core.sshCommand core.editor core.pager core.askPass core.gitProxy \
-         core.alternateRefsCommand gpg.program diff.external sequence.editor ssh.variant \
-         uploadpack.packObjectsHook credential.helper filter.nk.clean filter.nk.smudge \
-         filter.nkp.process diff.nk.textconv merge.nk.driver trailer.nk.command; do
-  git -C $R config $k $C; done
-printf '[gpg]\n\tprogram = %s\n' $C > $R/.git/extra.config   # reached through include.path
-for kv in "core.hooksPath $LAB/hk" "core.autocrlf true" "commit.gpgsign true" \
-  "filter.nkp.required true" "include.path $R/.git/extra.config"; do git -C $R config $kv; done
-git -C $R -c core.hooksPath=$N/hooks -c commit.gpgsign=false -c core.fsmonitor=false \
-  commit -q --allow-empty -m base --no-verify
-ATTR='* filter=nk diff=nk merge=nk working-tree-encoding=UTF-16 text eol=crlf'
-printf '%s\n*.md filter=nkp\n' "$ATTR" > $R/.gitattributes   # untracked, and still live
-printf '%s\n' "$ATTR" > $R/.git/info/attributes
-: > $F; mkdir -p $R/projects
-printf '<!-- northkeep: ... -->\n# demo\n\nplaintext body\n' > $R/projects/demo.md
-PINS="-c core.hooksPath=$N/hooks -c core.fsmonitor=false -c core.useBuiltinFSMonitor=false
- -c gpg.program=/usr/bin/false -c commit.gpgsign=false -c tag.gpgsign=false -c core.sshCommand=/usr/bin/false
- -c credential.helper= -c diff.external= -c core.editor=/usr/bin/false -c sequence.editor=/usr/bin/false
- -c core.pager=cat -c core.askPass=/usr/bin/false -c core.gitProxy= -c core.alternateRefsCommand=
- -c core.autocrlf=false -c core.safecrlf=false -c core.symlinks=false -c protocol.ext.allow=never
- -c uploadpack.packObjectsHook= -c user.useConfigOnly=true"
-G() { env -i PATH=/usr/bin:/bin HOME=$N GIT_CONFIG_NOSYSTEM=1 GIT_CONFIG_GLOBAL=$N/empty.gitconfig \
-  GIT_ATTR_NOSYSTEM=1 GIT_TERMINAL_PROMPT=0 GIT_OPTIONAL_LOCKS=0 GIT_ASKPASS=/usr/bin/false \
-  SSH_ASKPASS=/usr/bin/false GIT_INDEX_FILE=$LAB/nk.index /usr/bin/git -C $R $PINS "$@"; }
-G var GIT_COMMITTER_IDENT > /dev/null || { echo "no identity: refused"; exit 1; }
-G worktree list --porcelain > /dev/null
-G read-tree HEAD
-BL=$(G hash-object -w --no-filters -- $R/projects/demo.md)
-G update-index --add --cacheinfo 100644,$BL,projects/demo.md
-T=$(G write-tree); P=$(G rev-parse HEAD)
-CM=$(printf 'export: 1 project (test)\n' | G commit-tree $T -p $P)
-G update-ref -m "northkeep export" HEAD $CM $P
-echo "disk=$(G hash-object --no-filters -- $R/projects/demo.md) head=$(G rev-parse HEAD:projects/demo.md)"
-G ls-tree HEAD -- projects/demo.md
-echo "canaries fired:"; cat $F; [ -s $F ] || echo "(none)"
+```
+git: git version 2.54.0 (Apple Git-157)
+hostile: 24 hooks in each of .git/hooks and core.hooksPath, 17 program keys, 21 driver keys, 5 attribute sources
+main repository:
+  git-dir=repo/.git common-dir=repo/.git
+  projects/s1.md disk=b6aac8346241 head=b6aac8346241 sha1=b6aac8346241 equal
+  projects/s2.md disk=a5c4c6bde061 head=a5c4c6bde061 sha1=a5c4c6bde061 equal
+  projects/s3.md disk=5fa4ec4f9aa7 head=5fa4ec4f9aa7 sha1=5fa4ec4f9aa7 equal
+  projects/s4.md disk=a62414760618 head=a62414760618 sha1=a62414760618 equal
+  INDEX.md disk=bd63d675a1ae head=bd63d675a1ae sha1=bd63d675a1ae equal
+linked worktree:
+  git-dir=repo/.git/worktrees/wt common-dir=repo/.git
+  projects/s3.md disk=6bbd5892472b head=6bbd5892472b sha1=6bbd5892472b equal
+fresh repository:
+  git-dir=root/.git common-dir=root/.git
+  unborn HEAD: root-commit path
+  projects/root.md disk=c64e1f69d9f7 head=c64e1f69d9f7 sha1=c64e1f69d9f7 equal
+canaries fired:
+  (none)
+controls (must fire):
+  filter.a1.clean filter.a2.clean filter.a3.clean filter.a4.clean filter.a5.clean hook:core.hooksPath/reference-transaction
+result: PASS
 ```
 
-Run while this draft was written: `(none)`, and the disk and HEAD blob ids were equal. The same repository
-under `git add` fires the process filter, and `diff --quiet HEAD` hangs on it, which is why neither verb
-exists in the product. One caveat keeps the claim no wider than the evidence: the filters, hooks,
-`gpg.program`, `core.editor`, `diff.external` and `core.fsmonitor` were genuinely exercised, while
-`credential.helper`, `core.sshCommand`, `ssh.variant`, `core.gitProxy`, `protocol.ext` and
-`uploadpack.packObjectsHook` are unreachable anyway, because no allowed verb touches a transport.
+The five attribute sources: (1) a root `.gitattributes` committed in HEAD, (2) an untracked
+`projects/.gitattributes`, (3) `.git/info/attributes`, (4) `core.attributesFile`, and (5) a global
+`~/.config/git/attributes` in a stand-in home, since the pinned `HOME` is what keeps the real one out. The
+`sha1` column is `shasum` over `blob <size>\0<bytes>`, independent of git, so nothing was converted. Three
+caveats. Mutations show the script can fail: without the `core.hooksPath` pin it reports
+`reference-transaction` and `post-index-change`; without `--no-filters` on the ownership check it reports
+`filter.a1.clean`, `filter.a2.clean` and `filter.nkp.process`. Git 2.54 does not apply sources 3 and 4 to an
+absolute path at all, so their controls use a relative path; `--no-filters` is the mechanism, not that
+quirk. And the transport keys (`credential.helper`, `core.sshCommand`, `ssh.variant`, `core.gitProxy`,
+`protocol.ext`, `uploadpack.packObjectsHook`) are unreachable anyway, since no allowed verb opens a transport.
 
-## Adversarial review (2026-09-22, against the fourth draft)
+## Adversarial review (2026-09-22, recheck of the fifth draft)
 
-Executed on git 2.54.0 (Apple Git-157), APFS, macOS 26.6. Verdict: **NOT CLEARED**. Jay approved the
-amendments the same day and they are applied in the Decisions above.
+Executed on git 2.54.0 (Apple Git-157), APFS. Verdict: **NOT CLEARED**. The lab repositories it cited were
+deleted with the reviewer's scratchpad; `scripts/adr-0053-canary.sh` replaces them as the standing evidence.
 
-**What held, and is cited above.** All ten allowlisted verbs under the pinned environment and `-c` list
-fired zero canaries against nineteen config keys, nine hooks plus `core.hooksPath`, and five attribute
-sources; blob ids equalled an independently computed SHA-1, so no encoding or end-of-line conversion; the
-control without `--no-filters` hung on the process filter, proving the attributes were live. `commit-tree`
-did not sign under an unpinned `commit.gpgsign` and a canary `gpg.program`. The unborn-HEAD path worked, a
-second pass produced HEAD's own tree, and `O_EXCL` elected exactly one of eight racers. Twenty-eight
-citations verified, and `owned()` (project-handoff.ts:131-133) returning the empty string for a missing
-section means Decision 9's heading map cannot break `getProjectView`.
+**What closed.** The crash window with a vault advance; a journal naming a garbage-collected blob; a branch
+staged in another worktree; containment against a symlinked target, a directory, a hard link and a
+`projects` gitlink; the fourth review's five flesh wounds; `worktree list --porcelain` under the pinned
+environment, nothing fired; and a journal from another vault, refused by the vault-id test.
 
-**Kill shots.** (1) A single fault wedged the mirror permanently, and the automatic path could not clear it.
-Three executed faults each left a file whose bytes differed from HEAD or whose HEAD entry was gone: the
-crash window combined with a vault advance, because the trigger fires from a vault write so the "fresh
-render of the current revision" test never matches again; a stale `.git/index.lock` leaving `MM` after the
-commit landed; and another worktree's staged change. Each was clearable only by `--adopt`, which the
-automatic trigger cannot pass. (2) Preflight validated the repository root but never that each target
-resolves inside it. A `projects/` submodule took vault plaintext into a different repository, whose remotes
-Decision 4 never read, and then aborted the run leaving the file there.
+**What did not close.**
 
-**Flesh wounds.** The `.git/index.lock` sentence was false: `update-index` takes the lock and fails, after
-the commit. `update-ref` had no guard and moved a branch checked out in another worktree, and its
-no-old-value form succeeded against a non-empty HEAD. "A linked worktree has no `.git/index` of its own" was
-wrong in its reason; it has `.git/worktrees/<name>/index`. `ownershipOf(file, view)` could not return class
-4, because "absent from HEAD" is a git result and the signature took none, in the file the draft called the
-pure renderers. The lock was stale on an OR, so a live exporter eleven minutes in was declared stale; the
-`finally` block removed another process's lock; and `--git-common-dir` returns a relative `.git` from the
-main worktree.
+- **Kill shot, carried from the fourth review.** A stale `.git/index.lock` persisted across two landed
+  exports whose reconciles failed. After clearing it, `git checkout .` restored a blob matching neither HEAD
+  nor the one-blob journal: a hand edit forever. "The next run heals it" was false. Closed by preflight item
+  5 and the second lock check (the index lags at most one export) and Decision 3's ten-blob journal set.
+- **Flesh wound.** A containment refusal printed the `--adopt` command, which cannot pass containment, and
+  whether an all-refused run counted as a strike was undefined. Closed by Decision 2's fixed refusal messages
+  and Decision 10's definition of a failed run.
+- **Flesh wound.** After three failures the trigger said so once, with no status verb. Closed by Decision
+  10's state file, the per-write `export` payload and `--status`.
+- **Notes.** "Only a class 1 part" survived in Decision 6; it now reads "a part `classifyTarget` calls
+  ours". The journal doubled as the strike counter; the count now lives in the state file. The repository
+  hash was unspecified; it is SHA-256, 64 hex characters.
 
-**Scar tissue.** `atomicWrite` over a hard-linked file changed a file outside `projects/` and dropped the
-link count, unchecked. A sparse index is force-expanded by the reconcile. The header is 257 bytes, not 234.
-ADR 0045's 64 KiB row cap was uncited, and a sync-received row is ungated by `PROJECT_DOC_MAX_CHARS`. No
-post-mortem covered a restored vault, a moved repository, a hand-edited `INDEX.md`, a second Mac, or
-`filter-repo`.
+**Found while writing this draft.** The fifth draft hashed each file after writing it, so a crash between
+the write and the journal left unrecognized residue; the blob now comes from `hash-object -w --stdin` and is
+journaled first. A no-change run skipped the reconcile, so a stale index stayed stale; it now always runs.
 
-## Adversarial review (2026-09-22, against the third draft)
+## Earlier reviews
 
-Executed against git 2.54. Verdict: **NOT CLEARED**. Kill shots: the cleanliness check `git diff --quiet
-HEAD` handed the plaintext to the clean filter and textconv, has no `--no-filters`, and `GIT_ATTR_NOSYSTEM`
-does not reach an in-repo `.gitattributes`, with a process-filter canary hanging it; and an owned-looking
-file absent from HEAD read clean, so "nothing uncommitted is ever overwritten" was false. Flesh wounds: no
-root-commit path, a linked worktree with no index to rename over, wrong UTF-16 arithmetic in Decision 6, and
-`--adopt` promised in Residual but not granted in Decision 3. Negatives that held: `remote -v` showed
-`pushurl`, `includeIf` and `insteadOf`, and the identity pins behaved as Decision 7 states.
+**Fourth draft (2026-09-22), NOT CLEARED,** on git 2.54.0 (Apple Git-157), APFS, macOS 26.6. What held: the
+allowlisted verbs under the pinned environment fired no canary against nineteen config keys, nine hooks plus
+`core.hooksPath` and five attribute sources; blob ids equalled an independent SHA-1; `commit-tree` did not
+sign under a canary `gpg.program`; the unborn-HEAD path worked; `O_EXCL` elected one of eight racers; and
+`owned()` (project-handoff.ts:131-133) returning the empty string for a missing section means Decision 9's
+heading map cannot break `getProjectView`. Kill shots: a single fault (the crash window with a vault
+advance, a stale `index.lock` leaving `MM`, another worktree's staged change) wedged the mirror, and a
+`projects/` submodule took plaintext into another repository. Flesh wounds: a false `index.lock` sentence,
+an unguarded `update-ref`, a wrong reason for a linked worktree's index, an ownership signature that could
+not see git results, and a lock that was stale on an OR, removed by the wrong process, and placed by a
+relative `--git-common-dir`. Scar tissue: a hard-link write, sparse-index expansion, the header size, the 64
+KiB row cap, post-mortems.
 
-## Earlier drafts
+**Third draft (2026-09-22), NOT CLEARED.** `git diff --quiet HEAD` as the cleanliness check handed the
+plaintext to the clean filter and textconv, and hung on a process-filter canary; an owned-looking file
+absent from HEAD read clean. Also: no root-commit path, wrong UTF-16 arithmetic, and `--adopt` promised but
+not granted. `remote -v` showing `pushurl`, `includeIf` and `insteadOf`, and the identity pins, held.
 
-**First and second reviews (2026-09-21), both NOT CLEARED.** The first found eight stale citations, hooks
-treated as the only program a repository names, `~/.gitconfig` still in play, and `git status --porcelain`
-used as an ownership test that would have overwritten 31 hand-written files. The second, with a real git,
-found a `.gitattributes` filter running on `add` over the plaintext, `--adopt` keeping no backup, a header
-test that could not heal a stale mirror, and an export that did not round trip. Together they produced the
-third draft: plumbing writes, `backupOnce` on adopt, remote re-checks, round-tripping headers, and stripping
-the header on import.
+**First and second drafts (2026-09-21), both NOT CLEARED.** Eight stale citations, hooks treated as the only
+program a repository names, `~/.gitconfig` in play, `git status --porcelain` as an ownership test that would
+have overwritten 31 hand-written files, a `.gitattributes` filter running on `add`, `--adopt` keeping no
+backup, and an export that did not round trip. The third draft answered with plumbing writes, `backupOnce`,
+remote re-checks, round-tripping headers, and stripping the header on import.
