@@ -360,3 +360,21 @@ describe('tameOneLine drops unpaired surrogates and caps in UTF-16 units', () =>
     expect(mixed).toBe('a'.repeat(41) + '\ud83d\ude00'.repeat(19));
   });
 });
+
+describe('the brief shows the handshake name the row recorded, not a split of provider', () => {
+  it('a name holding an @ is shown whole when the row carries host', () => {
+    const open = openSessions(
+      [{ ...row('2026-09-20T09:00:00.000Z', 'project_resume', A), provider: 'claude@code@1.0', host: 'claude@code' }],
+      SCOPE, CURRENT, NOW,
+    );
+    expect(open[0]!.host).toBe('claude@code');
+  });
+
+  it('an older row without host still falls back to the provider name half', () => {
+    const open = openSessions(
+      [{ ...row('2026-09-20T09:00:00.000Z', 'project_resume', A), provider: 'codex-mcp-client@0.154.0' }],
+      SCOPE, CURRENT, NOW,
+    );
+    expect(open[0]!.host).toBe('codex-mcp-client');
+  });
+});

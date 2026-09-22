@@ -62,9 +62,12 @@ interface ValidRow {
  * is attacker-shaped input to a brief the model reads: a host must never carry
  * newlines into it. Null when nothing usable survives.
  */
-function hostOf(provider: unknown): string | null {
-  if (typeof provider !== 'string') return null;
-  const host = tameOneLine(provider.split('@')[0] ?? '', HOST_MAX_CHARS);
+function hostOf(row: { host?: unknown; provider?: unknown }): string | null {
+  // Rows from this branch carry the name alone; older rows only have
+  // name@version, where a name holding an @ cannot be split back exactly.
+  const raw = typeof row.host === 'string' ? row.host : typeof row.provider === 'string' ? row.provider.split('@')[0] ?? '' : null;
+  if (raw === null) return null;
+  const host = tameOneLine(raw, HOST_MAX_CHARS);
   return host.length > 0 ? host : null;
 }
 
@@ -90,7 +93,7 @@ function validateRow(
   if (typeof row.ts !== 'string' || !ISO_UTC.test(row.ts)) return null;
   const at = Date.parse(row.ts);
   if (!Number.isFinite(at) || at > now.getTime() + MAX_SKEW_MS) return null;
-  const host = hostOf(row.provider);
+  const host = hostOf(row);
   if (host === null) return null;
   // Re-serialized, never echoed: the emitted string is ours, not the log's.
   return { session_id, host, ts: new Date(at).toISOString(), at, isRead };

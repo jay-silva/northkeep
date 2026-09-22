@@ -48,7 +48,7 @@ every milestone; if a limit is removed, say when and how.*
   document of quote characters roughly doubles under escaping and a CJK
   document roughly triples. What holds is the shape: the default brief
   never carries the document body, never prior revision text, and is
-  always smaller than the same call with `history: true`.
+  never larger than the same call with `history: true`.
 - **A generic memory edit drops the writer block.** Editing a project head
   with `memory_edit` mints a revision that the previous session did not
   write, so the provenance block is removed rather than copied. That

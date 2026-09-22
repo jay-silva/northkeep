@@ -15,6 +15,9 @@ export interface CallLogEntry {
   /** One id per server process (ADR 0052), so a session that read a project
    * and never wrote back is derivable from these rows alone. */
   session_id?: string;
+  /** The tamed handshake name on its own (ADR 0052 fourth pass): `provider` is
+   * name@version, and a name that itself holds an @ split wrongly. */
+  host?: string;
   /** Scopes this connection was granted (undefined = full/owner access). */
   granted_scopes?: string[];
   /** Redaction tier applied to returned content (0 = none). */

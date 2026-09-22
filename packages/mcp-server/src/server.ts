@@ -278,6 +278,7 @@ async function run(
     tool,
     provider: ctx.provider,
     session_id: ctx.session_id,
+    host: ctx.host,
     granted_scopes: granted,
     redaction_tier: returnRedactionTier(),
     params,

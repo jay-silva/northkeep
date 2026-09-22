@@ -1,9 +1,10 @@
 # ADR 0052: Project provenance, session accounting, a lighter resume brief, and draft projects
 
 - **Date:** 2026-09-21
-- **Status:** Accepted pending Jay's acceptance run; three adversarial
-  passes NOT CLEARED, amendments applied after each, fourth pass
-  (scoped to the third pass's findings) pending. Jay
+- **Status:** Accepted pending Jay's acceptance run. Four adversarial
+  passes: three NOT CLEARED with amendments applied after each, the
+  fourth CLEARED WITH WOUNDS; Jay accepted two wounds and the third was
+  fixed (2026-09-21). Jay
   chose wave 1 ("M-C+E and M-F together") on 2026-09-21 after the
   migration-prerequisite scoping.
 - **Deciders:** Jay (product owner), Claude Code
@@ -152,8 +153,9 @@ carries the whole document in `content` and again in its parsed sections
 view serialized the document twice. `project_get` keeps both fields; only
 the resume brief drops them. The bound is structural, not a byte number:
 the default brief carries the document's sections once, never the body
-and never any prior revision text, and it is always smaller than the same
-call with `history: true`. Byte counts follow from the cap
+and never any prior revision text, and it is never larger than the same
+call with `history: true` (equal only when there is nothing to omit, as
+right after `project_create`). Byte counts follow from the cap
 (`PROJECT_DOC_MAX_CHARS`, 16,384 characters,
 packages/core/src/project-doc.ts:10) and from JSON escaping: a plain ASCII
 document at the cap measured about 20 KB, a quote-only document about
@@ -523,3 +525,29 @@ Tier-1 masking all held. Verdict: **NOT CLEARED**, on the byte claim.
    presented name, host reported and never verified. Closes 4.
 5. Acceptance step 4b prose and paste match the merged branch. Closes 5.
 6. Each item of 6 is recorded under Accepted scar tissue. Closes 6.
+
+## Adversarial review (2026-09-21, fourth pass, scoped to the third pass's amendments)
+
+Fresh-eyes execution track. Fifteen name shapes on the sanitizer, core and
+the live handshake agreed with zero mismatches; unpaired surrogates were
+removed or refused through the handshake, a forged log row and raw SQL;
+the acceptance gate threw on each of its five invariants when one was
+broken in a copy; the full document reproduced end to end. Verdict:
+**CLEARED WITH WOUNDS.**
+
+1. **FLESH WOUND.** "Always smaller than `history: true`" was false for a
+   project with no prior revisions and no archives, the state right after
+   `project_create`: brief and history were byte-identical (904 bytes).
+   Jay accepted (2026-09-21): recorded as scar tissue; the wording became
+   "never larger", which is what the code does.
+2. **FLESH WOUND.** The acceptance document's compaction table predates the
+   quote-heavy fixture and lacks its row. Jay accepted (2026-09-21): the
+   table is illustrative and the step's own output is the check.
+3. **FLESH WOUND.** `hostOf` split the call log's `provider` on the first
+   `@` before taming, so a handshake name `claude@code` was shown as
+   `claude` in `open_sessions`, letting a client shorten itself into a
+   known host's name. Fixed: every call log row now carries the tamed
+   handshake name as `host`, the derivation reads it, and only rows
+   written before this branch fall back to the split.
+4. **SCAR TISSUE.** The server test still asserts the retired byte numbers,
+   stricter than the published claim; harmless and left.
