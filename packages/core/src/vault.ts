@@ -30,10 +30,14 @@ import { getPlatform, type Platform } from './platform-context.js';
 import {
   PROJECT_HANDOFF_METADATA_KEY,
   PROJECT_HANDOFF_METADATA_VERSION,
+  PROJECT_PROVENANCE_METADATA_KEY,
   ProjectHandoffError,
   applyProjectUpdate,
   getProjectView,
+  projectProvenanceBlock,
   readProjectHandoffMetadata,
+  readProjectProvenance,
+  validateProjectWriter,
   type ProjectCheckpointRequest,
   type ProjectCheckpointResult,
   type ProjectHandoffMetadata,
@@ -697,10 +701,20 @@ export class Vault {
     return { ids: blanking.map((row) => row.id), bytes, candidates: candidates.length };
   }
 
-  /** Tombstones the named rows exactly as forget() does. Runs in the caller's transaction. */
+  /**
+   * Tombstones the named rows the way forget() does, with one exception: the
+   * writer block survives the text. Who wrote a revision is the record ADR 0052
+   * publishes, and compacting history must not silently delete it. Every other
+   * key, the handoff receipt included, still goes. Runs in the caller's
+   * transaction.
+   */
   private blankRevisions(ids: string[], forgottenAt: string): void {
-    const blank = this.db.prepare("UPDATE memories SET content = '', metadata = NULL, forgotten_at = ? WHERE id = ?");
-    for (const id of ids) blank.run(forgottenAt, id);
+    const read = this.db.prepare('SELECT metadata FROM memories WHERE id = ?');
+    const blank = this.db.prepare("UPDATE memories SET content = '', metadata = ?, forgotten_at = ? WHERE id = ?");
+    for (const id of ids) {
+      const row = read.get(id) as { metadata: string | null } | undefined;
+      blank.run(keptProvenanceMetadata(row?.metadata ?? null), forgottenAt, id);
+    }
   }
 
   /**
@@ -765,6 +779,7 @@ export class Vault {
     if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.operation_id)) throw new ProjectHandoffError('invalid_request', 'Operation id must be a lowercase RFC 4122 UUID.');
     if (request.mode !== 'checkpoint' && request.mode !== 'wrap') throw new ProjectHandoffError('invalid_request', 'Invalid project handoff mode.');
     if (typeof request.expected_revision !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.expected_revision) || typeof request.status !== 'string' || typeof request.completed !== 'string' || typeof request.next_actions !== 'string') throw new ProjectHandoffError('invalid_request','Checkpoint requires a valid revision, status, completed work, and next actions.');
+    if(request.writer!==undefined)validateProjectWriter(request.writer);
     if(request.completed.trim().length===0||/[\r]/.test(request.completed)||/^\n|\n$/.test(request.completed)||/^( {0,3})#{1,6}[ \t]+\S/m.test(request.completed))throw new ProjectHandoffError('invalid_request','Completed work is invalid.');
     const logical = {
       vault_id: request.vault_id, project: request.project, mode: request.mode,
@@ -775,7 +790,8 @@ export class Vault {
       ...(request.files !== undefined ? { files: request.files } : {}),
     };
     const fingerprint = blake2bHex(exactCanonicalJson(logical), this.platform.crypto);
-    const update:ProjectUpdateRequest={project:request.project,expected_revision:request.expected_revision,status:request.status,next_actions:request.next_actions,log_entry:`${request.mode==='checkpoint'?'Checkpoint':'Wrap up'}: ${request.completed}`,...(request.decision!==undefined?{decision:request.decision}:{}),...(request.open_questions!==undefined?{open_questions:request.open_questions}:{}),...(request.files!==undefined?{files:request.files}:{})};
+    // draft:false is derived from the mode, so replay rebuilds the same content.
+    const update:ProjectUpdateRequest={project:request.project,expected_revision:request.expected_revision,status:request.status,next_actions:request.next_actions,log_entry:`${request.mode==='checkpoint'?'Checkpoint':'Wrap up'}: ${request.completed}`,...(request.decision!==undefined?{decision:request.decision}:{}),...(request.open_questions!==undefined?{open_questions:request.open_questions}:{}),...(request.files!==undefined?{files:request.files}:{}),...(request.mode==='wrap'?{draft:false}:{}),...(request.writer!==undefined?{writer:request.writer}:{})};
     const matches: Array<{entry:MemoryEntry;meta:ProjectHandoffMetadata}> = []; const copied:Array<{entry:MemoryEntry;raw:Record<string,unknown>}>=[];
     for (const entry of this.list({ includeForgotten:true, includeSuperseded:true, allowedScopes })) {
       const raw=entry.metadata?.[PROJECT_HANDOFF_METADATA_KEY];
@@ -806,7 +822,8 @@ export class Vault {
     let scope:string;try{scope=projectScope(request.project);}catch{throw new ProjectHandoffError('invalid_request','Project slug is invalid.');}
     if(allowedScopes!==undefined&&!allowedScopes.includes(scope))throw new ProjectHandoffError('scope_denied','Project scope is outside this connection grant.');
     if(!Object.hasOwn(request,'expected_revision')||(request.expected_revision!==null&&(typeof request.expected_revision!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.expected_revision))))throw new ProjectHandoffError('invalid_request','expected_revision must be an exact revision UUID or null for creation.');
-    const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','files','title'] as const;
+    if(request.writer!==undefined)validateProjectWriter(request.writer);
+    const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','files','title','draft'] as const;
     if(!updateKeys.some((key)=>request[key]!==undefined))throw new ProjectHandoffError('invalid_request','Project update has no changes.');
     let receipt!:ProjectCheckpointResult['receipt'];
     let auto:AutoCompaction|null=null;
@@ -822,9 +839,12 @@ export class Vault {
       const insert=this.prepareEntryInsert(); const archiveIds:string[]=[]; let chain=this.getMeta('chain_head');
       if(merged.archives.length){const archive=this.makeProjectEntry('episodic',formatLogArchive(request.project,merged.archives,new Date(now)),scope,'northkeep:project-log-archive',null,chain,now);insert.run(this.entryParams(archive));chain=archive.entry_hash;archiveIds.push(archive.id);}
       const resultId=uuidv4(this.platform.crypto);
-      let meta:Record<string,unknown>|null=null;
-      if(handoff){meta=old?.metadata?JSON.parse(JSON.stringify(old.metadata)) as Record<string,unknown>:{};delete meta[PROJECT_HANDOFF_METADATA_KEY];meta[PROJECT_HANDOFF_METADATA_KEY]={version:PROJECT_HANDOFF_METADATA_VERSION,operation_id:handoff.operation_id,result_id:resultId,project:request.project,base_revision:request.expected_revision as string,mode:handoff.mode,request_fingerprint:handoff.fingerprint,archive_ids:archiveIds,saved_at:now};}
-      else if(old?.metadata){meta=JSON.parse(JSON.stringify(old.metadata)) as Record<string,unknown>;delete meta[PROJECT_HANDOFF_METADATA_KEY];if(Object.keys(meta).length===0)meta=null;}
+      // Both reserved blocks are rebuilt from this write, never inherited.
+      const built:Record<string,unknown>=old?.metadata?JSON.parse(JSON.stringify(old.metadata)) as Record<string,unknown>:{};
+      delete built[PROJECT_HANDOFF_METADATA_KEY];delete built[PROJECT_PROVENANCE_METADATA_KEY];
+      if(handoff)built[PROJECT_HANDOFF_METADATA_KEY]={version:PROJECT_HANDOFF_METADATA_VERSION,operation_id:handoff.operation_id,result_id:resultId,project:request.project,base_revision:request.expected_revision as string,mode:handoff.mode,request_fingerprint:handoff.fingerprint,archive_ids:archiveIds,saved_at:now};
+      if(request.writer!==undefined)built[PROJECT_PROVENANCE_METADATA_KEY]=projectProvenanceBlock(request.writer,now);
+      const meta:Record<string,unknown>|null=Object.keys(built).length===0?null:built;
       const head=this.makeProjectEntry('working',merged.content,scope,handoff?'northkeep:project-handoff':'northkeep:project-update',meta,chain,now,resultId);insert.run(this.entryParams(head));
       if(old){const changed=this.db.prepare('UPDATE memories SET superseded_at=?, superseded_by=? WHERE id=? AND forgotten_at IS NULL AND superseded_at IS NULL').run(now,head.id,old.id).changes;if(changed!==1)throw new ProjectHandoffError('stale_project','Project changed before the update could be applied.');}
       if(old)auto=this.autoCompactScope(scope);
@@ -1358,6 +1378,11 @@ export class Vault {
           ? null
           : (JSON.parse(JSON.stringify(old.metadata)) as Record<string, unknown>),
     };
+    // A generic edit is not the recorded writer, so the block never carries over.
+    if (next.metadata !== null && PROJECT_PROVENANCE_METADATA_KEY in next.metadata) {
+      delete next.metadata[PROJECT_PROVENANCE_METADATA_KEY];
+      if (Object.keys(next.metadata).length === 0) next.metadata = null;
+    }
     next.entry_hash = computeEntryHash(next, this.platform.crypto);
     this.autoCompaction = null;
     let auto: AutoCompaction | null = null;
@@ -1743,12 +1768,17 @@ export class Vault {
         return { ok: false, error: `Entry ${entry.id} breaks the chain: prev_hash mismatch.` };
       }
       // Forgotten entries keep their original hashes for linkage, but their
-      // content is blanked so the content check no longer applies.
+      // content is blanked so the content check no longer applies. What they may
+      // still carry is checked structurally instead: nothing, or the lone writer
+      // block compaction keeps (ADR 0051 addendum). The block's own fields cannot
+      // be re-hashed once the content is gone; this catches shape, not a swap.
       if (entry.forgotten_at === null) {
         const expected = computeEntryHash(entry, this.platform.crypto);
         if (entry.entry_hash !== expected) {
           return { ok: false, error: `Entry ${entry.id} hash does not match its content.` };
         }
+      } else if (entry.metadata !== null && !isProvenanceOnlyMetadata(entry.metadata)) {
+        return { ok: false, error: `Forgotten entry ${entry.id} carries metadata beyond its writer block.` };
       }
       prev = entry.entry_hash;
     }
@@ -1877,6 +1907,29 @@ function rowToEntry(row: EntryRow): MemoryEntry {
     forgotten_at: row.forgotten_at ?? null,
     metadata: row.metadata === null ? null : (JSON.parse(row.metadata) as Record<string, unknown>),
   };
+}
+
+/**
+ * The metadata a blanked revision keeps, serialized: a lone, well-formed writer
+ * block, or null. A malformed block is dropped rather than kept, so a blanked
+ * row can never carry something verifyChain would then reject.
+ */
+function keptProvenanceMetadata(raw: string | null): string | null {
+  if (raw === null) return null;
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); } catch { return null; }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+  const block = (parsed as Record<string, unknown>)[PROJECT_PROVENANCE_METADATA_KEY];
+  if (block === undefined) return null;
+  const only = { [PROJECT_PROVENANCE_METADATA_KEY]: block };
+  return isProvenanceOnlyMetadata(only) ? JSON.stringify(only) : null;
+}
+
+/** Exactly one key, the writer block, and a block a reader accepts. */
+function isProvenanceOnlyMetadata(metadata: Record<string, unknown>): boolean {
+  const keys = Object.keys(metadata);
+  if (keys.length !== 1 || keys[0] !== PROJECT_PROVENANCE_METADATA_KEY) return false;
+  return readProjectProvenance({ metadata } as MemoryEntry) !== null;
 }
 
 function isStringArray(value: unknown): value is string[] {

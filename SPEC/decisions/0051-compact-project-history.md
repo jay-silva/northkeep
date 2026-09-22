@@ -139,3 +139,32 @@ to "in sync" after the automatic push. `project_get northkeep` with
 - The vault file tracks live content plus a bounded history instead of
   growing without limit.
 - Handoff receipts keep their referenced revisions, so replay stays exact.
+
+## Addendum (2026-09-21, ADR 0052): compacted revisions keep their writer block
+
+Decision 1 step 3 said a blanked revision is tombstoned exactly as `forget`
+does, `metadata = NULL` included. ADR 0052 then put the writer of a project
+write in that same metadata, under `northkeep_provenance_v1`, so compaction
+was deleting the provenance of every revision beyond the newest five: the one
+record ADR 0052 publishes was the first thing history lost.
+
+From now on a blanked revision keeps only that block. Content is still
+emptied, the forget tombstone is still stamped, and every other key, the
+ADR 0048 handoff receipt included, is still removed. A revision written with
+no writer still ends with `metadata` null. This holds on both paths, the
+manual `northkeep projects compact` and the automatic per-supersession
+compaction of Decision 4, because they share one blanking step. The reported
+`bytes_freed` still counts content bytes only.
+
+`verifyChain` never re-hashed a forgotten row, so a surviving block does not
+break the chain. It now also checks the shape of what a forgotten row carries:
+`metadata` must be null, or an object whose single key is
+`northkeep_provenance_v1` holding a block a reader accepts. Any other
+surviving key, and any malformed block, fails verification.
+
+The limit of that check, stated plainly: once a revision is blanked its
+content is gone, so its entry hash cannot be recomputed, and swapping one
+well-formed host or session id for another well-formed one on a blanked row is
+not detectable. Tamper evidence through the hash chain covers the writer block
+for as long as the revision keeps its text. After compaction the surviving
+block is structurally checked, not hash-verified.

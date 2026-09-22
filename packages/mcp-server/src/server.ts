@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -8,6 +9,7 @@ import {
   VaultAuthError,
   VaultSchemaError,
   defaultVaultPath,
+  getProjectRevision,
   getProjectView,
   isValidProjectSlug,
   listProjectViews,
@@ -19,13 +21,21 @@ import {
   type ProjectCheckpointRequest,
   type ProjectFileReference,
   type ProjectUpdateRequest,
+  type ProjectWriter,
 } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import { createCachedEmbedder, createOllamaEmbedder } from '@northkeep/librarian';
 import { applyTier1 } from '@northkeep/redact';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
-import { appendCallLog, type CallLogEntry } from './log.js';
+import { appendCallLog, readCallLog, type CallLogEntry } from './log.js';
+import { tameOneLine } from './text-safe.js';
+import type { OpenSession } from './open-sessions.js';
+import {
+  OPEN_SESSIONS_NOTE,
+  OPEN_SESSIONS_UNREADABLE_NOTE,
+  openSessions,
+} from './open-sessions.js';
 
 /**
  * The MCP surface. Stdio transport; stdout is protocol, so all diagnostics go
@@ -61,6 +71,19 @@ function returnRedactionTier(): 0 | 1 {
 /** Mutable connection context, filled from the MCP initialize handshake. */
 interface ConnContext {
   provider: string;
+  /** Handshake name and version apart, because provenance stores them apart. */
+  host: string;
+  host_version: string | null;
+  /** Minted per server process; identifies this session in the call log. */
+  session_id: string;
+}
+
+/**
+ * The shared one-line class, and only that: host and host_version land in JSON
+ * provenance, never a CSV cell, so they do not need provider's , and " strip.
+ */
+function tameHandshakeField(value: string, max: number): string {
+  return tameOneLine(value, max);
 }
 
 const typeEnum = z.enum(MEMORY_TYPES);
@@ -98,6 +121,10 @@ const projectIdentifierKeys = new Set([
   'id', 'revision', 'vault_id', 'project', 'scope', 'updated_at', 'checked_at',
   'operation_id', 'base_revision', 'result_revision', 'request_fingerprint',
   'saved_at', 'type', 'access', 'mode',
+  'session_id', 'opened_at', 'last_read_at',
+  // Provenance and archive-summary fields are identifiers and timestamps, not
+  // vault content: masking them would corrupt the record of who wrote what.
+  'host', 'host_version', 'recorded_at', 'oldest', 'newest',
 ]);
 
 function maskProjectPayload(value: unknown, key?: string): unknown {
@@ -118,8 +145,12 @@ function maskProjectPayload(value: unknown, key?: string): unknown {
 }
 
 function receivingProjectView(view: ReturnType<typeof getProjectView>) {
+  // The document is already here as parsed sections and files, so carrying
+  // content and files_text as well serialized it twice and pushed a busy
+  // project past the 24 KB brief budget. project_get returns the full text.
+  const { content: _content, files_text: _files_text, ...rest } = view;
   return {
-    ...view,
+    ...rest,
     files: view.files?.map((file) => file.access === 'reported_available'
       ? { type: file.type, label: file.label, locator: file.locator, access: 'unverified' as const }
       : file),
@@ -246,6 +277,8 @@ async function run(
     ts: new Date().toISOString(),
     tool,
     provider: ctx.provider,
+    session_id: ctx.session_id,
+    host: ctx.host,
     granted_scopes: granted,
     redaction_tier: returnRedactionTier(),
     params,
@@ -326,9 +359,19 @@ function assertProjectGranted(scope: string, granted: string[] | undefined): voi
   }
 }
 
+/** Host-reported, never guessed: the handshake is all the server knows. */
+function writerFor(ctx: ConnContext): ProjectWriter {
+  return { host: ctx.host ?? 'unknown', host_version: ctx.host_version ?? null, session_id: ctx.session_id };
+}
+
 export function createServer(vaultPath: string = defaultVaultPath()): McpServer {
   const server = new McpServer({ name: 'northkeep', version: '0.5.0' });
-  const ctx: ConnContext = { provider: 'unknown' };
+  const ctx: ConnContext = {
+    provider: 'unknown',
+    host: 'unknown',
+    host_version: null,
+    session_id: randomUUID(),
+  };
   // Capture the calling client's name once it completes the MCP handshake.
   server.server.oninitialized = () => {
     const info = server.server.getClientVersion();
@@ -336,7 +379,13 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       // Bound and tame the client-supplied name before it reaches the audit
       // log (defense-in-depth alongside the CSV formula guard).
       const raw = `${info.name}${info.version ? `@${info.version}` : ''}`;
-      ctx.provider = raw.replace(/[\x00-\x1f,"]/g, ' ').slice(0, 80);
+      // Composed, not replaced: the CSV formula guard on , and " stays, and
+      // the shared class then takes the format characters it never covered.
+      ctx.provider = tameOneLine(raw.replace(/[\x00-\x1f,"]/g, ' '), 80);
+      // Built from the raw parts, not by splitting provider: provider's own
+      // bytes must not shift for the consumers that already read it.
+      ctx.host = tameHandshakeField(info.name, 80);
+      ctx.host_version = info.version ? tameHandshakeField(info.version, 40) : null;
     }
   };
 
@@ -451,7 +500,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     {
       title: 'List memories',
       description:
-        "Browse the user's memory vault without a search query — newest last. " +
+        "Browse the user's memory vault without a search query; newest last. " +
         'Useful for "what do you know about me?" style questions.',
       inputSchema: {
         type: typeEnum.optional().describe('Filter by memory type'),
@@ -575,16 +624,36 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'Read the current project document when the user names a project. Call this at session start so ' +
         'you pick up Current Status, Next Actions, and the Log. Conflicting current documents are refused. ' +
         'The live document keeps only its newest Log entries; ' +
-        'pass history: true to also get the archive memories holding older entries, newest first.',
+        'pass history: true to also get the archive memories holding older entries, newest first. ' +
+        'Pass a revision id from the resume brief to read that one earlier revision in full instead.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
         history: z.boolean().optional().describe('Also return the Log archives for this project (older entries), newest first'),
+        revision: idSchema.optional().describe('Read this one earlier revision of the project in full, instead of the current document. Ids come from the revisions list in project_get or project_resume.'),
       },
     },
-    async ({ project, history }) =>
-      run(ctx, 'project_get', { scope: `project:${project}` }, vaultPath, (vault, granted) => {
+    async ({ project, history, revision }) =>
+      run(ctx, 'project_get', { scope: `project:${project}`, id: revision }, vaultPath, (vault, granted) => {
         if (!isValidProjectSlug(project)) {
           throw new Error(`Invalid project slug "${project}".`);
+        }
+        if (revision !== undefined) {
+          // The grant is asserted here as well as in core, so a revision read
+          // cannot reach the vault on a scope this connection was never given.
+          const scope = projectScope(project);
+          assertProjectGranted(scope, granted);
+          const prior = getProjectRevision(vault, project, revision, granted);
+          return {
+            // history is ignored for a single revision: the archives belong to
+            // the project, not to the revision being read.
+            payload: {
+              project, scope, id: prior.id, revision: prior.id, type: 'working',
+              created_at: prior.updated_at, updated_at: prior.updated_at,
+              content: prior.content, ...(prior.mode ? { mode: prior.mode } : {}),
+            },
+            result_id: prior.id,
+            disclosed_scopes: [scope],
+          };
         }
         const view = getProjectView(vault, project, granted, { history });
         return {
@@ -609,21 +678,51 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     'project_resume',
     {
       title: 'Resume a project',
-      description: 'Read a revision-bound project handoff view, including recent working history and Log archives.',
+      description:
+        'Read a revision-bound project handoff view. Call this at session start. It returns the current ' +
+        'document as parsed sections, the files reported by earlier work, the host and session that ' +
+        'wrote it last, whether it is still a draft, a content-free list of the newest prior revisions, ' +
+        'a count of the Log archives, and any sessions that read this project on this machine and did ' +
+        'not write back. The document is not repeated as one block of text: project_get returns the ' +
+        'full document text. The text of prior revisions and archives is not included either: pass ' +
+        'history: true for all of it, or project_get with one revision id for one of them.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
-        history: z.boolean().optional().default(true),
+        history: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe('Also return prior working revisions and the Log archives for this project'),
       },
     },
-    async ({ project, history }) =>
-      run(ctx, 'project_resume', { scope: `project:${project}` }, vaultPath, (vault, granted) => {
+    async ({ project, history }) => {
+      const scope = `project:${project}`;
+      return run(ctx, 'project_resume', { scope }, vaultPath, (vault, granted) => {
         const view = getProjectView(vault, project, granted, { history });
+        // Derived inside the call, so a log this machine cannot read costs the
+        // session list and not the resume. This session's own row is still
+        // absent: run appends it only after this returns.
+        let open: OpenSession[] | null;
+        try {
+          open = openSessions(readCallLog(), scope, ctx.session_id, new Date());
+        } catch {
+          open = null;
+        }
         return {
-          payload: receivingProjectView(view),
+          payload: {
+            ...receivingProjectView(view),
+            ...(open === null
+              ? { open_sessions_note: OPEN_SESSIONS_UNREADABLE_NOTE }
+              : {
+                ...{ open_sessions: open },
+                ...(open.length > 0 ? { open_sessions_note: OPEN_SESSIONS_NOTE } : {}),
+              }),
+          },
           result_id: view.revision,
           disclosed_scopes: [view.scope],
         };
-      }),
+      });
+    },
   );
 
   server.registerTool(
@@ -656,6 +755,10 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           .optional()
           .describe('New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD.'),
         open_questions: z.string().max(16384).optional(),
+        draft: z
+          .boolean()
+          .optional()
+          .describe('Only false is meaningful on a project that already exists: it clears the draft line. Passing true is refused; a draft can only be marked when the project is created.'),
         files: z.array(z.object({
           type: z.string().min(1).max(32),
           label: z.string().min(1).max(512),
@@ -666,7 +769,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         })).max(40).optional(),
       },
     },
-    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, files }) =>
+    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, draft, files }) =>
       run(
         ctx,
         'project_update',
@@ -694,6 +797,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             log_entry === undefined &&
             decision === undefined &&
             open_questions === undefined &&
+            draft === undefined &&
             files === undefined
           ) {
             throw new Error(
@@ -704,7 +808,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           assertProjectGranted(scope, granted);
           const request: ProjectUpdateRequest = {
             project, expected_revision, title, what_why, status, next_actions, log_entry, decision,
-            open_questions, files: files as ProjectFileReference[] | undefined,
+            open_questions, files: files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
+            ...(draft !== undefined ? { draft } : {}),
           };
           const current = vault.updateProject(request, granted);
           vault.save();
@@ -735,9 +840,13 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         what_why: z.string().min(1).max(16384).describe('What & Why section: what this project is and why it exists'),
         status: z.string().min(1).max(16384).describe('Current Status section: where the project stands right now'),
         next_actions: z.string().max(16384).optional().describe('Next Actions section'),
+        draft: z
+          .boolean()
+          .optional()
+          .describe('Mark the document a draft: it opens with a line saying it was bootstrapped by this host on this date and is unverified. Use it when you built the document from a codebase rather than from the user. project_wrap clears the line.'),
       },
     },
-    async ({ project, title, what_why, status, next_actions }) =>
+    async ({ project, title, what_why, status, next_actions, draft }) =>
       run(
         ctx,
         'project_create',
@@ -756,6 +865,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           assertProjectGranted(scope, granted);
           const request: ProjectUpdateRequest = {
             project, expected_revision: null, title, what_why, status, next_actions,
+            writer: writerFor(ctx), ...(draft !== undefined ? { draft } : {}),
           };
           let current;
           try {
@@ -811,7 +921,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       const scope = projectScope(args.project);
       assertProjectGranted(scope, granted);
       const request: ProjectCheckpointRequest = {
-        ...args, mode, files: args.files as ProjectFileReference[] | undefined,
+        ...args, mode, files: args.files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
       };
       const result = vault.checkpointProject(request, granted);
       if (!result.replayed) vault.save();

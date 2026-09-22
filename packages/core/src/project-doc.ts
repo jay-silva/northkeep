@@ -273,6 +273,51 @@ export function formatLogArchive(project: string, archived: string[], now: Date 
   );
 }
 
+/**
+ * A draft project opens with one preamble line (ADR 0052 Decision 4), before
+ * any title heading, so every reader sees the document is unverified.
+ */
+export const PROJECT_DRAFT_LINE_PREFIX = 'Draft, unverified:';
+
+export function formatProjectDraftLine(host: string, now: Date = new Date()): string {
+  return `${PROJECT_DRAFT_LINE_PREFIX} bootstrapped by ${host} on ${isoDate(now)}.`;
+}
+
+/**
+ * Zero-width and byte-order marks that trim() does not always remove, so a
+ * pasted or hand-edited draft line still reads as one instead of hiding.
+ */
+const LEADING_INVISIBLES = /^[\s﻿​‌‍⁠]+/;
+
+/** Index of the preamble line carrying the draft marker, or -1 when there is none. */
+function draftLineIndex(preamble: string): number {
+  const lines = preamble.split('\n');
+  for (let i = 0; i < lines.length; i += 1) {
+    const text = lines[i]!.replace(LEADING_INVISIBLES, '');
+    if (text.length === 0) continue;
+    return text.startsWith(PROJECT_DRAFT_LINE_PREFIX) ? i : -1;
+  }
+  return -1;
+}
+
+export function isProjectDraft(doc: ProjectDoc): boolean {
+  return draftLineIndex(doc.preamble) !== -1;
+}
+
+/** Adds or removes the draft line in place, keeping any other preamble text. */
+export function setProjectDraft(doc: ProjectDoc, draft: boolean, line: string): void {
+  const already = isProjectDraft(doc);
+  if (draft === already) return;
+  if (draft) {
+    doc.preamble = [line, doc.preamble].filter((part) => part.length > 0).join('\n\n');
+    return;
+  }
+  // Same finder as the detector, so a line that reads as a draft is removable.
+  const lines = doc.preamble.split('\n');
+  lines.splice(draftLineIndex(doc.preamble), 1);
+  doc.preamble = trimSectionBody(lines.join('\n'));
+}
+
 export function isProjectLogArchive(content: string): boolean {
   return content.startsWith(`${PROJECT_LOG_ARCHIVE_HEADING}:`) || content.startsWith(`${PROJECT_LOG_ARCHIVE_HEADING}\n`);
 }

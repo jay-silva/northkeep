@@ -25,6 +25,8 @@ const COLUMNS = [
   'privacy',
   'created_ids',
   'route_reason',
+  // Appended, never inserted: an auditor's saved column positions must hold.
+  'session_id',
 ] as const;
 
 export function auditAsJson(lastN?: number): CallLogEntry[] {
@@ -53,6 +55,7 @@ export function auditAsCsv(lastN?: number): string {
         e.privacy ?? '',
         (e.created_ids ?? []).join(' '),
         e.route_reason ?? '',
+        e.session_id ?? '',
       ]
         .map(csvCell)
         .join(','),

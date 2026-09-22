@@ -11,6 +11,49 @@ every milestone; if a limit is removed, say when and how.*
 - Lock clears drafts and pending request text. Browser retry convenience requires the retained draft; saved operation receipts remain in the vault. Forgetting a receipt removes its retry guarantee. History shows at most 20 saved versions and 20 log archives.
 - The real Codex to Claude Desktop test used local tools and a disposable MCP client. It did not upgrade installed assistant configuration or certify hosted sync or packaged mobile.
 
+## Project provenance and open sessions (ADR 0052), current
+
+- **The writer is host reported, not verified.** Every project write records
+  the name a client presented in its MCP handshake, so any process can
+  present any name. The record is protected by the same chain that protects
+  every memory: an edit that does not re-hash the tail is detected. That
+  chain is unkeyed by design, so the record is tamper evident, not tamper
+  proof. It is tamper evident on the live document and on every older
+  revision that still holds its text. Compaction keeps the writer block
+  when it blanks a revision's text, but a blanked row is skipped by the
+  chain check, so on a compacted revision the writer is attribution that
+  survived and not evidence: it can be changed there without detection.
+- **No model is recorded in the provenance block.** Its `model` is always
+  null, because no MCP host exposes a model identifier in its handshake and
+  NorthKeep will not guess one. Converse's own call log rows do record the
+  model you chose for that turn. That is a different record, and this limit
+  is about the provenance block only.
+- **Open sessions are derived from this machine's call log.** A session that
+  read a project and never wrote back is visible only if it read through a
+  local MCP server on this Mac. The desktop app and the command line read
+  projects without writing a call log row, so their reads never open a
+  session. Reads through the hosted claude.ai connector are never in that
+  log, and a session on another Mac is not seen either.
+- **Open sessions come from successful reads only.** A denied or failed read
+  never opens a session, and a log row without a valid session id, host or
+  timestamp is skipped. A single unreadable line degrades the list: resume
+  omits it and says so in a note rather than guessing.
+- **A call log NorthKeep cannot write to stops project work.** Every call is
+  logged before and after it runs, so if the log file is unreadable or is
+  replaced by a directory, project tools fail instead of running unlogged.
+  That is deliberate: nothing is disclosed without a record of it. Move or
+  repair the file and the tools work again.
+- **The resume brief has no byte guarantee, only a shape guarantee.** The
+  project cap is 16,384 characters and a brief is bytes of JSON, so a
+  document of quote characters roughly doubles under escaping and a CJK
+  document roughly triples. What holds is the shape: the default brief
+  never carries the document body, never prior revision text, and is
+  never larger than the same call with `history: true`.
+- **A generic memory edit drops the writer block.** Editing a project head
+  with `memory_edit` mints a revision that the previous session did not
+  write, so the provenance block is removed rather than copied. That
+  revision has no writer until the next write through the project tools.
+
 ## Guided consolidation, accepted locally
 
 - Consolidation covers 2-8 same-type memories in one private, non-project collection. It does not organize shared collections or coordinate project work.

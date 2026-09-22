@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   CONTRACT_GRACEFUL_DEGRADATION,
   CONTRACT_TEXT,
+  OWNERSHIP_MARKER,
   claudeRulesPath,
   codexAgentsPath,
   contractStatus,
@@ -13,7 +14,10 @@ import {
   renderContract,
   uninstallContract,
 } from '../src/contract.js';
-import { PROJECT_STANDING_INSTRUCTION } from '../src/project-recipe.js';
+import {
+  PROJECT_BOOTSTRAP_INSTRUCTION,
+  PROJECT_STANDING_INSTRUCTION,
+} from '../src/project-recipe.js';
 
 let dir: string;
 let prevClaudeRules: string | undefined;
@@ -53,15 +57,21 @@ function projectDir(): string {
 }
 
 describe('CONTRACT_TEXT', () => {
-  it('has no em dash, is under 2048 bytes, contains P6 and standing-instruction tools', () => {
+  it('has no em dash, is under 4096 bytes, contains P6 and standing-instruction tools', () => {
     expect(CONTRACT_TEXT).not.toMatch(/[—–]/);
-    expect(Buffer.byteLength(CONTRACT_TEXT, 'utf8')).toBeLessThan(2048);
+    // ADR 0042 pinned 2048 for one paragraph; ADR 0052 Decision 5 adds the
+    // bootstrap paragraph, so the bound is doubled rather than removed.
+    expect(Buffer.byteLength(CONTRACT_TEXT, 'utf8')).toBeLessThan(4096);
     expect(CONTRACT_TEXT).toContain(CONTRACT_GRACEFUL_DEGRADATION);
-    expect(CONTRACT_TEXT).toContain('project_get');
+    expect(CONTRACT_TEXT).toContain('project_resume');
+    expect(CONTRACT_TEXT).toContain('project_wrap');
+    expect(CONTRACT_TEXT).toContain('project_checkpoint');
     expect(CONTRACT_TEXT).toContain('project_update');
     expect(CONTRACT_TEXT).toContain('project_list');
     expect(CONTRACT_TEXT).toContain('project_create');
     expect(CONTRACT_TEXT).toContain(PROJECT_STANDING_INSTRUCTION);
+    // ADR 0052 Decision 5: the installed block carries both paragraphs.
+    expect(CONTRACT_TEXT).toContain(PROJECT_BOOTSTRAP_INSTRUCTION);
     // ADR 0050 Decision 7: one sentence, on every surface.
     expect(CONTRACT_TEXT).toContain(
       'Create a project with project_create only when the user asks for one; never create one to hold notes that belong in an existing project or in a memory.',
@@ -330,5 +340,40 @@ describe('Cursor contract', () => {
     const result = uninstallContract('cursor-project', { projectDir: proj });
     expect(result.action).toBe('moved-aside');
     expect(fs.existsSync(`${file}.northkeep-bak`)).toBe(true);
+  });
+});
+
+describe('contract staleness after the ADR 0052 rewrite', () => {
+  it('reads stale for a file holding the pre-0052 block and installed after a reinstall', () => {
+    const file = claudeFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // The block as ADR 0042 shipped it: our marker, one paragraph, no
+    // bootstrap recipe. Staleness is a byte comparison against renderContract.
+    const oldBlock =
+      `${OWNERSHIP_MARKER}\n` +
+      'When I name a project, read it from NorthKeep with project_get at the start of the session. ' +
+      'When a working session on that project ends, call project_update with the new Current Status, ' +
+      'Next Actions, and a log entry describing what was done. ' +
+      CONTRACT_GRACEFUL_DEGRADATION +
+      '\n';
+    fs.writeFileSync(file, oldBlock);
+    expect(contractStatus('claude', { path: file }).status).toBe('stale');
+
+    installContract('claude', { path: file });
+    expect(contractStatus('claude', { path: file }).status).toBe('installed');
+    expect(fs.readFileSync(file, 'utf8')).toContain(PROJECT_BOOTSTRAP_INSTRUCTION);
+  });
+
+  it('reads stale for a Codex block holding the old contract interior', () => {
+    const file = codexFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(
+      file,
+      `# Notes\n\n<!-- northkeep-contract -->\nOld contract text.\n<!-- /northkeep-contract -->\n`,
+    );
+    expect(contractStatus('codex', { path: file }).status).toBe('stale');
+    installContract('codex', { path: file });
+    expect(contractStatus('codex', { path: file }).status).toBe('installed');
+    expect(fs.readFileSync(file, 'utf8')).toContain('# Notes');
   });
 });

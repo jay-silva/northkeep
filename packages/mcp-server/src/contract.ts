@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { atomicWrite, backupOnce } from './fs-safe.js';
-import { PROJECT_STANDING_INSTRUCTION } from './project-recipe.js';
+import { PROJECT_BOOTSTRAP_INSTRUCTION, PROJECT_STANDING_INSTRUCTION } from './project-recipe.js';
 
 /**
  * M16 contract installer (ADR 0042). Writes the standing project instruction
@@ -59,8 +59,9 @@ export const CONTRACT_GRACEFUL_DEGRADATION =
 
 /**
  * Canonical contract. Composed from PROJECT_STANDING_INSTRUCTION plus the
- * anti-spam, no-false-pass, no-secrets, when-to-create, and P6 lines.
- * No em dashes. Under 2048 bytes.
+ * anti-spam, no-false-pass, no-secrets, when-to-create, and P6 lines, then the
+ * bootstrap recipe as a second paragraph (ADR 0052 Decision 5).
+ * No em dashes.
  */
 export const CONTRACT_TEXT =
   PROJECT_STANDING_INSTRUCTION +
@@ -69,7 +70,9 @@ export const CONTRACT_TEXT =
   'Do not claim a project was updated unless the project_update call succeeded. ' +
   'Never write secrets, credentials, PHI, or personal identifying information into a project document. ' +
   'Create a project with project_create only when the user asks for one; never create one to hold notes that belong in an existing project or in a memory. ' +
-  CONTRACT_GRACEFUL_DEGRADATION;
+  CONTRACT_GRACEFUL_DEGRADATION +
+  '\n\n' +
+  PROJECT_BOOTSTRAP_INSTRUCTION;
 
 export const CLAUDE_CONTRACT_FILENAME = 'northkeep-projects.md';
 export const CURSOR_CONTRACT_FILENAME = 'northkeep.mdc';
