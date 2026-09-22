@@ -8,7 +8,7 @@
  * stored. Log entries keep their own dates: they are moved into ADR 0045
  * archives, oldest first, not replayed through project_update. The newest ten
  * stay live. If the document is still over the cap, extra sections move, last
- * first, into one overflow memory, then older live entries join the archives,
+ * first, into numbered overflow memories, then older live entries join the archives,
  * then the largest remaining bodies move whole, leaving a pointer. Nothing is
  * ever cut.
  */
@@ -27,8 +27,8 @@ import {
 import { MIRROR_ARCHIVE_SECTION_PREFIX, parseMirrorHeader, splitLogArchive } from './project-export.js';
 
 export const PROJECT_IMPORT_OVERFLOW_HEADING = '## Import overflow';
-/** Left in place of a section body that import moved to the overflow memory. */
-export const PROJECT_IMPORT_OVERFLOW_POINTER = 'Moved whole to the Import overflow memory in this project scope: too long for the live document.';
+/** Left in place of a section body that import moved to the overflow memories. */
+export const PROJECT_IMPORT_OVERFLOW_POINTER = 'Moved whole to the Import overflow memories in this project scope: too long for the live document.';
 
 /** Sections getProjectView reads by name; a duplicate of any of them makes the project unreadable. */
 const OWNED_HEADINGS = [...PROJECT_SECTION_HEADINGS, 'Open Questions', 'Files'] as const;
@@ -46,8 +46,10 @@ export interface ImportFilePlan {
   document: string;
   /** Archive memory contents, oldest first. */
   archives: string[];
-  /** One `## Import overflow` memory, or null. */
+  /** The whole overflow text for the dry run, or null. Not written as one row. */
   overflow: string | null;
+  /** What importProject writes: the overflow split into rows of at most 60,000 bytes, in order. */
+  overflow_parts: string[];
   /** Section titles moved into the overflow memory, in source order. */
   overflow_sections: string[];
   /** `kind log` files whose archives were reattached here. */
@@ -94,6 +96,65 @@ function chunkArchives(project: string, entries: string[], sourceFile: string): 
   }
   if (current.length > 0) out.push(formatImportedLogArchive(project, current, sourceFile));
   return out;
+}
+
+/** Under the connector's 65,536-byte row cap with room to spare. */
+export const PROJECT_IMPORT_OVERFLOW_PART_MAX_BYTES = 60000;
+/** Bytes kept free in each part for its heading and note, so the text budget never depends on the part count. */
+const OVERFLOW_HEADER_RESERVE = 400;
+const SPLIT_LINE_NOTE = 'A source line longer than this part could hold is split here at a character boundary; join the parts in order to read it.';
+
+/**
+ * Split on line boundaries so no line is broken, unless one line alone is
+ * over the budget; then it is cut at code points and the part says so.
+ * Joining the chunks gives back the input exactly.
+ */
+export function splitImportOverflow(project: string, overflow: string): string[] {
+  const encoder = new TextEncoder();
+  const budget = PROJECT_IMPORT_OVERFLOW_PART_MAX_BYTES - OVERFLOW_HEADER_RESERVE;
+  const chunks: Array<{ text: string; split: boolean }> = [];
+  let current = '';
+  let size = 0;
+  let split = false;
+  const flush = (): void => {
+    if (current.length > 0) chunks.push({ text: current, split });
+    current = '';
+    size = 0;
+    split = false;
+  };
+  for (const line of overflow.match(/[^\n]*\n|[^\n]+$/g) ?? []) {
+    const bytes = encoder.encode(line).length;
+    if (bytes <= budget) {
+      if (size + bytes > budget) flush();
+      current += line;
+      size += bytes;
+      continue;
+    }
+    flush();
+    for (const point of Array.from(line)) {
+      const b = encoder.encode(point).length;
+      if (size + b > budget) {
+        split = true;
+        flush();
+      }
+      current += point;
+      size += b;
+      split = true;
+    }
+    flush();
+  }
+  flush();
+  return chunks.map((chunk, i) => {
+    const heading = `${PROJECT_IMPORT_OVERFLOW_HEADING}: ${project} (part ${i + 1} of ${chunks.length})`;
+    const part = `${heading}\n${chunk.split ? `${SPLIT_LINE_NOTE}\n` : ''}\n${chunk.text}`;
+    if (encoder.encode(part).length > PROJECT_IMPORT_OVERFLOW_PART_MAX_BYTES) throw new Error('Import overflow part exceeds its byte cap.');
+    return part;
+  });
+}
+
+/** The inverse of splitImportOverflow, for readers and tests. */
+export function joinImportOverflowParts(parts: string[]): string {
+  return parts.map((part) => part.slice(part.indexOf('\n\n') + 2)).join('');
 }
 
 function overflowText(project: string, sections: ProjectDocSection[], sourceFile: string): string {
@@ -251,6 +312,7 @@ function planDocument(name: string, slug: string, body: string, logParts: Array<
   const inSourceOrder = moved.sort((a, b) => a.ord - b.ord).map((m) => m.section);
   const archives = [...reattached, ...chunkArchives(slug, rolled, name)];
   const overflow = inSourceOrder.length > 0 ? overflowText(slug, inSourceOrder, name) : null;
+  const overflow_parts = overflow === null ? [] : splitImportOverflow(slug, overflow);
   const encoder = new TextEncoder();
   return {
     name,
@@ -259,10 +321,11 @@ function planDocument(name: string, slug: string, body: string, logParts: Array<
     document,
     archives,
     overflow,
+    overflow_parts,
     overflow_sections: inSourceOrder.map((section) => section.title),
     log_files: logParts.map((part) => part.name),
     archived_entries: rolled.length,
-    largest_row_bytes: Math.max(...[document, ...archives, ...(overflow === null ? [] : [overflow])].map((row) => encoder.encode(row).length)),
+    largest_row_bytes: Math.max(...[document, ...archives, ...overflow_parts].map((row) => encoder.encode(row).length)),
   };
 }
 
@@ -278,8 +341,10 @@ export function importPlanProblem(plan: ImportFilePlan): string | null {
   if (!Array.isArray(plan.archives) || plan.archives.some((a) => typeof a !== 'string' || !a.startsWith(`${PROJECT_LOG_ARCHIVE_HEADING}: ${plan.slug}\n`))) {
     return 'Import plan archives are malformed.';
   }
-  if (plan.overflow !== null && (typeof plan.overflow !== 'string' || !plan.overflow.startsWith(`${PROJECT_IMPORT_OVERFLOW_HEADING}: ${plan.slug}\n`))) {
-    return 'Import plan overflow is malformed.';
+  const parts = plan.overflow_parts;
+  const encoder = new TextEncoder();
+  if (!Array.isArray(parts) || parts.some((part, i) => typeof part !== 'string' || !part.startsWith(`${PROJECT_IMPORT_OVERFLOW_HEADING}: ${plan.slug} (part ${i + 1} of ${parts.length})\n`) || encoder.encode(part).length > PROJECT_IMPORT_OVERFLOW_PART_MAX_BYTES)) {
+    return 'Import plan overflow parts are malformed or over the row cap.';
   }
   return null;
 }

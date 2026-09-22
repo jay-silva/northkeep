@@ -13,7 +13,7 @@ import { KDF_INTERACTIVE, generateDeviceSecret } from '../src/crypto.js';
 import { PROJECT_DOC_MAX_CHARS, PROJECT_LOG_ARCHIVE_HEADING, splitLogEntries } from '../src/project-doc.js';
 import { getProjectView, type ProjectWriter } from '../src/project-handoff.js';
 import { formatMirrorHeader, renderMirror, splitLogArchive } from '../src/project-export.js';
-import { PROJECT_IMPORT_OVERFLOW_HEADING, PROJECT_IMPORT_OVERFLOW_POINTER, formatImportedLogArchive, planImport } from '../src/project-import.js';
+import { PROJECT_IMPORT_OVERFLOW_HEADING, PROJECT_IMPORT_OVERFLOW_PART_MAX_BYTES, PROJECT_IMPORT_OVERFLOW_POINTER, formatImportedLogArchive, joinImportOverflowParts, planImport, splitImportOverflow } from '../src/project-import.js';
 import { Vault } from '../src/vault.js';
 
 const PASS='synthetic project import passphrase';
@@ -57,7 +57,7 @@ describe('planImport (dry run)',()=>{
     expect(p.overflow_sections).toEqual(['Blueprint','Links & Locations']);
     expect(p.overflow!.startsWith(`${PROJECT_IMPORT_OVERFLOW_HEADING}: sample\n`)).toBe(true);
     expect(p.archived_entries).toBe(190);
-    expect(p.largest_row_bytes).toBe(Math.max(...[p.document,...p.archives,p.overflow!].map((r)=>Buffer.byteLength(r))));
+    expect(p.largest_row_bytes).toBe(Math.max(...[p.document,...p.archives,...p.overflow_parts].map((r)=>Buffer.byteLength(r))));
     expect(p.archives.length).toBeGreaterThan(1);
     for(const a of p.archives){expect(a.startsWith(`${PROJECT_LOG_ARCHIVE_HEADING}: sample\n`)).toBe(true);expect(a.length).toBeLessThanOrEqual(PROJECT_DOC_MAX_CHARS);}
     const archived=p.archives.flatMap((a)=>splitLogArchive(a).entries);
@@ -129,6 +129,38 @@ describe('Vault.importProject (the write)',()=>{
     expect(v.verifyChain().ok).toBe(true);
     v.updateProject({project:'sample',expected_revision:view.revision,status:'Imported and edited.'});
     v.close();
+  });
+
+  it('splits a bobby-hood-sized overflow into numbered rows under the cap, losing nothing',()=>{
+    const status=Array.from({length:2600},(_,i)=>`Status line ${i} ${'observed detail '.repeat(4)}`).join('\n');
+    const log=Array.from({length:400},(_,k)=>`- 2026-03-${String(1+(k%28)).padStart(2,'0')} - Entry ${k} ${'work done '.repeat(40)}`).join('\n');
+    const links=Array.from({length:600},(_,i)=>`- Link ${i}: somewhere/${'x'.repeat(40)}`).join('\n');
+    const source=`# Bobby\n\n## What & Why\n\nWhy.\n\n## Current Status\n\n${status}\n\n## Links & Locations\n\n${links}\n\n## Log\n\n${log}`;
+    expect(Buffer.byteLength(source)).toBeGreaterThan(330000);
+    const p=planImport([{name:'bobby.md',text:source}]).projects[0]!;
+    expect(Buffer.byteLength(p.overflow!)).toBeGreaterThan(3*PROJECT_IMPORT_OVERFLOW_PART_MAX_BYTES);
+    const m=p.overflow_parts.length;expect(m).toBeGreaterThan(3);
+    p.overflow_parts.forEach((part,i)=>{expect(Buffer.byteLength(part)).toBeLessThanOrEqual(PROJECT_IMPORT_OVERFLOW_PART_MAX_BYTES);expect(part.startsWith(`${PROJECT_IMPORT_OVERFLOW_HEADING}: bobby (part ${i+1} of ${m})\n\n`)).toBe(true);});
+    expect(joinImportOverflowParts(p.overflow_parts)).toBe(p.overflow);
+    expect(p.largest_row_bytes).toBeLessThanOrEqual(65536);
+    const v=vault();v.importProject(p);
+    const rows=v.list({scope:'project:bobby'});
+    expect(rows.every((e)=>Buffer.byteLength(e.content)<=65536)).toBe(true);
+    expect(joinImportOverflowParts(rows.filter((e)=>e.content.startsWith(PROJECT_IMPORT_OVERFLOW_HEADING)).map((e)=>e.content))).toBe(p.overflow);
+    const out=rows.flatMap((e)=>e.content.split('\n'));
+    expect(source.split('\n').filter((l)=>l.trim()&&!out.includes(l))).toEqual([]);
+    v.close();
+  });
+
+  it('cuts only a line longer than a part, at code points, and says so in that part',()=>{
+    const text=`first line\n${'\u{1F600}'.repeat(40000)}\nlast line\n`;
+    const parts=splitImportOverflow('demo',text);
+    expect(joinImportOverflowParts(parts)).toBe(text);
+    for(const part of parts){expect(Buffer.byteLength(part)).toBeLessThanOrEqual(PROJECT_IMPORT_OVERFLOW_PART_MAX_BYTES);expect(part).not.toMatch(/\uFFFD/);}
+    const noted=parts.filter((part)=>part.split('\n')[1]!.startsWith('A source line longer'));
+    expect(noted.length).toBeGreaterThanOrEqual(3);
+    expect(parts[0]!.startsWith(`${PROJECT_IMPORT_OVERFLOW_HEADING}: demo (part 1 of ${parts.length})\n`)).toBe(true);
+    expect(splitImportOverflow('demo','a\nb\n')).toEqual([`${PROJECT_IMPORT_OVERFLOW_HEADING}: demo (part 1 of 1)\n\na\nb\n`]);
   });
 
   it('refuses a slug that already has a live document, with zero mutation',()=>{

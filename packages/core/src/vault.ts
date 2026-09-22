@@ -618,7 +618,7 @@ export class Vault {
       let chain = this.getMeta('chain_head');
       const rows: Array<[MemoryType, string, string]> = [
         ...plan.archives.map((content) => ['episodic', content, 'northkeep:project-log-archive'] as [MemoryType, string, string]),
-        ...(plan.overflow === null ? [] : [['episodic', plan.overflow, 'northkeep:project-import-overflow'] as [MemoryType, string, string]]),
+        ...plan.overflow_parts.map((content) => ['episodic', content, 'northkeep:project-import-overflow'] as [MemoryType, string, string]),
         ['working', plan.document, 'northkeep:project-import'],
       ];
       for (const [type, content, source] of rows) {
