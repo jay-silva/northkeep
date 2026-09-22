@@ -58,13 +58,14 @@ every milestone; if a limit is removed, say when and how.*
 
 - **The mirror is only as current as the last export.** It changes when you
   run `northkeep projects export` or when a schedule you turned on runs it,
-  and at no other time. A project write does not update it. The Projects
-  page, `project_list` and `project_resume` say when it was last updated and
-  how many projects changed since, so a stale mirror is visible, not fixed.
+  and at no other time. A project write does not update it. On this Mac, the
+  Projects page, `project_list` and `project_resume` say when it was last
+  updated and how many projects changed since, so a stale mirror is visible,
+  not fixed. The hosted claude.ai connector cannot read this Mac's files and
+  does not show that line.
 - **It holds project documents and their logs, not your other memories.**
-  Every other memory, and log archives past the newest 20, stay only in the
-  encrypted vault. The full backup is still the vault file, or
-  `northkeep export`.
+  Every other memory, and log archives past the newest 20, are not in the
+  mirror. The full backup is still the vault file, or `northkeep export`.
 - **Mirrored project files are plaintext in the folder you chose.** They are
   as private as that folder: anyone or anything that can read it, a backup
   tool or a cloud sync folder included, can read them. This is the one
