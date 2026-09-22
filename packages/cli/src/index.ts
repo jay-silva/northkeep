@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
-import { Command } from 'commander';
+import { Command, Option } from 'commander';
 import {
   MEMORY_TYPES,
   Vault,
@@ -12,6 +12,7 @@ import {
   ensureDeviceSecret,
   loadDeviceSecret,
   memzero,
+  northkeepHome,
   setPlatform,
   withFileLock,
   type MemoryEntry,
@@ -66,7 +67,15 @@ import {
   shareStatusCmd,
   shareSyncCmd,
 } from './shareCmd.js';
-import { projectsCompactCmd } from './projectsCmd.js';
+import {
+  projectsCompactCmd,
+  projectsExportCmd,
+  projectsImportCmd,
+  projectsUpdateCmd,
+  promptOnceRunner,
+  type ExportCmdOptions,
+  type MirrorDeps,
+} from './projectsCmd.js';
 import { routingClear, routingList, routingSet } from './routingCmd.js';
 import { mcpAdd, mcpAddRemote, mcpConnect, mcpList, mcpRemove, mcpSafeRead, mcpTools } from './mcpCmd.js';
 import { toolsBudget, toolsDisable, toolsEnable, toolsGrants, toolsList, toolsRevoke } from './toolsCmd.js';
@@ -890,6 +899,81 @@ projects
   .option('--yes', 'actually compact; without it this is a preview')
   .action(async (options: { project?: string; keep?: string; yes?: boolean }) => {
     await projectsCompactCmd(options, withVault, fail);
+  });
+
+projects
+  .command('update')
+  .description('Create a project document, or change sections of an existing one')
+  .argument('<slug>', 'project slug: lowercase letters, digits and hyphens')
+  .option('--title <text>', 'display title')
+  .option('--what-why <text>', 'the What & Why section')
+  .option('--status <text>', 'the Current Status section')
+  .option('--next-actions <text>', 'the Next Actions section')
+  .option('--decision <text>', 'add a dated Decisions entry')
+  .option('--log <text>', 'add a dated Log entry')
+  .action(async (slug: string, options: { title?: string; whatWhy?: string; status?: string; nextActions?: string; decision?: string; log?: string }) => {
+    await projectsUpdateCmd(slug, options, withVault, fail);
+  });
+
+/** launchd needs the real script, not the npm bin symlink. */
+function cliEntryPath(): string {
+  const entry = process.argv[1] ?? '';
+  try {
+    return fs.realpathSync(entry);
+  } catch {
+    return entry;
+  }
+}
+
+/** One key per command, so neither the export lock nor import waits on repeated prompts. */
+function mirrorDeps(): { deps: MirrorDeps; opened: () => Awaited<ReturnType<typeof promptOnceRunner>> | null } {
+  let opened: Awaited<ReturnType<typeof promptOnceRunner>> | null = null;
+  const deps: MirrorDeps = {
+    home: northkeepHome(),
+    vaultPath: vaultPathOpt(),
+    vaultRunner: async () => (opened ??= await promptOnceRunner(vaultPathOpt(), getPassphrase)).runner,
+    schedule: { cliEntry: cliEntryPath() },
+  };
+  return { deps, opened: () => opened };
+}
+
+projects
+  .command('export')
+  .description('Write every project document into a local git folder NorthKeep owns, and commit it (never pushes)')
+  .option('--repo <path>', 'the mirror folder: an empty folder after git init (first run only; recorded)')
+  .option('--verify', 'compare the mirror with the vault without changing anything')
+  .option('--status', 'show the last export, projects changed since, refusals and remotes')
+  .option('--schedule <when>', 'export on a schedule with launchd: hourly, daily or off')
+  .option('--json', 'print the raw result as JSON')
+  .addOption(new Option('--scheduled', 'run by the launchd job; never prompts').hideHelp())
+  .action(async (options: ExportCmdOptions) => {
+    const { deps, opened } = mirrorDeps();
+    try {
+      process.exitCode = await projectsExportCmd(options, deps);
+    } finally {
+      opened()?.dispose();
+      opened()?.keyForPush?.fill(0);
+    }
+  });
+
+projects
+  .command('import')
+  .description('Bring a folder of Markdown project files into the vault (a dry run unless --write)')
+  .requiredOption('--from <dir>', 'folder holding <slug>.md files; read only, never changed')
+  .option('--write', 'import; without it this only reports what would happen')
+  .option('--json', 'print the raw result as JSON')
+  .action(async (options: { from: string; write?: boolean; json?: boolean }) => {
+    const { deps, opened } = mirrorDeps();
+    const vaultPath = vaultPathOpt();
+    try {
+      const { result, saved } = await trackSaves(vaultPath, () => projectsImportCmd(options, deps));
+      process.exitCode = result;
+      // ADR 0044: a command that saved pushes once, when its key came without a prompt.
+      await autoPushAfterWrite({ vaultPath, masterKey: opened()?.keyForPush ?? null, saved });
+    } finally {
+      opened()?.dispose();
+      opened()?.keyForPush?.fill(0);
+    }
   });
 
 const share = program
