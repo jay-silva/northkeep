@@ -2,6 +2,7 @@ import { execFile, type ExecFileException } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
+import { MIRROR_TEMP_PATTERN } from './fs-safe.js';
 
 /**
  * Git plumbing for the local project mirror (ADR 0053 Decisions 2, 4 and 9).
@@ -416,7 +417,12 @@ export function checkOwnedFolder(
 ): 'fresh' | 'owned' {
   const bytes = readMarkerBytes(repo);
   if (bytes === null) {
-    const names = fs.readdirSync(repo);
+    // A killed first export leaves only its own temps beside .git; they must not wedge the folder.
+    const names = fs.readdirSync(repo).filter((n) => {
+      if (!MIRROR_TEMP_PATTERN.test(n)) return true;
+      const st = lstatOrNull(path.join(repo, n));
+      return !(st && (st.isFile() || st.isSymbolicLink()));
+    });
     if (head === null && names.length === 1 && names[0] === '.git') return 'fresh';
     throw new ExportRefusal(
       'not_owned',
@@ -604,9 +610,9 @@ export async function plumbingCommit(ctx: GitContext, info: RepoInfo, input: Com
     const ctArgs = parent ? ['commit-tree', tree, '-p', parent] : ['commit-tree', tree];
     commit = await out(ctx, ctArgs, { input: input.message });
     assertNoIndexLock(info.gitDir);
-    const urArgs = ['update-ref', '-m', 'northkeep export', 'HEAD', commit];
-    if (parent) urArgs.push(parent);
-    await runGit(ctx, urArgs);
+    // The all-zero old id makes an unborn HEAD lose the race to a concurrent first commit.
+    const old = parent ?? '0'.repeat(commit.length);
+    await runGit(ctx, ['update-ref', '-m', 'northkeep export', 'HEAD', commit, old]);
   }
   let indexRefreshed = true;
   try {
