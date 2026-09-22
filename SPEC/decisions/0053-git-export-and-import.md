@@ -25,7 +25,7 @@ bring an existing folder in.
 
 The vault stays canonical, so a mirror editable back into it would be a second source of truth and a merge
 problem, and this ADR refuses to build one. NorthKeep has written no memory plaintext outside the encrypted
-vault, as the call log header says (packages/mcp-server/src/log.ts:5-9). Export amends that sentence
+vault, as the call log header says (packages/mcp-server/src/log.ts:5-9); export amends that sentence
 deliberately, in one narrow place.
 
 Three new files are proposed: `packages/core/src/project-export.ts` for the pure renderers and the header
@@ -86,10 +86,11 @@ are two mechanisms, not one: plumbing alone would still fire `reference-transact
 `post-index-change` on `update-index`.
 
 The verb allowlist is exactly `rev-parse`, `read-tree`, `hash-object`, `update-index`, `write-tree`,
-`commit-tree`, `update-ref`, `var`, `diff`, `diff-index`, `remote`, `cat-file`, `ls-tree`. No `add`,
-`commit`, `status`, `checkout`, `push`, `pull`, `fetch`, `clone`, `init`, `merge` or `tag` is constructed
-anywhere in the code. `remote` is only ever `remote -v` (Decision 4); `cat-file` and `ls-tree` are
-read-only. Every invocation runs with this environment and nothing else:
+`commit-tree`, `update-ref`, `var`, `diff`, `diff-index` and `remote`. No `add`, `commit`, `status`,
+`checkout`, `push`, `pull`, `fetch`, `clone`, `init`, `merge` or `tag` is constructed anywhere in the code,
+and `remote` is only ever `remote -v` (Decision 4). The acceptance canary also runs `cat-file` to print what
+was stored; that is a test verb, not part of the product path. Every invocation runs with this environment
+and nothing else:
 
 ```
 PATH=/usr/bin:/bin   HOME=<NORTHKEEP_HOME>
@@ -127,13 +128,13 @@ path is a NorthKeep checkout, detected by a `packages/core/package.json` naming 
 seeded by `read-tree HEAD`, never at `.git/index`, so the commit carries HEAD's tree plus the exported files
 and whatever the user had staged is not in it. After `update-ref` the exporter reconciles the real index so
 `git status` is not left lying. Nothing staged (`diff-index --cached --quiet HEAD` returned 0 before the
-run): the temporary index is copied over `.git/index` and `update-index --refresh` restores stat
-information, after which `git status --short` is empty. Something staged: the real index is left alone
-except for one `update-index --add --cacheinfo` per exported path, after which the user's staged change
-survives, is absent from the export commit, and the exported paths agree with HEAD. Both were executed.
-Mutating `.git/index` is a real side effect, stated here rather than hidden, and Decision 3's refusals are
-what make it safe: no path is written or staged unless it is already NorthKeep's and already identical to
-HEAD.
+run): the temporary index is written inside `.git/` and renamed over `.git/index`, never copied over it, so
+a crash cannot leave a half-written index; `update-index --refresh` then restores stat information, after
+which `git status --short` is empty. Something staged: the real index is left alone except for one `update-
+index --add --cacheinfo` per exported path, after which the user's staged change survives, is absent from
+the export commit, and the exported paths agree with HEAD. Mutating `.git/index` is a real side effect,
+stated here rather than hidden, and Decision 3's refusals are what make it safe: no path is written or
+staged unless it is already NorthKeep's and already identical to HEAD.
 
 There is no checkout step, so a smudge filter has nothing to run on: the working tree files are the ones
 NorthKeep wrote. After each export, HEAD, the index and the files on disk agree for every exported path. A
@@ -150,9 +151,11 @@ Every generated file opens with one HTML comment, nothing before it:
      The vault is canonical. This file is regenerated. Edits here are not read back. -->
 ```
 
-`kind` is `document`, `log` or `index`; `INDEX.md` names the vault id and `kind index` only. `vault_id` and
-`revision` come from `ProjectView` (project-handoff.ts:232, the head row's id). `ownershipOf(file, view)`
-returns one of three classes.
+`kind` is `document`, `log` or `index`. A `kind log` header names the same vault id and slug and the
+project's current revision id at render time, so it classes exactly like the document. `INDEX.md` is derived
+from every project, so its header names the vault id and `kind index` with no slug and no revision, and
+`ownershipOf` classes it by vault id alone. `vault_id` and `revision` come from `ProjectView` (project-
+handoff.ts:232, the head row's id). `ownershipOf(file, view)` returns one of three classes.
 
 1. **Ours.** The header parses, the vault id matches, the slug matches, and the revision id is this
    project's current `revision` or one of the ids in `ProjectView.revisions` (project-handoff.ts:229).
@@ -180,9 +183,9 @@ clean. Nothing uncommitted is ever overwritten.
 On first configure the exporter prints the repository's remote list, names and URLs from `git remote -v`,
 with the resolved path and the project counts, and stores that list in `export.json` under `NORTHKEEP_HOME`
 after the user confirms. On every export it re-reads `git remote -v` and compares. A remote added, removed
-or re-pointed since the confirmation refuses the **whole** export, not one file, and asks the user to
-re-confirm. NorthKeep never adds, removes, renames or pushes a remote, and no code path constructs `push`,
-`fetch`, `pull` or `remote add`.
+or re-pointed since the confirmation refuses the **whole** export, not one file, until the user re-confirms.
+NorthKeep never adds, removes, renames or pushes a remote, and no code path constructs `push`, `fetch`,
+`pull` or `remote add`.
 
 ## Decision 5: Round trip (project-export.ts, import side)
 
@@ -192,30 +195,30 @@ log` reattaches its entries as ADR 0045 archive memories of the named slug, thro
 path, and creates no project. `kind document` is an ordinary import of that slug. No header is an ordinary
 import, the pre-NorthKeep case.
 
-The header is never written into the vault. Import strips it from the parsed `preamble`
-(project-doc.ts:101-126 keeps text before the first heading as preamble) before the document is stored, and
-strips only that comment: an ADR 0052 draft line in the same preamble (`PROJECT_DRAFT_LINE_PREFIX`,
-project-doc.ts:280-284) survives. A file that merely copies a NorthKeep header is indistinguishable from one
+The header is never written into the vault. Import strips it from the parsed `preamble` (project-
+doc.ts:101-126 keeps text before the first heading as preamble) before the document is stored, and strips
+only that comment: an ADR 0052 draft line in the same preamble (`PROJECT_DRAFT_LINE_PREFIX`, project-
+doc.ts:280-284) survives. A file that merely copies a NorthKeep header is indistinguishable from one
 NorthKeep wrote, which is harmless, because import refuses an existing slug anyway.
 
 ## Decision 6: Caps in bytes (project-export.ts)
 
 The export cap is 65,536 UTF-8 bytes per rendered file, measured as bytes and not characters, so accented
-text is measured on what the file really holds. The number is a choice, not an inherited constant: it
-mirrors the ADR 0045 project scope row cap so one number governs both sides, and ADR 0045 says nothing about
-files. `projects/<slug>.md` cannot exceed it, because `PROJECT_DOC_MAX_CHARS` is 16,384 characters
-(project-doc.ts:10), which reaches 65,536 bytes only in the pathological all-four-byte case; a document that
-somehow renders larger is refused by name and the rest of the export proceeds.
+text is measured on what the file really holds. The number is a choice, not an inherited rule. It reuses the
+row cap ADR 0045 (line 96) gives every row in a slug-valid project scope, which is the 65536-byte per-entry
+cap ADR 0040 Decision 6 states (0040 lines 109-114); neither ADR says anything about files.
+`projects/<slug>.md` cannot exceed it, because `PROJECT_DOC_MAX_CHARS` is 16,384 characters (project-
+doc.ts:10), which reaches 65,536 bytes only in the pathological all-four-byte case; a document that somehow
+renders larger is refused by name and the rest of the export proceeds.
 
 `projects/<slug>.log.md` can exceed it and is **split into numbered parts**, `<slug>.log.1.md`,
 `<slug>.log.2.md` and so on, each with its own `kind log` header, split on archive-entry boundaries so no
 entry is cut. Refusing the project instead was rejected because `northkeep projects export` must be both
 idempotent and total: a project whose log grew past a threshold would silently stop being mirrored, which is
-the failure this ADR exists to prevent. Parts number from 1 with no zero padding, and a part no longer
-needed is deleted only when it is class 1, so a stale part is never left behind and a foreign file of that
-name is never removed. Nothing else is built here: no read-back, no remote, push, pull, `git init`, branch,
-tag, merge handling or file watcher, no mirroring outside project scopes, no desktop surface in M-A, and no
-redaction of the mirror.
+the failure this ADR exists to prevent. Parts number from 1 with no zero padding. A part no longer needed is
+unlinked from disk and dropped from the tree with `update-index --force-remove`, so HEAD, the index and the
+files on disk still agree, and only a class 1 part is ever removed, so a foreign file of that name survives.
+Nothing else is built: no read-back, no remote or push, no watcher, and no desktop surface in M-A.
 
 ## Decision 7: Identity and commit messages (git-plumbing.ts)
 
@@ -234,7 +237,7 @@ into `ProjectView.last_writer`, line 74); a write with no block says `(unknown h
 is fixed text, because ADR 0052 Decision 1 stores `model: null` and no host exposes one. The trailing text
 is `firstNonEmptyLine` of the completed work, or of Current Status for an update, cut to 72 characters with
 control characters stripped. The message reaches git on `commit-tree`'s stdin, never as an argument and
-never through a shell, for the reason packages/mcp-server/src/connect.ts:234-235 states about
+never through a shell, for the reason packages/mcp-server/src/connect.ts:235-236 states about
 `execFileSync`.
 
 ## Decision 8: Concurrency (project-export-run.ts, `acquireExportLock`)
@@ -242,14 +245,14 @@ never through a shell, for the reason packages/mcp-server/src/connect.ts:234-235
 One lock file per repository under `<NORTHKEEP_HOME>/export/`, keyed by a hash of the resolved repository
 path, never inside the repository. It is created `wx`, holds the pid and a start timestamp, and is removed
 in a `finally`. A second export waits up to 30 seconds, then reports that an export of that repository is
-already running and does nothing. A lock whose pid is not alive is stale and is reclaimed; a lock NorthKeep
-did not create is never removed. This is not the vault lock and is never held across a vault write.
+already running and does nothing. A lock whose pid is not alive is reclaimed; a lock NorthKeep did not
+create is never removed. This is not the vault lock and is never held across a vault write.
 
 ## Decision 9: Import safety (project-export-run.ts, `importProjects`)
 
 `northkeep projects import --from <dir> [--write]`. `--dry-run` is the default: without `--write` the
 command prints the plan, per file its slug, section map, live document size, archive count and overflow yes
-or no, and writes nothing. The source directory is opened read-only, no file in it is written, renamed or
+or no, and writes nothing. The source directory is opened read-only, nothing in it is written, renamed or
 removed, and import spawns no git process. `*.md` in `<dir>`, non-recursive. A name whose stem fails
 `PROJECT_SLUG_PATTERN` (project-doc.ts:15) is skipped and listed, which is how `INDEX.md` and a stray `notes
 copy.md` are handled; NorthKeep's own `<slug>.log.md` is recognized by its header first (Decision 5) and
@@ -331,11 +334,9 @@ forever, and ADR 0051 can blank the revision a header names. Mitigated by Decisi
 revision chain and a stale owned file is overwritten. Residual: the visible chain is short, see Residual.
 
 **A hand edit destroyed.** Mitigated by the two `diff` checks in Decision 3. Residual: an edit the user
-committed is overwritten by the next export, by design, and is in git history.
-
-**`--adopt` with no backup**, the second review's kill shot over 31 hand-written files. Mitigated by
-`backupOnce` on every adopted file (fs-safe.ts:17-22). Residual: adopt still overwrites, and the backup is
-one copy per file.
+committed is overwritten by the next export, by design, and is in git history. **`--adopt` with no backup**,
+the second review's kill shot over 31 hand-written files. Mitigated by `backupOnce` on every adopted file
+(fs-safe.ts:17-22). Residual: adopt still overwrites, and the backup is one copy per file.
 
 **A remote added after the confirmation.** Reading `remote.origin.url` once at configure never saw it.
 Mitigated by Decision 4's re-read on every export. Residual: NorthKeep cannot stop a hand push and does not
@@ -489,12 +490,12 @@ echo "canaries fired:"; cat $F; [ -s $F ] || echo "(none)"
 
 Run on git 2.54.0 (Apple Git-157) while this draft was written: `(none)`, and the stored bytes were the
 plaintext unchanged. The same repository under `git add` with the identical pins fired `filter.nkp.process`,
-which hung on the filter handshake. Two honest caveats. The keys genuinely exercised are the filters, the
-hooks, `gpg.program`, `core.editor`, `diff.external` and `core.fsmonitor`; `credential.helper`,
-`core.sshCommand`, `ssh.variant`, `core.gitProxy`, `protocol.ext` and `uploadpack.packObjectsHook` are
-unreachable anyway, because no allowed verb touches a transport, and are pinned as belt and braces. And
-`commit-tree` with `commit.gpgsign=true` and `gpg.program` on a canary, both unpinned, signed nothing and
-fired nothing, so the gpg pins are not load-bearing either.
+which hung on the filter handshake. Two caveats keep the claim no wider than the evidence. The keys
+genuinely exercised are the filters, the hooks, `gpg.program`, `core.editor`, `diff.external` and
+`core.fsmonitor`; `credential.helper`, `core.sshCommand`, `ssh.variant`, `core.gitProxy`, `protocol.ext` and
+`uploadpack.packObjectsHook` are unreachable anyway, because no allowed verb touches a transport, and are
+pinned as belt and braces. And `commit-tree` with `commit.gpgsign=true` and `gpg.program` on a canary, both
+unpinned, signed nothing and fired nothing, so the gpg pins are not load-bearing either.
 
 ## Earlier drafts
 
@@ -514,6 +515,6 @@ kept no backup; the header test could not heal a mirror another device left stal
 blank the revision the header named. Flesh wounds: re-importing NorthKeep's own export dropped
 `<slug>.log.md` and `INDEX.md`; `remote.origin.url` was read only at configure; the header was
 indistinguishable from a copy on import; `serializeProjectDoc` returns no trailing newline; one more stale
-citation. The review required a third draft rather than an amendment, listing plumbing writes, `backupOnce`
-on adopt, remote re-checks, revision-chain ownership, round-tripping headers, and stripping the header on
-import. This draft answers each.
+citation. The review required a third draft listing plumbing writes, `backupOnce` on adopt, remote re-
+checks, revision-chain ownership, round-tripping headers, and stripping the header on import. This draft
+answers each.
