@@ -3,9 +3,10 @@ import path from 'node:path';
 import { callLogPath } from '@northkeep/core';
 
 /**
- * Content-free call log (invariant: memory content is never written to disk
- * outside the encrypted vault). Logged: what was asked of the vault and how
- * much came back — never what it said. One JSON object per line.
+ * Content-free call log. Memory content is never written to disk outside the
+ * encrypted vault, with one opt-in exception (ADR 0053): project documents the
+ * user exports to a git folder they chose. Logged: what was asked of the vault
+ * and how much came back, never what it said. One JSON object per line.
  */
 export interface CallLogEntry {
   ts: string;

@@ -2153,7 +2153,7 @@
   function showProjectsMirror(line) {
     const node = $('projectsMirrorMeta'), text = projectsMirrorText(line);
     node.textContent = text || '';
-    node.title = text ? line : '';
+    node.title = '';
     node.hidden = !text;
   }
 

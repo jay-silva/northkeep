@@ -530,6 +530,9 @@ function recordFailure(home: string, repo: string, vaultId: string | null, by: '
     id = isRecord(raw) && isStr(raw.vault_id) ? raw.vault_id : null;
   }
   if (id === null) return;
+  // A state file written for another vault is that vault's record; a refused run from this one must not erase it.
+  const existing = readJson(statePath(home, repo));
+  if (isRecord(existing) && isStr(existing.vault_id) && existing.vault_id !== id) return;
   const state = readExportState(home, repo, id) ?? emptyExportState(repo, id);
   state.last_attempt = { at, by };
   state.last_failure = { at, code };

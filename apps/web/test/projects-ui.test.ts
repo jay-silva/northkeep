@@ -298,12 +298,12 @@ describe('Projects backup mirror line (ADR 0053 Decision 7)', () => {
     expect(projects).toContain('showProjectsMirror(data.mirror);');
   });
 
-  it('rewords a real exported line for people and keeps the exact time on hover', () => {
+  it('rewords a real exported line for people and shows no raw line on hover', () => {
     const line = summarizeMirror({ ...exported, last_success: { at: '2026-09-22T12:00:00Z' } }, rows, NOW);
     const node = render(line);
     expect(node.hidden).toBe(false);
     expect(node.textContent).toBe('Backup mirror last updated 3 hours ago; 2 projects changed since');
-    expect(node.title).toBe(line);
+    expect(node.title).toBe('');
   });
 
   it('rewords a real never-exported line and a real failed-later line', () => {

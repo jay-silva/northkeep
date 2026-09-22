@@ -303,6 +303,28 @@ describe('exportProjects end to end', () => {
     expect(line).toMatch(/^mirror last exported .*; 0 projects changed since; last export failed /);
   });
 
+  it('a refused run from another vault leaves the mirror owner state file intact', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const before = fs.readFileSync(path.join(lab.home, 'export', fs.readdirSync(path.join(lab.home, 'export')).find((n) => n.endsWith('.state.json'))!), 'utf8');
+    const otherPath = path.join(lab.root, 'other.nkv');
+    const otherSecret = generateDeviceSecret();
+    Vault.create({ path: otherPath, passphrase: 'second vault', deviceSecret: otherSecret, kdf: KDF_INTERACTIVE }).close();
+    const h = Vault.readHeader(otherPath);
+    const otherKey = deriveMasterKey('second vault', otherSecret, h.salt, h.kdf);
+    const otherRunner: VaultRunner = (fn) =>
+      withFileLock(otherPath, async () => {
+        const v = Vault.openWithKey(otherPath, Buffer.from(otherKey));
+        try { return await fn(v); } finally { v.close(); }
+      });
+    await expect(exportProjects({ home: lab.home, vaultPath: otherPath, withVault: otherRunner, by: 'cli' })).rejects.toBeInstanceOf(ExportRefusal);
+    const statePath = path.join(lab.home, 'export', fs.readdirSync(path.join(lab.home, 'export')).find((n) => n.endsWith('.state.json'))!);
+    expect(fs.readFileSync(statePath, 'utf8')).toBe(before);
+    const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+    expect(state?.last_success).not.toBeNull();
+    expect(state?.nk_commits.length).toBeGreaterThan(0);
+  });
+
   it('commits with a remote configured and pushes nothing', async () => {
     await seed();
     const bare = path.join(lab.root, 'bare.git');
