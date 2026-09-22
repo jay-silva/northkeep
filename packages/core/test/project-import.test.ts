@@ -142,7 +142,7 @@ describe('Vault.importProject (the write)',()=>{
     const m=p.overflow_parts.length;expect(m).toBeGreaterThan(3);
     p.overflow_parts.forEach((part,i)=>{expect(Buffer.byteLength(part)).toBeLessThanOrEqual(PROJECT_IMPORT_OVERFLOW_PART_MAX_BYTES);expect(part.startsWith(`${PROJECT_IMPORT_OVERFLOW_HEADING}: bobby (part ${i+1} of ${m})\n\n`)).toBe(true);});
     expect(joinImportOverflowParts(p.overflow_parts)).toBe(p.overflow);
-    expect(p.largest_row_bytes).toBeLessThanOrEqual(65536);
+    expect(p.largest_row_bytes).toBeLessThanOrEqual(60000);
     const v=vault();v.importProject(p);
     const rows=v.list({scope:'project:bobby'});
     expect(rows.every((e)=>Buffer.byteLength(e.content)<=65536)).toBe(true);
