@@ -433,9 +433,9 @@ describe('the real CLI process', () => {
 describe('wording', () => {
   // Runs last in this file: every human-facing line above, checked for plain sentences.
   it('has no em dash and none of the internal words in normal output', () => {
-  const text = allPlain.join('\n');
-  expect(allPlain.length).toBeGreaterThan(50);
-  expect(text).not.toContain('\u2014');
-  expect(text).not.toMatch(/\b(blob|journal)\b/i);
+    const text = allPlain.join('\n');
+    expect(allPlain.length).toBeGreaterThan(50);
+    expect(text).not.toContain('\u2014');
+    expect(text).not.toMatch(/\b(blob|journal)\b/i);
   });
 });
