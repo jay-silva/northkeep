@@ -99,7 +99,9 @@ export_run() { local r=$1; shift; local gd cd top p b hb c t par
   for p in "$@"; do
     [ -n "$par" ] && hb=$(G "$r" rev-parse -q --verify "HEAD:$p" 2>/dev/null)
     G "$r" hash-object --no-filters -- "$r/$p" >/dev/null                                   # classifyTarget diskBlob
-    b=$(G "$r" hash-object -w --no-filters -- "$r/$p"); G "$r" update-index --add --cacheinfo "100644,$b,$p"; done
+    b=$(G "$r" hash-object -w --no-filters --stdin < "$r/$p")          # rendered bytes, journaled before the write
+    [ "$(G "$r" hash-object --no-filters -- "$r/$p")" = "$b" ] || { echo "  post-write mismatch: $p"; FAIL=1; }
+    G "$r" update-index --add --cacheinfo "100644,$b,$p"; done
   t=$(G "$r" write-tree)
   if [ -n "$par" ]; then c=$(printf 'export: test\n' | G "$r" commit-tree "$t" -p "$par")
   else c=$(printf 'export: test\n' | G "$r" commit-tree "$t"); fi
