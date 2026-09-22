@@ -133,32 +133,30 @@ never while the vault file lock is held. Git 2.31 or newer is required, for `rev
 2. The repository is bare (`rev-parse --is-bare-repository`).
 3. The path is inside `northkeepHome()` (packages/core/src/platform.ts:7-9) or the vault file's directory,
    by prefix on a separator boundary, or the path is a NorthKeep checkout.
-4. `worktree list --porcelain` shows HEAD's branch checked out in another worktree, which the fourth review
-   used to move that worktree's branch and leave a file staged there. A linked worktree of the repository
-   being exported is allowed and normal.
+4. `worktree list --porcelain` shows HEAD's branch checked out in another worktree (the fourth review moved
+   that worktree's branch). A linked worktree of the repository being exported is allowed and normal.
 5. **`<git-dir>/index.lock` exists.** The git dir comes from `rev-parse --path-format=absolute --git-dir`.
    In a linked worktree that is `.git/worktrees/<name>`, which differs from the common dir Decision 8 uses,
    and it is where that worktree's own index and lock live. The refusal names the file: "`<path>` exists.
    Another git process is running, or one crashed. NorthKeep will not export while it exists; remove it once
    no git process is running." NorthKeep never removes it.
 
-**The lock is checked twice,** in preflight and immediately before `update-ref`. If it appeared between,
-the run stops there as a failed run: HEAD does not move and the files on disk are journaled residue.
+**The lock is checked twice,** in preflight and before `update-ref`; if it appeared between, the run stops
+there as a failed run, HEAD unmoved, the files on disk journaled residue.
 
 **Per-target containment,** checked per file immediately before that file is written. A failure refuses that
 one target and the run continues:
 
-1. `lstat` every path component from the repository root down, `projects` then `projects/<name>`. A symlink
-   anywhere refuses the target, because `atomicWrite` resolves and writes through one by design
-   (fs-safe.ts:35-36).
-2. The target exists and is not a regular file, or has `st_nlink` greater than 1. The fourth review wrote
-   through a hard link, changing a file outside `projects/`.
-3. `ls-tree HEAD -- projects` reports mode 160000, or a `.git` entry exists under `projects`. The fourth
-   review wrote vault plaintext inside a submodule whose remotes Decision 4 never read.
+1. `lstat` every component from the repository root down; a symlink anywhere refuses the target, because
+   `atomicWrite` resolves and writes through one by design (fs-safe.ts:35-36).
+2. The target exists and is not a regular file, or has `st_nlink` greater than 1 (a hard link).
+3. `ls-tree HEAD -- projects` reports mode 160000 (a submodule), or a `.git` entry exists under `projects`.
 4. `realpath(dirname(target))` must start with `realpath(repo)` plus a separator.
 
-A containment refusal is fixed text naming the failed check and the fix, for example "projects/ is a
-symlink; NorthKeep exports only into a real directory inside the repository". It never mentions `--adopt`,
+A containment refusal is fixed text naming the check and the fix: "projects/ is a symlink; NorthKeep
+exports only into a real directory inside the repository", "<path> has 2 hard links; NorthKeep writes only a
+file with one link", "<path> is not a regular file", "projects/ is a submodule or holds .git; NorthKeep will
+not write into another repository", "<path> resolves outside the repository". It never mentions `--adopt`,
 which runs after containment and cannot pass it, and it makes the run a failed run (Decision 10).
 
 **The temporary index, the root commit, and the user's staged work.** `GIT_INDEX_FILE` points at a
@@ -379,7 +377,8 @@ a success.
 
 It is written with `atomicWrite` at `0o600` after every run. A failed automatic run increments the count;
 any successful run resets it, clears `stopped_since` and empties `refused`. After three consecutive failed
-automatic runs the trigger stops. Deleting the journal clears neither the count nor the stopped state.
+automatic runs the trigger stops. Deleting the journal clears neither; deleting the state file clears
+both, a human act like a hand run.
 
 **Stopped is never silent.** While stopped, every vault write that would have exported skips the export and
 carries an `export` object in its tool payload: `{ "state": "stopped", "repo", "stopped_since",
@@ -509,14 +508,14 @@ node $NK init && node $NK projects export --repo $R   # prints path, remotes, co
    -r $LAB/a $R/projects` is silent, `git -C $R log --oneline | wc -l` is 1, `git -C $R status --short` empty.
 2. **Nothing the repo names ever runs.** From the NorthKeep repository, `bash scripts/adr-0053-canary.sh`
    prints `(none)` under "canaries fired", `equal` on every blob line, `result: PASS`, and exits 0.
-3. **A hand edit is refused, and faults heal.** `echo "note" >> $R/projects/demo.md`, export: refused with the
-   `--adopt` command, edit intact, others exported. `git -C $R checkout -- projects/demo.md`, export:
-   overwritten silently. Delete `$NORTHKEEP_HOME/export/<key>.json` and repeat: HEAD's blob alone heals it,
-   and `--status` still shows the failure count.
+3. **A hand edit is refused, and faults heal.** `echo "note" >> $R/projects/demo.md`, `projects update`:
+   refused with the `--adopt` command, edit intact, others exported, `--status` shows 1 failure. Delete
+   `$NORTHKEEP_HOME/export/<key>.json`: `--status` still shows 1. `git -C $R checkout -- projects/demo.md`,
+   export: HEAD's blob alone heals it, and `--status` shows 0.
 4. **Crash residue.** Kill the exporter after the file write and before `update-ref`
    (`NORTHKEEP_EXPORT_CRASH=1`), write to the vault twice more, export: nothing is refused.
-5. **History moves.** Three vault writes, `git -C $R reset --hard HEAD~2`, export: no refusal. Copy `$LAB/a`
-   over `$R/projects`, export: recognized through the journal set, no refusal.
+5. **History moves.** `cp -R $R/projects $LAB/b`, three vault writes, `git -C $R reset --hard HEAD~2`,
+   export: no refusal. Copy `$LAB/b` over `$R/projects`, export: recognized by the journal set, no refusal.
 6. **A copy of the command repo, imported then adopted.** `cp -R ~/Claude/Projects/Command\ Repo $LAB/cr`,
    work only there. The import dry run prints a 31-row plan, writes nothing, and leaves `git -C $LAB/cr
    status --short` empty. Re-run with `--write`, export with `--adopt`: every overwritten file has a
@@ -533,7 +532,8 @@ node $NK init && node $NK projects export --repo $R   # prints path, remotes, co
     omits it and it stays staged. `touch $R/.git/index.lock`, `projects update`: refused before any write,
     naming the file. Remove it. With `NORTHKEEP_EXPORT_LOCK_BEFORE_RECONCILE=1` (creates the lock after
     `update-ref`), `projects update` reports "committed; working index not refreshed", and one more write is
-    refused. Remove the lock, `git -C $R checkout .`, export: no refusal, status shows only README.md.
+    refused, the third failure, so the trigger is stopped. Remove the lock, `git -C $R checkout .`, export:
+    no refusal, the trigger resumes, and status shows only README.md.
 11. **A linked worktree.** `git -C $R worktree add $LAB/wt -b wtb`, export there with a `projects update`: the
     commit lands, `git -C $LAB/wt status --short` is clean, the lock is at `$R/.git/northkeep-export.lock`,
     and `touch $R/.git/worktrees/wt/index.lock` refuses the next run.
