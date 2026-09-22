@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import path from 'node:path';
 import {
   Vault,
   VaultAuthError,
@@ -7,6 +8,7 @@ import {
   listProjectViews,
   loadDeviceSecret,
   memzero,
+  PROJECT_SECTION_HEADINGS,
   summarizeMirror,
   withFileLock,
   type ImportFilePlan,
@@ -350,6 +352,12 @@ async function statusCmd(options: ExportCmdOptions, deps: MirrorDeps, out: (l: s
 async function scheduleCmd(value: string, deps: MirrorDeps, out: (l: string) => void, err: (l: string) => void): Promise<number> {
   const sched = deps.schedule;
   if (!sched) throw new Error('The export schedule is not available from here');
+  // The launchd job cannot carry --vault, so it always opens the default vault.
+  const defaultVault = path.join(deps.home, 'vault.nkv');
+  if (value !== 'off' && path.resolve(deps.vaultPath) !== defaultVault) {
+    err(`✗ The schedule exports only the default vault (${defaultVault}). Run --schedule without --vault.`);
+    return 1;
+  }
   const where = { ...(sched.plistDir !== undefined ? { plistDir: sched.plistDir } : {}), ...(sched.load !== undefined ? { load: sched.load } : {}) };
   if (value === 'off') {
     const file = schedulePlistPath(sched.plistDir);
@@ -375,6 +383,8 @@ async function scheduleCmd(value: string, deps: MirrorDeps, out: (l: string) => 
 
 // ---- import (ADR 0053 Decision 10) ---------------------------------------------------------
 
+const KNOWN_SECTIONS = new Set<string>([...PROJECT_SECTION_HEADINGS, 'Open Questions', 'Files']);
+
 function planLine(p: ImportFilePlan): string {
   const bytes = Buffer.byteLength(p.document, 'utf8').toLocaleString('en-US');
   const parts = [
@@ -383,6 +393,12 @@ function planLine(p: ImportFilePlan): string {
     p.overflow_parts.length === 0 ? 'no overflow' : plural(p.overflow_parts.length, 'overflow part'),
   ];
   for (const s of p.sections) if (s.from !== s.to) parts.push(`${s.from} stored as ${s.to}`);
+  // Unknown headings are shown so a heading split out of a code fence is visible before --write.
+  const docLines = p.document.split('\n');
+  const other = p.sections.filter(
+    (s, i) => s.from === s.to && !KNOWN_SECTIONS.has(s.to) && !(i === 0 && docLines.includes(`# ${s.from}`)),
+  );
+  if (other.length > 0) parts.push(`other sections: ${other.map((s) => s.from).join(', ')}`);
   if (p.overflow_sections.length > 0) parts.push(`moved to overflow: ${p.overflow_sections.join(', ')}`);
   if (p.log_files.length > 0) parts.push(`log files: ${p.log_files.join(', ')}`);
   return parts.join(', ');

@@ -288,6 +288,13 @@ describe.skipIf(process.platform !== 'darwin')('northkeep projects export --sche
     expect(opened).toBe(false);
   });
 
+  it('refuses a vault other than the default, since the job cannot carry --vault', async () => {
+    expect(await exportCmd({ repo })).toBe(0);
+    expect(await exportCmd({ schedule: 'hourly' }, { vaultPath: path.join(root, 'elsewhere.nkv') })).toBe(1);
+    expect(err[0]).toBe(`✗ The schedule exports only the default vault (${path.join(home, 'vault.nkv')}). Run --schedule without --vault.`);
+    expect(fs.existsSync(path.join(root, 'agents'))).toBe(false);
+  });
+
   it('refuses to install before a mirror is configured', async () => {
     expect(await exportCmd({ schedule: 'hourly' })).toBe(1);
     expect(err[0]).toContain('No mirror is configured');
@@ -383,6 +390,17 @@ describe('northkeep projects import', () => {
     expect(await importCmd({ from: src, write: true })).toBe(1);
     expect(out.find((l) => l.startsWith('Refused alpha.md (alpha): '))).toContain('Project alpha already exists');
     expect(out.at(-1)).toBe('Imported 0 projects; 2 refused, 1 skipped.');
+  });
+
+  it('names headings the dry run does not recognize, including one split out of a code fence', async () => {
+    const dir = path.join(root, 'fenced');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(
+      path.join(dir, 'gamma.md'),
+      '# Gamma\n\n## What & Why\n\nWhy.\n\n```\n## Not a heading\n```\n\n## Current Status\n\nOk.\n\n## Custom\n\nMine.\n',
+    );
+    expect(await importCmd({ from: dir })).toBe(0);
+    expect(out[0]).toMatch(/^Would import gamma\.md as gamma: .*, other sections: Not a heading, Custom$/);
   });
 
   it('refuses a folder that does not exist', async () => {
