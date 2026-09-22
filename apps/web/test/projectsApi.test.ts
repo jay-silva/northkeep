@@ -1,9 +1,11 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { handleProjectsApi } from '../src/projectsApi.js';
-import { ProjectHandoffError } from '@northkeep/core';
+import { KDF_INTERACTIVE, ProjectHandoffError, Vault, deriveMasterKey, generateDeviceSecret, listProjectViews, withFileLock } from '@northkeep/core';
+import { exportProjects, type VaultRunner } from '@northkeep/mcp-server';
 
 const SESSION_ID = '22222222-2222-4222-8222-222222222222';
 const APP_WRITER = { host: 'northkeep-app', host_version: null, session_id: SESSION_ID };
@@ -152,5 +154,57 @@ describe('project writer attribution (ADR 0052 Decision 1)', () => {
       expect(response?.body).toMatchObject({ code: 'invalid_request' });
     }
     expect(touched).toBe(0);
+  });
+});
+
+describe('project list mirror line (ADR 0053 Decision 7)', () => {
+  const gitEnv = (home: string) => ({ PATH: '/usr/bin:/bin', HOME: home, GIT_CONFIG_NOSYSTEM: '1', GIT_CONFIG_GLOBAL: path.join(home, 'empty.gitconfig') });
+  let root: string; let prevHome: string | undefined;
+  beforeEach(() => {
+    prevHome = process.env.NORTHKEEP_HOME;
+    root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'nk-web-mirror-')));
+    process.env.NORTHKEEP_HOME = path.join(root, 'home');
+    fs.mkdirSync(process.env.NORTHKEEP_HOME);
+  });
+  afterEach(() => {
+    if (prevHome === undefined) delete process.env.NORTHKEEP_HOME; else process.env.NORTHKEEP_HOME = prevHome;
+    fs.rmSync(root, { recursive: true, force: true });
+  });
+
+  it('is null when no mirror is configured', async () => {
+    const vault = { getVaultId: () => 'synthetic', list: () => [] };
+    const session = { isUnlocked: () => true, withVault: async (fn: (v: typeof vault) => unknown) => fn(vault) } as never;
+    const response = await handleProjectsApi(session, 'GET', '/api/projects', Buffer.alloc(0));
+    expect(response?.status).toBe(200);
+    expect(response?.body).toMatchObject({ vault_id: 'synthetic', projects: [], mirror: null });
+  });
+
+  it('carries the summary line once a mirror is configured, with no path in it', async () => {
+    const home = process.env.NORTHKEEP_HOME!; const vaultPath = path.join(home, 'vault.nkv');
+    const deviceSecret = generateDeviceSecret();
+    Vault.create({ path: vaultPath, passphrase: 'adr 0053 web', deviceSecret, kdf: KDF_INTERACTIVE }).close();
+    const header = Vault.readHeader(vaultPath);
+    const key = deriveMasterKey('adr 0053 web', deviceSecret, header.salt, header.kdf);
+    const runner: VaultRunner = (fn) => withFileLock(vaultPath, async () => {
+      const v = Vault.openWithKey(vaultPath, Buffer.from(key));
+      try { return await fn(v); } finally { v.close(); }
+    });
+    await runner((v) => { v.updateProject({ project: 'alpha', expected_revision: null, status: 'Starting.' }); v.save(); });
+    const repo = path.join(root, 'mirror'); const gitHome = path.join(root, 'githome');
+    fs.mkdirSync(repo); fs.mkdirSync(gitHome); fs.writeFileSync(path.join(gitHome, 'empty.gitconfig'), '');
+    for (const args of [['init', '-q', '-b', 'main'], ['config', 'user.name', 'Tester'], ['config', 'user.email', 'tester@example.invalid']]) {
+      execFileSync('/usr/bin/git', ['-C', repo, ...args], { env: gitEnv(gitHome), stdio: 'pipe' });
+    }
+    await exportProjects({ home, vaultPath, withVault: runner, by: 'cli', repo });
+    await runner((v) => {
+      v.updateProject({ project: 'alpha', expected_revision: listProjectViews(v)[0]!.revision!, status: 'Changed.' });
+      v.save();
+    });
+    const session = { isUnlocked: () => true, withVault: runner } as never;
+    const response = await handleProjectsApi(session, 'GET', '/api/projects', Buffer.alloc(0));
+    const body = response?.body as { mirror: string };
+    expect(response?.status).toBe(200);
+    expect(body.mirror).toMatch(/^mirror last exported \d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z \([^)]*\); 1 project changed since$/);
+    expect(body.mirror).not.toContain(root);
   });
 });

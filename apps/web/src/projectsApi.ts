@@ -1,6 +1,7 @@
 /** Projects routes inherit server.ts session-token checks and require an unlocked vault. */
 import fs from 'node:fs';
-import { getProjectView, listProjectViews, ProjectHandoffError, type ProjectCheckpointRequest, type ProjectUpdateRequest } from '@northkeep/core';
+import { getProjectView, listProjectViews, northkeepHome, ProjectHandoffError, type ProjectCheckpointRequest, type ProjectUpdateRequest } from '@northkeep/core';
+import { readMirrorSummary } from '@northkeep/mcp-server';
 import type { UiSession } from './session.js';
 
 /** Attribution for a save made from this app (ADR 0052 Decision 1). The host
@@ -18,12 +19,17 @@ function fileBytes(vaultPath: string): number | null {
   try { return fs.statSync(vaultPath).size; } catch { return null; }
 }
 
+/** ADR 0053 Decision 7: the backup line, or null. A status must never cost the project list. */
+function mirrorSummary(vault: Parameters<typeof readMirrorSummary>[0]): string | null {
+  try { return readMirrorSummary(vault, undefined, northkeepHome()); } catch { return null; }
+}
+
 export async function handleProjectsApi(session: UiSession, method: string, route: string, body: Buffer): Promise<Response | null> {
   if (route !== '/api/projects' && !route.startsWith('/api/projects/')) return null;
   try {
     if (!session.isUnlocked()) return reply(423, { error: 'Vault is locked.', code: 'locked' });
     if (method === 'GET' && route === '/api/projects') {
-      return reply(200, await session.withVault(vault => ({ vault_id: vault.getVaultId(), projects: listProjectViews(vault) })));
+      return reply(200, await session.withVault(vault => ({ vault_id: vault.getVaultId(), projects: listProjectViews(vault), mirror: mirrorSummary(vault) })));
     }
     if (route === '/api/projects/compact') {
       // ADR 0051 Decision 2. Preview by default: the caller asks for a real run
