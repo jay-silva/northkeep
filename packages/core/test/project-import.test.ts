@@ -57,6 +57,7 @@ describe('planImport (dry run)',()=>{
     expect(p.overflow_sections).toEqual(['Blueprint','Links & Locations']);
     expect(p.overflow!.startsWith(`${PROJECT_IMPORT_OVERFLOW_HEADING}: sample\n`)).toBe(true);
     expect(p.archived_entries).toBe(190);
+    expect(p.largest_row_bytes).toBe(Math.max(...[p.document,...p.archives,p.overflow!].map((r)=>Buffer.byteLength(r))));
     expect(p.archives.length).toBeGreaterThan(1);
     for(const a of p.archives){expect(a.startsWith(`${PROJECT_LOG_ARCHIVE_HEADING}: sample\n`)).toBe(true);expect(a.length).toBeLessThanOrEqual(PROJECT_DOC_MAX_CHARS);}
     const archived=p.archives.flatMap((a)=>splitLogArchive(a).entries);
@@ -80,6 +81,7 @@ describe('planImport (dry run)',()=>{
   it('skips index and marker files, bad names, near-miss headers, duplicate owned sections and orphan logs, each with a reason',()=>{
     const vid='0f1e2d3c-4b5a-4968-8776-655443322110';const rev='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
     const doc=formatMirrorHeader({vaultId:vid,kind:'document',slug:'demo',revision:rev});
+    const dbl=formatMirrorHeader({vaultId:vid,kind:'document',slug:'double',revision:rev});
     const plan=planImport([
       {name:'INDEX.md',text:`${formatMirrorHeader({vaultId:vid,kind:'index'})}\n| x |`},
       {name:'.northkeep-mirror.md',text:`${formatMirrorHeader({vaultId:vid,kind:'marker'})}\nmarker`},
@@ -90,9 +92,14 @@ describe('planImport (dry run)',()=>{
       {name:'ghost.log.1.md',text:`${formatMirrorHeader({vaultId:vid,kind:'log',slug:'ghost',revision:rev})}\n# Log archives: ghost\n`},
       {name:'renamed.md',text:`${doc}\n## What & Why\n\nMoved.`},
       {name:'forged.md',text:`## Log\n\n${doc}- 2026-09-22 - real entry`},
+      {name:'double.md',text:`${dbl}\n${dbl}## What & Why\n\nX.`},
+      {name:'gap.md',text:'## What & Why\n\nGap.'},
+      {name:'gap.log.2.md',text:`${formatMirrorHeader({vaultId:vid,kind:'log',slug:'gap',revision:rev})}\n# Log archives: gap\n`},
     ]);
     const reasons=Object.fromEntries(plan.skipped.map((s)=>[s.name,s.reason]));
-    expect(Object.keys(reasons).sort()).toEqual(['.northkeep-mirror.md','INDEX.md','_TEMPLATE.md','crlf.md','ghost.log.1.md','notes.txt','renamed.md','twice.md']);
+    expect(Object.keys(reasons).sort()).toEqual(['.northkeep-mirror.md','INDEX.md','_TEMPLATE.md','crlf.md','double.md','gap.md','ghost.log.1.md','notes.txt','renamed.md','twice.md']);
+    // The dry run applies the write's own checks, so a plan it lists is one importProject accepts.
+    expect(reasons['double.md']).toMatch(/still carries a NorthKeep header/);expect(reasons['gap.md']).toMatch(/without gaps/);
     expect(reasons['INDEX.md']).toMatch(/INDEX/);expect(reasons['crlf.md']).toMatch(/not exact/);expect(reasons['twice.md']).toMatch(/Open Questions/);
     expect(reasons['ghost.log.1.md']).toMatch(/no importable ghost\.md/);expect(reasons['renamed.md']).toMatch(/not demo\.md/);
     // A header forged in body text is content, not a header: it is not stripped and not trusted.

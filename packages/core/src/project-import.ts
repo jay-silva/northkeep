@@ -54,6 +54,8 @@ export interface ImportFilePlan {
   log_files: string[];
   /** Log entries moved into archives from the document itself. */
   archived_entries: number;
+  /** UTF-8 bytes of the largest row this plan writes; the connector refuses a shared row over 65,536. */
+  largest_row_bytes: number;
 }
 
 export interface ImportSkip { name: string; reason: string }
@@ -180,8 +182,9 @@ export function planImport(files: { name: string; text: string }[]): ImportPlan 
       continue;
     }
     const result = planDocument(d.name, d.slug, d.body, (logs.get(d.slug) ?? []).sort((a, b) => a.part - b.part));
-    if (typeof result === 'string') skipped.push({ name: d.name, reason: result });
-    else projects.push(result);
+    const problem = typeof result === 'string' ? result : importPlanProblem(result);
+    if (problem !== null) skipped.push({ name: d.name, reason: problem });
+    else projects.push(result as ImportFilePlan);
   }
   for (const [slug, parts] of logs) {
     if (documents.some((d) => d.slug === slug && counts.get(slug) === 1)) continue;
@@ -197,6 +200,8 @@ function planDocument(name: string, slug: string, body: string, logParts: Array<
   const duplicate = duplicateOwned(doc);
   if (duplicate) return `has more than one ${duplicate} section after mapping headings; merge them in the source first`;
 
+  // A missing middle part would drop its archives unseen.
+  if (logParts.some((part, i) => part.part !== i + 1)) return `log parts are not numbered 1 to ${logParts.length} without gaps: ${logParts.map((p) => p.name).join(', ')}`;
   // Parts are numbered newest first; archives go in oldest first.
   const reattached: string[] = [];
   for (const part of [...logParts].reverse()) {
@@ -244,16 +249,20 @@ function planDocument(name: string, slug: string, body: string, logParts: Array<
   if (document.trim().length === 0) return 'has no content';
   const rolled = entries.slice(keep).reverse();
   const inSourceOrder = moved.sort((a, b) => a.ord - b.ord).map((m) => m.section);
+  const archives = [...reattached, ...chunkArchives(slug, rolled, name)];
+  const overflow = inSourceOrder.length > 0 ? overflowText(slug, inSourceOrder, name) : null;
+  const encoder = new TextEncoder();
   return {
     name,
     slug,
     sections,
     document,
-    archives: [...reattached, ...chunkArchives(slug, rolled, name)],
-    overflow: inSourceOrder.length > 0 ? overflowText(slug, inSourceOrder, name) : null,
+    archives,
+    overflow,
     overflow_sections: inSourceOrder.map((section) => section.title),
     log_files: logParts.map((part) => part.name),
     archived_entries: rolled.length,
+    largest_row_bytes: Math.max(...[document, ...archives, ...(overflow === null ? [] : [overflow])].map((row) => encoder.encode(row).length)),
   };
 }
 

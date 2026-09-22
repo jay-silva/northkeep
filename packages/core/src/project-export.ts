@@ -66,7 +66,8 @@ const HEADER_RE = new RegExp(
   `^<!-- northkeep: vault (${UUID})(?: project ([a-z0-9-]{1,40}) revision (${UUID}))? kind (document|log|index|marker)\\n` +
     `${HEADER_SECOND_LINE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n`,
 );
-const encoder = new TextEncoder();
+/** Built per call, never at import time, so loading core needs no TextEncoder. */
+const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
 
 /** Code-unit order, so the output does not depend on the host's locale collation. */
 function byCodeUnit(a: string, b: string): number {
@@ -96,7 +97,7 @@ export function formatMirrorHeader(input: { vaultId: string; kind: MirrorHeaderK
     throw new Error(`A ${input.kind} header names no project.`);
   }
   const header = `${HEADER_OPEN}vault ${input.vaultId}${subject} kind ${input.kind}\n${HEADER_SECOND_LINE}\n`;
-  if (encoder.encode(header).length > MIRROR_HEADER_MAX_BYTES) throw new Error('Mirror header exceeds its byte cap.');
+  if (utf8(header).length > MIRROR_HEADER_MAX_BYTES) throw new Error('Mirror header exceeds its byte cap.');
   return header;
 }
 
@@ -122,7 +123,7 @@ export const parseExportHeader = parseMirrorHeader;
 
 function withHeader(header: string, body: string): Uint8Array {
   const lf = body.replace(/\r\n?/g, '\n');
-  return encoder.encode(`${header}\n${lf}${lf.endsWith('\n') ? '' : '\n'}`);
+  return utf8(`${header}\n${lf}${lf.endsWith('\n') ? '' : '\n'}`);
 }
 
 /** `projects/<slug>.md`: the stored document verbatim under its header. */
@@ -155,23 +156,21 @@ function renderArchiveSection(archive: ProjectArchive): string {
 }
 
 /**
- * `projects/<slug>.log.<n>.md`, from the view's archives (getProjectView with
- * history: true), newest archive first and newest entry first. Parts split
- * only between archives at a 65,536-byte target; an archive larger than the
- * target is its own part. Always numbered from 1, so growing a second part
- * never renames the first. Empty when the project has no archives.
+ * Log parts from a history: true view, newest first. Splits only between
+ * archives so an archive is never cut; one over the target stands alone.
+ * Always numbered, so growing a second part never renames the first.
  */
 export function renderLogFile(view: ProjectView): MirrorFile[] {
   if (view.archives.length === 0) return [];
   const header = formatMirrorHeader({ vaultId: view.vault_id, kind: 'log', slug: view.project, revision: view.revision });
   const title = `# Log archives: ${view.project}\n\nNewest archive first, newest entry first. The live Log is in ${view.project}.md.\n`;
-  const fixed = encoder.encode(`${header}\n${title}\n`).length;
+  const fixed = utf8(`${header}\n${title}\n`).length;
   const parts: string[][] = [];
   let current: string[] = [];
   let size = fixed;
   for (const archive of view.archives) {
     const section = renderArchiveSection(archive);
-    const bytes = encoder.encode(`\n${section}`).length;
+    const bytes = utf8(`\n${section}`).length;
     if (current.length > 0 && size + bytes > MIRROR_LOG_PART_TARGET_BYTES) {
       parts.push(current);
       current = [];
@@ -183,7 +182,7 @@ export function renderLogFile(view: ProjectView): MirrorFile[] {
   parts.push(current);
   return parts.map((sections, i) => ({
     path: `projects/${view.project}.log.${i + 1}.md`,
-    bytes: encoder.encode(`${header}\n${title}\n${sections.join('\n')}`),
+    bytes: utf8(`${header}\n${title}\n${sections.join('\n')}`),
     slug: view.project,
     kind: 'log' as const,
     revision: view.revision,
@@ -282,10 +281,9 @@ function stampAndAgo(at: string, now: Date): string {
 }
 
 /**
- * One line for project_list and project_resume: fixed text, times and a
- * count. A project counts as changed when its current revision differs from
- * the one last exported, or it was never exported; a conflicted project
- * cannot be exported and is not counted.
+ * Fixed text, times and a count only, so no path or content reaches a
+ * resume. A conflicted project cannot be exported, so counting it would
+ * report a change no export can clear.
  */
 export function summarizeMirror(state: MirrorState, summaries: ProjectSummary[], now: Date): string {
   const exported = state.projects ?? {};

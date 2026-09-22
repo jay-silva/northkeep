@@ -599,11 +599,9 @@ export class Vault {
   }
 
   /**
-   * Writes one planned import (ADR 0053 Decision 10): archives oldest first,
-   * then any overflow memory, then the live document, in one transaction.
-   * Refuses a slug that already has a live document and never merges. Import
-   * is not a host write, so the head carries no ADR 0052 provenance block.
-   * The caller persists with one save(), as with deleteProject.
+   * ADR 0053 Decision 10's write, one transaction. Never merges, so an
+   * existing slug is refused. No provenance block: import is not a host
+   * write. Archives go first so rowid order matches. Caller saves.
    */
   importProject(plan: ImportFilePlan, allowedScopes?: string[]): ProjectView {
     this.assertOpen();
