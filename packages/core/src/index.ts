@@ -29,6 +29,7 @@ export {
   computeEntryHash,
   cosineSimilarity,
   parseSyncGeneration,
+  projectScopeInUse,
   type VaultHeader,
   type VaultOptions,
 } from './vault.js';
