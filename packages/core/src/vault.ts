@@ -45,6 +45,7 @@ import {
   type ProjectView,
 } from './project-handoff.js';
 import { emptyProjectDoc, formatLogArchive, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
+import { importPlanProblem, type ImportFilePlan } from './project-import.js';
 import type { SqliteDb } from './sqlite-driver.js';
 import { SCHEMA_DDL } from './schema.js';
 import {
@@ -595,6 +596,39 @@ export class Vault {
   updateProject(request: ProjectUpdateRequest, allowedScopes?: string[]): ProjectView {
     this.assertOpen();
     return this.writeProject(request, allowedScopes, null).current;
+  }
+
+  /**
+   * ADR 0053 Decision 10's write, one transaction. Never merges, so an
+   * existing slug is refused. No provenance block: import is not a host
+   * write. Archives go first so rowid order matches. Caller saves.
+   */
+  importProject(plan: ImportFilePlan, allowedScopes?: string[]): ProjectView {
+    this.assertOpen();
+    const problem = importPlanProblem(plan);
+    if (problem !== null) throw new ProjectHandoffError('invalid_request', problem);
+    const scope = projectScope(plan.slug);
+    if (allowedScopes !== undefined && !allowedScopes.includes(scope)) throw new ProjectHandoffError('scope_denied', 'Project scope is outside this connection grant.');
+    this.db.transaction(() => {
+      if (this.list({ type: 'working', scope }).length > 0) {
+        throw new ProjectHandoffError('stale_project', `Project ${plan.slug} already exists. Import never merges; delete it first or import under another slug.`);
+      }
+      const now = new Date().toISOString();
+      const insert = this.prepareEntryInsert();
+      let chain = this.getMeta('chain_head');
+      const rows: Array<[MemoryType, string, string]> = [
+        ...plan.archives.map((content) => ['episodic', content, 'northkeep:project-log-archive'] as [MemoryType, string, string]),
+        ...plan.overflow_parts.map((content) => ['episodic', content, 'northkeep:project-import-overflow'] as [MemoryType, string, string]),
+        ['working', plan.document, 'northkeep:project-import'],
+      ];
+      for (const [type, content, source] of rows) {
+        const entry = this.makeProjectEntry(type, content, scope, source, null, chain, now);
+        insert.run(this.entryParams(entry));
+        chain = entry.entry_hash;
+      }
+      this.setMeta('chain_head', chain);
+    })();
+    return getProjectView(this, plan.slug, allowedScopes, { history: true });
   }
 
   /**
