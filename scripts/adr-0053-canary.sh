@@ -1,15 +1,14 @@
 #!/bin/bash
-# ADR 0053 canary: runs the exact Decision 2 environment, -c pins, plumbing
-# export sequence and read-only verify sequence against a hostile repository
-# built in a fresh mktemp directory under $TMPDIR. Every program the repository
-# names is a canary that records its own name. Prints "(none)" when no canary
-# fired, the fired names otherwise, the disk, HEAD and independently computed
-# blob ids for every exported file, whether verify changed any file, replace
-# refs, the push stage against a local bare repository standing in for the
-# remote (URL form, legacy remote files, push guard), and the temp-file writer.
-# Exits nonzero on any fire, a blob mismatch, a verify that wrote anything, or
-# a positive control that did not fire (the hostile setup would not be live).
-# Touches nothing outside its temp directory. Needs no network.
+# ADR 0053 canary (M-A1, the local mirror): runs the exact Decision 2 environment,
+# -c pins, plumbing export and read-only verify sequences against a hostile
+# repository built in a fresh mktemp directory under $TMPDIR, plus guards for
+# replace refs, legacy remote files, the mirror writer's temp path and crash
+# residue. Every program the repository names is a canary that records its own
+# name; every plant has a positive control. Prints "(none)" when no canary fired.
+# Exits nonzero on any fire, blob mismatch, verify write, failed guard or silent
+# control. With --m-a2 it also runs the push stages owned by ADR 0055 (draft),
+# against local bare repositories. Touches nothing outside its temp directory.
+# Needs no network.
 set -u
 exec </dev/null
 GIT=/usr/bin/git
@@ -149,7 +148,66 @@ echo "  replace refs planted on the current blob and tree:"; verify_run "$R" $M
 G "$R" read-tree HEAD; [ "$(G "$R" write-tree)" = "$T" ] && echo "  read-tree HEAD under the pinned env: the real tree, not the replacement" || { echo "  REPLACED TREE READ"; FAIL=1; }
 echo "linked worktree:"; export_run "$W" projects/s3.md; verify_run "$W" projects/s3.md
 echo "fresh repository:"; export_run "$R0" projects/root.md .northkeep-mirror; verify_run "$R0" projects/root.md .northkeep-mirror
-# The push step: its own environment and pins, by confirmed URL, one fixed ref. A local
+# ---- M-A1 guards: legacy remote files, the mirror writer, crash residue ----------------------
+HX() { wd env -i "${ENVP[@]}" "$GIT" -C "$1" "${PINS[@]}" "${@:2}"; }   # harness resolution only
+echo "legacy remote files (a guard; M-A1 never names a remote):"
+gd0=$(G "$R0" rev-parse --path-format=absolute --git-dir); EVIL0=$LAB/evil0.git; S "$LAB" init -q --bare "$EVIL0"
+for u in https://mirror.invalid/o/m.git ssh://git@mirror.invalid/o/m.git; do for d in remotes branches; do mkdir -p "$(dirname "$gd0/$d/$u")"; done
+  printf 'URL: %s\n' "$EVIL0" > "$gd0/remotes/$u"; printf '%s\n' "$EVIL0" > "$gd0/branches/$u"
+  [ "$(HX "$R0" ls-remote --get-url "$u")" = "$u" ] && echo "  planted at the ${u%%:*} URL: it still resolves to itself" || { echo "  $u REDIRECTED"; FAIL=1; }; done
+verify_run "$R0" projects/root.md .northkeep-mirror
+# mw: delete NorthKeep's own stale temps (exact pattern, unlink never follows), then a unique temp name,
+# containment on it, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW 0644, write, rename. $3 forces a suffix (test only).
+mw() { /usr/bin/perl -MFcntl -MFile::Basename -e '
+  my ($t, $bytes, $force) = @ARGV; my ($b, $d) = fileparse($t);
+  unless ($force) { opendir(my $h, $d) or die; for (readdir $h) { next unless /^\Q$b\E\.northkeep-tmp-[0-9a-f]{16}$/;
+    my @st = lstat("$d$_"); next unless @st && (-f _ || -l _); unlink("$d$_") and print "removed stale $_\n" } }
+  my $sfx = $force // do { open(my $r, "<", "/dev/urandom") or die; read($r, my $x, 8); unpack("H*", $x) };
+  my $tmp = "$t.northkeep-tmp-$sfx";
+  if (!$ENV{NK_SKIP_LSTAT} && lstat($tmp)) { print "containment refused: temp path exists\n"; exit 1 }
+  sysopen(my $f, $tmp, O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0644) or do { print "open refused: $!\n"; exit 1 };
+  if ($ENV{NK_CRASH}) { print $f substr($bytes, 0, 3); close $f; kill 9, $$ }
+  print $f $bytes; close $f; rename($tmp, $t) or exit 1; print "written\n"' "$@"; }
+echo "mirror writer:"
+T0=$R0/projects/root.md; printf 'OUTSIDE ORIGINAL\n' > "$LAB/outside.txt"
+ln -s "$LAB/outside.txt" "$T0.northkeep-tmp-0123456789abcdef"; ln -s "$LAB/absent.txt" "$T0.northkeep-tmp-fedcba9876543210"
+printf 'not ours\n' > "$T0.northkeep-tmp-notmine"
+o=$(mw "$T0" 'VERSION 2' | tr '\n' ';')
+[ "$(cat "$LAB/outside.txt")" = 'OUTSIDE ORIGINAL' ] && [ ! -e "$LAB/absent.txt" ] && [ -f "$T0" ] && [ ! -L "$T0" ] &&
+  [ "$(cat "$T0")" = 'VERSION 2' ] && [ -f "$T0.northkeep-tmp-notmine" ] && [ "$(echo "$o" | grep -o removed | wc -l | tr -d ' ')" = 2 ] &&
+  echo "  symlinks at our temp pattern, existing and dangling: unlinked, targets untouched; unique temp written; foreign name kept" ||
+  { echo "  WRITER FAILED: $o"; FAIL=1; }
+ln -s "$LAB/outside.txt" "$T0.northkeep-tmp-aaaaaaaaaaaaaaaa"; o=$(mw "$T0" 'ESCAPE' aaaaaaaaaaaaaaaa | tr '\n' ';')
+o="$o$(NK_SKIP_LSTAT=1 mw "$T0" 'ESCAPE' aaaaaaaaaaaaaaaa | tr '\n' ';')"
+[ "$(cat "$LAB/outside.txt")" = 'OUTSIDE ORIGINAL' ] && [ "$(cat "$T0")" = 'VERSION 2' ] && echo "  forced onto a planted link: ${o%;}; nothing outside changed" | sed 's/;/, then with the lstat skipped: /' ||
+  { echo "  FORCED WRITE ESCAPED"; FAIL=1; }
+rm -f "$T0.northkeep-tmp-aaaaaaaaaaaaaaaa"
+NK_CRASH=1 mw "$T0" 'VERSION 3' >/dev/null 2>&1
+left=$(ls "$R0/projects" | grep -c '^root\.md\.northkeep-tmp-[0-9a-f]\{16\}$')
+o=$(mw "$T0" 'VERSION 3' | tr '\n' ';')
+[ "$left" = 1 ] && [ "$(cat "$T0")" = 'VERSION 3' ] && [ "$(ls "$R0/projects" | grep -c '^root\.md\.northkeep-tmp-[0-9a-f]\{16\}$')" = 0 ] &&
+  echo "  killed mid-write: 1 temp left, target unchanged; next run removed it and wrote: healed" || { echo "  CRASH RESIDUE NOT HEALED ($left, $o)"; FAIL=1; }
+
+echo "canaries fired:"; if [ -s "$F" ]; then sort -u "$F" | sed 's/^/  /'; FAIL=1; else echo "  (none)"; fi
+# Positive controls, proving the hostile setup and every plant are live. They are not product calls.
+: > "$F"
+for s in s1 s2 s3 s4; do wd env -i "${ENVP[@]}" "$GIT" -C "$R" hash-object -- "projects/$s.md" >/dev/null 2>&1; done
+wd env -i "${ENVP[@]}" "HOME=$UH" "$GIT" -C "$R0" hash-object -- projects/root.md >/dev/null 2>&1
+wd env -i "${ENVP[@]}" "$GIT" -C "$R" update-ref refs/canary/control HEAD >/dev/null 2>&1
+[ "$(wd env -i "${ENVB[@]}" "$GIT" -C "$R" cat-file -p HEAD:projects/s1.md)" = FOREIGN ] && echo replace-ref.live >> "$F"
+printf 'URL: %s\n' "$EVIL0" > "$gd0/remotes/git@mirror.invalid:m.git"
+[ "$(HX "$R0" ls-remote --get-url git@mirror.invalid:m.git 2>/dev/null)" = "$EVIL0" ] && echo legacy-remote.slashfree-redirect >> "$F"
+ln -s "$LAB/outside.txt" "$LAB/followme"; printf 'FOLLOWED\n' > "$LAB/followme"; [ "$(cat "$LAB/outside.txt")" = FOLLOWED ] && echo tempfile.symlink.followed >> "$F"
+echo "controls (must fire):"; sort -u "$F" | tr '\n' ' ' | sed 's/^/  /' | sed 's/ $//'; echo
+for want in filter.a1.clean filter.a2.clean filter.a3.clean filter.a4.clean filter.a5.clean hook:core.hooksPath/reference-transaction \
+    replace-ref.live legacy-remote.slashfree-redirect tempfile.symlink.followed; do
+  grep -qx "$want" "$F" || { echo "  control did not fire: $want"; FAIL=1; }; done
+[ "$FAIL" = 0 ] && echo "result M-A1: PASS" || echo "result M-A1: FAIL"
+[ "${1:-}" = --m-a2 ] || exit "$FAIL"
+
+# ==== M-A2, owned by ADR 0055 (draft): the GitHub push stages. Run with --m-a2. ================
+A1FAIL=$FAIL; FAIL=0; : > "$F"
+# The push step (ADR 0055): its own environment and pins, by confirmed URL, one fixed ref. A local
 # bare repository stands in for GitHub; the lab adds protocol.file.allow, nothing else.
 PUSHPINS=(-c "core.hooksPath=$N/hooks" -c core.fsmonitor=false -c protocol.allow=never
   -c protocol.https.allow=always -c protocol.ssh.allow=always -c push.gpgSign=false
@@ -211,36 +269,15 @@ P "$R" "${LABPIN[@]}" push --porcelain --no-verify "$URL" "HEAD:refs/heads/belt"
 [ -n "$(P "$R" "${LABPIN[@]}" ls-remote "$EVIL" 2>/dev/null)" ] && ev=yes || ev=no
 echo "  pins alone on the hostile mirror: url.insteadOf redirected the push: $ev (why the allowlist exists)"
 
-# The mirror file writer: containment covers the temp path, then O_CREAT|O_EXCL|O_NOFOLLOW.
-mw() { local t=$1 tmp="$1.northkeep-tmp"
-  if [ -e "$tmp" ] || [ -L "$tmp" ]; then echo "containment refused: ${tmp#$LAB/} exists"; fi
-  /usr/bin/perl -MFcntl -e 'sysopen(my $f, $ARGV[0], O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW, 0644) or do { print "open refused: $!\n"; exit 1 };
-    print $f $ARGV[2]; close $f; rename($ARGV[0], $ARGV[1]) or exit 1' "$tmp" "$t" "$2"; }
-echo "temp file:"
-printf 'OUTSIDE ORIGINAL\n' > "$LAB/outside.txt"; ln -s "$LAB/outside.txt" "$R0/projects/root.md.northkeep-tmp"
-ln -s "$LAB/absent.txt" "$R0/projects/INDEX.northkeep-tmp" 2>/dev/null
-r1=$(mw "$R0/projects/root.md" 'PLAINTEXT' | tr '\n' ';'); r2=$(mw "$R0/projects/INDEX" 'PLAINTEXT' | tr '\n' ';')
-[ "$(cat "$LAB/outside.txt")" = 'OUTSIDE ORIGINAL' ] && [ ! -e "$LAB/absent.txt" ] && [ ! -L "$R0/projects/root.md" ] &&
-  case "$r1$r2" in *"containment refused"*"open refused: File exists"*"open refused: File exists"*)
-    echo "  symlink at the temp path, existing and dangling: containment refused, O_EXCL|O_NOFOLLOW open refused (File exists), nothing outside changed";;
-    *) echo "  temp refusal missing: $r1 $r2"; FAIL=1;; esac || { echo "  TEMP WRITE ESCAPED"; FAIL=1; }
 
-echo "canaries fired:"; if [ -s "$F" ]; then sort -u "$F" | sed 's/^/  /'; FAIL=1; else echo "  (none)"; fi
-
-# Positive controls, proving the hostile setup is live. They are not product calls.
-cp "$F" "$FC.main"; : > "$F"
-for s in s1 s2 s3 s4; do wd env -i "${ENVP[@]}" "$GIT" -C "$R" hash-object -- "projects/$s.md" >/dev/null 2>&1; done
-wd env -i "${ENVP[@]}" "HOME=$UH" "$GIT" -C "$R0" hash-object -- projects/root.md >/dev/null 2>&1
-wd env -i "${ENVP[@]}" "$GIT" -C "$R" update-ref refs/canary/control HEAD >/dev/null 2>&1
+echo "M-A2 canaries fired:"; if [ -s "$F" ]; then sort -u "$F" | sed 's/^/  /'; FAIL=1; else echo "  (none)"; fi
+: > "$F"
 wd env -i "${PENV[@]}" "$GIT" -C "$R" "${LABPIN[@]}" push origin HEAD:refs/heads/ctl >/dev/null 2>&1
 wd env -i "${PENV[@]}" "$GIT" -C "$R" "${LABPIN[@]}" push "$URL" HEAD:refs/heads/ctl2 >/dev/null 2>&1
-[ "$(wd env -i "${ENVB[@]}" "$GIT" -C "$R" cat-file -p HEAD:projects/s1.md)" = FOREIGN ] && echo replace-ref.live >> "$F"
 mkdir -p "$gd1/remotes"; printf 'URL: %s\n' "$EVIL" > "$gd1/remotes/git@mirror.invalid:m.git"
 [ "$(P "$R1" ls-remote --get-url git@mirror.invalid:m.git 2>/dev/null)" = "$EVIL" ] && echo legacy-remote.scp-redirect >> "$F"
-printf 'FOLLOWED\n' > "$R0/projects/root.md.northkeep-tmp"; [ "$(cat "$LAB/outside.txt")" = FOLLOWED ] && echo tempfile.symlink.followed >> "$F"
-echo "controls (must fire):"; sort -u "$F" | tr '\n' ' ' | sed 's/^/  /'; echo
-for want in filter.a1.clean filter.a2.clean filter.a3.clean filter.a4.clean filter.a5.clean hook:core.hooksPath/reference-transaction \
-    hook:core.hooksPath/pre-push remote.origin.receivepack replace-ref.live legacy-remote.scp-redirect tempfile.symlink.followed; do
+echo "M-A2 controls (must fire):"; sort -u "$F" | tr '\n' ' ' | sed 's/^/  /' | sed 's/ $//'; echo
+for want in hook:core.hooksPath/pre-push remote.origin.receivepack legacy-remote.scp-redirect; do
   grep -qx "$want" "$F" || { echo "  control did not fire: $want"; FAIL=1; }; done
-[ "$FAIL" = 0 ] && echo "result: PASS" || echo "result: FAIL"
-exit "$FAIL"
+[ "$FAIL" = 0 ] && echo "result M-A2: PASS" || echo "result M-A2: FAIL"
+exit $(( A1FAIL || FAIL ))
