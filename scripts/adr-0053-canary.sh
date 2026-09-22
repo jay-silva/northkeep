@@ -4,7 +4,8 @@
 # built in a fresh mktemp directory under $TMPDIR. Every program the repository
 # names is a canary that records its own name. Prints "(none)" when no canary
 # fired, the fired names otherwise, the disk, HEAD and independently computed
-# blob ids for every exported file, and whether verify changed any file.
+# blob ids for every exported file, whether verify changed any file, and the
+# push stage against a local bare repository standing in for the remote.
 # Exits nonzero on any fire, a blob mismatch, a verify that wrote anything, or
 # a positive control that did not fire (the hostile setup would not be live).
 # Touches nothing outside its temp directory. Needs no network.
@@ -139,6 +140,39 @@ M="projects/s1.md projects/s2.md projects/s3.md projects/s4.md INDEX.md .northke
 export_run "$R" $M; verify_run "$R" $M
 echo "linked worktree:"; export_run "$W" projects/s3.md; verify_run "$W" projects/s3.md
 echo "fresh repository:"; export_run "$R0" projects/root.md .northkeep-mirror; verify_run "$R0" projects/root.md .northkeep-mirror
+# The push step: its own environment and pins, by confirmed URL, one fixed ref. A local
+# bare repository stands in for GitHub; the lab adds protocol.file.allow, nothing else.
+PUSHPINS=(-c "core.hooksPath=$N/hooks" -c core.fsmonitor=false -c protocol.allow=never
+  -c protocol.https.allow=always -c protocol.ssh.allow=always -c push.gpgSign=false
+  -c gpg.program=/usr/bin/false -c push.recurseSubmodules=no -c submodule.recurse=false
+  -c push.followTags=false -c core.askPass=/usr/bin/false -c core.alternateRefsCommand=
+  -c http.sslVerify=true)
+PENV=(PATH=/usr/bin:/bin "HOME=$UH" GIT_TERMINAL_PROMPT=0 GIT_ASKPASS=/usr/bin/false
+  SSH_ASKPASS=/usr/bin/false GIT_OPTIONAL_LOCKS=0)
+LABPIN=(-c protocol.file.allow=always)
+P() { local r=$1; shift; wd env -i "${PENV[@]}" "$GIT" -C "$r" "${PUSHPINS[@]}" "$@"; }
+URL=$LAB/remote.git; EVIL=$LAB/evil.git; S "$LAB" init -q --bare "$URL"; S "$LAB" init -q --bare "$EVIL"
+ALLOW='^(core\.(repositoryformatversion|filemode|bare|logallrefupdates|ignorecase|precomposeunicode)|user\.(name|email)|extensions\.objectformat)='
+offending() { G "$1" config --list --show-scope --includes | awk -F'\t' '$1!="command"{print $2}' |
+  grep -Ev "$ALLOW" | grep -Fvx "remote.origin.url=$URL" | grep -Fvx 'remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*'; }
+R1=$LAB/clean; mkdir -p "$R1"; S "$R1" init -q; S "$R1" config user.name O; S "$R1" config user.email o@e.invalid
+body clean > "$R1/INDEX.md"; S "$R1" add INDEX.md; S "$R1" commit -q -m export; S "$R1" remote add origin "$URL"
+echo "push:"
+n=$(offending "$R1" | wc -l | tr -d ' '); [ "$n" = 0 ] || { echo "  clean mirror preflight: $n keys"; FAIL=1; }
+P "$R1" "${LABPIN[@]}" push --porcelain --no-verify "$URL" "$(G "$R1" rev-parse HEAD):refs/heads/main" >/dev/null 2>&1 || FAIL=1
+lr=$(P "$R1" "${LABPIN[@]}" ls-remote "$URL" refs/heads/main | cut -c1-40)
+[ "$lr" = "$(G "$R1" rev-parse HEAD)" ] && echo "  clean mirror: allowlist passes, pushed, ls-remote main = HEAD" || { echo "  clean mirror push FAILED"; FAIL=1; }
+P "$R1" push --porcelain --no-verify "$URL" "HEAD:refs/heads/fileproto" >/dev/null 2>&1 && { echo "  product pins allowed a file URL"; FAIL=1; } ||
+  echo "  product pins, local path URL: refused (https and ssh only)"
+for k in remote.origin.receivepack remote.origin.uploadpack; do S "$R" config "$k" "$(can "$k")"; done
+S "$R" config remote.origin.url "$URL"; S "$R" config remote.origin.pushurl "$EVIL"
+S "$R" config "url.$EVIL.insteadOf" "$URL"; S "$R" config "url.$EVIL.pushInsteadOf" "$URL"
+S "$R" config push.gpgSign true; S "$R" config protocol.allow always; S "$R" config http.sslVerify false
+n=$(offending "$R" | wc -l | tr -d ' '); [ "$n" -gt 0 ] && echo "  hostile mirror: refused before push, $n local keys outside the allowlist" || FAIL=1
+P "$R" "${LABPIN[@]}" push --porcelain --no-verify "$URL" "HEAD:refs/heads/belt" >/dev/null 2>&1
+[ -n "$(P "$R" "${LABPIN[@]}" ls-remote "$EVIL" 2>/dev/null)" ] && ev=yes || ev=no
+echo "  pins alone on the hostile mirror: url.insteadOf redirected the push: $ev (why the allowlist exists)"
+
 echo "canaries fired:"; if [ -s "$F" ]; then sort -u "$F" | sed 's/^/  /'; FAIL=1; else echo "  (none)"; fi
 
 # Positive controls, proving the hostile setup is live. They are not product calls.
@@ -146,8 +180,11 @@ cp "$F" "$FC.main"; : > "$F"
 for s in s1 s2 s3 s4; do wd env -i "${ENVP[@]}" "$GIT" -C "$R" hash-object -- "projects/$s.md" >/dev/null 2>&1; done
 wd env -i "${ENVP[@]}" "HOME=$UH" "$GIT" -C "$R0" hash-object -- projects/root.md >/dev/null 2>&1
 wd env -i "${ENVP[@]}" "$GIT" -C "$R" update-ref refs/canary/control HEAD >/dev/null 2>&1
+wd env -i "${PENV[@]}" "$GIT" -C "$R" "${LABPIN[@]}" push origin HEAD:refs/heads/ctl >/dev/null 2>&1
+wd env -i "${PENV[@]}" "$GIT" -C "$R" "${LABPIN[@]}" push "$URL" HEAD:refs/heads/ctl2 >/dev/null 2>&1
 echo "controls (must fire):"; sort -u "$F" | tr '\n' ' ' | sed 's/^/  /'; echo
-for want in filter.a1.clean filter.a2.clean filter.a3.clean filter.a4.clean filter.a5.clean hook:core.hooksPath/reference-transaction; do
+for want in filter.a1.clean filter.a2.clean filter.a3.clean filter.a4.clean filter.a5.clean hook:core.hooksPath/reference-transaction \
+    hook:core.hooksPath/pre-push remote.origin.receivepack; do
   grep -qx "$want" "$F" || { echo "  control did not fire: $want"; FAIL=1; }; done
 [ "$FAIL" = 0 ] && echo "result: PASS" || echo "result: FAIL"
 exit "$FAIL"
