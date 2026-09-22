@@ -1,11 +1,12 @@
 #!/bin/bash
-# ADR 0053 canary: runs the exact Decision 2 environment, -c pins and plumbing
-# sequence against a hostile repository built in a fresh mktemp directory under
-# $TMPDIR. Every program the repository names is a canary that records its own
-# name. Prints "(none)" when no canary fired, the fired names otherwise, and the
-# disk, HEAD and independently computed blob ids for every exported file.
-# Exits nonzero on any fire, on a blob mismatch, or when a positive control
-# fails to fire (which would mean the hostile setup is not live).
+# ADR 0053 canary: runs the exact Decision 2 environment, -c pins, plumbing
+# export sequence and read-only verify sequence against a hostile repository
+# built in a fresh mktemp directory under $TMPDIR. Every program the repository
+# names is a canary that records its own name. Prints "(none)" when no canary
+# fired, the fired names otherwise, the disk, HEAD and independently computed
+# blob ids for every exported file, and whether verify changed any file.
+# Exits nonzero on any fire, a blob mismatch, a verify that wrote anything, or
+# a positive control that did not fire (the hostile setup would not be live).
 # Touches nothing outside its temp directory. Needs no network.
 set -u
 exec </dev/null
@@ -83,6 +84,8 @@ printf 'projects/root.md %s\n' "$(ATTR a5)" > "$UH/.config/git/attributes"      
 body() { printf '<!-- northkeep: vault v project %s revision r kind document\n     The vault is canonical. -->\n# %s\n\nplaintext body\n' "$1" "$1"; }
 for s in s1 s2 s3 s4; do body $s > "$R/projects/$s.md"; done
 body index > "$R/INDEX.md"; body wt > "$W/projects/s3.md"; body root > "$R0/projects/root.md"
+marker() { printf '<!-- northkeep: vault v kind marker\n     This folder is a NorthKeep mirror. -->\n' > "$1/.northkeep-mirror"; }
+marker "$R"; marker "$R0"
 : > "$F"
 
 # The Decision 2 and 3 sequence, one repository, one export.
@@ -115,12 +118,27 @@ export_run() { local r=$1; shift; local gd cd top p b hb c t par
     [ "$d" = "$h" ] && [ "$h" = "$i" ] && m=equal || { m=MISMATCH; FAIL=1; }
     echo "  $p disk=${d:0:12} head=${h:0:12} sha1=${i:0:12} $m"; done; }
 
+# The Decision 8 verify sequence: read-only, filter-free. The file bytes stand in for the render.
+snap() { { find "$1" -type f -print0 | sort -z | xargs -0 /usr/bin/shasum; ls -la "$1"; } 2>/dev/null | /usr/bin/shasum | cut -c1-40; }
+verify_run() { local r=$1; shift; local gd cd before after p rb hb db n=0 ok=0
+  gd=$(G "$r" rev-parse --path-format=absolute --git-dir); cd=$(G "$r" rev-parse --path-format=absolute --git-common-dir)
+  before="$(snap "$gd")$(snap "$cd")$(snap "$r")"
+  G "$r" ls-tree HEAD -- projects/ >/dev/null
+  for p in "$@"; do n=$((n+1))
+    rb=$(G "$r" hash-object --no-filters --stdin < "$r/$p"); hb=$(G "$r" rev-parse -q --verify "HEAD:$p")
+    db=$(G "$r" hash-object --no-filters -- "$r/$p"); [ "$rb" = "$hb" ] && [ "$hb" = "$db" ] && ok=$((ok+1)); done
+  after="$(snap "$gd")$(snap "$cd")$(snap "$r")"
+  [ "$before" = "$after" ] && u=unchanged || { u=CHANGED; FAIL=1; }
+  [ "$ok" = "$n" ] || FAIL=1
+  echo "  verify: $ok/$n match, repository $u"; }
+
 echo "git: $("$GIT" --version)"
 echo "hostile: $(echo $HOOKS | wc -w | tr -d ' ') hooks in each of .git/hooks and core.hooksPath, $(echo $KEYS | wc -w | tr -d ' ') program keys, 21 driver keys, 5 attribute sources"
 echo "main repository:"
-export_run "$R" projects/s1.md projects/s2.md projects/s3.md projects/s4.md INDEX.md
-echo "linked worktree:"; export_run "$W" projects/s3.md
-echo "fresh repository:"; export_run "$R0" projects/root.md
+M="projects/s1.md projects/s2.md projects/s3.md projects/s4.md INDEX.md .northkeep-mirror"
+export_run "$R" $M; verify_run "$R" $M
+echo "linked worktree:"; export_run "$W" projects/s3.md; verify_run "$W" projects/s3.md
+echo "fresh repository:"; export_run "$R0" projects/root.md .northkeep-mirror; verify_run "$R0" projects/root.md .northkeep-mirror
 echo "canaries fired:"; if [ -s "$F" ]; then sort -u "$F" | sed 's/^/  /'; FAIL=1; else echo "  (none)"; fi
 
 # Positive controls, proving the hostile setup is live. They are not product calls.
