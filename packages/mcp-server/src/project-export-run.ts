@@ -460,6 +460,15 @@ export function statePath(home: string, repoReal: string, mirrorId: string | nul
   return path.join(exportDir(home), `${exportFileStem(repoReal, mirrorId)}.state.json`);
 }
 
+/**
+ * A run refused before it held the export lock records here, never in the
+ * state file: the lock holder rewrites state from a copy read earlier, so a
+ * second writer would either lose the refusal or drop the holder's nk_commits.
+ */
+export function refusalPath(home: string, repoReal: string, mirrorId: string | null = null): string {
+  return path.join(exportDir(home), `${exportFileStem(repoReal, mirrorId)}.refused.json`);
+}
+
 function isStr(v: unknown): v is string {
   return typeof v === 'string';
 }
@@ -492,13 +501,19 @@ export function readExportState(home: string, repoReal: string, vaultId: string,
   if (!Array.isArray(commits) || !commits.every((c) => isStr(c) && OID.test(c))) return null;
   const fp = v.vault_fingerprint ?? null;
   if (fp !== null && !(isStr(fp) && /^[0-9a-f]{64}$/.test(fp))) return null;
+  const r = readJson(refusalPath(home, repoReal, mirrorId));
+  const late =
+    isRecord(r) && r.version === 1 && r.vault_id === vaultId && isStr(r.at) && isStr(r.code) && (r.by === 'cli' || r.by === 'schedule') &&
+    (attempt === null || r.at > attempt.at)
+      ? { at: r.at, by: r.by as 'cli' | 'schedule', code: r.code }
+      : null;
   return {
     version: 1,
     repo: v.repo,
     vault_id: vaultId,
     last_success: success,
-    last_attempt: attempt,
-    last_failure: failure,
+    last_attempt: late ? { at: late.at, by: late.by } : attempt,
+    last_failure: late ? { at: late.at, code: late.code } : failure,
     refused: refused as ExportState['refused'],
     projects: projects as ExportState['projects'],
     nk_commits: commits as string[],
@@ -769,6 +784,26 @@ function recordFailure(
   writeExportState(home, state, lock);
 }
 
+/**
+ * Records a refusal from before the lock was taken. Only into a mirror whose
+ * state this vault file already owns, by header fingerprint, since the vault
+ * is not opened; a unique temp and rename, so peers never interleave.
+ */
+function recordAcquireRefusal(home: string, repo: string, vaultPath: string, by: 'cli' | 'schedule', code: string, at: string): void {
+  const mirrorId = readMarkerMirrorId(repo);
+  const raw = readJson(statePath(home, repo, mirrorId));
+  const fp = vaultFingerprint(vaultPath);
+  if (!isRecord(raw) || !isStr(raw.vault_id) || fp === null || raw.vault_fingerprint !== fp) return;
+  const file = refusalPath(home, repo, mirrorId);
+  const tmp = `${file}.northkeep-tmp-${crypto.randomBytes(8).toString('hex')}`;
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, vault_id: raw.vault_id, vault_fingerprint: fp, at, by, code })}\n`, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmp, file);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
 /** Refusals that end the whole run; everything else refuses one target. */
 const RUN_FATAL = new Set(['lock_not_held', 'lock_lost', 'tree_check_failed']);
 
@@ -988,9 +1023,15 @@ export async function exportProjects(opts: ExportRunOptions): Promise<ExportRunR
   let lock: ExportLock;
   try {
     lock = await acquireExportLock(ctx, { waitMs: opts.lockWaitMs });
-  } catch (err) {
-    if (err instanceof GitCommandError) {
-      throw new ExportRefusal('not_work_tree', 'The mirror folder is not a git working tree; run git init in an empty folder first');
+  } catch (caught) {
+    const err =
+      caught instanceof GitCommandError
+        ? new ExportRefusal('not_work_tree', 'The mirror folder is not a git working tree; run git init in an empty folder first')
+        : caught;
+    try {
+      recordAcquireRefusal(opts.home, repo, opts.vaultPath, opts.by, failureCode(err), now().toISOString());
+    } catch {
+      // the refusal itself is the one worth reporting
     }
     throw err;
   }

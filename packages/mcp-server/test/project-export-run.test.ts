@@ -13,6 +13,7 @@ import {
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ExportRefusal, readRemotes, repoKey, setGitSpawnObserver } from '../src/git-plumbing.js';
 import {
+  acquireExportLock,
   classifyTarget,
   exportProjects,
   importProjects,
@@ -701,6 +702,34 @@ describe('a killed lock stealer never wedges exports (recheck flesh wound)', () 
     fs.writeFileSync(lockFile(), deadToken());
     expect((await changeAndExport('After the later crash.')).status).toBe('committed');
     expect(junk()).toEqual([]);
+  });
+
+  it('a scheduled run refused at lock time is the last failure, and the holder state write cannot hide it', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const stateFile = path.join(lab.home, 'export', fs.readdirSync(path.join(lab.home, 'export')).find((n) => n.endsWith('.state.json'))!);
+    fs.writeFileSync(lockFile(), 'not json, owner unknown\n');
+    await expect(
+      exportProjects({ home: lab.home, vaultPath: lab.vaultPath, by: 'schedule', lockWaitMs: 100, now: () => new Date(Date.now() + 60_000) }),
+    ).rejects.toMatchObject({ code: 'lock_unreadable' });
+    let state = await runner((v) => stateOf(v));
+    expect(state?.last_failure?.code).toBe('lock_unreadable');
+    expect(state?.last_attempt?.by).toBe('schedule');
+    expect(state?.nk_commits.length).toBeGreaterThan(0);
+    const line = await runner((v) => readMirrorSummary(v, undefined, lab.home, new Date(Date.now() + 120_000)));
+    expect(line).toContain('last export failed');
+
+    // A live holder refuses a second run, then rewrites state from its earlier copy.
+    fs.rmSync(lockFile());
+    const held = await acquireExportLock(ctxFor(lab, repo), { waitMs: 100 });
+    const copy = fs.readFileSync(stateFile, 'utf8');
+    await expect(
+      exportProjects({ home: lab.home, vaultPath: lab.vaultPath, by: 'schedule', lockWaitMs: 100, now: () => new Date(Date.now() + 180_000) }),
+    ).rejects.toMatchObject({ code: 'export_busy' });
+    fs.writeFileSync(stateFile, copy);
+    held.release();
+    state = await runner((v) => stateOf(v));
+    expect(state?.last_failure?.code).toBe('export_busy');
   });
 });
 

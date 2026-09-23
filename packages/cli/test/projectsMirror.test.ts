@@ -368,6 +368,19 @@ describe('northkeep projects export --scheduled', () => {
   });
 });
 
+describe('northkeep projects export --scheduled, refused at the lock', () => {
+  it('records an unreadable export lock and --status shows it as the last failure', async () => {
+    expect(await exportCmd({ repo })).toBe(0);
+    fs.writeFileSync(path.join(repo, '.git', 'northkeep-export.lock'), 'not json, owner unknown\n');
+    const code = await exportCmd({ scheduled: true }, { scheduledRunner: runner, scheduledLockWaitMs: 100 });
+    expect(code).toBe(1);
+    expect(out).toEqual([]);
+    expect(err).toEqual([]);
+    expect(await exportCmd({ status: true })).toBe(0);
+    expect(out.find((l) => l.startsWith('Last failure: '))).toMatch(/^Last failure: .+, lock_unreadable \(the export lock file was unreadable; /);
+  }, 60_000);
+});
+
 describe('northkeep projects import', () => {
   /** Shaped like the command repo's projects folder: one file per project, plus a template. */
   function commandRepoCopy(): string {

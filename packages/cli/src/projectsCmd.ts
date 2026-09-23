@@ -158,6 +158,8 @@ export interface MirrorDeps {
   vaultRunner: () => Promise<VaultRunner>;
   /** Tests only. The launchd job leaves it unset so the export layer never prompts. */
   scheduledRunner?: VaultRunner;
+  /** Tests only: how long the launchd run waits for the export lock. */
+  scheduledLockWaitMs?: number;
   schedule?: { cliEntry: string; plistDir?: string; load?: boolean };
   out?: (line: string) => void;
   err?: (line: string) => void;
@@ -260,6 +262,7 @@ async function scheduledExport(deps: MirrorDeps): Promise<number> {
       vaultPath: deps.vaultPath,
       by: 'schedule',
       ...(deps.scheduledRunner ? { withVault: deps.scheduledRunner } : {}),
+      ...(deps.scheduledLockWaitMs !== undefined ? { lockWaitMs: deps.scheduledLockWaitMs } : {}),
     });
     return res.refused.length > 0 ? 1 : 0;
   } catch {
