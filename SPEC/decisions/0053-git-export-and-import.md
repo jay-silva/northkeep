@@ -70,8 +70,10 @@ included, exists there, then `fchmodSync(fd, 0o644)` against the umask, write, `
 `renameSync(tmp, target)`. On error it unlinks only the temp it created. So a write killed mid-way leaves one
 temp that the next run removes before writing: crash residue heals without a human. Mirror files are
 `0o644` because this function sets it. Files under `<NORTHKEEP_HOME>/export/` (a `0o700` directory) use
-`atomicWrite` and keep `0o600`. `<key>` is the SHA-256 of the UTF-8 repository realpath, 64 lowercase hex
-characters, naming the temporary index, the journal and the state file.
+`atomicWrite` and keep `0o600`. `<key>` is the mirror id: a lowercase v4 UUID written into the marker file at
+the first export (a marker from before the id existed gets one on its next export, in one commit). It names
+the journal and the state file, so a moved mirror folder keeps its history. Each run's temporary index is
+its own file, `<key>.<run nonce>.index`, removed by the run that created it.
 
 Git never touches the working tree. Per file, NorthKeep renders the bytes, hashes them, journals the blob id,
 then writes. All through `execFile` with an args array:
@@ -101,7 +103,7 @@ PATH=/usr/bin:/bin   HOME=<NORTHKEEP_HOME>
 GIT_CONFIG_NOSYSTEM=1   GIT_CONFIG_GLOBAL=<NORTHKEEP_HOME>/empty.gitconfig  (owned, zero bytes)
 GIT_ATTR_NOSYSTEM=1  GIT_TERMINAL_PROMPT=0  GIT_OPTIONAL_LOCKS=0
 GIT_ASKPASS=/usr/bin/false   SSH_ASKPASS=/usr/bin/false   GIT_NO_REPLACE_OBJECTS=1
-GIT_INDEX_FILE=<NORTHKEEP_HOME>/export/<key>.index   (omitted only for the reconcile, below)
+GIT_INDEX_FILE=<NORTHKEEP_HOME>/export/<key>.<run nonce>.index   (omitted only for the reconcile, below)
 ```
 
 and these `-c` pins, which outrank repository config:
@@ -522,3 +524,31 @@ they went:
   control-character note moved. The directory-swap race stays a residual here.
 
 Jay's decision after it, 2026-09-22: "Split it."
+
+## Code review (2026-09-22, first review of the M-A1 code)
+
+Two fresh-eyes execution attackers against the built code, verdicts at
+`scratchpad/verdicts/m-a1-code-export.md` and `m-a1-code-import-surfaces.md`.
+Export side NOT CLEARED: concurrent exports could commit a tree deleting user
+files or an empty tree, because the lock could be stolen by age or by a racing
+dead-owner takeover and every run shared one temporary index. Import and
+surfaces CLEARED WITH WOUNDS (seven). Fixed in one round (Jay: "go"):
+
+- The lock is never taken by age. A dead owner's lock is taken by
+  compare-and-steal under a separate guard file; the lock is re-read before
+  `update-ref`; each run has a private temporary index; a commit missing a file
+  the run did not remove is refused.
+- An unreadable mirror file refuses only itself. A run records a failure only in
+  its own vault's state file, matched by `vault_fingerprint` (a hash of the vault
+  header's salt) when the vault could not be opened; that field is added to the
+  state file described in Decision 7.
+- Verify runs git with a throwaway home and writes nothing under NORTHKEEP_HOME;
+  it reports a file present only in HEAD, and a mode change.
+- Import decodes strict UTF-8 and refuses anything else; keeps the newest ten
+  Log entries by date when every entry is dated; caps every row at 60,000 bytes;
+  reports skipped symlinks, FIFOs and unreadable files; refuses a scope with any
+  live row; the dry run reports existing projects and sizes against the 4 MB
+  sync limit. Deleting a project works when only its archives remain.
+- The journal and state are keyed by the marker's mirror id (above).
+- Light-theme contrast of the mirror line is 5.1:1; the schedule has test-only
+  overrides for the LaunchAgents folder and launchctl.
