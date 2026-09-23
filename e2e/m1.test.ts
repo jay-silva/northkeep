@@ -87,6 +87,7 @@ describe('M1 acceptance — MCP server', () => {
       'memory_list',
       'memory_remember',
       'memory_retrieve',
+      'project_board',
       'project_checkpoint',
       'project_create',
       'project_get',
