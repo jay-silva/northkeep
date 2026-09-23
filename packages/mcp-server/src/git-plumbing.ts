@@ -78,9 +78,9 @@ function pidAlive(pid: number): boolean {
 }
 
 /**
- * Crash residue for this repository: the old shared index, and run indexes
- * whose pid is dead. Call only under the export lock; a live pid's index is
- * kept even then, in case its run lost the lock but is still building a tree.
+ * Crash residue: the old shared index and run indexes whose pid is dead.
+ * Call under the export lock; a live pid's index stays, since its run may
+ * still be building a tree.
  */
 export function removeStaleRunIndexes(home: string, repoReal: string): void {
   const dir = path.join(home, 'export');
@@ -629,10 +629,9 @@ async function treePaths(ctx: GitContext, treeish: string): Promise<Set<string>>
 }
 
 /**
- * One commit per run from a private temporary index seeded from HEAD, then
- * the reconcile of the default index. An unchanged tree stops before
- * commit-tree. A tree missing any parent path not in `remove` is refused.
- * Blobs must already be stored with hashObjectWrite.
+ * One commit from a private temp index seeded from HEAD, then the default
+ * index reconcile. An unchanged tree stops before commit-tree; a tree
+ * missing a parent path not in `remove` is refused. Blobs must be stored first.
  */
 export async function plumbingCommit(ctx: GitContext, info: RepoInfo, input: CommitInput): Promise<CommitResult> {
   const remove = input.remove ?? [];

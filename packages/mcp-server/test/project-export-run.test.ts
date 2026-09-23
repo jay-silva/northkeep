@@ -343,6 +343,21 @@ describe('exportProjects end to end', () => {
     }
   });
 
+  it('a scheduled run where every project is refused records nothing_exported, not a success alone (a2)', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const files = ['demo.md', 'demo.log.1.md', 'other.md'].map((n) => path.join(repo, 'projects', n));
+    for (const f of files) fs.chmodSync(f, 0o000);
+    try {
+      const res = await exportProjects({ home: lab.home, vaultPath: lab.vaultPath, withVault: runner, by: 'schedule' });
+      expect(res.refused.map((r) => r.reason)).toEqual(['unreadable', 'unreadable', 'unreadable']);
+      const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+      expect(state?.last_failure?.code).toBe('nothing_exported');
+    } finally {
+      for (const f of files) fs.chmodSync(f, 0o644);
+    }
+  });
+
   it('a run that cannot open its vault records nothing in another vault state file (a3)', async () => {
     await seed();
     await exportOnce({ repo });
@@ -504,6 +519,51 @@ catch (e) { console.log(e.code); }`], {
     expect(res.status).toBe('committed');
     assertHistoryKeeps(userHead);
   }, 90_000);
+
+  /** Replaces the export lock with a live foreign owner's token when `verb` first spawns (with `arg` when given). */
+  function stealLockOn(verb: string, arg?: string): () => boolean {
+    const lockFile = path.join(repo, '.git', 'northkeep-export.lock');
+    let fired = false;
+    setGitSpawnObserver((v, a) => {
+      if (fired || v !== verb || (arg !== undefined && !a.includes(arg))) return;
+      fired = true;
+      fs.writeFileSync(lockFile, `${JSON.stringify({ pid: process.ppid, started_at: new Date().toISOString(), nonce: 'fedcba9876543210' })}\n`);
+    });
+    return () => fired;
+  }
+
+  it('a run that loses the lock before update-ref commits nothing', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const head = fx(lab, repo, ['rev-parse', 'HEAD']);
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Lock stolen.' }));
+    const fired = stealLockOn('commit-tree');
+    const err = await exportOnce().catch((e: unknown) => e);
+    setGitSpawnObserver(null);
+    fs.rmSync(path.join(repo, '.git', 'northkeep-export.lock'), { force: true });
+    expect(fired()).toBe(true);
+    expect((err as ExportRefusal).code).toBe('lock_lost');
+    expect((err as ExportRefusal).message).toContain('lost the export lock');
+    expect(fx(lab, repo, ['rev-parse', 'HEAD'])).toBe(head);
+  });
+
+  it('a lock lost mid-run ends the run: no removal and no commit', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const head = fx(lab, repo, ['rev-parse', 'HEAD']);
+    await write((v) => {
+      v.deleteProject('demo');
+      v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Lock lost early.' });
+    });
+    const fired = stealLockOn('hash-object', '-w');
+    const err = await exportOnce().catch((e: unknown) => e);
+    setGitSpawnObserver(null);
+    fs.rmSync(path.join(repo, '.git', 'northkeep-export.lock'), { force: true });
+    expect(fired()).toBe(true);
+    expect(err).toBeInstanceOf(ExportRefusal);
+    expect(fs.existsSync(path.join(repo, 'projects', 'demo.md'))).toBe(true);
+    expect(fx(lab, repo, ['rev-parse', 'HEAD'])).toBe(head);
+  });
 
   it('three and six plain exports racing a dead-owner lock never commit a tree missing a user file (a5d, a5g, a5h)', async () => {
     const userHead = await seedWithUserFile();

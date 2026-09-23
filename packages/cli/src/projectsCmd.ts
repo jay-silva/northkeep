@@ -209,6 +209,7 @@ const FAILURE_TEXT: Record<string, string> = {
   lock_unreadable: 'the export lock file was unreadable; see the export command for how to clear it',
   lock_lost: 'the run lost the export lock before committing',
   tree_check_failed: 'a commit that would have dropped files was refused',
+  nothing_exported: 'every project file was refused; see Refused paths',
   not_configured: 'no mirror was configured',
   git_error: 'a git step failed',
 };

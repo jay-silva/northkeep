@@ -53,8 +53,8 @@ import { resolveMasterKey } from './key.js';
  * does every git step under the export lock in the repository's common dir,
  * so git never runs while the vault is held. Journal, state and settings
  * writes require the export lock and hold no memory content: only paths,
- * blob ids, slugs, revisions and times. Verify takes no lock and writes
- * nothing. Import reads the source folder and never writes it.
+ * blob ids, slugs, revisions, times and a hash of the vault header's salt.
+ * Verify takes no lock and writes nothing. Import never writes its source.
  */
 
 export const JOURNAL_DEPTH = 10;
@@ -162,8 +162,10 @@ function stealDeadLock(lockPath: string, seen: Buffer, token: string): 'retry' |
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     const g = readLockBytes(guardPath);
-    const gOwner = Buffer.isBuffer(g) ? lockOwner(g) : null;
-    return gOwner !== null && ownerDead(gOwner) ? 'guard_dead' : 'busy';
+    if (g === 'gone') return 'retry';
+    // An empty or unparseable guard is a crash between create and write; this branch only refuses.
+    const gOwner = g === 'unreadable' ? null : lockOwner(g);
+    return gOwner === null || ownerDead(gOwner) ? 'guard_dead' : 'busy';
   }
   try {
     // Read before the guard was ours: another stealer may have freed it and a contender taken it since.
@@ -186,10 +188,9 @@ function stealDeadLock(lockPath: string, seen: Buffer, token: string): 'retry' |
 const LOCK_HINT = 'if none is, remove northkeep-export.lock from the repository\'s .git folder and try again';
 
 /**
- * O_EXCL lock at `<common dir>/northkeep-export.lock`, shared by every worktree.
- * Never taken by age: a live or unreadable owner is waited for, then refused.
- * A dead owner's lock is taken only by compare-and-steal, so a contender's
- * fresh lock is never mistaken for the dead one. Released only while it holds our token.
+ * O_EXCL lock in the common dir, shared by every worktree. Never taken by
+ * age: a live or unreadable owner is waited for, then refused. A dead
+ * owner's lock goes only by compare-and-steal. Released only while ours.
  */
 export async function acquireExportLock(ctx: GitContext, opts: LockOptions = {}): Promise<ExportLock> {
   const r = await runGit(ctx, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
@@ -799,6 +800,9 @@ async function runLocked(
   if (res.commit) state.nk_commits.push(res.commit);
   state.last_attempt = { at, by: opts.by };
   if (commitId) state.last_success = { at, commit: commitId };
+  // A partial run is a success only when some project got through; all refused is a failure the resume line shows.
+  const okSlugs = snap.projects.filter((p) => p.state === 'ok').map((p) => p.slug);
+  if (okSlugs.length > 0 && okSlugs.every((s) => refusedSlugs.has(s))) state.last_failure = { at, code: 'nothing_exported' };
   state.refused = refused;
   state.vault_fingerprint = vaultFingerprint(opts.vaultPath);
   const live = new Set(snap.projects.map((p) => p.slug));
@@ -890,10 +894,9 @@ function parseLsTree(text: string): Map<string, string> {
 }
 
 /**
- * Read-only: no lock, no journal or state write, no git write verb, and
- * nothing created or chmodded under NORTHKEEP_HOME. Git runs with a throwaway
- * home holding an empty config and hooks folder, removed afterwards. Its git
- * calls are hash-object without -w, rev-parse and ls-tree.
+ * Read-only: no lock, no journal or state write, no git write verb.
+ * Git runs with a throwaway home, removed afterwards, so nothing under
+ * NORTHKEEP_HOME is created or chmodded.
  */
 export async function verifyMirror(opts: {
   home: string;

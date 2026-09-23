@@ -169,6 +169,12 @@ console.log(JSON.stringify({ t0, t1, held }));`;
     expect((err as ExportRefusal).message).toContain('northkeep-export.lock.steal');
     expect(fs.readFileSync(p, 'utf8')).toBe(dead);
     expect(fs.existsSync(`${p}.steal`)).toBe(true);
+    // A crash between creating and writing the guard leaves it empty; that is refused the same way.
+    fs.writeFileSync(`${p}.steal`, '');
+    const again = await acquireExportLock(ctxFor(lab, repo), { waitMs: 100, pollMs: 20 }).catch((e: unknown) => e);
+    expect((again as ExportRefusal).code).toBe('lock_unreadable');
+    expect((again as ExportRefusal).message).toContain('northkeep-export.lock.steal');
+    expect(fs.readFileSync(p, 'utf8')).toBe(dead);
   });
 
   it('never removes a lock it no longer holds', async () => {
