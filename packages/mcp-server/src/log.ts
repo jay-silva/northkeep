@@ -30,6 +30,8 @@ export interface CallLogEntry {
     query_terms?: number;
     content_chars?: number;
     limit?: number;
+    /** project_board's stale window, as applied (ADR 0054 Decision 4). */
+    stale_days?: number;
   };
   ok: boolean;
   /** True when the call was refused by a scope grant. */
