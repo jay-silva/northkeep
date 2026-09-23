@@ -326,6 +326,8 @@ export interface ExportState {
   projects: Record<string, { revision: string; exported_at: string }>;
   /** Every commit NorthKeep created, oldest first; ADR 0055 depends on it. */
   nk_commits: string[];
+  /** vaultFingerprint of the vault that wrote this; lets a locked run find its own state. */
+  vault_fingerprint: string | null;
 }
 
 export function emptyExportState(repoReal: string, vaultId: string): ExportState {
@@ -339,7 +341,21 @@ export function emptyExportState(repoReal: string, vaultId: string): ExportState
     refused: [],
     projects: {},
     nk_commits: [],
+    vault_fingerprint: null,
   };
+}
+
+/**
+ * The vault file's identity without its key: a hash of the header salt, which
+ * is stored in the clear. Null when the file is missing or unreadable.
+ */
+export function vaultFingerprint(vaultPath: string): string | null {
+  try {
+    const salt = Vault.readHeader(vaultPath).salt;
+    return crypto.createHash('sha256').update('northkeep-mirror-vault\0').update(salt).digest('hex');
+  } catch {
+    return null;
+  }
 }
 
 export function statePath(home: string, repoReal: string): string {
@@ -375,6 +391,8 @@ export function readExportState(home: string, repoReal: string, vaultId: string)
   }
   const commits = v.nk_commits ?? [];
   if (!Array.isArray(commits) || !commits.every((c) => isStr(c) && OID.test(c))) return null;
+  const fp = v.vault_fingerprint ?? null;
+  if (fp !== null && !(isStr(fp) && /^[0-9a-f]{64}$/.test(fp))) return null;
   return {
     version: 1,
     repo: repoReal,
@@ -385,6 +403,7 @@ export function readExportState(home: string, repoReal: string, vaultId: string)
     refused: refused as ExportState['refused'],
     projects: projects as ExportState['projects'],
     nk_commits: commits as string[],
+    vault_fingerprint: fp,
   };
 }
 
@@ -598,17 +617,23 @@ function failureCode(err: unknown): string {
   return 'error';
 }
 
-/** Records a failed run when a state file already names a vault; a mirror never exported has nothing to mark. */
-function recordFailure(home: string, repo: string, vaultId: string | null, by: 'cli' | 'schedule', code: string, at: string, lock: ExportLock): void {
-  let id = vaultId;
-  if (id === null) {
-    const raw = readJson(statePath(home, repo));
-    id = isRecord(raw) && isStr(raw.vault_id) ? raw.vault_id : null;
+/**
+ * Records a failed run only in this vault's own state file: matched by vault
+ * id when the vault opened, else by the header fingerprint. A run that could
+ * not open its vault never marks another vault's mirror as failed.
+ */
+function recordFailure(home: string, repo: string, vaultId: string | null, vaultPath: string, by: 'cli' | 'schedule', code: string, at: string, lock: ExportLock): void {
+  const raw = readJson(statePath(home, repo));
+  const owner = isRecord(raw) && isStr(raw.vault_id) ? raw.vault_id : null;
+  let id: string;
+  if (vaultId !== null) {
+    if (owner !== null && owner !== vaultId) return;
+    id = vaultId;
+  } else {
+    const fp = vaultFingerprint(vaultPath);
+    if (owner === null || fp === null || !isRecord(raw) || raw.vault_fingerprint !== fp) return;
+    id = owner;
   }
-  if (id === null) return;
-  // A state file written for another vault is that vault's record; a refused run from this one must not erase it.
-  const existing = readJson(statePath(home, repo));
-  if (isRecord(existing) && isStr(existing.vault_id) && existing.vault_id !== id) return;
   const state = readExportState(home, repo, id) ?? emptyExportState(repo, id);
   state.last_attempt = { at, by };
   state.last_failure = { at, code };
@@ -775,6 +800,7 @@ async function runLocked(
   state.last_attempt = { at, by: opts.by };
   if (commitId) state.last_success = { at, commit: commitId };
   state.refused = refused;
+  state.vault_fingerprint = vaultFingerprint(opts.vaultPath);
   const live = new Set(snap.projects.map((p) => p.slug));
   for (const slug of Object.keys(state.projects)) if (!live.has(slug)) delete state.projects[slug];
   for (const p of snap.projects) {
@@ -824,7 +850,7 @@ export async function exportProjects(opts: ExportRunOptions): Promise<ExportRunR
     return await runLocked(opts, repo, lock, snap, at);
   } catch (err) {
     try {
-      recordFailure(opts.home, repo, vaultId, opts.by, failureCode(err), at, lock);
+      recordFailure(opts.home, repo, vaultId, opts.vaultPath, opts.by, failureCode(err), at, lock);
     } catch {
       // the original error is the one worth reporting
     }

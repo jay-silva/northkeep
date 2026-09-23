@@ -297,6 +297,21 @@ describe('exportProjects end to end', () => {
     }
   });
 
+  it('a run that cannot open its vault records nothing in another vault state file (a3)', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const exp = path.join(lab.home, 'export');
+    const file = path.join(exp, fs.readdirSync(exp).find((n) => n.endsWith('.state.json'))!);
+    const before = fs.readFileSync(file, 'utf8');
+    const locked: VaultRunner = () => Promise.reject(new ExportRefusal('vault_locked', 'The vault is locked'));
+    const absent = path.join(lab.root, 'absent.nkv');
+    await expect(exportProjects({ home: lab.home, vaultPath: absent, withVault: locked, by: 'schedule' })).rejects.toBeInstanceOf(ExportRefusal);
+    const otherPath = path.join(lab.root, 'other.nkv');
+    Vault.create({ path: otherPath, passphrase: 'second vault', deviceSecret: generateDeviceSecret(), kdf: KDF_INTERACTIVE }).close();
+    await expect(exportProjects({ home: lab.home, vaultPath: otherPath, withVault: locked, by: 'schedule' })).rejects.toBeInstanceOf(ExportRefusal);
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+  });
+
   it('refuses a symlinked projects folder without writing or listing through it', async () => {
     await seed();
     await exportOnce({ repo });
