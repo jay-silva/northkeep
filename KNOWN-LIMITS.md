@@ -85,8 +85,12 @@ every milestone; if a limit is removed, say when and how.*
   entry opens with counts, and never a date after today (the UTC day). An imported
   project whose live Log has no usable date is aged from the import itself, so it cannot
   go stale until the window has passed since the import. The Log is only as
-  good as the import: an undated entry keeps source order, and a Log written
-  as headings reads as empty.
+  good as the import: when not every entry is dated, import keeps the
+  source's sequence (turned newest first when its dated entries run oldest
+  first) rather than sorting, so the direction is inferred and undated
+  entries are never placed by date. A Log written as headings is stored as
+  ordinary dated entries, but only when the Log's own text before its first
+  heading is empty.
 - **A large document costs time, not payload.** A document stored past the
   size cap through the raw memory path is read in full to find its dates;
   every field the board returns is still cut to its cap.
