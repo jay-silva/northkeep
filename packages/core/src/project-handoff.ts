@@ -18,6 +18,8 @@ import {
 } from './project-doc.js';
 import type { MemoryEntry } from './types.js';
 
+/** Row source of a head written by `northkeep projects import` (vault.ts importProject). */
+export const PROJECT_IMPORT_SOURCE = 'northkeep:project-import';
 export const PROJECT_HANDOFF_METADATA_KEY = 'northkeep_project_handoff_v1';
 /** Reserved metadata key for the writer of a project head (ADR 0052 Decision 1). */
 export const PROJECT_PROVENANCE_METADATA_KEY = 'northkeep_provenance_v1';
@@ -74,7 +76,8 @@ export interface ProjectView {
   last_writer: ProjectProvenance | null;
   draft: boolean;
 }
-export interface ProjectSummary { project:string; scope:string; title:string|null; status:string|null; revision:string|null; updated_at:string|null; conflict:boolean; last_writer_host:string|null; draft:boolean }
+/** `imported`: the current head was written by `projects import`, so `updated_at` is the import time, not the work's (ADR 0054). */
+export interface ProjectSummary { project:string; scope:string; title:string|null; status:string|null; revision:string|null; updated_at:string|null; conflict:boolean; last_writer_host:string|null; draft:boolean; imported:boolean }
 
 export interface ProjectCheckpointRequest {
   vault_id:string; project:string; mode:ProjectHandoffMode; operation_id:string; expected_revision:string;
@@ -253,5 +256,5 @@ export function getProjectRevision(vault:ProjectVaultReader,project:string,revis
 }
 export function listProjectViews(vault:ProjectVaultReader,allowedScopes?:string[]):ProjectSummary[]{
   const groups=new Map<string,MemoryEntry[]>(); for(const e of vault.list({type:'working',allowedScopes})){const p=parseProjectSlug(e.scope);if(p){const a=groups.get(p)||[];a.push(e);groups.set(p,a);}}
-  return [...groups].sort(([a],[b])=>a.localeCompare(b)).map(([project,heads])=>heads.length!==1?{project,scope:projectScope(project),title:null,status:null,revision:null,updated_at:null,conflict:true,last_writer_host:null,draft:false}:(()=>{const head=heads[0]!;const doc=parseProjectDoc(head.content);return {project,scope:projectScope(project),title:getProjectTitle(doc),status:getProjectSection(doc,'Current Status')||null,revision:head.id,updated_at:head.created_at,conflict:false,last_writer_host:readProjectProvenance(head)?.host??null,draft:isProjectDraft(doc)};})());
+  return [...groups].sort(([a],[b])=>a.localeCompare(b)).map(([project,heads])=>heads.length!==1?{project,scope:projectScope(project),title:null,status:null,revision:null,updated_at:null,conflict:true,last_writer_host:null,draft:false,imported:false}:(()=>{const head=heads[0]!;const doc=parseProjectDoc(head.content);return {project,scope:projectScope(project),title:getProjectTitle(doc),status:getProjectSection(doc,'Current Status')||null,revision:head.id,updated_at:head.created_at,conflict:false,last_writer_host:readProjectProvenance(head)?.host??null,draft:isProjectDraft(doc),imported:head.source===PROJECT_IMPORT_SOURCE};})());
 }

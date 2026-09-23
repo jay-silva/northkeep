@@ -30,6 +30,7 @@ import { getPlatform, type Platform } from './platform-context.js';
 import {
   PROJECT_HANDOFF_METADATA_KEY,
   PROJECT_HANDOFF_METADATA_VERSION,
+  PROJECT_IMPORT_SOURCE,
   PROJECT_PROVENANCE_METADATA_KEY,
   ProjectHandoffError,
   applyProjectUpdate,
@@ -631,7 +632,7 @@ export class Vault {
       const rows: Array<[MemoryType, string, string]> = [
         ...plan.archives.map((content) => ['episodic', content, 'northkeep:project-log-archive'] as [MemoryType, string, string]),
         ...plan.overflow_parts.map((content) => ['episodic', content, 'northkeep:project-import-overflow'] as [MemoryType, string, string]),
-        ['working', plan.document, 'northkeep:project-import'],
+        ['working', plan.document, PROJECT_IMPORT_SOURCE],
       ];
       for (const [type, content, source] of rows) {
         const entry = this.makeProjectEntry(type, content, scope, source, null, chain, now);

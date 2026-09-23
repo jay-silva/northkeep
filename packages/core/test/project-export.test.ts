@@ -40,7 +40,7 @@ function archive(n:number,entries:string[],day='2026-09-1'+n):ProjectArchive{
   return {id:`${n}0000000-0000-4000-8000-000000000000`,updated_at:`${day}T08:00:00.000Z`,content:formatLogArchive('demo',entries,new Date(`${day}T08:00:00.000Z`))};
 }
 function summary(extra:Partial<ProjectSummary>):ProjectSummary{
-  return {project:'demo',scope:'project:demo',title:null,status:'Now.',revision:REV,updated_at:'2026-09-22T10:00:00.000Z',conflict:false,last_writer_host:'claude-code',draft:false,...extra};
+  return {project:'demo',scope:'project:demo',title:null,status:'Now.',revision:REV,updated_at:'2026-09-22T10:00:00.000Z',conflict:false,last_writer_host:'claude-code',draft:false,imported:false,...extra};
 }
 
 describe('mirror header (Decision 3)',()=>{
