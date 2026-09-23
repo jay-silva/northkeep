@@ -867,6 +867,7 @@ export type VerifyStatus =
   | 'uncommitted export'
   | 'stale'
   | 'missing'
+  | 'missing on disk'
   | 'extra'
   | 'hand edit'
   | 'conflict'
@@ -878,10 +879,21 @@ export interface VerifyResult {
   ok: boolean;
 }
 
+/** Mode per path from `ls-tree -z`, for the top-level mirror files and projects/. */
+function parseLsTree(text: string): Map<string, string> {
+  const modes = new Map<string, string>();
+  for (const rec of text.split('\0')) {
+    const m = /^(\d{6}) \S+ [0-9a-f]+\t(.+)$/s.exec(rec);
+    if (m) modes.set(m[2] as string, m[1] as string);
+  }
+  return modes;
+}
+
 /**
- * Read-only: no lock, no journal or state write, no git write verb. Its git
- * calls are hash-object without -w, rev-parse and ls-tree, under the pinned
- * environment, which also keeps git from refreshing the index.
+ * Read-only: no lock, no journal or state write, no git write verb, and
+ * nothing created or chmodded under NORTHKEEP_HOME. Git runs with a throwaway
+ * home holding an empty config and hooks folder, removed afterwards. Its git
+ * calls are hash-object without -w, rev-parse and ls-tree.
  */
 export async function verifyMirror(opts: {
   home: string;
@@ -890,52 +902,67 @@ export async function verifyMirror(opts: {
   withVault?: VaultRunner;
 }): Promise<VerifyResult> {
   const repo = resolveRepo(opts.home, opts.repo);
-  const ctx: GitContext = { repo, home: opts.home, vaultPath: opts.vaultPath };
   const snap = await (opts.withVault ?? defaultVaultRunner(opts.vaultPath))((v) => snapshotMirror(v));
   const journal = readJournal(opts.home, repo, snap.vaultId);
-  const top = await runGit(ctx, ['rev-parse', '--show-toplevel'], { allowFailure: true });
-  if (top.exitCode !== 0) throw new ExportRefusal('not_work_tree', 'The mirror folder is not a git working tree');
-  const hasHead = (await readHead(ctx)) !== null;
-  const entries: VerifyResult['entries'] = [];
+  const gitHome = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-verify-'));
+  try {
+    const ctx: GitContext = { repo, home: gitHome, vaultPath: opts.vaultPath };
+    const top = await runGit(ctx, ['rev-parse', '--show-toplevel'], { allowFailure: true });
+    if (top.exitCode !== 0) throw new ExportRefusal('not_work_tree', 'The mirror folder is not a git working tree');
+    const hasHead = (await readHead(ctx)) !== null;
+    const headModes = hasHead
+      ? parseLsTree((await runGit(ctx, ['ls-tree', '-z', 'HEAD', '--', MIRROR_MARKER_PATH, MIRROR_INDEX_PATH, 'projects/'])).stdout)
+      : new Map<string, string>();
+    const entries: VerifyResult['entries'] = [];
 
-  const judge = async (rel: string, bytes: Uint8Array): Promise<VerifyStatus> => {
-    const abs = path.join(repo, rel);
-    if (rel.startsWith('projects/') && realProjectsDir(repo) === false) return 'hand edit';
-    const st = lstatOrNull(abs);
-    if (!st) return 'missing';
-    if (!st.isFile() || st.nlink > 1) return 'hand edit';
-    const rb = await hashBytes(ctx, bytes);
-    const db = await hashFile(ctx, abs);
-    const hb = hasHead ? await headBlob(ctx, rel) : null;
-    const jb = journal.paths[rel] ?? [];
-    const headOurs = hb === null || hb === rb || jb.includes(hb);
-    if (db === rb) return hb === rb ? 'matches' : headOurs ? 'uncommitted export' : 'hand edit';
-    return jb.includes(db) && headOurs ? 'stale' : 'hand edit';
-  };
+    const judge = async (rel: string, bytes: Uint8Array): Promise<VerifyStatus> => {
+      const abs = path.join(repo, rel);
+      if (rel.startsWith('projects/') && realProjectsDir(repo) === false) return 'hand edit';
+      const st = lstatOrNull(abs);
+      if (!st) return 'missing';
+      if (!st.isFile() || st.nlink > 1) return 'hand edit';
+      // NorthKeep writes 0644 and commits 100644; any other mode is someone else's change.
+      if ((st.mode & 0o111) !== 0) return 'hand edit';
+      const hm = headModes.get(rel);
+      if (hm !== undefined && hm !== '100644') return 'hand edit';
+      const rb = await hashBytes(ctx, bytes);
+      const db = await hashFile(ctx, abs);
+      const hb = hasHead ? await headBlob(ctx, rel) : null;
+      const jb = journal.paths[rel] ?? [];
+      const headOurs = hb === null || hb === rb || jb.includes(hb);
+      if (db === rb) return hb === rb ? 'matches' : headOurs ? 'uncommitted export' : 'hand edit';
+      return jb.includes(db) && headOurs ? 'stale' : 'hand edit';
+    };
 
-  entries.push({ path: MIRROR_MARKER_PATH, status: await judge(MIRROR_MARKER_PATH, snap.marker.bytes) });
-  const rendered = new Set<string>([MIRROR_MARKER_PATH, MIRROR_INDEX_PATH]);
-  const kept = new Set<string>();
-  for (const p of snap.projects) {
-    if (p.state !== 'ok') {
-      kept.add(p.slug);
-      entries.push({ path: `projects/${p.slug}.md`, status: p.state === 'conflict' ? 'conflict' : 'render failed' });
-      continue;
+    entries.push({ path: MIRROR_MARKER_PATH, status: await judge(MIRROR_MARKER_PATH, snap.marker.bytes) });
+    const rendered = new Set<string>([MIRROR_MARKER_PATH, MIRROR_INDEX_PATH]);
+    const kept = new Set<string>();
+    for (const p of snap.projects) {
+      if (p.state !== 'ok') {
+        kept.add(p.slug);
+        entries.push({ path: `projects/${p.slug}.md`, status: p.state === 'conflict' ? 'conflict' : 'render failed' });
+        continue;
+      }
+      for (const f of p.files) {
+        rendered.add(f.path);
+        entries.push({ path: f.path, status: await judge(f.path, f.bytes) });
+      }
     }
-    for (const f of p.files) {
-      rendered.add(f.path);
-      entries.push({ path: f.path, status: await judge(f.path, f.bytes) });
+    entries.push({ path: MIRROR_INDEX_PATH, status: await judge(MIRROR_INDEX_PATH, snap.index.bytes) });
+    const unrendered = (rel: string): boolean => {
+      const m = PROJECT_FILE.exec(rel);
+      return m !== null && !rendered.has(rel) && !kept.has(m[1] as string);
+    };
+    const dir = path.join(repo, 'projects');
+    const onDisk = new Set(realProjectsDir(repo) ? fs.readdirSync(dir).map((n) => `projects/${n}`) : []);
+    for (const rel of [...onDisk].sort()) if (unrendered(rel)) entries.push({ path: rel, status: 'extra' });
+    for (const rel of [...headModes.keys()].sort()) {
+      if (rel.startsWith('projects/') && !onDisk.has(rel) && unrendered(rel)) entries.push({ path: rel, status: 'missing on disk' });
     }
+    return { repo, entries, ok: entries.every((e) => e.status === 'matches') };
+  } finally {
+    fs.rmSync(gitHome, { recursive: true, force: true });
   }
-  entries.push({ path: MIRROR_INDEX_PATH, status: await judge(MIRROR_INDEX_PATH, snap.index.bytes) });
-  if (hasHead) await runGit(ctx, ['ls-tree', 'HEAD', '--', 'projects/']);
-  const dir = path.join(repo, 'projects');
-  for (const n of realProjectsDir(repo) ? fs.readdirSync(dir).sort() : []) {
-    const rel = `projects/${n}`;
-    const m = PROJECT_FILE.exec(rel);
-    if (m && !rendered.has(rel) && !kept.has(m[1] as string)) entries.push({ path: rel, status: 'extra' });
-  }
-  return { repo, entries, ok: entries.every((e) => e.status === 'matches') };
 }
 
 // ---- status and the resume line (Decision 7) ----------------------------------------------

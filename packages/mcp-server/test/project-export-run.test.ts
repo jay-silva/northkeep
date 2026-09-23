@@ -110,14 +110,29 @@ function snapshot(dir: string): string {
   return out.join('\n');
 }
 
-/** Verify, asserting it changed nothing in the repository, its git dir or the NorthKeep home. */
+/** Opens the vault without the vault file lock, so the snapshot below can include the home folder's own mtime. */
+const lockFreeRunner: VaultRunner = async (fn) => {
+  const v = Vault.openWithKey(lab.vaultPath, Buffer.from(keyHex, 'hex'));
+  try {
+    return await fn(v);
+  } finally {
+    v.close();
+  }
+};
+
+function withRoot(dir: string): string {
+  const st = fs.lstatSync(dir);
+  return `root ${st.mode} ${st.mtimeMs}\n${snapshot(dir)}`;
+}
+
+/** verifyMirror itself, asserting it changed nothing in the repository, its git dir or the NorthKeep home. */
 async function verifyReadOnly(): Promise<VerifyResult> {
-  const before = snapshot(repo) + snapshot(lab.home);
+  const before = withRoot(repo) + withRoot(lab.home);
   const verbs: string[][] = [];
   setGitSpawnObserver((_v, a) => verbs.push([...a]));
-  const res = await verifyMirror({ home: lab.home, vaultPath: lab.vaultPath, withVault: runner });
+  const res = await verifyMirror({ home: lab.home, vaultPath: lab.vaultPath, withVault: lockFreeRunner });
   setGitSpawnObserver(null);
-  expect(snapshot(repo) + snapshot(lab.home)).toBe(before);
+  expect(withRoot(repo) + withRoot(lab.home)).toBe(before);
   for (const a of verbs) {
     expect(['rev-parse', 'hash-object', 'ls-tree']).toContain(a[0]);
     expect(a).not.toContain('-w');
@@ -273,6 +288,37 @@ describe('exportProjects end to end', () => {
     expect(statusOf(v)['projects/broken.md']).toBe('render failed');
     expect(v.ok).toBe(false);
     expect(v.entries.filter((e) => e.status !== 'render failed').every((e) => e.status === 'matches')).toBe(true);
+  });
+
+  it('verify creates and chmods nothing under NORTHKEEP_HOME when its git files are missing or loosened (a1)', async () => {
+    await seed();
+    await exportOnce({ repo });
+    fs.chmodSync(path.join(lab.home, 'export'), 0o755);
+    fs.rmSync(path.join(lab.home, 'hooks'), { recursive: true });
+    fs.rmSync(path.join(lab.home, 'empty.gitconfig'));
+    const res = await verifyReadOnly();
+    expect(res.ok).toBe(true);
+    expect(fs.existsSync(path.join(lab.home, 'hooks'))).toBe(false);
+    expect(fs.statSync(path.join(lab.home, 'export')).mode & 0o777).toBe(0o755);
+  });
+
+  it('verify reports a HEAD-only project file as missing on disk and a mode change as a hand edit (a9)', async () => {
+    await seed();
+    await exportOnce({ repo });
+    fs.writeFileSync(path.join(repo, 'projects', 'zzz.md'), 'user file\n');
+    fx(lab, repo, ['add', 'projects/zzz.md']);
+    fx(lab, repo, ['commit', '-q', '-m', 'zzz']);
+    fs.rmSync(path.join(repo, 'projects', 'zzz.md'));
+    const v1 = await verifyReadOnly();
+    expect(statusOf(v1)['projects/zzz.md']).toBe('missing on disk');
+    expect(v1.ok).toBe(false);
+    fx(lab, repo, ['rm', '-q', '--cached', 'projects/zzz.md']);
+    fx(lab, repo, ['commit', '-q', '-m', 'rm zzz']);
+    expect((await verifyReadOnly()).ok).toBe(true);
+    fs.chmodSync(path.join(repo, 'projects', 'demo.md'), 0o755);
+    const v2 = await verifyReadOnly();
+    expect(statusOf(v2)['projects/demo.md']).toBe('hand edit');
+    expect(v2.ok).toBe(false);
   });
 
   it('an unreadable mirror file refuses only that target; a scheduled run records a partial run, not an error (a2)', async () => {
