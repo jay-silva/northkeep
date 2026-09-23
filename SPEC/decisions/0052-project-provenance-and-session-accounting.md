@@ -221,6 +221,9 @@ acceptance test. A change that grows a default read fails acceptance.
    reported like everything else here and never verified. Narrower than "on
    this machine": the GUI and the CLI read projects without writing a
    call-log row, so their reads are invisible here, as are hosted reads.
+   Amended by ADR 0054 Decision 4 (when it clears): `project_board`
+   calls are logged but are not reads for this claim; only `project_get`
+   and `project_resume` open a session.
 3. The provenance block never carries a model identity. `model` is null
    until a host exposes one through the handshake. This is a claim about
    the block and nothing else: Converse's own call-log rows record the
