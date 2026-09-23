@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KDF_INTERACTIVE, Vault, deriveMasterKey, generateDeviceSecret, listProjectViews, withFileLock } from '@northkeep/core';
 import { ExportRefusal, readExportSettings, readExportState, type VaultRunner } from '@northkeep/mcp-server';
-import { describeMirrorError, projectsDeleteCmd, projectsExportCmd, projectsImportCmd, type MirrorDeps } from '../src/projectsCmd.js';
+import { describeMirrorError, localStamp, projectsDeleteCmd, projectsExportCmd, projectsImportCmd, type MirrorDeps } from '../src/projectsCmd.js';
 
 /**
  * ADR 0053 M-A1 on the CLI: export, verify, status, schedule, the launchd
@@ -375,6 +375,20 @@ describe('northkeep projects export --scheduled', () => {
     expect(await exportCmd({ status: true })).toBe(0);
     expect(out.find((l) => l.startsWith('Last failure: '))).toMatch(/^Last failure: .+, vault_locked \(the vault was locked; run northkeep unlock/);
     expect(out[1]).toContain('last export failed');
+
+    expect(await exportCmd({ repo })).toBe(0);
+    out.length = 0;
+    expect(await exportCmd({ status: true })).toBe(0);
+    expect(out.find((l) => l.startsWith('Last failure: '))).toMatch(/vault_locked .*\. A later export succeeded$/);
+    expect(out.find((l) => l.startsWith('Last successful export: '))).toMatch(/^Last successful export: \d{4}-\d{2}-\d{2} \d{2}:\d{2} \S+, commit /);
+  });
+});
+
+describe('localStamp', () => {
+  it('shows a stored stamp in local time with its zone, and passes unparseable text through', () => {
+    expect(localStamp('2026-09-23T16:00:00.000Z', 'America/New_York')).toBe('2026-09-23 12:00 EDT');
+    expect(localStamp('2026-01-15T05:07:00.000Z', 'America/New_York')).toBe('2026-01-15 00:07 EST');
+    expect(localStamp('not a date')).toBe('not a date');
   });
 });
 
@@ -418,9 +432,9 @@ describe('northkeep projects import', () => {
     expect(dry).toBe(0);
     // Opened read only, to report taken slugs; the vault file is unchanged below.
     expect(opened).toBe(true);
-    expect(out.find((l) => l.startsWith('Would import alpha.md as alpha: '))).toMatch(
-      /bytes, 0 log archives, no overflow, Open Questions \/ Risks stored as Open Questions/,
-    );
+    const alpha = out.findIndex((l) => l.startsWith('Would import alpha.md as alpha: '));
+    expect(out[alpha]).toMatch(/bytes, 0 log archives, no overflow$/);
+    expect(out[alpha + 1]).toBe('  renamed: Open Questions / Risks stored as Open Questions');
     expect(out.some((l) => l.startsWith('Would import beta-str.md as beta-str: '))).toBe(true);
     expect(out.find((l) => l.startsWith('Skip _TEMPLATE.md: '))).toContain('not a project slug');
     expect(out.at(-2)).toMatch(/^Largest row: [\d,]+ bytes \(limit 60,000\)\. Total: [\d,]+ bytes of the 4,194,304-byte sync limit\.$/);
@@ -461,7 +475,8 @@ describe('northkeep projects import', () => {
       '# Gamma\n\n## What & Why\n\nWhy.\n\n```\n## Not a heading\n```\n\n## Current Status\n\nOk.\n\n## Custom\n\nMine.\n',
     );
     expect(await importCmd({ from: dir })).toBe(0);
-    expect(out[0]).toMatch(/^Would import gamma\.md as gamma: .*, other sections: Not a heading, Custom$/);
+    expect(out[0]).toMatch(/^Would import gamma\.md as gamma: [\d,]+ bytes, 0 log archives, no overflow$/);
+    expect(out[1]).toBe('  other sections: Not a heading, Custom');
   });
 
   it('refuses a folder that does not exist', async () => {

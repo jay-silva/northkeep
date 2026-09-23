@@ -860,7 +860,7 @@ export class Vault {
       if(entry.content!==expected.content||new Set(meta.archive_ids).size!==meta.archive_ids.length||meta.archive_ids.length!==(expected.archives.length?1:0))throw new ProjectHandoffError('operation_conflict','Persisted project handoff content does not match its request.');
       for(const id of meta.archive_ids){const archive=this.getEntry(id);const expectedContent=formatLogArchive(request.project,expected.archives,new Date(meta.saved_at));if(!archive||archive.scope!==scope||archive.type!=='episodic'||archive.source!=='northkeep:project-log-archive'||archive.created_at!==meta.saved_at||archive.content!==expectedContent||computeEntryHash(archive,this.platform.crypto)!==archive.entry_hash)throw new ProjectHandoffError('operation_conflict','Project handoff receipt archive is invalid.');}
       const receipt={operation_id:meta.operation_id,project:meta.project,mode:meta.mode,base_revision:meta.base_revision,result_revision:meta.result_id,request_fingerprint:meta.request_fingerprint,archive_ids:[...meta.archive_ids],saved_at:meta.saved_at,local_only:true as const};
-      return {receipt,current:getProjectView(this,request.project,allowedScopes,{history:true}),replayed:true};
+      return {receipt,current:getProjectView(this,request.project,allowedScopes),replayed:true};
     }
     return this.writeProject(update,allowedScopes,{operation_id:request.operation_id,mode:request.mode,fingerprint});
   }
@@ -880,7 +880,7 @@ export class Vault {
       if(heads.length>1)throw new ProjectHandoffError('project_conflict','Project has multiple current documents.');
       const old=heads[0]??null;
       if(!old&&request.expected_revision!==null)throw new ProjectHandoffError('not_found','Project was not found.');
-      if(old&&request.expected_revision!==old.id){let current:ProjectView|undefined;try{current=getProjectView(this,request.project,allowedScopes,{history:true});}catch{}throw new ProjectHandoffError('stale_project','Project changed after it was read.',current);}
+      if(old&&request.expected_revision!==old.id){let current:ProjectView|undefined;try{current=getProjectView(this,request.project,allowedScopes);}catch{}throw new ProjectHandoffError('stale_project','Project changed after it was read.',current);}
       if(!old&&request.expected_revision!==null)throw new ProjectHandoffError('stale_project','Project revision is stale.');
       const base=old?.content??serializeProjectDoc(emptyProjectDoc()); const merged=applyProjectUpdate(base,request); const now=new Date().toISOString();
       const insert=this.prepareEntryInsert(); const archiveIds:string[]=[]; let chain=this.getMeta('chain_head');
@@ -899,7 +899,7 @@ export class Vault {
       receipt={operation_id:handoff?.operation_id??'',project:request.project,mode:handoff?.mode??'checkpoint',base_revision:request.expected_revision??'',result_revision:head.id,request_fingerprint:handoff?.fingerprint??'',archive_ids:archiveIds,saved_at:now,local_only:true};
     })();
     this.finishAutoCompaction(auto);
-    return {receipt,current:getProjectView(this,request.project,allowedScopes,{history:true}),replayed:false};
+    return {receipt,current:getProjectView(this,request.project,allowedScopes),replayed:false};
   }
 
   private makeProjectEntry(type:MemoryType,content:string,scope:string,source:string,metadata:Record<string,unknown>|null,prevHash:string,now:string,id=uuidv4(this.platform.crypto)):MemoryEntry {

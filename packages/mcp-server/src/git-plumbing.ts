@@ -457,8 +457,10 @@ export function checkOwnedFolder(
   const bytes = readMarkerBytes(repo);
   if (bytes === null) {
     // A killed first export leaves only its own temps beside .git; they must not wedge the folder.
+    // Nor must Finder's .DS_Store, which appears as soon as the folder is opened. Neither is
+    // ever committed: the commit carries mirror paths only.
     const names = fs.readdirSync(repo).filter((n) => {
-      if (!MIRROR_TEMP_PATTERN.test(n)) return true;
+      if (!MIRROR_TEMP_PATTERN.test(n) && n !== '.DS_Store') return true;
       const st = lstatOrNull(path.join(repo, n));
       return !(st && (st.isFile() || st.isSymbolicLink()));
     });
@@ -568,6 +570,11 @@ export async function checkTargetContainment(ctx: GitContext, rel: string, head:
 
 // ---- identity, remotes, commit (Decisions 2, 7 and 9) -------------------------------------
 
+/** For a command shown to the user, never executed. */
+function shellQuote(p: string): string {
+  return `'${p.replace(/'/g, `'\\''`)}'`;
+}
+
 /** Refuses before any write when the repository has no identity; NorthKeep never sets one. */
 export async function requireCommitIdentity(ctx: GitContext): Promise<void> {
   for (const v of ['GIT_COMMITTER_IDENT', 'GIT_AUTHOR_IDENT']) {
@@ -575,7 +582,11 @@ export async function requireCommitIdentity(ctx: GitContext): Promise<void> {
     if (r.exitCode !== 0) {
       throw new ExportRefusal(
         'no_identity',
-        'This repository has no commit identity. Set one with: git config user.name "Your Name" and git config user.email "you@example.com"',
+        // Export runs git with the global config ignored, so a global identity
+        // does not count and the message has to say where to set one.
+        'This mirror has no commit identity of its own. NorthKeep ignores your global git settings, ' +
+          `so set one inside the mirror: git -C ${shellQuote(ctx.repo)} config user.name "Your Name" ` +
+          `and git -C ${shellQuote(ctx.repo)} config user.email "you@example.com"`,
       );
     }
   }
