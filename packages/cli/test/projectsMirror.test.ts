@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KDF_INTERACTIVE, Vault, deriveMasterKey, generateDeviceSecret, listProjectViews, withFileLock } from '@northkeep/core';
-import { ExportRefusal, readExportState, type VaultRunner } from '@northkeep/mcp-server';
+import { ExportRefusal, readExportSettings, readExportState, type VaultRunner } from '@northkeep/mcp-server';
 import { describeMirrorError, projectsExportCmd, projectsImportCmd, type MirrorDeps } from '../src/projectsCmd.js';
 
 /**
@@ -358,7 +358,7 @@ describe('northkeep projects export --scheduled', () => {
     expect(err).toEqual([]);
     expect(prompted).toBe(false);
     const vaultId = await runner((v) => v.getVaultId());
-    const state = readExportState(home, repo, vaultId)!;
+    const state = readExportState(home, repo, vaultId, readExportSettings(home)?.mirror_id ?? null)!;
     expect(state.last_failure?.code).toBe('vault_locked');
     expect(state.last_attempt?.by).toBe('schedule');
 
@@ -410,7 +410,7 @@ describe('northkeep projects import', () => {
     expect(snapshot(path.join(root, 'cr'))).toBe(srcBefore);
 
     expect(await importCmd({ from: src, write: true })).toBe(1);
-    expect(out.find((l) => l.startsWith('Refused alpha.md (alpha): '))).toContain('Project alpha already exists');
+    expect(out.find((l) => l.startsWith('Refused alpha.md (alpha): '))).toContain('Project alpha already has entries in this vault; delete the project from the Projects page first.');
     expect(out.at(-1)).toBe('Imported 0 projects; 2 refused, 1 skipped.');
   });
 

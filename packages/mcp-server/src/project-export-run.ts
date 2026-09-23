@@ -278,21 +278,35 @@ export interface ExportJournal {
   version: 1;
   repo: string;
   vault_id: string;
+  /** The marker's mirror id; null for a journal kept under the pre-id realpath key. */
+  mirror_id: string | null;
   /** Per path, the last JOURNAL_DEPTH blob ids NorthKeep wrote there, newest first. */
   paths: Record<string, string[]>;
 }
 
-export function journalPath(home: string, repoReal: string): string {
-  return path.join(exportDir(home), `${repoKey(repoReal)}.json`);
+export const MIRROR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/** Files keyed by mirror id follow a moved mirror; the realpath key is the pre-id layout, kept for migration. */
+function exportFileStem(repoReal: string, mirrorId: string | null): string {
+  if (mirrorId === null) return repoKey(repoReal);
+  if (!MIRROR_ID.test(mirrorId)) throw new ExportRefusal('bad_mirror_id', 'NorthKeep refused a malformed mirror id');
+  return `mirror-${mirrorId}`;
 }
 
-/** Unparseable, another version, repository or vault: reads as empty. */
-export function readJournal(home: string, repoReal: string, vaultId: string): ExportJournal {
-  const empty: ExportJournal = { version: 1, repo: repoReal, vault_id: vaultId, paths: {} };
-  const v = readJson(journalPath(home, repoReal));
-  if (!isRecord(v) || v.version !== 1 || v.repo !== repoReal || v.vault_id !== vaultId || !isRecord(v.paths)) {
-    return empty;
-  }
+export function journalPath(home: string, repoReal: string, mirrorId: string | null = null): string {
+  return path.join(exportDir(home), `${exportFileStem(repoReal, mirrorId)}.json`);
+}
+
+/**
+ * Unparseable, another version or vault: reads as empty. Keyed by mirror id
+ * the stored repository path is not checked, so a moved mirror keeps its
+ * journal; under the realpath key it must match.
+ */
+export function readJournal(home: string, repoReal: string, vaultId: string, mirrorId: string | null = null): ExportJournal {
+  const empty: ExportJournal = { version: 1, repo: repoReal, vault_id: vaultId, mirror_id: mirrorId, paths: {} };
+  const v = readJson(journalPath(home, repoReal, mirrorId));
+  if (!isRecord(v) || v.version !== 1 || v.vault_id !== vaultId || !isRecord(v.paths)) return empty;
+  if (mirrorId === null ? v.repo !== repoReal : v.mirror_id !== mirrorId) return empty;
   const paths: Record<string, string[]> = {};
   for (const [p, list] of Object.entries(v.paths)) {
     if (!Array.isArray(list) || !list.every((b) => typeof b === 'string' && OID.test(b))) return empty;
@@ -311,7 +325,7 @@ export function recordJournalBlob(journal: ExportJournal, rel: string, blob: str
 export function writeJournal(home: string, journal: ExportJournal, lock: ExportLock): void {
   requireLock(lock);
   ensureExportDir(home);
-  atomicWrite(journalPath(home, journal.repo), `${JSON.stringify(journal, null, 2)}\n`);
+  atomicWrite(journalPath(home, journal.repo, journal.mirror_id), `${JSON.stringify(journal, null, 2)}\n`);
 }
 
 // ---- the state file (Decision 7) ----------------------------------------------------------
@@ -329,9 +343,11 @@ export interface ExportState {
   nk_commits: string[];
   /** vaultFingerprint of the vault that wrote this; lets a locked run find its own state. */
   vault_fingerprint: string | null;
+  /** As in the journal: null only under the pre-id realpath key. */
+  mirror_id: string | null;
 }
 
-export function emptyExportState(repoReal: string, vaultId: string): ExportState {
+export function emptyExportState(repoReal: string, vaultId: string, mirrorId: string | null = null): ExportState {
   return {
     version: 1,
     repo: repoReal,
@@ -343,6 +359,7 @@ export function emptyExportState(repoReal: string, vaultId: string): ExportState
     projects: {},
     nk_commits: [],
     vault_fingerprint: null,
+    mirror_id: mirrorId,
   };
 }
 
@@ -359,8 +376,8 @@ export function vaultFingerprint(vaultPath: string): string | null {
   }
 }
 
-export function statePath(home: string, repoReal: string): string {
-  return path.join(exportDir(home), `${repoKey(repoReal)}.state.json`);
+export function statePath(home: string, repoReal: string, mirrorId: string | null = null): string {
+  return path.join(exportDir(home), `${exportFileStem(repoReal, mirrorId)}.state.json`);
 }
 
 function isStr(v: unknown): v is string {
@@ -372,10 +389,11 @@ function nullOr<T>(v: unknown, ok: (x: Record<string, unknown>) => boolean): T |
   return isRecord(v) && ok(v) ? (v as T) : undefined;
 }
 
-/** Null when absent, unparseable, or for another repository or vault. */
-export function readExportState(home: string, repoReal: string, vaultId: string): ExportState | null {
-  const v = readJson(statePath(home, repoReal));
-  if (!isRecord(v) || v.version !== 1 || v.repo !== repoReal || v.vault_id !== vaultId) return null;
+/** Null when absent, unparseable, or for another vault; keyed as readJournal is. */
+export function readExportState(home: string, repoReal: string, vaultId: string, mirrorId: string | null = null): ExportState | null {
+  const v = readJson(statePath(home, repoReal, mirrorId));
+  if (!isRecord(v) || v.version !== 1 || v.vault_id !== vaultId || !isStr(v.repo)) return null;
+  if (mirrorId === null ? v.repo !== repoReal : v.mirror_id !== mirrorId) return null;
   const success = nullOr<ExportState['last_success']>(v.last_success, (x) => isStr(x.at) && isStr(x.commit));
   const attempt = nullOr<ExportState['last_attempt']>(
     v.last_attempt,
@@ -396,7 +414,7 @@ export function readExportState(home: string, repoReal: string, vaultId: string)
   if (fp !== null && !(isStr(fp) && /^[0-9a-f]{64}$/.test(fp))) return null;
   return {
     version: 1,
-    repo: repoReal,
+    repo: v.repo,
     vault_id: vaultId,
     last_success: success,
     last_attempt: attempt,
@@ -405,19 +423,22 @@ export function readExportState(home: string, repoReal: string, vaultId: string)
     projects: projects as ExportState['projects'],
     nk_commits: commits as string[],
     vault_fingerprint: fp,
+    mirror_id: mirrorId,
   };
 }
 
 export function writeExportState(home: string, state: ExportState, lock: ExportLock): void {
   requireLock(lock);
   ensureExportDir(home);
-  atomicWrite(statePath(home, state.repo), `${JSON.stringify(state, null, 2)}\n`);
+  atomicWrite(statePath(home, state.repo, state.mirror_id), `${JSON.stringify(state, null, 2)}\n`);
 }
 
 // ---- the settings file (Decision 5) -------------------------------------------------------
 
 export interface ExportSettings {
   repo: string;
+  /** Lets status and the resume line find the state file without reading the repository. */
+  mirror_id?: string;
 }
 
 export function settingsPath(home: string): string {
@@ -440,16 +461,18 @@ export function readExportSettings(home: string): ExportSettings | null {
   } catch {
     v = undefined;
   }
-  if (!isRecord(v) || !isStr(v.repo) || v.repo === '' || Object.keys(v).length !== 1) {
+  const extra = isRecord(v) ? Object.keys(v).filter((k) => k !== 'repo' && k !== 'mirror_id') : [];
+  if (!isRecord(v) || !isStr(v.repo) || v.repo === '' || extra.length > 0 || (v.mirror_id !== undefined && !(isStr(v.mirror_id) && MIRROR_ID.test(v.mirror_id)))) {
     throw new ExportRefusal('settings_unreadable', 'export.json in the NorthKeep folder is unreadable; fix or remove it', file);
   }
-  return { repo: v.repo };
+  return v.mirror_id === undefined ? { repo: v.repo } : { repo: v.repo, mirror_id: v.mirror_id as string };
 }
 
 export function writeExportSettings(home: string, settings: ExportSettings, lock: ExportLock): void {
   requireLock(lock);
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  atomicWrite(settingsPath(home), `${JSON.stringify({ repo: settings.repo }, null, 2)}\n`);
+  const body = settings.mirror_id === undefined ? { repo: settings.repo } : { repo: settings.repo, mirror_id: settings.mirror_id };
+  atomicWrite(settingsPath(home), `${JSON.stringify(body, null, 2)}\n`);
 }
 
 // ---- the vault snapshot -------------------------------------------------------------------
@@ -487,6 +510,7 @@ export interface SnapshotProject {
 /** Everything export and verify need, rendered while the vault is open so git runs after it closes. */
 export interface MirrorSnapshot {
   vaultId: string;
+  mirrorId: string;
   projects: SnapshotProject[];
   index: MirrorFile;
   marker: { path: string; bytes: Uint8Array };
@@ -497,7 +521,7 @@ export interface MirrorSnapshot {
  * renderMirror). Its INDEX row says so in fixed text instead of borrowing the
  * conflict wording, which would be false.
  */
-export function snapshotMirror(vault: ProjectVaultReader, allowedScopes?: string[]): MirrorSnapshot {
+export function snapshotMirror(vault: ProjectVaultReader, mirrorId: string, allowedScopes?: string[]): MirrorSnapshot {
   const vaultId = vault.getVaultId();
   const summaries = listProjectViews(vault, allowedScopes);
   const projects: SnapshotProject[] = [];
@@ -523,8 +547,8 @@ export function snapshotMirror(vault: ProjectVaultReader, allowedScopes?: string
       indexRows.push({ ...s, status: RENDER_FAILED_STATUS, updated_at: null, last_writer_host: null });
     }
   }
-  const marker = renderMarkerFile(vaultId);
-  return { vaultId, projects, index: renderIndexFile(indexRows, vaultId), marker: { path: marker.path, bytes: marker.bytes } };
+  const marker = renderMarkerFile(vaultId, mirrorId);
+  return { vaultId, mirrorId, projects, index: renderIndexFile(indexRows, vaultId), marker: { path: marker.path, bytes: marker.bytes } };
 }
 
 // ---- ownership (Decision 3) ---------------------------------------------------------------
@@ -602,6 +626,19 @@ function realProjectsDir(repo: string): boolean | null {
   return st.isDirectory() && !st.isSymbolicLink();
 }
 
+/** The mirror id in the folder's marker; null when absent, unreadable, or an old marker without one. */
+function readMarkerMirrorId(repo: string): string | null {
+  const st = lstatOrNull(path.join(repo, MIRROR_MARKER_PATH));
+  if (!st || !st.isFile()) return null;
+  try {
+    const bytes = readRegular(path.join(repo, MIRROR_MARKER_PATH));
+    const header = bytes === null ? null : parseMirrorHeader(Buffer.from(bytes).toString('utf8'));
+    return header?.kind === 'marker' && header.mirrorId !== null && MIRROR_ID.test(header.mirrorId) ? header.mirrorId : null;
+  } catch {
+    return null;
+  }
+}
+
 function resolveRepo(home: string, repo: string | undefined): string {
   const chosen = repo ?? readExportSettings(home)?.repo;
   if (!chosen) throw new ExportRefusal('not_configured', 'No mirror is configured; run northkeep projects export --repo <folder> once');
@@ -623,8 +660,18 @@ function failureCode(err: unknown): string {
  * id when the vault opened, else by the header fingerprint. A run that could
  * not open its vault never marks another vault's mirror as failed.
  */
-function recordFailure(home: string, repo: string, vaultId: string | null, vaultPath: string, by: 'cli' | 'schedule', code: string, at: string, lock: ExportLock): void {
-  const raw = readJson(statePath(home, repo));
+function recordFailure(
+  home: string,
+  repo: string,
+  mirrorId: string | null,
+  vaultId: string | null,
+  vaultPath: string,
+  by: 'cli' | 'schedule',
+  code: string,
+  at: string,
+  lock: ExportLock,
+): void {
+  const raw = readJson(statePath(home, repo, mirrorId));
   const owner = isRecord(raw) && isStr(raw.vault_id) ? raw.vault_id : null;
   let id: string;
   if (vaultId !== null) {
@@ -635,7 +682,8 @@ function recordFailure(home: string, repo: string, vaultId: string | null, vault
     if (owner === null || fp === null || !isRecord(raw) || raw.vault_fingerprint !== fp) return;
     id = owner;
   }
-  const state = readExportState(home, repo, id) ?? emptyExportState(repo, id);
+  const state = readExportState(home, repo, id, mirrorId) ?? emptyExportState(repo, id, mirrorId);
+  state.repo = repo;
   state.last_attempt = { at, by };
   state.last_failure = { at, code };
   writeExportState(home, state, lock);
@@ -654,6 +702,7 @@ async function runLocked(
   lock: ExportLock,
   snap: MirrorSnapshot,
   at: string,
+  markerId: string | null,
 ): Promise<ExportRunResult> {
   const { ctx: pctx, info } = await preflightRepository({
     repo,
@@ -665,13 +714,32 @@ async function runLocked(
   await requireCommitIdentity(pctx);
   requireLock(lock);
   removeStaleRunIndexes(opts.home, repo);
-  if (opts.repo !== undefined) writeExportSettings(opts.home, { repo }, lock);
+  let settings: ExportSettings | null = null;
+  try {
+    settings = readExportSettings(opts.home);
+  } catch {
+    // Rewritten below; --repo is how a user repairs an unreadable export.json.
+  }
+  if (opts.repo !== undefined || settings?.repo !== repo || settings.mirror_id !== snap.mirrorId) {
+    writeExportSettings(opts.home, { repo, mirror_id: snap.mirrorId }, lock);
+  }
   const projectsDir = path.join(repo, 'projects');
   cleanStaleMirrorTemps(repo);
   cleanStaleMirrorTemps(projectsDir);
 
-  const journal = readJournal(opts.home, repo, snap.vaultId);
-  const state = readExportState(opts.home, repo, snap.vaultId) ?? emptyExportState(repo, snap.vaultId);
+  // A marker without an id is the pre-id layout: carry the realpath-keyed journal and state over to the new id.
+  const journal = readJournal(opts.home, repo, snap.vaultId, markerId ?? snap.mirrorId);
+  const state =
+    readExportState(opts.home, repo, snap.vaultId, markerId ?? snap.mirrorId) ??
+    (markerId === null ? readExportState(opts.home, repo, snap.vaultId, null) : null) ??
+    emptyExportState(repo, snap.vaultId);
+  if (markerId === null) {
+    for (const [p, blobs] of Object.entries(readJournal(opts.home, repo, snap.vaultId, null).paths)) {
+      if (!journal.paths[p]) journal.paths[p] = blobs;
+    }
+  }
+  state.repo = repo;
+  state.mirror_id = snap.mirrorId;
   const refused: { path: string; reason: string }[] = [];
   const add: CommitEntry[] = [];
   const written: string[] = [];
@@ -848,13 +916,16 @@ export async function exportProjects(opts: ExportRunOptions): Promise<ExportRunR
   }
   const at = now().toISOString();
   let vaultId: string | null = null;
+  // Read under the lock: the marker's id keys the journal and state; a first export or an old marker gets a new one.
+  const markerId = readMarkerMirrorId(repo);
   try {
-    const snap = await (opts.withVault ?? defaultVaultRunner(opts.vaultPath))((v) => snapshotMirror(v));
+    const mirrorId = markerId ?? crypto.randomUUID();
+    const snap = await (opts.withVault ?? defaultVaultRunner(opts.vaultPath))((v) => snapshotMirror(v, mirrorId));
     vaultId = snap.vaultId;
-    return await runLocked(opts, repo, lock, snap, at);
+    return await runLocked(opts, repo, lock, snap, at, markerId);
   } catch (err) {
     try {
-      recordFailure(opts.home, repo, vaultId, opts.vaultPath, opts.by, failureCode(err), at, lock);
+      recordFailure(opts.home, repo, markerId, vaultId, opts.vaultPath, opts.by, failureCode(err), at, lock);
     } catch {
       // the original error is the one worth reporting
     }
@@ -883,6 +954,8 @@ export interface VerifyResult {
   ok: boolean;
 }
 
+const PLACEHOLDER_MIRROR_ID = '00000000-0000-4000-8000-000000000000';
+
 /** Mode per path from `ls-tree -z`, for the top-level mirror files and projects/. */
 function parseLsTree(text: string): Map<string, string> {
   const modes = new Map<string, string>();
@@ -905,8 +978,10 @@ export async function verifyMirror(opts: {
   withVault?: VaultRunner;
 }): Promise<VerifyResult> {
   const repo = resolveRepo(opts.home, opts.repo);
-  const snap = await (opts.withVault ?? defaultVaultRunner(opts.vaultPath))((v) => snapshotMirror(v));
-  const journal = readJournal(opts.home, repo, snap.vaultId);
+  const markerId = readMarkerMirrorId(repo);
+  // An old marker has no id to render; the placeholder makes it read as stale, which the next export fixes.
+  const snap = await (opts.withVault ?? defaultVaultRunner(opts.vaultPath))((v) => snapshotMirror(v, markerId ?? PLACEHOLDER_MIRROR_ID));
+  const journal = readJournal(opts.home, repo, snap.vaultId, markerId);
   const gitHome = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-verify-'));
   try {
     const ctx: GitContext = { repo, home: gitHome, vaultPath: opts.vaultPath };
@@ -983,7 +1058,7 @@ export function readMirrorSummary(vault: ProjectVaultReader, granted: string[] |
     return 'mirror settings unreadable';
   }
   if (settings === null) return null;
-  const state = readExportState(home, settings.repo, vault.getVaultId());
+  const state = readExportState(home, settings.repo, vault.getVaultId(), settings.mirror_id ?? null);
   return summarizeMirror(state ?? {}, listProjectViews(vault, granted), now);
 }
 

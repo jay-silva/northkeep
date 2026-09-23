@@ -280,13 +280,16 @@ describe('the settings file', () => {
     expect(JSON.parse(fs.readFileSync(settingsPath(lab.home), 'utf8'))).toEqual({ repo });
     expect(mode(settingsPath(lab.home))).toBe(0o600);
     expect(readExportSettings(lab.home)).toEqual({ repo });
+    const id = '0f1e2d3c-4b5a-4968-8776-655443322110';
+    writeExportSettings(lab.home, { repo, mirror_id: id }, l);
+    expect(readExportSettings(lab.home)).toEqual({ repo, mirror_id: id });
     l.release();
     expect(() => writeExportSettings(lab.home, { repo: '/other' }, l)).toThrow(ExportRefusal);
-    expect(readExportSettings(lab.home)).toEqual({ repo });
+    expect(readExportSettings(lab.home)).toEqual({ repo, mirror_id: id });
   });
 
   it('refuses an unreadable file with fixed text', () => {
-    for (const bad of ['{not json', '{"repo": 3}', '{"repo": "/x", "token": "y"}', '[]']) {
+    for (const bad of ['{not json', '{"repo": 3}', '{"repo": "/x", "token": "y"}', '[]', '{"repo": "/x", "mirror_id": "../../escape"}', '{"repo": "/x", "mirror_id": "ABCDEF00-0000-4000-8000-000000000000"}']) {
       fs.writeFileSync(settingsPath(lab.home), bad);
       let err: unknown;
       try {

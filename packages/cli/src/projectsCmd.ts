@@ -330,7 +330,7 @@ async function statusCmd(options: ExportCmdOptions, deps: MirrorDeps, out: (l: s
   }
   const runner = await deps.vaultRunner();
   const { vaultId, summaries } = await runner((v) => ({ vaultId: v.getVaultId(), summaries: listProjectViews(v) }));
-  const state = readExportState(deps.home, settings.repo, vaultId);
+  const state = readExportState(deps.home, settings.repo, vaultId, settings.mirror_id ?? null);
   const exported = state?.projects ?? {};
   const changed = summaries
     .filter((s) => !s.conflict && s.revision !== null && exported[s.project]?.revision !== s.revision)

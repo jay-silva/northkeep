@@ -11,7 +11,7 @@ import {
   withFileLock,
 } from '@northkeep/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ExportRefusal, readRemotes, setGitSpawnObserver } from '../src/git-plumbing.js';
+import { ExportRefusal, readRemotes, repoKey, setGitSpawnObserver } from '../src/git-plumbing.js';
 import {
   classifyTarget,
   exportProjects,
@@ -140,6 +140,11 @@ async function verifyReadOnly(): Promise<VerifyResult> {
   return res;
 }
 
+/** The mirror's state file, found the way the resume line finds it: by the mirror id in export.json. */
+function stateOf(v: Vault) {
+  return readExportState(lab.home, repo, v.getVaultId(), readExportSettings(lab.home)?.mirror_id ?? null);
+}
+
 function statusOf(res: VerifyResult): Record<string, string> {
   return Object.fromEntries(res.entries.map((e) => [e.path, e.status]));
 }
@@ -159,8 +164,8 @@ describe('exportProjects end to end', () => {
     expect(fx(lab, repo, ['log', '-1', '--format=%s'])).toBe('export: 2 projects (northkeep-cli)');
     expect(fx(lab, repo, ['log', '-1', '--format=%b'])).toContain('demo (claude-code, model not exposed)');
     expect(fx(lab, repo, ['status', '--short'])).toBe('');
-    expect(readExportSettings(lab.home)).toEqual({ repo });
-    const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+    expect(readExportSettings(lab.home)).toEqual({ repo, mirror_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) });
+    const state = await runner((v) => stateOf(v));
     expect(state?.nk_commits).toEqual([res.commit]);
     expect(Object.keys(state!.projects).sort()).toEqual(['demo', 'other']);
     expect(fs.statSync(path.join(repo, 'projects', 'demo.md')).mode & 0o777).toBe(0o644);
@@ -219,7 +224,7 @@ describe('exportProjects end to end', () => {
     expect(res.written).toContain('projects/other.md');
     expect(fs.readFileSync(demo, 'utf8')).toBe(edited);
     expect(fx(lab, repo, ['diff', '--name-only', 'HEAD~1', 'HEAD'])).not.toContain('projects/demo.md');
-    const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+    const state = await runner((v) => stateOf(v));
     expect(state?.refused).toContainEqual({ path: 'projects/demo.md', reason: 'hand edit' });
     // Restoring the committed bytes makes the file NorthKeep's again.
     fx(lab, repo, ['checkout', '--', 'projects/demo.md']);
@@ -242,7 +247,7 @@ describe('exportProjects end to end', () => {
     expect(fx(lab, repo, ['ls-tree', '-r', '--name-only', 'HEAD', '--', 'projects'])).toBe('projects/other.md');
     expect(fx(lab, repo, ['log', '-1', '--format=%B'])).toContain('removed projects/demo.md');
     expect(commits()).toBe(2);
-    const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+    const state = await runner((v) => stateOf(v));
     expect(Object.keys(state!.projects)).toEqual(['other']);
     expect((await verifyReadOnly()).ok).toBe(true);
   });
@@ -333,7 +338,7 @@ describe('exportProjects end to end', () => {
       expect(res.written).toContain('projects/other.md');
       expect(res.status).toBe('committed');
       expect(JSON.stringify(res.refused)).not.toContain(lab.root);
-      const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+      const state = await runner((v) => stateOf(v));
       expect(state?.last_failure).toBeNull();
       expect(state?.last_success?.commit).toBe(res.commit);
       expect(state?.last_attempt?.by).toBe('schedule');
@@ -351,7 +356,7 @@ describe('exportProjects end to end', () => {
     try {
       const res = await exportProjects({ home: lab.home, vaultPath: lab.vaultPath, withVault: runner, by: 'schedule' });
       expect(res.refused.map((r) => r.reason)).toEqual(['unreadable', 'unreadable', 'unreadable']);
-      const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+      const state = await runner((v) => stateOf(v));
       expect(state?.last_failure?.code).toBe('nothing_exported');
     } finally {
       for (const f of files) fs.chmodSync(f, 0o644);
@@ -394,7 +399,7 @@ describe('exportProjects end to end', () => {
     await expect(
       exportProjects({ home: lab.home, vaultPath: lab.vaultPath, withVault: locked, by: 'schedule', now: () => new Date(Date.now() + 60_000) }),
     ).rejects.toMatchObject({ code: 'vault_locked' });
-    const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+    const state = await runner((v) => stateOf(v));
     expect(state?.last_failure?.code).toBe('vault_locked');
     expect(state?.last_attempt?.by).toBe('schedule');
     const line = await runner((v) => readMirrorSummary(v, undefined, lab.home, new Date(Date.now() + 120_000)));
@@ -418,7 +423,7 @@ describe('exportProjects end to end', () => {
     await expect(exportProjects({ home: lab.home, vaultPath: otherPath, withVault: otherRunner, by: 'cli' })).rejects.toBeInstanceOf(ExportRefusal);
     const statePath = path.join(lab.home, 'export', fs.readdirSync(path.join(lab.home, 'export')).find((n) => n.endsWith('.state.json'))!);
     expect(fs.readFileSync(statePath, 'utf8')).toBe(before);
-    const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+    const state = await runner((v) => stateOf(v));
     expect(state?.last_success).not.toBeNull();
     expect(state?.nk_commits.length).toBeGreaterThan(0);
   });
@@ -475,6 +480,76 @@ function assertHistoryKeeps(since: string): void {
   }
   expect(fx(lab, repo, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n')).toContain('notes.txt');
 }
+
+describe('the mirror id (F4)', () => {
+  const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  function markerId(): string | null {
+    const first = fs.readFileSync(path.join(repo, '.northkeep-mirror'), 'utf8').split('\n')[0]!;
+    return / mirror (\S+)/.exec(first)?.[1] ?? null;
+  }
+
+  it('a moved mirror exported with --repo keeps its journal: zero refusals, no commit, new path recorded', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const id = markerId();
+    expect(id).toMatch(UUID4);
+    const moved = path.join(lab.root, 'moved-mirror');
+    fs.renameSync(repo, moved);
+    repo = fs.realpathSync(moved);
+    const res = await exportOnce({ repo: moved });
+    expect(res.refused).toEqual([]);
+    expect(res.status).toBe('unchanged');
+    expect(commits()).toBe(1);
+    expect(markerId()).toBe(id);
+    expect(readExportSettings(lab.home)).toEqual({ repo, mirror_id: id });
+    const state = await runner((v) => stateOf(v));
+    expect(state?.repo).toBe(repo);
+    expect(state?.last_success).not.toBeNull();
+    expect((await verifyReadOnly()).ok).toBe(true);
+  });
+
+  it('an old marker without a mirror id gets one in a single migration commit, keeping the journal and state', async () => {
+    await seed();
+    await exportOnce({ repo });
+    // Rebuild the pre-id layout: marker without an id, journal and state under the realpath key, settings without an id.
+    const id = markerId()!;
+    const markerFile = path.join(repo, '.northkeep-mirror');
+    fs.writeFileSync(markerFile, fs.readFileSync(markerFile, 'utf8').replace(` mirror ${id}`, ''));
+    fx(lab, repo, ['add', '.northkeep-mirror']);
+    fx(lab, repo, ['commit', '-q', '-m', 'old marker']);
+    const exp = path.join(lab.home, 'export');
+    const journal = JSON.parse(fs.readFileSync(path.join(exp, `mirror-${id}.json`), 'utf8'));
+    delete journal.mirror_id;
+    journal.paths['.northkeep-mirror'].unshift(fx(lab, repo, ['hash-object', '.northkeep-mirror']));
+    const state = JSON.parse(fs.readFileSync(path.join(exp, `mirror-${id}.state.json`), 'utf8'));
+    delete state.mirror_id;
+    for (const n of fs.readdirSync(exp)) fs.rmSync(path.join(exp, n));
+    fs.writeFileSync(path.join(exp, `${repoKey(repo)}.json`), JSON.stringify(journal));
+    fs.writeFileSync(path.join(exp, `${repoKey(repo)}.state.json`), JSON.stringify(state));
+    fs.writeFileSync(path.join(lab.home, 'export.json'), JSON.stringify({ repo }));
+    expect(markerId()).toBeNull();
+    const before = commits();
+
+    const res = await exportOnce();
+    expect(res.refused).toEqual([]);
+    expect(res.status).toBe('committed');
+    expect(commits()).toBe(before + 1);
+    expect(fx(lab, repo, ['diff', '--name-only', 'HEAD~1', 'HEAD'])).toBe('.northkeep-mirror');
+    const newId = markerId();
+    expect(newId).toMatch(UUID4);
+    expect(readExportSettings(lab.home)?.mirror_id).toBe(newId);
+    const migrated = await runner((v) => stateOf(v));
+    expect(migrated?.nk_commits.length).toBe(state.nk_commits.length + 1);
+    expect(Object.keys(migrated!.projects).sort()).toEqual(['demo', 'other']);
+
+    const again = await exportOnce();
+    expect(again.status).toBe('unchanged');
+    expect(again.refused).toEqual([]);
+    expect(markerId()).toBe(newId);
+    expect((await verifyReadOnly()).ok).toBe(true);
+  });
+});
 
 describe('concurrent exports', () => {
   async function seedWithUserFile(): Promise<string> {
