@@ -167,6 +167,8 @@ export interface ExportCmdOptions {
   status?: boolean;
   schedule?: string;
   scheduled?: boolean;
+  /** Test only: install or remove the plist without calling launchctl. */
+  skipLaunchctl?: boolean;
   json?: boolean;
 }
 
@@ -237,7 +239,7 @@ export async function projectsExportCmd(options: ExportCmdOptions, deps: MirrorD
   }
   if (options.scheduled) return scheduledExport(deps);
   try {
-    if (options.schedule !== undefined) return await scheduleCmd(options.schedule, deps, out, err);
+    if (options.schedule !== undefined) return await scheduleCmd(options.schedule, options, deps, out, err);
     if (options.verify) return await verifyCmd(options, deps, out);
     if (options.status) return await statusCmd(options, deps, out);
     return await exportCmd(options, deps, out);
@@ -359,7 +361,7 @@ async function statusCmd(options: ExportCmdOptions, deps: MirrorDeps, out: (l: s
   return 0;
 }
 
-async function scheduleCmd(value: string, deps: MirrorDeps, out: (l: string) => void, err: (l: string) => void): Promise<number> {
+async function scheduleCmd(value: string, options: ExportCmdOptions, deps: MirrorDeps, out: (l: string) => void, err: (l: string) => void): Promise<number> {
   const sched = deps.schedule;
   if (!sched) throw new Error('The export schedule is not available from here');
   // The launchd job cannot carry --vault, so it always opens the default vault.
@@ -368,7 +370,8 @@ async function scheduleCmd(value: string, deps: MirrorDeps, out: (l: string) => 
     err(`✗ The schedule exports only the default vault (${defaultVault}). Run --schedule without --vault.`);
     return 1;
   }
-  const where = { ...(sched.plistDir !== undefined ? { plistDir: sched.plistDir } : {}), ...(sched.load !== undefined ? { load: sched.load } : {}) };
+  const load = options.skipLaunchctl ? false : sched.load;
+  const where = { ...(sched.plistDir !== undefined ? { plistDir: sched.plistDir } : {}), ...(load !== undefined ? { load } : {}) };
   if (value === 'off') {
     const file = schedulePlistPath(sched.plistDir);
     out((await removeSchedule(where)) ? `Removed the export schedule (${file}).` : 'No export schedule was installed.');

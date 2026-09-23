@@ -432,9 +432,9 @@ describe('northkeep projects import', () => {
 });
 
 describe('the real CLI process', () => {
-  function cli(args: string[]): { status: number | null; stdout: string; stderr: string } {
+  function cli(args: string[], extraEnv: Record<string, string> = {}): { status: number | null; stdout: string; stderr: string } {
     const r = spawnSync(process.execPath, [CLI_DIST, '--vault', vaultPath, ...args], {
-      env: { PATH: '/usr/bin:/bin', HOME: path.join(root, 'fixturehome'), NORTHKEEP_HOME: home, NORTHKEEP_MASTER_KEY: keyHex },
+      env: { PATH: '/usr/bin:/bin', HOME: path.join(root, 'fixturehome'), NORTHKEEP_HOME: home, NORTHKEEP_MASTER_KEY: keyHex, ...extraEnv },
       encoding: 'utf8',
       timeout: 60_000,
     });
@@ -463,10 +463,28 @@ describe('the real CLI process', () => {
     expect(cli(['projects', 'export']).status).toBe(1);
   });
 
-  it('hides --scheduled from help', () => {
+  it('hides --scheduled and --skip-launchctl from help', () => {
     const help = cli(['projects', 'export', '--help']);
     expect(help.stdout).toContain('--verify');
     expect(help.stdout).not.toContain('--scheduled');
+    expect(help.stdout).not.toContain('--skip-launchctl');
+  });
+
+  it('--schedule writes into NORTHKEEP_LAUNCH_AGENTS_DIR and --skip-launchctl loads nothing (S1)', () => {
+    if (process.platform !== 'darwin') return;
+    expect(cli(['projects', 'export', '--repo', repo]).status).toBe(0);
+    const agents = path.join(root, 'agents-env');
+    const env = { NORTHKEEP_LAUNCH_AGENTS_DIR: agents };
+    const on = cli(['projects', 'export', '--schedule', 'hourly', '--skip-launchctl'], env);
+    expect(on.stderr).toBe('');
+    expect(on.status).toBe(0);
+    expect(fs.readdirSync(agents)).toEqual(['com.northkeep.mirror-export.plist']);
+    expect(fs.readFileSync(path.join(agents, 'com.northkeep.mirror-export.plist'), 'utf8')).toContain('<string>--scheduled</string>');
+    expect(fs.existsSync(path.join(root, 'fixturehome', 'Library'))).toBe(false);
+    const off = cli(['projects', 'export', '--schedule', 'off', '--skip-launchctl'], env);
+    expect(off.status).toBe(0);
+    expect(off.stdout).toContain('Removed the export schedule');
+    expect(fs.readdirSync(agents)).toEqual([]);
   });
 });
 

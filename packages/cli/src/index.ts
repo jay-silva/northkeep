@@ -932,7 +932,8 @@ function mirrorDeps(): { deps: MirrorDeps; opened: () => Awaited<ReturnType<type
     home: northkeepHome(),
     vaultPath: vaultPathOpt(),
     vaultRunner: async () => (opened ??= await promptOnceRunner(vaultPathOpt(), getPassphrase)).runner,
-    schedule: { cliEntry: cliEntryPath() },
+    // Test only: NORTHKEEP_LAUNCH_AGENTS_DIR keeps a test's plist out of ~/Library/LaunchAgents.
+    schedule: { cliEntry: cliEntryPath(), ...(process.env.NORTHKEEP_LAUNCH_AGENTS_DIR ? { plistDir: process.env.NORTHKEEP_LAUNCH_AGENTS_DIR } : {}) },
   };
   return { deps, opened: () => opened };
 }
@@ -946,6 +947,8 @@ projects
   .option('--schedule <when>', 'export on a schedule with launchd: hourly, daily or off')
   .option('--json', 'print the raw result as JSON')
   .addOption(new Option('--scheduled', 'run by the launchd job; never prompts').hideHelp())
+  // Test only, with NORTHKEEP_LAUNCH_AGENTS_DIR: --schedule writes the plist but never runs launchctl.
+  .addOption(new Option('--skip-launchctl', 'test only: do not load or unload the launchd job').hideHelp())
   .action(async (options: ExportCmdOptions) => {
     const { deps, opened } = mirrorDeps();
     try {
