@@ -5,8 +5,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KDF_INTERACTIVE, Vault, deriveMasterKey, generateDeviceSecret, listProjectViews, withFileLock } from '@northkeep/core';
-import { ExportRefusal, readExportState, type VaultRunner } from '@northkeep/mcp-server';
-import { projectsExportCmd, projectsImportCmd, type MirrorDeps } from '../src/projectsCmd.js';
+import { ExportRefusal, readExportSettings, readExportState, type VaultRunner } from '@northkeep/mcp-server';
+import { describeMirrorError, projectsExportCmd, projectsImportCmd, type MirrorDeps } from '../src/projectsCmd.js';
 
 /**
  * ADR 0053 M-A1 on the CLI: export, verify, status, schedule, the launchd
@@ -194,6 +194,28 @@ describe('northkeep projects export', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe(edited);
   });
 
+  it('an unreadable mirror file is refused by name with fixed text, and the rest exports (a2)', async () => {
+    expect(await exportCmd({ repo })).toBe(0);
+    const demo = path.join(repo, 'projects', 'demo.md');
+    fs.chmodSync(demo, 0o000);
+    try {
+      await setStatus('other', 'Past the bad file.');
+      expect(await exportCmd({})).toBe(1);
+      expect(out).toContain('Refused projects/demo.md: unreadable. Check the file permissions; NorthKeep left it as it was.');
+      expect(out).toContain('Wrote projects/other.md');
+      expect([...out, ...err].join('\n')).not.toContain(demo);
+    } finally {
+      fs.chmodSync(demo, 0o644);
+    }
+  });
+
+  it('describes a file-system error with fixed text and no path', () => {
+    const e = Object.assign(new Error(`EACCES: permission denied, open '${path.join(root, 'secret', 'x.md')}'`), { code: 'EACCES' });
+    const text = describeMirrorError(e);
+    expect(text).not.toContain(root);
+    expect(text).toContain('EACCES');
+  });
+
   it('prints JSON with --json and rejects mixed modes', async () => {
     expect(await exportCmd({ repo, json: true })).toBe(0);
     expect(JSON.parse(out.join('\n')).status).toBe('committed');
@@ -336,7 +358,7 @@ describe('northkeep projects export --scheduled', () => {
     expect(err).toEqual([]);
     expect(prompted).toBe(false);
     const vaultId = await runner((v) => v.getVaultId());
-    const state = readExportState(home, repo, vaultId)!;
+    const state = readExportState(home, repo, vaultId, readExportSettings(home)?.mirror_id ?? null)!;
     expect(state.last_failure?.code).toBe('vault_locked');
     expect(state.last_attempt?.by).toBe('schedule');
 
@@ -371,13 +393,15 @@ describe('northkeep projects import', () => {
     const dry = await projectsImportCmd({ from: src }, { ...deps(), vaultRunner: async () => ((opened = true), runner) });
     allPlain.push(...out, ...err);
     expect(dry).toBe(0);
-    expect(opened).toBe(false);
+    // Opened read only, to report taken slugs; the vault file is unchanged below.
+    expect(opened).toBe(true);
     expect(out.find((l) => l.startsWith('Would import alpha.md as alpha: '))).toMatch(
       /bytes, 0 log archives, no overflow, Open Questions \/ Risks stored as Open Questions/,
     );
     expect(out.some((l) => l.startsWith('Would import beta-str.md as beta-str: '))).toBe(true);
     expect(out.find((l) => l.startsWith('Skip _TEMPLATE.md: '))).toContain('not a project slug');
-    expect(out.at(-1)).toBe('Dry run: 2 files would be imported and 1 skipped. Nothing was written; add --write to import.');
+    expect(out.at(-2)).toMatch(/^Largest row: [\d,]+ bytes \(limit 60,000\)\. Total: [\d,]+ bytes of the 4,194,304-byte sync limit\.$/);
+    expect(out.at(-1)).toBe('Dry run: 2 files would be imported, 0 already in the vault, 0 refused, 1 skipped. Nothing was written; add --write to import.');
     expect(snapshot(path.join(root, 'cr'))).toBe(srcBefore);
     expect(fs.readFileSync(vaultPath).equals(vaultBefore)).toBe(true);
 
@@ -388,8 +412,22 @@ describe('northkeep projects import', () => {
     expect(snapshot(path.join(root, 'cr'))).toBe(srcBefore);
 
     expect(await importCmd({ from: src, write: true })).toBe(1);
-    expect(out.find((l) => l.startsWith('Refused alpha.md (alpha): '))).toContain('Project alpha already exists');
+    expect(out.find((l) => l.startsWith('Refused alpha.md (alpha): '))).toContain('Project alpha already has entries in this vault; delete the project from the Projects page first.');
     expect(out.at(-1)).toBe('Imported 0 projects; 2 refused, 1 skipped.');
+  });
+
+  it('the dry run names a taken slug and a non-UTF-8 file, and counts both (F1, S2)', async () => {
+    const dir = path.join(root, 'mixed');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'demo.md'), '## Current Status\n\nAlready here.\n');
+    fs.writeFileSync(path.join(dir, 'cp.md'), Buffer.from([...Buffer.from('## Current Status\n\nCaf'), 0xe9, 0x0a]));
+    fs.writeFileSync(path.join(dir, 'fresh.md'), '## Current Status\n\nNew.\n');
+    const vaultBefore = fs.readFileSync(vaultPath);
+    expect(await importCmd({ from: dir })).toBe(0);
+    expect(out).toContain('Refused cp.md: not UTF-8; convert it first.');
+    expect(out).toContain('Exists demo.md (demo): Project demo already has entries in this vault; delete the project from the Projects page first.');
+    expect(out.at(-1)).toBe('Dry run: 1 file would be imported, 1 already in the vault, 1 refused, 0 skipped. Nothing was written; add --write to import.');
+    expect(fs.readFileSync(vaultPath).equals(vaultBefore)).toBe(true);
   });
 
   it('names headings the dry run does not recognize, including one split out of a code fence', async () => {
@@ -410,9 +448,9 @@ describe('northkeep projects import', () => {
 });
 
 describe('the real CLI process', () => {
-  function cli(args: string[]): { status: number | null; stdout: string; stderr: string } {
+  function cli(args: string[], extraEnv: Record<string, string> = {}): { status: number | null; stdout: string; stderr: string } {
     const r = spawnSync(process.execPath, [CLI_DIST, '--vault', vaultPath, ...args], {
-      env: { PATH: '/usr/bin:/bin', HOME: path.join(root, 'fixturehome'), NORTHKEEP_HOME: home, NORTHKEEP_MASTER_KEY: keyHex },
+      env: { PATH: '/usr/bin:/bin', HOME: path.join(root, 'fixturehome'), NORTHKEEP_HOME: home, NORTHKEEP_MASTER_KEY: keyHex, ...extraEnv },
       encoding: 'utf8',
       timeout: 60_000,
     });
@@ -441,10 +479,28 @@ describe('the real CLI process', () => {
     expect(cli(['projects', 'export']).status).toBe(1);
   });
 
-  it('hides --scheduled from help', () => {
+  it('hides --scheduled and --skip-launchctl from help', () => {
     const help = cli(['projects', 'export', '--help']);
     expect(help.stdout).toContain('--verify');
     expect(help.stdout).not.toContain('--scheduled');
+    expect(help.stdout).not.toContain('--skip-launchctl');
+  });
+
+  it('--schedule writes into NORTHKEEP_LAUNCH_AGENTS_DIR and --skip-launchctl loads nothing (S1)', () => {
+    if (process.platform !== 'darwin') return;
+    expect(cli(['projects', 'export', '--repo', repo]).status).toBe(0);
+    const agents = path.join(root, 'agents-env');
+    const env = { NORTHKEEP_LAUNCH_AGENTS_DIR: agents };
+    const on = cli(['projects', 'export', '--schedule', 'hourly', '--skip-launchctl'], env);
+    expect(on.stderr).toBe('');
+    expect(on.status).toBe(0);
+    expect(fs.readdirSync(agents)).toEqual(['com.northkeep.mirror-export.plist']);
+    expect(fs.readFileSync(path.join(agents, 'com.northkeep.mirror-export.plist'), 'utf8')).toContain('<string>--scheduled</string>');
+    expect(fs.existsSync(path.join(root, 'fixturehome', 'Library'))).toBe(false);
+    const off = cli(['projects', 'export', '--schedule', 'off', '--skip-launchctl'], env);
+    expect(off.status).toBe(0);
+    expect(off.stdout).toContain('Removed the export schedule');
+    expect(fs.readdirSync(agents)).toEqual([]);
   });
 });
 

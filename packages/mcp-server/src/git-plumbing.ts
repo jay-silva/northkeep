@@ -27,6 +27,8 @@ export interface GitContext {
   home: string;
   /** Vault file; runGit refuses while this process holds its lock. */
   vaultPath: string;
+  /** This run's private temp index; set only inside plumbingCommit. */
+  indexFile?: string;
 }
 
 /** A refusal with fixed, user-facing text. `path` is for the CLI, never a model payload. */
@@ -56,8 +58,45 @@ export function repoKey(repoReal: string): string {
   return crypto.createHash('sha256').update(repoReal, 'utf8').digest('hex');
 }
 
+/** The pre-fix shared index path; only removed now, never used. */
 export function tempIndexPath(home: string, repoReal: string): string {
   return path.join(home, 'export', `${repoKey(repoReal)}.index`);
+}
+
+/** A temp index no other run can name: repository key, pid, random nonce. */
+export function runIndexPath(home: string, repoReal: string): string {
+  return path.join(home, 'export', `${repoKey(repoReal)}.${process.pid}.${crypto.randomBytes(8).toString('hex')}.index`);
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return errno(err) !== 'ESRCH';
+  }
+}
+
+/**
+ * Crash residue: the old shared index and run indexes whose pid is dead.
+ * Call under the export lock; a live pid's index stays, since its run may
+ * still be building a tree.
+ */
+export function removeStaleRunIndexes(home: string, repoReal: string): void {
+  const dir = path.join(home, 'export');
+  const key = repoKey(repoReal);
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const n of names) {
+    const m = /^([0-9a-f]{64})\.(?:(\d+)\.[0-9a-f]{16}\.)?index$/.exec(n);
+    if (!m || m[1] !== key) continue;
+    if (m[2] !== undefined && pidAlive(Number(m[2]))) continue;
+    fs.rmSync(path.join(dir, n), { force: true });
+  }
 }
 
 /** Decision 2's environment, and nothing else from the parent process. */
@@ -228,7 +267,7 @@ export async function runGit(ctx: GitContext, args: readonly string[], opts: Run
   assertVaultLockNotHeld(ctx.vaultPath);
   ensureGitHome(ctx.home);
   const verb = args[0] as string;
-  const env = gitEnv(ctx.home, opts.index === 'default' ? null : tempIndexPath(ctx.home, ctx.repo));
+  const env = gitEnv(ctx.home, opts.index === 'default' ? null : (ctx.indexFile ?? tempIndexPath(ctx.home, ctx.repo)));
   const argv = ['-C', ctx.repo, ...gitPins(ctx.home), ...args];
   observer?.(verb, args);
   return new Promise((resolve, reject) => {
@@ -569,6 +608,8 @@ export interface CommitInput {
   add: CommitEntry[];
   remove?: string[];
   message: string;
+  /** Runs right before update-ref; throws to stop the commit (the export lock check). */
+  guard?: () => void;
 }
 
 export interface CommitResult {
@@ -581,10 +622,16 @@ export interface CommitResult {
 
 const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
+/** Paths in a tree, read NUL-separated so no name is quoted or split. */
+async function treePaths(ctx: GitContext, treeish: string): Promise<Set<string>> {
+  const text = (await runGit(ctx, ['ls-tree', '-r', '-z', '--name-only', treeish])).stdout;
+  return new Set(text.split('\0').filter(Boolean));
+}
+
 /**
- * One commit per run from a temporary index seeded from HEAD, then the
- * reconcile of the default index. An unchanged tree stops before commit-tree.
- * Blobs must already be stored with hashObjectWrite.
+ * One commit from a private temp index seeded from HEAD, then the default
+ * index reconcile. An unchanged tree stops before commit-tree; a tree
+ * missing a parent path not in `remove` is refused. Blobs must be stored first.
  */
 export async function plumbingCommit(ctx: GitContext, info: RepoInfo, input: CommitInput): Promise<CommitResult> {
   const remove = input.remove ?? [];
@@ -597,38 +644,52 @@ export async function plumbingCommit(ctx: GitContext, info: RepoInfo, input: Com
   assertNoIndexLock(info.gitDir);
   await assertBranchNotElsewhere(ctx);
   const parent = await readHead(ctx);
-  fs.rmSync(tempIndexPath(ctx.home, ctx.repo), { force: true });
-  if (parent) await runGit(ctx, ['read-tree', parent]);
-  else await runGit(ctx, ['read-tree', '--empty']);
-  for (const e of input.add) {
-    await runGit(ctx, ['update-index', '--add', '--cacheinfo', `100644,${e.blob},${e.path}`]);
-  }
-  for (const p of remove) await runGit(ctx, ['update-index', '--force-remove', '--', p]);
-  const tree = await out(ctx, ['write-tree']);
-  let commit: string | null = null;
-  if (!parent || tree !== (await out(ctx, ['rev-parse', `${parent}^{tree}`]))) {
-    const ctArgs = parent ? ['commit-tree', tree, '-p', parent] : ['commit-tree', tree];
-    commit = await out(ctx, ctArgs, { input: input.message });
-    assertNoIndexLock(info.gitDir);
-    // The all-zero old id makes an unborn HEAD lose the race to a concurrent first commit.
-    const old = parent ?? '0'.repeat(commit.length);
-    await runGit(ctx, ['update-ref', '-m', 'northkeep export', 'HEAD', commit, old]);
-  }
-  let indexRefreshed = true;
+  const run: GitContext = { ...ctx, indexFile: runIndexPath(ctx.home, ctx.repo) };
   try {
+    if (parent) await runGit(run, ['read-tree', parent]);
+    else await runGit(run, ['read-tree', '--empty']);
     for (const e of input.add) {
-      await runGit(ctx, ['update-index', '--add', '--cacheinfo', `100644,${e.blob},${e.path}`], { index: 'default' });
+      await runGit(run, ['update-index', '--add', '--cacheinfo', `100644,${e.blob},${e.path}`]);
     }
-    for (const p of remove) await runGit(ctx, ['update-index', '--force-remove', '--', p], { index: 'default' });
-  } catch {
-    indexRefreshed = false;
+    for (const p of remove) await runGit(run, ['update-index', '--force-remove', '--', p]);
+    const tree = await out(run, ['write-tree']);
+    let commit: string | null = null;
+    if (!parent || tree !== (await out(run, ['rev-parse', `${parent}^{tree}`]))) {
+      if (parent) {
+        // The a5 invariant, checked directly: whatever happened to the index, no file NorthKeep did not remove may go.
+        const have = await treePaths(run, tree);
+        const removing = new Set(remove);
+        for (const p of await treePaths(run, parent)) {
+          if (!have.has(p) && !removing.has(p)) {
+            throw new ExportRefusal('tree_check_failed', 'NorthKeep refused a commit that would drop files it did not remove; nothing was committed. Export again');
+          }
+        }
+      }
+      const ctArgs = parent ? ['commit-tree', tree, '-p', parent] : ['commit-tree', tree];
+      commit = await out(run, ctArgs, { input: input.message });
+      assertNoIndexLock(info.gitDir);
+      input.guard?.();
+      // The all-zero old id makes an unborn HEAD lose the race to a concurrent first commit.
+      const old = parent ?? '0'.repeat(commit.length);
+      await runGit(run, ['update-ref', '-m', 'northkeep export', 'HEAD', commit, old]);
+    }
+    let indexRefreshed = true;
+    try {
+      for (const e of input.add) {
+        await runGit(ctx, ['update-index', '--add', '--cacheinfo', `100644,${e.blob},${e.path}`], { index: 'default' });
+      }
+      for (const p of remove) await runGit(ctx, ['update-index', '--force-remove', '--', p], { index: 'default' });
+    } catch {
+      indexRefreshed = false;
+    }
+    return {
+      status: commit ? 'committed' : 'unchanged',
+      commit,
+      tree,
+      indexRefreshed,
+      note: indexRefreshed ? null : commit ? INDEX_NOT_REFRESHED : 'working index not refreshed',
+    };
+  } finally {
+    fs.rmSync(run.indexFile as string, { force: true });
   }
-  fs.rmSync(tempIndexPath(ctx.home, ctx.repo), { force: true });
-  return {
-    status: commit ? 'committed' : 'unchanged',
-    commit,
-    tree,
-    indexRefreshed,
-    note: indexRefreshed ? null : commit ? INDEX_NOT_REFRESHED : 'working index not refreshed',
-  };
 }

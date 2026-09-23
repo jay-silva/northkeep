@@ -12,6 +12,7 @@ import {
   listProjectViews,
   parseMirrorHeader,
   planImport,
+  projectScopeInUse,
   renderIndexFile,
   renderLogFile,
   renderMarkerFile,
@@ -37,6 +38,7 @@ import {
   plumbingCommit,
   preflightRepository,
   readHead,
+  removeStaleRunIndexes,
   repoKey,
   requireCommitIdentity,
   runGit,
@@ -52,13 +54,12 @@ import { resolveMasterKey } from './key.js';
  * does every git step under the export lock in the repository's common dir,
  * so git never runs while the vault is held. Journal, state and settings
  * writes require the export lock and hold no memory content: only paths,
- * blob ids, slugs, revisions and times. Verify takes no lock and writes
- * nothing. Import reads the source folder and never writes it.
+ * blob ids, slugs, revisions, times and a hash of the vault header's salt.
+ * Verify takes no lock and writes nothing. Import never writes its source.
  */
 
 export const JOURNAL_DEPTH = 10;
 export const EXPORT_LOCK_NAME = 'northkeep-export.lock';
-export const EXPORT_LOCK_STALE_MS = 60 * 60 * 1000;
 export const EXPORT_LOCK_WAIT_MS = 30_000;
 
 const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -86,7 +87,6 @@ export interface ExportLock {
 
 export interface LockOptions {
   waitMs?: number;
-  staleMs?: number;
   pollMs?: number;
 }
 
@@ -103,17 +103,42 @@ function readNoFollow(p: string): string | null {
   }
 }
 
-/** Unparseable owners count as alive; only age can free them. */
-function ownerDead(token: string): boolean {
-  let pid: unknown;
+/** Exact lock bytes, 'gone' when absent, 'unreadable' for anything else (never stolen). */
+function readLockBytes(p: string): Buffer | 'gone' | 'unreadable' {
   try {
-    pid = (JSON.parse(token) as { pid?: unknown }).pid;
-  } catch {
-    return false;
+    const fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      return fs.readFileSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'gone' : 'unreadable';
   }
-  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+}
+
+interface LockOwner {
+  pid: number;
+  /** Re-serialized, so no text from the lock file reaches a message. */
+  startedAt: string | null;
+}
+
+function lockOwner(bytes: Buffer): LockOwner | null {
+  let v: unknown;
   try {
-    process.kill(pid, 0);
+    v = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!isRecord(v) || typeof v.pid !== 'number' || !Number.isInteger(v.pid) || v.pid <= 0) return null;
+  const t = typeof v.started_at === 'string' ? Date.parse(v.started_at) : Number.NaN;
+  return { pid: v.pid, startedAt: Number.isNaN(t) ? null : new Date(t).toISOString() };
+}
+
+function ownerDead(owner: LockOwner): boolean {
+  if (owner.pid === process.pid) return false;
+  try {
+    process.kill(owner.pid, 0);
     return false;
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === 'ESRCH';
@@ -121,15 +146,57 @@ function ownerDead(token: string): boolean {
 }
 
 /**
- * O_EXCL lock at `<common dir>/northkeep-export.lock`, shared by every worktree.
- * Stale only when its pid is dead or it is over an hour old; stolen by rename
- * so exactly one contender wins, and released only while it holds our token.
+ * Compare-and-steal under an O_EXCL guard: stealers run one at a time, and a
+ * dead lock can only be removed by a stealer, so re-reading it under the
+ * guard proves the rename moves exactly the dead bytes.
+ */
+function stealDeadLock(lockPath: string, seen: Buffer, token: string): 'retry' | 'busy' | 'mismatch' | 'guard_dead' {
+  const guardPath = `${lockPath}.steal`;
+  const { O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW } = fs.constants;
+  try {
+    const fd = fs.openSync(guardPath, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
+    try {
+      fs.writeSync(fd, token);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    const g = readLockBytes(guardPath);
+    if (g === 'gone') return 'retry';
+    // An empty or unparseable guard is a crash between create and write; this branch only refuses.
+    const gOwner = g === 'unreadable' ? null : lockOwner(g);
+    return gOwner === null || ownerDead(gOwner) ? 'guard_dead' : 'busy';
+  }
+  try {
+    // Read before the guard was ours: another stealer may have freed it and a contender taken it since.
+    const now = readLockBytes(lockPath);
+    if (!Buffer.isBuffer(now) || !now.equals(seen)) return 'retry';
+    const grave = `${lockPath}.stale-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+    try {
+      fs.renameSync(lockPath, grave);
+    } catch {
+      return 'retry';
+    }
+    const moved = readLockBytes(grave);
+    fs.rmSync(grave, { force: true });
+    return Buffer.isBuffer(moved) && moved.equals(seen) ? 'retry' : 'mismatch';
+  } finally {
+    if (readNoFollow(guardPath) === token) fs.rmSync(guardPath, { force: true });
+  }
+}
+
+const LOCK_HINT = 'if none is, remove northkeep-export.lock from the repository\'s .git folder and try again';
+
+/**
+ * O_EXCL lock in the common dir, shared by every worktree. Never taken by
+ * age: a live or unreadable owner is waited for, then refused. A dead
+ * owner's lock goes only by compare-and-steal. Released only while ours.
  */
 export async function acquireExportLock(ctx: GitContext, opts: LockOptions = {}): Promise<ExportLock> {
   const r = await runGit(ctx, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   const lockPath = path.join(r.stdout.replace(/\r?\n$/, ''), EXPORT_LOCK_NAME);
   const waitMs = opts.waitMs ?? EXPORT_LOCK_WAIT_MS;
-  const staleMs = opts.staleMs ?? EXPORT_LOCK_STALE_MS;
   const pollMs = opts.pollMs ?? 250;
   const token = `${JSON.stringify({
     pid: process.pid,
@@ -150,25 +217,36 @@ export async function acquireExportLock(ctx: GitContext, opts: LockOptions = {})
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
-    let st: fs.Stats | null = null;
-    try {
-      st = fs.lstatSync(lockPath);
-    } catch {
-      continue;
-    }
-    const existing = readNoFollow(lockPath);
-    if (Date.now() - st.mtimeMs > staleMs || (existing !== null && ownerDead(existing))) {
-      const graveyard = `${lockPath}.stale-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-      try {
-        fs.renameSync(lockPath, graveyard);
-        fs.rmSync(graveyard, { force: true });
-      } catch {
-        // another contender won the steal
+    const seen = readLockBytes(lockPath);
+    if (seen === 'gone') continue;
+    const owner = seen === 'unreadable' ? null : lockOwner(seen);
+    if (owner !== null && seen !== 'unreadable' && ownerDead(owner)) {
+      const stolen = stealDeadLock(lockPath, seen, token);
+      if (stolen === 'retry') continue;
+      if (stolen === 'mismatch') {
+        // Put nothing back: restoring could clobber a newer lock, and its owner re-checks before committing.
+        throw new ExportRefusal('export_busy', 'Another NorthKeep export took the export lock at the same moment; try again shortly');
       }
-      continue;
+      if (stolen === 'guard_dead') {
+        throw new ExportRefusal(
+          'lock_unreadable',
+          "A stale northkeep-export.lock.steal is in the repository's .git folder; once no NorthKeep export is running, remove it and try again",
+        );
+      }
     }
     if (Date.now() >= deadline) {
-      throw new ExportRefusal('export_busy', 'Another NorthKeep export is running on this repository; try again shortly');
+      if (owner === null) {
+        throw new ExportRefusal(
+          'lock_unreadable',
+          "The export lock is unreadable; once no NorthKeep export is running, remove northkeep-export.lock from the repository's .git folder and try again",
+        );
+      }
+      throw new ExportRefusal(
+        'export_busy',
+        owner.startedAt
+          ? `Another NorthKeep export has been running since ${owner.startedAt}; ${LOCK_HINT}`
+          : `Another NorthKeep export is running on this repository; ${LOCK_HINT}`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
@@ -201,21 +279,35 @@ export interface ExportJournal {
   version: 1;
   repo: string;
   vault_id: string;
+  /** The marker's mirror id; null for a journal kept under the pre-id realpath key. */
+  mirror_id: string | null;
   /** Per path, the last JOURNAL_DEPTH blob ids NorthKeep wrote there, newest first. */
   paths: Record<string, string[]>;
 }
 
-export function journalPath(home: string, repoReal: string): string {
-  return path.join(exportDir(home), `${repoKey(repoReal)}.json`);
+export const MIRROR_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+/** Files keyed by mirror id follow a moved mirror; the realpath key is the pre-id layout, kept for migration. */
+function exportFileStem(repoReal: string, mirrorId: string | null): string {
+  if (mirrorId === null) return repoKey(repoReal);
+  if (!MIRROR_ID.test(mirrorId)) throw new ExportRefusal('bad_mirror_id', 'NorthKeep refused a malformed mirror id');
+  return `mirror-${mirrorId}`;
 }
 
-/** Unparseable, another version, repository or vault: reads as empty. */
-export function readJournal(home: string, repoReal: string, vaultId: string): ExportJournal {
-  const empty: ExportJournal = { version: 1, repo: repoReal, vault_id: vaultId, paths: {} };
-  const v = readJson(journalPath(home, repoReal));
-  if (!isRecord(v) || v.version !== 1 || v.repo !== repoReal || v.vault_id !== vaultId || !isRecord(v.paths)) {
-    return empty;
-  }
+export function journalPath(home: string, repoReal: string, mirrorId: string | null = null): string {
+  return path.join(exportDir(home), `${exportFileStem(repoReal, mirrorId)}.json`);
+}
+
+/**
+ * Unparseable, another version or vault: reads as empty. Keyed by mirror id
+ * the stored repository path is not checked, so a moved mirror keeps its
+ * journal; under the realpath key it must match.
+ */
+export function readJournal(home: string, repoReal: string, vaultId: string, mirrorId: string | null = null): ExportJournal {
+  const empty: ExportJournal = { version: 1, repo: repoReal, vault_id: vaultId, mirror_id: mirrorId, paths: {} };
+  const v = readJson(journalPath(home, repoReal, mirrorId));
+  if (!isRecord(v) || v.version !== 1 || v.vault_id !== vaultId || !isRecord(v.paths)) return empty;
+  if (mirrorId === null ? v.repo !== repoReal : v.mirror_id !== mirrorId) return empty;
   const paths: Record<string, string[]> = {};
   for (const [p, list] of Object.entries(v.paths)) {
     if (!Array.isArray(list) || !list.every((b) => typeof b === 'string' && OID.test(b))) return empty;
@@ -234,7 +326,7 @@ export function recordJournalBlob(journal: ExportJournal, rel: string, blob: str
 export function writeJournal(home: string, journal: ExportJournal, lock: ExportLock): void {
   requireLock(lock);
   ensureExportDir(home);
-  atomicWrite(journalPath(home, journal.repo), `${JSON.stringify(journal, null, 2)}\n`);
+  atomicWrite(journalPath(home, journal.repo, journal.mirror_id), `${JSON.stringify(journal, null, 2)}\n`);
 }
 
 // ---- the state file (Decision 7) ----------------------------------------------------------
@@ -250,9 +342,13 @@ export interface ExportState {
   projects: Record<string, { revision: string; exported_at: string }>;
   /** Every commit NorthKeep created, oldest first; ADR 0055 depends on it. */
   nk_commits: string[];
+  /** vaultFingerprint of the vault that wrote this; lets a locked run find its own state. */
+  vault_fingerprint: string | null;
+  /** As in the journal: null only under the pre-id realpath key. */
+  mirror_id: string | null;
 }
 
-export function emptyExportState(repoReal: string, vaultId: string): ExportState {
+export function emptyExportState(repoReal: string, vaultId: string, mirrorId: string | null = null): ExportState {
   return {
     version: 1,
     repo: repoReal,
@@ -263,11 +359,26 @@ export function emptyExportState(repoReal: string, vaultId: string): ExportState
     refused: [],
     projects: {},
     nk_commits: [],
+    vault_fingerprint: null,
+    mirror_id: mirrorId,
   };
 }
 
-export function statePath(home: string, repoReal: string): string {
-  return path.join(exportDir(home), `${repoKey(repoReal)}.state.json`);
+/**
+ * The vault file's identity without its key: a hash of the header salt, which
+ * is stored in the clear. Null when the file is missing or unreadable.
+ */
+export function vaultFingerprint(vaultPath: string): string | null {
+  try {
+    const salt = Vault.readHeader(vaultPath).salt;
+    return crypto.createHash('sha256').update('northkeep-mirror-vault\0').update(salt).digest('hex');
+  } catch {
+    return null;
+  }
+}
+
+export function statePath(home: string, repoReal: string, mirrorId: string | null = null): string {
+  return path.join(exportDir(home), `${exportFileStem(repoReal, mirrorId)}.state.json`);
 }
 
 function isStr(v: unknown): v is string {
@@ -279,10 +390,11 @@ function nullOr<T>(v: unknown, ok: (x: Record<string, unknown>) => boolean): T |
   return isRecord(v) && ok(v) ? (v as T) : undefined;
 }
 
-/** Null when absent, unparseable, or for another repository or vault. */
-export function readExportState(home: string, repoReal: string, vaultId: string): ExportState | null {
-  const v = readJson(statePath(home, repoReal));
-  if (!isRecord(v) || v.version !== 1 || v.repo !== repoReal || v.vault_id !== vaultId) return null;
+/** Null when absent, unparseable, or for another vault; keyed as readJournal is. */
+export function readExportState(home: string, repoReal: string, vaultId: string, mirrorId: string | null = null): ExportState | null {
+  const v = readJson(statePath(home, repoReal, mirrorId));
+  if (!isRecord(v) || v.version !== 1 || v.vault_id !== vaultId || !isStr(v.repo)) return null;
+  if (mirrorId === null ? v.repo !== repoReal : v.mirror_id !== mirrorId) return null;
   const success = nullOr<ExportState['last_success']>(v.last_success, (x) => isStr(x.at) && isStr(x.commit));
   const attempt = nullOr<ExportState['last_attempt']>(
     v.last_attempt,
@@ -299,9 +411,11 @@ export function readExportState(home: string, repoReal: string, vaultId: string)
   }
   const commits = v.nk_commits ?? [];
   if (!Array.isArray(commits) || !commits.every((c) => isStr(c) && OID.test(c))) return null;
+  const fp = v.vault_fingerprint ?? null;
+  if (fp !== null && !(isStr(fp) && /^[0-9a-f]{64}$/.test(fp))) return null;
   return {
     version: 1,
-    repo: repoReal,
+    repo: v.repo,
     vault_id: vaultId,
     last_success: success,
     last_attempt: attempt,
@@ -309,19 +423,23 @@ export function readExportState(home: string, repoReal: string, vaultId: string)
     refused: refused as ExportState['refused'],
     projects: projects as ExportState['projects'],
     nk_commits: commits as string[],
+    vault_fingerprint: fp,
+    mirror_id: mirrorId,
   };
 }
 
 export function writeExportState(home: string, state: ExportState, lock: ExportLock): void {
   requireLock(lock);
   ensureExportDir(home);
-  atomicWrite(statePath(home, state.repo), `${JSON.stringify(state, null, 2)}\n`);
+  atomicWrite(statePath(home, state.repo, state.mirror_id), `${JSON.stringify(state, null, 2)}\n`);
 }
 
 // ---- the settings file (Decision 5) -------------------------------------------------------
 
 export interface ExportSettings {
   repo: string;
+  /** Lets status and the resume line find the state file without reading the repository. */
+  mirror_id?: string;
 }
 
 export function settingsPath(home: string): string {
@@ -344,16 +462,18 @@ export function readExportSettings(home: string): ExportSettings | null {
   } catch {
     v = undefined;
   }
-  if (!isRecord(v) || !isStr(v.repo) || v.repo === '' || Object.keys(v).length !== 1) {
+  const extra = isRecord(v) ? Object.keys(v).filter((k) => k !== 'repo' && k !== 'mirror_id') : [];
+  if (!isRecord(v) || !isStr(v.repo) || v.repo === '' || extra.length > 0 || (v.mirror_id !== undefined && !(isStr(v.mirror_id) && MIRROR_ID.test(v.mirror_id)))) {
     throw new ExportRefusal('settings_unreadable', 'export.json in the NorthKeep folder is unreadable; fix or remove it', file);
   }
-  return { repo: v.repo };
+  return v.mirror_id === undefined ? { repo: v.repo } : { repo: v.repo, mirror_id: v.mirror_id as string };
 }
 
 export function writeExportSettings(home: string, settings: ExportSettings, lock: ExportLock): void {
   requireLock(lock);
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
-  atomicWrite(settingsPath(home), `${JSON.stringify({ repo: settings.repo }, null, 2)}\n`);
+  const body = settings.mirror_id === undefined ? { repo: settings.repo } : { repo: settings.repo, mirror_id: settings.mirror_id };
+  atomicWrite(settingsPath(home), `${JSON.stringify(body, null, 2)}\n`);
 }
 
 // ---- the vault snapshot -------------------------------------------------------------------
@@ -391,6 +511,7 @@ export interface SnapshotProject {
 /** Everything export and verify need, rendered while the vault is open so git runs after it closes. */
 export interface MirrorSnapshot {
   vaultId: string;
+  mirrorId: string;
   projects: SnapshotProject[];
   index: MirrorFile;
   marker: { path: string; bytes: Uint8Array };
@@ -401,7 +522,7 @@ export interface MirrorSnapshot {
  * renderMirror). Its INDEX row says so in fixed text instead of borrowing the
  * conflict wording, which would be false.
  */
-export function snapshotMirror(vault: ProjectVaultReader, allowedScopes?: string[]): MirrorSnapshot {
+export function snapshotMirror(vault: ProjectVaultReader, mirrorId: string, allowedScopes?: string[]): MirrorSnapshot {
   const vaultId = vault.getVaultId();
   const summaries = listProjectViews(vault, allowedScopes);
   const projects: SnapshotProject[] = [];
@@ -427,8 +548,8 @@ export function snapshotMirror(vault: ProjectVaultReader, allowedScopes?: string
       indexRows.push({ ...s, status: RENDER_FAILED_STATUS, updated_at: null, last_writer_host: null });
     }
   }
-  const marker = renderMarkerFile(vaultId);
-  return { vaultId, projects, index: renderIndexFile(indexRows, vaultId), marker: { path: marker.path, bytes: marker.bytes } };
+  const marker = renderMarkerFile(vaultId, mirrorId);
+  return { vaultId, mirrorId, projects, index: renderIndexFile(indexRows, vaultId), marker: { path: marker.path, bytes: marker.bytes } };
 }
 
 // ---- ownership (Decision 3) ---------------------------------------------------------------
@@ -506,6 +627,19 @@ function realProjectsDir(repo: string): boolean | null {
   return st.isDirectory() && !st.isSymbolicLink();
 }
 
+/** The mirror id in the folder's marker; null when absent, unreadable, or an old marker without one. */
+function readMarkerMirrorId(repo: string): string | null {
+  const st = lstatOrNull(path.join(repo, MIRROR_MARKER_PATH));
+  if (!st || !st.isFile()) return null;
+  try {
+    const bytes = readRegular(path.join(repo, MIRROR_MARKER_PATH));
+    const header = bytes === null ? null : parseMirrorHeader(Buffer.from(bytes).toString('utf8'));
+    return header?.kind === 'marker' && header.mirrorId !== null && MIRROR_ID.test(header.mirrorId) ? header.mirrorId : null;
+  } catch {
+    return null;
+  }
+}
+
 function resolveRepo(home: string, repo: string | undefined): string {
   const chosen = repo ?? readExportSettings(home)?.repo;
   if (!chosen) throw new ExportRefusal('not_configured', 'No mirror is configured; run northkeep projects export --repo <folder> once');
@@ -522,21 +656,45 @@ function failureCode(err: unknown): string {
   return 'error';
 }
 
-/** Records a failed run when a state file already names a vault; a mirror never exported has nothing to mark. */
-function recordFailure(home: string, repo: string, vaultId: string | null, by: 'cli' | 'schedule', code: string, at: string, lock: ExportLock): void {
-  let id = vaultId;
-  if (id === null) {
-    const raw = readJson(statePath(home, repo));
-    id = isRecord(raw) && isStr(raw.vault_id) ? raw.vault_id : null;
+/**
+ * Records a failed run only in this vault's own state file: matched by vault
+ * id when the vault opened, else by the header fingerprint. A run that could
+ * not open its vault never marks another vault's mirror as failed.
+ */
+function recordFailure(
+  home: string,
+  repo: string,
+  mirrorId: string | null,
+  vaultId: string | null,
+  vaultPath: string,
+  by: 'cli' | 'schedule',
+  code: string,
+  at: string,
+  lock: ExportLock,
+): void {
+  const raw = readJson(statePath(home, repo, mirrorId));
+  const owner = isRecord(raw) && isStr(raw.vault_id) ? raw.vault_id : null;
+  let id: string;
+  if (vaultId !== null) {
+    if (owner !== null && owner !== vaultId) return;
+    id = vaultId;
+  } else {
+    const fp = vaultFingerprint(vaultPath);
+    if (owner === null || fp === null || !isRecord(raw) || raw.vault_fingerprint !== fp) return;
+    id = owner;
   }
-  if (id === null) return;
-  // A state file written for another vault is that vault's record; a refused run from this one must not erase it.
-  const existing = readJson(statePath(home, repo));
-  if (isRecord(existing) && isStr(existing.vault_id) && existing.vault_id !== id) return;
-  const state = readExportState(home, repo, id) ?? emptyExportState(repo, id);
+  const state = readExportState(home, repo, id, mirrorId) ?? emptyExportState(repo, id, mirrorId);
+  state.repo = repo;
   state.last_attempt = { at, by };
   state.last_failure = { at, code };
   writeExportState(home, state, lock);
+}
+
+/** Refusals that end the whole run; everything else refuses one target. */
+const RUN_FATAL = new Set(['lock_not_held', 'lock_lost', 'tree_check_failed']);
+
+function fsErrno(err: unknown): boolean {
+  return err instanceof Error && typeof (err as NodeJS.ErrnoException).code === 'string' && !(err instanceof ExportRefusal);
 }
 
 async function runLocked(
@@ -545,6 +703,7 @@ async function runLocked(
   lock: ExportLock,
   snap: MirrorSnapshot,
   at: string,
+  markerId: string | null,
 ): Promise<ExportRunResult> {
   const { ctx: pctx, info } = await preflightRepository({
     repo,
@@ -554,13 +713,34 @@ async function runLocked(
     parseMarker: (b) => parseMirrorHeader(Buffer.from(b).toString('utf8')),
   });
   await requireCommitIdentity(pctx);
-  if (opts.repo !== undefined) writeExportSettings(opts.home, { repo }, lock);
+  requireLock(lock);
+  removeStaleRunIndexes(opts.home, repo);
+  let settings: ExportSettings | null = null;
+  try {
+    settings = readExportSettings(opts.home);
+  } catch {
+    // Rewritten below; --repo is how a user repairs an unreadable export.json.
+  }
+  if (opts.repo !== undefined || settings?.repo !== repo || settings.mirror_id !== snap.mirrorId) {
+    writeExportSettings(opts.home, { repo, mirror_id: snap.mirrorId }, lock);
+  }
   const projectsDir = path.join(repo, 'projects');
   cleanStaleMirrorTemps(repo);
   cleanStaleMirrorTemps(projectsDir);
 
-  const journal = readJournal(opts.home, repo, snap.vaultId);
-  const state = readExportState(opts.home, repo, snap.vaultId) ?? emptyExportState(repo, snap.vaultId);
+  // A marker without an id is the pre-id layout: carry the realpath-keyed journal and state over to the new id.
+  const journal = readJournal(opts.home, repo, snap.vaultId, markerId ?? snap.mirrorId);
+  const state =
+    readExportState(opts.home, repo, snap.vaultId, markerId ?? snap.mirrorId) ??
+    (markerId === null ? readExportState(opts.home, repo, snap.vaultId, null) : null) ??
+    emptyExportState(repo, snap.vaultId);
+  if (markerId === null) {
+    for (const [p, blobs] of Object.entries(readJournal(opts.home, repo, snap.vaultId, null).paths)) {
+      if (!journal.paths[p]) journal.paths[p] = blobs;
+    }
+  }
+  state.repo = repo;
+  state.mirror_id = snap.mirrorId;
   const refused: { path: string; reason: string }[] = [];
   const add: CommitEntry[] = [];
   const written: string[] = [];
@@ -576,13 +756,17 @@ async function runLocked(
   targets.push({ path: MIRROR_INDEX_PATH, bytes: snap.index.bytes, kind: 'index', slug: null });
 
   for (const t of targets) {
+    let stage: 'read' | 'write' = 'write';
     try {
       // The marker goes first so a killed first run leaves only temps beside .git.
       if (t.path.startsWith('projects/') && !lstatOrNull(projectsDir)) fs.mkdirSync(projectsDir);
       await checkTargetContainment(pctx, t.path, info.head);
       const abs = path.join(repo, t.path);
+      stage = 'read';
       const disk = readRegular(abs);
-      const diskBlob = disk === null ? null : await hashFile(pctx, abs);
+      stage = 'write';
+      // Hashing the bytes already read: the same blob id, with no second read to race or fail.
+      const diskBlob = disk === null ? null : await hashBytes(pctx, disk);
       const cls = classifyTarget(
         { bytes: disk, kind: t.kind },
         { diskBlob, journalBlobs: journal.paths[t.path] ?? [], vaultId: snap.vaultId, slug: t.slug },
@@ -610,7 +794,12 @@ async function runLocked(
         if (t.slug) changedSlugs.add(t.slug);
       }
     } catch (err) {
-      if (!(err instanceof ExportRefusal)) throw err;
+      if (fsErrno(err)) {
+        refused.push({ path: t.path, reason: stage === 'read' ? 'unreadable' : 'unwritable' });
+        if (t.slug) refusedSlugs.add(t.slug);
+        continue;
+      }
+      if (!(err instanceof ExportRefusal) || RUN_FATAL.has(err.code)) throw err;
       refused.push({ path: t.path, reason: err.message });
       if (t.slug) refusedSlugs.add(t.slug);
     }
@@ -634,14 +823,27 @@ async function runLocked(
     const st = lstatOrNull(abs);
     const jb = journal.paths[rel] ?? [];
     if (st) {
-      const disk = readRegular(abs);
-      const diskBlob = disk === null ? null : await hashFile(pctx, abs);
+      let disk: Uint8Array | null;
+      try {
+        disk = readRegular(abs);
+      } catch (err) {
+        if (!fsErrno(err)) throw err;
+        refused.push({ path: rel, reason: 'unreadable' });
+        continue;
+      }
+      const diskBlob = disk === null ? null : await hashBytes(pctx, disk);
       const kind = rel.includes('.log.') ? 'log' : 'document';
       if (st.nlink > 1 || classifyTarget({ bytes: disk, kind }, { diskBlob, journalBlobs: jb, vaultId: snap.vaultId, slug: m[1] as string }) !== 'ours') {
         refused.push({ path: rel, reason: 'hand edit' });
         continue;
       }
-      fs.unlinkSync(abs);
+      try {
+        fs.unlinkSync(abs);
+      } catch (err) {
+        if (!fsErrno(err)) throw err;
+        refused.push({ path: rel, reason: 'unwritable' });
+        continue;
+      }
     } else {
       const hb = await headBlob(pctx, rel);
       if (hb === null || !jb.includes(hb)) continue;
@@ -658,13 +860,20 @@ async function runLocked(
     written: snap.projects.filter((p) => changedSlugs.has(p.slug)).map((p) => ({ slug: p.slug, lastWriterHost: p.lastWriterHost })),
     removed,
   });
-  const res = await plumbingCommit(pctx, info, { add, remove: removed, message });
+  const guard = (): void => {
+    if (!lock.held()) throw new ExportRefusal('lock_lost', 'NorthKeep lost the export lock before committing; nothing was committed. Export again');
+  };
+  const res = await plumbingCommit(pctx, info, { add, remove: removed, message, guard });
 
   const commitId = res.commit ?? (await readHead(pctx));
   if (res.commit) state.nk_commits.push(res.commit);
   state.last_attempt = { at, by: opts.by };
   if (commitId) state.last_success = { at, commit: commitId };
+  // A partial run is a success only when some project got through; all refused is a failure the resume line shows.
+  const okSlugs = snap.projects.filter((p) => p.state === 'ok').map((p) => p.slug);
+  if (okSlugs.length > 0 && okSlugs.every((s) => refusedSlugs.has(s))) state.last_failure = { at, code: 'nothing_exported' };
   state.refused = refused;
+  state.vault_fingerprint = vaultFingerprint(opts.vaultPath);
   const live = new Set(snap.projects.map((p) => p.slug));
   for (const slug of Object.keys(state.projects)) if (!live.has(slug)) delete state.projects[slug];
   for (const p of snap.projects) {
@@ -708,13 +917,16 @@ export async function exportProjects(opts: ExportRunOptions): Promise<ExportRunR
   }
   const at = now().toISOString();
   let vaultId: string | null = null;
+  // Read under the lock: the marker's id keys the journal and state; a first export or an old marker gets a new one.
+  const markerId = readMarkerMirrorId(repo);
   try {
-    const snap = await (opts.withVault ?? defaultVaultRunner(opts.vaultPath))((v) => snapshotMirror(v));
+    const mirrorId = markerId ?? crypto.randomUUID();
+    const snap = await (opts.withVault ?? defaultVaultRunner(opts.vaultPath))((v) => snapshotMirror(v, mirrorId));
     vaultId = snap.vaultId;
-    return await runLocked(opts, repo, lock, snap, at);
+    return await runLocked(opts, repo, lock, snap, at, markerId);
   } catch (err) {
     try {
-      recordFailure(opts.home, repo, vaultId, opts.by, failureCode(err), at, lock);
+      recordFailure(opts.home, repo, markerId, vaultId, opts.vaultPath, opts.by, failureCode(err), at, lock);
     } catch {
       // the original error is the one worth reporting
     }
@@ -731,6 +943,7 @@ export type VerifyStatus =
   | 'uncommitted export'
   | 'stale'
   | 'missing'
+  | 'missing on disk'
   | 'extra'
   | 'hand edit'
   | 'conflict'
@@ -742,10 +955,22 @@ export interface VerifyResult {
   ok: boolean;
 }
 
+const PLACEHOLDER_MIRROR_ID = '00000000-0000-4000-8000-000000000000';
+
+/** Mode per path from `ls-tree -z`, for the top-level mirror files and projects/. */
+function parseLsTree(text: string): Map<string, string> {
+  const modes = new Map<string, string>();
+  for (const rec of text.split('\0')) {
+    const m = /^(\d{6}) \S+ [0-9a-f]+\t(.+)$/s.exec(rec);
+    if (m) modes.set(m[2] as string, m[1] as string);
+  }
+  return modes;
+}
+
 /**
- * Read-only: no lock, no journal or state write, no git write verb. Its git
- * calls are hash-object without -w, rev-parse and ls-tree, under the pinned
- * environment, which also keeps git from refreshing the index.
+ * Read-only: no lock, no journal or state write, no git write verb.
+ * Git runs with a throwaway home, removed afterwards, so nothing under
+ * NORTHKEEP_HOME is created or chmodded.
  */
 export async function verifyMirror(opts: {
   home: string;
@@ -754,52 +979,69 @@ export async function verifyMirror(opts: {
   withVault?: VaultRunner;
 }): Promise<VerifyResult> {
   const repo = resolveRepo(opts.home, opts.repo);
-  const ctx: GitContext = { repo, home: opts.home, vaultPath: opts.vaultPath };
-  const snap = await (opts.withVault ?? defaultVaultRunner(opts.vaultPath))((v) => snapshotMirror(v));
-  const journal = readJournal(opts.home, repo, snap.vaultId);
-  const top = await runGit(ctx, ['rev-parse', '--show-toplevel'], { allowFailure: true });
-  if (top.exitCode !== 0) throw new ExportRefusal('not_work_tree', 'The mirror folder is not a git working tree');
-  const hasHead = (await readHead(ctx)) !== null;
-  const entries: VerifyResult['entries'] = [];
+  const markerId = readMarkerMirrorId(repo);
+  // An old marker has no id to render; the placeholder makes it read as stale, which the next export fixes.
+  const snap = await (opts.withVault ?? defaultVaultRunner(opts.vaultPath))((v) => snapshotMirror(v, markerId ?? PLACEHOLDER_MIRROR_ID));
+  const journal = readJournal(opts.home, repo, snap.vaultId, markerId);
+  const gitHome = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-verify-'));
+  try {
+    const ctx: GitContext = { repo, home: gitHome, vaultPath: opts.vaultPath };
+    const top = await runGit(ctx, ['rev-parse', '--show-toplevel'], { allowFailure: true });
+    if (top.exitCode !== 0) throw new ExportRefusal('not_work_tree', 'The mirror folder is not a git working tree');
+    const hasHead = (await readHead(ctx)) !== null;
+    const headModes = hasHead
+      ? parseLsTree((await runGit(ctx, ['ls-tree', '-z', 'HEAD', '--', MIRROR_MARKER_PATH, MIRROR_INDEX_PATH, 'projects/'])).stdout)
+      : new Map<string, string>();
+    const entries: VerifyResult['entries'] = [];
 
-  const judge = async (rel: string, bytes: Uint8Array): Promise<VerifyStatus> => {
-    const abs = path.join(repo, rel);
-    if (rel.startsWith('projects/') && realProjectsDir(repo) === false) return 'hand edit';
-    const st = lstatOrNull(abs);
-    if (!st) return 'missing';
-    if (!st.isFile() || st.nlink > 1) return 'hand edit';
-    const rb = await hashBytes(ctx, bytes);
-    const db = await hashFile(ctx, abs);
-    const hb = hasHead ? await headBlob(ctx, rel) : null;
-    const jb = journal.paths[rel] ?? [];
-    const headOurs = hb === null || hb === rb || jb.includes(hb);
-    if (db === rb) return hb === rb ? 'matches' : headOurs ? 'uncommitted export' : 'hand edit';
-    return jb.includes(db) && headOurs ? 'stale' : 'hand edit';
-  };
+    const judge = async (rel: string, bytes: Uint8Array): Promise<VerifyStatus> => {
+      const abs = path.join(repo, rel);
+      if (rel.startsWith('projects/') && realProjectsDir(repo) === false) return 'hand edit';
+      const st = lstatOrNull(abs);
+      if (!st) return 'missing';
+      if (!st.isFile() || st.nlink > 1) return 'hand edit';
+      // NorthKeep writes 0644 and commits 100644; any other mode is someone else's change.
+      if ((st.mode & 0o111) !== 0) return 'hand edit';
+      const hm = headModes.get(rel);
+      if (hm !== undefined && hm !== '100644') return 'hand edit';
+      const rb = await hashBytes(ctx, bytes);
+      const db = await hashFile(ctx, abs);
+      const hb = hasHead ? await headBlob(ctx, rel) : null;
+      const jb = journal.paths[rel] ?? [];
+      const headOurs = hb === null || hb === rb || jb.includes(hb);
+      if (db === rb) return hb === rb ? 'matches' : headOurs ? 'uncommitted export' : 'hand edit';
+      return jb.includes(db) && headOurs ? 'stale' : 'hand edit';
+    };
 
-  entries.push({ path: MIRROR_MARKER_PATH, status: await judge(MIRROR_MARKER_PATH, snap.marker.bytes) });
-  const rendered = new Set<string>([MIRROR_MARKER_PATH, MIRROR_INDEX_PATH]);
-  const kept = new Set<string>();
-  for (const p of snap.projects) {
-    if (p.state !== 'ok') {
-      kept.add(p.slug);
-      entries.push({ path: `projects/${p.slug}.md`, status: p.state === 'conflict' ? 'conflict' : 'render failed' });
-      continue;
+    entries.push({ path: MIRROR_MARKER_PATH, status: await judge(MIRROR_MARKER_PATH, snap.marker.bytes) });
+    const rendered = new Set<string>([MIRROR_MARKER_PATH, MIRROR_INDEX_PATH]);
+    const kept = new Set<string>();
+    for (const p of snap.projects) {
+      if (p.state !== 'ok') {
+        kept.add(p.slug);
+        entries.push({ path: `projects/${p.slug}.md`, status: p.state === 'conflict' ? 'conflict' : 'render failed' });
+        continue;
+      }
+      for (const f of p.files) {
+        rendered.add(f.path);
+        entries.push({ path: f.path, status: await judge(f.path, f.bytes) });
+      }
     }
-    for (const f of p.files) {
-      rendered.add(f.path);
-      entries.push({ path: f.path, status: await judge(f.path, f.bytes) });
+    entries.push({ path: MIRROR_INDEX_PATH, status: await judge(MIRROR_INDEX_PATH, snap.index.bytes) });
+    const unrendered = (rel: string): boolean => {
+      const m = PROJECT_FILE.exec(rel);
+      return m !== null && !rendered.has(rel) && !kept.has(m[1] as string);
+    };
+    const dir = path.join(repo, 'projects');
+    const onDisk = new Set(realProjectsDir(repo) ? fs.readdirSync(dir).map((n) => `projects/${n}`) : []);
+    for (const rel of [...onDisk].sort()) if (unrendered(rel)) entries.push({ path: rel, status: 'extra' });
+    for (const rel of [...headModes.keys()].sort()) {
+      if (rel.startsWith('projects/') && !onDisk.has(rel) && unrendered(rel)) entries.push({ path: rel, status: 'missing on disk' });
     }
+    return { repo, entries, ok: entries.every((e) => e.status === 'matches') };
+  } finally {
+    fs.rmSync(gitHome, { recursive: true, force: true });
   }
-  entries.push({ path: MIRROR_INDEX_PATH, status: await judge(MIRROR_INDEX_PATH, snap.index.bytes) });
-  if (hasHead) await runGit(ctx, ['ls-tree', 'HEAD', '--', 'projects/']);
-  const dir = path.join(repo, 'projects');
-  for (const n of realProjectsDir(repo) ? fs.readdirSync(dir).sort() : []) {
-    const rel = `projects/${n}`;
-    const m = PROJECT_FILE.exec(rel);
-    if (m && !rendered.has(rel) && !kept.has(m[1] as string)) entries.push({ path: rel, status: 'extra' });
-  }
-  return { repo, entries, ok: entries.every((e) => e.status === 'matches') };
 }
 
 // ---- status and the resume line (Decision 7) ----------------------------------------------
@@ -817,7 +1059,7 @@ export function readMirrorSummary(vault: ProjectVaultReader, granted: string[] |
     return 'mirror settings unreadable';
   }
   if (settings === null) return null;
-  const state = readExportState(home, settings.repo, vault.getVaultId());
+  const state = readExportState(home, settings.repo, vault.getVaultId(), settings.mirror_id ?? null);
   return summarizeMirror(state ?? {}, listProjectViews(vault, granted), now);
 }
 
@@ -826,7 +1068,7 @@ export function readMirrorSummary(vault: ProjectVaultReader, granted: string[] |
 export interface ImportFileReport {
   name: string;
   slug: string | null;
-  status: 'would import' | 'imported' | 'skipped' | 'refused';
+  status: 'would import' | 'exists' | 'imported' | 'skipped' | 'refused';
   reason: string | null;
 }
 
@@ -835,34 +1077,87 @@ export interface ImportRunResult {
   files: ImportFileReport[];
 }
 
+export const IMPORT_NOT_UTF8 = 'not UTF-8; convert it first';
+const IMPORT_UNREADABLE = 'could not be read; check its permissions';
+const UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+/** O_NONBLOCK so an entry swapped for a FIFO after readdir cannot hang the run; null when it is no longer a regular file. */
+function readSourceFile(abs: string): Buffer | null {
+  const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+  const fd = fs.openSync(abs, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+  try {
+    return fs.fstatSync(fd).isFile() ? fs.readFileSync(fd) : null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Strict UTF-8 with one leading BOM removed; null for anything else, so no replacement character or NUL is ever stored. */
+function decodeSource(bytes: Buffer): string | null {
+  const body = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? bytes.subarray(3) : bytes;
+  try {
+    const text = UTF8.decode(body);
+    return text.includes('\u0000') ? null : text;
+  } catch {
+    return null;
+  }
+}
+
+function nonRegularReason(d: fs.Dirent): string {
+  if (d.isSymbolicLink()) return 'a symlink; NorthKeep reads only regular files';
+  if (d.isDirectory()) return 'a folder, not a file';
+  return 'not a regular file';
+}
+
 /**
- * Reads `*.md` directly in `dir` as text (regular files only, no symlinks, no
- * recursion) and never writes there or spawns git. Dry run by default; with
- * write, each project goes in through Vault.importProject under the vault
- * lock with one save per project.
+ * Reads `*.md` directly in `dir` (regular files only, no recursion) and never
+ * writes there or spawns git. Every other `.md` entry is reported with a
+ * reason. The dry run opens the vault only to read which slugs are taken.
  */
 export async function importProjects(
   dir: string,
   opts: { write: boolean; vaultPath: string; withVault?: VaultRunner; allowedScopes?: string[] },
 ): Promise<ImportRunResult> {
   const files: { name: string; text: string }[] = [];
+  const reports: ImportFileReport[] = [];
   for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!d.isFile() || !d.name.endsWith('.md')) continue;
-    const fd = fs.openSync(path.join(dir, d.name), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    try {
-      files.push({ name: d.name, text: fs.readFileSync(fd, 'utf8') });
-    } finally {
-      fs.closeSync(fd);
-    }
-  }
-  const plan = planImport(files);
-  const reports: ImportFileReport[] = plan.skipped.map((s) => ({ name: s.name, slug: null, status: 'skipped', reason: s.reason }));
-  const run = opts.withVault ?? defaultVaultRunner(opts.vaultPath);
-  for (const p of plan.projects) {
-    if (!opts.write) {
-      reports.push({ name: p.name, slug: p.slug, status: 'would import', reason: null });
+    if (!d.name.endsWith('.md')) continue;
+    const entry = { name: d.name, slug: null };
+    if (!d.isFile()) {
+      reports.push({ ...entry, status: 'skipped', reason: nonRegularReason(d) });
       continue;
     }
+    let bytes: Buffer | null;
+    try {
+      bytes = readSourceFile(path.join(dir, d.name));
+    } catch (err) {
+      if (!fsErrno(err)) throw err;
+      reports.push({ ...entry, status: 'refused', reason: IMPORT_UNREADABLE });
+      continue;
+    }
+    if (bytes === null) {
+      reports.push({ ...entry, status: 'skipped', reason: 'not a regular file' });
+      continue;
+    }
+    const text = decodeSource(bytes);
+    if (text === null) reports.push({ ...entry, status: 'refused', reason: IMPORT_NOT_UTF8 });
+    else files.push({ name: d.name, text });
+  }
+  const plan = planImport(files);
+  for (const sk of plan.skipped) reports.push({ name: sk.name, slug: null, status: 'skipped', reason: sk.reason });
+  const run = opts.withVault ?? defaultVaultRunner(opts.vaultPath);
+  if (!opts.write) {
+    // Read only: no save, so the vault file is unchanged.
+    const taken = plan.projects.length === 0 ? [] : await run((vault) => plan.projects.map((p) => projectScopeInUse(vault, p.slug)));
+    plan.projects.forEach((p, i) => {
+      reports.push(
+        taken[i]
+          ? { name: p.name, slug: p.slug, status: 'exists', reason: `Project ${p.slug} already has entries in this vault; delete the project from the Projects page first.` }
+          : { name: p.name, slug: p.slug, status: 'would import', reason: null },
+      );
+    });
+  }
+  for (const p of opts.write ? plan.projects : []) {
     try {
       await run((vault) => {
         vault.importProject(p, opts.allowedScopes);

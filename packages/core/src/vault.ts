@@ -599,8 +599,20 @@ export class Vault {
   }
 
   /**
-   * ADR 0053 Decision 10's write, one transaction. Never merges, so an
-   * existing slug is refused. No provenance block: import is not a host
+   * True when project:<slug> holds any unforgotten row, superseded ones
+   * included. Import refuses on this, not on the working document alone, so
+   * archives left behind by a forgotten document are never duplicated.
+   */
+  projectScopeInUse(slug: string): boolean {
+    this.assertOpen();
+    let scope: string;
+    try { scope = projectScope(slug); } catch { throw new ProjectHandoffError('invalid_request', 'Project slug is invalid.'); }
+    return this.db.prepare('SELECT 1 FROM memories WHERE scope = ? AND forgotten_at IS NULL LIMIT 1').get(scope) !== undefined;
+  }
+
+  /**
+   * ADR 0053 Decision 10's write, one transaction. Never merges, so a slug
+   * with any entries is refused. No provenance block: import is not a host
    * write. Archives go first so rowid order matches. Caller saves.
    */
   importProject(plan: ImportFilePlan, allowedScopes?: string[]): ProjectView {
@@ -610,8 +622,8 @@ export class Vault {
     const scope = projectScope(plan.slug);
     if (allowedScopes !== undefined && !allowedScopes.includes(scope)) throw new ProjectHandoffError('scope_denied', 'Project scope is outside this connection grant.');
     this.db.transaction(() => {
-      if (this.list({ type: 'working', scope }).length > 0) {
-        throw new ProjectHandoffError('stale_project', `Project ${plan.slug} already exists. Import never merges; delete it first or import under another slug.`);
+      if (this.projectScopeInUse(plan.slug)) {
+        throw new ProjectHandoffError('stale_project', `Project ${plan.slug} already has entries in this vault; delete the project from the Projects page first.`);
       }
       const now = new Date().toISOString();
       const insert = this.prepareEntryInsert();
@@ -645,7 +657,8 @@ export class Vault {
     let count = 0;
     this.db.transaction(() => {
       const entries = this.list({ scope, includeSuperseded: true, allowedScopes });
-      if (!entries.some((e) => e.type === 'working' && !e.forgotten_at)) throw new ProjectHandoffError('not_found', 'Project was not found.');
+      // Archives or overflow left after the document was forgotten still block import, so they must be deletable.
+      if (!entries.some((e) => !e.forgotten_at)) throw new ProjectHandoffError('not_found', 'Project was not found.');
       for (const entry of entries) {
         if (entry.forgotten_at) continue;
         this.forget(entry.id, allowedScopes);
@@ -1902,6 +1915,11 @@ export class Vault {
  * deliberately excluded — those fields change after the fact, and hashing
  * them would break the chain on every legitimate supersede/forget.
  */
+/** Read-only: whether import would refuse this slug. Lets a dry run say "exists" without writing. */
+export function projectScopeInUse(vault: Vault, slug: string): boolean {
+  return vault.projectScopeInUse(slug);
+}
+
 export function computeEntryHash(entry: MemoryEntry, provider?: CryptoProvider): string {
   return blake2bHex(
     canonicalJson({

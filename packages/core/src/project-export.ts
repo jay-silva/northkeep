@@ -45,6 +45,8 @@ export interface MirrorHeader {
   slug: string | null;
   revision: string | null;
   kind: MirrorHeaderKind;
+  /** The marker's own id, so a moved mirror is still recognised; null for other kinds and for markers written before it existed. */
+  mirrorId: string | null;
   /** UTF-16 length of the header text including its final newline, for slicing it off. */
   length: number;
 }
@@ -61,9 +63,10 @@ const HEADER_OPEN = '<!-- northkeep: ';
 const HEADER_SECOND_LINE = '     The vault is canonical. This file is regenerated. Edits here are not read back. -->';
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
 const UUID_RE = new RegExp(`^${UUID}$`);
+const UUID_V4_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 const SLUG_RE = /^[a-z0-9-]{1,40}$/;
 const HEADER_RE = new RegExp(
-  `^<!-- northkeep: vault (${UUID})(?: project ([a-z0-9-]{1,40}) revision (${UUID}))? kind (document|log|index|marker)\\n` +
+  `^<!-- northkeep: vault (${UUID})(?: project ([a-z0-9-]{1,40}) revision (${UUID}))? kind (document|log|index|marker)(?: mirror (${UUID}))?\\n` +
     `${HEADER_SECOND_LINE.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\n`,
 );
 /** Built per call, never at import time, so loading core needs no TextEncoder. */
@@ -85,7 +88,7 @@ function isoDay(stamp: string | null): string {
  * Document and log headers name a project and revision; index and marker
  * headers name only the vault. Throws on an id that would make it ambiguous.
  */
-export function formatMirrorHeader(input: { vaultId: string; kind: MirrorHeaderKind; slug?: string | null; revision?: string | null }): string {
+export function formatMirrorHeader(input: { vaultId: string; kind: MirrorHeaderKind; slug?: string | null; revision?: string | null; mirrorId?: string | null }): string {
   if (!UUID_RE.test(input.vaultId)) throw new Error('Mirror header needs a lowercase UUID vault id.');
   const perProject = input.kind === 'document' || input.kind === 'log';
   let subject = '';
@@ -96,7 +99,13 @@ export function formatMirrorHeader(input: { vaultId: string; kind: MirrorHeaderK
   } else if (input.slug != null || input.revision != null) {
     throw new Error(`A ${input.kind} header names no project.`);
   }
-  const header = `${HEADER_OPEN}vault ${input.vaultId}${subject} kind ${input.kind}\n${HEADER_SECOND_LINE}\n`;
+  let mirror = '';
+  if (input.mirrorId != null) {
+    if (input.kind !== 'marker') throw new Error('Only a marker header names a mirror id.');
+    if (!UUID_V4_RE.test(input.mirrorId)) throw new Error('Mirror id must be a lowercase v4 UUID.');
+    mirror = ` mirror ${input.mirrorId}`;
+  }
+  const header = `${HEADER_OPEN}vault ${input.vaultId}${subject} kind ${input.kind}${mirror}\n${HEADER_SECOND_LINE}\n`;
   if (utf8(header).length > MIRROR_HEADER_MAX_BYTES) throw new Error('Mirror header exceeds its byte cap.');
   return header;
 }
@@ -115,7 +124,9 @@ export function parseMirrorHeader(text: string): MirrorHeader | null {
   const revision = match[3] ?? null;
   const perProject = kind === 'document' || kind === 'log';
   if (perProject !== (slug !== null)) return null;
-  return { vaultId: match[1]!, slug, revision, kind, length: match[0].length };
+  const mirrorId = match[5] ?? null;
+  if (mirrorId !== null && (kind !== 'marker' || !UUID_V4_RE.test(mirrorId))) return null;
+  return { vaultId: match[1]!, slug, revision, kind, mirrorId, length: match[0].length };
 }
 
 /** ADR 0053's name for the same parser. */
@@ -225,9 +236,14 @@ export function renderIndexFile(summaries: ProjectSummary[], vaultId: string): M
   return { path: MIRROR_INDEX_PATH, bytes: withHeader(header, body), slug: null, kind: 'index', revision: null };
 }
 
-/** `.northkeep-mirror`, the root marker that says this folder is a NorthKeep mirror of one vault (Decision 4). */
-export function renderMarkerFile(vaultId: string): MirrorMarkerFile {
-  const header = formatMirrorHeader({ vaultId, kind: 'marker' });
+/**
+ * `.northkeep-mirror`, the root marker that says this folder is a NorthKeep
+ * mirror of one vault (Decision 4). The mirror id survives a move of the
+ * folder, so the journal can be found again when the path changes.
+ */
+export function renderMarkerFile(vaultId: string, mirrorId: string): MirrorMarkerFile {
+  if (typeof mirrorId !== 'string' || !UUID_V4_RE.test(mirrorId)) throw new Error('Mirror marker needs a lowercase v4 UUID mirror id.');
+  const header = formatMirrorHeader({ vaultId, kind: 'marker', mirrorId });
   const body = 'This folder is a NorthKeep project mirror. NorthKeep writes only projects/, INDEX.md and this file.';
   return { path: MIRROR_MARKER_PATH, bytes: withHeader(header, body), kind: 'marker' };
 }

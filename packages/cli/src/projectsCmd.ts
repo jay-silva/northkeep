@@ -13,6 +13,8 @@ import {
   withFileLock,
   type ImportFilePlan,
   type ProjectCompactionResult,
+  PROJECT_IMPORT_PUSH_MAX_BYTES,
+  PROJECT_IMPORT_ROW_MAX_BYTES,
 } from '@northkeep/core';
 import {
   ExportRefusal,
@@ -167,6 +169,8 @@ export interface ExportCmdOptions {
   status?: boolean;
   schedule?: string;
   scheduled?: boolean;
+  /** Test only: install or remove the plist without calling launchctl. */
+  skipLaunchctl?: boolean;
   json?: boolean;
 }
 
@@ -179,6 +183,11 @@ export function describeMirrorError(err: unknown): string {
   if (err instanceof GitCommandError) {
     return `A git step (${err.verb}) ${err.reason === 'timeout' ? 'timed out' : 'failed'}. Check the mirror folder with git status, then try again`;
   }
+  // A system error's message names an absolute path; only its code is shown.
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  if (err instanceof Error && typeof code === 'string' && /^E[A-Z]+$/.test(code)) {
+    return `A file operation failed (${code}). Check the permissions of the mirror folder and the NorthKeep folder, then try again`;
+  }
   return err instanceof Error ? err.message : String(err);
 }
 
@@ -190,6 +199,8 @@ function refusalText(reason: string): string {
   if (reason === 'hand edit') return 'hand edit. Move or delete the file; NorthKeep then writes it fresh.';
   if (reason === 'changed while writing') return 'the file changed while NorthKeep was writing it. Export again.';
   if (reason === RENDER_FAILED) return 'render failed. The project could not be read, so its file was left as it was.';
+  if (reason === 'unreadable') return 'unreadable. Check the file permissions; NorthKeep left it as it was.';
+  if (reason === 'unwritable') return 'could not be written. Check the folder permissions; NorthKeep left it as it was.';
   if (reason === 'NorthKeep refused a malformed blob id') return 'NorthKeep refused a malformed file id from git.';
   return sentence(reason);
 }
@@ -197,6 +208,10 @@ function refusalText(reason: string): string {
 const FAILURE_TEXT: Record<string, string> = {
   vault_locked: 'the vault was locked; run northkeep unlock so the schedule can open it',
   export_busy: 'another export was running on this folder',
+  lock_unreadable: 'the export lock file was unreadable; see the export command for how to clear it',
+  lock_lost: 'the run lost the export lock before committing',
+  tree_check_failed: 'a commit that would have dropped files was refused',
+  nothing_exported: 'every project file was refused; see Refused paths',
   not_configured: 'no mirror was configured',
   git_error: 'a git step failed',
 };
@@ -227,7 +242,7 @@ export async function projectsExportCmd(options: ExportCmdOptions, deps: MirrorD
   }
   if (options.scheduled) return scheduledExport(deps);
   try {
-    if (options.schedule !== undefined) return await scheduleCmd(options.schedule, deps, out, err);
+    if (options.schedule !== undefined) return await scheduleCmd(options.schedule, options, deps, out, err);
     if (options.verify) return await verifyCmd(options, deps, out);
     if (options.status) return await statusCmd(options, deps, out);
     return await exportCmd(options, deps, out);
@@ -317,7 +332,7 @@ async function statusCmd(options: ExportCmdOptions, deps: MirrorDeps, out: (l: s
   }
   const runner = await deps.vaultRunner();
   const { vaultId, summaries } = await runner((v) => ({ vaultId: v.getVaultId(), summaries: listProjectViews(v) }));
-  const state = readExportState(deps.home, settings.repo, vaultId);
+  const state = readExportState(deps.home, settings.repo, vaultId, settings.mirror_id ?? null);
   const exported = state?.projects ?? {};
   const changed = summaries
     .filter((s) => !s.conflict && s.revision !== null && exported[s.project]?.revision !== s.revision)
@@ -349,7 +364,7 @@ async function statusCmd(options: ExportCmdOptions, deps: MirrorDeps, out: (l: s
   return 0;
 }
 
-async function scheduleCmd(value: string, deps: MirrorDeps, out: (l: string) => void, err: (l: string) => void): Promise<number> {
+async function scheduleCmd(value: string, options: ExportCmdOptions, deps: MirrorDeps, out: (l: string) => void, err: (l: string) => void): Promise<number> {
   const sched = deps.schedule;
   if (!sched) throw new Error('The export schedule is not available from here');
   // The launchd job cannot carry --vault, so it always opens the default vault.
@@ -358,7 +373,8 @@ async function scheduleCmd(value: string, deps: MirrorDeps, out: (l: string) => 
     err(`✗ The schedule exports only the default vault (${defaultVault}). Run --schedule without --vault.`);
     return 1;
   }
-  const where = { ...(sched.plistDir !== undefined ? { plistDir: sched.plistDir } : {}), ...(sched.load !== undefined ? { load: sched.load } : {}) };
+  const load = options.skipLaunchctl ? false : sched.load;
+  const where = { ...(sched.plistDir !== undefined ? { plistDir: sched.plistDir } : {}), ...(load !== undefined ? { load } : {}) };
   if (value === 'off') {
     const file = schedulePlistPath(sched.plistDir);
     out((await removeSchedule(where)) ? `Removed the export schedule (${file}).` : 'No export schedule was installed.');
@@ -423,12 +439,8 @@ export async function projectsImportCmd(
   const write = options.write === true;
   let res: ImportRunResult;
   try {
-    // A dry run never opens the vault; the stand-in runner proves it.
-    const runner: VaultRunner = write
-      ? await deps.vaultRunner()
-      : async () => {
-          throw new Error('A dry run does not open the vault');
-        };
+    // The dry run opens the vault too, read only, so a slug that is taken shows now rather than at --write.
+    const runner: VaultRunner = await deps.vaultRunner();
     res = await importProjects(options.from, { write, vaultPath: deps.vaultPath, withVault: runner });
   } catch (e) {
     err(`✗ ${sentence(describeMirrorError(e))}`);
@@ -443,12 +455,20 @@ export async function projectsImportCmd(
   for (const f of res.files) {
     const plan = plans.get(f.name);
     if (f.status === 'skipped') out(`Skip ${f.name}: ${sentence(f.reason ?? 'not importable')}`);
-    else if (f.status === 'refused') out(`Refused ${f.name} (${f.slug}): ${sentence(f.reason ?? 'import failed')}`);
+    else if (f.status === 'refused') out(`Refused ${f.name}${f.slug ? ` (${f.slug})` : ''}: ${sentence(f.reason ?? 'import failed')}`);
+    else if (f.status === 'exists') out(`Exists ${f.name} (${f.slug}): ${sentence(f.reason ?? 'the vault already has this project')}`);
     else out(`${f.status === 'imported' ? 'Imported' : 'Would import'} ${f.name} as ${f.slug}: ${plan ? planLine(plan) : ''}`);
   }
   const skipped = res.files.filter((f) => f.status === 'skipped').length;
   if (!write) {
-    out(`Dry run: ${plural(res.plan.projects.length, 'file')} would be imported and ${skipped} skipped. Nothing was written; add --write to import.`);
+    const would = res.files.filter((f) => f.status === 'would import').length;
+    const exists = res.files.filter((f) => f.status === 'exists').length;
+    const n = (x: number) => x.toLocaleString('en-US');
+    out(`Largest row: ${n(res.plan.largest_row_bytes)} bytes (limit ${n(PROJECT_IMPORT_ROW_MAX_BYTES)}). Total: ${n(res.plan.total_bytes)} bytes of the ${n(PROJECT_IMPORT_PUSH_MAX_BYTES)}-byte sync limit.`);
+    if (res.plan.total_bytes > PROJECT_IMPORT_PUSH_MAX_BYTES) {
+      out('Note: that is more than one sync push carries. Import fewer files at a time.');
+    }
+    out(`Dry run: ${plural(would, 'file')} would be imported, ${exists} already in the vault, ${refused} refused, ${skipped} skipped. Nothing was written; add --write to import.`);
     return 0;
   }
   const imported = res.files.filter((f) => f.status === 'imported').length;

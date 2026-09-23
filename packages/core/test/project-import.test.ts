@@ -14,7 +14,7 @@ import { PROJECT_DOC_MAX_CHARS, PROJECT_LOG_ARCHIVE_HEADING, splitLogEntries } f
 import { getProjectView, type ProjectWriter } from '../src/project-handoff.js';
 import { formatMirrorHeader, renderMirror, splitLogArchive } from '../src/project-export.js';
 import { PROJECT_IMPORT_OVERFLOW_HEADING, PROJECT_IMPORT_OVERFLOW_PART_MAX_BYTES, PROJECT_IMPORT_OVERFLOW_POINTER, formatImportedLogArchive, joinImportOverflowParts, planImport, splitImportOverflow } from '../src/project-import.js';
-import { Vault } from '../src/vault.js';
+import { Vault, projectScopeInUse } from '../src/vault.js';
 
 const PASS='synthetic project import passphrase';
 const CODE:ProjectWriter={host:'claude-code',host_version:'0.24.0',session_id:'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'};
@@ -142,7 +142,7 @@ describe('Vault.importProject (the write)',()=>{
     const m=p.overflow_parts.length;expect(m).toBeGreaterThan(3);
     p.overflow_parts.forEach((part,i)=>{expect(Buffer.byteLength(part)).toBeLessThanOrEqual(PROJECT_IMPORT_OVERFLOW_PART_MAX_BYTES);expect(part.startsWith(`${PROJECT_IMPORT_OVERFLOW_HEADING}: bobby (part ${i+1} of ${m})\n\n`)).toBe(true);});
     expect(joinImportOverflowParts(p.overflow_parts)).toBe(p.overflow);
-    expect(p.largest_row_bytes).toBeLessThanOrEqual(65536);
+    expect(p.largest_row_bytes).toBeLessThanOrEqual(60000);
     const v=vault();v.importProject(p);
     const rows=v.list({scope:'project:bobby'});
     expect(rows.every((e)=>Buffer.byteLength(e.content)<=65536)).toBe(true);
@@ -166,12 +166,31 @@ describe('Vault.importProject (the write)',()=>{
   it('refuses a slug that already has a live document, with zero mutation',()=>{
     const v=vault();v.updateProject({project:'sample',expected_revision:null,what_why:'Existing.',status:'Here.'});
     const before=v.export().memories;const p=planImport([{name:'sample.md',text:commandRepoFile()}]).projects[0]!;
-    expect(()=>v.importProject(p)).toThrowError(expect.objectContaining({code:'stale_project',message:expect.stringContaining('never merges')}));
+    expect(()=>v.importProject(p)).toThrowError(expect.objectContaining({code:'stale_project',message:'Project sample already has entries in this vault; delete the project from the Projects page first.'}));
     expect(v.export().memories).toEqual(before);expect(v.verifyChain().ok).toBe(true);
     expect(()=>v.importProject(p,['project:other'])).toThrowError(expect.objectContaining({code:'scope_denied'}));
     expect(()=>v.importProject({...p,slug:'fresh',document:`${formatMirrorHeader({vaultId:v.getVaultId(),kind:'index'})}x`,archives:[],overflow:null})).toThrowError(expect.objectContaining({code:'invalid_request'}));
     expect(()=>v.importProject({...p,slug:'fresh'})).toThrowError(expect.objectContaining({code:'invalid_request'}));
     expect(v.export().memories).toEqual(before);v.close();
+  });
+
+  it('refuses a slug whose document was forgotten but whose archives remain, and says so in a dry run (review F6, S2)',()=>{
+    const v=vault();const p=planImport([{name:'sample.md',text:commandRepoFile()}]).projects[0]!;
+    expect(projectScopeInUse(v,'sample')).toBe(false);
+    v.importProject(p);expect(projectScopeInUse(v,'sample')).toBe(true);
+    const working=v.list({scope:'project:sample',type:'working'});expect(working).toHaveLength(1);
+    v.forget(working[0]!.id);
+    expect(projectScopeInUse(v,'sample')).toBe(true);
+    const before=v.export().memories;
+    expect(()=>v.importProject(p)).toThrowError(expect.objectContaining({code:'stale_project',message:'Project sample already has entries in this vault; delete the project from the Projects page first.'}));
+    expect(v.export().memories).toEqual(before);
+    expect(v.list({scope:'project:sample'}).filter((e)=>e.content.startsWith(PROJECT_LOG_ARCHIVE_HEADING))).toHaveLength(p.archives.length);
+    expect(()=>v.deleteProject('sample',['project:other'])).toThrowError(expect.objectContaining({code:'scope_denied'}));
+    expect(v.deleteProject('sample')).toBe(p.archives.length+p.overflow_parts.length);
+    expect(projectScopeInUse(v,'sample')).toBe(false);
+    expect(()=>v.deleteProject('sample')).toThrowError(expect.objectContaining({code:'not_found'}));
+    expect(v.importProject(p).project).toBe('sample');
+    v.close();
   });
 
   it('round-trips NorthKeep\'s own rendered mirror: document identical, log reattached, index skipped, no header stored',()=>{

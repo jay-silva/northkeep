@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,7 +11,7 @@ import {
   withFileLock,
 } from '@northkeep/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ExportRefusal, readRemotes, setGitSpawnObserver } from '../src/git-plumbing.js';
+import { ExportRefusal, readRemotes, repoKey, setGitSpawnObserver } from '../src/git-plumbing.js';
 import {
   classifyTarget,
   exportProjects,
@@ -110,19 +110,39 @@ function snapshot(dir: string): string {
   return out.join('\n');
 }
 
-/** Verify, asserting it changed nothing in the repository, its git dir or the NorthKeep home. */
+/** Opens the vault without the vault file lock, so the snapshot below can include the home folder's own mtime. */
+const lockFreeRunner: VaultRunner = async (fn) => {
+  const v = Vault.openWithKey(lab.vaultPath, Buffer.from(keyHex, 'hex'));
+  try {
+    return await fn(v);
+  } finally {
+    v.close();
+  }
+};
+
+function withRoot(dir: string): string {
+  const st = fs.lstatSync(dir);
+  return `root ${st.mode} ${st.mtimeMs}\n${snapshot(dir)}`;
+}
+
+/** verifyMirror itself, asserting it changed nothing in the repository, its git dir or the NorthKeep home. */
 async function verifyReadOnly(): Promise<VerifyResult> {
-  const before = snapshot(repo) + snapshot(lab.home);
+  const before = withRoot(repo) + withRoot(lab.home);
   const verbs: string[][] = [];
   setGitSpawnObserver((_v, a) => verbs.push([...a]));
-  const res = await verifyMirror({ home: lab.home, vaultPath: lab.vaultPath, withVault: runner });
+  const res = await verifyMirror({ home: lab.home, vaultPath: lab.vaultPath, withVault: lockFreeRunner });
   setGitSpawnObserver(null);
-  expect(snapshot(repo) + snapshot(lab.home)).toBe(before);
+  expect(withRoot(repo) + withRoot(lab.home)).toBe(before);
   for (const a of verbs) {
     expect(['rev-parse', 'hash-object', 'ls-tree']).toContain(a[0]);
     expect(a).not.toContain('-w');
   }
   return res;
+}
+
+/** The mirror's state file, found the way the resume line finds it: by the mirror id in export.json. */
+function stateOf(v: Vault) {
+  return readExportState(lab.home, repo, v.getVaultId(), readExportSettings(lab.home)?.mirror_id ?? null);
 }
 
 function statusOf(res: VerifyResult): Record<string, string> {
@@ -144,8 +164,8 @@ describe('exportProjects end to end', () => {
     expect(fx(lab, repo, ['log', '-1', '--format=%s'])).toBe('export: 2 projects (northkeep-cli)');
     expect(fx(lab, repo, ['log', '-1', '--format=%b'])).toContain('demo (claude-code, model not exposed)');
     expect(fx(lab, repo, ['status', '--short'])).toBe('');
-    expect(readExportSettings(lab.home)).toEqual({ repo });
-    const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+    expect(readExportSettings(lab.home)).toEqual({ repo, mirror_id: expect.stringMatching(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/) });
+    const state = await runner((v) => stateOf(v));
     expect(state?.nk_commits).toEqual([res.commit]);
     expect(Object.keys(state!.projects).sort()).toEqual(['demo', 'other']);
     expect(fs.statSync(path.join(repo, 'projects', 'demo.md')).mode & 0o777).toBe(0o644);
@@ -204,7 +224,7 @@ describe('exportProjects end to end', () => {
     expect(res.written).toContain('projects/other.md');
     expect(fs.readFileSync(demo, 'utf8')).toBe(edited);
     expect(fx(lab, repo, ['diff', '--name-only', 'HEAD~1', 'HEAD'])).not.toContain('projects/demo.md');
-    const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+    const state = await runner((v) => stateOf(v));
     expect(state?.refused).toContainEqual({ path: 'projects/demo.md', reason: 'hand edit' });
     // Restoring the committed bytes makes the file NorthKeep's again.
     fx(lab, repo, ['checkout', '--', 'projects/demo.md']);
@@ -227,7 +247,7 @@ describe('exportProjects end to end', () => {
     expect(fx(lab, repo, ['ls-tree', '-r', '--name-only', 'HEAD', '--', 'projects'])).toBe('projects/other.md');
     expect(fx(lab, repo, ['log', '-1', '--format=%B'])).toContain('removed projects/demo.md');
     expect(commits()).toBe(2);
-    const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+    const state = await runner((v) => stateOf(v));
     expect(Object.keys(state!.projects)).toEqual(['other']);
     expect((await verifyReadOnly()).ok).toBe(true);
   });
@@ -275,6 +295,89 @@ describe('exportProjects end to end', () => {
     expect(v.entries.filter((e) => e.status !== 'render failed').every((e) => e.status === 'matches')).toBe(true);
   });
 
+  it('verify creates and chmods nothing under NORTHKEEP_HOME when its git files are missing or loosened (a1)', async () => {
+    await seed();
+    await exportOnce({ repo });
+    fs.chmodSync(path.join(lab.home, 'export'), 0o755);
+    fs.rmSync(path.join(lab.home, 'hooks'), { recursive: true });
+    fs.rmSync(path.join(lab.home, 'empty.gitconfig'));
+    const res = await verifyReadOnly();
+    expect(res.ok).toBe(true);
+    expect(fs.existsSync(path.join(lab.home, 'hooks'))).toBe(false);
+    expect(fs.statSync(path.join(lab.home, 'export')).mode & 0o777).toBe(0o755);
+  });
+
+  it('verify reports a HEAD-only project file as missing on disk and a mode change as a hand edit (a9)', async () => {
+    await seed();
+    await exportOnce({ repo });
+    fs.writeFileSync(path.join(repo, 'projects', 'zzz.md'), 'user file\n');
+    fx(lab, repo, ['add', 'projects/zzz.md']);
+    fx(lab, repo, ['commit', '-q', '-m', 'zzz']);
+    fs.rmSync(path.join(repo, 'projects', 'zzz.md'));
+    const v1 = await verifyReadOnly();
+    expect(statusOf(v1)['projects/zzz.md']).toBe('missing on disk');
+    expect(v1.ok).toBe(false);
+    fx(lab, repo, ['rm', '-q', '--cached', 'projects/zzz.md']);
+    fx(lab, repo, ['commit', '-q', '-m', 'rm zzz']);
+    expect((await verifyReadOnly()).ok).toBe(true);
+    fs.chmodSync(path.join(repo, 'projects', 'demo.md'), 0o755);
+    const v2 = await verifyReadOnly();
+    expect(statusOf(v2)['projects/demo.md']).toBe('hand edit');
+    expect(v2.ok).toBe(false);
+  });
+
+  it('an unreadable mirror file refuses only that target; a scheduled run records a partial run, not an error (a2)', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const demo = path.join(repo, 'projects', 'demo.md');
+    fs.chmodSync(demo, 0o000);
+    try {
+      await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Past the bad file.' }));
+      const res = await exportProjects({ home: lab.home, vaultPath: lab.vaultPath, withVault: runner, by: 'schedule' });
+      expect(res.refused).toContainEqual({ path: 'projects/demo.md', reason: 'unreadable' });
+      expect(res.written).toContain('projects/other.md');
+      expect(res.status).toBe('committed');
+      expect(JSON.stringify(res.refused)).not.toContain(lab.root);
+      const state = await runner((v) => stateOf(v));
+      expect(state?.last_failure).toBeNull();
+      expect(state?.last_success?.commit).toBe(res.commit);
+      expect(state?.last_attempt?.by).toBe('schedule');
+      expect(state?.refused).toContainEqual({ path: 'projects/demo.md', reason: 'unreadable' });
+    } finally {
+      fs.chmodSync(demo, 0o644);
+    }
+  });
+
+  it('a scheduled run where every project is refused records nothing_exported, not a success alone (a2)', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const files = ['demo.md', 'demo.log.1.md', 'other.md'].map((n) => path.join(repo, 'projects', n));
+    for (const f of files) fs.chmodSync(f, 0o000);
+    try {
+      const res = await exportProjects({ home: lab.home, vaultPath: lab.vaultPath, withVault: runner, by: 'schedule' });
+      expect(res.refused.map((r) => r.reason)).toEqual(['unreadable', 'unreadable', 'unreadable']);
+      const state = await runner((v) => stateOf(v));
+      expect(state?.last_failure?.code).toBe('nothing_exported');
+    } finally {
+      for (const f of files) fs.chmodSync(f, 0o644);
+    }
+  });
+
+  it('a run that cannot open its vault records nothing in another vault state file (a3)', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const exp = path.join(lab.home, 'export');
+    const file = path.join(exp, fs.readdirSync(exp).find((n) => n.endsWith('.state.json'))!);
+    const before = fs.readFileSync(file, 'utf8');
+    const locked: VaultRunner = () => Promise.reject(new ExportRefusal('vault_locked', 'The vault is locked'));
+    const absent = path.join(lab.root, 'absent.nkv');
+    await expect(exportProjects({ home: lab.home, vaultPath: absent, withVault: locked, by: 'schedule' })).rejects.toBeInstanceOf(ExportRefusal);
+    const otherPath = path.join(lab.root, 'other.nkv');
+    Vault.create({ path: otherPath, passphrase: 'second vault', deviceSecret: generateDeviceSecret(), kdf: KDF_INTERACTIVE }).close();
+    await expect(exportProjects({ home: lab.home, vaultPath: otherPath, withVault: locked, by: 'schedule' })).rejects.toBeInstanceOf(ExportRefusal);
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+  });
+
   it('refuses a symlinked projects folder without writing or listing through it', async () => {
     await seed();
     await exportOnce({ repo });
@@ -296,7 +399,7 @@ describe('exportProjects end to end', () => {
     await expect(
       exportProjects({ home: lab.home, vaultPath: lab.vaultPath, withVault: locked, by: 'schedule', now: () => new Date(Date.now() + 60_000) }),
     ).rejects.toMatchObject({ code: 'vault_locked' });
-    const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+    const state = await runner((v) => stateOf(v));
     expect(state?.last_failure?.code).toBe('vault_locked');
     expect(state?.last_attempt?.by).toBe('schedule');
     const line = await runner((v) => readMirrorSummary(v, undefined, lab.home, new Date(Date.now() + 120_000)));
@@ -320,7 +423,7 @@ describe('exportProjects end to end', () => {
     await expect(exportProjects({ home: lab.home, vaultPath: otherPath, withVault: otherRunner, by: 'cli' })).rejects.toBeInstanceOf(ExportRefusal);
     const statePath = path.join(lab.home, 'export', fs.readdirSync(path.join(lab.home, 'export')).find((n) => n.endsWith('.state.json'))!);
     expect(fs.readFileSync(statePath, 'utf8')).toBe(before);
-    const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+    const state = await runner((v) => stateOf(v));
     expect(state?.last_success).not.toBeNull();
     expect(state?.nk_commits.length).toBeGreaterThan(0);
   });
@@ -340,6 +443,215 @@ describe('exportProjects end to end', () => {
     expect(fx(lab, bare, ['rev-list', '--all'])).toBe('');
     expect(await readRemotes(ctxFor(lab, repo))).toEqual([{ name: 'origin', url: bare }]);
   });
+});
+
+/** A second process running exportProjects from dist with the default runner; resolves with its one output line. */
+function childExport(opts: { lockWaitMs?: number } = {}): Promise<string> {
+  const script = `import { nodePlatform } from '@northkeep/platform-node';
+import { setPlatform } from '@northkeep/core';
+setPlatform(nodePlatform());
+const { exportProjects } = await import(${JSON.stringify(RUN_DIST)});
+try {
+  const r = await exportProjects({ home: ${JSON.stringify(lab.home)}, vaultPath: ${JSON.stringify(lab.vaultPath)}, by: 'cli', lockWaitMs: ${opts.lockWaitMs ?? 20_000} });
+  console.log(JSON.stringify({ status: r.status }));
+} catch (e) { console.log(JSON.stringify({ refused: e.code ?? 'error' })); }`;
+  return new Promise((resolve) => {
+    const c = spawn(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: MCP_DIR,
+      env: { PATH: '/usr/bin:/bin', NORTHKEEP_HOME: lab.home, NORTHKEEP_MASTER_KEY: keyHex, NORTHKEEP_NO_KEYCHAIN: '1' },
+    });
+    let o = '';
+    c.stdout.on('data', (d: Buffer) => (o += d.toString()));
+    c.on('close', () => resolve(o.trim()));
+  });
+}
+
+function deadPid(): number {
+  return Number(spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout);
+}
+
+/** Every commit after `since` keeps notes.txt and is never an empty tree. */
+function assertHistoryKeeps(since: string): void {
+  const ids = fx(lab, repo, ['rev-list', `${since}..HEAD`]).split('\n').filter(Boolean);
+  for (const c of ids) {
+    const names = fx(lab, repo, ['ls-tree', '-r', '--name-only', c]).split('\n');
+    expect(names, `commit ${c}`).toContain('notes.txt');
+    expect(names, `commit ${c}`).toContain('.northkeep-mirror');
+  }
+  expect(fx(lab, repo, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n')).toContain('notes.txt');
+}
+
+describe('the mirror id (F4)', () => {
+  const UUID4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+
+  function markerId(): string | null {
+    const first = fs.readFileSync(path.join(repo, '.northkeep-mirror'), 'utf8').split('\n')[0]!;
+    return / mirror (\S+)/.exec(first)?.[1] ?? null;
+  }
+
+  it('a moved mirror exported with --repo keeps its journal: zero refusals, no commit, new path recorded', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const id = markerId();
+    expect(id).toMatch(UUID4);
+    const moved = path.join(lab.root, 'moved-mirror');
+    fs.renameSync(repo, moved);
+    repo = fs.realpathSync(moved);
+    const res = await exportOnce({ repo: moved });
+    expect(res.refused).toEqual([]);
+    expect(res.status).toBe('unchanged');
+    expect(commits()).toBe(1);
+    expect(markerId()).toBe(id);
+    expect(readExportSettings(lab.home)).toEqual({ repo, mirror_id: id });
+    const state = await runner((v) => stateOf(v));
+    expect(state?.repo).toBe(repo);
+    expect(state?.last_success).not.toBeNull();
+    expect((await verifyReadOnly()).ok).toBe(true);
+  });
+
+  it('an old marker without a mirror id gets one in a single migration commit, keeping the journal and state', async () => {
+    await seed();
+    await exportOnce({ repo });
+    // Rebuild the pre-id layout: marker without an id, journal and state under the realpath key, settings without an id.
+    const id = markerId()!;
+    const markerFile = path.join(repo, '.northkeep-mirror');
+    fs.writeFileSync(markerFile, fs.readFileSync(markerFile, 'utf8').replace(` mirror ${id}`, ''));
+    fx(lab, repo, ['add', '.northkeep-mirror']);
+    fx(lab, repo, ['commit', '-q', '-m', 'old marker']);
+    const exp = path.join(lab.home, 'export');
+    const journal = JSON.parse(fs.readFileSync(path.join(exp, `mirror-${id}.json`), 'utf8'));
+    delete journal.mirror_id;
+    journal.paths['.northkeep-mirror'].unshift(fx(lab, repo, ['hash-object', '.northkeep-mirror']));
+    const state = JSON.parse(fs.readFileSync(path.join(exp, `mirror-${id}.state.json`), 'utf8'));
+    delete state.mirror_id;
+    for (const n of fs.readdirSync(exp)) fs.rmSync(path.join(exp, n));
+    fs.writeFileSync(path.join(exp, `${repoKey(repo)}.json`), JSON.stringify(journal));
+    fs.writeFileSync(path.join(exp, `${repoKey(repo)}.state.json`), JSON.stringify(state));
+    fs.writeFileSync(path.join(lab.home, 'export.json'), JSON.stringify({ repo }));
+    expect(markerId()).toBeNull();
+    const before = commits();
+
+    const res = await exportOnce();
+    expect(res.refused).toEqual([]);
+    expect(res.status).toBe('committed');
+    expect(commits()).toBe(before + 1);
+    expect(fx(lab, repo, ['diff', '--name-only', 'HEAD~1', 'HEAD'])).toBe('.northkeep-mirror');
+    const newId = markerId();
+    expect(newId).toMatch(UUID4);
+    expect(readExportSettings(lab.home)?.mirror_id).toBe(newId);
+    const migrated = await runner((v) => stateOf(v));
+    expect(migrated?.nk_commits.length).toBe(state.nk_commits.length + 1);
+    expect(Object.keys(migrated!.projects).sort()).toEqual(['demo', 'other']);
+
+    const again = await exportOnce();
+    expect(again.status).toBe('unchanged');
+    expect(again.refused).toEqual([]);
+    expect(markerId()).toBe(newId);
+    expect((await verifyReadOnly()).ok).toBe(true);
+  });
+});
+
+describe('concurrent exports', () => {
+  async function seedWithUserFile(): Promise<string> {
+    expect(fs.existsSync(RUN_DIST), 'build @northkeep/mcp-server first').toBe(true);
+    await seed();
+    await exportOnce({ repo });
+    fs.writeFileSync(path.join(repo, 'notes.txt'), 'user notes\n');
+    fx(lab, repo, ['add', 'notes.txt']);
+    fx(lab, repo, ['commit', '-q', '-m', 'user: add notes.txt']);
+    return fx(lab, repo, ['rev-parse', 'HEAD']);
+  }
+
+  it('an aged lock held by a paused live export is not stolen, and the paused export keeps the user file (a5b)', async () => {
+    const userHead = await seedWithUserFile();
+    const lockFile = path.join(repo, '.git', 'northkeep-export.lock');
+    let other = '';
+    let fired = false;
+    setGitSpawnObserver((v) => {
+      if (v !== 'update-index' || fired) return;
+      fired = true;
+      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      fs.utimesSync(lockFile, old, old);
+      // Blocks this run mid-commit while a second process tries to export.
+      const r = spawnSync(process.execPath, ['--input-type=module', '-e', `import { nodePlatform } from '@northkeep/platform-node';
+import { setPlatform } from '@northkeep/core';
+setPlatform(nodePlatform());
+const { exportProjects } = await import(${JSON.stringify(RUN_DIST)});
+try { const r = await exportProjects({ home: ${JSON.stringify(lab.home)}, vaultPath: ${JSON.stringify(lab.vaultPath)}, by: 'schedule', lockWaitMs: 300 }); console.log(r.status); }
+catch (e) { console.log(e.code); }`], {
+        cwd: MCP_DIR,
+        env: { PATH: '/usr/bin:/bin', NORTHKEEP_HOME: lab.home, NORTHKEEP_MASTER_KEY: keyHex, NORTHKEEP_NO_KEYCHAIN: '1' },
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+      other = r.stdout.trim();
+    });
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'During the race.' }));
+    const res = await exportOnce();
+    setGitSpawnObserver(null);
+    expect(fired).toBe(true);
+    expect(other).toBe('export_busy');
+    expect(res.status).toBe('committed');
+    assertHistoryKeeps(userHead);
+  }, 90_000);
+
+  /** Replaces the export lock with a live foreign owner's token when `verb` first spawns (with `arg` when given). */
+  function stealLockOn(verb: string, arg?: string): () => boolean {
+    const lockFile = path.join(repo, '.git', 'northkeep-export.lock');
+    let fired = false;
+    setGitSpawnObserver((v, a) => {
+      if (fired || v !== verb || (arg !== undefined && !a.includes(arg))) return;
+      fired = true;
+      fs.writeFileSync(lockFile, `${JSON.stringify({ pid: process.ppid, started_at: new Date().toISOString(), nonce: 'fedcba9876543210' })}\n`);
+    });
+    return () => fired;
+  }
+
+  it('a run that loses the lock before update-ref commits nothing', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const head = fx(lab, repo, ['rev-parse', 'HEAD']);
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Lock stolen.' }));
+    const fired = stealLockOn('commit-tree');
+    const err = await exportOnce().catch((e: unknown) => e);
+    setGitSpawnObserver(null);
+    fs.rmSync(path.join(repo, '.git', 'northkeep-export.lock'), { force: true });
+    expect(fired()).toBe(true);
+    expect((err as ExportRefusal).code).toBe('lock_lost');
+    expect((err as ExportRefusal).message).toContain('lost the export lock');
+    expect(fx(lab, repo, ['rev-parse', 'HEAD'])).toBe(head);
+  });
+
+  it('a lock lost mid-run ends the run: no removal and no commit', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const head = fx(lab, repo, ['rev-parse', 'HEAD']);
+    await write((v) => {
+      v.deleteProject('demo');
+      v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Lock lost early.' });
+    });
+    const fired = stealLockOn('hash-object', '-w');
+    const err = await exportOnce().catch((e: unknown) => e);
+    setGitSpawnObserver(null);
+    fs.rmSync(path.join(repo, '.git', 'northkeep-export.lock'), { force: true });
+    expect(fired()).toBe(true);
+    expect(err).toBeInstanceOf(ExportRefusal);
+    expect(fs.existsSync(path.join(repo, 'projects', 'demo.md'))).toBe(true);
+    expect(fx(lab, repo, ['rev-parse', 'HEAD'])).toBe(head);
+  });
+
+  it('three and six plain exports racing a dead-owner lock never commit a tree missing a user file (a5d, a5g, a5h)', async () => {
+    const userHead = await seedWithUserFile();
+    const lockFile = path.join(repo, '.git', 'northkeep-export.lock');
+    const outs: string[] = [];
+    for (const n of [3, 3, 3, 6, 6]) {
+      fs.writeFileSync(lockFile, `${JSON.stringify({ pid: deadPid(), started_at: 'x', nonce: 'dead' })}\n`);
+      outs.push(...(await Promise.all(Array.from({ length: n }, () => childExport()))));
+      assertHistoryKeeps(userHead);
+    }
+    expect(outs.some((o) => o.includes('"status"'))).toBe(true);
+    expect(fx(lab, repo, ['status', '--short'])).toBe('');
+  }, 120_000);
 });
 
 describe('a killed first export heals', () => {
@@ -441,6 +753,7 @@ describe('importProjects', () => {
       { name: 'README.md', slug: null, status: 'skipped', reason: expect.stringContaining('not a project slug') },
       { name: 'alpha.md', slug: 'alpha', status: 'would import', reason: null },
       { name: 'beta.md', slug: 'beta', status: 'would import', reason: null },
+      { name: 'linked.md', slug: null, status: 'skipped', reason: 'a symlink; NorthKeep reads only regular files' },
     ]);
     expect(dry.plan.projects.find((p) => p.slug === 'alpha')?.sections.map((s) => s.to)).toContain('Open Questions');
     expect(await runner((v) => listProjectViews(v).length)).toBe(0);
@@ -451,6 +764,85 @@ describe('importProjects', () => {
     const again = await importProjects(dir, { write: true, vaultPath: lab.vaultPath, withVault: runner });
     expect(again.files.filter((f) => f.status === 'refused').map((f) => f.slug)).toEqual(['alpha', 'beta']);
     expect(snapshot(path.join(lab.root, 'cr'))).toBe(before);
+  });
+
+  it('refuses a non-UTF-8 file by name instead of storing replacement characters (F1)', async () => {
+    const dir = path.join(lab.root, 'enc');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'cp.md'), Buffer.from([...Buffer.from('## Current Status\n\nCaf'), 0xe9, 0x20, 0x93, 0x71, 0x94, 0x0a]));
+    fs.writeFileSync(path.join(dir, 'wide.md'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('## Current Status\n\nWide.\n', 'utf16le')]));
+    fs.writeFileSync(path.join(dir, 'fine.md'), '## Current Status\n\nFine.\n');
+    const res = await importProjects(dir, { write: true, vaultPath: lab.vaultPath, withVault: runner });
+    expect(res.files).toEqual([
+      { name: 'cp.md', slug: null, status: 'refused', reason: 'not UTF-8; convert it first' },
+      { name: 'fine.md', slug: 'fine', status: 'imported', reason: null },
+      { name: 'wide.md', slug: null, status: 'refused', reason: 'not UTF-8; convert it first' },
+    ]);
+    const contents = await runner((v) => v.list({ type: 'working' }).map((e) => e.content));
+    expect(contents.join('')).not.toMatch(/[\uFFFD\u0000]/);
+    expect(await runner((v) => listProjectViews(v).map((s) => s.project))).toEqual(['fine']);
+  });
+
+  it('strips a BOM instead of skipping the file, including a re-saved exported file (reviewer 25)', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const dir = path.join(lab.root, 'bom');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'other.md'), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), fs.readFileSync(path.join(repo, 'projects', 'other.md'))]));
+    fs.writeFileSync(path.join(dir, 'plain.md'), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('## Current Status\n\nBom.\n')]));
+    await write((v) => {
+      v.deleteProject('other');
+    });
+    const res = await importProjects(dir, { write: true, vaultPath: lab.vaultPath, withVault: runner });
+    expect(res.files.map((f) => [f.name, f.status])).toEqual([
+      ['other.md', 'imported'],
+      ['plain.md', 'imported'],
+    ]);
+    const contents = await runner((v) => v.list({ type: 'working' }).map((e) => e.content));
+    expect(contents.join('')).not.toContain('\uFEFF');
+  });
+
+  it('reports every skipped .md entry with a reason, and an unreadable file without stopping the run (F5, note 20)', async () => {
+    const dir = path.join(lab.root, 'odd');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(lab.root, 'target.md'), '## Current Status\n\nOutside.\n');
+    fs.symlinkSync(path.join(lab.root, 'target.md'), path.join(dir, 'link.md'));
+    spawnSync('/usr/bin/mkfifo', [path.join(dir, 'pipe.md')]);
+    fs.mkdirSync(path.join(dir, 'folder.md'));
+    fs.writeFileSync(path.join(dir, 'locked.md'), '## Current Status\n\nLocked.\n');
+    fs.chmodSync(path.join(dir, 'locked.md'), 0o000);
+    fs.writeFileSync(path.join(dir, 'ok.md'), '## Current Status\n\nOk.\n');
+    try {
+      const res = await importProjects(dir, { write: false, vaultPath: lab.vaultPath, withVault: runner });
+      expect(res.files).toEqual([
+        { name: 'folder.md', slug: null, status: 'skipped', reason: 'a folder, not a file' },
+        { name: 'link.md', slug: null, status: 'skipped', reason: 'a symlink; NorthKeep reads only regular files' },
+        { name: 'locked.md', slug: null, status: 'refused', reason: 'could not be read; check its permissions' },
+        { name: 'ok.md', slug: 'ok', status: 'would import', reason: null },
+        { name: 'pipe.md', slug: null, status: 'skipped', reason: 'not a regular file' },
+      ]);
+    } finally {
+      fs.chmodSync(path.join(dir, 'locked.md'), 0o644);
+    }
+  });
+
+  it('the dry run opens the vault read-only and reports exists for a slug with any entries (S2), with byte totals', async () => {
+    const dir = commandRepo();
+    await write((v) => {
+      v.remember({ type: 'episodic', scope: 'project:alpha', content: 'An archive left behind.' });
+    });
+    const vaultBefore = fs.readFileSync(lab.vaultPath);
+    const dry = await importProjects(dir, { write: false, vaultPath: lab.vaultPath, withVault: runner });
+    expect(dry.files.find((f) => f.name === 'alpha.md')).toEqual({
+      name: 'alpha.md',
+      slug: 'alpha',
+      status: 'exists',
+      reason: 'Project alpha already has entries in this vault; delete the project from the Projects page first.',
+    });
+    expect(dry.files.find((f) => f.name === 'beta.md')?.status).toBe('would import');
+    expect(dry.plan.total_bytes).toBeGreaterThan(0);
+    expect(dry.plan.largest_row_bytes).toBeGreaterThan(0);
+    expect(fs.readFileSync(lab.vaultPath).equals(vaultBefore)).toBe(true);
   });
 
   it('round trip: an exported mirror imports into a fresh vault with no header in any stored document', async () => {

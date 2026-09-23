@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -23,6 +23,12 @@ import {
 import { ctxFor, fx, initRepo, makeLab, type Lab } from './git-fixture.js';
 
 const VAULT = '11111111-2222-3333-4444-555555555555';
+const MCP_DIR = path.resolve(__dirname, '..');
+const RUN_DIST = path.join(MCP_DIR, 'dist', 'project-export-run.js');
+
+function deadPid(): number {
+  return Number(spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout);
+}
 const blob = (n: number) => n.toString(16).padStart(40, '0');
 
 let lab: Lab;
@@ -88,15 +94,87 @@ describe('the export lock', () => {
     expect(l.held()).toBe(true);
   });
 
-  it('steals a lock over an hour old but not a fresh foreign one', async () => {
+  it('never steals a live owner by age, and reports since when it has been running (a5b)', async () => {
+    const p = path.join(repo, '.git', EXPORT_LOCK_NAME);
+    const since = new Date(Date.now() - 3 * 60 * 60 * 1000).toISOString();
+    const body = `${JSON.stringify({ pid: process.ppid, started_at: since, nonce: '0123456789abcdef' })}\n`;
+    fs.writeFileSync(p, body);
+    const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    fs.utimesSync(p, old, old);
+    const err = await acquireExportLock(ctxFor(lab, repo), { waitMs: 100, pollMs: 20 }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(ExportRefusal);
+    expect((err as ExportRefusal).code).toBe('export_busy');
+    expect((err as ExportRefusal).message).toContain(`Another NorthKeep export has been running since ${since}`);
+    expect((err as ExportRefusal).message).not.toContain(repo);
+    expect(fs.readFileSync(p, 'utf8')).toBe(body);
+  });
+
+  it('never steals an unreadable lock, whatever its age, and says how to clear it', async () => {
     const p = path.join(repo, '.git', EXPORT_LOCK_NAME);
     fs.writeFileSync(p, 'not json, owner unknown\n');
-    const err = await acquireExportLock(ctxFor(lab, repo), { waitMs: 100, pollMs: 20 }).catch((e: unknown) => e);
-    expect((err as ExportRefusal).code).toBe('export_busy');
     const old = new Date(Date.now() - 61 * 60 * 1000);
     fs.utimesSync(p, old, old);
-    const l = await take();
-    expect(l.held()).toBe(true);
+    const err = await acquireExportLock(ctxFor(lab, repo), { waitMs: 100, pollMs: 20 }).catch((e: unknown) => e);
+    expect((err as ExportRefusal).code).toBe('lock_unreadable');
+    expect((err as ExportRefusal).message).toContain('northkeep-export.lock');
+    expect((err as ExportRefusal).message).not.toContain(repo);
+    expect(fs.readFileSync(p, 'utf8')).toBe('not json, owner unknown\n');
+  });
+
+  it('16 contenders on a dead-owner lock never hold it at the same time (a5c)', async () => {
+    expect(fs.existsSync(RUN_DIST), 'build @northkeep/mcp-server first').toBe(true);
+    const child = `const run = await import(${JSON.stringify(RUN_DIST)});
+const go = Number(process.argv[1]); while (Date.now() < go) {}
+let lock;
+try { lock = await run.acquireExportLock({ repo: ${JSON.stringify(repo)}, home: ${JSON.stringify(lab.home)}, vaultPath: '/nonexistent/v.nkv' }, { waitMs: 20000, pollMs: 5 }); }
+catch (e) { console.log(JSON.stringify({ refused: e.code })); process.exit(0); }
+const t0 = performance.timeOrigin + performance.now(); const until = Date.now() + 120; while (Date.now() < until) {}
+const held = lock.held(); const t1 = performance.timeOrigin + performance.now(); lock.release();
+console.log(JSON.stringify({ t0, t1, held }));`;
+    const lockFile = path.join(repo, '.git', EXPORT_LOCK_NAME);
+    let overlaps = 0;
+    let lost = 0;
+    let holds = 0;
+    for (let round = 0; round < 6; round++) {
+      fs.writeFileSync(lockFile, `${JSON.stringify({ pid: deadPid(), started_at: 'x', nonce: 'dead' })}\n`);
+      const go = Date.now() + 900;
+      const outs = await Promise.all(
+        Array.from({ length: 16 }, () =>
+          new Promise<string>((resolve) => {
+            const c = spawn(process.execPath, ['--input-type=module', '-e', child, String(go)], { cwd: MCP_DIR, env: { PATH: '/usr/bin:/bin', NORTHKEEP_HOME: lab.home } });
+            let o = '';
+            c.stdout.on('data', (d: Buffer) => (o += d.toString()));
+            c.on('close', () => resolve(o.trim()));
+          }),
+        ),
+      );
+      const iv = outs.filter(Boolean).map((l) => JSON.parse(l) as { t0?: number; t1?: number; held?: boolean }).filter((x) => x.t0 !== undefined);
+      iv.sort((a, b) => a.t0! - b.t0!);
+      for (let i = 1; i < iv.length; i++) if (iv[i]!.t0! < iv[i - 1]!.t1!) overlaps++;
+      lost += iv.filter((x) => !x.held).length;
+      holds += iv.length;
+    }
+    expect(holds).toBeGreaterThan(0);
+    expect(overlaps).toBe(0);
+    expect(lost).toBe(0);
+  }, 90_000);
+
+  it('refuses, and removes nothing, when a dead stealer left its steal guard behind', async () => {
+    const p = path.join(repo, '.git', EXPORT_LOCK_NAME);
+    const dead = `${JSON.stringify({ pid: deadPid(), started_at: 'x', nonce: 'dead' })}\n`;
+    fs.writeFileSync(p, dead);
+    fs.writeFileSync(`${p}.steal`, dead);
+    const err = await acquireExportLock(ctxFor(lab, repo), { waitMs: 100, pollMs: 20 }).catch((e: unknown) => e);
+    expect((err as ExportRefusal).code).toBe('lock_unreadable');
+    expect((err as ExportRefusal).message).toContain('northkeep-export.lock.steal');
+    expect(fs.readFileSync(p, 'utf8')).toBe(dead);
+    expect(fs.existsSync(`${p}.steal`)).toBe(true);
+    // A crash between creating and writing the guard leaves it empty; that is refused the same way.
+    fs.writeFileSync(`${p}.steal`, '');
+    const again = await acquireExportLock(ctxFor(lab, repo), { waitMs: 100, pollMs: 20 }).catch((e: unknown) => e);
+    expect((again as ExportRefusal).code).toBe('lock_unreadable');
+    expect((again as ExportRefusal).message).toContain('northkeep-export.lock.steal');
+    expect(fs.readFileSync(p, 'utf8')).toBe(dead);
   });
 
   it('never removes a lock it no longer holds', async () => {
@@ -202,13 +280,16 @@ describe('the settings file', () => {
     expect(JSON.parse(fs.readFileSync(settingsPath(lab.home), 'utf8'))).toEqual({ repo });
     expect(mode(settingsPath(lab.home))).toBe(0o600);
     expect(readExportSettings(lab.home)).toEqual({ repo });
+    const id = '0f1e2d3c-4b5a-4968-8776-655443322110';
+    writeExportSettings(lab.home, { repo, mirror_id: id }, l);
+    expect(readExportSettings(lab.home)).toEqual({ repo, mirror_id: id });
     l.release();
     expect(() => writeExportSettings(lab.home, { repo: '/other' }, l)).toThrow(ExportRefusal);
-    expect(readExportSettings(lab.home)).toEqual({ repo });
+    expect(readExportSettings(lab.home)).toEqual({ repo, mirror_id: id });
   });
 
   it('refuses an unreadable file with fixed text', () => {
-    for (const bad of ['{not json', '{"repo": 3}', '{"repo": "/x", "token": "y"}', '[]']) {
+    for (const bad of ['{not json', '{"repo": 3}', '{"repo": "/x", "token": "y"}', '[]', '{"repo": "/x", "mirror_id": "../../escape"}', '{"repo": "/x", "mirror_id": "ABCDEF00-0000-4000-8000-000000000000"}']) {
       fs.writeFileSync(settingsPath(lab.home), bad);
       let err: unknown;
       try {
