@@ -179,6 +179,11 @@ export function describeMirrorError(err: unknown): string {
   if (err instanceof GitCommandError) {
     return `A git step (${err.verb}) ${err.reason === 'timeout' ? 'timed out' : 'failed'}. Check the mirror folder with git status, then try again`;
   }
+  // A system error's message names an absolute path; only its code is shown.
+  const code = (err as NodeJS.ErrnoException | null)?.code;
+  if (err instanceof Error && typeof code === 'string' && /^E[A-Z]+$/.test(code)) {
+    return `A file operation failed (${code}). Check the permissions of the mirror folder and the NorthKeep folder, then try again`;
+  }
   return err instanceof Error ? err.message : String(err);
 }
 
@@ -190,6 +195,8 @@ function refusalText(reason: string): string {
   if (reason === 'hand edit') return 'hand edit. Move or delete the file; NorthKeep then writes it fresh.';
   if (reason === 'changed while writing') return 'the file changed while NorthKeep was writing it. Export again.';
   if (reason === RENDER_FAILED) return 'render failed. The project could not be read, so its file was left as it was.';
+  if (reason === 'unreadable') return 'unreadable. Check the file permissions; NorthKeep left it as it was.';
+  if (reason === 'unwritable') return 'could not be written. Check the folder permissions; NorthKeep left it as it was.';
   if (reason === 'NorthKeep refused a malformed blob id') return 'NorthKeep refused a malformed file id from git.';
   return sentence(reason);
 }
@@ -197,6 +204,9 @@ function refusalText(reason: string): string {
 const FAILURE_TEXT: Record<string, string> = {
   vault_locked: 'the vault was locked; run northkeep unlock so the schedule can open it',
   export_busy: 'another export was running on this folder',
+  lock_unreadable: 'the export lock file was unreadable; see the export command for how to clear it',
+  lock_lost: 'the run lost the export lock before committing',
+  tree_check_failed: 'a commit that would have dropped files was refused',
   not_configured: 'no mirror was configured',
   git_error: 'a git step failed',
 };

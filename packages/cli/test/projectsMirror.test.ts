@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KDF_INTERACTIVE, Vault, deriveMasterKey, generateDeviceSecret, listProjectViews, withFileLock } from '@northkeep/core';
 import { ExportRefusal, readExportState, type VaultRunner } from '@northkeep/mcp-server';
-import { projectsExportCmd, projectsImportCmd, type MirrorDeps } from '../src/projectsCmd.js';
+import { describeMirrorError, projectsExportCmd, projectsImportCmd, type MirrorDeps } from '../src/projectsCmd.js';
 
 /**
  * ADR 0053 M-A1 on the CLI: export, verify, status, schedule, the launchd
@@ -192,6 +192,28 @@ describe('northkeep projects export', () => {
     expect(out).toContain('Wrote projects/other.md');
     expect(out).toContain('1 path refused; everything else was exported.');
     expect(fs.readFileSync(file, 'utf8')).toBe(edited);
+  });
+
+  it('an unreadable mirror file is refused by name with fixed text, and the rest exports (a2)', async () => {
+    expect(await exportCmd({ repo })).toBe(0);
+    const demo = path.join(repo, 'projects', 'demo.md');
+    fs.chmodSync(demo, 0o000);
+    try {
+      await setStatus('other', 'Past the bad file.');
+      expect(await exportCmd({})).toBe(1);
+      expect(out).toContain('Refused projects/demo.md: unreadable. Check the file permissions; NorthKeep left it as it was.');
+      expect(out).toContain('Wrote projects/other.md');
+      expect([...out, ...err].join('\n')).not.toContain(demo);
+    } finally {
+      fs.chmodSync(demo, 0o644);
+    }
+  });
+
+  it('describes a file-system error with fixed text and no path', () => {
+    const e = Object.assign(new Error(`EACCES: permission denied, open '${path.join(root, 'secret', 'x.md')}'`), { code: 'EACCES' });
+    const text = describeMirrorError(e);
+    expect(text).not.toContain(root);
+    expect(text).toContain('EACCES');
   });
 
   it('prints JSON with --json and rejects mixed modes', async () => {
