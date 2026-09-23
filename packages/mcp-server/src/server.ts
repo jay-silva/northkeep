@@ -3,6 +3,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import {
+  BOARD_DEFAULT_STALE_DAYS,
+  BOARD_MAX_STALE_DAYS,
   MEMORY_TYPES,
   ProjectHandoffError,
   Vault,
@@ -27,11 +29,13 @@ import {
 import { nodePlatform } from '@northkeep/platform-node';
 import { createCachedEmbedder, createOllamaEmbedder } from '@northkeep/librarian';
 import { applyTier1 } from '@northkeep/redact';
+import { maskProjectFields } from './project-mask.js';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
 import { appendCallLog, readCallLogStrict, type CallLogEntry } from './log.js';
 import { tameOneLine } from './text-safe.js';
 import { readMirrorSummary } from './project-export-run.js';
+import { collectBoard } from './project-board-run.js';
 import type { OpenSession } from './open-sessions.js';
 import {
   OPEN_SESSIONS_NOTE,
@@ -119,31 +123,8 @@ function err(message: string): ToolOk {
   return { content: [{ type: 'text', text: message }], isError: true };
 }
 
-const projectIdentifierKeys = new Set([
-  'id', 'revision', 'vault_id', 'project', 'scope', 'updated_at', 'checked_at',
-  'operation_id', 'base_revision', 'result_revision', 'request_fingerprint',
-  'saved_at', 'type', 'access', 'mode',
-  'session_id', 'opened_at', 'last_read_at',
-  // Provenance and archive-summary fields are identifiers and timestamps, not
-  // vault content: masking them would corrupt the record of who wrote what.
-  'host', 'host_version', 'recorded_at', 'oldest', 'newest',
-]);
-
-function maskProjectPayload(value: unknown, key?: string): unknown {
-  if (returnRedactionTier() === 0) return value;
-  if (typeof value === 'string') {
-    return key && projectIdentifierKeys.has(key) ? value : applyTier1(value).text;
-  }
-  if (Array.isArray(value)) return value.map((item) => maskProjectPayload(item));
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value as Record<string, unknown>).map(([childKey, child]) => [
-        childKey,
-        maskProjectPayload(child, childKey),
-      ]),
-    );
-  }
-  return value;
+function maskProjectPayload(value: unknown): unknown {
+  return maskProjectFields(value, returnRedactionTier());
 }
 
 function receivingProjectView(view: ReturnType<typeof getProjectView>) {
@@ -629,6 +610,38 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           disclosed_scopes: distinctScopes(projects.map((project) => project.scope)),
         };
       }),
+  );
+
+  server.registerTool(
+    'project_board',
+    {
+      title: 'Project board',
+      description:
+        'A read-only weekly review across the projects this connection can see: projects gone quiet ' +
+        '(no activity for more than stale_days, default 14, excluding Done), dated lines in Next Actions ' +
+        'and Open Questions, sessions on this machine that read a project and did not write back, draft ' +
+        'projects, and projects that need repair. Returns one-line excerpts only, never a whole document; ' +
+        'call project_resume for the project you will work on. Calling this does not count as reading ' +
+        'any project.',
+      inputSchema: {
+        stale_days: z.number().int().min(0).max(BOARD_MAX_STALE_DAYS).optional()
+          .describe(`Days without activity before a project counts as stale (0 to ${BOARD_MAX_STALE_DAYS}, default ${BOARD_DEFAULT_STALE_DAYS})`),
+      },
+    },
+    async ({ stale_days }) => {
+      const staleDays = stale_days ?? BOARD_DEFAULT_STALE_DAYS;
+      return run(ctx, 'project_board', { stale_days: staleDays }, vaultPath, (vault, granted) => {
+        const result = collectBoard(vault, {
+          granted, now: new Date(), staleDays, currentSessionId: ctx.session_id, readLog: readCallLogStrict,
+        });
+        return {
+          payload: result.board,
+          result_count: result.disclosed_scopes.length,
+          result_ids: result.result_ids,
+          disclosed_scopes: result.disclosed_scopes,
+        };
+      });
+    },
   );
 
   server.registerTool(

@@ -10,7 +10,9 @@ export {
   keychainSetMasterKey,
 } from './keychain.js';
 export { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
-export { appendCallLog, readCallLog, type CallLogEntry } from './log.js';
+export { appendCallLog, readCallLog, readCallLogStrict, type CallLogEntry } from './log.js';
+export { BOARD_CALL_LOG_UNREADABLE, collectBoard, type BoardRunOptions, type BoardRunResult } from './project-board-run.js';
+export { PROJECT_IDENTIFIER_KEYS, maskProjectFields } from './project-mask.js';
 export {
   SERVER_NAME,
   chatgptStatus,

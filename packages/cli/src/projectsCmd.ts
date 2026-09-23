@@ -2,6 +2,8 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+  BOARD_DEFAULT_STALE_DAYS,
+  BOARD_MAX_STALE_DAYS,
   Vault,
   VaultAuthError,
   deriveMasterKey,
@@ -13,7 +15,9 @@ import {
   projectScope,
   summarizeMirror,
   withFileLock,
+  type BoardSection,
   type ImportFilePlan,
+  type ProjectBoard,
   type ProjectCompactionResult,
   PROJECT_IMPORT_PUSH_MAX_BYTES,
   PROJECT_IMPORT_ROW_MAX_BYTES,
@@ -23,11 +27,14 @@ import {
   GitCommandError,
   INDEX_NOT_REFRESHED,
   RENDER_FAILED,
+  collectBoard,
   exportProjects,
   importProjects,
   installSchedule,
   parseScheduleTime,
   readExportSettings,
+  maskProjectFields,
+  readCallLogStrict,
   readExportState,
   readRemotes,
   removeSchedule,
@@ -118,7 +125,7 @@ export async function projectsCompactCmd(
  */
 export async function projectsUpdateCmd(
   slug: string,
-  options: { title?: string; whatWhy?: string; status?: string; nextActions?: string; decision?: string; log?: string },
+  options: { title?: string; whatWhy?: string; status?: string; nextActions?: string; openQuestions?: string; decision?: string; log?: string },
   withVault: WithVault,
   fail: (m: string) => never,
 ): Promise<void> {
@@ -127,10 +134,11 @@ export async function projectsUpdateCmd(
     ...(options.whatWhy !== undefined ? { what_why: options.whatWhy } : {}),
     ...(options.status !== undefined ? { status: options.status } : {}),
     ...(options.nextActions !== undefined ? { next_actions: options.nextActions } : {}),
+    ...(options.openQuestions !== undefined ? { open_questions: options.openQuestions } : {}),
     ...(options.decision !== undefined ? { decision: options.decision } : {}),
     ...(options.log !== undefined ? { log_entry: options.log } : {}),
   };
-  if (Object.keys(fields).length === 0) fail('Give at least one of --title, --what-why, --status, --next-actions, --decision or --log.');
+  if (Object.keys(fields).length === 0) fail('Give at least one of --title, --what-why, --status, --next-actions, --open-questions, --decision or --log.');
   type Outcome = { error: string } | { error?: undefined; created: boolean; revision: string };
   const outcome: Outcome = await withVault((vault): Outcome => {
     const current = listProjectViews(vault).find((s) => s.project === slug);
@@ -621,4 +629,60 @@ export async function promptOnceRunner(
       }
     });
   return { runner, keyForPush: resolved !== null ? Buffer.from(key) : null, dispose: () => memzero(key) };
+}
+
+/**
+ * `northkeep projects board` (ADR 0054): the owner's view of every project,
+ * read-only. No connection, so no grant to narrow; no call-log row, like
+ * every CLI read. Masks under NORTHKEEP_REDACT_TIER=1 the way the MCP tool does.
+ */
+export async function projectsBoardCmd(
+  options: { staleDays?: string; json?: boolean },
+  withVault: WithVault,
+  fail: (m: string) => never,
+  out: (line: string) => void = (line) => console.log(line),
+): Promise<void> {
+  let staleDays = BOARD_DEFAULT_STALE_DAYS;
+  if (options.staleDays !== undefined) {
+    if (!/^\d{1,4}$/.test(options.staleDays) || Number(options.staleDays) > BOARD_MAX_STALE_DAYS) {
+      fail(`Stale days must be a whole number from 0 to ${BOARD_MAX_STALE_DAYS}.`);
+    }
+    staleDays = Number(options.staleDays);
+  }
+  const board = await withVault((vault) =>
+    collectBoard(vault, { granted: undefined, now: new Date(), staleDays, currentSessionId: '', readLog: readCallLogStrict }).board,
+  );
+  const tier = process.env.NORTHKEEP_REDACT_TIER === '1' ? 1 : 0;
+  const masked = maskProjectFields(board, tier) as ProjectBoard;
+  if (options.json === true) {
+    out(JSON.stringify(masked, null, 2));
+    return;
+  }
+  for (const line of renderBoard(masked)) out(line);
+}
+
+function sectionLines<T>(title: string, section: BoardSection<T>, row: (r: T) => string): string[] {
+  const lines = ['', `${title} (${section.total})`];
+  if (section.total === 0) lines.push('  None.');
+  for (const r of section.rows) lines.push(`  ${row(r)}`);
+  if (section.shown < section.total) lines.push(`  Showing ${section.shown} of ${section.total}.`);
+  return lines;
+}
+
+/** Every string here is already made safe and capped by the board, so it is printed as is. */
+export function renderBoard(board: ProjectBoard): string[] {
+  const lines = [
+    `Project board, ${board.generated_at.slice(0, 10)}. Stale means no activity for more than ${board.stale_days} ${board.stale_days === 1 ? 'day' : 'days'}.`,
+    `Done rule: ${board.done_rule}`,
+  ];
+  lines.push(...sectionLines('Stale', board.stale, (r) => `${r.project}  ${r.activity_source} ${r.last_activity.slice(0, 10)}  ${r.status}`));
+  lines.push(...sectionLines('Dated items', board.dated, (r) => `${r.date}  ${r.project}  ${r.line}`));
+  if ('unavailable' in board.open_sessions) {
+    lines.push('', 'Open sessions (unavailable)', `  ${board.open_sessions.unavailable}`);
+  } else {
+    lines.push(...sectionLines('Open sessions', board.open_sessions, (r) => `${r.project}  ${r.host}  last read ${r.last_read_at}  session ${r.session_id.slice(0, 8)}`));
+  }
+  lines.push(...sectionLines('Drafts', board.drafts, (r) => `${r.project}  since ${r.updated_at.slice(0, 10)}`));
+  lines.push(...sectionLines('Needs repair', board.needs_repair, (r) => `${r.project}  ${r.reason === 'conflict' ? 'conflict: more than one current document' : 'unreadable: the document could not be read'}`));
+  return lines;
 }
