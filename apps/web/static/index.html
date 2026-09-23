@@ -480,6 +480,10 @@
   .projects-summary { min-height:66px; padding:15px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
   .projects-summary strong { font:500 20px/1.2 var(--serif); }
   .projects-mirror { flex-basis:100%; font-size:12px; line-height:1.4; }
+  /* 12px muted text needs 4.5:1; the base light --muted gives 3.4 on --bg, so Projects takes the darker value Memories uses. */
+  @media not (prefers-color-scheme: dark) {
+    #view-projects { --muted: #6d675c; }
+  }
   .projects-workspace { display:grid; grid-template-columns:260px minmax(0,1fr); min-height:620px; }
   .projects-rail { border-right:1px solid var(--line); padding:16px 14px 20px 0; }
   .project-choice { display:grid; grid-template-columns:minmax(0,1fr); align-content:start; gap:8px; width:100%; min-height:112px; padding:16px 12px; border:0; border-bottom:1px solid var(--line); border-radius:0; background:transparent; text-align:left; color:var(--muted); }
