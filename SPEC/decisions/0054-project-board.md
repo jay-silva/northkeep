@@ -8,7 +8,9 @@
   to its own draft, ADR 0056, so this ADR now covers D1 only; the second
   pass's required list is answered item by item under "Third draft: the
   required list, answered". D1 is inside the review gate because it
-  publishes a claims table.
+  publishes a claims table. Third draft reviewed 2026-09-23: CLEARED WITH
+  WOUNDS (five wounds, one scar); Jay chose to fix all five and narrow the
+  Done rule, amendments applied below, one recheck to follow.
 - **Deciders:** Jay (product owner), Claude Code
 - **Extends:** ADR 0039 (projects as vault memories), ADR 0048
   (revision-bound writes, Tier-1 return masking), ADR 0052 (provenance,
@@ -35,30 +37,48 @@ Pure functions in `packages/core`, over `ProjectView` and `ProjectSummary`
 data the caller already loaded. No vault handle, no clock beyond an injected
 `now`, no I/O, no model, no network.
 
-**Stale.** A project whose state is not Done and which has no write in `N`
-days measured from `updated_at`. `N` is configurable, default 14. Sorted
+**Stale.** A project whose state is not Done and whose last activity is
+more than `N` days before `now`. `N` is configurable, default 14. Sorted
 oldest first, ties by slug.
+
+Last activity is `updated_at`, with one exception. A project whose current
+head was written by `northkeep projects import` (row source
+`northkeep:project-import`, packages/core/src/vault.ts `importProject`)
+carries the import time as `updated_at`, which says nothing about when the
+work last moved. For such a head, last activity is the newest date among
+its live Log entries (import keeps them dated and sorted, ADR 0053), and
+`updated_at` only when no Log entry has a readable date. The row says which
+it used (`last write` or `last log entry`). `ProjectSummary` gains
+`imported: boolean` for this; it is derived from the head's source and is
+false after the first ordinary write, when `updated_at` becomes true again.
 
 There is no state field in the code. `ProjectSummary` (project-handoff.ts:77)
 carries `project`, `scope`, `title`, `status`, `revision`, `updated_at`,
 `conflict`, `last_writer_host` and `draft`, and none of those is a state. So
 "not Done" is a convention here: a project is Done when `firstNonEmptyLine`
 of Current Status (packages/core/src/project-doc.ts) begins,
-case-insensitively, with `Done` or `Complete`, optionally followed by
-punctuation. Anything else is not Done. The board states the rule in its own
+case-insensitively, with the bare word `Done`, `Complete` or `Completed`,
+followed by the end of the line or by `.`, `:` or `!`. So `Done.`,
+`Complete: shipped 2026-09-01` and `DONE` are Done; `Done with phase 1;
+phase 2 blocked` and `Complete rewrite in progress` are not. Anything else
+is not Done. The board states the rule in its own
 output, because a reader who assumes a state machine will be wrong. A real
 state field is a schema question and out of scope.
 
 **Dated items.** Each line of the Next Actions and Open Questions bodies
 (`ProjectView.next_actions` and `open_questions`, project-handoff.ts:63 and
 65) is first split on every line terminator (`\r\n`, `\r`, `\n`, `U+0085`,
-`U+2028`, `U+2029`) and then made safe with `tameOneLine` (Decision 3). The
-date sweep runs on the safe line, so the date the board reports is always
-in the text it shows. It matches `YYYY-MM-DD` and month-name dates (`Jan`
-to `December` with a day, with or without a year; a missing year resolves to
-the next occurrence at or after `now`). An impossible date (`2026-02-30`) is
-not a match. One row per match: date, slug, and the safe line cut to 160
-UTF-16 units. Sorted ascending by date, ties by slug then line. Dates in
+`U+2028`, `U+2029`), then made safe and cut to 160 UTF-16 units with
+`tameOneLine` (Decision 3). The date sweep runs on the cut line, so every
+date the board reports is in the text it shows before masking (Tier-1 may
+mask part of the line afterwards; Decision 3). It matches `YYYY-MM-DD` and
+month-name dates (`Jan` to `December` with a day, with or without a year).
+A month-name date without a year resolves to the occurrence nearest `now`:
+this year, last year or next year, whichever is closest, ties to the later
+one. So `Sep 20` read on 2026-09-23 is 2026-09-20 and shows as overdue at
+the top of the list, and `Jan 5` read on 2026-12-20 is 2027-01-05. An
+impossible date (`2026-02-30`) is not a match. One row per match: date,
+slug and the cut line. Sorted ascending by date, ties by slug then line. Dates in
 Decisions and Log are ignored: those are the record, not the plan.
 
 **Open sessions.** Exactly the derivation ADR 0052 Decision 2 defines and
@@ -68,17 +88,36 @@ id that read the project within the last 30 days with no successful write
 after the read, current session excluded, newest three per project. Rows
 come out of `openSessions` re-serialized, never echoed from the log.
 
-If the call log cannot be read, the section says `unavailable` with the
-reason and the other four sections still render. It never shows an empty
-list in that case, because an empty list is a claim that nothing is open.
+The call log is read with a reader that tells three cases apart:
+missing (no file yet, a fresh machine: an empty list is correct), readable,
+and unreadable (the file exists and any read error occurs, such as a
+permission error or a directory in its place). The existing
+`readCallLog` (packages/mcp-server/src/log.ts:94-100) returns `[]` for all
+of them, so the board does not use it as it stands: it gains a strict
+variant that returns `{ rows }` or `{ unavailable: reason }` and returns
+empty rows only when the file does not exist. On unavailable the section
+says `unavailable` with the reason and the other sections still render. It
+never shows an empty list in that case, because an empty list is a claim
+that nothing is open. The same reader replaces the one behind
+`project_resume`'s open sessions, whose fallback note at server.ts:723-729
+can never fire today because `readCallLog` never throws (review r3, note);
+that fix ships ahead of the board as an ADR 0052 bug fix.
 
 **Drafts.** Every project with `draft: true` (ADR 0052 Decision 4), with the
 date of its current revision.
 
-**Conflicts.** A project with more than one current document
-(`conflict: true`) has a null `updated_at` and cannot be aged or read. It is
-listed by slug under its own heading, never as stale, and it contributes
-nothing to the other sections.
+**Needs repair.** Two kinds of project cannot be aged or read, and both
+are listed by slug under this heading with a reason code, never as stale,
+contributing nothing to the other sections:
+
+- `conflict`: more than one current document (`conflict: true`, null
+  `updated_at`).
+- `unreadable`: `listProjectViews` lists it, but `getProjectView` refuses
+  its document (for example duplicate owned sections, project-handoff.ts
+  :223). A raw `remember` or a granted `memory_remember` can write such a
+  document. The board catches that refusal per project, so one bad document
+  never takes the rest of the board with it. Only `ProjectHandoffError`
+  refusals are caught this way; any other error still fails the call.
 
 ## Decision 2: Two surfaces, both read-only
 
@@ -113,7 +152,11 @@ a Decisions body, never a `content` field.
 
 Every text field in the payload, from any source, passes through
 `tameOneLine` (packages/mcp-server/src/text-safe.ts), the sanitizer ADR 0052
-closed its injection findings with. It removes (not substitutes) Unicode
+closed its injection findings with, and then has the data-fence markers
+`===BEGIN MEMORY DATA===` and `===END MEMORY DATA===` removed. No board
+output is placed inside that fence today; removing them anyway means an
+agent that pastes the board into a curator prompt cannot close the fence
+early. It removes (not substitutes) Unicode
 `Cc` and `Cf`, `U+2028` and `U+2029` and unpaired surrogates, collapses
 whitespace to one space, and cuts at a UTF-16 cap without splitting a pair.
 Caps: the status line 120, a dated line 160, a host 80. Slugs are already
@@ -132,14 +175,22 @@ project and then the newest 50 overall. With every text field capped and
 every section capped, the payload has a ceiling that holds for any number of
 projects and any document size.
 
-**The ceiling is 128 KB of JSON**, and it is a measured claim, not cap
-arithmetic: a test builds the saturating case (60 projects, every section
-over its cap, every text field at its cap in the widest UTF-8 a character
-can take after sanitizing: 3-byte CJK, and quote and backslash text that JSON
-escapes to two bytes), serializes it with Tier-1 masking off and on, and
-asserts the byte length is under the ceiling. The measured maximum is
-recorded here when D1 is built. A second test asserts a realistic
-31-project board built from the migrated vault's shape is under 8 KB.
+**The ceiling is 128 KB, measured on the MCP wire**: the UTF-8 bytes of
+the complete JSON-RPC response carrying the `project_board` result, as the
+server emits it (`ok()` pretty-prints the payload into a text content item,
+which the transport then JSON-encodes again). That is the largest
+serialization in the product; the CLI's `--json` is smaller and is held to
+the same ceiling. It is a measured claim, not cap arithmetic: a test builds
+the saturating case (at least 110 projects, so every section is over its
+cap at once: 50 stale, 50 with drafts, 50 needing repair, and dated items
+and open sessions from the stale ones; every text field at its cap in the
+widest form it can take after sanitizing: 3-byte CJK, and quote and
+backslash text that JSON escapes twice on the wire), runs it with Tier-1
+masking off and on, and asserts the wire bytes are under the ceiling. The
+review measured about 122 KB for that shape; any new per-row field has to
+pass the same test. The measured maximum is recorded here when D1 is built.
+No figure is claimed for a typical board; acceptance step 2 measures the
+real one.
 
 **Document size does not reach the payload.** The second pass found that
 `PROJECT_DOC_MAX_CHARS` is enforced only on the project tool path, so a
@@ -156,7 +207,11 @@ prerequisite of D1.
 `maskProjectPayload` like every other project tool (server.ts:132-147).
 Slugs, dates, revision ids, session ids and hosts are identifier keys and
 stay exact; the key `date` is added to `projectIdentifierKeys` for that.
-Status lines and dated lines are masked when the setting is on. The CLI
+Status lines and dated lines are masked when the setting is on. Masking runs
+after the caps, so under Tier-1 a masked field can exceed its cap (the
+review saw 120 units become 179) and a dated line can lose the date it was
+found in (two adjacent ISO dates can mask as a card number). The `date`
+field itself stays exact, and the wire ceiling is tested with masking on. The CLI
 masks the same way when `NORTHKEEP_REDACT_TIER=1` is set.
 
 ## Decision 4: The board is audited, and it is not a project read
@@ -183,12 +238,14 @@ out ("through a local MCP server").
 | Claim | Enforced by |
 |---|---|
 | The board runs no model and makes no network call | Pure functions in core with no Ollama or fetch import; test runs the board with `fetch` stubbed to throw |
-| The board writes nothing to the vault | Both entry points take a reader; test hashes the vault file before and after a CLI run and an MCP run |
+| The board writes nothing to the vault | Both entry points take a reader; test hashes a current-schema vault file before and after a CLI run and an MCP run (opening an older vault can run a schema migration, which is the open path's write, not the board's) |
 | The board never returns a whole project document | Output types carry no `content` field; test asserts a planted 16 KB document's body is absent from the payload |
-| Every text field is stripped of `Cc`, `Cf`, `U+2028`, `U+2029` and unpaired surrogates and capped | `tameOneLine` on every text field; test plants ANSI escapes, bare CR, `U+2028`, `U+0085`, a bidi override and a lone surrogate in a status and a Next Actions line, and asserts none survives in the JSON or the rendered text |
-| The payload is under 128 KB for any number of projects and any document size | Absolute row caps and field caps (Decision 3); saturating test with 60 projects, CJK and escape-heavy text, Tier-1 off and on; second test with a 60,000-character document stored through the raw memory path |
+| Every text field is stripped of `Cc`, `Cf`, `U+2028`, `U+2029`, unpaired surrogates and the data-fence markers, and capped before masking | `tameOneLine` plus fence removal on every text field; test plants ANSI escapes, bare CR, `U+2028`, `U+0085`, a bidi override, a lone surrogate and `===END MEMORY DATA===` in a status and a Next Actions line, and asserts none survives in the JSON or the rendered text |
+| The MCP response is under 128 KB on the wire for any number of projects and any document size | Absolute row caps and field caps (Decision 3); saturating test with at least 110 projects, CJK and escape-heavy text, Tier-1 off and on, measuring the JSON-RPC response bytes; second test with a 60,000-character document stored through the raw memory path |
+| One unreadable document never hides the other projects | Per-project catch of `ProjectHandoffError` (Decision 1, Needs repair); test plants a duplicate-section document through the raw memory path beside healthy projects and asserts it is listed as `unreadable` and every other section still renders |
+| An imported project is aged from its newest Log date, not the import time | Decision 1, Stale; test imports a project whose newest Log entry is 40 days old and asserts it is stale at the default window with `last log entry` |
 | A connection sees only projects in its grant, in every section | `allowedScopes` on both core reads; open sessions only for granted scopes; test with a narrowed grant and a call-log row about an ungranted project |
-| An unreadable call log never shows as "no open sessions" | Decision 1; test with an unreadable log asserts `unavailable` and the other sections present |
+| An unreadable call log never shows as "no open sessions", and a missing one shows as none | Strict reader (Decision 1); tests with a real `chmod 000` file and with a directory at the log path assert `unavailable` and the other sections present; a test with no log file asserts an empty list; the same tests run against `project_resume` |
 | A board call is logged and opens no session | Decision 4; test calls `project_board`, asserts one call-log row with `disclosed_scopes`, and asserts `openSessions` is unchanged |
 | `project_board` output respects Tier-1 masking | `maskProjectPayload`; seeded-secret test over every text field, and identifiers asserted exact |
 
@@ -206,14 +263,23 @@ out ("through a local MCP server").
 
 ## Residual (documented, accepted)
 
-- **"Done" is a text convention.** A status that reads "Finished the
-  migration" is not Done to the board. The output names the rule.
+- **"Done" is a text convention, wrong in both directions.** "Finished the
+  migration" is not Done to the board, and "Done." on a project that
+  reopened without its status being rewritten is. The rule is narrow on
+  purpose (bare word, then end or punctuation) so ordinary sentences that
+  begin with "Done with" or "Complete rewrite" stay active. The output
+  names the rule.
 - **Open sessions are per machine and per MCP path.** The call log is local;
   a session from claude.ai through the connector is invisible to the board.
 - **The caps can hide work.** Past 50 rows a section shows the first 50 in
   its sort order and states the total.
 - **One stale window for every project** until `--stale-days` is passed.
-- **"Next Tuesday" and "Q3" are not dates** to the sweep.
+- **"Next Tuesday" and "Q3" are not dates** to the sweep, and a month-name
+  date without a year more than six months from `now` resolves to the
+  nearer year, which can be the wrong one.
+- **Imported projects are aged from their Log.** An imported project whose
+  Log has no readable date is aged from the import, so it cannot go stale
+  for `N` days after the import.
 - **A large document costs time, not payload.** Until ADR 0056's
   prerequisite lands, a document stored past the cap through the raw memory
   path is read in full to find its dates.
@@ -227,8 +293,10 @@ build; the steps are:
 1. **The board, default.** Import the command-repo projects into the
    throwaway vault (ADR 0053), run `northkeep projects board`: five sections,
    the Done rule stated, no model started.
-2. **Size.** `northkeep projects board --json | wc -c`: a few KB.
-3. **Stale window.** `--stale-days 1` lists nearly every project;
+2. **Size.** `northkeep projects board --json | wc -c`: record the figure;
+   it must be under the 128 KB ceiling.
+3. **Stale window.** `--stale-days 1` lists nearly every imported project
+   (their Log dates are older than a day) with `last log entry`;
    `--stale-days 3650` lists none.
 4. **Zero writes.** Hash the vault file, run the board twice, hash again:
    identical.
@@ -242,6 +310,13 @@ build; the steps are:
    it leaves.
 8. **Hostile text.** Put an ANSI color escape and a `U+2028` into a Current
    Status: the board's line shows neither and the terminal is not recolored.
+9. **Needs repair.** Store a document with two `## Current Status` headings
+   into a new project scope with `northkeep remember --scope project:broken
+   --type working`: the board lists `broken` as `unreadable` and every other
+   section still renders.
+10. **Month dates.** Add `- Sep 20 file the renewal` (with today's month and
+    a day three days ago) to a Next Actions: it appears at the top of Dated
+    items with this year's date.
 
 ## Third draft: the required list, answered
 
@@ -357,3 +432,42 @@ saturating fixture, never from cap arithmetic.
 
 **Residual.** Real model behaviour and the pair-explosion bound, unreachable
 until D2 exists.
+
+## Adversarial review (2026-09-23, third draft, first review)
+
+Fresh-eyes review against the draft and the cited code, attacks executed
+in an isolated worktree with a throwaway home. Verdict: **CLEARED WITH
+WOUNDS**. Full verdict and scripts: `Reviews/adr-0054/r3-first-review.md`.
+
+**Held under attack.** `tameOneLine` stripped every hostile class fed to
+it; both core reads narrow to the grant; the board path leaves vault bytes
+identical; `run()` refuses on an unwritable call log and a board-shaped row
+opens no session; a 59,512-character raw document does not reach the
+payload; 250 saturated rows came to about 122 KB on the wire.
+
+**Wounds.** (1) `readCallLog` returns `[]` on every error, so `unavailable`
+was unreachable, and shipped `project_resume` has the same dead fallback.
+(2) `getProjectView` refuses a duplicate-section document that
+`listProjectViews` lists as healthy, which would refuse the whole board.
+(3) Import stamps `updated_at`, so imported projects could not go stale and
+acceptance step 3 failed after step 1. (4) A yearless month date resolved to
+the next occurrence, so an overdue item jumped a year ahead. (5) The move to
+ADR 0056 dropped D2's no-write claim, its does-not-touch boundary, two
+acceptance steps and two non-goals.
+
+**Scar tissue.** The Done rule counted "Done with phase 1" and "Complete
+rewrite in progress" as Done.
+
+**Amendments (Jay, 2026-09-23: "fix narrow").** (1) A strict call-log
+reader separating missing, readable and unreadable; the same reader fixes
+`project_resume`, shipped first. (2) A Needs repair section with
+`conflict` and `unreadable`, caught per project. (3) Imported heads are aged
+from their newest Log date, via `ProjectSummary.imported`. (4) Yearless
+dates resolve to the nearest occurrence. (5) The dropped items restored to
+ADR 0056. Scar: the Done rule narrowed to the bare word followed by end or
+`.`, `:`, `!`, with both directions recorded as residual. Notes taken: fence
+markers removed from board text; the ceiling defined on the MCP wire with a
+110-project fixture; the 8 KB figure dropped; masking-after-caps and the
+current-schema condition on the zero-write test stated; the sweep runs on
+the cut line.
+
