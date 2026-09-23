@@ -193,9 +193,13 @@ backslash text that JSON escapes twice on the wire), runs it with Tier-1
 masking off and on, and asserts the wire bytes are under the ceiling. The
 recheck measured 125,857 bytes for that shape with the fields this draft
 defines, so the margin is about 5 KB and any new per-row field has to pass
-the same test. The measured maximum is recorded here when D1 is built.
-No figure is claimed for a typical board; acceptance step 2 measures the
-real one.
+the same test. **Measured at build (2026-09-23): 116,690 bytes**, the
+maximum over the saturating fixture's two variants (every field in `"` and
+`\`, the 4-byte form, Tier-1 off and on alike: 116,690; the mixed variant
+with CJK and email text that grows under masking: 108,556 off, 107,906 on),
+in `packages/mcp-server/test/project-board.test.ts`. The CLI's `--json` for
+the widest variant measured 77,333 bytes. No figure is claimed for a typical
+board; acceptance step 2 measures the real one.
 
 **Document size does not reach the payload.** The second pass found that
 `PROJECT_DOC_MAX_CHARS` is enforced only on the project tool path, so a

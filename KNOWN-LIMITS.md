@@ -54,6 +54,37 @@ every milestone; if a limit is removed, say when and how.*
   write, so the provenance block is removed rather than copied. That
   revision has no writer until the next write through the project tools.
 
+## Project board (ADR 0054), current
+
+- **"Done" is a text convention, and it is wrong in both directions.** There
+  is no state field. A project is Done to the board only when the first line
+  of its Current Status begins with the bare word Done, Complete or
+  Completed, followed by the end of the line or by a period, colon or
+  exclamation mark. "Finished the migration" is not Done, and "Done." on a
+  project that reopened without its status being rewritten is. The board
+  prints the rule with every result.
+- **Open sessions are per machine and per MCP path.** They come from this
+  Mac's call log, so a session through the hosted claude.ai connector, or on
+  another Mac, is invisible to the board. Reading the board is logged but
+  opens no session.
+- **The caps can hide work.** Each section shows at most 50 rows in its sort
+  order and states its total, so past 50 the rest are counted, not listed.
+- **One stale window for every project**, 14 days unless `--stale-days` (or
+  the tool's `stale_days`) says otherwise.
+- **The date sweep is literal.** "Next Tuesday" and "Q3" are not dates. A
+  month-name date without a year resolves to the occurrence nearest today,
+  so one more than six months away can land in the wrong year. Only dates in
+  the first 160 characters of a line are seen, because the sweep runs on the
+  line as shown.
+- **Imported projects are aged from their Log.** An imported project whose
+  live Log has no readable date is aged from the import itself, so it cannot
+  go stale until the window has passed since the import. The Log is only as
+  good as the import: an undated entry keeps source order, and a Log written
+  as headings reads as empty.
+- **A large document costs time, not payload.** A document stored past the
+  size cap through the raw memory path is read in full to find its dates;
+  every field the board returns is still cut to its cap.
+
 ## Local git mirror (ADR 0053), current
 
 - **The mirror is only as current as the last export.** It changes when you
