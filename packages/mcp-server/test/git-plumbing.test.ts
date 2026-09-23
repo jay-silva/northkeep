@@ -206,6 +206,17 @@ describe('preflightRepository', () => {
     expect(again.info.head).toBe(res.commit);
   });
 
+  it('treats a folder holding only Finder\'s .DS_Store file as fresh and never commits it', async () => {
+    const repo = initRepo(lab);
+    fs.writeFileSync(path.join(repo, '.DS_Store'), 'finder');
+    const { res } = await firstExport(repo);
+    expect(res.status).toBe('committed');
+    expect(fx(lab, repo, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n')).not.toContain('.DS_Store');
+    const dirRepo = initRepo(lab, 'dsdir');
+    fs.mkdirSync(path.join(dirRepo, '.DS_Store'));
+    await expectRefusal(preflight(dirRepo), 'not_owned');
+  });
+
   it('refuses a missing folder, a non-repository and a subfolder of a work tree', async () => {
     await expectRefusal(preflight(path.join(lab.root, 'absent')), 'repo_missing');
     const plain = path.join(lab.root, 'plain');
@@ -564,11 +575,13 @@ describe('plumbingCommit', () => {
 });
 
 describe('requireCommitIdentity and readRemotes', () => {
-  it('refuses a repository with no identity, naming the two git config commands', async () => {
+  it('refuses a repository with no identity, naming the two commands to run inside the mirror', async () => {
     const repo = initRepo(lab, 'noid', false);
-    const err = await expectRefusal(requireCommitIdentity(ctxFor(lab, repo)), 'no_identity');
-    expect(err.message).toContain('git config user.name');
-    expect(err.message).toContain('git config user.email');
+    const ctx = ctxFor(lab, repo);
+    const err = await expectRefusal(requireCommitIdentity(ctx), 'no_identity');
+    expect(err.message).toContain('ignores your global git settings');
+    expect(err.message).toContain(`git -C '${ctx.repo}' config user.name`);
+    expect(err.message).toContain(`git -C '${ctx.repo}' config user.email`);
   });
 
   it('lists remotes read-only and drops credentials from an https URL', async () => {

@@ -385,6 +385,19 @@ async function verifyCmd(options: ExportCmdOptions, deps: MirrorDeps, out: (l: s
   return res.ok ? 0 : 1;
 }
 
+/** A stored ISO stamp in local time, e.g. "2026-09-23 12:00 EDT"; the raw text if it does not parse. */
+export function localStamp(iso: string, timeZone?: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      timeZone, year: 'numeric', month: '2-digit', day: '2-digit',
+      hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZoneName: 'short',
+    }).formatToParts(d).map((p) => [p.type, p.value]),
+  );
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute} ${parts.timeZoneName}`;
+}
+
 async function statusCmd(options: ExportCmdOptions, deps: MirrorDeps, out: (l: string) => void): Promise<number> {
   const settings = readExportSettings(deps.home);
   if (settings === null) {
@@ -412,12 +425,14 @@ async function statusCmd(options: ExportCmdOptions, deps: MirrorDeps, out: (l: s
   const line = summarizeMirror(state ?? {}, summaries, new Date());
   out(`Mirror folder: ${settings.repo}`);
   out(line.charAt(0).toUpperCase() + line.slice(1));
-  out(`Last successful export: ${state?.last_success ? `${state.last_success.at}, commit ${state.last_success.commit}` : 'never'}`);
+  out(`Last successful export: ${state?.last_success ? `${localStamp(state.last_success.at)}, commit ${state.last_success.commit}` : 'never'}`);
   out(`Projects changed since: ${changed.length === 0 ? 'none' : changed.join(', ')}`);
   if (!state || state.refused.length === 0) out('Refused paths: none');
   else for (const r of state.refused) out(`Refused path: ${r.path}: ${refusalText(r.reason)}`);
   const failure = state?.last_failure;
-  out(failure ? `Last failure: ${failure.at}, ${failure.code}${FAILURE_TEXT[failure.code] ? ` (${FAILURE_TEXT[failure.code]})` : ''}` : 'Last failure: none');
+  // The record keeps the last failure after later successes; say so instead of implying it is current.
+  const resolved = failure && state?.last_success && Date.parse(state.last_success.at) > Date.parse(failure.at);
+  out(failure ? `Last failure: ${localStamp(failure.at)}, ${failure.code}${FAILURE_TEXT[failure.code] ? ` (${FAILURE_TEXT[failure.code]})` : ''}${resolved ? '. A later export succeeded' : ''}` : 'Last failure: none');
   if (remoteError !== null) out(`Remotes: could not be read. ${sentence(remoteError)}`);
   else if (!remotes || remotes.length === 0) out('Remotes: none');
   else for (const r of remotes) out(`Remote ${r.name}: ${r.url}`);
@@ -476,23 +491,26 @@ async function scheduleCmd(value: string, options: ExportCmdOptions, deps: Mirro
 
 const KNOWN_SECTIONS = new Set<string>([...PROJECT_SECTION_HEADINGS, 'Open Questions', 'Files']);
 
-function planLine(p: ImportFilePlan): string {
+/** The summary for the file's own line, then one indented line per list, so long lists stay readable. */
+function planLines(p: ImportFilePlan): { summary: string; details: string[] } {
   const bytes = Buffer.byteLength(p.document, 'utf8').toLocaleString('en-US');
-  const parts = [
+  const summary = [
     `${bytes} bytes`,
     plural(p.archives.length, 'log archive'),
     p.overflow_parts.length === 0 ? 'no overflow' : plural(p.overflow_parts.length, 'overflow part'),
-  ];
-  for (const s of p.sections) if (s.from !== s.to) parts.push(`${s.from} stored as ${s.to}`);
+  ].join(', ');
+  const details: string[] = [];
+  const renamed = p.sections.filter((s) => s.from !== s.to).map((s) => `${s.from} stored as ${s.to}`);
+  if (renamed.length > 0) details.push(`renamed: ${renamed.join(', ')}`);
   // Unknown headings are shown so a heading split out of a code fence is visible before --write.
   const docLines = p.document.split('\n');
   const other = p.sections.filter(
     (s, i) => s.from === s.to && !KNOWN_SECTIONS.has(s.to) && !(i === 0 && docLines.includes(`# ${s.from}`)),
   );
-  if (other.length > 0) parts.push(`other sections: ${other.map((s) => s.from).join(', ')}`);
-  if (p.overflow_sections.length > 0) parts.push(`moved to overflow: ${p.overflow_sections.join(', ')}`);
-  if (p.log_files.length > 0) parts.push(`log files: ${p.log_files.join(', ')}`);
-  return parts.join(', ');
+  if (other.length > 0) details.push(`other sections: ${other.map((s) => s.from).join(', ')}`);
+  if (p.overflow_sections.length > 0) details.push(`moved to overflow: ${p.overflow_sections.join(', ')}`);
+  if (p.log_files.length > 0) details.push(`log files: ${p.log_files.join(', ')}`);
+  return { summary, details };
 }
 
 export async function projectsImportCmd(
@@ -532,7 +550,11 @@ export async function projectsImportCmd(
     if (f.status === 'skipped') out(`Skip ${f.name}: ${sentence(f.reason ?? 'not importable')}`);
     else if (f.status === 'refused') out(`Refused ${f.name}${f.slug ? ` (${f.slug})` : ''}: ${sentence(f.reason ?? 'import failed')}`);
     else if (f.status === 'exists') out(`Exists ${f.name} (${f.slug}): ${sentence(f.reason ?? 'the vault already has this project')}`);
-    else out(`${f.status === 'imported' ? 'Imported' : 'Would import'} ${f.name} as ${f.slug}: ${plan ? planLine(plan) : ''}`);
+    else {
+      const lines = plan ? planLines(plan) : { summary: '', details: [] };
+      out(`${f.status === 'imported' ? 'Imported' : 'Would import'} ${f.name} as ${f.slug}: ${lines.summary}`);
+      for (const d of lines.details) out(`  ${d}`);
+    }
   }
   const skipped = res.files.filter((f) => f.status === 'skipped').length;
   if (!write) {
