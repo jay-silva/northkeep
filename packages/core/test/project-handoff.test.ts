@@ -34,6 +34,13 @@ describe('project handoff core',()=>{
     expect(()=>v.checkpointProject({...request,status:'Changed.'})).toThrowError(expect.objectContaining({code:'operation_conflict'}));v.close();
   });
 
+  it('returns the current view without prior revision text from checkpoint, replay and stale refusals',()=>{
+    const v=vault();const r0=seed(v);const r1=v.updateProject({project:'demo',expected_revision:r0.revision,status:'Second.',log_entry:'Edited.'});
+    const first=checkpoint(v,r1.revision);expect(first.current.history).toEqual([]);expect(first.current.archives).toEqual([]);expect(first.current.revisions.length).toBeGreaterThan(0);
+    expect(checkpoint(v,r1.revision).current.history).toEqual([]);
+    try{checkpoint(v,r0.revision,{operation_id:'22222222-2222-4222-8222-222222222222'});throw new Error('expected stale');}catch(e){expect(e).toBeInstanceOf(ProjectHandoffError);expect((e as ProjectHandoffError&{current?:{history:unknown[]}}).current?.history).toEqual([]);}
+    v.close();
+  });
   it('rejects a hash-valid receipt result whose content does not match the bound request',()=>{
     const v=vault();const base=seed(v);const request={vault_id:v.getVaultId(),project:'demo',mode:'wrap' as const,operation_id:OP,expected_revision:base.revision,status:'Done.',completed:'Finished.',next_actions:'Follow up.'};
     const applied=v.checkpointProject(request);const entry=v.list({scope:'project:demo',includeSuperseded:true}).find((x)=>x.id===applied.receipt.result_revision)!;
