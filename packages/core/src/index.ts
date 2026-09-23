@@ -4,6 +4,7 @@ export * from './consolidation.js';
 export * from './project-handoff.js';
 export * from './project-export.js';
 export * from './project-import.js';
+export { tameOneLine } from './text-safe.js';
 export {
   KDF_INTERACTIVE,
   KDF_MODERATE,
