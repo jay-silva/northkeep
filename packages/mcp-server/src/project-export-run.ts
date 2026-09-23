@@ -12,6 +12,7 @@ import {
   listProjectViews,
   parseMirrorHeader,
   planImport,
+  projectInUseMessage,
   projectScopeInUse,
   renderIndexFile,
   renderLogFile,
@@ -145,28 +146,100 @@ function ownerDead(owner: LockOwner): boolean {
   }
 }
 
-/**
- * Compare-and-steal under an O_EXCL guard: stealers run one at a time, and a
- * dead lock can only be removed by a stealer, so re-reading it under the
- * guard proves the rename moves exactly the dead bytes.
- */
-function stealDeadLock(lockPath: string, seen: Buffer, token: string): 'retry' | 'busy' | 'mismatch' | 'guard_dead' {
-  const guardPath = `${lockPath}.steal`;
-  const { O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW } = fs.constants;
+/** A guard this old with no readable owner was left by a crash in the pre-link layout, or by a hand. */
+const GUARD_UNOWNED_STALE_MS = 5_000;
+const GUARD_JUNK = /\.(?:steal\.tmp|stale)-(\d+)-[0-9a-f]+$/;
+
+/** Temps and graves are named by pid; a dead pid's are left by a killed run and go. */
+function sweepStealJunk(lockPath: string): void {
+  const dir = path.dirname(lockPath);
+  const base = path.basename(lockPath);
+  let names: string[];
   try {
-    const fd = fs.openSync(guardPath, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
-    try {
-      fs.writeSync(fd, token);
-    } finally {
-      fs.closeSync(fd);
-    }
+    names = fs.readdirSync(dir);
+  } catch {
+    return;
+  }
+  for (const n of names) {
+    if (!n.startsWith(base)) continue;
+    const m = GUARD_JUNK.exec(n);
+    if (m && ownerDead({ pid: Number(m[1]), startedAt: null })) fs.rmSync(path.join(dir, n), { force: true });
+  }
+}
+
+/**
+ * Creates the guard complete: the token is written to a temp first, then
+ * linked into place, which fails if a guard exists. A reader never sees a
+ * partial guard, so an empty one is never a live stealer mid-write.
+ */
+function createGuard(guardPath: string, token: string): boolean {
+  const { O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW } = fs.constants;
+  const tmp = `${guardPath}.tmp-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  const fd = fs.openSync(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
+  try {
+    fs.writeSync(fd, token);
+  } finally {
+    fs.closeSync(fd);
+  }
+  try {
+    fs.linkSync(tmp, guardPath);
+    return true;
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    return false;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
+/**
+ * Compare-and-remove of a stale guard: only the exact bytes judged stale are
+ * unlinked. A fresh guard moved by mistake is linked back, never renamed over
+ * a newer one.
+ */
+function removeStaleGuard(guardPath: string, seen: Buffer): void {
+  const grave = `${guardPath.slice(0, -'.steal'.length)}.stale-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+  try {
+    fs.renameSync(guardPath, grave);
+  } catch {
+    return;
+  }
+  const moved = readLockBytes(grave);
+  if (!(Buffer.isBuffer(moved) && moved.equals(seen))) {
+    try {
+      fs.linkSync(grave, guardPath);
+    } catch {
+      // A newer guard is in place; the lock re-check before update-ref still covers its owner.
+    }
+  }
+  fs.rmSync(grave, { force: true });
+}
+
+function guardStale(guardPath: string, g: Buffer): boolean {
+  const owner = lockOwner(g);
+  if (owner !== null) return ownerDead(owner);
+  try {
+    return Date.now() - fs.lstatSync(guardPath).mtimeMs > GUARD_UNOWNED_STALE_MS;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Compare-and-steal under a linked guard: stealers run one at a time, so
+ * re-reading the lock under it proves the rename moves only the dead bytes.
+ * A stale guard is removed and retried, so a killed stealer never wedges.
+ */
+function stealDeadLock(lockPath: string, seen: Buffer, token: string): 'retry' | 'busy' | 'guard_unreadable' | 'mismatch' {
+  const guardPath = `${lockPath}.steal`;
+  sweepStealJunk(lockPath);
+  if (!createGuard(guardPath, token)) {
     const g = readLockBytes(guardPath);
     if (g === 'gone') return 'retry';
-    // An empty or unparseable guard is a crash between create and write; this branch only refuses.
-    const gOwner = g === 'unreadable' ? null : lockOwner(g);
-    return gOwner === null || ownerDead(gOwner) ? 'guard_dead' : 'busy';
+    if (g === 'unreadable') return 'guard_unreadable';
+    if (!guardStale(guardPath, g)) return 'busy';
+    removeStaleGuard(guardPath, g);
+    return 'retry';
   }
   try {
     // Read before the guard was ours: another stealer may have freed it and a contender taken it since.
@@ -220,6 +293,8 @@ export async function acquireExportLock(ctx: GitContext, opts: LockOptions = {})
     const seen = readLockBytes(lockPath);
     if (seen === 'gone') continue;
     const owner = seen === 'unreadable' ? null : lockOwner(seen);
+    // Why the lock is still not ours, so the refusal at the deadline names the real obstacle.
+    let blocker: 'owner' | 'stealer' | 'guard_unreadable' = 'owner';
     if (owner !== null && seen !== 'unreadable' && ownerDead(owner)) {
       const stolen = stealDeadLock(lockPath, seen, token);
       if (stolen === 'retry') continue;
@@ -227,14 +302,18 @@ export async function acquireExportLock(ctx: GitContext, opts: LockOptions = {})
         // Put nothing back: restoring could clobber a newer lock, and its owner re-checks before committing.
         throw new ExportRefusal('export_busy', 'Another NorthKeep export took the export lock at the same moment; try again shortly');
       }
-      if (stolen === 'guard_dead') {
-        throw new ExportRefusal(
-          'lock_unreadable',
-          "A stale northkeep-export.lock.steal is in the repository's .git folder; once no NorthKeep export is running, remove it and try again",
-        );
-      }
+      blocker = stolen === 'busy' ? 'stealer' : 'guard_unreadable';
     }
     if (Date.now() >= deadline) {
+      if (blocker === 'stealer') {
+        throw new ExportRefusal('export_busy', 'Another NorthKeep export is clearing a dead export lock on this repository; try again shortly');
+      }
+      if (blocker === 'guard_unreadable') {
+        throw new ExportRefusal(
+          'lock_unreadable',
+          "The export lock's northkeep-export.lock.steal file is unreadable; once no NorthKeep export is running, remove it from the repository's .git folder and try again",
+        );
+      }
       if (owner === null) {
         throw new ExportRefusal(
           'lock_unreadable',
@@ -381,6 +460,15 @@ export function statePath(home: string, repoReal: string, mirrorId: string | nul
   return path.join(exportDir(home), `${exportFileStem(repoReal, mirrorId)}.state.json`);
 }
 
+/**
+ * A run refused before it held the export lock records here, never in the
+ * state file: the lock holder rewrites state from a copy read earlier, so a
+ * second writer would either lose the refusal or drop the holder's nk_commits.
+ */
+export function refusalPath(home: string, repoReal: string, mirrorId: string | null = null): string {
+  return path.join(exportDir(home), `${exportFileStem(repoReal, mirrorId)}.refused.json`);
+}
+
 function isStr(v: unknown): v is string {
   return typeof v === 'string';
 }
@@ -413,13 +501,19 @@ export function readExportState(home: string, repoReal: string, vaultId: string,
   if (!Array.isArray(commits) || !commits.every((c) => isStr(c) && OID.test(c))) return null;
   const fp = v.vault_fingerprint ?? null;
   if (fp !== null && !(isStr(fp) && /^[0-9a-f]{64}$/.test(fp))) return null;
+  const r = readJson(refusalPath(home, repoReal, mirrorId));
+  const late =
+    isRecord(r) && r.version === 1 && r.vault_id === vaultId && isStr(r.at) && isStr(r.code) && (r.by === 'cli' || r.by === 'schedule') &&
+    (attempt === null || r.at > attempt.at)
+      ? { at: r.at, by: r.by as 'cli' | 'schedule', code: r.code }
+      : null;
   return {
     version: 1,
     repo: v.repo,
     vault_id: vaultId,
     last_success: success,
-    last_attempt: attempt,
-    last_failure: failure,
+    last_attempt: late ? { at: late.at, by: late.by } : attempt,
+    last_failure: late ? { at: late.at, code: late.code } : failure,
     refused: refused as ExportState['refused'],
     projects: projects as ExportState['projects'],
     nk_commits: commits as string[],
@@ -690,6 +784,26 @@ function recordFailure(
   writeExportState(home, state, lock);
 }
 
+/**
+ * Records a refusal from before the lock was taken. Only into a mirror whose
+ * state this vault file already owns, by header fingerprint, since the vault
+ * is not opened; a unique temp and rename, so peers never interleave.
+ */
+function recordAcquireRefusal(home: string, repo: string, vaultPath: string, by: 'cli' | 'schedule', code: string, at: string): void {
+  const mirrorId = readMarkerMirrorId(repo);
+  const raw = readJson(statePath(home, repo, mirrorId));
+  const fp = vaultFingerprint(vaultPath);
+  if (!isRecord(raw) || !isStr(raw.vault_id) || fp === null || raw.vault_fingerprint !== fp) return;
+  const file = refusalPath(home, repo, mirrorId);
+  const tmp = `${file}.northkeep-tmp-${crypto.randomBytes(8).toString('hex')}`;
+  try {
+    fs.writeFileSync(tmp, `${JSON.stringify({ version: 1, vault_id: raw.vault_id, vault_fingerprint: fp, at, by, code })}\n`, { mode: 0o600, flag: 'wx' });
+    fs.renameSync(tmp, file);
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+}
+
 /** Refusals that end the whole run; everything else refuses one target. */
 const RUN_FATAL = new Set(['lock_not_held', 'lock_lost', 'tree_check_failed']);
 
@@ -909,9 +1023,15 @@ export async function exportProjects(opts: ExportRunOptions): Promise<ExportRunR
   let lock: ExportLock;
   try {
     lock = await acquireExportLock(ctx, { waitMs: opts.lockWaitMs });
-  } catch (err) {
-    if (err instanceof GitCommandError) {
-      throw new ExportRefusal('not_work_tree', 'The mirror folder is not a git working tree; run git init in an empty folder first');
+  } catch (caught) {
+    const err =
+      caught instanceof GitCommandError
+        ? new ExportRefusal('not_work_tree', 'The mirror folder is not a git working tree; run git init in an empty folder first')
+        : caught;
+    try {
+      recordAcquireRefusal(opts.home, repo, opts.vaultPath, opts.by, failureCode(err), now().toISOString());
+    } catch {
+      // the refusal itself is the one worth reporting
     }
     throw err;
   }
@@ -1152,7 +1272,7 @@ export async function importProjects(
     plan.projects.forEach((p, i) => {
       reports.push(
         taken[i]
-          ? { name: p.name, slug: p.slug, status: 'exists', reason: `Project ${p.slug} already has entries in this vault; delete the project from the Projects page first.` }
+          ? { name: p.name, slug: p.slug, status: 'exists', reason: projectInUseMessage(p.slug) }
           : { name: p.name, slug: p.slug, status: 'would import', reason: null },
       );
     });

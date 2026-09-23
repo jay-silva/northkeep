@@ -66,9 +66,11 @@ import {
   shareServerCmd,
   shareStatusCmd,
   shareSyncCmd,
+  type WithVault,
 } from './shareCmd.js';
 import {
   projectsCompactCmd,
+  projectsDeleteCmd,
   projectsExportCmd,
   projectsImportCmd,
   projectsUpdateCmd,
@@ -953,6 +955,29 @@ projects
     const { deps, opened } = mirrorDeps();
     try {
       process.exitCode = await projectsExportCmd(options, deps);
+    } finally {
+      opened()?.dispose();
+      opened()?.keyForPush?.fill(0);
+    }
+  });
+
+projects
+  .command('delete')
+  .description('Forget every entry in a project: its document, log archives and other notes in its scope')
+  .argument('<slug>', 'project slug')
+  .option('--yes', 'delete without asking (scripting)')
+  .action(async (slug: string, options: { yes?: boolean }) => {
+    const yes = options.yes === true || process.env.NORTHKEEP_ASSUME_YES === '1';
+    // One key for the count and the delete, so the passphrase is asked once.
+    const { deps, opened } = mirrorDeps();
+    const vaultPath = vaultPathOpt();
+    const once: WithVault = async (fn) => (await deps.vaultRunner())(fn);
+    try {
+      const { saved } = await trackSaves(vaultPath, () =>
+        projectsDeleteCmd(slug, { yes }, { withVault: once, fail, ask: async (q) => (process.stdin.isTTY ? promptLine(q) : null) }),
+      );
+      // ADR 0044: a command that saved pushes once, when its key came without a prompt.
+      await autoPushAfterWrite({ vaultPath, masterKey: opened()?.keyForPush ?? null, saved });
     } finally {
       opened()?.dispose();
       opened()?.keyForPush?.fill(0);

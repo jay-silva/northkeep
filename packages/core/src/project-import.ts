@@ -78,6 +78,11 @@ export interface ImportPlan {
 }
 
 /** The connector's content cap for one push (MAX_TOTAL_CONTENT_BYTES), shown beside total_bytes in a dry run. */
+/** The refusal for a slug with entries left, even archives only; the command it names is the way out. */
+export function projectInUseMessage(slug: string): string {
+  return `Project ${slug} already has entries in this vault. Remove them with \`northkeep projects delete ${slug}\` first, then import again.`;
+}
+
 export const PROJECT_IMPORT_PUSH_MAX_BYTES = 4 * 1024 * 1024;
 /** Every imported row stays at or under this, below the connector's 65,536-byte row cap. */
 export const PROJECT_IMPORT_ROW_MAX_BYTES = 60000;

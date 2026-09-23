@@ -159,21 +159,39 @@ console.log(JSON.stringify({ t0, t1, held }));`;
     expect(lost).toBe(0);
   }, 90_000);
 
-  it('refuses, and removes nothing, when a dead stealer left its steal guard behind', async () => {
+  it('waits for a guard a live stealer is still writing, then takes the lock', async () => {
+    const p = path.join(repo, '.git', EXPORT_LOCK_NAME);
+    fs.writeFileSync(p, `${JSON.stringify({ pid: deadPid(), started_at: 'x', nonce: 'dead' })}\n`);
+    fs.writeFileSync(`${p}.steal`, '');
+    const live = `${JSON.stringify({ pid: process.ppid, started_at: new Date().toISOString(), nonce: 'live' })}\n`;
+    setTimeout(() => fs.writeFileSync(`${p}.steal`, live), 300);
+    setTimeout(() => fs.rmSync(`${p}.steal`, { force: true }), 600);
+    const l = await acquireExportLock(ctxFor(lab, repo), { waitMs: 4000, pollMs: 20 });
+    lock = l;
+    expect(l.held()).toBe(true);
+  });
+
+  it('refuses accurately while a live stealer holds the guard, and touches neither file', async () => {
+    const p = path.join(repo, '.git', EXPORT_LOCK_NAME);
+    const dead = `${JSON.stringify({ pid: deadPid(), started_at: 'x', nonce: 'dead' })}\n`;
+    const live = `${JSON.stringify({ pid: process.ppid, started_at: new Date().toISOString(), nonce: 'live' })}\n`;
+    fs.writeFileSync(p, dead);
+    fs.writeFileSync(`${p}.steal`, live);
+    const err = await acquireExportLock(ctxFor(lab, repo), { waitMs: 200, pollMs: 20 }).catch((e: unknown) => e);
+    expect((err as ExportRefusal).code).toBe('export_busy');
+    expect((err as ExportRefusal).message).toBe('Another NorthKeep export is clearing a dead export lock on this repository; try again shortly');
+    expect(fs.readFileSync(p, 'utf8')).toBe(dead);
+    expect(fs.readFileSync(`${p}.steal`, 'utf8')).toBe(live);
+  });
+
+  it('never removes a fresh guard with no readable owner before it is a few seconds old', async () => {
     const p = path.join(repo, '.git', EXPORT_LOCK_NAME);
     const dead = `${JSON.stringify({ pid: deadPid(), started_at: 'x', nonce: 'dead' })}\n`;
     fs.writeFileSync(p, dead);
-    fs.writeFileSync(`${p}.steal`, dead);
-    const err = await acquireExportLock(ctxFor(lab, repo), { waitMs: 100, pollMs: 20 }).catch((e: unknown) => e);
-    expect((err as ExportRefusal).code).toBe('lock_unreadable');
-    expect((err as ExportRefusal).message).toContain('northkeep-export.lock.steal');
-    expect(fs.readFileSync(p, 'utf8')).toBe(dead);
-    expect(fs.existsSync(`${p}.steal`)).toBe(true);
-    // A crash between creating and writing the guard leaves it empty; that is refused the same way.
     fs.writeFileSync(`${p}.steal`, '');
-    const again = await acquireExportLock(ctxFor(lab, repo), { waitMs: 100, pollMs: 20 }).catch((e: unknown) => e);
-    expect((again as ExportRefusal).code).toBe('lock_unreadable');
-    expect((again as ExportRefusal).message).toContain('northkeep-export.lock.steal');
+    const err = await acquireExportLock(ctxFor(lab, repo), { waitMs: 200, pollMs: 20 }).catch((e: unknown) => e);
+    expect((err as ExportRefusal).code).toBe('export_busy');
+    expect(fs.existsSync(`${p}.steal`)).toBe(true);
     expect(fs.readFileSync(p, 'utf8')).toBe(dead);
   });
 

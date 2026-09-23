@@ -45,7 +45,7 @@ import {
   type ProjectView,
 } from './project-handoff.js';
 import { emptyProjectDoc, formatLogArchive, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
-import { importPlanProblem, type ImportFilePlan } from './project-import.js';
+import { importPlanProblem, projectInUseMessage, type ImportFilePlan } from './project-import.js';
 import type { SqliteDb } from './sqlite-driver.js';
 import { SCHEMA_DDL } from './schema.js';
 import {
@@ -623,7 +623,7 @@ export class Vault {
     if (allowedScopes !== undefined && !allowedScopes.includes(scope)) throw new ProjectHandoffError('scope_denied', 'Project scope is outside this connection grant.');
     this.db.transaction(() => {
       if (this.projectScopeInUse(plan.slug)) {
-        throw new ProjectHandoffError('stale_project', `Project ${plan.slug} already has entries in this vault; delete the project from the Projects page first.`);
+        throw new ProjectHandoffError('stale_project', projectInUseMessage(plan.slug));
       }
       const now = new Date().toISOString();
       const insert = this.prepareEntryInsert();

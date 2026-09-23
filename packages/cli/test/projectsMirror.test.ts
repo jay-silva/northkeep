@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KDF_INTERACTIVE, Vault, deriveMasterKey, generateDeviceSecret, listProjectViews, withFileLock } from '@northkeep/core';
 import { ExportRefusal, readExportSettings, readExportState, type VaultRunner } from '@northkeep/mcp-server';
-import { describeMirrorError, projectsExportCmd, projectsImportCmd, type MirrorDeps } from '../src/projectsCmd.js';
+import { describeMirrorError, projectsDeleteCmd, projectsExportCmd, projectsImportCmd, type MirrorDeps } from '../src/projectsCmd.js';
 
 /**
  * ADR 0053 M-A1 on the CLI: export, verify, status, schedule, the launchd
@@ -368,6 +368,19 @@ describe('northkeep projects export --scheduled', () => {
   });
 });
 
+describe('northkeep projects export --scheduled, refused at the lock', () => {
+  it('records an unreadable export lock and --status shows it as the last failure', async () => {
+    expect(await exportCmd({ repo })).toBe(0);
+    fs.writeFileSync(path.join(repo, '.git', 'northkeep-export.lock'), 'not json, owner unknown\n');
+    const code = await exportCmd({ scheduled: true }, { scheduledRunner: runner, scheduledLockWaitMs: 100 });
+    expect(code).toBe(1);
+    expect(out).toEqual([]);
+    expect(err).toEqual([]);
+    expect(await exportCmd({ status: true })).toBe(0);
+    expect(out.find((l) => l.startsWith('Last failure: '))).toMatch(/^Last failure: .+, lock_unreadable \(the export lock file was unreadable; /);
+  }, 60_000);
+});
+
 describe('northkeep projects import', () => {
   /** Shaped like the command repo's projects folder: one file per project, plus a template. */
   function commandRepoCopy(): string {
@@ -412,7 +425,7 @@ describe('northkeep projects import', () => {
     expect(snapshot(path.join(root, 'cr'))).toBe(srcBefore);
 
     expect(await importCmd({ from: src, write: true })).toBe(1);
-    expect(out.find((l) => l.startsWith('Refused alpha.md (alpha): '))).toContain('Project alpha already has entries in this vault; delete the project from the Projects page first.');
+    expect(out.find((l) => l.startsWith('Refused alpha.md (alpha): '))).toContain('Project alpha already has entries in this vault. Remove them with `northkeep projects delete alpha` first, then import again.');
     expect(out.at(-1)).toBe('Imported 0 projects; 2 refused, 1 skipped.');
   });
 
@@ -425,7 +438,7 @@ describe('northkeep projects import', () => {
     const vaultBefore = fs.readFileSync(vaultPath);
     expect(await importCmd({ from: dir })).toBe(0);
     expect(out).toContain('Refused cp.md: not UTF-8; convert it first.');
-    expect(out).toContain('Exists demo.md (demo): Project demo already has entries in this vault; delete the project from the Projects page first.');
+    expect(out).toContain('Exists demo.md (demo): Project demo already has entries in this vault. Remove them with `northkeep projects delete demo` first, then import again.');
     expect(out.at(-1)).toBe('Dry run: 1 file would be imported, 1 already in the vault, 1 refused, 0 skipped. Nothing was written; add --write to import.');
     expect(fs.readFileSync(vaultPath).equals(vaultBefore)).toBe(true);
   });
@@ -444,6 +457,41 @@ describe('northkeep projects import', () => {
   it('refuses a folder that does not exist', async () => {
     expect(await importCmd({ from: path.join(root, 'nope') })).toBe(1);
     expect(err).toEqual(['✗ The import folder does not exist or is not a folder.']);
+  });
+});
+
+describe('northkeep projects delete', () => {
+  class Failed extends Error {}
+  const fail = (m: string): never => {
+    err.push(`✗ ${m}`);
+    throw new Failed(m);
+  };
+  async function del(slug: string, yes: boolean, answer: string | null): Promise<string[]> {
+    out = [];
+    err = [];
+    const asked: string[] = [];
+    await projectsDeleteCmd(slug, { yes }, { withVault: runner, fail, out: (l) => out.push(l), ask: async (q) => (asked.push(q), answer) }).catch((e: unknown) => {
+      if (!(e instanceof Failed)) throw e;
+    });
+    allPlain.push(...out, ...err, ...asked);
+    return asked;
+  }
+
+  it('asks first, keeps everything on no, and forgets every entry on yes', async () => {
+    const asked = await del('demo', false, 'n');
+    expect(asked[0]).toMatch(/^This forgets 1 entry in project demo: .* Continue\? \[y\/N\] $/);
+    expect(err).toEqual(['✗ Cancelled. Nothing was deleted.']);
+    expect(await runner((v) => listProjectViews(v).map((s) => s.project))).toEqual(['demo', 'other']);
+    await del('demo', false, 'y');
+    expect(out[0]).toBe('✓ Deleted project demo: forgot 1 entry.');
+    expect(await runner((v) => listProjectViews(v).map((s) => s.project))).toEqual(['other']);
+  });
+
+  it('refuses an invalid slug and a missing project without asking', async () => {
+    expect(await del('Not A Slug', false, 'y')).toEqual([]);
+    expect(err).toEqual(['✗ Project slug is invalid: use lowercase letters, digits and hyphens.']);
+    expect(await del('missing', false, 'y')).toEqual([]);
+    expect(err).toEqual(['✗ Project missing has no entries in this vault; nothing was deleted.']);
   });
 });
 
@@ -477,6 +525,36 @@ describe('the real CLI process', () => {
     expect(dirty.status).toBe(1);
     expect(dirty.stdout).toContain('projects/third.md: hand edit');
     expect(cli(['projects', 'export']).status).toBe(1);
+  });
+
+  it('an archives-only project blocks import until projects delete removes it (F6)', async () => {
+    const src = path.join(root, 'f6');
+    fs.mkdirSync(src);
+    const log = Array.from({ length: 15 }, (_, i) => `- 2026-08-${String(i + 1).padStart(2, '0')}: Step ${i + 1}.`).join('\n');
+    fs.writeFileSync(path.join(src, 'delta.md'), `# Delta\n\n## What & Why\n\nWhy.\n\n## Current Status\n\nOk.\n\n## Log\n\n${log}\n`);
+    expect(cli(['projects', 'import', '--from', src, '--write']).status).toBe(0);
+    const doc = await runner((v) => v.list({ scope: 'project:delta', type: 'working' })[0]!.id);
+    expect(cli(['forget', doc]).status).toBe(0);
+    expect(await runner((v) => v.list({ scope: 'project:delta' }).length)).toBeGreaterThan(0);
+
+    const refused = cli(['projects', 'import', '--from', src, '--write']);
+    expect(refused.status).toBe(1);
+    expect(refused.stdout).toContain(
+      'Refused delta.md (delta): Project delta already has entries in this vault. Remove them with `northkeep projects delete delta` first, then import again.',
+    );
+    const unasked = cli(['projects', 'delete', 'delta']);
+    expect(unasked.status).toBe(1);
+    expect(unasked.stderr).toContain('No terminal to confirm on. Add --yes to delete without asking.');
+    const deleted = cli(['projects', 'delete', 'delta', '--yes']);
+    expect(deleted.status).toBe(0);
+    expect(deleted.stdout).toMatch(/^✓ Deleted project delta: forgot \d+ (entry|entries)\.$/m);
+    expect(await runner((v) => v.list({ scope: 'project:delta' }).length)).toBe(0);
+    const again = cli(['projects', 'delete', 'delta', '--yes']);
+    expect(again.status).toBe(1);
+    expect(again.stderr).toContain('Project delta has no entries in this vault; nothing was deleted.');
+    const imported = cli(['projects', 'import', '--from', src, '--write']);
+    expect(imported.status).toBe(0);
+    expect(imported.stdout).toContain('Imported 1 project; 0 refused, 0 skipped.');
   });
 
   it('hides --scheduled and --skip-launchctl from help', () => {
