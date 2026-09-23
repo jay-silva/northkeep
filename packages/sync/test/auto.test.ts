@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Vault, deriveMasterKey, onVaultSave, KDF_INTERACTIVE } from '@northkeep/core';
-import { AutoSync, DIVERGED_MESSAGE, syncAge, type AutoSyncEvent } from '../src/auto.js';
+import { AutoSync, DIVERGED_MESSAGE, syncAge, type AutoSyncClock, type AutoSyncEvent } from '../src/auto.js';
 import { deriveSyncCreds } from '../src/creds.js';
 import { loadSyncConfig, setSyncServer } from '../src/config.js';
 import { pullVault, pushVault } from '../src/client.js';
@@ -14,6 +14,11 @@ import { pullVault, pushVault } from '../src/client.js';
  * ADR 0044 engine tests. A fake ciphertext-only server (same wire contract as
  * apps/sync-server) plus real vaults on disk. "Another device" is a second
  * NORTHKEEP_HOME that pushes straight through pushVault.
+ *
+ * Time is a ManualClock: the engine's debounce, backoff and pause windows
+ * move only when a test advances it, and every operation a timer starts has
+ * finished before the test looks. A slow server response is a parked request
+ * the test releases. No test sleeps, so machine load cannot reorder anything.
  */
 
 type Mode = 'ok' | 'subscription' | 'crash' | 'slow-blob' | 'garbage-blob' | 'slow-put' | 'slow-fail-put';
@@ -25,6 +30,8 @@ function fakeServer(): {
   mode: (m: Mode) => void;
   omitSha: (v: boolean) => void;
   conflictOnce: () => void;
+  parked: () => Promise<void>;
+  release: () => void;
 } {
   let blob: Buffer | null = null;
   let version = 0;
@@ -32,6 +39,13 @@ function fakeServer(): {
   let noSha = false;
   /** Answer exactly one PUT with a 409 at the current version, then behave. */
   let conflictNext = false;
+  /** Responses a slow mode is holding back, and waiters for the next one to be held. */
+  const held: (() => void)[] = [];
+  const parkWaiters: (() => void)[] = [];
+  const park = (respond: () => void) => {
+    held.push(respond);
+    for (const w of parkWaiters.splice(0)) w();
+  };
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
@@ -77,7 +91,7 @@ function fakeServer(): {
           res.writeHead(200, noSha ? { 'x-version': String(version) } : { 'x-version': String(version), 'x-sha256': sha(blob!) });
           res.end(blob);
         };
-        if (mode === 'slow-blob') setTimeout(send, 400);
+        if (mode === 'slow-blob') park(send);
         else send();
         return;
       }
@@ -85,7 +99,7 @@ function fakeServer(): {
         // A PUT that is parked and then fails: status and blob keep working,
         // so a write can land while a manual push is in flight and losing.
         if (mode === 'slow-fail-put') {
-          setTimeout(() => res.writeHead(500).end(), 300);
+          park(() => res.writeHead(500).end());
           return;
         }
         const base = Number(req.headers['x-base-version'] ?? '0');
@@ -106,7 +120,7 @@ function fakeServer(): {
           res.writeHead(200, { 'content-type': 'application/json' });
           res.end(JSON.stringify({ version }));
         };
-        if (mode === 'slow-put') setTimeout(accept, 400);
+        if (mode === 'slow-put') park(accept);
         else accept();
         return;
       }
@@ -126,6 +140,12 @@ function fakeServer(): {
     conflictOnce: () => {
       conflictNext = true;
     },
+    /** Resolves once a slow mode is holding a request. */
+    parked: () => (held.length > 0 ? Promise.resolve() : new Promise<void>((r) => parkWaiters.push(r))),
+    /** Sends every held response. */
+    release: () => {
+      for (const respond of held.splice(0)) respond();
+    },
   };
 }
 
@@ -133,7 +153,55 @@ function sha(buf: Buffer): string {
   return createHash('sha256').update(buf).digest('hex');
 }
 
-const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/**
+ * The engine's clock. Nothing fires until advance(), which fires each timer
+ * that falls due in time order and waits for the engine to finish the work
+ * that timer queued (real disk and HTTP) before firing the next.
+ */
+class ManualClock implements AutoSyncClock {
+  private t = Date.now();
+  private seq = 0;
+  private readonly timers = new Map<number, { at: number; fn: () => void }>();
+
+  now(): number {
+    return this.t;
+  }
+  setTimeout(fn: () => void, ms: number): number {
+    const id = ++this.seq;
+    this.timers.set(id, { at: this.t + Math.max(0, ms), fn });
+    return id;
+  }
+  clearTimeout(handle: unknown): void {
+    this.timers.delete(handle as number);
+  }
+  /** Timers still waiting to fire. */
+  pending(): number {
+    return this.timers.size;
+  }
+  /** Fires the timers due within ms without waiting for what they start (for a request the server holds). */
+  fire(ms: number): void {
+    const end = this.t + ms;
+    for (let next = this.nextDue(end); next; next = this.nextDue(end)) this.run(next);
+    this.t = end;
+  }
+  async advance(ms: number, auto: AutoSync): Promise<void> {
+    const end = this.t + ms;
+    await auto.whenIdle();
+    for (let next = this.nextDue(end); next; next = this.nextDue(end)) {
+      this.run(next);
+      await auto.whenIdle();
+    }
+    this.t = end;
+  }
+  private nextDue(end: number): [number, { at: number; fn: () => void }] | undefined {
+    return [...this.timers].filter(([, v]) => v.at <= end).sort((a, b) => a[1].at - b[1].at || a[0] - b[0])[0];
+  }
+  private run([id, timer]: [number, { at: number; fn: () => void }]): void {
+    this.timers.delete(id);
+    this.t = Math.max(this.t, timer.at);
+    timer.fn();
+  }
+}
 
 describe('AutoSync (ADR 0044)', () => {
   const passphrase = 'auto sync passphrase';
@@ -164,10 +232,19 @@ describe('AutoSync (ADR 0044)', () => {
   });
 
   const vaultPath = (home: string) => path.join(home, 'vault.nkv');
-  const keyFor = (home: string): Buffer => {
-    const header = Vault.readHeader(vaultPath(home));
-    return deriveMasterKey(passphrase, deviceSecret, header.salt, header.kdf);
+  /** Argon2 per call made each write cost tens of ms of CPU; derive once per salt, hand out copies (the engine zeroes its copy). */
+  const derived = new Map<string, Buffer>();
+  const keyAt = (vp: string): Buffer => {
+    const header = Vault.readHeader(vp);
+    const id = `${Buffer.from(header.salt).toString('hex')} ${JSON.stringify(header.kdf)}`;
+    let key = derived.get(id);
+    if (!key) {
+      key = deriveMasterKey(passphrase, deviceSecret, header.salt, header.kdf);
+      derived.set(id, Buffer.from(key));
+    }
+    return Buffer.from(key);
   };
+  const keyFor = (home: string): Buffer => keyAt(vaultPath(home));
   function createVault(home: string, seed: string): void {
     const v = Vault.create({ path: vaultPath(home), passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
     v.remember({ content: seed, type: 'semantic' });
@@ -182,8 +259,7 @@ describe('AutoSync (ADR 0044)', () => {
   }
   /** The sync generation sealed in a vault file (the live one, or a .bak beside it). */
   function generationAt(vp: string): number {
-    const header = Vault.readHeader(vp);
-    const v = Vault.openWithKey(vp, deriveMasterKey(passphrase, deviceSecret, header.salt, header.kdf));
+    const v = Vault.openWithKey(vp, keyAt(vp));
     try {
       return v.getSyncGeneration();
     } finally {
@@ -191,8 +267,7 @@ describe('AutoSync (ADR 0044)', () => {
     }
   }
   function contentsAt(vp: string): string[] {
-    const header = Vault.readHeader(vp);
-    const v = Vault.openWithKey(vp, deriveMasterKey(passphrase, deviceSecret, header.salt, header.kdf));
+    const v = Vault.openWithKey(vp, keyAt(vp));
     try {
       return v.list().map((e) => e.content);
     } finally {
@@ -231,8 +306,11 @@ describe('AutoSync (ADR 0044)', () => {
   ): {
     auto: AutoSync;
     events: AutoSyncEvent[];
+    clock: ManualClock;
+    tick: (ms: number) => Promise<void>;
   } {
     const events: AutoSyncEvent[] = [];
+    const clock = new ManualClock();
     const auto = new AutoSync({
       vaultPath: vaultPath(homeA),
       getMasterKey: () => (opts.locked?.() ? null : keyFor(homeA)),
@@ -242,27 +320,31 @@ describe('AutoSync (ADR 0044)', () => {
       backoffMs: opts.backoffMs ?? [40, 40],
       // Ten minutes in production; tests that care set their own.
       pauseRetryMs: opts.pauseRetryMs ?? 600_000,
+      clock,
     });
     // Wire it the way the hosts do: core's save hook feeds notifyWrite.
     unsubscribe = onVaultSave((p) => auto.notifyWrite(p));
     engines.push(auto);
-    return { auto, events };
+    return { auto, events, clock, tick: (ms) => clock.advance(ms, auto) };
   }
 
   it('a write becomes one debounced push, and the push does not re-trigger itself', async () => {
     createVault(homeA, 'seed');
     configure(homeA);
-    const { auto, events } = engine();
+    const { auto, events, clock, tick } = engine();
     write(homeA, 'one');
-    write(homeA, 'two'); // second write inside the debounce window
+    await tick(20);
+    write(homeA, 'two'); // second write inside the debounce window restarts it
     expect(auto.status().phase).toBe('pending');
-    await sleep(80);
-    await auto.flush();
-    expect(fake.version()).toBe(1); // one upload for two writes
+    await tick(29);
+    expect(fake.version()).toBe(0); // trailing edge: 30 ms after the LAST write, not the first
+    await tick(1);
+    expect(fake.version()).toBe(1); // one upload for two writes, from the timer alone
     expect(events.filter((e) => e.type === 'pushed')).toHaveLength(1);
     expect(auto.status().phase).toBe('synced');
     // pushVault saved the vault (generation bump); that save must not queue another push.
-    await sleep(80);
+    expect(clock.pending()).toBe(0);
+    await tick(1_000);
     expect(fake.version()).toBe(1);
     expect(auto.status().phase).toBe('synced');
     expect(loadSyncConfig()?.lastSyncedAt).toBeTruthy();
@@ -349,9 +431,9 @@ describe('AutoSync (ADR 0044)', () => {
     createVault(homeA, 'seed');
     configure(homeA);
     let locked = true;
-    const { auto } = engine({ locked: () => locked });
+    const { auto, tick } = engine({ locked: () => locked });
     write(homeA, 'written while locked');
-    await sleep(80);
+    await tick(30); // the debounced push runs, finds no key, and leaves the write pending
     await auto.flush();
     expect(fake.version()).toBe(0);
     expect(auto.status().phase).toBe('pending');
@@ -365,21 +447,20 @@ describe('AutoSync (ADR 0044)', () => {
     createVault(homeA, 'seed');
     configure(homeA);
     fake.mode('subscription');
-    const { auto, events } = engine();
+    const { auto, events, clock, tick } = engine();
     write(homeA, 'edit');
-    await sleep(80);
-    await auto.flush();
+    await tick(30);
     expect(auto.status().phase).toBe('paused');
     expect(auto.status().pausedReason).toBe('subscription');
     expect(auto.status().nextRetryAt).toBeNull();
+    expect(clock.pending()).toBe(0); // no retry timer at all
     expect(events.some((e) => e.type === 'paused')).toBe(true);
-    await sleep(120); // longer than the backoff: still nothing, because paused
+    await tick(120); // longer than the backoff: still nothing, because paused
     expect(fake.version()).toBe(0);
 
     fake.mode('ok');
     auto.resume();
-    await sleep(80);
-    await auto.flush();
+    await tick(30); // resume re-armed the debounce; no flush needed
     expect(fake.version()).toBe(1);
     expect(auto.status().phase).toBe('synced');
   });
@@ -394,10 +475,9 @@ describe('AutoSync (ADR 0044)', () => {
     createVault(homeA, 'seed');
     configure(homeA);
     fake.mode('subscription');
-    const { auto } = engine({ debounceMs: 20, pauseRetryMs: 300 });
+    const { auto, tick } = engine({ debounceMs: 20, pauseRetryMs: 300 });
     write(homeA, 'edit');
-    await sleep(80);
-    await auto.flush();
+    await tick(20);
     expect(auto.status().phase).toBe('paused');
     expect(auto.status().pausedReason).toBe('subscription');
 
@@ -405,15 +485,18 @@ describe('AutoSync (ADR 0044)', () => {
     // Inside the window: a write is recorded but must not retry the paywall.
     write(homeA, 'second, still inside the pause window');
     expect(auto.status().phase).toBe('paused');
-    await sleep(200);
+    await tick(200);
+    expect(fake.version()).toBe(0);
+    await tick(99);
+    write(homeA, 'at 299 ms, one short of the window');
+    expect(auto.status().pausedReason).toBe('subscription');
+    await tick(100);
     expect(fake.version()).toBe(0);
 
     // Past the window: the next write lifts the pause and the push goes.
-    await sleep(250);
     write(homeA, 'third, after the pause expired');
     expect(auto.status().pausedReason).toBeNull();
-    await sleep(200);
-    await auto.flush();
+    await tick(20);
     expect(fake.version()).toBe(1);
     expect(auto.status().phase).toBe('synced');
   });
@@ -422,14 +505,13 @@ describe('AutoSync (ADR 0044)', () => {
     createVault(homeA, 'seed');
     configure(homeA);
     fake.mode('subscription');
-    const { auto, events } = engine({ debounceMs: 20, pauseRetryMs: 200 });
+    const { auto, events, tick } = engine({ debounceMs: 20, pauseRetryMs: 200 });
     write(homeA, 'edit');
-    await sleep(80);
-    await auto.flush();
+    await tick(20);
     expect(auto.status().pausedReason).toBe('subscription');
     expect(events.filter((e) => e.type === 'paused')).toHaveLength(1);
 
-    await sleep(250); // past pauseRetryMs
+    await tick(250); // past pauseRetryMs
     await auto.wake(); // lifts the pause, tries, and is refused again
     expect(auto.status().phase).toBe('paused');
     expect(auto.status().pausedReason).toBe('subscription');
@@ -455,7 +537,7 @@ describe('AutoSync (ADR 0044)', () => {
     createVault(homeA, 'seed');
     configure(homeA);
     configure(homeB);
-    const { auto } = engine({ debounceMs: 20 });
+    const { auto, tick } = engine({ debounceMs: 20 });
     await auto.runManual(() => pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }));
     expect(fake.version()).toBe(1);
 
@@ -463,14 +545,15 @@ describe('AutoSync (ADR 0044)', () => {
     const failing = auto.runManual(() =>
       pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }),
     );
-    await sleep(120); // the PUT is parked; the vault lock is free
+    await fake.parked(); // the PUT is parked; the vault lock is free
     write(homeA, 'landed during the failing push');
+    fake.mode('ok');
+    fake.release(); // and now the parked PUT fails
     await expect(failing).rejects.toThrow();
     expect(auto.status().pushPending).toBe(true);
     expect(auto.status().phase).toBe('pending');
 
-    fake.mode('ok');
-    await sleep(300); // the re-armed debounce fires on its own: no flush, no wake
+    await tick(20); // the re-armed debounce fires on its own: no flush, no wake
     expect(fake.version()).toBe(2);
     expect(auto.status().phase).toBe('synced');
 
@@ -488,30 +571,32 @@ describe('AutoSync (ADR 0044)', () => {
     createVault(homeA, 'seed');
     configure(homeA);
     fake.mode('crash');
-    const { auto } = engine({ debounceMs: 20, backoffMs: [600, 600] });
+    const { auto, clock, tick } = engine({ debounceMs: 20, backoffMs: [600, 600] });
     write(homeA, 'edit');
-    await sleep(300); // the debounced attempt fails (open + save + upload takes tens of ms, more under load)
+    await tick(20); // the debounced attempt fails
     expect(auto.status().phase).toBe('error');
     expect(auto.status().failures).toBe(1);
-    expect(auto.status().nextRetryAt).not.toBeNull();
+    expect(auto.status().nextRetryAt).toBe(clock.now() + 600);
     write(homeA, 'another edit inside the backoff window');
-    await sleep(100);
-    expect(auto.status().failures).toBe(1); // no second attempt before the retry is due
     fake.mode('ok');
-    await sleep(700); // the scheduled retry fires and succeeds
+    await tick(100); // its debounce fires, and yields to the backoff
+    expect(auto.status().failures).toBe(1); // no second attempt before the retry is due
+    await tick(499);
+    expect(fake.version()).toBe(0); // one short of the retry: still waiting
+    await tick(1); // the scheduled retry fires and succeeds
     expect(fake.version()).toBe(1);
     expect(auto.status().failures).toBe(0);
     expect(auto.status().phase).toBe('synced');
 
     fake.mode('crash');
     write(homeA, 'third');
-    await sleep(300);
+    await tick(20);
     expect(auto.status().nextRetryAt).not.toBeNull();
     auto.stop();
     expect(auto.status().nextRetryAt).toBeNull();
-    await sleep(100); // let any in-flight attempt finish failing before the server recovers
+    expect(clock.pending()).toBe(0); // no timer left to fire
     fake.mode('ok');
-    await sleep(800);
+    await tick(5_000);
     expect(fake.version()).toBe(1); // stopped engines do not retry
   });
 
@@ -535,21 +620,28 @@ describe('AutoSync (ADR 0044)', () => {
   it('a write stream faster than the debounce still pushes within the maximum wait', async () => {
     createVault(homeA, 'seed');
     configure(homeA);
+    const clock = new ManualClock();
     const auto = new AutoSync({
       vaultPath: vaultPath(homeA),
       getMasterKey: () => keyFor(homeA),
       loadDeviceSecret: () => Buffer.from(deviceSecret),
       debounceMs: 80,
       maxWaitMs: 250,
+      clock,
     });
     engines.push(auto);
     unsubscribe = onVaultSave((p) => auto.notifyWrite(p));
-    const started = Date.now();
-    while (Date.now() - started < 600) {
-      write(homeA, `burst ${Date.now()}`);
-      await sleep(30);
+    // A write every 30 ms restarts the 80 ms debounce each time, so only the
+    // 250 ms cap can push while the stream runs.
+    const versionAt: Record<number, number> = {};
+    for (let t = 0; t < 600; t += 30) {
+      write(homeA, `burst ${t}`);
+      await clock.advance(30, auto);
+      versionAt[t + 30] = fake.version();
     }
-    expect(fake.version()).toBeGreaterThanOrEqual(1); // pushed mid-stream, not only after it stopped
+    expect(versionAt[240]).toBe(0); // the debounce alone never fired
+    expect(versionAt[270]).toBe(1); // the cap fired at 250 ms, mid-stream
+    expect(versionAt[600]).toBe(2); // and again 250 ms after the next unpushed write
   });
 
   it('with no remote hash, an edited vault is never fast-forwarded (no-sha server)', async () => {
@@ -576,8 +668,10 @@ describe('AutoSync (ADR 0044)', () => {
     await otherDevicePushes('remote edit');
     fake.mode('slow-blob');
     const wake = auto.wake();
-    await sleep(150); // the download is in flight; the vault lock is NOT held, so this write goes through
+    await fake.parked(); // the download is in flight; the vault lock is NOT held, so this write goes through
     write(homeA, 'written during the download');
+    fake.mode('ok');
+    fake.release();
     await wake;
     expect(events.some((e) => e.type === 'pulled')).toBe(false);
     expect(contents(homeA)).toContain('written during the download');
@@ -608,11 +702,17 @@ describe('AutoSync (ADR 0044)', () => {
     createVault(homeA, 'seed');
     configure(homeA);
     fake.mode('slow-put');
-    const { auto, events } = engine({ debounceMs: 20 });
+    const { auto, events, clock, tick } = engine({ debounceMs: 20 });
     write(homeA, 'first');
-    await sleep(120); // the first upload is in flight (400 ms), no vault lock held
+    clock.fire(20); // the debounced push starts; not awaited, since the server holds its PUT
+    await fake.parked(); // the first upload is in flight, no vault lock held
     write(homeA, 'second, during the upload');
-    await sleep(1400); // first push lands, the engine sees the bytes moved on, re-arms, second push lands
+    fake.mode('ok');
+    fake.release();
+    await auto.whenIdle(); // the first push lands and sees the bytes moved on
+    expect(fake.version()).toBe(1);
+    expect(auto.status().pushPending).toBe(true);
+    await tick(20); // the re-armed debounce pushes the second write
     expect(fake.version()).toBe(2);
     expect(events.filter((e) => e.type === 'pushed')).toHaveLength(2);
     expect(auto.status().phase).toBe('synced');
@@ -630,7 +730,7 @@ describe('AutoSync (ADR 0044)', () => {
     createVault(homeA, 'seed');
     configure(homeA);
     configure(homeB);
-    const { auto } = engine({ debounceMs: 20, backoffMs: [40, 40] });
+    const { auto, clock, tick } = engine({ debounceMs: 20, backoffMs: [40, 40] });
     await auto.runManual(() => pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }));
     const genBefore = generationAt(vaultPath(homeA));
     expect(loadSyncConfig()?.lastGeneration).toBe(genBefore);
@@ -638,10 +738,10 @@ describe('AutoSync (ADR 0044)', () => {
     // The server goes away with one write unpushed; the engine retries.
     fake.mode('crash');
     write(homeA, 'the pending local edit');
-    await sleep(500);
-    expect(auto.status().failures).toBeGreaterThanOrEqual(2); // several attempts, not one
+    await tick(20 + 40 + 40 + 40); // the debounced attempt, then three retries
+    expect(auto.status().failures).toBe(4);
     auto.stop();
-    await sleep(120); // let the attempt in flight finish failing
+    expect(clock.pending()).toBe(0);
     fake.mode('ok');
 
     expect(generationAt(vaultPath(homeA))).toBe(genBefore + 1);
@@ -667,13 +767,13 @@ describe('AutoSync (ADR 0044)', () => {
   it('the 409 retry pushes once more without a second generation bump', async () => {
     createVault(homeA, 'seed');
     configure(homeA);
-    const { auto, events } = engine({ debounceMs: 20 });
+    const { auto, events, tick } = engine({ debounceMs: 20 });
     await auto.runManual(() => pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) }));
     const genBefore = generationAt(vaultPath(homeA));
 
     fake.conflictOnce();
     write(homeA, 'an edit whose first PUT is refused');
-    await sleep(400);
+    await tick(20);
 
     expect(fake.version()).toBe(2); // the retry landed
     expect(events.filter((e) => e.type === 'pushed')).toHaveLength(1);
@@ -725,15 +825,18 @@ describe('AutoSync (ADR 0044)', () => {
     const v = Vault.create({ path: other, passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
     v.save();
     v.close();
+    const clock = new ManualClock();
     const auto = new AutoSync({
       vaultPath: other,
       getMasterKey: () => keyFor(homeA),
       loadDeviceSecret: () => Buffer.from(deviceSecret),
       debounceMs: 10,
+      clock,
     });
     engines.push(auto);
     auto.notifyWrite(other);
-    await sleep(60);
+    expect(clock.pending()).toBe(0); // not even a debounce was armed
+    await clock.advance(60, auto);
     await auto.flush();
     await auto.wake();
     expect(auto.status().phase).toBe('off');
@@ -743,10 +846,9 @@ describe('AutoSync (ADR 0044)', () => {
   it('repairs a record whose push landed but was never recorded (exit mid-upload), on wake and on the 409 path', async () => {
     createVault(homeA, 'seed');
     configure(homeA);
-    const { auto } = engine({ debounceMs: 20 });
+    const { auto, tick } = engine({ debounceMs: 20 });
     write(homeA, 'first');
-    await sleep(150);
-    await auto.flush();
+    await tick(20);
     expect(fake.version()).toBe(1);
     // Simulate the lost record step: the server has v1 with these bytes, sync.json still says v0.
     const cfgPath = path.join(homeA, 'sync.json');
@@ -759,8 +861,7 @@ describe('AutoSync (ADR 0044)', () => {
     expect(repaired.lastGeneration).toBe(cfg.lastGeneration);
     // The next write pushes from the repaired base without a false diverged.
     write(homeA, 'second');
-    await sleep(150);
-    await auto.flush();
+    await tick(20);
     expect(fake.version()).toBe(2);
     expect(auto.status().state).toBe('in-sync');
 
@@ -770,8 +871,7 @@ describe('AutoSync (ADR 0044)', () => {
     // wake, which every host runs at start, is what repairs a torn record).
     fs.writeFileSync(cfgPath, JSON.stringify({ ...JSON.parse(fs.readFileSync(cfgPath, 'utf8')), lastVersion: 1 }));
     write(homeA, 'third');
-    await sleep(150);
-    await auto.flush();
+    await tick(20);
     expect(fake.version()).toBe(2);
     expect(auto.status().state).toBe('diverged');
     expect(contents(homeA)).toContain('third'); // the write is intact locally
@@ -790,9 +890,9 @@ describe('AutoSync (ADR 0044)', () => {
 
   it('reports off when sync is not configured and never touches the network', async () => {
     createVault(homeA, 'seed');
-    const { auto } = engine();
+    const { auto, tick } = engine();
     write(homeA, 'edit');
-    await sleep(80);
+    await tick(30);
     await auto.flush();
     await auto.wake();
     expect(auto.status().phase).toBe('off');
