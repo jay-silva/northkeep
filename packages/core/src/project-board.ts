@@ -22,7 +22,7 @@ export const BOARD_DEFAULT_STALE_DAYS = 14;
 export const BOARD_MAX_STALE_DAYS = 3650;
 
 export const BOARD_DONE_RULE =
-  'A project counts as Done only when the first line of its Current Status begins with the word Done, ' +
+  'A project counts as Done only when the first line of its Current Status that is not empty once cleaned (the line the board shows) begins with the word Done, ' +
   'Complete or Completed, followed by the end of the line or by a period, colon or exclamation mark. ' +
   'Anything else is active. There is no state field; this is a text convention.';
 

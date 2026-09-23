@@ -60,8 +60,9 @@ false after the first ordinary write, when `updated_at` becomes true again.
 There is no state field in the code. `ProjectSummary` (project-handoff.ts:77)
 carries `project`, `scope`, `title`, `status`, `revision`, `updated_at`,
 `conflict`, `last_writer_host` and `draft`, and none of those is a state. So
-"not Done" is a convention here: a project is Done when `firstNonEmptyLine`
-of Current Status (packages/core/src/project-doc.ts) begins,
+"not Done" is a convention here: a project is Done when the first line
+of Current Status that is not empty once cleaned (the status line the
+board displays, Decision 3) begins,
 case-insensitively, with the bare word `Done`, `Complete` or `Completed`,
 followed by the end of the line or by `.`, `:` or `!`. So `Done.`,
 `Complete: shipped 2026-09-01` and `DONE` are Done; `Done with phase 1;
@@ -160,8 +161,9 @@ a Decisions body, never a `content` field.
 Every text field in the payload, from any source, passes through
 `tameOneLine` (packages/mcp-server/src/text-safe.ts), the sanitizer ADR 0052
 closed its injection findings with, and then has the data-fence markers
-`===BEGIN MEMORY DATA===` and `===END MEMORY DATA===` removed, repeatedly
-until neither occurs, so a nested marker cannot survive one pass. No board
+`===BEGIN MEMORY DATA===` and `===END MEMORY DATA===` removed in one linear
+pass that also removes any marker the removal assembles (nested, or joined
+across a collapsed space), so the output never contains either marker. No board
 output is placed inside that fence today; removing them anyway means an
 agent that pastes the board into a curator prompt cannot close the fence
 early. It removes (not substitutes) Unicode
@@ -527,4 +529,14 @@ by today; the Done rule reads the displayed (cleaned) line, so a leading
 zero-width character cannot split rule and display; fence-marker removal is
 one linear pass (nested markers had cost one pass per level, 10 s on a
 336,000-character document). One recheck follows.
+
+Recheck of the fix round (`Reviews/adr-0054/md1-code-recheck.md`):
+**CLEARED**. FW1 closed on core, MCP and both CLI forms; the zero-width
+Done case and the slow fence case closed (10,171 ms to 183 ms). One scar
+introduced by the fix, SR2, pending Jay's acceptance: the Log's shape is
+chosen from its first non-empty line, as import chooses it, so a bold-date
+Log that opens with a prose line reads as undated (aged from the import)
+and a bold-date entry inside a dash Log is ignored. None of the 33 archived
+command-repo projects has either shape (checked read-only, 2026-09-23).
+Wording drift fixed: the Done rule text and Decision 3's fence sentence.
 

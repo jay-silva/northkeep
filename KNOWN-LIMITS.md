@@ -78,7 +78,7 @@ every milestone; if a limit is removed, say when and how.*
   month-name date without a year resolves to the occurrence nearest today,
   so one more than six months away can land in the wrong year.
 - **Imported projects are aged from their Log.** Only the date each Log
-  entry opens with counts, and never a date after today. An imported
+  entry opens with counts, and never a date after today (the UTC day). An imported
   project whose live Log has no usable date is aged from the import itself, so it cannot
   go stale until the window has passed since the import. The Log is only as
   good as the import: an undated entry keeps source order, and a Log written
