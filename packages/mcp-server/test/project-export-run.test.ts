@@ -916,7 +916,7 @@ describe('importProjects', () => {
       name: 'alpha.md',
       slug: 'alpha',
       status: 'exists',
-      reason: 'Project alpha already has entries in this vault; delete the project from the Projects page first.',
+      reason: 'Project alpha already has entries in this vault. Remove them with `northkeep projects delete alpha` first, then import again.',
     });
     expect(dry.files.find((f) => f.name === 'beta.md')?.status).toBe('would import');
     expect(dry.plan.total_bytes).toBeGreaterThan(0);

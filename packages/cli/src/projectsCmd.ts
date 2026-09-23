@@ -9,6 +9,8 @@ import {
   loadDeviceSecret,
   memzero,
   PROJECT_SECTION_HEADINGS,
+  ProjectHandoffError,
+  projectScope,
   summarizeMirror,
   withFileLock,
   type ImportFilePlan,
@@ -147,6 +149,59 @@ export async function projectsUpdateCmd(
   });
   if (outcome.error !== undefined) fail(outcome.error);
   console.log(`✓ ${outcome.created ? 'Created' : 'Updated'} project ${slug} (revision ${outcome.revision.slice(0, 8)}).`);
+}
+
+function entries(n: number): string {
+  return n === 1 ? '1 entry' : `${n} entries`;
+}
+
+export interface DeleteDeps {
+  withVault: WithVault;
+  fail: (m: string) => never;
+  /** Asks one question; null when there is no terminal to ask on. */
+  ask: (question: string) => Promise<string | null>;
+  out?: (line: string) => void;
+}
+
+/**
+ * `northkeep projects delete`: forget every live entry in a project's scope,
+ * archives and overflow included, so a slug left with archives only can be
+ * imported again. Asks first, outside the vault lock, unless --yes.
+ */
+export async function projectsDeleteCmd(slug: string, options: { yes?: boolean }, deps: DeleteDeps): Promise<void> {
+  const out = deps.out ?? ((line: string) => console.log(line));
+  let scope: string;
+  try {
+    scope = projectScope(slug);
+  } catch {
+    deps.fail('Project slug is invalid: use lowercase letters, digits and hyphens.');
+  }
+  const live = await deps.withVault((vault) => vault.list({ scope, includeSuperseded: true }).length);
+  if (live === 0) deps.fail(`Project ${slug} has no entries in this vault; nothing was deleted.`);
+  if (options.yes !== true) {
+    const answer = await deps.ask(
+      `This forgets ${entries(live)} in project ${slug}: its document, log archives and any other notes in its scope. ` +
+        'Their text cannot be recovered. Continue? [y/N] ',
+    );
+    if (answer === null) deps.fail('No terminal to confirm on. Add --yes to delete without asking.');
+    if (!/^y(es)?$/i.test(answer.trim())) deps.fail('Cancelled. Nothing was deleted.');
+  }
+  type Outcome = { error: string } | { error?: undefined; count: number };
+  const outcome: Outcome = await deps.withVault((vault): Outcome => {
+    try {
+      const count = vault.deleteProject(slug);
+      vault.save();
+      return { count };
+    } catch (err) {
+      if (err instanceof ProjectHandoffError && err.code === 'not_found') {
+        return { error: `Project ${slug} has no entries in this vault; nothing was deleted.` };
+      }
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+  if (outcome.error !== undefined) deps.fail(outcome.error);
+  out(`✓ Deleted project ${slug}: forgot ${entries(outcome.count)}.`);
+  out('  Note: the previous vault state remains in vault.nkv.bak until the next write.');
 }
 
 // ---- the local mirror (ADR 0053 M-A1) ------------------------------------------------------

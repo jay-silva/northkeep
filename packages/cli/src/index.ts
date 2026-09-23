@@ -69,6 +69,7 @@ import {
 } from './shareCmd.js';
 import {
   projectsCompactCmd,
+  projectsDeleteCmd,
   projectsExportCmd,
   projectsImportCmd,
   projectsUpdateCmd,
@@ -913,6 +914,20 @@ projects
   .option('--log <text>', 'add a dated Log entry')
   .action(async (slug: string, options: { title?: string; whatWhy?: string; status?: string; nextActions?: string; decision?: string; log?: string }) => {
     await projectsUpdateCmd(slug, options, withVault, fail);
+  });
+
+projects
+  .command('delete')
+  .description('Forget every entry in a project: its document, log archives and other notes in its scope')
+  .argument('<slug>', 'project slug')
+  .option('--yes', 'delete without asking (scripting)')
+  .action(async (slug: string, options: { yes?: boolean }) => {
+    const yes = options.yes === true || process.env.NORTHKEEP_ASSUME_YES === '1';
+    await projectsDeleteCmd(slug, { yes }, {
+      withVault,
+      fail,
+      ask: async (question) => (process.stdin.isTTY ? promptLine(question) : null),
+    });
   });
 
 /** launchd needs the real script, not the npm bin symlink. */

@@ -166,7 +166,7 @@ describe('Vault.importProject (the write)',()=>{
   it('refuses a slug that already has a live document, with zero mutation',()=>{
     const v=vault();v.updateProject({project:'sample',expected_revision:null,what_why:'Existing.',status:'Here.'});
     const before=v.export().memories;const p=planImport([{name:'sample.md',text:commandRepoFile()}]).projects[0]!;
-    expect(()=>v.importProject(p)).toThrowError(expect.objectContaining({code:'stale_project',message:'Project sample already has entries in this vault; delete the project from the Projects page first.'}));
+    expect(()=>v.importProject(p)).toThrowError(expect.objectContaining({code:'stale_project',message:'Project sample already has entries in this vault. Remove them with `northkeep projects delete sample` first, then import again.'}));
     expect(v.export().memories).toEqual(before);expect(v.verifyChain().ok).toBe(true);
     expect(()=>v.importProject(p,['project:other'])).toThrowError(expect.objectContaining({code:'scope_denied'}));
     expect(()=>v.importProject({...p,slug:'fresh',document:`${formatMirrorHeader({vaultId:v.getVaultId(),kind:'index'})}x`,archives:[],overflow:null})).toThrowError(expect.objectContaining({code:'invalid_request'}));
@@ -182,7 +182,7 @@ describe('Vault.importProject (the write)',()=>{
     v.forget(working[0]!.id);
     expect(projectScopeInUse(v,'sample')).toBe(true);
     const before=v.export().memories;
-    expect(()=>v.importProject(p)).toThrowError(expect.objectContaining({code:'stale_project',message:'Project sample already has entries in this vault; delete the project from the Projects page first.'}));
+    expect(()=>v.importProject(p)).toThrowError(expect.objectContaining({code:'stale_project',message:'Project sample already has entries in this vault. Remove them with `northkeep projects delete sample` first, then import again.'}));
     expect(v.export().memories).toEqual(before);
     expect(v.list({scope:'project:sample'}).filter((e)=>e.content.startsWith(PROJECT_LOG_ARCHIVE_HEADING))).toHaveLength(p.archives.length);
     expect(()=>v.deleteProject('sample',['project:other'])).toThrowError(expect.objectContaining({code:'scope_denied'}));

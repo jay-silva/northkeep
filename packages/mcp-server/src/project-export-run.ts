@@ -12,6 +12,7 @@ import {
   listProjectViews,
   parseMirrorHeader,
   planImport,
+  projectInUseMessage,
   projectScopeInUse,
   renderIndexFile,
   renderLogFile,
@@ -1272,7 +1273,7 @@ export async function importProjects(
     plan.projects.forEach((p, i) => {
       reports.push(
         taken[i]
-          ? { name: p.name, slug: p.slug, status: 'exists', reason: `Project ${p.slug} already has entries in this vault; delete the project from the Projects page first.` }
+          ? { name: p.name, slug: p.slug, status: 'exists', reason: projectInUseMessage(p.slug) }
           : { name: p.name, slug: p.slug, status: 'would import', reason: null },
       );
     });
