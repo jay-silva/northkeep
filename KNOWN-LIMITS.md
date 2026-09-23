@@ -71,6 +71,10 @@ every milestone; if a limit is removed, say when and how.*
   order and states its total, so past 50 the rest are counted, not listed.
 - **One stale window for every project**, 14 days unless `--stale-days` (or
   the tool's `stale_days`) says otherwise.
+- **The Log's layout is chosen from its first line**, the way import
+  chooses it. A Log of bold dates that opens with a plain sentence reads as
+  undated (the project is aged from its import), and one bold-date entry
+  inside a dash-style Log is ignored.
 - **Month names are read only as "Sep 20".** Month first, title case:
   "sep 20", "SEP 20" and "20 Sep" produce no dated item, so that words like
   "may" and "march" are never read as dates.

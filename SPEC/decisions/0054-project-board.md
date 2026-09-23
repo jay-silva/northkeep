@@ -1,7 +1,7 @@
 # ADR 0054: The project board (M-D1)
 
 - **Date:** 2026-09-21, third draft 2026-09-23
-- **Status:** Accepted for build (milestone M-D1), third draft. Scoped by Jay on
+- **Status:** Accepted (milestone M-D1): built, reviewed, and Jay's acceptance run passed all ten steps on 2026-09-23 (board over the 30 imported projects: 11,309 bytes). Third draft. Scoped by Jay on
   2026-09-21 in two parts: D1 ships without a model, D2 runs on the local
   model only under his 2026-09-09 local-only decision. Reviewed twice on
   2026-09-21 against the design, NOT CLEARED twice. On 2026-09-23 D2 moved
@@ -293,6 +293,11 @@ out ("through a local MCP server").
 - **The caps can hide work.** Past 50 rows a section shows the first 50 in
   its sort order and states the total.
 - **One stale window for every project** until `--stale-days` is passed.
+- **The Log's layout is chosen from its first line**, as import chooses it
+  (accepted 2026-09-23, code recheck SR2). A bold-date Log that opens with a
+  prose line reads as undated, so the project is aged from its import, and a
+  bold-date entry inside a dash Log is ignored. None of the 33 archived
+  command-repo projects has either layout.
 - **Month names are read only as `Sep 20`**: month first, title case.
   `sep 20`, `SEP 20` and `20 Sep` produce no dated item. Accepted so that
   ordinary words such as "may" and "march" are never dates.
@@ -533,7 +538,7 @@ one linear pass (nested markers had cost one pass per level, 10 s on a
 Recheck of the fix round (`Reviews/adr-0054/md1-code-recheck.md`):
 **CLEARED**. FW1 closed on core, MCP and both CLI forms; the zero-width
 Done case and the slow fence case closed (10,171 ms to 183 ms). One scar
-introduced by the fix, SR2, pending Jay's acceptance: the Log's shape is
+introduced by the fix, SR2, accepted by Jay on 2026-09-23 ("1 accepted"): the Log's shape is
 chosen from its first non-empty line, as import chooses it, so a bold-date
 Log that opens with a prose line reads as undated (aged from the import)
 and a bold-date entry inside a dash Log is ignored. None of the 33 archived
