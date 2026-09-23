@@ -654,6 +654,56 @@ catch (e) { console.log(e.code); }`], {
   }, 120_000);
 });
 
+describe('a killed lock stealer never wedges exports (recheck flesh wound)', () => {
+  const lockFile = () => path.join(repo, '.git', 'northkeep-export.lock');
+  const guardFile = () => `${lockFile()}.steal`;
+  const deadToken = () => `${JSON.stringify({ pid: deadPid(), started_at: new Date().toISOString(), nonce: '0000deaddead0000' })}\n`;
+
+  async function changeAndExport(status: string): Promise<ExportRunResult> {
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status }));
+    return exportOnce();
+  }
+
+  function junk(): string[] {
+    return fs.readdirSync(path.join(repo, '.git')).filter((n) => n.startsWith('northkeep-export.lock'));
+  }
+
+  it('killed after the guard is created: an empty old guard and a dead temp are cleared, then two exports commit', async () => {
+    await seed();
+    await exportOnce({ repo });
+    fs.writeFileSync(lockFile(), deadToken());
+    fs.writeFileSync(guardFile(), '');
+    const old = new Date(Date.now() - 60_000);
+    fs.utimesSync(guardFile(), old, old);
+    fs.writeFileSync(`${guardFile()}.tmp-${deadPid()}-0badc0de`, '');
+    expect((await changeAndExport('After a kill at guard create.')).status).toBe('committed');
+    expect((await changeAndExport('And again.')).status).toBe('committed');
+    expect(junk()).toEqual([]);
+  });
+
+  it('killed after the guard is written: a dead owner guard is cleared, then two exports commit', async () => {
+    await seed();
+    await exportOnce({ repo });
+    fs.writeFileSync(lockFile(), deadToken());
+    fs.writeFileSync(guardFile(), deadToken());
+    expect((await changeAndExport('After a kill at guard write.')).status).toBe('committed');
+    expect((await changeAndExport('And again.')).status).toBe('committed');
+    expect(junk()).toEqual([]);
+  });
+
+  it('killed after the rename: the leftover guard does not wedge the next crash', async () => {
+    await seed();
+    await exportOnce({ repo });
+    fs.writeFileSync(guardFile(), deadToken());
+    fs.writeFileSync(`${lockFile()}.stale-${deadPid()}-0badc0de`, deadToken());
+    expect((await changeAndExport('After a kill at rename.')).status).toBe('committed');
+    // A later run crashes too, so a dead lock meets the guard the first kill left.
+    fs.writeFileSync(lockFile(), deadToken());
+    expect((await changeAndExport('After the later crash.')).status).toBe('committed');
+    expect(junk()).toEqual([]);
+  });
+});
+
 describe('a killed first export heals', () => {
   it('leaves only a marker temp beside .git after SIGKILL, and the next run exports cleanly', async () => {
     expect(fs.existsSync(RUN_DIST), 'build @northkeep/mcp-server first').toBe(true);
