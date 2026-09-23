@@ -17,6 +17,10 @@ on:
     paths:
       - 'apps/sync-server/**'
       - 'apps/connector-server/**'
+      # The connector's workspace dependencies: a change here redeploys it.
+      - 'packages/core/**'
+      - 'packages/platform-node/**'
+      - 'packages/sync/**'
       - 'scripts/probe-hosted.sh'
       - '.github/workflows/hosted-probe.yml'
 
