@@ -98,7 +98,27 @@ export interface AutoSyncOptions {
    * ADR 0044 default: 10 minutes. Overridable for tests only.
    */
   pauseRetryMs?: number;
+  /** Tests only: the time source and timers behind every debounce, backoff and pause window. */
+  clock?: AutoSyncClock;
 }
+
+/** Everything time-dependent the engine does goes through this, so a test can drive it instead of sleeping. */
+export interface AutoSyncClock {
+  now(): number;
+  setTimeout(fn: () => void, ms: number): unknown;
+  clearTimeout(handle: unknown): void;
+}
+
+/** Real time. Timers are unref'd: they must never keep a CLI or a shutting-down server alive. */
+const SYSTEM_CLOCK: AutoSyncClock = {
+  now: () => Date.now(),
+  setTimeout: (fn, ms) => {
+    const timer = setTimeout(fn, ms);
+    timer.unref?.();
+    return timer;
+  },
+  clearTimeout: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+};
 
 const DEFAULT_DEBOUNCE_MS = 5_000;
 const DEFAULT_MAX_WAIT_MS = 30_000;
@@ -121,6 +141,7 @@ export class AutoSync {
   private readonly maxWaitMs: number;
   private readonly backoffMs: readonly number[];
   private readonly pauseRetryMs: number;
+  private readonly clock: AutoSyncClock;
   /** When the current pause started; null when not paused. */
   private pausedAt: number | null = null;
   /** When the oldest unpushed write happened; bounds the debounce. */
@@ -139,8 +160,8 @@ export class AutoSync {
   private pushPending = false;
   /** Set while the engine itself is saving (push bumps the generation): those saves are not writes to push. */
   private inOwnOperation = false;
-  private debounceTimer: ReturnType<typeof setTimeout> | null = null;
-  private retryTimer: ReturnType<typeof setTimeout> | null = null;
+  private debounceTimer: unknown = null;
+  private retryTimer: unknown = null;
   /** Serializes operations: a wake never overlaps a push. */
   private chain: Promise<void> = Promise.resolve();
   private stopped = false;
@@ -156,6 +177,7 @@ export class AutoSync {
     this.maxWaitMs = options.maxWaitMs ?? DEFAULT_MAX_WAIT_MS;
     this.backoffMs = options.backoffMs ?? DEFAULT_BACKOFF_MS;
     this.pauseRetryMs = options.pauseRetryMs ?? PAUSE_RETRY_MS;
+    this.clock = options.clock ?? SYSTEM_CLOCK;
     this.eligible = options.allowAnyVault === true || isAutoSyncVault(options.vaultPath);
   }
 
@@ -164,7 +186,7 @@ export class AutoSync {
     if (this.stopped || !this.eligible || this.inOwnOperation) return;
     if (savedPath !== undefined && savedPath !== this.vaultPath) return;
     this.pushPending = true;
-    if (this.firstPendingAt === null) this.firstPendingAt = Date.now();
+    if (this.firstPendingAt === null) this.firstPendingAt = this.clock.now();
     this.expirePause();
     if (this.pausedReason !== null) return; // stays pending until resume() or the pause expires
     if (this.phase !== 'syncing') this.phase = 'pending';
@@ -189,6 +211,19 @@ export class AutoSync {
     this.clearDebounce();
     if (!this.pushPending) return this.chain;
     return this.enqueue(() => this.runPush(true));
+  }
+
+  /**
+   * Resolves once every queued operation has finished, including any queued
+   * while waiting. Starts nothing: a debounce or retry still waiting on its
+   * timer is not an operation yet.
+   */
+  async whenIdle(): Promise<void> {
+    let seen: Promise<void>;
+    do {
+      seen = this.chain;
+      await seen;
+    } while (seen !== this.chain);
   }
 
   /**
@@ -281,7 +316,7 @@ export class AutoSync {
   /** Mark a write pending after a manual operation and put it on the debounce. */
   private rearmAfterManual(): void {
     this.pushPending = true;
-    if (this.firstPendingAt === null) this.firstPendingAt = Date.now();
+    if (this.firstPendingAt === null) this.firstPendingAt = this.clock.now();
     this.phase = 'pending';
     this.armDebounce();
   }
@@ -297,25 +332,25 @@ export class AutoSync {
     this.clearDebounce();
     // Trailing-edge debounce, capped: a write never waits more than maxWaitMs
     // behind newer writes.
-    const deadline = (this.firstPendingAt ?? Date.now()) + this.maxWaitMs;
-    const delay = Math.max(0, Math.min(this.debounceMs, deadline - Date.now()));
-    this.debounceTimer = setTimeout(() => {
+    const now = this.clock.now();
+    const deadline = (this.firstPendingAt ?? now) + this.maxWaitMs;
+    const delay = Math.max(0, Math.min(this.debounceMs, deadline - now));
+    this.debounceTimer = this.clock.setTimeout(() => {
       this.debounceTimer = null;
       void this.enqueue(() => this.runPush());
     }, delay);
-    unrefTimer(this.debounceTimer);
   }
 
   private clearDebounce(): void {
     if (this.debounceTimer !== null) {
-      clearTimeout(this.debounceTimer);
+      this.clock.clearTimeout(this.debounceTimer);
       this.debounceTimer = null;
     }
   }
 
   private clearRetry(): void {
     if (this.retryTimer !== null) {
-      clearTimeout(this.retryTimer);
+      this.clock.clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
     this.nextRetryAt = null;
@@ -325,13 +360,12 @@ export class AutoSync {
     if (this.stopped) return;
     this.clearRetry();
     const delay = this.backoffMs[Math.min(this.failures, this.backoffMs.length) - 1] ?? this.backoffMs[0] ?? 30_000;
-    this.nextRetryAt = Date.now() + delay;
-    this.retryTimer = setTimeout(() => {
+    this.nextRetryAt = this.clock.now() + delay;
+    this.retryTimer = this.clock.setTimeout(() => {
       this.retryTimer = null;
       this.nextRetryAt = null;
       void this.enqueue(retry);
     }, delay);
-    unrefTimer(this.retryTimer);
   }
 
   /**
@@ -341,7 +375,7 @@ export class AutoSync {
    */
   private async runPush(ignoreBackoff = false): Promise<void> {
     if (this.stopped || !this.pushPending || this.pausedReason !== null) return;
-    if (!ignoreBackoff && this.nextRetryAt !== null && Date.now() < this.nextRetryAt) return;
+    if (!ignoreBackoff && this.nextRetryAt !== null && this.clock.now() < this.nextRetryAt) return;
     if (loadSyncConfig() === null) {
       this.pushPending = false;
       this.phase = 'idle';
@@ -503,7 +537,7 @@ export class AutoSync {
     const now = this.localSha();
     const stillPending = recorded !== null && now !== null && now !== recorded;
     this.pushPending = stillPending;
-    this.firstPendingAt = stillPending ? Date.now() : null;
+    this.firstPendingAt = stillPending ? this.clock.now() : null;
     this.settle('in-sync');
     this.onEvent({ type: 'pushed', version });
     if (stillPending) this.armDebounce();
@@ -593,13 +627,13 @@ export class AutoSync {
    */
   private expirePause(): void {
     if (this.pausedReason === null || this.pausedAt === null) return;
-    if (Date.now() - this.pausedAt < this.pauseRetryMs) return;
+    if (this.clock.now() - this.pausedAt < this.pauseRetryMs) return;
     this.resume();
   }
 
   private pause(reason: 'subscription' | 'private', message: string): void {
     this.pausedReason = reason;
-    this.pausedAt = Date.now();
+    this.pausedAt = this.clock.now();
     this.phase = 'paused';
     this.message = message;
     this.clearDebounce();
@@ -614,12 +648,6 @@ export class AutoSync {
       return null;
     }
   }
-}
-
-/** Timers must never keep a CLI or a shutting-down server alive. */
-function unrefTimer(timer: ReturnType<typeof setTimeout>): void {
-  const t = timer as unknown as { unref?: () => void };
-  if (typeof t.unref === 'function') t.unref();
 }
 
 /**

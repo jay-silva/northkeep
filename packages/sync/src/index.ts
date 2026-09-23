@@ -4,6 +4,7 @@ export {
   AUTO_PULL_BACKUP_SUFFIX,
   DIVERGED_MESSAGE,
   syncAge,
+  type AutoSyncClock,
   type AutoSyncEvent,
   type AutoSyncOptions,
   type AutoSyncPhase,
