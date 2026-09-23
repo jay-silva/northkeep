@@ -587,8 +587,10 @@ any entry lacked a readable date kept source order, so an oldest-first Log
 longer than ten entries kept its oldest ten live and archived the newest. The
 rule now:
 
-- When every entry has a readable date, nothing changes: newest ten by date
-  live, archives oldest first by date, `log_order: 'by date'`.
+- When every entry has a readable date: newest ten by date live, archives
+  oldest first by date, `log_order: 'by date'`, as before. Same-day ties are
+  oriented by the direction rule below, which reads the same as before for
+  any Log whose dates mostly run one way.
 - Otherwise the entries are not sorted. The source's direction is read from
   its dated entries in source order: the direction most adjacent dated pairs
   take (equal dates cast no vote), then first dated against last dated on a
@@ -628,7 +630,12 @@ the project from its import. Now:
 run as the whole plan, refusal on a scope with any live row, archives as ADR
 0045 rows with their original dates, and nothing ever cut.
 
-**Residual.** Direction is inferred, not known: a Log whose dated entries
+**Residual.** The fix applies to imports run after it. Projects already
+imported (the M-A1 migration of 2026-09-23) keep the old shape: a heading Log
+still sits in nested sections with an empty live Log, and a partly dated,
+oldest-first Log still has its oldest entries live. The way out for one of
+them is `northkeep projects delete <slug>`, then import it again from the
+mirror or the source; that is the owner's call. Direction is inferred, not known: a Log whose dated entries
 are mostly out of order can be turned the wrong way, and a Log with fewer
 than two distinct dates is taken as newest first. Undated entries are never
 placed by date. Converted entries carry four spaces of indent the source did

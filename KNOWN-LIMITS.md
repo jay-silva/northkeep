@@ -89,8 +89,11 @@ every milestone; if a limit is removed, say when and how.*
   source's sequence (turned newest first when its dated entries run oldest
   first) rather than sorting, so the direction is inferred and undated
   entries are never placed by date. A Log written as headings is stored as
-  ordinary dated entries, but only when the Log's own text before its first
-  heading is empty.
+  ordinary dash entries, but only when the Log's own text before its first
+  heading is empty. Both apply to imports run after 2026-09-23's fix; a
+  project imported earlier keeps the old shape (a heading Log reads as empty,
+  an oldest-first partly dated Log kept its oldest entries live) until it is
+  deleted with `northkeep projects delete <slug>` and imported again.
 - **A large document costs time, not payload.** A document stored past the
   size cap through the raw memory path is read in full to find its dates;
   every field the board returns is still cut to its cap.
