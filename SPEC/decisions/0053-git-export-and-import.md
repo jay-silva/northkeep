@@ -552,3 +552,23 @@ surfaces CLEARED WITH WOUNDS (seven). Fixed in one round (Jay: "go"):
 - The journal and state are keyed by the marker's mirror id (above).
 - Light-theme contrast of the mirror line is 5.1:1; the schedule has test-only
   overrides for the LaunchAgents folder and launchctl.
+
+Recheck, 2026-09-22 (`scratchpad/verdicts/m-a1-code-recheck.md`): CLEARED WITH
+WOUNDS, 11 of 13 prior findings closed. Two flesh wounds, fixed after it:
+
+- A killed stealer no longer wedges exports. The steal guard is written to a
+  temp and linked into place, so it is never seen partial. A guard whose owner
+  is dead, or that has no readable owner and is over five seconds old, is
+  removed by compare-and-remove and the steal retried. A live guard is waited
+  for, then refused as `export_busy` with a message saying another export is
+  clearing a dead lock.
+- A run refused before it holds the lock (`lock_unreadable`, `export_busy`;
+  `export_busy` is the only busy code) is now recorded. It goes to a small
+  per-mirror `refused.json`, never to the state file: the lock holder rewrites
+  state from a copy read at run start, so a second writer, even behind its own
+  guard, would either lose the refusal or drop the holder's `nk_commits`. The
+  file is written only when this vault file already owns the mirror's state,
+  matched by `vault_fingerprint`, and is overlaid by `readExportState` when newer
+  than the last attempt, so `--status` and the resume line both show it.
+- F6: `northkeep projects delete <slug>` forgets every live entry in the scope,
+  archives included. The import refusal now names that command.
