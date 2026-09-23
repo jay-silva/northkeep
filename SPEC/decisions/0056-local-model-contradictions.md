@@ -193,6 +193,7 @@ review.
 - No cross-project merge, dedupe or consolidation proposals. The pass finds
   contradictions and nothing else.
 - No scheduled or background run. It runs when asked.
+- No desktop, web or mobile surface. The MCP tool and the CLI only.
 - No API model path, ever, under this ADR.
 - No accept-all, confidence threshold or auto-apply (ADR 0043 P6).
 

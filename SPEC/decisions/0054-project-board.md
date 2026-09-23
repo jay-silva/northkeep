@@ -1,7 +1,7 @@
 # ADR 0054: The project board (M-D1)
 
 - **Date:** 2026-09-21, third draft 2026-09-23
-- **Status:** Proposed (milestone M-D1), third draft. Scoped by Jay on
+- **Status:** Accepted for build (milestone M-D1), third draft. Scoped by Jay on
   2026-09-21 in two parts: D1 ships without a model, D2 runs on the local
   model only under his 2026-09-09 local-only decision. Reviewed twice on
   2026-09-21 against the design, NOT CLEARED twice. On 2026-09-23 D2 moved
@@ -10,7 +10,10 @@
   required list, answered". D1 is inside the review gate because it
   publishes a claims table. Third draft reviewed 2026-09-23: CLEARED WITH
   WOUNDS (five wounds, one scar); Jay chose to fix all five and narrow the
-  Done rule, amendments applied below, one recheck to follow.
+  Done rule. Recheck 2026-09-23: all closed, one new wound in the gate's
+  wording (FR1), fixed in text with the recheck's notes. **Cleared for
+  build** on Jay's "Yes do both" (2026-09-23): no third review round,
+  because the last fix is wording only; the built code gets its own review.
 - **Deciders:** Jay (product owner), Claude Code
 - **Extends:** ADR 0039 (projects as vault memories), ADR 0048
   (revision-bound writes, Tier-1 return masking), ADR 0052 (provenance,
@@ -153,7 +156,8 @@ a Decisions body, never a `content` field.
 Every text field in the payload, from any source, passes through
 `tameOneLine` (packages/mcp-server/src/text-safe.ts), the sanitizer ADR 0052
 closed its injection findings with, and then has the data-fence markers
-`===BEGIN MEMORY DATA===` and `===END MEMORY DATA===` removed. No board
+`===BEGIN MEMORY DATA===` and `===END MEMORY DATA===` removed, repeatedly
+until neither occurs, so a nested marker cannot survive one pass. No board
 output is placed inside that fence today; removing them anyway means an
 agent that pastes the board into a curator prompt cannot close the fence
 early. It removes (not substitutes) Unicode
@@ -175,7 +179,7 @@ project and then the newest 50 overall. With every text field capped and
 every section capped, the payload has a ceiling that holds for any number of
 projects and any document size.
 
-**The ceiling is 128 KB, measured on the MCP wire**: the UTF-8 bytes of
+**The ceiling is 131,072 bytes (128 KiB), measured on the MCP wire**: the UTF-8 bytes of
 the complete JSON-RPC response carrying the `project_board` result, as the
 server emits it (`ok()` pretty-prints the payload into a text content item,
 which the transport then JSON-encodes again). That is the largest
@@ -187,8 +191,9 @@ and open sessions from the stale ones; every text field at its cap in the
 widest form it can take after sanitizing: 3-byte CJK, and quote and
 backslash text that JSON escapes twice on the wire), runs it with Tier-1
 masking off and on, and asserts the wire bytes are under the ceiling. The
-review measured about 122 KB for that shape; any new per-row field has to
-pass the same test. The measured maximum is recorded here when D1 is built.
+recheck measured 125,857 bytes for that shape with the fields this draft
+defines, so the margin is about 5 KB and any new per-row field has to pass
+the same test. The measured maximum is recorded here when D1 is built.
 No figure is claimed for a typical board; acceptance step 2 measures the
 real one.
 
@@ -241,11 +246,11 @@ out ("through a local MCP server").
 | The board writes nothing to the vault | Both entry points take a reader; test hashes a current-schema vault file before and after a CLI run and an MCP run (opening an older vault can run a schema migration, which is the open path's write, not the board's) |
 | The board never returns a whole project document | Output types carry no `content` field; test asserts a planted 16 KB document's body is absent from the payload |
 | Every text field is stripped of `Cc`, `Cf`, `U+2028`, `U+2029`, unpaired surrogates and the data-fence markers, and capped before masking | `tameOneLine` plus fence removal on every text field; test plants ANSI escapes, bare CR, `U+2028`, `U+0085`, a bidi override, a lone surrogate and `===END MEMORY DATA===` in a status and a Next Actions line, and asserts none survives in the JSON or the rendered text |
-| The MCP response is under 128 KB on the wire for any number of projects and any document size | Absolute row caps and field caps (Decision 3); saturating test with at least 110 projects, CJK and escape-heavy text, Tier-1 off and on, measuring the JSON-RPC response bytes; second test with a 60,000-character document stored through the raw memory path |
+| The MCP response is under 131,072 bytes on the wire for any number of projects and any document size | Absolute row caps and field caps (Decision 3); saturating test with at least 110 projects, CJK and escape-heavy text, Tier-1 off and on, measuring the JSON-RPC response bytes; second test with a 60,000-character document stored through the raw memory path |
 | One unreadable document never hides the other projects | Per-project catch of `ProjectHandoffError` (Decision 1, Needs repair); test plants a duplicate-section document through the raw memory path beside healthy projects and asserts it is listed as `unreadable` and every other section still renders |
 | An imported project is aged from its newest Log date, not the import time | Decision 1, Stale; test imports a project whose newest Log entry is 40 days old and asserts it is stale at the default window with `last log entry` |
 | A connection sees only projects in its grant, in every section | `allowedScopes` on both core reads; open sessions only for granted scopes; test with a narrowed grant and a call-log row about an ungranted project |
-| An unreadable call log never shows as "no open sessions", and a missing one shows as none | Strict reader (Decision 1); tests with a real `chmod 000` file and with a directory at the log path assert `unavailable` and the other sections present; a test with no log file asserts an empty list; the same tests run against `project_resume` |
+| An unreadable call log never shows as "no open sessions", and a missing one shows as none | Strict reader (Decision 1). Over MCP the only unreadable state that reaches the handler is a log the process can append to but not read, since an unappendable log refuses the call in `run()` (Decision 4); the tests use a real write-only (`0200`) log file, never a stubbed reader, and assert `unavailable` with the other sections present on `project_board` and the unreadable note on `project_resume` (shipped in 106fae3). CLI tests also use `chmod 000` and a directory at the log path, since the CLI appends nothing. A test with no log file asserts an empty list |
 | A board call is logged and opens no session | Decision 4; test calls `project_board`, asserts one call-log row with `disclosed_scopes`, and asserts `openSessions` is unchanged |
 | `project_board` output respects Tier-1 masking | `maskProjectPayload`; seeded-secret test over every text field, and identifiers asserted exact |
 
@@ -278,8 +283,13 @@ out ("through a local MCP server").
   date without a year more than six months from `now` resolves to the
   nearer year, which can be the wrong one.
 - **Imported projects are aged from their Log.** An imported project whose
-  Log has no readable date is aged from the import, so it cannot go stale
-  for `N` days after the import.
+  live Log has no readable date is aged from the import, so it cannot go
+  stale for `N` days after the import. The recheck found 4 of the 33
+  command-repo projects in that state (bobby-hood, ledger, wine-cellar,
+  wine-purchases-13mo); bobby-hood and ledger had every dated entry moved
+  to archives because their documents were over the cap. The live Log is
+  also only as good as ADR 0053's import: an undated entry keeps source
+  order, and a Log written as headings parses as empty.
 - **A large document costs time, not payload.** Until ADR 0056's
   prerequisite lands, a document stored past the cap through the raw memory
   path is read in full to find its dates.
@@ -294,7 +304,7 @@ build; the steps are:
    throwaway vault (ADR 0053), run `northkeep projects board`: five sections,
    the Done rule stated, no model started.
 2. **Size.** `northkeep projects board --json | wc -c`: record the figure;
-   it must be under the 128 KB ceiling.
+   it must be under the 131,072-byte ceiling.
 3. **Stale window.** `--stale-days 1` lists nearly every imported project
    (their Log dates are older than a day) with `last log entry`;
    `--stale-days 3650` lists none.
@@ -314,9 +324,11 @@ build; the steps are:
    into a new project scope with `northkeep remember --scope project:broken
    --type working`: the board lists `broken` as `unreadable` and every other
    section still renders.
-10. **Month dates.** Add `- Sep 20 file the renewal` (with today's month and
-    a day three days ago) to a Next Actions: it appears at the top of Dated
-    items with this year's date.
+10. **Month dates.** Add a Next Actions line of the form `- <Mon> <D> file
+    the renewal` naming a date three days before today (for example
+    `- Sep 20` when run on 2026-09-23). It appears at the top of Dated items
+    with that date's own year, which is last year when run in the first
+    three days of January.
 
 ## Third draft: the required list, answered
 
@@ -338,7 +350,7 @@ The second pass required, before a third draft:
    does both halves that matter: the board is logged as a tool call, and
    Claim 2 is amended to say it is not a project read.
 6. *Restate the payload bound in bytes from a saturating fixture.* Decision
-   3: 128 KB, asserted by a saturating test, measured figure recorded at
+   3: 131,072 bytes on the MCP wire, asserted by a saturating test, measured figure recorded at
    build. The fixture includes every flesh wound's case: CJK, JSON-escaped
    characters and control characters (which are now removed before
    serialization rather than escaped).
@@ -470,4 +482,19 @@ markers removed from board text; the ceiling defined on the MCP wire with a
 110-project fixture; the 8 KB figure dropped; masking-after-caps and the
 current-schema condition on the zero-write test stated; the sweep runs on
 the cut line.
+
+## Recheck (2026-09-23)
+
+All five wounds and the scar closed, with executed evidence (full verdict:
+`Reviews/adr-0054/r3-recheck.md`). One new wound, FR1: the claims row
+planned MCP tests with a `chmod 000` log and a directory at the log path,
+both of which make `run()` refuse before any payload exists, so the tests
+would pass vacuously while the one state that reaches the handler, a
+write-only log, went unnamed. Fixed in the row, which now names the
+write-only case and forbids a stubbed reader; the shipped `project_resume`
+fix (106fae3) already tests it that way. Notes taken: fence removal repeats
+to a fixed point, the ceiling is stated in bytes with the measured 125,857,
+step 10 no longer breaks at month starts, and the import fallback residual
+names the four affected projects. Verdict after the text fix: cleared for
+build.
 
