@@ -243,4 +243,19 @@ describe('imported on a real vault', () => {
       expect(listProjectViews(v)[0]).toMatchObject({ conflict: true, imported: false });
     } finally { v.close(); }
   });
+
+  it('ages an imported heading Log from its newest heading date', () => {
+    const v = Vault.create({ path: path.join(dir, 'h.nkv'), passphrase: 'synthetic board passphrase', deviceSecret: generateDeviceSecret(), kdf: KDF_INTERACTIVE });
+    try {
+      const at = (days: number): string => new Date(Date.now() - days * 86400000).toISOString().slice(0, 10);
+      const text = `# Heads\n\n## Current Status\n\nQuiet.\n\n## Log\n\n### ${at(40)} newest session\n\n- did a thing\n\n### Week of ${at(60)}\n\nOlder.\n`;
+      const plan = planImport([{ name: 'heads.md', text }]);
+      v.importProject(plan.projects[0]!);
+      const [s] = listProjectViews(v);
+      const headView = getProjectView(v, 'heads');
+      expect(newestLogDate(headView.log, new Date())).toBe(at(40));
+      const board = buildBoard({ summaries: [s!], views: new Map([['heads', headView]]), now: new Date(), staleDays: 14, openSessions: new Map() });
+      expect(board.stale.rows).toEqual([{ project: 'heads', last_activity: at(40), activity_source: 'last log entry', status: 'Quiet.' }]);
+    } finally { v.close(); }
+  });
 });

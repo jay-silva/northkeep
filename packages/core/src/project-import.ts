@@ -8,7 +8,9 @@
  * stored. Log entries keep their own dates: they are moved into ADR 0045
  * archives, not replayed through project_update. When every entry has a
  * readable date the newest ten by date stay live and archives run oldest
- * first; otherwise source order is kept and the plan says so. If the document
+ * first; otherwise the source's sequence is kept, turned newest first when its
+ * dated entries run oldest first, and the plan says so. A Log written as
+ * headings becomes ordinary dash entries. If the document
  * is still over the cap, extra sections move, last first, into numbered
  * overflow memories, then older live entries join the archives, then the
  * largest remaining bodies move whole, leaving a pointer. No row exceeds
@@ -46,9 +48,9 @@ export interface ImportFilePlan {
   sections: ImportSectionMapping[];
   /** The live document as it will be stored. */
   document: string;
-  /** Archive memory contents in write order: oldest first when log_order is 'by date'. */
+  /** Archive memory contents in write order, oldest first (by date, or as the source's dated entries run). */
   archives: string[];
-  /** 'by date' when every Log entry had a readable date; otherwise the source's own order was kept. */
+  /** 'by date' when every Log entry had a readable date; otherwise the source's sequence, reversed when it ran oldest first. */
   log_order: ImportLogOrder;
   /** The whole overflow text for the dry run, or null. Not written as one row. */
   overflow: string | null;
@@ -66,7 +68,7 @@ export interface ImportFilePlan {
   total_bytes: number;
 }
 
-export type ImportLogOrder = 'by date' | 'source order';
+export type ImportLogOrder = 'by date' | 'source order' | 'source order reversed';
 export interface ImportSkip { name: string; reason: string }
 export interface ImportPlan {
   projects: ImportFilePlan[];
@@ -90,14 +92,14 @@ export const PROJECT_IMPORT_ROW_MAX_BYTES = 60000;
 const UNSAFE_NAME_CHARS = /[\p{Cc}\p{Cf}\u2028\u2029]/gu;
 
 /** 'oldest first' is true only when the order came from dates or from NorthKeep's own export. */
-export type ImportedArchiveOrder = 'oldest first' | 'reverse source order';
+export type ImportedArchiveOrder = 'oldest first' | 'source sequence';
 
 /** One paragraph, never a blank line, so splitLogArchive still finds where the entries start. */
 function importedArchiveNote(sourceFile: string, order: ImportedArchiveOrder): string {
   const source = sourceFile.replace(UNSAFE_NAME_CHARS, ' ').trim() || 'an unnamed file';
   const ordering = order === 'oldest first'
     ? 'Oldest first.'
-    : 'Not every entry had a readable date, so these are in reverse source order, not sorted by date.';
+    : 'Not every entry had a readable date, so these are not sorted by date. They keep the source\'s sequence, turned where needed so its dated entries run oldest first.';
   return `Imported from ${source} by northkeep projects import, entries with their original dates. ${ordering} Read with project_get history, or search this scope.`;
 }
 
@@ -402,13 +404,35 @@ function splitBoldDateEntries(body: string): string[] {
   return entries.map((e) => e.replace(/\n+$/, ''));
 }
 
-interface LogEntry { text: string; date: string | null; section: ProjectDocSection | null }
+interface LogEntry { text: string; date: string | null; sections: ProjectDocSection[] }
+
+/**
+ * Four spaces, one past the three HEADING_RE allows, so a heading inside a
+ * converted entry stays text and no body line opens a new dash entry.
+ */
+const HEADING_ENTRY_INDENT = '    ';
+
+/**
+ * One heading-shaped entry as a dash entry: `- <title>`, or `- <date> - <title>`
+ * when the title's date is not at its start, so every reader finds the date
+ * import ordered by. The body and deeper headings follow, indented.
+ */
+function headingEntryText(sections: ProjectDocSection[]): string {
+  const [head, ...rest] = sections;
+  const title = head!.title;
+  const date = importLogEntryDate(`# ${title}`);
+  const opener = date !== null && importLogEntryDate(`- ${title}`) !== date ? `- ${date} - ${title}` : `- ${title}`;
+  const body = serializeProjectDoc({ preamble: head!.body, sections: rest });
+  if (body.length === 0) return opener;
+  return `${opener}\n\n${body.split('\n').map((line) => (line.length === 0 ? line : HEADING_ENTRY_INDENT + line)).join('\n')}`;
+}
 
 /**
  * The Log's entries, with the rule picked from its first line so one shape's
  * marker inside another's entry never splits it. A Log whose body is empty
- * and is followed by deeper headings is a heading log: each of those
- * sections is one entry.
+ * and is followed by deeper headings is a heading log: each section at the
+ * shallowest of those levels opens an entry, deeper ones join it, and the
+ * entry is converted to the dash shape the live Log uses.
  */
 function readLogEntries(doc: ProjectDoc, logSection: ProjectDocSection | null): { rule: 'dash' | 'bold' | 'heading'; entries: LogEntry[] } {
   if (logSection === null) return { rule: 'dash', entries: [] };
@@ -417,28 +441,53 @@ function readLogEntries(doc: ProjectDoc, logSection: ProjectDocSection | null): 
     const at = doc.sections.indexOf(logSection);
     const nested: ProjectDocSection[] = [];
     for (let i = at + 1; i < doc.sections.length && doc.sections[i]!.level > logSection.level; i += 1) nested.push(doc.sections[i]!);
+    if (nested.length === 0) return { rule: 'dash', entries: [] };
+    const top = Math.min(...nested.map((section) => section.level));
+    const groups: ProjectDocSection[][] = [];
+    for (const section of nested) {
+      if (groups.length === 0 || section.level <= top) groups.push([section]);
+      else groups[groups.length - 1]!.push(section);
+    }
     return {
       rule: 'heading',
-      entries: nested.map((section) => {
-        const text = serializeProjectDoc({ preamble: '', sections: [section] });
-        return { text, date: importLogEntryDate(text), section };
+      entries: groups.map((sections) => {
+        const text = headingEntryText(sections);
+        return { text, date: importLogEntryDate(text), sections };
       }),
     };
   }
   const bold = BOLD_DATE_START.test(first);
   const texts = bold ? splitBoldDateEntries(logSection.body) : splitLogEntries(logSection.body);
-  return { rule: bold ? 'bold' : 'dash', entries: texts.map((text) => ({ text, date: importLogEntryDate(text), section: null })) };
+  return { rule: bold ? 'bold' : 'dash', entries: texts.map((text) => ({ text, date: importLogEntryDate(text), sections: [] })) };
 }
 
 /**
- * Newest first by date when every entry has one. Ties keep source order,
- * read newest first: an oldest-first source is reversed before the stable
- * sort, so same-day entries stay in the order they were written, newest first.
+ * Whether the source Log runs oldest first, read from its dated entries in
+ * source order: the direction most adjacent pairs take (equal dates cast no
+ * vote), then first against last on a tie. Otherwise newest first, the live
+ * Log's own direction.
+ */
+function runsOldestFirst(entries: LogEntry[]): boolean {
+  const dates = entries.flatMap((e) => (e.date === null ? [] : [e.date]));
+  let up = 0;
+  let down = 0;
+  for (let i = 1; i < dates.length; i += 1) {
+    if (dates[i]! > dates[i - 1]!) up += 1;
+    else if (dates[i]! < dates[i - 1]!) down += 1;
+  }
+  if (up !== down) return up > down;
+  return dates.length > 1 && dates[0]! < dates[dates.length - 1]!;
+}
+
+/**
+ * Newest first. By date when every entry has one; ties keep source order,
+ * read newest first. Otherwise the source's own sequence, reversed when it
+ * runs oldest first, so an undated entry stays between the same neighbours.
  */
 function orderLogEntries(entries: LogEntry[]): { ordered: LogEntry[]; order: ImportLogOrder } {
-  if (entries.some((e) => e.date === null)) return { ordered: entries, order: 'source order' };
-  const ascending = entries.length > 1 && entries[0]!.date! < entries[entries.length - 1]!.date!;
+  const ascending = runsOldestFirst(entries);
   const oriented = ascending ? [...entries].reverse() : [...entries];
+  if (entries.some((e) => e.date === null)) return { ordered: oriented, order: ascending ? 'source order reversed' : 'source order' };
   const ordered = oriented
     .map((entry, i) => ({ entry, i }))
     .sort((a, b) => (a.entry.date === b.entry.date ? a.i - b.i : a.entry.date! < b.entry.date! ? 1 : -1))
@@ -448,10 +497,14 @@ function orderLogEntries(entries: LogEntry[]): { ordered: LogEntry[]; order: Imp
 
 function planDocument(name: string, slug: string, body: string, logParts: Array<{ name: string; part: number; body: string }>): ImportFilePlan | string {
   const source = parseProjectDoc(body);
-  const sections: ImportSectionMapping[] = source.sections.map((s) => ({ from: s.title, to: HEADING_MAP[s.title] ?? s.title, chars: s.body.length }));
   const doc: ProjectDoc = { preamble: source.preamble, sections: source.sections.map((s) => ({ ...s, title: HEADING_MAP[s.title] ?? s.title })) };
   const duplicate = duplicateOwned(doc);
   if (duplicate) return `has more than one ${duplicate} section after mapping headings; merge them in the source first`;
+  const logSection = doc.sections.find((section) => section.title === 'Log') ?? null;
+  const { rule, entries } = readLogEntries(doc, logSection);
+  const entrySections = new Set(entries.flatMap((e) => e.sections));
+  // A heading-log entry is stored as Log text, not as the section it was.
+  const sections: ImportSectionMapping[] = source.sections.map((s, i) => ({ from: s.title, to: entrySections.has(doc.sections[i]!) ? 'Log' : HEADING_MAP[s.title] ?? s.title, chars: s.body.length }));
 
   // A missing middle part would drop its archives unseen.
   if (logParts.some((part, i) => part.part !== i + 1)) return `log parts are not numbered 1 to ${logParts.length} without gaps: ${logParts.map((p) => p.name).join(', ')}`;
@@ -466,23 +519,18 @@ function planDocument(name: string, slug: string, body: string, logParts: Array<
 
   const over = (): boolean => serializeProjectDoc(doc).length > PROJECT_DOC_MAX_CHARS;
   const order = new Map(doc.sections.map((section, i) => [section, i]));
-  const logSection = doc.sections.find((section) => section.title === 'Log') ?? null;
-  const { rule, entries } = readLogEntries(doc, logSection);
   const { ordered, order: logOrder } = orderLogEntries(entries);
-  const entrySections = new Set(entries.flatMap((e) => (e.section ? [e.section] : [])));
   const reordered = ordered.some((entry, i) => entry !== entries[i]);
   let keep = Math.min(ordered.length, PROJECT_LOG_KEEP_ENTRIES);
-  // Rewrites only when an entry moves, so an already ordered Log keeps its exact spacing.
+  // Rewrites only when an entry moves, so an already ordered Log keeps its exact spacing; a heading Log always converts.
   const setLog = (): void => {
-    if (logSection === null || (keep >= ordered.length && !reordered)) return;
+    if (logSection === null || (rule !== 'heading' && keep >= ordered.length && !reordered)) return;
     const live = ordered.slice(0, keep);
     if (rule === 'heading') {
       const rest = doc.sections.filter((section) => !entrySections.has(section));
-      rest.splice(rest.indexOf(logSection) + 1, 0, ...live.map((e) => e.section!));
       doc.sections.splice(0, doc.sections.length, ...rest);
-    } else {
-      logSection.body = live.map((e) => e.text).join(rule === 'bold' ? '\n\n' : '\n');
     }
+    logSection.body = live.map((e) => e.text).join(rule === 'bold' ? '\n\n' : '\n');
   };
   setLog();
 
@@ -513,10 +561,10 @@ function planDocument(name: string, slug: string, body: string, logParts: Array<
     return `still ${document.length} characters after moving every section body out; the text before the first heading exceeds ${PROJECT_DOC_MAX_CHARS}; shorten it in the source`;
   }
   if (document.trim().length === 0) return 'has no content';
-  // Newest first before the cut, so reversing the rest gives oldest first when ordered by date.
+  // Newest first before the cut, so reversing the rest gives oldest first.
   const rolled = ordered.slice(keep).reverse().map((e) => e.text);
   const inSourceOrder = moved.sort((a, b) => a.ord - b.ord).map((m) => m.section);
-  const archives = [...reattached, ...chunkArchives(slug, rolled, name, logOrder === 'by date' ? 'oldest first' : 'reverse source order')];
+  const archives = [...reattached, ...chunkArchives(slug, rolled, name, logOrder === 'by date' ? 'oldest first' : 'source sequence')];
   const overflow = inSourceOrder.length > 0 ? overflowText(slug, inSourceOrder, name) : null;
   const overflow_parts = overflow === null ? [] : splitImportOverflow(slug, overflow);
   const rowBytes = [document, ...archives, ...overflow_parts].map(utf8Length);
