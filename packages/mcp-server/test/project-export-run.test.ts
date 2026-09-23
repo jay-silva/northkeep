@@ -1,4 +1,4 @@
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -275,6 +275,28 @@ describe('exportProjects end to end', () => {
     expect(v.entries.filter((e) => e.status !== 'render failed').every((e) => e.status === 'matches')).toBe(true);
   });
 
+  it('an unreadable mirror file refuses only that target; a scheduled run records a partial run, not an error (a2)', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const demo = path.join(repo, 'projects', 'demo.md');
+    fs.chmodSync(demo, 0o000);
+    try {
+      await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Past the bad file.' }));
+      const res = await exportProjects({ home: lab.home, vaultPath: lab.vaultPath, withVault: runner, by: 'schedule' });
+      expect(res.refused).toContainEqual({ path: 'projects/demo.md', reason: 'unreadable' });
+      expect(res.written).toContain('projects/other.md');
+      expect(res.status).toBe('committed');
+      expect(JSON.stringify(res.refused)).not.toContain(lab.root);
+      const state = await runner((v) => readExportState(lab.home, repo, v.getVaultId()));
+      expect(state?.last_failure).toBeNull();
+      expect(state?.last_success?.commit).toBe(res.commit);
+      expect(state?.last_attempt?.by).toBe('schedule');
+      expect(state?.refused).toContainEqual({ path: 'projects/demo.md', reason: 'unreadable' });
+    } finally {
+      fs.chmodSync(demo, 0o644);
+    }
+  });
+
   it('refuses a symlinked projects folder without writing or listing through it', async () => {
     await seed();
     await exportOnce({ repo });
@@ -340,6 +362,100 @@ describe('exportProjects end to end', () => {
     expect(fx(lab, bare, ['rev-list', '--all'])).toBe('');
     expect(await readRemotes(ctxFor(lab, repo))).toEqual([{ name: 'origin', url: bare }]);
   });
+});
+
+/** A second process running exportProjects from dist with the default runner; resolves with its one output line. */
+function childExport(opts: { lockWaitMs?: number } = {}): Promise<string> {
+  const script = `import { nodePlatform } from '@northkeep/platform-node';
+import { setPlatform } from '@northkeep/core';
+setPlatform(nodePlatform());
+const { exportProjects } = await import(${JSON.stringify(RUN_DIST)});
+try {
+  const r = await exportProjects({ home: ${JSON.stringify(lab.home)}, vaultPath: ${JSON.stringify(lab.vaultPath)}, by: 'cli', lockWaitMs: ${opts.lockWaitMs ?? 20_000} });
+  console.log(JSON.stringify({ status: r.status }));
+} catch (e) { console.log(JSON.stringify({ refused: e.code ?? 'error' })); }`;
+  return new Promise((resolve) => {
+    const c = spawn(process.execPath, ['--input-type=module', '-e', script], {
+      cwd: MCP_DIR,
+      env: { PATH: '/usr/bin:/bin', NORTHKEEP_HOME: lab.home, NORTHKEEP_MASTER_KEY: keyHex, NORTHKEEP_NO_KEYCHAIN: '1' },
+    });
+    let o = '';
+    c.stdout.on('data', (d: Buffer) => (o += d.toString()));
+    c.on('close', () => resolve(o.trim()));
+  });
+}
+
+function deadPid(): number {
+  return Number(spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout);
+}
+
+/** Every commit after `since` keeps notes.txt and is never an empty tree. */
+function assertHistoryKeeps(since: string): void {
+  const ids = fx(lab, repo, ['rev-list', `${since}..HEAD`]).split('\n').filter(Boolean);
+  for (const c of ids) {
+    const names = fx(lab, repo, ['ls-tree', '-r', '--name-only', c]).split('\n');
+    expect(names, `commit ${c}`).toContain('notes.txt');
+    expect(names, `commit ${c}`).toContain('.northkeep-mirror');
+  }
+  expect(fx(lab, repo, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n')).toContain('notes.txt');
+}
+
+describe('concurrent exports', () => {
+  async function seedWithUserFile(): Promise<string> {
+    expect(fs.existsSync(RUN_DIST), 'build @northkeep/mcp-server first').toBe(true);
+    await seed();
+    await exportOnce({ repo });
+    fs.writeFileSync(path.join(repo, 'notes.txt'), 'user notes\n');
+    fx(lab, repo, ['add', 'notes.txt']);
+    fx(lab, repo, ['commit', '-q', '-m', 'user: add notes.txt']);
+    return fx(lab, repo, ['rev-parse', 'HEAD']);
+  }
+
+  it('an aged lock held by a paused live export is not stolen, and the paused export keeps the user file (a5b)', async () => {
+    const userHead = await seedWithUserFile();
+    const lockFile = path.join(repo, '.git', 'northkeep-export.lock');
+    let other = '';
+    let fired = false;
+    setGitSpawnObserver((v) => {
+      if (v !== 'update-index' || fired) return;
+      fired = true;
+      const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      fs.utimesSync(lockFile, old, old);
+      // Blocks this run mid-commit while a second process tries to export.
+      const r = spawnSync(process.execPath, ['--input-type=module', '-e', `import { nodePlatform } from '@northkeep/platform-node';
+import { setPlatform } from '@northkeep/core';
+setPlatform(nodePlatform());
+const { exportProjects } = await import(${JSON.stringify(RUN_DIST)});
+try { const r = await exportProjects({ home: ${JSON.stringify(lab.home)}, vaultPath: ${JSON.stringify(lab.vaultPath)}, by: 'schedule', lockWaitMs: 300 }); console.log(r.status); }
+catch (e) { console.log(e.code); }`], {
+        cwd: MCP_DIR,
+        env: { PATH: '/usr/bin:/bin', NORTHKEEP_HOME: lab.home, NORTHKEEP_MASTER_KEY: keyHex, NORTHKEEP_NO_KEYCHAIN: '1' },
+        encoding: 'utf8',
+        timeout: 60_000,
+      });
+      other = r.stdout.trim();
+    });
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'During the race.' }));
+    const res = await exportOnce();
+    setGitSpawnObserver(null);
+    expect(fired).toBe(true);
+    expect(other).toBe('export_busy');
+    expect(res.status).toBe('committed');
+    assertHistoryKeeps(userHead);
+  }, 90_000);
+
+  it('three and six plain exports racing a dead-owner lock never commit a tree missing a user file (a5d, a5g, a5h)', async () => {
+    const userHead = await seedWithUserFile();
+    const lockFile = path.join(repo, '.git', 'northkeep-export.lock');
+    const outs: string[] = [];
+    for (const n of [3, 3, 3, 6, 6]) {
+      fs.writeFileSync(lockFile, `${JSON.stringify({ pid: deadPid(), started_at: 'x', nonce: 'dead' })}\n`);
+      outs.push(...(await Promise.all(Array.from({ length: n }, () => childExport()))));
+      assertHistoryKeeps(userHead);
+    }
+    expect(outs.some((o) => o.includes('"status"'))).toBe(true);
+    expect(fx(lab, repo, ['status', '--short'])).toBe('');
+  }, 120_000);
 });
 
 describe('a killed first export heals', () => {

@@ -37,6 +37,7 @@ import {
   plumbingCommit,
   preflightRepository,
   readHead,
+  removeStaleRunIndexes,
   repoKey,
   requireCommitIdentity,
   runGit,
@@ -58,7 +59,6 @@ import { resolveMasterKey } from './key.js';
 
 export const JOURNAL_DEPTH = 10;
 export const EXPORT_LOCK_NAME = 'northkeep-export.lock';
-export const EXPORT_LOCK_STALE_MS = 60 * 60 * 1000;
 export const EXPORT_LOCK_WAIT_MS = 30_000;
 
 const OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
@@ -86,7 +86,6 @@ export interface ExportLock {
 
 export interface LockOptions {
   waitMs?: number;
-  staleMs?: number;
   pollMs?: number;
 }
 
@@ -103,17 +102,42 @@ function readNoFollow(p: string): string | null {
   }
 }
 
-/** Unparseable owners count as alive; only age can free them. */
-function ownerDead(token: string): boolean {
-  let pid: unknown;
+/** Exact lock bytes, 'gone' when absent, 'unreadable' for anything else (never stolen). */
+function readLockBytes(p: string): Buffer | 'gone' | 'unreadable' {
   try {
-    pid = (JSON.parse(token) as { pid?: unknown }).pid;
-  } catch {
-    return false;
+    const fd = fs.openSync(p, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+    try {
+      return fs.readFileSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'gone' : 'unreadable';
   }
-  if (typeof pid !== 'number' || !Number.isInteger(pid) || pid <= 0 || pid === process.pid) return false;
+}
+
+interface LockOwner {
+  pid: number;
+  /** Re-serialized, so no text from the lock file reaches a message. */
+  startedAt: string | null;
+}
+
+function lockOwner(bytes: Buffer): LockOwner | null {
+  let v: unknown;
   try {
-    process.kill(pid, 0);
+    v = JSON.parse(bytes.toString('utf8'));
+  } catch {
+    return null;
+  }
+  if (!isRecord(v) || typeof v.pid !== 'number' || !Number.isInteger(v.pid) || v.pid <= 0) return null;
+  const t = typeof v.started_at === 'string' ? Date.parse(v.started_at) : Number.NaN;
+  return { pid: v.pid, startedAt: Number.isNaN(t) ? null : new Date(t).toISOString() };
+}
+
+function ownerDead(owner: LockOwner): boolean {
+  if (owner.pid === process.pid) return false;
+  try {
+    process.kill(owner.pid, 0);
     return false;
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === 'ESRCH';
@@ -121,15 +145,56 @@ function ownerDead(token: string): boolean {
 }
 
 /**
+ * Compare-and-steal under an O_EXCL guard: stealers run one at a time, and a
+ * dead lock can only be removed by a stealer, so re-reading it under the
+ * guard proves the rename moves exactly the dead bytes.
+ */
+function stealDeadLock(lockPath: string, seen: Buffer, token: string): 'retry' | 'busy' | 'mismatch' | 'guard_dead' {
+  const guardPath = `${lockPath}.steal`;
+  const { O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW } = fs.constants;
+  try {
+    const fd = fs.openSync(guardPath, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o600);
+    try {
+      fs.writeSync(fd, token);
+    } finally {
+      fs.closeSync(fd);
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+    const g = readLockBytes(guardPath);
+    const gOwner = Buffer.isBuffer(g) ? lockOwner(g) : null;
+    return gOwner !== null && ownerDead(gOwner) ? 'guard_dead' : 'busy';
+  }
+  try {
+    // Read before the guard was ours: another stealer may have freed it and a contender taken it since.
+    const now = readLockBytes(lockPath);
+    if (!Buffer.isBuffer(now) || !now.equals(seen)) return 'retry';
+    const grave = `${lockPath}.stale-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
+    try {
+      fs.renameSync(lockPath, grave);
+    } catch {
+      return 'retry';
+    }
+    const moved = readLockBytes(grave);
+    fs.rmSync(grave, { force: true });
+    return Buffer.isBuffer(moved) && moved.equals(seen) ? 'retry' : 'mismatch';
+  } finally {
+    if (readNoFollow(guardPath) === token) fs.rmSync(guardPath, { force: true });
+  }
+}
+
+const LOCK_HINT = 'if none is, remove northkeep-export.lock from the repository\'s .git folder and try again';
+
+/**
  * O_EXCL lock at `<common dir>/northkeep-export.lock`, shared by every worktree.
- * Stale only when its pid is dead or it is over an hour old; stolen by rename
- * so exactly one contender wins, and released only while it holds our token.
+ * Never taken by age: a live or unreadable owner is waited for, then refused.
+ * A dead owner's lock is taken only by compare-and-steal, so a contender's
+ * fresh lock is never mistaken for the dead one. Released only while it holds our token.
  */
 export async function acquireExportLock(ctx: GitContext, opts: LockOptions = {}): Promise<ExportLock> {
   const r = await runGit(ctx, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
   const lockPath = path.join(r.stdout.replace(/\r?\n$/, ''), EXPORT_LOCK_NAME);
   const waitMs = opts.waitMs ?? EXPORT_LOCK_WAIT_MS;
-  const staleMs = opts.staleMs ?? EXPORT_LOCK_STALE_MS;
   const pollMs = opts.pollMs ?? 250;
   const token = `${JSON.stringify({
     pid: process.pid,
@@ -150,25 +215,36 @@ export async function acquireExportLock(ctx: GitContext, opts: LockOptions = {})
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
     }
-    let st: fs.Stats | null = null;
-    try {
-      st = fs.lstatSync(lockPath);
-    } catch {
-      continue;
-    }
-    const existing = readNoFollow(lockPath);
-    if (Date.now() - st.mtimeMs > staleMs || (existing !== null && ownerDead(existing))) {
-      const graveyard = `${lockPath}.stale-${process.pid}-${crypto.randomBytes(4).toString('hex')}`;
-      try {
-        fs.renameSync(lockPath, graveyard);
-        fs.rmSync(graveyard, { force: true });
-      } catch {
-        // another contender won the steal
+    const seen = readLockBytes(lockPath);
+    if (seen === 'gone') continue;
+    const owner = seen === 'unreadable' ? null : lockOwner(seen);
+    if (owner !== null && seen !== 'unreadable' && ownerDead(owner)) {
+      const stolen = stealDeadLock(lockPath, seen, token);
+      if (stolen === 'retry') continue;
+      if (stolen === 'mismatch') {
+        // Put nothing back: restoring could clobber a newer lock, and its owner re-checks before committing.
+        throw new ExportRefusal('export_busy', 'Another NorthKeep export took the export lock at the same moment; try again shortly');
       }
-      continue;
+      if (stolen === 'guard_dead') {
+        throw new ExportRefusal(
+          'lock_unreadable',
+          "A stale northkeep-export.lock.steal is in the repository's .git folder; once no NorthKeep export is running, remove it and try again",
+        );
+      }
     }
     if (Date.now() >= deadline) {
-      throw new ExportRefusal('export_busy', 'Another NorthKeep export is running on this repository; try again shortly');
+      if (owner === null) {
+        throw new ExportRefusal(
+          'lock_unreadable',
+          "The export lock is unreadable; once no NorthKeep export is running, remove northkeep-export.lock from the repository's .git folder and try again",
+        );
+      }
+      throw new ExportRefusal(
+        'export_busy',
+        owner.startedAt
+          ? `Another NorthKeep export has been running since ${owner.startedAt}; ${LOCK_HINT}`
+          : `Another NorthKeep export is running on this repository; ${LOCK_HINT}`,
+      );
     }
     await new Promise((resolve) => setTimeout(resolve, pollMs));
   }
@@ -539,6 +615,13 @@ function recordFailure(home: string, repo: string, vaultId: string | null, by: '
   writeExportState(home, state, lock);
 }
 
+/** Refusals that end the whole run; everything else refuses one target. */
+const RUN_FATAL = new Set(['lock_not_held', 'lock_lost', 'tree_check_failed']);
+
+function fsErrno(err: unknown): boolean {
+  return err instanceof Error && typeof (err as NodeJS.ErrnoException).code === 'string' && !(err instanceof ExportRefusal);
+}
+
 async function runLocked(
   opts: ExportRunOptions,
   repo: string,
@@ -554,6 +637,8 @@ async function runLocked(
     parseMarker: (b) => parseMirrorHeader(Buffer.from(b).toString('utf8')),
   });
   await requireCommitIdentity(pctx);
+  requireLock(lock);
+  removeStaleRunIndexes(opts.home, repo);
   if (opts.repo !== undefined) writeExportSettings(opts.home, { repo }, lock);
   const projectsDir = path.join(repo, 'projects');
   cleanStaleMirrorTemps(repo);
@@ -576,13 +661,17 @@ async function runLocked(
   targets.push({ path: MIRROR_INDEX_PATH, bytes: snap.index.bytes, kind: 'index', slug: null });
 
   for (const t of targets) {
+    let stage: 'read' | 'write' = 'write';
     try {
       // The marker goes first so a killed first run leaves only temps beside .git.
       if (t.path.startsWith('projects/') && !lstatOrNull(projectsDir)) fs.mkdirSync(projectsDir);
       await checkTargetContainment(pctx, t.path, info.head);
       const abs = path.join(repo, t.path);
+      stage = 'read';
       const disk = readRegular(abs);
-      const diskBlob = disk === null ? null : await hashFile(pctx, abs);
+      stage = 'write';
+      // Hashing the bytes already read: the same blob id, with no second read to race or fail.
+      const diskBlob = disk === null ? null : await hashBytes(pctx, disk);
       const cls = classifyTarget(
         { bytes: disk, kind: t.kind },
         { diskBlob, journalBlobs: journal.paths[t.path] ?? [], vaultId: snap.vaultId, slug: t.slug },
@@ -610,7 +699,12 @@ async function runLocked(
         if (t.slug) changedSlugs.add(t.slug);
       }
     } catch (err) {
-      if (!(err instanceof ExportRefusal)) throw err;
+      if (fsErrno(err)) {
+        refused.push({ path: t.path, reason: stage === 'read' ? 'unreadable' : 'unwritable' });
+        if (t.slug) refusedSlugs.add(t.slug);
+        continue;
+      }
+      if (!(err instanceof ExportRefusal) || RUN_FATAL.has(err.code)) throw err;
       refused.push({ path: t.path, reason: err.message });
       if (t.slug) refusedSlugs.add(t.slug);
     }
@@ -634,14 +728,27 @@ async function runLocked(
     const st = lstatOrNull(abs);
     const jb = journal.paths[rel] ?? [];
     if (st) {
-      const disk = readRegular(abs);
-      const diskBlob = disk === null ? null : await hashFile(pctx, abs);
+      let disk: Uint8Array | null;
+      try {
+        disk = readRegular(abs);
+      } catch (err) {
+        if (!fsErrno(err)) throw err;
+        refused.push({ path: rel, reason: 'unreadable' });
+        continue;
+      }
+      const diskBlob = disk === null ? null : await hashBytes(pctx, disk);
       const kind = rel.includes('.log.') ? 'log' : 'document';
       if (st.nlink > 1 || classifyTarget({ bytes: disk, kind }, { diskBlob, journalBlobs: jb, vaultId: snap.vaultId, slug: m[1] as string }) !== 'ours') {
         refused.push({ path: rel, reason: 'hand edit' });
         continue;
       }
-      fs.unlinkSync(abs);
+      try {
+        fs.unlinkSync(abs);
+      } catch (err) {
+        if (!fsErrno(err)) throw err;
+        refused.push({ path: rel, reason: 'unwritable' });
+        continue;
+      }
     } else {
       const hb = await headBlob(pctx, rel);
       if (hb === null || !jb.includes(hb)) continue;
@@ -658,7 +765,10 @@ async function runLocked(
     written: snap.projects.filter((p) => changedSlugs.has(p.slug)).map((p) => ({ slug: p.slug, lastWriterHost: p.lastWriterHost })),
     removed,
   });
-  const res = await plumbingCommit(pctx, info, { add, remove: removed, message });
+  const guard = (): void => {
+    if (!lock.held()) throw new ExportRefusal('lock_lost', 'NorthKeep lost the export lock before committing; nothing was committed. Export again');
+  };
+  const res = await plumbingCommit(pctx, info, { add, remove: removed, message, guard });
 
   const commitId = res.commit ?? (await readHead(pctx));
   if (res.commit) state.nk_commits.push(res.commit);

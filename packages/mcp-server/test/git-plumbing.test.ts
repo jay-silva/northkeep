@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { withFileLock } from '@northkeep/core';
@@ -16,6 +17,8 @@ import {
   plumbingCommit,
   preflightRepository,
   readRemotes,
+  removeStaleRunIndexes,
+  repoKey,
   requireCommitIdentity,
   runGit,
   setGitSpawnObserver,
@@ -165,6 +168,18 @@ describe('runGit environment and allowlist', () => {
     fs.rmSync(path.join(lab.home, 'hooks', 'post-index-change'));
     fs.writeFileSync(path.join(lab.home, 'empty.gitconfig'), '[core]\n\thooksPath = /tmp\n');
     await expectRefusal(runGit(ctx, ['rev-parse', '--git-dir']), 'gitconfig_invalid');
+  });
+
+  it('removes stale run indexes only when their pid is dead, plus the old shared one', async () => {
+    const repo = fs.realpathSync(initRepo(lab));
+    const exp = path.join(lab.home, 'export');
+    fs.mkdirSync(exp, { recursive: true });
+    const key = repoKey(repo);
+    const dead = spawnSync(process.execPath, ['-e', 'process.stdout.write(String(process.pid))'], { encoding: 'utf8' }).stdout;
+    const names = [`${key}.index`, `${key}.${dead}.0123456789abcdef.index`, `${key}.${process.ppid}.0123456789abcdef.index`, `${'f'.repeat(64)}.${dead}.0123456789abcdef.index`, `${key}.json`];
+    for (const n of names) fs.writeFileSync(path.join(exp, n), '');
+    removeStaleRunIndexes(lab.home, repo);
+    expect(fs.readdirSync(exp).sort()).toEqual([names[2], names[3], names[4]].sort());
   });
 
   it('does not pass the parent environment to git', async () => {
@@ -402,6 +417,66 @@ describe('plumbingCommit', () => {
     expect(res.status).toBe('committed');
     expect(fx(lab, repo, ['ls-tree', '-r', '--name-only', 'HEAD'])).not.toContain('projects/demo.md');
     expect(fx(lab, repo, ['status', '--short'])).toBe('');
+  });
+
+  it('never commits a tree missing a HEAD file it was not told to remove, even when a temp index vanishes mid-run (a5)', async () => {
+    const repo = initRepo(lab);
+    await firstExport(repo);
+    fs.writeFileSync(path.join(repo, 'notes.txt'), 'user notes\n');
+    fx(lab, repo, ['add', 'notes.txt']);
+    fx(lab, repo, ['commit', '-q', '-m', 'user: notes']);
+    const userHead = fx(lab, repo, ['rev-parse', 'HEAD']);
+    const { ctx, info } = await preflight(repo);
+    // What a concurrent run did in a5b: remove the index files under export/ after this run's read-tree.
+    let fired = false;
+    setGitSpawnObserver((v) => {
+      if (v !== 'update-index' || fired) return;
+      fired = true;
+      for (const n of fs.readdirSync(path.join(lab.home, 'export'))) {
+        if (n.endsWith('.index')) fs.rmSync(path.join(lab.home, 'export', n));
+      }
+    });
+    await exportFiles(ctx, info, { 'projects/demo.md': '# demo v2\n' }).catch((e: unknown) => {
+      expect((e as ExportRefusal).code).toBe('tree_check_failed');
+    });
+    expect(fired).toBe(true);
+    const names = fx(lab, repo, ['ls-tree', '-r', '--name-only', 'HEAD']).split('\n');
+    expect(names).toContain('notes.txt');
+    expect(names).toContain('.northkeep-mirror');
+    expect(fx(lab, repo, ['rev-list', '--count', `${userHead}..HEAD`])).toMatch(/^[01]$/);
+  });
+
+  it('uses a private temp index per run and removes only its own', async () => {
+    const repo = initRepo(lab);
+    await firstExport(repo);
+    const { ctx, info } = await preflight(repo);
+    const indexes = new Set<string>();
+    const exp = path.join(lab.home, 'export');
+    setGitSpawnObserver((v) => {
+      if (v === 'write-tree') for (const n of fs.readdirSync(exp)) if (n.endsWith('.index')) indexes.add(n);
+    });
+    await exportFiles(ctx, info, { 'projects/demo.md': '# demo v5\n' });
+    const { ctx: c2, info: i2 } = await preflight(repo);
+    await exportFiles(c2, i2, { 'projects/demo.md': '# demo v6\n' });
+    expect(indexes.size).toBe(2);
+    for (const n of indexes) expect(n).toMatch(/^[0-9a-f]{64}\.\d+\.[0-9a-f]{16}\.index$/);
+    expect(fs.readdirSync(exp).filter((n) => n.endsWith('.index'))).toEqual([]);
+  });
+
+  it('runs the guard before update-ref and leaves HEAD unmoved when it throws', async () => {
+    const repo = initRepo(lab);
+    const { res: first } = await firstExport(repo);
+    const { ctx, info } = await preflight(repo);
+    const blob = await hashObjectWrite(ctx, Buffer.from('# demo v7\n'));
+    const seen: string[] = [];
+    setGitSpawnObserver((v) => seen.push(v));
+    const guard = () => {
+      throw new ExportRefusal('lock_lost', 'lost');
+    };
+    await expectRefusal(plumbingCommit(ctx, info, { add: [{ path: 'projects/demo.md', blob }], message: 'x\n', guard }), 'lock_lost');
+    expect(seen).toContain('commit-tree');
+    expect(seen).not.toContain('update-ref');
+    expect(fx(lab, repo, ['rev-parse', 'HEAD'])).toBe(first.commit);
   });
 
   it('refuses a commit of a non-mirror path or a malformed blob', async () => {
