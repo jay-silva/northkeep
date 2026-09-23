@@ -47,7 +47,7 @@ describe('mirror header (Decision 3)',()=>{
   it('formats the pinned text and parses it back, for every kind',()=>{
     const doc=formatMirrorHeader({vaultId:VAULT,kind:'document',slug:'demo',revision:REV});
     expect(doc).toBe(`<!-- northkeep: vault ${VAULT} project demo revision ${REV} kind document\n     The vault is canonical. This file is regenerated. Edits here are not read back. -->\n`);
-    expect(parseMirrorHeader(doc+'body')).toEqual({vaultId:VAULT,slug:'demo',revision:REV,kind:'document',length:doc.length});
+    expect(parseMirrorHeader(doc+'body')).toEqual({vaultId:VAULT,slug:'demo',revision:REV,kind:'document',mirrorId:null,length:doc.length});
     for(const kind of ['index','marker'] as const){const h=formatMirrorHeader({vaultId:VAULT,kind});expect(parseMirrorHeader(h)).toMatchObject({kind,slug:null,revision:null});}
     expect(parseMirrorHeader(formatMirrorHeader({vaultId:VAULT,kind:'log',slug:'demo',revision:REV}))).toMatchObject({kind:'log',slug:'demo'});
     expect(parseExportHeader).toBe(parseMirrorHeader);
@@ -188,8 +188,24 @@ describe('renderMirror against a vault',()=>{
     v.close();
   });
 
-  it('renders the marker with a marker header naming the vault',()=>{
-    const m=renderMarkerFile(VAULT);
-    expect(m.path).toBe('.northkeep-mirror');expect(parseMirrorHeader(text(m.bytes))).toMatchObject({kind:'marker',vaultId:VAULT});
+  it('renders the marker with a marker header naming the vault and the mirror id',()=>{
+    const MIRROR='1b2c3d4e-5f60-4718-9abc-def012345678';
+    const m=renderMarkerFile(VAULT,MIRROR);
+    expect(m.path).toBe('.northkeep-mirror');
+    expect(text(m.bytes).split('\n')[0]).toBe(`<!-- northkeep: vault ${VAULT} kind marker mirror ${MIRROR}`);
+    expect(parseMirrorHeader(text(m.bytes))).toMatchObject({kind:'marker',vaultId:VAULT,mirrorId:MIRROR});
+    expect(new TextEncoder().encode(formatMirrorHeader({vaultId:VAULT,kind:'marker',mirrorId:MIRROR})).length).toBeLessThanOrEqual(MIRROR_HEADER_MAX_BYTES);
+  });
+
+  it('still parses a marker written before mirror ids, and refuses a mirror id anywhere else',()=>{
+    const MIRROR='1b2c3d4e-5f60-4718-9abc-def012345678';
+    const old=formatMirrorHeader({vaultId:VAULT,kind:'marker'});
+    expect(parseMirrorHeader(old)).toEqual({vaultId:VAULT,slug:null,revision:null,kind:'marker',mirrorId:null,length:old.length});
+    const idx=formatMirrorHeader({vaultId:VAULT,kind:'index'});
+    expect(parseMirrorHeader(idx.replace('kind index',`kind index mirror ${MIRROR}`))).toBeNull();
+    expect(parseMirrorHeader(old.replace('kind marker','kind marker mirror 1b2c3d4e-5f60-1718-9abc-def012345678'))).toBeNull();
+    expect(()=>renderMarkerFile(VAULT,'not-a-uuid')).toThrow();
+    expect(()=>renderMarkerFile(VAULT,MIRROR.toUpperCase())).toThrow();
+    expect(()=>formatMirrorHeader({vaultId:VAULT,kind:'index',mirrorId:MIRROR})).toThrow();
   });
 });
