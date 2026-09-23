@@ -98,6 +98,27 @@ export function readCallLog(lastN?: number): CallLogEntry[] {
   } catch {
     return [];
   }
+  const entries = parseCallLog(raw);
+  return lastN === undefined ? entries : entries.slice(-lastN);
+}
+
+/**
+ * For derivations whose empty answer is a claim, such as "no open sessions".
+ * A missing file is a machine with no calls yet, so empty is true; any other
+ * read error throws rather than looking like an empty log.
+ */
+export function readCallLogStrict(): CallLogEntry[] {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(callLogPath(), 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+    throw new Error('The call log exists but could not be read.');
+  }
+  return parseCallLog(raw);
+}
+
+function parseCallLog(raw: string): CallLogEntry[] {
   const entries: CallLogEntry[] = [];
   for (const line of raw.split('\n')) {
     if (line.trim().length === 0) continue;
@@ -107,5 +128,5 @@ export function readCallLog(lastN?: number): CallLogEntry[] {
       // a truncated line (crash mid-append) must not take the whole log down
     }
   }
-  return lastN === undefined ? entries : entries.slice(-lastN);
+  return entries;
 }

@@ -29,7 +29,7 @@ import { createCachedEmbedder, createOllamaEmbedder } from '@northkeep/librarian
 import { applyTier1 } from '@northkeep/redact';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
-import { appendCallLog, readCallLog, type CallLogEntry } from './log.js';
+import { appendCallLog, readCallLogStrict, type CallLogEntry } from './log.js';
 import { tameOneLine } from './text-safe.js';
 import { readMirrorSummary } from './project-export-run.js';
 import type { OpenSession } from './open-sessions.js';
@@ -723,7 +723,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         // absent: run appends it only after this returns.
         let open: OpenSession[] | null;
         try {
-          open = openSessions(readCallLog(), scope, ctx.session_id, new Date());
+          open = openSessions(readCallLogStrict(), scope, ctx.session_id, new Date());
         } catch {
           open = null;
         }

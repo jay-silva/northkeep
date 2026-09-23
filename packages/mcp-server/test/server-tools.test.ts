@@ -3,7 +3,7 @@ import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import {
@@ -24,20 +24,6 @@ import {
   PROJECT_STANDING_INSTRUCTION,
 } from '../src/project-recipe.js';
 import { createServer } from '../src/server.js';
-
-// A pass-through by default; one test flips it to prove a resume survives a
-// call log this machine cannot read at all.
-const callLogRead = vi.hoisted(() => ({ fails: false }));
-vi.mock('../src/log.js', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../src/log.js')>();
-  return {
-    ...actual,
-    readCallLog: (lastN?: number) => {
-      if (callLogRead.fails) throw new Error('call log unreadable');
-      return actual.readCallLog(lastN);
-    },
-  };
-});
 
 const PASSPHRASE = 'm13 server-tools passphrase';
 
@@ -97,7 +83,6 @@ afterEach(async () => {
   else process.env.NORTHKEEP_REDACT_TIER = prevRedactionTier;
   if (prevOllamaUrl === undefined) delete process.env.NORTHKEEP_OLLAMA_URL;
   else process.env.NORTHKEEP_OLLAMA_URL = prevOllamaUrl;
-  callLogRead.fails = false;
   fs.rmSync(home, { recursive: true, force: true });
 });
 
@@ -899,9 +884,15 @@ describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
       arguments: { project: 'nolog', expected_revision: null, status: 'Started.', next_actions: '' },
     });
     const before = readCallLog().length;
-    callLogRead.fails = true;
-    const result = await mcp.callTool({ name: 'project_resume', arguments: { project: 'nolog' } });
-    callLogRead.fails = false;
+    // A real file this process can append to but not read: a stubbed reader
+    // hid that readCallLog swallowed the error and reported no open sessions.
+    fs.chmodSync(callLogPath(), 0o200);
+    let result: Awaited<ReturnType<typeof mcp.callTool>>;
+    try {
+      result = await mcp.callTool({ name: 'project_resume', arguments: { project: 'nolog' } });
+    } finally {
+      fs.chmodSync(callLogPath(), 0o600);
+    }
     expect(result.isError, toolText(result)).toBeFalsy();
     const parsed = JSON.parse(toolText(result)) as { open_sessions?: unknown; open_sessions_note?: string; revision: string };
     expect(parsed.open_sessions).toBeUndefined();

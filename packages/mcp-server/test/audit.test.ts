@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { auditAsCsv } from '../src/audit.js';
-import { appendCallLog } from '../src/log.js';
+import { callLogPath } from '@northkeep/core';
+import { appendCallLog, readCallLogStrict } from '../src/log.js';
 import { grantedScopes } from '../src/server.js';
 
 let home: string;
@@ -66,3 +67,21 @@ describe('grantedScopes fail-closed parsing', () => {
     );
   });
 });
+
+describe('readCallLogStrict', () => {
+  it('reads an empty list when no log exists yet, and throws on a log it cannot read', () => {
+    expect(readCallLogStrict()).toEqual([]);
+    appendCallLog({ ts: '2026-09-23T00:00:00Z', tool: 'memory_list', provider: 'p', ok: true });
+    expect(readCallLogStrict()).toHaveLength(1);
+    fs.chmodSync(callLogPath(), 0o200);
+    try {
+      expect(() => readCallLogStrict()).toThrow('could not be read');
+    } finally {
+      fs.chmodSync(callLogPath(), 0o600);
+    }
+    fs.rmSync(callLogPath());
+    fs.mkdirSync(callLogPath());
+    expect(() => readCallLogStrict()).toThrow('could not be read');
+  });
+});
+
