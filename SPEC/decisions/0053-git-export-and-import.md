@@ -589,8 +589,12 @@ rule now:
 
 - When every entry has a readable date: newest ten by date live, archives
   oldest first by date, `log_order: 'by date'`, as before. Same-day ties are
-  oriented by the direction rule below, which reads the same as before for
-  any Log whose dates mostly run one way.
+  oriented by the direction rule below; before, they were oriented by the
+  first entry's date against the last's. The two differ when most dates run
+  one way but the first and last disagree, as with a year typo at the start
+  of an oldest-first Log: same-day entries then come out newest written
+  first, where before they came out oldest written first (review round 1,
+  f20).
 - Otherwise the entries are not sorted. The source's direction is read from
   its dated entries in source order: the direction most adjacent dated pairs
   take (equal dates cast no vote), then first dated against last dated on a
@@ -603,6 +607,11 @@ rule now:
   entries run. The archive note says the entries are not sorted by date.
 - Adjacent pairs rather than first against last, so one year typo at either
   end (a `2099` for `2026`) does not flip a long Log.
+- Text before the first entry (a dash Log whose first line is prose) is the
+  Log's preamble, not an entry: it is never dated, never ordered, and stays
+  at the top of the live Log when the entries are reversed. Only if the
+  document is still over the cap with every entry archived does it join the
+  archives, ahead of the entries.
 
 **2. A Log written as headings becomes dash entries.** Before, a Log whose
 body was empty and whose entries were deeper headings (`### 2026-09-01 ...`)
@@ -610,8 +619,22 @@ was stored as nested sections, so `ProjectView.log` read as empty, log
 rolling found nothing to roll, and the project board's `newestLogDate` aged
 the project from its import. Now:
 
-- Each section at the shallowest level under the Log opens one entry; deeper
-  sections join the entry before them.
+- The Log is read from the source lines, fence-aware: a line inside a code
+  fence (```` ``` ```` or `~~~`) that closes is never a heading and is never
+  rewritten. An unclosed fence is read as if it never opened, so it cannot
+  swallow the rest of the Log.
+- Only a dated heading at the entry level opens an entry. The entry level is
+  the shallowest level any dated heading uses. Every other line, including
+  an undated heading at the entry level and any deeper heading, is text of
+  the entry above it. Text before the first dated heading is the Log's
+  preamble and stays at the top, indented only if one of its lines would
+  otherwise re-read as a heading or an entry. A heading Log with no dated
+  heading is left exactly as written (review round 1, FW1: f8, f21).
+- A heading under the Log whose title is an owned section (What & Why,
+  Current Status, Next Actions, Decisions, Log, Open Questions, Files, or
+  `Open Questions / Risks`) ends the Log there, even inside a fence, and it
+  and every section after it stay sections, as before this fix, so
+  `project_resume` still finds them (review round 1, FW2: f19).
 - The entry is stored as `- <heading title>`, then a blank line and the
   section text with every non-empty line indented four spaces. Four, not
   two, because a heading line indented up to three spaces still opens a
@@ -620,9 +643,10 @@ the project from its import. Now:
 - When the title's first readable date is not at its start
   (`### Week of 2026-09-01`), the entry opens `- 2026-09-01 - Week of
   2026-09-01`, so the date import orders by is the one every dash-Log reader
-  finds. The title is kept whole. An undated heading opens `- <title>`.
-- The heading's level and marker are not kept. The dry run's section map
-  reports each such heading as stored in `Log`.
+  finds. The title is kept whole.
+- The opening heading's level and marker are not kept; headings inside an
+  entry keep theirs, indented. The dry run's section map reports every
+  heading absorbed into the Log as stored in `Log`.
 - A heading Log is always converted, even when it is short and already in
   order, and a round trip through the mirror reproduces the live Log.
 
@@ -641,9 +665,16 @@ than two distinct dates is taken as newest first. Undated entries are never
 placed by date. Converted entries carry four spaces of indent the source did
 not have. A heading Log whose Log body opens with a prose line is not a
 heading Log (the shape is still chosen from the Log's first line), so its
-headings stay sections.
+headings stay sections. A dated heading deeper than the entry level (a
+`####` under a `###`), or one before the first entry-level dated heading, is
+text, so its date is not read. An undated heading written as its own entry
+reads as part of the entry above. Sections after an owned heading nested
+under the Log are not converted. Fence detection covers the document's Log
+only: a fenced line elsewhere that looks like a heading still splits the
+document, as ADR 0053 already records.
 
 Tests: `packages/core/test/project-import-order.test.ts` ("Partly dated Log
-direction", "Heading Log shape", and the rewritten heading test) and
+direction", "Heading Log shape", "Heading Log review round 1 (FW1, FW2)",
+"Dash Log preamble (review round 1 note)", and the rewritten heading test) and
 `packages/core/test/project-board.test.ts` ("ages an imported heading Log
 from its newest heading date").

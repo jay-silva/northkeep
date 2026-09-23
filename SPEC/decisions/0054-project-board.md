@@ -314,7 +314,8 @@ out ("through a local MCP server").
   2026-09-23 (ADR 0053 addendum), a partly dated Log keeps the source's
   sequence turned newest first by the direction its dated entries run, so
   that direction is inferred and undated entries are never placed by date;
-  a Log written as headings is stored as dash entries the board reads.
+  a Log written as headings is stored as dash entries the board reads, one
+  per dated heading (undated headings are text of the entry above).
   Projects imported before that fix keep the old shape until deleted and
   imported again.
 - **A large document costs time, not payload.** Until ADR 0056's

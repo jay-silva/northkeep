@@ -90,7 +90,11 @@ every milestone; if a limit is removed, say when and how.*
   first) rather than sorting, so the direction is inferred and undated
   entries are never placed by date. A Log written as headings is stored as
   ordinary dash entries, but only when the Log's own text before its first
-  heading is empty. Both apply to imports run after 2026-09-23's fix; a
+  heading is empty and at least one heading is dated. Only a dated heading
+  opens an entry: an undated heading, or a dated one nested deeper, is read
+  as part of the entry above it, so its date is not counted. A heading under
+  the Log named like a project section (Next Actions, Decisions and so on)
+  stays that section. Both apply to imports run after 2026-09-23's fix; a
   project imported earlier keeps the old shape (a heading Log reads as empty,
   an oldest-first partly dated Log kept its oldest entries live) until it is
   deleted with `northkeep projects delete <slug>` and imported again.
