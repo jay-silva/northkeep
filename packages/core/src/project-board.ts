@@ -173,20 +173,14 @@ export function sweepDates(line: string, now: Date): string[] {
   return found.sort((a, b) => a.at - b.at).map((f) => f.date);
 }
 
-/** Dated rows for one project's Next Actions and Open Questions. The sweep runs on the cut line. */
+/** Dated rows for one project's Next Actions and Open Questions, one per match. The sweep runs on the cut line. */
 export function datedItems(project: string, view: Pick<BoardView, 'next_actions' | 'open_questions'>, now: Date): BoardDatedRow[] {
   const rows: BoardDatedRow[] = [];
-  const seen = new Set<string>();
   for (const body of [view.next_actions, view.open_questions]) {
     for (const raw of splitBoardLines(body)) {
       const line = tameBoardText(raw, BOARD_LINE_MAX_CHARS);
       if (line.length === 0) continue;
-      for (const date of sweepDates(line, now)) {
-        const key = `${date}\u0000${line}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        rows.push({ date, project, line });
-      }
+      for (const date of sweepDates(line, now)) rows.push({ date, project, line });
     }
   }
   return rows;

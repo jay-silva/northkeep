@@ -152,7 +152,7 @@ describe('project_board (ADR 0054)', () => {
   }, 60_000);
 
   it('claim: document size does not reach the payload (a 60,000-character document through the raw memory path)', async () => {
-    const line = (i: number) => `- 2026-10-${String((i % 28) + 1).padStart(2, '0')} ${i} ${'"\\'.repeat(100)}`;
+    const line = (i: number) => `- 2026-10-${String((i % 28) + 1).padStart(2, '0')} ${'"\\'.repeat(100)}`;
     const nextActions = Array.from({ length: 200 }, (_, i) => line(i)).join('\n');
     const content = `## What & Why\n\n${'w'.repeat(20000)}\n\n## Current Status\n\n${'"'.repeat(5000)}\n\n## Next Actions\n\n${nextActions}`;
     expect(content.length).toBeGreaterThanOrEqual(60000);

@@ -92,6 +92,10 @@ describe('text made safe', () => {
     expect(rows.map((r) => r.date)).toEqual(['2026-10-02']);
     expect(rows.every((r) => r.line.length <= 160)).toBe(true);
   });
+  it('one row per match: a repeated line or a repeated date is not collapsed', () => {
+    const rows = datedItems('p', { next_actions: '- 2026-10-01 a\n- 2026-10-01 a\nOct 1 or 2026-10-01', open_questions: '' }, NOW);
+    expect(rows.map((r) => r.date)).toEqual(['2026-10-01', '2026-10-01', '2026-10-01', '2026-10-01']);
+  });
   it('splits Next Actions on every terminator', () => {
     const rows = datedItems('p', { next_actions: 'a 2026-10-01\u2028b 2026-10-02\u0085c 2026-10-03\rd 2026-10-04', open_questions: '' }, NOW);
     expect(rows.map((r) => r.line)).toEqual(['a 2026-10-01', 'b 2026-10-02', 'c 2026-10-03', 'd 2026-10-04']);

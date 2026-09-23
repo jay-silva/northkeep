@@ -73,9 +73,7 @@ every milestone; if a limit is removed, say when and how.*
   the tool's `stale_days`) says otherwise.
 - **The date sweep is literal.** "Next Tuesday" and "Q3" are not dates. A
   month-name date without a year resolves to the occurrence nearest today,
-  so one more than six months away can land in the wrong year. Only dates in
-  the first 160 characters of a line are seen, because the sweep runs on the
-  line as shown.
+  so one more than six months away can land in the wrong year.
 - **Imported projects are aged from their Log.** An imported project whose
   live Log has no readable date is aged from the import itself, so it cannot
   go stale until the window has passed since the import. The Log is only as

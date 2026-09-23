@@ -193,12 +193,16 @@ backslash text that JSON escapes twice on the wire), runs it with Tier-1
 masking off and on, and asserts the wire bytes are under the ceiling. The
 recheck measured 125,857 bytes for that shape with the fields this draft
 defines, so the margin is about 5 KB and any new per-row field has to pass
-the same test. **Measured at build (2026-09-23): 116,690 bytes**, the
-maximum over the saturating fixture's two variants (every field in `"` and
-`\`, the 4-byte form, Tier-1 off and on alike: 116,690; the mixed variant
-with CJK and email text that grows under masking: 108,556 off, 107,906 on),
+the same test. **Measured at build (2026-09-23): 117,890 bytes**, the
+maximum over the saturating fixture's two variants: every field in `"` and
+`\`, the 4-byte form, with each dated line opening on the shortest date the
+sweep matches (117,890 with Tier-1 off and on alike), and a mixed variant
+with CJK and email text that grows under masking (108,556 off, 107,906 on),
 in `packages/mcp-server/test/project-board.test.ts`. The CLI's `--json` for
-the widest variant measured 77,333 bytes. No figure is claimed for a typical
+the widest variant measured 77,733 bytes. The built rows carry exactly the
+fields Decision 1 lists; the recheck's 125,857 came from the reviewer's own
+reading of the row shapes, whose size script is not in the repository, so
+the two figures are not the same fixture. No figure is claimed for a typical
 board; acceptance step 2 measures the real one.
 
 **Document size does not reach the payload.** The second pass found that

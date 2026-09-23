@@ -45,7 +45,9 @@ export function seedSaturatingBoard(v: Vault, variant: BoardFixtureVariant = 'wi
   for (let i = 0; i < SATURATING_HEALTHY; i += 1) {
     const slug = wideSlug('h', i);
     healthy.push(slug);
-    const nextActions = [1, 2, 3].map((d) => fill(i + d, 160, `- 2026-10-${String(d + (i % 20)).padStart(2, '0')} `, variant)).join('\n');
+    // The widest dated line opens with the shortest date the sweep matches (5 units), leaving 155 for fill.
+    const datePrefix = (d: number) => (variant === 'widest' ? `May ${d + (i % 7)}` : `- 2026-10-${String(d + (i % 20)).padStart(2, '0')} `);
+    const nextActions = [1, 2, 3].map((d) => fill(i + d, 160, datePrefix(d), variant)).join('\n');
     v.updateProject({
       project: slug, expected_revision: null, what_why: 'Why this project exists.',
       status: fill(i, 130, '', variant), next_actions: nextActions, draft: true, writer: WRITER,
