@@ -13,6 +13,7 @@ import {
   getProjectView,
   isValidProjectSlug,
   listProjectViews,
+  northkeepHome,
   projectScope,
   setPlatform,
   withFileLock,
@@ -30,6 +31,7 @@ import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
 import { appendCallLog, readCallLog, type CallLogEntry } from './log.js';
 import { tameOneLine } from './text-safe.js';
+import { readMirrorSummary } from './project-export-run.js';
 import type { OpenSession } from './open-sessions.js';
 import {
   OPEN_SESSIONS_NOTE,
@@ -591,6 +593,17 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       ),
   );
 
+  // ADR 0053 Decision 7. Settings and state files only, never git. An error
+  // other than an unreadable settings file drops the line, because a backup
+  // status must never cost the caller the list or the resume it asked for.
+  function mirrorStatus(vault: Vault, granted: string[] | undefined): string | null {
+    try {
+      return readMirrorSummary(vault, granted, northkeepHome());
+    } catch {
+      return null;
+    }
+  }
+
   server.registerTool(
     'project_list',
     {
@@ -598,7 +611,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       description:
         "List the user's live projects. Each row is a project scope plus the first line of Current " +
         'Status. This list is the project index; there is no separate index memory. Call this to see ' +
-        'what is in flight.',
+        'what is in flight. When the user keeps a local git backup of their projects, mirror_status is ' +
+        'one line saying when that backup was last updated and how many of these projects changed since.',
       inputSchema: {},
     },
     async () =>
@@ -607,8 +621,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           ...project,
           id: project.revision,
         }));
+        const mirror = mirrorStatus(vault, granted);
         return {
-          payload: { projects },
+          payload: { projects, ...(mirror === null ? {} : { mirror_status: mirror }) },
           result_count: projects.length,
           result_ids: projects.flatMap((project) => project.revision ? [project.revision] : []),
           disclosed_scopes: distinctScopes(projects.map((project) => project.scope)),
@@ -685,7 +700,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'a count of the Log archives, and any sessions that read this project on this machine and did ' +
         'not write back. The document is not repeated as one block of text: project_get returns the ' +
         'full document text. The text of prior revisions and archives is not included either: pass ' +
-        'history: true for all of it, or project_get with one revision id for one of them.',
+        'history: true for all of it, or project_get with one revision id for one of them. When the user ' +
+        'keeps a local git backup of their projects, mirror_status is one line saying when that backup was ' +
+        'last updated and how many projects changed since, so a stale backup is visible.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         history: z
@@ -699,6 +716,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       const scope = `project:${project}`;
       return run(ctx, 'project_resume', { scope }, vaultPath, (vault, granted) => {
         const view = getProjectView(vault, project, granted, { history });
+        // After the view, so a denied or missing project never reads the mirror files.
+        const mirror = mirrorStatus(vault, granted);
         // Derived inside the call, so a log this machine cannot read costs the
         // session list and not the resume. This session's own row is still
         // absent: run appends it only after this returns.
@@ -717,6 +736,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
                 ...{ open_sessions: open },
                 ...(open.length > 0 ? { open_sessions_note: OPEN_SESSIONS_NOTE } : {}),
               }),
+            ...(mirror === null ? {} : { mirror_status: mirror }),
           },
           result_id: view.revision,
           disclosed_scopes: [view.scope],

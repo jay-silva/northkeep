@@ -45,6 +45,7 @@ import {
   type ProjectView,
 } from './project-handoff.js';
 import { emptyProjectDoc, formatLogArchive, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
+import { importPlanProblem, projectInUseMessage, type ImportFilePlan } from './project-import.js';
 import type { SqliteDb } from './sqlite-driver.js';
 import { SCHEMA_DDL } from './schema.js';
 import {
@@ -598,6 +599,51 @@ export class Vault {
   }
 
   /**
+   * True when project:<slug> holds any unforgotten row, superseded ones
+   * included. Import refuses on this, not on the working document alone, so
+   * archives left behind by a forgotten document are never duplicated.
+   */
+  projectScopeInUse(slug: string): boolean {
+    this.assertOpen();
+    let scope: string;
+    try { scope = projectScope(slug); } catch { throw new ProjectHandoffError('invalid_request', 'Project slug is invalid.'); }
+    return this.db.prepare('SELECT 1 FROM memories WHERE scope = ? AND forgotten_at IS NULL LIMIT 1').get(scope) !== undefined;
+  }
+
+  /**
+   * ADR 0053 Decision 10's write, one transaction. Never merges, so a slug
+   * with any entries is refused. No provenance block: import is not a host
+   * write. Archives go first so rowid order matches. Caller saves.
+   */
+  importProject(plan: ImportFilePlan, allowedScopes?: string[]): ProjectView {
+    this.assertOpen();
+    const problem = importPlanProblem(plan);
+    if (problem !== null) throw new ProjectHandoffError('invalid_request', problem);
+    const scope = projectScope(plan.slug);
+    if (allowedScopes !== undefined && !allowedScopes.includes(scope)) throw new ProjectHandoffError('scope_denied', 'Project scope is outside this connection grant.');
+    this.db.transaction(() => {
+      if (this.projectScopeInUse(plan.slug)) {
+        throw new ProjectHandoffError('stale_project', projectInUseMessage(plan.slug));
+      }
+      const now = new Date().toISOString();
+      const insert = this.prepareEntryInsert();
+      let chain = this.getMeta('chain_head');
+      const rows: Array<[MemoryType, string, string]> = [
+        ...plan.archives.map((content) => ['episodic', content, 'northkeep:project-log-archive'] as [MemoryType, string, string]),
+        ...plan.overflow_parts.map((content) => ['episodic', content, 'northkeep:project-import-overflow'] as [MemoryType, string, string]),
+        ['working', plan.document, 'northkeep:project-import'],
+      ];
+      for (const [type, content, source] of rows) {
+        const entry = this.makeProjectEntry(type, content, scope, source, null, chain, now);
+        insert.run(this.entryParams(entry));
+        chain = entry.entry_hash;
+      }
+      this.setMeta('chain_head', chain);
+    })();
+    return getProjectView(this, plan.slug, allowedScopes, { history: true });
+  }
+
+  /**
    * Forgets every entry in a project's scope: the live document, its earlier
    * revisions, log archives and handoff receipts. Same tombstone semantics as
    * forget() per entry (content blanked, chain intact), inside one transaction.
@@ -611,7 +657,8 @@ export class Vault {
     let count = 0;
     this.db.transaction(() => {
       const entries = this.list({ scope, includeSuperseded: true, allowedScopes });
-      if (!entries.some((e) => e.type === 'working' && !e.forgotten_at)) throw new ProjectHandoffError('not_found', 'Project was not found.');
+      // Archives or overflow left after the document was forgotten still block import, so they must be deletable.
+      if (!entries.some((e) => !e.forgotten_at)) throw new ProjectHandoffError('not_found', 'Project was not found.');
       for (const entry of entries) {
         if (entry.forgotten_at) continue;
         this.forget(entry.id, allowedScopes);
@@ -1868,6 +1915,11 @@ export class Vault {
  * deliberately excluded — those fields change after the fact, and hashing
  * them would break the chain on every legitimate supersede/forget.
  */
+/** Read-only: whether import would refuse this slug. Lets a dry run say "exists" without writing. */
+export function projectScopeInUse(vault: Vault, slug: string): boolean {
+  return vault.projectScopeInUse(slug);
+}
+
 export function computeEntryHash(entry: MemoryEntry, provider?: CryptoProvider): string {
   return blake2bHex(
     canonicalJson({

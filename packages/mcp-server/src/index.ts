@@ -61,6 +61,35 @@ export {
   type InstallResult,
   type UninstallResult,
 } from './contract.js';
+export {
+  RENDER_FAILED,
+  SCHEDULE_LABEL,
+  classifyTarget,
+  defaultVaultRunner,
+  exportProjects,
+  importProjects,
+  installSchedule,
+  readExportSettings,
+  readExportState,
+  readMirrorSummary,
+  removeSchedule,
+  schedulePlistPath,
+  snapshotMirror,
+  verifyMirror,
+  type ExportRunOptions,
+  type ExportRunResult,
+  type ExportSettings,
+  type ExportState,
+  type ImportFileReport,
+  type ImportRunResult,
+  type MirrorSnapshot,
+  type ScheduleOptions,
+  type TargetClass,
+  type VaultRunner,
+  type VerifyResult,
+  type VerifyStatus,
+} from './project-export-run.js';
+export { ExportRefusal, GitCommandError, INDEX_NOT_REFRESHED, readRemotes, type RemoteInfo } from './git-plumbing.js';
 
 // Executed directly (Claude Desktop config / `northkeep serve`), not imported.
 if (process.argv[1]?.endsWith('mcp-server/dist/index.js')) {

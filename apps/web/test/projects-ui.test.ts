@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import vm from 'node:vm';
+import { summarizeMirror } from '@northkeep/core';
 
 const html = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'static', 'index.html'), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? '';
@@ -272,5 +273,62 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
     expect(text).toContain('Older revision body');
     expect(text).toContain('Archived log entry');
     expect(text).toContain('Session history · 1 recent · 1 archived');
+  });
+});
+
+describe('Projects backup mirror line (ADR 0053 Decision 7)', () => {
+  const NOW = new Date('2026-09-22T15:00:00Z');
+  const rows = [
+    { project: 'alpha', revision: 'r-alpha-2', conflict: false },
+    { project: 'beta', revision: 'r-beta-2', conflict: false },
+  ] as never;
+  const exported = { projects: { alpha: { revision: 'r-alpha-1' }, beta: { revision: 'r-beta-1' } } };
+
+  /** Runs the page's own functions against a stand-in node, so the test sees what a person sees. */
+  function render(line: unknown) {
+    const node = { textContent: 'stale text', title: 'stale title', hidden: false };
+    const context = vm.createContext({ node, line });
+    vm.runInContext(`const $ = () => node;\n${functionSource('projectsMirrorText')}\n${functionSource('showProjectsMirror')}\nshowProjectsMirror(line);`, context);
+    return node;
+  }
+
+  it('sits in the summary row as one small line with no new control', () => {
+    expect(html).toContain('<span class="pill" id="projectsLocalPill">Local vault</span><span class="muted projects-mirror" id="projectsMirrorMeta" hidden></span></div>');
+    expect(html).toContain('.projects-mirror { flex-basis:100%; font-size:12px; line-height:1.4; }');
+    expect(projects).toContain('showProjectsMirror(data.mirror);');
+  });
+
+  it('rewords a real exported line for people and shows no raw line on hover', () => {
+    const line = summarizeMirror({ ...exported, last_success: { at: '2026-09-22T12:00:00Z' } }, rows, NOW);
+    const node = render(line);
+    expect(node.hidden).toBe(false);
+    expect(node.textContent).toBe('Backup mirror last updated 3 hours ago; 2 projects changed since');
+    expect(node.title).toBe('');
+  });
+
+  it('rewords a real never-exported line and a real failed-later line', () => {
+    expect(render(summarizeMirror({}, rows, NOW)).textContent).toBe('Backup mirror never updated; 2 projects changed since');
+    const failed = summarizeMirror({
+      projects: { alpha: { revision: 'r-alpha-2' }, beta: { revision: 'r-beta-2' } },
+      last_success: { at: '2026-09-22T12:00:00Z' },
+      last_failure: { at: '2026-09-22T14:30:00Z' },
+    }, rows, NOW);
+    expect(render(failed).textContent).toBe('Backup mirror last updated 3 hours ago; 0 projects changed since; last update failed 30 minutes ago');
+  });
+
+  it('is hidden and empty when the server sends null or nothing', () => {
+    for (const value of [null, undefined, '']) {
+      const node = render(value);
+      expect(node.hidden).toBe(true);
+      expect(node.textContent).toBe('');
+      expect(node.title).toBe('');
+    }
+  });
+
+  it('is cleared on lock and while a reload is in flight, so a stale line never survives', () => {
+    expect(functionSource('clearProjectsSensitive')).toContain('showProjectsMirror(null);');
+    const load = functionSource('loadProjects');
+    expect(load.indexOf('showProjectsMirror(null);')).toBeGreaterThan(-1);
+    expect(load.indexOf('showProjectsMirror(null);')).toBeLessThan(load.indexOf("await api('/api/projects')"));
   });
 });

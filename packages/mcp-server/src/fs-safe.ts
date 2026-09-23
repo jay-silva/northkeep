@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
@@ -46,5 +47,79 @@ export function atomicWrite(file: string, contents: string): void {
   } finally {
     // Never leave a stray temp behind if the rename didn't happen.
     if (fs.existsSync(tmp)) fs.rmSync(tmp, { force: true });
+  }
+}
+
+/** NorthKeep's own mirror temps: `<name>.northkeep-tmp-<16 lowercase hex>`, nothing looser. */
+export const MIRROR_TEMP_PATTERN = /^.+\.northkeep-tmp-[0-9a-f]{16}$/;
+
+/**
+ * ADR 0053 Decision 2: at run start, remove crash residue from a killed write.
+ * Only exact-pattern regular files or symlinks go; unlink never follows a link.
+ * Returns the names removed.
+ */
+export function cleanStaleMirrorTemps(dir: string): string[] {
+  let names: string[];
+  try {
+    names = fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+  const removed: string[] = [];
+  for (const name of names) {
+    if (!MIRROR_TEMP_PATTERN.test(name)) continue;
+    const p = path.join(dir, name);
+    let st: fs.Stats;
+    try {
+      st = fs.lstatSync(p);
+    } catch {
+      continue;
+    }
+    if (!st.isFile() && !st.isSymbolicLink()) continue;
+    fs.unlinkSync(p);
+    removed.push(name);
+  }
+  return removed;
+}
+
+/**
+ * The mirror writer (ADR 0053 Decision 2). Unlike atomicWrite it resolves
+ * nothing: a fresh random temp opened O_EXCL|O_NOFOLLOW so a planted link is
+ * never written through, mode 0o644 set on the descriptor against the umask,
+ * fsync, then rename. On failure it unlinks only the temp it created.
+ */
+export function writeMirrorFile(target: string, bytes: Uint8Array): void {
+  const tmp = `${target}.northkeep-tmp-${crypto.randomBytes(8).toString('hex')}`;
+  let present = true;
+  try {
+    fs.lstatSync(tmp);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    present = false;
+  }
+  if (present) throw new Error('The mirror temp path already exists; NorthKeep will not write through it');
+  const { O_WRONLY, O_CREAT, O_EXCL, O_NOFOLLOW } = fs.constants;
+  const fd = fs.openSync(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o644);
+  let open = true;
+  let renamed = false;
+  try {
+    fs.fchmodSync(fd, 0o644);
+    if (process.env.NORTHKEEP_EXPORT_CRASH_WRITE === '1') {
+      // Acceptance hook: die with a partial temp on disk, skipping every finally.
+      fs.writeSync(fd, bytes.subarray(0, Math.min(3, bytes.length)));
+      fs.fsyncSync(fd);
+      process.kill(process.pid, 'SIGKILL');
+      process.abort();
+    }
+    let off = 0;
+    while (off < bytes.length) off += fs.writeSync(fd, bytes, off, bytes.length - off);
+    fs.fsyncSync(fd);
+    fs.closeSync(fd);
+    open = false;
+    fs.renameSync(tmp, target);
+    renamed = true;
+  } finally {
+    if (open) fs.closeSync(fd);
+    if (!renamed) fs.rmSync(tmp, { force: true });
   }
 }

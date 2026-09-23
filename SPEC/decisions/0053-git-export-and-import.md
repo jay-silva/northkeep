@@ -1,460 +1,577 @@
 # ADR 0053: Git export and import for project documents
 
-- **Date:** 2026-09-21
-- **Status:** Proposed (milestone M-A). Scoped by Jay on 2026-09-21, reviewed
-  twice the same day against the design. NOT CLEARED twice; redesign before
-  build. The required changes are listed at the end and are deliberately not
-  folded into the Decisions above, because they change how files are written.
-  This is the first deliberate write of vault plaintext to disk outside the
-  vault, and the first git process NorthKeep spawns in a user directory.
+- **Date:** 2026-09-22
+- **Status:** Accepted for build (M-A1, local mirror), pending code review. On 2026-09-22 Jay split the
+  design after the seventh-draft recheck; the GitHub push moved to ADR 0055 (draft).
 - **Deciders:** Jay (product owner), Claude Code
-- **Extends:** ADR 0039 (projects as vault memories), ADR 0045 (log rolling),
-  ADR 0048 (revision-bound handoffs), ADR 0051 (compaction), ADR 0052
-  (provenance and draft projects)
-- **Does not touch:** egress, redaction tiers, crypto or key handling, the row
-  envelope, sync, the connector, the vault schema. No model runs in any path
-  here. No new runtime dependency: git is invoked as an external program the
-  user already installed, never linked. Said plainly, because the hardening
-  below can read as more than it is: git is a program, NorthKeep spawns it, and
-  code does run. The invariant-7 argument is "no new networked dependency", not
-  "no code runs".
+- **Extends:** ADR 0039 (projects as vault memories), ADR 0045 (log rolling), ADR 0048 (revision-bound
+  handoffs), ADR 0051 (compaction), ADR 0052 (provenance)
+- **Review gate:** M-A1 trips the gate on filesystem writes outside the vault and on spawning git over a
+  repository the user chose, and on the claims it publishes. It does not change what leaves the machine: no
+  push, fetch or network call exists in M-A1. Not touched: egress, the vault schema, crypto or key handling,
+  redaction tiers, sync, the connector. No model runs in any path here.
 
 ## Context
 
-A project document lives as one `working` memory per `project:<slug>` scope.
-Jay's working record before NorthKeep was a git repository of Markdown files,
-still what he reads outside an agent session, and the two do not meet: the vault
-is the truth and the repository is stale. The vault already keeps everything the
-repository held. `getProjectView` (packages/core/src/project-handoff.ts:215-229)
-returns the parsed document with its prior revisions and Log archives, and
-`listProjectViews` (project-handoff.ts:250-252) returns one summary row per
-project, sorted by slug (line 252). That is the index. Missing: a renderer, and
-a way to bring an existing folder of Markdown files in.
+A project document lives as one `working` memory per `project:<slug>` scope. Jay's record before NorthKeep
+was a git repository of Markdown files. `getProjectView` (packages/core/src/project-handoff.ts:219-233)
+returns the parsed document with prior revisions and Log archives, and `listProjectViews`
+(project-handoff.ts:254-257) returns one summary row per project, sorted by slug (line 256). Missing: a
+renderer, a git-versioned human-readable copy, and a way to bring an existing folder in.
 
-Two constraints shape everything below. The vault is canonical, so a mirror
-editable back into it would be a second source of truth and a merge problem, and
-this ADR refuses to build one. And NorthKeep has written no memory plaintext
-outside the encrypted vault, as the call log header says
-(packages/mcp-server/src/log.ts:6-8). Export amends that sentence deliberately,
-in one narrow place.
+**Jay's decisions, 2026-09-22.** The scope cut: "I want to do B but ensure we still have an accurate
+mirror/backup." Jay is connecting Grok Bot to NorthKeep through MCP, so no agent reads the mirror for current
+state; the mirror is a human-readable, git-versioned backup, exported on demand into a folder NorthKeep owns.
+After the seventh-draft recheck Jay decided: **"Split it."** M-A1, this ADR, is import plus the local mirror,
+built now. M-A2, the push to GitHub with its standing consent, confirmation hold and exclusion, returns to
+design in ADR 0055.
 
-## Decision 1: What is rendered, and where
+Files. `packages/core/src/project-export.ts` (pure): `renderProjectFile`, `renderLogFile`,
+`renderIndexFile`, `renderMarkerFile`, `parseExportHeader`, `summarizeMirror`.
+`packages/mcp-server/src/git-plumbing.ts`: `runGit`, `plumbingCommit`, `readRemotes`,
+`requireCommitIdentity`. `packages/mcp-server/src/fs-safe.ts` gains `writeMirrorFile`.
+`packages/mcp-server/src/project-export-run.ts`: `exportProjects`, `verifyMirror`, `classifyTarget`,
+`readJournal`, `writeJournal`, `readExportState`, `writeExportState`, `readMirrorSummary`,
+`acquireExportLock`, `installSchedule`, `importProjects`. Decisions 2, 3 and 6 are evidenced by
+`scripts/adr-0053-canary.sh`.
 
-A user-chosen repository path holds `projects/<slug>.md` (the live document as
-the vault stores it, unmodified apart from Decision 2's header),
-`projects/<slug>.log.md` for a project with Log archives (every archive memory
-in that scope, newest entry first), and `INDEX.md`, one row per project from
-`listProjectViews`.
+## Decision 1: What is rendered, and where (project-export.ts)
 
-The INDEX row is slug, state (`draft` or `active`), one-line status, updated
-date, last writer host. `ProjectSummary` (project-handoff.ts:77) already carries
-all five, `last_writer_host` and `draft` having landed with ADR 0052, so this
-ADR adds no field. Every cell escapes `|` as `\|` and collapses newlines to
-spaces, so an agent-written status line holding a pipe cannot forge a column.
-`ProjectSummary.status` is the whole Current Status body
-(`getProjectSection(doc,'Current Status')||null`, project-handoff.ts:252), not
-one line, so the renderer takes `firstNonEmptyLine`
-(packages/core/src/project-doc.ts:153-159) and cuts to 120 characters with an
-ellipsis, which keeps INDEX.md small.
+The mirror holds `projects/<slug>.md` (the stored document plus the Decision 3 header),
+`projects/<slug>.log.md` for a project with Log archives, `INDEX.md` (one row per project from
+`listProjectViews`), and the root marker `.northkeep-mirror` (Decision 4). Every project is exported
+(Decision 5).
 
-A conflicted project (`conflict: true`, two live heads) has null status,
-revision and date. Its row renders slug, `conflict`, the fixed text `two live
-documents, not exported`, and empty cells; its `<slug>.md` is neither written
-nor removed, and the result names it.
+The INDEX row is slug, state (`draft` or `active`), one-line status, updated date, last writer host, all on
+`ProjectSummary` (project-handoff.ts:77). Cells escape `|` and collapse newlines, so a status line cannot
+forge a column. The status is the whole Current Status body (project-handoff.ts:256), so the renderer takes
+`firstNonEmptyLine` (packages/core/src/project-doc.ts:153-159) and cuts to 120 characters.
 
-## Decision 2: Deterministic bytes
+The same vault state renders byte-identical files: no generation timestamp, dates from stored `created_at`
+as `YYYY-MM-DD` UTC, the document's own section order, slug order, `\n` endings, and the trailing newline
+`serializeProjectDoc` (project-doc.ts:137-146) does not return. Log files come from archives, which
+`getProjectView` returns only under `history: true` (project-handoff.ts:228); newest archive first, newest
+entry first, because `formatLogArchive` writes oldest first (project-doc.ts:267-274), split with
+`splitLogEntries` (project-doc.ts:210-225). A conflicted project (two live heads) renders slug, `conflict`
+and `two live documents, not exported`; its file is neither written nor removed.
 
-The same vault state renders byte-identical files. The mechanism:
+## Decision 2: Plumbing writes (git-plumbing.ts)
 
-1. Every file opens with an HTML comment header, nothing before it: `<!--
-   Generated by NorthKeep from vault <vault_id> revision <revision>. The vault
-   is canonical. Edits here are not read back. -->` `vault_id` and `revision`
-   come from `ProjectView` (the head entry's id, project-handoff.ts:228). No
-   generation timestamp, which would defeat the claim by itself. `INDEX.md`
-   names the vault id only.
-2. Every date printed comes from a stored `updated_at` / `created_at`, rendered
-   `YYYY-MM-DD` in UTC. No local zone, no "2 days ago". Section order is the
-   document's own, because the body is the stored `content` verbatim, and row
-   order in INDEX.md is the slug order `listProjectViews` already fixes
-   (project-handoff.ts:252). Line endings are `\n`, and a trailing newline ends
-   every file.
-3. `<slug>.log.md` is rendered from the archive memories, which `getProjectView`
-   returns only under `history: true` (project-handoff.ts:224), so the exporter
-   asks for history. Newest archive first, newest entry first inside each; the
-   inner reversal is deliberate, because `formatLogArchive` writes entries
-   oldest first (project-doc.ts:267-274). The renderer splits an archive body
-   with `splitLogEntries` (project-doc.ts:210-225).
+**The mirror writer.** `atomicWrite` (packages/mcp-server/src/fs-safe.ts:31-49) writes through an
+existing file's realpath (lines 35-36), keeps its mode or uses `0o600` (line 33), and writes a fixed temp
+name with a plain `writeFileSync` (lines 41-43), which follows a symlink planted there. The contract
+installer and `connect.ts` use it, so it stays unchanged. A new `writeMirrorFile(target, bytes)` beside it
+resolves nothing. At the start of each run, before any write, it deletes NorthKeep's own stale temps: in each
+directory it writes, entries matching exactly `<name>.northkeep-tmp-<16 lowercase hex>` whose `lstat` is a
+regular file or a symlink are unlinked, and `unlink` never follows a link. Per write it draws 8 random bytes
+for a fresh suffix, refuses if `lstat` finds anything at that temp path, opens it with
+`fs.openSync(tmp, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0o644)`, which fails if anything, a symlink
+included, exists there, then `fchmodSync(fd, 0o644)` against the umask, write, `fsyncSync`, close, and
+`renameSync(tmp, target)`. On error it unlinks only the temp it created. So a write killed mid-way leaves one
+temp that the next run removes before writing: crash residue heals without a human. Mirror files are
+`0o644` because this function sets it. Files under `<NORTHKEEP_HOME>/export/` (a `0o700` directory) use
+`atomicWrite` and keep `0o600`. `<key>` is the mirror id: a lowercase v4 UUID written into the marker file at
+the first export (a marker from before the id existed gets one on its next export, in one commit). It names
+the journal and the state file, so a moved mirror folder keeps its history. Each run's temporary index is
+its own file, `<key>.<run nonce>.index`, removed by the run that created it.
 
-## Decision 3: Not reversible, and a hand edit is never destroyed
+Git never touches the working tree. Per file, NorthKeep renders the bytes, hashes them, journals the blob id,
+then writes. All through `execFile` with an args array:
 
-The vault is canonical, and nothing here reads a mirrored file back into it;
-Decision 6 defines a separate, explicit import from a directory NorthKeep did
-not write. Ownership is decided by the file's own bytes, not by git state. The
-first design asked `git status --porcelain`, which is wrong in both directions:
-a file NorthKeep wrote and never committed reads as modified, a hand edit the
-user committed reads as clean. The test, per file:
+```
+git worktree list --porcelain                   # refuse if HEAD's branch is checked out elsewhere
+git read-tree HEAD                              # into a TEMPORARY index
+git hash-object --no-filters -- <abs path>      # classifyTarget's diskBlob (Decision 3)
+git hash-object -w --no-filters --stdin         # the rendered bytes; journaled, then the file is written
+git hash-object --no-filters -- <abs path>      # must equal the journaled blob, or the target is refused
+git update-index --add --cacheinfo 100644,<blob>,<path>
+git write-tree ; git rev-parse HEAD
+git commit-tree <tree> -p <parent>              # message on stdin
+git update-ref -m "northkeep export" HEAD <commit> <parent>   # old value always passed
+```
 
-1. First line is the Decision 2 header **and** the whole file equals a fresh
-   render of the revision that header names: ours, overwrite.
-2. No header: not ours. The file is left alone and named in the result, unless
-   the run passes `--adopt`, which overwrites it. The first migration uses
-   `--adopt` once, on the command repo.
-3. Header present, bytes different: a hand edit. That file is refused, the
-   export proceeds, and the result says which file and why. The edit stays in
-   the working tree; a later export overwrites it only once its bytes match
-   again, and otherwise keeps refusing.
+`--no-filters` stops a clean filter; an owned empty `core.hooksPath` stops `reference-transaction` and
+`post-index-change`. `update-ref` carries the old value, so a concurrent commit loses the race; the no-old-
+value form is used only on an unborn HEAD. The local verb allowlist is exactly `rev-parse`, `read-tree`,
+`hash-object`, `update-index`, `write-tree`, `commit-tree`, `update-ref`, `ls-tree`, `worktree` (only `list
+--porcelain`), `var` and `remote` (only `-v`, for `--status`). No `add`, `commit`, `status`, `diff`,
+`checkout`, `init`, `merge`, `tag`, `push`, `fetch` or `ls-remote` is constructed in M-A1. Every local
+invocation runs with this environment and nothing else:
 
-Test 1 re-renders what the exporter already computed, so the check costs nothing
-extra and never depends on git.
+```
+PATH=/usr/bin:/bin   HOME=<NORTHKEEP_HOME>
+GIT_CONFIG_NOSYSTEM=1   GIT_CONFIG_GLOBAL=<NORTHKEEP_HOME>/empty.gitconfig  (owned, zero bytes)
+GIT_ATTR_NOSYSTEM=1  GIT_TERMINAL_PROMPT=0  GIT_OPTIONAL_LOCKS=0
+GIT_ASKPASS=/usr/bin/false   SSH_ASKPASS=/usr/bin/false   GIT_NO_REPLACE_OBJECTS=1
+GIT_INDEX_FILE=<NORTHKEEP_HOME>/export/<key>.<run nonce>.index   (omitted only for the reconcile, below)
+```
 
-## Decision 4: When it runs
+and these `-c` pins, which outrank repository config:
 
-The writer mirrors its own write, after the vault save succeeds: the MCP server
-after `project_wrap`, `project_checkpoint`, `project_update` and
-`project_create`, and the CLI after `northkeep projects update`, a new
-subcommand proposed here (`projects` today has only `compact`,
-packages/cli/src/index.ts:881-893). Desktop is not in M-A; it writes through the
-same routes and gets the same hook behind a Projects-page control once Jay
-approves a mock. Plus `northkeep projects export`, an idempotent full re-render:
-run twice it makes no second commit, because the second run writes identical
-bytes and git finds nothing staged.
+```
+-c core.hooksPath=<NORTHKEEP_HOME>/hooks   (owned, empty directory)
+-c core.fsmonitor=false  -c core.useBuiltinFSMonitor=false
+-c gpg.program=/usr/bin/false  -c commit.gpgsign=false  -c tag.gpgsign=false
+-c core.sshCommand=/usr/bin/false  -c credential.helper=  -c diff.external=
+-c core.editor=/usr/bin/false  -c sequence.editor=/usr/bin/false  -c core.pager=cat
+-c core.askPass=/usr/bin/false  -c core.gitProxy=  -c core.alternateRefsCommand=
+-c core.autocrlf=false  -c core.safecrlf=false  -c core.symlinks=false
+-c protocol.ext.allow=never  -c uploadpack.packObjectsHook=  -c user.useConfigOnly=true
+```
 
-Export runs only when a repository path is configured, in a new sidecar
-`~/.northkeep/export.json` beside `sync.json` (packages/sync/src/config.ts:43)
-and `connector.json` (packages/sync/src/connector-config.ts:32). It holds the
-path and the Decision 7 confirmation, no secret. An absent file means the
-feature is off, the default.
+`-C` takes the repository realpath from `fs.realpathSync`. Per invocation: a 10 second timeout, a bounded
+`maxBuffer`, never while the vault file lock is held. Git 2.31 or newer, for `--path-format=absolute`.
+`GIT_NO_REPLACE_OBJECTS=1` matters: a review planted a replace ref on the current blob and tree, and verify
+reported `matches` on foreign bytes; with it set, git reads the real objects. M-A1 never names a remote, so a
+legacy `.git/remotes` or `.git/branches` file has nothing to redirect; the canary keeps that as a guard.
 
-## Decision 5: How git is run, and what it is never allowed to do
+**Preflight,** before any write, each refusing the whole run: the path is not a work tree (`rev-parse
+--show-toplevel` must equal it); it is bare; it is inside `northkeepHome()`
+(packages/core/src/platform.ts:7-9) or the vault's directory, or is a NorthKeep checkout; Decision 4's
+marker check fails; `worktree list --porcelain` shows HEAD's branch checked out in another worktree; or
+`<git-dir>/index.lock` exists, the git dir from `rev-parse --path-format=absolute --git-dir`, which in a
+linked worktree is `.git/worktrees/<name>`, where that worktree's index and lock live. That refusal names
+the file and says to remove it once no git process runs; NorthKeep never removes it. The lock is checked
+again before `update-ref`; if it appeared, the run stops there, HEAD unmoved, the files journaled residue.
 
-One commit per export run. A wrap's message is `wrap: <slug> (<host>, model not
-exposed) - <first line of completed>`, with `<host>` from `last_writer.host`
-(ADR 0052 Decision 1) or `unknown host`, and `model not exposed` fixed text
-because ADR 0052 records `model: null`. Checkpoint, update and create use
-`checkpoint:`, `update:` and `create:`; a full run uses `export: <n> projects
-(<host>)`. The trailing text is `firstNonEmptyLine` of the completed work, or of
-Current Status for an update, cut to 72 characters with control characters
-stripped, and it is one element of an args array, never shell-interpolated.
+**Per-target containment,** per file before it is written, refusing that target and continuing: anything at
+the write's unique temp path (`lstat` succeeds); a symlink in any component; a target that is not a
+regular file or has `st_nlink` above 1; `ls-tree HEAD -- projects` mode 160000 or a `.git` under
+`projects`; `realpath(dirname(target))` outside `realpath(repo)` plus a separator. Each refusal is fixed
+text naming the check and the fix, for example "projects/ is a symlink; NorthKeep exports only into a real
+directory inside the repository".
 
-The rules, all fail-closed:
+**The temporary index and the root commit.** `GIT_INDEX_FILE` is seeded by `read-tree HEAD`, so a commit
+carries HEAD's tree plus NorthKeep's paths and nothing the user staged. On an unborn HEAD the index is
+seeded with `read-tree --empty`, `commit-tree` has no parent, and `update-ref` no old value.
 
-1. `execFile` with an args array, never a shell string, for the reason
-   packages/mcp-server/src/connect.ts:234-236 states for `execFileSync`.
-2. Repository config can name a program to run, so every invocation pins those
-   keys on the command line, where `-c` outranks repository config: `-c
-   core.hooksPath=<empty dir> -c core.fsmonitor=false -c gpg.program= -c
-   commit.gpgsign=false -c core.sshCommand=`, plus `--no-verify` on `commit`.
-   NorthKeep owns the empty hooks directory, under `~/.northkeep/`.
-3. `-C <realpath of repo>`, resolved with `fs.realpathSync` before any git call;
-   every check uses the resolved path.
-4. Refuse unless `git rev-parse --show-toplevel` succeeds and equals that path
-   (NorthKeep never runs `git init`), or if the path is inside `northkeepHome()`
-   (packages/core/src/platform.ts:7-9) or the vault file's directory, by prefix
-   on a separator boundary.
-5. The allowed verbs are exactly `rev-parse`, `add`, `commit`, `check-ignore`
-   and `config --get`. No `remote`, `push`, `pull` or `fetch` subcommand is
-   constructed anywhere in the code. `status` left the list with Decision 3's
-   header test.
-6. A 10 second timeout and a bounded `maxBuffer` per invocation, and git is
-   never run while the vault file lock is held.
-7. A scrubbed environment (git sees `PATH` and `HOME` only, so no stray
-   `GIT_SSH_COMMAND` or `GIT_EXTERNAL_DIFF`), `GIT_CONFIG_NOSYSTEM=1`, and
-   `GIT_CONFIG_GLOBAL` on an empty file NorthKeep owns under `~/.northkeep/`, so
-   neither the system config nor the user's own `~/.gitconfig` is read at all.
-8. `user.name` and `user.email` must both resolve from repository config
-   (`config --get`) before anything is written; rule 7 hides the global file, so
-   a repo that relied on it must set its own. Missing either, the export refuses
-   before writing, naming the two `git config` commands that fix it.
-9. `check-ignore -q` on every target before writing; a path `.gitignore` would
-   drop is refused and named, because a file git will never track is one the
-   user believes is exported and is not.
-10. One export at a time per repository, serialized by a lock file under
-    `~/.northkeep/` keyed by the resolved path, so a second export refuses on
-    the lock instead of interleaving writes and commits.
+**The reconcile.** After `update-ref`, one `update-index --add --cacheinfo` per exported path runs without
+`GIT_INDEX_FILE`, so git picks the index (a linked worktree's is `.git/worktrees/<name>/index`). It runs on
+every run that passes preflight, including a no-change run, so an index an earlier run could not refresh is
+refreshed by the next. Only a lock that appears after the second check can make it fail, after `update-ref`
+landed; nothing is rolled back, and the run reports "committed; working index not refreshed". A `git
+checkout .` over that stale index restores an earlier export, which the journal set recognizes. The
+reconcile expands a sparse index, a residual. An unchanged vault makes `write-tree` return HEAD's tree and
+the run stops before `commit-tree`: no second commit.
 
-Files are written with `atomicWrite` (packages/mcp-server/src/fs-safe.ts:31),
-which resolves an existing file's realpath and writes through it (lines 34-39),
-so a reader never sees half a file. Two deviations: a new mirror is chmodded
-`0o644` rather than the helper's `0o600` (line 33), because a mirror lives in a
-repository the user may share, and `backupOnce` (fs-safe.ts:17-22) is unused,
-because git history is the backup. The exporter stages and commits in one step;
-a failed commit leaves written files carrying the header and valid bytes, which
-the next export recognizes as its own (Decision 3 test 1) and commits.
+## Decision 3: Ownership by header and journal set (project-export-run.ts, `classifyTarget`)
 
-## Decision 6: Import
+Every generated file opens with one HTML comment, nothing before it:
 
-`northkeep projects import --from <dir> [--dry-run]` reads `*.md` in `<dir>`,
-non-recursive, `<slug>.md` where the slug matches `PROJECT_SLUG_PATTERN`
-(project-doc.ts:15). Per file:
+```
+<!-- northkeep: vault <vault_id> project <slug> revision <revision_id> kind document
+     The vault is canonical. This file is regenerated. Edits here are not read back. -->
+```
 
-1. Parse with `parseProjectDoc` (project-doc.ts:101-126).
-2. Map sections: the five known headings (project-doc.ts:25-31) to themselves,
-   `Open Questions / Risks` to the `Open Questions` section ADR 0048 owns
-   (`ProjectView.open_questions`, project-handoff.ts:65), and every other
-   heading verbatim, which `parseProjectDoc` and `serializeProjectDoc` already
-   round-trip (project-doc.ts:137-146).
-3. Write with the existing revision-bound create path, `expected_revision:
-   null`, which refuses when a live head exists (ADR 0050, Claims table). An
-   existing slug is refused by name and the run continues; import never merges.
-4. Log entries go in **oldest first** as ADR 0045 archive memories, written
-   directly rather than by replaying `project_update`, which would stamp every
-   entry with today's date (`datedBullet`, project-doc.ts:334). This needs one
-   new core formatter, `formatImportedLogArchive(project, entries, sourceFile)`,
-   emitting the same `## Log archive: <slug>` first line as `formatLogArchive`
-   (project-doc.ts:20, 267-274), because `getProjectView` finds archives by that
-   prefix (project-handoff.ts:222); only the provenance line differs. The newest
-   `PROJECT_LOG_KEEP_ENTRIES` (project-doc.ts:18) stay live and the rest are
-   archived, chunked under the ADR 0045 project-scope row cap of 65,536 bytes,
-   measured as UTF-8 bytes and not characters, so accented text chunks on what
-   the row really holds.
-5. Anything that still does not fit `PROJECT_DOC_MAX_CHARS` (16,384,
-   project-doc.ts:10) becomes one `episodic` memory in the project scope headed
-   `## Import overflow: <slug>`, naming the source file and which headings
-   moved. Nothing is dropped; every overflow is reported.
-6. The source directory is read-only, and import spawns no git process.
-   `--dry-run` reports the plan (per file: slug, section map, live document
-   size, archive count, overflow yes or no) and writes nothing.
+`kind` is `document`, `log`, `index` (vault id, no slug) or `marker` (vault id, no slug); the values come
+from `ProjectView` (project-handoff.ts:232). The revision id is for a human and is never an ownership test.
 
-## Decision 7: Token cost is zero, and privacy is the folder's
+**The journal** is `<NORTHKEEP_HOME>/export/<key>.json`: per path, the last ten blob ids NorthKeep wrote
+there, newest first. After `hash-object -w --stdin` and before the write, a blob already present moves to
+the front, a new one is prepended, and the list is cut to ten, so unchanged runs never evict history.
+Written with `atomicWrite` at `0o600`. An unparseable file, another version, realpath or vault reads as
+empty. Entries for removed paths are kept.
 
-No model runs in export or import: both are string transformations over data the
-vault already holds. Zero model tokens, an acceptance criterion run with no
-Ollama and no network. Unshared projects are exported, because they are the
-majority and a mirror that omitted them would be worse than no mirror. The file
-is as private as the folder the user chose, written into a path the owner typed.
-There is no default path.
+```json
+{ "version": 1, "repo": "<realpath>", "vault_id": "<uuid>",
+  "paths": { "projects/demo.md": ["<newest blob>", "...", "<oldest of at most 10>"] } }
+```
 
-- **CLAUDE.md invariant #7 is about networked dependencies.** Git is a program
-  the user installed and NorthKeep spawns it, so code NorthKeep did not write
-  does run. What Decision 5 buys is that the repository cannot choose which
-  code. The invariant holds because nothing new reaches the network, not because
-  nothing runs.
-- **CLAUDE.md invariant #1 is unchanged.** It bounds what *leaves the machine*,
-  and export writes a local file. A remote the user later adds and pushes to is
-  the user's own egress through the user's own git, and NorthKeep never creates
-  a remote (Decision 5, rule 5).
-- **The "no plaintext on disk outside the vault" property is amended.** It is
-  stated in the call log header (packages/mcp-server/src/log.ts:6-8) and that
-  sentence is what this ADR narrows. After M-A the accurate statement is:
-  NorthKeep writes memory plaintext outside the encrypted vault in exactly one
-  place, project documents mirrored to a git repository the user configured by
-  path. The call log itself stays content-free. KNOWN-LIMITS.md must carry the
-  amended sentence and the residuals below before this ships.
-- **Tier-1 return masking (ADR 0048 binding amendments) does not apply** to the
-  exported file. Masking a mirror of the user's own vault to the user's own disk
-  would write corrupted text the user would read as real. The mirror is verbatim
-  or it is not a mirror, and the precondition below is what makes that a choice
-  rather than an oversight.
-- **Precondition before the first export to a path:** NorthKeep prints the
-  resolved path, whether a remote is configured (read-only `config --get
-  remote.origin.url`), and how many projects and unshared projects will be
-  written, then requires a confirmation stored in `export.json`. A changed path
-  re-asks.
+**The rule.** `classifyTarget(target, { diskBlob, journalBlobs, vaultId, slug })`: a target is **ours**
+when its header names this vault id (and slug for `document` and `log`) and `diskBlob` is in
+`journalBlobs`. Anything else is a **hand edit**, refused and reported by name, and the run continues. A
+missing file is written. HEAD is not an ownership input: in a folder NorthKeep owns, a file the user
+committed is still a file NorthKeep did not write. Nothing is ever adopted. The refusal's fix is "move or
+delete the file; NorthKeep then writes it fresh"; its old content stays in git history.
+
+**What heals without a human.** Crash residue (journaled before the write; a killed write's temp is removed
+by the next run), a `checkout .` over a stale
+index, a `reset --hard` or restored mirror within the last ten writes of the path. Preflight refuses while
+a lock exists, so the index lags HEAD by at most one export and its blob is among the newest two journal
+entries. **Accepted edge:** a hand-typed file byte-identical to a former render is overwritten; the bytes
+are NorthKeep's own.
+
+## Decision 4: A folder NorthKeep owns (project-export-run.ts, `exportProjects`)
+
+The user runs `git init` on an empty folder; NorthKeep never does. The first `northkeep projects export
+--repo <path>` requires the working tree to hold nothing but `.git` (`readdirSync` returns exactly `.git`)
+and HEAD to be unborn, and writes `.northkeep-mirror` at the root, rendered by `renderMarkerFile` with a
+`kind marker` header naming the vault id, journaled and committed like every other file. Every later export
+refuses the whole run when the marker is absent, unparseable, or names another vault, with the fix
+("restore it with `git checkout -- .northkeep-mirror`, or start a new mirror in an empty folder").
+
+NorthKeep writes only `projects/`, `INDEX.md` and the marker. A file there it did not write is a hand edit
+(Decision 3). Files the user adds elsewhere are never read, written or committed by NorthKeep: the
+temporary index is seeded from HEAD and only NorthKeep's paths are added. Export runs only when the
+Decision 5 settings file names a repository; absent means off.
+
+## Decision 5: Every project, one settings file, written under the lock
+
+**Every project is exported.** M-A1 has no confirmation hold and no per-project exclusion. Those exist
+because content pushed to GitHub is irreversible; a local mirror is as private as the folder the user chose,
+like any file on this Mac. Exclusion and confirmation are born in ADR 0055, with the push.
+
+**The settings file** is `<NORTHKEEP_HOME>/export.json`: the resolved repository path and nothing else, no
+secret. Export state lives in the Decision 7 state file. Both are written only by `exportProjects`, the
+first configuration included, and only while it holds the Decision 9 lock in the repository's common dir,
+so two writers cannot race. `atomicWrite` at `0o600`. It lives outside the vault, so no sync, restore or
+import writes it. Missing means unconfigured; unreadable refuses the run and names the file.
+
+**Invariants.** M-A1 needs no amendment to invariant #1: nothing leaves the machine. The one sentence it
+amends is the call log header's "memory content is never written to disk outside the encrypted vault"
+(packages/mcp-server/src/log.ts:5-9): for project scopes only, opt-in, at a path the user chose.
+KNOWN-LIMITS.md carries the amended sentence before this ships.
+
+## Decision 6: Verify (project-export-run.ts, `verifyMirror`)
+
+`northkeep projects export --verify` is read-only: no git writes, no file writes, no journal or state
+writes, no export lock. It renders every project and reports each path as **matches** (disk,
+HEAD and render equal), **uncommitted export** (disk equals the render, HEAD older, both NorthKeep's),
+**stale** (disk and HEAD are NorthKeep's but differ from the render), **missing**, **extra** (a
+`projects/*.md` for no project), or **hand edit** (disk or HEAD in no journal entry and not the
+render). A conflicted project reports `conflict`. Exit 0 only when every path matches. Its git
+calls are `hash-object --no-filters --stdin` on the render, `rev-parse HEAD:<path>`, `hash-object
+--no-filters -- <path>` and `ls-tree HEAD -- projects/`, under Decision 2's environment; the canary runs
+this sequence and fails if any file under the repository, its git dirs or `NORTHKEEP_HOME` changed.
+
+## Decision 7: Staleness and status (project-export.ts, project-export-run.ts)
+
+The state file, `<NORTHKEEP_HOME>/export/<key>.state.json`, `atomicWrite` at `0o600` after every run:
+
+```json
+{ "version": 1, "repo": "<realpath>", "vault_id": "<uuid>",
+  "last_success": { "at": "<ISO>", "commit": "<id>" }, "last_attempt": { "at": "<ISO>", "by": "cli|schedule" },
+  "last_failure": { "at": "<ISO>", "code": "<code>" }, "refused": [ { "path": "...", "reason": "hand edit" } ],
+  "projects": { "<slug>": { "revision": "<id>", "exported_at": "<ISO>" } },
+  "nk_commits": ["<every commit id NorthKeep created, oldest first>"] }
+```
+
+`northkeep projects export --status` prints the repository, last successful export time and commit,
+projects changed since (current revision differs from `projects`), refused paths, the last failure, and any
+remote the repository has, with "NorthKeep never pushes; a push you make publishes the mirror".
+`nk_commits` records every NorthKeep commit unconditionally, which ADR 0055 requires.
+
+`summarizeMirror(state, summaries, now)` is pure and returns one line: "mirror last exported <time>; N
+projects changed since", plus "; last export failed <time>" when true. `readMirrorSummary(vault,
+granted)` reads `export.json` and the state file only, never runs git, takes revisions from
+`listProjectViews(vault, granted)`, and counts only projects in the caller's granted scopes, so a narrow
+grant learns nothing about other projects. It returns null when no mirror is configured. Callers:
+`project_list` (packages/mcp-server/src/server.ts:605-615) and `project_resume` (server.ts:700-724) add
+`mirror_status`; `GET /api/projects` (apps/web/src/projectsApi.ts:25-26) adds `mirror`, shown in
+`projectsSummaryMeta` (apps/web/static/index.html:2154). Every string is fixed text, a time or a count: no
+path, no git stderr. The hosted connector's `project_list` (apps/connector-server/src/mcp.ts:545) cannot
+read this Mac's files and does not show the line; the connector has no `project_resume`.
+
+## Decision 8: An optional schedule (project-export-run.ts, `installSchedule`)
+
+`northkeep projects export --schedule hourly|daily|off`, macOS only, off by default, run by the user.
+It writes or removes `~/Library/LaunchAgents/com.northkeep.mirror-export.plist` (`0o644`, no secret):
+`ProgramArguments` are `process.execPath`, the CLI entry and `projects export --scheduled`; `StartInterval`
+3600 or a daily `StartCalendarInterval`; `NORTHKEEP_HOME` when set; output to `/dev/null`. It loads with
+`/bin/launchctl bootstrap gui/<uid> <plist>` and unloads with `bootout`. The job is a separate process
+started by launchd, never inside an agent's write.
+
+It needs the key `northkeep unlock` parks in the Keychain (packages/cli/src/index.ts:136-163).
+`--scheduled` never prompts: it calls `resolveMasterKey` (packages/mcp-server/src/key.ts:22) itself and never
+reaches `withVault`'s prompt (packages/cli/src/index.ts:1164-1167); with no key it records `last_failure`
+`vault_locked` and exits. A busy vault lock, a refusal or a git error is recorded the same way, and the
+staleness line shows it. A scheduled run commits locally and never pushes.
+
+## Decision 9: Byte caps, identity, one commit per run, the lock
+
+**Caps.** `PROJECT_DOC_MAX_CHARS` is 16,384 UTF-16 code units (project-doc.ts:10), at most 49,152 UTF-8
+bytes; the header is at most 257 bytes. The cap binds only write paths (`assertProjectDocSize`,
+project-doc.ts:199-203, from project-handoff.ts:190), so a synced document can be larger; it is exported
+whatever its size, and one over 65,536 bytes is reported. Log files split on archive boundaries into
+`<slug>.log.1.md`, `<slug>.log.2.md`, a 65,536-byte target, each with its own header; one archive can
+exceed it, because the ADR 0045 row cap lets an archive reach 64 KiB. A part no longer needed is removed
+only when `classifyTarget` calls it ours.
+
+**Identity.** `requireCommitIdentity` runs `git var GIT_COMMITTER_IDENT` under the pins, including
+`user.useConfigOnly=true`, so a repository with no identity refuses before writing and names the two `git
+config` commands. NorthKeep never sets an identity; with `GIT_CONFIG_GLOBAL` empty, the repository must.
+
+**One commit per run.** Subject `export: <n> projects (<host>)`; the body lists each project written as
+`<slug> (<last writer host>, model not exposed)`, the host from the head's ADR 0052 provenance block
+(project-handoff.ts:45, `ProjectView.last_writer`, line 74) or `(unknown host)`, and each removed path. The
+message goes on `commit-tree`'s stdin, never as an argument or through a shell, the args-array pattern
+packages/mcp-server/src/connect.ts:235-236 describes.
+
+**The lock.** `<common dir>/northkeep-export.lock`, the common dir from `rev-parse --path-format=absolute
+--git-common-dir`, shared by every worktree. `O_EXCL` with pid and start time; stale only when the pid is
+dead or the file is over an hour old; removed only by its owner; a second export waits 30 seconds, then
+reports. It covers every settings and state write. Git's `index.lock` is only ever read.
+
+## Decision 10: Import (project-export-run.ts, `importProjects`)
+
+`northkeep projects import --from <dir> [--write]`, dry run by default: per file, slug, section map, size,
+archive count and overflow, writing nothing. The source is read-only and import spawns no git. `*.md`,
+non-recursive; stems failing `PROJECT_SLUG_PATTERN` (project-doc.ts:15) are listed and skipped; `kind index`
+and `kind marker` are skipped, `kind log` reattaches archives to its slug, `kind document` and headerless
+files import. The header is stripped from the preamble (project-doc.ts:101-126), leaving an ADR 0052 draft
+line (`PROJECT_DRAFT_LINE_PREFIX`, project-doc.ts:280-284). Per file:
+
+1. Parse with `parseProjectDoc` (project-doc.ts:101-126); map the five known headings (project-doc.ts:25-31)
+   to themselves, `Open Questions / Risks` to `Open Questions` (project-handoff.ts:65), others verbatim.
+2. Create through the revision-bound path with `expected_revision: null` (ADR 0050); an existing slug is
+   refused by name and never merged.
+3. Log entries go in oldest first as ADR 0045 archives via `formatImportedLogArchive(project, entries,
+   sourceFile)`, with the `## Log archive: <slug>` first line (project-doc.ts:20, 267-274) that
+   `getProjectView` finds (project-handoff.ts:226), not by replaying `project_update`, which would restamp
+   dates (`datedBullet`, project-doc.ts:334-339). The newest `PROJECT_LOG_KEEP_ENTRIES` (10,
+   project-doc.ts:18) stay live.
+4. Whatever still exceeds `PROJECT_DOC_MAX_CHARS` becomes one `## Import overflow: <slug>` episodic memory.
+
+## Decision 11: Backup scope (stated, not enforced)
+
+The mirror holds project documents and logs only. The full backup of every memory is the encrypted vault
+file and `northkeep export` (packages/cli/src/index.ts:308-323), which writes plaintext JSON at `0o600`. The
+mirror is as off-machine as Time Machine or a push the user makes by hand; NorthKeep never pushes. The call
+log header's "never written to disk outside the encrypted vault" (packages/mcp-server/src/log.ts:5-9) is
+amended in KNOWN-LIMITS.md for mirrored project scopes before this ships; the journal and state file hold
+blob ids, slugs, revisions and times, never content.
+
+## Decision 12: Deferred to a possible v2
+
+**Automatic export after vault writes** is cut. Before it returns: the schedule and staleness line show
+whether on-demand export keeps the mirror current; export runs off the write path through a queue; and it
+passes its own first review. **The GitHub push** moved to ADR 0055.
+**Adopting an existing hand-written repository** is cut: nothing is ever overwritten that NorthKeep did not
+write. Before it returns, adoption must be an import (Decision 10) into the vault first, so the mirror never
+holds content the vault lacks, with a backup of every file replaced.
+
+## Twelve-month post-mortems
+
+**The vault is restored from backup.** Headers match by vault id and blobs by journal, so the next export
+writes the restored content; git history keeps the rest.
+
+**The schedule silently stops running** (a macOS update, a moved `node`). `last_attempt` stops advancing and
+"last exported" ages in every resume. **The vault is locked at schedule time:** the run records
+`vault_locked`, the line shows "last export failed", and `northkeep unlock` fixes the next run.
+
+**The user deletes the marker.** Every export refuses with the restore command, and verify reports it.
+
+**The settings file is lost.** Export is unconfigured; reconfiguring needs an empty folder.
+
+**A write is killed mid-way.** One unique temp is left; the next run removes it and writes the file.
+
+**History is rewritten with `git filter-repo`.** Rewritten files fall out of the journal and read as hand
+edits until moved.
 
 ## Threats
 
-**A repository that names a program.** `.git/hooks`, `core.hooksPath`,
-`gpg.program`, `core.sshCommand` and `core.fsmonitor` are each a way for a
-repository to have git run someone's code as the user. Decision 5, rule 2 pins
-all five with `-c`, which outranks repository config, plus `--no-verify`; rule 7
-closes the system config, the global config and the `GIT_*` environment. What
-remains is git itself, the user's own program.
+**A repository that names a program.** Filters, hooks, `gpg.program`, `core.fsmonitor`, `post-index-change`
+and `reference-transaction` under plumbing, and `~/.gitconfig`. Mitigated by Decision 2; the canary checks
+five attribute sources, 17 program keys, 21 driver keys, 24 hooks in two directories, an included config
+and a worktree config. Residual: the pins are a list, and a future git could add a key.
 
-**Symlinked repo path.** `realpathSync` first, and the resolved path for every
-check and every git call (rule 3). A symlink *inside* the repository would be
-written through, because `atomicWrite` resolves an existing file's realpath by
-design (fs-safe.ts:34-39), so the exporter `lstat`s each target and refuses a
-symlinked mirror path or `projects/` directory, naming it.
+**Replace refs and legacy remote files.** `GIT_NO_REPLACE_OBJECTS=1`; M-A1 names no remote. The canary
+plants both.
 
-**Refused before anything is written.** A path inside the vault directory, which
-would put plaintext beside `vault.nkv` (rule 4); a path `.gitignore` drops,
-which would look exported and never be tracked (rule 9); a repository with no
-commit identity, which would fail at `commit` with the files already on disk
-(rule 8); and a repository that is itself a NorthKeep checkout, detected by a
-`packages/core/package.json` naming `@northkeep/core`.
+**The user adds a remote and pushes.** That is the user's egress, not NorthKeep's; `--status` names the
+remote and says so.
 
-**A file the user edited by hand, or never NorthKeep's.** Decision 3's header
-test refuses that file, exports the rest, and names it. `--adopt` is the
-deliberate exception, and the first migration is its one use.
+**Bytes written outside the repository.** A symlink at the temp path wrote outside in a review. Mitigated by
+the unique temp name, containment on it, the pattern-only cleanup that unlinks without following, and
+`O_EXCL | O_NOFOLLOW`; the canary plants existing and dangling links. Residual: a directory component
+swapped between `lstat` and the write.
 
-**Git missing, or failing mid-commit.** `execFile` fails with `ENOENT`; the
-first export probes `git --version` and stores nothing on failure, and later
-runs report it once per process. The vault write is saved before the mirror runs
-(Decision 4), so any export failure is reported, never fatal, and never rolls
-back the vault. Leftover files carry the header and valid bytes, so the next run
-commits them. A stale `.git/index.lock` is the same case, and NorthKeep never
-removes a lock file it did not create.
+**A hand edit destroyed.** Mitigated by journal-only ownership, committed or not.
 
 ## Claims this ADR publishes, and where each is enforced
 
 | Claim | Enforced by |
 |---|---|
-| Two exports of an unchanged vault produce byte-identical files | Decision 2: no timestamp in the header, dates from stored fields, slug order from project-handoff.ts:252; test diffs two renders of one fixture vault |
-| NorthKeep never creates a remote and never pushes | Decision 5, rule 5: the constructed verb list is exactly `rev-parse`, `add`, `commit`, `check-ignore`, `config --get`; test asserts a recording `execFile` shim saw no other verb across every trigger |
-| Export sends nothing off the machine | No network call in the path; invariant #1 untouched; test runs the full export with network syscalls stubbed to throw |
-| No program named by repository, global or system config runs | Decision 5, rules 2 and 7; test plants an executable `pre-commit`, a `core.hooksPath`, a `gpg.program` and a `core.sshCommand`, each writing a canary, and asserts every canary is absent after a commit |
-| A file that is not a byte-identical re-render of the revision in its header is never overwritten | Decision 3's header test; tests cover an edited mirror file, a file with no header, and an uncommitted but unmodified mirror file, asserting the first two are refused and named, the third is overwritten, and the rest of the export proceeds |
-| A path `.gitignore` would drop is never written, and a repository with no commit identity is refused before any write | Decision 5, rules 8 and 9; one test per refusal asserts zero files written |
-| Export refuses a path that is not a git work tree, or is inside NORTHKEEP_HOME or the vault directory | Decision 5, rule 4; one test per refusal asserts zero files written and no git verb beyond `rev-parse` |
-| A git failure never rolls back or blocks a vault write | Decision 4 ordering; test makes `git commit` exit non-zero after a `project_wrap` and asserts the receipt and new head are present and unchanged |
-| Import modifies no source file | Decision 6, rule 6; test hashes every file in the source directory before and after a 31-file import |
-| Import drops nothing | Decision 6, rules 4 and 5; test imports a file whose sections exceed 16,384 characters and asserts every heading is present either in the document, an archive, or an `## Import overflow` memory |
-| Import refuses an existing slug | Decision 6, rule 3; existing `expected_revision: null` refusal path (ADR 0050); test asserts no write and that the other files still imported |
-| Neither export nor import runs a model | Decision 7; acceptance runs with Ollama stopped |
-
-## What this deliberately does not build
-
-- No read-back: a hand edit never becomes a vault write, and import is a
-  separate command against a directory NorthKeep did not generate.
-- No remote, push, pull, `git init`, branch or tag creation, merge conflict
-  handling, or file watcher; no mirroring of memories outside project scopes,
-  and none of superseded revisions. No desktop or mobile surface in M-A, no
-  per-project opt-out, no redaction, no recursive or zip import, no other
-  format.
+| Two exports of an unchanged vault produce byte-identical files and one commit | `renderProjectFile`, `renderIndexFile` (no timestamp, stored dates, slug order); `exportProjects` stops when `write-tree` returns HEAD's tree |
+| No program named by repository, global or system config runs during local export or verify | `runGit`: Decision 2 env, pins, `--no-filters`, owned hooks path; `scripts/adr-0053-canary.sh` |
+| M-A1 sends nothing off the machine | `runGit`'s verb allowlist has no `push`, `fetch` or `ls-remote`; a test records every spawned verb |
+| A file NorthKeep did not write is never overwritten or committed | `classifyTarget` (header plus journal blob); `plumbingCommit` adds only NorthKeep's paths to an index seeded from HEAD |
+| Verify writes nothing | `verifyMirror` uses no write verb and no lock; the canary hashes the repository, git dirs and `NORTHKEEP_HOME` before and after |
+| Resume never runs git | `readMirrorSummary` reads two files; test replaces `runGit` with a throwing stub and calls `project_resume` |
+| No mirror byte is written outside the repository; NorthKeep's own files go only under `NORTHKEEP_HOME` | preflight, containment including the temp path, and `writeMirrorFile`; one test per refusal; the canary's writer stage |
+| A killed write heals on the next run | `writeMirrorFile`'s stale-temp cleanup; the canary's crash stage |
+| No export header reaches the vault | `importProjects` strips it; a round-trip test |
 
 ## Residual (documented, accepted)
 
-- **Archives beyond 20 are not mirrored.** `getProjectView` slices archives at
-  `PROJECT_REVISION_SUMMARY_LIMIT`, 20 (project-handoff.ts:24 and 224), so a
-  project with more loses its oldest from `<slug>.log.md`. They stay in the
-  vault; lifting this needs a new unbounded accessor.
-- **The mirror is stale between writes from other devices** until the next local
-  write or `projects export`, and the plaintext is readable by anything that can
-  read the folder: Spotlight, Time Machine, a cloud folder sync, or a remote the
-  user later adds and pushes to.
-- **A conflicted project is never exported** and its last good `<slug>.md` stays
-  on disk, older than its header's revision suggests. The INDEX row says
-  `conflict`.
-- **Commit identity is git's.** NorthKeep never sets `user.name` or `user.email`
-  and refuses up front when neither resolves from repository config (rule 8).
-  Because rule 7 hides the global config, a repository that relied on it must
-  set its own.
-- **Case-insensitive filesystems.** APFS is case-insensitive by default, so two
-  slugs differing only in case would collide on one file. The slug pattern is
-  lowercase (project-doc.ts:15), so this is unreachable today and stays a
-  residual rather than a check.
+- **Journal loss:** every mirrored file reads as a hand edit until the user moves them; `--verify` lists them.
+- **Archives beyond 20** (`PROJECT_REVISION_SUMMARY_LIMIT`, project-handoff.ts:24 and 228) are not mirrored.
+- **`nk_commits` grows** by one id per export commit, about 360 KB a year on an hourly schedule.
+- **A directory component swapped** between `lstat` and the write is a race NorthKeep does not close.
+- **A conflicted project** keeps its last good file. The reconcile expands a sparse index. Git 2.31+.
 
 ## Acceptance (Jay, from the CLI)
 
-Against a throwaway vault and a throwaway repository, `NORTHKEEP_HOME` set on
-every command.
+Throwaway vault, never the real command repo:
 
 ```bash
-export NORTHKEEP_HOME=$(mktemp -d)
+export NORTHKEEP_HOME=$(mktemp -d); LAB=$(mktemp -d); R=$LAB/mirror
 export NK=~/Claude/Projects/NorthKeep/northkeep/packages/cli/dist/index.js
-export CR=~/Claude/Projects/Command\ Repo/projects
-mkdir -p /tmp/nk-mirror && git -C /tmp/nk-mirror init -q
-git -C /tmp/nk-mirror config user.email you@example.com
-git -C /tmp/nk-mirror config user.name Jay
-node $NK init && node $NK projects export --repo /tmp/nk-mirror  # asks once
+mkdir -p $R && git -C $R init -q && git -C $R config user.email you@example.com && git -C $R config user.name Jay
+node $NK init   # then create two projects, demo and other, with node $NK projects update
 ```
 
-1. **Byte-identical double export.** Export, copy `projects/`, export again,
-   `diff -r` the two, and confirm `git log --oneline | wc -l` is 1.
-2. **Nothing the repo or `~/.gitconfig` names ever runs.** Plant a canary script
-   in `.git/hooks/pre-commit`, `core.hooksPath`, `gpg.program` and
-   `core.sshCommand`, in the repository config and in `~/.gitconfig`, run a
-   `projects update`, and confirm no canary file exists.
-3. **Ownership is the header.** Append a line to `projects/demo.md` and export:
-   refused, edit intact. Commit that edit and export: still refused. Write a
-   headerless `projects/stranger.md` and export: refused. Export `--adopt`: both
-   overwritten.
-4. **Refusals, each writing nothing:** a path inside `NORTHKEEP_HOME`, a path
-   that is not a work tree, an unset `user.email`, `projects/` in `.gitignore`,
-   and a second export while one is running.
-5. **Import.** `projects import --from $CR --dry-run` prints a 31-row plan and
-   writes nothing, the command repo's `git status --short` stays empty, then the
-   real run imports 31 projects, and one `projects export --repo <command repo>
-   --adopt` migrates its files.
-6. **Zero model tokens.** Stop Ollama and repeat steps 1 and 5.
-7. **Git failure is not fatal.** Take `git` off `PATH`, run a `projects update`,
-   and confirm the vault head changed while the CLI reported the export as
-   skipped.
+1. **First export.** `node $NK projects export --repo $R`. `ls -A $R`
+   shows `.git`, `.northkeep-mirror`, `INDEX.md`, `projects`; the log shows 1 commit. `ls $NORTHKEEP_HOME`
+   shows `export.json`. A non-empty folder is refused.
+2. **Byte-identical second export, no commit.** `cp -R $R/projects $LAB/a`, export again: `diff -r $LAB/a
+   $R/projects` is silent, the log still shows 1 commit, `git -C $R status --short` is empty.
+3. **Verify clean.** `node $NK projects export --verify; echo $?` prints every path `matches` and 0.
+4. **A hand edit.** `echo note >> $R/projects/demo.md`: verify reports `projects/demo.md: hand edit` and
+   exits 1; export refuses it by name and exports the rest; the edit is intact.
+5. **Status after a write.** `git -C $R checkout -- projects/demo.md`, write to `other`: `--status` shows
+   `1 project changed since`, and `project_resume` shows the same line. Export: it is committed.
+6. **The canary.** From the NorthKeep repository, `bash scripts/adr-0053-canary.sh` prints `(none)`, every
+   blob line `equal`, every verify `unchanged`, every writer and crash line, `result M-A1: PASS`, exit 0.
+7. **Import dry run.** `cp -R ~/Claude/Projects/Command\ Repo $LAB/cr`; `node $NK projects import --from
+   $LAB/cr/projects` prints a 31-row plan, writes nothing, and `git -C $LAB/cr status --short` is empty.
+8. **Nothing is pushed.** `git init -q --bare $LAB/bare.git; git -C $R remote add origin $LAB/bare.git`,
+   export: it commits, `--status` names the remote, and `git -C $LAB/bare.git rev-list --all | wc -l` is 0.
+9. **A killed write heals.** With `NORTHKEEP_EXPORT_CRASH_WRITE=1` (a test hook that kills the process after
+   writing a temp), write to `demo` and export: `ls $R/projects` shows one `demo.md.northkeep-tmp-*`. Export
+   again: the temp is gone and verify reports `matches`.
+10. **Schedule.** `--schedule hourly`, then `launchctl print gui/$(id -u)/com.northkeep.mirror-export` shows
+    it; `northkeep lock`, wait for a run, `--status` shows `vault_locked`; `--schedule off`.
 
-## Adversarial review (2026-09-21, against the design)
+**Canary output while this draft was written,** twice, git 2.54.0 (Apple Git-157), APFS, `TMPDIR=<scratch>
+bash scripts/adr-0053-canary.sh`. Both exited 0, the outputs were identical, each deleted its temp dir:
 
-Nothing is built, so the attack was against the prose and the cited code.
-Verdict: **NOT CLEARED**. Eight citations pointed at the wrong lines, itself a
-finding: a reader checking this design checked nothing.
+```
+git: git version 2.54.0 (Apple Git-157)
+hostile: 24 hooks in each of .git/hooks and core.hooksPath, 17 program keys, 21 driver keys, 5 attribute sources
+main repository:
+  git-dir=repo/.git common-dir=repo/.git
+  projects/s1.md disk=b6aac8346241 head=b6aac8346241 sha1=b6aac8346241 equal
+  projects/s2.md disk=a5c4c6bde061 head=a5c4c6bde061 sha1=a5c4c6bde061 equal
+  projects/s3.md disk=5fa4ec4f9aa7 head=5fa4ec4f9aa7 sha1=5fa4ec4f9aa7 equal
+  projects/s4.md disk=a62414760618 head=a62414760618 sha1=a62414760618 equal
+  INDEX.md disk=bd63d675a1ae head=bd63d675a1ae sha1=bd63d675a1ae equal
+  .northkeep-mirror disk=43b44717e162 head=43b44717e162 sha1=43b44717e162 equal
+  verify: 6/6 match, repository and NORTHKEEP_HOME unchanged
+  replace refs planted on the current blob and tree:
+  verify: 6/6 match, repository and NORTHKEEP_HOME unchanged
+  read-tree HEAD under the pinned env: the real tree, not the replacement
+linked worktree:
+  git-dir=repo/.git/worktrees/wt common-dir=repo/.git
+  projects/s3.md disk=6bbd5892472b head=6bbd5892472b sha1=6bbd5892472b equal
+  verify: 1/1 match, repository and NORTHKEEP_HOME unchanged
+fresh repository:
+  git-dir=root/.git common-dir=root/.git
+  unborn HEAD: root-commit path
+  projects/root.md disk=c64e1f69d9f7 head=c64e1f69d9f7 sha1=c64e1f69d9f7 equal
+  .northkeep-mirror disk=43b44717e162 head=43b44717e162 sha1=43b44717e162 equal
+  verify: 2/2 match, repository and NORTHKEEP_HOME unchanged
+legacy remote files (a guard; M-A1 never names a remote):
+  planted at the https URL: it still resolves to itself
+  planted at the ssh URL: it still resolves to itself
+  verify: 2/2 match, repository and NORTHKEEP_HOME unchanged
+mirror writer:
+  symlinks at our temp pattern, existing and dangling: unlinked, targets untouched; unique temp written; foreign name kept
+  forced onto a planted link: containment refused: temp path exists, then with the lstat skipped: open refused: File exists; nothing outside changed
+  killed mid-write: 1 temp left, target unchanged; next run removed it and wrote: healed
+canaries fired:
+  (none)
+controls (must fire):
+  filter.a1.clean filter.a2.clean filter.a3.clean filter.a4.clean filter.a5.clean hook:core.hooksPath/reference-transaction legacy-remote.slashfree-redirect replace-ref.live tempfile.symlink.followed
+result M-A1: PASS
+```
 
-**Findings.**
+The five attribute sources: a committed root `.gitattributes`, an untracked `projects/.gitattributes`,
+`.git/info/attributes`, `core.attributesFile`, and a global `~/.config/git/attributes` in a stand-in home.
+`ls-remote --get-url` is harness-only: it shows how git resolves a URL without connecting. The writer is
+`perl sysopen` with the same four flags and the same cleanup pattern; the crash stage kills it with SIGKILL
+after writing the temp. Each plant has a control that fires without the fix. Mutations: without
+`GIT_NO_REPLACE_OBJECTS=1` verify reports 5/6; without the hooks pin, `reference-transaction` and
+`post-index-change` fire; without `--no-filters`, three filters fire. Git 2.54 does not apply
+`.git/info/attributes` or `core.attributesFile` to an absolute path, so their controls use a relative path.
+The push stages moved behind `--m-a2`, owned by ADR 0055.
 
-1. Hooks are not the only program a repository names: `gpg.program`,
-   `core.sshCommand` and `core.fsmonitor` each run a command.
-2. `GIT_CONFIG_NOSYSTEM=1` leaves the user's own `~/.gitconfig` in play, so
-   those same keys return through it.
-3. The invariant-7 wording reads as "no code runs", which is false.
-4. `git status --porcelain` is not an ownership test: an uncommitted file
-   NorthKeep wrote reads as modified and is skipped forever, a committed hand
-   edit reads as clean and is overwritten.
-5. Nothing refused a file NorthKeep did not write, so the first export into the
-   command repo would have overwritten 31 hand-written files, and "the next
-   export commits the leftovers" rested on that same `git status`.
-6. "64 KiB" was unstated as bytes or characters; the row cap is bytes.
-7. `.gitignore` can drop `projects/` and the export would report success for
-   files git will never track, and a repository with no `user.name` or
-   `user.email` fails at `commit` with the files already written.
-8. An INDEX cell holding `|` forges a column, the status line being free text
-   an agent wrote.
-9. `<slug>.log.md` was specified from `ProjectView.archives`, empty unless
-   `getProjectView` is called with `history: true` (project-handoff.ts:224), so
-   it would have rendered empty.
-10. Two writers can export into one repository at once, interleaving writes and
-    commits.
-11. Eight stale citations: `getProjectView`, `listProjectViews`, its sort line,
-    `ProjectSummary`, the head id, the archive filter, the archive slice, and
-    the `0o600` default.
+## Adversarial review (2026-09-22, first review of the seventh draft)
 
-**Binding amendments (applied to the Decisions above).** Rule 2 pins all five
-program-naming keys, rule 7 adds `GIT_CONFIG_GLOBAL` on an empty file NorthKeep
-owns, and the header block and Decision 7 state the invariant-7 argument
-plainly. Decision 3 replaces the git-status test with the header test and adds
-`--adopt` for the first migration, and Decision 5 states the one-step stage and
-commit whose leftovers that test recognizes. Decision 6 states the cap as 65,536
-UTF-8 bytes. Decision 5 gains `check-ignore`, the resolved-identity refusal and
-the per-repository lock file. Decision 1 escapes pipes in INDEX cells, and
-Decision 2 renders `<slug>.log.md` from a `history: true` read. Every citation
-was re-opened and corrected. The claims table, Threats, Residual and the
-acceptance script moved with these.
+Two tracks, NOT CLEARED. Push-only findings moved to ADR 0055: the legacy remote-file redirect, exclusion
+failing open under whole-vault sync, and the push sending HEAD's ancestry. M-A1 findings, fixed here: a
+symlink at the temp path wrote outside the repository (Decision 2 writer); replace refs fooled verify
+(`GIT_NO_REPLACE_OBJECTS=1`); the false `0o644` citation; the verify snapshot now covers `NORTHKEEP_HOME`;
+verify gained "uncommitted export"; the `resolveMasterKey` and `connect.ts` citations. Import's code-fence
+handling is inherited and shown in the dry run.
 
-**Residual.** Real git behaviour against a real repository, unreachable.
+## Earlier reviews
 
-## Adversarial review (2026-09-21, second pass, against the amended design)
+Five earlier reviews, all NOT CLEARED. The fifth-draft recheck found a persistent `index.lock` let the index
+fall two exports behind a one-blob journal (answered by the lock precondition and the ten-blob journal) and
+flagged adoption hints and a silent stopped trigger, both since cut. The fourth found a single fault could
+wedge the mirror and a `projects/` submodule could take plaintext elsewhere. The third found `git diff` ran
+the clean filter over plaintext. The first and second found stale citations, hooks treated as the only
+program, `~/.gitconfig` in play, `git status` as an ownership test and a filter on `add`.
 
-Nothing built, so the attack was again against the prose and the cited code,
-plus a real git binary (git 2.54, Apple Git-157). Verdict: **NOT CLEARED**.
+## Adversarial review (2026-09-22, recheck of the seventh draft), the last before the split
 
-**Kill shots.** (1) Decision 5 pins the keys that name a program at commit
-time, but `.gitattributes` in the repository selects a `filter.<name>.clean` or
-`.process` and git runs it on `add`, under the full override set. Executed on
-git 2.54: the filter ran and was handed the project document's plaintext.
-(2) `--adopt` over the command repo's 31 hand-written files keeps no backup and
-`backupOnce` (fs-safe.ts:17-22) is explicitly unused, so a mistaken first
-migration is lossy. (3) The header test cannot self-heal a mirror left stale by
-another device: the bytes differ, so export refuses that file forever, and ADR
-0051 can blank the revision the header names, so the re-render it wants is
-gone.
+Verdict at `scratchpad/verdicts/adr0053-draft7-recheck.md`: **NOT CLEARED.** All five prior findings closed
+(legacy remote files, exclusion loss, schema bump, temp-path symlink, push breadth). New findings and where
+they went:
 
-**Flesh wounds.** (1) Re-importing NorthKeep's own export drops every
-`<slug>.log.md` and `INDEX.md`: Decision 6 matches `PROJECT_SLUG_PATTERN`
-(project-doc.ts:15), and `demo.log` holds a dot while `INDEX` is uppercase.
-(2) `remote.origin.url` is read only at the first configure, so a later remote
-is never seen. (3) The header is an HTML comment, which `parseProjectDoc` keeps
-as preamble, so on import a file that copies it is indistinguishable from one
-NorthKeep wrote. (4) `serializeProjectDoc` (project-doc.ts:137-146) returns no trailing
-newline, which Decision 2 rule 2 promises. (5) `project-doc.ts:317` had
-drifted; `datedBullet` is at 334.
+- **Kill shot, push-only, moved to ADR 0055:** concurrent `mirror include|exclude` writes lost an
+  acknowledged exclusion. In M-A1 the settings file holds only the repository path and is written only
+  under the common-dir lock, and there is no exclusion to lose.
+- **Flesh wound, push-only, moved:** confirmation by slug is bypassed by delete and re-create.
+- **Flesh wound, push-only, moved:** `nk_commits` kept only with a remote made the guard refuse forever.
+  M-A1 records every commit id unconditionally, so ADR 0055 inherits the history.
+- **Flesh wound, M-A1, fixed:** a killed `writeMirrorFile` left a temp that refused the target forever. The
+  writer now uses a unique temp per write and removes its own stale temps first; the canary's crash stage
+  shows the heal.
+- **Notes.** "Per-project, opt-in" and list precedence moved to ADR 0055. "No byte is written outside the
+  repository" is narrowed to mirror bytes; NorthKeep's own files live under `NORTHKEEP_HOME`. The URL
+  control-character note moved. The directory-swap race stays a residual here.
 
-**Required before the next draft.** This design is not amended in place. A
-third draft must: write every file through git plumbing (`hash-object
---no-filters`, `update-index --cacheinfo`, `write-tree`, `commit-tree`,
-`update-ref`) so no filter and no hook runs over vault plaintext; `backupOnce` every file `--adopt` overwrites; re-check remotes on
-every export and refuse when one appeared since the stored confirmation;
-recognize a stale mirror by the header's revision id being an ancestor in that
-project's vault chain, not by byte identity, and overwrite it rather than
-refusing forever; give `<slug>.log.md` and `INDEX.md` a header import
-recognizes and either skips or reattaches, so an export round-trips; and strip
-the "NorthKeep-generated" marker on import, never writing it into the vault.
+Jay's decision after it, 2026-09-22: "Split it."
 
-**Residual.** Real git behaviour against the user's own repository, and the
-cost of plumbing writes at 31 projects: unreachable until code exists.
+## Code review (2026-09-22, first review of the M-A1 code)
+
+Two fresh-eyes execution attackers against the built code, verdicts at
+`scratchpad/verdicts/m-a1-code-export.md` and `m-a1-code-import-surfaces.md`.
+Export side NOT CLEARED: concurrent exports could commit a tree deleting user
+files or an empty tree, because the lock could be stolen by age or by a racing
+dead-owner takeover and every run shared one temporary index. Import and
+surfaces CLEARED WITH WOUNDS (seven). Fixed in one round (Jay: "go"):
+
+- The lock is never taken by age. A dead owner's lock is taken by
+  compare-and-steal under a separate guard file; the lock is re-read before
+  `update-ref`; each run has a private temporary index; a commit missing a file
+  the run did not remove is refused.
+- An unreadable mirror file refuses only itself. A run records a failure only in
+  its own vault's state file, matched by `vault_fingerprint` (a hash of the vault
+  header's salt) when the vault could not be opened; that field is added to the
+  state file described in Decision 7.
+- Verify runs git with a throwaway home and writes nothing under NORTHKEEP_HOME;
+  it reports a file present only in HEAD, and a mode change.
+- Import decodes strict UTF-8 and refuses anything else; keeps the newest ten
+  Log entries by date when every entry is dated; caps every row at 60,000 bytes;
+  reports skipped symlinks, FIFOs and unreadable files; refuses a scope with any
+  live row; the dry run reports existing projects and sizes against the 4 MB
+  sync limit. Deleting a project works when only its archives remain.
+- The journal and state are keyed by the marker's mirror id (above).
+- Light-theme contrast of the mirror line is 5.1:1; the schedule has test-only
+  overrides for the LaunchAgents folder and launchctl.
+
+Recheck, 2026-09-22 (`scratchpad/verdicts/m-a1-code-recheck.md`): CLEARED WITH
+WOUNDS, 11 of 13 prior findings closed. Two flesh wounds, fixed after it:
+
+- A killed stealer no longer wedges exports. The steal guard is written to a
+  temp and linked into place, so it is never seen partial. A guard whose owner
+  is dead, or that has no readable owner and is over five seconds old, is
+  removed by compare-and-remove and the steal retried. A live guard is waited
+  for, then refused as `export_busy` with a message saying another export is
+  clearing a dead lock.
+- A run refused before it holds the lock (`lock_unreadable`, `export_busy`;
+  `export_busy` is the only busy code) is now recorded. It goes to a small
+  per-mirror `refused.json`, never to the state file: the lock holder rewrites
+  state from a copy read at run start, so a second writer, even behind its own
+  guard, would either lose the refusal or drop the holder's `nk_commits`. The
+  file is written only when this vault file already owns the mirror's state,
+  matched by `vault_fingerprint`, and is overlaid by `readExportState` when newer
+  than the last attempt, so `--status` and the resume line both show it.
+- F6: `northkeep projects delete <slug>` forgets every live entry in the scope,
+  archives included. The import refusal now names that command.
+- `refused.json` is the one file under `NORTHKEEP_HOME/export/` written without
+  the export lock, by design; Decision 9's "covers every settings and state
+  write" still holds for the journal, state and settings files.

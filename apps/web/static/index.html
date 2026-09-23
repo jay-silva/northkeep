@@ -479,6 +479,11 @@
   body:has(#view-projects:not([hidden])) main { max-width:1500px; width:100%; }
   .projects-summary { min-height:66px; padding:15px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
   .projects-summary strong { font:500 20px/1.2 var(--serif); }
+  .projects-mirror { flex-basis:100%; font-size:12px; line-height:1.4; }
+  /* 12px muted text needs 4.5:1; the base light --muted gives 3.4 on --bg, so Projects takes the darker value Memories uses. */
+  @media not (prefers-color-scheme: dark) {
+    #view-projects { --muted: #6d675c; }
+  }
   .projects-workspace { display:grid; grid-template-columns:260px minmax(0,1fr); min-height:620px; }
   .projects-rail { border-right:1px solid var(--line); padding:16px 14px 20px 0; }
   .project-choice { display:grid; grid-template-columns:minmax(0,1fr); align-content:start; gap:8px; width:100%; min-height:112px; padding:16px 12px; border:0; border-bottom:1px solid var(--line); border-radius:0; background:transparent; text-align:left; color:var(--muted); }
@@ -810,7 +815,7 @@
   </section>
   <section id="view-projects" hidden>
     <div class="page-head"><div><h2>Projects</h2><p class="muted">Pick up the work with its latest state, evidence, and next move.</p></div></div>
-    <div class="projects-summary"><strong id="projectsSummaryTitle">Projects</strong><span class="muted" id="projectsSummaryMeta">Loading…</span><span class="pill" id="projectsLocalPill">Local vault</span></div>
+    <div class="projects-summary"><strong id="projectsSummaryTitle">Projects</strong><span class="muted" id="projectsSummaryMeta">Loading…</span><span class="pill" id="projectsLocalPill">Local vault</span><span class="muted projects-mirror" id="projectsMirrorMeta" hidden></span></div>
     <div class="projects-workspace">
       <aside class="projects-rail" aria-label="Projects"><div class="review-meta-title">Projects</div><div id="projectList"></div></aside>
       <div class="projects-pane">
@@ -2088,6 +2093,7 @@
     $('projectSelect').replaceChildren();
     $('projectDetail').replaceChildren();
     $('projectsSummaryMeta').textContent = 'Vault locked';
+    showProjectsMirror(null);
   }
 
   function projectLines(value) {
@@ -2136,9 +2142,29 @@
     projectReturnFocus = null;
   }
 
+  // ADR 0053 Decision 7. The server line is written for assistants; this
+  // rewords it for people and keeps the exact UTC time on hover.
+  function projectsMirrorText(line) {
+    if (typeof line !== 'string' || !line) return null;
+    return line
+      .replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}Z \(([^)]*)\)/g, '$1')
+      .replace(/^mirror last exported /, 'Backup mirror last updated ')
+      .replace(/^mirror never exported/, 'Backup mirror never updated')
+      .replace(/^mirror settings unreadable/, 'Backup mirror settings could not be read')
+      .replace(/; last export failed /, '; last update failed ');
+  }
+
+  function showProjectsMirror(line) {
+    const node = $('projectsMirrorMeta'), text = projectsMirrorText(line);
+    node.textContent = text || '';
+    node.title = '';
+    node.hidden = !text;
+  }
+
   async function loadProjects(preferredSlug = '') {
     const requestId = ++projectLoadSequence;
     $('projectsSummaryMeta').textContent = 'Loading…';
+    showProjectsMirror(null);
     let data;
     try { data = await api('/api/projects'); }
     catch (ex) {
@@ -2152,6 +2178,7 @@
     projectIndex = Array.isArray(data.projects) ? data.projects : [];
     $('projectsSummaryTitle').textContent = projectIndex.length ? 'In progress' : 'Projects';
     $('projectsSummaryMeta').textContent = projectIndex.length + ' ' + (projectIndex.length === 1 ? 'project' : 'projects');
+    showProjectsMirror(data.mirror);
     renderProjectChoices();
     if (!projectIndex.length) { renderProjectsEmpty(); return; }
     const usable = projectIndex.filter((item) => !item.conflict);

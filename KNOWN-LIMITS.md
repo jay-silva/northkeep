@@ -54,6 +54,36 @@ every milestone; if a limit is removed, say when and how.*
   write, so the provenance block is removed rather than copied. That
   revision has no writer until the next write through the project tools.
 
+## Local git mirror (ADR 0053), current
+
+- **The mirror is only as current as the last export.** It changes when you
+  run `northkeep projects export` or when a schedule you turned on runs it,
+  and at no other time. A project write does not update it. On this Mac, the
+  Projects page, `project_list` and `project_resume` say when it was last
+  updated and how many projects changed since, so a stale mirror is visible,
+  not fixed. The hosted claude.ai connector cannot read this Mac's files and
+  does not show that line.
+- **It holds project documents and their logs, not your other memories.**
+  Every other memory, and log archives past the newest 20, are not in the
+  mirror. The full backup is still the vault file, or `northkeep export`.
+- **Mirrored project files are plaintext in the folder you chose.** They are
+  as private as that folder: anyone or anything that can read it, a backup
+  tool or a cloud sync folder included, can read them. This is the one
+  exception to the call log's rule that memory content is never written to
+  disk outside the encrypted vault, and it applies only to project scopes,
+  only after you turn it on, and only at a path you chose.
+- **NorthKeep never pushes.** It commits in the folder and stops there. A
+  push you make, to any remote, publishes the mirror to whoever can read that
+  remote.
+- **A scheduled export needs a stored key.** It uses the key `northkeep
+  unlock` keeps in the Keychain and never asks for a passphrase. With no key,
+  or with the vault locked or busy, the run records a failure and exits, and
+  the status line says the last export failed.
+- **A file you edit by hand in the mirror is refused, not overwritten.** The
+  export names it and exports the rest, and your edit stays as you left it.
+  Nothing you write in the mirror flows back into the vault; `northkeep
+  projects import` is a separate, explicit step.
+
 ## Guided consolidation, accepted locally
 
 - Consolidation covers 2-8 same-type memories in one private, non-project collection. It does not organize shared collections or coordinate project work.
