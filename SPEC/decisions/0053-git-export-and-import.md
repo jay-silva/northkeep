@@ -572,3 +572,6 @@ WOUNDS, 11 of 13 prior findings closed. Two flesh wounds, fixed after it:
   than the last attempt, so `--status` and the resume line both show it.
 - F6: `northkeep projects delete <slug>` forgets every live entry in the scope,
   archives included. The import refusal now names that command.
+- `refused.json` is the one file under `NORTHKEEP_HOME/export/` written without
+  the export lock, by design; Decision 9's "covers every settings and state
+  write" still holds for the journal, state and settings files.
