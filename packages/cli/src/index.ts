@@ -73,6 +73,7 @@ import {
   projectsDeleteCmd,
   projectsExportCmd,
   projectsImportCmd,
+  projectsBoardCmd,
   projectsUpdateCmd,
   promptOnceRunner,
   type ExportCmdOptions,
@@ -911,10 +912,20 @@ projects
   .option('--what-why <text>', 'the What & Why section')
   .option('--status <text>', 'the Current Status section')
   .option('--next-actions <text>', 'the Next Actions section')
+  .option('--open-questions <text>', 'the Open Questions section')
   .option('--decision <text>', 'add a dated Decisions entry')
   .option('--log <text>', 'add a dated Log entry')
-  .action(async (slug: string, options: { title?: string; whatWhy?: string; status?: string; nextActions?: string; decision?: string; log?: string }) => {
+  .action(async (slug: string, options: { title?: string; whatWhy?: string; status?: string; nextActions?: string; openQuestions?: string; decision?: string; log?: string }) => {
     await projectsUpdateCmd(slug, options, withVault, fail);
+  });
+
+projects
+  .command('board')
+  .description('Show what needs you: stale projects, dated items, open sessions, drafts and projects that need repair (read only)')
+  .option('--stale-days <n>', 'days without activity before a project counts as stale (default 14)')
+  .option('--json', 'print the board as JSON')
+  .action(async (options: { staleDays?: string; json?: boolean }) => {
+    await projectsBoardCmd(options, withVault, fail);
   });
 
 /** launchd needs the real script, not the npm bin symlink. */
