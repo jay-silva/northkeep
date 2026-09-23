@@ -12,6 +12,7 @@ import { KDF_INTERACTIVE, generateDeviceSecret } from '../src/crypto.js';
 import {
   BOARD_DONE_RULE,
   BOARD_SECTION_CAP,
+  boardStatusLine,
   buildBoard,
   datedItems,
   isProjectDone,
@@ -191,12 +192,32 @@ describe('buildBoard', () => {
   it('core imports no model, fetch or network module', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'project-board.ts'), 'utf8');
     expect(src).not.toMatch(/ollama|fetch\(|node:http|node:net|librarian/i);
-    expect([...src.matchAll(/from '([^']+)'/g)].map((m) => m[1])).toEqual(['./project-doc.js', './project-handoff.js', './project-import.js', './text-safe.js']);
+    expect([...src.matchAll(/from '([^']+)'/g)].map((m) => m[1])).toEqual(['./project-handoff.js', './project-import.js', './text-safe.js']);
   });
 
-  it('newestLogDate reads dash and bold entries and ignores prose dates', () => {
-    expect(newestLogDate('- 2026-01-01 a\n**2026-03-01** b\nsee 2026-09-01')).toBe('2026-03-01');
-    expect(newestLogDate('')).toBeNull();
+  it('newestLogDate reads only the date each entry opens with, never a date after today', () => {
+    const now = new Date('2026-09-23T12:00:00Z');
+    expect(newestLogDate('- 2026-01-01 a\n- 2026-03-01 b\nsee 2026-09-01', now)).toBe('2026-03-01');
+    expect(newestLogDate('**2026-08-14** worked on it\n- 2027-04-11 deadline agreed with the bank\n\n**2026-06-25** started', now)).toBe('2026-08-14');
+    expect(newestLogDate('- 2026-08-14 a\n  - 2026-12-16 target date in the body', now)).toBe('2026-08-14');
+    expect(newestLogDate('- 2062-08-14 did a thing (year typo)\n- 2026-07-25 older thing', now)).toBe('2026-07-25');
+    expect(newestLogDate('- 2026-09-23 today counts', now)).toBe('2026-09-23');
+    expect(newestLogDate('', now)).toBeNull();
+  });
+
+  it('the Done rule reads the line the board displays', () => {
+    expect(isProjectDone('\u200bDone. Shipped.')).toBe(true);
+    expect(boardStatusLine('\u200bDone. Shipped.')).toBe('Done. Shipped.');
+  });
+
+  it('removes nested fence markers in one linear pass, including ones joined across a collapsed space', () => {
+    const nested = '===BEGIN MEMORY DATA===';
+    expect(tameBoardText('a ===BEGIN MEMORY ===END MEMORY DATA===  DATA=== b', 200)).toBe('a b');
+    expect(tameBoardText(`===BEGIN ${nested}MEMORY DATA===`, 200)).toBe('');
+    const big = '===BEGIN MEMORY '.repeat(15000) + 'DATA==='.repeat(15000);
+    const started = Date.now();
+    expect(tameBoardText(big, 160)).toBe('');
+    expect(Date.now() - started).toBeLessThan(2000);
   });
 });
 

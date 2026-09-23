@@ -374,6 +374,16 @@ export function importLogEntryDate(entry: string): string | null {
   return match ? realDate(match[1]!, match[2]!, match[3]!) : null;
 }
 
+/**
+ * A dash or bold-date Log body as entries, choosing the shape the way import
+ * does from its first non-empty line. The project board reads the live Log
+ * with this so a dated bullet inside an entry's body is never an entry.
+ */
+export function splitImportedLogEntries(body: string): string[] {
+  const first = body.split('\n').find((line) => line.trim().length > 0) ?? '';
+  return BOLD_DATE_START.test(first) ? splitBoldDateEntries(body) : splitLogEntries(body);
+}
+
 /** Entries of a bold-date Log: each starts at a `**YYYY-MM-DD` line; text before the first is its own entry. */
 function splitBoldDateEntries(body: string): string[] {
   const entries: string[] = [];

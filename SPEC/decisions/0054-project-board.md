@@ -48,9 +48,11 @@ Last activity is `updated_at`, with one exception. A project whose current
 head was written by `northkeep projects import` (row source
 `northkeep:project-import`, packages/core/src/vault.ts `importProject`)
 carries the import time as `updated_at`, which says nothing about when the
-work last moved. For such a head, last activity is the newest date among
-its live Log entries (import keeps them dated and sorted, ADR 0053), and
-`updated_at` only when no Log entry has a readable date. The row says which
+work last moved. For such a head, last activity is the newest date a live
+Log entry opens with (entries split the way import splits them, ADR 0053),
+ignoring any date after today's UTC day, and `updated_at` only when no
+entry has a usable date. A date inside an entry's body, such as a deadline,
+is not an entry date, and a future date (a year typo) is not activity. The row says which
 it used (`last write` or `last log entry`). `ProjectSummary` gains
 `imported: boolean` for this; it is derived from the head's source and is
 false after the first ordinary write, when `updated_at` becomes true again.
@@ -75,7 +77,9 @@ state field is a schema question and out of scope.
 `tameOneLine` (Decision 3). The date sweep runs on the cut line, so every
 date the board reports is in the text it shows before masking (Tier-1 may
 mask part of the line afterwards; Decision 3). It matches `YYYY-MM-DD` and
-month-name dates (`Jan` to `December` with a day, with or without a year).
+month-name dates (`Jan` to `December` with a day, with or without a year),
+written month first with the month in title case, so the verb "may" and a
+lowercase "march" are not read as dates.
 A month-name date without a year resolves to the occurrence nearest `now`:
 this year, last year or next year, whichever is closest, ties to the later
 one. So `Sep 20` read on 2026-09-23 is 2026-09-20 and shows as overdue at
@@ -287,6 +291,9 @@ out ("through a local MCP server").
 - **The caps can hide work.** Past 50 rows a section shows the first 50 in
   its sort order and states the total.
 - **One stale window for every project** until `--stale-days` is passed.
+- **Month names are read only as `Sep 20`**: month first, title case.
+  `sep 20`, `SEP 20` and `20 Sep` produce no dated item. Accepted so that
+  ordinary words such as "may" and "march" are never dates.
 - **"Next Tuesday" and "Q3" are not dates** to the sweep, and a month-name
   date without a year more than six months from `now` resolves to the
   nearer year, which can be the wrong one.
@@ -505,4 +512,19 @@ to a fixed point, the ceiling is stated in bytes with the measured 125,857,
 step 10 no longer breaks at month starts, and the import fallback residual
 names the four affected projects. Verdict after the text fix: cleared for
 build.
+
+## Code review of the build (2026-09-23)
+
+Fresh-eyes review of `106fae3..d09dce2` (`Reviews/adr-0054/md1-code-review.md`):
+**CLEARED WITH WOUNDS**. Every claims-table row held under independent
+attack. One wound: an imported project with any future-dated Log line never
+went stale, because the newest Log date was read from every Log line rather
+than each entry's opening date and was not bounded by today. The archived
+command repo holds this pattern (a fleetstat deadline, several bobby-hood
+dates). One scar: month names only as `Sep 20`, now recorded above and in
+KNOWN-LIMITS. Fixes on Jay's "yes" (2026-09-23): per-entry Log dates bounded
+by today; the Done rule reads the displayed (cleaned) line, so a leading
+zero-width character cannot split rule and display; fence-marker removal is
+one linear pass (nested markers had cost one pass per level, 10 s on a
+336,000-character document). One recheck follows.
 

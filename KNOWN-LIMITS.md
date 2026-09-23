@@ -71,11 +71,15 @@ every milestone; if a limit is removed, say when and how.*
   order and states its total, so past 50 the rest are counted, not listed.
 - **One stale window for every project**, 14 days unless `--stale-days` (or
   the tool's `stale_days`) says otherwise.
+- **Month names are read only as "Sep 20".** Month first, title case:
+  "sep 20", "SEP 20" and "20 Sep" produce no dated item, so that words like
+  "may" and "march" are never read as dates.
 - **The date sweep is literal.** "Next Tuesday" and "Q3" are not dates. A
   month-name date without a year resolves to the occurrence nearest today,
   so one more than six months away can land in the wrong year.
-- **Imported projects are aged from their Log.** An imported project whose
-  live Log has no readable date is aged from the import itself, so it cannot
+- **Imported projects are aged from their Log.** Only the date each Log
+  entry opens with counts, and never a date after today. An imported
+  project whose live Log has no usable date is aged from the import itself, so it cannot
   go stale until the window has passed since the import. The Log is only as
   good as the import: an undated entry keeps source order, and a Log written
   as headings reads as empty.

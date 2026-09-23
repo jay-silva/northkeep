@@ -9,9 +9,8 @@
  * and every section is capped at BOARD_SECTION_CAP rows with its total, so
  * the payload has a ceiling for any number of projects and any document size.
  */
-import { firstNonEmptyLine } from './project-doc.js';
 import type { ProjectSummary, ProjectView } from './project-handoff.js';
-import { importLogEntryDate } from './project-import.js';
+import { importLogEntryDate, splitImportedLogEntries } from './project-import.js';
 import { tameOneLine } from './text-safe.js';
 
 export const BOARD_SECTION_CAP = 50;
@@ -31,7 +30,6 @@ export const BOARD_FENCE_MARKERS = ['===BEGIN MEMORY DATA===', '===END MEMORY DA
 
 /** Every line terminator a reader honours, not only \n (ADR 0052's round-2 lesson). */
 const LINE_TERMINATORS = /\r\n|[\r\n\u0085\u2028\u2029]/;
-const LINE_TERMINATORS_G = /\r\n|[\r\n\u0085\u2028\u2029]/g;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -75,35 +73,46 @@ function cmp(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
+/**
+ * One linear pass over text tameOneLine has already cleaned: whitespace
+ * collapses as it is pushed, and a marker is popped the moment it completes,
+ * so a marker assembled by removing another (nested, or joined across a
+ * collapsed space) is removed in the same pass. The output holds no marker.
+ */
 function stripFenceMarkers(text: string): string {
-  let out = text;
-  for (const marker of BOARD_FENCE_MARKERS) out = out.split(marker).join('');
-  return out;
+  const out: string[] = [];
+  for (const ch of text) {
+    const c = /\s/.test(ch) ? ' ' : ch;
+    if (c === ' ' && out[out.length - 1] === ' ') continue;
+    out.push(c);
+    for (const marker of BOARD_FENCE_MARKERS) {
+      if (out.length >= marker.length && out.slice(out.length - marker.length).join('') === marker) {
+        out.length -= marker.length;
+        break;
+      }
+    }
+  }
+  return out.join('');
 }
 
 /**
- * tameOneLine and fence removal, repeated until neither changes the text, so
- * neither a nested marker nor one assembled by stripping a Cf character
- * survives. The cut comes last, on the settled text.
+ * tameOneLine, then fence removal, then the cut. Linear in the input: the
+ * removal cannot reintroduce anything tameOneLine removes, so no second
+ * round is needed.
  */
 export function tameBoardText(input: string, max: number): string {
-  let text = input;
-  for (;;) {
-    const next = stripFenceMarkers(tameOneLine(text, Number.MAX_SAFE_INTEGER));
-    if (next === text) break;
-    text = next;
-  }
-  return tameOneLine(text, max);
+  return tameOneLine(stripFenceMarkers(tameOneLine(input, Number.MAX_SAFE_INTEGER)), max);
 }
 
 export function splitBoardLines(text: string): string[] {
   return text.split(LINE_TERMINATORS);
 }
 
-/** ADR 0054's narrowed Done rule, over firstNonEmptyLine of Current Status. */
+/** ADR 0054's narrowed Done rule, over the displayed first line of Current Status. */
 export function isProjectDone(status: string): boolean {
-  const line = firstNonEmptyLine(status.replace(LINE_TERMINATORS_G, '\n'));
-  return /^(?:done|complete|completed)(?:$|[.:!])/i.test(line);
+  // The same cleaned line the board displays, so an invisible character in
+  // front of "Done." cannot make the rule and the display disagree.
+  return /^(?:done|complete|completed)(?:$|[.:!])/i.test(boardStatusLine(status));
 }
 
 /** One line for display: the first non-empty line, made safe and capped. */
@@ -115,12 +124,18 @@ export function boardStatusLine(status: string): string {
   return '';
 }
 
-/** Newest date among Log lines that open an entry the way import dates them; null when none has one. */
-export function newestLogDate(log: string): string | null {
+/**
+ * Newest date an entry of the live Log opens with, split the way import splits
+ * it, ignoring dates after `now`'s UTC day: a deadline inside an entry's body
+ * is not an entry, and a future date (a year typo) is not activity. Null when
+ * no entry has a usable date.
+ */
+export function newestLogDate(log: string, now: Date): string | null {
+  const today = now.toISOString().slice(0, 10);
   let newest: string | null = null;
-  for (const line of splitBoardLines(log)) {
-    const date = importLogEntryDate(line);
-    if (date !== null && (newest === null || date > newest)) newest = date;
+  for (const entry of splitImportedLogEntries(log)) {
+    const date = importLogEntryDate(entry);
+    if (date !== null && date <= today && (newest === null || date > newest)) newest = date;
   }
   return newest;
 }
@@ -215,7 +230,7 @@ export function buildBoard(input: BuildBoardInput): ProjectBoard {
     if (summary.draft) drafts.push({ project: summary.project, updated_at: summary.updated_at });
     dated.push(...datedItems(summary.project, view, now));
     if (isProjectDone(view.status)) continue;
-    const logDate = summary.imported ? newestLogDate(view.log) : null;
+    const logDate = summary.imported ? newestLogDate(view.log, input.now) : null;
     const lastActivity = logDate ?? summary.updated_at;
     const ms = logDate !== null ? Date.parse(`${logDate}T00:00:00.000Z`) : Date.parse(summary.updated_at);
     if (!Number.isFinite(ms) || nowMs - ms <= staleDays * DAY_MS) continue;
