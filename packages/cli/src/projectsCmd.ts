@@ -26,6 +26,7 @@ import {
   exportProjects,
   importProjects,
   installSchedule,
+  parseScheduleTime,
   readExportSettings,
   readExportState,
   readRemotes,
@@ -225,6 +226,8 @@ export interface ExportCmdOptions {
   verify?: boolean;
   status?: boolean;
   schedule?: string;
+  /** With --schedule daily: the local time, HH:MM. */
+  at?: string;
   scheduled?: boolean;
   /** Test only: install or remove the plist without calling launchctl. */
   skipLaunchctl?: boolean;
@@ -447,9 +450,23 @@ async function scheduleCmd(value: string, options: ExportCmdOptions, deps: Mirro
     err('✗ No mirror is configured. Run northkeep projects export --repo <folder> once, then set the schedule.');
     return 1;
   }
-  const file = await installSchedule(value, { cliEntry: sched.cliEntry, ...where });
+  let at: { hour: number; minute: number } | undefined;
+  if (options.at !== undefined) {
+    if (value !== 'daily') {
+      err('✗ --at works only with --schedule daily.');
+      return 1;
+    }
+    const parsed = parseScheduleTime(options.at);
+    if (parsed === null) {
+      err('✗ --at takes a 24-hour time such as 12:00.');
+      return 1;
+    }
+    at = parsed;
+  }
+  const file = await installSchedule(value, { cliEntry: sched.cliEntry, ...where, ...(at ? { at } : {}) });
+  const when = `${String(at?.hour ?? 3).padStart(2, '0')}:${String(at?.minute ?? 0).padStart(2, '0')}`;
   out(`Installed the ${value} export schedule: ${file}`);
-  out(`It runs northkeep projects export ${value === 'hourly' ? 'every hour' : 'every day at 03:00'} and commits to ${settings.repo}. It never pushes.`);
+  out(`It runs northkeep projects export ${value === 'hourly' ? 'every hour' : `every day at ${when}`} and commits to ${settings.repo}. It never pushes.`);
   out('The job needs a stored key from northkeep unlock. While the vault is locked, each run records a failure that --status shows.');
   out('Turn it off with northkeep projects export --schedule off.');
   return 0;

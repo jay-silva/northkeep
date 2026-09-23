@@ -69,6 +69,7 @@ export {
   exportProjects,
   importProjects,
   installSchedule,
+  parseScheduleTime,
   readExportSettings,
   readExportState,
   readMirrorSummary,

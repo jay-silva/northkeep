@@ -947,6 +947,7 @@ projects
   .option('--verify', 'compare the mirror with the vault without changing anything')
   .option('--status', 'show the last export, projects changed since, refusals and remotes')
   .option('--schedule <when>', 'export on a schedule with launchd: hourly, daily or off')
+  .option('--at <HH:MM>', 'with --schedule daily: the local time to run (default 03:00)')
   .option('--json', 'print the raw result as JSON')
   .addOption(new Option('--scheduled', 'run by the launchd job; never prompts').hideHelp())
   // Test only, with NORTHKEEP_LAUNCH_AGENTS_DIR: --schedule writes the plist but never runs launchctl.

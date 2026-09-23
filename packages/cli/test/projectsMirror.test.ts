@@ -300,6 +300,16 @@ describe.skipIf(process.platform !== 'darwin')('northkeep projects export --sche
 
     expect(await exportCmd({ schedule: 'daily' }, noVault)).toBe(0);
     expect(fs.readFileSync(plist, 'utf8')).toContain('<key>StartCalendarInterval</key>');
+    expect(fs.readFileSync(plist, 'utf8')).toMatch(/<key>Hour<\/key>\n\s*<integer>3<\/integer>/);
+    expect(await exportCmd({ schedule: 'daily', at: '12:00' }, noVault)).toBe(0);
+    expect(out.join('\n')).toContain('every day at 12:00');
+    const noon = fs.readFileSync(plist, 'utf8');
+    expect(noon).toMatch(/<key>Hour<\/key>\n\s*<integer>12<\/integer>/);
+    expect(noon).toMatch(/<key>Minute<\/key>\n\s*<integer>0<\/integer>/);
+    expect(await exportCmd({ schedule: 'hourly', at: '12:00' }, noVault)).toBe(1);
+    expect(await exportCmd({ schedule: 'daily', at: '25:00' }, noVault)).toBe(1);
+    expect(await exportCmd({ schedule: 'daily', at: 'noon' }, noVault)).toBe(1);
+    expect(fs.readFileSync(plist, 'utf8')).toBe(noon);
 
     expect(await exportCmd({ schedule: 'off' }, noVault)).toBe(0);
     expect(out).toEqual([`Removed the export schedule (${plist}).`]);

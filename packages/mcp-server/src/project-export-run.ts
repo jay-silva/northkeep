@@ -1305,10 +1305,18 @@ export interface ScheduleOptions {
   load?: boolean;
   nodePath?: string;
   northkeepHome?: string;
+  /** Local time for a daily run; 03:00 when absent. */
+  at?: { hour: number; minute: number };
 }
 
 function xml(text: string): string {
   return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+/** Parses a 24-hour HH:MM for --at; null when malformed. */
+export function parseScheduleTime(value: string): { hour: number; minute: number } | null {
+  const m = /^([01]?\d|2[0-3]):([0-5]\d)$/.exec(value.trim());
+  return m ? { hour: Number(m[1]), minute: Number(m[2]) } : null;
 }
 
 export function schedulePlistPath(plistDir?: string): string {
@@ -1320,7 +1328,7 @@ export function renderSchedulePlist(frequency: 'hourly' | 'daily', opts: Schedul
   const timing =
     frequency === 'hourly'
       ? '  <key>StartInterval</key>\n  <integer>3600</integer>\n'
-      : '  <key>StartCalendarInterval</key>\n  <dict>\n    <key>Hour</key>\n    <integer>3</integer>\n    <key>Minute</key>\n    <integer>0</integer>\n  </dict>\n';
+      : `  <key>StartCalendarInterval</key>\n  <dict>\n    <key>Hour</key>\n    <integer>${opts.at?.hour ?? 3}</integer>\n    <key>Minute</key>\n    <integer>${opts.at?.minute ?? 0}</integer>\n  </dict>\n`;
   const home = opts.northkeepHome ?? process.env.NORTHKEEP_HOME;
   const env = home
     ? `  <key>EnvironmentVariables</key>\n  <dict>\n    <key>NORTHKEEP_HOME</key>\n    <string>${xml(home)}</string>\n  </dict>\n`
