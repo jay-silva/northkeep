@@ -138,17 +138,16 @@ describe('Partly dated Log direction',()=>{
 describe('Heading Log shape',()=>{
   const small=`# Small\n\n## Current Status\n\ns\n\n## Log\n\n### 2026-09-10 shipped\n\nText ten.\n\n#### Detail\n\n- sub point\n\n### Week of 2026-09-01\n\nWeek text.\n\n### Undated retro\n\nRetro text.\n\n## Open Questions\n\n- q`;
 
-  it('converts a short, already ordered heading log into dash entries the live Log reads',()=>{
+  it('converts a short, already ordered heading log into dash entries the live Log reads; an undated heading joins the entry above',()=>{
     const p=planImport([{name:'small.md',text:small}]).projects[0]!;
-    expect(p.log_order).toBe('source order');expect(p.archives).toEqual([]);
+    expect(p.log_order).toBe('by date');expect(p.archives).toEqual([]);
     expect(parseProjectDoc(p.document).sections.map((s)=>s.title)).toEqual(['Small','Current Status','Log','Open Questions']);
     expect(splitLogEntries(liveLog(p.document))).toEqual([
       '- 2026-09-10 shipped\n\n    Text ten.\n\n    #### Detail\n\n    - sub point',
-      '- 2026-09-01 - Week of 2026-09-01\n\n    Week text.',
-      '- Undated retro\n\n    Retro text.',
+      '- 2026-09-01 - Week of 2026-09-01\n\n    Week text.\n\n    ### Undated retro\n\n    Retro text.',
     ]);
     const v=vault();const view=v.importProject(p);
-    expect(splitLogEntries(view.log)).toHaveLength(3);
+    expect(splitLogEntries(view.log)).toHaveLength(2);
     expect(newestLogDate(view.log,new Date('2026-09-23T12:00:00.000Z'))).toBe('2026-09-10');
     expect(allTextPresent(small,rows(v,'small'))).toEqual([]);v.close();
   });
@@ -162,6 +161,87 @@ describe('Heading Log shape',()=>{
     expect(second.log).toBe(first.log);
     const hist=(v:Vault)=>getProjectView(v,'heads',undefined,{history:true}).archives.flatMap((x)=>splitLogArchive(x.content).entries);
     expect(hist(b)).toEqual(hist(a));a.close();b.close();
+  });
+});
+
+
+describe('Heading Log review round 1 (FW1, FW2)',()=>{
+  const f8="# Proj\n\n## What & Why\n\nWhy.\n\n## Current Status\n\nOK.\n\n## Log\n\n\n### 2026-09-01 first\n\nRan:\n\n```md\n### not a heading, markdown sample\n- nor a bullet\n```\n\n### 2026-09-02 second\n\nbody two\n\n### 2026-09-03 third\n\nbody three\n\n## Decisions\n\n- 2026-09-01 d";
+  const f19="# Proj\n\n## What & Why\n\nWhy.\n\n## Current Status\n\nOK.\n\n## Log\n\n\n### 2026-09-01 a\nx\n### Next Actions\n- do the thing";
+  const f21="# Proj\n\n## Log\n\n### 2026-09-01 first\n\ndid one\n\n### Notes\n\nnote about first\n\n### 2026-09-02 second\n\ndid two\n\n### Follow-up\n\nfollow-up about second\n\n### 2026-09-03 third\n\ndid three\n";
+  /** Non-blank lines of the source Log, in order, found in order in the output (indent and heading or bullet markers aside). */
+  function inOrder(sourceLog:string,out:string){const want=sourceLog.split('\n').filter((l)=>l.trim()).map(bare);const got=out.split('\n').map(bare);let i=0;for(const line of got){if(i<want.length&&line===want[i])i+=1;}return want.slice(i);}
+
+  it('f8: a heading-looking line inside a code fence is never a heading and never rewritten, and the text stays in order',()=>{
+    const p=planImport([{name:'f8.md',text:f8}]).projects[0]!;
+    expect(p.log_order).toBe('by date');
+    const log=liveLog(p.document);
+    const live=splitLogEntries(log);
+    expect(live.map((e)=>e.split('\n')[0])).toEqual(['- 2026-09-03 third','- 2026-09-02 second','- 2026-09-01 first']);
+    expect(live[2]).toBe('- 2026-09-01 first\n\n    Ran:\n\n    ```md\n    ### not a heading, markdown sample\n    - nor a bullet\n    ```');
+    expect(log).not.toContain('- not a heading');
+    expect(parseProjectDoc(p.document).sections.map((s)=>s.title)).toEqual(['Proj','What & Why','Current Status','Log','Decisions']);
+    // The pre-fix import's content, in source order within the one entry that holds it.
+    const firstEntry=f8.slice(f8.indexOf('### 2026-09-01'),f8.indexOf('### 2026-09-02'));
+    expect(inOrder(firstEntry,live[2]!)).toEqual([]);
+    const v=vault();v.importProject(p);expect(allTextPresent(f8,rows(v,'f8'))).toEqual([]);v.close();
+  });
+
+  it('f21: an undated same-level heading is text of the dated entry above it, never an entry of its own',()=>{
+    const p=planImport([{name:'f21.md',text:f21}]).projects[0]!;
+    expect(p.log_order).toBe('by date');
+    const live=splitLogEntries(liveLog(p.document));
+    expect(live).toEqual([
+      '- 2026-09-03 third\n\n    did three',
+      '- 2026-09-02 second\n\n    did two\n\n    ### Follow-up\n\n    follow-up about second',
+      '- 2026-09-01 first\n\n    did one\n\n    ### Notes\n\n    note about first',
+    ]);
+  });
+
+  it('f19: an owned section nested under the Log stays a section, so Next Actions is populated',()=>{
+    const p=planImport([{name:'f19.md',text:f19}]).projects[0]!;
+    expect(p.sections.find((m)=>m.from==='Next Actions')!.to).toBe('Next Actions');
+    const v=vault();const view=v.importProject(p);
+    expect(view.next_actions).toBe('- do the thing');
+    expect(splitLogEntries(view.log)).toEqual(['- 2026-09-01 a\n\n    x']);
+    v.close();
+  });
+
+  it('keeps text before the first dated heading as the Log preamble, on top',()=>{
+    const source=`# Pre\n\n## Log\n\n### About this log\n\nOldest first.\n\n### 2026-09-01 one\n\na\n\n### 2026-09-02 two\n\nb`;
+    const p=planImport([{name:'pre.md',text:source}]).projects[0]!;
+    expect(liveLog(p.document)).toBe('    ### About this log\n\n    Oldest first.\n- 2026-09-02 two\n\n    b\n- 2026-09-01 one\n\n    a');
+    expect(parseProjectDoc(p.document).sections.map((s)=>s.title)).toEqual(['Pre','Log']);
+  });
+
+  it('leaves a heading Log with no dated heading as written, and ignores an unclosed fence',()=>{
+    const undated=`# U\n\n## Log\n\n### Notes\n\nn\n\n### More\n\nm`;
+    const p=planImport([{name:'u.md',text:undated}]).projects[0]!;
+    expect(p.document).toBe(serializeProjectDoc(parseProjectDoc(undated)));
+    const open=`# O\n\n## Log\n\n### 2026-09-01 one\n\n\`\`\`\nnever closed\n\n### 2026-09-02 two\n\nb`;
+    const q=planImport([{name:'o.md',text:open}]).projects[0]!;
+    expect(splitLogEntries(liveLog(q.document)).map((e)=>e.split('\n')[0])).toEqual(['- 2026-09-02 two','- 2026-09-01 one']);
+  });
+});
+
+describe('Dash Log preamble (review round 1 note)',()=>{
+  it('keeps prose before the first entry on top when an oldest-first partly dated Log is turned',()=>{
+    const entries=Array.from({length:12},(_,i)=>i===4?'- undated':`- ${day(i+1)} - e${i+1}`);
+    const source=`# Pre\n\n## Log\n\nOldest first; newest at the bottom.\n${entries.join('\n')}`;
+    const p=planImport([{name:'pre.md',text:source}]).projects[0]!;
+    expect(p.log_order).toBe('source order reversed');
+    const lines=liveLog(p.document).split('\n');
+    expect(lines[0]).toBe('Oldest first; newest at the bottom.');
+    expect(lines[1]).toBe(`- ${day(12)} - e12`);
+    expect(lines.filter((l)=>l.startsWith('Oldest first'))).toHaveLength(1);
+    expect(splitLogArchive(p.archives[0]!).entries).toEqual([entries[0],entries[1]]);
+  });
+
+  it('sorts an otherwise fully dated Log by date, the preamble no longer counting as an undated entry',()=>{
+    const source=`# Pre\n\n## Log\n\nA note.\n- ${day(1)} - a\n- ${day(2)} - b`;
+    const p=planImport([{name:'pre.md',text:source}]).projects[0]!;
+    expect(p.log_order).toBe('by date');
+    expect(liveLog(p.document)).toBe(`A note.\n- ${day(2)} - b\n- ${day(1)} - a`);
   });
 });
 
