@@ -12,6 +12,7 @@ import {
   listProjectViews,
   parseMirrorHeader,
   planImport,
+  projectScopeInUse,
   renderIndexFile,
   renderLogFile,
   renderMarkerFile,
@@ -1067,7 +1068,7 @@ export function readMirrorSummary(vault: ProjectVaultReader, granted: string[] |
 export interface ImportFileReport {
   name: string;
   slug: string | null;
-  status: 'would import' | 'imported' | 'skipped' | 'refused';
+  status: 'would import' | 'exists' | 'imported' | 'skipped' | 'refused';
   reason: string | null;
 }
 
@@ -1076,34 +1077,87 @@ export interface ImportRunResult {
   files: ImportFileReport[];
 }
 
+export const IMPORT_NOT_UTF8 = 'not UTF-8; convert it first';
+const IMPORT_UNREADABLE = 'could not be read; check its permissions';
+const UTF8 = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true });
+
+/** O_NONBLOCK so an entry swapped for a FIFO after readdir cannot hang the run; null when it is no longer a regular file. */
+function readSourceFile(abs: string): Buffer | null {
+  const { O_RDONLY, O_NOFOLLOW, O_NONBLOCK } = fs.constants;
+  const fd = fs.openSync(abs, O_RDONLY | O_NOFOLLOW | O_NONBLOCK);
+  try {
+    return fs.fstatSync(fd).isFile() ? fs.readFileSync(fd) : null;
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+/** Strict UTF-8 with one leading BOM removed; null for anything else, so no replacement character or NUL is ever stored. */
+function decodeSource(bytes: Buffer): string | null {
+  const body = bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? bytes.subarray(3) : bytes;
+  try {
+    const text = UTF8.decode(body);
+    return text.includes('\u0000') ? null : text;
+  } catch {
+    return null;
+  }
+}
+
+function nonRegularReason(d: fs.Dirent): string {
+  if (d.isSymbolicLink()) return 'a symlink; NorthKeep reads only regular files';
+  if (d.isDirectory()) return 'a folder, not a file';
+  return 'not a regular file';
+}
+
 /**
- * Reads `*.md` directly in `dir` as text (regular files only, no symlinks, no
- * recursion) and never writes there or spawns git. Dry run by default; with
- * write, each project goes in through Vault.importProject under the vault
- * lock with one save per project.
+ * Reads `*.md` directly in `dir` (regular files only, no recursion) and never
+ * writes there or spawns git. Every other `.md` entry is reported with a
+ * reason. The dry run opens the vault only to read which slugs are taken.
  */
 export async function importProjects(
   dir: string,
   opts: { write: boolean; vaultPath: string; withVault?: VaultRunner; allowedScopes?: string[] },
 ): Promise<ImportRunResult> {
   const files: { name: string; text: string }[] = [];
+  const reports: ImportFileReport[] = [];
   for (const d of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!d.isFile() || !d.name.endsWith('.md')) continue;
-    const fd = fs.openSync(path.join(dir, d.name), fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-    try {
-      files.push({ name: d.name, text: fs.readFileSync(fd, 'utf8') });
-    } finally {
-      fs.closeSync(fd);
-    }
-  }
-  const plan = planImport(files);
-  const reports: ImportFileReport[] = plan.skipped.map((s) => ({ name: s.name, slug: null, status: 'skipped', reason: s.reason }));
-  const run = opts.withVault ?? defaultVaultRunner(opts.vaultPath);
-  for (const p of plan.projects) {
-    if (!opts.write) {
-      reports.push({ name: p.name, slug: p.slug, status: 'would import', reason: null });
+    if (!d.name.endsWith('.md')) continue;
+    const entry = { name: d.name, slug: null };
+    if (!d.isFile()) {
+      reports.push({ ...entry, status: 'skipped', reason: nonRegularReason(d) });
       continue;
     }
+    let bytes: Buffer | null;
+    try {
+      bytes = readSourceFile(path.join(dir, d.name));
+    } catch (err) {
+      if (!fsErrno(err)) throw err;
+      reports.push({ ...entry, status: 'refused', reason: IMPORT_UNREADABLE });
+      continue;
+    }
+    if (bytes === null) {
+      reports.push({ ...entry, status: 'skipped', reason: 'not a regular file' });
+      continue;
+    }
+    const text = decodeSource(bytes);
+    if (text === null) reports.push({ ...entry, status: 'refused', reason: IMPORT_NOT_UTF8 });
+    else files.push({ name: d.name, text });
+  }
+  const plan = planImport(files);
+  for (const sk of plan.skipped) reports.push({ name: sk.name, slug: null, status: 'skipped', reason: sk.reason });
+  const run = opts.withVault ?? defaultVaultRunner(opts.vaultPath);
+  if (!opts.write) {
+    // Read only: no save, so the vault file is unchanged.
+    const taken = plan.projects.length === 0 ? [] : await run((vault) => plan.projects.map((p) => projectScopeInUse(vault, p.slug)));
+    plan.projects.forEach((p, i) => {
+      reports.push(
+        taken[i]
+          ? { name: p.name, slug: p.slug, status: 'exists', reason: `Project ${p.slug} already has entries in this vault; delete the project from the Projects page first.` }
+          : { name: p.name, slug: p.slug, status: 'would import', reason: null },
+      );
+    });
+  }
+  for (const p of opts.write ? plan.projects : []) {
     try {
       await run((vault) => {
         vault.importProject(p, opts.allowedScopes);

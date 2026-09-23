@@ -393,13 +393,15 @@ describe('northkeep projects import', () => {
     const dry = await projectsImportCmd({ from: src }, { ...deps(), vaultRunner: async () => ((opened = true), runner) });
     allPlain.push(...out, ...err);
     expect(dry).toBe(0);
-    expect(opened).toBe(false);
+    // Opened read only, to report taken slugs; the vault file is unchanged below.
+    expect(opened).toBe(true);
     expect(out.find((l) => l.startsWith('Would import alpha.md as alpha: '))).toMatch(
       /bytes, 0 log archives, no overflow, Open Questions \/ Risks stored as Open Questions/,
     );
     expect(out.some((l) => l.startsWith('Would import beta-str.md as beta-str: '))).toBe(true);
     expect(out.find((l) => l.startsWith('Skip _TEMPLATE.md: '))).toContain('not a project slug');
-    expect(out.at(-1)).toBe('Dry run: 2 files would be imported and 1 skipped. Nothing was written; add --write to import.');
+    expect(out.at(-2)).toMatch(/^Largest row: [\d,]+ bytes \(limit 60,000\)\. Total: [\d,]+ bytes of the 4,194,304-byte sync limit\.$/);
+    expect(out.at(-1)).toBe('Dry run: 2 files would be imported, 0 already in the vault, 0 refused, 1 skipped. Nothing was written; add --write to import.');
     expect(snapshot(path.join(root, 'cr'))).toBe(srcBefore);
     expect(fs.readFileSync(vaultPath).equals(vaultBefore)).toBe(true);
 
@@ -412,6 +414,20 @@ describe('northkeep projects import', () => {
     expect(await importCmd({ from: src, write: true })).toBe(1);
     expect(out.find((l) => l.startsWith('Refused alpha.md (alpha): '))).toContain('Project alpha already has entries in this vault; delete the project from the Projects page first.');
     expect(out.at(-1)).toBe('Imported 0 projects; 2 refused, 1 skipped.');
+  });
+
+  it('the dry run names a taken slug and a non-UTF-8 file, and counts both (F1, S2)', async () => {
+    const dir = path.join(root, 'mixed');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'demo.md'), '## Current Status\n\nAlready here.\n');
+    fs.writeFileSync(path.join(dir, 'cp.md'), Buffer.from([...Buffer.from('## Current Status\n\nCaf'), 0xe9, 0x0a]));
+    fs.writeFileSync(path.join(dir, 'fresh.md'), '## Current Status\n\nNew.\n');
+    const vaultBefore = fs.readFileSync(vaultPath);
+    expect(await importCmd({ from: dir })).toBe(0);
+    expect(out).toContain('Refused cp.md: not UTF-8; convert it first.');
+    expect(out).toContain('Exists demo.md (demo): Project demo already has entries in this vault; delete the project from the Projects page first.');
+    expect(out.at(-1)).toBe('Dry run: 1 file would be imported, 1 already in the vault, 1 refused, 0 skipped. Nothing was written; add --write to import.');
+    expect(fs.readFileSync(vaultPath).equals(vaultBefore)).toBe(true);
   });
 
   it('names headings the dry run does not recognize, including one split out of a code fence', async () => {

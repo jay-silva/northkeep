@@ -753,6 +753,7 @@ describe('importProjects', () => {
       { name: 'README.md', slug: null, status: 'skipped', reason: expect.stringContaining('not a project slug') },
       { name: 'alpha.md', slug: 'alpha', status: 'would import', reason: null },
       { name: 'beta.md', slug: 'beta', status: 'would import', reason: null },
+      { name: 'linked.md', slug: null, status: 'skipped', reason: 'a symlink; NorthKeep reads only regular files' },
     ]);
     expect(dry.plan.projects.find((p) => p.slug === 'alpha')?.sections.map((s) => s.to)).toContain('Open Questions');
     expect(await runner((v) => listProjectViews(v).length)).toBe(0);
@@ -763,6 +764,85 @@ describe('importProjects', () => {
     const again = await importProjects(dir, { write: true, vaultPath: lab.vaultPath, withVault: runner });
     expect(again.files.filter((f) => f.status === 'refused').map((f) => f.slug)).toEqual(['alpha', 'beta']);
     expect(snapshot(path.join(lab.root, 'cr'))).toBe(before);
+  });
+
+  it('refuses a non-UTF-8 file by name instead of storing replacement characters (F1)', async () => {
+    const dir = path.join(lab.root, 'enc');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'cp.md'), Buffer.from([...Buffer.from('## Current Status\n\nCaf'), 0xe9, 0x20, 0x93, 0x71, 0x94, 0x0a]));
+    fs.writeFileSync(path.join(dir, 'wide.md'), Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('## Current Status\n\nWide.\n', 'utf16le')]));
+    fs.writeFileSync(path.join(dir, 'fine.md'), '## Current Status\n\nFine.\n');
+    const res = await importProjects(dir, { write: true, vaultPath: lab.vaultPath, withVault: runner });
+    expect(res.files).toEqual([
+      { name: 'cp.md', slug: null, status: 'refused', reason: 'not UTF-8; convert it first' },
+      { name: 'fine.md', slug: 'fine', status: 'imported', reason: null },
+      { name: 'wide.md', slug: null, status: 'refused', reason: 'not UTF-8; convert it first' },
+    ]);
+    const contents = await runner((v) => v.list({ type: 'working' }).map((e) => e.content));
+    expect(contents.join('')).not.toMatch(/[\uFFFD\u0000]/);
+    expect(await runner((v) => listProjectViews(v).map((s) => s.project))).toEqual(['fine']);
+  });
+
+  it('strips a BOM instead of skipping the file, including a re-saved exported file (reviewer 25)', async () => {
+    await seed();
+    await exportOnce({ repo });
+    const dir = path.join(lab.root, 'bom');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(dir, 'other.md'), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), fs.readFileSync(path.join(repo, 'projects', 'other.md'))]));
+    fs.writeFileSync(path.join(dir, 'plain.md'), Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from('## Current Status\n\nBom.\n')]));
+    await write((v) => {
+      v.deleteProject('other');
+    });
+    const res = await importProjects(dir, { write: true, vaultPath: lab.vaultPath, withVault: runner });
+    expect(res.files.map((f) => [f.name, f.status])).toEqual([
+      ['other.md', 'imported'],
+      ['plain.md', 'imported'],
+    ]);
+    const contents = await runner((v) => v.list({ type: 'working' }).map((e) => e.content));
+    expect(contents.join('')).not.toContain('\uFEFF');
+  });
+
+  it('reports every skipped .md entry with a reason, and an unreadable file without stopping the run (F5, note 20)', async () => {
+    const dir = path.join(lab.root, 'odd');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(path.join(lab.root, 'target.md'), '## Current Status\n\nOutside.\n');
+    fs.symlinkSync(path.join(lab.root, 'target.md'), path.join(dir, 'link.md'));
+    spawnSync('/usr/bin/mkfifo', [path.join(dir, 'pipe.md')]);
+    fs.mkdirSync(path.join(dir, 'folder.md'));
+    fs.writeFileSync(path.join(dir, 'locked.md'), '## Current Status\n\nLocked.\n');
+    fs.chmodSync(path.join(dir, 'locked.md'), 0o000);
+    fs.writeFileSync(path.join(dir, 'ok.md'), '## Current Status\n\nOk.\n');
+    try {
+      const res = await importProjects(dir, { write: false, vaultPath: lab.vaultPath, withVault: runner });
+      expect(res.files).toEqual([
+        { name: 'folder.md', slug: null, status: 'skipped', reason: 'a folder, not a file' },
+        { name: 'link.md', slug: null, status: 'skipped', reason: 'a symlink; NorthKeep reads only regular files' },
+        { name: 'locked.md', slug: null, status: 'refused', reason: 'could not be read; check its permissions' },
+        { name: 'ok.md', slug: 'ok', status: 'would import', reason: null },
+        { name: 'pipe.md', slug: null, status: 'skipped', reason: 'not a regular file' },
+      ]);
+    } finally {
+      fs.chmodSync(path.join(dir, 'locked.md'), 0o644);
+    }
+  });
+
+  it('the dry run opens the vault read-only and reports exists for a slug with any entries (S2), with byte totals', async () => {
+    const dir = commandRepo();
+    await write((v) => {
+      v.remember({ type: 'episodic', scope: 'project:alpha', content: 'An archive left behind.' });
+    });
+    const vaultBefore = fs.readFileSync(lab.vaultPath);
+    const dry = await importProjects(dir, { write: false, vaultPath: lab.vaultPath, withVault: runner });
+    expect(dry.files.find((f) => f.name === 'alpha.md')).toEqual({
+      name: 'alpha.md',
+      slug: 'alpha',
+      status: 'exists',
+      reason: 'Project alpha already has entries in this vault; delete the project from the Projects page first.',
+    });
+    expect(dry.files.find((f) => f.name === 'beta.md')?.status).toBe('would import');
+    expect(dry.plan.total_bytes).toBeGreaterThan(0);
+    expect(dry.plan.largest_row_bytes).toBeGreaterThan(0);
+    expect(fs.readFileSync(lab.vaultPath).equals(vaultBefore)).toBe(true);
   });
 
   it('round trip: an exported mirror imports into a fresh vault with no header in any stored document', async () => {

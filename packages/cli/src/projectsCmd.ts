@@ -13,6 +13,8 @@ import {
   withFileLock,
   type ImportFilePlan,
   type ProjectCompactionResult,
+  PROJECT_IMPORT_PUSH_MAX_BYTES,
+  PROJECT_IMPORT_ROW_MAX_BYTES,
 } from '@northkeep/core';
 import {
   ExportRefusal,
@@ -437,12 +439,8 @@ export async function projectsImportCmd(
   const write = options.write === true;
   let res: ImportRunResult;
   try {
-    // A dry run never opens the vault; the stand-in runner proves it.
-    const runner: VaultRunner = write
-      ? await deps.vaultRunner()
-      : async () => {
-          throw new Error('A dry run does not open the vault');
-        };
+    // The dry run opens the vault too, read only, so a slug that is taken shows now rather than at --write.
+    const runner: VaultRunner = await deps.vaultRunner();
     res = await importProjects(options.from, { write, vaultPath: deps.vaultPath, withVault: runner });
   } catch (e) {
     err(`✗ ${sentence(describeMirrorError(e))}`);
@@ -457,12 +455,20 @@ export async function projectsImportCmd(
   for (const f of res.files) {
     const plan = plans.get(f.name);
     if (f.status === 'skipped') out(`Skip ${f.name}: ${sentence(f.reason ?? 'not importable')}`);
-    else if (f.status === 'refused') out(`Refused ${f.name} (${f.slug}): ${sentence(f.reason ?? 'import failed')}`);
+    else if (f.status === 'refused') out(`Refused ${f.name}${f.slug ? ` (${f.slug})` : ''}: ${sentence(f.reason ?? 'import failed')}`);
+    else if (f.status === 'exists') out(`Exists ${f.name} (${f.slug}): ${sentence(f.reason ?? 'the vault already has this project')}`);
     else out(`${f.status === 'imported' ? 'Imported' : 'Would import'} ${f.name} as ${f.slug}: ${plan ? planLine(plan) : ''}`);
   }
   const skipped = res.files.filter((f) => f.status === 'skipped').length;
   if (!write) {
-    out(`Dry run: ${plural(res.plan.projects.length, 'file')} would be imported and ${skipped} skipped. Nothing was written; add --write to import.`);
+    const would = res.files.filter((f) => f.status === 'would import').length;
+    const exists = res.files.filter((f) => f.status === 'exists').length;
+    const n = (x: number) => x.toLocaleString('en-US');
+    out(`Largest row: ${n(res.plan.largest_row_bytes)} bytes (limit ${n(PROJECT_IMPORT_ROW_MAX_BYTES)}). Total: ${n(res.plan.total_bytes)} bytes of the ${n(PROJECT_IMPORT_PUSH_MAX_BYTES)}-byte sync limit.`);
+    if (res.plan.total_bytes > PROJECT_IMPORT_PUSH_MAX_BYTES) {
+      out('Note: that is more than one sync push carries. Import fewer files at a time.');
+    }
+    out(`Dry run: ${plural(would, 'file')} would be imported, ${exists} already in the vault, ${refused} refused, ${skipped} skipped. Nothing was written; add --write to import.`);
     return 0;
   }
   const imported = res.files.filter((f) => f.status === 'imported').length;
