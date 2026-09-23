@@ -226,10 +226,9 @@ function guardStale(guardPath: string, g: Buffer): boolean {
 }
 
 /**
- * Compare-and-steal under an O_EXCL guard: stealers run one at a time, and a
- * dead lock can only be removed by a stealer, so re-reading it under the
- * guard proves the rename moves exactly the dead bytes. A dead or stale guard
- * is removed and the steal retried, so a killed stealer never wedges exports.
+ * Compare-and-steal under a linked guard: stealers run one at a time, so
+ * re-reading the lock under it proves the rename moves only the dead bytes.
+ * A stale guard is removed and retried, so a killed stealer never wedges.
  */
 function stealDeadLock(lockPath: string, seen: Buffer, token: string): 'retry' | 'busy' | 'guard_unreadable' | 'mismatch' {
   const guardPath = `${lockPath}.steal`;
