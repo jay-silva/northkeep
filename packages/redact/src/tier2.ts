@@ -1,5 +1,6 @@
 import type { OllamaClient } from '@northkeep/librarian';
 import { isCommonEnglish, nameListHit } from './names.js';
+import { readNerReply } from './ner-reply.js';
 import type { EntityKind, PseudonymMap, Replacement } from './types.js';
 
 /**
@@ -181,24 +182,12 @@ EXACTLY as it appears. Skip generic words, titles alone, dates, and numbers.
 Text:
 ${text}`;
   const raw = await ollama.generateJson(prompt);
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(raw);
-  } catch {
-    // Unparseable model output is a FAILURE, not "no entities" — throw so the
-    // caller marks Tier-2 degraded (invariant #6) rather than silently
-    // passing names through unpseudonymized.
-    throw new Error('Tier-2 model returned non-JSON output.');
-  }
-  const list = (parsed as { entities?: unknown }).entities;
-  if (!Array.isArray(list)) {
-    throw new Error('Tier-2 model output missing an entities array.');
-  }
+  // Duplicate-aware and strict: a reply we cannot fully account for throws,
+  // so the caller marks the text degraded (invariant #6), never clean.
+  const list = readNerReply(raw);
   const hits: EntityHit[] = [];
   const seen = new Set<string>();
-  for (const item of list) {
-    const record = item as { text?: unknown; kind?: unknown };
-    if (typeof record.text !== 'string') continue;
+  for (const record of list) {
     const span = record.text.trim();
     // Drop length-1 spans ONLY for boundary-friendly scripts (a lone Latin "J."
     // is an initial); a single-character CJK name ("王") is a real name and must
