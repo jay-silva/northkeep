@@ -6,7 +6,8 @@
   WITH WOUNDS after recheck (first review and recheck, 2026-09-24); the
   final text pass was not re-reviewed. Provider handling of the tagged
   tokens (R10) stays unverified until Jay's one real-provider run. O1 and
-  O2 are built with the recommended default, pending Jay's confirmation.
+  O2 are built with the recommended default, confirmed by Jay on
+  2026-09-24 ("accept all the recommended defaults").
   "Build notes" below lists every place the build differs from the text.
   It changes what leaves the machine (D2, D4), puts third-party text in
   front of the model (D3), changes a trust level (D6) and publishes
@@ -920,13 +921,13 @@ same review gate.
 ## Open items for Jay
 
 - **O1. `memory_remember` at Tier 1 over MCP.** Built with the
-  recommended default, pending Jay's confirmation. Proposed: leave it
+  recommended default, confirmed by Jay on 2026-09-24. Proposed: leave it
   allowed (a Tier-1 host still needs to save new facts), accepting R9.
   Alternative: refuse a save whose text contains a NorthKeep placeholder
   shape such as `[EMAIL_1]`, which would also refuse the rare memory
   that legitimately contains that text.
 - **O2. Names in collection names (R1).** Built with the recommended
-  default, pending Jay's confirmation. They are sent as written at
+  default, confirmed by Jay on 2026-09-24. They are sent as written at
   every tier. Proposed: accept it, with the panel sentence. Alternative:
   run the tier's name layers over scope names too (cheap, but a
   collection named "Donna Keller" would reach the model as a token).

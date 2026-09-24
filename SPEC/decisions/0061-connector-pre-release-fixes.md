@@ -6,7 +6,7 @@
   design pass that closes the recheck's two wounds (R2-F1, R2-F2) and its
   notes is **not re-reviewed**. Built on this branch 2026-09-24 (see Review
   history); next step: a full adversarial review of the code before merge. Jay's decisions D1
-  to D4 are pending; the build uses the recommendations. All three decisions sit behind the CLAUDE.md review gate:
+  to D4 were accepted as recommended by Jay on 2026-09-24 ("accept all the recommended defaults"); the build uses them. All three decisions sit behind the CLAUDE.md review gate:
   Decision 1 changes who decides (it adds a way to reach a route without the
   billing gate), Decision 2 changes how a credential is stored and checked
   (invariant #3 requires an explicit adversarial review before merge), and
