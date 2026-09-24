@@ -450,17 +450,13 @@ every milestone; if a limit is removed, say when and how.*
   quick second Ctrl-C that lands after the task has stopped reaches an idle
   prompt and ends the REPL. At a terminal, an approval prompt takes only what
   you type after it appears. Ctrl-C at an idle prompt, or during a reply
-  without `--tools`, ends the REPL (after that reply finishes). In the web GUI, closing
-  the tab or reloading fires the response 'close' event, which aborts the loop
-  and sweeps that turn's pending approvals; a late approve POST for a swept id
-  404s (the page says the request expired and to send again). An unanswered approval still denies after the
-  loop's 5-minute timeout.
-- **Approvals live in server memory, not across a restart.** A pending tool
-  approval is held in the converse process's memory keyed by a random
-  single-use id. If the UI server restarts while an approval is outstanding,
-  the id is gone: the browser's approve POST 404s (the page asks you to send
-  again) and the killed
-  loop simply ended. Nothing is auto-approved across a restart.
+  without `--tools`, ends the REPL (after that reply finishes). An unanswered
+  approval still denies after the loop's 5-minute timeout. The desktop app
+  has no chat view, so none of this applies there.
+- **Approvals live in process memory, not across a restart.** A pending tool
+  approval is held only in the running `northkeep converse` process. If that
+  process ends while an approval is outstanding, the task ends with it.
+  Nothing is auto-approved across a restart.
 - **fetch is https-only, ports 443/8443, GET, no cookies, ever.** Content
   types beyond HTML/text/JSON/XML are refused without reading the body.
 
@@ -497,8 +493,8 @@ every milestone; if a limit is removed, say when and how.*
   you granted "always" runs with no prompt**, even in a private-pinned chat. The
   deterministic Tier-1 mask is applied to the arguments either way. The ceiling exists to prevent SILENT
   escalation by the router (ADR 0011), and a tool call is never silent. If you
-  want a conversation where nothing at all leaves, pin it private AND leave the
-  Tools toggle off.
+  want a conversation where nothing at all leaves, pin it private AND start
+  `northkeep converse` without `--tools`.
 
 ## M11 (MCP client tools), current
 
@@ -662,10 +658,10 @@ every milestone; if a limit is removed, say when and how.*
   cost ledger is future work.
 - **The daily cap is enforced by an atomic reserve (M10e).** A costed tool
   reserves its daily slot in one synchronous read-check-write at execute time,
-  so concurrent conversations in one process (several chats in the web GUI)
-  cannot both pass and overshoot: the second reserve sees the incremented
-  count and budget-denies. The reserve is not locked across processes, so the
-  CLI and the GUI reserving the last slot at the same instant can still
+  so concurrent tool calls in one process cannot both pass and overshoot:
+  the second reserve sees the incremented count and budget-denies. The
+  reserve is not locked across processes, so two `northkeep converse`
+  sessions reserving the last slot at the same instant can still
   overshoot. The rare visible edge: two concurrent
   prompts for a cap-1 tool can both appear, and the second approval is
   budget-denied AFTER consent. The budget is still a call COUNT, not a dollar
