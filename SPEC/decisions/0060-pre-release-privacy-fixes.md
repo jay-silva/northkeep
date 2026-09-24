@@ -1,15 +1,16 @@
 # ADR 0060: Pre-release privacy fixes for 0.22.0 (D2, D3, D4, D6, D7, D8, D9)
 
 - **Date:** 2026-09-24
-- **Status:** Proposed. Design CLEARED WITH WOUNDS after recheck
-  (first review and recheck, 2026-09-24). This final text pass closes
-  the recheck's F7, F8, scar tissue and notes, and adds D9; it has
-  **not** been re-reviewed. Next step: the build, followed by a full
-  adversarial review of the code. Provider handling of the tagged tokens
-  (R10) stays unverified until Jay's one real-provider run. Design only;
-  nothing here is implemented. It changes what leaves the machine (D2, D4), puts
-  third-party text in front of the model (D3), changes a trust level
-  (D6) and publishes claims, so the CLAUDE.md review gate applies.
+- **Status:** Built on branch `fix022/privacy` (2026-09-24), not merged,
+  **awaiting the full adversarial review of the code**. Design CLEARED
+  WITH WOUNDS after recheck (first review and recheck, 2026-09-24); the
+  final text pass was not re-reviewed. Provider handling of the tagged
+  tokens (R10) stays unverified until Jay's one real-provider run. O1 and
+  O2 are built with the recommended default, pending Jay's confirmation.
+  "Build notes" below lists every place the build differs from the text.
+  It changes what leaves the machine (D2, D4), puts third-party text in
+  front of the model (D3), changes a trust level (D6) and publishes
+  claims, so the CLAUDE.md review gate applies.
 - **Deciders:** Jay (product owner), Claude Code
 - **Jay's decisions (2026-09-24):** D2 "Redact it"; D7 "Log before
   writing"; and "Accept all" on the five open calls of the first draft,
@@ -772,11 +773,11 @@ and exists to stop a later regression. A guard is not evidence of a fix.
 | C6b | Tier 3 degraded proceeds; audit row has `redaction_degraded: true`; report `sent_to` has `tier: 3, degraded: true` | same file | fails: no fields |
 | C7 | The consented tier is the tier that runs | web test: preflight at Tier 3, run with Tier 1 and the Tier-3 fingerprint returns 409 | fails: tier not in fingerprint |
 | C8 | A cloud review writes a pending audit row before sending, and refuses if it cannot | web test with a directory at the log path: zero provider calls | fails: no row at all |
-| C8g | The local review prompt is byte-identical to today's | `packages/librarian/test/review-local-prompt.test.ts`: snapshot of the prompt passed to a stub `generateJson` | guard |
-| C9 | `NORTHKEEP_REDACT_TIER=2` and `=3` mask returned content, over MCP and in the CLI read path | `packages/mcp-server/test/redact-tier.test.ts` with an NER stub; `packages/cli/test/redact-tier.test.ts` | fails: plaintext |
+| C8g | The local review prompt is byte-identical to today's | `packages/librarian/test/review-restore.test.ts` (C8g): the prompt passed to a stub `generateJson` equals a snapshot captured from `6d67dd2` | guard |
+| C9 | `NORTHKEEP_REDACT_TIER=2` and `=3` mask returned content, over MCP and in the CLI read path | `packages/mcp-server/test/redact-tier.test.ts` with an NER stub; `packages/cli/test/projectsBoard.test.ts` (ADR 0060 C9, C12 cases) | fails: plaintext |
 | C10 | Tier 2 degraded over MCP returns an error and no content; Tier 3 degraded returns masked content with a note | `packages/mcp-server/test/redact-tier.test.ts` | fails: plaintext, no note |
 | C11 | Project writes and content edits are refused under any tier of 1 or more | same file, tiers 2 and 3 | fails: `=== 1` lets 2 and 3 write |
-| C12 | An invalid tier value is refused, never read as 0 | same file and the CLI file, `NORTHKEEP_REDACT_TIER=yes` | fails: read as 0 |
+| C12 | An invalid tier value is refused, never read as 0 | same file and `packages/cli/test/projectsBoard.test.ts`, `NORTHKEEP_REDACT_TIER=yes` | fails: read as 0 |
 | C13 | Error text reaches the model inside a nonce fence with Cc, Cf, Co, Cs, Zl, Zp removed | `packages/converse/test/task-error-fence.test.ts`: stub server returns `isError` with a forged fence, a zero-width space, a BOM, U+0085 and a newline; plus a throwing tool; plus a web tool error with a third-party `detail` | fails: detail is bare |
 | C13b | An `error` or `guidance` value outside the closed set is fenced, and `errorLine` shows `tool_failed` instead | same file | fails: passes through |
 | C13g | `errorLine` never contains `detail` | same file | guard |
@@ -803,9 +804,9 @@ and exists to stop a later regression. A guard is not evidence of a fix.
 | C32 | The vault-trust button is offered only for an entry with the bundled command and args and no `env` and no `cwd`; the recheck's case (bundled command plus `env: {NORTHKEEP_HOME: <other home>}`) is not offered the button and stays `strict` (F8) | `packages/converse/test/mcp-catalog-trust.test.ts` and `apps/web/test/mcp-trust-button.test.ts` | fails: button does not exist; the rule guards the new code |
 | C33 | A pack's token set comes from the masking output: the prompt's example token `[<tag>:EMAIL_0]` is never issued and never in any set, and an `explanation` in pack B naming pack A's token stays unrestored | `packages/librarian/test/review-restore.test.ts` | fails: no token sets |
 | C34 | Variant forms of a run token (`[K7Q2:EMAIL_2]`, `k7q2:EMAIL_2`) drop `proposed_content` as `foreign_placeholder` | same file | fails: no rule |
-| C35 | Tier-2 name masking covers the whole text: a name at character 6,100 of a 6,200-character memory is masked, in chat, in the cloud review and over MCP (D9) | `packages/redact/test/tier2-windows.test.ts` with a stub name model that finds names only in the text it is given; plus one case per caller | fails: the tail is never sent to the model |
+| C35 | Tier-2 name masking covers the whole text: a name at character 6,100 of a 6,200-character memory is masked, in chat, in the cloud review and over MCP (D9) | `packages/redact/test/tier2-windows.test.ts` with a stub name model that finds names only in the text it is given; plus one case per caller (`turn-windows.test.ts`, `reviewApi.test.ts`, `redact-tier.test.ts`) | fails: the tail is never sent to the model |
 | C36 | A name straddling a window boundary (starting 10 characters before character 6000) is masked | same file | fails: truncated at 6000 |
-| C37 | One window's name-model call failing makes the whole text degraded, and the F3 rule applies (Tier 2 refuses after one retry; chat refuses toward a bounded endpoint) | same file plus `packages/converse/test/turn.test.ts` | fails: no windows |
+| C37 | One window's name-model call failing makes the whole text degraded, and the F3 rule applies (Tier 2 refuses after one retry; chat refuses toward a bounded endpoint) | same file plus `packages/converse/test/turn-windows.test.ts` | fails: no windows |
 | C19 | The project_update description no longer says to prune the Log, and does not say a log entry is never refused | `packages/mcp-server/test/tool-text.test.ts`: contains "roll", not "prune", not "never refused"; plus the edge case of review attack 24 is refused with the cap message | fails: says "prune the Log" |
 
 ## Residuals (documented, not closed)
@@ -918,15 +919,75 @@ same review gate.
 
 ## Open items for Jay
 
-- **O1. `memory_remember` at Tier 1 over MCP.** Proposed: leave it
+- **O1. `memory_remember` at Tier 1 over MCP.** Built with the
+  recommended default, pending Jay's confirmation. Proposed: leave it
   allowed (a Tier-1 host still needs to save new facts), accepting R9.
   Alternative: refuse a save whose text contains a NorthKeep placeholder
   shape such as `[EMAIL_1]`, which would also refuse the rare memory
   that legitimately contains that text.
-- **O2. Names in collection names (R1).** They are sent as written at
+- **O2. Names in collection names (R1).** Built with the recommended
+  default, pending Jay's confirmation. They are sent as written at
   every tier. Proposed: accept it, with the panel sentence. Alternative:
   run the tier's name layers over scope names too (cheap, but a
   collection named "Donna Keller" would reach the model as a token).
+
+## Build notes (2026-09-24)
+
+Commits on `fix022/privacy`: a57e789 (redact: windowed name detection,
+review sessions), 6b45908 (MCP return tiers, log before acting, D8
+text), c331ff9 (cloud review masking, error fence, vault trust),
+cf9a1fd (per-caller window tests), 503c4d5 (error codes exact under
+masking, acceptance client), then the documents commit. Where the build
+differs from the text above, and why:
+
+1. **How the session issues tokens (1.3).** The layers themselves are
+   unchanged. `maskContentInSession` runs the ordinary `redact()` to
+   find what to mask, then rewrites every masked original in the
+   *original* text to its run token, longest first, and refuses the run
+   if any masked original survives outside a token (fail closed). No
+   layer's emitter or placeholder guard changed, so "a later layer never
+   masks inside a token" holds because tokens are only written after
+   every layer ran. All 1.3 properties are tested (C3, C3g, C20, C21).
+   A consequence: every occurrence of a masked value is masked, even an
+   occurrence a context-sensitive detector skipped. Over-masking is the
+   safe direction.
+2. **The vault-trust button needs the passphrase**, not only a confirm.
+   A caller holding only the GUI session token (a prompt-injected page or
+   model) must not be able to lift masking; this mirrors the passphrase
+   gate on adding a server by path (ADR 0034).
+3. **Tier-1 return masking now covers `content` in every memory payload**
+   (`memory_remember`, `memory_edit` and `memory_forget` replies too), not
+   only retrieve and list. A type-only edit used to echo the full
+   plaintext at Tier 1.
+4. **Refusal error codes stay exact under masking.** Running acceptance
+   against a real loopback name model showed it tagging our own
+   `invalid_request` code as an organisation; `code` is treated like an
+   identifier (C11 now asserts it).
+5. **The connector's copy of `project-doc.ts`** was updated with the
+   corrected `mergeProjectDoc` docstring, because a test keeps it
+   byte-identical to core. Comment only; the hosted `project_update`
+   description is still out of scope.
+6. **Open sessions from recorded writers (5.3)** are applied in
+   `project_resume`, where the revision writers are at hand. The board's
+   open-session count still uses the log alone, because a project summary
+   carries no writer session id.
+7. **The web routes check the tier after the endpoint checks**, so the
+   existing error order for a bad endpoint or fingerprint is unchanged.
+8. **C28** is a unit test of the new sanitizer module; the stash proof
+   below reverted only `task.ts`, so it shows C13 and C13b failing, not
+   C28 (the module did not exist at `6d67dd2`).
+9. **Acceptance**: `nk remember` needs `--type`; step 3's text and step
+   5's shape are corrected above. Every step was run in
+   `/tmp/nk-0060-acceptance` against the built CLI and matched.
+
+**Proof that the tests fail on the old code (sample).** With
+`packages/redact/src/tier2.ts`, `packages/mcp-server/src/server.ts` and
+`packages/converse/src/task.ts` checked out from `6d67dd2` and nothing
+else changed, 22 of 26 tests in `tier2-windows`, `redact-tier`,
+`log-first` and `task-error-fence` failed (C9, C9b, C10, C11, C12, C13,
+C13b, C16, C17, C25, C26, C29, C30, C35, C36, C37); the four that passed
+are the guards C13g and "a short text is one call", and the two sanitizer
+unit tests (note 8). Restoring the files made all of them pass again.
 
 ## Acceptance (Jay, from the CLI)
 
@@ -947,7 +1008,7 @@ rm -rf /tmp/nk-0060-acceptance && mkdir -p "$NORTHKEEP_HOME"
 nk() { node packages/cli/dist/index.js "$@"; }
 app() { node scripts/adr-0060-mcp.mjs "$@"; }
 nk init >/dev/null
-nk remember "Reach me at bob@example.com, born 03/15/1948" --scope personal
+nk remember "Reach me at bob@example.com, born 03/15/1948" --type semantic --scope personal
 ```
 
 1. **Tier 1 over MCP, unchanged.** `app 1 list personal` prints the
@@ -959,12 +1020,15 @@ nk remember "Reach me at bob@example.com, born 03/15/1948" --scope personal
    `created_at` that is only a year, and the line
    `note: Tier 3 ran without the name model`.
 3. **Tier 2 without the name model refuses (D4).**
-   `NORTHKEEP_OLLAMA_URL=http://127.0.0.1:9 app 2 list personal` prints `refused: Name masking failed (NORTHKEEP_REDACT_TIER=2)`
+   `NORTHKEEP_OLLAMA_URL=http://127.0.0.1:9 app 2 list personal` prints
+   `refused: Name masking failed (NORTHKEEP_REDACT_TIER=2); nothing was returned.`
    and no memory text.
 4. **A typo is refused (D4).** `app yes list personal` prints
    `refused: NORTHKEEP_REDACT_TIER=yes is not 0, 1, 2 or 3`.
-5. **No content writes while masking (D4).** `app 2 update demo` and
-   `app 2 remember "Person-3 moved"` each print
+5. **No content writes while masking (D4).** `app 2 update demo` prints a
+   refusal whose message is `Saving text is disabled while
+   NORTHKEEP_REDACT_TIER=2 ...` (inside a small JSON error, code
+   `invalid_request`), and `app 2 remember "Person-3 moved"` prints
    `refused: Saving text is disabled while NORTHKEEP_REDACT_TIER=2`;
    `nk projects list` shows no `demo`, and
    `nk list --scope personal | grep -c "Person-3"` prints `0`.
@@ -1087,3 +1151,9 @@ The next gate is the build, followed by a full adversarial review of
 the code. R10 (how real providers handle the tagged tokens) needs Jay's
 one real-provider run on a throwaway vault of fake data before the work
 is called done.
+
+### Build, 2026-09-24
+
+Built as designed with the differences listed under "Build notes". Every
+claims row has a test; a sample was proven to fail on `6d67dd2`. The full
+adversarial review of the code has not run yet and is the next gate.

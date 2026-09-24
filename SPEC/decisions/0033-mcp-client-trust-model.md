@@ -172,6 +172,19 @@ shipped is the deterministic Tier-1 floor — see the amendment immediately
 below, which is the operative rule.) Local-and-ours is not automatically safer than remote: the vault's
 own server can read every memory.
 
+> **Correction 2026-09-24 (ADR 0060 Decision 4).** "Local or ours" alone
+> still earns nothing, but the catalog's vault server is now added
+> `trusted`: its arguments only go into the vault on this machine, it has
+> no network client except the loopback-only Ollama client, and what
+> leaves after a write leaves by the ordinary sync (ciphertext) and
+> user-initiated share paths. Masking its `memory_remember` arguments
+> corrupted what was saved. The launch pin does not detect a server file
+> replaced in place; that program would already read the whole vault, so
+> `trusted` gives it nothing more. An install that added the vault server
+> earlier keeps `strict` until the user confirms "This is my NorthKeep
+> vault", offered only for the exact bundled launch with no env and no cwd,
+> behind the passphrase. Trust is never inferred on load.
+
 > **What M11 actually shipped, 2026-07-25.** The floor is the DETERMINISTIC
 > Tier-1 mask over argument string leaves — the same floor a bounded web
 > destination gets — not Tier 3. Reason: Tier 3 needs the local NER model, so

@@ -160,6 +160,12 @@ model-emitted `auto_apply` field is ignored if present.
 user-editable in v1. Retrieved memories go in a delimited data section.
 The apply path never reads model prose as an instruction.
 
+**Correction 2026-09-24 (ADR 0060 Decision 1):** the pinned prompt used on
+the cloud (API) path gains one rule, telling the model to copy placeholders
+such as `[<tag>:EMAIL_0]` exactly and not to guess what they hide
+(`formatReviewPrompt` in packages/librarian/src/review.ts). The local
+path's prompt is byte-identical to before (test C8g).
+
 ### Attack 2: False contradictions the user must catch without trusting
 the model
 
@@ -228,6 +234,19 @@ scopes are included when the user includes those scopes.
 scopes, types, dates) of every memory included in that run, to the
 provider the user named, under that provider's policy. Same class of
 exposure as pasting those memories into that provider's app.
+
+**Correction 2026-09-24 (ADR 0060 Decision 1, Jay: "Redact it"):**
+"Full content of the included entries leaves" is no longer true. Each
+memory's content is masked at the tier chosen on the consent panel (1, 2
+or 3; it starts at the chat tier) before anything is sent, secrets in
+collection names are masked, and at Tier 3 dates in collection names and
+the recording date go to the year. Ids and types leave as written, and
+names in collection names leave as written (open item O2). Tier 2 refuses
+the whole run if the name model fails for any memory. Replies are
+restored on this machine: P4 quotes are kept as the stored span they
+match, and suggested text is filled in only from memories the suggestion
+cites. A pending audit row carrying the ids to be sent is written before
+the first send.
 
 ## Honest limits
 
