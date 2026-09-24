@@ -142,21 +142,30 @@ user content, which is why Tiers 1 and 2 send it unchanged.
 (packages/redact/src/index.ts:1), so `runReviewPass` cannot call
 `redact()` without a dependency cycle. The seam:
 
-- `createReviewApiGenerator` (converse, which already depends on redact)
-  stops accepting a prompt string. Its only method becomes
-  `generateReview(pack: RedactedReviewPack, opts)`, where
-  `RedactedReviewPack` is a branded type that only a new converse
-  function, `redactReviewPacks(packs, tier, ollama?)`, can construct.
-  There is no longer any function in the API adapter that takes free
-  text and reaches `provider.chat`.
-- `runReviewPass` gains an optional `outbound` option:
-  `{ prepare(packs: MemoryEntry[][]): Promise<PreparedPacks>; send(i, opts): Promise<string> }`.
-  When `outbound` is absent (the local Ollama path, `northkeep review`,
-  and the web local route at api.ts:2090) behaviour is byte-for-byte
-  unchanged. When present, `runReviewPass` calls `prepare` once with
-  **every** pack before the first `send`, builds the prompt from the
-  prepared (redacted) content, and validates the reply through the
-  restoration rules in 1.4.
+- `createReviewApiGenerator` (converse, which already depends on redact:
+  task.ts imports `applyTier1`) stops accepting a prompt string. It
+  exposes two methods and nothing else:
+  - `prepare(packs: MemoryEntry[][], tier)`: redacts every pack (1.3)
+    and returns opaque handles plus the run's placeholder mapping and
+    the tier actually applied.
+  - `send(handle, opts)`: builds the prompt **itself**, from the
+    redacted content held behind the handle, using the prompt formatter
+    exported by librarian (`formatReviewPrompt`, today's
+    `reviewPrompt`, review.ts:82-84) plus the placeholder sentence
+    below, then calls `provider.chat`.
+  A handle is checked at runtime, not only by type: `send` accepts only
+  objects present in a module-private `WeakSet` that `prepare` filled.
+  TypeScript brands vanish at runtime, so the WeakSet is the guarantee.
+  No method on the adapter takes free text, so no later caller can reach
+  `provider.chat` with unredacted memory text through it.
+- `runReviewPass`'s second parameter becomes a union:
+  `Pick<OllamaClient, 'generateJson'>` (the local path, unchanged) or
+  `ReviewOutbound` (`{ prepare, send }` as above). With a
+  `ReviewOutbound`, `runReviewPass` calls `prepare` once with **every**
+  pack before the first `send`, never formats a prompt string itself,
+  and validates each reply through the restoration rules in 1.4. With an
+  Ollama client (the local path, `northkeep review`, and the web local
+  route at api.ts:2090) the prompt is byte-for-byte what it is today.
 - Placeholder restoration and quote matching live in librarian as pure
   functions over a plain mapping (`Array<{placeholder, originals[], kind}>`),
   so librarian still does not import redact.
@@ -307,6 +316,13 @@ nothing off the machine, and keep today's prompt and validation.
   unset or `0` means 0; `1`, `2`, `3` mean that tier; **any other value
   is refused** (see "Decisions for Jay", item 2, for the proposed
   behaviour).
+- **The CLI read path** (projectsCmd.ts:637-660, which "masks under
+  NORTHKEEP_REDACT_TIER=1 the way the MCP tool does") follows the same
+  rules: at 2 or 3 it masks through the same shared function the server
+  uses, a degraded Tier 2 exits non-zero with the same sentence and
+  prints no content, a degraded Tier 3 prints the note on stderr, and
+  an invalid value exits non-zero naming the value. The CLI never
+  silently reads 2 or 3 as 0.
 - **Tier 1:** unchanged (Tier-1 masking of returned content and project
   payloads).
 - **Tiers 2 and 3:** returned memory content and project payload fields
@@ -344,11 +360,20 @@ nothing off the machine, and keep today's prompt and validation.
 At the single join point in task.ts (where `resultContent` is set,
 task.ts:960-967), for **every** tool, not only MCP:
 
-- A failed result is split into our part and theirs. Our part is the
-  `error` code and `guidance` sentence, which NorthKeep authors; it stays
-  bare JSON, re-serialized by us (`JSON.stringify` of the two fields
-  only). Their part is `detail`, plus any failed content that is not our
-  structured error JSON.
+- A failed result is split into our part and theirs. "Ours" is a closed
+  set, checked, not assumed: an `error` value is ours only if it is one
+  of the error codes NorthKeep's tools and loop define (the web tools'
+  `GUIDANCE` keys, the loop's own codes such as `tool_failed`,
+  `budget_exceeded`, `tool_definitions_changed`), and a `guidance` value
+  is ours only if it is one of the fixed strings those tables and the
+  loop define. Checked in code: both web tools build `error` from a code
+  constant and `guidance` from their `GUIDANCE` table or a fixed
+  fallback (webFetch.ts:43-47, webSearch.ts:154-158); their `detail`
+  can carry third-party text (`err.message` at webSearch.ts:259). Our
+  part stays bare JSON, re-serialized by us (`JSON.stringify` of the
+  two fields only). Everything else is theirs: `detail`, any `error` or
+  `guidance` value outside the closed set, and any failed content that
+  is not our structured error JSON.
 - Their part is sanitized by Unicode category, not by lists: every code
   point in `\p{Cc}` (C0 and C1 controls, newline included), `\p{Cf}`
   (zero-width, bidi marks, BOM), `\p{Co}`, `\p{Cs}`, and `\p{Zl}`/`\p{Zp}`
@@ -360,8 +385,9 @@ task.ts:960-967), for **every** tool, not only MCP:
 - `resultContent` becomes our bare JSON, a newline, then the fence. The
   MCP client (client.ts:396-397) and the catch (task.ts:936-947) keep
   producing `detail`; they no longer decide fencing.
-- The `errorLine` shown to the user (task.ts:970-980) stays built only
-  from our `error` and `guidance` fields: content-free, never `detail`.
+- The `errorLine` shown to the user (task.ts:970-980) is built only from
+  `error` and `guidance` values inside the closed set; a value outside it
+  is replaced by `tool_failed`. Never `detail`.
 
 ## Decision 4 (D6): the catalog's vault server is `trusted`
 
@@ -369,6 +395,9 @@ task.ts:960-967), for **every** tool, not only MCP:
   `trusted`. The GUI catalog add route passes `entry.trust` to
   `addServer`. A custom add by path still defaults to `strict`; trust is
   never inferred on load and never inferred from a matching command.
+  The CLI has no catalog add (no use of `getMcpCatalogEntry` or
+  `listMcpCatalog` in packages/cli/src), so `northkeep mcp add` keeps its
+  current `strict`-only behaviour.
 - Why this is safe, stated as conditions the reviewer can check:
   1. The destination of the arguments is the vault on this machine. The
      server is our own `packages/mcp-server/dist/index.js`, launched with
@@ -378,9 +407,13 @@ task.ts:960-967), for **every** tool, not only MCP:
      Ollama, and `ollamaUrl()` refuses any non-loopback host with no
      override (packages/librarian/src/ollama.ts:20-29).
   3. What leaves after a write leaves on paths that already have their
-     own rules: sync pushes ciphertext (invariant 2), and a write into a
-     scope the user marked Shared is pushed under invariant 1(b), exactly
-     as a GUI write would be.
+     own rules, exactly as for a GUI write: the standalone server's
+     auto-sync (mcp-server/src/auto-sync.ts, ADR 0044) pushes the
+     encrypted vault (invariant 2); whether it also pushes Shared-scope
+     content to the connector was not confirmed while writing this ADR
+     (a grep of packages/sync/src/auto.ts found no connector push), and
+     the reviewer must check it. If it does, that push is invariant
+     1(b), which the user opted into per scope.
   4. The arguments are the user's own conversation, going into the
      user's own vault. The Tier-1 floor on `strict` servers exists
      because a local program may forward what it receives (invariant 1,
@@ -409,14 +442,22 @@ task.ts:960-967), for **every** tool, not only MCP:
    nothing was done." No vault is opened.
 2. Run the tool body.
 3. Append the **completion** row: today's row shape plus
-   `phase: "done"` and the same `call_id`. Its `ts` is the completion
-   time (so a write's row still sorts after the read it follows, which
-   open-session ordering relies on, open-sessions.ts:115-117).
-4. If the completion append fails:
-   - after a **write** (any tool that saved): return the success payload
-     with `log_warning: "The change was saved, but its log entry could
-     not be completed."` Returning an error here is the retry bug D7
-     is about.
+   `phase: "done"` and the same `call_id`. Its `ts` stays the call's
+   start time, as today (`base.ts` is set before `withVault`,
+   server.ts:260), so the open-session derivation, which sorts by `ts`
+   (open-sessions.ts:115-117), sees exactly the ordering it sees now. A
+   new `completed_at` field carries the end time.
+4. `run()` does not guess which tools write. Each registration passes
+   `kind: 'read' | 'write'` explicitly (write: `memory_remember`,
+   `memory_edit`, `memory_forget`, `project_create`, `project_update`,
+   `project_checkpoint`, `project_wrap`; everything else read).
+5. If the completion append fails:
+   - after a **write** that saved: return success, but only a minimal
+     acknowledgement with no content: `{ saved: true, id or revision,
+     log_warning: "The change was saved, but its log entry could not be
+     completed." }`. Returning an error is the retry bug D7 is about;
+     returning the full document (project writes return it today) would
+     be a disclosure with no ledger row, which the read rule forbids.
    - after a **read**: withhold the payload and return an error. The
      disclosure ledger (which ids went out) lives in the completion row,
      so a read whose ledger cannot be written discloses nothing.
@@ -484,32 +525,44 @@ enforced by the caller through `rollProjectLog` and
 
 ## Claims this ADR publishes, and the test that enforces each
 
-Every test below must fail on `fix022/privacy` at `6d67dd2`. Every test
-that opens a vault or writes the log sets `NORTHKEEP_HOME` to a temp
-directory. No test calls a real provider; providers are local stubs
-injected into the generator.
+Every test that opens a vault or writes the log sets `NORTHKEEP_HOME` to
+a temp directory. No test calls a real provider; providers are local
+stubs injected into the generator. Test paths follow the repo layout
+(`<package>/test/*.test.ts`). The last column says whether the test
+**fails on old code** (`fix022/privacy` at `6d67dd2`), which is the
+proof the defect was real, or is a **guard** that passes on old code
+and exists to stop a later regression. A guard is not evidence of a fix.
 
-| # | claim | test (planned file) | why it fails on old code |
+| # | claim | test (planned file) | old code |
 |---|---|---|---|
-| C1 | A cloud review sends no seeded Tier-1 value; at Tier 3 no seeded full date and no dictionary name | `apps/web/test/review-api-redact.test.ts`: stub provider records wire text; corpus seeded into memories; assert none of the originals appear | wire text today is the raw prompt |
-| C2 | The API adapter has no free-text send | type test plus `packages/converse/test/reviewApi.test.ts`: `generateReview` rejects an object not built by `redactReviewPacks` | today `generateJson(prompt)` accepts any string |
-| C3 | Placeholder numbering is consistent across a run | `packages/redact/test/session.test.ts`: two emails in two calls sharing a session get `[EMAIL_1]`, `[EMAIL_2]`; the same email twice gets one placeholder | numbering restarts per call |
-| C4 | A quote containing placeholders validates against stored text and the report keeps the stored span | `packages/librarian/test/review-restore.test.ts`, including a `[DATE-1948]` quote over an entry with two 1948 dates and a lowercased pseudonym original | `includes()` fails on any placeholder |
-| C5 | `proposed_content` is restored, including Tier-1; ambiguous or unmapped placeholders drop the proposal | same file; drop reasons `ambiguous_placeholder`, `unmapped_placeholder` | today the placeholder text would be written |
-| C6 | Tier 2 degraded refuses the review before any send | web test with NER stub offline: stub provider receives zero calls, job `failed`, audit row `tier2-unavailable` | no tier exists today |
-| C7 | The consented tier is the tier that runs | web test: preflight at Tier 3, run with Tier 1 and the Tier-3 fingerprint: 409 | tier not in fingerprint |
-| C8 | A cloud review writes a pending audit row before sending, and refuses if it cannot | web test with a directory at the log path: zero provider calls | no row today |
-| C9 | `NORTHKEEP_REDACT_TIER=2` and `=3` mask returned content | `packages/mcp-server/test/redact-tier.test.ts` with an NER stub | returns plaintext |
-| C10 | Tier 2 degraded over MCP returns an error and no content; Tier 3 degraded returns masked content with a note | same file | returns plaintext, no note |
-| C11 | Project writes and content edits are refused under any tier of 1 or more | same file, tiers 2 and 3 | `=== 1` lets 2/3 write |
-| C12 | An invalid tier value is refused, never read as 0 | same file, `NORTHKEEP_REDACT_TIER=yes` | read as 0 |
-| C13 | MCP error text reaches the model inside a nonce fence with Cc/Cf stripped | `packages/converse/test/task-error-fence.test.ts`: stub server returns `isError` with a forged fence, a zero-width space, BOM and a newline; and a throwing tool | detail is bare today |
-| C14 | The catalog vault server stores `memory_remember` content unmasked | `packages/converse/test/mcp-catalog-trust.test.ts`: catalog add, then a task call with an email in content; the stub-recorded arguments contain the email | stored as `[EMAIL_1]` |
-| C15 | A custom-added server with the vault's exact command stays `strict` | same file | (guards against inference) |
-| C16 | When the log cannot be appended, a write does not happen | `packages/mcp-server/test/log-first.test.ts`: directory at the log path, `memory_remember` and `project_update`: vault bytes unchanged, error returned | write lands today |
-| C17 | When the completion row fails after a write, the client gets success plus `log_warning`; after a read, no payload | same file, with an injected append that fails on the second call | error today |
-| C18 | Pending rows never open or close a session, in this build's derivation and in a copy of the pre-0060 derivation | `packages/mcp-server/test/open-sessions.test.ts` | new behaviour |
-| C19 | The project_update description no longer says to prune the Log | `packages/mcp-server/test/tool-text.test.ts`: description contains "roll" and not "prune" | says "prune the Log" |
+| C1 | A cloud review sends no seeded Tier-1 value; at Tier 3 no seeded full date, no dictionary name, and `created_at` as year only | `apps/web/test/review-api-redact.test.ts`: stub provider records wire text; corpus seeded into memories; assert no original and no full `created_at` appears | fails: wire text is the raw prompt |
+| C2 | The API adapter has no free-text send | `packages/converse/test/reviewApi.test.ts`: `send` rejects a hand-built object and a string; only a `prepare` handle passes | fails: `generateJson(prompt)` accepts any string |
+| C3 | Placeholder numbering is consistent across a run | `packages/redact/test/session.test.ts`: two different emails in two calls sharing a session get `[EMAIL_1]`, `[EMAIL_2]`; the same email twice gets one placeholder | fails: numbering restarts per call |
+| C3g | Without a session, `redact()` output is unchanged | same file, against today's corpus outputs | guard |
+| C4 | A quote containing placeholders validates against stored text, and the report keeps the stored span | `packages/librarian/test/review-restore.test.ts`, including a `[DATE-1948]` quote over an entry with two 1948 dates and a lowercased pseudonym original | fails: `includes()` rejects any placeholder |
+| C5 | `proposed_content` is restored, including Tier 1; ambiguous or unmapped placeholders drop the proposal | same file; drop reasons `ambiguous_placeholder`, `unmapped_placeholder` | fails: placeholder text would be written |
+| C5b | `explanation` and `question` restore unambiguous placeholders and keep ambiguous ones visible, without dropping | same file | fails: no restoration |
+| C5c | Restoration runs on parsed leaves: an original containing `"` and `\` round-trips | same file | fails: no restoration |
+| C6 | Tier 2 degraded refuses the review before any send | web test, NER stub offline: stub provider receives zero calls, job `failed`, audit row `tier2-unavailable` | fails: no tier exists |
+| C6b | Tier 3 degraded proceeds; audit row has `redaction_degraded: true`; report `sent_to` has `tier: 3, degraded: true` | same file | fails: no fields |
+| C7 | The consented tier is the tier that runs | web test: preflight at Tier 3, run with Tier 1 and the Tier-3 fingerprint returns 409 | fails: tier not in fingerprint |
+| C8 | A cloud review writes a pending audit row before sending, and refuses if it cannot | web test with a directory at the log path: zero provider calls | fails: no row at all |
+| C8g | The local review prompt is byte-identical to today's | `packages/librarian/test/review-local-prompt.test.ts`: snapshot of the prompt passed to a stub `generateJson` | guard |
+| C9 | `NORTHKEEP_REDACT_TIER=2` and `=3` mask returned content, over MCP and in the CLI read path | `packages/mcp-server/test/redact-tier.test.ts` with an NER stub; `packages/cli/test/redact-tier.test.ts` | fails: plaintext |
+| C10 | Tier 2 degraded over MCP returns an error and no content; Tier 3 degraded returns masked content with a note | `packages/mcp-server/test/redact-tier.test.ts` | fails: plaintext, no note |
+| C11 | Project writes and content edits are refused under any tier of 1 or more | same file, tiers 2 and 3 | fails: `=== 1` lets 2 and 3 write |
+| C12 | An invalid tier value is refused, never read as 0 | same file and the CLI file, `NORTHKEEP_REDACT_TIER=yes` | fails: read as 0 |
+| C13 | Error text reaches the model inside a nonce fence with Cc, Cf, Co, Cs, Zl, Zp removed | `packages/converse/test/task-error-fence.test.ts`: stub server returns `isError` with a forged fence, a zero-width space, a BOM, U+0085 and a newline; plus a throwing tool; plus a web tool error with a third-party `detail` | fails: detail is bare |
+| C13b | An `error` or `guidance` value outside the closed set is fenced, and `errorLine` shows `tool_failed` instead | same file | fails: passes through |
+| C13g | `errorLine` never contains `detail` | same file | guard |
+| C14 | The catalog vault server receives `memory_remember` content unmasked | `packages/converse/test/mcp-catalog-trust.test.ts`: catalog add, then a task call (gate stub approves once) with an email in content; the stub server records the arguments | fails: arrives as `[EMAIL_1]` |
+| C15 | A custom-added server with the vault's exact command stays `strict` | same file | guard |
+| C16 | When the log cannot be appended, a write does not happen | `packages/mcp-server/test/log-first.test.ts`: directory at the log path, `memory_remember` and `project_update`: vault bytes unchanged, error returned | fails: write lands |
+| C17 | When the completion row fails after a write, the client gets a content-free acknowledgement plus `log_warning`; after a read, no payload | same file, append injected to fail on its second call | fails: error returned after the write |
+| C18 | Pending rows never open or close a session | `packages/mcp-server/test/open-sessions.test.ts`, run against this build's derivation and against a copy of the pre-0060 derivation | guard (both pass on old code by the `ok === true` rule; the test pins it) |
+| C18b | A session is closed when a project revision recorded at or after its last read names it as the writer, even with no completion row | same file | fails: derivation reads only the log |
+| C18c | A pending row with a completion folds into one row in `northkeep log`, the GUI list and audit JSON/CSV; one without shows "outcome unknown (interrupted)" | `packages/cli/test/log-fold.test.ts`, `packages/mcp-server/test/audit.test.ts` | fails: no phase handling |
+| C19 | The project_update description no longer says to prune the Log | `packages/mcp-server/test/tool-text.test.ts`: description contains "roll" and not "prune" | fails: says "prune the Log" |
 
 ## Residuals (documented, not closed)
 
@@ -581,8 +634,9 @@ same review gate.
    release-note line telling users to remove and re-add it.
 4. **Tier 3 and `created_at`.** Proposed: year only at Tier 3 (1.1).
    Alternative: always send it, for better stale detection.
-5. **Completion row failure.** Proposed: a write returns success with a
-   warning; a read returns an error and no payload (5.1).
+5. **Completion row failure.** Proposed: a write returns a content-free
+   "saved" acknowledgement with a warning; a read returns an error and no
+   payload (5.1).
 
 ## Acceptance (Jay, from the CLI)
 
@@ -608,11 +662,13 @@ nk remember "Reach me at bob@example.com, born 03/15/1948" --scope personal
 
 1. **Tier 1 over MCP, unchanged.** `app 1 list personal` prints the
    memory with `[EMAIL_1]` and the date as written.
-2. **Tier 3 over MCP masks more (D4).** With Ollama stopped,
-   `app 3 list personal` prints `[EMAIL_1]`, `[DATE-1948]`, and the line
+2. **Tier 3 over MCP masks more (D4).** Point the name model at a port
+   nothing listens on, so the degraded case is certain whether or not
+   Ollama is running (`ollamaUrl()` accepts any loopback address):
+   `NORTHKEEP_OLLAMA_URL=http://127.0.0.1:9 app 3 list personal` prints `[EMAIL_1]`, `[DATE-1948]`, and the line
    `note: Tier 3 ran without the name model`.
-3. **Tier 2 with Ollama stopped refuses (D4).** `app 2 list personal`
-   prints `refused: NORTHKEEP_REDACT_TIER=2 needs the local name model`
+3. **Tier 2 without the name model refuses (D4).**
+   `NORTHKEEP_OLLAMA_URL=http://127.0.0.1:9 app 2 list personal` prints `refused: NORTHKEEP_REDACT_TIER=2 needs the local name model`
    and no memory text.
 4. **A typo is refused (D4).** `app yes list personal` prints
    `refused: NORTHKEEP_REDACT_TIER=yes is not 0, 1, 2 or 3`.
@@ -628,7 +684,10 @@ nk remember "Reach me at bob@example.com, born 03/15/1948" --scope personal
 8. **Vault server saves what you say (D6).**
    `app catalog-remember "my email is bob@example.com"` adds the vault
    server from the catalog in the throwaway home, runs one task through a
-   local stub model that calls `memory_remember`, and prints
+   local stub model that calls `memory_remember`, with a permission gate
+   injected by the client that approves that one call (the call is
+   consequential and the email raises an ADR 0029 warning, so an
+   unattended run would otherwise stop at the prompt), and prints
    `stored: my email is bob@example.com`.
 9. **Error text is fenced (D3) and the review is masked (D2).**
    `pnpm exec vitest run packages/converse/test/task-error-fence.test.ts apps/web/test/review-api-redact.test.ts packages/librarian/test/review-restore.test.ts`
