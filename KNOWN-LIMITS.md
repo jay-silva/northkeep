@@ -94,7 +94,9 @@ every milestone; if a limit is removed, say when and how.*
   opens an entry: an undated heading, or a dated one nested deeper, is read
   as part of the entry above it, so its date is not counted. A heading under
   the Log named like a project section (Next Actions, Decisions and so on)
-  stays that section. Both apply to imports run after 2026-09-23's fix; a
+  stays that section. Undated headings before the first dated one stay at
+  the top as a preamble, but after the first project write log rolling
+  reads that preamble as the body of the newest entry (no text is lost). Both apply to imports run after 2026-09-23's fix; a
   project imported earlier keeps the old shape (a heading Log reads as empty,
   an oldest-first partly dated Log kept its oldest entries live) until it is
   deleted with `northkeep projects delete <slug>` and imported again.

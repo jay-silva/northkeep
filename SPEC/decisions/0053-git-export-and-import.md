@@ -619,18 +619,26 @@ was stored as nested sections, so `ProjectView.log` read as empty, log
 rolling found nothing to roll, and the project board's `newestLogDate` aged
 the project from its import. Now:
 
-- The Log is read from the source lines, fence-aware: a line inside a code
-  fence (```` ``` ```` or `~~~`) that closes is never a heading and is never
-  rewritten. An unclosed fence is read as if it never opened, so it cannot
+- The Log is read from the source lines, fence-aware: a `###` or deeper
+  line inside a code fence (```` ``` ```` or `~~~`) that closes is never a
+  heading and is never rewritten. A `#` or `##` line inside a fence still
+  ends the Log at the document level (the accepted f9 limit), so it is not
+  protected. An unclosed fence is read as if it never opened, so it cannot
   swallow the rest of the Log.
 - Only a dated heading at the entry level opens an entry. The entry level is
   the shallowest level any dated heading uses. Every other line, including
   an undated heading at the entry level and any deeper heading, is text of
   the entry above it. Text before the first dated heading is the Log's
-  preamble and stays at the top, indented only if one of its lines would
-  otherwise re-read as a heading or an entry. A heading Log with no dated
+  preamble and stays at the top. In a heading Log it is always indented,
+  since it becomes the text under the converted Log; in a dash Log it is
+  indented only if one of its lines would otherwise re-read as a heading or
+  an entry. After the first project write, log rolling reads the preamble as
+  the body of the newest entry (no text is lost; dash Logs behaved the same
+  before this fix). A heading Log with no dated
   heading is left exactly as written (review round 1, FW1: f8, f21).
-- A heading under the Log whose title is an owned section (What & Why,
+- A heading under the Log whose title, trimmed of surrounding whitespace
+  (including NBSP, BOM and Unicode spaces, as the document parser trims
+  titles), is an owned section (What & Why,
   Current Status, Next Actions, Decisions, Log, Open Questions, Files, or
   `Open Questions / Risks`) ends the Log there, even inside a fence, and it
   and every section after it stay sections, as before this fix, so
@@ -678,3 +686,11 @@ direction", "Heading Log shape", "Heading Log review round 1 (FW1, FW2)",
 "Dash Log preamble (review round 1 note)", and the rewritten heading test) and
 `packages/core/test/project-board.test.ts` ("ages an imported heading Log
 from its newest heading date").
+
+Review round 2 (recheck, `Reviews/import-log-shapes/r2-recheck.md`): FW1
+and FW2 closed for the reported cases; one wound remained, an owned heading
+with a trailing NBSP, BOM or Unicode space was still absorbed because the
+owned check compared the untrimmed title. Fixed by trimming as
+`parseProjectDoc` does, with a test for all three characters. The fence and
+preamble sentences above were corrected to match the code.
+

@@ -207,6 +207,15 @@ describe('Heading Log review round 1 (FW1, FW2)',()=>{
     v.close();
   });
 
+  it('f19 with a trailing NBSP, BOM or em space on the owned heading still keeps the section',()=>{
+    for(const [i,tail] of ['\u00a0','\ufeff','\u2003'].entries()){
+      const p=planImport([{name:'f19u.md',text:f19.replace('### Next Actions',`### Next Actions${tail}`)}]).projects[0]!;
+      const v=vault(`f19u-${i}.nkv`);const view=v.importProject(p);
+      expect(view.next_actions).toBe('- do the thing');
+      v.close();
+    }
+  });
+
   it('keeps text before the first dated heading as the Log preamble, on top',()=>{
     const source=`# Pre\n\n## Log\n\n### About this log\n\nOldest first.\n\n### 2026-09-01 one\n\na\n\n### 2026-09-02 two\n\nb`;
     const p=planImport([{name:'pre.md',text:source}]).projects[0]!;

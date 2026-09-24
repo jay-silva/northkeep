@@ -473,7 +473,9 @@ function readHeadingLog(doc: ProjectDoc, logSection: ProjectDocSection, lines: s
   let cut = region.length;
   for (let i = 0; i < region.length; i += 1) {
     const m = HEADING_LINE.exec(region[i]!);
-    if (m && owned.has(HEADING_MAP[m[3]!] ?? m[3]!)) { cut = i; break; }
+    // Trimmed as parseProjectDoc trims titles, so NBSP, BOM or a Unicode space at the end still matches.
+    const title = m ? m[3]!.trim() : '';
+    if (m && owned.has(HEADING_MAP[title] ?? title)) { cut = i; break; }
   }
   const headings: Array<{ line: number; level: number; title: string; date: string | null }> = [];
   for (let i = 0; i < cut; i += 1) {
