@@ -90,7 +90,7 @@ for (const kind of ['memory', 'pglite'] as const) {
         () => {},
       );
       expect(r!.purged).toBeGreaterThan(0);
-    });
+    }, 30_000); // several pglite databases; slow CI runners took 5.3 s
   });
 }
 
