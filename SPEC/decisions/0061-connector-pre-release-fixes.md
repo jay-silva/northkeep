@@ -2,10 +2,11 @@
 
 - **Date:** 2026-09-24
 - **Status:** Proposed. Design only, no product code on this branch yet.
-  First design review (2026-09-24): **CLEARED WITH WOUNDS**, one flesh
-  wound (F1) and eleven notes, all closed in the design fix round recorded
-  under Review history. The recheck has not run. Jay's decisions D1 to D4
-  are pending. All three decisions sit behind the CLAUDE.md review gate:
+  Design **CLEARED WITH WOUNDS after the recheck** (2026-09-24). The final
+  design pass that closes the recheck's two wounds (R2-F1, R2-F2) and its
+  notes is **not re-reviewed**. Next step: build exactly this design, then
+  a full adversarial review of the code before merge. Jay's decisions D1
+  to D4 are pending; the build uses the recommendations. All three decisions sit behind the CLAUDE.md review gate:
   Decision 1 changes who decides (it adds a way to reach a route without the
   billing gate), Decision 2 changes how a credential is stored and checked
   (invariant #3 requires an explicit adversarial review before merge), and
@@ -345,7 +346,11 @@ reads, no 429). The order is now, for `POST` on those two paths:
    `mcpAuthRouter`, so a ChatGPT web origin can read our 400 and 429);
 2. **a new per-IP limiter**, built with the app's own `createRateLimiter`,
    50 requests per 15 minutes per client IP (the SDK's numbers), keyed on
-   `clientIp(req)` like the existing IP limiter. It runs before anything
+   Express's `req.ip` under the app's `trust proxy 1` setting, the same key
+   the SDK's `express-rate-limit` uses: the address the nearest proxy
+   appended, never the first `X-Forwarded-For` entry, which the client
+   chooses (recheck R2-F1: the fix round's first-hop key let a rotating
+   first entry bypass the limit behind a proxy). It runs before anything
    parses the body or reads storage, and answers `429` with the SDK's body
    shape (`{"error":"too_many_requests",...}`) and `retry-after`;
 3. the secret check below (the only step that reads storage);
@@ -354,7 +359,24 @@ reads, no 429). The order is now, for `POST` on those two paths:
 
 The new limiter is in-memory per instance, exactly like the SDK's, so the
 bound is per IP per warm instance, the same as today. An unknown
-`client_id` is throttled the same way.
+`client_id` is throttled the same way. An admitted request costs at most
+two client reads (ours, then the SDK's), so the bound is at most 50
+admitted requests per IP, not 50 reads.
+
+**Proxy configuration this key assumes.** `trust proxy 1` means "exactly
+one proxy in front, and it appends the real client address to
+`X-Forwarded-For`". Hosted: Vercel is that proxy and, per its
+request-headers documentation, overwrites the header (not verified by a
+live call). Self-host: run the connector behind exactly one reverse proxy
+(nginx `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`, or
+Caddy's `reverse_proxy`, which appends by default). With more than one
+proxy hop the key is the second-nearest proxy, not the client, and the
+connector's `trust proxy` would need to change. A connector exposed
+directly with no proxy trusts the client's own header, so its key is
+spoofable; that is true of the SDK's limiter today, so it is not a
+regression, but it is not a supported setup. The existing app IP limiter
+on `/mcp`, `/pair`, `/consent` and `/client` still keys on the first hop
+(`clientIp`); that is pre-existing and out of scope (R14).
 
 **CORS.** Our 400 and 429 carry the headers the app's CORS middleware set,
 which reflects only the ChatGPT web origins. The SDK's `cors()` would have
@@ -408,9 +430,10 @@ that as a test against the real implementation.
 5), never in `SCHEMA_STATEMENTS`. It uses one statement per call (ADR 0010)
 and is safe when two cold starts run it at once:
 
-1. `SELECT client_id, client_json FROM oauth_clients WHERE
-   position('"client_secret":' in client_json) > 0`. This is only a cheap
-   prefilter on the key. It deliberately does **not** exclude rows by
+1. `SELECT client_id, client_json, client_secret_hash FROM oauth_clients
+   WHERE position('client_secret' in client_json) > 0`. This is only a
+   cheap prefilter on the key name, loose on purpose so a spaced key
+   still reaches the parser. It deliberately does **not** exclude rows by
    searching the text for `nkcs-scrubbed:`: the first review showed that a
    client registered with `nkcs-scrubbed:` in, say, its `client_name` would
    then be skipped for good and keep its plaintext secret (review a1, a6).
@@ -466,29 +489,33 @@ legacy rows are "already undeliverable": a self-hoster who once ran with
 pending app-written row may exist nowhere else. One restart without that
 flag must not destroy them. So:
 
-- **Hosted production** (`VERCEL` set and `VERCEL_ENV === 'production'`):
-  the purge runs by default. This is the deploy the privacy claim is about.
-- **Everywhere else** (a self-host, local dev, the test suite): the purge
-  runs **only** with the explicit opt-in
-  `NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT=1`. The self-host section of
-  the connector README gets one prominent line saying so, and saying that
-  the purge is permanent.
+- **Everywhere, hosted included,** the purge runs only when **both**
+  explicit flags are on: `NORTHKEEP_CONNECTOR_MAINTENANCE=on` (Decision 5)
+  and `NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT=on`. There is no
+  environment inference (no `VERCEL`, no `VERCEL_ENV`). Jay sets both in
+  the connector's Vercel **Production** environment only.
 - **Always skipped** when `NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT=1`
-  (that operator has chosen to keep and serve the rows), even with the
-  opt-in set, and when all maintenance is off (Decision 5).
+  (that operator has chosen to keep and serve the rows), even with both
+  flags on.
+- **A self-host,** on its own Vercel project or anywhere else, therefore
+  never purges by default (recheck note 5: the fix round's "hosted
+  production" test also matched a self-hoster's own Vercel production).
+  The connector's self-host documentation gets one prominent line: the
+  purge is off unless you set both flags, and it is permanent.
 
-Why opt-in rather than opt-out for self-hosters: an opt-out defaults to
-deleting data the operator may not know they have, which is the failure a
-self-hoster cannot recover from. An opt-in defaults to keeping rows that
-the read gate already hides. The hosted deploy, where we own the claim, is
-the one place the default is to purge.
+Why explicit flags rather than a default: a purge that runs by default
+deletes data an operator may not know they have, which a self-hoster cannot
+recover from, and an environment test cannot tell our production from
+anyone else's. A flag has one meaning everywhere. The purge flag is
+separate from the maintenance flag so the purge can be held back on its own
+while the secret migration and the cleanup run (recheck note 4).
 
 **The statement,** one call (ADR 0010):
 
 ```sql
 WITH d AS (
   DELETE FROM shared_entries WHERE NOT starts_with(content, 'nkc1:') RETURNING 1
-) SELECT count(*) AS purged FROM d
+) SELECT count(*)::int AS purged FROM d
 ```
 
 `starts_with` is used instead of `LIKE` so no wildcard or escape rule can
@@ -527,10 +554,12 @@ either, because decryption fails and the route answers 409 or skips it.
 
 ### 4. Garbage-collect used and expired OAuth codes and tokens
 
-In the same maintenance step, two single statements:
-`DELETE FROM oauth_codes WHERE consumed = true OR expires_at <= now()` and
-`DELETE FROM oauth_tokens WHERE expires_at <= $nowSec` (`expires_at` there
-is seconds, bigint, as `consumeToken` already compares). Each row removed
+In the same maintenance step, two single statements, each counted with the
+same `WITH d AS (DELETE ... RETURNING 1) SELECT count(*)::int FROM d`
+shape: delete from `oauth_codes` where `consumed = true OR expires_at <=
+now()`, and from `oauth_tokens` where `expires_at <= $nowSec` (`expires_at`
+there is seconds, bigint, as `consumeToken` already compares). The code
+also wraps every count in `Number(...)`. Each row removed
 also takes its `dek_wrap` with it. None of these rows can authenticate
 anything (every reader requires unexpired, and codes unconsumed), so this
 changes no behavior, only what a database copy holds. Counts are logged
@@ -539,24 +568,35 @@ the same way as the purge.
 ### 5. One maintenance step, run once per process
 
 A new `ConnectorStorage.maintenance(opts: { purgeLegacyPlaintext: boolean })`
-returns `{ purged, clientsMigrated, clientsUnparsable, clientsSentinelNoHash,
-codesGc, tokensGc }`.
+returns `{ purged, clientsMigrated, clientsUnparsable, clientsCasMissed,
+clientsSentinelNoHash, clientsPlaintextRemaining, codesGc, tokensGc }`.
+`clientsCasMissed` counts rows whose compare-and-swap matched nothing (a
+row that misses on every run is no longer silent, recheck note 8).
+`clientsPlaintextRemaining` is computed after the migration from the parsed
+JSON of every row that has the key; it is the authoritative number for
+Acceptance C.2.
 
-**Whether it runs at all** is decided once per process, from the
-environment, before any storage call:
+**Whether it runs at all** is decided once per process, from two explicit
+flags and nothing else (recheck R2-F2: the fix round's `VERCEL_ENV` test
+missed the very case it named, because a project that hides `VERCEL_ENV`
+hides `VERCEL` too, so it fell into the off-Vercel branch and ran):
 
-- On Vercel (`VERCEL` set): only when `VERCEL_ENV === 'production'`. A
-  preview or development deployment never runs maintenance, whatever
-  database it can reach. If `VERCEL_ENV` is missing (system variables not
-  exposed), it is treated as not production. That fails safe, and the log
-  line says why, so Acceptance C.1 would show it.
-- Off Vercel: the client-secret migration and the GC run; the purge needs
-  its opt-in (Decision 3).
-- `NORTHKEEP_CONNECTOR_MAINTENANCE=off` turns all of it off anywhere, for
-  an operator who wants to hold everything.
+- `NORTHKEEP_CONNECTOR_MAINTENANCE`: on means the secret migration and the
+  code and token cleanup run. Absent, empty, or any other value means
+  nothing runs.
+- `NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT`: on (together with the
+  maintenance flag, and without `NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT=1`)
+  means the purge also runs.
+- **Accepted values**, after trimming whitespace and ignoring case: `on`,
+  `true`, `1`, `yes`. Everything else, including `off`, `false`, `0`, `no`
+  and typos, means off. An unknown value is logged as ignored, by flag
+  name only.
 
-A skipped run logs one line with the reason (for example `connector
-maintenance: skipped (VERCEL_ENV=preview)`), never a database name or URL.
+Jay sets both flags in the connector's Vercel **Production** environment
+only, never Preview or Development. A skipped run logs one line with the
+reason (for example `connector maintenance: skipped
+(NORTHKEEP_CONNECTOR_MAINTENANCE not on)`), never a database name, a URL or
+a flag's value beyond on or off.
 Each part is independent. `createConnectorServer` runs it through a
 memoized promise before the first request is handled (it awaits it). A
 failure is logged (message only) and does not fail the request: every
@@ -588,17 +628,19 @@ too; they pin a property that must not regress.
 | 12 | Rollback fails closed: the SDK's check run against a migrated row's raw `client_json` (old `getClient` semantics) rejects every presented secret | same | n/a (proves the rollback property) |
 | 13 | Migration: a seeded pre-0061 row (plaintext in JSON, hash present, or hash null) ends with the sentinel and `hash = sha256hex(secret)`, the client still authenticates with its old secret, a second run changes nothing, two concurrent runs leave one consistent row, and an unparsable row is skipped and counted | same, PGlite | Yes |
 | 14 | The purge deletes exactly the rows `isEncryptedRow` rejects, over the hostile corpus, and a second run deletes 0 | `adr0061-legacy-purge.test.ts`, PGlite | Yes (no purge exists) |
-| 15 | Nothing is purged: with `NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT=1` (even with the opt-in), or off Vercel without `NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT=1` | same | No, *guard* (old code never purges). It pins the self-host default. |
+| 15 | Nothing is purged with `NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT=1` (even with both flags on), or without the purge flag, or without the maintenance flag | same | No, *guard* (old code never purges). It pins the default. |
 | 16 | `SCHEMA_SQL` contains no `DELETE FROM shared_entries` | same | *guard* |
 | 17 | Every writer to `shared_entries` stores `nkc1:` (the ADR 0020 canary property test, `c3-property.test.ts`, run unchanged, plus a grep-based review check) | existing | *guard* |
 | 18 | GC removes consumed and expired codes and expired tokens only; a live code and a live refresh token still work afterwards | `adr0061-maintenance.test.ts`, PGlite | Yes |
 | 19 | Maintenance logs counts only: the captured log line contains no seeded content, account hash, or id, and the line exists | same | Yes, but only because old code has no line at all (the "line exists" assertion). The privacy half would pass vacuously on old code. |
 | 20 | Clients: a failed unshare shows the new copy on CLI, web and phone; the phone no longer shows subscription copy for an unshare; a 402 on push adds the unshare sentence; no em dash | CLI, web and mobile unit tests beside the existing ones | Yes |
-| 21 | Review F1: 60 `POST /token` requests with a wrong secret for a known confidential `client_id`, from one IP (the review's `a2-secret.mjs` case): at most 50 reach the storage client read, and every request after the 50th gets 429 with `retry-after`. Same on `/revoke`. An unknown `client_id` is throttled the same way. | `adr0061-client-secret.test.ts` | No on `6d67dd2` (the SDK limiter throttles). **Fails on the first-draft order** (review: 60 reads, 0 × 429), which is what this row exists to catch. |
+| 21 | Review F1: 60 `POST /token` requests with a wrong secret for a known confidential `client_id`, from one IP (the review's `a2-secret.mjs` case): at most 50 are admitted (at most two client reads each), and every request after the 50th gets 429 with `retry-after`. Same on `/revoke`. An unknown `client_id` is throttled the same way. | `adr0061-client-secret.test.ts` | No on `6d67dd2` (the SDK limiter throttles). **Fails on the first-draft order** (review: 60 reads, 0 × 429), which is what this row exists to catch. |
 | 22 | A row with the sentinel in its JSON and a NULL hash column is refused with and without a secret, and is counted by maintenance | same | No, *guard* (old `getClient` shows the sentinel as the secret and refuses). Fails on the first-draft rule (review: accepted with no secret). |
 | 23 | A confidential client registered with `nkcs-scrubbed:` in its `client_name` (or any other metadata) is still migrated, and part B's `plaintext_secrets` query counts it before migration and not after | same, PGlite | Yes (no migration on old code). Fails on the first-draft text filter (review a6). |
 | 24 | Lapsed path: an account row with `entitled_until` NULL still gets its rows deleted and tombstoned, but cannot create a new tombstone for a scope with no rows | `adr0061-lapsed-unshare.test.ts`, PGlite | Yes (402 on old code) |
-| 25 | Maintenance does not run with `VERCEL=1` and `VERCEL_ENV` set to `preview`, `development` or unset, nor with `NORTHKEEP_CONNECTOR_MAINTENANCE=off`; it logs the skip reason | `adr0061-maintenance.test.ts` | Yes (no maintenance on old code) |
+| 25 | The flag parser and gate: maintenance runs only for `on`, `true`, `1`, `yes` in any case with surrounding spaces; it does not run when the flag is absent, empty, `off`, `OFF`, `false`, `0`, `no` or a typo, whatever `VERCEL` and `VERCEL_ENV` say (including `VERCEL_ENV=production` with no flag, and neither `VERCEL` nor `VERCEL_ENV` set, the recheck's R2-F2 case); the purge needs its own flag as well, and is skipped with the purge flag off while the migration and cleanup still run; every skip logs its reason | `adr0061-maintenance.test.ts` | Yes (no maintenance on old code) |
+| 27 | Recheck R2-F1: behind one appending proxy, 60 wrong-secret `POST /token` requests whose first `X-Forwarded-For` entry rotates on every request while the appended entry stays constant: at most 50 admitted, then 429 | `adr0061-client-secret.test.ts` | No on `6d67dd2` (the SDK keys on `req.ip`). **Fails on the fix-round keying** (`clientIp`, first hop): 60 admitted, no 429. |
+| 28 | A registration whose `client_name` contains a NUL (`\u0000`) or a lone surrogate does not break the migration (it is migrated or skipped on its parsed value) or the text-based part B queries (they run and return numbers) | `adr0061-client-secret.test.ts`, PGlite | Yes (no migration on old code) |
 | 26 | Counts reach clients as numbers: with a driver stub that returns `int8` as strings (as Neon's HTTP driver does), the unshare answers `"deleted": 2`, a JSON number | `adr0061-lapsed-unshare.test.ts` | Yes (old code 402s a lapsed unshare) |
 
 The full ladder must also stay green: `pnpm -r build`, `pnpm test`, and the
@@ -624,9 +666,12 @@ Two controls, both required:
 1. **Process.** No `fix022/*` branch (and no branch carrying this change)
    is pushed to GitHub before it is merged. The only push is `main`, with
    Jay's OK. Local commits only until then.
-2. **Code.** Maintenance runs on Vercel only when `VERCEL_ENV ===
-   'production'` (Decision 5), so even an accidental branch push cannot run
-   it. The new unshare path and secret check would still run in such a
+2. **Code.** Maintenance runs only when `NORTHKEEP_CONNECTOR_MAINTENANCE`
+   is on, and the purge only when its own flag is on too (Decision 5). Jay
+   sets them in the Production environment only, so an accidental branch
+   push builds a preview without them and cannot run either, whatever
+   database it can reach and whatever Vercel's system-variable setting is.
+   The new unshare path and secret check would still run in such a
    preview; they do not delete anything a user has not asked to delete, and
    they do not rewrite rows.
 
@@ -649,7 +694,12 @@ Every push needs Jay's explicit OK for that push.
 2. Implementation on this branch. Full ladder green. Adversarial review of
    the implementation (Decisions 1 to 4; Decision 2 as the invariant #3
    session), with findings written into this ADR.
-3. Merge to `main`, then **the push, with Jay's OK**. This is the connector
+3. Jay sets, in the connector's Vercel project, Settings, Environment
+   Variables, **Production only** (untick Preview and Development):
+   `NORTHKEEP_CONNECTOR_MAINTENANCE=on` and
+   `NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT=on`. Confirm
+   `NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT` is not set there. Then
+   merge to `main`, then **the push, with Jay's OK**. This is the connector
    deploy. It must land before any client release that relies on it.
    Nothing in 0.22.0 clients *requires* it (the copy is correct either way),
    but the privacy text does.
@@ -718,7 +768,8 @@ Every push needs Jay's explicit OK for that push.
   origin cannot read a failed-authentication body.
 - **R11.** Whether a Vercel preview of this project can reach the
   production connector database is not answerable from the repo (Deploy
-  safety). The `VERCEL_ENV` gate and the no-branch-push rule cover it.
+  safety). The explicit Production-only flags and the no-branch-push rule
+  cover it.
 - **R12.** Out of scope, recorded from the first review (note 11): an
   `X-NB-Entitlement` attestation carries no account, so one valid
   attestation stamps any connector account. It predates this ADR and bears
@@ -726,6 +777,15 @@ Every push needs Jay's explicit OK for that push.
   billing bridge (ADR 0019 C3), not here.
 - **R13.** The SDK's 30-day confidential secret expiry is pre-existing and
   unchanged; see Acceptance C.4.
+- **R14.** The existing app IP limiter (`/mcp`, `/pair`, `/consent`,
+  `/client`) keys on the first `X-Forwarded-For` hop (`clientIp`), which a
+  client behind a self-hoster's proxy can choose. Pre-existing, recorded by
+  the recheck (note 9), out of scope.
+- **R15.** Rows only a direct database writer can make (a spaced or
+  escaped `client_secret` key; a BOM prefix that a driver strips on read)
+  may escape the migration prefilter or lose every compare-and-swap. The
+  first is counted by part B, the second by `clientsCasMissed`; both fail
+  loudly, not silently. Neon's handling of BOM and NUL is unverified.
 
 ## Decisions Jay must make
 
@@ -781,12 +841,15 @@ The first line removes source files the implementation added (a new
 middleware module, for example), so a test that imports one directly
 cannot pass against "old code".
 
-Expect claims 1 to 4, 6, 8, 11, 13, 14, 18, 19 and 23 to 26 to fail.
-Claims 5, 7, 9, 10, 12, 15 to 17, 21 and 22 are guards and may pass. A test
+Expect claims 1 to 4, 6, 8, 11, 13, 14, 18 to 20, 23 to 26 and 28 to fail.
+Claims 5, 7, 9, 10, 12, 15 to 17, 21, 22 and 27 are guards and may pass.
+Claim 20 lives in the CLI, web and mobile test files, not the connector
+ones, so check it with those suites against the old client source the
+same way. A test
 file that fails to compile against the old storage interface counts as
 failing only for rows marked Yes; for a guard row in the same file, rerun
-that row alone after restoring the new code. Claims 21 and 22 are the ones
-that fail on the first-draft design, which no longer exists as code.
+that row alone after restoring the new code. Claims 21, 22 and 27 are the ones
+that fail on earlier drafts of this design, which never existed as code.
 
 ### B. Production, read-only, before the deploy
 
@@ -796,18 +859,28 @@ database). Every query only counts:
 ```sql
 SELECT count(*)::int AS legacy_rows FROM shared_entries WHERE NOT starts_with(content, 'nkc1:');
 SELECT count(*)::int AS confidential_clients FROM oauth_clients WHERE client_secret_hash IS NOT NULL;
-SELECT count(*)::int AS plaintext_secrets FROM oauth_clients WHERE client_json::jsonb ? 'client_secret' AND NOT starts_with(client_json::jsonb ->> 'client_secret', 'nkcs-scrubbed:');
-SELECT count(*)::int AS secret_without_hash FROM oauth_clients WHERE client_secret_hash IS NULL AND client_json::jsonb ? 'client_secret';
-SELECT count(*)::int AS secret_unexpired FROM oauth_clients WHERE client_json::jsonb ? 'client_secret' AND (coalesce((client_json::jsonb ->> 'client_secret_expires_at')::bigint, 0) = 0 OR (client_json::jsonb ->> 'client_secret_expires_at')::bigint > extract(epoch from now()));
+SELECT count(*)::int AS plaintext_secrets FROM oauth_clients WHERE position('"client_secret":"' in client_json) > 0 AND position('"client_secret":"nkcs-scrubbed:' in client_json) = 0;
+SELECT count(*)::int AS secret_without_hash FROM oauth_clients WHERE client_secret_hash IS NULL AND position('"client_secret":"' in client_json) > 0;
+SELECT count(*)::int AS secret_unexpired FROM oauth_clients WHERE position('"client_secret":"' in client_json) > 0 AND (coalesce(substring(client_json from '"client_secret_expires_at":([0-9]+)')::bigint, 0) = 0 OR substring(client_json from '"client_secret_expires_at":([0-9]+)')::bigint > extract(epoch from now()));
 SELECT count(*)::int AS never_entitled_accounts FROM connector_accounts WHERE entitled_until IS NULL;
 ```
 
-The `plaintext_secrets` query decides on the parsed secret, not on a text
-search, so a client name containing `nkcs-scrubbed:` cannot hide a
-plaintext secret from it. If a query that uses `::jsonb` fails with
-"invalid input syntax for type json", some row does not parse. Say so, and
-run this upper bound instead:
-`SELECT count(*)::int FROM oauth_clients WHERE position('"client_secret":' in client_json) > 0;`
+These queries compare text and never cast to `jsonb`. The recheck showed
+that one anonymous `/register` with a NUL or a lone surrogate in its
+`client_name` makes every `::jsonb` query fail with **"unsupported Unicode
+escape sequence"**, so the part B and C queries do not use `jsonb` at all.
+If any of them errors anyway, that message (or any other) is the thing to
+report; do not substitute a different query.
+
+Why the text patterns are safe to read: the store writes `client_json`
+with `JSON.stringify`, which escapes every `"` inside a string value, so
+`"client_secret":"` (quote, key, quote, colon, quote) can only match a real
+key, never text inside `client_name`. Their one limit: a registrant who
+puts a nested object with its own `client_secret` key into their own
+metadata can move the count for their own row only. The migration never
+relies on these counts; it decides on the parsed top-level value. The
+authoritative after-deploy number is `clientsPlaintextRemaining` in the
+maintenance log line (Decision 5).
 
 Any result is fine for the migration and the purge; the design handles 0
 and non-zero alike. `never_entitled_accounts` is no longer a tombstone risk
@@ -818,10 +891,14 @@ numbers down to compare with part C.
 
 1. In Vercel's logs for the connector, find one `connector maintenance:`
    line. It must not say `skipped` (if it does, the reason is on the line;
-   stop and tell Claude). It shows counts only, and `purged` equals part B's `legacy_rows`
-   (or 0 if another instance ran first).
-2. Rerun part B. `legacy_rows` is 0 (unless you opted out, see Deploy
-   safety). `plaintext_secrets` is 0.
+   stop and tell Claude). It shows counts only; `clientsPlaintextRemaining`
+   is 0, and `purged` equals part B's `legacy_rows` (or 0 if another
+   instance ran first).
+2. Rerun part B. `plaintext_secrets` is 0. `legacy_rows` is 0 if
+   `NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT=on` was set in Production;
+   if you deliberately left that flag off, `legacy_rows` is unchanged and
+   the privacy sentence "holds only ciphertext" must wait until you set it
+   and redeploy.
    `confidential_clients` is at least the old `plaintext_secrets`.
 These two checks are read-only and are the whole production acceptance.
 The lapsed unshare itself is proven locally (part A, claims 1 to 4); it is
@@ -898,4 +975,32 @@ it would not take the lapsed path anyway.
     (claim 25), because the repo cannot show whether previews reach the
     production database (R11).
   - D1 to D4 still pending with Jay.
-  - Recheck not yet run.
+- 2026-09-24, recheck (`Reviews/adr-0061/r2-recheck.md`): **CLEARED WITH
+  WOUNDS.** F1 closed on the hosted deploy; ten of eleven notes closed or
+  recorded.
+  - Flesh wound R2-F1: the new limiter keyed on the first
+    `X-Forwarded-For` hop, so behind a self-hoster's appending proxy a
+    rotating first hop bypassed it (60 reads, no 429), a regression from
+    the SDK's `req.ip` key.
+  - Flesh wound R2-F2: the `VERCEL_ENV` fail-safe was unreachable in the
+    case it named (hidden system variables hide `VERCEL` too), and claim 25
+    tested a combination that case never produces.
+  - Notes: part B `::jsonb` queries broken by a NUL in an anonymous
+    registration; claim 21 read count; flag spelling and no purge-only
+    opt-out; self-host on Vercel purged by default; purge and cleanup
+    counts uncast; claim 20 missing from acceptance A; malformed
+    writer-only rows; first-hop keying on the older app limiter.
+- 2026-09-24, final design pass (this revision; **not re-reviewed**):
+  - R2-F1: the limiter keys on `req.ip` under `trust proxy 1`, like the
+    SDK; the self-host proxy setup is stated; claim 27.
+  - R2-F2: no environment inference. Maintenance needs
+    `NORTHKEEP_CONNECTOR_MAINTENANCE=on`, the purge also needs
+    `NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT=on`, accepted values
+    documented, Jay sets both in Production only; claim 25 rewritten.
+  - Notes: purge and cleanup counts cast `::int`; claim 20 back in
+    acceptance A; part B and C queries are text-only and the real error
+    message is named; claim 28 covers NUL and lone surrogates; migration
+    prefilter loosened and `clientsCasMissed` and
+    `clientsPlaintextRemaining` added; claim 21 counts admitted requests;
+    self-host (Vercel or not) never purges by default; R14 and R15 added.
+  - D1 to D4 still pending; the build uses the recommendations.
