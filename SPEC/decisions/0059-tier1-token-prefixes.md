@@ -1,9 +1,10 @@
 # ADR 0059: Tier-1 masks issuer-prefixed API tokens
 
 - **Date:** 2026-09-23
-- **Status:** Proposed, NOT REVIEWED. This changes redaction and publishes a
-  claim in KNOWN-LIMITS, so under the CLAUDE.md review gate it needs an
-  adversarial review before it merges. The implementation sits on branch
+- **Status:** Proposed. First adversarial review CLEARED WITH WOUNDS
+  (2026-09-23); the fix round below addresses the wound, and one open
+  question needs Jay's decision before merge. This changes redaction and
+  publishes a claim in KNOWN-LIMITS, so the CLAUDE.md review gate applies. The implementation sits on branch
   `adr-0059/tier1-tokens`, unmerged, so the reviewer can attack code rather
   than prose.
 - **Deciders:** Jay (product owner), Claude Code
@@ -122,19 +123,26 @@ Decision 3).
 | databricks | `dapi[a-f0-9]{32,}` | gitleaks `databricks-api-token` |
 | sentry | `sntry[us]_[A-Za-z0-9+/=_]{40,}` | gitleaks `sentry-user-token`, `sentry-org-token` |
 | doppler | `dp\.pt\.[A-Za-z0-9]{40,}` | gitleaks `doppler-api-token` |
-| planetscale | `pscale_(?:tkn\|oauth\|pw)_[A-Za-z0-9_.=-]{32,}` | gitleaks `planetscale-*` |
+| planetscale | `pscale_(?:tkn\|oauth\|pw)_[A-Za-z0-9_.=-]{31,}[A-Za-z0-9_=-]` | gitleaks `planetscale-*` (last character may not be `.`, so a sentence's full stop stays outside the mask) |
 | pulumi | `pul-[a-f0-9]{40,}` | gitleaks `pulumi-api-token` |
 | postman | `PMAK-[a-f0-9]{24}-[a-f0-9]{34,}` | gitleaks `postman-api-token` |
 | heroku | `HRKU-AA[A-Za-z0-9_-]{58,}` | gitleaks `heroku-api-key-v2` |
-| onepassword-service | `ops_eyJ[A-Za-z0-9+/]{100,}={0,3}` | gitleaks `1password-service-account-token` |
+| onepassword-service | `ops_eyJ[A-Za-z0-9+/_-]{100,}={0,3}` | gitleaks `1password-service-account-token` (standard base64 there; `-` and `_` added defensively, see below) |
 | age | `AGE-SECRET-KEY-1[0-9A-Z]{58,}` | gitleaks `age-secret-key` |
 | atlassian | `ATATT3[A-Za-z0-9_=-]{100,}` | gitleaks `atlassian-api-token` (the prefixed branch only) |
-| flyio | `fo1_[A-Za-z0-9_-]{43,}` or `fm[12][ar]?_[A-Za-z0-9+/]{100,}={0,3}` | gitleaks `flyio-access-token` |
-| telegram-bot | `\d{8,10}:AA[A-Za-z0-9_-]{32,}` | gitleaks `telegram-bot-api-token` (the token shape, without its keyword anchor) |
+| flyio | `fo1_[A-Za-z0-9_-]{43,}` or `fm[12][ar]?_[A-Za-z0-9+/_-]{100,}={0,3}` | gitleaks `flyio-access-token` (standard base64 there; `-` and `_` added defensively) |
+| telegram-bot | `(?:<guard>\|(?<=<guard>bot))\d{5,16}:A[A-Za-z0-9_-]{33,}` | gitleaks `telegram-bot-api-token` (`[0-9]{5,16}:A` + 34), without its keyword anchor. The second arm matches right after `bot`, the spelling Telegram's own API uses (`api.telegram.org/bot<id>:<secret>/method`); `bot` itself stays outside the mask. `robot<digits>:` is refused by the guard on `bot`. |
 
 Unchanged: PEM private-key blocks, the legacy generic
 `\b(?:sk|pk|rk)[_-](?:live|test|proj)?[_-]?[A-Za-z0-9]{16,}\b` (old OpenAI
 `sk-` keys, `pk_` keys), Google `AIza`, and JWTs.
+
+**The base64url widening (fix round).** gitleaks gives the 1Password
+service-account and Fly `fm1`/`fm2` bodies as standard base64. Whether real
+tokens ever carry base64url characters is unverified here. Adding `-` and
+`_` after these long, specific prefixes costs nothing measurable (both
+sweeps below still find zero new hits) and turns a would-be partial leak
+into a whole mask if they do, so it is done defensively rather than claimed.
 
 ### 2. The table runs before the generic branch
 
@@ -238,10 +246,40 @@ produce no `api_key` span): the bare prefixes in prose (`github_pat_`,
 `ASIA PACIFIC`, `ASIAN`, `SG.1.2.3`), a clock time and a short
 `12345678:AA`, and a prefix glued onto a letter (`xghp_`).
 
-**Accepted over-match:** a string with a real prefix and a long enough body
-is masked even if it is not a valid key (bad checksum, wrong length). That
-is a false positive by design: the cost is one masked non-secret, the
-alternative is a leaked secret.
+**Over-match, and what it really costs.** A string with a real prefix and a
+long enough body is treated as a key even if it is not one. The first draft
+of this ADR costed that as "one masked non-secret". That was wrong for two
+of the consumers. `api_key` is a hard-deny kind, so the same match also:
+
+- **denies a tool call outright**, at the screen, before the gate and with
+  no prompt and no override (`task.ts:67`, `task.ts:773`), and
+- **drops a candidate memory** in distillation (`turn.ts:611-613`).
+
+The first review measured what is newly caught, through the real
+`screenArguments` and a real strict-MCP `runTask`:
+
+- `.env.example`-style placeholders: `STRIPE_SECRET_KEY=sk_test_yourkeyhere`,
+  `sk_test_placeholder`, `sk_live_changeme123`,
+  `sk-ant-api03-your-api-key-goes-here-xxxx`,
+  `sk-proj-your_openai_project_key_here_123`, `ghp_` + 30 `x`, `gsk_` + 40
+  `x`, `hf_` + 34 `x`. Each is denied via the screen.
+- Branch and namespace slugs: `sk-admin-dashboard-redesign-for-q4-launch`,
+  `sk-proj-management-tool-refactor-phase-two`,
+  `sk-ant-dev01-cluster-monitoring-stack`. Denied the same way.
+- Random base64url payloads: the per-leaf false hard-deny rate on 4,000-char
+  leaves roughly doubles, from about 0.06% (12 of 20,000, all the old
+  generic branch) to about 0.13% (26 of 20,000), from `-r8_` or `_hf_`
+  landing at a random position before 30 alphanumerics. Through the full
+  screen: 3 of 3,000 random 3 KB base64url payloads, 0 of 3,000 for base64,
+  hex and printable ASCII.
+- Real text: 0 new hits in 173 M characters of dependency code and the
+  repo's full patch history (the review's sweep, on top of the two below).
+
+So the practical cost is: a user who asks an agent to write an
+`.env.example` file, or to act on a branch named like a key prefix, through
+a strict MCP server or a web tool, gets that call refused with "the request
+carries an API key or token" and cannot approve it. This is an open
+question for Jay, below, not a settled acceptance.
 
 ## Where Tier-1 runs, so the reach of this change
 
@@ -283,6 +321,39 @@ unmasked (invariant 1(b); that path never ran Tier-1).
 | Fixtures are not validly checksummed GitHub or npm tokens | fixture construction | `redact.test.ts` "uses fixtures that fail the GitHub and npm CRC32 checksum" |
 | The exfil screen flags the new shapes as `api_key` (so they hard-deny), plain, percent-encoded, and in a JSON body leaf | `exfil.ts:397` with `task.ts:67` | `exfil.test.ts` "screenArguments: issuer-prefixed API keys (ADR 0059)" |
 | A distilled memory candidate carrying a new shape is dropped, and the prompt to the provider carries the key masked | `turn.ts:611-613`, `turn.ts:385` | `converse.test.ts` "never distills an issuer-prefixed API key into memory (ADR 0059)" |
+| A Telegram bot token is masked in its API URL, curl, webhook, env and bare forms, with `bot` left visible | telegram-bot entry | `redact.test.ts` "masks a Telegram bot token in its API URL, curl, webhook, env and bare forms" |
+| A strict MCP server never receives a Telegram bot token in any of those forms; the call is denied at the screen before any prompt | `exfil.ts:397`, `task.ts:67`, `task.ts:918-921` | `task.test.ts` "runTask: Telegram bot tokens toward a strict MCP server (ADR 0059)" |
+| The CLI leak gate fails if the CLI exits non-zero, writes to stderr, or prints no placeholders | `e2e/m3.test.ts` | the same test |
+
+## Open question for Jay: placeholders and slugs that now hard-deny
+
+**Question.** Accept that placeholder values and key-prefixed slugs are
+hard-denied in tool calls and dropped from memory, or narrow the match?
+
+**Options.**
+
+- **A. Accept as is.** Simplest and loosest against real keys. Cost: the
+  refusals above, with no way to approve them.
+- **B. Raise four minimums toward real key lengths.** Anthropic and
+  `sk-(proj|svcacct|admin)-` bodies from 20 to 40 (real keys run past 90),
+  Stripe from 10 to 16 (the old generic branch's minimum; real keys are
+  long), `r8_` from 30 to 35 (real 37), `hf_` from 30 to 34 (real 34). This
+  releases the two `sk-proj-`/`sk-admin-` slugs, the `sk-proj-...here_123`
+  placeholder, the short Stripe placeholders, and most of the base64url
+  increase. Cost: a real key truncated below the new minimum would leak, and
+  Decision 4's margin against an issuer shortening a key shrinks.
+- **C. Exempt a body that is one character repeated** (`ghp_xxxx...`). Such
+  a body carries no entropy, so it cannot be a real key, and it cannot be
+  used to smuggle one. Cost: small code, small benefit.
+- **D. Exempt bodies containing placeholder words** (`your`, `here`,
+  `example`, `placeholder`, `changeme`). **Not recommended:** the exfil
+  screen exists to stop a prompt-injected model from sending a key out, and
+  this exemption would let it append `_yourkeyhere` to a real key and pass.
+
+**Recommendation.** B and C together, and never D. They remove most of the
+measured false refusals without creating an evasion path, and every new
+minimum stays well under the real key length. Until Jay decides, the code
+ships as A (nothing is weakened silently).
 
 ## Residual (documented, not closed)
 
@@ -303,39 +374,88 @@ unmasked (invariant 1(b); that path never ran Tier-1).
   and JWTs still fail when a token is glued after `_`. Not widened here,
   because widening the generic body is the change most likely to hit slugs
   and branch names.
+- **OpenAI `sk-None-` keys** (an older user-key shape, recalled by the
+  reviewer, not verified from a source used here). With `-` or `_` in the
+  body they leak whole, because the generic branch needs 16 unbroken
+  alphanumerics. Not added: neither gitleaks' `openai-api-key` rule nor any
+  other source this ADR cites names it. A follow-up once sourced.
+- **Real token formats are unverified against reality.** Every fixture is
+  self-built filler, so both the transcription of gitleaks/trufflehog and
+  each issuer's current format are untested against a live token. That is
+  the failure mode this ADR found in the old `sk-proj-` fixture.
 - **A new issuer prefix** is not masked until it is added to the table.
 
 ## Acceptance (Jay, from the CLI)
 
 Run from the worktree after `pnpm -r build`, in a throwaway home so nothing
 touches the real vault. `redact` needs no vault; the home is set anyway.
+Written for zsh (and works in bash): the CLI is a shell function, because
+zsh does not split an unquoted `$NK` into a command and its argument.
 
 ```sh
 export NORTHKEEP_HOME="$(mktemp -d)" NORTHKEEP_NO_KEYCHAIN=1
 F=$(printf 'FakeTestKey0%.0s' 1 2 3 4 5 6 7 8)   # 96 chars of fake filler
-NK="node packages/cli/dist/index.js"
+nk() { node packages/cli/dist/index.js "$@"; }
 ```
 
 1. **The three verified misses, plus a real-shape OpenAI key.**
-   `$NK redact "a sk-ant-api03-$F b github_pat_${F}_$F c gho_${F:0:36} d sk-proj-${F:0:30}_${F:0:30}"`
+   `nk redact "a sk-ant-api03-$F b github_pat_${F}_$F c gho_${F:0:36} d sk-proj-${F:0:30}_${F:0:30}"`
    prints `a [API_KEY_1] b [API_KEY_2] c [API_KEY_3] d [API_KEY_4]`.
 2. **Catalog providers.**
-   `$NK redact "xai-${F:0:80} and sk-or-v1-${F:0:64}"` prints
+   `nk redact "xai-${F:0:80} and sk-or-v1-${F:0:64}"` prints
    `[API_KEY_1] and [API_KEY_2]`.
 3. **Glued after an underscore.**
-   `$NK redact "MY_KEY_ghp_${F:0:36}"` prints `MY_KEY_[API_KEY_1]`.
-4. **Prose is left alone.**
-   `$NK redact "Tokens start with github_pat_ or glpat-; set npm_config_registry; use xai-grok-4."`
+   `nk redact "MY_KEY_ghp_${F:0:36}"` prints `MY_KEY_[API_KEY_1]`.
+4. **Telegram, as its API URL spells it.**
+   `nk redact "curl https://api.telegram.org/bot7012345678:AA${F:0:34}/getMe"`
+   prints `curl https://api.telegram.org/bot[API_KEY_1]/getMe`.
+5. **Prose is left alone.**
+   `nk redact "Tokens start with github_pat_ or glpat-; set npm_config_registry; use xai-grok-4."`
    prints the sentence unchanged.
-5. **Old shapes still masked.**
-   `$NK redact "AKIAIOSFODNN7EXAMPLE and sk_live_${F:0:24}"` prints
+6. **Old shapes still masked.**
+   `nk redact "AKIAIOSFODNN7EXAMPLE and sk_live_${F:0:24}"` prints
    `[API_KEY_1] and [API_KEY_2]`.
-6. **The gates.** `npx vitest run packages/redact` and
+7. **The gates.** `npx vitest run packages/redact` and
    `pnpm exec vitest run --config e2e/vitest.config.ts e2e/m3.test.ts` pass.
-7. **Nothing written.** `ls -A "$NORTHKEEP_HOME"` prints nothing; then
+8. **Nothing written.** `ls -A "$NORTHKEEP_HOME"` prints nothing; then
    `rm -rf "$NORTHKEEP_HOME"`.
 
 ## Review history
 
-- 2026-09-23: Proposed. No adversarial review yet. The reviewer's findings
-  go here, verified against code, not this prose.
+- 2026-09-23: Proposed.
+- 2026-09-23, first review (`Reviews/adr-0059/r1-first-review.md`):
+  **CLEARED WITH WOUNDS.** Executed attacks: 2,310 context cases, old/new
+  shape comparisons, a 173 M-char false-positive sweep (0 new hits), cost at
+  4 KB to 1 MB (new `api_key` alternation linear, at most 9 ms per MB),
+  real-consumer runs (strict-MCP `runTask`, MCP return masking over a real
+  vault, the CLI), a per-entry mutation test (all 36 entries load-bearing),
+  and byte-identical output on the old corpus.
+  - Flesh wound: Telegram bot tokens leaked whole in their canonical
+    `api.telegram.org/bot<id>:<secret>/` spelling at every consumer tested,
+    against a published claim.
+  - Scar tissue: placeholders, key-prefixed slugs and a small share of
+    base64url payloads now hard-deny and drop memories, costed too lightly.
+  - Notes: the acceptance block failed in zsh; `sk-None-` unsourced and
+    leaking; 1Password and Fly alphabets unverified; PlanetScale swallowed a
+    full stop; the e2e CLI gate would pass on a crashed CLI; whole-Tier-1
+    cost is superlinear on some 1 MB inputs under old and new alike (a
+    pre-existing, non-`api_key` detector; recorded outside this ADR).
+- 2026-09-23, fix round:
+  - Telegram: the entry now matches bare and right after `bot`, with the
+    digit and secret ranges from gitleaks (`\d{5,16}:A` + 33 or more). Tests
+    cover the API URL, curl, webhook, env and bare forms through
+    `applyTier1`, and through a strict-MCP `runTask`, where every form is
+    denied at the screen with no prompt and never reaches the server. Both
+    tests fail on the old entry.
+  - Scar tissue: restated with the review's numbers (see "Over-match, and
+    what it really costs") and put to Jay as an open question with a
+    recommendation; no pattern weakened.
+  - `sk-None-`: recorded as residual (no source in hand). 1Password and Fly
+    bodies widened to base64url defensively. PlanetScale no longer swallows
+    a full stop. Acceptance block rewritten with a shell function. The e2e
+    CLI leak gate now asserts exit code 0, empty stderr, every placeholder
+    kind present, and at least one `[API_KEY_n]` per corpus key.
+  - Re-measured after the fix: zero new `api_key` hits against the old
+    detector over the repo text plus log (9.8 M chars), 20,000 dependency
+    docs and type files (132 M chars) and 20,000 dependency code, JSON,
+    YAML, Python and source-map files (118 M chars).
