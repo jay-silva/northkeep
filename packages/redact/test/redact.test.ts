@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { redact, restore } from '../src/index.js';
-import { applyTier1, luhnValid } from '../src/tier1.js';
+import { applyTier1, isRepeatedFillPlaceholder, luhnValid, TOKEN_PREFIX_PATTERNS } from '../src/tier1.js';
+import {
+  FAKE_TOKENS,
+  NEAR_MISSES,
+  passesIssuerChecksum,
+  RECHECK_OVERMATCH,
+  RELEASED_BY_B_AND_C,
+  TELEGRAM_FORMS,
+  TELEGRAM_SECRET,
+  TELEGRAM_WIDE_FORM,
+  TELEGRAM_WIDE_SECRET,
+} from './fake-tokens.js';
 import type { OllamaClient } from '@northkeep/librarian';
 
 describe('Tier-1 behavior', () => {
@@ -27,6 +38,115 @@ describe('Tier-1 behavior', () => {
     const result = await redact('SSN 123-45-6789.', { tier: 1 });
     expect(result.replacements[0]!.restorable).toBe(false);
     expect(restore(result.redacted, result.replacements)).toBe(result.redacted); // stays masked
+  });
+});
+
+describe('Tier-1 issuer-prefixed tokens (ADR 0059)', () => {
+  it('masks every fake token as one whole api_key span, in prose and at string edges', () => {
+    for (const { family, token } of FAKE_TOKENS) {
+      for (const text of [`key ${token} end`, token, `"${token}",`, `export KEY=${token}\n`, `MY_KEY_${token} x`]) {
+        const { text: out, replacements } = applyTier1(text);
+        const hit = replacements.find((r) => r.original === token);
+        expect(hit, `${family} not masked whole in: ${text.slice(0, 40)}`).toBeDefined();
+        expect(hit!.kind).toBe('api_key');
+        expect(out).not.toContain(token.slice(-12));
+      }
+    }
+  });
+
+  it('has a fake token for every family in the pattern table', () => {
+    const covered = new Set(FAKE_TOKENS.map((t) => t.family));
+    for (const { name } of TOKEN_PREFIX_PATTERNS) expect(covered, `no fixture for ${name}`).toContain(name);
+  });
+
+  it('closes the verified gap on 9f8c8c4: Anthropic, fine-grained GitHub, GitHub OAuth, and real-shape OpenAI keys', () => {
+    const find = (f: string) => FAKE_TOKENS.filter((t) => t.family === f).map((t) => t.token);
+    const gap = [...find('anthropic'), ...find('github-fine-grained'), ...find('openai-named')];
+    gap.push(FAKE_TOKENS.find((t) => t.token.startsWith('gh' + 'o_'))!.token);
+    for (const token of gap) expect(applyTier1(`x ${token} y`).text).toBe('x [API_KEY_1] y');
+  });
+
+  it('leaves prefix-sharing prose and identifiers alone (near misses)', () => {
+    for (const text of NEAR_MISSES) {
+      const keys = applyTier1(text).replacements.filter((r) => r.kind === 'api_key');
+      expect(keys.map((r) => r.original), text).toEqual([]);
+    }
+  });
+
+  it('does not stop at a trailing sentence dot inside a GitLab routable token, and drops the dot itself', () => {
+    const token = FAKE_TOKENS.find((t) => t.token.includes('.01.'))!.token;
+    const { text } = applyTier1(`Rotate ${token}.`);
+    expect(text).toBe('Rotate [API_KEY_1].');
+  });
+
+  it('masks a Telegram bot token in its API URL, curl, webhook, env and bare forms, keeping `bot` visible', () => {
+    for (const text of TELEGRAM_FORMS) {
+      const { text: out, replacements } = applyTier1(text);
+      expect(replacements.find((r) => r.original === TELEGRAM_SECRET), text.slice(0, 40)).toBeDefined();
+      expect(out).not.toContain(TELEGRAM_SECRET.slice(-12));
+      if (text.includes('/bot')) expect(out).toContain('/bot[API_KEY_1]/');
+    }
+  });
+
+  it('does not swallow a sentence full stop after a PlanetScale token', () => {
+    const token = FAKE_TOKENS.find((t) => t.family === 'planetscale')!.token;
+    expect(applyTier1(`Rotate ${token}.`).text).toBe('Rotate [API_KEY_1].');
+  });
+
+  it('masks the bot-anchored Telegram shape with the wide id range, but not a bare one', () => {
+    expect(applyTier1(TELEGRAM_WIDE_FORM).text).toBe('https://api.telegram.org/bot[API_KEY_1]/getMe');
+    expect(applyTier1(`id ${TELEGRAM_WIDE_SECRET} end`).replacements.filter((r) => r.kind === 'api_key')).toEqual([]);
+  });
+
+  it('releases placeholders, near-length branch names and repeated-character bodies (options B and C)', () => {
+    for (const text of RELEASED_BY_B_AND_C) {
+      const keys = applyTier1(text).replacements.filter((r) => r.kind === 'api_key');
+      expect(keys.map((r) => r.original), text).toEqual([]);
+    }
+  });
+
+  it('still masks real-length fake keys at and just above the raised minimums', () => {
+    const f = (n: number) => 'FakeTest0Key9'.repeat(10).slice(0, n);
+    const atMinimum = [
+      'sk-ant-' + 'api03-' + f(40),
+      'sk-' + 'proj-' + f(40),
+      'sk-' + 'admin-' + f(20) + '_' + f(19),
+      'sk' + '_test_' + f(16),
+      'r8' + '_' + f(35),
+      'hf' + '_' + f(34),
+      'api_' + 'org_' + f(34),
+    ];
+    for (const token of atMinimum) expect(applyTier1(`x ${token} y`).text, token).toBe('x [API_KEY_1] y');
+  });
+
+  it('exempts only a genuinely repeated body: a real-entropy body with a short run is still masked', () => {
+    expect(isRepeatedFillPlaceholder('gh' + 'p_' + 'x'.repeat(36))).toBe(true);
+    const mixed = 'gh' + 'p_' + 'x'.repeat(19) + 'FakeTest0Key9FakeT';
+    expect(isRepeatedFillPlaceholder(mixed)).toBe(false);
+    expect(applyTier1(`t ${mixed} u`).text).toBe('t [API_KEY_1] u');
+    // The longest prefix (PyPI, 20 chars) still fits the exemption's allowance.
+    const longPrefixFill = 'pypi-' + 'AgE' + 'IcHlwaS5vcmc' + 'x'.repeat(50);
+    expect(applyTier1(`t ${longPrefixFill} u`).text).toBe(`t ${longPrefixFill} u`);
+    // Twenty-one non-run characters is past the allowance, so it stays masked.
+    const pastAllowance = 'gh' + 'p_' + 'FakeTest0Key9FakeT' + 'x'.repeat(30);
+    expect(isRepeatedFillPlaceholder(pastAllowance)).toBe(false);
+    expect(applyTier1(`t ${pastAllowance} u`).text).toBe('t [API_KEY_1] u');
+  });
+
+  it('does not hard-deny the identifiers the recheck caught with the widened Telegram and Fly shapes', () => {
+    for (const text of RECHECK_OVERMATCH) {
+      const keys = applyTier1(text).replacements.filter((r) => r.kind === 'api_key');
+      expect(keys.map((r) => r.original), text).toEqual([]);
+    }
+  });
+
+  it('uses fixtures that fail the GitHub and npm CRC32 checksum, so none is a validly issued shape', () => {
+    const checksummed = FAKE_TOKENS.filter((t) => /^(?:gh[pousr]_|npm_)/.test(t.token));
+    expect(checksummed.length).toBe(6);
+    for (const { token } of checksummed) {
+      const cut = token.indexOf('_') + 1;
+      expect(passesIssuerChecksum(token.slice(0, cut), token.slice(cut)), token.slice(0, cut)).toBe(false);
+    }
   });
 });
 

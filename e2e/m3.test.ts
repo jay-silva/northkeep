@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { LEAK_CORPUS } from '../packages/redact/test/corpus.js';
+import { LEAK_CORPUS, survivingWindow } from '../packages/redact/test/corpus.js';
 
 /**
  * M3 acceptance, driven through the real CLI:
@@ -25,7 +25,7 @@ let fakeUrl: string;
 function cli(
   args: string[],
   opts: { stdin?: string; ollama?: string } = {},
-): Promise<{ stdout: string; stderr: string }> {
+): Promise<{ stdout: string; stderr: string; code: number }> {
   return new Promise((resolve, reject) => {
     const child = execFile(
       process.execPath,
@@ -34,11 +34,16 @@ function cli(
         env: {
           PATH: process.env.PATH ?? '',
           NORTHKEEP_NO_KEYCHAIN: '1',
+          // Keep the child CLI out of the real home even if a command writes.
+          NORTHKEEP_HOME: path.join(dir, 'home'),
           ...(opts.ollama ? { NORTHKEEP_OLLAMA_URL: opts.ollama } : { NORTHKEEP_OLLAMA_URL: 'http://127.0.0.1:9' }),
         },
         encoding: 'utf8',
       },
-      (err, stdout, stderr) => (err && !stderr ? reject(err) : resolve({ stdout, stderr })),
+      (err, stdout, stderr) =>
+        err && !stderr
+          ? reject(err)
+          : resolve({ stdout, stderr, code: err ? (typeof err.code === 'number' ? err.code : 1) : 0 }),
     );
     if (opts.stdin !== undefined) {
       child.stdin!.write(opts.stdin);
@@ -82,8 +87,20 @@ afterAll(async () => {
 describe('M3 acceptance — redaction', () => {
   it('leak gate: the CLI masks every seeded secret (zero misses)', async () => {
     const blob = LEAK_CORPUS.map((s) => s.sentence).join(' ');
-    const { stdout } = await cli(['redact', blob, '--tier', '1']);
-    const leaked = LEAK_CORPUS.filter((s) => stdout.includes(s.secret)).map((s) => s.secret);
+    const { stdout, stderr, code } = await cli(['redact', blob, '--tier', '1']);
+    // A crashed CLI prints nothing and would pass the leak check vacuously.
+    expect(code, stderr).toBe(0);
+    // A harmless runtime warning may appear on stderr; an error or stack may not.
+    expect(stderr).not.toMatch(/(?:error|exception|fatal)\b|^\s+at\s/im);
+    for (const kind of ['API_KEY', 'EMAIL', 'SSN', 'CREDIT_CARD', 'PHONE', 'IP', 'IBAN']) {
+      expect(stdout, `no [${kind}_n] placeholder in CLI output`).toMatch(new RegExp(`\\[${kind}_\\d+\\]`));
+    }
+    const keyCount = LEAK_CORPUS.filter((s) => s.kind === 'api_key').length;
+    expect((stdout.match(/\[API_KEY_\d+\]/g) ?? []).length).toBeGreaterThanOrEqual(keyCount);
+    // A window check, not includes(): a partly masked key still leaks (ADR 0059).
+    const leaked = LEAK_CORPUS.filter((s) => stdout.includes(s.secret) || survivingWindow(s.secret, stdout)).map(
+      (s) => s.secret,
+    );
     expect(leaked, `leaked: ${leaked.join(', ')}`).toEqual([]);
   });
 

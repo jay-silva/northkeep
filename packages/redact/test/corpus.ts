@@ -1,7 +1,9 @@
 import type { SecretKind } from '../src/types.js';
+import { FAKE_TOKENS } from './fake-tokens.js';
 
 /**
- * The leak-test corpus: 50 seeded secrets embedded in realistic sentences.
+ * The leak-test corpus: seeded secrets embedded in realistic sentences, plus
+ * one sentence per synthetic issuer-prefixed token (ADR 0059).
  * Every `secret` MUST be gone from the Tier-1 output — zero misses allowed
  * (CLAUDE.md engineering standard; runs in CI on every commit).
  *
@@ -84,4 +86,21 @@ export const LEAK_CORPUS: SeededSecret[] = [
   { kind: 'ip', secret: '2001:db8::1', sentence: 'Assigned 2001:db8::1 today.' },
   // contiguous 10-digit phone (keyword-anchored)
   { kind: 'phone', secret: '6175550182', sentence: 'Call 6175550182 now.' },
+
+  // Issuer-prefixed tokens (ADR 0059): Anthropic, real-shape OpenAI, all
+  // GitHub token types, GitLab, npm, PyPI, Hugging Face, xAI, OpenRouter and
+  // the rest of TOKEN_PREFIX_PATTERNS. Built at runtime in fake-tokens.ts.
+  ...FAKE_TOKENS.map(({ family, token }) => ({
+    kind: 'api_key' as const,
+    secret: token,
+    sentence: `The ${family} credential ${token} was pasted by mistake.`,
+  })),
 ];
+
+/** True when any 8-character window of `secret` survives in `text` (partial-mask detector). */
+export function survivingWindow(secret: string, text: string): boolean {
+  for (let i = 0; i + 8 <= secret.length; i += 1) {
+    if (text.includes(secret.slice(i, i + 8))) return true;
+  }
+  return false;
+}

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { redact } from '../src/index.js';
 import { applyTier1 } from '../src/tier1.js';
-import { LEAK_CORPUS } from './corpus.js';
+import { LEAK_CORPUS, survivingWindow } from './corpus.js';
 
 /**
  * THE LEAK TEST (CLAUDE.md engineering standard). A corpus of seeded secrets
@@ -18,10 +18,25 @@ describe('leak test — zero Tier-1 misses', () => {
     expect(missed, `LEAKED ${missed.length} secrets:\n${missed.join('\n')}`).toEqual([]);
   });
 
-  it('masks every secret when all 50 appear in one blob', () => {
+  // `includes(secret)` passes when only part of a key is masked, which is how
+  // a body with `-` or `_` used to fail (ADR 0059). Keys must be masked whole,
+  // and no 8-char window of any secret may survive.
+  it('masks every API key as one whole span and leaves no 8-char window of any secret', () => {
+    const partial: string[] = [];
+    for (const { kind, secret, sentence } of LEAK_CORPUS) {
+      const { text, replacements } = applyTier1(sentence);
+      if (kind === 'api_key' && !replacements.some((r) => r.original === secret)) partial.push(`whole: ${secret}`);
+      if (survivingWindow(secret, text)) partial.push(`window: ${secret}`);
+    }
+    expect(partial, partial.join('\n')).toEqual([]);
+  });
+
+  it('masks every secret when all of them appear in one blob', () => {
     const blob = LEAK_CORPUS.map((s) => s.sentence).join('\n');
     const { text } = applyTier1(blob);
-    const leaked = LEAK_CORPUS.filter((s) => text.includes(s.secret)).map((s) => s.secret);
+    const leaked = LEAK_CORPUS.filter((s) => text.includes(s.secret) || survivingWindow(s.secret, text)).map(
+      (s) => s.secret,
+    );
     expect(leaked).toEqual([]);
   });
 

@@ -21,23 +21,86 @@ interface Detector {
 // (NBSP, thin space, narrow no-break space).
 const SEP = '[ .\\-\\u00A0\\u2009\\u202F]';
 
+/**
+ * Issuer-prefixed token shapes (ADR 0059). Each body is a MINIMUM length over
+ * the issuer's full alphabet, looser than gitleaks/trufflehog on purpose: an
+ * issuer lengthening a key or adding `-`/`_` must not turn a mask into a full
+ * leak. The leading guard is "no letter or digit before", not \b, so a token
+ * glued after `_` (MY_KEY_ghp_...) still matches. Exported so tests iterate
+ * the same table the detector compiles.
+ */
+export const TOKEN_PREFIX_PATTERNS: ReadonlyArray<{ name: string; pattern: string }> = [
+  { name: 'anthropic', pattern: '(?<![A-Za-z0-9])sk-ant-[a-z]{2,10}\\d{2}-[A-Za-z0-9_-]{40,}' },
+  { name: 'openai-named', pattern: '(?<![A-Za-z0-9])sk-(?:proj|svcacct|admin)-[A-Za-z0-9_-]{40,}' },
+  { name: 'stripe', pattern: '(?<![A-Za-z0-9])[rs]k_(?:live|test|prod)_[A-Za-z0-9]{16,}' },
+  { name: 'openrouter', pattern: '(?<![A-Za-z0-9])sk-or-v1-[A-Za-z0-9]{32,}' },
+  { name: 'github', pattern: '(?<![A-Za-z0-9])gh[pousr]_[A-Za-z0-9]{30,}' },
+  { name: 'github-fine-grained', pattern: '(?<![A-Za-z0-9])github_pat_[A-Za-z0-9_]{40,}' },
+  {
+    name: 'gitlab',
+    pattern:
+      '(?<![A-Za-z0-9])gl(?:pat|dt|ptt|rt|cbt|ft|ffct|imt|agent|oas|soat)-[A-Za-z0-9_-][A-Za-z0-9_.-]{18,}[A-Za-z0-9_-]',
+  },
+  { name: 'gitlab-runner-registration', pattern: '(?<![A-Za-z0-9])GR1348941[A-Za-z0-9_-]{20,}' },
+  { name: 'slack', pattern: '(?<![A-Za-z0-9])xox[baprse]-[A-Za-z0-9-]{10,}' },
+  { name: 'slack-app', pattern: '(?<![A-Za-z0-9])xapp-\\d-[A-Za-z0-9-]{10,}' },
+  { name: 'npm', pattern: '(?<![A-Za-z0-9])npm_[A-Za-z0-9]{36,}' },
+  { name: 'pypi', pattern: '(?<![A-Za-z0-9])pypi-AgE[A-Za-z0-9_-]{50,}' },
+  { name: 'huggingface', pattern: '(?<![A-Za-z0-9])(?:hf|api_org)_[A-Za-z0-9]{34,}' },
+  { name: 'xai', pattern: '(?<![A-Za-z0-9])xai-[A-Za-z0-9_]{50,}' },
+  { name: 'groq', pattern: '(?<![A-Za-z0-9])gsk_[A-Za-z0-9]{40,}' },
+  { name: 'replicate', pattern: '(?<![A-Za-z0-9])r8_[A-Za-z0-9_-]{35,}' },
+  { name: 'perplexity', pattern: '(?<![A-Za-z0-9])pplx-[A-Za-z0-9]{40,}' },
+  {
+    name: 'aws-access-key',
+    pattern: '(?<![A-Za-z0-9])(?:AKIA|ASIA|ABIA|ACCA)[0-9A-Z]{16}(?![A-Za-z0-9])',
+  },
+  { name: 'aws-bedrock', pattern: '(?<![A-Za-z0-9])ABSK[A-Za-z0-9+/]{100,}={0,2}' },
+  { name: 'sendgrid', pattern: '(?<![A-Za-z0-9])SG\\.[A-Za-z0-9_-]{16,}\\.[A-Za-z0-9_-]{30,}' },
+  { name: 'digitalocean', pattern: '(?<![A-Za-z0-9])do[opr]_v1_[a-f0-9]{64,}' },
+  { name: 'shopify', pattern: '(?<![A-Za-z0-9])shp(?:at|ca|pa|ss)_[a-fA-F0-9]{32,}' },
+  { name: 'linear', pattern: '(?<![A-Za-z0-9])lin_api_[A-Za-z0-9]{40,}' },
+  { name: 'notion', pattern: '(?<![A-Za-z0-9])(?:ntn_[A-Za-z0-9]{40,}|secret_[A-Za-z0-9]{43,})' },
+  { name: 'databricks', pattern: '(?<![A-Za-z0-9])dapi[a-f0-9]{32,}' },
+  { name: 'sentry', pattern: '(?<![A-Za-z0-9])sntry[us]_[A-Za-z0-9+/=_]{40,}' },
+  { name: 'doppler', pattern: '(?<![A-Za-z0-9])dp\\.pt\\.[A-Za-z0-9]{40,}' },
+  { name: 'planetscale', pattern: '(?<![A-Za-z0-9])pscale_(?:tkn|oauth|pw)_[A-Za-z0-9_.=-]{31,}[A-Za-z0-9_=-]' },
+  { name: 'pulumi', pattern: '(?<![A-Za-z0-9])pul-[a-f0-9]{40,}' },
+  { name: 'postman', pattern: '(?<![A-Za-z0-9])PMAK-[a-f0-9]{24}-[a-f0-9]{34,}' },
+  { name: 'heroku', pattern: '(?<![A-Za-z0-9])HRKU-AA[A-Za-z0-9_-]{58,}' },
+  { name: 'onepassword-service', pattern: '(?<![A-Za-z0-9])ops_eyJ[A-Za-z0-9+/]{100,}={0,3}' },
+  { name: 'age', pattern: '(?<![A-Za-z0-9])AGE-SECRET-KEY-1[0-9A-Z]{58,}' },
+  { name: 'atlassian', pattern: '(?<![A-Za-z0-9])ATATT3[A-Za-z0-9_=-]{100,}' },
+  { name: 'flyio', pattern: '(?<![A-Za-z0-9])(?:fo1_[A-Za-z0-9_-]{43,}|fm[12][ar]?_[A-Za-z0-9+/]{100,}={0,3})' },
+  // Right after `bot` as Telegram's own API URLs spell it
+  // (api.telegram.org/bot<id>:<secret>/method), where `bot` anchors gitleaks'
+  // wide id range and stays visible; bare, only the narrow `<8-10>:AA` shape,
+  // because a wide bare range hits ids like `order:123456:Awaiting...`.
+  {
+    name: 'telegram-bot',
+    pattern:
+      '(?<=(?<![A-Za-z0-9])bot)\\d{5,16}:A[A-Za-z0-9_-]{33,}|(?<![A-Za-z0-9])\\d{8,10}:AA[A-Za-z0-9_-]{32,}',
+  },
+];
+
 const DETECTORS: Detector[] = [
   {
     kind: 'api_key',
-    // PEM blocks; OpenAI sk-/sk-proj-; Stripe sk_live_/rk_live_/pk_test_;
-    // AWS; GitHub; Slack; Google; and JWTs (three base64url segments).
+    // PEM blocks; the issuer-prefixed table above, placed BEFORE the generic
+    // sk/pk/rk branch because alternation is first-match at a position and the
+    // generic branch would otherwise claim a partial span; legacy OpenAI sk-
+    // and pk_/rk_ keys; Google; JWTs.
     regex: new RegExp(
       [
         '-----BEGIN[ A-Z]*PRIVATE KEY-----[\\s\\S]*?-----END[ A-Z]*PRIVATE KEY-----',
+        ...TOKEN_PREFIX_PATTERNS.map((p) => p.pattern),
         '\\b(?:sk|pk|rk)[_-](?:live|test|proj)?[_-]?[A-Za-z0-9]{16,}\\b',
-        '\\bAKIA[0-9A-Z]{16}\\b',
-        '\\bghp_[A-Za-z0-9]{36}\\b',
-        '\\bxox[baprs]-[A-Za-z0-9-]{10,}\\b',
         '\\bAIza[0-9A-Za-z_-]{35}\\b',
         '\\beyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\b', // JWT
       ].join('|'),
       'g',
     ),
+    valid: (m) => !isRepeatedFillPlaceholder(m),
     restorable: false,
   },
   {
@@ -172,6 +235,23 @@ const DETECTORS: Detector[] = [
     restorable: false,
   },
 ];
+
+/**
+ * ADR 0059 option C: a key-shaped match whose body is one character repeated
+ * (`ghp_xxxx...`) carries no entropy, so it is a placeholder, not a key. The
+ * run must be 20+ long and leave at most 20 other characters (room for the
+ * longest prefix), so at most a 20-char fragment of a real key could ride
+ * along, no more than splitting a key already leaks.
+ */
+export function isRepeatedFillPlaceholder(match: string): boolean {
+  let best = 0;
+  let run = 0;
+  for (let i = 0; i < match.length; i += 1) {
+    run = i > 0 && match[i] === match[i - 1] ? run + 1 : 1;
+    if (run > best) best = run;
+  }
+  return best >= 20 && match.length - best <= 20;
+}
 
 export function luhnValid(candidate: string): boolean {
   const digits = candidate.replace(/[^\d]/g, '');
