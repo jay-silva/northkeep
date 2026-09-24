@@ -17,6 +17,7 @@ import {
   connectorSyncSummary,
   formatPairingCountdown,
   mcpUrlFor,
+  newlySharedMessage,
   runConnectorSyncNow,
   runShareScope,
   runUnshareScope,
@@ -288,6 +289,7 @@ describe('runConnectorSyncNow', () => {
       held: 0,
       held_scopes: [],
       pushed: 9,
+      newlyShared: [],
     });
   });
 
@@ -319,6 +321,7 @@ describe('runConnectorSyncNow', () => {
       held: 0,
       held_scopes: [],
       pushed: 2,
+      newlyShared: [],
     });
   });
 
@@ -391,7 +394,10 @@ describe('runConnectorSyncNow', () => {
       },
     });
     expect(pushedWith).toEqual([['project:hosted-thing']]);
-    expect(outcome).toMatchObject({ kind: 'synced', added: 1, pushed: 1 });
+    expect(outcome).toMatchObject({ kind: 'synced', added: 1, pushed: 1, newlyShared: ['project:hosted-thing'] });
+    // The screen's summary tells the user the project is now Shared and that edits push.
+    expect(connectorSyncSummary(outcome as never)).toContain(newlySharedMessage('project:hosted-thing'));
+    expect(newlySharedMessage('project:hosted-thing')).toMatch(/now marked Shared\. Later edits to it are pushed/);
   });
 
   it('still refuses without a pairing, and never calls the connector', async () => {

@@ -96,4 +96,23 @@ describe('Sharing: Sync now button (ADR 0050 Decision 5)', () => {
     await listeners.get('sharePairBtn')!();
     expect($('shareSyncBtn').disabled).toBe(false);
   });
+
+  it('tells the user when a sync marked a newly arrived project Shared', async () => {
+    const binding = script.match(/\$\('shareSyncBtn'\)\.addEventListener\('click',[\s\S]*?\n {2}\}\);/)?.[0] ?? '';
+    expect(binding).not.toBe('');
+    const nodes = new Map<string, Record<string, unknown>>();
+    let listener: (() => Promise<void>) | undefined;
+    const $ = (id: string) => {
+      if (!nodes.has(id)) {
+        nodes.set(id, { textContent: '', hidden: true, disabled: false, style: {},
+          addEventListener: (_: string, fn: () => Promise<void>) => { listener = fn; } });
+      }
+      return nodes.get(id)!;
+    };
+    const api = async () => ({ added: 1, forgotten: 0, deduped: 0, pushed: 1, held_messages: [], newly_shared: ['project:hosted-thing'] });
+    const context = vm.createContext({ $, api });
+    vm.runInContext(`const loadSharing = async () => {}; ${binding}`, context);
+    await listener!();
+    expect($('shareSyncResult').textContent).toContain('"project:hosted-thing" came from a connected app and is now marked Shared. Later edits to it are pushed');
+  });
 });

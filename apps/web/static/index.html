@@ -1037,7 +1037,7 @@
       Everything is private by default. You share one scope at a time, on purpose.</p>
     <div class="banner" style="margin:16px 0 22px">
       <strong>Sharing is different from Sync. What you share leaves this Mac, and the apps you connect read it in full.</strong>
-      <div style="margin-top:6px">There it is stored encrypted, and NorthKeep holds no key in the database to read it: the key is rebuilt for each request from your app's own credential plus a secret held in our server. This is not end-to-end encryption, the server briefly decrypts in memory to answer each request, and the AI app you connect reads the result. The server can still see each shared scope's name, how many memories it holds, and when they change. Only scopes you turn on here ever leave this Mac, a private scope never does. You can unshare anytime, which deletes it from the server.</div>
+      <div style="margin-top:6px">There it is stored encrypted, and NorthKeep holds no key in the database to read it: the key is rebuilt for each request from your app's own credential plus a secret held in our server. This is not end-to-end encryption, the server briefly decrypts in memory to answer each request, and the AI app you connect reads the result. The server can still see each shared scope's name, how many memories it holds, and when they change. Only shared scopes ever leave this Mac, and a scope becomes shared when you turn it on here, with one exception: a new project one of your AI apps creates, which this Mac does not have yet, is marked Shared when it arrives, and later edits to it are pushed. What an app writes into one of your private projects is held until you share it. You can unshare anytime, which deletes it from the server.</div>
     </div>
     <h3 class="sect">Connector server</h3>
     <div class="card">
@@ -1051,7 +1051,8 @@
     <h3 class="sect">Scopes</h3>
     <div class="card">
       <p class="muted" style="margin:0 0 12px;font-size:13px">Every scope is <strong>private</strong> until
-        you turn Share on. Turning it on shows a confirmation first. A shared scope wears a
+        you turn Share on, and turning it on shows a confirmation first. The one exception:
+        a new project one of your AI apps creates, which this Mac does not have yet, is marked Shared when it arrives, and later edits to it are pushed. What an app writes into one of your private projects is held until you share it. A shared scope wears a
         <span class="badge shared" style="vertical-align:middle">SHARED</span> badge here.</p>
       <div id="shareScopeList"><p class="muted">Loading…</p></div>
       <div class="err" id="shareScopeErr"></div>
@@ -1099,7 +1100,8 @@
     <div class="card">
       <p class="muted" style="margin:0 0 10px;font-size:13px">Pull memories you created (or forgot) inside your
         AI apps back into this vault, then re-push so the server matches. Pushes only your shared scopes. Once this
-        Mac is paired it also brings in a new project created in a connected app.</p>
+        Mac is paired it also brings in a new project an AI app created: that project is marked Shared,
+        and later edits to it are pushed.</p>
       <div class="row"><button class="btn" id="shareSyncBtn">Sync now</button></div>
       <p class="muted" id="shareSyncResult" hidden style="margin:10px 0 0;font-size:13px"></p>
       <div class="err" id="shareSyncErr"></div>
@@ -5446,7 +5448,7 @@
     // shared_scopes: null and we show an unlock prompt instead of guessing.
     if (!s.unlocked) {
       list.appendChild(el('p', 'muted',
-        'Your vault is locked. Unlock it to see and manage sharing — the shared-scope list lives inside the vault, so it syncs to every device.'));
+        'Your vault is locked. Unlock it to see and manage sharing: the shared-scope list lives inside the vault, so it syncs to every device.'));
       return;
     }
     const shared = new Set(s.shared_scopes || []);
@@ -5697,6 +5699,9 @@
       // Held rows are the whole point of a sync that pulled nothing: a connected
       // app wrote to a project this device keeps private.
       (r.held_messages || []).forEach(function (m) { text += '\n' + m; });
+      (r.newly_shared || []).forEach(function (s) {
+        text += '\n"' + s + '" came from a connected app and is now marked Shared. Later edits to it are pushed; unshare it above to stop.';
+      });
       out.style.whiteSpace = 'pre-line';
       out.textContent = text;
     } catch (e) {

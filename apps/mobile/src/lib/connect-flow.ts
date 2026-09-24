@@ -278,7 +278,7 @@ export interface ConnectorDownSyncCounts {
 }
 
 export type ConnectorSyncOutcome =
-  | ({ kind: 'synced'; pushed: number } & ConnectorDownSyncCounts)
+  | ({ kind: 'synced'; pushed: number; newlyShared: string[] } & ConnectorDownSyncCounts)
   | ({
       /**
        * The down-sync landed, but every scope was unshared while it ran, so the
@@ -300,6 +300,7 @@ export type ConnectorSyncOutcome =
        * memories arrived AND the re-push failed (suggest running sync again).
        */
       kind: 'partially-synced';
+      newlyShared: string[];
       pushFailure: ConnectorFailure;
     } & ConnectorDownSyncCounts)
   | { kind: 'nothing-shared'; message: string }
@@ -348,17 +349,19 @@ export async function runConnectorSyncNow(ports: ConnectorSyncPorts): Promise<Co
   // user STILL shares may be pushed (revocation honesty; see the doc above).
   // The fold can also have ADDED a scope here, and that one is pushed.
   const fresh = await ports.store.load();
+  // Scopes the fold marked Shared in this run (ADR 0050): the screen says so.
+  const newlyShared = fresh.filter((s) => !scopes.includes(s));
   if (fresh.length === 0) {
     const reason = scopes.length === 0 ? 'nothing-shared' : 'unshared-mid-sync';
     return { kind: 'synced-no-push', reason, ...down };
   }
   try {
     const { pushed } = await ports.pushScopes(fresh);
-    return { kind: 'synced', ...down, pushed };
+    return { kind: 'synced', ...down, pushed, newlyShared };
   } catch (err) {
     // The memories already landed in the vault; only the re-push failed. Keep
     // both halves visible instead of hiding the successful down-sync.
-    return { kind: 'partially-synced', ...down, pushFailure: classifyConnectorError(err) };
+    return { kind: 'partially-synced', ...down, newlyShared, pushFailure: classifyConnectorError(err) };
   }
 }
 
@@ -372,13 +375,25 @@ export function canSyncNow(state: { sharedCount: number; paired: boolean }): boo
   return state.sharedCount > 0 || state.paired;
 }
 
+/** A project an AI app created arrived and the fold marked it Shared (ADR 0050). */
+export function newlySharedMessage(scope: string): string {
+  return `"${scope}" came from a connected app and is now marked Shared. Later edits to it are pushed; unshare it to stop.`;
+}
+
 /**
  * Human summary of a completed sync-now, shown under the button. Pass
  * `pushedBack: false` for the partially-synced and synced-no-push outcomes,
  * where the closing "pushed back" sentence would be a lie.
  */
 export function connectorSyncSummary(
-  r: { added: number; forgotten: number; deduped: number; held_scopes?: readonly string[]; skipped?: number },
+  r: {
+    added: number;
+    forgotten: number;
+    deduped: number;
+    held_scopes?: readonly string[];
+    skipped?: number;
+    newlyShared?: readonly string[];
+  },
   opts?: { pushedBack?: boolean },
 ): string {
   const memories = (n: number) => (n === 1 ? '1 new memory' : `${n} new memories`);
@@ -401,6 +416,7 @@ export function connectorSyncSummary(
   }
   // A held project is the whole point of a sync that landed nothing: say which
   // one, and what sharing it would do.
+  for (const scope of r.newlyShared ?? []) parts.push(newlySharedMessage(scope));
   for (const scope of r.held_scopes ?? []) parts.push(holdMessage(heldSlug(scope)));
   if ((r.skipped ?? 0) > 0) {
     parts.push(

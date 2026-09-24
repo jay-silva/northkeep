@@ -181,7 +181,10 @@ export default function ManageScopes() {
       </View>
       <FieldLabel>Scopes</FieldLabel>
       <Text style={styles.footnote}>
-        Every scope is private until you turn Share on. Turning it on shows a confirmation first.
+        Every scope is private until you turn Share on, and turning it on shows a confirmation
+        first. One exception: a new project an AI app creates, which this phone does not have yet,
+        is marked Shared when it arrives, and later edits to it are pushed. What an app writes into
+        one of your private projects is held until you share it.
       </Text>
       {rows.length === 0 ? (
         <Text style={styles.footnote}>No scopes yet. Add memories, then share a scope here.</Text>
@@ -232,8 +235,8 @@ export default function ManageScopes() {
             copies; your vault keeps everything.
           </Text>
           <Text style={styles.confirmBody}>
-            Sharing applies to this scope on every device that syncs this vault — including your
-            Mac — and so does unsharing.
+            Sharing applies to this scope on every device that syncs this vault, including your
+            Mac, and so does unsharing.
           </Text>
           <Button
             title="Share this scope"
@@ -283,7 +286,8 @@ export default function ManageScopes() {
       <Text style={styles.footnote}>
         Pull memories you created (or forgot) inside your AI apps back into this vault, then
         re-push so the server matches. Pushes only your shared scopes. Once this phone is paired
-        it also brings in a new project created in a connected app.
+        it also brings in a new project an AI app created: that project is marked Shared, and later
+        edits to it are pushed.
       </Text>
       <Button
         title="Sync app-written memories"

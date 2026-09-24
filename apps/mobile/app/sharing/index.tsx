@@ -77,7 +77,8 @@ export default function SharingHub() {
         <Text style={styles.footnote}>Loading...</Text>
       ) : shared.length === 0 ? (
         <Text style={styles.footnote}>
-          Nothing is shared. Every scope stays on this phone until you turn it on.
+          Nothing is shared. Every scope stays on this phone until you turn it on, except a new
+          project an AI app creates, which is marked Shared when it arrives.
         </Text>
       ) : (
         <View style={styles.summaryCard}>

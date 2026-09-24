@@ -523,6 +523,7 @@ describe('POST /api/share/sync and /api/share/pair (ADR 0050 Decision 5)', () =>
     expect(body.added).toBe(1);
     expect(body.held).toBe(0);
     expect(body.scopes).toContain('project:hosted-thing');
+    expect((res.body as { newly_shared: string[] }).newly_shared).toEqual(['project:hosted-thing']);
     expect(puts).toHaveLength(1);
     expect(puts[0]!.scopes).toContain('project:hosted-thing');
   });
