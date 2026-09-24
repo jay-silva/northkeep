@@ -27,7 +27,8 @@ export type NerMode = 'ok' | 'offline' | ((text: string, call: number) => 'ok' |
 const ENV_KEYS = ['NORTHKEEP_HOME', 'NORTHKEEP_MASTER_KEY', 'NORTHKEEP_SCOPES', 'NORTHKEEP_NO_KEYCHAIN', 'NORTHKEEP_REDACT_TIER', 'NORTHKEEP_OLLAMA_URL'];
 
 export function names(): string[] {
-  return ['Zyler Okonkwo', 'Quennell Abernathy-Vos'];
+  // 'invalid_request': a real 3B model once tagged our own error code as an org.
+  return ['Zyler Okonkwo', 'Quennell Abernathy-Vos', 'invalid_request'];
 }
 
 export function createHarness(opts: { ner?: NerMode } = {}): Harness {

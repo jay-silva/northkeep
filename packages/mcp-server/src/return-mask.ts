@@ -85,7 +85,10 @@ function yearOf(value: string): string {
 async function walk(value: unknown, kind: 'memory' | 'project', ctx: MaskContext, key?: string): Promise<unknown> {
   if (typeof value === 'string') {
     if (key !== undefined && HANDLE_KEYS.has(key)) return value;
-    const userText = kind === 'memory' ? key === 'content' : !(key !== undefined && PROJECT_IDENTIFIER_KEYS.has(key));
+    // `code` is our own error code in a refusal payload, never user text.
+    const userText = kind === 'memory'
+      ? key === 'content'
+      : !(key !== undefined && (PROJECT_IDENTIFIER_KEYS.has(key) || key === 'code'));
     if (userText) return maskText(value, ctx);
     if (ctx.tier === 3 && ((key !== undefined && DATE_KEYS.has(key) && /^\d{4}/.test(value)) || FULL_DATE.test(value))) {
       return yearOf(value);

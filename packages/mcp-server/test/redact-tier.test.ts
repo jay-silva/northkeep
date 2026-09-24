@@ -165,6 +165,7 @@ describe('ADR 0060 D4: return tiers over MCP', () => {
       const create = await call('project_create', { project: `p${tier}`, what_why: 'w', status: 's' });
       expect(create.isError, tier).toBe(true);
       expect(text(create)).toContain(contentWriteRefusal(Number(tier) as 1 | 2 | 3));
+      expect(JSON.parse(text(create)).error.code, tier).toBe('invalid_request');
       const edit = await call('memory_edit', { id, content: 'Person-1 moved.' });
       expect(edit.isError, tier).toBe(true);
       expect(text(edit)).toContain(contentWriteRefusal(Number(tier) as 1 | 2 | 3));
