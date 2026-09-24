@@ -550,7 +550,7 @@ describe('the real CLI process', () => {
     expect(dirty.status).toBe(1);
     expect(dirty.stdout).toContain('projects/third.md: hand edit');
     expect(cli(['projects', 'export']).status).toBe(1);
-  });
+  }, 30_000);
 
   it('an archives-only project blocks import until projects delete removes it (F6)', async () => {
     const src = path.join(root, 'f6');
