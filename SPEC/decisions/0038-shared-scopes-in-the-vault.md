@@ -320,6 +320,12 @@ whole push. Name every conflicting scope in the body. The other still-shared
 scopes are not permanently stuck: the user can unshare the conflicting one
 locally (`DELETE /client/scope/:scope` is not gated) and push the rest.
 
+**Correction 2026-09-24 (ADR 0061):** "is not gated" was false when
+written. Until ADR 0061, `DELETE /client/scope/:scope` ran the billing gate
+like every other connector route and answered 402 once an account's
+entitlement stamp lapsed. ADR 0061 removes the entitlement check from that
+route only; it is now covered by bearer ownership of the connector token.
+
 **Do not reuse ADR 0020's 409. Pin 412 (planner N4).** Every client switches
 on status only and never reads error bodies (`pushSharedScopes`). A "409
 with a distinct error field" is unimplementable without breaking that

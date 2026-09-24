@@ -15,6 +15,8 @@ import {
   startPairing,
   tokenHash,
   unshareScope,
+  UNSHARE_FAILED_MESSAGE,
+  UNSHARE_LOCAL_SAVE_FAILED_MESSAGE,
   type ConnectorConfig,
 } from '@northkeep/sync';
 import { promptLine } from './prompt.js';
@@ -211,25 +213,33 @@ export async function shareRemoveCmd(
 ): Promise<void> {
   const cfg = requireConfig(fail);
   const deviceSecret = deviceSecretOrFail(fail);
-  let outcome: { deleted: number; wasShared: boolean } | { error: string };
+  let outcome: { deleted: number; wasShared: boolean } | { error: string; stage: 'server' | 'local' };
   outcome = await withVault(async (vault) => {
     foldSidecarScopesIntoVault(vault);
     const wasShared = vault.sharedScopes().includes(scope);
     // Server delete FIRST, local unmark second (same ordering as always): a
     // failed delete leaves the mark honestly in place rather than the vault
     // claiming private while the server still holds rows.
+    let deleted: number;
     try {
-      const { deleted } = await unshareScope({ server: cfg.server, deviceSecret, scope });
-      vault.setScopeShared(scope, false);
-      vault.save();
-      return { deleted, wasShared };
+      ({ deleted } = await unshareScope({ server: cfg.server, deviceSecret, scope }));
     } catch (err) {
       // Nothing to roll back: the fold-in saves itself, and the unmark never
-      // happened — the mark honestly stays until the server delete succeeds.
-      return { error: err instanceof Error ? err.message : String(err) };
+      // happened, so the mark honestly stays until the server delete succeeds.
+      return { error: err instanceof Error ? err.message : String(err), stage: 'server' as const };
     }
+    try {
+      vault.setScopeShared(scope, false);
+      vault.save();
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err), stage: 'local' as const };
+    }
+    return { deleted, wasShared };
   });
-  if ('error' in outcome) fail(`Could not unshare on the connector server: ${outcome.error}`);
+  if ('error' in outcome) {
+    const lead = outcome.stage === 'local' ? UNSHARE_LOCAL_SAVE_FAILED_MESSAGE : UNSHARE_FAILED_MESSAGE;
+    fail(`${lead} (${outcome.error})`);
+  }
   if (!outcome.wasShared) {
     console.log(`Scope '${scope}' was not marked shared. Unshared on the server anyway to be safe.`);
   }

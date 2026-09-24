@@ -118,6 +118,25 @@ export async function deriveKek(label: string, secret: string, pepper: Uint8Arra
   return s.crypto_generichash(DEK_BYTES, k1, pepper);
 }
 
+/** Fresh random bytes (libsodium), e.g. a per-process key or a sentinel's filler. */
+export async function randomBytesSodium(n: number): Promise<Uint8Array> {
+  const s = await sodium();
+  return s.randombytes_buf(n);
+}
+
+/** Keyed BLAKE2b (32 bytes) of a utf8 message, as hex. ADR 0061 bound client-secret values. */
+export async function keyedHashHex(key: Uint8Array, message: string): Promise<string> {
+  const s = await sodium();
+  return Buffer.from(s.crypto_generichash(32, s.from_string(message), key)).toString('hex');
+}
+
+/** Constant-time equality (libsodium memcmp); false on a length mismatch. */
+export async function constantTimeEqual(a: Uint8Array, b: Uint8Array): Promise<boolean> {
+  if (a.length !== b.length || a.length === 0) return false;
+  const s = await sodium();
+  return s.memcmp(a, b);
+}
+
 /** A fresh random 32-byte per-account data-encryption key. */
 export async function generateDek(): Promise<Uint8Array> {
   const s = await sodium();

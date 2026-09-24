@@ -8,11 +8,25 @@
  * Env: PUBLIC_URL (the deployed https origin, e.g. https://connector.northkeep.ai)
  * so OAuth metadata advertises absolute URLs that match the deploy; plus a
  * Postgres URL for the connector's SEPARATE Neon database (ADR 0016).
+ *
+ * SELF-HOSTERS (ADR 0061): nothing is purged unless you set BOTH
+ * NORTHKEEP_CONNECTOR_MAINTENANCE=on and
+ * NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT=on; the purge of pre-encryption
+ * rows is permanent. Run behind exactly one reverse proxy that appends
+ * X-Forwarded-For (trust proxy 1).
  */
 import { createConnectorServer } from './create-server.js';
 import { NeonConnectorStorage } from './neon-storage.js';
 import { resolveDatabaseUrl } from './db-url.js';
 import type { ConnectorStorage } from './storage.js';
+
+// Last-resort guard (ADR 0061 F2): an async error that escapes every route
+// handler is logged by message only (a driver error's params can include an
+// account hash) and never exits the process.
+process.on('unhandledRejection', (reason) => {
+  // eslint-disable-next-line no-console
+  console.error('connector unhandled rejection:', reason instanceof Error ? reason.message : 'error');
+});
 
 const databaseUrl = resolveDatabaseUrl();
 const storage: ConnectorStorage = databaseUrl ? new NeonConnectorStorage(databaseUrl) : missingDbStorage();
@@ -44,6 +58,7 @@ function missingDbStorage(): ConnectorStorage {
   };
   return {
     upsertAccount: fail,
+    hasAccount: fail,
     setEntitledUntil: fail,
     getEntitledUntil: fail,
     ensureAccountDekWrap: fail,
@@ -52,6 +67,9 @@ function missingDbStorage(): ConnectorStorage {
     consumePairingCode: fail,
     getClient: fail,
     registerClient: fail,
+    getClientRecord: fail,
+    listClientSecretCandidates: fail,
+    casClientRow: fail,
     putCode: fail,
     getCode: fail,
     consumeCode: fail,
@@ -64,6 +82,7 @@ function missingDbStorage(): ConnectorStorage {
     replaceScopes: fail,
     replaceScopesAcceptingReshare: fail,
     deleteScope: fail,
+    unshareScope: fail,
     listTombstones: fail,
     getEntry: fail,
     deleteEntry: fail,
@@ -73,5 +92,7 @@ function missingDbStorage(): ConnectorStorage {
     ackEntry: fail,
     applyForget: fail,
     appendAudit: fail,
+    purgeLegacyPlaintext: fail,
+    gcOAuth: fail,
   };
 }
