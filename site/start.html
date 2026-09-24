@@ -70,7 +70,7 @@
   <li>Pick your provider: Claude, OpenAI, Gemini, Grok, or OpenRouter. The wizard links you to the provider's key page, and shows relative cost up front.</li>
   <li>Paste your API key. It is stored in your Mac's Keychain, never in a file, and never sent to us.</li>
 </ol>
-<p class="tip">Want fully local instead? Install <a href="https://ollama.com">Ollama</a> and NorthKeep will detect it and offer a one-click model install. Local chats never leave your machine at all.</p>
+<p class="tip">Want fully local instead? Install <a href="https://ollama.com">Ollama</a> and NorthKeep will detect it and offer a one-click model install. With Tools off, local chats never leave your machine at all.</p>
 </div>
 
 <div class="step">
@@ -91,7 +91,7 @@
   <li>Send a message containing something sensitive, or attach a document with the paperclip.</li>
   <li>On the reply, open <strong>"What left this machine"</strong>. You will see every masked item, real value to placeholder, plus the exact text that was sent. Shown on your screen only, never stored.</li>
 </ol>
-<p class="tip">Tier 1 masks secrets and identifiers like emails, phones, account numbers, and street addresses, always. Tier 2 also pseudonymizes names. Tier 3 adds blanket date masking, built for working with sensitive documents.</p>
+<p class="tip">Tier 1 always masks keys with a known issuer prefix, card numbers, SSNs, emails, phones, labeled account numbers, and street addresses; a key with no recognizable prefix or a password is not caught. Tier 2 also pseudonymizes names. Tier 3 adds blanket date masking, built for working with sensitive documents.</p>
 </div>
 
 <div class="step">

@@ -53,28 +53,28 @@
 <p>A short standing instruction tells connected agents to read the live project at the start of a session and write status when they finish. It is advisory: a session that ends abruptly wrote nothing.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>Sync replay hardening and share revocation</h3>
-<p>Your synced vault now carries a sealed generation counter, so a sync server that serves you an older copy of your own vault is refused. Unsharing a scope now also blocks a lagging device from re-pushing it. Honest limits: two devices that edit simultaneously produce copies the counter cannot order, and a brand-new machine's first download has nothing to compare against.</p></div>
+<p>Your synced vault now carries a sealed generation counter, so a sync server that serves you an older copy of your own vault is refused. On our hosted connector, unsharing a scope now also blocks a lagging device from re-pushing it. Honest limits: two devices that edit simultaneously produce copies the counter cannot order, and a brand-new machine's first download has nothing to compare against.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>Cloud Connect (Beta)</h3>
-<p>Your chosen memory scopes reach Claude, ChatGPT, and Manus wherever you use them, including your phone. Shared content is encrypted at rest and the server stores no key that can read it.</p></div>
+<p>Your chosen memory scopes reach Claude, ChatGPT, and Manus wherever you use them, including your phone. Shared content is encrypted at rest, the connector database holds no key that can read it, and the server decrypts it briefly to answer each request.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>Cross-app conversation journal</h3>
 <p>Your AI apps summarize your conversations into your vault automatically, so your history survives switching apps. Step 9 in the <a href="./start.html">getting-started guide</a>.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>Tiered on-device redaction, up to Tier 3</h3>
-<p>Secrets, names, dates, addresses, and record numbers masked on your machine before anything is sent, with on-screen proof of exactly what left.</p></div>
+<p>Identifiers such as keys with a known issuer prefix, card numbers, addresses, and record numbers, plus names and dates at the higher tiers, masked on your machine before anything is sent, with on-screen proof of exactly what left. A key with no recognizable prefix or a password is not caught.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>Web search and fetch, with per-call approval</h3>
-<p>Your chat can look things up on the web. The first call to any site stops and asks, showing the exact search or address it is about to send, and you can allow it once, allow that site from then on, or refuse. Afterwards it shows you precisely what left your machine. Off unless you turn it on.</p></div>
+<p>Your chat can look things up on the web. The first call to any site stops and asks, showing the exact search or address it is about to send, and you can allow it once, allow that site from then on, or refuse. Afterwards it shows you everything it sent, as you approved it; masking can only remove from that. Off unless you turn it on.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>Your own tools, under the same approval gate</h3>
 <p>Your chat can use MCP servers you configure, starting with your vault itself, so it can search your memories while it answers. You approve what a server offers before it can run anything, and it stops working if those tools change. Tools that only read can be remembered; anything that changes something asks every time.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>Connect a service you sign in to</h3>
-<p>Beyond tools that run on your Mac, your chat can use a remote MCP service you sign in to with your own account. Signing in needs your vault passphrase, and NorthKeep shows you where the service wants to send you before any browser opens. Its calls always get the secret-masking floor, and a chat you have pinned private refuses them outright. Providers like Google require you to create the OAuth client yourself, so this is a paste-two-values setup, not one click.</p></div>
+<p>Beyond tools that run on your Mac, your chat can use a remote MCP service you sign in to with your own account. Signing in needs your vault passphrase, and NorthKeep shows you where the service wants to send you before any browser opens. Its call arguments always get the Tier-1 masking floor, and a chat you have pinned private refuses them outright. Providers like Google require you to create the OAuth client yourself, so this is a paste-two-values setup, not one click.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>Model concierge</h3>
-<p>Automatic model routing per message, under a privacy ceiling you set. A chat you have pinned private is never silently escalated to a cloud model, and every reply tells you which model answered and why.</p></div>
+<p>Automatic model routing per message, under a privacy ceiling you set. A chat you have pinned private is never silently escalated to a cloud model, and every reply tells you which model answered, and in Auto mode why.</p></div>
 
 <h2>In testing</h2>
 <div class="card"><span class="tag">Beta</span>
@@ -84,8 +84,8 @@
 <h3>PDF attachments on the phone</h3>
 <p>The same on-device extraction the Mac app uses: the PDF never leaves your phone, only its redacted text does.</p></div>
 <div class="card"><span class="tag">Beta</span>
-<h3>Apple Intelligence masking pass</h3>
-<p>An extra on-phone model pass that pseudonymizes names the deterministic rules do not know. It ships only when it beats our published evaluation bar.</p></div>
+<h3>On-phone name recognition pass</h3>
+<p>An extra on-phone pass, using the name recognizer built into iOS, that pseudonymizes names the deterministic rules do not know. It runs on every cloud chat turn in the current iPhone build.</p></div>
 <div class="card"><span class="tag">Beta</span>
 <h3>Set up from your phone, no Mac required</h3>
 <p>Create your vault, back up your recovery secret, turn on Sync and Cloud Connect, and pair your AI apps entirely from the iPhone app. In the TestFlight build now.</p></div>

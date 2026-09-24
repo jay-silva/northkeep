@@ -3,22 +3,28 @@
 > This is a Jay-enters-in-App-Store-Connect checklist, not code. It maps
 > NorthKeep's actual data handling (see `legal/PRIVACY.md`, `KNOWN-LIMITS.md`,
 > CLAUDE.md invariant #5) to the App Store Connect "App Privacy" questionnaire.
-> Two items are genuine judgment calls, flagged for counsel. Not legal advice.
+> Three items are genuine judgment calls, flagged for counsel. Not legal advice.
 
 ## The honest baseline
 
 NorthKeep collects **no telemetry, no analytics, no tracking, no usage or
-diagnostic data**. The only data that ever leaves the device is (a) the
+diagnostic data**. The data that can reach NorthKeep's servers is (a) the
 end-to-end-encrypted vault blob and a version number, sent to a sync server the
-user configures, and (b) a one-way hashed account identifier used to match that
-blob to the user's sync account. This build has no in-app purchase, so the app
+user configures, (b) a one-way hashed account identifier used to match that
+blob to the user's sync account, and (c) if the user shares a scope with Cloud
+Connect, that scope's memories, stored on NorthKeep's connector encrypted at rest
+and decrypted briefly on the server to answer each request from the user's
+connected AI apps (see judgment call 3). Separately, a Converse message, after
+on-device redaction, goes directly to the AI provider the user configured, not
+to NorthKeep. This build has no in-app purchase, so the app
 itself creates no billing record; the app never touches card or email data
 (Stripe-hosted checkout happens off-app on desktop/web).
 
 ## Start here: is there ANY sync in the reviewed build?
 
 Yes. Settings lets the user set a sync server URL, and the app pushes/pulls the
-encrypted vault. So you **cannot** select the blanket "Data Not Collected" for
+encrypted vault. Settings also opens Cloud Connect, which uploads any scope the
+user shares (see judgment call 3). So you **cannot** select the blanket "Data Not Collected" for
 the whole app. You must disclose the sync data honestly, as below.
 
 ## Per-category answers to enter
@@ -75,7 +81,7 @@ subscription state; in the current build it does not, see the flag).*
 - Does the app track users across apps/websites owned by other companies? **No.**
 - No third-party SDKs, no ad identifiers, no ATT prompt needed.
 
-## Two judgment calls to confirm with counsel
+## Three judgment calls to confirm with counsel
 
 1. **Is client-side-encrypted content "collected"?** Apple's definition covers
    data transmitted off-device and stored beyond a transient request. The vault
@@ -87,9 +93,15 @@ subscription state; in the current build it does not, see the flag).*
    marking Financial Info "Not Collected by the app" and naming Stripe as
    processor is defensible and matches `legal/PRIVACY.md`. Confirm this is how
    counsel wants it presented.
+3. **Cloud Connect shared scopes.** The phone app can share a scope with
+   NorthKeep's connector (Settings, Cloud Connect). That content is stored
+   server-side beyond a transient request and, unlike the sync blob, the server
+   can decrypt it while answering a request. This answer sheet does not yet
+   list it; decide with counsel how to disclose it before submitting.
 
 ## Consistency check
 
 These answers must agree with `legal/PRIVACY.md` and the privacy policy URL you
-enter in App Store Connect. They do as written. If the app later adds in-app
+enter in App Store Connect. Re-check before submitting: `legal/PRIVACY.md` does
+not yet describe the iPhone app (it says NorthKeep runs on macOS today). If the app later adds in-app
 purchase or any analytics, this label must be revised before that build ships.

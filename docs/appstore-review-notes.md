@@ -11,8 +11,9 @@ NorthKeep is a local-first, encrypted memory vault for AI. Your notes and
 memories are stored in an encrypted database on the device itself. There is no
 NorthKeep account and no login required to use the app locally. Nothing is
 readable until you unlock the vault with a passphrase you choose on the device.
-The app does not phone home, contains no analytics or tracking, and collects no
-personal data (see the App Privacy answers).
+The app does not phone home and contains no analytics or tracking. It sends
+nothing to NorthKeep unless the user turns on sync or Cloud Connect (see the App
+Privacy answers).
 
 Because everything is encrypted at rest and gated behind a vault, a reviewer who
 just installs the app sees a locked/empty state, not the product. Two paths let
@@ -49,12 +50,16 @@ the create-vault, unlock, and Converse (AI chat) flows, use the next path.
 
 - Converse is "bring your own key" (BYOK). The user connects an AI model of their
   choice (for example Anthropic or OpenAI) with their own API key. NorthKeep is
-  not an AI provider and ships no built-in model in this build.
-- Before any message is sent, NorthKeep runs an on-device redaction pass that
-  masks secrets (emails, phone numbers, SSNs, card numbers, IP addresses, API
-  keys) out of the outbound text. A persistent banner states plainly that only
-  this Tier-1 masking is active on the phone. A "What left this device" view
-  shows the exact text that was sent.
+  not an AI provider and ships no built-in model in this build. On a device with
+  Apple Intelligence, Converse can also run entirely on the phone with no key.
+- Before any message is sent to a cloud provider, NorthKeep runs an on-device
+  redaction pass. It always masks API keys with a known issuer prefix, card
+  numbers, SSNs, emails, phone numbers, IP addresses and similar identifiers,
+  every full date (reduced to its year), and dictionary-listed names, and the iOS name recognizer adds
+  a pass for other names, orgs, and places. A key with no recognizable prefix or
+  a password is not caught. A persistent banner states which of these
+  protections is active. A "What left this device" view shows the exact text
+  that was sent.
 - The AI conversation is private to the user and stays on the device (plus the
   chosen provider). It is not shared with other users and there is no social or
   public feed. This is not user-generated content in the social sense.
@@ -64,8 +69,8 @@ the create-vault, unlock, and Converse (AI chat) flows, use the next path.
 - There is no account or login to use NorthKeep locally.
 - This build has **no in-app purchase**. The optional hosted sync subscription is
   arranged outside the app (on the desktop app / web via Stripe-hosted checkout).
-  In the app, Settings only lets a user point at a sync server URL; it does not
-  sell anything.
+  In the app, Settings lets a user turn on sync and Cloud Connect against a
+  server; no screen shows a price, a purchase link, or a way to buy.
 
 ## Permissions the app requests
 
@@ -78,14 +83,15 @@ the create-vault, unlock, and Converse (AI chat) flows, use the next path.
 
 NorthKeep is publicly available open-source software (AGPL-3.0,
 github.com/jay-silva/northkeep) that uses only standard published cryptography
-via libsodium. `ITSAppUsesNonExemptEncryption` is set to false on the
+via libsodium and the open-source @noble libraries. `ITSAppUsesNonExemptEncryption` is set to false on the
 open-source exemption basis.
 
 ---
 
 ## Flag for Jay (decide before submitting): demo Converse key
 
-Converse needs a working API key to return a reply. The demo vault is read-only
+On a device without Apple Intelligence, Converse needs a working API key to
+return a reply. The demo vault is read-only
 and does not exercise Converse, so a reviewer cannot see the AI chat produce a
 response without a key. Options:
 

@@ -32,7 +32,7 @@ lowest frequency / "does not contain") for every content question:
 - **Unrestricted Web Access: No.** NorthKeep has no in-app web browser. It does
   not load arbitrary web pages.
 - **User-Generated Content: No.** The user's memories and AI chats are private
-  and stay on the device. There is no social feed, no sharing to other users, no
+  to the user. There is no social feed, no sharing to other users, no
   public or multi-user content. (If the questionnaire's UGC definition is broad,
   see the note below; the honest position is that nothing is shared to other
   users.)
@@ -44,7 +44,8 @@ lowest frequency / "does not contain") for every content question:
 ## AI chat / AI-generated content: disclose honestly: Yes
 
 NorthKeep's Converse feature is an AI chat. It connects to an AI model the user
-chooses with their own API key (BYOK), and NorthKeep does not filter or moderate
+chooses with their own API key (BYOK), or to Apple Intelligence on the device,
+and NorthKeep does not filter or moderate
 what that third-party model returns. Apple's 2025 update requires developers to
 account for AI assistant/chatbot functionality when rating an app.
 

@@ -28,7 +28,7 @@ NorthKeep works two ways:
 
 Memories groups your vault by collection. Projects brings together current status, next actions, decisions, questions and file references, with Resume, Checkpoint and Wrap up. Local project saves check for newer changes before writing and retain saved versions. File references do not open or verify their targets. Review handles memory curation; Connect groups assistant setup.
 
-The Projects implementation is local and owner accepted. Its handoff checks cover one local vault; existing hosted sync behavior is unchanged.
+The Projects implementation is local and owner accepted. Its handoff checks cover one local vault; the hosted connector's project tools do not have these revision checks.
 
 ## Install
 
@@ -85,7 +85,7 @@ someone else's app, for that, use Converse.
 Converse, available through `northkeep converse` in the terminal,
 is a chat surface where the privacy runs itself. On every message NorthKeep
 retrieves relevant memory,
-masks secrets *before* anything leaves the machine, calls the model you picked,
+masks identifiers (and, at Tier 2 and up, names) *before* anything leaves the machine, calls the model you picked,
 restores names in the reply locally, distills what's worth keeping into the
 vault (visibly, with one-click undo), and writes a content-free audit row.
 
@@ -103,10 +103,10 @@ Point it at **any** OpenAI-compatible endpoint, Ollama, LM Studio, vLLM,
 llama.cpp on a LAN box, a hosted API, or at Claude natively. Every endpoint
 wears an honest badge derived from where it actually is: **private** (loopback
 or your LAN, model traffic never leaves your network) or **bounded** (a cloud host, where
-Tier-1 masking always runs before send, and the audit log proves what was
-masked). There is no way to send unredacted text to a remote endpoint, not a
+Tier-1 masking always runs before send, a per-turn view shows exactly what was
+masked, and the audit log records which tier ran). There is no way to send unredacted text to a remote endpoint, not a
 setting, a code path that doesn't exist. In **Auto** mode a concierge routes
-each message to the cheapest capable model you've connected; you can pin a
+each message to a capable model you've connected, favoring the cheapest; you can pin a
 model, pin a task to a model, or force private-only.
 
 ### Tools (optional, off by default)
@@ -116,8 +116,9 @@ plus any MCP server you add, local (a program on your machine, over stdio) or
 remote (an HTTPS service you sign in to, macOS only, tokens live in your
 Keychain and never in a file). Every tool call is approved by you, per call or
 under a grant you create at a live prompt and can revoke, and the arguments
-are screened and masked before they are sent; a per-turn proof shows exactly
-what left. A chat pinned private-only refuses remote MCP tools outright.
+are screened, then masked before they go to the web, a remote server, or a
+local server you have not marked trusted; a per-turn proof shows what left
+(for web calls, as you approved it, before masking). A chat pinned private-only refuses remote MCP tools outright.
 `KNOWN-LIMITS.md` states precisely what these tools do and do not send.
 
 ## Bring your memory with you
@@ -135,8 +136,8 @@ northkeep import paste its-answer.md   # …and imports what it said
 ```
 
 Extraction runs entirely on your machine (Ollama + a local model, localhost
-only, enforced). Every import ends in a review step: nothing enters your vault
-unseen.
+only, enforced). Every import ends in a review step, so nothing enters your
+vault unseen unless you skip review with `--yes` on the CLI.
 
 ## Sync it to another machine
 
@@ -165,8 +166,9 @@ northkeep sync subscribe   # prints a secure Stripe checkout link
 northkeep sync billing     # manage or cancel (Stripe billing portal)
 ```
 
-We store only whether your subscription is active, linked to your **encrypted**
-account, never your card or the contents of your vault.
+We store only your subscription status and its Stripe customer and subscription
+IDs, linked to your **hashed** account identifier, never your card or the
+contents of your vault.
 
 ## Share scopes with your AI apps (optional connector)
 
@@ -216,7 +218,9 @@ echo "Call Bob Henderson, SSN 123-45-6789, at 774-555-0134" | northkeep redact -
 echo "Dear Person-1, ..." | northkeep restore --map /tmp/m.json
 ```
 
-Tier 1 masks secrets (emails, SSNs, cards, keys) deterministically; Tier 2 swaps
+Tier 1 deterministically masks keys with a known issuer prefix, card numbers,
+SSNs, emails, phone numbers and similar identifiers (a key with no recognizable
+prefix, or a password, is not caught); Tier 2 swaps
 names and orgs for consistent placeholders using a local model and can restore
 them in the AI's reply. All on your machine. It's a tool you route text
 *through*, NorthKeep can't scrub a prompt you type straight into a chat app,

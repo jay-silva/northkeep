@@ -25,8 +25,8 @@ Owner: Silva Peak Labs, LLC (d/b/a NorthKeep) · Expo/EAS owner `j_silva`
 ## 2. Jay sets in App Store Connect (portal, not repo)
 
 - **App Privacy** answers per `docs/appstore-privacy-label.md` (disclose the
-  encrypted sync blob as User Content + hashed User ID; everything else Not
-  Collected; no tracking).
+  encrypted sync blob as User Content + hashed User ID; resolve the Cloud Connect
+  counsel flag there first; no tracking).
 - **Age rating** answers per `docs/appstore-age-rating.md` (all content
   descriptors None; Unrestricted Web Access No; UGC/social/messaging No; AI chat
   disclosed Yes; let Apple compute the band).
@@ -46,11 +46,12 @@ Owner: Silva Peak Labs, LLC (d/b/a NorthKeep) · Expo/EAS owner `j_silva`
 - **External TestFlight Beta App Review.** Distributing to external testers needs
   Apple's Beta App Review first. This is Apple's clock, plan for it before the
   public link in the launch plan's M6-5 acceptance test.
-- **On-device model absent → Tier-1-only disclosed.** There is no on-device
-  Tier-2 (NER) redaction on the phone yet (M6-4); Converse runs BYOK cloud with
-  Tier-1 masking only, and the app says so with a persistent banner. This is
-  disclosed, not hidden, in the reviewer notes and KNOWN-LIMITS, but it is a known
-  limitation to keep stated honestly.
+- **On-device redaction limits disclosed.** Cloud Converse turns on the phone
+  run the deterministic layers (Tier-1 identifiers, every full date,
+  dictionary-listed names) plus the iOS name recognizer; where the recognizer is
+  unavailable, a persistent warning banner says so and the deterministic layers
+  still run. This is disclosed, not hidden, in the reviewer notes and
+  KNOWN-LIMITS, and it is a known limitation to keep stated honestly.
 - **AGPL exception needs counsel sign-off.** `LICENSE-APPSTORE-EXCEPTION` is a
   draft; Silva Peak Labs, LLC + counsel confirm wording and authority before the
   public submission relies on it.
@@ -72,7 +73,8 @@ Owner: Silva Peak Labs, LLC (d/b/a NorthKeep) · Expo/EAS owner `j_silva`
 - **No in-app purchase in this build**, so App Store Guideline 3.1.1 (in-app
   purchase for digital services) is not triggered. The $10/mo hosted sync
   subscription is arranged off-app (desktop/web, Stripe-hosted). The app only
-  configures a sync server URL; it sells nothing. State this in the review notes.
+  sets up sync and Cloud Connect against a server; it sells nothing and shows no
+  price or purchase link. State this in the review notes.
 - **No account/login for local use.** Nothing to test-credential for the basic app.
-- **Converse output is private and on-device**, not shared to other users, so it
+- **Converse output is private to the user**, not shared to other users, so it
   is not social user-generated content (helps with Guideline 1.2 questions).
