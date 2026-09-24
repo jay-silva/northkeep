@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import crypto from 'node:crypto';
+import { inspect } from 'node:util';
 import { createRequire } from 'node:module';
 import { PGlite } from '@electric-sql/pglite';
 import { createConnectorServer } from '../src/create-server.js';
@@ -7,7 +8,19 @@ import { InMemoryConnectorStorage, type ConnectorStorage } from '../src/storage.
 import { NeonConnectorStorage } from '../src/neon-storage.js';
 import { sha256hex } from '../src/hash.js';
 import { ipRateLimitKey } from '../src/ip-key.js';
-import { form, pgliteAsNeon, postForm, registerClient, signTestEntitlement, startServer, TEST_PEPPER_B64, withEnv, nowSec } from './adr0061-support.js';
+import {
+  REDIRECT_URI,
+  form,
+  pgliteAsNeon,
+  pkce,
+  postForm,
+  registerClient,
+  signTestEntitlement,
+  startServer,
+  TEST_PEPPER_B64,
+  withEnv,
+  nowSec,
+} from './adr0061-support.js';
 
 /**
  * ADR 0061 code review round 1: F1 (the /token limiter keys IPv6 by /56 like
@@ -45,6 +58,10 @@ describe('claim 29: ipRateLimitKey groups addresses exactly as express-rate-limi
       '2001:db8::',
       '2001:db8:0:ff::',
       '2001:db8:0:100::',
+      'fe80::1%eth0',
+      'fe80::1',
+      '2001:db8:1:2::1%en0',
+      '2001:db8:1:2ff::9%x',
     ];
     for (const a of corpus) {
       for (const b of corpus) {
@@ -163,21 +180,44 @@ for (const kind of ['memory', 'pglite'] as const) {
       expect((await fetch(`${base}/`)).status).toBe(200);
     });
 
-    it('PUT /client/entries and POST /client/ack with a NUL are 400 before storage', async () => {
-      calls.length = 0;
-      const put = await fetch(`${base}/client/entries`, {
-        method: 'PUT',
-        headers: { ...paidHeaders(), 'content-type': 'application/json' },
-        body: JSON.stringify({ scopes: ['a\u0000b'], entries: [] }),
-      });
-      expect(put.status).toBe(400);
-      const ack = await fetch(`${base}/client/ack`, {
-        method: 'POST',
-        headers: { ...paidHeaders(), 'content-type': 'application/json' },
-        body: JSON.stringify({ acked: [{ server_id: 'x\u0000', local_entry_id: 'y' }], forgets: [] }),
-      });
-      expect(ack.status).toBe(400);
-      expect(calls).toEqual([]);
+    it('PUT /client/entries: a NUL in any scope, entry field or shared_at is 400 before storage', async () => {
+      const ok = { entry_id: 'e1', scope: 'w', entry_hash: 'h', type: 'semantic', content: 'c' };
+      const bodies: Array<[string, unknown]> = [
+        ['scopes[]', { scopes: ['a\u0000b'], entries: [] }],
+        ['entry_id', { scopes: ['w'], entries: [{ ...ok, entry_id: 'e\u0000' }] }],
+        ['entry scope', { scopes: ['w'], entries: [{ ...ok, scope: 'w\u0000' }] }],
+        ['entry_hash', { scopes: ['w'], entries: [{ ...ok, entry_hash: 'h\u0000' }] }],
+        ['shared_at key', { scopes: ['w'], entries: [ok], shared_at: { 'w\u0000': new Date().toISOString() } }],
+        ['shared_at value', { scopes: ['w'], entries: [ok], shared_at: { w: '2026\u0000' } }],
+      ];
+      for (const [label, body] of bodies) {
+        calls.length = 0;
+        const put = await fetch(`${base}/client/entries`, {
+          method: 'PUT',
+          headers: { ...paidHeaders(), 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        expect(put.status, label).toBe(400);
+        expect(calls, label).toEqual([]);
+      }
+    });
+
+    it('POST /client/ack: a NUL in server_id, local_entry_id or forgets is 400 before storage', async () => {
+      const bodies: Array<[string, unknown]> = [
+        ['server_id', { acked: [{ server_id: 'x\u0000', local_entry_id: 'y' }], forgets: [] }],
+        ['local_entry_id', { acked: [{ server_id: 'x', local_entry_id: 'y\u0000' }], forgets: [] }],
+        ['forgets', { acked: [], forgets: ['f\u0000'] }],
+      ];
+      for (const [label, body] of bodies) {
+        calls.length = 0;
+        const ack = await fetch(`${base}/client/ack`, {
+          method: 'POST',
+          headers: { ...paidHeaders(), 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        expect(ack.status, label).toBe(400);
+        expect(calls, label).toEqual([]);
+      }
     });
 
     it('/token and /consent with a NUL client_id are 400, not a crash', async () => {
@@ -200,9 +240,11 @@ describe('claim 32: a storage error in any route is a 500 JSON, logged without t
       err.params = [acct];
       throw err;
     };
+    // Inspect every argument the way Node's console does, so an error object
+    // logged whole (its params carry the account hash) is caught.
     const logged: string[] = [];
     const spy = vi.spyOn(console, 'error').mockImplementation((...a: unknown[]) => {
-      logged.push(a.map(String).join(' '));
+      logged.push(a.map((x) => (typeof x === 'string' ? x : inspect(x, { depth: 5 }))).join(' '));
     });
     const { base, close } = await withEnv({ CONNECTOR_ENTITLEMENT_SECRET: undefined, NORTHKEEP_CONNECTOR_ALLOWED_TOKEN_HASHES: undefined }, () =>
       startServer(() => createConnectorServer(store, { maintenance: maint })),
@@ -245,6 +287,69 @@ for (const kind of ['memory', 'pglite'] as const) {
           expect(await store.hasAccount(sha256hex(token)), path).toBe(false);
         }
       });
+      await close();
+    }, 30_000);
+  });
+}
+
+for (const kind of ['memory', 'pglite'] as const) {
+  describe(`/consent refuses control characters before storage and keeps the pairing code (${kind})`, () => {
+    it('a NUL code_challenge is 400 and the same pairing code still works afterwards', async () => {
+      const raw = await makeStore(kind);
+      const c = counting(raw);
+      const { base, close } = await withEnv(
+        {
+          CONNECTOR_ENTITLEMENT_SECRET: undefined,
+          NORTHKEEP_CONNECTOR_ALLOWED_TOKEN_HASHES: undefined,
+          CONNECTOR_KEK_PEPPER: kind === 'memory' ? undefined : TEST_PEPPER_B64,
+        },
+        () => startServer(() => createConnectorServer(c.store, { maintenance: maint })),
+      );
+      const reg = await registerClient(base, { confidential: false });
+      const pair = await fetch(`${base}/pair/start`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${crypto.randomBytes(24).toString('hex')}`, 'content-type': 'application/json' },
+        body: '{}',
+      });
+      const { pairing_code } = (await pair.json()) as { pairing_code: string };
+      const { challenge } = pkce();
+      const fields = {
+        client_id: reg.client_id,
+        redirect_uri: REDIRECT_URI,
+        code_challenge: challenge,
+        state: 's',
+        scope: 'mcp',
+        resource: `${base}/mcp`,
+        pairing_code,
+      };
+      c.arm();
+      const bad: Array<[string, string]> = [
+        ['code_challenge', form({ ...fields, code_challenge: 'a\u0000b' })],
+        ['redirect_uri', form({ ...fields, redirect_uri: `${REDIRECT_URI}\u0000` })],
+        ['state', form({ ...fields, state: 's\u0007' })],
+        ['resource', form({ ...fields, resource: 'x\u007f' })],
+        ['scope', form({ ...fields, scope: 'mcp\n' })],
+        ['duplicated field', `${form(fields)}&code_challenge=second`],
+      ];
+      for (const [label, body] of bad) {
+        c.calls.length = 0;
+        const r = await fetch(`${base}/consent`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/x-www-form-urlencoded' },
+          redirect: 'manual',
+          body,
+        });
+        expect(r.status, label).toBe(400);
+        expect(c.calls, label).toEqual([]);
+      }
+      const good = await fetch(`${base}/consent`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        redirect: 'manual',
+        body: form(fields),
+      });
+      expect(good.status).toBe(302);
+      expect(new URL(good.headers.get('location')!).searchParams.get('code')).toBeTruthy();
       await close();
     }, 30_000);
   });

@@ -429,11 +429,17 @@ export function createConnectorServer(
   // then mint the account-bound authorization code and redirect to the client.
   app.post('/consent', express.urlencoded({ extended: false, limit: '8kb' }), asyncRoute(async (req: Request, res: Response) => {
     const body = req.body as Record<string, string | undefined>;
-    const clientId = body.client_id ?? '';
-    if (hasNul(clientId)) {
-      res.status(400).json({ error: 'invalid_request', error_description: 'Unknown client or missing PKCE challenge.' });
-      return;
+    // Every field this route reads must be one plain string with no control
+    // character, checked before any storage call, so a NUL cannot 500 after
+    // the pairing code is spent (ADR 0061 code recheck note 4).
+    for (const f of CONSENT_FIELDS) {
+      const v: unknown = body[f];
+      if (v !== undefined && (typeof v !== 'string' || hasControlChar(v))) {
+        res.status(400).json({ error: 'invalid_request', error_description: `Invalid ${f}.` });
+        return;
+      }
     }
+    const clientId = body.client_id ?? '';
     const redirectUri = body.redirect_uri ?? '';
     const codeChallenge = body.code_challenge ?? '';
     const state = body.state;
@@ -1006,6 +1012,13 @@ function asyncRoute(fn: AsyncHandler): (req: Request, res: Response, next: NextF
 /** Postgres text cannot hold U+0000; such a value must be refused before storage (ADR 0061). */
 export function hasNul(value: unknown): boolean {
   return typeof value === 'string' && value.includes('\u0000');
+}
+
+const CONSENT_FIELDS = ['client_id', 'redirect_uri', 'code_challenge', 'state', 'scope', 'resource', 'pairing_code'] as const;
+
+/** C0 controls and DEL: never valid in an OAuth parameter, and NUL cannot be stored. */
+function hasControlChar(value: string): boolean {
+  return /[\u0000-\u001f\u007f]/.test(value);
 }
 
 /** Any scope, id or hash in a push body that storage could not hold. */
