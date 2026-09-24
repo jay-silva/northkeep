@@ -401,4 +401,13 @@ describe('runPerKindNer (fake model)', () => {
       ],
     });
   });
+
+  it('R2: a nested "entities" list or a name under another key fails the pass and the run', async () => {
+    const nested = '{"entities":[{"text":"x","entities":[{"text":"Bob Henderson","kind":"person"}]}]}';
+    expect(() => parseEntityReply(nested, 'person')).toThrow('unreadable reply');
+    expect(() => parseEntityReply('{"entities":[{"text":"x","name":"Bob Henderson"}]}', 'person')).toThrow('unreadable reply');
+    const fake = cannedModel({ [NEEDLES.person]: nested });
+    await expect(runPerKindNer(TEXT, fake.callModel)).rejects.toThrow('1 of 4 NER passes failed');
+  });
 });
+

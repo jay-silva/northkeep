@@ -186,10 +186,11 @@ export function salvageEntityJson(raw: string): string {
  * (pass identity guarantees kind; small models mislabel the echo field).
  *
  * Fail closed (ADR 0060 O3): the reply is read with core's duplicate-aware
- * strict reader, so a repeated "entities" key keeps every list, and a reply
- * that cannot be fully accounted for (an item without a string text, a
- * foreign key, more entities than the cap) throws instead of passing with
- * names missing. Messages are content-free by construction.
+ * strict reader (see its header for exactly what it checks: one object,
+ * only "entities" keys, items with only "text" and "kind", string texts), so
+ * a repeated "entities" key keeps every list, and a reply outside that shape,
+ * or with more entities than the cap, throws instead of passing with names
+ * missing. Messages are content-free by construction.
  */
 export function parseEntityReply(raw: string, kind: NerEntityKind): NerEntity[] {
   let list: Array<{ text: string }>;
@@ -202,7 +203,8 @@ export function parseEntityReply(raw: string, kind: NerEntityKind): NerEntity[] 
   const out: NerEntity[] = [];
   for (const record of list) {
     const span = record.text.trim();
-    // A one-character or 100+ character span is not a name; dropping it hides none.
+    // Spans shorter than 2 or longer than 100 characters are dropped, as the
+    // desktop name layer does; the length is the only thing checked here.
     if (span.length < 2 || span.length > 100) continue;
     out.push({ text: span, kind });
   }

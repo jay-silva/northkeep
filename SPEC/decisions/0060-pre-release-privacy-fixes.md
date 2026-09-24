@@ -1267,3 +1267,33 @@ surviving restoration.
   typecheck, the offline Metro export (iOS bundle, 7.7 MB), the mobile
   tests, the full suite and e2e pass.
 
+### Code review recheck and final targeted fix, 2026-09-24
+
+Recheck report: `Reviews/adr-0060/code-r2-recheck.md`. K1, F2, F3 and F6
+closed; F1 still open by another route; a missed shape found. Jay approved
+this final targeted fix with no further review round; the lead verifies
+the tests.
+
+- **F1, second route.** A restored original may come only from a memory
+  that is both listed in the proposal's `entry_ids` and quoted with a
+  validated quote. Before, a validated quote from an unlisted memory
+  (its own placeholder, or one real character of it) cited that memory,
+  and the report, which shows only listed memories' quotes, hid it while
+  its value was spliced in. Tests R1a and R1b in `review-restore.test.ts`;
+  both failed on the old code.
+- **Names under an unexpected key.** The strict reader now also requires
+  each item's keys to be only "text" and "kind", so a nested "entities"
+  list or a name under another key fails the reply (Tier 2 refuses, Tier 3
+  runs deterministic only) instead of being ignored. The reader's header
+  and the phone parser's length comment now say only what the code checks.
+  Tests R2 in `tier2-reply.test.ts` (desktop) and `per-kind-ner.test.ts`
+  (phone); both failed on the old code. The recheck saw this shape in 0 of
+  54 real replies; it predates this ADR.
+- **Placeholder detector false positives.** The detector now matches only
+  shapes the redactor or a session emits and their mis-copies: a label
+  with an underscore index (in any brackets, with or without a tag),
+  bracketed `[DATE]`, `[DATE-1948]` and `[REDACTED]`, and `Person-3`,
+  `Org-2`, `Place-4`, `Location-1`. "(ZIP 02532)", "ip-10-0-0-12" and
+  "(email)" are kept (test R3, failed on the old code); every earlier
+  mis-copy case still drops.
+

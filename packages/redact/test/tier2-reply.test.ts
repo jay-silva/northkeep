@@ -64,3 +64,21 @@ describe('ADR 0060 kill shot: the name model reply is read in full', () => {
     expect(r.tier2Degraded).toBe(false);
   });
 });
+
+describe('ADR 0060 code review recheck: names under an unexpected key', () => {
+  const NESTED = '{"entities":[{"text":"x","entities":[{"text":"Bob Henderson","kind":"person"}]}]}';
+  const OTHER_KEY = '{"entities":[{"text":"x","name":"Bob Henderson"}]}';
+
+  it('R2: a nested "entities" list or a name under another key fails the reply; Tier 2 refuses, Tier 3 is deterministic only', async () => {
+    for (const reply of [NESTED, OTHER_KEY]) {
+      expect(() => readNerReply(reply), reply).toThrow();
+      const t2 = await redact(TEXT, { tier: 2 }, model(reply));
+      expect(t2.tier2Degraded, reply).toBe(true);
+      expect(t2.tierApplied, reply).toBe(1);
+      const t3 = await redact(TEXT, { tier: 3 }, model(reply));
+      expect(t3.tier2Degraded, reply).toBe(true);
+      expect(t3.tierApplied, reply).toBe(3);
+    }
+  });
+});
+

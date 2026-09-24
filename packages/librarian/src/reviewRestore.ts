@@ -38,18 +38,21 @@ export const PLACEHOLDER_LABELS: readonly string[] = [
   'PERSON', 'ORG', 'LOCATION', 'PLACE', 'DATE', 'REDACTED',
 ];
 
-const LABELS = PLACEHOLDER_LABELS.join('|');
+const INDEXED_LABELS = PLACEHOLDER_LABELS.filter((l) => l !== 'REDACTED').join('|');
 /**
- * Any mis-copy of a placeholder, case-insensitive: bracketed in any of [ < { (
- * with or without a tag and with or without its colon (`[DATE_1948_1]`,
- * `<EMAIL_1>`, `[k7q2 EMAIL_1]`, `[REDACTED]`, `[DATE-1948]`), or bare with a
- * number suffix (`EMAIL_1`, `DATE_1948_1`, `Person-3`). A plain word such as
- * "email" or "date" in prose, with neither brackets nor a number, is not one.
+ * Only the shapes the redactor or a session emits, and their mis-copies,
+ * case-insensitive:
+ * - a label from the list followed by an underscore index, in any brackets
+ *   or none, with or without a tag (`[DATE_1948_1]`, `EMAIL_1`, `<EMAIL_1>`,
+ *   `[k7q2 EMAIL_1]`, `[k7q2:email_1]`);
+ * - `[DATE]`, `[DATE-1948]` and `[REDACTED]` in brackets;
+ * - `Person-3`, `Org-2`, `Place-4`, `Location-1`.
+ * A label with no index is prose: "(email)", "(ZIP 02532)", "ip-10-0-0-12".
  */
 const PLACEHOLDER_SHAPE = new RegExp(
-  // Bracketed: needs a number suffix or a closing bracket, so "(date unknown)" is prose.
-  `[\\[<{(\uFF3B]\\s*(?:[a-z0-9]{4}\\s*[:\uFF1A]?\\s*)?(?:${LABELS})(?:(?:[_\\- ]?\\d+)+\\s*[\\]>})\uFF3D]?|\\s*[\\]>})\uFF3D])` +
-    `|(?<![\\p{L}\\p{N}_])(?:[a-z0-9]{4}[:\uFF1A])?(?:${LABELS})(?:[_\\-]\\d+)+(?![\\p{L}\\p{N}])`,
+  `(?<![\\p{L}\\p{N}_])(?:[a-z0-9]{4}[:\\uFF1A\\s])?(?:${INDEXED_LABELS})(?:_\\d+)+(?![\\p{L}\\p{N}])` +
+    `|[\\[<{(\\uFF3B\\u3010]\\s*(?:DATE(?:-\\d{4})?|REDACTED)\\s*[\\]>})\\uFF3D\\u3011]` +
+    `|(?<![\\p{L}\\p{N}_])(?:Person|Org|Place|Location)-\\d+(?![\\p{L}\\p{N}])`,
   'giu',
 );
 
@@ -196,10 +199,13 @@ export function restoreReviewReply(
       });
     }
     if (typeof rec.proposed_content === 'string' && rec.proposed_content.length > 0) {
-      // Cited means a quote from that memory validated against its stored
-      // text (code review F1): a fabricated quote, or an id listed without a
-      // quote, lends no memory's values to the suggested wording.
-      const ids = new Set<string>(validated);
+      // Cited means BOTH listed in entry_ids AND quoted with a validated quote
+      // (code review F1, recheck): a quote from a memory the proposal does not
+      // list would be hidden from the report while its value is spliced in.
+      const listed = new Set<string>(
+        Array.isArray(rec.entry_ids) ? rec.entry_ids.filter((id): id is string => typeof id === 'string') : [],
+      );
+      const ids = new Set<string>([...validated].filter((id) => listed.has(id)));
       const target = typeof rec.target_entry_id === 'string' && ids.has(rec.target_entry_id) ? byId.get(rec.target_entry_id) : undefined;
       const cited = [
         ...(target ? [target] : []),

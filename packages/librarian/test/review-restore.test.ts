@@ -321,3 +321,46 @@ describe('ADR 0060 code review round 1', () => {
   });
 });
 
+describe('ADR 0060 code review recheck', () => {
+  async function pair() {
+    const m1 = entry(1, 'Therapist email is therapist@clinic.example.com for appointments.');
+    const m2 = entry(2, 'The ex lives on Elm Street now.');
+    const session = createRedactionSession([m1.content, m2.content], () => 'k7q2');
+    const { handle } = await prepare(session, [m1, m2]);
+    const splice = (m1Quote: string) => ({
+      kind: 'stale', entry_ids: [m2.id], target_entry_id: m2.id, explanation: 'x', question: null,
+      quotes: [{ entry_id: m2.id, quote: 'The ex lives on Elm Street now' }, { entry_id: m1.id, quote: m1Quote }],
+      proposed_content: 'The ex can be reached at [k7q2:EMAIL_1].',
+    });
+    return { m1, m2, handle, splice };
+  }
+
+  it('R1a (F1): a validated quote of memory 1\'s own placeholder does not cite memory 1 when only memory 2 is listed', async () => {
+    const { m1, m2, handle, splice } = await pair();
+    const out = restoreReviewReply(reply([splice('[k7q2:EMAIL_1]')]), [m1, m2], handle);
+    expect(out.drops).toEqual({ uncited_original: 1 });
+    expect(JSON.stringify(out.parsed)).not.toContain('therapist@clinic.example.com');
+  });
+
+  it('R1b (F1): one real character quoted from memory 1 does not cite memory 1 when only memory 2 is listed', async () => {
+    const { m1, m2, handle, splice } = await pair();
+    const out = restoreReviewReply(reply([splice('f')]), [m1, m2], handle);
+    expect(out.drops).toEqual({ uncited_original: 1 });
+    expect(JSON.stringify(out.parsed)).not.toContain('therapist@clinic.example.com');
+  });
+
+  it('R3: prose that only looks like a placeholder label is kept', async () => {
+    const m = entry(1, 'Family note number 1.');
+    const session = createRedactionSession([m.content], () => 'k7q2');
+    const { handle } = await prepare(session, [m]);
+    for (const proposed of [
+      'Mail goes to the Cape office (ZIP 02532).',
+      'The server is ip-10-0-0-12 in the rack.',
+      'Reach her by phone (email) instead.',
+    ]) {
+      const out = restoreReviewReply(reply([stale(m, 'Family note number 1.', proposed)]), [m], handle);
+      expect((out.parsed as { proposals: Array<{ proposed_content: string }> }).proposals[0]?.proposed_content, proposed).toBe(proposed);
+    }
+  });
+});
+
