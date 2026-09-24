@@ -1,19 +1,19 @@
 # ADR 0061: Connector fixes before release 0.22.0 (lapsed unshare, hashed client secrets, legacy plaintext purge)
 
 - **Date:** 2026-09-24
-- **Status:** Proposed. Design only, no product code on this branch yet.
-  Design **CLEARED WITH WOUNDS after the recheck** (2026-09-24). The final
-  design pass that closes the recheck's two wounds (R2-F1, R2-F2) and its
-  notes is **not re-reviewed**. Built on this branch 2026-09-24 (see Review
-  history); next step: a full adversarial review of the code before merge. Jay's decisions D1
-  to D4 were accepted as recommended by Jay on 2026-09-24 ("accept all the recommended defaults"); the build uses them. All three decisions sit behind the CLAUDE.md review gate:
-  Decision 1 changes who decides (it adds a way to reach a route without the
-  billing gate), Decision 2 changes how a credential is stored and checked
-  (invariant #3 requires an explicit adversarial review before merge), and
-  Decision 3 exists to make a published claim true ("the connector holds
-  only ciphertext"). An adversarial review runs against the implementation,
-  not against this prose, before merge. Merge and the production push are
-  Jay's calls.
+- **Status:** Accepted and built for release 0.22.0 (merged on
+  `integrate2/0.22.0`, 2026-09-24). Design CLEARED WITH WOUNDS after the
+  recheck; the code review recheck CLEARED it (see Review history). Jay's
+  decisions D1 to D4 were accepted as recommended on 2026-09-24 ("accept
+  all the recommended defaults"). The legacy plaintext purge and the
+  client-secret migration run only when the connector's Production
+  environment has `NORTHKEEP_CONNECTOR_MAINTENANCE=on` (and, for the purge,
+  `NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT=on`); until then they have
+  not run. The production push is Jay's call. All three decisions sit
+  behind the CLAUDE.md review gate: Decision 1 changes who decides,
+  Decision 2 changes how a credential is stored and checked (invariant #3),
+  and Decision 3 exists to make a published claim true ("the connector
+  holds only ciphertext").
 - **Deciders:** Jay (product owner; approved items 1 to 3 for 0.22.0 on
   2026-09-24), Claude Code
 - **Branch:** `fix022/connector` (base `6d67dd2`)

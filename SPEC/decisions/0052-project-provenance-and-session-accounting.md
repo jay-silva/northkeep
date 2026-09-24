@@ -1,19 +1,12 @@
 # ADR 0052: Project provenance, session accounting, a lighter resume brief, and draft projects
 
 - **Date:** 2026-09-21
-- **Status:** Accepted pending Jay's acceptance run. Four adversarial
+- **Status:** Accepted and shipped (main dd4e78b, 2026-09-22); Jay's
+  acceptance run passed all seven steps on 2026-09-22. Four adversarial
   passes: three NOT CLEARED with amendments applied after each, the
   fourth CLEARED WITH WOUNDS; Jay accepted two wounds and the third was
-  fixed (2026-09-21). Jay
-  chose wave 1 ("M-C+E and M-F together") on 2026-09-21 after the
-  migration-prerequisite scoping.
-
-  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** "pending"
-  is stale. ADR 0052 is merged to main as dd4e78b (2026-09-22) and ships
-  for the first time in 0.22.0. The merge commit message records the
-  acceptance: "Accepted by Jay 2026-09-22 after a seven-step acceptance
-  run". docs/adr-0052-acceptance.md holds its author's 2026-09-21 run,
-  not Jay's; no separate transcript of Jay's run is in docs/.
+  fixed (2026-09-21). Jay chose wave 1 ("M-C+E and M-F together") on
+  2026-09-21 after the migration-prerequisite scoping.
 - **Deciders:** Jay (product owner), Claude Code
 - **Extends:** ADR 0039 (projects as vault memories), ADR 0042 (contract
   installer), ADR 0045 (log rolling), ADR 0048 (handoff receipts),

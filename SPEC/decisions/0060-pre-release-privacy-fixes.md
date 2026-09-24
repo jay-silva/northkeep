@@ -1,13 +1,13 @@
 # ADR 0060: Pre-release privacy fixes for 0.22.0 (D2, D3, D4, D6, D7, D8, D9)
 
 - **Date:** 2026-09-24
-- **Status:** Built on branch `fix022/privacy` (2026-09-24), not merged,
-  **awaiting the full adversarial review of the code**. Design CLEARED
-  WITH WOUNDS after recheck (first review and recheck, 2026-09-24); the
-  final text pass was not re-reviewed. Provider handling of the tagged
-  tokens (R10) stays unverified until Jay's one real-provider run. O1 and
-  O2 are built with the recommended default, confirmed by Jay on
-  2026-09-24 ("accept all the recommended defaults").
+- **Status:** Accepted and built for release 0.22.0 (merged on
+  `integrate2/0.22.0`, 2026-09-24). Design CLEARED WITH WOUNDS after its
+  recheck; the code review and its recheck ran, and the last findings were
+  fixed and checked by targeted tests (see Review history). O1 and O2 use
+  the recommended defaults, confirmed by Jay on 2026-09-24 ("accept all
+  the recommended defaults"). Provider handling of the tagged tokens (R10)
+  stays unverified until Jay's one real-provider run on a throwaway vault.
   "Build notes" below lists every place the build differs from the text.
   It changes what leaves the machine (D2, D4), puts third-party text in
   front of the model (D3), changes a trust level (D6) and publishes
