@@ -674,6 +674,27 @@ every milestone; if a limit is removed, say when and how.*
   ZIP codes, record/account IDs). An exotic format it
   doesn't recognize can slip through — the leak test locks in the formats we
   claim, and we add formats as we find gaps.
+- **API keys are matched by issuer prefix, so a key with no prefix is not
+  masked** (ADR 0059, proposed, pending adversarial review). Tier 1 masks
+  tokens that start with a known issuer prefix: Anthropic `sk-ant-`, OpenAI
+  `sk-proj-`/`sk-svcacct-`/`sk-admin-` and legacy `sk-`, OpenRouter, xAI,
+  Groq, Replicate, Perplexity, Hugging Face, every GitHub token type
+  (`ghp_ gho_ ghu_ ghs_ ghr_ github_pat_`), GitLab, Slack, npm, PyPI,
+  Stripe, AWS access key ids and Bedrock keys, Google `AIza`, SendGrid,
+  DigitalOcean, Shopify, Linear, Notion, Databricks, Sentry, Doppler,
+  PlanetScale, Pulumi, Postman, Heroku, 1Password service accounts, age,
+  Atlassian, Fly.io, Telegram bot tokens, JWTs and PEM private keys (the
+  exact list and patterns are in the ADR). Before this, Anthropic keys,
+  fine-grained and OAuth GitHub tokens, and real OpenAI project keys (whose
+  bodies contain `-` or `_`) passed through unmasked. Still not masked: a
+  secret with no prefix (an AWS secret access key, a Twilio auth token, a
+  database password, a bare hex or base64 string); Google OAuth secrets and
+  tokens (`GOCSPX-`, `ya29.`, `1//`) and Stripe `whsec_` webhook secrets,
+  not yet added; a key wrapped across lines, with an invisible character
+  inside, or glued directly after a digit; and any issuer prefix not on the
+  list. An API-key match also hard-denies a tool call whose arguments carry
+  it and stops a conversation from distilling it into a memory, so both now
+  apply to these shapes too.
 - **Tier 2 needs Ollama and is 85–95% in-domain.** A name it misses is a
   leak; Tier 1 always runs underneath as a backstop for secrets. Without
   Ollama, Tier 2 is skipped and you're told loudly — names are NOT masked.
