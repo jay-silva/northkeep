@@ -226,7 +226,9 @@ NorthKeep can send text to AI models **you** connect:
   network), never for a cloud provider. On
   an iPhone with
   Apple Intelligence, you can instead chat with the model built into the phone,
-  which runs on the device.
+  which runs on the device. After a cloud chat on an iPhone, the "What left
+  this device" view shows the exact text sent to the provider on the most
+  recent turn.
 - **Memory review on a cloud model (Mac, optional).** Memory review runs on a
   local model by default. If you choose a cloud provider for a review instead,
   you pick a redaction tier (1, 2 or 3; redaction cannot be turned off for a
@@ -275,8 +277,9 @@ page.
   showing the exact query or URL, unless you've granted that specific site
   "always," which you can revoke at any time. Before anything is sent, the
   arguments are passed through a deterministic redaction pass that masks them.
-  A per-turn proof shows each query or URL as you approved it; what was sent is
-  that or less, after masking. We keep a content-free audit log recording that
+  In NorthKeep's command-line chat on the Mac, each reply names the redaction
+  tier it ran at and lists the tool calls it made, and each call to an MCP
+  server shows the masked arguments it sent. We keep a content-free audit log recording that
   a call happened, not what was in it.
 - **The honest limit.** Screening and masking reduce, they do not eliminate,
   what a query or URL can disclose. Using web search or web fetch means
