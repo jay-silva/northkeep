@@ -3,7 +3,7 @@
 > This is a Jay-enters-in-App-Store-Connect checklist, not code. It maps
 > NorthKeep's actual data handling (see `legal/PRIVACY.md`, `KNOWN-LIMITS.md`,
 > CLAUDE.md invariants #1, #2 and #5) to the App Store Connect "App Privacy"
-> questionnaire. It covers the iPhone app only (build 27, version 0.22.0). Four
+> questionnaire. It covers the iPhone app only (version 0.22.0, build 28 planned). Four
 > items are judgment calls, flagged for counsel below; item 3 (Cloud Connect)
 > now carries a recommendation. Not legal advice.
 
@@ -27,12 +27,20 @@ servers from the phone is:
   that scope's memories, sent in plaintext over TLS and encrypted by the
   connector for storage, stored there until unshared, and decrypted briefly on
   the server to answer each request from the user's connected AI apps
-  (`packages/sync/src/connector-client.ts:128-146`,
-  `apps/connector-server/src/create-server.ts:602-607`). Scope names, entry
-  ids, sizes, timestamps and whether a row was app-written stay plaintext. The
-  connector account is keyed on the SHA-256 of a second device-secret-derived
-  token (`packages/sync/src/creds.ts:52-57`,
-  `apps/connector-server/src/create-server.ts:313`).
+  (`packages/sync/src/connector-client.ts:145-167`,
+  `apps/connector-server/src/create-server.ts:677-683`). Scope names, entry
+  ids, entry hashes, sizes, timestamps, whether a row was app-written and
+  whether it is still pending download stay plaintext
+  (`apps/connector-server/src/neon-storage.ts:70-86`). The connector also keeps
+  a request log per account (`connector_audit`, `neon-storage.ts:111-121`):
+  the phone's own pushes, unshares and download confirmations (action, time,
+  counts; `create-server.ts:709-717, 745-755, 871-879`) as well as each read or
+  write by a connected AI app (tool, time, counts, entry ids). OAuth sign-in
+  codes (client id, account link, return address, PKCE challenge, expiry) are
+  kept until the maintenance cleanup removes them
+  (`neon-storage.ts:637-650`). The connector account is keyed on the SHA-256
+  of a second device-secret-derived token (`packages/sync/src/creds.ts:52-57`,
+  `apps/connector-server/src/create-server.ts:949-953`).
 
 Separately, and not to NorthKeep: a Converse message, with the memories
 retrieved for it, after on-device redaction, goes directly to the AI provider
@@ -72,7 +80,8 @@ identifier. Every row not marked Yes is "Not Collected".
 | Sensitive Info | No | | | | NorthKeep does not ask for it. Anything a user types into a memory is covered by Other User Content. |
 | Contacts | No | | | | |
 | Browsing History, Search History | No | | | | The iPhone app has no web search or web fetch. |
-| Usage Data (Product Interaction, Advertising Data, Other) | No | | | | No analytics. The connector's request log records reads made by the user's connected AI apps, not the iPhone app's own use; see judgment call 3. |
+| **Usage Data: Product Interaction** | **Yes (recommended; see judgment call 3)** | **Yes** | No | App Functionality | No analytics, but the connector's request log stores, per connector account, a row each time the phone pushes shared scopes, unshares, or confirms a download (action, time, counts), alongside connected apps' reads and writes (`connector_audit`). |
+| Usage Data: Advertising Data, Other Usage Data | No | | | | No ads, no analytics SDK. |
 | Diagnostics (Crash, Performance, Other) | No | | | | No crash or performance reporting (invariant #5). |
 | Surroundings, Body | No | | | | |
 | Other Data Types | No | | | | |
@@ -121,11 +130,19 @@ identifier. Every row not marked Yes is "Not Collected".
    - Not selecting it is the only option that could be wrong. Over-disclosing
      a category the app only uses when the user opts in costs little; the
      Other User Content row is already Yes because of sync.
-   - Open for counsel: whether the connector's request log (tool, time, entry
-     ids returned by a connected AI app) is "Usage Data". The recommendation
-     is No, because it records third-party apps' reads rather than the iPhone
-     app's own use, but counsel may prefer Other Usage Data, Linked, App
-     Functionality.
+   - Open for counsel, restated on corrected facts: the connector's request
+     log is not only a record of third-party apps' reads. It also records the
+     iPhone app's own Cloud Connect actions (each push of shared scopes, each
+     unshare, each download confirmation) with the time, the counts and the
+     connector account hash, and keeps those rows with no deletion route. That
+     is stored, linked to a User ID, and describes how the user used the app,
+     so the recommendation is now to disclose Usage Data: Product Interaction
+     (Collected Yes, Linked Yes, Tracking No, App Functionality), as entered
+     in the table. The case for No: these are operational server records of
+     sync requests the user started, not in-app interaction analytics, and
+     Apple's examples for Product Interaction are app launches, taps and
+     views. If counsel takes that view, change the row to No; the privacy
+     policy discloses the log either way.
 4. **The support email.** The sync-access screen opens an email draft to
    support@northkeep.ai containing the user's sync account id; the user sends
    it from their own mail app. Recommendation: Not Collected by the app, since

@@ -4,7 +4,7 @@
 > what Jay sets in App Store Connect, and what still blocks a public release.
 > Covers milestone M6-5 of `07-MOBILE-LAUNCH-PLAN.md`. Not legal advice.
 
-App: NorthKeep · Bundle ID: `com.silvapeak.northkeep` · Version 0.1.0 (build 20)
+App: NorthKeep · Bundle ID: `com.silvapeak.northkeep` · Version 0.22.0 (build 28 planned; app.config.ts is at build 27 until the build is cut)
 Owner: Silva Peak Labs, LLC (d/b/a NorthKeep) · Expo/EAS owner `j_silva`
 
 ## 1. Done in the repo (this branch)
@@ -19,7 +19,7 @@ Owner: Silva Peak Labs, LLC (d/b/a NorthKeep) · Expo/EAS owner `j_silva`
 - **Age rating answers**: `docs/appstore-age-rating.md`.
 - **In app.config.ts already (not changed here)**: `ITSAppUsesNonExemptEncryption
   = false` (open-source exemption), camera + Face ID usage strings, icon/splash
-  from brand assets, portrait, tablet off, build number 20.
+  from brand assets, portrait, tablet off, build number 27 (28 planned for this submission).
 - Existing legal docs: `legal/PRIVACY.md`, `legal/TERMS.md`, `KNOWN-LIMITS.md`.
 
 ## 2. Jay sets in App Store Connect (portal, not repo)

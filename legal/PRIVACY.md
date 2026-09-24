@@ -1,8 +1,5 @@
 # NorthKeep Privacy Policy
 
-> Grounded in how NorthKeep actually handles data (see `KNOWN-LIMITS.md` and
-> `SPEC/security-model.md`). Not legal advice.
-
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
 **Contact:** support@northkeep.ai · **Effective date:** 2026-09-XX
@@ -50,7 +47,9 @@ keychain. On a Mac, that is the **macOS Keychain**, which holds your AI
 provider API keys, your Brave Search key (if you enable web search), and any
 OAuth tokens and client credentials for the remote MCP servers you connect. On
 an iPhone, that is the **iOS Keychain**, which holds your device secret, your
-AI provider API keys, and your sync and connector settings. (On a platform
+AI provider API keys, your sync and connector settings, and, if you turn on
+Face ID unlock, a copy of your vault key that the Keychain releases only after
+Face ID succeeds. (On a platform
 without a Keychain, API keys fall back to an environment variable you supply,
 and remote MCP sign-in is not available at all.) On an iPhone, the encrypted
 vault file can be included in your device or iCloud backup like other app
@@ -149,15 +148,22 @@ memories you choose. You can use it from the Mac app and from the iPhone app
 - **What stays visible to us even with content encrypted:** your scope names
   (choose neutral names if a name itself is sensitive; a project that an app
   creates is named by that app), entry identifiers, whether each entry was
-  written by your device or by a connected app, how many memories each shared
-  scope holds, the encrypted sizes (which approximate content length),
-  timestamps, and integrity hashes. We also keep: for each AI app you connect,
-  the registration details that app sends when it connects (such as its name
-  and the address it returns to after sign-in) and which account it is linked
-  to; a log of each request your connected apps make (the tool used, the time,
-  how many results, and the identifiers of the entries returned, never their
-  content); the name of each scope you unshare and when; and the date through
-  which your account may use the connector.
+  written by your device or by a connected app and whether it is still waiting
+  to be downloaded to your device, how many memories each shared scope holds,
+  the encrypted sizes (which approximate content length), timestamps, and the
+  integrity hash your device computes for each entry it shares. We also keep:
+  for each AI app you connect, the registration details that app sends when it
+  connects (such as its name and the address it returns to after sign-in) and
+  which account it is linked to; while an app is signing in, and until we clean
+  them up, one-time sign-in records that link that app to your account, with
+  its return address, a sign-in check value, and an expiry time; a request log
+  for your account, recording each request your connected apps make (the tool
+  used, the time, how many results, and the identifiers of the entries
+  returned, never their content) and each time your own Mac or iPhone uploads
+  shared scopes, unshares a scope, or confirms a download (the action, the time,
+  and how many entries or scopes, never their names or content); the name of
+  each scope you unshare and when; and the date through which your account may
+  use the connector.
 - **What we do not derive from it:** no embeddings, no content logs, no analytics.
   We never store your keys, your passphrase, or your device secret on the
   connector.
@@ -166,11 +172,14 @@ memories you choose. You can use it from the Mac app and from the iPhone app
   exposure as connecting a local app, now over the network, and encryption at rest
   does not change it.
 - **Deletion:** unshare a scope and we delete its rows from the connector
-  immediately. (If your subscription has ended, the app may not be able to
-  unshare on its own; ask us at support@northkeep.ai and we will delete them.)
-  Forget a memory on your device and it is deleted from the connector the next
-  time that device syncs with it; a memory an app forgets is deleted once your
-  device next syncs. Deletion removes exactly what you
+  immediately, whether or not your subscription is active. Forget a memory on
+  your device and it is deleted from the connector the next time that device
+  syncs with it; a memory an app forgets is deleted once your device next
+  syncs. **After your subscription ends, that second path stops:** the
+  connector refuses your device's syncs, so a memory you forget on your device,
+  or that an app forgot before the subscription ended, stays on the connector
+  until you unshare its scope or subscribe again. To remove shared content after
+  a subscription ends, unshare the scope. Deletion removes exactly what you
   chose to expose; it cannot recall copies an AI app already retrieved. The
   records listed above (unshared scope names, the request log, and connected-app
   registrations) remain until you ask us to delete them, as does anything an
@@ -189,9 +198,10 @@ connecting an app to it, means no shared memory ever transits our server.
   which is stored there encrypted at rest and briefly decrypted per request so
   your own AI apps can read it, and (2) the arguments of a tool call you
   approve (a web search, a web fetch, or a call to an MCP server you've
-  connected), which are screened and, except for a local server you have marked
-  "trusted," masked by our redaction floor before they're sent to that
-  destination (see "Tools" below). Everything you keep private, and every tool
+  connected), which are screened and masked by our redaction floor before
+  they're sent to that destination, except for a local server that is marked
+  "trusted," such as NorthKeep's own vault server, whose arguments stay on your
+  machine (see "Tools" below). Everything you keep private, and every tool
   you leave off, stays on your device, apart from what you send to an AI
   provider you choose (see "Data you send to AI providers you choose" below).
   (Chat transcripts are never stored at
@@ -219,10 +229,17 @@ NorthKeep can send text to AI models **you** connect:
   which runs on the device.
 - **Memory review on a cloud model (Mac, optional).** Memory review runs on a
   local model by default. If you choose a cloud provider for a review instead,
-  and confirm the send on the screen that names the provider, the memories
-  being compared (their text, identifiers, scopes, types, and dates) are sent
-  to that provider as stored in your vault, **without** redaction, under that
-  provider's privacy policy.
+  you pick a redaction tier (1, 2 or 3; redaction cannot be turned off for a
+  review) and confirm the send on the screen that names the provider. The text
+  of the memories being compared is then masked on your Mac at that tier, as in
+  Chat, and sent to that provider under its privacy policy. If Tier 2's local
+  name model is unavailable, nothing is sent; if Tier 3's is unavailable, the
+  review continues with the other Tier 3 masking only. Some details still
+  leave as written: each memory's identifier and type; the name of its scope,
+  with only the identifiers Tier 1 masks (and, at Tier 3, dates) removed from
+  it, so a person's name in a scope name is sent; and the time NorthKeep
+  recorded the memory, exactly at Tiers 1 and 2 and as the year only at
+  Tier 3.
 - In **Connect** mode, an app you link (such as Claude Desktop) reads memory from
   your vault under the scope you grant and sends whatever you type in that app to
   **its** provider. NorthKeep cannot redact what you type into another app, and
@@ -277,8 +294,12 @@ There are two kinds, with different exposure.
 - **Local MCP servers** are programs you install and run on your own machine,
   under your own privileges. When you approve a tool call, its arguments are
   masked by NorthKeep's redaction floor first and then passed to that program,
-  unless you have marked that server "trusted" in its configuration file, in
-  which case they are passed unmasked. What that program does with them
+  unless the server is marked "trusted," in which case they are passed
+  unmasked. NorthKeep's own vault server is marked trusted when you add it from
+  NorthKeep's list (or confirm that an existing entry is it), because it saves
+  what you ask it to remember into your vault on this machine and sends
+  nothing anywhere; any other local server is trusted only if you mark it so
+  in its configuration file. What that program does with them
   afterward is outside NorthKeep: many wrap a third-party cloud API, and a
   program forwarding what it's given to that API is its own egress, not ours.
   NorthKeep never sends a local server your vault or your conversation, only
