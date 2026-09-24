@@ -267,6 +267,12 @@ export default function ManageScopes() {
         it also brings in a new project an AI app created: that project is marked Shared, and later
         edits to it are pushed.
       </Text>
+      {!paired ? (
+        <Text style={styles.footnote}>
+          This phone has no pairing on record. If you paired it before version 0.22.0, pair again
+          (Sharing, then Pair an AI app) so it can receive projects an AI app creates.
+        </Text>
+      ) : null}
       <Button
         title="Sync app-written memories"
         kind="secondary"
