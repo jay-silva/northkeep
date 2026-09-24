@@ -350,6 +350,27 @@ describe('AutoSync (ADR 0044)', () => {
     expect(loadSyncConfig()?.lastSyncedAt).toBeTruthy();
   });
 
+  it('with the real clock (no clock option), a write still reaches the server through the debounce', async () => {
+    createVault(homeA, 'seed');
+    configure(homeA);
+    let pushed!: () => void;
+    const done = new Promise<void>((r) => (pushed = r));
+    const auto = new AutoSync({
+      vaultPath: vaultPath(homeA),
+      getMasterKey: () => keyFor(homeA),
+      loadDeviceSecret: () => Buffer.from(deviceSecret),
+      onEvent: (e) => e.type === 'pushed' && pushed(),
+      debounceMs: 10,
+    });
+    engines.push(auto);
+    unsubscribe = onVaultSave((p) => auto.notifyWrite(p));
+    write(homeA, 'one');
+    await done; // no timing assertion: only that the real timer fires and pushes
+    await auto.whenIdle();
+    expect(fake.version()).toBe(1);
+    expect(auto.status().phase).toBe('synced');
+  });
+
   it('wake fast-forwards when the server is ahead and this vault is untouched', async () => {
     createVault(homeA, 'seed');
     configure(homeA);
