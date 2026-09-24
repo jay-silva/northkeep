@@ -74,6 +74,7 @@ export const FAKE_TOKENS: FakeToken[] = [
   { family: 'flyio', token: 'fo1' + '_' + fill(43) },
   { family: 'flyio', token: 'fm2' + '_' + fill(120, 'b64') },
   { family: 'telegram-bot', token: '123456789' + ':AA' + fill(20) + '_' + fill(13) },
+  { family: 'telegram-bot', token: '12345' + ':A' + fill(20) + '-' + fill(13) },
   { family: 'aws-access-key', token: 'AS' + 'IA' + fill(16, 'upper') },
   { family: 'stripe', token: 'sk' + '_prod_' + fill(24) },
   { family: 'stripe', token: 'rk' + '_live_' + fill(40) },
@@ -94,6 +95,16 @@ export const FAKE_TOKENS: FakeToken[] = [
   { family: 'huggingface', token: 'hf' + '_' + fill(20) + fill(14, 'upper') },
 ];
 
+/** A Telegram bot token in the spellings its own API uses (ADR 0059 fix round). */
+export const TELEGRAM_SECRET = '7012345678' + ':AA' + fill(20) + '_' + fill(12);
+export const TELEGRAM_FORMS: string[] = [
+  `https://api.telegram.org/bot${TELEGRAM_SECRET}/sendMessage?chat_id=42&text=hi`,
+  `curl -s "https://api.telegram.org/bot${TELEGRAM_SECRET}/getMe"`,
+  `https://api.telegram.org/bot${TELEGRAM_SECRET}/setWebhook?url=https://hooks.example.com/tg`,
+  `TELEGRAM_BOT_TOKEN=${TELEGRAM_SECRET}`,
+  `Bot token ${TELEGRAM_SECRET} set.`,
+];
+
 /** Prose and identifiers that share a prefix with a token family and must stay unmasked. */
 export const NEAR_MISSES: string[] = [
   'Fine-grained tokens start with the github_pat_ prefix.',
@@ -112,6 +123,9 @@ export const NEAR_MISSES: string[] = [
   'Firmware SG.1.2.3 shipped to ASIA PACIFIC and ASIAN markets.',
   'The pul-request template and PMAK-docs page.',
   'Meet at 12345678:AA or 10:30.',
+  'Build 20260923:Alpha and port 8080:A' + 'b'.repeat(40) + ' are not tokens.',
+  'A bot1234:Ab' + 'c'.repeat(40) + ' id is under five digits.',
+  'PlanetScale tokens start pscale_tkn_ and end there.',
   'Glued prefix x' + 'gh' + 'p_ stays prose, and ops_eyJ alone is nothing.',
 ];
 

@@ -4,7 +4,9 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { CallLogEntry } from '@northkeep/mcp-server';
 import type { RedactionResult, Replacement } from '@northkeep/redact';
+import { TELEGRAM_FORMS, TELEGRAM_SECRET } from '../../redact/test/fake-tokens.js';
 import {
+  addServer,
   createPermissionEngine,
   createSession,
   daySpend,
@@ -937,4 +939,68 @@ describe('runTask — budget enforcement', () => {
     expect(result.toolCallsMade[0]!.decision).toBe('approved');
     expect(result.toolCallsMade[0]!.egress).toBeUndefined();
   });
+});
+
+// ADR 0059 fix round: a Telegram bot token in its API-URL spelling leaked
+// whole through the strict-MCP path. A strict server must never receive it.
+describe('runTask: Telegram bot tokens toward a strict MCP server (ADR 0059)', () => {
+  let home: string;
+  let prior: string | undefined;
+  beforeEach(() => {
+    home = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-0059-strict-'));
+    prior = process.env.NORTHKEEP_HOME;
+    process.env.NORTHKEEP_HOME = home;
+    const serverFile = path.join(home, 'server.js');
+    fs.writeFileSync(serverFile, '// fake mcp server\n');
+    addServer({ id: 'fs', command: process.execPath, args: [serverFile] });
+  });
+  afterEach(() => {
+    if (prior === undefined) delete process.env.NORTHKEEP_HOME;
+    else process.env.NORTHKEEP_HOME = prior;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  const strictTool = (executed: unknown[]): ToolDefinition => ({
+    name: 'fs__write',
+    serverId: 'fs',
+    description: 'writes a note',
+    inputSchema: { type: 'object' },
+    risk: 'safe-read',
+    egress: () => null,
+    execute: (args) => {
+      executed.push(args);
+      return Promise.resolve({ content: 'ok', meta: { bytes: 2, truncated: false, ok: true } });
+    },
+  });
+
+  for (const form of TELEGRAM_FORMS) {
+    it(`denies at the screen, before any prompt: ${form.slice(0, 32)}`, async () => {
+      const { provider } = scriptedProvider(PRIVATE_URL, [
+        {
+          text: '',
+          toolCalls: [{ id: 'c1', name: 'fs__write', arguments: JSON.stringify({ content: form }) }],
+          stopReason: 'tool_use',
+        },
+        { text: 'done', toolCalls: [], stopReason: 'end' },
+      ]);
+      const executed: unknown[] = [];
+      const events: TaskEvent[] = [];
+      let asked = 0;
+      const result = await runTask({
+        ...baseOptions(provider),
+        message: 'save this',
+        redactTier: 0,
+        tools: [strictTool(executed)],
+        hooks: hooks(events, 'allow', () => {
+          asked += 1;
+        }),
+      });
+      expect(asked).toBe(0);
+      expect(result.toolCallsMade[0]!.decision).toBe('denied');
+      const perm = events.find((e) => e.type === 'permission') as { via?: string } | undefined;
+      expect(perm?.via).toBe('screen');
+      expect(executed).toEqual([]);
+      expect(JSON.stringify(result)).not.toContain(TELEGRAM_SECRET.slice(-12));
+    });
+  }
 });

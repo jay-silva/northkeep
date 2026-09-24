@@ -64,15 +64,21 @@ export const TOKEN_PREFIX_PATTERNS: ReadonlyArray<{ name: string; pattern: strin
   { name: 'databricks', pattern: '(?<![A-Za-z0-9])dapi[a-f0-9]{32,}' },
   { name: 'sentry', pattern: '(?<![A-Za-z0-9])sntry[us]_[A-Za-z0-9+/=_]{40,}' },
   { name: 'doppler', pattern: '(?<![A-Za-z0-9])dp\\.pt\\.[A-Za-z0-9]{40,}' },
-  { name: 'planetscale', pattern: '(?<![A-Za-z0-9])pscale_(?:tkn|oauth|pw)_[A-Za-z0-9_.=-]{32,}' },
+  { name: 'planetscale', pattern: '(?<![A-Za-z0-9])pscale_(?:tkn|oauth|pw)_[A-Za-z0-9_.=-]{31,}[A-Za-z0-9_=-]' },
   { name: 'pulumi', pattern: '(?<![A-Za-z0-9])pul-[a-f0-9]{40,}' },
   { name: 'postman', pattern: '(?<![A-Za-z0-9])PMAK-[a-f0-9]{24}-[a-f0-9]{34,}' },
   { name: 'heroku', pattern: '(?<![A-Za-z0-9])HRKU-AA[A-Za-z0-9_-]{58,}' },
-  { name: 'onepassword-service', pattern: '(?<![A-Za-z0-9])ops_eyJ[A-Za-z0-9+/]{100,}={0,3}' },
+  { name: 'onepassword-service', pattern: '(?<![A-Za-z0-9])ops_eyJ[A-Za-z0-9+/_-]{100,}={0,3}' },
   { name: 'age', pattern: '(?<![A-Za-z0-9])AGE-SECRET-KEY-1[0-9A-Z]{58,}' },
   { name: 'atlassian', pattern: '(?<![A-Za-z0-9])ATATT3[A-Za-z0-9_=-]{100,}' },
-  { name: 'flyio', pattern: '(?<![A-Za-z0-9])(?:fo1_[A-Za-z0-9_-]{43,}|fm[12][ar]?_[A-Za-z0-9+/]{100,}={0,3})' },
-  { name: 'telegram-bot', pattern: '(?<![A-Za-z0-9])\\d{8,10}:AA[A-Za-z0-9_-]{32,}' },
+  { name: 'flyio', pattern: '(?<![A-Za-z0-9])(?:fo1_[A-Za-z0-9_-]{43,}|fm[12][ar]?_[A-Za-z0-9+/_-]{100,}={0,3})' },
+  // Bare, or right after `bot` as Telegram's own API URLs spell it
+  // (api.telegram.org/bot<id>:<secret>/method); `bot` itself stays visible.
+  {
+    name: 'telegram-bot',
+    pattern:
+      '(?:(?<![A-Za-z0-9])|(?<=(?<![A-Za-z0-9])bot))\\d{5,16}:A[A-Za-z0-9_-]{33,}',
+  },
 ];
 
 const DETECTORS: Detector[] = [

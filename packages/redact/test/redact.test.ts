@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { redact, restore } from '../src/index.js';
 import { applyTier1, luhnValid, TOKEN_PREFIX_PATTERNS } from '../src/tier1.js';
-import { FAKE_TOKENS, NEAR_MISSES, passesIssuerChecksum } from './fake-tokens.js';
+import { FAKE_TOKENS, NEAR_MISSES, passesIssuerChecksum, TELEGRAM_FORMS, TELEGRAM_SECRET } from './fake-tokens.js';
 import type { OllamaClient } from '@northkeep/librarian';
 
 describe('Tier-1 behavior', () => {
@@ -67,6 +67,27 @@ describe('Tier-1 issuer-prefixed tokens (ADR 0059)', () => {
     const token = FAKE_TOKENS.find((t) => t.token.includes('.01.'))!.token;
     const { text } = applyTier1(`Rotate ${token}.`);
     expect(text).toBe('Rotate [API_KEY_1].');
+  });
+
+  it('masks a Telegram bot token in its API URL, curl, webhook, env and bare forms, keeping `bot` visible', () => {
+    for (const text of TELEGRAM_FORMS) {
+      const { text: out, replacements } = applyTier1(text);
+      expect(replacements.find((r) => r.original === TELEGRAM_SECRET), text.slice(0, 40)).toBeDefined();
+      expect(out).not.toContain(TELEGRAM_SECRET.slice(-12));
+      if (text.includes('/bot')) expect(out).toContain('/bot[API_KEY_1]/');
+    }
+  });
+
+  it('does not swallow a sentence full stop after a PlanetScale token', () => {
+    const token = FAKE_TOKENS.find((t) => t.family === 'planetscale')!.token;
+    expect(applyTier1(`Rotate ${token}.`).text).toBe('Rotate [API_KEY_1].');
+  });
+
+  it('masks 1Password and Fly bodies whole even when they contain base64url characters', () => {
+    const b64url = 'FakeTest-Key_9'.repeat(10);
+    for (const token of ['ops_' + 'eyJ' + b64url, 'fm2' + '_' + b64url]) {
+      expect(applyTier1(`x ${token} y`).text).toBe('x [API_KEY_1] y');
+    }
   });
 
   it('uses fixtures that fail the GitHub and npm CRC32 checksum, so none is a validly issued shape', () => {
