@@ -650,7 +650,7 @@
             <option value="3">Tier 3: max, names + dates (PHI)</option>
             <option value="0">Off (private endpoints only)</option>
           </select>
-          <label class="pinchip" title="Pin this conversation to local models only — only local models read this chat (web tools, if on, still leave), and Auto may only pick private endpoints.">
+          <label class="pinchip" title="Pin this conversation to local models only: only local models read this chat (web tools, if on, still leave), and Auto may only pick private endpoints.">
             <input type="checkbox" id="convPrivatePin"> Private only
           </label>
           <label class="pinchip toolchip" title="Let the assistant use web tools (search and fetch) to answer. Every call asks for your approval before anything leaves your machine; site grants you make are remembered.">
@@ -682,7 +682,7 @@
           <summary style="cursor:pointer;font-weight:600;color:var(--muted)">Add any endpoint by hand</summary>
           <p class="muted" style="margin:8px 0 12px;font-size:13px">Point NorthKeep at any OpenAI-compatible runtime or hosted API.</p>
           <div class="row" style="margin-bottom:8px">
-            <input type="text" id="epLabel" placeholder="Label (e.g. This Mac — Ollama)" style="flex:0 1 240px;min-width:160px">
+            <input type="text" id="epLabel" placeholder="Label (e.g. This Mac: Ollama)" style="flex:0 1 240px;min-width:160px">
             <input type="text" id="epBase" placeholder="Base URL (e.g. http://localhost:11434/v1)">
           </div>
           <div class="row" style="margin-bottom:8px">
@@ -694,7 +694,7 @@
           <div class="row" style="margin-bottom:4px">
             <input type="password" id="epKey" placeholder="API key (optional)" style="flex:1;min-width:200px">
           </div>
-          <p class="muted" style="margin:0 0 10px;font-size:13px">Stored in the macOS Keychain — never written to files.</p>
+          <p class="muted" style="margin:0 0 10px;font-size:13px">Stored in the macOS Keychain; never written to files.</p>
           <div class="err" id="epErr"></div>
           <div class="row"><button class="btn primary" id="epAdd">Add endpoint</button></div>
         </details>
@@ -724,8 +724,8 @@
       </div>
       <div id="convEmpty" class="card" hidden>
         <strong>No AI endpoints configured yet.</strong>
-        <p class="muted" style="margin:6px 0 10px">Point NorthKeep at any OpenAI-compatible runtime —
-          Ollama, LM Studio, vLLM — or a hosted API. Your memories stay in the vault; only what you
+        <p class="muted" style="margin:6px 0 10px">Point NorthKeep at any OpenAI-compatible runtime
+          (Ollama, LM Studio, vLLM) or a hosted API. Your memories stay in the vault; only what you
           send (after redaction) reaches the endpoint.</p>
         <div class="row">
           <button class="btn primary" id="convEmptyConnect">✦ Connect a model</button>
@@ -772,7 +772,7 @@
         (Tier 1 masking still ran). Start Ollama to enable it.
       </div>
       <div id="redactOutWrap" hidden style="margin-top:12px">
-        <h3 class="sect">Redacted — safe to paste into any AI <button class="btn" id="copyRedacted" style="font-size:12px;padding:2px 10px;margin-left:8px">Copy</button></h3>
+        <h3 class="sect">Redacted: check it before you paste (unprefixed keys and passwords are not caught) <button class="btn" id="copyRedacted" style="font-size:12px;padding:2px 10px;margin-left:8px">Copy</button></h3>
         <div class="card content" id="redactOut" style="white-space:pre-wrap"></div>
         <div id="restoreWrap" hidden>
           <h3 class="sect">Paste the AI's reply to restore real names</h3>
@@ -881,7 +881,7 @@
     </div>
     <div class="drop" id="drop">
       <strong>Drop your ChatGPT or Claude export here</strong><br>
-      <span class="muted">The whole folder or the .zip — NorthKeep finds the right files and figures out the rest.</span>
+      <span class="muted">The whole folder or the .zip; NorthKeep finds the right files and figures out the rest.</span>
     </div>
     <input type="file" id="file" hidden>
     <input type="file" id="folder" hidden webkitdirectory>
@@ -914,7 +914,7 @@
   <section id="view-activity" hidden>
     <div class="page-head settings-intro"><div><h2>Activity</h2><p class="muted">See when an AI app accessed your vault.</p></div></div>
     <div class="row" style="justify-content:space-between">
-      <p class="muted" style="flex:1">Every call an AI app has made to your vault — who asked,
+      <p class="muted" style="flex:1">Every call an AI app has made to your vault: who asked,
         under which scope grant, and which memories were disclosed. Never the content itself.</p>
       <button class="btn" id="auditCsv">Export CSV</button>
       <button class="btn" id="auditJson">Export JSON</button>
@@ -973,7 +973,7 @@
   <section id="view-sync" hidden>
     <div class="page-head settings-intro"><div><h2>Sync</h2><p class="muted">Keep your encrypted vault current across your machines.</p></div></div>
     <p class="muted">Sync your encrypted vault across machines. The server only ever stores
-      ciphertext — it can't read your memories.</p>
+      ciphertext, so it can't read your memories.</p>
     <h3 class="sect">Sync server</h3>
     <div class="card">
       <div class="row" style="margin-bottom:8px">
@@ -988,12 +988,13 @@
       <div class="card">
         <p id="syncBillingLine" style="margin:0 0 10px">Loading…</p>
         <div class="row">
-          <button class="btn primary" id="syncSubscribeBtn" hidden>Subscribe — $10/month</button>
+          <button class="btn primary" id="syncSubscribeBtn" hidden>Subscribe, $10/month</button>
           <button class="btn" id="syncManageBtn" hidden>Manage billing</button>
         </div>
         <p class="muted" style="margin:10px 0 0;font-size:13px">Your card is entered on Stripe's
-          secure checkout — it never touches NorthKeep. We store only whether your subscription
-          is active, linked to your encrypted account. Never your card or the contents of your vault.</p>
+          secure checkout; it never touches NorthKeep. We store your subscription status, the
+          Stripe customer and subscription IDs, and when the current period ends, linked to your encrypted
+          account. Never your card or the contents of your vault.</p>
       </div>
     </div>
     <h3 class="sect">Status</h3>
@@ -1021,7 +1022,7 @@
     <div class="banner" style="margin:16px 0 22px">
       <strong>Desktop Connect shares your memory. It does not redact your chat.</strong>
       <div style="margin-top:6px">Connecting hands that app your <strong>owned, portable memory</strong>
-        under the scope you pick. It does <strong>not</strong> change what you type into that app —
+        under the scope you pick. It does <strong>not</strong> change what you type into that app:
         the app still sends your whole chat to its provider. Connecting NorthKeep does not
         add a privacy firewall to your messages.</div>
     </div>
@@ -1202,22 +1203,22 @@
       <p>Your AI memories will live in an encrypted vault on this Mac.
         Choose a passphrase to protect it.</p>
       <p>Your vault opens with two secrets: your passphrase plus a device key
-        file NorthKeep creates — losing either loses the vault, by design.</p>
+        file NorthKeep creates; losing either loses the vault, by design.</p>
       <div class="err" id="setupErr"></div>
       <input type="password" id="setupPass" placeholder="Choose a passphrase (min 8 characters)">
       <input type="password" id="setupPass2" placeholder="Confirm passphrase">
       <button class="btn primary" id="setupCreateBtn" style="width:100%">Create my vault</button>
     </div>
     <div id="setupStepBackup" hidden>
-      <h2>Vault created — back up your device key</h2>
+      <h2>Vault created: back up your device key</h2>
       <div class="banner" style="margin:12px 0">
         <strong>Back up this file now:</strong>
         <div class="content" id="setupSecretPath" style="font-family:var(--mono);font-size:13px;margin-top:6px"></div>
-        <div style="margin-top:6px">Copy it somewhere safe — a password manager or a printed copy.
+        <div style="margin-top:6px">Copy it somewhere safe: a password manager or a printed copy.
           Opening this vault needs <strong>both</strong> your passphrase <strong>and</strong> that file.
-          Lose either one and the vault is unrecoverable — by design.</div>
+          Lose either one and the vault is unrecoverable, by design.</div>
       </div>
-      <button class="btn primary" id="setupBackupBtn" style="width:100%">I’ve backed it up — continue</button>
+      <button class="btn primary" id="setupBackupBtn" style="width:100%">I’ve backed it up, continue</button>
     </div>
     <div id="setupStepAi" hidden>
       <h2>Add your first AI</h2>
@@ -1228,21 +1229,21 @@
         <button class="btn primary" id="setupOllamaAdd" style="width:100%;margin-bottom:8px">Use this model</button>
       </div>
       <div id="setupManualBox" hidden>
-        <input type="text" id="setupEpLabel" placeholder="Label (e.g. This Mac — Ollama)">
+        <input type="text" id="setupEpLabel" placeholder="Label (e.g. This Mac: Ollama)">
         <input type="text" id="setupEpBase" placeholder="Base URL (e.g. http://localhost:11434/v1)">
         <input type="text" id="setupEpModel" placeholder="Model (e.g. llama3.2:3b)">
         <button class="btn primary" id="setupManualAdd" style="width:100%;margin-bottom:8px">Add endpoint</button>
       </div>
-      <button class="btn" id="setupSkip" style="width:100%">Skip — add one later under Settings → Models</button>
+      <button class="btn" id="setupSkip" style="width:100%">Skip: add one later under Settings → Models</button>
     </div>
     <div id="setupStepTour" hidden>
       <h2>You're all set</h2>
       <p>Here's where everything lives:</p>
       <ul style="margin:0 0 16px 18px;line-height:1.9;font-size:14px;color:var(--muted)">
-        <li><strong>Memories</strong> — everything NorthKeep knows about you, on this Mac. Browse, search, edit, or add.</li>
-        <li><strong>Models</strong> — manage the local or cloud models available for detailed memory review under Settings.</li>
-        <li><strong>Connect</strong> — <strong>Desktop</strong> plugs your memory into the AI apps on this Mac in one click; <strong>Cloud</strong> copies chosen scopes to NorthKeep's connector server so the AI apps you use on the web can read them.</li>
-        <li><strong>Settings</strong> — import your history from ChatGPT or Claude, review activity, and set up sync across devices.</li>
+        <li><strong>Memories</strong>: everything NorthKeep knows about you, on this Mac. Browse, search, edit, or add.</li>
+        <li><strong>Models</strong>: manage the local or cloud models available for detailed memory review under Settings.</li>
+        <li><strong>Connect</strong>: <strong>Desktop</strong> plugs your memory into the AI apps on this Mac in one click; <strong>Cloud</strong> copies chosen scopes to NorthKeep's connector server so the AI apps you use on the web can read them.</li>
+        <li><strong>Settings</strong>: import your history from ChatGPT or Claude, review activity, and set up sync across devices.</li>
       </ul>
       <button class="btn primary" id="setupDone" style="width:100%">Start using NorthKeep</button>
     </div>
@@ -1254,7 +1255,7 @@
   <div class="dialog" style="width:480px">
     <div id="cwStepProvider">
       <h2>Connect a model</h2>
-      <p>Pick a provider. NorthKeep walks you through getting a key and choosing a model — your key goes straight to the Keychain.</p>
+      <p>Pick a provider. NorthKeep walks you through getting a key and choosing a model; your key goes straight to the Keychain.</p>
       <div class="err" id="cwErr"></div>
       <div id="cwProviderCards"></div>
       <button class="btn" id="cwCancel" style="width:100%;margin-top:6px">Cancel</button>
@@ -1278,7 +1279,7 @@
       <div class="muted" id="cwKeyWarn" style="font-size:13px;min-height:16px;margin-bottom:8px"></div>
       <label class="muted" style="font-size:13px;display:block;margin-bottom:6px">Model</label>
       <select id="cwModelSel" style="width:100%;margin-bottom:12px"></select>
-      <p class="muted" style="font-size:13px;margin:0 0 14px">Your key goes straight to the macOS Keychain — never written to files or shown again.</p>
+      <p class="muted" style="font-size:13px;margin:0 0 14px">Your key goes straight to the macOS Keychain; never written to files or shown again.</p>
       <div class="row">
         <button class="btn" id="cwPasteBack">Back</button>
         <div class="grow"></div>
@@ -1516,7 +1517,7 @@
       }
       card.appendChild(el('div', 'muted',
         'Read-only tools: ' + ((s.safe_read || []).length ? s.safe_read.join(', ') : 'none declared')
-        + ' — everything else asks every time and can never be remembered.'));
+        + '. Everything else asks every time and can never be remembered.'));
       const detail = el('div');
       card.appendChild(detail);
 
@@ -1672,7 +1673,7 @@
   }
 
   function loadAbout() {
-    $('aboutVersion').textContent = status.version || '—';
+    $('aboutVersion').textContent = status.version || 'unknown';
     $('updateResult').textContent = '';
   }
   $('checkUpdateBtn').addEventListener('click', async () => {
@@ -1943,7 +1944,7 @@
       const r = await api('/api/models?base=' + encodeURIComponent(OLLAMA_BASE));
       const pick = pickChatModel(r.models || []);
       if (pick) {
-        $('setupAiLine').textContent = 'Found Ollama on this Mac. Pick a model — it runs here, so your chat never goes to a cloud model:';
+        $('setupAiLine').textContent = 'Found Ollama on this Mac. Pick a model; it runs here, so your chat never goes to a cloud model:';
         const sel = $('setupOllamaModel');
         sel.textContent = '';
         for (const m of (r.models || []).filter((x) => !/embed/i.test(x))) {
@@ -1956,7 +1957,7 @@
       }
     } catch { /* no Ollama — fall through to the manual form */ }
     $('setupAiLine').textContent = 'No local AI found. Point NorthKeep at any OpenAI-compatible ' +
-      'runtime — Ollama, LM Studio, vLLM — or a hosted API.';
+      'runtime (Ollama, LM Studio, vLLM) or a hosted API.';
     $('setupOllamaBox').hidden = true;
     $('setupManualBox').hidden = false;
   }
@@ -1965,7 +1966,7 @@
     $('setupOllamaAdd').disabled = true;
     try {
       await api('/api/providers', { method: 'POST', json: {
-        label: 'This Mac — Ollama', base_url: OLLAMA_BASE, model: $('setupOllamaModel').value } });
+        label: 'This Mac: Ollama', base_url: OLLAMA_BASE, model: $('setupOllamaModel').value } });
       setupStep('setupStepTour');
     } catch (e) {
       if (e.message !== 'locked') $('setupAiErr').textContent = e.message;
@@ -2008,7 +2009,7 @@
       syncWake('unlock');
     } catch (e) {
       $('unlockErr').textContent = e.message === 'locked' ? '' :
-        'Could not unlock — check your passphrase.';
+        'Could not unlock. Check your passphrase.';
     } finally { $('unlockBtn').disabled = false; }
   }
   $('lockBtn').addEventListener('click', async () => {
@@ -2017,7 +2018,7 @@
     const r = await api('/api/lock', { method: 'POST', json: { forgetKeychain: clear } });
     if (r.envGrant) {
       alert('Locked. Note: an environment variable (NORTHKEEP_PASSPHRASE or ' +
-        'NORTHKEEP_MASTER_KEY) is set — it will re-open the vault if you restart NorthKeep. ' +
+        'NORTHKEEP_MASTER_KEY) is set; it will re-open the vault if you restart NorthKeep. ' +
         'Unset it to lock permanently.');
     }
     location.reload();
@@ -2207,7 +2208,7 @@
       button.appendChild(badges);
       button.addEventListener('click', () => loadProject(item.project));
       list.appendChild(button);
-      const option = el('option', undefined, (item.title || projectName(item.project)) + (item.conflict ? ' — needs attention' : ''));
+      const option = el('option', undefined, (item.title || projectName(item.project)) + (item.conflict ? ' (needs attention)' : ''));
       option.value = item.project; select.appendChild(option);
     }
     if (currentProjectSlug) select.value = currentProjectSlug;
@@ -2840,11 +2841,11 @@
   // Plain-language glosses for the memory types (jargon otherwise). The short
   // label shows in the dropdown; the fuller help line explains the choice.
   const TYPE_LABELS = {
-    episodic: 'episodic — something that happened',
-    semantic: 'semantic — a durable fact',
-    procedural: 'procedural — how you like things done',
-    working: 'working — a current, temporary note',
-    identity: 'identity — who you are',
+    episodic: 'episodic: something that happened',
+    semantic: 'semantic: a durable fact',
+    procedural: 'procedural: how you like things done',
+    working: 'working: a current, temporary note',
+    identity: 'identity: who you are',
   };
   const TYPE_HELP = {
     episodic: 'An event or experience. e.g. "Met the Hendersons about their filing on June 12."',
@@ -3025,7 +3026,7 @@
     if (p.status === 'extracting') {
       $('importStatus').textContent =
         `Extracting memories on this Mac… ${p.done}/${p.total} conversations` +
-        (p.degraded ? ' (rough mode — local AI off)' : '');
+        (p.degraded ? ' (rough mode: local AI off)' : '');
       $('importBar').max = p.total || 1;
       $('importBar').value = p.done;
       return;
@@ -3042,7 +3043,7 @@
       `<strong>${c.candidates.length}</strong> memory candidates` +
       (c.duplicates_dropped ? ` · ${c.duplicates_dropped} duplicates dropped` : '') +
       (c.degraded ? ' · <strong>rough extraction (local AI was off)</strong>' : '') +
-      '<br>Review below — nothing is saved until you import.';
+      '<br>Review below. Nothing is saved until you import.';
     $('conflictBox').hidden = c.conflicts.length === 0;
     $('conflictBox').innerHTML = c.conflicts.length === 0 ? '' :
       '<h3 class="sect">Possible conflicts with what the vault already knows</h3>' +
@@ -3940,7 +3941,7 @@
   function setBadge(node, tier) {
     const priv = tier === 'private';
     node.className = 'badge ' + (priv ? 'private' : 'bounded');
-    node.textContent = priv ? 'PRIVATE — nothing leaves your network' : 'BOUNDED — masked before send';
+    node.textContent = priv ? 'PRIVATE: nothing leaves your network' : 'BOUNDED: masked before send';
     return node;
   }
   const makeBadge = (tier) => setBadge(document.createElement('span'), tier);
@@ -3970,7 +3971,7 @@
     if (endpoints.length > 1) {
       // The concierge (M7b): routes each message by task + your rules,
       // within the privacy ceiling. Only offered with something to choose from.
-      const auto = el('option', '', '✦ Auto — concierge decides');
+      const auto = el('option', '', '✦ Auto: concierge decides');
       auto.value = 'auto';
       sel.appendChild(auto);
     }
@@ -4107,7 +4108,7 @@
   function renderEpList(defaultId) {
     const box = $('epList');
     box.textContent = '';
-    if (!endpoints.length) { box.appendChild(el('p', 'muted', 'None yet — add one below.')); return; }
+    if (!endpoints.length) { box.appendChild(el('p', 'muted', 'None yet. Add one below.')); return; }
     for (const ep of endpoints) {
       const line = el('div', 'epline');
       line.appendChild(el('strong', '', ep.label));
@@ -4149,13 +4150,13 @@
   let routingRules = [];
   function endpointLabel(id) {
     const ep = endpoints.find((e) => e.id === id);
-    return ep ? ep.label : id + ' (removed — rule is ignored)';
+    return ep ? ep.label : id + ' (removed, rule is ignored)';
   }
   function renderRules() {
     const box = $('ruleList');
     box.textContent = '';
     if (!routingRules.length) {
-      box.appendChild(el('p', 'muted', 'No rules yet — Auto sends everything to your default endpoint.'));
+      box.appendChild(el('p', 'muted', 'No rules yet. Auto sends everything to your default endpoint.'));
       return;
     }
     for (const r of routingRules) {
@@ -4352,7 +4353,7 @@
     $('cwSubmit').disabled = true;
     try {
       await api('/api/providers', { method: 'POST', json: {
-        label: p.name + ' — ' + (model.label || modelId),
+        label: p.name + ': ' + (model.label || modelId),
         base_url: p.baseUrl,
         model: modelId,
         api_key,
@@ -4451,14 +4452,14 @@
     catch (e) { clearInterval(localPoller); btn.disabled = false; if (e.message !== 'locked') $('localErr').textContent = e.message; return; }
     if (!p.done) {
       const mb = (n) => Math.round(n / 1048576);
-      $('localPullStatus').textContent = p.status + (p.total ? ' — ' + mb(p.completed) + ' / ' + mb(p.total) + ' MB' : '');
+      $('localPullStatus').textContent = p.status + (p.total ? ': ' + mb(p.completed) + ' / ' + mb(p.total) + ' MB' : '');
       if (p.total) { $('localPullBar').max = p.total; $('localPullBar').value = p.completed; }
       else $('localPullBar').removeAttribute('value');
       return;
     }
     clearInterval(localPoller);
     if (p.error) { $('localPullStatus').textContent = 'Download failed: ' + p.error; btn.disabled = false; return; }
-    $('localPullStatus').textContent = 'Installed — added to your endpoints.';
+    $('localPullStatus').textContent = 'Installed: added to your endpoints.';
     $('localPullBar').max = 1; $('localPullBar').value = 1;
     await loadProviders().catch(() => {});
   }
@@ -4483,7 +4484,7 @@
     // only — the reason includes endpoint labels, which are user config.
     if (ev.route_reason) strip.appendChild(el('span', '', '✦ ' + ev.route_reason));
     strip.appendChild(el('span', '',
-      ev.tier_applied === 3 && ev.tier2_degraded ? 'Tier 3 — deterministic (NER net offline)'
+      ev.tier_applied === 3 && ev.tier2_degraded ? 'Tier 3: deterministic only (NER net offline)'
       : ev.tier2_degraded ? 'Tier 2 degraded → 1'
       : 'Tier ' + ev.tier_applied));
     // Approximate on-device cost of this turn; hover shows what your other
@@ -4494,7 +4495,7 @@
       const span = el('span', '', label);
       const cmp = ev.cost_compare || [];
       if (cmp.length > 1) {
-        span.title = 'On your connected models — ' +
+        span.title = 'On your connected models: ' +
           cmp.map((r) => r.label + ' ' + (r.usd > 0 ? fmt(r.usd) : 'free')).join(' · ');
         span.style.cursor = 'help';
         span.style.textDecoration = 'underline dotted';
@@ -4541,7 +4542,7 @@
     count.style.fontWeight = '600';
     body.appendChild(count);
     // Model-derived memory text — createTextNode keeps it inert (no HTML).
-    body.appendChild(document.createTextNode(' — ' + created.map((m) => m.content).join('; ') + ' '));
+    body.appendChild(document.createTextNode(': ' + created.map((m) => m.content).join('; ') + ' '));
     const undo = el('button', 'undo', 'Undo');
     undo.addEventListener('click', async () => {
       undo.disabled = true;
@@ -4560,7 +4561,7 @@
     if (ev && ev.distill_diverted) {
       const note = el('p', 'muted', '');
       note.style.cssText = 'margin:6px 0 0;font-size:12px';
-      note.textContent = '🔒 Saved to your private Inbox — kept out of the shared "' +
+      note.textContent = '🔒 Saved to your private Inbox, kept out of the shared "' +
         (ev.requested_scope || 'shared') + '" scope, so it is not synced. Review it under Memories to keep or move it.';
       body.appendChild(note);
     }
@@ -4618,7 +4619,7 @@
       head.appendChild(note);
     } else {
       const t = el('p', 'muted', ev.privacy === 'private'
-        ? 'This went to a private local endpoint (' + host + ') — nothing left your machine.'
+        ? 'This went to a private local endpoint (' + host + '). Nothing left your machine.'
         : 'No sensitive data was found to mask in this message, so it was sent as-is at Tier ' +
           (ev.tier_applied ?? 1) + '. The exact text is below.');
       t.style.cssText = 'margin:0';
@@ -4824,9 +4825,9 @@
       box.appendChild(el('div', 'toolline' + (cls ? ' ' + cls : ''), text));
     }
     const DECISION_MSG = {
-      allow: 'Allowed once — running the tool…',
-      'allow-session': 'Allowed for this session — running the tool…',
-      'allow-always': 'Always allowed — running the tool…',
+      allow: 'Allowed once: running the tool…',
+      'allow-session': 'Allowed for this session: running the tool…',
+      'allow-always': 'Always allowed: running the tool…',
       deny: 'Denied.',
       'deny-never': 'Never allowed for this site.',
     };
@@ -4872,13 +4873,13 @@
             body: JSON.stringify({ session_id: convSession, approval_id: ev.approval_id, decision }),
           });
           // 404 = the pending call is gone (answered, timed out, or aborted).
-          if (res.status === 404) { status.textContent = 'This request expired — send again.'; return; }
-          if (!res.ok) { status.textContent = 'Could not send that decision — send again.'; return; }
+          if (res.status === 404) { status.textContent = 'This request expired. Send again.'; return; }
+          if (!res.ok) { status.textContent = 'Could not send that decision. Send again.'; return; }
           // Success: the loop resumes on the OPEN stream; tool_result / more
           // steps / done arrive on the same reader below. Nothing to re-open.
           status.textContent = DECISION_MSG[decision] || 'Decision sent.';
         } catch {
-          status.textContent = 'This request expired — send again.'; // network gone, same as 404
+          status.textContent = 'This request expired. Send again.'; // network gone, same as 404
         }
       };
       const addBtn = (label, decision, cls) => {
@@ -4942,9 +4943,9 @@
         } else if (ev.decision !== 'approved' && ev.via === 'grant') {
           toolLine('↳ ✗ ' + ev.name + ' refused (never-for-this-site grant)');
         } else if (ev.decision !== 'approved' && ev.via === 'budget') {
-          toolLine('↳ ✗ ' + ev.name + ' skipped — ' + (ev.reasons || []).join('; '), 'warn');
+          toolLine('↳ ✗ ' + ev.name + ' skipped: ' + (ev.reasons || []).join('; '), 'warn');
         } else if (ev.decision !== 'approved') {
-          toolLine('↳ ✗ ' + ev.name + ' ' + (ev.decision === 'timeout' ? 'timed out — denied' : 'denied'));
+          toolLine('↳ ✗ ' + ev.name + ' ' + (ev.decision === 'timeout' ? 'timed out, denied' : 'denied'));
         }
         showToolThinking(); // the model weighs the result / next step
       } else if (ev.type === 'tool_result') {
@@ -4975,7 +4976,7 @@
         hideToolThinking();
         if (!streamed && !toolBox) a.wrap.remove(); // keep the message if tool activity showed
         addMsg('error', ev.code === 'TIER2_UNAVAILABLE'
-          ? 'Nothing was sent to the model — ' + ev.message
+          ? 'Nothing was sent to the model: ' + ev.message
           : ev.message);
       }
     };
@@ -5045,14 +5046,14 @@
   function syncSentence(s) {
     switch (s.state) {
       case 'in-sync': return '✓ In sync (version ' + s.localVersion + ').';
-      case 'behind': return '↓ The server has newer changes — Pull to update.';
-      case 'ahead': return '↑ You have local changes — Push to upload.';
+      case 'behind': return '↓ The server has newer changes. Pull to update.';
+      case 'ahead': return '↑ You have local changes. Push to upload.';
       // Both sides moved. Pull first: it keeps the current vault as vault.nkv.bak,
       // so the local work is recoverable either way.
       // Never assert that this Mac changed: a torn or unknown baseline looks
       // the same as an edit (seventh and eighth reviews). Say what is known.
       case 'diverged': return "⚠ This Mac's vault differs from the server's newer copy. Pull first (your current vault is kept as a .bak), then Push.";
-      case 'no-remote': return 'Nothing uploaded yet — Push to start.';
+      case 'no-remote': return 'Nothing uploaded yet. Push to start.';
       case 'no-local': return 'No local vault; Pull to download version ' + s.remoteVersion + '.';
       case 'no-config': return 'Set a sync server above to start.';
       default: return 'Sync status: ' + s.state;
@@ -5064,7 +5065,7 @@
       const s = await api('/api/sync/status');
       if (!s.configured) {
         serverLine.hidden = true;
-        line.textContent = 'No sync server set yet — enter one above to start.';
+        line.textContent = 'No sync server set yet. Enter one above to start.';
         $('syncPushBtn').disabled = true;
         $('syncPullBtn').disabled = true;
         return;
@@ -5113,19 +5114,19 @@
     try {
       const r = await api('/api/sync/push', { method: 'POST' });
       if (!r.ok && r.conflict) {
-        out.textContent = 'The vault changed on another device — Pull first, then Push.';
+        out.textContent = 'The vault changed on another device. Pull first, then Push.';
       } else if (r.ok) {
-        out.textContent = 'Pushed — server now at version ' + r.version + '.';
+        out.textContent = 'Pushed: server now at version ' + r.version + '.';
       } else {
         out.textContent = 'Push did not complete.';
       }
     } catch (e) {
       if (e.status === 402) {
-        out.textContent = 'A $10/month subscription is required — subscribe below, then Push.';
+        out.textContent = 'A $10/month subscription is required. Subscribe below, then Push.';
         await loadSyncBilling();
       } else {
         out.textContent = e.message === 'locked'
-          ? 'Your vault is locked — unlock it, then Push again.' : e.message;
+          ? 'Your vault is locked. Unlock it, then Push again.' : e.message;
       }
     } finally {
       syncBusy(false);
@@ -5140,7 +5141,7 @@
       const r = await api('/api/sync/pull', { method: 'POST' });
       if (r.ok) {
         out.textContent = r.wroteVault
-          ? 'Pulled — local vault replaced with version ' + r.version + '.'
+          ? 'Pulled: local vault replaced with version ' + r.version + '.'
           : 'Already up to date (version ' + r.version + ').';
       } else {
         out.textContent = 'Pull did not complete.';
@@ -5148,11 +5149,11 @@
     } catch (e) {
       // api() already called showUnlock() on a 423.
       if (e.status === 402) {
-        out.textContent = 'A $10/month subscription is required — subscribe below, then Pull.';
+        out.textContent = 'A $10/month subscription is required. Subscribe below, then Pull.';
         await loadSyncBilling();
       } else {
         out.textContent = e.message === 'locked'
-          ? 'Your vault is locked — unlock it above, then Pull again.' : e.message;
+          ? 'Your vault is locked. Unlock it above, then Pull again.' : e.message;
       }
     } finally {
       syncBusy(false);
@@ -5174,12 +5175,12 @@
       card.hidden = false;
       if (s.active) {
         const until = s.currentPeriodEnd
-          ? ' — renews ' + new Date(s.currentPeriodEnd * 1000).toISOString().slice(0, 10) : '';
+          ? ', renews ' + new Date(s.currentPeriodEnd * 1000).toISOString().slice(0, 10) : '';
         line.textContent = '✓ Active (' + s.status + ')' + until + '.';
         subBtn.hidden = true; mgBtn.hidden = false;
       } else if (s.status && s.status !== 'none') {
         // Billing on, account inactive/lapsed.
-        line.textContent = 'Your subscription is ' + s.status + ' — resubscribe to keep syncing.';
+        line.textContent = 'Your subscription is ' + s.status + '. Resubscribe to keep syncing.';
         subBtn.hidden = false; mgBtn.hidden = false;
       } else {
         // Billing on, no subscription yet — prompt to subscribe.
@@ -5194,7 +5195,7 @@
   // a real https URL, never a javascript:/data: scheme. noopener severs the tab.
   function openStripe(url) {
     if (typeof url === 'string' && /^https:\/\//i.test(url)) openExternal(url);
-    else $('syncBillingLine').textContent = 'The server returned an unexpected checkout link — not opening it.';
+    else $('syncBillingLine').textContent = 'The server returned an unexpected checkout link, so it was not opened.';
   }
   $('syncSubscribeBtn').addEventListener('click', async () => {
     $('syncSubscribeBtn').disabled = true;
@@ -5312,7 +5313,7 @@
     // Claude Code with no CLI on PATH: disabled card, honest reason.
     if (!t.available) {
       card.style.opacity = '.6';
-      card.appendChild(el('p', 'muted', 'Claude Code CLI not found — install it to connect.'));
+      card.appendChild(el('p', 'muted', 'Claude Code CLI not found. Install it to connect.'));
       return card;
     }
 
@@ -5320,8 +5321,8 @@
     status.style.margin = '12px 0';
     if (t.connected) {
       status.textContent = t.scopes && t.scopes.length
-        ? '✓ Connected — sharing ' + t.scopes.join(', ')
-        : '✓ Connected — full access';
+        ? '✓ Connected: sharing ' + t.scopes.join(', ')
+        : '✓ Connected: full access';
     } else {
       status.textContent = 'Not connected.';
     }
@@ -5593,7 +5594,7 @@
       $('unshareConfirmErr').textContent =
         e.message && e.message !== 'locked'
           ? e.message
-          : 'Could not reach the connector server. Your scope is still shared — try again.';
+          : 'Could not reach the connector server. Your scope is still shared. Try again.';
     }
   });
 
