@@ -29,6 +29,7 @@ import { describeFlag, screenArguments, type ExfilFlag } from './tools/exfil.js'
 import { endpointOrigin, getServer as getMcpServer, isHttpServer } from './tools/mcp/config.js';
 import { getToolBudget, reserveDailySpend, withinDailyCap } from './tools/budget.js';
 import { newFenceNonce, untrustedSystemLine, wrapUntrusted } from './tools/untrusted.js';
+import { TOOL_THREW_GUIDANCE, fenceFailedResult } from './tools/errorFence.js';
 
 /**
  * runTask — the agent loop (M10b, ADR 0027/0028): model → tool → model → …
@@ -909,9 +910,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
               // INVISIBLE to us — it may write to disk, spawn a process, or
               // make its own network calls. So a 'strict' server (the default)
               // gets the same deterministic floor a bounded web destination
-              // gets, rather than raw plaintext. 'trusted' is user-declared and
-              // never inferred: the vault's own server needs the real query,
-              // and masking a memory_remember would corrupt what gets stored.
+              // gets, rather than raw plaintext. 'trusted' is never inferred: the
+              // catalog's vault server is added trusted (ADR 0060 D6), because
+              // masking a memory_remember would corrupt what gets stored.
               const mcpStrict =
                 mcpServerId !== undefined && getMcpServer(mcpServerId)?.trust !== 'trusted';
               if (mcpStrict || (egressUrl !== null && egressTier === 'bounded')) {
@@ -941,43 +942,29 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                   content: JSON.stringify({
                     error: 'tool_failed',
                     detail: err instanceof Error ? err.message : String(err),
-                    guidance: 'The tool failed unexpectedly. Consider a different approach.',
+                    guidance: TOOL_THREW_GUIDANCE,
                   }),
                   meta: { bytes: 0, truncated: false, ok: false },
                 };
               }
               execMeta = toolOut.meta;
-              // Fence SUCCESSFUL tool output (attacker-authored data); our own
-              // structured error JSON is not external and stays bare.
-              //
-              // The trigger is "a tool produced this", NOT "it has an egress
-              // URL". Keying on the URL fails OPEN for any tool that egresses
-              // somewhere we cannot name — exactly the shape M11's MCP tools
-              // take (ADR 0033), where a stdio server has no URL at all. Both
-              // tools shipped today always carry one, so this changes nothing
-              // now; it means a URL-less tool cannot arrive later and quietly
-              // inject unfenced attacker text into the transcript.
-              resultContent = toolOut.meta.ok
-                ? wrapUntrusted(
-                    truncateChars(toolOut.content, maxResultChars),
-                    egressUrl ?? toolOut.meta.host ?? call.name,
-                    fenceNonce,
-                    now,
-                  )
-                : truncateChars(toolOut.content, maxResultChars);
-              // On failure, lift the tool's own {error, guidance} out of the
-              // (unfenced) structured error content so the surface can show the
-              // user WHY — content-free, never page/query text.
+              // Fence what a tool produced, success or failure (ADR 0028, ADR
+              // 0060 D3). The trigger is "a tool produced this", not "it has an
+              // egress URL": an MCP stdio server has no URL, and keying on one
+              // would let its text in unfenced. On failure only NorthKeep's own
+              // code and guidance stay outside the fence and reach the user.
               let errorLine: string | undefined;
-              if (!toolOut.meta.ok) {
-                try {
-                  const parsed = JSON.parse(toolOut.content) as { error?: unknown; guidance?: unknown };
-                  const err = typeof parsed.error === 'string' ? parsed.error : undefined;
-                  const guide = typeof parsed.guidance === 'string' ? parsed.guidance : undefined;
-                  errorLine = [err, guide].filter(Boolean).join(': ') || undefined;
-                } catch {
-                  errorLine = undefined; // non-JSON content: no structured reason
-                }
+              if (toolOut.meta.ok) {
+                resultContent = wrapUntrusted(
+                  truncateChars(toolOut.content, maxResultChars),
+                  egressUrl ?? toolOut.meta.host ?? call.name,
+                  fenceNonce,
+                  now,
+                );
+              } else {
+                const fenced = fenceFailedResult(toolOut.content, call.name, fenceNonce, now);
+                resultContent = fenced.content;
+                errorLine = fenced.errorLine;
               }
               hooks.onEvent({
                 type: 'tool_result',

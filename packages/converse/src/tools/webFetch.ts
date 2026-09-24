@@ -24,7 +24,7 @@ export interface WebFetchConfig {
 }
 
 /** One-line model guidance per refusal code — actionable, never chatty. */
-const GUIDANCE: Record<string, string> = {
+export const WEB_FETCH_GUIDANCE: Readonly<Record<string, string>> = {
   scheme: 'Only https:// URLs can be fetched. Retry with an https URL.',
   userinfo: 'URLs with embedded credentials are refused. Retry without user:pass@.',
   'private-address': 'That address is private/internal and can never be fetched. Only public sites are reachable.',
@@ -40,11 +40,14 @@ const GUIDANCE: Record<string, string> = {
   network: 'The connection failed. The site may be unreachable; try once more or move on.',
 };
 
+/** Our fixed fallback; part of the closed set the error fence trusts (ADR 0060 D3). */
+export const WEB_FETCH_FALLBACK_GUIDANCE = 'The fetch failed. Consider a different URL.';
+
 function errorResult(code: string, detail: string, host?: string): ToolResult {
   const content = JSON.stringify({
     error: code,
     detail,
-    guidance: GUIDANCE[code] ?? 'The fetch failed. Consider a different URL.',
+    guidance: WEB_FETCH_GUIDANCE[code] ?? WEB_FETCH_FALLBACK_GUIDANCE,
   });
   return {
     content,

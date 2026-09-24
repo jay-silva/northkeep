@@ -52,7 +52,8 @@ export interface ReviewReport {
   proposals: ReviewProposal[];
   rejected_fingerprints: string[];
   operations: ReviewReceipt[];
-  sent_to?: { label: string; host: string; endpoint_id?: string; model?: string };
+  /** tier and degraded: what masking the cloud review applied (ADR 0060 1.7). */
+  sent_to?: { label: string; host: string; endpoint_id?: string; model?: string; tier?: 1 | 2 | 3; degraded?: boolean };
 }
 
 export interface LegacyReviewReport {
@@ -294,7 +295,9 @@ function coverage(value: unknown): value is ReviewCoverage {
 function sentTo(value: unknown, legacy: boolean): boolean {
   return object(value) && string(value.label) && string(value.host) && (legacy ||
     ((value.endpoint_id === undefined || string(value.endpoint_id)) &&
-      (value.model === undefined || string(value.model))));
+      (value.model === undefined || string(value.model)) &&
+      (value.tier === undefined || value.tier === 1 || value.tier === 2 || value.tier === 3) &&
+      (value.degraded === undefined || typeof value.degraded === 'boolean')));
 }
 
 function strictV2(value: unknown): value is ReviewReport {

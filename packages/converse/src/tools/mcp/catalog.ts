@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import type { McpServerConfig, McpTrust } from './config.js';
 
 /**
  * The MCP server catalog (ADR 0034 Decision 1).
@@ -26,6 +27,11 @@ export interface McpCatalogEntry {
   safeRead: string[];
   /** Why you might want it, and what it can see. Shown before adding. */
   caution: string;
+  /**
+   * Trust the add route records (ADR 0060 Decision 4). Only the bundled vault
+   * server is `trusted`: its arguments go into the vault on this machine.
+   */
+  trust: McpTrust;
 }
 
 export interface ResolvedMcpCatalogEntry extends McpCatalogEntry {
@@ -70,6 +76,9 @@ const ENTRIES: Array<McpCatalogEntry & { resolve: () => { command: string; args:
     safeRead: ['memory_retrieve', 'memory_list'],
     caution:
       'This server can read every memory in your vault. It runs on this Mac and sends nothing anywhere by itself.',
+    // What you ask it to remember is saved exactly, not Tier-1 masked: it is
+    // the vault on this machine (ADR 0060 Decision 4, amending ADR 0033 D3).
+    trust: 'trusted',
     resolve: resolveVaultServer,
   },
 ];
@@ -87,4 +96,22 @@ export function listMcpCatalog(): ResolvedMcpCatalogEntry[] {
 
 export function getMcpCatalogEntry(id: string): ResolvedMcpCatalogEntry | undefined {
   return listMcpCatalog().find((e) => e.id === id);
+}
+
+/**
+ * Whether an existing entry is exactly the bundled vault server's launch, so
+ * the "This is my NorthKeep vault" button may be OFFERED (ADR 0060 Decision 4,
+ * F8). It never sets trust by itself: only the user's confirm does. An entry
+ * with any env or cwd override is refused, because NORTHKEEP_HOME or a working
+ * directory can point this same program at a different vault.
+ */
+export function isBundledVaultLaunch(server: McpServerConfig): boolean {
+  if (server.transport !== 'stdio') return false;
+  if (server.env !== undefined && Object.keys(server.env).length > 0) return false;
+  if (server.cwd !== undefined) return false;
+  const entry = getMcpCatalogEntry('vault');
+  if (entry === undefined || !entry.available || entry.command === undefined || entry.args === undefined) return false;
+  return server.command === entry.command &&
+    server.args.length === entry.args.length &&
+    server.args.every((arg, i) => arg === entry.args![i]);
 }

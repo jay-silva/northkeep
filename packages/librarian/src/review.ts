@@ -16,6 +16,7 @@ import {
   validateProposals,
   type ReviewProposal,
 } from './reviewSchema.js';
+import { restoreReviewReply, type ReviewPackHandle } from './reviewRestore.js';
 
 const REVIEW_TIMEOUT_MS = 300_000;
 const DATA_BEGIN = '===BEGIN MEMORY DATA===';
@@ -79,8 +80,34 @@ function formatDataSection(entries: MemoryEntry[]): string {
   return `${DATA_BEGIN}\n${blocks.join('\n---\n')}\n${DATA_END}`;
 }
 
+/**
+ * The pinned review prompt. With `placeholderTag` (the cloud path only, ADR
+ * 0060 1.4 amending P3) one sentence is added; its example uses number 0,
+ * which a session never issues, so the example is never a real token.
+ */
+export function formatReviewPrompt(entries: MemoryEntry[], opts?: { placeholderTag?: string }): string {
+  const rule = opts?.placeholderTag === undefined
+    ? ''
+    : `\n- Some values are replaced by placeholders such as [${opts.placeholderTag}:EMAIL_0]. Copy them exactly as written; do not guess what they hide.`;
+  return `${SYSTEM_INSTRUCTIONS}${rule}\n\n${formatDataSection(entries)}`;
+}
+
 function reviewPrompt(entries: MemoryEntry[]): string {
-  return `${SYSTEM_INSTRUCTIONS}\n\n${formatDataSection(entries)}`;
+  return formatReviewPrompt(entries);
+}
+
+/**
+ * The cloud path (ADR 0060 1.2). `prepare` masks every pack before the first
+ * send and returns handles; `send` builds the prompt itself from what a handle
+ * holds. runReviewPass never formats a prompt for this path.
+ */
+export interface ReviewOutbound {
+  prepare(packs: MemoryEntry[][]): Promise<ReviewPackHandle[]>;
+  send(handle: ReviewPackHandle, opts: { model: string; timeoutMs: number }): Promise<string>;
+}
+
+function isOutbound(g: Pick<OllamaClient, 'generateJson'> | ReviewOutbound): g is ReviewOutbound {
+  return typeof (g as ReviewOutbound).prepare === 'function' && typeof (g as ReviewOutbound).send === 'function';
 }
 
 function mergeDrops(into: Record<string, number>, from: Record<string, number>): void {
@@ -136,7 +163,7 @@ async function embedSingletons(
  */
 export async function runReviewPass(
   entries: MemoryEntry[],
-  ollama: Pick<OllamaClient, 'generateJson'>,
+  ollama: Pick<OllamaClient, 'generateJson'> | ReviewOutbound,
   opts?: ReviewPassOptions,
 ): Promise<ReviewPassResult> {
   const model = opts?.model ?? REVIEW_MODEL_PREFERRED;
@@ -241,13 +268,18 @@ export async function runReviewPass(
     opts?.onStatus?.('Some related memories required separate review packs and are counted as incomplete comparisons.');
   }
 
+  // Every pack is masked before the first send, so a refusal leaves nothing sent.
+  const handles = isOutbound(ollama) ? await ollama.prepare(modelPacks) : null;
+
   for (let i = 0; i < modelPacks.length; i++) {
     const pack = modelPacks[i]!;
-    const prompt = reviewPrompt(pack);
+    const handle = handles?.[i];
     let parsed: unknown | null = null;
     for (let attempt = 0; attempt < 2 && parsed === null; attempt++) {
       try {
-        const raw = await generateBatch(ollama, prompt, { model, timeoutMs });
+        const raw = handle !== undefined && isOutbound(ollama)
+          ? await ollama.send(handle, { model, timeoutMs })
+          : await generateBatch(ollama as Pick<OllamaClient, 'generateJson'>, reviewPrompt(pack), { model, timeoutMs });
         parsed = parseReviewResponse(raw);
       } catch {
         parsed = null;
@@ -260,10 +292,12 @@ export async function runReviewPass(
       opts?.onProgress?.(i + 1, modelPacks.length);
       continue;
     }
-    const result = validateProposals(parsed, pack);
+    const restored = handle !== undefined ? restoreReviewReply(parsed, pack, handle) : { parsed, drops: {} };
+    const result = validateProposals(restored.parsed, pack);
     proposals.push(...result.proposals);
+    mergeDrops(drops, restored.drops);
     mergeDrops(drops, result.drops);
-    if (Object.keys(result.drops).length > 0) {
+    if (Object.keys(result.drops).length > 0 || Object.keys(restored.drops).length > 0) {
       for (const entry of pack) failedIds.add(entry.id);
       opts?.onStatus?.(`Review batch ${i + 1} contained invalid findings and has incomplete coverage.`);
     } else {
