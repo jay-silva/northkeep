@@ -1,10 +1,13 @@
-# ADR 0060: Pre-release privacy fixes for 0.22.0 (D2, D3, D4, D6, D7, D8)
+# ADR 0060: Pre-release privacy fixes for 0.22.0 (D2, D3, D4, D6, D7, D8, D9)
 
 - **Date:** 2026-09-24
-- **Status:** Proposed. First review CLEARED WITH WOUNDS (2026-09-24,
-  six flesh wounds F1 to F6, twelve notes); this revision closes them
-  in the design and awaits a recheck. Design only; nothing here is
-  implemented. It changes what leaves the machine (D2, D4), puts
+- **Status:** Proposed. Design CLEARED WITH WOUNDS after recheck
+  (first review and recheck, 2026-09-24). This final text pass closes
+  the recheck's F7, F8, scar tissue and notes, and adds D9; it has
+  **not** been re-reviewed. Next step: the build, followed by a full
+  adversarial review of the code. Provider handling of the tagged tokens
+  (R10) stays unverified until Jay's one real-provider run. Design only;
+  nothing here is implemented. It changes what leaves the machine (D2, D4), puts
   third-party text in front of the model (D3), changes a trust level
   (D6) and publishes claims, so the CLAUDE.md review gate applies.
 - **Deciders:** Jay (product owner), Claude Code
@@ -123,13 +126,17 @@ sent, per tier:
 |---|---|---|---|
 | `id` | sent; must be a UUID or `prepare` refuses the run | same | same |
 | `type` | sent; must be one of `MEMORY_TYPES` or `prepare` refuses | same | same |
-| `scope` (collection name) | **Tier 1** | **Tier 1** | **Tier 1** |
-| `created_at` | sent | sent | **year only** (`2026`), Jay 2026-09-24 |
+| `scope` (collection name) | **Tier 1** | **Tier 1** | **Tier 1, then every date to year** |
+| `created_at` | sent; must be an ISO 8601 UTC date-time or `prepare` refuses | same | **year only** (`2026`), Jay 2026-09-24 |
 | `content` | Tier 1 | Tier 2 | Tier 3 |
 
 Collection names (F6). The scope line of each block is run through
 Tier-1 masking in the same run session as content (1.3), so
-`patient:508-555-0142` goes out as `patient:[k7q2:PHONE_1]`. Names in
+`patient:508-555-0142` goes out as `patient:[k7q2:PHONE_1]`. At Tier 3
+the date layer also runs over the scope line (F7, recheck attack 7), so
+`visit:2026-10-03` goes out as `visit:[k7q2:DATE_2026_1]`; otherwise a
+user who chose Tier 3 to keep appointment dates coarse would still send
+an exact date whenever a collection is named after one. Names in
 collection names are not run through name detection at any tier
 (residual R1). Consequences: the consent panel, the saved report and the
 apply dialog show the real collection names, because they are local and
@@ -138,9 +145,12 @@ scope, and proposals are keyed by entry id, so masking the scope costs
 no review quality; a token whose only occurrence was in a scope line can
 never be restored into a proposal (the `uncited_original` rule in 1.4).
 
-`prepare` validates `id` against the UUID shape and `type` against the
-enum and refuses the run on any other value, so no caller can smuggle
-free text into the frame through those fields (review note 10).
+`prepare` validates `id` against the UUID shape, `type` against the
+enum and `created_at` as an ISO 8601 UTC date-time, and refuses the run
+on any other value, so no caller can smuggle free text into the frame
+through those fields (first review note 10, recheck note 4). Every
+current id is minted by `uuidv4`; a future import that kept foreign ids
+would make the review refuse, which is the safe direction.
 
 ### 1.2 The seam, and why the guarantee sits at the send
 
@@ -152,9 +162,13 @@ free text into the frame through those fields (review note 10).
   task.ts imports `applyTier1`) stops accepting a prompt string. It
   exposes two methods and nothing else:
   - `prepare(packs: MemoryEntry[][], tier)`: redacts every pack (1.3)
-    and returns one opaque handle per pack, each carrying the set of
-    tagged tokens that pack's prompt contains, plus the run's token
-    mapping and the tier actually applied.
+    and returns one opaque handle per pack, each carrying that pack's
+    **token set**, plus the run's token mapping and the tier actually
+    applied. A pack's token set is defined from the masking output: the
+    tokens the redaction session issued while masking that pack's own
+    content and scope lines. It is never computed by scanning the built
+    prompt (recheck note 1), so the instruction sentence cannot add a
+    token to it.
   - `send(handle, opts)`: builds the prompt **itself**, from the
     redacted content held behind the handle, using the prompt formatter
     exported by librarian (`formatReviewPrompt`, today's
@@ -247,6 +261,14 @@ for an original containing `"` or `\`.
    `foreign_placeholder`, in `explanation` or `question` it stays
    visible unrestored. Review attack A2 (pack B naming pack A's
    `[EMAIL_1]`) becomes a drop.
+
+   **Variant forms** (recheck note 2). Any text that contains the run
+   tag followed by `:` compared case-insensitively, with or without the
+   brackets (`[K7Q2:EMAIL_2]`, `k7q2:EMAIL_2`, `[k7q2:email_2`), and is
+   not exactly an issued token of this pack, is treated as a forgery:
+   `proposed_content` drops with `foreign_placeholder`, a quote cannot
+   match, and `explanation` or `question` show it unrestored. A variant
+   is never kept as literal text in a suggested wording.
 1. Split the quote into literal runs and tagged-token occurrences, where
    a token is any string in this pack's token set.
 2. Build a matcher: each literal run matches itself exactly; each token
@@ -287,15 +309,25 @@ to fix. Rules:
   only if it occurs literally in a cited entry's stored content;
   otherwise the proposal drops with `unmapped_placeholder`.
 
+**The merge case, accepted** (recheck attack 5, note 3). A proposal that
+cites two memories of the same pack may carry a value from one into the
+suggested wording for the other (for example m2's email into m1). The
+`uncited_original` rule allows it, because both memories are cited and
+the model saw both, masked. Today's plaintext review can make the same
+suggestion, so this is not a regression; the Save dialog shows the exact
+text before anything is written (P6).
+
 **`explanation` and `question` (display only, never applied).**
 Tokens from this pack's set are restored; anything else stays visible
 as written. Nothing is dropped for these fields.
 
 **Prompt amendment (ADR 0043 P3).** The pinned prompt used on the API
 path gains one sentence, with this run's tag filled in: "Some values
-are replaced by placeholders such as [k7q2:EMAIL_1]. Copy them exactly
-as written; do not guess what they hide." The local path's prompt is
-unchanged.
+are replaced by placeholders such as [k7q2:EMAIL_0]. Copy them exactly
+as written; do not guess what they hide." The example uses number 0,
+which the session never issues (counters start at 1), so the example is
+never a real token and never names the run's first email (recheck
+note 1). The local path's prompt is unchanged.
 
 ### 1.5 Tier selection and the consent panel
 
@@ -392,10 +424,15 @@ nothing off the machine, and keep today's prompt and validation.
   life of the server process: one `PseudonymMap` held in RAM, never
   written to disk, never logged. No run tag is used over MCP: the host
   keeps what it reads, and nothing is ever restored from it.
-- **Tier 3 dates in every field (F4).** Tier 3 promises all dates to the
-  year, so at Tier 3 every date-valued string in a returned payload is
-  reduced to its four-digit year, including fields the Tier-1 walk
-  treats as identifiers. The date-typed keys, from `publicEntry`
+- **Tier 3 dates in every field except handles (F4).** Tier 3 promises
+  all dates to the year, so at Tier 3 every date-valued string in a
+  returned payload is reduced to its four-digit year, including fields
+  the Tier-1 walk treats as identifiers. **Handle fields are the
+  exception**: `scope`, `project`, and the scope and slug strings inside
+  `disclosed_scopes`, `granted_scopes` and board rows are names the host
+  must send back to call a tool, so they stay exact even when a user
+  named a collection or project after a date (`visit:2026-10-03`,
+  `care-2026-10-03`). This is scar tissue, residual R12. The date-typed keys, from `publicEntry`
   (server.ts:145-155) and `PROJECT_IDENTIFIER_KEYS`
   (project-mask.ts:8-16): `created_at`, `updated_at`, `checked_at`,
   `saved_at`, `recorded_at`, `opened_at`, `last_read_at`, `oldest`,
@@ -404,8 +441,8 @@ nothing off the machine, and keep today's prompt and validation.
   list goes stale, the rule is also structural: at Tier 3 the walker
   reduces any string leaf under an identifier key that parses as a full
   date or date-time to its year. The enforcing test (C9b) calls every
-  read tool at Tier 3 and asserts no string leaf anywhere in any payload
-  matches a month-and-day pattern. Consequence: at Tier 3 the host
+  read tool at Tier 3 and asserts no string leaf outside the handle
+  fields matches a month-and-day pattern. Consequence: at Tier 3 the host
   cannot order memories or revisions by exact time, only by year and by
   list order. Revision ids, not dates, remain the write handle, and
   writes are refused under masking anyway.
@@ -537,12 +574,27 @@ task.ts:960-967), for **every** tool, not only MCP:
   vault entry earns it because conditions 1 to 4 hold for that program.
 - Existing installs (Jay decision 3): the MCP settings list shows, for a
   stdio server whose resolved command and args equal the bundled vault
-  server's, one button, "This is my NorthKeep vault: save exactly what I
-  say". It opens a confirm that names the program path, and only the
+  server's **and which has no `env` and no `cwd`** (F8), one button,
+  "This is my NorthKeep vault: save exactly what I say". It opens a confirm that names the program path, and only the
   confirm sets `trusted`. This is the one sanctioned exception to "never
   inferred from a matching command": the match only offers the button,
   and the user decides. C15 is amended accordingly: a matching custom
   server stays `strict` until that confirm.
+- **Why no `env` and no `cwd`** (F8, recheck attack 9). `northkeep mcp
+  add` accepts `--env NAME=VALUE` and `--cwd` (packages/cli/src/mcpCmd.ts:70-86).
+  An entry with the bundled command and args plus
+  `env: {NORTHKEEP_HOME: <another home>}` launches our own server
+  against a different vault; the recheck saved a memory through such an
+  entry and found it in the other home. Condition 1 is false for it, so
+  the button is not offered for it, and a confirm that shows only the
+  program path could not have warned the user. The stricter rule was
+  chosen over "show every env value in the confirm" because it costs
+  nothing: the catalog add passes neither (`resolveVaultServer` returns
+  command and args only, catalog.ts:47-58), so the bundled server's own
+  launch never has an `env` or `cwd` override, and an exact args match
+  already excludes an extra `--vault` argument. The same rule applies to
+  the catalog add itself: a catalog entry is added with no `env` and no
+  `cwd`, as today (api.ts:1084-1088).
 
 ## Decision 5 (D7): log before acting
 
@@ -659,7 +711,44 @@ serialized result exceeds PROJECT_DOC_MAX_CHARS" and say that size is
 enforced by the caller through `rollProjectLog` and
 `assertProjectDocSize` (ADR 0045), matching project-doc.ts:193-195.
 
-## Claims this ADR publishes, and the test that enforces each
+## Decision 8 (D9): the name model reads the whole text, in windows
+
+**The defect** (missed by the first review, found by the recheck,
+attack 12). `detectEntities` sends the name model only
+`text.slice(0, 6000)` (packages/redact/src/tier2.ts:124) and reports
+nothing about the cut. Memory content reaches 8192 characters over MCP,
+`memory_edit` and project fields 16384, and chat prompts carry whole
+histories. A name after character 6000 is never seen, so it goes out in
+plain text while the call reports Tier 2 (recheck: a 6.1k memory sent
+with `applied:[2]` and "Quennell Abernathy-Vos" intact in the tail).
+That is invariant 6's silent drop, and it affects chat, the cloud
+review and MCP returns alike, because all three call the same
+`applyTier2`.
+
+**The fix.**
+
+- `detectEntities` runs the name model over the **whole** text in
+  windows of at most 6000 characters, each overlapping the previous by
+  500 characters, so a name that straddles a boundary appears whole in
+  at least one window (names are far shorter than 500 characters). A
+  window boundary is moved back to the nearest whitespace within its
+  last 200 characters when there is one, and never splits a surrogate
+  pair.
+- Hits from all windows are unioned and de-duplicated before masking;
+  masking itself already runs over the full text by span text, so a name
+  found in any window is masked everywhere it occurs.
+- If any window's call fails (exception, timeout, unparseable output),
+  the whole text counts as degraded, and the F3 rule applies unchanged:
+  retry once, then refuse the run (cloud review) or the call (MCP) at
+  Tier 2, or proceed labelled "deterministic only" at Tier 3. Chat keeps
+  its existing rule (turn.ts:399-420): a degraded Tier 2 toward a
+  bounded endpoint refuses, now also when only one window failed.
+- The prompt format per window is unchanged, including the trailing
+  "\nText:\n" marker the mobile client splits on (tier2.ts:110-114).
+- Cost: a 16384-character text takes three or four name-model calls
+  instead of one (residual R13).
+
+
 
 Every test that opens a vault or writes the log sets `NORTHKEEP_HOME` to
 a temp directory. No test calls a real provider; providers are local
@@ -671,7 +760,7 @@ and exists to stop a later regression. A guard is not evidence of a fix.
 
 | # | claim | test (planned file) | old code |
 |---|---|---|---|
-| C1 | A cloud review sends no seeded Tier-1 value, in content **or in a collection name**; at Tier 3 no seeded full date, no dictionary name, and `created_at` as year only | `apps/web/test/review-api-redact.test.ts`: stub provider records wire text; corpus seeded into memories; assert no original and no full `created_at` appears | fails: wire text is the raw prompt |
+| C1 | A cloud review sends no seeded Tier-1 value, in content **or in a collection name**; at Tier 3 no seeded full date in content **or in a collection name** (`visit:2026-10-03`), no dictionary name, and `created_at` as year only | `apps/web/test/review-api-redact.test.ts`: stub provider records wire text; corpus seeded into memories; assert no original and no full `created_at` appears | fails: wire text is the raw prompt |
 | C2 | The API adapter has no free-text send | `packages/converse/test/reviewApi.test.ts`: `send` rejects a hand-built object and a string; only a `prepare` handle passes | fails: `generateJson(prompt)` accepts any string |
 | C3 | Placeholder numbering is consistent across a run and tagged | `packages/redact/test/session.test.ts`: two different emails in two calls sharing a session get `[<tag>:EMAIL_1]`, `[<tag>:EMAIL_2]`; the same email twice gets one token; two different 1948 dates get two tokens | fails: numbering restarts per call, dates collide |
 | C3g | Without a session, `redact()` output is unchanged | same file, against today's corpus outputs | guard |
@@ -692,7 +781,7 @@ and exists to stop a later regression. A guard is not evidence of a fix.
 | C13b | An `error` or `guidance` value outside the closed set is fenced, and `errorLine` shows `tool_failed` instead | same file | fails: passes through |
 | C13g | `errorLine` never contains `detail` | same file | guard |
 | C14 | The catalog vault server receives `memory_remember` content unmasked | `packages/converse/test/mcp-catalog-trust.test.ts`: catalog add, then a task call (gate stub approves once) with an email in content; the stub server records the arguments | fails: arrives as `[EMAIL_1]` |
-| C15 | A custom-added server with the vault's exact command stays `strict` until the user confirms the "This is my NorthKeep vault" button; the confirm sets `trusted` | same file | guard for the first half; fails for the button (does not exist) |
+| C15 | A custom-added server with the vault's exact command and args, and no env or cwd, stays `strict` until the user confirms the "This is my NorthKeep vault" button; the confirm sets `trusted` | same file | guard for the first half; fails for the button (does not exist) |
 | C16 | When the log cannot be appended, a write does not happen | `packages/mcp-server/test/log-first.test.ts`: directory at the log path, `memory_remember` and `project_update`: vault bytes unchanged, error returned | fails: write lands |
 | C17 | When the completion row fails after a write, the client gets a content-free acknowledgement plus `log_warning`; after a read, no payload | same file, append injected to fail on its second call | fails: error returned after the write |
 | C18 | Pending rows never open or close a session | `packages/mcp-server/test/open-sessions.test.ts`, run against this build's derivation and against a copy of the pre-0060 derivation | guard (both pass on old code by the `ok === true` rule; the test pins it) |
@@ -704,13 +793,19 @@ and exists to stop a later regression. A guard is not evidence of a fix.
 | C23 | A restored original that occurs in no cited entry (for example one seen only in a scope line) drops the proposal as `uncited_original` | same file | fails: no rule |
 | C24 | Tier-2 cloud review: a name-model stub that fails one memory's call once succeeds on retry and the run proceeds; one that fails it twice refuses the whole run with zero provider calls (F3) | `apps/web/test/review-api-redact.test.ts` | fails: that memory is sent at Tier 1 while the run is labelled Tier 2 |
 | C25 | Tier-2 over MCP: one field's name-model call failing twice refuses the whole call with no content; completion row `ok: false` and no `ok: true` row for the call (F3, note 7) | `packages/mcp-server/test/redact-tier.test.ts` | fails: plaintext |
-| C9b | At Tier 3 over MCP no string leaf in any read tool's payload (memory, project, board, list, resume) matches a month-and-day date pattern; `created_at` and the board's `date` are years (F4) | `packages/mcp-server/test/redact-tier.test.ts`, walking every read tool | fails: `"date":"2026-10-03"`, full `created_at` |
+| C9b | At Tier 3 over MCP no string leaf outside the handle fields (`scope`, `project`, scope and slug lists) in any read tool's payload matches a month-and-day date pattern; `created_at` and the board's `date` are years (F4); a dated scope and slug are seeded and stay exact in the handle fields only | `packages/mcp-server/test/redact-tier.test.ts`, walking every read tool | fails: `"date":"2026-10-03"`, full `created_at` |
 | C26 | `memory_remember` is refused at Tiers 2 and 3 and allowed at Tier 1 (F5) | same file | fails: allowed at 2 and 3 |
-| C27 | `prepare` refuses a non-UUID id or a type outside the enum | `packages/converse/test/reviewApi.test.ts` | fails: no check |
+| C27 | `prepare` refuses a non-UUID id, a type outside the enum, or a `created_at` that is not an ISO 8601 UTC date-time | `packages/converse/test/reviewApi.test.ts` | fails: no check |
 | C28 | The error sanitizer removes NBSP, fullwidth and unclosed fence lookalikes and variation selectors, and a 2000-code-point cap after an emoji never leaves a lone surrogate | `packages/converse/test/task-error-fence.test.ts` | fails: no sanitizer on the error path |
 | C29 | An error-path completion row carries `phase: "done"` and the call's `call_id` | `packages/mcp-server/test/log-first.test.ts` | fails: no call id |
 | C30 | `memory_retrieve` with an unwritable log opens no vault (no pre-embed read) | same file, with an instrumented vault open | fails: pre-embed opens it |
 | C31 | The review's pending row carries the ids and scopes to be sent; a completion-row failure after the sends still saves the report and ends `done` with the warning | `apps/web/test/review-api-redact.test.ts` | fails: no row |
+| C32 | The vault-trust button is offered only for an entry with the bundled command and args and no `env` and no `cwd`; the recheck's case (bundled command plus `env: {NORTHKEEP_HOME: <other home>}`) is not offered the button and stays `strict` (F8) | `packages/converse/test/mcp-catalog-trust.test.ts` and `apps/web/test/mcp-trust-button.test.ts` | fails: button does not exist; the rule guards the new code |
+| C33 | A pack's token set comes from the masking output: the prompt's example token `[<tag>:EMAIL_0]` is never issued and never in any set, and an `explanation` in pack B naming pack A's token stays unrestored | `packages/librarian/test/review-restore.test.ts` | fails: no token sets |
+| C34 | Variant forms of a run token (`[K7Q2:EMAIL_2]`, `k7q2:EMAIL_2`) drop `proposed_content` as `foreign_placeholder` | same file | fails: no rule |
+| C35 | Tier-2 name masking covers the whole text: a name at character 6,100 of a 6,200-character memory is masked, in chat, in the cloud review and over MCP (D9) | `packages/redact/test/tier2-windows.test.ts` with a stub name model that finds names only in the text it is given; plus one case per caller | fails: the tail is never sent to the model |
+| C36 | A name straddling a window boundary (starting 10 characters before character 6000) is masked | same file | fails: truncated at 6000 |
+| C37 | One window's name-model call failing makes the whole text degraded, and the F3 rule applies (Tier 2 refuses after one retry; chat refuses toward a bounded endpoint) | same file plus `packages/converse/test/turn.test.ts` | fails: no windows |
 | C19 | The project_update description no longer says to prune the Log, and does not say a log entry is never refused | `packages/mcp-server/test/tool-text.test.ts`: contains "roll", not "prune", not "never refused"; plus the edge case of review attack 24 is refused with the cap message | fails: says "prune the Log" |
 
 ## Residuals (documented, not closed)
@@ -760,6 +855,20 @@ and exists to stop a later regression. A guard is not evidence of a fix.
   repo rule on verifying against reality); Jay runs it.
 - **R11. Tier 3 over MCP loses exact ordering by time.** All dates are
   years (F4); list order is the only finer ordering the host gets.
+- **R12. Dated handles stay exact over MCP at Tier 3** (scar tissue,
+  recheck attack 8). A collection or project named after a date
+  (`visit:2026-10-03`, `care-2026-10-03`) is returned exactly in
+  `scope`, `project` and the scope and slug lists, because the host must
+  send those names back to call a tool. The cloud review has no such
+  constraint and masks them (F7).
+- **R13. Long texts cost more name-model calls at Tier 2 and 3** (D9):
+  roughly one per 5500 characters.
+- **R14. Some fence lookalikes still survive the error sanitizer**
+  (`【END EXTERNAL CONTENT`, Cyrillic look-alike letters,
+  `END_EXTERNAL_CONTENT`, split letters; recheck note 5). The nonce is
+  intact, so this stays within R8.
+- **R15. `mirror_status` keeps a relative time** ("3 hours ago") at Tier
+  3. It is operational metadata, not user content (recheck note 7).
 
 ## What this does not build
 
@@ -940,3 +1049,41 @@ behaviour is residual R10.
 
 Design only, no product code. Jay's five decisions recorded as
 Decision 7. Awaiting the recheck.
+
+### Recheck, 2026-09-24: CLEARED WITH WOUNDS
+
+Recheck agent, skill loaded fresh, against `4989099`, in the isolated
+review worktree with throwaway homes; no real provider called. Report:
+`Reviews/adr-0060/r2-recheck.md`; scripts under `.adversarial/0060-r2/`.
+F1 to F6 closed with executed reproductions, no prior finding back, and
+the first-review notes held. Treated as a patch within the same
+approach. New findings, and how the final text pass closes them:
+
+- **F7** (a dated collection name went to the cloud review exactly at
+  Tier 3): the Tier-3 date layer also runs over the scope line (1.1;
+  C1).
+- **F8** (the vault-trust button matched command and args only, so it
+  was offered for an entry whose `env` pointed our server at another
+  vault): the button requires no `env` and no `cwd`, the stricter rule,
+  which the bundled launch already satisfies (Decision 4; C32).
+- **Scar tissue** (dated scope and slug handles stay exact over MCP at
+  Tier 3): recorded as R12; the F4 rule and C9b are narrowed to exclude
+  handle fields.
+- **Missed in first review, now D9** (the name model reads only the
+  first 6000 characters and reports nothing): windowed name detection
+  over the whole text, failure under the F3 rule, for chat, the cloud
+  review and MCP (Decision 8; C35 to C37).
+- **Notes taken:** token sets come from the masking output, and the
+  prompt's example token is `_0`, which is never issued (C33); variant
+  token forms drop (C34); the merge case is stated and accepted (1.4);
+  `created_at` is validated in `prepare` (C27); surviving fence
+  lookalikes and `mirror_status` relative times are residuals R14 and
+  R15.
+
+### Final text pass, 2026-09-24
+
+Design only, no product code. This pass has **not** been re-reviewed.
+The next gate is the build, followed by a full adversarial review of
+the code. R10 (how real providers handle the tagged tokens) needs Jay's
+one real-provider run on a throwaway vault of fake data before the work
+is called done.
