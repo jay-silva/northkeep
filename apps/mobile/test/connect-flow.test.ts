@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { holdMessage, LAPSED_UNSHARE_HINT, UNSHARE_FAILED_MESSAGE, UNSHARE_LOCAL_SAVE_FAILED_MESSAGE } from '@northkeep/sync';
 import {
@@ -282,7 +283,7 @@ describe('runUnshareScope', () => {
     if (local.kind !== 'failed' || server.kind !== 'failed') throw new Error('expected failures');
     expect(unshareFailureText(local)).toBe(UNSHARE_LOCAL_SAVE_FAILED_MESSAGE);
     expect(unshareFailureText(server)).toBe(UNSHARE_FAILED_MESSAGE);
-    const screen = readFileSync(new URL('../app/sharing/scopes.tsx', import.meta.url), 'utf8');
+    const screen = readFileSync(fileURLToPath(new URL('../app/sharing/scopes.tsx', import.meta.url).href), 'utf8');
     expect(screen).toContain('unshareFailureText(outcome)');
     expect(screen).not.toContain('were not removed');
   });
