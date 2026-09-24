@@ -12,6 +12,9 @@
  * The Platform is a stateless bundle of adapters, so registering the same one in
  * both places is safe.
  */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import { nodePlatform } from '@northkeep/platform-node';
 import { setPlatform as setPackagePlatform } from '@northkeep/core';
 import { setPlatform as setSourcePlatform } from './packages/core/src/platform-context.js';
@@ -19,3 +22,14 @@ import { setPlatform as setSourcePlatform } from './packages/core/src/platform-c
 const platform = nodePlatform();
 setPackagePlatform(platform);
 setSourcePlatform(platform);
+
+// No test may write to the owner's real NorthKeep home. A test that sets its own
+// NORTHKEEP_HOME still wins; this only replaces an unset one, or one pointing at
+// the real default, with a fresh throwaway folder per test file. Without it the
+// converse suites appended about 1,000 fixture rows to the real call log.
+const realHome = path.join(os.homedir(), '.northkeep');
+const current = process.env.NORTHKEEP_HOME;
+if (!current || path.resolve(current) === realHome) {
+  process.env.NORTHKEEP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'northkeep-test-home-'));
+}
+
