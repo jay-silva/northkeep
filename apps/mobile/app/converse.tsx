@@ -214,8 +214,8 @@ export default function Converse() {
     const text = input.trim();
     if ((text.length === 0 && !attachment) || busy || mode === 'none') return;
     setRouteNote(null);
-    // Route BEFORE sending. An attachment is a long-document turn by nature, so
-    // it skips the heuristic and is treated as beyond the local model.
+    // Route BEFORE sending. With an attachment the heuristic sees the file name
+    // and the typed note, not the file body.
     const decision = decideMobileRoute({
       message: attachment ? `${attachment.name}\n${text}` : text,
       selectedId,

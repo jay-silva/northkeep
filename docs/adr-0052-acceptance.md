@@ -13,8 +13,8 @@ counts and revision counts differ too whenever the seeded content or the number
 of writes above them changes, so read each step's stated invariant rather than
 its exact numbers.
 
-Two of the ADR's steps ask for two hosts. The CLI has no project commands, so
-those steps run through `docs/adr-0052-acceptance.mjs`, which opens two
+Two of the ADR's steps ask for two hosts. The CLI's `projects` commands do not
+open MCP sessions, so they cannot present two host names; those steps run through `docs/adr-0052-acceptance.mjs`, which opens two
 in-process MCP clients with different handshake names (`claude-code` and
 `codex-mcp-client`) against the same vault, the way
 `packages/mcp-server/test/server-tools.test.ts` does.
