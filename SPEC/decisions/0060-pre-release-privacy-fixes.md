@@ -1240,6 +1240,30 @@ surviving restoration.
 ## Open items for Jay (added in the code fix round)
 
 - **O3. The phone's name pass reads on-device replies with `JSON.parse`**
-  and has the same duplicate-key exposure. The fix is the same parser; it
-  needs a phone build, which is Jay's call to batch.
+  and has the same duplicate-key exposure. Closed the same day, because
+  build 28 ships with this release (below).
+
+### O3 fix, 2026-09-24 (phone build 28 ships with this release)
+
+- The strict reply reader moved to `@northkeep/core` (`readNerReply`) so
+  the phone can share it; `@northkeep/redact` re-exports it.
+- `per-kind-ner.ts` (the retired Apple FM per-kind path, kept for
+  rollback) reads each pass reply with it: every duplicate "entities"
+  list counts, and an item without a string text or more entities than
+  the cap fails the pass instead of being skipped or cut.
+- Fail closed at run level: any failed, timed-out or skipped pass now
+  fails the whole run, which `applyTier2` turns into `tier2Degraded`, so
+  the phone shows its existing "Tier 2 name detection was unavailable"
+  warning and a Tier-2 send to a cloud model refuses. Before, the other
+  passes' results were returned as a clean Tier 2.
+- The NLTagger client (the live phone path) returned "no entities" for a
+  prompt shape it did not recognise; it now throws, so the turn degrades
+  and says so. Its native spans are serialized with `JSON.stringify` and
+  read by the same strict reader in `applyTier2`.
+- Tests: `packages/platform-mobile/test/per-kind-ner.test.ts` (O3 cases,
+  including a duplicate "entities" reply) and
+  `apps/mobile/test/nltagger-ner-closed.test.ts`. On the old phone code 8
+  per-kind tests and the NLTagger unknown-prompt test failed. Mobile
+  typecheck, the offline Metro export (iOS bundle, 7.7 MB), the mobile
+  tests, the full suite and e2e pass.
 

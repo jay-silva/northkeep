@@ -106,22 +106,28 @@ describe('parseEntityReply', () => {
     ]);
   });
 
-  it('drops junk spans (non-string, too short, too long) and caps the list', () => {
-    const many = Array.from({ length: MAX_ENTITIES_PER_PASS + 10 }, (_, i) => ({
-      text: `Entity Number ${i}`,
-      kind: 'person',
-    }));
-    const raw = JSON.stringify({
-      entities: [{ text: 7 }, { text: 'a' }, { text: 'x'.repeat(101) }, ...many],
-    });
-    expect(parseEntityReply(raw, 'person')).toHaveLength(MAX_ENTITIES_PER_PASS - 3);
+  it('drops spans too short or too long to be a name', () => {
+    const raw = JSON.stringify({ entities: [{ text: 'a' }, { text: 'x'.repeat(101) }, { text: 'Maria Delgado' }] });
+    expect(parseEntityReply(raw, 'person')).toEqual([{ text: 'Maria Delgado', kind: 'person' }]);
+  });
+
+  it('O3: an item it cannot account for, or more entities than the cap, fails the pass (fail closed)', () => {
+    expect(() => parseEntityReply(JSON.stringify({ entities: [{ text: 7 }, { text: 'Maria Delgado' }] }), 'person')).toThrow('unreadable reply');
+    const many = Array.from({ length: MAX_ENTITIES_PER_PASS + 1 }, (_, i) => ({ text: `Entity Number ${i}` }));
+    expect(() => parseEntityReply(JSON.stringify({ entities: many }), 'person')).toThrow('too many entities in one reply');
+  });
+
+  it('O3: a duplicate "entities" key keeps every list (JSON.parse kept only the last)', () => {
+    const raw = '{"entities":[{"text":"Bob Henderson","kind":"person"}],"entities":[{"text":"Maria Delgado","kind":"person"}]}';
+    expect(parseEntityReply(raw, 'person')).toEqual([
+      { text: 'Bob Henderson', kind: 'person' },
+      { text: 'Maria Delgado', kind: 'person' },
+    ]);
   });
 
   it('throws content-free errors on non-JSON and on a missing entities array', () => {
-    expect(() => parseEntityReply('the secret is Bob', 'person')).toThrow('non-JSON reply');
-    expect(() => parseEntityReply('{"items":[]}', 'person')).toThrow(
-      'reply missing an entities array',
-    );
+    expect(() => parseEntityReply('the secret is Bob', 'person')).toThrow('unreadable reply');
+    expect(() => parseEntityReply('{"items":[]}', 'person')).toThrow('unreadable reply');
   });
 });
 
@@ -243,7 +249,7 @@ describe('runPerKindNer (fake model)', () => {
     );
   });
 
-  it('continues with the other kinds when one pass fails, recording the failure', async () => {
+  it('O3: one failed pass fails the whole run (degraded), after recording every pass', async () => {
     const fake = cannedModel({
       [NEEDLES.person]: 'THROW',
       [NEEDLES.org]: '{"entities":[{"text":"Cascade Analytics","kind":"org"}]}',
@@ -251,21 +257,22 @@ describe('runPerKindNer (fake model)', () => {
       [NEEDLES.place]: '{"entities":[{"text":"Portland","kind":"location"}]}',
     });
     const events: NerPassEvent[] = [];
-    const out = await runPerKindNer(TEXT, fake.callModel, { onPass: (e) => events.push(e) });
-    const parsed = JSON.parse(out) as { entities: NerEntity[] };
-    expect(parsed.entities).toEqual(
-      expect.arrayContaining([
-        { text: 'Cascade Analytics', kind: 'org' },
-        { text: 'Portland', kind: 'location' },
-      ]),
+    await expect(runPerKindNer(TEXT, fake.callModel, { onPass: (e) => events.push(e) })).rejects.toThrow(
+      `2 of ${NER_PASSES.length} NER passes failed`,
     );
-    expect(parsed.entities).toHaveLength(2);
     const failed = events.filter((e) => !e.ok);
     expect(failed.map((e) => e.pass).sort()).toEqual(['person', 'street']);
     expect(failed.find((e) => e.pass === 'person')?.error).toBe('simulated pass failure');
-    expect(failed.find((e) => e.pass === 'street')?.error).toBe('non-JSON reply');
-    // Parse/other failures do NOT abandon the run: all four passes were issued.
+    expect(failed.find((e) => e.pass === 'street')?.error).toBe('unreadable reply');
     expect(fake.calls).toHaveLength(NER_PASSES.length);
+  });
+
+  it('O3: a duplicate "entities" reply from the person pass still masks both names', async () => {
+    const fake = cannedModel({
+      [NEEDLES.person]: '{"entities":[{"text":"Maria Delgado","kind":"person"}],"entities":[{"text":"Bob Henderson","kind":"person"}]}',
+    });
+    const out = JSON.parse(await runPerKindNer(TEXT, fake.callModel)) as { entities: NerEntity[] };
+    expect(out.entities.map((e) => e.text)).toEqual(expect.arrayContaining(['Maria Delgado', 'Bob Henderson']));
   });
 
   it('throws (degraded, never silent) only when EVERY pass fails', async () => {
@@ -300,13 +307,12 @@ describe('runPerKindNer (fake model)', () => {
       return '{"entities":[]}';
     };
     const events: NerPassEvent[] = [];
-    const out = await runPerKindNer(TEXT, callModel, {
+    await expect(runPerKindNer(TEXT, callModel, {
       onPass: (e) => events.push(e),
       now: () => clock,
       perPassTimeoutMs: 6000,
       totalBudgetMs: 10_000,
-    });
-    expect(JSON.parse(out)).toEqual({ entities: [] });
+    })).rejects.toThrow('NER passes failed');
     // Pass 1 at t=0 (10000 left), pass 2 at t=4500 (5500 left, timeout capped
     // to the remainder), pass 3 at t=9000 with 1000 left, under the 2s floor
     // (a guaranteed timeout), so passes 3+ are skipped, not attempted.
@@ -325,23 +331,20 @@ describe('runPerKindNer (fake model)', () => {
       return '{"entities":[{"text":"Maria Delgado","kind":"person"}]}';
     };
     const events: NerPassEvent[] = [];
-    const out = await runPerKindNer(TEXT, callModel, {
+    await expect(runPerKindNer(TEXT, callModel, {
       onPass: (e) => events.push(e),
       now: () => clock,
       perPassTimeoutMs: 5000,
       totalBudgetMs: 6000,
-    });
+    })).rejects.toThrow('NER passes failed');
     // 1900ms remaining is nonzero but below MIN_PASS_BUDGET_MS: starting the
     // pass would be a guaranteed failure that also wedges the bridge.
     expect(calls).toHaveLength(1);
     const skipped = events.filter((e) => e.error === 'skipped: time budget exhausted');
     expect(skipped.map((e) => e.pass)).toEqual(NER_PASSES.slice(1).map((p) => p.id));
-    expect(JSON.parse(out)).toEqual({
-      entities: [{ text: 'Maria Delgado', kind: 'person' }],
-    });
   });
 
-  it('a pass TIMEOUT abandons the remaining passes (wedged bridge), keeping what merged so far', async () => {
+  it('a pass TIMEOUT abandons the remaining passes (wedged bridge) and fails the run (O3)', async () => {
     let clock = 0;
     const issued: string[] = [];
     const callModel = async (prompt: string, timeoutMs: number): Promise<string> => {
@@ -359,20 +362,16 @@ describe('runPerKindNer (fake model)', () => {
       return '{"entities":[]}';
     };
     const events: NerPassEvent[] = [];
-    const out = await runPerKindNer(TEXT, callModel, {
+    await expect(runPerKindNer(TEXT, callModel, {
       onPass: (e) => events.push(e),
       now: () => clock,
-    });
+    })).rejects.toThrow('NER passes failed');
     // Only passes 1 and 2 were ever issued to the model.
     expect(issued).toEqual(['person', 'org']);
     // Passes 3 and 4 are recorded as skipped, never silent.
     const skipped = events.filter((e) => e.error === 'skipped: earlier pass timed out');
     expect(skipped.map((e) => e.pass)).toEqual(['street', 'place']);
     expect(events).toHaveLength(NER_PASSES.length);
-    // Pass 1's entities still come back merged.
-    expect(JSON.parse(out)).toEqual({
-      entities: [{ text: 'Maria Delgado', kind: 'person' }],
-    });
   });
 
   it('a TIMEOUT before any pass succeeded throws like the all-fail path (degraded, never silent)', async () => {

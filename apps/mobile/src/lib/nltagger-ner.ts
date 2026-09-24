@@ -79,10 +79,11 @@ export function createNLTaggerNerClient(): NLTaggerNerClient {
     available: () => isNLTaggerNerAvailable(),
     generateJson: async (prompt: string) => {
       const text = extractNerText(prompt);
-      // No marker (unexpected prompt shape) or empty text: nothing to tag. The
-      // deterministic layers already ran; returning "no entities" is correct
-      // and never degrades the turn.
-      if (text === null || text.trim().length === 0) return EMPTY_ENTITIES;
+      // No marker means a prompt shape this client does not know, so it cannot
+      // say what it tagged: throw, and the turn is degraded and says so (fail
+      // closed, ADR 0060 O3). Empty text has nothing to tag.
+      if (text === null) throw new Error('unexpected name-model prompt');
+      if (text.trim().length === 0) return EMPTY_ENTITIES;
       const { requireNativeModule } = await import('expo');
       const NlTagger = requireNativeModule<NlTaggerNative>('NlTagger');
       const spans = await NlTagger.tagNames(text);

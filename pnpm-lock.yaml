@@ -389,6 +389,9 @@ importers:
 
   packages/redact:
     dependencies:
+      '@northkeep/core':
+        specifier: workspace:*
+        version: link:../core
       '@northkeep/librarian':
         specifier: workspace:*
         version: link:../librarian
