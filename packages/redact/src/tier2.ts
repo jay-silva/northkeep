@@ -102,7 +102,65 @@ export async function applyTier2(
   return { text: out, replacements, degraded: false };
 }
 
+/** Longest text one name-model call reads (ADR 0060 Decision 8). */
+export const NER_WINDOW_CHARS = 6000;
+/** Overlap between windows, so a name on a boundary is whole in one of them. */
+export const NER_WINDOW_OVERLAP = 500;
+
+/**
+ * Split text into overlapping windows that together cover all of it
+ * (ADR 0060 D9: the model used to read only the first 6000 characters and a
+ * later name went out unmasked while the call reported Tier 2). A boundary
+ * backs off to whitespace in its last 200 characters and never splits a
+ * surrogate pair.
+ */
+export function nerWindows(
+  text: string,
+  size = NER_WINDOW_CHARS,
+  overlap = NER_WINDOW_OVERLAP,
+): Array<{ start: number; text: string }> {
+  if (text.length <= size) return [{ start: 0, text }];
+  const out: Array<{ start: number; text: string }> = [];
+  let start = 0;
+  while (start < text.length) {
+    let end = Math.min(start + size, text.length);
+    if (end < text.length) {
+      const ws = text.slice(end - 200, end).search(/\s[^\s]*$/);
+      if (ws >= 0) end = end - 200 + ws + 1;
+      const code = text.charCodeAt(end - 1);
+      if (code >= 0xd800 && code <= 0xdbff) end -= 1;
+    }
+    out.push({ start, text: text.slice(start, end) });
+    if (end >= text.length) break;
+    let next = end - overlap;
+    const lead = text.charCodeAt(next);
+    if (lead >= 0xdc00 && lead <= 0xdfff) next -= 1;
+    start = Math.max(next, start + 1);
+  }
+  return out;
+}
+
 async function detectEntities(
+  text: string,
+  ollama: OllamaClient,
+  strictGate: boolean,
+): Promise<EntityHit[]> {
+  // Every window must answer; one failure throws, and the caller marks the
+  // whole text degraded (the F3 rule), never a partial Tier 2.
+  const hits: EntityHit[] = [];
+  const seen = new Set<string>();
+  for (const window of nerWindows(text)) {
+    for (const hit of await detectEntitiesInWindow(window.text, ollama, strictGate)) {
+      const key = hit.text.toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      hits.push(hit);
+    }
+  }
+  return hits;
+}
+
+async function detectEntitiesInWindow(
   text: string,
   ollama: OllamaClient,
   strictGate: boolean,
@@ -121,7 +179,7 @@ EXACTLY as it appears. Skip generic words, titles alone, dates, and numbers.
 {"entities":[]} if none.
 
 Text:
-${text.slice(0, 6000)}`;
+${text}`;
   const raw = await ollama.generateJson(prompt);
   let parsed: unknown;
   try {
