@@ -363,6 +363,16 @@ export async function runConnectorSyncNow(ports: ConnectorSyncPorts): Promise<Co
 }
 
 /**
+ * Whether "Sync app-written memories" may run: the same gate as
+ * runConnectorSyncNow. A paired phone with nothing shared must be able to sync,
+ * because that sync is how a project created in a connected app first arrives
+ * (ADR 0050). A phone that never paired has no account there to ask.
+ */
+export function canSyncNow(state: { sharedCount: number; paired: boolean }): boolean {
+  return state.sharedCount > 0 || state.paired;
+}
+
+/**
  * Human summary of a completed sync-now, shown under the button. Pass
  * `pushedBack: false` for the partially-synced and synced-no-push outcomes,
  * where the closing "pushed back" sentence would be a lie.

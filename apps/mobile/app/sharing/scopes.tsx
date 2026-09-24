@@ -5,6 +5,7 @@ import {
   SYNC_PUSH_FAILED_FOLLOWUP,
   SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE,
   SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE,
+  canSyncNow,
   connectorSyncSummary,
   runConnectorSyncNow,
   runShareScope,
@@ -39,6 +40,7 @@ export default function ManageScopes() {
   const params = useLocalSearchParams<{ share?: string }>();
 
   const [sharedScopes, setSharedScopes] = useState<string[]>([]);
+  const [paired, setPaired] = useState(false);
 
   const [pendingShare, setPendingShare] = useState<string | null>(null);
   const [pendingUnshare, setPendingUnshare] = useState<string | null>(null);
@@ -61,6 +63,7 @@ export default function ManageScopes() {
     void (async () => {
       const scopes = await session.connectorScopeStore.load();
       setSharedScopes(scopes);
+      setPaired((await loadConnectorPairedAt()) !== null);
       const wanted = typeof params.share === 'string' ? params.share : null;
       if (wanted && !scopes.includes(wanted)) setPendingShare(wanted);
     })();
@@ -135,6 +138,11 @@ export default function ManageScopes() {
         paired: async () => (await loadConnectorPairedAt()) !== null,
       });
       setConnectorBusy(null);
+      // The fold can mark a newly arrived project Shared, so re-read the list
+      // after any sync that reached the server.
+      if (outcome.kind === 'synced' || outcome.kind === 'synced-no-push' || outcome.kind === 'partially-synced') {
+        setSharedScopes(await store.load());
+      }
       if (outcome.kind === 'synced') {
         setSyncResult(connectorSyncSummary(outcome));
       } else if (outcome.kind === 'synced-no-push') {
@@ -145,7 +153,6 @@ export default function ManageScopes() {
             ? SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE
             : SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE;
         setSyncResult(`${connectorSyncSummary(outcome, { pushedBack: false })} ${skipped}`);
-        setSharedScopes(await store.load());
       } else if (outcome.kind === 'partially-synced') {
         // Both halves stay visible: the memories arrived AND the re-push failed.
         setSyncResult(connectorSyncSummary(outcome, { pushedBack: false }));
@@ -275,14 +282,15 @@ export default function ManageScopes() {
       <FieldLabel>Sync app-written memories</FieldLabel>
       <Text style={styles.footnote}>
         Pull memories you created (or forgot) inside your AI apps back into this vault, then
-        re-push so the server matches. Runs only on your shared scopes.
+        re-push so the server matches. Pushes only your shared scopes. Once this phone is paired
+        it also brings in a new project created in a connected app.
       </Text>
       <Button
         title="Sync app-written memories"
         kind="secondary"
         onPress={onSyncNow}
         busy={connectorBusy === 'sync'}
-        disabled={connectorBusy !== null || sharedScopes.length === 0}
+        disabled={connectorBusy !== null || !canSyncNow({ sharedCount: sharedScopes.length, paired })}
         style={styles.stackedButton}
       />
       {syncError ? <ErrorNote message={syncError.message} /> : null}
