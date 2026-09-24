@@ -2240,11 +2240,16 @@ async function startReviewApiRun(
         tier,
         beforeSend: (prepared) => {
           summary = prepared;
-          appendCallLog({
-            ...audit, phase: 'pending', ok: false, error: 'pending',
-            redaction_tier: prepared.tier, redaction_degraded: prepared.degraded,
-            result_count: prepared.total, result_ids: prepared.ids, disclosed_scopes: prepared.scopes,
-          });
+          try {
+            appendCallLog({
+              ...audit, phase: 'pending', ok: false, error: 'pending',
+              redaction_tier: prepared.tier, redaction_degraded: prepared.degraded,
+              result_count: prepared.total, result_ids: prepared.ids, disclosed_scopes: prepared.scopes,
+            });
+          } catch {
+            // Plain words for the job status, not the errno and the path.
+            throw new Error('NorthKeep could not write its call log, so nothing was sent.');
+          }
           pendingWritten = true;
         },
         onDegraded: (message) => { job.progress = message; },

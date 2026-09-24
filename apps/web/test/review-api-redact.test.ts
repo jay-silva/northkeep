@@ -209,6 +209,7 @@ describe('ADR 0060 D2: the cloud review masks before it sends', () => {
     fs.mkdirSync(path.join(directory, 'mcp-calls.log'));
     const job = await finish(1);
     expect(job.status).toBe('failed');
+    expect(job.error).toBe('NorthKeep could not write its call log, so nothing was sent.');
     expect(providerBodies).toHaveLength(0);
   });
 

@@ -113,15 +113,17 @@ describe('ADR 0060 1.4: quotes and restoration', () => {
   });
 
   it('C5c: restoration runs on parsed leaves, so an original with a quote mark and a backslash round-trips', async () => {
-    const m = entry(1, 'Key: "sk_live_4eC39HqLyjWDarjtT1zdp7dc" \\ end');
+    // Built at runtime and fake, never a committed key shape (ADR 0059 Decision 7).
+    const fakeKey = ['sk', 'live', 'FakeTestKey0'.repeat(2)].join('_');
+    const m = entry(1, `Key: "${fakeKey}" \\ end`);
     const session = createRedactionSession([m.content], () => 'k7q2');
     const { handle, wire } = await prepare(session, [m]);
-    expect(wire[0]).not.toContain('sk_live_');
+    expect(wire[0]).not.toContain(fakeKey);
     const token = [...handle.tokens][0]!;
     const raw = JSON.parse(JSON.stringify(reply([stale(m, `Key: "${token}"`, `Key: "${token}" (rotated) \\ end`)])));
     const out = restoreReviewReply(raw, [m], handle);
     expect((out.parsed as { proposals: Array<{ proposed_content: string }> }).proposals[0]!.proposed_content)
-      .toBe('Key: "sk_live_4eC39HqLyjWDarjtT1zdp7dc" (rotated) \\ end');
+      .toBe(`Key: "${fakeKey}" (rotated) \\ end`);
   });
 });
 

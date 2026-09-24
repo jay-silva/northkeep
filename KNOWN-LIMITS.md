@@ -49,9 +49,11 @@ every milestone; if a limit is removed, say when and how.*
   returns an error and discloses nothing, and a write that already saved
   returns "saved" with a warning and no content, so an app does not retry a
   write that landed. A crash between the two rows leaves the first one alone,
-  shown as "outcome unknown (interrupted)". For a project, a session whose
-  write is recorded in the project's own history is not listed as open even
-  without the second row; for a memory there is no such record. Move or
+  shown as "outcome unknown (interrupted)". In a project's resume brief, a
+  session whose write is recorded in the project's own history is not
+  listed as open even without the second row; the project board still
+  counts from the log alone, so it can list that session as open, and for
+  a memory there is no such record. Move or
   repair the file and the tools work again. Older builds, after a downgrade,
   show each first row as an extra failed call.
 - **The resume brief has no byte guarantee, only a shape guarantee.** The
