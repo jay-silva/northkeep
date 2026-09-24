@@ -434,7 +434,10 @@ every milestone; if a limit is removed, say when and how.*
   you are back at the prompt. Cancelling stops NorthKeep waiting for a tool
   call that is already running; it does not stop the tool. An MCP server may
   still complete that call's side effect, so such a call is shown and logged
-  as cancelled with an unknown outcome, and the model is told the same. Ctrl-C at an idle prompt, or during a reply
+  as cancelled with an unknown outcome, and the model is told the same. A
+  quick second Ctrl-C that lands after the task has stopped reaches an idle
+  prompt and ends the REPL. At a terminal, an approval prompt takes only what
+  you type after it appears. Ctrl-C at an idle prompt, or during a reply
   without `--tools`, ends the REPL (after that reply finishes). In the web GUI, closing
   the tab or reloading fires the response 'close' event, which aborts the loop
   and sweeps that turn's pending approvals; a late approve POST for a swept id
