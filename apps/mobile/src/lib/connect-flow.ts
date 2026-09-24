@@ -275,6 +275,16 @@ export async function runUnshareScope(
   return { kind: 'unshared', scope, deleted };
 }
 
+/**
+ * The text the Sharing screen shows for a failed unshare. Each failure
+ * message already says whether the server copies remain, so nothing is
+ * appended (ADR 0061 code recheck note 1: an appended "not removed" sentence
+ * contradicted the local-save-failed case, where the server had deleted).
+ */
+export function unshareFailureText(outcome: ConnectorFailure): string {
+  return outcome.message;
+}
+
 /** The down-sync counts every outcome carries, including the ADR 0050 holds. */
 export interface ConnectorDownSyncCounts {
   added: number;

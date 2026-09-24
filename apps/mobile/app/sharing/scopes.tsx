@@ -12,6 +12,7 @@ import {
   scopeRows,
   type ConnectorFailure,
   type SharedScopeStore,
+  unshareFailureText,
 } from '../../src/lib/connect-flow';
 import { loadConnectorPairedAt } from '../../src/lib/secure-store';
 import { useVaultSession } from '../../src/lib/vault-session';
@@ -113,11 +114,8 @@ export default function ManageScopes() {
         setSharedScopes(await store.load());
         setScopeNotice(`"${outcome.scope}" is private again. The server copies were deleted.`);
       } else {
-        // Honest failure: the server still holds the copies, so the mark stays.
-        setScopeError({
-          ...outcome,
-          message: `${outcome.message} The server copies were not removed, so the scope is still marked Shared.`,
-        });
+        // Each failure message says what is true about the server copies.
+        setScopeError({ ...outcome, message: unshareFailureText(outcome) });
       }
     })();
   }

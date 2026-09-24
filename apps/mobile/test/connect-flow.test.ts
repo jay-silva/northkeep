@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { holdMessage, LAPSED_UNSHARE_HINT, UNSHARE_FAILED_MESSAGE, UNSHARE_LOCAL_SAVE_FAILED_MESSAGE } from '@northkeep/sync';
 import {
@@ -22,6 +23,7 @@ import {
   scopeRows,
   shareIdFromConnectorToken,
   type SharedScopeStore,
+  unshareFailureText,
 } from '../src/lib/connect-flow.js';
 import {
   CONVERSATIONS_SCOPE,
@@ -263,6 +265,26 @@ describe('runUnshareScope', () => {
       'conversations',
     );
     expect(outcome).toEqual({ kind: 'failed', errorKind: 'other', message: UNSHARE_LOCAL_SAVE_FAILED_MESSAGE });
+  });
+
+  it('ADR 0061: the Sharing screen shows each unshare failure message verbatim, with nothing appended', async () => {
+    const local = await runUnshareScope(
+      {
+        store: { load: async () => ['c'], save: async () => { throw new Error('disk full'); } },
+        unshare: async () => ({ deleted: 1 }),
+      },
+      'c',
+    );
+    const server = await runUnshareScope(
+      { store: memStore(['c']).store, unshare: async () => { throw new Error('Connector server returned HTTP 500 on unshare.'); } },
+      'c',
+    );
+    if (local.kind !== 'failed' || server.kind !== 'failed') throw new Error('expected failures');
+    expect(unshareFailureText(local)).toBe(UNSHARE_LOCAL_SAVE_FAILED_MESSAGE);
+    expect(unshareFailureText(server)).toBe(UNSHARE_FAILED_MESSAGE);
+    const screen = readFileSync(new URL('../app/sharing/scopes.tsx', import.meta.url), 'utf8');
+    expect(screen).toContain('unshareFailureText(outcome)');
+    expect(screen).not.toContain('were not removed');
   });
 
   it('ADR 0061: a connector 402 adds the unshare sentence', () => {
