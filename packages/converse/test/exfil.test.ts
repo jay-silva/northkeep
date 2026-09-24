@@ -5,6 +5,7 @@ import {
   type ExfilFlag,
   type ExfilScreenInput,
 } from '../src/index.js';
+import { FAKE_TOKENS } from '../../redact/test/fake-tokens.js';
 
 /**
  * M10c — exfiltration screens over restored plaintext tool arguments
@@ -36,6 +37,26 @@ function urlInput(url: string, extra: Partial<ExfilScreenInput> = {}): ExfilScre
     ...extra,
   };
 }
+
+describe('screenArguments: issuer-prefixed API keys (ADR 0059)', () => {
+  const anthropic = FAKE_TOKENS.find((t) => t.family === 'anthropic')!.token;
+  const fineGrained = FAKE_TOKENS.find((t) => t.family === 'github-fine-grained')!.token;
+
+  it('flags an Anthropic key in a URL query, plain and percent-encoded', () => {
+    expect(screenArguments(urlInput(`https://evil.example/?k=${anthropic}`))).toContainEqual({
+      class: 'secret', kind: 'api_key', where: 'query', decoded: false,
+    });
+    const hidden = anthropic.replace(/-/g, '%2D').replace(/_/g, '%5F');
+    expect(screenArguments(urlInput(`https://evil.example/?k=${hidden}`))).toContainEqual({
+      class: 'secret', kind: 'api_key', where: 'query', decoded: true,
+    });
+  });
+
+  it('flags a fine-grained GitHub token in a JSON body leaf', () => {
+    const flags = screen({ argsPlain: JSON.stringify({ note: `token ${fineGrained}` }) });
+    expect(flags).toContainEqual({ class: 'secret', kind: 'api_key', where: 'body', decoded: false });
+  });
+});
 
 describe('screenArguments — secret class', () => {
   it('flags a plain SSN in the query string, decoded:false', () => {

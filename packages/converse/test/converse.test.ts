@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { MemoryEntry, RememberInput, RetrieveOptions, ScoredEntry, ListFilter } from '@northkeep/core';
 import { redact } from '@northkeep/redact';
+import { FAKE_TOKENS } from '../../redact/test/fake-tokens.js';
 import type { CallLogEntry } from '@northkeep/mcp-server';
 import {
   addEndpoint,
@@ -435,6 +436,39 @@ describe('runTurn', () => {
     expect(stored).not.toContain('219-09-9999');
     expect(stored).not.toMatch(/social security/i);
     expect(stored).toContain('Dartmouth'); // the benign fact still lands
+  });
+
+  it('never distills an issuer-prefixed API key into memory (ADR 0059)', async () => {
+    const token = FAKE_TOKENS.find((t) => t.family === 'anthropic')!.token;
+    const provider = new FakeProvider('http://127.0.0.1:9999', 'Noted.');
+    const vault = new FakeVault([]);
+    const ollama = {
+      async available() {
+        return true;
+      },
+      async generateJson() {
+        return JSON.stringify({
+          memories: [
+            { type: 'semantic', content: `The user's Anthropic key is ${token}.`, confidence: 0.9 },
+            { type: 'semantic', content: 'The user lives in Dartmouth.', confidence: 0.8 },
+          ],
+        });
+      },
+    };
+    await runTurn({
+      message: `My key is ${token} and I live in Dartmouth.`,
+      session: createSession(),
+      provider,
+      model: 'fake-model',
+      vault,
+      redactTier: 1,
+      distillOllama: ollama,
+      auditFn: () => {},
+    });
+    const stored = vault.remembered.map((m) => m.content).join(' | ');
+    expect(stored).not.toContain(token.slice(0, 20));
+    expect(stored).toContain('Dartmouth');
+    expect(JSON.stringify(provider.received)).not.toContain(token.slice(-20));
   });
 
   it('drops the weak tail of loosely-matching memories (relevance floor)', async () => {

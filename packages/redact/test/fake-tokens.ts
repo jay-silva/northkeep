@@ -77,6 +77,21 @@ export const FAKE_TOKENS: FakeToken[] = [
   { family: 'aws-access-key', token: 'AS' + 'IA' + fill(16, 'upper') },
   { family: 'stripe', token: 'sk' + '_prod_' + fill(24) },
   { family: 'stripe', token: 'rk' + '_live_' + fill(40) },
+  // One more fixture per remaining alternation branch, so every sub-prefix
+  // the ADR and KNOWN-LIMITS name is exercised, not only the first.
+  ...['ptt', 'cbt', 'ft', 'ffct', 'imt', 'agent', 'oas', 'soat'].map((p) => ({
+    family: 'gitlab',
+    token: 'gl' + p + '-' + fill(14) + '_' + fill(10),
+  })),
+  ...['a', 'p', 'r', 's'].map((c) => ({ family: 'slack', token: 'xox' + c + '-' + fill(30) })),
+  ...['o', 'r'].map((c) => ({ family: 'digitalocean', token: 'do' + c + '_v1_' + fill(64, 'hex') })),
+  ...['ca', 'pa', 'ss'].map((p) => ({ family: 'shopify', token: 'shp' + p + '_' + fill(32, 'hex') })),
+  { family: 'sentry', token: 'sntry' + 's_' + 'eyJ' + fill(60, 'b64') + '_' + fill(43) },
+  ...['oauth', 'pw'].map((p) => ({ family: 'planetscale', token: 'pscale_' + p + '_' + fill(40) })),
+  ...['fm1a', 'fm1r'].map((p) => ({ family: 'flyio', token: p + '_' + fill(120, 'b64') })),
+  ...['AB', 'AC'].map((p) => ({ family: 'aws-access-key', token: p + (p === 'AB' ? 'IA' : 'CA') + fill(16, 'upper') })),
+  { family: 'stripe', token: 'sk' + '_test_' + fill(30) },
+  { family: 'huggingface', token: 'hf' + '_' + fill(20) + fill(14, 'upper') },
 ];
 
 /** Prose and identifiers that share a prefix with a token family and must stay unmasked. */
