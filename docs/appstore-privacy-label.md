@@ -34,7 +34,7 @@ servers from the phone is:
   (`apps/connector-server/src/neon-storage.ts:70-86`). The connector also keeps
   a request log per account (`connector_audit`, `neon-storage.ts:111-121`):
   the phone's own pushes, unshares and download confirmations (action, time,
-  counts; `create-server.ts:709-717, 745-755, 871-879`) as well as each read or
+  counts; `create-server.ts:709-717, 747-755, 872-880`) as well as each read or
   write by a connected AI app (tool, time, counts, entry ids). OAuth sign-in
   codes (client id, account link, return address, PKCE challenge, expiry) are
   kept until the maintenance cleanup removes them
@@ -69,7 +69,7 @@ identifier. Every row not marked Yes is "Not Collected".
 |---|---|---|---|---|---|
 | **User Content: Other User Content** | **Yes** | **Yes** | No | App Functionality | Sync blob (stored ciphertext, keyed on the account hash) and Cloud Connect shared scopes (stored, server can decrypt, keyed on the connector account hash). See judgment calls 1 and 3. |
 | **Identifiers: User ID** | **Yes** | **Yes** | No | App Functionality | The sync account hash (`sync_blobs.token_hash`) and the connector account hash (`connector_accounts.account_hash`); each routes the user's data to their account. |
-| Identifiers: Device ID | No | | | | The device secret is a random value the user can move between devices, not a hardware or advertising identifier; only hashes of tokens derived from it leave the phone. |
+| Identifiers: Device ID | No | | | | The device secret is a random value the user can move between devices, not a hardware or advertising identifier; the phone sends bearer tokens derived from it one-way, and the servers store only hashes of those tokens. |
 | User Content: Customer Support | No (see judgment call 4) | | | | The sync-access screen opens a `mailto:` draft in the user's own mail app with the account id in the body (`apps/mobile/src/lib/sync-support-mail.ts`); the app transmits nothing itself. |
 | User Content: Emails or Text Messages, Photos or Videos, Audio Data, Gameplay Content | No | | | | The camera only scans the Mac's link QR code; nothing is stored or sent. |
 | Contact Info (Name, Email, Phone, Physical Address, Other) | No | | | | No account for local use; no sign-up in the app. |
