@@ -11,8 +11,9 @@
  * SQL string directly.
  *
  * Storage discipline (invariant #2 spirit + ADR 0016/0020 threat model):
- *  - Token, authorization-code, and pairing-code values are stored as sha256 hex
- *    ONLY. The raw value lives only in the client's possession. A DB thief gets
+ *  - Token, authorization-code, pairing-code and OAuth client-secret values are
+ *    stored as sha256 hex ONLY (client secrets since ADR 0061; the client JSON
+ *    holds a random sentinel in their place). The raw value lives only in the client's possession. A DB thief gets
  *    hashes, never a usable credential.
  *  - `shared_entries.content` holds CIPHERTEXT only (ADR 0020): the "nkc1:"
  *    envelope encrypted under a per-account DEK. The DEK itself is stored only
@@ -105,10 +106,25 @@ export interface ConnectorAuditEntry {
   resultIds: string[];
 }
 
+/** One oauth_clients row as stored, for the ADR 0061 secret migration. */
+export interface StoredClientRow {
+  clientId: string;
+  clientJson: string;
+  clientSecretHash: string | null;
+}
+
+/** Counts from the ADR 0061 cleanup of used and expired OAuth rows. */
+export interface OAuthGcResult {
+  codes: number;
+  tokens: number;
+}
+
 export interface ConnectorStorage {
   // --- accounts ---
   /** Idempotently record that an account exists (keyed by sha256(connector_token)). */
   upsertAccount(accountHash: string): Promise<void>;
+  /** Read-only: does an account row exist? Never creates one (ADR 0061). */
+  hasAccount(accountHash: string): Promise<boolean>;
   /**
    * Stamp a billing grace window (C3): the ms-since-epoch until which this
    * account is entitled, set when the desktop forwards a valid entitlement. Only
@@ -147,6 +163,17 @@ export interface ConnectorStorage {
    * full client JSON.
    */
   registerClient(client: OAuthClientInformationFull, clientSecretHash: string | null): Promise<void>;
+  /** The stored client JSON (parsed) plus its secret hash column (ADR 0061). */
+  getClientRecord(
+    clientId: string,
+  ): Promise<{ info: OAuthClientInformationFull; clientSecretHash: string | null } | undefined>;
+  /** Rows whose JSON mentions client_secret at all (a loose prefilter; the caller parses). */
+  listClientSecretCandidates(): Promise<StoredClientRow[]>;
+  /**
+   * Compare-and-swap one client row: set JSON and hash together only if the
+   * JSON is still `oldJson`. Returns whether a row changed.
+   */
+  casClientRow(clientId: string, oldJson: string, newJson: string, clientSecretHash: string): Promise<boolean>;
 
   // --- OAuth authorization codes ---
   putCode(codeHash: string, rec: StoredOAuthCode): Promise<void>;
@@ -199,6 +226,17 @@ export interface ConnectorStorage {
    * Returns how many rows were deleted.
    */
   deleteScope(accountHash: string, scope: string): Promise<number>;
+  /**
+   * ADR 0061 unshare, one statement: delete the scope's rows; write or refresh
+   * the tombstone when rows were deleted or one exists; a NEW tombstone for a
+   * scope with no rows only when the name is at most 1024 bytes, the account
+   * has fewer than 1000, and (paid, or the account was stamped at least once).
+   */
+  unshareScope(
+    accountHash: string,
+    scope: string,
+    opts: { paid: boolean },
+  ): Promise<{ deleted: number; newTombstones: number }>;
   /** The account's unshare tombstones (audit / inspection). */
   listTombstones(accountHash: string): Promise<ScopeTombstone[]>;
 
@@ -227,7 +265,17 @@ export interface ConnectorStorage {
 
   // --- audit ---
   appendAudit(entry: ConnectorAuditEntry): Promise<void>;
+
+  // --- maintenance (ADR 0061) ---
+  /** Delete every shared row isEncryptedRow rejects (content not starting "nkc1:"). */
+  purgeLegacyPlaintext(): Promise<number>;
+  /** Delete consumed or expired authorization codes and expired tokens. */
+  gcOAuth(nowSec: number): Promise<OAuthGcResult>;
 }
+
+/** The ADR 0061 tombstone caps. */
+export const MAX_TOMBSTONES_PER_ACCOUNT = 1000;
+export const MAX_NEW_TOMBSTONE_SCOPE_BYTES = 1024;
 
 interface PairingRow {
   accountHash: string;
@@ -239,7 +287,7 @@ interface CodeRow extends StoredOAuthCode {
   consumed: boolean;
 }
 interface ClientRow {
-  info: OAuthClientInformationFull;
+  json: string;
   clientSecretHash: string | null;
 }
 
@@ -270,6 +318,10 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
     if (!this.accounts.has(accountHash)) this.accounts.set(accountHash, null);
   }
 
+  async hasAccount(accountHash: string): Promise<boolean> {
+    return this.accounts.has(accountHash);
+  }
+
   async ensureAccountDekWrap(accountHash: string, candidateWrap: string): Promise<string> {
     if (!this.accounts.has(accountHash)) {
       throw new Error('ensureAccountDekWrap: unknown account (upsertAccount first)');
@@ -285,6 +337,8 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
   }
 
   async setEntitledUntil(accountHash: string, untilMs: number): Promise<void> {
+    // Parity with Neon: the stamp is an upsert of the account row.
+    if (!this.accounts.has(accountHash)) this.accounts.set(accountHash, null);
     const prev = this.entitledUntil.get(accountHash) ?? 0;
     if (untilMs > prev) this.entitledUntil.set(accountHash, untilMs);
   }
@@ -314,11 +368,38 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
   }
 
   async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
-    return this.clients.get(clientId)?.info;
+    const row = this.clients.get(clientId);
+    return row ? (JSON.parse(row.json) as OAuthClientInformationFull) : undefined;
   }
 
   async registerClient(client: OAuthClientInformationFull, clientSecretHash: string | null): Promise<void> {
-    this.clients.set(client.client_id, { info: client, clientSecretHash });
+    this.clients.set(client.client_id, { json: JSON.stringify(client), clientSecretHash });
+  }
+
+  async getClientRecord(
+    clientId: string,
+  ): Promise<{ info: OAuthClientInformationFull; clientSecretHash: string | null } | undefined> {
+    const row = this.clients.get(clientId);
+    if (!row) return undefined;
+    return { info: JSON.parse(row.json) as OAuthClientInformationFull, clientSecretHash: row.clientSecretHash };
+  }
+
+  async listClientSecretCandidates(): Promise<StoredClientRow[]> {
+    return [...this.clients.entries()]
+      .filter(([, r]) => r.json.includes('client_secret'))
+      .map(([clientId, r]) => ({ clientId, clientJson: r.json, clientSecretHash: r.clientSecretHash }));
+  }
+
+  async casClientRow(clientId: string, oldJson: string, newJson: string, clientSecretHash: string): Promise<boolean> {
+    const row = this.clients.get(clientId);
+    if (!row || row.json !== oldJson) return false;
+    this.clients.set(clientId, { json: newJson, clientSecretHash });
+    return true;
+  }
+
+  /** Test-only: write a raw client row exactly as a pre-0061 server or a DB writer would. */
+  putRawClientRow(clientId: string, json: string, clientSecretHash: string | null): void {
+    this.clients.set(clientId, { json, clientSecretHash });
   }
 
   async putCode(codeHash: string, rec: StoredOAuthCode): Promise<void> {
@@ -401,6 +482,14 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
   }
 
   async deleteScope(accountHash: string, scope: string): Promise<number> {
+    return (await this.unshareScope(accountHash, scope, { paid: true })).deleted;
+  }
+
+  async unshareScope(
+    accountHash: string,
+    scope: string,
+    opts: { paid: boolean },
+  ): Promise<{ deleted: number; newTombstones: number }> {
     const byId = this.entries.get(accountHash);
     let n = 0;
     if (byId) {
@@ -414,13 +503,21 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
     const list = this.tombstones.get(accountHash) ?? [];
     const now = new Date().toISOString();
     const existing = list.find((t) => t.scope === scope);
-    if (!existing) {
-      list.push({ scope, unsharedAt: now });
-    } else if (!shouldKeepTombstone(existing.unsharedAt, now)) {
-      existing.unsharedAt = now;
+    let newTombstones = 0;
+    if (existing) {
+      if (!shouldKeepTombstone(existing.unsharedAt, now)) existing.unsharedAt = now;
+    } else {
+      const allowEmpty =
+        Buffer.byteLength(scope, 'utf8') <= MAX_NEW_TOMBSTONE_SCOPE_BYTES &&
+        list.length < MAX_TOMBSTONES_PER_ACCOUNT &&
+        (opts.paid || this.entitledUntil.has(accountHash));
+      if (n > 0 || allowEmpty) {
+        list.push({ scope, unsharedAt: now });
+        newTombstones = 1;
+      }
     }
     this.tombstones.set(accountHash, list);
-    return n;
+    return { deleted: n, newTombstones };
   }
 
   async replaceScopesAcceptingReshare(
@@ -500,6 +597,37 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
 
   async appendAudit(entry: ConnectorAuditEntry): Promise<void> {
     this.audit.push({ ...entry });
+  }
+
+  async purgeLegacyPlaintext(): Promise<number> {
+    let n = 0;
+    for (const byId of this.entries.values()) {
+      for (const [id, e] of [...byId.entries()]) {
+        if (!e.content.startsWith('nkc1:')) {
+          byId.delete(id);
+          n++;
+        }
+      }
+    }
+    return n;
+  }
+
+  async gcOAuth(nowSec: number): Promise<OAuthGcResult> {
+    let codes = 0;
+    let tokens = 0;
+    for (const [k, r] of [...this.codes.entries()]) {
+      if (r.consumed || r.expiresAt <= nowSec * 1000) {
+        this.codes.delete(k);
+        codes++;
+      }
+    }
+    for (const [k, r] of [...this.tokens.entries()]) {
+      if (r.expiresAt <= nowSec) {
+        this.tokens.delete(k);
+        tokens++;
+      }
+    }
+    return { codes, tokens };
   }
 
   /** Test-only accessor for the audit ledger. */

@@ -48,6 +48,8 @@ import {
   TombstoneConflictError,
 } from './tombstones.js';
 import { ConnectorOAuthProvider } from './provider.js';
+import type { ClientSecretBinder } from './client-secrets.js';
+import { maintenanceConfigFromEnv, runMaintenance, type MaintenanceConfig } from './maintenance.js';
 import { createMcpServer } from './mcp.js';
 import { renderConsentPage } from './consent.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
@@ -73,6 +75,11 @@ const PAIRING_TTL_MS = 10 * 60 * 1000; // 10 minutes
 const RATE_LIMIT_DEFAULT = 120;
 const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 const IP_LIMIT_MULTIPLIER = 4;
+// ADR 0061 F1: our own /token and /revoke limiter, the SDK's numbers, keyed
+// on req.ip (the proxy-appended hop under `trust proxy 1`, like the SDK).
+const CLIENT_AUTH_PATHS = ['/token', '/revoke'];
+const CLIENT_AUTH_LIMIT = 50;
+const CLIENT_AUTH_WINDOW_MS = 15 * 60 * 1000;
 /** Paths that must be throttled (before body read / storage / Stripe). */
 const THROTTLED_PREFIXES = ['/mcp', '/pair', '/consent', '/client', '/debug'];
 
@@ -116,6 +123,12 @@ export type ConnectorServerOptions = {
    * order (ADR 0050 Decision 3). Production omits it.
    */
   betweenPendingReads?: () => Promise<void>;
+  /** Override the ADR 0061 maintenance flags (tests). Production reads the env. */
+  maintenance?: MaintenanceConfig;
+  /** Where the maintenance line goes (tests). Default console.log. */
+  maintenanceLog?: (line: string) => void;
+  /** Fix the client-secret binding key (tests simulating two processes). */
+  clientSecretBinder?: ClientSecretBinder;
 };
 
 export function createConnectorServer(
@@ -142,7 +155,7 @@ export function createConnectorServer(
   // plaintext "memories"). The hosted deploy does NOT set this.
   const allowLegacyPlaintext = process.env.NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT === '1';
 
-  const provider = new ConnectorOAuthProvider(storage, mcpResourceUrl, kekPepper);
+  const provider = new ConnectorOAuthProvider(storage, mcpResourceUrl, kekPepper, opts.clientSecretBinder);
 
   // ---- billing gate (C3) -------------------------------------------------
   // Gate OFF (both envs unset) ⇒ every account is allowed (self-host / the
@@ -210,6 +223,30 @@ export function createConnectorServer(
 
   const app = express();
   app.disable('x-powered-by');
+
+  // ---- ADR 0061 maintenance: once per process, only on explicit flags ----
+  // Awaited before the first request is handled; a failure is logged and
+  // retried on the next request, never surfaced to the caller.
+  const maintenanceCfg = opts.maintenance ?? maintenanceConfigFromEnv(process.env);
+  let maintenanceDone: Promise<void> | null = null;
+  app.use(async (_req: Request, _res: Response, next: NextFunction) => {
+    if (!maintenanceDone) {
+      const attempt = runMaintenance(storage, maintenanceCfg, opts.maintenanceLog)
+        .then((r) => {
+          if (r && r.failures.length > 0) throw new Error('maintenance incomplete');
+        });
+      maintenanceDone = attempt;
+      attempt.catch(() => {
+        if (maintenanceDone === attempt) maintenanceDone = null;
+      });
+    }
+    try {
+      await maintenanceDone;
+    } catch {
+      // Logged by runMaintenance; readers already cope with un-migrated state.
+    }
+    next();
+  });
   // Vercel is a single proxy hop in front of the function. Trust exactly one hop
   // so express (and the SDK's internal express-rate-limit) reads the real client
   // IP from x-forwarded-for without the "trust all → trivially bypassable"
@@ -276,8 +313,45 @@ export function createConnectorServer(
     next();
   });
 
+  // ---- ADR 0061: /token and /revoke limiter, then our client-secret check --
+  // Both run after CORS (a ChatGPT origin can read our 400/429) and before the
+  // SDK router. The limiter comes first so no storage read is unthrottled.
+  const clientAuthLimiter = createRateLimiter({ limit: CLIENT_AUTH_LIMIT, windowMs: CLIENT_AUTH_WINDOW_MS });
+  const clientAuthBody = express.urlencoded({ extended: false });
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== 'POST' || !isClientAuthPath(req.path)) return next();
+    const retryAfter = clientAuthLimiter.check(`ip:${req.ip ?? 'unknown'}`);
+    if (retryAfter !== null) {
+      res.set('retry-after', String(retryAfter));
+      res.status(429).json({
+        error: 'too_many_requests',
+        error_description: 'You have exceeded the rate limit for token requests',
+      });
+      return;
+    }
+    next();
+  });
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    if (req.method !== 'POST' || !isClientAuthPath(req.path)) return next();
+    clientAuthBody(req, res, (err?: unknown) => {
+      if (err) return next(err);
+      void (async () => {
+        const body = (req.body ?? {}) as Record<string, unknown>;
+        if (typeof body.client_id !== 'string') return next();
+        const verdict = await provider.checkClientSecret(body.client_id, body.client_secret);
+        if (verdict.kind === 'reject') {
+          res.status(400).json({ error: 'invalid_client', error_description: 'Invalid client_secret' });
+          return;
+        }
+        if (verdict.kind === 'replace') body.client_secret = verdict.value;
+        next();
+      })().catch(next);
+    });
+  });
+
   // ---- SDK OAuth authorization server (mounted at root) ------------------
-  // No global body parser before this — each SDK sub-route parses its own body.
+  // No global body parser before this — each SDK sub-route parses its own body
+  // (on /token and /revoke ours ran first; body-parser 2 keeps that req.body).
   app.use(
     mcpAuthRouter({
       provider,
@@ -311,12 +385,13 @@ export function createConnectorServer(
       return;
     }
     const accountHash = sha256hex(token);
-    await storage.upsertAccount(accountHash);
     await stampEntitlement(req, accountHash);
     if (!(await isEntitled(accountHash))) {
       deny402(res);
       return;
     }
+    // After the gate (ADR 0061): a 402'd request never creates an account row.
+    await storage.upsertAccount(accountHash);
     // ADR 0020 chain of custody: unwrap (or first-create) the account DEK with
     // the connector-token KEK, then re-wrap it under a KEK derived from the
     // pairing code so /consent can carry custody forward. The DB row gets only
@@ -505,12 +580,12 @@ export function createConnectorServer(
       res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
       return;
     }
-    await storage.upsertAccount(accountHash);
     await stampEntitlement(req, accountHash);
     if (!(await isEntitled(accountHash))) {
       deny402(res);
       return;
     }
+    await storage.upsertAccount(accountHash);
     const entries = await storage.listEntries(accountHash);
     res.status(200).json({
       entries: entries.map((e) => ({ entry_id: e.entryId, entry_hash: e.entryHash ?? '', scope: e.scope })),
@@ -528,12 +603,12 @@ export function createConnectorServer(
       res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
       return;
     }
-    await storage.upsertAccount(accountHash);
     await stampEntitlement(req, accountHash);
     if (!(await isEntitled(accountHash))) {
       deny402(res);
       return;
     }
+    await storage.upsertAccount(accountHash);
     const body = req.body as { scopes?: unknown; entries?: unknown; shared_at?: unknown };
     if (!Array.isArray(body.scopes) || !Array.isArray(body.entries)) {
       res.status(400).json({ error: 'Provide a scopes[] array and an entries[] array.' });
@@ -643,8 +718,9 @@ export function createConnectorServer(
     res.status(200).json({ ok: true, scopes, upserted: entries.length });
   });
 
-  // DELETE /client/scope/:scope -> unshare: delete every row in the scope and
-  // write a content-free tombstone.
+  // DELETE /client/scope/:scope -> unshare. Gate: bearer ownership of the
+  // connector token only, never the entitlement (ADR 0061 Decision 1): it only
+  // deletes the caller's rows, records that deletion, and returns a count.
   app.delete('/client/scope/:scope', async (req: Request, res: Response) => {
     const accountHash = bearerAccount(req);
     if (!accountHash) {
@@ -656,22 +732,28 @@ export function createConnectorServer(
       res.status(400).json({ error: 'Provide a scope to unshare.' });
       return;
     }
-    await storage.upsertAccount(accountHash);
     await stampEntitlement(req, accountHash);
-    if (!(await isEntitled(accountHash))) {
-      deny402(res);
+    const paid = await isEntitled(accountHash);
+    if (paid) {
+      await storage.upsertAccount(accountHash);
+    } else if (!(await storage.hasAccount(accountHash))) {
+      // Unknown token: nothing of theirs is stored, and nothing is written.
+      res.status(200).json({ ok: true, scope, deleted: 0 });
       return;
     }
-    const deleted = await storage.deleteScope(accountHash, scope);
-    await storage.appendAudit({
-      ts: new Date().toISOString(),
-      accountHash,
-      tool: 'client_unshare',
-      params: { limit: 1 },
-      ok: true,
-      resultCount: deleted,
-      resultIds: [],
-    });
+    const { deleted, newTombstones } = await storage.unshareScope(accountHash, scope, { paid });
+    // Lapsed path: audit only real changes, so a repeated no-op adds no row.
+    if (paid || deleted > 0 || newTombstones > 0) {
+      await storage.appendAudit({
+        ts: new Date().toISOString(),
+        accountHash,
+        tool: 'client_unshare',
+        params: { limit: 1 },
+        ok: true,
+        resultCount: deleted,
+        resultIds: [],
+      });
+    }
     res.status(200).json({ ok: true, scope, deleted });
   });
 
@@ -686,12 +768,12 @@ export function createConnectorServer(
       res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
       return;
     }
-    await storage.upsertAccount(accountHash);
     await stampEntitlement(req, accountHash);
     if (!(await isEntitled(accountHash))) {
       deny402(res);
       return;
     }
+    await storage.upsertAccount(accountHash);
     // Order is load-bearing (ADR 0050 Decision 3). A re-share deletes the
     // tombstone before the app can write, so a tombstone read that FOLLOWS the
     // pending read can never name a row written after that re-share.
@@ -756,12 +838,12 @@ export function createConnectorServer(
       res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
       return;
     }
-    await storage.upsertAccount(accountHash);
     await stampEntitlement(req, accountHash);
     if (!(await isEntitled(accountHash))) {
       deny402(res);
       return;
     }
+    await storage.upsertAccount(accountHash);
     const body = req.body as { acked?: unknown; forgets?: unknown };
     const acked = Array.isArray(body.acked) ? body.acked : [];
     const forgets = Array.isArray(body.forgets) ? body.forgets : [];
@@ -868,6 +950,12 @@ function bearerToken(req: Request): string | null {
 function bearerAccount(req: Request): string | null {
   const token = bearerToken(req);
   return token ? sha256hex(token) : null;
+}
+
+/** POST /token or /revoke in any case, with any trailing slashes or sub-path the SDK router would also run on. */
+function isClientAuthPath(path: string): boolean {
+  const p = path.toLowerCase().replace(/\/+$/, '') || '/';
+  return CLIENT_AUTH_PATHS.some((c) => p === c || p.startsWith(`${c}/`));
 }
 
 /** Client IP: first hop of x-forwarded-for (set by Vercel), else the socket. */

@@ -36,6 +36,7 @@ import {
   InvalidTargetError,
 } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { ConnectorStorage } from './storage.js';
+import { ClientSecretBinder, clientSecretState, scrubForStorage, secretMatchesHash } from './client-secrets.js';
 import { renderConsentPage } from './consent.js';
 import { sha256hex, randomToken } from './hash.js';
 import {
@@ -51,19 +52,50 @@ const CODE_TTL_MS = 5 * 60 * 1000; // authorization codes live 5 min
 const ACCESS_TTL_SEC = 60 * 60; // access tokens live 1 hour
 const REFRESH_TTL_SEC = 30 * 24 * 60 * 60; // refresh tokens live 30 days
 
-class ConnectorClientsStore implements OAuthRegisteredClientsStore {
-  constructor(private storage: ConnectorStorage) {}
+/** Outcome of our own client-secret check (ADR 0061 Decision 2). */
+export type ClientSecretCheck =
+  | { kind: 'pass' }
+  | { kind: 'replace'; value: string }
+  | { kind: 'reject' };
 
+class ConnectorClientsStore implements OAuthRegisteredClientsStore {
+  constructor(
+    private storage: ConnectorStorage,
+    private binder: ClientSecretBinder,
+  ) {}
+
+  // ADR 0061: a confidential client is presented with a per-process bound
+  // value, never the stored hash or sentinel, so nothing in the DB is a secret.
   async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
-    return this.storage.getClient(clientId);
+    const rec = await this.storage.getClientRecord(clientId);
+    if (!rec) return undefined;
+    return this.binder.present(rec.info, rec.clientSecretHash);
   }
 
-  // RFC 7591 DCR. The SDK's register handler has already generated
-  // client_id/client_secret and validated metadata; we persist and echo it.
+  // RFC 7591 DCR. The SDK echoes the returned client (secret included) once;
+  // storage gets the sentinel JSON and the hash only.
   async registerClient(client: OAuthClientInformationFull): Promise<OAuthClientInformationFull> {
-    const secretHash = client.client_secret ? sha256hex(client.client_secret) : null;
-    await this.storage.registerClient(client, secretHash);
+    const { stored, hash } = await scrubForStorage(client);
+    await this.storage.registerClient(stored, hash);
     return client;
+  }
+
+  /**
+   * Our constant-time check, run before the SDK's `!==`. `pass` leaves the
+   * request to the SDK (public client, unknown id, or no secret presented);
+   * `replace` swaps the verified secret for the bound value; `reject` is
+   * invalid_client.
+   */
+  async checkSecret(clientId: string, presented: unknown): Promise<ClientSecretCheck> {
+    const rec = await this.storage.getClientRecord(clientId);
+    if (!rec) return { kind: 'pass' };
+    const state = clientSecretState(rec.info, rec.clientSecretHash);
+    if (state.kind === 'public') return { kind: 'pass' };
+    if (state.kind === 'unusable') return { kind: 'reject' };
+    if (presented === undefined) return { kind: 'pass' };
+    if (typeof presented !== 'string') return { kind: 'reject' };
+    if (!(await secretMatchesHash(presented, state.hash))) return { kind: 'reject' };
+    return { kind: 'replace', value: await this.binder.bound(state.hash) };
   }
 }
 
@@ -78,12 +110,18 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     private storage: ConnectorStorage,
     private mcpResourceUrl: string,
     private kekPepper: Uint8Array,
+    binder: ClientSecretBinder = new ClientSecretBinder(),
   ) {
-    this._clientsStore = new ConnectorClientsStore(storage);
+    this._clientsStore = new ConnectorClientsStore(storage, binder);
   }
 
   get clientsStore(): OAuthRegisteredClientsStore {
     return this._clientsStore;
+  }
+
+  /** ADR 0061: the pre-SDK client-secret check used by create-server. */
+  checkClientSecret(clientId: string, presented: unknown): Promise<ClientSecretCheck> {
+    return this._clientsStore.checkSecret(clientId, presented);
   }
 
   /**

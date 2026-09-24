@@ -1,12 +1,16 @@
 import { neon, type NeonQueryFunction } from '@neondatabase/serverless';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
-import type {
-  ConnectorAuditEntry,
-  ConnectorStorage,
-  ScopeTombstone,
-  SharedEntry,
-  StoredOAuthCode,
-  StoredOAuthToken,
+import {
+  MAX_NEW_TOMBSTONE_SCOPE_BYTES,
+  MAX_TOMBSTONES_PER_ACCOUNT,
+  type ConnectorAuditEntry,
+  type ConnectorStorage,
+  type OAuthGcResult,
+  type ScopeTombstone,
+  type StoredClientRow,
+  type SharedEntry,
+  type StoredOAuthCode,
+  type StoredOAuthToken,
 } from './storage.js';
 import { findTombstoneConflicts, TombstoneConflictError } from './tombstones.js';
 
@@ -163,6 +167,14 @@ export class NeonConnectorStorage implements ConnectorStorage {
     `;
   }
 
+  async hasAccount(accountHash: string): Promise<boolean> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      SELECT 1 AS present FROM connector_accounts WHERE account_hash = ${accountHash}
+    `) as unknown as unknown[];
+    return rows.length > 0;
+  }
+
   async setEntitledUntil(accountHash: string, untilMs: number): Promise<void> {
     await this.ensureSchema();
     // Upsert + only ever advance the stamp (GREATEST guards a stale re-stamp).
@@ -251,6 +263,45 @@ export class NeonConnectorStorage implements ConnectorStorage {
         client_json = EXCLUDED.client_json,
         client_secret_hash = EXCLUDED.client_secret_hash
     `;
+  }
+
+  async getClientRecord(
+    clientId: string,
+  ): Promise<{ info: OAuthClientInformationFull; clientSecretHash: string | null } | undefined> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      SELECT client_json, client_secret_hash FROM oauth_clients WHERE client_id = ${clientId}
+    `) as unknown as Array<{ client_json: string; client_secret_hash: string | null }>;
+    const row = rows[0];
+    if (!row) return undefined;
+    return {
+      info: JSON.parse(row.client_json) as OAuthClientInformationFull,
+      clientSecretHash: row.client_secret_hash ?? null,
+    };
+  }
+
+  async listClientSecretCandidates(): Promise<StoredClientRow[]> {
+    await this.ensureSchema();
+    // Loose text prefilter only; the caller decides on the parsed JSON (ADR 0061).
+    const rows = (await this.sql`
+      SELECT client_id, client_json, client_secret_hash FROM oauth_clients
+      WHERE position('client_secret' in client_json) > 0
+    `) as unknown as Array<{ client_id: string; client_json: string; client_secret_hash: string | null }>;
+    return rows.map((r) => ({
+      clientId: r.client_id,
+      clientJson: r.client_json,
+      clientSecretHash: r.client_secret_hash ?? null,
+    }));
+  }
+
+  async casClientRow(clientId: string, oldJson: string, newJson: string, clientSecretHash: string): Promise<boolean> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      UPDATE oauth_clients SET client_json = ${newJson}, client_secret_hash = ${clientSecretHash}
+      WHERE client_id = ${clientId} AND client_json = ${oldJson}
+      RETURNING client_id
+    `) as unknown as unknown[];
+    return rows.length > 0;
   }
 
   async putCode(codeHash: string, rec: StoredOAuthCode): Promise<void> {
@@ -456,18 +507,39 @@ export class NeonConnectorStorage implements ConnectorStorage {
   }
 
   async deleteScope(accountHash: string, scope: string): Promise<number> {
+    return (await this.unshareScope(accountHash, scope, { paid: true })).deleted;
+  }
+
+  async unshareScope(
+    accountHash: string,
+    scope: string,
+    opts: { paid: boolean },
+  ): Promise<{ deleted: number; newTombstones: number }> {
     await this.ensureSchema();
-    const results = await this.sql.transaction([
-      this.sql`DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND scope = ${scope} RETURNING entry_id`,
-      this.sql`
+    // ONE statement (ADR 0010): rows and tombstone move together. Counts are
+    // cast ::int and wrapped in Number() because Neon returns int8 as a string.
+    const rows = (await this.sql`
+      WITH d AS (
+        DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND scope = ${scope} RETURNING 1
+      ), t AS (
         INSERT INTO scope_tombstones (account_hash, scope, unshared_at)
-        VALUES (${accountHash}, ${scope}, now())
-        ON CONFLICT (account_hash, scope) DO UPDATE SET
-          unshared_at = GREATEST(scope_tombstones.unshared_at, EXCLUDED.unshared_at)
-      `,
-    ]);
-    const deleted = results[0] as unknown as unknown[];
-    return Array.isArray(deleted) ? deleted.length : 0;
+        SELECT ${accountHash}, ${scope}, now()
+        WHERE EXISTS (SELECT 1 FROM d)
+           OR EXISTS (SELECT 1 FROM scope_tombstones WHERE account_hash = ${accountHash} AND scope = ${scope})
+           OR (octet_length(${scope}::text) <= ${MAX_NEW_TOMBSTONE_SCOPE_BYTES}
+               AND (SELECT count(*) FROM scope_tombstones WHERE account_hash = ${accountHash}) < ${MAX_TOMBSTONES_PER_ACCOUNT}
+               AND (${opts.paid}::boolean OR EXISTS (
+                     SELECT 1 FROM connector_accounts
+                     WHERE account_hash = ${accountHash} AND entitled_until IS NOT NULL)))
+        ON CONFLICT (account_hash, scope) DO UPDATE
+          SET unshared_at = GREATEST(scope_tombstones.unshared_at, EXCLUDED.unshared_at)
+        RETURNING (xmax = 0) AS inserted
+      )
+      SELECT (SELECT count(*) FROM d)::int AS deleted,
+             (SELECT count(*) FROM t WHERE inserted)::int AS new_tombstones
+    `) as unknown as Array<{ deleted: number | string; new_tombstones: number | string }>;
+    const r = rows[0];
+    return { deleted: Number(r?.deleted ?? 0), newTombstones: Number(r?.new_tombstones ?? 0) };
   }
 
   async listTombstones(accountHash: string): Promise<ScopeTombstone[]> {
@@ -548,6 +620,33 @@ export class NeonConnectorStorage implements ConnectorStorage {
       this.sql`DELETE FROM pending_forgets WHERE account_hash = ${accountHash} AND entry_id = ${entryId}`,
       this.sql`DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND entry_id = ${entryId}`,
     ]);
+  }
+
+  async purgeLegacyPlaintext(): Promise<number> {
+    await this.ensureSchema();
+    // The exact complement of isEncryptedRow (startsWith 'nkc1:'); starts_with,
+    // not LIKE, so no wildcard can widen it. Never part of SCHEMA_STATEMENTS.
+    const rows = (await this.sql`
+      WITH d AS (
+        DELETE FROM shared_entries WHERE NOT starts_with(content, 'nkc1:') RETURNING 1
+      ) SELECT count(*)::int AS purged FROM d
+    `) as unknown as Array<{ purged: number | string }>;
+    return Number(rows[0]?.purged ?? 0);
+  }
+
+  async gcOAuth(nowSec: number): Promise<OAuthGcResult> {
+    await this.ensureSchema();
+    const codes = (await this.sql`
+      WITH d AS (
+        DELETE FROM oauth_codes WHERE consumed = true OR expires_at <= to_timestamp(${nowSec}) RETURNING 1
+      ) SELECT count(*)::int AS n FROM d
+    `) as unknown as Array<{ n: number | string }>;
+    const tokens = (await this.sql`
+      WITH d AS (
+        DELETE FROM oauth_tokens WHERE expires_at <= ${nowSec} RETURNING 1
+      ) SELECT count(*)::int AS n FROM d
+    `) as unknown as Array<{ n: number | string }>;
+    return { codes: Number(codes[0]?.n ?? 0), tokens: Number(tokens[0]?.n ?? 0) };
   }
 
   async appendAudit(entry: ConnectorAuditEntry): Promise<void> {

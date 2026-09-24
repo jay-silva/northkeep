@@ -44,6 +44,7 @@ function missingDbStorage(): ConnectorStorage {
   };
   return {
     upsertAccount: fail,
+    hasAccount: fail,
     setEntitledUntil: fail,
     getEntitledUntil: fail,
     ensureAccountDekWrap: fail,
@@ -52,6 +53,9 @@ function missingDbStorage(): ConnectorStorage {
     consumePairingCode: fail,
     getClient: fail,
     registerClient: fail,
+    getClientRecord: fail,
+    listClientSecretCandidates: fail,
+    casClientRow: fail,
     putCode: fail,
     getCode: fail,
     consumeCode: fail,
@@ -64,6 +68,7 @@ function missingDbStorage(): ConnectorStorage {
     replaceScopes: fail,
     replaceScopesAcceptingReshare: fail,
     deleteScope: fail,
+    unshareScope: fail,
     listTombstones: fail,
     getEntry: fail,
     deleteEntry: fail,
@@ -73,5 +78,7 @@ function missingDbStorage(): ConnectorStorage {
     ackEntry: fail,
     applyForget: fail,
     appendAudit: fail,
+    purgeLegacyPlaintext: fail,
+    gcOAuth: fail,
   };
 }
