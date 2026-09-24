@@ -925,8 +925,13 @@ every milestone; if a limit is removed, say when and how.*
 - **A project keeps its newest five revisions; older ones are blanked
   automatically (ADR 0051).** Every project update supersedes the prior
   document, and at that moment the vault blanks all but the newest five
-  superseded revisions of that project, keeping any a handoff receipt
-  still names. The text of older revisions is gone. The live document and
+  superseded revisions of that project, plus any revision a handoff
+  receipt on a surviving revision names (at most one more). A receipt on a
+  revision that is itself being blanked protects nothing, so a checkpoint or
+  wrap retried after its revision was blanked is refused rather than
+  recognized; before 0.22.0 receipts protected each other back through the
+  whole history, and a project saved by checkpoint or wrap was never
+  compacted. The text of older revisions is gone. The live document and
   its Log archives are never touched. `northkeep projects compact` (dry
   run by default, `--yes` to apply) does the same on demand, for vaults
   with history from before this rule or for a different keep count; the

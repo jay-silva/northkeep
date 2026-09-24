@@ -67,7 +67,7 @@ describe('compactProjectHistory', () => {
     v.close();
   });
 
-  it('keeps revisions a handoff receipt still names', () => {
+  it('keeps revisions a surviving receipt names, and an old receipt protects nothing', () => {
     const v = vault();
     let revision = seedProject(v, 'demo', 2);
     const receipt = v.checkpointProject({
@@ -75,13 +75,17 @@ describe('compactProjectHistory', () => {
       operation_id: '11111111-1111-4111-8111-111111111111', expected_revision: revision,
       status: 'Ready.', completed: 'Built the core.', next_actions: 'Next.',
     }).receipt;
-    revision = receipt.result_revision;
+    revision = v.updateProject({ project: 'demo', expected_revision: receipt.result_revision, status: 'Later.' }).revision;
+    const first = v.compactProjectHistory({ keep: 1 });
+    expect(first.projects[0]!.kept).toBe(2); // the kept result, plus the base its receipt names
+    expect(liveRevisions(v, 'demo')).toEqual(expect.arrayContaining([receipt.base_revision, receipt.result_revision]));
+
     for (let i = 0; i < 10; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Later ${i}.` }).revision;
-    const result = v.compactProjectHistory({ keep: 1 });
-    expect(result.projects[0]!.kept).toBe(3); // newest one, plus the receipt's base and result
-    const survivors = v.list({ scope: 'project:demo', includeSuperseded: true }).map((e) => e.id);
-    expect(survivors).toContain(receipt.base_revision);
-    expect(survivors).toContain(receipt.result_revision);
+    const second = v.compactProjectHistory({ keep: 1 });
+    expect(second.projects[0]!.kept).toBe(1); // the receipt sits on a blanked row now, so it keeps nothing
+    const survivors = liveRevisions(v, 'demo');
+    expect(survivors).not.toContain(receipt.base_revision);
+    expect(survivors).not.toContain(receipt.result_revision);
     expect(v.verifyChain().ok).toBe(true);
     v.close();
   });
@@ -203,7 +207,26 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
     v.close();
   });
 
-  it('keeps the revisions a checkpoint receipt names, and the checkpoint still replays', () => {
+  it('stays bounded when every save is a checkpoint or wrap (receipts do not chain)', () => {
+    const v = vault();
+    let revision = seedProject(v, 'demo', 0);
+    for (let i = 0; i < 20; i += 1) {
+      revision = v.checkpointProject({
+        vault_id: v.getVaultId(), project: 'demo', mode: i % 2 ? 'wrap' : 'checkpoint',
+        operation_id: `33333333-3333-4333-8333-${String(i).padStart(12, '0')}`, expected_revision: revision,
+        status: `Status ${i}.`, completed: `Did ${i}.`, next_actions: `Next ${i}.`,
+      }).receipt.result_revision;
+    }
+    // The newest five, plus the base the fifth one's receipt names. Before the
+    // fix every one of the twenty kept its text, because each receipt protected
+    // a row whose own receipt protected the next.
+    expect(survivingRevisions(v, 'project:demo')).toHaveLength(6);
+    expect(v.compactProjectHistory({ project: 'demo' }).blanked).toBe(0);
+    expect(v.verifyChain().ok).toBe(true);
+    v.close();
+  });
+
+  it('keeps a recent checkpoint replayable, and refuses a retry once its revision is blanked', () => {
     const v = vault();
     const request = {
       vault_id: '', project: 'demo', mode: 'checkpoint' as const,
@@ -214,16 +237,18 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
     request.expected_revision = seedProject(v, 'demo', 3);
     const receipt = v.checkpointProject(request).receipt;
     let revision = receipt.result_revision;
+    for (let i = 0; i < 2; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Soon ${i}.` }).revision;
+    const recent = v.checkpointProject(request);
+    expect(recent.replayed).toBe(true);
+    expect(recent.receipt).toEqual(receipt);
+
     for (let i = 0; i < 20; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Later ${i}.` }).revision;
-
     const surviving = survivingRevisions(v, 'project:demo');
-    expect(surviving).toHaveLength(7); // the newest five plus the receipt's base and result
-    expect(surviving).toContain(receipt.base_revision);
-    expect(surviving).toContain(receipt.result_revision);
-
-    const replay = v.checkpointProject(request);
-    expect(replay.replayed).toBe(true);
-    expect(replay.receipt).toEqual(receipt);
+    expect(surviving).toHaveLength(5);
+    expect(surviving).not.toContain(receipt.result_revision);
+    const head = v.list({ scope: 'project:demo' }).filter((e) => e.type === 'working').map((e) => e.id);
+    expect(() => v.checkpointProject(request)).toThrow(expect.objectContaining({ code: 'stale_project' }));
+    expect(v.list({ scope: 'project:demo' }).filter((e) => e.type === 'working').map((e) => e.id)).toEqual(head);
     expect(v.verifyChain().ok).toBe(true);
     v.close();
   });

@@ -673,8 +673,8 @@ export class Vault {
    * Blanks old superseded project revisions (ADR 0051 Decision 1). Candidates
    * are `working` rows in slug-valid project scopes that are superseded and not
    * already forgotten; the newest `keep` per scope stay, as does any revision a
-   * handoff receipt in that scope still names, so replay and lineage keep
-   * working. Blanking uses the same tombstone UPDATE as forget(), so the hash
+   * handoff receipt on a surviving row still names, so a recent retry and the
+   * current lineage keep working. Blanking uses the same tombstone UPDATE as forget(), so the hash
    * chain and the export stay valid. VACUUM releases the freed pages, without
    * which the next save() would re-serialize them. The caller persists with one
    * save().
@@ -732,8 +732,11 @@ export class Vault {
 
   /**
    * Picks the superseded project revisions this scope may lose: everything past
-   * the newest `keep`, minus any a handoff receipt still names. Pure selection,
-   * so both the manual operation and the automatic path share one rule.
+   * the newest `keep`, minus any a handoff receipt on a surviving row still
+   * names. Pure selection, so both the manual operation and the automatic path
+   * share one rule. Only survivors' receipts count: every checkpoint names its
+   * base, so letting a protected row's own receipt protect in turn would chain
+   * back through the whole history and nothing would ever be blanked.
    */
   private planScopeCompaction(scope: string, keep: number): { ids: string[]; bytes: number; candidates: number } {
     const candidates = this.db
@@ -742,8 +745,9 @@ export class Vault {
           'AND superseded_at IS NOT NULL AND forgotten_at IS NULL ORDER BY created_at DESC, rowid DESC',
       )
       .all(scope) as Array<{ id: string; content: string }>;
-    const referenced = this.receiptReferences(scope);
-    const blanking = candidates.slice(keep).filter((row) => !referenced.has(row.id));
+    const beyond = candidates.slice(keep);
+    const referenced = this.receiptReferences(scope, new Set(beyond.map((row) => row.id)));
+    const blanking = beyond.filter((row) => !referenced.has(row.id));
     let bytes = 0;
     for (const row of blanking) bytes += Buffer.byteLength(row.content, 'utf8');
     return { ids: blanking.map((row) => row.id), bytes, candidates: candidates.length };
@@ -795,13 +799,18 @@ export class Vault {
     return this.autoCompaction;
   }
 
-  /** Revision ids a handoff receipt in this scope still names (base, result, archives). */
-  private receiptReferences(scope: string): Set<string> {
+  /**
+   * Revision ids a handoff receipt in this scope still names (base, result,
+   * archives), read only from rows outside `skip`: the rows compaction may
+   * blank do not get to protect anything.
+   */
+  private receiptReferences(scope: string, skip: Set<string>): Set<string> {
     const referenced = new Set<string>();
     const rows = this.db
-      .prepare('SELECT metadata FROM memories WHERE scope = ? AND metadata IS NOT NULL')
-      .all(scope) as Array<{ metadata: string }>;
+      .prepare('SELECT id, metadata FROM memories WHERE scope = ? AND metadata IS NOT NULL')
+      .all(scope) as Array<{ id: string; metadata: string }>;
     for (const row of rows) {
+      if (skip.has(row.id)) continue;
       let meta: unknown;
       try { meta = JSON.parse(row.metadata); } catch { continue; }
       if (!meta || typeof meta !== 'object') continue;

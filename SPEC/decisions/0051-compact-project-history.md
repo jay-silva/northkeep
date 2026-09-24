@@ -178,3 +178,26 @@ well-formed host or session id for another well-formed one on a blanked row is
 not detectable. Tamper evidence through the hash chain covers the writer block
 for as long as the revision keeps its text. After compaction the surviving
 block is structurally checked, not hash-verified.
+
+## Correction, 2026-09-24: receipts no longer chain (release 0.22.0)
+
+Found by the 0.22.0 release-notes claims review
+(`Reviews/release-0.22.0/release-notes-claims-r1.md`, F1) and confirmed in the
+code. "Keep any revision a handoff receipt names" was read from every row in
+the scope. Every checkpoint or wrap receipt names its own result and its base,
+and a protected row keeps its receipt, so protection ran back through the whole
+history: after twenty checkpoints all twenty superseded revisions kept their
+text and `northkeep projects compact` blanked none. History was bounded only
+for projects saved with `project_update`, which contradicts Decision 4's
+"bounded at all times".
+
+The rule is now: keep the newest five, plus any revision named by a receipt on
+a row that survives this pass. Receipts on rows beyond the newest five protect
+nothing. The bound is the newest five plus at most one more (the base the fifth
+one's receipt names). Consequence, accepted by Jay on 2026-09-24 ("Fix before
+release"): a checkpoint or wrap retried after its result revision was blanked
+is refused as stale (`stale_project`) instead of replayed. A retry within the newest five still
+replays. Tests: `packages/core/test/project-compact.test.ts`, the three tests
+on surviving receipts, twenty checkpoints staying bounded, and a retry refused
+once blanked; all three fail on the previous code.
+
