@@ -11,7 +11,7 @@ import { describe, expect, it } from 'vitest';
  */
 
 const repo = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
-const EM = '—';
+const EM = '\u2014';
 
 function stringHits(label: string, text: string, kind: ts.ScriptKind, lineOffset = 0): string[] {
   const sf = ts.createSourceFile(label, text, ts.ScriptTarget.Latest, true, kind);
