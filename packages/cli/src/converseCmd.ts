@@ -165,10 +165,21 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   let lastTip: string | null = null;
 
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  // We write every prompt ourselves; readline's default "> " would reappear on redraw.
+  rl.setPrompt('');
   // Stdio MCP servers are child processes; leaving them running after the REPL
   // exits would strand them holding a vault handle.
-  const lines = createReplLines(rl, (text) => process.stdout.write(text), () => void closeMcp?.());
+  const lines = createReplLines(rl, (text) => process.stdout.write(text), {
+    interactive: rl.terminal,
+    // Ctrl-U: drop a partly typed line so it cannot complete an answer.
+    clearPartial: () => {
+      if (rl.line.length > 0) rl.write(null, { ctrl: true, name: 'u' });
+    },
+    onClose: () => void closeMcp?.(),
+  });
   const nextLine = lines.nextLine;
+  // After a cancel, the next prompt ignores what was typed while the task ran.
+  let cancelledTask = false;
 
   // The spinner fills every silent wait: after send until the first token,
   // and between agent steps while a tool runs or the model plans. It must be
@@ -272,7 +283,8 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         : offerNever
           ? `[y]es once / [n]o / ne[v]er for ${site}`
           : '[y]es once / [n]o';
-      const answer = (await nextLine(`${what} ${options}: `))?.trim().toLowerCase() ?? '';
+      // Only keystrokes typed after this prompt appears may answer it.
+      const answer = (await nextLine(`${what} ${options}: `, { freshInput: true }))?.trim().toLowerCase() ?? '';
       if (/^y(es)?$/.test(answer)) return 'allow';
       if (offerScopes && /^s(ession)?$/.test(answer)) return 'allow-session';
       if (offerScopes && /^a(lways)?$/.test(answer)) return 'allow-always';
@@ -282,7 +294,8 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   };
 
   for (;;) {
-    const line = await nextLine('you> ');
+    const line = await nextLine('you> ', { freshInput: cancelledTask });
+    cancelledTask = false;
     if (line === null) break; // Ctrl-D / closed input
     const trimmed = line.trim();
     if (trimmed.length === 0) continue;
@@ -472,34 +485,26 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       let taskResult: TaskResult | null = null;
       let result: TurnResult;
       if (taskTools.length > 0) {
-        // Ctrl-C cancels the task, not the REPL: readline's SIGINT at a terminal
-        // (raw mode sends no signal), the process signal otherwise. Releasing the
-        // approval prompt stops the next line going to a dead waiter.
-        const controller = new AbortController();
-        const cancel = (): void => {
-          if (controller.signal.aborted) return;
-          spinner.stop();
-          console.log(`\n${YELLOW}[cancelling…]${RESET}`);
-          controller.abort();
-          lines.releaseWaiters();
-        };
-        const endTask = lines.beginTask(cancel);
-        process.on('SIGINT', cancel);
-        try {
-          taskResult = await runTask({
-            ...turnArgs,
-            tools: taskTools,
-            hooks: taskHooks,
-            gate: permissionEngine,
-            // ADR 0035 Decision 3 (option B): a private-pinned conversation
-            // refuses remote MCP tools. Web tools still ask and still work.
-            ceiling,
-            signal: controller.signal,
-          });
-        } finally {
-          endTask();
-          process.off('SIGINT', cancel);
-        }
+        // Ctrl-C cancels the task, not the REPL (converseInterrupt.ts).
+        const { value } = await lines.runCancellable(
+          (signal) =>
+            runTask({
+              ...turnArgs,
+              tools: taskTools,
+              hooks: taskHooks,
+              gate: permissionEngine,
+              // ADR 0035 Decision 3 (option B): a private-pinned conversation
+              // refuses remote MCP tools. Web tools still ask and still work.
+              ceiling,
+              signal,
+            }),
+          () => {
+            cancelledTask = true;
+            spinner.stop();
+            console.log(`\n${YELLOW}[cancelling…]${RESET}`);
+          },
+        );
+        taskResult = value;
         result = taskResult;
       } else {
         result = await runTurn(turnArgs);
