@@ -6,8 +6,8 @@
   recheck; the code review and its recheck ran, and the last findings were
   fixed and checked by targeted tests (see Review history). O1 and O2 use
   the recommended defaults, confirmed by Jay on 2026-09-24 ("accept all
-  the recommended defaults"). Provider handling of the tagged tokens (R10)
-  stays unverified until Jay's one real-provider run on a throwaway vault.
+  the recommended defaults"). R10 (provider handling of the tagged tokens)
+  was checked on 2026-09-24 against one real provider; see R10.
   "Build notes" below lists every place the build differs from the text.
   It changes what leaves the machine (D2, D4), puts third-party text in
   front of the model (D3), changes a trust level (D6) and publishes
@@ -855,6 +855,17 @@ and exists to stop a later regression. A guard is not evidence of a fix.
   rate depend on it. Before this is called done, one live review run on a
   throwaway vault of fake data against a real provider is required (the
   repo rule on verifying against reality); Jay runs it.
+  **Result, 2026-09-24 (Jay's run, `Reviews/release-0.22.0/r10-real-provider.sh`):**
+  12 fake memories with names, emails, phones and dates, sent to
+  api.anthropic.com, model claude-sonnet-5, once at Tier 1 and twice at
+  Tier 2 (name model llama3.2:3b, not degraded). Every run: 12 of 12
+  compared, 5 proposals, `drops` empty (no `foreign_placeholder`,
+  `unmapped_placeholder` or `uncited_original`), and no run-tagged token,
+  `Person-` or `Company-` label left in any proposal. At Tier 2 the
+  proposals carried the real fake names (4 people, 1 company), both emails
+  and all three phone numbers restored. Call log: a `pending` row before
+  and a `done` row after each send. One model, one small vault: this shows
+  the tokens survive a real provider, not that every model copies them.
 - **R11. Tier 3 over MCP loses exact ordering by time.** All dates are
   years (F4); list order is the only finer ordering the host gets.
 - **R12. Dated handles stay exact over MCP at Tier 3** (scar tissue,
