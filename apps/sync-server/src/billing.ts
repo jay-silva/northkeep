@@ -192,7 +192,7 @@ export function billingFromEnv(env: NodeJS.ProcessEnv = process.env): BillingDep
   if (present < 4) {
     throw new Error(
       'Incomplete Stripe billing configuration. Set ALL of STRIPE_SECRET_KEY, ' +
-        'STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_ID, PUBLIC_BASE_URL — or NONE (to run without billing).',
+        'STRIPE_WEBHOOK_SECRET, STRIPE_PRICE_ID, PUBLIC_BASE_URL, or NONE (to run without billing).',
     );
   }
   return {

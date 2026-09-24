@@ -279,12 +279,12 @@ export async function retrieveAndAssemble(args: {
       ? ''
       : [
           '## What you remember about the user',
-          `(from their private memory vault — entries: ${used.map((s) => s.entry.id.slice(0, 8)).join(', ')})`,
+          `(from their private memory vault, entries: ${used.map((s) => s.entry.id.slice(0, 8)).join(', ')})`,
           ...used.map((s) => `- [${s.entry.type}] ${s.entry.content}`),
         ].join('\n');
   const systemText = [
     'You are the user\'s private assistant. Their own memory vault provides the context below; use it naturally and never claim to have no memory of them.',
-    'Some names or values may appear as placeholders like "Person-1" or "[SSN]". Use the placeholders exactly as written — they are restored to the real values on the user\'s machine after you answer.',
+    'Some names or values may appear as placeholders like "Person-1" or "[SSN]". Use the placeholders exactly as written; they are restored to the real values on the user\'s machine after you answer.',
     memoryBlock,
   ]
     .filter((s) => s.length > 0)

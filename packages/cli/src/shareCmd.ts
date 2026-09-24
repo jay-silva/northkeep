@@ -178,13 +178,16 @@ export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => ne
     // rows would create one (or 402). A pre-0.22 sidecar counts as paired
     // (connectorPaired), so a server saved then without pairing still asks.
     if (vault.sharedScopes().length === 0 && !connectorPaired()) return null;
+    const before = new Set(vault.sharedScopes());
     const down = await downSyncConnector({ server: cfg.server, deviceSecret, vault, entitlement });
     const scopes = vault.sharedScopes();
-    if (scopes.length === 0) return { down, push: null };
+    // Scopes the fold marked Shared in this run (ADR 0050): say so by name.
+    const newlyShared = scopes.filter((s) => !before.has(s));
+    if (scopes.length === 0) return { down, push: null, newlyShared };
     // Re-push so each newly down-synced row is rehashed server-side under its
     // vault id with pending cleared, and any forgotten row is reconciled away.
     const push = await pushSharedScopes({ server: cfg.server, deviceSecret, scopes, vault, entitlement });
-    return { down, push };
+    return { down, push, newlyShared };
   });
   if (result === null) {
     console.log(NOTHING_SHARED);
@@ -195,6 +198,11 @@ export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => ne
   );
   if (result.down.skipped > 0) {
     console.log('  Skipped memories had a type NorthKeep does not store; the app that wrote them can forget them.');
+  }
+  for (const scope of result.newlyShared) {
+    console.log(
+      `  "${scope}" came from a connected app and is now marked Shared. Later edits to it are pushed; run "northkeep share remove ${scope}" to stop.`,
+    );
   }
   for (const scope of result.down.held_scopes) console.log(`  ${holdMessage(heldSlug(scope))}`);
   if (result.push === null) {

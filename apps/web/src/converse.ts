@@ -241,7 +241,7 @@ export async function handleConverseStream(
   } else {
     endpoint = req.endpoint_id ? getEndpoint(req.endpoint_id) : null;
   }
-  if (!endpoint) return jsonError(res, 400, 'Unknown endpoint — configure one under Providers.');
+  if (!endpoint) return jsonError(res, 400, 'Unknown endpoint. Configure one under Providers.');
 
   // A pinned-private conversation may not reach a bounded endpoint by ANY
   // path — the pin is a promise, and it binds manual picks too (a user who
@@ -250,7 +250,7 @@ export async function handleConverseStream(
     return jsonError(
       res,
       400,
-      'This conversation is pinned private — that endpoint would leave the machine. Unpin to use it.',
+      'This conversation is pinned private: that endpoint would leave the machine. Unpin to use it.',
     );
   }
   const tier =
@@ -667,7 +667,7 @@ export function handleApprove(body: Buffer): { status: number; body: Record<stri
   // already-answered/timed-out/aborted id is gone). Fail closed: the loop's
   // own 5-min timeout still denies an approval nobody ever answers.
   if (entry === undefined || entry.sessionId !== sessionId) {
-    return { status: 404, body: { error: 'No pending approval for that id (it may have expired — send again).' } };
+    return { status: 404, body: { error: 'No pending approval for that id (it may have expired; send again).' } };
   }
   settleApproval(approvalId, decision as ApprovalAnswer);
   return { status: 200, body: { ok: true } };

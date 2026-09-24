@@ -494,7 +494,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
         if (toolSpecs.length > 0 && err instanceof Error && /HTTP 400\b/.test(err.message)) {
           throw new TurnError(
             'TOOLS_UNSUPPORTED',
-            `${model} on ${endpointHost} refused the tool-enabled request. This endpoint likely has no native tool support — disable tools for it, or pick a tool-capable model.`,
+            `${model} on ${endpointHost} refused the tool-enabled request. This endpoint likely has no native tool support. Disable tools for it, or pick a tool-capable model.`,
           );
         }
         throw new TurnError(

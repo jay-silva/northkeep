@@ -2789,7 +2789,9 @@
     if (d.rescope) { openRescope(d.rescope, d.scope, e.target); return; }
     const id = d.forget;
     if (!id) return;
-    if (!confirm('Forget this memory?\nIts content is removed permanently; the deletion itself stays on the record.')) return;
+    if (!confirm('Forget this memory?\nIts content is removed from the vault; the deletion itself stays on the record. ' +
+      'Copies outside the vault are not touched: the previous vault state stays in the backup file until the next write, ' +
+      'and a plaintext file such as a saved memory review report may still hold it.')) return;
     await api('/api/forget', { method: 'POST', json: { id } });
     await refreshStatus();
   });
@@ -4073,7 +4075,7 @@
         '🔒 <span><strong>Private only is on.</strong> Only local models on your Mac will read this chat; ' +
         'nothing is sent to a cloud model. Web tools are separate: if you turn Tools on, a search or fetch ' +
         'still leaves your Mac. It asks you first, unless you have already granted that site ' +
-        '&quot;always&quot; \u2014 a standing grant runs with no prompt, even here. For a chat where nothing at ' +
+        '&quot;always&quot;: a standing grant runs with no prompt, even here. For a chat where nothing at ' +
         'all leaves, keep Tools off.</span>';
     } else {
       hint.innerHTML = '<span>Turn on <strong>Private only</strong> to pin this chat to local models on your Mac, so nothing is ever sent to a cloud model. It is off, so a connected cloud model may be used (after on-device redaction).</span>';

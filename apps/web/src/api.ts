@@ -518,7 +518,7 @@ async function dispatch(
   // derived key are never returned or logged.
   if (method === 'POST' && route === '/api/setup/create') {
     if (fs.existsSync(session.vaultPath)) {
-      return bad(409, 'A vault already exists — unlock it instead.');
+      return bad(409, 'A vault already exists. Unlock it instead.');
     }
     const { passphrase, confirm } = parseJson<{ passphrase?: string; confirm?: string }>(body);
     if (typeof passphrase !== 'string' || passphrase.length < 8) {
@@ -1500,7 +1500,7 @@ async function dispatch(
       }
       return ok({ models, tier: classifyEndpoint(baseUrl).tier, costs });
     } catch {
-      return bad(502, 'Could not list models from that endpoint — is it running?');
+      return bad(502, 'Could not list models from that endpoint. Is it running?');
     }
   }
 
@@ -1546,7 +1546,7 @@ async function dispatch(
           );
           if (!already) {
             addEndpoint({
-              label: 'This Mac — ' + model,
+              label: 'This Mac: ' + model,
               baseUrl: 'http://127.0.0.1:11434',
               model,
               kind: 'openai-compatible',
@@ -1934,7 +1934,7 @@ async function startImport(
     if (source === 'paste') {
       const parsed = parsePasteFile(tempPath);
       if (parsed.length === 0) {
-        throw new Error('No "- [type] fact" lines found — is this the chatbot\'s answer to the NorthKeep prompt?');
+        throw new Error('No "- [type] fact" lines found. Is this the chatbot\'s answer to the NorthKeep prompt?');
       }
       const deduped = dedupeCandidates(parsed, existing);
       job.candidates = deduped.unique;

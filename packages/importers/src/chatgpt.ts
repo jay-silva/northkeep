@@ -59,7 +59,7 @@ export function parseChatgptExport(inputPath: string): ImportedConversation[] {
     try {
       parsed = JSON.parse(raw);
     } catch {
-      throw new Error('A conversations file is not valid JSON — the export may be corrupted.');
+      throw new Error('A conversations file is not valid JSON. The export may be corrupted.');
     }
     if (!Array.isArray(parsed)) {
       throw new Error('Unexpected ChatGPT export format (expected an array of conversations).');

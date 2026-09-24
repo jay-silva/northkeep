@@ -133,8 +133,8 @@ export class McpOriginChangedError extends Error {
 export class McpNotConnectedError extends Error {
   constructor(readonly serverId: string) {
     super(
-      `MCP server "${serverId}" has not been connected yet. A remote server does nothing — ` +
-        'not even list its tools — until you sign in to it, so that nobody holding this ' +
+      `MCP server "${serverId}" has not been connected yet. A remote server does nothing, ` +
+        'not even list its tools, until you sign in to it, so that nobody holding this ' +
         "window's address can put an unknown server's tools in front of the model.",
     );
     this.name = 'McpNotConnectedError';

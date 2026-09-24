@@ -139,7 +139,7 @@ export const WEB_SEARCH_GUIDANCE: Readonly<Record<string, string>> = {
   rate_limited:
     'The search API is rate limiting (HTTP 429). Wait a moment before searching again, or answer from what you already know.',
   auth:
-    'The search API rejected the subscription key (invalid or inactive). Search is unavailable this session; do not retry — proceed without it.',
+    'The search API rejected the subscription key (invalid or inactive). Search is unavailable this session; do not retry; proceed without it.',
   bad_response: 'The search API returned an unreadable response. Try a different query or continue without search.',
   'redirect-refused':
     'The search API returned a redirect, which is refused on a credentialed request. Search is unavailable right now; proceed without it.',
@@ -181,7 +181,7 @@ export function fetchErrorToResult(err: FetchRefusedError, host: string): ToolRe
   // Our request is fixed and pre-validated, so a 422 here is an auth problem in
   // practice, not a malformed query.
   if (err.code === 'http-status' && (err.status === 401 || err.status === 403 || err.status === 422)) {
-    return errorResult('auth', `Brave rejected the request (HTTP ${err.status}) — the subscription key is invalid or inactive`, host);
+    return errorResult('auth', `Brave rejected the request (HTTP ${err.status}): the subscription key is invalid or inactive`, host);
   }
   return errorResult(err.code, err.message, host);
 }

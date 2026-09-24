@@ -64,7 +64,7 @@ export function parseClaudeExport(filePath: string): ImportedConversation[] {
   try {
     parsed = JSON.parse(raw);
   } catch {
-    throw new Error('Not valid JSON — for a memory-export text file, use "northkeep import paste".');
+    throw new Error('Not valid JSON. For a memory-export text file, use "northkeep import paste".');
   }
   if (!Array.isArray(parsed)) {
     throw new Error('Unexpected Claude export format (expected an array of conversations).');

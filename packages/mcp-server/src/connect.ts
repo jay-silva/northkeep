@@ -145,7 +145,7 @@ function mcpServersOrThrow(file: string, config: Record<string, unknown>): Recor
 function unparseable(file: string): Error {
   return new Error(
     `Refusing to modify ${file}: it exists but is not a valid JSON object. ` +
-      `NorthKeep never overwrites a config it cannot parse — fix or move that file, then reconnect.`,
+      `NorthKeep never overwrites a config it cannot parse. Fix or move that file, then reconnect.`,
   );
 }
 
