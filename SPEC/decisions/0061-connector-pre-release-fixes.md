@@ -1,8 +1,8 @@
 # ADR 0061: Connector fixes before release 0.22.0 (lapsed unshare, hashed client secrets, legacy plaintext purge)
 
 - **Date:** 2026-09-24
-- **Status:** Accepted and built for release 0.22.0 (merged on
-  `integrate2/0.22.0`, 2026-09-24). Design CLEARED WITH WOUNDS after the
+- **Status:** Accepted and built; first released in 0.22.0
+  (2026-09-24). Design CLEARED WITH WOUNDS after the
   recheck; the code review recheck CLEARED it (see Review history). Jay's
   decisions D1 to D4 were accepted as recommended on 2026-09-24 ("accept
   all the recommended defaults"). The legacy plaintext purge and the

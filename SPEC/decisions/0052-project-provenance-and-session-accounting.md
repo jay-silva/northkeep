@@ -1,7 +1,7 @@
 # ADR 0052: Project provenance, session accounting, a lighter resume brief, and draft projects
 
 - **Date:** 2026-09-21
-- **Status:** Accepted and shipped (main dd4e78b, 2026-09-22); Jay's
+- **Status:** Accepted and merged (main dd4e78b, 2026-09-22), first released in 0.22.0; Jay's
   acceptance run passed all seven steps on 2026-09-22. Four adversarial
   passes: three NOT CLEARED with amendments applied after each, the
   fourth CLEARED WITH WOUNDS; Jay accepted two wounds and the third was

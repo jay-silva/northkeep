@@ -5,9 +5,7 @@
   0.22.0). First review and recheck both CLEARED WITH WOUNDS
   (2026-09-23), no wound open. Jay decided the placeholder question on
   2026-09-23 (options B and C, Decision 8). This changes redaction and
-  publishes a claim in KNOWN-LIMITS, so the CLAUDE.md review gate applies. The implementation sits on branch
-  `adr-0059/tier1-tokens`, unmerged, so the reviewer can attack code rather
-  than prose.
+  publishes a claim in KNOWN-LIMITS, so the CLAUDE.md review gate applies.
 
   **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** this status
   is stale. The branch was merged into main as merge commit `3c0d306`

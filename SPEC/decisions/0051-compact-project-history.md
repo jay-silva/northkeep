@@ -4,7 +4,8 @@
 - **Status:** Accepted by Jay ("Do option 1 and raise the cap to 8 MB",
   then "make it automatic", 2026-09-21). Option 1 and automatic
   compaction implemented the same day; the cap raise was found impossible
-  on the current transport (Decision 3) and is not done.
+  on the current transport (Decision 3) and is not done. Corrected
+  2026-09-24 for release 0.22.0; see "Correction, 2026-09-24" at the end.
 - **Deciders:** Jay (product owner), Claude Code
 - **Extends:** ADR 0039 (projects as vault memories), ADR 0045 (log
   rolling), ADR 0048 (handoff receipts)

@@ -1,8 +1,8 @@
 # ADR 0060: Pre-release privacy fixes for 0.22.0 (D2, D3, D4, D6, D7, D8, D9)
 
 - **Date:** 2026-09-24
-- **Status:** Accepted and built for release 0.22.0 (merged on
-  `integrate2/0.22.0`, 2026-09-24). Design CLEARED WITH WOUNDS after its
+- **Status:** Accepted and built; first released in 0.22.0
+  (2026-09-24). Design CLEARED WITH WOUNDS after its
   recheck; the code review and its recheck ran, and the last findings were
   fixed and checked by targeted tests (see Review history). O1 and O2 use
   the recommended defaults, confirmed by Jay on 2026-09-24 ("accept all
