@@ -175,7 +175,9 @@
           read.</p>
         <p class="note">Honest boundary: Connect gives you ownership and
           portability, not a firewall, and it can't redact what you type into
-          someone else's app. The cloud connector is opt-in per scope. Shared
+          someone else's app. The cloud connector is opt-in per scope, with one
+          exception: a new project that an app you connected creates arrives
+          already shared, so that app can keep it updated. Shared
           memories are encrypted at rest there: the connector database holds no
           key that can read them, and the key is rebuilt each request from your
           app's own credential plus a secret on our server, which briefly decrypts
@@ -190,7 +192,9 @@
           your message leaves the machine, calls the model, and restores the
           details locally in the reply.</p>
         <p class="note">The real firewall, against a local model (with tools off,
-          nothing leaves your network) or a cloud model with your own key.</p>
+          nothing leaves your network) or a cloud model with your own key. It runs
+          in the iPhone app (beta) and in the terminal from a source install; the
+          Mac app no longer has a chat view.</p>
       </div>
     </div>
   </div>
@@ -203,12 +207,12 @@
       <div class="feat"><h3><span class="dot"></span>Owned &amp; portable</h3><p>One encrypted file you can copy, back up, and move. Your memory lives in none of the AI apps, so switching costs nothing.</p></div>
       <div class="feat"><h3><span class="dot"></span>Projects across agents</h3><p>Start a project in Claude, pick it up in Codex or Cursor. Status, next actions, and a log live in your vault, so the second agent knows what the first one knew.</p></div>
       <div class="feat"><h3><span class="dot"></span>The session contract</h3><p>A short standing instruction tells connected agents to read the live project and write it back when they finish. It is advisory: a session that ends abruptly wrote nothing.</p></div>
-      <div class="feat"><h3><span class="dot"></span>On-device redaction</h3><p>Keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers are always masked before a chat message or a cloud memory review leaves your machine, and names too at Tier 2 and up. A key with no recognizable prefix or a password is not caught. Each turn shows you exactly what was masked.</p></div>
+      <div class="feat"><h3><span class="dot"></span>On-device redaction</h3><p>Keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers are always masked before a chat message or a cloud memory review leaves your machine, and names too at Tier 2 and up. A key with no recognizable prefix or a password is not caught. In the iPhone app, each turn shows exactly what left the device; in the terminal, each reply names the tier that ran.</p></div>
       <div class="feat"><h3><span class="dot"></span>Per-app scopes</h3><p>Grant one app your work memory only, another nothing sensitive. Enforced at the vault, not on trust.</p></div>
       <div class="feat"><h3><span class="dot"></span>Bring your history</h3><p>Import your ChatGPT or Claude export. Extraction runs entirely on your machine, and you review every memory before it's kept.</p></div>
       <div class="feat"><h3><span class="dot"></span>Any model</h3><p>Local models via Ollama, or any provider with your own key. A concierge routes each question to a capable model, favoring the cheapest, cost shown up front.</p></div>
       <div class="feat"><h3><span class="dot"></span>Encrypted sync</h3><p>Move your vault between machines. The server only ever holds ciphertext it cannot decrypt, never a key, never plaintext. We could not read it if we wanted to.</p></div>
-      <div class="feat"><h3><span class="dot"></span>Cloud Connect (Beta)</h3><p>Share the scopes you choose to the AI apps you already use, so Claude and ChatGPT remember you on your phone too. Stored encrypted at rest with no key kept in that database; decrypted only for the moment it takes to answer your app. Opt-in per scope, reversible.</p></div>
+      <div class="feat"><h3><span class="dot"></span>Cloud Connect (Beta)</h3><p>Share the scopes you choose to the AI apps you already use, so Claude and ChatGPT remember you on your phone too. Stored encrypted at rest with no key kept in that database; decrypted only for the moment it takes to answer your app. Opt-in per scope (a new project an app you connected creates arrives shared), reversible.</p></div>
     </div>
   </div>
 </section>

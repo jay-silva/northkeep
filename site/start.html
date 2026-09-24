@@ -40,7 +40,7 @@
 <main><div class="wrap">
 
 <h1>Up and running in 15 minutes</h1>
-<p class="lede">No terminal, no configuration files. If you can install an app and paste a key, you can run NorthKeep.</p>
+<p class="lede">No configuration files to edit. If you can install an app and paste a key, you can run the Mac app. Only chatting through NorthKeep on a Mac needs the terminal (step 4).</p>
 
 <div class="step">
 <h2><span class="num">1</span>Install the app</h2>
@@ -64,32 +64,31 @@
 
 <div class="step">
 <h2><span class="num">3</span>Connect a model</h2>
-<p>NorthKeep talks to AI models you choose. The easiest path:</p>
+<p>On the Mac, NorthKeep uses the models you connect to review your memories. The easiest path:</p>
 <ol>
-  <li>Open the <strong>Converse</strong> tab and click <strong>Connect a model</strong>.</li>
+  <li>Open <strong>Settings</strong>, then <strong>Models</strong>, and click <strong>Connect a model</strong>.</li>
   <li>Pick your provider: Claude, OpenAI, Gemini, Grok, or OpenRouter. The wizard links you to the provider's key page, and shows relative cost up front.</li>
   <li>Paste your API key. It is stored in your Mac's Keychain, never in a file, and never sent to us.</li>
 </ol>
-<p class="tip">Want fully local instead? Install <a href="https://ollama.com">Ollama</a> and NorthKeep will detect it and offer a one-click model install. With Tools off, local chats never leave your machine at all.</p>
+<p class="tip">Want fully local instead? Install <a href="https://ollama.com">Ollama</a> and the Models page will detect it and offer a one-click model download. A review on a local model never leaves your Mac.</p>
 </div>
 
 <div class="step">
-<h2><span class="num">4</span>Have your first conversation</h2>
+<h2><span class="num">4</span>Talk through NorthKeep</h2>
+<p>Converse is the chat that masks your message before it leaves and restores the details in the reply. The Mac app no longer has a chat view, so Converse runs in two places:</p>
 <ol>
-  <li>In <strong>Converse</strong>, type a message and hit Send.</li>
-  <li>Watch the badge next to the toolbar: <strong>PRIVATE</strong> means the model runs on your machine or your own network, so your conversation never leaves your network. (With Tools on, a tool call you approve does leave, masked; keep Tools off to keep every byte on your network.) <strong>BOUNDED</strong> means your text goes to a cloud model, but only after masking.</li>
-  <li>Each reply shows which model answered and roughly what the turn cost.</li>
+  <li><strong>The iPhone app</strong> (beta, on TestFlight with design partners): open Converse, pick a model, and send.</li>
+  <li><strong>The terminal on your Mac</strong>, from a source install (the steps are in the <a href="https://github.com/jay-silva/northkeep">README</a>): run <code>pnpm northkeep converse</code>. It prints a <strong>private</strong> badge when the model runs on your machine or your own network, so your conversation never leaves your network (a tool call you approve does leave, masked; tools are off unless you start with <code>--tools</code>), or a <strong>bounded</strong> badge when your text goes to a cloud model, only after masking. Each reply names the model that answered, the tier that ran, and roughly what the turn cost.</li>
 </ol>
-<p class="tip">NorthKeep remembers useful facts from your chats automatically. Every new memory appears with an Undo button, and you can browse and edit them all in the Memories tab.</p>
+<p class="tip">NorthKeep remembers useful facts from your chats automatically. In the terminal, new memories are listed after each reply and <code>:undo</code> removes them. You can browse and edit them all in the Memories tab.</p>
 </div>
 
 <div class="step">
 <h2><span class="num">5</span>See the privacy working</h2>
 <p>This is the part worth two minutes of your time:</p>
 <ol>
-  <li>Set the tier picker to <strong>Tier 3</strong> (the maximum: names, dates, addresses, record numbers).</li>
-  <li>Send a message containing something sensitive, or attach a document with the paperclip.</li>
-  <li>On the reply, open <strong>"What left this machine"</strong>. You will see every masked item, real value to placeholder, plus the exact text that was sent. Shown on your screen only, never stored.</li>
+  <li>On the iPhone app, send a message containing something sensitive, then open <strong>"What left this device"</strong> on the reply. You will see every masked item and the exact text that was sent. Shown on your screen only, never stored.</li>
+  <li>In the terminal, run the same masking by hand: <code>echo "Dana Reyes, SSN 123-45-6789, phone 774-555-0134, seen on 03/15/2026" | pnpm northkeep redact --tier 3</code> prints the text with each item replaced by a placeholder. Start a chat at that tier with <code>pnpm northkeep converse --tier 3</code>.</li>
 </ol>
 <p class="tip">Tier 1 always masks keys with a known issuer prefix, card numbers, SSNs, emails, phones, labeled account numbers, and street addresses; a key with no recognizable prefix or a password is not caught. Tier 2 also pseudonymizes names. Tier 3 adds blanket date masking, built for working with sensitive documents.</p>
 </div>
@@ -98,7 +97,7 @@
 <h2><span class="num">6</span>Give your AI apps your memory</h2>
 <p>This is what makes NorthKeep different: the AI apps you already pay for get your memory, on your terms.</p>
 <ol>
-  <li>Open the <strong>Connect</strong> tab.</li>
+  <li>Open <strong>Connect</strong>, then <strong>Desktop</strong>.</li>
   <li>Click Connect next to <strong>Claude Desktop</strong>, <strong>Claude Code</strong>, <strong>Cursor</strong>, or <strong>ChatGPT</strong>. Pick which scope of memories the app may see.</li>
   <li>Restart that app. Ask it "what do you know about me?" and watch it answer from your vault.</li>
 </ol>
@@ -109,14 +108,14 @@
 <p>The <strong>Sync + Cloud Connect</strong> subscription ($10/month) adds the two hosted pieces:</p>
 <ul>
   <li><strong>Sync</strong> moves your encrypted vault between machines. Our server holds ciphertext it cannot read.</li>
-  <li><strong>Cloud Connect (Beta)</strong> shares chosen scopes to Claude and ChatGPT wherever you use them, including your phone. Open the Cloud Connect tab, share a scope (you confirm exactly what leaves), then pair your app with the URL and one-time code shown.</li>
+  <li><strong>Cloud Connect (Beta)</strong> shares chosen scopes to Claude and ChatGPT wherever you use them, including your phone. Open <strong>Connect</strong>, then <strong>Cloud</strong>, share a scope (you confirm exactly what leaves), then pair your app with the URL and one-time code shown. One exception to confirming: a new project that a paired app creates arrives on your devices already shared, so that app can keep it updated; unsharing revokes it.</li>
 </ul>
 <p class="tip">Design partners: your subscription is on us during the pilot. Just tell Jay when you reach this step.</p>
 </div>
 
 <div class="step">
 <h2><span class="num">8</span>Optional: bring your history</h2>
-<p>Already have months of ChatGPT or Claude conversations? Request your data export from the provider, then drop the export file into NorthKeep's <strong>Import</strong> wizard. Extraction runs on your machine, and you review every proposed memory before it is kept.</p>
+<p>Already have months of ChatGPT or Claude conversations? Request your data export from the provider, then drop the export file into NorthKeep's <strong>Import</strong> page, under Settings. Extraction runs on your machine, and you review every proposed memory before it is kept.</p>
 </div>
 
 <div class="step">
@@ -125,7 +124,7 @@
 <p><strong>One-time setup:</strong></p>
 <ol>
   <li>In the Memories tab, add one memory with a new scope named <code>conversations</code>. Something like: "This scope holds automatic chat summaries from my AI apps."</li>
-  <li>In the Cloud Connect tab, share the <code>conversations</code> scope.</li>
+  <li>In <strong>Connect</strong>, then <strong>Cloud</strong>, share the <code>conversations</code> scope.</li>
 </ol>
 <p><strong>Pattern 1: a nightly scheduled task</strong> (works in apps whose tasks can see session history, like Manus and ChatGPT):</p>
 <div class="note" style="color:var(--ink)">Review my conversations from today. For each substantive one, write a two or three sentence summary. Store each summary in NorthKeep using memory_remember with type "episodic" and scope "conversations". Skip small talk and anything already stored.</div>
@@ -139,7 +138,7 @@
 <p>Projects live in your vault, so the next agent can pick up where the last one stopped.</p>
 <ol>
   <li>Create a project in any connected app, or in NorthKeep.</li>
-  <li>Install the session contract from the Connect tab so agents know to read that project at the start of a session and write status when they finish.</li>
+  <li>Install the session contract from <strong>Connect</strong>, then <strong>Desktop</strong>, so agents know to read that project at the start of a session and write status when they finish.</li>
   <li>End a session in one agent. Start cold in another. The second agent should already know the status, next actions, and log.</li>
 </ol>
 <p class="tip">The contract is advisory. A session that ends abruptly wrote nothing.</p>
