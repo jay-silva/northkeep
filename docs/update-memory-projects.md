@@ -24,6 +24,6 @@ The restart loads the new server. Its local saves refuse an outdated project rev
 
 ## What this update changes
 
-Memories organizes saved information by collection. Review provides deliberate consolidation of eligible private memories, with original wording retained in history. Projects brings the current state, next actions, decisions, questions and file references together with Resume, Checkpoint and Wrap up.
+Memories organizes saved information by collection. Review finds duplicate, stale and conflicting memories in the collections you pick and proposes changes you approve one at a time, using a local model by default or a cloud model you choose (memory text is masked before it is sent). Its report is a plaintext file on this Mac that keeps the reviewed text even after a memory is forgotten; see KNOWN-LIMITS.md. Guided consolidation merges eligible private memories into one you edit and approve, with the original wording retained in history. Projects brings the current state, next actions, decisions, questions and file references together with Resume, Checkpoint and Wrap up.
 
 The existing vault format is retained. A new import is not part of the transition. The new local handoff checks do not change hosted connector writes or coordinate competing edits across devices.
