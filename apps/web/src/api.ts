@@ -719,10 +719,13 @@ async function dispatch(
 
   // Redaction is stateless and doesn't touch the vault — no unlock required.
   if (method === 'POST' && route === '/api/redact') {
-    const { text, tier } = parseJson<{ text?: string; tier?: number }>(body);
+    const { text, tier } = parseJson<{ text?: string; tier?: unknown }>(body);
     if (typeof text !== 'string' || text.length === 0) return bad(400, 'Text required.');
     if (text.length > 100_000) return bad(413, 'Text too large (100 KB max).');
-    const result = await redact(text, { tier: tier === 2 ? 2 : 1 });
+    // 1 when omitted; anything other than 1, 2 or 3 is refused, never read as 1.
+    const wanted = tier === undefined ? 1 : tier;
+    if (wanted !== 1 && wanted !== 2 && wanted !== 3) return bad(400, 'tier must be 1, 2 or 3.');
+    const result = await redact(text, { tier: wanted });
     return ok(result);
   }
 
@@ -1057,23 +1060,17 @@ async function dispatch(
 
   /*
    * "This is my NorthKeep vault": stop masking what this server is asked to
-   * save (ADR 0060 Decision 4). Offered only for the exact bundled launch, and
-   * it needs the passphrase, so a caller holding only a session token (a
-   * prompt-injected page or model) cannot lift the masking on its own.
+   * save (ADR 0060 Decision 4, Jay: one click). Only for the exact bundled
+   * launch with no env and no cwd. No passphrase: adding the vault from the
+   * catalog, one click with the same session, already yields this entry.
    */
   if (method === 'POST' && route === '/api/mcp/trust-vault') {
-    const { id, passphrase } = parseJson<{ id?: unknown; passphrase?: unknown }>(body);
+    const { id } = parseJson<{ id?: unknown }>(body);
     if (typeof id !== 'string') return bad(400, 'id is required.');
     const server = getMcpServer(id);
     if (server === undefined) return bad(404, `No such MCP server: ${id}`);
     if (!isBundledVaultLaunch(server)) {
       return bad(400, 'Only the NorthKeep vault server, launched exactly as NorthKeep installs it with no extra settings, can be marked as your vault.');
-    }
-    if (typeof passphrase !== 'string' || passphrase.length === 0) {
-      return bad(401, 'Marking this as your vault needs your passphrase.');
-    }
-    if (!(await session.verifyPassphrase(passphrase))) {
-      return bad(401, 'That passphrase is not right.');
     }
     setServerTrusted(id);
     return ok({ id, trust: 'trusted' });

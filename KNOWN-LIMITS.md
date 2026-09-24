@@ -635,7 +635,7 @@ every milestone; if a limit is removed, say when and how.*
   catalog, is `trusted` (ADR 0060): its arguments only go into the vault on
   this Mac, so what you ask it to remember is saved exactly. A vault server
   added before this release stays `strict` until you press "This is my
-  NorthKeep vault" in the MCP settings and enter your passphrase; that button
+  NorthKeep vault" in the MCP settings and confirm; that button
   appears only for the exact bundled server with no extra environment or
   working directory. Any other server can only be made `trusted` by editing
   `~/.northkeep/mcp.json` by hand. The exfiltration screens still run on the
@@ -792,8 +792,10 @@ every milestone; if a limit is removed, say when and how.*
   Ollama, Tier 2 is skipped and you're told loudly — names are NOT masked.
   The name model reads long text in overlapping windows of about 6,000
   characters, so a long text costs several calls; if any window fails, the
-  whole text counts as unmasked for names (ADR 0060). Before 0.22.0 it read
-  only the first 6,000 characters and said nothing about the rest.
+  whole text counts as unmasked for names (ADR 0060), and so does a reply
+  from the model that cannot be read in full. Before 0.22.0 it read only
+  the first 6,000 characters and kept only the last of two "entities" lists
+  in a reply, and said nothing in either case.
   Tier 2 also generalizes DOB-labeled dates to year-only, deterministically.
 - **Tier 3 makes dates and listed names deterministic — not "all names."**
   Full calendar dates in every recognized format (numeric US and day-first,
@@ -1014,7 +1016,8 @@ every milestone; if a limit is removed, say when and how.*
   and ids go as written. Tier 2 refuses the whole run, with nothing sent, if
   the local name model fails for any memory; Tier 3 proceeds and says so.
   Suggestions come back with placeholders and are filled in on this machine,
-  only from memories the suggestion cites, so masked text never lands in
+  only from memories the suggestion quotes (a quote that does not match the
+  memory counts for nothing), so masked text never lands in
   your vault; review quality drops because the model reasons over
   placeholders, and some suggestions are dropped. How real providers copy
   the placeholders has not yet been checked against a live provider. Local

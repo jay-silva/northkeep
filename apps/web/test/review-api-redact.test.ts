@@ -274,3 +274,16 @@ describe('ADR 0060 code review F2 through the web route', () => {
   });
 });
 
+
+describe('ADR 0060 code review item 5: /api/redact honours Tier 3', () => {
+  it('tier 3 masks dates to the year; an unknown tier is refused', async () => {
+    const r = await handleApi(session, 'POST', '/api/redact', new URLSearchParams(), body({ text: 'Born 03/15/1948, mail a@example.com', tier: 3 }));
+    expect(r.status).toBe(200);
+    expect((r.body as { redacted: string; tierApplied: number }).redacted).toBe('Born [DATE-1948], mail [EMAIL_1]');
+    expect((r.body as { tierApplied: number }).tierApplied).toBe(3);
+    for (const tier of [4, '3', 0, null]) {
+      const bad = await handleApi(session, 'POST', '/api/redact', new URLSearchParams(), body({ text: 'x', tier }));
+      expect(bad.status, String(tier)).toBe(400);
+    }
+  });
+});

@@ -82,6 +82,10 @@ const fmtKb = (bytes: number): string =>
   bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
 
 export async function runConverse(options: ConverseCmdOptions, withVault: WithVault): Promise<void> {
+  // A tier that is not 0 to 3 is refused, never read as 1 (invariant 6).
+  if (!['0', '1', '2', '3'].includes(options.tier)) {
+    throw new Error(`--tier ${options.tier} is not 0, 1, 2 or 3.`);
+  }
   let endpoint = options.endpoint ? getEndpoint(options.endpoint) : getDefaultEndpoint();
   if (!endpoint) {
     throw new Error(
@@ -91,11 +95,11 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
           '  northkeep providers add --label "Local" --base-url http://127.0.0.1:11434 --model llama3.2:3b',
     );
   }
-  const tier = options.tier === '0' ? 0 : options.tier === '2' ? 2 : 1;
+  const tier = Number(options.tier) as 0 | 1 | 2 | 3;
   const classification = classifyEndpoint(endpoint.baseUrl);
   if (tier === 0 && classification.tier !== 'private') {
     throw new Error(
-      'Redaction cannot be turned off toward a non-private endpoint. Use --tier 1 or --tier 2, or point at a local/LAN model.',
+      'Redaction cannot be turned off toward a non-private endpoint. Use --tier 1, 2 or 3, or point at a local/LAN model.',
     );
   }
   let auto = options.auto === true;
@@ -541,7 +545,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         : '';
       console.log(
         `${DIM}[${result.privacy} · ${result.endpointHost} · ${result.model} · tier ${result.tierApplied}` +
-          `${result.tier2Degraded ? ' (tier 2 degraded)' : ''}${costSeg}` +
+          `${result.tier2Degraded ? (result.tierApplied === 3 ? ' (deterministic only, name model offline)' : ' (tier 2 degraded)') : ''}${costSeg}` +
           ` · memory: ${result.memoriesUsed.length} used, ${result.memoriesCreated.length} added]${RESET}`,
       );
       if (routeReason) console.log(`${DIM}[✦ ${routeReason}]${RESET}`);

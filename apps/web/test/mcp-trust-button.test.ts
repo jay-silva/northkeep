@@ -58,17 +58,13 @@ describe('ADR 0060 D6: the vault-trust button', () => {
     expect(servers.find((s) => s.id === 'plain')!.vault_trust_offer).toBe(true);
     expect(servers.find((s) => s.id === 'elsewhere')!.vault_trust_offer).toBe(false);
 
-    const refused = await handleApi(session, 'POST', '/api/mcp/trust-vault', new URLSearchParams(), body({ id: 'elsewhere', passphrase }));
+    const refused = await handleApi(session, 'POST', '/api/mcp/trust-vault', new URLSearchParams(), body({ id: 'elsewhere' }));
     expect(refused.status).toBe(400);
     expect(getServer('elsewhere')!.trust).toBe('strict');
 
-    const noPass = await handleApi(session, 'POST', '/api/mcp/trust-vault', new URLSearchParams(), body({ id: 'plain' }));
-    expect(noPass.status).toBe(401);
-    const wrong = await handleApi(session, 'POST', '/api/mcp/trust-vault', new URLSearchParams(), body({ id: 'plain', passphrase: 'nope' }));
-    expect(wrong.status).toBe(401);
-    expect(getServer('plain')!.trust).toBe('strict');
-
-    const okay = await handleApi(session, 'POST', '/api/mcp/trust-vault', new URLSearchParams(), body({ id: 'plain', passphrase }));
+    // One click, no passphrase (Jay decision 3): the catalog add of the vault
+    // server already yields this same trusted entry from the same session.
+    const okay = await handleApi(session, 'POST', '/api/mcp/trust-vault', new URLSearchParams(), body({ id: 'plain' }));
     expect(okay.status).toBe(200);
     expect(getServer('plain')!.trust).toBe('trusted');
   });

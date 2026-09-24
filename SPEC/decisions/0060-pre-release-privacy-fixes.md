@@ -952,10 +952,15 @@ differs from the text above, and why:
    A consequence: every occurrence of a masked value is masked, even an
    occurrence a context-sensitive detector skipped. Over-masking is the
    safe direction.
-2. **The vault-trust button needs the passphrase**, not only a confirm.
-   A caller holding only the GUI session token (a prompt-injected page or
-   model) must not be able to lift masking; this mirrors the passphrase
-   gate on adding a server by path (ADR 0034).
+2. **The vault-trust button is one click and a confirm, no passphrase**
+   (as Jay decided). The first build asked for the passphrase, on the
+   reasoning that a caller holding only the GUI session token must not
+   lift masking. The code review showed that reasoning false: with the
+   same token, removing the entry and adding the vault server from the
+   catalog (one click by ADR 0034's design) yields the same `trusted`
+   entry. Masking the arguments sent to our own vault server protects
+   nothing (conditions 1 to 4), so the passphrase was removed rather than
+   added to the catalog path too.
 3. **Tier-1 return masking now covers `content` in every memory payload**
    (`memory_remember`, `memory_edit` and `memory_forget` replies too), not
    only retrieve and list. A type-only edit used to echo the full
@@ -1035,12 +1040,13 @@ nk remember "Reach me at bob@example.com, born 03/15/1948" --type semantic --sco
    and no memory text.
 4. **A typo is refused (D4).** `app yes list personal` prints
    `refused: NORTHKEEP_REDACT_TIER=yes is not 0, 1, 2 or 3`.
-5. **No content writes while masking (D4).** `app 2 update demo` prints a
-   refusal whose message is `Saving text is disabled while
-   NORTHKEEP_REDACT_TIER=2 ...` (inside a small JSON error, code
-   `invalid_request`), and `app 2 remember "Person-3 moved"` prints
+5. **No content writes while masking (D4).** With the name model on or
+   off (`NORTHKEEP_OLLAMA_URL=http://127.0.0.1:9` for off),
+   `app 2 update demo` prints a refusal whose message is `Saving text is
+   disabled while NORTHKEEP_REDACT_TIER=2 ...` (inside a small JSON error,
+   code `invalid_request`), and `app 2 remember "Person-3 moved"` prints
    `refused: Saving text is disabled while NORTHKEEP_REDACT_TIER=2`;
-   `nk projects list` shows no `demo`, and
+   `nk projects board | grep -c demo` prints `0`, and
    `nk list --scope personal | grep -c "Person-3"` prints `0`.
 6. **Log before writing (D7).** `mv "$NORTHKEEP_HOME/mcp-calls.log" /tmp/nk-0060-acceptance/log.bak; mkdir "$NORTHKEEP_HOME/mcp-calls.log"`,
    then `app 0 remember "should not be saved"` prints
@@ -1167,3 +1173,73 @@ is called done.
 Built as designed with the differences listed under "Build notes". Every
 claims row has a test; a sample was proven to fail on `6d67dd2`. The full
 adversarial review of the code has not run yet and is the next gate.
+
+### Code review, first round, 2026-09-24: CLEARED WITH WOUNDS
+
+Fresh-eyes subagent against the built branch in an isolated worktree,
+stub models only. Report: `Reviews/adr-0060/code-r1.md`. Findings F1 to
+F3 below; notes on `source`, the trust-button rationale and acceptance
+step 5. A separate claims review of the README and site
+(`cr-claims/.adversarial/claims-r1/b1-readme-site/`) found a kill shot,
+and one of KNOWN-LIMITS (`.../b2-kl-docs/`) found tag-stripped tokens
+surviving restoration.
+
+### Code fix round, 2026-09-24
+
+- **Kill shot (claims review): a duplicate "entities" key.** A real
+  llama3.2:3b replied `{"entities":[...Bob Henderson...],"entities":[...]}`
+  in 8 of 10 runs; `JSON.parse` kept the last list, the name was dropped,
+  and the text went out unmasked at "Tier 2". The reply is now read by a
+  duplicate-aware strict parser (`packages/redact/src/ner-reply.ts`):
+  every entity in every "entities" list counts, and a reply that cannot be
+  fully accounted for throws, so Tier 2 refuses and Tier 3 is labelled
+  deterministic only. Covers chat, the cloud review and MCP (all call
+  `applyTier2`). Tests K1 to K4 in `tier2-reply.test.ts` use the review's
+  exact replies; K1 and K3 failed on the old parser. Real local model, 10
+  runs of the review's synthetic text after the fix: 10 masked, 0 leaked
+  (7 replies had the duplicate key). Not fixed: the phone's per-kind NER
+  pass (`packages/platform-mobile/src/local-model/per-kind-ner.ts`) has
+  its own `JSON.parse` of on-device replies; it needs the same change and
+  a phone build (open item O3).
+- **F1 (uncited splice).** A memory counts as cited only when a quote
+  from it validated against its stored text. The API prompt now asks the
+  model to quote any memory whose placeholder it uses. Test A-W1 (and its
+  control) in `review-restore.test.ts`; A-W1 failed on the old code.
+- **F2 (detected name sent elsewhere in plain text).** The cloud review
+  now detects across every memory and collection name first, then renders
+  all of them with every token the run issued (`detectContentInSession`,
+  `detectScopeInSession`, `renderInSession`); MCP masks each call in the
+  same two passes. A name found by detection is therefore also masked
+  inside collection names, which is stricter than O2 stated. Tests A-W2
+  (redact side and through the web route) and A-M7; all failed on the old
+  code.
+- **F3 (landed write reported failed).** A write whose reply cannot be
+  masked at Tier 2 returns a content-free `saved` with a warning and logs
+  `ok: true` with `redaction_degraded: true`. Test A-M3; failed on the old
+  code.
+- **Mis-copied placeholders (KNOWN-LIMITS review).** Suggested text is
+  dropped when it holds any placeholder shape the redactor or session can
+  emit, from one label list (`PLACEHOLDER_LABELS`, checked against the
+  redactor's kinds by a test), with or without brackets, tag or colon,
+  case-insensitive: `[DATE_1948_1]`, `EMAIL_1`, `<EMAIL_1>`,
+  `[k7q2 EMAIL_1]`, `[DATE-1948]`, `[REDACTED]`. Plain prose such as
+  "date of birth" is not a placeholder. Test "Claims-review wire case";
+  failed on the old code.
+- **Item 5.** `northkeep redact --tier 3`, `converse --tier 3` and
+  `/api/redact` with tier 3 now run Tier 3, and any other value is refused
+  by name (tests `tier-flags.test.ts` and the `/api/redact` case). The
+  memory `source` field is masked like content at Tiers 1 to 3 (test M2).
+  Write refusals under masking keep their own words when the name model
+  is down, which fixes acceptance step 5; the step now uses
+  `nk projects board` (there is no `projects list`). The trust button
+  lost its passphrase (build note 2).
+- KNOWN-LIMITS: only the three lines this round's code changed were
+  edited (trust button, cited quotes, unreadable model replies); the
+  final KNOWN-LIMITS pass is the lead's after merge.
+
+## Open items for Jay (added in the code fix round)
+
+- **O3. The phone's name pass reads on-device replies with `JSON.parse`**
+  and has the same duplicate-key exposure. The fix is the same parser; it
+  needs a phone build, which is Jay's call to batch.
+
