@@ -103,6 +103,14 @@ everything. Entitlement lapse freezes reads, then deletes after a stated grace
 period. Because only shared-scope plaintext is ever stored, deletion removes
 exactly what the user chose to expose.
 
+**Correction 2026-09-24 (ADR 0061):** two sentences above describe work that
+was never built. There is no account-delete endpoint, and nothing deletes an
+account's data after an entitlement lapse; account and record deletion is
+manual (release 0.22.0 legal redlines, C4 and J3). Until ADR 0061, unshare
+itself was refused (402) once the entitlement stamp lapsed. ADR 0061 makes
+unshare available without a live entitlement and sets the rule a future
+account-delete route must follow.
+
 ## Alternatives considered
 
 - **Browser injection / proxying into other apps' chat** — fragile, a trust

@@ -8,6 +8,12 @@
  * Env: PUBLIC_URL (the deployed https origin, e.g. https://connector.northkeep.ai)
  * so OAuth metadata advertises absolute URLs that match the deploy; plus a
  * Postgres URL for the connector's SEPARATE Neon database (ADR 0016).
+ *
+ * SELF-HOSTERS (ADR 0061): nothing is purged unless you set BOTH
+ * NORTHKEEP_CONNECTOR_MAINTENANCE=on and
+ * NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT=on; the purge of pre-encryption
+ * rows is permanent. Run behind exactly one reverse proxy that appends
+ * X-Forwarded-For (trust proxy 1).
  */
 import { createConnectorServer } from './create-server.js';
 import { NeonConnectorStorage } from './neon-storage.js';

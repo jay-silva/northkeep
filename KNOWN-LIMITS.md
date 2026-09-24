@@ -1164,6 +1164,38 @@ every milestone; if a limit is removed, say when and how.*
 - **Unshare deletes server-side, but copies already retrieved are gone.**
   Unsharing removes the rows from the connector immediately; it cannot recall
   anything an AI app already read while the scope was shared.
+- **Unsharing never needs an active subscription (ADR 0061, 0.22.0).** Unshare
+  is checked only against your device's connector credential, so it works
+  after a subscription ends. It deletes the scope's rows, including memories an
+  app wrote there that never reached your vault, and returns only a count.
+  Everything else on the connector still needs a live subscription: sharing,
+  pushing, pairing, pulling app-written memories, and the AI apps themselves
+  (HTTP 402). So while lapsed, forgetting a single memory on your device does
+  not reach the connector; unsharing its scope does. A request with a
+  credential the connector has never seen writes nothing. Until this
+  connector build is deployed, unshare after a lapsed subscription still
+  returns 402.
+- **OAuth client secrets are stored as a hash only (ADR 0061).** An AI app that
+  registers with a client secret gets it once; the connector keeps only its
+  sha256 and a random placeholder, checks a presented secret in constant time,
+  and limits `/token` and `/revoke` to 50 requests per 15 minutes per client
+  address. That address is the one the nearest proxy appends (`trust proxy 1`).
+  A self-hosted connector must sit behind exactly one reverse proxy that
+  appends the client address to `X-Forwarded-For`; exposed directly, or behind
+  more than one hop, the limit keys on a value a client can choose. The older
+  per-address limit on `/mcp`, `/pair`, `/consent` and `/client` still keys on
+  the first `X-Forwarded-For` entry, which a client behind a self-hoster's
+  proxy can choose.
+- **Old plaintext rows are purged only on explicit flags (ADR 0061).** Rows
+  from before ADR 0020 encryption are never served on the hosted connector, and
+  a maintenance step deletes them, but only when both
+  `NORTHKEEP_CONNECTOR_MAINTENANCE` and
+  `NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT` are on (`on`, `true`, `1` or
+  `yes`, any case) and `NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT` is not `1`.
+  A self-hosted connector never purges by default, and the purge is permanent.
+  The same maintenance flag runs the client-secret migration and removes used
+  or expired OAuth codes and tokens. Deleted rows remain in the database
+  provider's point-in-time backups until that retention window passes.
 - **A hostile sync server can still pick among equal-generation forks (ADR 0038
   F3, residual N2).** 0.20.0 seals a monotonic `sync_generation` inside the
   vault. Pull refuses a blob whose generation is older than the copy this
