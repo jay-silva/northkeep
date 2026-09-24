@@ -25,7 +25,7 @@
 
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
-import { holdMessage } from '@northkeep/sync';
+import { holdMessage, LAPSED_UNSHARE_HINT, UNSHARE_FAILED_MESSAGE } from '@northkeep/sync';
 import { classifySyncError, type SyncErrorKind } from './sync-errors';
 
 /** The hosted production connector server (apps/connector-server on Vercel). */
@@ -167,7 +167,7 @@ export function classifyConnectorError(err: unknown): ConnectorFailure {
     return {
       kind: 'failed',
       errorKind: friendly.kind,
-      message: `${CONNECTOR_SUBSCRIPTION_MESSAGE} ${CONNECTOR_SUBSCRIPTION_HINT}`,
+      message: `${CONNECTOR_SUBSCRIPTION_MESSAGE} ${CONNECTOR_SUBSCRIPTION_HINT} ${LAPSED_UNSHARE_HINT}`,
     };
   }
   if (friendly.kind === 'network') {
@@ -257,7 +257,8 @@ export async function runUnshareScope(
   try {
     ({ deleted } = await ports.unshare(scope));
   } catch (err) {
-    return classifyConnectorError(err);
+    // ADR 0061: an unshare failure is never subscription copy; unshare is free.
+    return { ...classifyConnectorError(err), message: UNSHARE_FAILED_MESSAGE };
   }
   const before = await ports.store.load();
   await ports.store.save(before.filter((s) => s !== scope));

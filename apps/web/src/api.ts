@@ -43,6 +43,8 @@ import {
   setConnectorServer,
   startPairing,
   unshareScope,
+  UNSHARE_FAILED_MESSAGE,
+  LAPSED_UNSHARE_HINT,
 } from '@northkeep/sync';
 import {
   PASTE_PROMPT,
@@ -926,7 +928,9 @@ async function dispatch(
       if (err instanceof LockedError) throw err; // → 423, prompts unlock
       if (err instanceof ConnectorTombstoneError) return bad(412, err.message);
       const msg = err instanceof Error ? err.message : String(err);
-      if (/HTTP 402/.test(msg)) return bad(402, 'The connector server requires an active subscription to share.');
+      if (/HTTP 402/.test(msg)) {
+        return bad(402, `The connector server requires an active subscription to share. ${LAPSED_UNSHARE_HINT}`);
+      }
       return bad(400, msg);
     }
   }
@@ -943,13 +947,20 @@ async function dispatch(
     // Unsharing now needs the vault open: the mark lives there (ADR 0038). The
     // server delete still runs FIRST, so a failure leaves the mark honestly in
     // place — never a vault claiming private while the server holds rows.
-    const deleted = await session.withVault(async (vault) => {
-      foldSidecarScopesIntoVault(vault);
-      const res = await unshareScope({ server: config.server, deviceSecret, scope: targetScope });
-      vault.setScopeShared(targetScope, false);
-      vault.save();
-      return res.deleted;
-    });
+    let deleted: number;
+    try {
+      deleted = await session.withVault(async (vault) => {
+        foldSidecarScopesIntoVault(vault);
+        const res = await unshareScope({ server: config.server, deviceSecret, scope: targetScope });
+        vault.setScopeShared(targetScope, false);
+        vault.save();
+        return res.deleted;
+      });
+    } catch (err) {
+      if (err instanceof LockedError) throw err; // → 423, prompts unlock
+      // ADR 0061: say what is true (still Shared), never a raw status or sales copy.
+      return bad(502, UNSHARE_FAILED_MESSAGE);
+    }
     return ok({ unshared: targetScope, deleted });
   }
 

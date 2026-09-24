@@ -15,6 +15,7 @@ import {
   startPairing,
   tokenHash,
   unshareScope,
+  UNSHARE_FAILED_MESSAGE,
   type ConnectorConfig,
 } from '@northkeep/sync';
 import { promptLine } from './prompt.js';
@@ -228,7 +229,7 @@ export async function shareRemoveCmd(
       return { error: err instanceof Error ? err.message : String(err) };
     }
   });
-  if ('error' in outcome) fail(`Could not unshare on the connector server: ${outcome.error}`);
+  if ('error' in outcome) fail(`${UNSHARE_FAILED_MESSAGE} (${outcome.error})`);
   if (!outcome.wasShared) {
     console.log(`Scope '${scope}' was not marked shared. Unshared on the server anyway to be safe.`);
   }

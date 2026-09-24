@@ -61,4 +61,6 @@ export {
   type ManifestEntry,
   type PushEntry,
   type PushSharedResult,
+  UNSHARE_FAILED_MESSAGE,
+  LAPSED_UNSHARE_HINT,
 } from './connector-client.js';

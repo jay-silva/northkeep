@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { holdMessage } from '@northkeep/sync';
+import { holdMessage, LAPSED_UNSHARE_HINT, UNSHARE_FAILED_MESSAGE } from '@northkeep/sync';
 import {
   CONNECTOR_NETWORK_MESSAGE,
   CONNECTOR_PRIVATE_BETA_MESSAGE,
@@ -228,6 +228,31 @@ describe('runUnshareScope', () => {
     );
     expect(outcome).toEqual({ kind: 'unshared', scope: 'conversations', deleted: 4 });
     expect(get()).toEqual(['work']);
+  });
+
+  it('ADR 0061: a failed unshare says it is still Shared, never subscription copy, even on a 402', async () => {
+    const { store, get } = memStore(['conversations']);
+    const outcome = await runUnshareScope(
+      {
+        store,
+        unshare: async () => {
+          throw new Error('Connector server returned HTTP 402 on unshare.');
+        },
+      },
+      'conversations',
+    );
+    expect(outcome.kind).toBe('failed');
+    if (outcome.kind === 'failed') {
+      expect(outcome.message).toBe(UNSHARE_FAILED_MESSAGE);
+      expect(outcome.message).not.toContain(CONNECTOR_SUBSCRIPTION_MESSAGE);
+    }
+    expect(get()).toEqual(['conversations']);
+  });
+
+  it('ADR 0061: a connector 402 adds the unshare sentence', () => {
+    const r = classifyConnectorError(new Error('Connector server returned HTTP 402 on push.'));
+    expect(r.message).toContain(LAPSED_UNSHARE_HINT);
+    expect(r.message).not.toMatch(/\u2014/);
   });
 
   it('keeps the mark when the server delete fails (the server still holds copies)', async () => {

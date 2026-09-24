@@ -16,6 +16,23 @@ import { timeoutSignal } from './abort.js';
 
 const TIMEOUT_MS = 30_000;
 
+/**
+ * What every surface says when an unshare did not reach the server (ADR 0061).
+ * The scope stays marked Shared because the server still holds its copies.
+ */
+export const UNSHARE_FAILED_MESSAGE =
+  'Could not delete this scope from the connector server, so it is still marked Shared. ' +
+  'Try again. If it keeps failing, contact support and we will delete it.';
+
+/** Added to every connector 402: unshare never needs a subscription (ADR 0061). */
+export const LAPSED_UNSHARE_HINT = 'You can still unshare scopes, which deletes them from the connector.';
+
+/** Status-only error for a refused connector call; a 402 carries the unshare hint. */
+function httpError(status: number, op: string): Error {
+  const base = `Connector server returned HTTP ${status} on ${op}.`;
+  return new Error(status === 402 ? `${base} ${LAPSED_UNSHARE_HINT}` : base);
+}
+
 
 /** Entry as pushed on the wire — byte-faithful to the vault (id/hash/scope/type/content). */
 export interface PushEntry {
@@ -164,7 +181,7 @@ export async function pushSharedScopes(opts: {
       : [];
     throw new ConnectorTombstoneError(named);
   }
-  if (!res.ok) throw new Error(`Connector server returned HTTP ${res.status} on push.`);
+  if (!res.ok) throw httpError(res.status, 'push');
   return { pushed: entries.length, scopes };
 }
 
@@ -197,7 +214,7 @@ export async function getManifest(opts: {
     redirect: 'error',
     signal: timeoutSignal(TIMEOUT_MS),
   });
-  if (!res.ok) throw new Error(`Connector server returned HTTP ${res.status} on manifest.`);
+  if (!res.ok) throw httpError(res.status, 'manifest');
   const body = (await res.json()) as { entries?: ManifestEntry[] };
   return body.entries ?? [];
 }
@@ -267,10 +284,10 @@ export async function downSyncConnector(opts: {
   });
   if (pendingRes.status === 401) throw new Error('The connector server rejected the connector token (401).');
   if (pendingRes.status === 402) {
-    throw new Error('The connector server requires an active subscription (402) to down-sync.');
+    throw new Error(`The connector server requires an active subscription (402) to down-sync. ${LAPSED_UNSHARE_HINT}`);
   }
   if (pendingRes.status === 409) throw reencryptError();
-  if (!pendingRes.ok) throw new Error(`Connector server returned HTTP ${pendingRes.status} on pending.`);
+  if (!pendingRes.ok) throw httpError(pendingRes.status, 'pending');
   const pending = (await pendingRes.json()) as { entries?: PendingEntry[]; forgets?: Array<{ entry_id: string }> };
   const entries = pending.entries ?? [];
   const forgets = pending.forgets ?? [];
@@ -389,7 +406,7 @@ export async function downSyncConnector(opts: {
     redirect: 'error',
     signal: timeoutSignal(TIMEOUT_MS),
   });
-  if (!ackRes.ok) throw new Error(`Connector server returned HTTP ${ackRes.status} on ack.`);
+  if (!ackRes.ok) throw httpError(ackRes.status, 'ack');
 
   return { added, forgotten, deduped, held, held_scopes: [...heldScopes].sort(), skipped };
 }
@@ -413,7 +430,7 @@ export async function startPairing(opts: {
     signal: timeoutSignal(TIMEOUT_MS),
   });
   if (res.status === 409) throw reencryptError();
-  if (!res.ok) throw new Error(`Connector server returned HTTP ${res.status} on pairing.`);
+  if (!res.ok) throw httpError(res.status, 'pairing');
   const body = (await res.json()) as { pairing_code?: string };
   if (!body.pairing_code) throw new Error('Connector server did not return a pairing code.');
   return body.pairing_code;
