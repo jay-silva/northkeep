@@ -117,6 +117,9 @@ describe('shareSyncCmd (ADR 0050 Decision 5)', () => {
     expect(puts[0]!.scopes).toContain('project:hosted-thing');
     expect(puts[0]!.entries.some((e) => e.scope === 'project:hosted-thing')).toBe(true);
     expect(lines.some((l) => l.includes('1 added'))).toBe(true);
+    expect(lines).toContain(
+      '  "project:hosted-thing" came from a connected app and is now marked Shared. Later edits to it are pushed; run "northkeep share remove project:hosted-thing" to stop.',
+    );
     vault.close();
   });
 
