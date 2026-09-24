@@ -10,9 +10,11 @@ Release preparation: the replacement installer has not been published. Version 0
 
 ## Before continuing a project
 
-Ask each connected assistant to check its actual local NorthKeep tools. It should expose `project_resume`, `project_checkpoint` and `project_wrap`; `project_update` should require `expected_revision`. Have it call Resume for an existing project and report the current status and next action. This check is read-only.
+Ask each connected assistant to check its actual local NorthKeep tools. It should expose `project_resume`, `project_checkpoint`, `project_wrap`, `project_create` and `project_board`; `project_update` should require `expected_revision`. Have it call Resume for an existing project and report the current status and next action. This check is read-only.
 
 If it still shows the old tools, stop project writes from that connection. Fully quit and reopen the host again. If the old schema persists, resolve the stale connection before continuing. Use the local connection explicitly when a hosted connector is also present; the existing hosted project tools do not have these revision guarantees.
+
+If you installed the project session contract, reinstall it: in NorthKeep, open the Project session contract card and choose Install, or run `northkeep contract install all`. The contract text changed in this release, and an installed copy shows as stale until it is reinstalled. Nothing replaces it automatically.
 
 ## Why a full restart matters
 
