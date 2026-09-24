@@ -62,9 +62,38 @@ describe('Sharing: Sync now button (ADR 0050 Decision 5)', () => {
     expect(await syncButtonAfterLoad({ ...base, configured: false, server: null, shared_scopes: [], paired: true })).toBe(true);
   });
 
-  it('refreshes sharing state after pairing so the button enables without a reload', () => {
+  it('refreshes sharing state after pairing so the button enables without a reload', async () => {
     const binding = script.match(/\$\('sharePairBtn'\)\.addEventListener\('click',[\s\S]*?\n {2}\}\);/)?.[0] ?? '';
-    expect(binding).toContain("api('/api/share/pair'");
-    expect(binding).toContain('await loadSharing()');
+    expect(binding).not.toBe('');
+    const nodes = new Map<string, Record<string, unknown>>();
+    const listeners = new Map<string, () => Promise<void>>();
+    const $ = (id: string) => {
+      if (!nodes.has(id)) {
+        nodes.set(id, {
+          value: '', textContent: '', hidden: false, disabled: false, style: {},
+          addEventListener: (_: string, fn: () => Promise<void>) => { listeners.set(id, fn); },
+        });
+      }
+      return nodes.get(id)!;
+    };
+    let paired = false;
+    const api = async (route: string) => {
+      if (route === '/api/share/pair') { paired = true; return { code: 'ABCD-1234', mcp_url: 'https://c.example/mcp', expires_in_seconds: 600 }; }
+      return { ...base, shared_scopes: [], paired };
+    };
+    const context = vm.createContext({ $, api });
+    vm.runInContext(`
+      const DEFAULT_CONNECTOR_SERVER = 'https://connector.example';
+      const el = () => ({});
+      const renderShareScopes = () => {};
+      const startPairCountdown = () => {};
+      ${functionSource('loadSharing')}
+      ${binding}
+      this.load = loadSharing;
+    `, context);
+    await context.load();
+    expect($('shareSyncBtn').disabled).toBe(true);
+    await listeners.get('sharePairBtn')!();
+    expect($('shareSyncBtn').disabled).toBe(false);
   });
 });
