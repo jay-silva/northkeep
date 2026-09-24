@@ -23,6 +23,17 @@ export interface CallLogEntry {
   granted_scopes?: string[];
   /** Redaction tier applied to returned content (0 = none). */
   redaction_tier?: number;
+  /** A Tier 3 whose name model was offline for some text (ADR 0060). */
+  redaction_degraded?: boolean;
+  /**
+   * Log before acting (ADR 0060 Decision 5). A `pending` row (ok:false, error
+   * "pending") is written before the call runs; the `done` row with the same
+   * call_id carries the outcome. Rows without a phase are read as before.
+   */
+  phase?: 'pending' | 'done';
+  call_id?: string;
+  /** When the call finished; `ts` stays the start time. */
+  completed_at?: string;
   params: {
     type?: string;
     scope?: string;
@@ -93,14 +104,53 @@ export function appendCallLog(entry: CallLogEntry): void {
   fs.appendFileSync(file, `${JSON.stringify(entry)}\n`, { mode: 0o600 });
 }
 
-export function readCallLog(lastN?: number): CallLogEntry[] {
+/** A pending row with no outcome is shown as this, never as success (ADR 0060 D7). */
+export type CallOutcomeLabel = 'in progress' | 'outcome unknown (interrupted)';
+
+export interface FoldedCallLogEntry extends CallLogEntry {
+  outcome_label?: CallOutcomeLabel;
+}
+
+/** How long an unmatched pending row reads as in progress before it reads as interrupted. */
+export const IN_PROGRESS_MS = 5 * 60 * 1000;
+
+/**
+ * One row per call for people reading the log: a pending row whose done row
+ * exists is dropped (the done row carries the outcome); one without is kept
+ * and labelled. Rows without a phase (chat, older builds) pass unchanged.
+ */
+export function foldCallLog(rows: CallLogEntry[], now: Date = new Date()): FoldedCallLogEntry[] {
+  const finished = new Set<string>();
+  // The log is a plain local file: a row can be any JSON value, never assume an object.
+  const isObject = (row: unknown): row is CallLogEntry => row !== null && typeof row === 'object';
+  for (const row of rows) {
+    if (isObject(row) && row.phase === 'done' && typeof row.call_id === 'string') finished.add(row.call_id);
+  }
+  const out: FoldedCallLogEntry[] = [];
+  for (const row of rows) {
+    if (!isObject(row) || row.phase !== 'pending') {
+      out.push(row);
+      continue;
+    }
+    if (typeof row.call_id === 'string' && finished.has(row.call_id)) continue;
+    const started = Date.parse(row.ts);
+    const label: CallOutcomeLabel = Number.isFinite(started) && now.getTime() - started < IN_PROGRESS_MS
+      ? 'in progress'
+      : 'outcome unknown (interrupted)';
+    out.push({ ...row, outcome_label: label });
+  }
+  return out;
+}
+
+/** Folded, then the last N calls (not the last N raw rows). */
+export function readCallLog(lastN?: number): FoldedCallLogEntry[] {
   let raw: string;
   try {
     raw = fs.readFileSync(callLogPath(), 'utf8');
   } catch {
     return [];
   }
-  const entries = parseCallLog(raw);
+  const entries = foldCallLog(parseCallLog(raw));
   return lastN === undefined ? entries : entries.slice(-lastN);
 }
 

@@ -28,8 +28,15 @@ import {
 } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import { createCachedEmbedder, createOllamaEmbedder } from '@northkeep/librarian';
-import { applyTier1 } from '@northkeep/redact';
-import { maskProjectFields } from './project-mask.js';
+import type { PseudonymMap } from '@northkeep/redact';
+import {
+  TIER2_FAILED_MESSAGE,
+  TIER3_DEGRADED_NOTE,
+  contentWriteRefusal,
+  maskReturnPayload,
+  parseReturnRedactionTier,
+  type ReturnTier,
+} from './return-mask.js';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
 import { appendCallLog, readCallLogStrict, type CallLogEntry } from './log.js';
@@ -69,10 +76,15 @@ export function grantedScopes(): string[] | undefined {
   return scopes; // present ⇒ exactly these (empty array ⇒ deny-all)
 }
 
-/** Optional Tier-1 masking of secrets in returned content (NORTHKEEP_REDACT_TIER=1). */
-function returnRedactionTier(): 0 | 1 {
-  return process.env.NORTHKEEP_REDACT_TIER === '1' ? 1 : 0;
+/** The valid return tier for this call; an invalid value is refused in run() (ADR 0060 D4). */
+function returnRedactionTier(): ReturnTier {
+  const parsed = parseReturnRedactionTier();
+  return parsed.ok ? parsed.tier : 0;
 }
+
+/** Pseudonyms for Tiers 2 and 3, consistent for this process, RAM only, never logged. */
+const returnPseudonyms: PseudonymMap = {};
+let degradedNoticeWritten = false;
 
 /** Mutable connection context, filled from the MCP initialize handshake. */
 interface ConnContext {
@@ -121,10 +133,6 @@ function ok(payload: unknown): ToolOk {
 
 function err(message: string): ToolOk {
   return { content: [{ type: 'text', text: message }], isError: true };
-}
-
-function maskProjectPayload(value: unknown): unknown {
-  return maskProjectFields(value, returnRedactionTier());
 }
 
 function receivingProjectView(view: ReturnType<typeof getProjectView>) {
@@ -248,14 +256,41 @@ interface RunOutcome {
   disclosed_scopes?: string[];
 }
 
+/**
+ * How run() treats a tool (ADR 0060 Decision 5). `kind` is declared at each
+ * registration, never guessed from the name; `mask` picks which return walk
+ * applies; `pre` runs inside the log envelope, after the pending row.
+ */
+interface RunOptions {
+  kind: 'read' | 'write';
+  mask: 'memory' | 'project' | 'none';
+  pre?: () => Promise<void>;
+}
+
+const LOG_UNWRITABLE = 'NorthKeep could not write its call log, so nothing was done.';
+const LOG_INCOMPLETE_READ = 'NorthKeep could not complete its call log, so nothing was returned.';
+const LOG_INCOMPLETE_WRITE = 'The change was saved, but its log entry could not be completed.';
+
+function tryAppend(entry: CallLogEntry): boolean {
+  try {
+    appendCallLog(entry);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function run(
   ctx: ConnContext,
   tool: string,
   params: LogParams,
   vaultPath: string,
+  options: RunOptions,
   fn: (vault: Vault, granted: string[] | undefined) => RunOutcome | Promise<RunOutcome>,
 ): Promise<ToolOk> {
   const granted = grantedScopes();
+  const parsedTier = parseReturnRedactionTier();
+  const tier: ReturnTier = parsedTier.ok ? parsedTier.tier : 0;
   const base = {
     ts: new Date().toISOString(),
     tool,
@@ -263,26 +298,32 @@ async function run(
     session_id: ctx.session_id,
     host: ctx.host,
     granted_scopes: granted,
-    redaction_tier: returnRedactionTier(),
+    redaction_tier: tier,
     params,
+    call_id: randomUUID(),
   };
+  const done = (fields: Partial<CallLogEntry> & { ok: boolean }): boolean =>
+    tryAppend({ ...base, phase: 'done', completed_at: new Date().toISOString(), ...fields });
+
+  // A mistyped tier is refused, naming the value (Jay decision 2).
+  if (!parsedTier.ok) {
+    done({ ok: false, error: 'invalid_tier' });
+    return err(parsedTier.message);
+  }
+  // Log before acting (ADR 0060 D7, Jay decision): no row, no call.
+  if (!tryAppend({ ...base, phase: 'pending', ok: false, error: 'pending' })) {
+    return err(LOG_UNWRITABLE);
+  }
+
+  let outcome: RunOutcome;
   try {
-    const outcome = await withVault(vaultPath, (vault) => fn(vault, granted));
-    appendCallLog({
-      ...base,
-      ok: true,
-      result_count: outcome.result_count,
-      result_id: outcome.result_id,
-      result_ids: outcome.result_ids,
-      disclosed_scopes: outcome.disclosed_scopes,
-    });
-    return ok(tool.startsWith('project_') ? maskProjectPayload(outcome.payload) : outcome.payload);
+    if (options.pre) await options.pre();
+    outcome = await withVault(vaultPath, (vault) => fn(vault, granted));
   } catch (error) {
     const denied = error instanceof ScopeDeniedError ||
       (error instanceof ProjectHandoffError && error.code === 'scope_denied');
     const message = error instanceof Error ? error.message : String(error);
-    appendCallLog({
-      ...base,
+    done({
       ok: false,
       denied,
       error: tool.startsWith('project_')
@@ -297,22 +338,71 @@ async function run(
           ...(error.current ? { current: error.current } : {}),
         },
       };
-      return { ...ok(maskProjectPayload(payload)), isError: true };
+      const masked = await maskReturnPayload(payload, 'project', tier, returnPseudonyms);
+      if (masked.failed) return err(`${error.code}: ${TIER2_FAILED_MESSAGE}`);
+      return { ...ok(masked.payload), isError: true };
     }
     return err(message);
   }
+
+  // Masking runs after the vault closed and before the completion row, so the
+  // row records the true outcome (a Tier-2 refusal is never logged as ok).
+  let payload = outcome.payload;
+  let degraded = false;
+  if (options.mask !== 'none') {
+    const masked = await maskReturnPayload(payload, options.mask, tier, returnPseudonyms);
+    if (masked.failed) {
+      done({ ok: false, error: 'tier2-unavailable' });
+      return err(TIER2_FAILED_MESSAGE);
+    }
+    payload = masked.payload;
+    degraded = masked.degraded;
+    if (degraded) {
+      payload = { ...(payload as Record<string, unknown>), redaction_note: TIER3_DEGRADED_NOTE };
+      if (!degradedNoticeWritten) {
+        degradedNoticeWritten = true;
+        console.error(`northkeep MCP server: ${TIER3_DEGRADED_NOTE}`);
+      }
+    }
+  }
+
+  const logged = done({
+    ok: true,
+    result_count: outcome.result_count,
+    result_id: outcome.result_id,
+    result_ids: outcome.result_ids,
+    disclosed_scopes: outcome.disclosed_scopes,
+    ...(degraded ? { redaction_degraded: true } : {}),
+  });
+  if (!logged) {
+    // A saved write says so, with no content: an error would invite a retry
+    // of a write that landed, and content would be a disclosure with no
+    // ledger row. A read discloses nothing (Jay decision 5).
+    if (options.kind === 'write') {
+      return ok({
+        saved: true,
+        ...(outcome.result_id !== undefined ? { id: outcome.result_id } : {}),
+        log_warning: LOG_INCOMPLETE_WRITE,
+      });
+    }
+    return err(LOG_INCOMPLETE_READ);
+  }
+  return ok(payload);
 }
 
 /**
- * Opt-in Tier-1 secret masking of content before it leaves the vault toward
- * the model. Synchronous (Tier-1 is pure regex — no Ollama), so it's safe to
- * run while the vault is open. Tier-2 pseudonymization is NOT applied over MCP
- * because there's no response hook to restore names — that needs a proxy
- * (parked decision).
+ * Content writes while returns are masked (ADR 0060 Decision 2, F5, Jay
+ * decision 1): the app only saw masked text, so text it saves could overwrite
+ * a real value with a placeholder, or store a name nobody can recover.
  */
-function maskContent<T extends { content: string }>(entries: T[]): T[] {
-  if (returnRedactionTier() === 0) return entries;
-  return entries.map((e) => ({ ...e, content: applyTier1(e.content).text }));
+function refuseProjectWriteUnderMasking(): void {
+  const tier = returnRedactionTier();
+  if (tier >= 1) throw new ProjectHandoffError('invalid_request', contentWriteRefusal(tier));
+}
+
+function refuseMemoryWriteUnderMasking(minTier: 1 | 2): void {
+  const tier = returnRedactionTier();
+  if (tier >= minTier) throw new Error(contentWriteRefusal(tier));
 }
 
 function distinctScopes(scopes: string[]): string[] {
@@ -323,15 +413,6 @@ function assertGrantedScope(scope: string, granted: string[] | undefined): void 
   if (granted !== undefined && !granted.includes(scope)) {
     throw new ScopeDeniedError(
       `This connection is not granted the "${scope}" scope (granted: ${granted.join(', ') || '(none)'}).`,
-    );
-  }
-}
-
-function refuseProjectWriteUnderTier1(): void {
-  if (returnRedactionTier() === 1) {
-    throw new ProjectHandoffError(
-      'invalid_request',
-      'Project writes are disabled while NORTHKEEP_REDACT_TIER=1 because masked text cannot be written back exactly.',
     );
   }
 }
@@ -390,15 +471,19 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       },
     },
     async ({ query, type, scope, limit }) => {
-      // Embed the candidates OUTSIDE the vault lock first (memoized per
-      // process), so the ranking inside the lock is cache hits and the lock is
-      // never held across a slow loopback call (ADR 0044 lesson).
-      await preEmbedForRetrieve(vaultPath, { type: type as MemoryType | undefined, scope });
       return run(
         ctx,
         'memory_retrieve',
         { query_terms: query.split(/\s+/).filter(Boolean).length, type, scope, limit },
         vaultPath,
+        {
+          kind: 'read',
+          mask: 'memory',
+          // Embed the candidates OUTSIDE the vault lock first (memoized per
+          // process), so the ranking inside the lock is cache hits (ADR 0044).
+          // Inside the log envelope, after the pending row (ADR 0060 D7).
+          pre: () => preEmbedForRetrieve(vaultPath, { type: type as MemoryType | undefined, scope }),
+        },
         async (vault, granted) => {
           const r = await vault.retrieveSemantic(query, searchEmbedder, {
             type: type as MemoryType,
@@ -407,9 +492,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             allowedScopes: granted,
           });
           const results = r.results;
-          const entries = maskContent(
-            results.map((s) => ({ ...publicEntry(s.entry), relevance: Number(s.score.toFixed(3)) })),
-          );
+          const entries = results.map((s) => ({ ...publicEntry(s.entry), relevance: Number(s.score.toFixed(3)) }));
           const note = results.length === 0
             ? (r.mode === 'semantic'
               ? 'No matching memories. Ranked by meaning; try describing it differently.'
@@ -452,7 +535,11 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'memory_remember',
         { content_chars: content.length, type, scope },
         vaultPath,
+        { kind: 'write', mask: 'memory' },
         (vault, granted) => {
+          // Tiers 2 and 3 only: the app read Person-N pseudonyms whose map lives
+          // in this process's RAM (ADR 0060 F5). Tier 1 stays allowed (O1).
+          refuseMemoryWriteUnderMasking(2);
           const targetScope = scope ?? 'personal';
           // Capability enforcement: can't write outside the granted scopes.
           if (granted !== undefined && !granted.includes(targetScope)) {
@@ -492,11 +579,11 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       },
     },
     async ({ type, scope, limit }) =>
-      run(ctx, 'memory_list', { type, scope, limit }, vaultPath, (vault, granted) => {
+      run(ctx, 'memory_list', { type, scope, limit }, vaultPath, { kind: 'read', mask: 'memory' }, (vault, granted) => {
         const rows = vault
           .list({ type: type as MemoryType, scope, allowedScopes: granted })
           .slice(-(limit ?? 50));
-        const entries = maskContent(rows.map(publicEntry));
+        const entries = rows.map(publicEntry);
         return {
           payload: { memories: entries },
           result_count: entries.length,
@@ -518,7 +605,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       },
     },
     async ({ id }) =>
-      run(ctx, 'memory_forget', { id }, vaultPath, (vault, granted) => {
+      run(ctx, 'memory_forget', { id }, vaultPath, { kind: 'write', mask: 'memory' }, (vault, granted) => {
         const tombstone = vault.forget(id, granted); // enforces scope: unseeable = unforgettable
         vault.save();
         return {
@@ -554,10 +641,14 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'memory_edit',
         { id, content_chars: content?.length, type },
         vaultPath,
+        { kind: 'write', mask: 'memory' },
         (vault, granted) => {
           if (content === undefined && type === undefined) {
             throw new Error('Provide content and/or type to edit.');
           }
+          // Jay decision 1: a content edit while masking is on could overwrite
+          // a real value with a placeholder the app saw. Type-only edits stay.
+          if (content !== undefined) refuseMemoryWriteUnderMasking(1);
           // Scope is intentionally omitted from the patch (ADR 0039). Do not
           // forward extra request keys even if a future SDK starts passing them.
           const patch: { content?: string; type?: MemoryType } = {};
@@ -597,7 +688,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       inputSchema: {},
     },
     async () =>
-      run(ctx, 'project_list', {}, vaultPath, (vault, granted) => {
+      run(ctx, 'project_list', {}, vaultPath, { kind: 'read', mask: 'project' }, (vault, granted) => {
         const projects = listProjectViews(vault, granted).map((project) => ({
           ...project,
           id: project.revision,
@@ -630,7 +721,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     },
     async ({ stale_days }) => {
       const staleDays = stale_days ?? BOARD_DEFAULT_STALE_DAYS;
-      return run(ctx, 'project_board', { stale_days: staleDays }, vaultPath, (vault, granted) => {
+      return run(ctx, 'project_board', { stale_days: staleDays }, vaultPath, { kind: 'read', mask: 'project' }, (vault, granted) => {
         const result = collectBoard(vault, {
           granted, now: new Date(), staleDays, currentSessionId: ctx.session_id, readLog: readCallLogStrict,
         });
@@ -661,7 +752,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       },
     },
     async ({ project, history, revision }) =>
-      run(ctx, 'project_get', { scope: `project:${project}`, id: revision }, vaultPath, (vault, granted) => {
+      run(ctx, 'project_get', { scope: `project:${project}`, id: revision }, vaultPath, { kind: 'read', mask: 'project' }, (vault, granted) => {
         if (!isValidProjectSlug(project)) {
           throw new Error(`Invalid project slug "${project}".`);
         }
@@ -727,16 +818,20 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     },
     async ({ project, history }) => {
       const scope = `project:${project}`;
-      return run(ctx, 'project_resume', { scope }, vaultPath, (vault, granted) => {
+      return run(ctx, 'project_resume', { scope }, vaultPath, { kind: 'read', mask: 'project' }, (vault, granted) => {
         const view = getProjectView(vault, project, granted, { history });
         // After the view, so a denied or missing project never reads the mirror files.
         const mirror = mirrorStatus(vault, granted);
         // Derived inside the call, so a log this machine cannot read costs the
-        // session list and not the resume. This session's own row is still
-        // absent: run appends it only after this returns.
+        // session list and not the resume. This session's own rows (its pending
+        // row is already written) are excluded by its session id.
+        const writers = [
+          ...(view.last_writer ? [{ session_id: view.last_writer.session_id, at: view.last_writer.recorded_at }] : []),
+          ...view.revisions.flatMap((r) => (r.writer ? [{ session_id: r.writer.session_id, at: r.updated_at }] : [])),
+        ];
         let open: OpenSession[] | null;
         try {
-          open = openSessions(readCallLogStrict(), scope, ctx.session_id, new Date());
+          open = openSessions(readCallLogStrict(), scope, ctx.session_id, new Date(), 30, writers);
         } catch {
           open = null;
         }
@@ -766,8 +861,11 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'Create or update a project document. Call this when a working session ends, with the new ' +
         'Current Status, Next Actions, and a log entry describing what was done. Optional What & Why ' +
         'replacement and a dated decision. Updates merge into the existing sections; they do not ' +
-        'replace the whole document. Documents over 16384 characters are refused: prune the Log and ' +
-        'try again. NorthKeep will not silently truncate.',
+        'replace the whole document. The live document keeps only its newest Log entries; older ones ' +
+        "roll into an archive memory in the project scope (the result's archive_summary counts them), so " +
+        "the Log's history never makes an update fail. An update is refused only when the document is " +
+        'still over 16384 characters with just the newest Log entry kept: long hand-written sections, or a ' +
+        'long new entry on a nearly full document. NorthKeep never truncates.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         expected_revision: idSchema.nullable().describe('Revision returned by project_get/resume, or null only when creating'),
@@ -817,8 +915,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             (decision?.length ?? 0),
         },
         vaultPath,
+        { kind: 'write', mask: 'project' },
         (vault, granted) => {
-          refuseProjectWriteUnderTier1();
+          refuseProjectWriteUnderMasking();
           if (!isValidProjectSlug(project)) {
             throw new Error(`Invalid project slug "${project}".`);
           }
@@ -889,8 +988,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             (title?.length ?? 0) + what_why.length + status.length + (next_actions?.length ?? 0),
         },
         vaultPath,
+        { kind: 'write', mask: 'project' },
         (vault, granted) => {
-          refuseProjectWriteUnderTier1();
+          refuseProjectWriteUnderMasking();
           if (!isValidProjectSlug(project)) {
             throw new Error(`Invalid project slug "${project}".`);
           }
@@ -949,8 +1049,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     }, async (args) => run(ctx, name, {
       scope: `project:${args.project}`, id: args.operation_id,
       content_chars: args.status.length + args.completed.length + args.next_actions.length,
-    }, vaultPath, (vault, granted) => {
-      refuseProjectWriteUnderTier1();
+    }, vaultPath, { kind: 'write', mask: 'project' }, (vault, granted) => {
+      refuseProjectWriteUnderMasking();
       const scope = projectScope(args.project);
       assertProjectGranted(scope, granted);
       const request: ProjectCheckpointRequest = {

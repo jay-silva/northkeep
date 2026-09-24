@@ -1,6 +1,7 @@
+// Frozen copy of open-sessions.ts at 6d67dd2 (pre ADR 0060), so a test can prove old builds ignore pending rows.
 import { isProjectScope, parseProjectSlug } from '@northkeep/core';
-import type { CallLogEntry } from './log.js';
-import { tameOneLine } from './text-safe.js';
+import type { CallLogEntry } from '../../src/log.js';
+import { tameOneLine } from '../../src/text-safe.js';
 
 /**
  * Open sessions (ADR 0052 Decision 2), derived from the call log rather than
@@ -99,24 +100,12 @@ function validateRow(
   return { session_id, host, ts: new Date(at).toISOString(), at, isRead };
 }
 
-/**
- * A writer the project's own history records (ADR 0052 provenance). A session
- * that wrote a revision at or after its last read is closed even when its
- * completion row never reached the log (ADR 0060 D7: a crash between the
- * write and the row). Pending rows are ok:false and never count by themselves.
- */
-export interface RecordedWriter {
-  session_id: string;
-  at: string;
-}
-
 export function openSessions(
   rows: CallLogEntry[],
   scope: string,
   currentSessionId: string,
   now: Date,
   days = 30,
-  writers: RecordedWriter[] = [],
 ): OpenSession[] {
   const cutoff = now.getTime() - days * 24 * 60 * 60 * 1000;
   const valid: ValidRow[] = [];
@@ -154,7 +143,6 @@ export function openSessions(
   const open: OpenSession[] = [];
   for (const [session_id, t] of tracked) {
     if (t.last_write_ms !== null && t.last_write_ms >= t.last_read_ms) continue;
-    if (writers.some((w) => w.session_id === session_id && Date.parse(w.at) >= t.last_read_ms)) continue;
     open.push({ session_id, host: t.host, opened_at: t.opened_at, last_read_at: t.last_read_at });
   }
   open.sort((a, b) => Date.parse(b.last_read_at) - Date.parse(a.last_read_at));

@@ -85,3 +85,33 @@ describe('readCallLogStrict', () => {
   });
 });
 
+
+describe('ADR 0060 D7: readers fold pending rows', () => {
+  it('C18c: a finished call is one row; an unfinished one is labelled, never shown as success', async () => {
+    const { auditAsJson } = await import('../src/audit.js');
+    const { readCallLog } = await import('../src/log.js');
+    const old = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const fresh = new Date().toISOString();
+    appendCallLog({ ts: old, tool: 'memory_list', ok: false, error: 'pending', phase: 'pending', call_id: 'a', params: {} });
+    appendCallLog({ ts: old, tool: 'memory_list', ok: true, phase: 'done', call_id: 'a', params: {}, result_count: 2 });
+    appendCallLog({ ts: old, tool: 'memory_remember', ok: false, error: 'pending', phase: 'pending', call_id: 'b', params: {} });
+    appendCallLog({ ts: fresh, tool: 'memory_list', ok: false, error: 'pending', phase: 'pending', call_id: 'c', params: {} });
+    appendCallLog({ ts: fresh, tool: 'converse', ok: true, params: {} });
+    const rows = readCallLog();
+    expect(rows.map((r) => [r.tool, r.ok, r.outcome_label])).toEqual([
+      ['memory_list', true, undefined],
+      ['memory_remember', false, 'outcome unknown (interrupted)'],
+      ['memory_list', false, 'in progress'],
+      ['converse', true, undefined],
+    ]);
+    // Counting is by call, after folding: the last two calls, not the last two raw rows.
+    expect(readCallLog(2).map((r) => r.tool)).toEqual(['memory_list', 'converse']);
+    expect(auditAsJson()).toHaveLength(4);
+    const csv = auditAsCsv().trim().split('\n');
+    expect(csv[0]!.endsWith(',session_id,phase,call_id')).toBe(true);
+    expect(csv).toHaveLength(5);
+    expect(csv[2]).toContain('pending (outcome unknown (interrupted))');
+    // The raw file keeps every row for derivations.
+    expect(readCallLogStrict()).toHaveLength(5);
+  });
+});

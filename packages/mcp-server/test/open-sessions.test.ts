@@ -378,3 +378,35 @@ describe('the brief shows the handshake name the row recorded, not a split of pr
     expect(open[0]!.host).toBe('codex-mcp-client');
   });
 });
+
+describe('ADR 0060 D7: pending rows and recorded writers', () => {
+  const pending = (ts: string, tool: string, session: string, call_id: string): CallLogEntry =>
+    row(ts, tool, session, { ok: false, error: 'pending', phase: 'pending', call_id });
+
+  it('C18: pending rows never open or close a session, in this build and in the pre-0060 derivation', async () => {
+    const { openSessions: oldOpenSessions } = await import('./fixtures/open-sessions-pre-0060.js');
+    // A read that only has a pending row opened nothing.
+    const onlyPending = [pending('2026-09-20T09:00:00.000Z', 'project_resume', A, 'r1')];
+    expect(openSessions(onlyPending, SCOPE, CURRENT, NOW)).toEqual([]);
+    expect(oldOpenSessions(onlyPending, SCOPE, CURRENT, NOW)).toEqual([]);
+    // A completed read followed by a write that only has a pending row stays open.
+    const writePending = [
+      pending('2026-09-20T09:00:00.000Z', 'project_resume', A, 'r2'),
+      row('2026-09-20T09:00:00.000Z', 'project_resume', A, { phase: 'done', call_id: 'r2' }),
+      pending('2026-09-20T10:00:00.000Z', 'project_update', A, 'w1'),
+    ];
+    for (const derive of [openSessions, oldOpenSessions]) {
+      expect(derive(writePending, SCOPE, CURRENT, NOW).map((s) => s.session_id)).toEqual([A]);
+    }
+  });
+
+  it('C18b: a session is closed when a revision recorded at or after its last read names it as the writer', () => {
+    const rows = [
+      row('2026-09-20T09:00:00.000Z', 'project_resume', A, { phase: 'done', call_id: 'r1' }),
+      pending('2026-09-20T10:00:00.000Z', 'project_update', A, 'w1'),
+      row('2026-09-20T09:30:00.000Z', 'project_resume', B, { phase: 'done', call_id: 'r2' }),
+    ];
+    const writers = [{ session_id: A, at: '2026-09-20T10:00:01.000Z' }, { session_id: B, at: '2026-09-20T09:00:00.000Z' }];
+    expect(openSessions(rows, SCOPE, CURRENT, NOW, 30, writers).map((s) => s.session_id)).toEqual([B]);
+  });
+});
