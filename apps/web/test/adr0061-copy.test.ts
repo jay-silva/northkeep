@@ -65,6 +65,6 @@ describe('ADR 0061 desktop copy', () => {
   });
 
   it('the new copy has no em dash', () => {
-    expect(UNSHARE_FAILED_MESSAGE + LAPSED_UNSHARE_HINT).not.toMatch(/—/);
+    expect(UNSHARE_FAILED_MESSAGE + LAPSED_UNSHARE_HINT).not.toMatch(/\u2014/);
   });
 });
