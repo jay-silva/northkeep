@@ -20,6 +20,14 @@ import { NeonConnectorStorage } from './neon-storage.js';
 import { resolveDatabaseUrl } from './db-url.js';
 import type { ConnectorStorage } from './storage.js';
 
+// Last-resort guard (ADR 0061 F2): an async error that escapes every route
+// handler is logged by message only (a driver error's params can include an
+// account hash) and never exits the process.
+process.on('unhandledRejection', (reason) => {
+  // eslint-disable-next-line no-console
+  console.error('connector unhandled rejection:', reason instanceof Error ? reason.message : 'error');
+});
+
 const databaseUrl = resolveDatabaseUrl();
 const storage: ConnectorStorage = databaseUrl ? new NeonConnectorStorage(databaseUrl) : missingDbStorage();
 
