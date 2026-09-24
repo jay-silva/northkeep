@@ -1,8 +1,11 @@
 # ADR 0061: Connector fixes before release 0.22.0 (lapsed unshare, hashed client secrets, legacy plaintext purge)
 
 - **Date:** 2026-09-24
-- **Status:** Proposed. Design only, NOT reviewed, no product code on this
-  branch yet. All three decisions sit behind the CLAUDE.md review gate:
+- **Status:** Proposed. Design only, no product code on this branch yet.
+  First design review (2026-09-24): **CLEARED WITH WOUNDS**, one flesh
+  wound (F1) and eleven notes, all closed in the design fix round recorded
+  under Review history. The recheck has not run. Jay's decisions D1 to D4
+  are pending. All three decisions sit behind the CLAUDE.md review gate:
   Decision 1 changes who decides (it adds a way to reach a route without the
   billing gate), Decision 2 changes how a credential is stored and checked
   (invariant #3 requires an explicit adversarial review before merge), and
@@ -142,9 +145,10 @@ re-checked against the code at review time.
 ### 1. Revocation never needs a live entitlement
 
 **The rule.** A connector route is available without a live entitlement if
-and only if all of these hold: its only effect on stored data is to delete
-the caller's own data (or refresh a tombstone that records a deletion), it
-returns no memory content and no stored metadata beyond a count, and it
+and only if all of these hold: its effect on stored data is limited to
+deleting the caller's own data and recording that deletion (inserting or
+refreshing a tombstone, and a content-free audit row), under stated bounds;
+it returns no memory content and no stored metadata beyond a count; and it
 cannot cause new content to be stored or served. Everything else stays
 behind the gate. This is the test any future route (account deletion, C4b)
 is held to.
@@ -193,20 +197,36 @@ on the next down-sync. **Account deletion** has no route to exempt.
      WHERE EXISTS (SELECT 1 FROM d)
         OR EXISTS (SELECT 1 FROM scope_tombstones WHERE account_hash = $1 AND scope = $2)
         OR (octet_length($2) <= 1024
-            AND (SELECT count(*) FROM scope_tombstones WHERE account_hash = $1) < 1000)
+            AND (SELECT count(*) FROM scope_tombstones WHERE account_hash = $1) < 1000
+            AND ($3::boolean OR EXISTS (
+                  SELECT 1 FROM connector_accounts
+                  WHERE account_hash = $1 AND entitled_until IS NOT NULL)))
      ON CONFLICT (account_hash, scope) DO UPDATE
        SET unshared_at = GREATEST(scope_tombstones.unshared_at, EXCLUDED.unshared_at)
      RETURNING (xmax = 0) AS inserted
    )
-   SELECT (SELECT count(*) FROM d) AS deleted,
-          (SELECT count(*) FROM t WHERE inserted) AS new_tombstones
+   SELECT (SELECT count(*) FROM d)::int AS deleted,
+          (SELECT count(*) FROM t WHERE inserted)::int AS new_tombstones
    ```
+
+   `$3` is true on the paid path and false on the lapsed path. On the lapsed
+   path a *new* tombstone for a scope with no rows also needs the account to
+   have been stamped at least once (`entitled_until IS NOT NULL`), so an
+   account row minted for free by a 402'd request before this deploy (R2)
+   cannot write any. Counts are cast `::int` because Neon's HTTP driver
+   returns `int8` as a string; the code also wraps them in `Number(...)`,
+   as it already does for `entitled_until`.
 
    Deletion is never refused. The tombstone is always written when rows were
    deleted, and always refreshed when one already exists. Only a *new*
    tombstone for a scope with no rows is bounded (name at most 1024 bytes,
-   fewer than 1000 tombstones on the account). This applies on both paths,
-   paid and lapsed; no real user has 1000 unshared scopes. The in-memory
+   fewer than 1000 tombstones on the account, and on the lapsed path an
+   account that was stamped at least once). The name and count caps apply on
+   both paths; no real user has 1000 unshared scopes. The count check is
+   not serialized: concurrent unshares on one account can each see fewer
+   than 1000 and overshoot the cap slightly. The overshoot is bounded by
+   how many requests run at once, which the rate limiter bounds; it is
+   accepted rather than paid for with a lock (R9). The in-memory
    store gets identical semantics (ADR 0038 N11).
 6. Append the content-free `client_unshare` audit row, and answer
    `200 {"ok": true, "scope": ..., "deleted": n}`. On the paid path the
@@ -232,10 +252,12 @@ the old and new positions.
 **Why this cannot be abused for free service.** The lapsed path only
 deletes. It returns a count and nothing else: no content, no ids, no
 tombstone list. It cannot store content. It writes two kinds of row. A
-tombstone, whose `scope` column is attacker-chosen text: bounded to existing
-accounts, 1000 new rows of at most 1024 bytes each (about 1 MB per account
-at worst), and write-only (tombstones are read back only through
-`/client/pending`, which stays gated). And a fixed-size, content-free audit
+tombstone, whose `scope` column is attacker-chosen text: new empty-scope
+tombstones are bounded to accounts that were stamped at least once, 1000
+new rows of at most 1024 bytes each (about 1 MB per account at worst), and
+write-only for the caller. Tombstones are read in three places: `/mcp`
+(`mcp.ts:184`), the push route (`replaceScopesAcceptingReshare`), and
+`/client/pending`. All three stay gated, and none returns the list. And a fixed-size, content-free audit
 row, written only when rows were deleted or a new tombstone was inserted, so
 bounded by the same 1000 plus the rows the account had pushed while it was
 paying (audit rows have no deletion path yet, C4b). All of it is throttled
@@ -311,8 +333,38 @@ logged. If there is no effective hash, the client is public and
 database, so a database thief cannot present it (b), and the object is
 never public when a hash exists (a).
 
+**Order on `/token` and `/revoke` (review F1).** The first draft put the
+secret check ahead of the SDK router, and so ahead of the SDK's own
+`/token` and `/revoke` rate limiter (`express-rate-limit`, 50 requests per
+15 minutes per IP). The app's limiter skips those paths
+(`THROTTLED_PREFIXES`), so wrong-secret traffic was never throttled and
+every request read the database (review a2: 60 wrong secrets, 60 storage
+reads, no 429). The order is now, for `POST` on those two paths:
+
+1. the app's existing CORS middleware (it already runs before
+   `mcpAuthRouter`, so a ChatGPT web origin can read our 400 and 429);
+2. **a new per-IP limiter**, built with the app's own `createRateLimiter`,
+   50 requests per 15 minutes per client IP (the SDK's numbers), keyed on
+   `clientIp(req)` like the existing IP limiter. It runs before anything
+   parses the body or reads storage, and answers `429` with the SDK's body
+   shape (`{"error":"too_many_requests",...}`) and `retry-after`;
+3. the secret check below (the only step that reads storage);
+4. `mcpAuthRouter`, whose own limiter still runs. A request counts once
+   against each limiter; both allow 50, so the effective limit is unchanged.
+
+The new limiter is in-memory per instance, exactly like the SDK's, so the
+bound is per IP per warm instance, the same as today. An unknown
+`client_id` is throttled the same way.
+
+**CORS.** Our 400 and 429 carry the headers the app's CORS middleware set,
+which reflects only the ChatGPT web origins. The SDK's `cors()` would have
+answered any origin with `*`. So a browser page on another origin can no
+longer read the body of a *failed* client authentication. Successful
+requests still reach the SDK and its `cors()`. Accepted: failures only, and
+no browser client other than ChatGPT web is known.
+
 **Checking a secret.** A new middleware is mounted before `mcpAuthRouter`
-on the client-authenticating endpoints. It matches by method `POST` and by
+on the client-authenticating endpoints, after the limiter above. It matches by method `POST` and by
 the path normalized the way Express routes it (lowercased, trailing slashes
 stripped) against the pathnames of the advertised `token_endpoint` and
 `revocation_endpoint`. It parses the urlencoded body itself (same 100 KB
@@ -330,31 +382,44 @@ default limit as the SDK) and then:
   {"error":"invalid_client","error_description":"Invalid client_secret"}`
   (the SDK's status and body) and stop.
 
+**A sentinel with no hash fails closed.** A row whose JSON holds the
+`nkcs-scrubbed:` sentinel while its hash column is NULL cannot be made by
+this code (the scrub and the hash land in one statement), only by a direct
+database writer. The first draft's rule would have presented it as public
+(review a2: accepted with no secret). Now such a row is confidential and
+unusable: the middleware answers `invalid_client` for it, and `getClient`
+returns a fresh random `client_secret` on every call, which nothing can
+match. The maintenance step counts such rows in its log line.
+
 If the middleware is bypassed, the SDK compares the raw presented secret
 with the bound value. They never match, so (d) holds. The SDK's expiry check
 still runs on `client_secret_expires_at`, which stays in the JSON.
 
-**Unverified assumption the tests must settle.** The SDK's routers use
+**Body parsing, verified by the first review.** The SDK's routers use
 Express 5 with body-parser 2.3.0, whose `read()` skips a request whose
 stream has already been read (`onFinished.isFinished(req)`,
 `body-parser/lib/read.js:40-44`) and keeps the existing `req.body`. The app
-itself is on Express 4.22.2 with body-parser 1.20.6. I have not run it. A
-real confidential round trip through `mcpAuthRouter` (register, authorize,
-consent, `/token` with the secret, refresh, `/revoke`) is in the claims
-table so this is proven by execution, not by reading.
+is on Express 4.22.2 with body-parser 1.20.6. The review ran a real
+confidential round trip through `mcpAuthRouter` with the middleware
+simulated (authorize, `/token`, refresh, `/revoke`: all 200). Claim 9 keeps
+that as a test against the real implementation.
 
 **Migration of existing rows.** It runs in the maintenance step (Decision
 5), never in `SCHEMA_STATEMENTS`. It uses one statement per call (ADR 0010)
 and is safe when two cold starts run it at once:
 
 1. `SELECT client_id, client_json FROM oauth_clients WHERE
-   position('"client_secret":' in client_json) > 0 AND
-   position('nkcs-scrubbed:' in client_json) = 0`.
+   position('"client_secret":' in client_json) > 0`. This is only a cheap
+   prefilter on the key. It deliberately does **not** exclude rows by
+   searching the text for `nkcs-scrubbed:`: the first review showed that a
+   client registered with `nkcs-scrubbed:` in, say, its `client_name` would
+   then be skipped for good and keep its plaintext secret (review a1, a6).
 2. For each row, in JavaScript: parse. If it does not parse, skip and
    count it (such a row is already unusable: `getClient` throws on it
-   today). If `client_secret` is not a non-empty string, skip. Otherwise
-   compute `h = sha256hex(secret)` and build the scrubbed JSON with a fresh
-   sentinel.
+   today). The decision is made on the **parsed** value: if
+   `client_secret` is not a non-empty string, or it starts with
+   `nkcs-scrubbed:`, skip. Otherwise compute `h = sha256hex(secret)` and
+   build the scrubbed JSON with a fresh sentinel.
 3. `UPDATE oauth_clients SET client_json = $new, client_secret_hash = $h
    WHERE client_id = $id AND client_json = $old`. This is a compare-and-swap
    on the old JSON: a concurrent migrator or a re-registration makes it
@@ -362,7 +427,10 @@ and is safe when two cold starts run it at once:
    the same statement, so a row can never be scrubbed without a matching
    hash. The hash is taken from the JSON, because before the scrub the JSON
    holds the secret the client actually has.
-4. A second run matches zero rows (idempotent).
+4. A second run updates zero rows (idempotent). It still re-reads every
+   row that has the key, scrubbed or not, and re-counts unparsable rows,
+   on every process start. That is one small read per start, sized by
+   part B's `confidential_clients`.
 
 **Clients registered before the change** keep working with the secret they
 already hold, whether or not the migration has reached their row: before,
@@ -391,8 +459,29 @@ there would wipe an opted-in self-host's data. No admin route: that would
 be a new network-facing route needing its own gate, for a job that needs no
 input.
 
-**Skipped** entirely when `NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT=1`.
-That self-hoster has chosen to keep and serve those rows.
+**When it runs (changed in the fix round, review note 9).** The purge is
+destructive and cannot be undone, and on a self-host it is not true that
+legacy rows are "already undeliverable": a self-hoster who once ran with
+`NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT=1` was serving them, and a
+pending app-written row may exist nowhere else. One restart without that
+flag must not destroy them. So:
+
+- **Hosted production** (`VERCEL` set and `VERCEL_ENV === 'production'`):
+  the purge runs by default. This is the deploy the privacy claim is about.
+- **Everywhere else** (a self-host, local dev, the test suite): the purge
+  runs **only** with the explicit opt-in
+  `NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT=1`. The self-host section of
+  the connector README gets one prominent line saying so, and saying that
+  the purge is permanent.
+- **Always skipped** when `NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT=1`
+  (that operator has chosen to keep and serve the rows), even with the
+  opt-in set, and when all maintenance is off (Decision 5).
+
+Why opt-in rather than opt-out for self-hosters: an opt-out defaults to
+deleting data the operator may not know they have, which is the failure a
+self-hoster cannot recover from. An opt-in defaults to keeping rows that
+the read gate already hides. The hosted deploy, where we own the claim, is
+the one place the default is to purge.
 
 **The statement,** one call (ADR 0010):
 
@@ -419,11 +508,10 @@ row would be deleted undelivered. It was already undeliverable.
 
 **The ADR 0020 read gate stays.** The purge runs once per process start,
 so a plaintext row injected into the database afterwards is stopped only by
-the gate (never served, never synced) until the next start deletes it. For
-the implementer: with maintenance running at the first request, the
-existing legacy-gate test in `crypto-review.test.ts` becomes
-order-dependent. That test must either disable maintenance or seed its
-legacy row before the server's first request, and say which.
+the gate (never served, never synced) until the next start deletes it. The
+test suite runs off Vercel with no opt-in, so the purge is off there by
+default and the existing legacy-gate test in `crypto-review.test.ts` is not
+made order-dependent. The new purge tests turn it on explicitly.
 
 **Logged** as a count only: `connector maintenance: purged N legacy
 plaintext rows`. No content, no account hash, no ids (invariant #5, ADR 0019
@@ -451,7 +539,24 @@ the same way as the purge.
 ### 5. One maintenance step, run once per process
 
 A new `ConnectorStorage.maintenance(opts: { purgeLegacyPlaintext: boolean })`
-returns `{ purged, clientsMigrated, clientsUnparsable, codesGc, tokensGc }`.
+returns `{ purged, clientsMigrated, clientsUnparsable, clientsSentinelNoHash,
+codesGc, tokensGc }`.
+
+**Whether it runs at all** is decided once per process, from the
+environment, before any storage call:
+
+- On Vercel (`VERCEL` set): only when `VERCEL_ENV === 'production'`. A
+  preview or development deployment never runs maintenance, whatever
+  database it can reach. If `VERCEL_ENV` is missing (system variables not
+  exposed), it is treated as not production. That fails safe, and the log
+  line says why, so Acceptance C.1 would show it.
+- Off Vercel: the client-secret migration and the GC run; the purge needs
+  its opt-in (Decision 3).
+- `NORTHKEEP_CONNECTOR_MAINTENANCE=off` turns all of it off anywhere, for
+  an operator who wants to hold everything.
+
+A skipped run logs one line with the reason (for example `connector
+maintenance: skipped (VERCEL_ENV=preview)`), never a database name or URL.
 Each part is independent. `createConnectorServer` runs it through a
 memoized promise before the first request is handled (it awaits it). A
 failure is logged (message only) and does not fail the request: every
@@ -477,27 +582,67 @@ too; they pin a property that must not regress.
 | 6 | A new empty-scope tombstone is refused past 1000 on the account or past 1024 bytes of name. Deletion and a refresh of an existing tombstone are never refused. A long-named scope with rows is still unshared and tombstoned. | same, plus `tombstone-pg.test.ts` extended | Yes (no cap) |
 | 7 | Tombstone semantics of ADR 0038 and 0050 unchanged (re-share accepted, stale re-push refused with the flag on, pending purge order) | existing `tombstone-*.test.ts`, `adr0050-*.test.ts` | *guard* |
 | 8 | After `/register` of a confidential client, no stored value (in-memory `dumpState`, PGlite `oauth_clients`) contains the secret | `adr0061-client-secret.test.ts` | Yes |
-| 9 | Full confidential round trip through `mcpAuthRouter`: register, authorize, consent, `/token` with the secret, refresh, `/revoke`, all succeed | same | No (works today). It proves the body-parser assumption under the new code. |
-| 10 | `/token` and `/revoke` refuse, with `invalid_client`: a missing secret, a wrong secret, the stored hash, the sentinel, and the bound value from another process, on `/token`, `/TOKEN`, `/token/` and `/revoke` | same | Yes (the hash and sentinel cases do not exist on old code, and old code has no hash check) |
+| 9 | Full confidential round trip through `mcpAuthRouter`: register, authorize, consent, `/token` with the secret, refresh, `/revoke`, all succeed | same | No, *guard*: it works today. A compile failure of this file against old code does not count as failing for this row. Under the new code it proves the body-parser interplay. |
+| 10 | `/token` and `/revoke` refuse, with `invalid_client`: a missing secret, a wrong secret, the stored hash, the sentinel, and the bound value from another process, on `/token`, `/TOKEN`, `/token/` and `/revoke` | same | No, *guard*: the first review ran every input on old code and each already returned `invalid_client`. It pins that the new check keeps refusing them. |
 | 11 | Bypass fails closed: calling the SDK's `authenticateClient` directly with our store and the raw correct secret (no middleware) fails | same | Yes (old code accepts) |
 | 12 | Rollback fails closed: the SDK's check run against a migrated row's raw `client_json` (old `getClient` semantics) rejects every presented secret | same | n/a (proves the rollback property) |
 | 13 | Migration: a seeded pre-0061 row (plaintext in JSON, hash present, or hash null) ends with the sentinel and `hash = sha256hex(secret)`, the client still authenticates with its old secret, a second run changes nothing, two concurrent runs leave one consistent row, and an unparsable row is skipped and counted | same, PGlite | Yes |
 | 14 | The purge deletes exactly the rows `isEncryptedRow` rejects, over the hostile corpus, and a second run deletes 0 | `adr0061-legacy-purge.test.ts`, PGlite | Yes (no purge exists) |
-| 15 | With `NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT=1`, nothing is purged | same | Yes |
+| 15 | Nothing is purged: with `NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT=1` (even with the opt-in), or off Vercel without `NORTHKEEP_CONNECTOR_PURGE_LEGACY_PLAINTEXT=1` | same | No, *guard* (old code never purges). It pins the self-host default. |
 | 16 | `SCHEMA_SQL` contains no `DELETE FROM shared_entries` | same | *guard* |
 | 17 | Every writer to `shared_entries` stores `nkc1:` (the ADR 0020 canary property test, `c3-property.test.ts`, run unchanged, plus a grep-based review check) | existing | *guard* |
 | 18 | GC removes consumed and expired codes and expired tokens only; a live code and a live refresh token still work afterwards | `adr0061-maintenance.test.ts`, PGlite | Yes |
-| 19 | Maintenance logs counts only: the captured log line contains no seeded content, account hash, or id | same | Yes |
+| 19 | Maintenance logs counts only: the captured log line contains no seeded content, account hash, or id, and the line exists | same | Yes, but only because old code has no line at all (the "line exists" assertion). The privacy half would pass vacuously on old code. |
 | 20 | Clients: a failed unshare shows the new copy on CLI, web and phone; the phone no longer shows subscription copy for an unshare; a 402 on push adds the unshare sentence; no em dash | CLI, web and mobile unit tests beside the existing ones | Yes |
+| 21 | Review F1: 60 `POST /token` requests with a wrong secret for a known confidential `client_id`, from one IP (the review's `a2-secret.mjs` case): at most 50 reach the storage client read, and every request after the 50th gets 429 with `retry-after`. Same on `/revoke`. An unknown `client_id` is throttled the same way. | `adr0061-client-secret.test.ts` | No on `6d67dd2` (the SDK limiter throttles). **Fails on the first-draft order** (review: 60 reads, 0 × 429), which is what this row exists to catch. |
+| 22 | A row with the sentinel in its JSON and a NULL hash column is refused with and without a secret, and is counted by maintenance | same | No, *guard* (old `getClient` shows the sentinel as the secret and refuses). Fails on the first-draft rule (review: accepted with no secret). |
+| 23 | A confidential client registered with `nkcs-scrubbed:` in its `client_name` (or any other metadata) is still migrated, and part B's `plaintext_secrets` query counts it before migration and not after | same, PGlite | Yes (no migration on old code). Fails on the first-draft text filter (review a6). |
+| 24 | Lapsed path: an account row with `entitled_until` NULL still gets its rows deleted and tombstoned, but cannot create a new tombstone for a scope with no rows | `adr0061-lapsed-unshare.test.ts`, PGlite | Yes (402 on old code) |
+| 25 | Maintenance does not run with `VERCEL=1` and `VERCEL_ENV` set to `preview`, `development` or unset, nor with `NORTHKEEP_CONNECTOR_MAINTENANCE=off`; it logs the skip reason | `adr0061-maintenance.test.ts` | Yes (no maintenance on old code) |
+| 26 | Counts reach clients as numbers: with a driver stub that returns `int8` as strings (as Neon's HTTP driver does), the unshare answers `"deleted": 2`, a JSON number | `adr0061-lapsed-unshare.test.ts` | Yes (old code 402s a lapsed unshare) |
 
 The full ladder must also stay green: `pnpm -r build`, `pnpm test`, and the
 e2e leak test.
+
+## Deploy safety: never push a fix branch before merge
+
+The connector is a GitHub-connected Vercel project. Pushing `main` is the
+production deploy, and a push of any other branch may build a **preview**
+deployment. Whether a preview can reach the production connector database
+depends on how the Postgres URL is scoped in Vercel's environment
+settings, and the repo cannot answer that: `apps/connector-server/vercel.json`
+sets only `buildCommand` and `regions`, and `db-url.ts` takes whatever
+Postgres URL the environment injects. Previews are known to build for this
+account (the sync server's entry-point fix was verified on a preview), so
+the risk is real. If a preview of this branch ran against the production
+connector database, its first request would run the purge and the
+client-secret scrub before the merge and before Jay's part B counts, and
+the old production code would then reject every confidential client.
+
+Two controls, both required:
+
+1. **Process.** No `fix022/*` branch (and no branch carrying this change)
+   is pushed to GitHub before it is merged. The only push is `main`, with
+   Jay's OK. Local commits only until then.
+2. **Code.** Maintenance runs on Vercel only when `VERCEL_ENV ===
+   'production'` (Decision 5), so even an accidental branch push cannot run
+   it. The new unshare path and secret check would still run in such a
+   preview; they do not delete anything a user has not asked to delete, and
+   they do not rewrite rows.
+
+Jay can check the scoping himself, read-only: Vercel dashboard, the
+connector project, Settings, Environment Variables, and look at which
+environments (Production, Preview, Development) the Postgres URL and
+`CONNECTOR_KEK_PEPPER` are ticked for. If the URL is ticked for Preview,
+consider unticking it; a preview with no pepper and a Neon URL refuses to
+start anyway (ADR 0020 pepper guard), which is another fail-safe.
 
 ## Deploy order
 
 Pushing `main` deploys the connector (and the sync server) to production.
 Every push needs Jay's explicit OK for that push.
 
+0. Nothing on this branch is pushed before merge (Deploy safety above).
 1. **Before anything ships, Jay runs read-only counts** against the
    connector's production database (queries in Acceptance, part B). They
    return numbers only, never content or secrets.
@@ -548,9 +693,11 @@ Every push needs Jay's explicit OK for that push.
 - **R1.** A lapsed user who forgets a single memory does not reach the
   server (push is gated). Unsharing the scope does. Disclosed as today.
 - **R2.** Account rows created for free before this deploy (by a 402'd
-  request) remain. They can use the lapsed unshare path to write up to 1000
-  bounded tombstones each, plus one content-free audit row per new
-  tombstone, and nothing else.
+  request) remain. Since the fix round they cannot create any new
+  tombstone on the lapsed path (`entitled_until IS NOT NULL` is required),
+  so the first review's aggregate (1 MB times the number of such rows) is
+  closed. Accounts that were stamped once can still write up to 1000
+  bounded tombstones each after lapsing.
 - **R3.** Unsharing while lapsed deletes app-written rows that were never
   delivered to the vault. Paid unshare does the same today. See D1.
 - **R4.** Purged rows persist in Neon backups for the retention window.
@@ -563,8 +710,27 @@ Every push needs Jay's explicit OK for that push.
   J3) is unchanged.
 - **R8.** The per-account tombstone cap also applies to paying accounts.
   Past 1000, an unshare of a scope with no rows writes no new tombstone.
+- **R9.** The 1000 cap is checked without a lock, so concurrent unshares on
+  one account can overshoot it by roughly the number running at once.
+  Bounded by the rate limiter. Not executed (PGlite has one connection).
+- **R10.** Our 400 and 429 on `/token` and `/revoke` carry only the app's
+  CORS headers (ChatGPT web origins), not the SDK's `*`, so another browser
+  origin cannot read a failed-authentication body.
+- **R11.** Whether a Vercel preview of this project can reach the
+  production connector database is not answerable from the repo (Deploy
+  safety). The `VERCEL_ENV` gate and the no-branch-push rule cover it.
+- **R12.** Out of scope, recorded from the first review (note 11): an
+  `X-NB-Entitlement` attestation carries no account, so one valid
+  attestation stamps any connector account. It predates this ADR and bears
+  on what "passed the gate once" means in Decision 1. It belongs with the
+  billing bridge (ADR 0019 C3), not here.
+- **R13.** The SDK's 30-day confidential secret expiry is pre-existing and
+  unchanged; see Acceptance C.4.
 
 ## Decisions Jay must make
+
+All four are **pending** as of the fix round (2026-09-24). The
+recommendations stand.
 
 - **D1. Should a lapsed user still be able to down-sync and ack?**
   (`GET /client/pending`, `POST /client/ack`.) It returns their own
@@ -580,7 +746,9 @@ Every push needs Jay's explicit OK for that push.
 - **D4. Include Decision 4 (code and token GC)?** **Recommendation:** yes.
   It is small, and it shrinks what a database copy holds.
 - **D5. Run the part B read-only counts** before step 3 of the deploy, and
-  send Claude the numbers (numbers only).
+  send Claude the numbers (numbers only). Optionally also check, read-only,
+  which Vercel environments the connector's Postgres URL is scoped to
+  (Deploy safety).
 
 ## Acceptance (Jay)
 
@@ -613,9 +781,12 @@ The first line removes source files the implementation added (a new
 middleware module, for example), so a test that imports one directly
 cannot pass against "old code".
 
-Expect the connector claims 1 to 4, 6, 8, 10, 11, 13 to 15, 18 and 19 to
-fail (some files may fail to compile against the old storage interface,
-which also counts as failing).
+Expect claims 1 to 4, 6, 8, 11, 13, 14, 18, 19 and 23 to 26 to fail.
+Claims 5, 7, 9, 10, 12, 15 to 17, 21 and 22 are guards and may pass. A test
+file that fails to compile against the old storage interface counts as
+failing only for rows marked Yes; for a guard row in the same file, rerun
+that row alone after restoring the new code. Claims 21 and 22 are the ones
+that fail on the first-draft design, which no longer exists as code.
 
 ### B. Production, read-only, before the deploy
 
@@ -623,22 +794,34 @@ In the Neon SQL editor for the **connector** database (not the sync
 database). Every query only counts:
 
 ```sql
-SELECT count(*) AS legacy_rows FROM shared_entries WHERE NOT starts_with(content, 'nkc1:');
-SELECT count(*) AS confidential_clients FROM oauth_clients WHERE client_secret_hash IS NOT NULL;
-SELECT count(*) AS plaintext_secrets FROM oauth_clients WHERE position('"client_secret":' in client_json) > 0 AND position('nkcs-scrubbed:' in client_json) = 0;
-SELECT count(*) AS secret_without_hash FROM oauth_clients WHERE client_secret_hash IS NULL AND position('"client_secret":' in client_json) > 0;
-SELECT count(*) AS never_entitled_accounts FROM connector_accounts WHERE entitled_until IS NULL;
+SELECT count(*)::int AS legacy_rows FROM shared_entries WHERE NOT starts_with(content, 'nkc1:');
+SELECT count(*)::int AS confidential_clients FROM oauth_clients WHERE client_secret_hash IS NOT NULL;
+SELECT count(*)::int AS plaintext_secrets FROM oauth_clients WHERE client_json::jsonb ? 'client_secret' AND NOT starts_with(client_json::jsonb ->> 'client_secret', 'nkcs-scrubbed:');
+SELECT count(*)::int AS secret_without_hash FROM oauth_clients WHERE client_secret_hash IS NULL AND client_json::jsonb ? 'client_secret';
+SELECT count(*)::int AS secret_unexpired FROM oauth_clients WHERE client_json::jsonb ? 'client_secret' AND (coalesce((client_json::jsonb ->> 'client_secret_expires_at')::bigint, 0) = 0 OR (client_json::jsonb ->> 'client_secret_expires_at')::bigint > extract(epoch from now()));
+SELECT count(*)::int AS never_entitled_accounts FROM connector_accounts WHERE entitled_until IS NULL;
 ```
 
-Any result is fine. The design handles 0 and non-zero alike. Write them
-down to compare with part C.
+The `plaintext_secrets` query decides on the parsed secret, not on a text
+search, so a client name containing `nkcs-scrubbed:` cannot hide a
+plaintext secret from it. If a query that uses `::jsonb` fails with
+"invalid input syntax for type json", some row does not parse. Say so, and
+run this upper bound instead:
+`SELECT count(*)::int FROM oauth_clients WHERE position('"client_secret":' in client_json) > 0;`
+
+Any result is fine for the migration and the purge; the design handles 0
+and non-zero alike. `never_entitled_accounts` is no longer a tombstone risk
+either: those rows cannot create new tombstones (Decision 1). Write the
+numbers down to compare with part C.
 
 ### C. Production, after the deploy
 
 1. In Vercel's logs for the connector, find one `connector maintenance:`
-   line. It shows counts only, and `purged` equals part B's `legacy_rows`
+   line. It must not say `skipped` (if it does, the reason is on the line;
+   stop and tell Claude). It shows counts only, and `purged` equals part B's `legacy_rows`
    (or 0 if another instance ran first).
-2. Rerun part B. `legacy_rows` is 0. `plaintext_secrets` is 0.
+2. Rerun part B. `legacy_rows` is 0 (unless you opted out, see Deploy
+   safety). `plaintext_secrets` is 0.
    `confidential_clients` is at least the old `plaintext_secrets`.
 These two checks are read-only and are the whole production acceptance.
 The lapsed unshare itself is proven locally (part A, claims 1 to 4); it is
@@ -652,11 +835,67 @@ it would not take the lapsed path anyway.
    of the paid path, not a test of the lapsed path.
 4. Optional: use an AI app you already have connected (Claude or ChatGPT)
    for one tool call. This proves a real client still authenticates after
-   the migration **only if** part B showed `confidential_clients` greater
-   than 0 (that app registered with a secret). If it was 0, every client is
-   public, the secret path has no production user, and this check proves
-   nothing about Decision 2.
+   the migration **only if** part B showed `secret_unexpired` greater than 0
+   and that app is one of them. If `confidential_clients` was 0, every
+   client is public and this proves nothing about Decision 2.
+   **Do not read a "Client secret has expired" error as a migration
+   failure.** The SDK gives every confidential secret a 30-day life
+   (`client_secret_expires_at`; `create-server.ts` does not override it), so
+   a client registered more than 30 days ago already fails today with that
+   exact message. Rolling back for it would make things worse: per Rollback,
+   old code then rejects *every* confidential client. The fix for an
+   expired secret is that the app re-registers, which it does on reconnect.
+   The 30-day expiry itself is pre-existing and out of scope here.
 
 ## Review history
 
-- 2026-09-24: Proposed (design only). Not reviewed.
+- 2026-09-24: Proposed (design only), commit `5f60999`.
+- 2026-09-24, first review
+  (`Reviews/adr-0061/r1-first-review.md`, scripts in the review worktree's
+  `.adversarial/0061-r1/`): **CLEARED WITH WOUNDS.** Executed against the
+  real app and real SDK 1.29.0 with the design simulated, PGlite and
+  in-memory storage only. Held: the SDK facts, the body-parser double read
+  (full confidential round trip green), the refusal matrix on every path
+  that reaches the SDK, bypass and rollback both fail closed, migration
+  compare-and-swap, the unshare CTE and caps, an unknown token writes
+  nothing, purge parity over 23 hostile strings, GC keeps live rows.
+  - Flesh wound F1: the secret check ran before the SDK's `/token` and
+    `/revoke` rate limiter, so wrong secrets were unthrottled and each read
+    the database (60 of 60 reads, no 429).
+  - Notes: claims 9, 10 and 19 mislabelled; the text filter
+    `nkcs-scrubbed:` let crafted metadata hide a plaintext secret from the
+    migration and from part B; a sentinel with a NULL hash read as public;
+    the 30-day SDK secret expiry could be misread in acceptance C.4; the R2
+    aggregate was unbounded and the Decision 1 rule text denied the
+    tombstone inserts; tombstone readers were misstated; Neon returns
+    `int8` as strings; cap overshoot under concurrency; self-hosters' rows
+    purged irreversibly; CORS on the new 400; entitlement attestations are
+    not account-bound (out of scope); preview deployments against the
+    production database unaddressed.
+- 2026-09-24, design fix round (this revision; design only, no code):
+  - F1: a per-IP limiter (50 per 15 minutes, the SDK's numbers) now runs
+    before the secret check, which is the only step that reads storage;
+    order restated in Decision 2; claim 21 reproduces the review's case and
+    fails on the draft order.
+  - Claims 9, 10, 15 relabelled as guards, 19 qualified; acceptance A's
+    expected-failure list rewritten.
+  - Migration and part B decide on the parsed `client_secret`, not a text
+    search (claim 23). Unparsable rows are stated as re-read each run.
+  - Sentinel with NULL hash is confidential and unusable (claim 22).
+  - Acceptance C.4 explains the 30-day expiry and warns against rolling
+    back for it; part B adds `secret_unexpired`.
+  - Lapsed new empty-scope tombstones need `entitled_until IS NOT NULL`
+    (claim 24); the Decision 1 rule text now admits tombstone and audit
+    inserts; R2 narrowed.
+  - All three tombstone readers listed. Counts cast `::int` and wrapped in
+    `Number(...)` (claim 26). Cap overshoot recorded (R9).
+  - Self-host purge is now explicit opt-in; hosted production purges by
+    default; reasons in Decision 3.
+  - CORS on the new 400 and 429 stated (R10). Attestation binding recorded
+    as out of scope (R12).
+  - New Deploy safety section: no branch push before merge, and
+    maintenance runs on Vercel only when `VERCEL_ENV === 'production'`
+    (claim 25), because the repo cannot show whether previews reach the
+    production database (R11).
+  - D1 to D4 still pending with Jay.
+  - Recheck not yet run.
