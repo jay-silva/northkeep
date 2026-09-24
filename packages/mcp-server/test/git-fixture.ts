@@ -35,8 +35,15 @@ export function makeLab(prefix = 'nk-git-'): Lab {
   };
 }
 
+/**
+ * `git commit` starts `git maintenance run --auto --detach`, which holds
+ * objects/maintenance.lock (and may repack) after commit returns. That
+ * daemon raced verifyReadOnly's snapshot in CI, so fixture git never runs it.
+ */
+const NO_AUTO_MAINTENANCE = ['-c', 'maintenance.auto=false', '-c', 'gc.auto=0'];
+
 export function fx(lab: Lab, cwd: string, args: string[], input?: string): string {
-  return execFileSync('/usr/bin/git', ['-C', cwd, ...args], {
+  return execFileSync('/usr/bin/git', ['-C', cwd, ...NO_AUTO_MAINTENANCE, ...args], {
     env: {
       PATH: '/usr/bin:/bin',
       HOME: lab.fixtureHome,
