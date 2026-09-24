@@ -376,21 +376,30 @@ function adaptTool(
           meta: { bytes: 0, truncated: false, ok: false },
         };
       }
-      const raw = await client.callTool(
-        {
-          name: tool.name,
-          arguments:
-            args !== null && typeof args === 'object' ? (args as Record<string, unknown>) : {},
-        },
-        undefined,
-        // A server that never answers must not hold the loop open forever, and
-        // Ctrl-C has to reach an in-flight call — the CLI promises it does.
-        {
-          timeout: REQUEST_TIMEOUT_MS,
-          // The loop's per-task signal wins; the connect-time one is the fallback.
-          ...(ctx.signal ?? signal ? { signal: ctx.signal ?? signal } : {}),
-        },
-      );
+      const callSignal = ctx.signal ?? signal;
+      let raw: Awaited<ReturnType<typeof client.callTool>>;
+      try {
+        raw = await client.callTool(
+          {
+            name: tool.name,
+            arguments:
+              args !== null && typeof args === 'object' ? (args as Record<string, unknown>) : {},
+          },
+          undefined,
+          // A server that never answers must not hold the loop open forever, and
+          // Ctrl-C has to reach an in-flight call.
+          {
+            timeout: REQUEST_TIMEOUT_MS,
+            // The loop's per-task signal wins; the connect-time one is the fallback.
+            ...(callSignal ? { signal: callSignal } : {}),
+          },
+        );
+      } catch (err) {
+        // Aborting stops our wait, not the server: it may still complete the
+        // side effect, so this is "unknown", never "failed".
+        if (callSignal?.aborted === true) return cancelledInFlight();
+        throw err;
+      }
       const { text, isError } = resultToText(raw);
       return {
         content: isError
@@ -399,5 +408,17 @@ function adaptTool(
         meta: { bytes: Buffer.byteLength(text, 'utf8'), truncated: false, ok: !isError },
       };
     },
+  };
+}
+
+/** The result of an MCP call the user cancelled while it was running. */
+export function cancelledInFlight(): ToolResult {
+  return {
+    content: JSON.stringify({
+      error: 'cancelled',
+      guidance:
+        'The user cancelled while this call was running. The tool may still have completed; do not assume it did or did not.',
+    }),
+    meta: { bytes: 0, truncated: false, ok: false, cancelled: true },
   };
 }

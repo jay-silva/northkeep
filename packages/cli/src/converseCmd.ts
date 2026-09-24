@@ -206,6 +206,8 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         } else if (e.decision !== 'approved') {
           console.log(`${DIM}↳ ✗ ${e.name} ${e.decision === 'timeout' ? 'timed out — denied' : 'denied'}${RESET}`);
         }
+      } else if (e.type === 'tool_result' && e.cancelled === true) {
+        console.log(`${YELLOW}↳ ${e.name} cancelled; the tool may still have completed${RESET}`);
       } else if (e.type === 'tool_result') {
         console.log(
           e.ok

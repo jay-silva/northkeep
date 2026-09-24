@@ -30,6 +30,7 @@ import {
   type ToolDefinition,
 } from '../src/index.js';
 import { toAnthropicTurns } from '../src/anthropic.js';
+import { cancelledInFlight } from '../src/tools/mcp/client.js';
 
 /**
  * M10b — the runTask agent loop, the JSON-leaf redaction helpers, the
@@ -518,6 +519,46 @@ describe('runTask — the agent loop', () => {
     expect(toolMsgs).toHaveLength(2);
     expect(toolMsgs[1]!.content).toBe('Cancelled by the user.');
     expect(session.historyTiers).toHaveLength(session.plainHistory.length);
+  });
+
+  it('a call cancelled while in flight is logged as outcome unknown and reported as cancelled, not failed', async () => {
+    const controller = new AbortController();
+    const { provider } = scriptedProvider(PRIVATE_URL, [
+      { text: '', toolCalls: [{ id: 'c1', name: 'slow', arguments: '{}' }], stopReason: 'tool_use' },
+    ]);
+    const slow: ToolDefinition = {
+      name: 'slow',
+      description: 'runs until cancelled',
+      inputSchema: { type: 'object' },
+      risk: 'consequential',
+      egress: () => null,
+      execute: () => {
+        controller.abort(); // Ctrl-C lands while the call is running
+        return Promise.resolve(cancelledInFlight());
+      },
+    };
+    const events: TaskEvent[] = [];
+    const rows: CallLogEntry[] = [];
+    const session = createSession();
+    const result = await runTask({
+      ...baseOptions(provider),
+      session,
+      message: 'go',
+      redactTier: 0,
+      tools: [slow],
+      signal: controller.signal,
+      hooks: hooks(events),
+      auditFn: (e) => rows.push(e),
+    });
+    expect(result.stopped).toBe('aborted');
+    const res = events.find((e) => e.type === 'tool_result') as Extract<TaskEvent, { type: 'tool_result' }>;
+    expect(res.cancelled).toBe(true);
+    const row = rows.find((r) => r.tool === 'tool_call')!;
+    expect(row.tool_call!.outcome).toBe('unknown');
+    expect('ok' in row.tool_call!).toBe(false);
+    expect(row.error).toBe('cancelled while running; outcome unknown');
+    const toolMsg = session.plainHistory.find((m) => m.role === 'tool')!;
+    expect(toolMsg.content).toContain('may still have completed');
   });
 
   it('unknown tool and unparseable arguments come back as structured errors, loop alive', async () => {

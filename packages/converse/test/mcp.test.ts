@@ -558,3 +558,28 @@ describe('the duplicate-id error does not prescribe a surface', () => {
     expect(msg).not.toContain('northkeep mcp');
   });
 });
+
+describe('a call cancelled while in flight (real stdio server)', () => {
+  it('reports cancelled with an unknown outcome, and the server may still complete it', async () => {
+    const fixture = path.join(path.dirname(new URL(import.meta.url).pathname), 'fixtures', 'marker-mcp.mjs');
+    const marker = path.join(home, 'marker.txt');
+    addServer({ id: 'marker', command: node, args: [fixture], env: { MARKER_FILE: marker, SLOW_MS: '1200' } });
+    const conn = await connectServer(getServer('marker')!);
+    try {
+      const touch = conn.tools.find((t) => t.name === 'marker__touch')!;
+      const controller = new AbortController();
+      setTimeout(() => controller.abort(), 200);
+      const out = await touch.execute({ note: 'slow' }, { signal: controller.signal, maxResultChars: 1000 });
+      expect(out.meta).toMatchObject({ ok: false, cancelled: true });
+      const body = JSON.parse(out.content) as { error: string; guidance: string };
+      expect(body.error).toBe('cancelled');
+      expect(body.guidance).toContain('may still have completed');
+      expect(out.content).not.toMatch(/failed/i);
+      // Aborting stopped our wait, not the server: the side effect lands anyway.
+      await new Promise((r) => setTimeout(r, 1800));
+      expect(fs.readFileSync(marker, 'utf8')).toContain('TOOL RAN');
+    } finally {
+      await conn.close();
+    }
+  }, 15000);
+});

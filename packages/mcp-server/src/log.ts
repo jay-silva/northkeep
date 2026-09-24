@@ -83,7 +83,10 @@ export interface CallLogEntry {
      * e.g. "secret:ssn:query:decoded" — never matched text. */
     screen?: string[];
     result_bytes?: number;
-    ok: boolean;
+    /** Absent when outcome is 'unknown'. */
+    ok?: boolean;
+    /** 'unknown': cancelled while in flight, so it may still have completed. */
+    outcome?: 'unknown';
   };
 }
 

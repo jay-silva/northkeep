@@ -445,7 +445,8 @@ program
             (t.scope !== undefined && t.scope !== 'once' ? ` (${t.scope})` : '') +
             (t.url_hash !== undefined ? ` · url#${t.url_hash.slice(0, 12)}` : '') +
             ` · args#${t.args_hash.slice(0, 12)} (${t.arg_chars} chars)` +
-            (t.result_bytes !== undefined ? ` · ${t.result_bytes} B` : ''),
+            (t.result_bytes !== undefined ? ` · ${t.result_bytes} B` : '') +
+            (t.outcome === 'unknown' ? ' · outcome unknown (cancelled while running)' : ''),
         );
         // Screen flags get their own line — an exfil block should not be
         // easy to miss when auditing (content-free descriptors only).
