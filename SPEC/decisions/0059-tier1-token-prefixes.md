@@ -1,9 +1,10 @@
 # ADR 0059: Tier-1 masks issuer-prefixed API tokens
 
 - **Date:** 2026-09-23
-- **Status:** Proposed. First review and recheck both CLEARED WITH WOUNDS
+- **Status:** Accepted and shipped (main 3c0d306, 2026-09-24; in release
+  0.22.0). First review and recheck both CLEARED WITH WOUNDS
   (2026-09-23), no wound open. Jay decided the placeholder question on
-  2026-09-23 (options B and C, Decision 8). Merge is Jay's call. This changes redaction and
+  2026-09-23 (options B and C, Decision 8). This changes redaction and
   publishes a claim in KNOWN-LIMITS, so the CLAUDE.md review gate applies. The implementation sits on branch
   `adr-0059/tier1-tokens`, unmerged, so the reviewer can attack code rather
   than prose.
