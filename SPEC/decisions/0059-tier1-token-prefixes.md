@@ -59,6 +59,25 @@ digits only. And the leak assertion was `text.includes(secret)`, which passes
 when any single character of a key is masked, so a key masked only up to its
 first `-` would also have passed.
 
+### What this means for what already left
+
+On main, the shapes above crossed every Tier-1 consumer unmasked: prompts to
+cloud providers, arguments to `strict` MCP servers and bounded web
+destinations, and MCP return masking. The exfiltration screen's `api_key`
+hard-deny never fired for them. This change does not reach anything already
+sent. Whether to advise key rotation, and how to word a release note, is
+Jay's decision, not this ADR's.
+
+### Where the broad claim is published
+
+These public or reviewer-facing lines say Tier 1 masks "keys" or "secrets"
+without naming shapes. They were over-broad on main and stay broad after
+this change (prefixless secrets are still missed). They are listed here, not
+edited, because changing public copy is itself a gated claim:
+`README.md:88`, `README.md:219` ("Tier 1 masks secrets (emails, SSNs, cards,
+keys)"), `site/index.html:206`, `site/start.html:94`, `site/roadmap.html:65`,
+`docs/appstore-review-notes.md:54` ("API keys").
+
 ## Decision
 
 ### 1. An issuer-prefix table, compiled into the `api_key` detector
@@ -170,7 +189,19 @@ npm fixtures fail the CRC32/base62 checksum under both published readings
 asserts the checksum failure, so a later edit cannot quietly turn a fixture
 into a valid-shaped token. The corpus appends one sentence per fake token,
 so both the unit leak test and the e2e CLI leak gate enforce zero misses on
-every shape.
+every shape. There is at least one fixture per alternation branch (every
+GitLab, Slack, DigitalOcean, Shopify, PlanetScale, Fly, AWS and Stripe
+sub-prefix), not only one per family.
+
+The materialized fixtures do match 49 of gitleaks' strict shape rules. That
+is expected: most issuers have no offline checksum, so any string of the
+right shape passes a scanner. They exist only at runtime, are visibly
+filler, and the only issuers with an offline checksum (GitHub, npm) are the
+ones the checksum test covers. The committed diff was scanned with the 220
+gitleaks rules that compile in JavaScript: two hits, AWS's published
+documentation example key `AKIAIOSFODNN7EXAMPLE` (already in the corpus
+before this change) and a `generic-api-key` false positive on the fragment
+`AGE-SECRET-`.
 
 ## False-positive analysis
 
@@ -188,6 +219,13 @@ finds that the old one did not:**
 | 20,000 `.md` and `.d.ts` files from installed dependencies (`node_modules/.pnpm`), prose and type signatures from across the JavaScript ecosystem | 132 M chars | 0 |
 
 A sanity plant (one fake `gho_` token) confirmed the sweep detects hits.
+
+**Cost.** The exfil screen caps a candidate at 4,096 characters and its DoS
+bound rests on Tier-1 cost. Timed old against new on 4,096-char worst cases
+(random alphanumerics, `-`/`_`-heavy text, repeated `sk-ant-api03-` and
+`ghp_` prefixes, dot-heavy `glpat-`, `xoxb-` followed by dashes, prose):
+every case within 0.8 ms of the old detector, worst case 5.7 ms against
+4.9 ms.
 
 **Near-miss unit tests** (`NEAR_MISSES` in `fake-tokens.ts`, asserted to
 produce no `api_key` span): the bare prefixes in prose (`github_pat_`,
@@ -218,7 +256,7 @@ behaviour for the new shapes at once.
 | Web app API | `apps/web/src/api.ts:718` | Masks new shapes. |
 | Mobile | `apps/mobile/src/lib/converse-run.ts:171`, `local-model.ts:70` | Masks new shapes before provider egress on the phone. Reaches users only with the next mobile build. |
 | Tool-egress floor | `packages/converse/src/task.ts:918-921` | Arguments to a `strict` MCP server or a bounded web destination are sent with new shapes masked. |
-| Exfiltration screen | `packages/converse/src/tools/exfil.ts:397`, hard-deny set at `task.ts:67` | **Behaviour change:** `api_key` is a hard-deny kind, so a tool call whose restored arguments carry any new shape (plainly or after the screen's percent and base64 decoding) is now denied without a prompt, where it used to be allowed or prompted. This includes `trusted-api` tools such as web search (`task.ts:741-745` keeps hard-deny kinds there). |
+| Exfiltration screen | `packages/converse/src/tools/exfil.ts:397`, hard-deny set at `task.ts:67` | **Behaviour change:** `api_key` is a hard-deny kind, so a tool call whose restored arguments carry any new shape (plainly or after the screen's percent and base64 decoding) is now denied without a prompt, where it used to be allowed or prompted. This includes `trusted-api` tools such as web search (`task.ts:742-746` keeps hard-deny kinds there). |
 | Memory distillation | `packages/converse/src/turn.ts:611-613` | **Behaviour change:** a candidate memory that contains a new shape is dropped, not stored. |
 | MCP return masking (memories) | `maskContent`, `packages/mcp-server/src/server.ts:313-316`, when `NORTHKEEP_REDACT_TIER=1` | Memory content returned to AI apps has new shapes masked. |
 | MCP and CLI project payloads | `maskProjectFields`, `packages/mcp-server/src/project-mask.ts:21`, used by `server.ts:127` and `packages/cli/src/projectsCmd.ts:656` | Project text returned with Tier-1 on has new shapes masked; identifier keys stay exact. |
@@ -243,6 +281,8 @@ unmasked (invariant 1(b); that path never ran Tier-1).
 | Prefix-sharing prose and identifiers are not masked as keys | the guard and minimum lengths | `redact.test.ts` "leaves prefix-sharing prose and identifiers alone" |
 | Zero Tier-1 misses on the seeded corpus, including every new shape, as whole spans with no surviving 8-char window | leak gate | `leak.test.ts` (unit), `e2e/m3.test.ts` (CLI) |
 | Fixtures are not validly checksummed GitHub or npm tokens | fixture construction | `redact.test.ts` "uses fixtures that fail the GitHub and npm CRC32 checksum" |
+| The exfil screen flags the new shapes as `api_key` (so they hard-deny), plain, percent-encoded, and in a JSON body leaf | `exfil.ts:397` with `task.ts:67` | `exfil.test.ts` "screenArguments: issuer-prefixed API keys (ADR 0059)" |
+| A distilled memory candidate carrying a new shape is dropped, and the prompt to the provider carries the key masked | `turn.ts:611-613`, `turn.ts:385` | `converse.test.ts` "never distills an issuer-prefixed API key into memory (ADR 0059)" |
 
 ## Residual (documented, not closed)
 
