@@ -216,7 +216,9 @@ describe('ADR 0060 F1, F2: literals, foreign tokens and cited originals', () => 
     const m2 = entry(2, 'The ex now uses new@example.com.');
     const session = createRedactionSession([m1.content, m2.content], () => 'k7q2');
     const { handle } = await prepare(session, [m1, m2]);
-    const out = restoreReviewReply(reply([stale(m1, "Old note: x is my ex's address.", "Old note: [k7q2:EMAIL_1] is my ex's address.", [m1, m2])]), [m1, m2], handle);
+    const merge = stale(m1, "Old note: x is my ex's address.", "Old note: [k7q2:EMAIL_1] is my ex's address.", [m1, m2]) as { quotes: unknown[] };
+    merge.quotes.push({ entry_id: m2.id, quote: 'The ex now uses [k7q2:EMAIL_1].' });
+    const out = restoreReviewReply(reply([merge]), [m1, m2], handle);
     expect((out.parsed as { proposals: Array<{ proposed_content: string }> }).proposals[0]!.proposed_content)
       .toBe("Old note: new@example.com is my ex's address.");
     expect(validateProposals(out.parsed, [m1, m2]).proposals).toHaveLength(1);
@@ -239,7 +241,9 @@ describe('runReviewPass with an outbound adapter', () => {
       async send(handle) {
         events.push('send');
         expect(handle.tokens.size).toBe(2);
-        return JSON.stringify(reply([stale(m1, 'Mom lives at [k7q2:EMAIL_1].', 'Mom lives at [k7q2:EMAIL_2].', [m1, m2])]));
+        const p = stale(m1, 'Mom lives at [k7q2:EMAIL_1].', 'Mom lives at [k7q2:EMAIL_2].', [m1, m2]) as { quotes: unknown[] };
+        p.quotes.push({ entry_id: m2.id, quote: 'mail [k7q2:EMAIL_2]' });
+        return JSON.stringify(reply([p]));
       },
     };
     const result = await runReviewPass([m1, m2], outbound, { embed: async () => [1, 0, 0] });
@@ -261,3 +265,59 @@ describe('ADR 0060 1.8: the local review path is unchanged', () => {
     expect(captured).toBe(expected);
   });
 });
+
+describe('ADR 0060 code review round 1', () => {
+  it('A-W1 (F1): a fabricated quote from another memory lends none of its values', async () => {
+    const m1 = entry(1, 'Therapist email is therapist@clinic.example.com for appointments.');
+    const m2 = entry(2, 'The ex lives on Elm Street and never calls.');
+    const session = createRedactionSession([m1.content, m2.content], () => 'k7q2');
+    const { handle } = await prepare(session, [m1, m2]);
+    const hostile = {
+      kind: 'stale', entry_ids: [m2.id], target_entry_id: m2.id, explanation: 'x', question: null,
+      quotes: [{ entry_id: m2.id, quote: 'The ex lives on Elm Street' }, { entry_id: m1.id, quote: 'no such text in m1' }],
+      proposed_content: 'The ex can be reached at [k7q2:EMAIL_1].',
+    };
+    const out = restoreReviewReply(reply([hostile]), [m1, m2], handle);
+    expect(out.drops).toEqual({ uncited_original: 1 });
+    expect(JSON.stringify(out.parsed)).not.toContain('therapist@clinic.example.com');
+    // An id listed in entry_ids without a validated quote lends nothing either.
+    const listed = { ...hostile, entry_ids: [m2.id, m1.id], quotes: [hostile.quotes[0]] };
+    expect(restoreReviewReply(reply([listed]), [m1, m2], handle).drops).toEqual({ uncited_original: 1 });
+  });
+
+  it('A-W1 control: the same value with a validated quote from its memory is restored', async () => {
+    const m1 = entry(1, 'Therapist email is therapist@clinic.example.com for appointments.');
+    const m2 = entry(2, 'The ex lives on Elm Street and never calls.');
+    const session = createRedactionSession([m1.content, m2.content], () => 'k7q2');
+    const { handle } = await prepare(session, [m1, m2]);
+    const ok = {
+      kind: 'stale', entry_ids: [m2.id, m1.id], target_entry_id: m2.id, explanation: 'x', question: null,
+      quotes: [{ entry_id: m2.id, quote: 'The ex lives on Elm Street' }, { entry_id: m1.id, quote: 'Therapist email is [k7q2:EMAIL_1]' }],
+      proposed_content: 'The ex can be reached at [k7q2:EMAIL_1].',
+    };
+    const out = restoreReviewReply(reply([ok]), [m1, m2], handle);
+    expect((out.parsed as { proposals: Array<{ proposed_content: string }> }).proposals[0]!.proposed_content)
+      .toBe('The ex can be reached at therapist@clinic.example.com.');
+  });
+
+  it('Claims-review wire case: tag-stripped and other mis-copied placeholders never reach a suggestion', async () => {
+    const m = entry(1, 'Family note number 1. Born 03/15/1948, mail mom@example.com.');
+    const session = createRedactionSession([m.content], () => 'k7q2');
+    const { handle } = await prepare(session, [m], 3);
+    for (const proposed of [
+      'Family note: born [DATE_1948_1].',
+      'Family note: mail EMAIL_1.',
+      'Family note: mail <EMAIL_1>.',
+      'Family note: mail [k7q2 EMAIL_1].',
+      'Family note: born [DATE-1948].',
+      'Family note: born DATE_1948_1 and [REDACTED].',
+      'Family note: mail [email_1].',
+    ]) {
+      const out = restoreReviewReply(reply([stale(m, 'Family note number 1.', proposed)]), [m], handle);
+      expect((out.parsed as { proposals: unknown[] }).proposals, proposed).toHaveLength(0);
+    }
+    const prose = restoreReviewReply(reply([stale(m, 'Family note number 1.', 'Family note: date of birth and email are on file.')]), [m], handle);
+    expect((prose.parsed as { proposals: unknown[] }).proposals).toHaveLength(1);
+  });
+});
+

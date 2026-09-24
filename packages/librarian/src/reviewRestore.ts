@@ -28,8 +28,30 @@ export interface ReviewPackHandle {
   readonly tokenInfo: ReadonlyMap<string, ReviewTokenInfo>;
 }
 
-/** Untagged placeholder shapes NorthKeep's layers emit (chat, MCP, old writes). */
-const UNTAGGED_PLACEHOLDER = /\[[A-Z][A-Z_]*_\d+\]|\[DATE(?:-\d{4})?\]|(?<![\p{L}\p{N}_])(?:Person|Org|Place|Location)-\d+(?![\p{L}\p{N}_])/gu;
+/**
+ * Every label a NorthKeep placeholder can carry: the Tier-1 secret kinds, the
+ * name kinds (and the Place prefix Tier 2 prints), dates, and the generic
+ * REDACTED. A redact test checks this list covers every kind it emits.
+ */
+export const PLACEHOLDER_LABELS: readonly string[] = [
+  'EMAIL', 'PHONE', 'SSN', 'CREDIT_CARD', 'IP', 'API_KEY', 'IBAN', 'RECORD_ID', 'GPS', 'ZIP', 'ADDRESS',
+  'PERSON', 'ORG', 'LOCATION', 'PLACE', 'DATE', 'REDACTED',
+];
+
+const LABELS = PLACEHOLDER_LABELS.join('|');
+/**
+ * Any mis-copy of a placeholder, case-insensitive: bracketed in any of [ < { (
+ * with or without a tag and with or without its colon (`[DATE_1948_1]`,
+ * `<EMAIL_1>`, `[k7q2 EMAIL_1]`, `[REDACTED]`, `[DATE-1948]`), or bare with a
+ * number suffix (`EMAIL_1`, `DATE_1948_1`, `Person-3`). A plain word such as
+ * "email" or "date" in prose, with neither brackets nor a number, is not one.
+ */
+const PLACEHOLDER_SHAPE = new RegExp(
+  // Bracketed: needs a number suffix or a closing bracket, so "(date unknown)" is prose.
+  `[\\[<{(\uFF3B]\\s*(?:[a-z0-9]{4}\\s*[:\uFF1A]?\\s*)?(?:${LABELS})(?:(?:[_\\- ]?\\d+)+\\s*[\\]>})\uFF3D]?|\\s*[\\]>})\uFF3D])` +
+    `|(?<![\\p{L}\\p{N}_])(?:[a-z0-9]{4}[:\uFF1A])?(?:${LABELS})(?:[_\\-]\\d+)+(?![\\p{L}\\p{N}])`,
+  'giu',
+);
 
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -105,7 +127,7 @@ export function restoreProposed(text: string, cited: MemoryEntry[], handle: Revi
   if (pieces.some((p) => p.kind === 'forged')) return { ok: false, reason: 'foreign_placeholder' };
   for (const piece of pieces) {
     if (piece.kind !== 'text') continue;
-    for (const m of piece.text.matchAll(UNTAGGED_PLACEHOLDER)) {
+    for (const m of piece.text.matchAll(PLACEHOLDER_SHAPE)) {
       if (!cited.some((entry) => entry.content.includes(m[0]))) return { ok: false, reason: 'unmapped_placeholder' };
     }
   }
@@ -159,6 +181,7 @@ export function restoreReviewReply(
       continue;
     }
     const rec = { ...(item as Record<string, unknown>) };
+    const validated = new Set<string>();
     if (Array.isArray(rec.quotes)) {
       rec.quotes = rec.quotes.map((q) => {
         if (q === null || typeof q !== 'object') return q;
@@ -167,19 +190,17 @@ export function restoreReviewReply(
         const entry = byId.get(quote.entry_id);
         if (!entry) return q;
         const span = matchQuote(quote.quote, entry.content, handle);
-        return span === null ? q : { ...quote, quote: span };
+        if (span === null || span.trim().length === 0) return q;
+        validated.add(entry.id);
+        return { ...quote, quote: span };
       });
     }
     if (typeof rec.proposed_content === 'string' && rec.proposed_content.length > 0) {
-      const ids = new Set<string>();
-      if (Array.isArray(rec.entry_ids)) for (const id of rec.entry_ids) if (typeof id === 'string') ids.add(id);
-      if (Array.isArray(rec.quotes)) {
-        for (const q of rec.quotes) {
-          const id = (q as { entry_id?: unknown } | null)?.entry_id;
-          if (typeof id === 'string') ids.add(id);
-        }
-      }
-      const target = typeof rec.target_entry_id === 'string' ? byId.get(rec.target_entry_id) : undefined;
+      // Cited means a quote from that memory validated against its stored
+      // text (code review F1): a fabricated quote, or an id listed without a
+      // quote, lends no memory's values to the suggested wording.
+      const ids = new Set<string>(validated);
+      const target = typeof rec.target_entry_id === 'string' && ids.has(rec.target_entry_id) ? byId.get(rec.target_entry_id) : undefined;
       const cited = [
         ...(target ? [target] : []),
         ...[...ids].map((id) => byId.get(id)).filter((e): e is MemoryEntry => e !== undefined && e !== target),

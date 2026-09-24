@@ -59,3 +59,31 @@ describe('ADR 0060 1.3: one tagged numbering per review run', () => {
     expect(r.redacted).toBe('Reach [EMAIL_1], born [DATE-1948]');
   });
 });
+
+describe('ADR 0060 code review F2: detect across the run, then render', () => {
+  it('A-W2 (redact side): a name found in a later memory is masked in an earlier one too', async () => {
+    const { detectContentInSession, renderInSession } = await import('../src/index.js');
+    // Finds the name only in the sentence that mentions the clinic.
+    const clinicOnly = {
+      available: async () => true,
+      generateJson: async (prompt: string) => {
+        const text = prompt.slice(prompt.lastIndexOf('\nText:\n') + 7);
+        return JSON.stringify({ entities: text.includes('clinic') && text.includes('Zyler Okonkwo') ? [{ text: 'Zyler Okonkwo', kind: 'person' }] : [] });
+      },
+    } as unknown as OllamaClient;
+    const a = 'Zyler Okonkwo called about the lease renewal.';
+    const b = 'Met Zyler Okonkwo at the clinic on Tuesday.';
+    const session = createRedactionSession([a, b], () => 'k7q2');
+    await detectContentInSession(session, a, 2, clinicOnly);
+    await detectContentInSession(session, b, 2, clinicOnly);
+    expect(renderInSession(session, a).wire).toBe('[k7q2:PERSON_1] called about the lease renewal.');
+    expect(renderInSession(session, b).wire).toBe('Met [k7q2:PERSON_1] at the clinic on Tuesday.');
+  });
+
+  it('PLACEHOLDER_LABELS covers every kind the redactor can emit', async () => {
+    const { PLACEHOLDER_LABELS } = await import('../../librarian/src/reviewRestore.js');
+    const kinds = ['email', 'phone', 'ssn', 'credit_card', 'ip', 'api_key', 'iban', 'record_id', 'gps', 'zip', 'address', 'person', 'org', 'location', 'date'];
+    for (const k of kinds) expect(PLACEHOLDER_LABELS, k).toContain(k.toUpperCase());
+    expect(PLACEHOLDER_LABELS).toContain('PLACE');
+  });
+});

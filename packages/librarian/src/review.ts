@@ -88,7 +88,7 @@ function formatDataSection(entries: MemoryEntry[]): string {
 export function formatReviewPrompt(entries: MemoryEntry[], opts?: { placeholderTag?: string }): string {
   const rule = opts?.placeholderTag === undefined
     ? ''
-    : `\n- Some values are replaced by placeholders such as [${opts.placeholderTag}:EMAIL_0]. Copy them exactly as written; do not guess what they hide.`;
+    : `\n- Some values are replaced by placeholders such as [${opts.placeholderTag}:EMAIL_0]. Copy them exactly as written; do not guess what they hide. When proposed_content uses a placeholder from an entry, quote that entry too.`;
   return `${SYSTEM_INSTRUCTIONS}${rule}\n\n${formatDataSection(entries)}`;
 }
 

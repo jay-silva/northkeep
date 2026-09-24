@@ -31,7 +31,7 @@ export function names(): string[] {
   return ['Zyler Okonkwo', 'Quennell Abernathy-Vos', 'invalid_request'];
 }
 
-export function createHarness(opts: { ner?: NerMode } = {}): Harness {
+export function createHarness(opts: { ner?: NerMode; find?: (text: string) => string[] } = {}): Harness {
   const saved = Object.fromEntries(ENV_KEYS.map((k) => [k, process.env[k]]));
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-0060-'));
   const vaultPath = path.join(home, 'vault.nkv');
@@ -61,7 +61,7 @@ export function createHarness(opts: { ner?: NerMode } = {}): Harness {
       const prompt = (JSON.parse(String(init?.body)) as { prompt: string }).prompt;
       const text = prompt.slice(prompt.lastIndexOf('\nText:\n') + 7);
       if (typeof mode === 'function' && mode(text, calls) === 'fail') throw new Error('name model timed out');
-      const found = names().filter((n) => text.includes(n));
+      const found = opts.find ? opts.find(text) : names().filter((n) => text.includes(n));
       return json({ response: JSON.stringify({ entities: found.map((t) => ({ text: t, kind: 'person' })) }) });
     }
     throw new Error(`unexpected Ollama path: ${url}`);

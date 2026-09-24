@@ -164,8 +164,7 @@ describe('ADR 0060 D4: return tiers over MCP', () => {
       process.env.NORTHKEEP_REDACT_TIER = tier;
       const create = await call('project_create', { project: `p${tier}`, what_why: 'w', status: 's' });
       expect(create.isError, tier).toBe(true);
-      expect(text(create)).toContain(contentWriteRefusal(Number(tier) as 1 | 2 | 3));
-      expect(JSON.parse(text(create)).error.code, tier).toBe('invalid_request');
+      expect(JSON.parse(text(create)), tier).toEqual({ error: { code: 'invalid_request', message: contentWriteRefusal(Number(tier) as 1 | 2 | 3) } });
       const edit = await call('memory_edit', { id, content: 'Person-1 moved.' });
       expect(edit.isError, tier).toBe(true);
       expect(text(edit)).toContain(contentWriteRefusal(Number(tier) as 1 | 2 | 3));
@@ -204,3 +203,60 @@ describe('ADR 0060 D4: return tiers over MCP', () => {
     expect(logRows(h.home).at(-1)).toMatchObject({ ok: false, error: 'invalid_tier' });
   });
 });
+
+describe('ADR 0060 code review round 1 (MCP)', () => {
+  it('A-M7 (F2): a name found in one returned memory is masked in every memory of the call', async () => {
+    // The stub finds the name only in the sentence that mentions the clinic.
+    h = createHarness({ find: (t) => (t.includes('clinic') && t.includes('Zyler Okonkwo') ? ['Zyler Okonkwo'] : []) });
+    const vault = h.openVault();
+    vault.remember({ content: 'Zyler Okonkwo called about the lease renewal.', type: 'semantic', scope: 'personal' });
+    vault.remember({ content: 'Met Zyler Okonkwo at the clinic on Tuesday.', type: 'semantic', scope: 'personal' });
+    vault.save();
+    vault.close();
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const r = await call('memory_list');
+    expect(r.isError).toBeFalsy();
+    expect(text(r)).not.toContain('Zyler');
+  });
+
+  it('A-M3 (F3): a Tier-2 type edit that lands while masking fails is reported and logged as saved', async () => {
+    h = createHarness({ ner: 'offline' });
+    const id = seedMemory();
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const r = await call('memory_edit', { id, type: 'procedural' });
+    expect(r.isError).toBeFalsy();
+    const ack = JSON.parse(text(r)) as Record<string, unknown>;
+    expect(ack).toMatchObject({ saved: true, masking_warning: expect.stringContaining('The change was saved') });
+    expect(text(r)).not.toMatch(/Zyler|zyler@/);
+    expect(logRows(h.home).at(-1)).toMatchObject({ tool: 'memory_edit', phase: 'done', ok: true, result_id: ack.id });
+    const vault = h.openVault();
+    expect(vault.list().find((e) => e.id === ack.id)?.type).toBe('procedural');
+    vault.close();
+  });
+
+  it('acceptance step 5: the write refusal keeps its own words when the name model is down', async () => {
+    h = createHarness({ ner: 'offline' });
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const create = await call('project_create', { project: 'demo', what_why: 'w', status: 's' });
+    expect(JSON.parse(text(create))).toEqual({ error: { code: 'invalid_request', message: contentWriteRefusal(2) } });
+    const remember = await call('memory_remember', { content: 'Person-3 moved', type: 'semantic' });
+    expect(text(remember)).toBe(contentWriteRefusal(2));
+  });
+
+  it('M2: the memory source field is masked like content at Tiers 1 to 3', async () => {
+    for (const tier of ['1', '2', '3'] as const) {
+      h = createHarness();
+      const vault = h.openVault();
+      vault.remember({ content: 'x', type: 'semantic', scope: 'personal', source: 'Zyler Okonkwo bob@example.com 2026-10-03' });
+      vault.save();
+      vault.close();
+      process.env.NORTHKEEP_REDACT_TIER = tier;
+      const out = text(await call('memory_list'));
+      expect(out, tier).not.toContain('bob@example.com');
+      if (tier !== '1') expect(out, tier).not.toContain('Zyler');
+      await h.close();
+    }
+    h = createHarness();
+  });
+});
+

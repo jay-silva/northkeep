@@ -270,6 +270,19 @@ interface RunOptions {
 const LOG_UNWRITABLE = 'NorthKeep could not write its call log, so nothing was done.';
 const LOG_INCOMPLETE_READ = 'NorthKeep could not complete its call log, so nothing was returned.';
 const LOG_INCOMPLETE_WRITE = 'The change was saved, but its log entry could not be completed.';
+const MASKING_FAILED_WRITE = 'The change was saved, but the reply could not be masked (NORTHKEEP_REDACT_TIER=2), so it is not shown.';
+
+/**
+ * A refusal NorthKeep writes itself, with no user text in it, so it is
+ * returned as is and never goes through return masking (whose failure would
+ * otherwise replace the reason).
+ */
+class MaskingRefusal extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'MaskingRefusal';
+  }
+}
 
 function tryAppend(entry: CallLogEntry): boolean {
   try {
@@ -323,6 +336,14 @@ async function run(
     const denied = error instanceof ScopeDeniedError ||
       (error instanceof ProjectHandoffError && error.code === 'scope_denied');
     const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof MaskingRefusal) {
+      // Project tools keep their structured error shape; either way nothing
+      // in it is user text, so it skips return masking.
+      done({ ok: false, error: tool.startsWith('project_') ? 'invalid_request' : 'masking_refusal' });
+      return tool.startsWith('project_')
+        ? { ...ok({ error: { code: 'invalid_request', message } }), isError: true }
+        : err(message);
+    }
     done({
       ok: false,
       denied,
@@ -352,6 +373,20 @@ async function run(
   if (options.mask !== 'none') {
     const masked = await maskReturnPayload(payload, options.mask, tier, returnPseudonyms);
     if (masked.failed) {
+      if (options.kind === 'write') {
+        // The write landed (code review F3): say so, show nothing, and log
+        // the true outcome, so an app does not retry a change that is saved.
+        const logged = done({
+          ok: true, result_id: outcome.result_id, result_ids: outcome.result_ids,
+          disclosed_scopes: outcome.disclosed_scopes, redaction_degraded: true,
+        });
+        return ok({
+          saved: true,
+          ...(outcome.result_id !== undefined ? { id: outcome.result_id } : {}),
+          masking_warning: MASKING_FAILED_WRITE,
+          ...(logged ? {} : { log_warning: LOG_INCOMPLETE_WRITE }),
+        });
+      }
       done({ ok: false, error: 'tier2-unavailable' });
       return err(TIER2_FAILED_MESSAGE);
     }
@@ -397,12 +432,12 @@ async function run(
  */
 function refuseProjectWriteUnderMasking(): void {
   const tier = returnRedactionTier();
-  if (tier >= 1) throw new ProjectHandoffError('invalid_request', contentWriteRefusal(tier));
+  if (tier >= 1) throw new MaskingRefusal(contentWriteRefusal(tier));
 }
 
 function refuseMemoryWriteUnderMasking(minTier: 1 | 2): void {
   const tier = returnRedactionTier();
-  if (tier >= minTier) throw new Error(contentWriteRefusal(tier));
+  if (tier >= minTier) throw new MaskingRefusal(contentWriteRefusal(tier));
 }
 
 function distinctScopes(scopes: string[]): string[] {

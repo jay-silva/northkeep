@@ -139,9 +139,13 @@ function containsOriginal(text: string, token: SessionToken): boolean {
   return spansFor(text, token).length > 0;
 }
 
-/** Rewrite every occurrence of each masked original in `text` to its token. */
-function rewrite(session: RedactionSession, text: string, replacements: Replacement[]): { wire: string; used: Set<string> } {
-  const tokens = replacements.map((r) => session.tokenFor(r));
+/**
+ * Rewrite every occurrence of every original the session has masked so far,
+ * in any text of the run (code review F2): a name found in one memory is
+ * masked in every memory, not only the ones masked after it was found.
+ */
+function rewrite(session: RedactionSession, text: string): { wire: string; used: Set<string> } {
+  const tokens = [...session.tokens.values()];
   const spans = tokens.flatMap((t) => spansFor(text, t));
   // Longest first, then leftmost: a full name wins over a stray first name.
   spans.sort((a, b) => (b.end - b.start) - (a.end - a.start) || a.start - b.start);
@@ -168,27 +172,60 @@ function rewrite(session: RedactionSession, text: string, replacements: Replacem
   return { wire: out, used: new Set(taken.map((span) => span.token.token)) };
 }
 
-/** Mask one memory's content at `tier` inside the session. */
+export interface SessionDetectResult {
+  tierApplied: Tier;
+  degraded: boolean;
+}
+
+/**
+ * Pass 1: find what to mask in one memory's content and record it in the
+ * session. Nothing is rendered; call renderInSession after every text of the
+ * run has been detected.
+ */
+export async function detectContentInSession(
+  session: RedactionSession,
+  text: string,
+  tier: Tier,
+  ollama?: OllamaClient | null,
+): Promise<SessionDetectResult> {
+  const r = await redact(text, { tier, pseudonyms: session.pseudonyms }, ollama);
+  for (const rep of r.replacements) session.tokenFor(rep);
+  return { tierApplied: r.tierApplied, degraded: r.tier2Degraded };
+}
+
+/**
+ * Pass 1 for a collection name: Tier 1 at every tier, plus every date to the
+ * year at Tier 3 (ADR 0060 1.1, F6 and F7). Name detection is not run on it
+ * (open item O2), but a name found elsewhere in the run is still masked here.
+ */
+export function detectScopeInSession(session: RedactionSession, scope: string, tier: Tier): void {
+  const t1 = applyTier1(scope);
+  for (const rep of t1.replacements) session.tokenFor(rep);
+  if (tier === 3) for (const rep of generalizeDates(t1.text, 'all').replacements) session.tokenFor(rep);
+}
+
+/** Pass 2: render any text of the run with every token the run has issued. */
+export function renderInSession(session: RedactionSession, text: string): { wire: string; issued: Set<string> } {
+  const { wire, used } = rewrite(session, text);
+  // The issued set is what the masking produced, never a scan of a prompt.
+  return { wire, issued: used };
+}
+
+/** Detect then render one text. Only for a single text: a run uses the two passes. */
 export async function maskContentInSession(
   session: RedactionSession,
   text: string,
   tier: Tier,
   ollama?: OllamaClient | null,
 ): Promise<SessionMaskResult> {
-  const r = await redact(text, { tier, pseudonyms: session.pseudonyms }, ollama);
-  const { wire, used } = rewrite(session, text, r.replacements);
-  // The issued set is what the masking produced, never a scan of a prompt.
-  return { wire, issued: used, tierApplied: r.tierApplied, degraded: r.tier2Degraded };
+  const d = await detectContentInSession(session, text, tier, ollama);
+  const { wire, issued } = renderInSession(session, text);
+  return { wire, issued, tierApplied: d.tierApplied, degraded: d.degraded };
 }
 
-/**
- * Mask a collection name: Tier 1 at every tier, plus every date to the year
- * at Tier 3 (ADR 0060 1.1, F6 and F7). Names are not run (open item O2).
- */
+/** Detect then render one collection name. Only for a single text: a run uses the two passes. */
 export function maskScopeInSession(session: RedactionSession, scope: string, tier: Tier): SessionMaskResult {
-  const t1 = applyTier1(scope);
-  const replacements = [...t1.replacements];
-  if (tier === 3) replacements.push(...generalizeDates(t1.text, 'all').replacements);
-  const { wire, used } = rewrite(session, scope, replacements);
-  return { wire, issued: used, tierApplied: tier, degraded: false };
+  detectScopeInSession(session, scope, tier);
+  const { wire, issued } = renderInSession(session, scope);
+  return { wire, issued, tierApplied: tier, degraded: false };
 }

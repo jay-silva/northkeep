@@ -13,8 +13,12 @@ export { NER_WINDOW_CHARS, NER_WINDOW_OVERLAP, nerWindows } from './tier2.js';
 export {
   RedactionSession,
   createRedactionSession,
+  detectContentInSession,
+  detectScopeInSession,
   maskContentInSession,
   maskScopeInSession,
+  renderInSession,
+  type SessionDetectResult,
   randomRunTag,
   type SessionMaskResult,
   type SessionToken,

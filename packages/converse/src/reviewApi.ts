@@ -16,8 +16,9 @@ import {
 } from '@northkeep/librarian';
 import {
   createRedactionSession,
-  maskContentInSession,
-  maskScopeInSession,
+  detectContentInSession,
+  detectScopeInSession,
+  renderInSession,
   type RedactionSession,
   type Tier,
 } from '@northkeep/redact';
@@ -144,16 +145,18 @@ export function createReviewApiGenerator(endpoint: EndpointConfig, options: Revi
       const unique = new Map(all.map((e) => [e.id, e]));
       const failed = new Set<string>();
       const degradedIds = new Set<string>();
-      const masked = new Map<string, { content: string; issued: Set<string> }>();
+      // Pass 1: detect in every memory and collection name before rendering
+      // any, so a name found in one memory is masked in all of them (code
+      // review F2).
       for (const entry of unique.values()) {
-        let r = await maskContentInSession(session, entry.content, tier, options.ollama);
+        let r = await detectContentInSession(session, entry.content, tier, options.ollama);
         // F3: judged per call; one retry, then the run-level rule.
-        if (r.degraded) r = await maskContentInSession(session, entry.content, tier, options.ollama);
+        if (r.degraded) r = await detectContentInSession(session, entry.content, tier, options.ollama);
         if (r.degraded) {
           if (tier === 2) failed.add(entry.id);
           else degradedIds.add(entry.id);
         }
-        masked.set(entry.id, { content: r.wire, issued: r.issued });
+        detectScopeInSession(session, entry.scope, tier);
       }
       if (failed.size > 0) {
         throw new ReviewApiRefusal(
@@ -164,14 +167,15 @@ export function createReviewApiGenerator(endpoint: EndpointConfig, options: Revi
       const handles: ReviewPackHandle[] = [];
       for (const pack of packs) {
         const tokens = new Set<string>();
+        // Pass 2: render with every token the run issued.
         const entries = pack.map((entry) => {
-          const content = masked.get(entry.id)!;
-          const scope = maskScopeInSession(session, entry.scope, tier);
+          const content = renderInSession(session, entry.content);
+          const scope = renderInSession(session, entry.scope);
           for (const t of content.issued) tokens.add(t);
           for (const t of scope.issued) tokens.add(t);
           return {
             ...entry,
-            content: content.content,
+            content: content.wire,
             scope: scope.wire,
             created_at: tier === 3 ? entry.created_at.slice(0, 4) : entry.created_at,
           };

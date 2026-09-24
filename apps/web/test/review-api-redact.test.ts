@@ -231,3 +231,46 @@ describe('ADR 0060 D2: the cloud review masks before it sends', () => {
     expect(loadReviewReport(path.join(directory, 'vault.nkv'))).not.toBeNull();
   });
 });
+
+describe('ADR 0060 code review F2 through the web route', () => {
+  it('A-W2: a name the model finds in only one memory is masked in every memory sent', async () => {
+    await session.withVault((vault) => {
+      for (const e of vault.list()) vault.forget(e.id);
+      vault.remember({ content: 'Zyler Okonkwo called about the lease renewal.', type: 'semantic', scope: 'visit:2026-10-03' });
+      vault.remember({ content: 'Met Zyler Okonkwo at the clinic on Tuesday.', type: 'semantic', scope: 'visit:2026-10-03' });
+      vault.save();
+    });
+    vi.unstubAllGlobals();
+    vi.stubGlobal('fetch', async (input: unknown, init?: { body?: unknown }) => {
+      const url = String(input);
+      const json = (value: unknown) => new Response(JSON.stringify(value), { status: 200, headers: { 'content-type': 'application/json' } });
+      if (url.endsWith('/api/tags')) return json({ models: [{ name: 'nomic-embed-text:latest' }, { name: 'llama3.2:3b' }] });
+      if (url.endsWith('/api/embed')) return json({ embeddings: [[1, 0, 0]] });
+      if (url.endsWith('/api/generate')) {
+        const prompt = (JSON.parse(String(init?.body)) as { prompt: string }).prompt;
+        const text = prompt.slice(prompt.lastIndexOf('\nText:\n') + 7);
+        const hit = text.includes('clinic') && text.includes('Zyler Okonkwo');
+        return json({ response: JSON.stringify({ entities: hit ? [{ text: 'Zyler Okonkwo', kind: 'person' }] : [] }) });
+      }
+      if (url.startsWith('https://review.invalid/')) {
+        providerBodies.push(String(init?.body ?? ''));
+        return json({ choices: [{ message: { content: '{"proposals":[]}' } }] });
+      }
+      throw new Error(`unexpected request in test: ${url}`);
+    });
+    const pre = await handleApi(session, 'POST', '/api/review/preflight', new URLSearchParams(), body({ endpoint_id: PROVIDER.id, scopes: ['visit:2026-10-03'], tier: 2 }));
+    const started = await handleApi(session, 'POST', '/api/review/run', new URLSearchParams(), body({
+      mode: 'api', endpoint_id: PROVIDER.id, scopes: ['visit:2026-10-03'], tier: 2,
+      selection_fingerprint: (pre.body as { selection_fingerprint: string }).selection_fingerprint,
+    }));
+    const jobId = (started.body as { job_id: string }).job_id;
+    for (let i = 0; i < 400; i += 1) {
+      const r = await handleApi(session, 'GET', `/api/review/job/${jobId}`, new URLSearchParams(), Buffer.alloc(0));
+      if ((r.body as { status: string }).status !== 'running') break;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(providerBodies.length).toBeGreaterThan(0);
+    expect(providerBodies.join('\n')).not.toContain('Zyler');
+  });
+});
+
