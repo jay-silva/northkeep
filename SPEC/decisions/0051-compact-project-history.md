@@ -193,17 +193,26 @@ for projects saved with `project_update`, which contradicts Decision 4's
 
 The rule is now: keep the newest five, plus any revision named by a receipt on
 a row that survives this pass. Receipts on rows beyond the newest five protect
-nothing. The bound is the newest five plus at most two more: the base the
-fifth one's receipt names, and one more when a `memory_edit` (including a
-hosted update arriving through the fold) has copied a receipt forward onto a
-new revision. Accepted by Jay on 2026-09-24 ("Fix before release").
+nothing. The bound is the newest five plus at most two more, the second one
+only when a `memory_edit` (including a hosted update arriving through the
+fold) has copied a receipt forward onto a new revision (bound confirmed over
+200 randomized fold-heavy runs in the recheck). Accepted by Jay on 2026-09-24 ("Fix before release").
 
 Retries after compaction (fix review `Reviews/release-0.22.0/compaction-fix-r1.md`):
 
 - A verbatim retry of a save among the newest ones replays. A verbatim retry
   whose own revision, or whose base, was blanked is refused as
   `stale_project` with the current document and a plain message ("This save
-  was already applied ..."), never applied twice. Before the second fix a
+  was already applied ..."), never applied twice. One route still answers
+  `operation_conflict` ("Operation receipt metadata exists without its
+  original result.", no current document): checkpoint X, then a
+  `memory_edit` or hosted fold that copies X's receipt forward, then
+  checkpoint Y on that revision, then enough saves to blank X's result. A
+  verbatim retry of X is refused, never applied twice, but with the wrong
+  code (recheck `Reviews/release-0.22.0/compaction-fix-r2-recheck.md`).
+  Fixed together with F1 in 0.22.1. The stale message also says "compacted"
+  when the base was removed by `memory_forget`; the refusal is still
+  correct. Before the second fix a
   retry whose base alone was blanked reported a false "content does not
   match" `operation_conflict` (F2).
 - **Accepted scar tissue (F1), Jay 2026-09-24 ("Accept for 0.22.0, fix

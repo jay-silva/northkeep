@@ -931,7 +931,9 @@ every milestone; if a limit is removed, say when and how.*
   receipts protected each other back through the whole history, and a
   project saved by checkpoint or wrap was never compacted. A checkpoint or
   wrap retried unchanged after its revision (or its base) was blanked is
-  refused as `stale_project`, not applied twice. But the vault forgets a
+  refused, not applied twice: as `stale_project`, or, when a memory edit
+  had copied its receipt forward, as `operation_conflict` with no current
+  document. But the vault forgets a
   blanked save's operation id: resending that same id against the new head
   is saved as a new save (duplicate Log line, older Status and Next Actions
   back on top). Use a new operation id after a stale refusal; a fix is
