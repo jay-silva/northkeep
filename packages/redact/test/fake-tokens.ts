@@ -74,7 +74,6 @@ export const FAKE_TOKENS: FakeToken[] = [
   { family: 'flyio', token: 'fo1' + '_' + fill(43) },
   { family: 'flyio', token: 'fm2' + '_' + fill(120, 'b64') },
   { family: 'telegram-bot', token: '123456789' + ':AA' + fill(20) + '_' + fill(13) },
-  { family: 'telegram-bot', token: '12345' + ':A' + fill(20) + '-' + fill(13) },
   { family: 'aws-access-key', token: 'AS' + 'IA' + fill(16, 'upper') },
   { family: 'stripe', token: 'sk' + '_prod_' + fill(24) },
   { family: 'stripe', token: 'rk' + '_live_' + fill(40) },
@@ -103,6 +102,44 @@ export const TELEGRAM_FORMS: string[] = [
   `https://api.telegram.org/bot${TELEGRAM_SECRET}/setWebhook?url=https://hooks.example.com/tg`,
   `TELEGRAM_BOT_TOKEN=${TELEGRAM_SECRET}`,
   `Bot token ${TELEGRAM_SECRET} set.`,
+];
+
+/** The `bot`-anchored arm takes gitleaks' wider shape: 5-16 digits, `:A`, 34+ chars. */
+export const TELEGRAM_WIDE_SECRET = '12345' + ':A' + fill(20) + '-' + fill(13);
+export const TELEGRAM_WIDE_FORM = `https://api.telegram.org/bot${TELEGRAM_WIDE_SECRET}/getMe`;
+
+/**
+ * ADR 0059 options B and C (Jay, 2026-09-23): placeholder values, near-length
+ * branch names, repeated-character bodies, and the recheck's over-match
+ * strings. None may produce an api_key span (so none hard-denies a tool call).
+ */
+export const RELEASED_BY_B_AND_C: string[] = [
+  'STRIPE_SECRET_KEY=sk_test_yourkeyhere',
+  'sk_test_placeholder and sk_live_changeme123',
+  'ANTHROPIC_API_KEY=sk-ant-api03-your-api-key-goes-here-xxxx',
+  'OPENAI_API_KEY=sk-proj-your_openai_project_key_here_123',
+  'git checkout -b sk-admin-dashboard-redesign-for-q4-launch',
+  'git checkout -b sk-proj-management-tool-refactor-phase-two',
+  'kubectl get pods -n sk-ant-dev01-cluster-monitoring-stack',
+  'GITHUB_TOKEN=gh' + 'p_' + 'x'.repeat(36),
+  'GITHUB_TOKEN=gh' + 'p_' + 'x'.repeat(30),
+  'GROQ_API_KEY=gsk' + '_' + 'x'.repeat(40),
+  'HF_TOKEN=hf' + '_' + 'x'.repeat(34),
+  'NPM_TOKEN=npm' + '_' + '0'.repeat(36),
+  'Replicate r8' + '_' + fill(34) + ' is one short.',
+  'Hugging Face hf' + '_' + fill(33) + ' is one short.',
+];
+
+/** Identifiers the recheck showed the widened Telegram and Fly shapes catching. */
+export const RECHECK_OVERMATCH: string[] = [
+  'HGETALL order:123456:AwaitingFulfillment-warehouse-east-coast-2',
+  '[worker 48213:AssertionError_in_module_payments_reconcile_v3]',
+  'main.js:104233:AbstractFactoryBeanRegistrationProcessor',
+  'trace=12345:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefgh1',
+  'user 1234567:A1b2c3d4-e5f6-7890-abcd-ef1234567890',
+  'rsync fm1' + '_recordings/2026-09-23/station_4/unit-12/' + 'archive_'.repeat(10) + 'ecg_12lead_full_disclosure.pdf',
+  'def fm2' + '_compute_weighted_moving_average_' + 'over_window_'.repeat(8) + 'v2():',
+  'fm1a' + '_' + 'config-key-'.repeat(12) + 'end: true',
 ];
 
 /** Prose and identifiers that share a prefix with a token family and must stay unmasked. */

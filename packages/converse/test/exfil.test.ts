@@ -171,8 +171,11 @@ describe('screenArguments — secret class', () => {
   });
 
   it('catches a percent-hidden API key in a body leaf', () => {
-    const key = 'sk-proj-AAAAAAAAAAAAAAAAAAAA';
-    const flags = screen({ argsPlain: JSON.stringify({ body: `sk%2Dproj%2DAAAAAAAAAAAAAAAAAAAA` }) });
+    // A real-entropy filler body: a single repeated character is a placeholder
+    // under ADR 0059 Decision 8, not a key, and would no longer flag.
+    const body = 'FakeTest0Key9'.repeat(4);
+    const key = 'sk-proj-' + body;
+    const flags = screen({ argsPlain: JSON.stringify({ body: `sk%2Dproj%2D${body}` }) });
     expect(flags).toContainEqual({ class: 'secret', kind: 'api_key', where: 'body', decoded: true });
     expect(JSON.stringify(flags)).not.toContain(key);
   });

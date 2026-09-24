@@ -1,7 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import { redact, restore } from '../src/index.js';
-import { applyTier1, luhnValid, TOKEN_PREFIX_PATTERNS } from '../src/tier1.js';
-import { FAKE_TOKENS, NEAR_MISSES, passesIssuerChecksum, TELEGRAM_FORMS, TELEGRAM_SECRET } from './fake-tokens.js';
+import { applyTier1, isRepeatedFillPlaceholder, luhnValid, TOKEN_PREFIX_PATTERNS } from '../src/tier1.js';
+import {
+  FAKE_TOKENS,
+  NEAR_MISSES,
+  passesIssuerChecksum,
+  RECHECK_OVERMATCH,
+  RELEASED_BY_B_AND_C,
+  TELEGRAM_FORMS,
+  TELEGRAM_SECRET,
+  TELEGRAM_WIDE_FORM,
+  TELEGRAM_WIDE_SECRET,
+} from './fake-tokens.js';
 import type { OllamaClient } from '@northkeep/librarian';
 
 describe('Tier-1 behavior', () => {
@@ -83,10 +93,50 @@ describe('Tier-1 issuer-prefixed tokens (ADR 0059)', () => {
     expect(applyTier1(`Rotate ${token}.`).text).toBe('Rotate [API_KEY_1].');
   });
 
-  it('masks 1Password and Fly bodies whole even when they contain base64url characters', () => {
-    const b64url = 'FakeTest-Key_9'.repeat(10);
-    for (const token of ['ops_' + 'eyJ' + b64url, 'fm2' + '_' + b64url]) {
-      expect(applyTier1(`x ${token} y`).text).toBe('x [API_KEY_1] y');
+  it('masks the bot-anchored Telegram shape with the wide id range, but not a bare one', () => {
+    expect(applyTier1(TELEGRAM_WIDE_FORM).text).toBe('https://api.telegram.org/bot[API_KEY_1]/getMe');
+    expect(applyTier1(`id ${TELEGRAM_WIDE_SECRET} end`).replacements.filter((r) => r.kind === 'api_key')).toEqual([]);
+  });
+
+  it('releases placeholders, near-length branch names and repeated-character bodies (options B and C)', () => {
+    for (const text of RELEASED_BY_B_AND_C) {
+      const keys = applyTier1(text).replacements.filter((r) => r.kind === 'api_key');
+      expect(keys.map((r) => r.original), text).toEqual([]);
+    }
+  });
+
+  it('still masks real-length fake keys at and just above the raised minimums', () => {
+    const f = (n: number) => 'FakeTest0Key9'.repeat(10).slice(0, n);
+    const atMinimum = [
+      'sk-ant-' + 'api03-' + f(40),
+      'sk-' + 'proj-' + f(40),
+      'sk-' + 'admin-' + f(20) + '_' + f(19),
+      'sk' + '_test_' + f(16),
+      'r8' + '_' + f(35),
+      'hf' + '_' + f(34),
+      'api_' + 'org_' + f(34),
+    ];
+    for (const token of atMinimum) expect(applyTier1(`x ${token} y`).text, token).toBe('x [API_KEY_1] y');
+  });
+
+  it('exempts only a genuinely repeated body: a real-entropy body with a short run is still masked', () => {
+    expect(isRepeatedFillPlaceholder('gh' + 'p_' + 'x'.repeat(36))).toBe(true);
+    const mixed = 'gh' + 'p_' + 'x'.repeat(19) + 'FakeTest0Key9FakeT';
+    expect(isRepeatedFillPlaceholder(mixed)).toBe(false);
+    expect(applyTier1(`t ${mixed} u`).text).toBe('t [API_KEY_1] u');
+    // The longest prefix (PyPI, 20 chars) still fits the exemption's allowance.
+    const longPrefixFill = 'pypi-' + 'AgE' + 'IcHlwaS5vcmc' + 'x'.repeat(50);
+    expect(applyTier1(`t ${longPrefixFill} u`).text).toBe(`t ${longPrefixFill} u`);
+    // Twenty-one non-run characters is past the allowance, so it stays masked.
+    const pastAllowance = 'gh' + 'p_' + 'FakeTest0Key9FakeT' + 'x'.repeat(30);
+    expect(isRepeatedFillPlaceholder(pastAllowance)).toBe(false);
+    expect(applyTier1(`t ${pastAllowance} u`).text).toBe('t [API_KEY_1] u');
+  });
+
+  it('does not hard-deny the identifiers the recheck caught with the widened Telegram and Fly shapes', () => {
+    for (const text of RECHECK_OVERMATCH) {
+      const keys = applyTier1(text).replacements.filter((r) => r.kind === 'api_key');
+      expect(keys.map((r) => r.original), text).toEqual([]);
     }
   });
 
