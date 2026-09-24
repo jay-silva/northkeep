@@ -346,8 +346,11 @@ reads, no 429). The order is now, for `POST` on those two paths:
    `mcpAuthRouter`, so a ChatGPT web origin can read our 400 and 429);
 2. **a new per-IP limiter**, built with the app's own `createRateLimiter`,
    50 requests per 15 minutes per client IP (the SDK's numbers), keyed on
-   Express's `req.ip` under the app's `trust proxy 1` setting, the same key
-   the SDK's `express-rate-limit` uses: the address the nearest proxy
+   Express's `req.ip` under the app's `trust proxy 1` setting, grouped the
+   way the SDK's `express-rate-limit` groups it (`ipKeyGenerator(ip, 56)`:
+   IPv4 as is, an embedded IPv4 as that IPv4, other IPv6 by its /56; code
+   review F1 found the build keyed on the full IPv6 address, so rotating
+   inside one's own /64 escaped the limit): the address the nearest proxy
    appended, never the first `X-Forwarded-For` entry, which the client
    chooses (recheck R2-F1: the fix round's first-hop key let a rotating
    first entry bypass the limit behind a proxy). It runs before anything
@@ -640,6 +643,10 @@ too; they pin a property that must not regress.
 | 24 | Lapsed path: an account row with `entitled_until` NULL still gets its rows deleted and tombstoned, but cannot create a new tombstone for a scope with no rows | `adr0061-lapsed-unshare.test.ts`, PGlite | Yes (402 on old code) |
 | 25 | The flag parser and gate: maintenance runs only for `on`, `true`, `1`, `yes` in any case with surrounding spaces; it does not run when the flag is absent, empty, `off`, `OFF`, `false`, `0`, `no` or a typo, whatever `VERCEL` and `VERCEL_ENV` say (including `VERCEL_ENV=production` with no flag, and neither `VERCEL` nor `VERCEL_ENV` set, the recheck's R2-F2 case); the purge needs its own flag as well, and is skipped with the purge flag off while the migration and cleanup still run; every skip logs its reason | `adr0061-maintenance.test.ts` | Yes (no maintenance on old code) |
 | 27 | Recheck R2-F1: behind one appending proxy, 60 wrong-secret `POST /token` requests whose first `X-Forwarded-For` entry rotates on every request while the appended entry stays constant: at most 50 admitted, then 429 | `adr0061-client-secret.test.ts` | No on `6d67dd2` (the SDK keys on `req.ip`). **Fails on the fix-round keying** (`clientIp`, first hop): 60 admitted, no 429. |
+| 29 | `ipRateLimitKey` partitions addresses exactly as the SDK's `express-rate-limit` `ipKeyGenerator(ip, 56)` does, over IPv4, IPv6, compressed, uppercase and IPv4-embedded forms | `adr0061-code-r1.test.ts` | n/a (new module; parity against the SDK's own function) |
+| 30 | Code review F1: 120 wrong-secret `POST /token` requests rotating inside one /64, and across /64s inside one /56: 50 admitted, 70 refused with 429; distinct /56s are distinct clients | `adr0061-code-r1.test.ts` | **Yes on the build's full-address keying** (120 admitted, verified by restoring the pre-fix `create-server.ts`). No on `6d67dd2` (the SDK limiter grouped by /56). |
+| 31 | Code review F2: `DELETE /client/scope/a%00b` answers 400 for a lapsed and a paying account with no storage call, over InMemory and PGlite; a NUL in a pushed scope, entry id or hash, a `shared_at` key, an ack id, or a `client_id` on `/token` or `/consent` is 400; the process keeps serving | `adr0061-code-r1.test.ts` | Yes (pre-fix: 200 or no response, and an unhandled rejection that printed the account hash) |
+| 32 | A storage error inside any async route becomes a 500 JSON `{"error":"Internal server error."}`, logged by message only (no account hash), and the process keeps serving | `adr0061-code-r1.test.ts` | Yes (pre-fix: no response, unhandled rejection) |
 | 28 | A registration whose `client_name` contains a NUL (`\u0000`) or a lone surrogate does not break the migration (it is migrated or skipped on its parsed value) or the text-based part B queries (they run and return numbers) | `adr0061-client-secret.test.ts`, PGlite | Yes (no migration on old code) |
 | 26 | Counts reach clients as numbers: with a driver stub that returns `int8` as strings (as Neon's HTTP driver does), the unshare answers `"deleted": 2`, a JSON number | `adr0061-lapsed-unshare.test.ts` | Yes (old code 402s a lapsed unshare) |
 
@@ -781,6 +788,15 @@ Every push needs Jay's explicit OK for that push.
   `/client`) keys on the first `X-Forwarded-For` hop (`clientIp`), which a
   client behind a self-hoster's proxy can choose. Pre-existing, recorded by
   the recheck (note 9), out of scope.
+- **R16.** A connector entry point (`src/index.ts`) also logs and survives
+  any unhandled rejection that escapes the route catch. It is not
+  unit-tested (the module listens on import); the route-level catch is.
+- **R17.** `/token` and `/revoke` with a non-UTF-8 `charset` now get a 415
+  from our body parser before the SDK runs (code review note 4). No known
+  MCP client sends one.
+- **R18.** A maintenance part that fails on every run makes every request
+  re-run the whole maintenance until the next deploy (code review note 3),
+  as designed ("not cached on failure").
 - **R15.** Rows only a direct database writer can make (a spaced or
   escaped `client_secret` key; a BOM prefix that a driver strips on read)
   may escape the migration prefilter or lose every compare-and-swap. The
@@ -1038,3 +1054,33 @@ it would not take the lapsed path anyway.
     `packages/mcp-server/test/project-export-run.test.ts` passed 37 of 37
     rerun alone), e2e 149 of 149. All with no database URL or pepper in the
     environment and `NORTHKEEP_HOME` in a temporary directory.
+- 2026-09-24, code review (`Reviews/adr-0061/code-r1.md`, against the
+  integrated build): **CLEARED WITH WOUNDS.** Credential handling held on
+  every path attacked (bypass, rollback and migration fail closed, also
+  against the real `6d67dd2` code on a shared database); maintenance deleted
+  exactly the intended rows over a nine-table diff; 22 of 24 source
+  mutations were caught.
+  - Flesh wound F1: the `/token` limiter keyed IPv6 on the full address, so
+    rotating inside one /64 escaped it (120 reads, no 429), a regression
+    from `6d67dd2`, where the SDK grouped by /56.
+  - Flesh wound F2: `DELETE /client/scope/a%00b` crashed the process (an
+    unhandled rejection from Postgres), printing the account hash, and the
+    ungated unshare put that in non-customers' hands.
+  - Notes: claim 4 covered three of five gated routes (two mutations
+    survived); the unshare failure copy was false when the server delete
+    succeeded and only the local save failed; KNOWN-LIMITS "an unknown
+    credential writes nothing" ignored R12; maintenance retries every
+    request on a permanent part failure; a non-UTF-8 charset gets 415.
+- 2026-09-24, code fix round (not re-reviewed):
+  - F1: `src/ip-key.ts` groups like `ipKeyGenerator(ip, 56)`; claim 29
+    proves the same partition against the SDK's own function, claim 30 the
+    /64 and /56 floods.
+  - F2: a NUL in any scope, id, hash, `shared_at` key or `client_id` is a
+    400 before storage; every async route is wrapped so a rejection becomes
+    a 500 logged by message only; the entry point logs and survives an
+    unhandled rejection (R16). Claims 31 and 32.
+  - Notes: claim 4 now covers all five gated routes; a new
+    `UNSHARE_LOCAL_SAVE_FAILED_MESSAGE` on CLI, desktop and phone when the
+    server delete succeeded but the local save failed (claim 20 tests);
+    KNOWN-LIMITS corrected for R12 and the /56 grouping; R17 and R18 record
+    the charset and retry notes.

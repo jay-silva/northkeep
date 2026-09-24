@@ -1172,14 +1172,22 @@ every milestone; if a limit is removed, say when and how.*
   pushing, pairing, pulling app-written memories, and the AI apps themselves
   (HTTP 402). So while lapsed, forgetting a single memory on your device does
   not reach the connector; unsharing its scope does. A request with a
-  credential the connector has never seen writes nothing. Until this
+  credential the connector has never seen writes nothing, unless it also
+  carries a valid subscriber attestation: attestations are not tied to one
+  account, so any valid one opens any credential, and that request is
+  treated as a paying one (it creates the account and records the unshare).
+  A scope name containing a NUL character is refused (400) on every route,
+  because the database cannot store it. Until this
   connector build is deployed, unshare after a lapsed subscription still
   returns 402.
 - **OAuth client secrets are stored as a hash only (ADR 0061).** An AI app that
   registers with a client secret gets it once; the connector keeps only its
   sha256 and a random placeholder, checks a presented secret in constant time,
   and limits `/token` and `/revoke` to 50 requests per 15 minutes per client
-  address. That address is the one the nearest proxy appends (`trust proxy 1`).
+  address, grouped the way the MCP SDK's own limiter groups it: an IPv4
+  address on its own, an IPv6 address by its /56 network (one IPv6 user
+  typically holds a whole /64 or more). That address is the one the nearest
+  proxy appends (`trust proxy 1`).
   A self-hosted connector must sit behind exactly one reverse proxy that
   appends the client address to `X-Forwarded-For`; exposed directly, or behind
   more than one hop, the limit keys on a value a client can choose. The older
