@@ -937,7 +937,8 @@ Commits on `fix022/privacy`: a57e789 (redact: windowed name detection,
 review sessions), 6b45908 (MCP return tiers, log before acting, D8
 text), c331ff9 (cloud review masking, error fence, vault trust),
 cf9a1fd (per-caller window tests), 503c4d5 (error codes exact under
-masking, acceptance client), then the documents commit. Where the build
+masking, acceptance client), 4660b62 (documents), 5f4df6a (review fixes:
+runtime fake key, plain call-log message, narrower KNOWN-LIMITS line). Where the build
 differs from the text above, and why:
 
 1. **How the session issues tokens (1.3).** The layers themselves are
@@ -988,6 +989,15 @@ else changed, 22 of 26 tests in `tier2-windows`, `redact-tier`,
 C13b, C16, C17, C25, C26, C29, C30, C35, C36, C37); the four that passed
 are the guards C13g and "a short text is one call", and the two sanitizer
 unit tests (note 8). Restoring the files made all of them pass again.
+Second sample, one decision each: with `packages/librarian/src`,
+`packages/converse/src`, `apps/web/src` and `apps/web/static` from
+`6d67dd2` and rebuilt, all 8 tests in `review-api-redact` failed (C1 saw
+the seeded email in the wire; C6, C6b, C7, C8, C24, C31 too). With only
+the catalog's `trust: 'trusted'` line removed, C14 failed. With
+`server.ts` from `6d67dd2`, C19's description test failed (its edge-case
+half is a guard that passes). With `log.ts`, `audit.ts` and
+`open-sessions.ts` from `6d67dd2`, C18b and C18c failed and C18 passed, as
+a guard should. Everything was restored and rebuilt afterwards.
 
 ## Acceptance (Jay, from the CLI)
 
