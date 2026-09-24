@@ -117,14 +117,14 @@ describe('review job snapshot and concurrency boundaries', () => {
     };
     fs.writeFileSync(path.join(directory, 'providers.json'), JSON.stringify({ endpoints: [provider] }), { mode: 0o600 });
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
-    const consent = await handleApi(session, 'POST', '/api/review/preflight', new URLSearchParams(), body({ endpoint_id: provider.id, scopes: ['personal'] }));
+    const consent = await handleApi(session, 'POST', '/api/review/preflight', new URLSearchParams(), body({ endpoint_id: provider.id, scopes: ['personal'], tier: 1 }));
     expect(consent.status).toBe(200);
     expect(consent.body).toMatchObject({ memory_count: 1, scopes: [{ scope: 'personal', count: 1 }] });
     expect((consent.body as { scopes: unknown[] }).scopes).toHaveLength(1);
     expect((await start(['personal', 'personal'])).status).toBe(400);
     for (const route of ['/api/review/preflight', '/api/review/run']) {
       const response = await handleApi(session, 'POST', route, new URLSearchParams(), body({
-        mode: 'api', endpoint_id: provider.id, scopes: ['personal', 'personal'], selection_fingerprint: 'unused',
+        mode: 'api', endpoint_id: provider.id, scopes: ['personal', 'personal'], selection_fingerprint: 'unused', tier: 1,
       }));
       expect(response.status).toBe(400);
     }
@@ -200,7 +200,7 @@ describe('review job snapshot and concurrency boundaries', () => {
       };
       fs.writeFileSync(providersPath, JSON.stringify({ endpoints: [provider] }), { mode: 0o600 });
       const preflight = await handleApi(session, 'POST', '/api/review/preflight', new URLSearchParams(), body({
-        endpoint_id: provider.id, scopes: ['personal'],
+        endpoint_id: provider.id, scopes: ['personal'], tier: 1,
       }));
       expect(preflight.status).toBe(200);
       if (mutation === 'content') {
@@ -213,7 +213,7 @@ describe('review job snapshot and concurrency boundaries', () => {
       }
       const fetchSpy = vi.spyOn(globalThis, 'fetch');
       const response = await handleApi(session, 'POST', '/api/review/run', new URLSearchParams(), body({
-        mode: 'api', endpoint_id: provider.id, scopes: ['personal'],
+        mode: 'api', endpoint_id: provider.id, scopes: ['personal'], tier: 1,
         selection_fingerprint: (preflight.body as { selection_fingerprint: string }).selection_fingerprint,
       }));
       expect(response.status).toBe(409);

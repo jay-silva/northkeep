@@ -9,6 +9,20 @@ export * from './types.js';
 export { applyTier1, luhnValid } from './tier1.js';
 export { generalizeDates } from './dates.js';
 export { findNameSpans, scrubNames } from './names.js';
+export { NER_WINDOW_CHARS, NER_WINDOW_OVERLAP, nerWindows } from './tier2.js';
+export {
+  RedactionSession,
+  createRedactionSession,
+  detectContentInSession,
+  detectScopeInSession,
+  maskContentInSession,
+  maskScopeInSession,
+  renderInSession,
+  type SessionDetectResult,
+  randomRunTag,
+  type SessionMaskResult,
+  type SessionToken,
+} from './session.js';
 
 /**
  * Redacts text before it goes to a cloud model. Tier-1 (deterministic

@@ -91,6 +91,7 @@ import {
   keychainAvailable,
   keychainDeleteMasterKey,
   keychainSetMasterKey,
+  appendCallLog,
   readCallLog,
   uninstallContract,
   type ConnectTarget,
@@ -104,6 +105,8 @@ import {
   createAnthropicProvider,
   createOpenAICompatibleProvider,
   createReviewApiGenerator,
+  ReviewApiRefusal,
+  type ReviewPrepareSummary,
   listReviewApiEndpoints,
   reviewSelectionFingerprint,
   detectHardware,
@@ -123,11 +126,13 @@ import {
   getServer as getMcpServer,
   removeServer as removeMcpServer,
   setSafeRead,
+  setServerTrusted,
   setToolsPin,
   addServer,
   allowedGuiRoots,
   connectServer,
   getMcpCatalogEntry,
+  isBundledVaultLaunch,
   isUnderAllowedRoot,
   listMcpCatalog,
   sanitizeServerText,
@@ -263,6 +268,8 @@ interface ReviewJob {
   batches_total: number;
   error?: string;
   progress?: string;
+  /** Finished, but something the user should know (for example an incomplete log row). */
+  warning?: string;
   vaultPath: string;
 }
 const reviewJobs = new Map<string, ReviewJob>();
@@ -712,10 +719,13 @@ async function dispatch(
 
   // Redaction is stateless and doesn't touch the vault — no unlock required.
   if (method === 'POST' && route === '/api/redact') {
-    const { text, tier } = parseJson<{ text?: string; tier?: number }>(body);
+    const { text, tier } = parseJson<{ text?: string; tier?: unknown }>(body);
     if (typeof text !== 'string' || text.length === 0) return bad(400, 'Text required.');
     if (text.length > 100_000) return bad(413, 'Text too large (100 KB max).');
-    const result = await redact(text, { tier: tier === 2 ? 2 : 1 });
+    // 1 when omitted; anything other than 1, 2 or 3 is refused, never read as 1.
+    const wanted = tier === undefined ? 1 : tier;
+    if (wanted !== 1 && wanted !== 2 && wanted !== 3) return bad(400, 'tier must be 1, 2 or 3.');
+    const result = await redact(text, { tier: wanted });
     return ok(result);
   }
 
@@ -1045,11 +1055,32 @@ async function dispatch(
         ? { url: s.url, connected: hasRemoteTokens(s.id) }
         : { command: s.command, args: s.args }),
       trust: s.trust,
+      // Offer "This is my NorthKeep vault" only for the exact bundled launch
+      // with no env and no cwd (ADR 0060 Decision 4, F8).
+      vault_trust_offer: s.trust !== 'trusted' && isBundledVaultLaunch(s),
       safe_read: s.safeRead,
       reviewed: s.toolsPin !== undefined,
       added_at: s.addedAt,
     }));
     return ok({ servers });
+  }
+
+  /*
+   * "This is my NorthKeep vault": stop masking what this server is asked to
+   * save (ADR 0060 Decision 4, Jay: one click). Only for the exact bundled
+   * launch with no env and no cwd. No passphrase: adding the vault from the
+   * catalog, one click with the same session, already yields this entry.
+   */
+  if (method === 'POST' && route === '/api/mcp/trust-vault') {
+    const { id } = parseJson<{ id?: unknown }>(body);
+    if (typeof id !== 'string') return bad(400, 'id is required.');
+    const server = getMcpServer(id);
+    if (server === undefined) return bad(404, `No such MCP server: ${id}`);
+    if (!isBundledVaultLaunch(server)) {
+      return bad(400, 'Only the NorthKeep vault server, launched exactly as NorthKeep installs it with no extra settings, can be marked as your vault.');
+    }
+    setServerTrusted(id);
+    return ok({ id, trust: 'trusted' });
   }
 
   // Connect and report what a server advertises RIGHT NOW, plus whether that
@@ -1094,6 +1125,7 @@ async function dispatch(
           command: entry.command!,
           args: entry.args!,
           safeRead: entry.safeRead,
+          trust: entry.trust,
         });
         return ok({ id: server.id, reviewed: false });
       } catch (err) {
@@ -1748,6 +1780,7 @@ async function dispatch(
       done: job.status !== 'running',
       error: job.error,
       progress: job.progress,
+      warning: job.warning,
     });
   }
 
@@ -2008,12 +2041,13 @@ function requireBoundedReviewEndpoint(endpointId: string):
 }
 
 async function reviewPreflight(session: UiSession, body: Buffer): Promise<ApiResponse> {
-  const { endpoint_id, scopes } = parseJson<{ endpoint_id?: string; scopes?: string[] }>(body);
+  const { endpoint_id, scopes, tier } = parseJson<{ endpoint_id?: string; scopes?: string[]; tier?: unknown }>(body);
   if (typeof endpoint_id !== 'string' || endpoint_id.length === 0) {
     return bad(400, 'endpoint_id is required.');
   }
   const checked = requireBoundedReviewEndpoint(endpoint_id);
   if (!checked.ok) return checked.response;
+  if (!isReviewTier(tier)) return bad(400, 'tier must be 1, 2 or 3.');
   const snapshot = await session.withVault((vault) => ({
     entries: vault.list(),
     shared: vault.sharedScopes(),
@@ -2033,9 +2067,14 @@ async function reviewPreflight(session: UiSession, body: Buffer): Promise<ApiRes
     },
     memory_count: selected.length,
     scopes: selection.scopes.filter((item) => scopes.includes(item.scope)),
-    selection_fingerprint: operationFingerprint({vault_id:snapshot.vault_id,scopes:[...scopes].sort(),entries:selected,endpoint:checked.endpoint}),
+    selection_fingerprint: operationFingerprint({vault_id:snapshot.vault_id,scopes:[...scopes].sort(),entries:selected,endpoint:checked.endpoint,tier}),
+    tier,
     project_docs_excluded: true,
   });
+}
+
+function isReviewTier(value: unknown): value is 1 | 2 | 3 {
+  return value === 1 || value === 2 || value === 3;
 }
 
 /** RAM-only nomic embed for packing. Never writes the vault or the cache table. */
@@ -2144,8 +2183,9 @@ async function startReviewRun(session: UiSession, body: Buffer): Promise<ApiResp
 
 async function startReviewApiRun(
   session: UiSession,
-  parsed: { endpoint_id?: string; selection_fingerprint?: string; scopes?: string[] },
+  parsed: { endpoint_id?: string; selection_fingerprint?: string; scopes?: string[]; tier?: unknown },
 ): Promise<ApiResponse> {
+  const tier = parsed.tier;
   if (typeof parsed.endpoint_id !== 'string' || parsed.endpoint_id.length === 0) {
     return bad(400, 'endpoint_id is required.');
   }
@@ -2155,6 +2195,7 @@ async function startReviewApiRun(
   if (!Array.isArray(parsed.scopes) || parsed.scopes.length === 0 || !parsed.scopes.every((s) => typeof s === 'string') || new Set(parsed.scopes).size !== parsed.scopes.length) return bad(400, 'scopes must be a non-empty array of unique collection names.');
   const checked = requireBoundedReviewEndpoint(parsed.endpoint_id);
   if (!checked.ok) return checked.response;
+  if (!isReviewTier(tier)) return bad(400, 'tier must be 1, 2 or 3.');
   const snapshot = await session.withVault((vault) => {
     const previous = loadReviewReport(session.vaultPath);
     if (previous?.schema === 'northkeep-review-report/2') reconcileReviewOperations(vault, previous, session.vaultPath);
@@ -2167,7 +2208,7 @@ async function startReviewApiRun(
   const available = new Set(baseSelection.selected.map((e) => e.scope));
   if (parsed.scopes.some((scope) => !available.has(scope))) return bad(400, 'A selected collection does not exist or cannot be reviewed.');
   const selected = baseSelection.selected.filter((e) => parsed.scopes!.includes(e.scope));
-  const boundFingerprint = operationFingerprint({vault_id:snapshot.vault_id,scopes:[...parsed.scopes].sort(),entries:selected,endpoint:checked.endpoint});
+  const boundFingerprint = operationFingerprint({vault_id:snapshot.vault_id,scopes:[...parsed.scopes].sort(),entries:selected,endpoint:checked.endpoint,tier});
   if (boundFingerprint !== parsed.selection_fingerprint) {
     return bad(409, 'Vault changed since you reviewed the consent panel. Open it again.');
   }
@@ -2183,14 +2224,40 @@ async function startReviewApiRun(
     status: 'running',
     batches_done: 0,
     batches_total: 0,
-    progress: `Sending memories to ${checked.host}…`,
+    progress: `Masking memories at Tier ${tier} before sending to ${checked.host}…`,
     vaultPath: session.vaultPath,
   };
   reviewJobs.set(job.id, job);
 
   void (async () => {
+    // Log before sending (ADR 0060 1.7): the pending row carries the ledger of
+    // what is about to leave, and is written after masking, before the first send.
+    const callId = randomUUID();
+    const audit = {
+      ts: started_at, tool: 'review_api', call_id: callId, endpoint_host: checked.host,
+      model: checked.endpoint.model, privacy: 'bounded' as const, params: { scope: undefined },
+    };
+    let summary: ReviewPrepareSummary | null = null;
+    let pendingWritten = false;
     try {
-      const generator = createReviewApiGenerator(checked.endpoint);
+      const generator = createReviewApiGenerator(checked.endpoint, {
+        tier,
+        beforeSend: (prepared) => {
+          summary = prepared;
+          try {
+            appendCallLog({
+              ...audit, phase: 'pending', ok: false, error: 'pending',
+              redaction_tier: prepared.tier, redaction_degraded: prepared.degraded,
+              result_count: prepared.total, result_ids: prepared.ids, disclosed_scopes: prepared.scopes,
+            });
+          } catch {
+            // Plain words for the job status, not the errno and the path.
+            throw new Error('NorthKeep could not write its call log, so nothing was sent.');
+          }
+          pendingWritten = true;
+        },
+        onDegraded: (message) => { job.progress = message; },
+      });
       const embed = await ramReviewEmbed(createOllamaClient());
       const result = await runReviewPass(selected, generator, {
         model: checked.endpoint.model,
@@ -2204,6 +2271,7 @@ async function startReviewApiRun(
           job.progress = msg;
         },
       });
+      const sent = summary as ReviewPrepareSummary | null;
       await session.withVault((vault) => {
         if (reviewJobs.get(job.id) !== job || job.vaultPath !== session.vaultPath) throw new Error('Review job no longer owns this vault.');
         const current = selectReviewEntries(vault.list()).filter((entry) => parsed.scopes!.includes(entry.scope));
@@ -2219,17 +2287,41 @@ async function startReviewApiRun(
         drops: result.drops,
         proposals: result.proposals,
         previous,
-        sent_to: { label: checked.endpoint.label, host: checked.host, endpoint_id: checked.endpoint.id, model: checked.endpoint.model },
+        sent_to: {
+          label: checked.endpoint.label, host: checked.host, endpoint_id: checked.endpoint.id, model: checked.endpoint.model,
+          tier, degraded: sent?.degraded ?? false,
+        },
         vault_id:snapshot.vault_id,vault_path:session.vaultPath,selected_scopes:parsed.scopes,source_entries:selected,coverage:result.coverage,
       });
         saveReviewReport(report,session.vaultPath);
       });
+      if (sent?.degraded) job.progress = `Tier 3, deterministic only (name model offline for ${sent.degradedCount} of ${sent.total} memories)`;
+      try {
+        if (pendingWritten) {
+          appendCallLog({
+            ...audit, phase: 'done', ok: true, completed_at: new Date().toISOString(),
+            redaction_tier: tier, redaction_degraded: sent?.degraded ?? false,
+            result_count: sent?.total, result_ids: sent?.ids, disclosed_scopes: sent?.scopes,
+          });
+        }
+      } catch {
+        job.warning = 'The review finished, but its log entry could not be completed.';
+      }
       job.batches_done = result.batches;
       job.batches_total = result.batches;
       job.status = 'done';
     } catch (err: unknown) {
       job.status = 'failed';
       job.error = err instanceof Error ? err.message : String(err);
+      try {
+        appendCallLog({
+          ...audit, phase: 'done', ok: false, completed_at: new Date().toISOString(),
+          redaction_tier: tier,
+          error: err instanceof ReviewApiRefusal ? err.code : pendingWritten ? 'review_failed' : 'not_sent',
+        });
+      } catch {
+        // The failure itself is already reported to the user through the job.
+      }
     } finally {
       activeReviewVaults.delete(vaultKey);
     }

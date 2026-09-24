@@ -118,10 +118,9 @@ export function createLocalNerClient(model: LocalModel, hooks?: LocalNerHooks): 
         }
       }
       // Per-kind decomposition: K sequential focused passes, merged into the
-      // one {"entities":[...]} string applyTier2 expects. A parse-failed pass
-      // is recorded and the others continue; a TIMED-OUT pass abandons the
-      // remaining passes (NerPassTimeoutError, see withTimeout above); only
-      // zero successful passes throws (-> degraded).
+      // one {"entities":[...]} string applyTier2 expects. Any failed, timed-out
+      // or skipped pass throws (-> degraded, fail closed; ADR 0060 O3); a
+      // TIMED-OUT pass also abandons the remaining passes.
       return runPerKindNer(
         text,
         (passPrompt, timeoutMs) =>

@@ -161,7 +161,8 @@ export function firstNonEmptyLine(text: string): string {
 /**
  * Structured merge: replace What & Why / Current Status / Next Actions;
  * append a dated decision; prepend a dated log entry (newest first).
- * Throws if the serialized result exceeds PROJECT_DOC_MAX_CHARS.
+ * Does not enforce size: the caller rolls the Log with rollProjectLog and
+ * then calls assertProjectDocSize (ADR 0045).
  */
 export function mergeProjectDoc(
   doc: ProjectDoc,

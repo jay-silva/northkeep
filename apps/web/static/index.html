@@ -1144,6 +1144,12 @@
     <p id="reviewApiEmpty" hidden>No cloud model is configured. Add one under Settings, then come back.</p>
     <div id="reviewApiForm">
       <select id="reviewApiEndpoint" style="width:100%;margin-bottom:12px"></select>
+      <label for="reviewApiTier" style="display:block;margin-bottom:4px">Mask before sending</label>
+      <select id="reviewApiTier" style="width:100%;margin-bottom:12px;min-height:44px">
+        <option value="1">Tier 1: mask identifiers (known-prefix keys, cards, SSNs, emails, phones)</option>
+        <option value="2">Tier 2: also replace names (needs the local model)</option>
+        <option value="3">Tier 3: also replace names and reduce every date to the year</option>
+      </select>
       <div id="reviewApiDetails"></div>
     </div>
     <div class="err" id="reviewApiErr"></div>
@@ -1520,6 +1526,41 @@
         + '. Everything else asks every time and can never be remembered.'));
       const detail = el('div');
       card.appendChild(detail);
+
+      // ADR 0060 Decision 4: offered only for the exact NorthKeep vault server
+      // with no extra settings; the server decides that. One click and a confirm.
+      if (s.vault_trust_offer) {
+        const trustBtn = el('button', 'btn', 'This is my NorthKeep vault: save exactly what I say');
+        trustBtn.style.cssText = 'min-height:44px;margin-top:8px';
+        card.insertBefore(trustBtn, detail);
+        trustBtn.addEventListener('click', () => {
+          detail.textContent = '';
+          const form = el('div', 'card');
+          form.appendChild(el('p', '',
+            'Right now, what you ask this server to remember is saved with emails, phone numbers and similar details masked. '
+            + 'Confirm only if this is your own NorthKeep vault on this Mac. This program will be trusted:'));
+          form.appendChild(el('p', 'muted', s.command + ' ' + (s.args || []).join(' ')));
+          const go = el('button', 'btn primary', 'Yes, this is my vault');
+          go.style.cssText = 'min-height:44px';
+          const msg = el('p', 'muted');
+          form.appendChild(go);
+          form.appendChild(msg);
+          detail.appendChild(form);
+          go.focus();
+          go.addEventListener('click', async () => {
+            go.disabled = true;
+            msg.textContent = '';
+            try {
+              await api('/api/mcp/trust-vault', { method: 'POST', json: { id: s.id } });
+              loadMcp();
+            } catch (e) {
+              msg.className = 'danger';
+              msg.textContent = e.message || 'Could not change this server.';
+              go.disabled = false;
+            }
+          });
+        });
+      }
 
       if (connectBtn) {
         connectBtn.addEventListener('click', () => {
@@ -3087,7 +3128,7 @@
       ? '<p class="muted">No AI app has called your vault yet.</p>'
       : calls.map((c) => `
         <div class="logline">
-          <span style="color:${c.ok ? 'var(--ok)' : c.outcome === 'unknown' ? 'var(--muted)' : 'var(--danger)'}">${c.ok ? '✓' : (c.denied ? '⛔' : (c.outcome === 'unknown' ? '?' : '✗'))}</span>
+          <span style="color:${c.ok ? 'var(--ok)' : (c.outcome_label || c.outcome === 'unknown') ? 'var(--muted)' : 'var(--danger)'}">${c.ok ? '✓' : c.outcome_label ? '…' : c.outcome === 'unknown' ? '?' : (c.denied ? '⛔' : '✗')}</span>
           <strong style="color:var(--ink)">${esc(c.tool)}</strong>
           <span class="muted">${esc(c.ts.replace('T', ' ').slice(0, 19))}</span>
           ${c.provider ? `<span class="tag">${esc(c.provider)}</span>` : ''}
@@ -3096,8 +3137,7 @@
           <span class="muted">${esc(Object.entries(c.params || {}).filter(([, v]) => v !== undefined)
             .map(([k, v]) => k + '=' + v).join(' '))}</span>
           ${c.denied ? '<span style="color:var(--danger)">DENIED</span>' : ''}
-          ${c.error && !c.denied ? `<span class="muted">${esc(c.error)}</span>` : ''}
-          ${c.outcome === 'unknown' ? '<span class="muted">outcome unknown: cancelled while running, it may still have completed</span>' : ''}
+          ${c.outcome_label ? `<span class="muted">${esc(c.outcome_label)}</span>` : c.outcome === 'unknown' ? '<span class="muted">outcome unknown: cancelled while running, it may still have completed</span>' : c.error && !c.denied ? `<span class="muted">${esc(c.error)}</span>` : ''}
           ${c.disclosed_scopes && c.disclosed_scopes.length ? `<span class="muted">scopes: ${esc(c.disclosed_scopes.join(' '))}</span>` : ''}
           ${c.result_ids && c.result_ids.length ? `<div class="prov">disclosed: ${c.result_ids.map((i) => `<span class="tag">${esc(i.slice(0, 8))}</span>`).join(' ')}</div>` : ''}
         </div>`).join('');
@@ -3325,6 +3365,7 @@
   $('reviewApiBtn').addEventListener('click', () => { openReviewApiConsent(); });
   $('reviewApiCancel').addEventListener('click', closeReviewApiConsent);
   $('reviewApiEndpoint').addEventListener('change', () => { loadReviewApiPreflight(); });
+  $('reviewApiTier').addEventListener('change', () => { loadReviewApiPreflight(); });
   $('reviewApiConfirm').addEventListener('click', async () => {
     if (!reviewApiPreflight) return;
     $('reviewApiErr').textContent = '';
@@ -3339,11 +3380,12 @@
           mode: 'api',
           endpoint_id: reviewApiPreflight.endpoint.id,
           selection_fingerprint: reviewApiPreflight.selection_fingerprint,
+          tier: reviewApiPreflight.tier,
         },
       });
       closeReviewApiConsent();
       $('reviewPassErr').textContent = '';
-      $('reviewPassStatus').textContent = 'Sending memories to ' + host + '…';
+      $('reviewPassStatus').textContent = 'Masking memories at Tier ' + reviewApiPreflight.tier + ', then sending to ' + host + '…';
       setReviewButtonsDisabled(true);
       pollReviewJob(started.job_id);
     } catch (ex) {
@@ -3387,6 +3429,10 @@
       return;
     }
     $('reviewApiForm').hidden = false;
+    // Same tier selection chat uses (ADR 0060 1.5): Off maps to Tier 1, because
+    // a cloud endpoint always gets at least Tier 1.
+    const chatTier = Number($('convTierSel').value);
+    $('reviewApiTier').value = String(chatTier >= 1 && chatTier <= 3 ? chatTier : 1);
     for (const ep of endpoints) {
       const opt = document.createElement('option');
       opt.value = ep.id;
@@ -3406,7 +3452,7 @@
     if (!endpointId) return;
     let data;
     try {
-      data = await api('/api/review/preflight', { method: 'POST', json: { endpoint_id: endpointId, scopes: reviewSelectedScopes } });
+      data = await api('/api/review/preflight', { method: 'POST', json: { endpoint_id: endpointId, scopes: reviewSelectedScopes, tier: Number($('reviewApiTier').value) } });
       if (requestId !== reviewRequestSequence || !status.unlocked || $('reviewApiOverlay').hidden) return;
     } catch (ex) {
       if (requestId !== reviewRequestSequence) return;
@@ -3415,7 +3461,7 @@
     }
     reviewApiPreflight = data;
     renderReviewApiDetails(data);
-    $('reviewApiConfirm').textContent = 'Send ' + data.memory_count + ' memories to ' + data.endpoint.host;
+    $('reviewApiConfirm').textContent = 'Mask and send ' + data.memory_count + ' memories to ' + data.endpoint.host;
     $('reviewApiConfirm').hidden = false;
   }
 
@@ -3431,7 +3477,7 @@
     dest.appendChild(document.createTextNode(data.endpoint.model));
     box.appendChild(dest);
     const intro = el('p');
-    intro.textContent = 'This run will send ' + data.memory_count + ' memories in these scopes:';
+    intro.textContent = 'This run will send ' + data.memory_count + ' memories, masked at Tier ' + data.tier + ', in these scopes:';
     box.appendChild(intro);
     const list = document.createElement('ul');
     list.style.margin = '0 0 12px';
@@ -3450,6 +3496,15 @@
     box.appendChild(el('p', 'muted',
       'Shared scopes are already visible to apps you connected. This send is a new egress to ' +
       data.endpoint.host + ', on top of Cloud Connect.'));
+    const tierLine = {
+      1: 'Tier 1 masks keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers. A key with no recognizable prefix, or a password, is not caught.',
+      2: 'Tier 2 masks those secrets and replaces names, using the local model.',
+      3: 'Tier 3 masks those secrets, replaces names, and reduces every date to the year.',
+    }[data.tier] || '';
+    box.appendChild(el('p', 'muted',
+      'Before sending, NorthKeep masks what it can find in each memory at Tier ' + data.tier + ': ' + tierLine
+      + ' Secrets in collection names are masked too; names in collection names are not. Memory types and ids are sent as written.'
+      + (data.tier === 3 ? ' At Tier 3 the recording date is reduced to the year.' : '')));
     box.appendChild(el('p', 'muted', 'Project documents are not included.'));
     box.appendChild(el('p', 'muted', 'The model cannot write to your vault. You still approve every change.'));
     box.appendChild(el('p', 'muted', 'This choice is not remembered. You will see this panel every time.'));
@@ -3476,7 +3531,9 @@
             $('reviewPassStatus').textContent = '';
             return;
           }
-          $('reviewPassStatus').textContent = 'Review pass finished. Nothing was written to the vault.';
+          $('reviewPassStatus').textContent = 'Review pass finished. Nothing was written to the vault.'
+            + (p.progress && /^Tier 3, deterministic only/.test(p.progress) ? ' ' + p.progress + '.' : '')
+            + (p.warning ? ' ' + p.warning : '');
           await loadReviewPanel();
         }
       } catch (ex) {

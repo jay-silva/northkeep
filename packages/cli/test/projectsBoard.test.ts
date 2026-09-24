@@ -159,6 +159,30 @@ describe('northkeep projects board', () => {
     expect(r.stdout).not.toContain('someone@example.com');
   });
 
+  it('ADR 0060 C9 (CLI): Tier 3 masks names, secrets and every date; a failed Tier 2 prints nothing', () => {
+    write((v) => v.updateProject({ project: 'masked', expected_revision: null, what_why: 'Why.', status: 'Mail someone@example.com', next_actions: '- 2026-10-01 visit on 10/03/2026 at 508-555-0142', writer: WRITER }));
+    // Port 9 refuses: the name model is offline, so this is the degraded case on purpose.
+    const offline = { NORTHKEEP_OLLAMA_URL: 'http://127.0.0.1:9' };
+    const t3 = cli(['projects', 'board', '--stale-days', '0', '--json'], { NORTHKEEP_REDACT_TIER: '3', ...offline });
+    expect(t3.status, t3.stderr).toBe(0);
+    const b = JSON.parse(t3.stdout) as { dated: { rows: Array<{ date: string; line: string }> } };
+    expect(b.dated.rows[0]!.date).toBe('2026');
+    expect(t3.stdout).not.toMatch(/2026-10-01|10\/03\/2026|508-555-0142|someone@example\.com/);
+    expect(t3.stderr).toContain('Tier 3 ran without the name model');
+    const t2 = cli(['projects', 'board', '--stale-days', '0', '--json'], { NORTHKEEP_REDACT_TIER: '2', ...offline });
+    expect(t2.status).not.toBe(0);
+    expect(t2.stdout).toBe('');
+    expect(t2.stderr).toContain('Name masking failed (NORTHKEEP_REDACT_TIER=2)');
+  });
+
+  it('ADR 0060 C12 (CLI): a mistyped NORTHKEEP_REDACT_TIER is refused, never read as 0', () => {
+    write((v) => v.updateProject({ project: 'masked', expected_revision: null, what_why: 'Why.', status: 'Mail someone@example.com', writer: WRITER }));
+    const r = cli(['projects', 'board', '--json'], { NORTHKEEP_REDACT_TIER: 'yes' });
+    expect(r.status).not.toBe(0);
+    expect(r.stdout).toBe('');
+    expect(r.stderr).toContain('NORTHKEEP_REDACT_TIER=yes is not 0, 1, 2 or 3');
+  });
+
   it('refuses a stale window that is not a whole number from 0 to 3650', () => {
     for (const bad of ['-1', '3651', '1.5', 'x']) {
       const r = cli(['projects', 'board', '--stale-days', bad]);

@@ -56,6 +56,7 @@ export {
 } from './tools/exfil.js';
 export {
   getMcpCatalogEntry,
+  isBundledVaultLaunch,
   listMcpCatalog,
   type McpCatalogEntry,
   type ResolvedMcpCatalogEntry,
@@ -90,6 +91,7 @@ export {
   removeServer,
   riskOf,
   setSafeRead,
+  setServerTrusted,
   setToolsPin,
   type McpConfig,
   type McpHttpServer,
@@ -253,7 +255,10 @@ export {
   type EndpointConfig,
 } from './settings.js';
 export {
+  ReviewApiRefusal,
   createReviewApiGenerator,
   listReviewApiEndpoints,
   reviewSelectionFingerprint,
+  type ReviewApiOptions,
+  type ReviewPrepareSummary,
 } from './reviewApi.js';

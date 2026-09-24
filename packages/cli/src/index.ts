@@ -370,15 +370,19 @@ program
   .command('redact')
   .description('Mask secrets (and optionally pseudonymize names) in text before you paste it into any AI')
   .argument('[text]', 'text to redact; omit to read stdin')
-  .option('--tier <n>', '1 = known-prefix keys, cards, SSNs, emails, phones and similar identifiers; 2 = also pseudonymize names/orgs (needs Ollama)', '1')
+  .option('--tier <n>', '1 = known-prefix keys, cards, SSNs, emails, phones and similar identifiers; 2 = also pseudonymize names/orgs (needs Ollama); 3 = also every date to the year and listed names', '1')
   .option('--map <file>', 'write the restore map here (needed by "northkeep restore")')
   .action(async (text: string | undefined, options: { tier: string; map?: string }) => {
     const input = text ?? (await readStdin());
     if (!input.trim()) fail('Nothing to redact. Pass text or pipe it in.');
-    const tier = options.tier === '2' ? 2 : 1;
+    // A tier that is not 1 to 3 is refused, never read as 1 (invariant 6).
+    if (!['1', '2', '3'].includes(options.tier)) fail(`--tier ${options.tier} is not 1, 2 or 3.`);
+    const tier = Number(options.tier) as 1 | 2 | 3;
     const result = await redact(input, { tier });
-    if (result.tier2Degraded) {
-      console.error('⚠  Tier 2 unavailable (no Ollama): names were NOT pseudonymized, only Tier 1 identifiers masked.');
+    if (result.tier2Degraded && tier === 3) {
+      console.error('Warning: the local name model is unavailable. Tier 3 ran its built-in date and name lists only; names outside those lists were NOT masked.');
+    } else if (result.tier2Degraded) {
+      console.error('Warning: Tier 2 unavailable (no Ollama). Names were NOT pseudonymized, only Tier 1 identifiers masked.');
       console.error('   Start Ollama for name pseudonymization: brew services start ollama');
     }
     process.stdout.write(result.redacted + (result.redacted.endsWith('\n') ? '' : '\n'));
@@ -422,7 +426,7 @@ program
       return;
     }
     for (const entry of entries) {
-      const status = entry.ok ? '✓' : entry.outcome === 'unknown' ? '?' : '✗';
+      const status = entry.ok ? '✓' : entry.outcome === 'unknown' ? '?' : entry.outcome_label ? '…' : '✗';
       const params = Object.entries(entry.params)
         .filter(([, v]) => v !== undefined)
         .map(([k, v]) => `${k}=${String(v)}`)
@@ -431,10 +435,12 @@ program
         ? entry.result_count !== undefined
           ? `${entry.result_count} result${entry.result_count === 1 ? '' : 's'}`
           : (entry.result_id?.slice(0, 8) ?? 'ok')
-        : entry.denied
-          ? 'denied'
-          : entry.outcome === 'unknown'
-            ? 'outcome unknown (cancelled while running; it may still have completed)'
+        : entry.outcome_label
+          ? entry.outcome_label
+          : entry.denied
+            ? 'denied'
+            : entry.outcome === 'unknown'
+              ? 'outcome unknown (cancelled while running; it may still have completed)'
             : `error: ${entry.error}`;
       console.log(`${status} ${entry.ts}  ${entry.tool}  ${params}  → ${outcome}`);
       if (entry.result_ids && entry.result_ids.length > 0) {
@@ -583,7 +589,7 @@ program
   .alias('chat')
   .description('Converse with a model through NorthKeep: memory injected, Tier 1 identifiers masked, every turn audited')
   .option('--endpoint <id>', 'endpoint id (default: the configured default)')
-  .option('--tier <n>', 'redaction tier: 0 (private endpoints only) | 1 | 2', '1')
+  .option('--tier <n>', 'redaction tier: 0 (private endpoints only) | 1 | 2 | 3', '1')
   .option('--scope <scope>', 'scope for memories distilled from this conversation', 'personal')
   .option('--auto', 'let the concierge route each message by task (M7b)')
   .option('--tools', 'enable agent tools for this conversation (registry-enabled tools only; every call asks first)')

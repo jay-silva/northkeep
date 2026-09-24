@@ -342,6 +342,16 @@ Named here so a later reader knows these were seen and left, not missed.
   unlogged disclosure, but a write can land unlogged. The citations have
   moved: `appendCallLog` is packages/mcp-server/src/log.ts:90-94 and the
   two calls are server.ts:271 and 284.
+
+  **Correction 2026-09-24 (ADR 0060 Decision 5, Jay: "Log before
+  writing"):** the gap above is closed. `run` now appends a pending row
+  (`ok: false`, `phase: "pending"`, a `call_id`) before any vault access,
+  and refuses the call if it cannot; the outcome row follows with the same
+  `call_id` and the start-time `ts`. Pending rows are `ok: false`, so this
+  derivation and every older one ignore them. A session is also closed
+  when a project revision recorded at or after its last read names it as
+  the writer, which covers a crash between a landed write and its outcome
+  row.
 - **Decision 5's enforcement is the avoided question.** The call log
   shows 0 `project_wrap` and 0 `project_checkpoint` calls in 2.5 months.
   Nothing here makes a host call either one. The contract install is

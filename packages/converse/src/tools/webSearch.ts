@@ -134,7 +134,7 @@ export function braveBodyToText(
 }
 
 /** One-line, actionable model guidance per error code — never chatty. */
-const GUIDANCE: Record<string, string> = {
+export const WEB_SEARCH_GUIDANCE: Readonly<Record<string, string>> = {
   invalid_arguments: 'Provide a query string: {"query": "your search terms"}.',
   rate_limited:
     'The search API is rate limiting (HTTP 429). Wait a moment before searching again, or answer from what you already know.',
@@ -151,11 +151,14 @@ const GUIDANCE: Record<string, string> = {
   'http-status': 'The search API refused the request. Try a different query or continue without search.',
 };
 
+/** Our fixed fallback; part of the closed set the error fence trusts (ADR 0060 D3). */
+export const WEB_SEARCH_FALLBACK_GUIDANCE = 'The search failed. Try a different query or continue without search.';
+
 function errorResult(code: string, detail: string, host?: string): ToolResult {
   const content = JSON.stringify({
     error: code,
     detail,
-    guidance: GUIDANCE[code] ?? 'The search failed. Try a different query or continue without search.',
+    guidance: WEB_SEARCH_GUIDANCE[code] ?? WEB_SEARCH_FALLBACK_GUIDANCE,
   });
   return {
     content,

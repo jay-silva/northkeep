@@ -41,13 +41,21 @@ every milestone; if a limit is removed, say when and how.*
   timestamp is skipped, and so is a line that is not valid JSON, with no
   note. A call log file that exists but cannot be read degrades the list: resume
   omits it and says so in a note rather than guessing.
-- **A call log NorthKeep cannot write to stops project work.** Every call is
-  logged once, after it runs, and a call whose log row cannot be written
-  (the log path replaced by a directory, or a file that cannot be appended
-  to) returns an error instead of its result. That is deliberate: nothing is
-  disclosed without a record of it. A write is the exception: it is already
-  saved when the logging fails, so read the project before retrying. Move or
-  repair the file and the tools work again.
+- **A call log NorthKeep cannot write to stops every tool call** (ADR 0060).
+  A row is written before a tool runs; if it cannot be written (the log path
+  replaced by a directory, a full disk, a file that cannot be appended to),
+  the call is refused and nothing is read or saved. A second row with the
+  same call id records the outcome. If only that second row fails, a read
+  returns an error and discloses nothing, and a write that already saved
+  returns "saved" with a warning and no content, so an app does not retry a
+  write that landed. A crash between the two rows leaves the first one alone,
+  shown as "outcome unknown (interrupted)". In a project's resume brief, a
+  session whose write is recorded in the project's own history is not
+  listed as open even without the second row; the project board still
+  counts from the log alone, so it can list that session as open, and for
+  a memory there is no such record. Move or
+  repair the file and the tools work again. Older builds, after a downgrade,
+  show each first row as an extra failed call.
 - **The resume brief has no byte guarantee, only a shape guarantee.** The
   project cap is 16,384 characters and a brief is bytes of JSON, so a
   document of quote characters roughly doubles under escaping and a CJK
@@ -533,9 +541,14 @@ every milestone; if a limit is removed, say when and how.*
   a hostile server to write sentences that read as NorthKeep speaking, and an
   error path is precisely where such a server would choose to speak. This
   covers a server that fails to start or connect. When a single tool call
-  fails, the server's error text is passed to the model without that
-  stripping and outside the untrusted-content fence, capped only by the
-  result-size limit.
+  fails (ADR 0060), the server's or website's error text reaches the model
+  inside the same per-task fence as a result, after control, invisible and
+  bidirectional characters and fence lookalikes are removed and the text is
+  capped at 2,000 characters. Only NorthKeep's own error codes and guidance
+  sentences stay outside the fence or reach the on-screen error line. The
+  fence reduces this risk; it does not remove it. Some lookalikes still pass
+  the cleaning (a CJK bracket, look-alike letters, underscores in place of
+  spaces), but the random fence id stays intact.
 - **Non-text tool results are omitted, not rendered.** Images, audio and embedded
   resources from a server show as a placeholder such as
   `[image content omitted]` or `[resource content omitted]`: they are another
@@ -626,10 +639,16 @@ every milestone; if a limit is removed, say when and how.*
   name pseudonymization, because Tier 3 needs the local NER model and would make
   every MCP call fail whenever Ollama is stopped. Names and other Tier-2/3
   content therefore reach a strict server unmasked. Only a server marked
-  `trusted` sees raw content. No command or GUI control sets that; it can only
-  be set by editing `~/.northkeep/mcp.json` by hand. NorthKeep's own vault
-  server is added from the catalog as `strict`, so its arguments are Tier-1
-  masked too.
+  `trusted` sees raw content. NorthKeep's own vault server, added from the
+  catalog, is `trusted` (ADR 0060): its arguments only go into the vault on
+  this Mac, so what you ask it to remember is saved exactly. A vault server
+  added before this release stays `strict` until you press "This is my
+  NorthKeep vault" in the MCP settings and confirm; that button
+  appears only for the exact bundled server with no extra environment or
+  working directory. Any other server can only be made `trusted` by editing
+  `~/.northkeep/mcp.json` by hand. The exfiltration screens still run on the
+  vault server's arguments, so a memory containing an SSN, card number,
+  IBAN or API key is still refused there.
 
 ## M10d (web_search + spend budget), current
 
@@ -717,11 +736,21 @@ every milestone; if a limit is removed, say when and how.*
 - **The grant is per-connection config, not per-message.** You run a scoped
   MCP connection for a matter; you don't switch scopes mid-conversation (that
   would let the model widen its own access).
-- **Tier-1 masking over MCP is opt-in and one-way.** `NORTHKEEP_REDACT_TIER=1`
-  applies the Tier-1 mask to retrieved content; full name-pseudonymization over MCP
-  needs a provider proxy that doesn't exist yet (parked). Only the exact
-  value `1` turns masking on: `2`, `3` or any other value means no masking
-  at all, with no warning (packages/mcp-server/src/server.ts:73-75).
+- **Masking over MCP is opt-in and one-way** (ADR 0060).
+  `NORTHKEEP_REDACT_TIER=1` masks secrets in what the vault returns, `2` also
+  replaces names with `Person-1` style labels (consistent for the life of
+  the server process, kept only in memory), and `3` also reduces every date
+  to the year, including recording dates. Names are never put back: that
+  needs a provider proxy that does not exist (parked). If the local name
+  model fails at Tier 2 the call is refused with nothing returned; at Tier 3
+  the call returns with a note, and whether you see that note depends on
+  the AI app. Collection and project names stay exact at every tier, even
+  one named after a date, because the app must send them back. Any other
+  value, such as `yes` or `4`, refuses every call and names the value.
+  While masking is on, project writes and memory edits that change text are
+  refused, and at Tiers 2 and 3 saving a new memory is refused too, because
+  the app only saw masked text. Tiers 2 and 3 run the name model on every
+  returned text, so large lists are slow.
 - **The audit log covers NorthKeep's own surface.** It records what AI apps
   asked of the vault — it can't see what a provider did with the content
   after NorthKeep handed it over.
@@ -769,6 +798,12 @@ every milestone; if a limit is removed, say when and how.*
 - **Tier 2 needs Ollama and is 85–95% in-domain.** A name it misses is a
   leak; Tier 1 always runs underneath as a backstop for secrets. Without
   Ollama, Tier 2 is skipped and you're told loudly — names are NOT masked.
+  The name model reads long text in overlapping windows of about 6,000
+  characters, so a long text costs several calls; if any window fails, the
+  whole text counts as unmasked for names (ADR 0060), and so does a reply
+  from the model that cannot be read in full. Before 0.22.0 it read only
+  the first 6,000 characters and kept only the last of two "entities" lists
+  in a reply, and said nothing in either case.
   Tier 2 also generalizes DOB-labeled dates to year-only, deterministically.
 - **Tier 3 makes dates and listed names deterministic — not "all names."**
   Full calendar dates in every recognized format (numeric US and day-first,
@@ -981,9 +1016,20 @@ every milestone; if a limit is removed, say when and how.*
   consent panel). Clustering still happens on this machine first, so
   the cloud model sees packs, not a 25-slice of the vault. Consent
   still names the full selected count (over-consent, not a leak).
-  Consent is not remembered. You pay the provider. Pack text is sent as
-  stored: the cloud review path does not run a redaction tier. Local remains the
-  default; neither path hops to the other.
+  Consent is not remembered. You pay the provider. Before anything is sent,
+  each memory is masked at the tier you choose on the consent panel (it
+  starts at your chat tier), the same pipeline chat uses (ADR 0060). Secrets
+  in collection names are masked too, and at Tier 3 dates in them and the
+  recording date go to the year; names in collection names, memory types
+  and ids go as written. Tier 2 refuses the whole run, with nothing sent, if
+  the local name model fails for any memory; Tier 3 proceeds and says so.
+  Suggestions come back with placeholders and are filled in on this machine,
+  only from memories the suggestion quotes (a quote that does not match the
+  memory counts for nothing), so masked text never lands in
+  your vault; review quality drops because the model reasons over
+  placeholders, and some suggestions are dropped. How real providers copy
+  the placeholders has not yet been checked against a live provider. Local
+  remains the default; neither path hops to the other.
 - **Review is collection-selected in the local vault.** `project:`
   documents remain excluded. Shared collections can be selected explicitly;
   no scope membership is changed by review. Project handoffs (ADR 0048)

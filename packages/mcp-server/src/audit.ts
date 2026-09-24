@@ -27,6 +27,8 @@ const COLUMNS = [
   'route_reason',
   // Appended, never inserted: an auditor's saved column positions must hold.
   'session_id',
+  'phase',
+  'call_id',
 ] as const;
 
 export function auditAsJson(lastN?: number): CallLogEntry[] {
@@ -56,6 +58,8 @@ export function auditAsCsv(lastN?: number): string {
         (e.created_ids ?? []).join(' '),
         e.route_reason ?? '',
         e.session_id ?? '',
+        e.phase === 'pending' ? `pending (${e.outcome_label ?? 'outcome unknown (interrupted)'})` : e.phase ?? '',
+        e.call_id ?? '',
       ]
         .map(csvCell)
         .join(','),

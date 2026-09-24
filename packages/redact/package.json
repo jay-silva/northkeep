@@ -13,6 +13,7 @@
     "node": ">=20"
   },
   "dependencies": {
+    "@northkeep/core": "workspace:*",
     "@northkeep/librarian": "workspace:*"
   }
 }

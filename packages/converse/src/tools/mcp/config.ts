@@ -41,9 +41,10 @@ export type McpToolRisk = 'safe-read' | 'consequential';
  *    MCP call whenever Ollama is stopped. Tier 1 is always available, so there is
  *    no unavailable case to refuse on.
  *  - 'trusted': the user has declared this server a local consumer, so
- *    arguments pass at the conversation's own tier. Never inferred, and
- *    "local" or "ours" does not earn it — the vault's own server can read
- *    every memory.
+ *    arguments pass at the conversation's own tier. Never inferred on load.
+ *    "Local" or "ours" alone does not earn it; the catalog's vault server
+ *    does, because its arguments only go into the vault on this machine
+ *    (ADR 0060 Decision 4, amending ADR 0033 Decision 3).
  */
 export type McpTrust = 'strict' | 'trusted';
 
@@ -414,6 +415,20 @@ export function setSafeRead(id: string, tools: string[]): void {
   if (server === undefined) throw new Error(`No such MCP server: ${id}`);
   server.safeRead = [...new Set(tools)];
   save(config);
+}
+
+/**
+ * Mark a stdio server `trusted`. Callers must have checked isBundledVaultLaunch
+ * and had the user confirm; a remote server can never be trusted.
+ */
+export function setServerTrusted(id: string): McpServerConfig {
+  const config = loadMcpConfig();
+  const server = config.servers.find((s) => s.id === id);
+  if (server === undefined) throw new Error(`No such MCP server: ${id}`);
+  if (server.transport !== 'stdio') throw new Error('A remote server is always strict.');
+  server.trust = 'trusted';
+  save(config);
+  return server;
 }
 
 /** A tool's risk: user-declared read-only, else consequential (fail closed). */

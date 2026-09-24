@@ -31,6 +31,8 @@
  * in packages/platform-mobile/test/per-kind-ner.test.ts with a fake model.
  */
 
+import { readNerReply } from '@northkeep/core';
+
 export type NerEntityKind = 'person' | 'org' | 'location';
 
 export interface NerEntity {
@@ -182,25 +184,25 @@ export function salvageEntityJson(raw: string): string {
 /**
  * Parse one pass's salvaged reply. The pass's kind is FORCED onto every span
  * (pass identity guarantees kind; small models mislabel the echo field).
- * Throws on structural failure so the caller can record a per-pass error;
- * messages are content-free by construction.
+ *
+ * Fail closed (ADR 0060 O3): the reply is read with core's duplicate-aware
+ * strict reader, so a repeated "entities" key keeps every list, and a reply
+ * that cannot be fully accounted for (an item without a string text, a
+ * foreign key, more entities than the cap) throws instead of passing with
+ * names missing. Messages are content-free by construction.
  */
 export function parseEntityReply(raw: string, kind: NerEntityKind): NerEntity[] {
-  let parsed: unknown;
+  let list: Array<{ text: string }>;
   try {
-    parsed = JSON.parse(salvageEntityJson(raw));
+    list = readNerReply(salvageEntityJson(raw));
   } catch {
-    throw new Error('non-JSON reply');
+    throw new Error('unreadable reply');
   }
-  const list = (parsed as { entities?: unknown }).entities;
-  if (!Array.isArray(list)) {
-    throw new Error('reply missing an entities array');
-  }
+  if (list.length > MAX_ENTITIES_PER_PASS) throw new Error('too many entities in one reply');
   const out: NerEntity[] = [];
-  for (const item of list.slice(0, MAX_ENTITIES_PER_PASS)) {
-    const record = item as { text?: unknown };
-    if (typeof record.text !== 'string') continue;
+  for (const record of list) {
     const span = record.text.trim();
+    // A one-character or 100+ character span is not a name; dropping it hides none.
     if (span.length < 2 || span.length > 100) continue;
     out.push({ text: span, kind });
   }
@@ -241,14 +243,15 @@ export function mergeEntities(perPass: NerEntity[][]): NerEntity[] {
  * unverified on device) and return ONE merged {"entities":[...]} JSON string,
  * the exact contract applyTier2's parser expects from generateJson.
  *
- * Degraded-proceeds: a pass that throws a parse/other failure is recorded via
- * onPass and the remaining passes still run. A pass that TIMES OUT
- * (NerPassTimeoutError) is recorded and ABANDONS the rest of the run: the
- * timed-out native call is still executing (no abort signal), and the bridge
- * is single-call-only, so issuing further passes would stack concurrent
- * calls. Whatever merged so far is returned. Only when NO pass succeeded does
- * this throw, which applyTier2 converts to tier2Degraded exactly like a
- * failed single call today. Tier-1 is never touched by any of this.
+ * Fail closed (ADR 0060 O3): a pass that fails, times out or is skipped is
+ * recorded via onPass, and then the whole run throws, which applyTier2
+ * converts to tier2Degraded: the phone shows its degraded banner and a
+ * Tier-2 send to a cloud model refuses. A missing pass would otherwise drop
+ * that pass's names while the turn claimed Tier 2. A pass that TIMES OUT
+ * (NerPassTimeoutError) still abandons the rest of the run: the timed-out
+ * native call is still executing (no abort signal), and the bridge is
+ * single-call-only, so further passes would stack concurrent calls. Tier-1
+ * is never touched by any of this.
  *
  * `callModel(prompt, timeoutMs)` must resolve to the model's raw reply and
  * reject with NerPassTimeoutError on timeout; the adapter wraps
@@ -301,6 +304,9 @@ export async function runPerKindNer(
 
   if (lists.length === 0) {
     throw new Error(`All ${NER_PASSES.length} NER passes failed: ${failures.join('; ')}`);
+  }
+  if (failures.length > 0) {
+    throw new Error(`${failures.length} of ${NER_PASSES.length} NER passes failed: ${failures.join('; ')}`);
   }
   return JSON.stringify({ entities: mergeEntities(lists) });
 }

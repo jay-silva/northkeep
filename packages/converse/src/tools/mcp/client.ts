@@ -312,6 +312,11 @@ export async function connectServer(
 }
 
 /** Flatten an MCP CallToolResult into text for the model. */
+/** Fixed strings: the error fence treats them as ours (ADR 0060 D3). */
+export const MCP_TOOL_FAILED_GUIDANCE = 'The tool reported an error.';
+export const MCP_DEFINITIONS_CHANGED_GUIDANCE =
+  'This server changed the tools it offers mid-conversation. Nothing was run; the user must review it again.';
+
 function resultToText(raw: unknown): { text: string; isError: boolean } {
   if (raw === null || typeof raw !== 'object') return { text: String(raw), isError: false };
   const r = raw as { content?: unknown; isError?: unknown };
@@ -370,8 +375,7 @@ function adaptTool(
         return {
           content: JSON.stringify({
             error: 'tool_definitions_changed',
-            guidance:
-              'This server changed the tools it offers mid-conversation. Nothing was run; the user must review it again.',
+            guidance: MCP_DEFINITIONS_CHANGED_GUIDANCE,
           }),
           meta: { bytes: 0, truncated: false, ok: false },
         };
@@ -403,7 +407,7 @@ function adaptTool(
       const { text, isError } = resultToText(raw);
       return {
         content: isError
-          ? JSON.stringify({ error: 'tool_failed', detail: text, guidance: 'The tool reported an error.' })
+          ? JSON.stringify({ error: 'tool_failed', detail: text, guidance: MCP_TOOL_FAILED_GUIDANCE })
           : text,
         meta: { bytes: Buffer.byteLength(text, 'utf8'), truncated: false, ok: !isError },
       };

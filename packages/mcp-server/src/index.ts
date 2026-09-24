@@ -10,7 +10,25 @@ export {
   keychainSetMasterKey,
 } from './keychain.js';
 export { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
-export { appendCallLog, readCallLog, readCallLogStrict, type CallLogEntry } from './log.js';
+export {
+  appendCallLog,
+  foldCallLog,
+  readCallLog,
+  readCallLogStrict,
+  type CallLogEntry,
+  type CallOutcomeLabel,
+  type FoldedCallLogEntry,
+} from './log.js';
+export {
+  HANDLE_KEYS,
+  DATE_KEYS,
+  TIER2_FAILED_MESSAGE,
+  TIER3_DEGRADED_NOTE,
+  contentWriteRefusal,
+  maskReturnPayload,
+  parseReturnRedactionTier,
+  type ReturnTier,
+} from './return-mask.js';
 export { BOARD_CALL_LOG_UNREADABLE, collectBoard, type BoardRunOptions, type BoardRunResult } from './project-board-run.js';
 export { PROJECT_IDENTIFIER_KEYS, maskProjectFields } from './project-mask.js';
 export {

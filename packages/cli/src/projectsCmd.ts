@@ -33,7 +33,10 @@ import {
   installSchedule,
   parseScheduleTime,
   readExportSettings,
-  maskProjectFields,
+  TIER2_FAILED_MESSAGE,
+  TIER3_DEGRADED_NOTE,
+  maskReturnPayload,
+  parseReturnRedactionTier,
   readCallLogStrict,
   readExportState,
   readRemotes,
@@ -634,7 +637,7 @@ export async function promptOnceRunner(
 /**
  * `northkeep projects board` (ADR 0054): the owner's view of every project,
  * read-only. No connection, so no grant to narrow; no call-log row, like
- * every CLI read. Masks under NORTHKEEP_REDACT_TIER=1 the way the MCP tool does.
+ * every CLI read. Masks under NORTHKEEP_REDACT_TIER the way the MCP tool does.
  */
 export async function projectsBoardCmd(
   options: { staleDays?: string; json?: boolean },
@@ -652,8 +655,14 @@ export async function projectsBoardCmd(
   const board = await withVault((vault) =>
     collectBoard(vault, { granted: undefined, now: new Date(), staleDays, currentSessionId: '', readLog: readCallLogStrict }).board,
   );
-  const tier = process.env.NORTHKEEP_REDACT_TIER === '1' ? 1 : 0;
-  const masked = maskProjectFields(board, tier) as ProjectBoard;
+  // The same parser and walk the MCP server uses (ADR 0060 Decision 2): 2 and
+  // 3 mask, a failed Tier 2 prints nothing, and a typo is refused.
+  const parsed = parseReturnRedactionTier();
+  if (!parsed.ok) fail(parsed.message);
+  const result = await maskReturnPayload(board, 'project', parsed.ok ? parsed.tier : 0, {});
+  if (result.failed) fail(TIER2_FAILED_MESSAGE);
+  if (result.degraded) console.error(`northkeep: ${TIER3_DEGRADED_NOTE}`);
+  const masked = result.payload as ProjectBoard;
   if (options.json === true) {
     out(JSON.stringify(masked, null, 2));
     return;

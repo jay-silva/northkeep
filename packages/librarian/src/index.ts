@@ -23,11 +23,22 @@ export {
 export { dedupeCandidates, jaccard, tokenize, type DedupeResult } from './dedupe.js';
 export { runImport, type ImportRunOptions, type ImportRunResult } from './import.js';
 export {
+  formatReviewPrompt,
   runReviewPass,
   selectReviewEntries,
+  type ReviewOutbound,
   type ReviewPassOptions,
   type ReviewPassResult,
 } from './review.js';
+export {
+  matchQuote,
+  restoreDisplay,
+  restoreProposed,
+  restoreReviewReply,
+  type ProposedRestore,
+  type ReviewPackHandle,
+  type ReviewTokenInfo,
+} from './reviewRestore.js';
 export {
   extractRawProposals,
   parseReviewResponse,
