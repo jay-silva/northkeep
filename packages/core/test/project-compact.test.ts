@@ -217,12 +217,44 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
         status: `Status ${i}.`, completed: `Did ${i}.`, next_actions: `Next ${i}.`,
       }).receipt.result_revision;
     }
-    // The newest five, plus the base the fifth one's receipt names. Before the
-    // fix every one of the twenty kept its text, because each receipt protected
-    // a row whose own receipt protected the next.
+    // The newest five, plus the base the fifth one's receipt names (a memory
+    // edit copies a receipt forward, which can add one more). Before the fix
+    // every one of the twenty kept its text, because each receipt protected a
+    // row whose own receipt protected the next.
     expect(survivingRevisions(v, 'project:demo')).toHaveLength(6);
     expect(v.compactProjectHistory({ project: 'demo' }).blanked).toBe(0);
     expect(v.verifyChain().ok).toBe(true);
+    v.close();
+  });
+
+  it('answers every verbatim retry after compaction with a replay or a stale refusal, never a mismatch', () => {
+    const v = vault();
+    let revision = seedProject(v, 'demo', 0);
+    const requests = [];
+    for (let i = 0; i < 20; i += 1) {
+      const request = {
+        vault_id: v.getVaultId(), project: 'demo', mode: (i % 2 ? 'wrap' : 'checkpoint') as 'wrap' | 'checkpoint',
+        operation_id: `44444444-4444-4444-8444-${String(i).padStart(12, '0')}`, expected_revision: revision,
+        status: `Status ${i}.`, completed: `Did ${i}.`, next_actions: `Next ${i}.`,
+      };
+      requests.push(request);
+      revision = v.checkpointProject(request).receipt.result_revision;
+    }
+    const head = () => v.list({ scope: 'project:demo' }).filter((e) => e.type === 'working').map((e) => e.id);
+    const before = head();
+    const outcomes: string[] = [];
+    for (const request of requests) {
+      try {
+        outcomes.push(v.checkpointProject(request).replayed ? 'replayed' : 'written');
+      } catch (error) {
+        outcomes.push((error as { code?: string }).code ?? 'error');
+      }
+      expect(head()).toEqual(before);
+    }
+    expect(outcomes).not.toContain('written');
+    expect(outcomes).not.toContain('operation_conflict');
+    expect(outcomes.filter((o) => o === 'replayed').length).toBeGreaterThanOrEqual(5);
+    expect(new Set(outcomes)).toEqual(new Set(['stale_project', 'replayed']));
     v.close();
   });
 

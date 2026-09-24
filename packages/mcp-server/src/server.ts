@@ -1079,7 +1079,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
   const registerHandoff = (name: 'project_checkpoint' | 'project_wrap', mode: 'checkpoint' | 'wrap') => {
     server.registerTool(name, {
       title: mode === 'checkpoint' ? 'Checkpoint project' : 'Wrap up project',
-      description: 'Atomically save a revision-bound project handoff. Retrying the same operation id is safe.',
+      description: 'Atomically save a revision-bound project handoff. Retrying the exact same request with the same operation id is safe. After a stale_project refusal, read the project again and use a new operation id.',
       inputSchema: checkpointSchema,
     }, async (args) => run(ctx, name, {
       scope: `project:${args.project}`, id: args.operation_id,

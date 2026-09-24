@@ -193,11 +193,33 @@ for projects saved with `project_update`, which contradicts Decision 4's
 
 The rule is now: keep the newest five, plus any revision named by a receipt on
 a row that survives this pass. Receipts on rows beyond the newest five protect
-nothing. The bound is the newest five plus at most one more (the base the fifth
-one's receipt names). Consequence, accepted by Jay on 2026-09-24 ("Fix before
-release"): a checkpoint or wrap retried after its result revision was blanked
-is refused as stale (`stale_project`) instead of replayed. A retry within the newest five still
-replays. Tests: `packages/core/test/project-compact.test.ts`, the three tests
-on surviving receipts, twenty checkpoints staying bounded, and a retry refused
-once blanked; all three fail on the previous code.
+nothing. The bound is the newest five plus at most two more: the base the
+fifth one's receipt names, and one more when a `memory_edit` (including a
+hosted update arriving through the fold) has copied a receipt forward onto a
+new revision. Accepted by Jay on 2026-09-24 ("Fix before release").
 
+Retries after compaction (fix review `Reviews/release-0.22.0/compaction-fix-r1.md`):
+
+- A verbatim retry of a save among the newest ones replays. A verbatim retry
+  whose own revision, or whose base, was blanked is refused as
+  `stale_project` with the current document and a plain message ("This save
+  was already applied ..."), never applied twice. Before the second fix a
+  retry whose base alone was blanked reported a false "content does not
+  match" `operation_conflict` (F2).
+- **Accepted scar tissue (F1), Jay 2026-09-24 ("Accept for 0.22.0, fix
+  next").** A blanked revision loses its receipt, so the vault no longer
+  remembers that operation id. A client that, after the `stale_project`
+  refusal, resends the same operation id with `expected_revision` set to the
+  new head gets a new save: the Log line appears twice and the old Status
+  and Next Actions replace the newer ones. Before this correction that
+  resend was refused as `operation_conflict`. The checkpoint and wrap tool
+  description now says to use a new operation id after a stale refusal. The
+  proper fix (remembering operation ids past compaction) changes what a
+  forgotten row may carry and so the integrity check on every device; it is
+  its own ADR for 0.22.1.
+
+Tests: `packages/core/test/project-compact.test.ts`: surviving receipts
+only, twenty checkpoints staying bounded, a retry refused once blanked
+(`stale_project`), and every verbatim retry after twenty checkpoints
+answered by a replay or a stale refusal; each fails on the code before its
+fix.

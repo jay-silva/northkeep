@@ -926,12 +926,16 @@ every milestone; if a limit is removed, say when and how.*
   automatically (ADR 0051).** Every project update supersedes the prior
   document, and at that moment the vault blanks all but the newest five
   superseded revisions of that project, plus any revision a handoff
-  receipt on a surviving revision names (at most one more). A receipt on a
-  revision that is itself being blanked protects nothing, so a checkpoint or
-  wrap retried after its revision was blanked is refused rather than
-  recognized; before 0.22.0 receipts protected each other back through the
-  whole history, and a project saved by checkpoint or wrap was never
-  compacted. The text of older revisions is gone. The live document and
+  receipt on a surviving revision names (at most two more). A receipt on a
+  revision that is itself being blanked protects nothing; before 0.22.0
+  receipts protected each other back through the whole history, and a
+  project saved by checkpoint or wrap was never compacted. A checkpoint or
+  wrap retried unchanged after its revision (or its base) was blanked is
+  refused as `stale_project`, not applied twice. But the vault forgets a
+  blanked save's operation id: resending that same id against the new head
+  is saved as a new save (duplicate Log line, older Status and Next Actions
+  back on top). Use a new operation id after a stale refusal; a fix is
+  planned for 0.22.1 (ADR 0051 correction). The text of older revisions is gone. The live document and
   its Log archives are never touched. `northkeep projects compact` (dry
   run by default, `--yes` to apply) does the same on demand, for vaults
   with history from before this rule or for a different keep count; the
