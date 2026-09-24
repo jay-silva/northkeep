@@ -1084,3 +1084,12 @@ it would not take the lapsed path anyway.
     server delete succeeded but the local save failed (claim 20 tests);
     KNOWN-LIMITS corrected for R12 and the /56 grouping; R17 and R18 record
     the charset and retry notes.
+- 2026-09-24, code recheck (`Reviews/adr-0061/code-r2-recheck.md`):
+  **CLEARED**, no findings. Follow-up on its notes (not re-reviewed): the
+  phone no longer appends "The server copies were not removed" to an
+  unshare failure (it contradicted the local-save message); `/consent`
+  refuses a control character or a duplicated value in any field it reads
+  with a 400 before storage, so a NUL cannot spend the pairing code and
+  then 500; tests now catch the five mutations that survived the recheck
+  (NUL in entry fields, `shared_at` and ack `forgets`, the IPv6 zone-id
+  strip, and an error handler that logs the whole error object).
