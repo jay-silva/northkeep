@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { holdMessage, LAPSED_UNSHARE_HINT, UNSHARE_FAILED_MESSAGE } from '@northkeep/sync';
+import { holdMessage, LAPSED_UNSHARE_HINT, UNSHARE_FAILED_MESSAGE, UNSHARE_LOCAL_SAVE_FAILED_MESSAGE } from '@northkeep/sync';
 import {
   CONNECTOR_NETWORK_MESSAGE,
   CONNECTOR_PRIVATE_BETA_MESSAGE,
@@ -247,6 +247,22 @@ describe('runUnshareScope', () => {
       expect(outcome.message).not.toContain(CONNECTOR_SUBSCRIPTION_MESSAGE);
     }
     expect(get()).toEqual(['conversations']);
+  });
+
+  it('ADR 0061: server delete succeeded but the local save failed: says so', async () => {
+    const outcome = await runUnshareScope(
+      {
+        store: {
+          load: async () => ['conversations'],
+          save: async () => {
+            throw new Error('disk full');
+          },
+        },
+        unshare: async () => ({ deleted: 2 }),
+      },
+      'conversations',
+    );
+    expect(outcome).toEqual({ kind: 'failed', errorKind: 'other', message: UNSHARE_LOCAL_SAVE_FAILED_MESSAGE });
   });
 
   it('ADR 0061: a connector 402 adds the unshare sentence', () => {

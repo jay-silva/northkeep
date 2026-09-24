@@ -25,7 +25,12 @@
 
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
-import { holdMessage, LAPSED_UNSHARE_HINT, UNSHARE_FAILED_MESSAGE } from '@northkeep/sync';
+import {
+  holdMessage,
+  LAPSED_UNSHARE_HINT,
+  UNSHARE_FAILED_MESSAGE,
+  UNSHARE_LOCAL_SAVE_FAILED_MESSAGE,
+} from '@northkeep/sync';
 import { classifySyncError, type SyncErrorKind } from './sync-errors';
 
 /** The hosted production connector server (apps/connector-server on Vercel). */
@@ -260,8 +265,13 @@ export async function runUnshareScope(
     // ADR 0061: an unshare failure is never subscription copy; unshare is free.
     return { ...classifyConnectorError(err), message: UNSHARE_FAILED_MESSAGE };
   }
-  const before = await ports.store.load();
-  await ports.store.save(before.filter((s) => s !== scope));
+  try {
+    const before = await ports.store.load();
+    await ports.store.save(before.filter((s) => s !== scope));
+  } catch {
+    // The server already deleted; only the local mark failed to save.
+    return { kind: 'failed', errorKind: 'other', message: UNSHARE_LOCAL_SAVE_FAILED_MESSAGE };
+  }
   return { kind: 'unshared', scope, deleted };
 }
 

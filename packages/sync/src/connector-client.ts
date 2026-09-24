@@ -24,6 +24,15 @@ export const UNSHARE_FAILED_MESSAGE =
   'Could not delete this scope from the connector server, so it is still marked Shared. ' +
   'Try again. If it keeps failing, contact support and we will delete it.';
 
+/**
+ * The server delete succeeded but this device could not record the unshare
+ * (ADR 0061 code review note 2). Unsharing again finishes it and deletes
+ * nothing more on the server.
+ */
+export const UNSHARE_LOCAL_SAVE_FAILED_MESSAGE =
+  'The connector server deleted this scope, but this device could not save that it is now private, ' +
+  'so it still shows as Shared here. Unshare it again to finish; nothing more will be deleted.';
+
 /** Added to every connector 402: unshare never needs a subscription (ADR 0061). */
 export const LAPSED_UNSHARE_HINT = 'You can still unshare scopes, which deletes them from the connector.';
 

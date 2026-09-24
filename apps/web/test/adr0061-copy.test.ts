@@ -4,7 +4,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KDF_INTERACTIVE, Vault, setPlatform } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
-import { LAPSED_UNSHARE_HINT, UNSHARE_FAILED_MESSAGE, setConnectorServer } from '@northkeep/sync';
+import { LAPSED_UNSHARE_HINT, UNSHARE_FAILED_MESSAGE, UNSHARE_LOCAL_SAVE_FAILED_MESSAGE, setConnectorServer } from '@northkeep/sync';
 import { handleApi } from '../src/api.js';
 import { UiSession } from '../src/session.js';
 
@@ -55,6 +55,23 @@ describe('ADR 0061 desktop copy', () => {
     expect(error).not.toMatch(/402|subscription/i);
     const still = await session.withVault((v) => v.sharedScopes());
     expect(still).toContain('work');
+  });
+
+  it('server delete succeeded but the local save failed: says so', async () => {
+    let deletedOnServer = false;
+    vi.stubGlobal('fetch', async () => {
+      deletedOnServer = true;
+      return new Response(JSON.stringify({ ok: true, deleted: 2 }), { status: 200 });
+    });
+    const realSave = Vault.prototype.save;
+    const save = vi.spyOn(Vault.prototype, 'save').mockImplementation(function (this: Vault) {
+      if (deletedOnServer) throw new Error('ENOSPC: no space left on device');
+      return realSave.call(this);
+    });
+    const res = await call('POST', '/api/share/remove', { scope: 'work' });
+    save.mockRestore();
+    expect(res.status).toBe(500);
+    expect((res.body as { error: string }).error).toBe(UNSHARE_LOCAL_SAVE_FAILED_MESSAGE);
   });
 
   it('a 402 on share adds the unshare sentence', async () => {

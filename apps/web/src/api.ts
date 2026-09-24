@@ -44,6 +44,7 @@ import {
   startPairing,
   unshareScope,
   UNSHARE_FAILED_MESSAGE,
+  UNSHARE_LOCAL_SAVE_FAILED_MESSAGE,
   LAPSED_UNSHARE_HINT,
 } from '@northkeep/sync';
 import {
@@ -948,18 +949,21 @@ async function dispatch(
     // server delete still runs FIRST, so a failure leaves the mark honestly in
     // place — never a vault claiming private while the server holds rows.
     let deleted: number;
+    let serverDone = false;
     try {
       deleted = await session.withVault(async (vault) => {
         foldSidecarScopesIntoVault(vault);
         const res = await unshareScope({ server: config.server, deviceSecret, scope: targetScope });
+        serverDone = true;
         vault.setScopeShared(targetScope, false);
         vault.save();
         return res.deleted;
       });
     } catch (err) {
       if (err instanceof LockedError) throw err; // → 423, prompts unlock
-      // ADR 0061: say what is true (still Shared), never a raw status or sales copy.
-      return bad(502, UNSHARE_FAILED_MESSAGE);
+      // ADR 0061: say what is true, never a raw status or sales copy. The
+      // server may have deleted already while the local save failed.
+      return bad(serverDone ? 500 : 502, serverDone ? UNSHARE_LOCAL_SAVE_FAILED_MESSAGE : UNSHARE_FAILED_MESSAGE);
     }
     return ok({ unshared: targetScope, deleted });
   }
