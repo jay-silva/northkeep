@@ -1,17 +1,16 @@
 # ADR 0060: Pre-release privacy fixes for 0.22.0 (D2, D3, D4, D6, D7, D8)
 
 - **Date:** 2026-09-24
-- **Status:** Proposed. **Not reviewed.** This is a design only; nothing
-  here is implemented. It changes what leaves the machine (D2, D4),
-  puts third-party text in front of the model (D3), changes a trust
-  level (D6) and publishes claims, so the CLAUDE.md review gate
-  requires an adversarial review against code before any
-  implementation starts. The review history section at the end is
-  empty on purpose.
+- **Status:** Proposed. First review CLEARED WITH WOUNDS (2026-09-24,
+  six flesh wounds F1 to F6, twelve notes); this revision closes them
+  in the design and awaits a recheck. Design only; nothing here is
+  implemented. It changes what leaves the machine (D2, D4), puts
+  third-party text in front of the model (D3), changes a trust level
+  (D6) and publishes claims, so the CLAUDE.md review gate applies.
 - **Deciders:** Jay (product owner), Claude Code
-- **Jay's decisions already taken (2026-09-24):** D2 "Redact it"; D7
-  "Log before writing". The remaining open choices are listed under
-  "Decisions for Jay" near the end.
+- **Jay's decisions (2026-09-24):** D2 "Redact it"; D7 "Log before
+  writing"; and "Accept all" on the five open calls of the first draft,
+  recorded as Decision 7.
 - **Source:** the defect table in
   `Reviews/release-0.22.0/doc-vs-code.md` (rows D2, D3, D4, D6, D7,
   D8), re-verified against branch `fix022/privacy` (HEAD `6d67dd2`).
@@ -116,25 +115,32 @@ turned back into one original by string replacement.
 
 ### 1.1 What is redacted, and where
 
-Only the `content` of each memory goes through the redaction pipeline.
-The frame around it (instructions, ids, markers) is ours and is not
-redacted, so ids can never be masked into `dead_id` drops.
-
-Metadata sent with each memory, per tier:
+Memory `content` goes through the redaction pipeline at the chosen tier.
+The frame around it (instructions, ids, markers) is ours. Every field
+sent, per tier:
 
 | field | Tier 1 | Tier 2 | Tier 3 |
 |---|---|---|---|
-| `id` | sent | sent | sent |
-| `type` | sent | sent | sent |
-| `scope` (collection name) | sent as written | sent as written | sent as written |
-| `created_at` | sent | sent | **year only** (`2026`) |
+| `id` | sent; must be a UUID or `prepare` refuses the run | same | same |
+| `type` | sent; must be one of `MEMORY_TYPES` or `prepare` refuses | same | same |
+| `scope` (collection name) | **Tier 1** | **Tier 1** | **Tier 1** |
+| `created_at` | sent | sent | **year only** (`2026`), Jay 2026-09-24 |
 | `content` | Tier 1 | Tier 2 | Tier 3 |
 
-Plain language: Tier 3 promises "all dates to year", so the one date we
-add ourselves follows the same rule. Collection names are labels the
-user typed; they are not run through name detection, and the consent
-panel says so (1.5). `created_at` is NorthKeep's recording time, not
-user content, which is why Tiers 1 and 2 send it unchanged.
+Collection names (F6). The scope line of each block is run through
+Tier-1 masking in the same run session as content (1.3), so
+`patient:508-555-0142` goes out as `patient:[k7q2:PHONE_1]`. Names in
+collection names are not run through name detection at any tier
+(residual R1). Consequences: the consent panel, the saved report and the
+apply dialog show the real collection names, because they are local and
+read from the vault, not from the wire; the model never has to echo a
+scope, and proposals are keyed by entry id, so masking the scope costs
+no review quality; a token whose only occurrence was in a scope line can
+never be restored into a proposal (the `uncited_original` rule in 1.4).
+
+`prepare` validates `id` against the UUID shape and `type` against the
+enum and refuses the run on any other value, so no caller can smuggle
+free text into the frame through those fields (review note 10).
 
 ### 1.2 The seam, and why the guarantee sits at the send
 
@@ -146,8 +152,9 @@ user content, which is why Tiers 1 and 2 send it unchanged.
   task.ts imports `applyTier1`) stops accepting a prompt string. It
   exposes two methods and nothing else:
   - `prepare(packs: MemoryEntry[][], tier)`: redacts every pack (1.3)
-    and returns opaque handles plus the run's placeholder mapping and
-    the tier actually applied.
+    and returns one opaque handle per pack, each carrying the set of
+    tagged tokens that pack's prompt contains, plus the run's token
+    mapping and the tier actually applied.
   - `send(handle, opts)`: builds the prompt **itself**, from the
     redacted content held behind the handle, using the prompt formatter
     exported by librarian (`formatReviewPrompt`, today's
@@ -167,29 +174,55 @@ user content, which is why Tiers 1 and 2 send it unchanged.
   Ollama client (the local path, `northkeep review`, and the web local
   route at api.ts:2090) the prompt is byte-for-byte what it is today.
 - Placeholder restoration and quote matching live in librarian as pure
-  functions over a plain mapping (`Array<{placeholder, originals[], kind}>`),
-  so librarian still does not import redact.
+  functions over plain data (`Array<{token, original, kind}>` and each
+  pack's token set), so librarian still does not import redact.
 
-The web route is the only caller that passes `outbound`; it must pass
-it, because the adapter type no longer offers a free-text send.
+The web route is the only caller that passes a `ReviewOutbound`; it must,
+because the adapter no longer offers a free-text send.
 
-### 1.3 One numbering across the whole run
+### 1.3 One numbering across the whole run, in a namespace of its own
 
 Redaction gains an optional shared state,
-`RedactOptions.session?: RedactionSession`, holding the Tier-1
-`seen` map and per-kind counters, alongside the existing shared
-`pseudonyms` map. `redactReviewPacks` creates one session per run and
-redacts each memory's content separately with it. Properties (tested):
+`RedactOptions.session?: RedactionSession`, holding the Tier-1 `seen`
+map, per-kind counters, a fresh pseudonym map (never shared with chat
+or MCP), and a **run tag**. `prepare` creates one session per run.
 
-- the same original gets the same placeholder everywhere in the run;
-- two different originals of a numbered kind (`[EMAIL_n]`, `[PHONE_n]`,
-  `Person-n`, ...) never share a placeholder within the run;
+**The run tag (F1).** Stored memories can already contain text that
+looks exactly like a placeholder: `[EMAIL_1]` or `Person-1` written by a
+Tier-1 host, or by the pre-0060 `strict` vault server (review attack 3).
+Numbering from the session maps alone therefore collides with those
+literals (review A1, A3, A4: the therapist's email restored into the
+note about the ex; a literal `Person-1` restored to "Donna Keller").
+So, inside a session, every placeholder issued by every layer uses one
+grammar that stored text cannot contain:
+
+    [<tag>:<KIND>_<n>]        e.g. [k7q2:EMAIL_1], [k7q2:PERSON_3]
+    [<tag>:DATE_<year>_<n>]   e.g. [k7q2:DATE_1948_2]
+    [<tag>:DATE_<n>]          a date with no recoverable year
+
+- `<tag>` is four characters from `[a-z0-9]`, starting with a letter,
+  drawn at random per run. `prepare` redraws it until the string
+  `[<tag>:` occurs in no stored `content`, scope name, id or type in the
+  run (at most 32 draws, then the run refuses). "Cannot occur" is
+  therefore checked, not probable.
+- Dates are **numbered inside a session**, so two different 1948 dates
+  are `[k7q2:DATE_1948_1]` and `[k7q2:DATE_1948_2]`. Outside a session
+  (chat, CLI `redact`, mobile, MCP) placeholder shapes do not change.
+- Every layer's placeholder guard (Tier-1 guards, date guard, name
+  dictionary, NER span guard) treats a tagged token as already masked,
+  so a later layer never masks inside one (for example the year inside
+  `DATE_1948_2`, or the tag read as a name).
+- Untagged placeholder-looking text in stored content (`[EMAIL_1]`,
+  `Person-1`) is plain text: it is sent as written (it is already
+  masked text) and it is never a restoration target.
+
+Properties (tested):
+
+- the same original gets the same tagged token everywhere in the run;
+- two different originals never share a token, including dates;
+- no tagged token equals any substring of stored text in the run;
 - without `session`, `redact()` output is unchanged for every existing
-  caller (chat, CLI `redact`, mobile).
-
-`[DATE-YYYY]` and `[DATE]` stay un-numbered (changing them would change
-chat and published placeholder shapes). The restoration rules below
-handle the resulting ambiguity.
+  caller.
 
 ### 1.4 Validating and restoring what the model returns
 
@@ -206,15 +239,22 @@ for an original containing `"` or `\`.
 
 **Quotes (P4, P5).** For a quote cited against entry E:
 
-1. Split the quote into literal runs and placeholder occurrences, where a
-   placeholder is any placeholder string in this run's mapping (longest
-   first).
-2. Build a matcher: each literal run matches itself exactly; each
-   placeholder matches any one of its originals in this run, or the
-   placeholder text itself (a memory can literally contain `Person-1`).
-   Name kinds (person, org, location) match case-insensitively, because
-   replayed pseudonyms carry the lowercased map key as their original
-   (redact/src/index.ts:163); every other kind matches exactly.
+0. **Only this pack's tokens count (F2).** Each prepared pack records
+   the set of tagged tokens its own prompt contained. A reply for that
+   pack may use only those. Any other tagged token (issued to another
+   pack, or never issued) is treated as a forgery: in a quote it cannot
+   match, in `proposed_content` it drops the proposal with reason
+   `foreign_placeholder`, in `explanation` or `question` it stays
+   visible unrestored. Review attack A2 (pack B naming pack A's
+   `[EMAIL_1]`) becomes a drop.
+1. Split the quote into literal runs and tagged-token occurrences, where
+   a token is any string in this pack's token set.
+2. Build a matcher: each literal run matches itself exactly; each token
+   matches its one original. Name kinds (person, org, location) match
+   case-insensitively, because replayed pseudonyms carry the lowercased
+   map key as their original (redact/src/index.ts:163); every other
+   kind matches exactly. Untagged placeholder-looking text is a literal
+   run like any other.
 3. The quote is valid only if the matcher finds a span in E's **stored**
    content. The quote kept in the report is that stored span, copied
    from the vault, never the model's text.
@@ -232,25 +272,30 @@ user's own memory, the original never left the machine, and writing
 `[EMAIL_1]` into the vault would corrupt the memory the user is trying
 to fix. Rules:
 
-- a placeholder with exactly one original in this run is replaced by
-  it; for a name kind, the surface form is taken from the target entry's
-  stored content (first case-insensitive match), else from any cited
-  entry, else the proposal is dropped;
-- a placeholder with two or more originals (typically `[DATE-1948]`) is
-  **ambiguous**: the proposal is dropped with reason
-  `ambiguous_placeholder`;
-- any token that has a NorthKeep placeholder shape but is not in the
-  run's mapping, and does not occur literally in a cited entry's stored
-  content, drops the proposal with reason `unmapped_placeholder`.
+- only tokens in this pack's token set are restored (step 0);
+- each token has exactly one original (1.3), so there is no ambiguous
+  case; if an implementation bug ever produced two, the proposal drops
+  with `ambiguous_placeholder`;
+- **the original must occur in the stored content of an entry the
+  proposal cites** (`entry_ids`); otherwise the proposal drops with
+  `uncited_original`. This stops a token that appeared only in a scope
+  line, or only in an uncited entry of the same pack, from being
+  spliced into a suggested wording (F1, F2 defence in depth). For a
+  name kind the surface form is the one found in the target entry's
+  stored content, else in another cited entry;
+- untagged placeholder-looking text (`[EMAIL_1]`, `Person-1`) is kept
+  only if it occurs literally in a cited entry's stored content;
+  otherwise the proposal drops with `unmapped_placeholder`.
 
 **`explanation` and `question` (display only, never applied).**
-Unambiguous placeholders are restored; ambiguous or unmapped ones are
-left visible as placeholders. Nothing is dropped for these fields.
+Tokens from this pack's set are restored; anything else stays visible
+as written. Nothing is dropped for these fields.
 
 **Prompt amendment (ADR 0043 P3).** The pinned prompt used on the API
-path gains one sentence: "Some values are replaced by placeholders such
-as [EMAIL_1] or Person-2. Copy placeholders exactly as written; do not
-guess what they hide." The local path's prompt is unchanged.
+path gains one sentence, with this run's tag filled in: "Some values
+are replaced by placeholders such as [k7q2:EMAIL_1]. Copy them exactly
+as written; do not guess what they hide." The local path's prompt is
+unchanged.
 
 ### 1.5 Tier selection and the consent panel
 
@@ -266,37 +311,52 @@ guess what they hide." The local path's prompt is unchanged.
   is the tier that runs.
 - The panel (index.html:3417-3451) adds, in plain words: "Before sending,
   NorthKeep masks what it can find in each memory at Tier N: <one line
-  describing that tier>. Collection names, memory types and ids are sent
-  as written. At Tier 3 the recording date is reduced to the year."
+  describing that tier>. Secrets in collection names are masked too;
+  names in collection names are not. Memory types and ids are sent as
+  written. At Tier 3 the recording date is reduced to the year."
   It also replaces "This run will send N memories" with "This run will
   send N memories, masked at Tier N". The Send button reads
   "Mask and send N memories to <host>".
 
-### 1.6 Degraded tiers (invariant 6)
+### 1.6 Degraded tiers (invariant 6), per item and per run
 
-All packs are redacted before the first send (1.2), so a failure is
-known while nothing has left.
+All packs are redacted before the first send (1.2), so every failure is
+known while nothing has left. Degradation is judged **per redaction
+call**, not only "model not running": `applyTier2` reports `degraded` on
+any name-model exception, timeout or unavailability, for that one call
+(review attack 7: one memory at Tier 2, the next silently at Tier 1).
 
-- **Tier 2 with the name model unavailable:** the run refuses before
-  sending anything. Job status `failed`, message modelled on chat's
-  (turn.ts:399-420): "Name masking needs the local model and it is not
-  running. Nothing was sent. Start the local model, or choose Tier 1 or
-  Tier 3." Audit row written with `ok: false`, `error: tier2-unavailable`.
-- **Tier 3 with the name model unavailable:** the run proceeds (Tier 3's
-  guarantee is its deterministic layers, as in chat, turn.ts:399-422),
-  and the progress line, the saved report and the audit row all say
-  "Tier 3, deterministic only (name model offline)".
+- **Tier 2, any item degraded (F3):** that item's redaction is retried
+  once. If it is still degraded, the **whole run is refused** before any
+  send: job `failed`, message "Name masking failed for N of M memories.
+  Nothing was sent. Start the local model, or choose Tier 1 or Tier 3."
+  Audit completion row `ok: false`, `error: tier2-unavailable`. A run is
+  never sent with a mix of Tier-2 and Tier-1 items.
+- **Tier 3, any item degraded:** the run proceeds (Tier 3's guarantee is
+  its deterministic layers, as in chat, turn.ts:399-422). The run-level
+  flag is the OR of all items, and the progress line, the saved report
+  and the audit row all say "Tier 3, deterministic only (name model
+  offline for N of M memories)".
+- The applied tier recorded for a run is the lowest tier any item
+  actually received; with the rules above that is always the chosen
+  tier.
 - Practical note: a cloud review already needs local Ollama, because
   with no embedder `runReviewPass` makes zero model calls
-  (review.ts:191-198). So "Tier 2 degraded" in practice means
-  `nomic-embed-text` is present and `llama3.2:3b` is not.
+  (review.ts:191-198).
 
 ### 1.7 The audit row, written before the send
 
 The cloud review writes no call-log row today. It gains one, under the
 same "log before acting" rule as Decision 5: a `pending` row is appended
 after redaction and before the first `send`; if it cannot be appended,
-the run refuses and nothing is sent. The completion row follows.
+the run refuses and nothing is sent. Because the ids to be sent are
+known before the first send, the **pending row carries the disclosure
+ledger** (`result_ids`, `disclosed_scopes`, `redaction_tier`,
+`redaction_degraded`, host, model). The completion row follows with the
+outcome. If the completion append fails after sends (review note 9),
+the report is still saved and the job ends `done` with the warning "The
+review finished, but its log entry could not be completed"; the ledger
+of what was sent is already on disk in the pending row.
 Fields (content-free, existing field names where they exist):
 `tool: "review_api"`, `endpoint_host`, `model`, `privacy: "bounded"`,
 `redaction_tier` (the tier actually applied), `redaction_degraded`
@@ -314,8 +374,9 @@ nothing off the machine, and keep today's prompt and validation.
 - One parser, `parseReturnRedactionTier(env)`, shared by the MCP server
   and the CLI (replacing server.ts:73-75 and projectsCmd.ts:655):
   unset or `0` means 0; `1`, `2`, `3` mean that tier; **any other value
-  is refused** (see "Decisions for Jay", item 2, for the proposed
-  behaviour).
+  is refused** (Jay decision 2): the server starts, and every tool call
+  returns "NORTHKEEP_REDACT_TIER=<value> is not 0, 1, 2 or 3; nothing was
+  done." with no content, logged `ok: false`, `error: invalid_tier`.
 - **The CLI read path** (projectsCmd.ts:637-660, which "masks under
   NORTHKEEP_REDACT_TIER=1 the way the MCP tool does") follows the same
   rules: at 2 or 3 it masks through the same shared function the server
@@ -326,34 +387,64 @@ nothing off the machine, and keep today's prompt and validation.
 - **Tier 1:** unchanged (Tier-1 masking of returned content and project
   payloads).
 - **Tiers 2 and 3:** returned memory content and project payload fields
-  (the same fields `maskProjectFields` masks today, project-mask.ts:21)
+  (the fields `maskProjectFields` masks today, project-mask.ts:18-22)
   go through `redact()` at that tier. Pseudonyms are consistent for the
   life of the server process: one `PseudonymMap` held in RAM, never
-  written to disk, never logged.
+  written to disk, never logged. No run tag is used over MCP: the host
+  keeps what it reads, and nothing is ever restored from it.
+- **Tier 3 dates in every field (F4).** Tier 3 promises all dates to the
+  year, so at Tier 3 every date-valued string in a returned payload is
+  reduced to its four-digit year, including fields the Tier-1 walk
+  treats as identifiers. The date-typed keys, from `publicEntry`
+  (server.ts:145-155) and `PROJECT_IDENTIFIER_KEYS`
+  (project-mask.ts:8-16): `created_at`, `updated_at`, `checked_at`,
+  `saved_at`, `recorded_at`, `opened_at`, `last_read_at`, `oldest`,
+  `newest`, `date` (the board's dated items, the value the user typed),
+  `last_activity`, `generated_at`, and the new `completed_at`. Because a
+  list goes stale, the rule is also structural: at Tier 3 the walker
+  reduces any string leaf under an identifier key that parses as a full
+  date or date-time to its year. The enforcing test (C9b) calls every
+  read tool at Tier 3 and asserts no string leaf anywhere in any payload
+  matches a month-and-day pattern. Consequence: at Tier 3 the host
+  cannot order memories or revisions by exact time, only by year and by
+  list order. Revision ids, not dates, remain the write handle, and
+  writes are refused under masking anyway.
 - **Order.** The slow NER pass runs after the vault is closed, on the
   payload `fn` returned, never inside `withVault`. ADR 0044 already
   learned that holding the vault lock across a loopback model call
-  stalls every other tool (see the comment at server.ts:393-395).
-- **Degraded Tier 2** (name model unavailable): the call returns an error
-  and no content: "NORTHKEEP_REDACT_TIER=2 needs the local name model,
-  which is not running. Nothing was returned." A refused call is the
-  loudest signal an MCP host shows. Log row `ok: false`,
+  stalls every other tool (see the comment at server.ts:393-395). It
+  runs **before** the completion row is written, so the completion row
+  records the true outcome: a Tier-2 refusal writes `ok: false`, never
+  an `ok: true` disclosure row followed by a refusal (review note 7).
+- **Degraded Tier 2, any field (F3):** each field whose redaction reports
+  degraded is retried once; if any is still degraded, the **whole call**
+  returns an error and no content (never a partial payload): "Name
+  masking failed (NORTHKEEP_REDACT_TIER=2); nothing was returned. Start
+  the local model or use Tier 1 or 3." Completion row `ok: false`,
   `error: tier2-unavailable`.
-- **Degraded Tier 3:** content is returned with the deterministic layers
-  applied, the payload carries `redaction_note: "Tier 3 ran without the
-  name model; names outside the built-in lists may be unmasked."`, one
-  stderr line is written per process, and the log row carries
-  `redaction_degraded: true`. Honest limit: whether the user sees the
-  note depends on the host app showing tool output.
-- **Writes under any tier of 1 or more:** project writes are refused
-  (`refuseProjectWriteUnderTier1` becomes `refuseProjectWriteUnderMasking`,
-  testing `>= 1`). `memory_edit` with `content` is refused under any
-  tier of 1 or more; a type-only edit is allowed. Reason: the model only
-  saw masked text, so replacement content it writes can silently
-  overwrite the real value with a placeholder. (Jay decides, item 1.)
-- **Log rows** record the tier actually applied (2 degraded to 1 never
-  happens here: it refuses; 3 degraded stays 3 with the flag), not the
-  env string.
+- **Degraded Tier 3, any field:** content is returned with the
+  deterministic layers applied, the payload carries `redaction_note:
+  "Tier 3 ran without the name model; names outside the built-in lists
+  may be unmasked."`, one stderr line is written per process, and the
+  completion row carries `redaction_degraded: true`. Honest limit:
+  whether the user sees the note depends on the host app.
+- **Content writes under masking (F5, Jay decision 1).**
+  - Any tier of 1 or more: project writes are refused
+    (`refuseProjectWriteUnderTier1` becomes
+    `refuseProjectWriteUnderMasking`, testing `>= 1`), and `memory_edit`
+    with `content` is refused; a type-only edit is allowed.
+  - Tiers 2 and 3: `memory_remember` is refused too. The model has read
+    `Person-N` pseudonyms whose map lives only in this process's RAM, so
+    a saved "Person-3 moved to Boston" could never be turned back into a
+    name, and it would seed F1-style literals into later reviews.
+  - Tier 1: `memory_remember` stays allowed (a new fact the user states
+    is not masked text); residual R9 and open item O1.
+  - `memory_forget` writes no content and stays allowed.
+  - Refusal text: "Saving text is disabled while NORTHKEEP_REDACT_TIER=N
+    because this app only sees masked text."
+- **Log rows** record the tier actually applied (2 never degrades to 1
+  here: it refuses; 3 degraded stays 3 with the flag), not the env
+  string.
 
 ## Decision 3 (D3): error text is fenced and sanitized like results
 
@@ -365,8 +456,12 @@ task.ts:960-967), for **every** tool, not only MCP:
   of the error codes NorthKeep's tools and loop define (the web tools'
   `GUIDANCE` keys, the loop's own codes such as `tool_failed`,
   `budget_exceeded`, `tool_definitions_changed`), and a `guidance` value
-  is ours only if it is one of the fixed strings those tables and the
-  loop define. Checked in code: both web tools build `error` from a code
+  is ours only if it is one of the fixed strings those tables, the loop
+  and the MCP client define. The MCP client's own pair,
+  `tool_failed` / "The tool reported an error." (client.ts:397), is in
+  the set (review note 6), so the user-facing line keeps its reason.
+  `budget_exceeded`'s guidance is built from `budgetReason`, which is
+  one of two fixed strings (task.ts:758-760); both are listed. Checked in code: both web tools build `error` from a code
   constant and `guidance` from their `GUIDANCE` table or a fixed
   fallback (webFetch.ts:43-47, webSearch.ts:154-158); their `detail`
   can carry third-party text (`err.message` at webSearch.ts:259). Our
@@ -374,12 +469,20 @@ task.ts:960-967), for **every** tool, not only MCP:
   two fields only). Everything else is theirs: `detail`, any `error` or
   `guidance` value outside the closed set, and any failed content that
   is not our structured error JSON.
-- Their part is sanitized by Unicode category, not by lists: every code
-  point in `\p{Cc}` (C0 and C1 controls, newline included), `\p{Cf}`
-  (zero-width, bidi marks, BOM), `\p{Co}`, `\p{Cs}`, and `\p{Zl}`/`\p{Zp}`
-  is replaced by a space; the result is capped at 2000 characters. This
-  closes the gap that `sanitizeServerText` misses zero-width characters
-  and BOM while `wrapUntrusted`'s list misses C0/C1.
+- Their part is sanitized by Unicode category, not by lists, in this
+  order: NFKC normalization (so fullwidth brackets and NBSP become their
+  ASCII forms before the fence check); every code point in `\p{Cc}`
+  (C0 and C1 controls, newline included), `\p{Cf}` (zero-width, bidi
+  marks, BOM, tag characters), `\p{Co}`, `\p{Cs}`, `\p{Zl}`, `\p{Zp}`
+  and the variation selectors (U+FE00 to U+FE0F, U+E0100 to U+E01EF) is
+  replaced by a space; any fence lookalike, closed or not
+  (`\[\s*(END\s+)?EXTERNAL\s+CONTENT`, case-insensitive), is replaced
+  by `[fence-marker-removed]`; then the text is capped at **2000 code
+  points**, cut on a code point boundary so no lone surrogate can be
+  produced (review note 5). This closes the gaps that
+  `sanitizeServerText` misses zero-width characters and BOM, and that
+  `wrapUntrusted`'s list misses C0/C1. The success path's `wrapUntrusted`
+  and `truncateChars` are unchanged (residual R8).
 - The sanitized text is then wrapped with `wrapUntrusted` (per-task
   nonce, fence-lookalike defang), source label `<tool name> (error)`.
 - `resultContent` becomes our bare JSON, a newline, then the fence. The
@@ -401,19 +504,25 @@ task.ts:960-967), for **every** tool, not only MCP:
 - Why this is safe, stated as conditions the reviewer can check:
   1. The destination of the arguments is the vault on this machine. The
      server is our own `packages/mcp-server/dist/index.js`, launched with
-     the running Node (catalog.ts:47-58), and the launch fingerprint pin
-     (ADR 0033 Decision 1) refuses a swapped program under the same id.
+     the running Node (catalog.ts:47-58). The launch fingerprint pin
+     (ADR 0033 Decision 1) refuses a changed command, path or env under
+     the same id. It does **not** detect a file replaced in place: it
+     hashes the resolved path, command and env, not file content (review
+     attack 16). That does not weaken this decision: a program that can
+     replace NorthKeep's own server file already has everything the
+     server has, including read access to the whole vault, so `trusted`
+     gives it nothing more.
   2. It sends arguments nowhere by itself. Its only model client is
      Ollama, and `ollamaUrl()` refuses any non-loopback host with no
      override (packages/librarian/src/ollama.ts:20-29).
   3. What leaves after a write leaves on paths that already have their
      own rules, exactly as for a GUI write: the standalone server's
-     auto-sync (mcp-server/src/auto-sync.ts, ADR 0044) pushes the
-     encrypted vault (invariant 2); whether it also pushes Shared-scope
-     content to the connector was not confirmed while writing this ADR
-     (a grep of packages/sync/src/auto.ts found no connector push), and
-     the reviewer must check it. If it does, that push is invariant
-     1(b), which the user opted into per scope.
+     auto-sync (mcp-server/src/auto-sync.ts, ADR 0044) pushes only the
+     encrypted vault (invariant 2). Shared-scope content reaches the
+     connector only through `pushSharedScopes`, whose callers are
+     `/api/share/add`, `/api/share/sync` (the Share "Sync now" button)
+     and the CLI `share` commands, all user-initiated (confirmed by the
+     first review, attack 17). That push is invariant 1(b).
   4. The arguments are the user's own conversation, going into the
      user's own vault. The Tier-1 floor on `strict` servers exists
      because a local program may forward what it receives (invariant 1,
@@ -426,8 +535,14 @@ task.ts:960-967), for **every** tool, not only MCP:
 - ADR 0033 Decision 3 and the comment at config.ts:36-47 are amended:
   "local or ours" alone still does not earn `trusted`; the catalog's
   vault entry earns it because conditions 1 to 4 hold for that program.
-- Existing installs keep `strict` until the user acts (Jay decides the
-  upgrade path, item 3).
+- Existing installs (Jay decision 3): the MCP settings list shows, for a
+  stdio server whose resolved command and args equal the bundled vault
+  server's, one button, "This is my NorthKeep vault: save exactly what I
+  say". It opens a confirm that names the program path, and only the
+  confirm sets `trusted`. This is the one sanctioned exception to "never
+  inferred from a matching command": the match only offers the button,
+  and the user decides. C15 is amended accordingly: a matching custom
+  server stays `strict` until that confirm.
 
 ## Decision 5 (D7): log before acting
 
@@ -439,8 +554,13 @@ task.ts:960-967), for **every** tool, not only MCP:
    today's `base` fields plus `phase: "pending"`, `call_id`, `ok: false`,
    `error: "pending"`. If this append throws, the tool body does **not**
    run; the client gets "NorthKeep could not write its call log, so
-   nothing was done." No vault is opened.
-2. Run the tool body.
+   nothing was done." No vault is opened: `memory_retrieve`'s
+   pre-embedding step (`preEmbedForRetrieve`, server.ts:171-190, called
+   at server.ts:396), which today opens the vault before `run()`, moves
+   inside the envelope, after the pending row (review note 8). The
+   start-up warm-up call at server.ts:995 is not a tool call, discloses
+   nothing to a client, and is unchanged.
+2. Run the tool body, then (reads) the return masking of Decision 2.
 3. Append the **completion** row: today's row shape plus
    `phase: "done"` and the same `call_id`. Its `ts` stays the call's
    start time, as today (`base.ts` is set before `withVault`,
@@ -462,10 +582,12 @@ task.ts:960-967), for **every** tool, not only MCP:
      disclosure ledger (which ids went out) lives in the completion row,
      so a read whose ledger cannot be written discloses nothing.
    - after a failed tool body: return the tool's error as today.
-   (Jay decides, item 5.)
+   (Jay decision 5, recorded in Decision 7.)
 
-The catch path's append is wrapped too; an append failure there no
-longer replaces the tool's own error message.
+The catch path's row is a completion row like any other: `phase:
+"done"`, the same `call_id`, `ok: false`, and the error code. Its append
+is wrapped too; an append failure there no longer replaces the tool's
+own error message (review notes 7 and 21).
 
 ### 5.2 Why `ok: false` on the pending row
 
@@ -486,8 +608,11 @@ session or close one, in any version. New readers use `phase`.
   vault already has; nothing new is stored.
 - **`northkeep log`, the GUI activity list (api.ts:706), audit JSON and
   CSV:** a pending row with a matching completion row is folded into the
-  completion row. A pending row with no completion is shown as
-  "outcome unknown (interrupted)", never as success and never hidden.
+  completion row. A pending row with no completion is shown as "in
+  progress" while it is under five minutes old and as "outcome unknown
+  (interrupted)" after that, never as success and never hidden.
+- **Counting:** `readCallLog(n)` folds first and then takes the last `n`
+  calls, so `northkeep log -n 2` shows two calls, not two raw rows.
   CSV appends two columns at the end, `phase` and `call_id`
   (audit.ts:28 says columns are appended, never inserted).
 - **Mixed rows:** chat and task rows written by `runTurn`/`runTask`
@@ -514,9 +639,20 @@ Local `project_update` description, replacing server.ts:765-770
 > decision. Updates merge into the existing sections; they do not
 > replace the whole document. The live document keeps only its newest
 > Log entries; older ones roll into an archive memory in the project
-> scope (the result's archive_summary counts them), so a log entry is
-> never refused for size. Only a document whose hand-written sections
-> alone exceed 16384 characters is refused. NorthKeep never truncates.
+> scope (the result's archive_summary counts them), so the Log's
+> history never makes an update fail. An update is refused only when the
+> document is still over 16384 characters with just the newest Log entry
+> kept: long hand-written sections, or a long new entry on a nearly full
+> document. NorthKeep never truncates.
+
+This is the true rule: `rollProjectLog` keeps at least the newest entry,
+then `assertProjectDocSize` refuses (project-doc.ts:241-264,
+project-handoff.ts:193). The first draft's "a log entry is never refused
+for size" was false at the edge (review attack 24: a 14116-character
+document plus a 4000-character entry is refused). The hosted
+description (apps/connector-server/src/mcp.ts:791-793) has the same
+flaw; fixing it is a connector deploy and is listed under "What this
+does not build".
 
 `mergeProjectDoc` docstring (project-doc.ts:161-165): drop "Throws if the
 serialized result exceeds PROJECT_DOC_MAX_CHARS" and say that size is
@@ -535,12 +671,12 @@ and exists to stop a later regression. A guard is not evidence of a fix.
 
 | # | claim | test (planned file) | old code |
 |---|---|---|---|
-| C1 | A cloud review sends no seeded Tier-1 value; at Tier 3 no seeded full date, no dictionary name, and `created_at` as year only | `apps/web/test/review-api-redact.test.ts`: stub provider records wire text; corpus seeded into memories; assert no original and no full `created_at` appears | fails: wire text is the raw prompt |
+| C1 | A cloud review sends no seeded Tier-1 value, in content **or in a collection name**; at Tier 3 no seeded full date, no dictionary name, and `created_at` as year only | `apps/web/test/review-api-redact.test.ts`: stub provider records wire text; corpus seeded into memories; assert no original and no full `created_at` appears | fails: wire text is the raw prompt |
 | C2 | The API adapter has no free-text send | `packages/converse/test/reviewApi.test.ts`: `send` rejects a hand-built object and a string; only a `prepare` handle passes | fails: `generateJson(prompt)` accepts any string |
-| C3 | Placeholder numbering is consistent across a run | `packages/redact/test/session.test.ts`: two different emails in two calls sharing a session get `[EMAIL_1]`, `[EMAIL_2]`; the same email twice gets one placeholder | fails: numbering restarts per call |
+| C3 | Placeholder numbering is consistent across a run and tagged | `packages/redact/test/session.test.ts`: two different emails in two calls sharing a session get `[<tag>:EMAIL_1]`, `[<tag>:EMAIL_2]`; the same email twice gets one token; two different 1948 dates get two tokens | fails: numbering restarts per call, dates collide |
 | C3g | Without a session, `redact()` output is unchanged | same file, against today's corpus outputs | guard |
 | C4 | A quote containing placeholders validates against stored text, and the report keeps the stored span | `packages/librarian/test/review-restore.test.ts`, including a `[DATE-1948]` quote over an entry with two 1948 dates and a lowercased pseudonym original | fails: `includes()` rejects any placeholder |
-| C5 | `proposed_content` is restored, including Tier 1; ambiguous or unmapped placeholders drop the proposal | same file; drop reasons `ambiguous_placeholder`, `unmapped_placeholder` | fails: placeholder text would be written |
+| C5 | `proposed_content` is restored, including Tier 1; untagged placeholder-looking text not present in a cited entry drops the proposal | same file; drop reason `unmapped_placeholder` | fails: placeholder text would be written |
 | C5b | `explanation` and `question` restore unambiguous placeholders and keep ambiguous ones visible, without dropping | same file | fails: no restoration |
 | C5c | Restoration runs on parsed leaves: an original containing `"` and `\` round-trips | same file | fails: no restoration |
 | C6 | Tier 2 degraded refuses the review before any send | web test, NER stub offline: stub provider receives zero calls, job `failed`, audit row `tier2-unavailable` | fails: no tier exists |
@@ -556,27 +692,42 @@ and exists to stop a later regression. A guard is not evidence of a fix.
 | C13b | An `error` or `guidance` value outside the closed set is fenced, and `errorLine` shows `tool_failed` instead | same file | fails: passes through |
 | C13g | `errorLine` never contains `detail` | same file | guard |
 | C14 | The catalog vault server receives `memory_remember` content unmasked | `packages/converse/test/mcp-catalog-trust.test.ts`: catalog add, then a task call (gate stub approves once) with an email in content; the stub server records the arguments | fails: arrives as `[EMAIL_1]` |
-| C15 | A custom-added server with the vault's exact command stays `strict` | same file | guard |
+| C15 | A custom-added server with the vault's exact command stays `strict` until the user confirms the "This is my NorthKeep vault" button; the confirm sets `trusted` | same file | guard for the first half; fails for the button (does not exist) |
 | C16 | When the log cannot be appended, a write does not happen | `packages/mcp-server/test/log-first.test.ts`: directory at the log path, `memory_remember` and `project_update`: vault bytes unchanged, error returned | fails: write lands |
 | C17 | When the completion row fails after a write, the client gets a content-free acknowledgement plus `log_warning`; after a read, no payload | same file, append injected to fail on its second call | fails: error returned after the write |
 | C18 | Pending rows never open or close a session | `packages/mcp-server/test/open-sessions.test.ts`, run against this build's derivation and against a copy of the pre-0060 derivation | guard (both pass on old code by the `ok === true` rule; the test pins it) |
 | C18b | A session is closed when a project revision recorded at or after its last read names it as the writer, even with no completion row | same file | fails: derivation reads only the log |
 | C18c | A pending row with a completion folds into one row in `northkeep log`, the GUI list and audit JSON/CSV; one without shows "outcome unknown (interrupted)" | `packages/cli/test/log-fold.test.ts`, `packages/mcp-server/test/audit.test.ts` | fails: no phase handling |
-| C19 | The project_update description no longer says to prune the Log | `packages/mcp-server/test/tool-text.test.ts`: description contains "roll" and not "prune" | fails: says "prune the Log" |
+| C20 | Literal placeholder text in stored memories never collides with issued tokens (F1): review A1 (a literal `[EMAIL_1]` in the "ex's address" memory alongside a therapist's real email elsewhere in the run), A3 (a literal `Person-1` alongside "Donna Keller" at Tier 3) and A4 (one memory with a literal `[EMAIL_1]` and a real email) each produce a proposal whose restored text contains no value that was not already in the target or a cited entry | `packages/librarian/test/review-restore.test.ts` with the real `redact()` session | fails: shared numbering restores the therapist's email and "Donna Keller" |
+| C21 | The run tag occurs in no stored text of the run; a vault seeded with `[<tag>:` for the first drawn tag forces a redraw | `packages/converse/test/reviewApi.test.ts` with an injected tag source | fails: no tag |
+| C22 | A reply for pack B that names a token only pack A's prompt contained is dropped as `foreign_placeholder` (F2, review A2) | `packages/librarian/test/review-restore.test.ts` | fails: restored to pack A's original |
+| C23 | A restored original that occurs in no cited entry (for example one seen only in a scope line) drops the proposal as `uncited_original` | same file | fails: no rule |
+| C24 | Tier-2 cloud review: a name-model stub that fails one memory's call once succeeds on retry and the run proceeds; one that fails it twice refuses the whole run with zero provider calls (F3) | `apps/web/test/review-api-redact.test.ts` | fails: that memory is sent at Tier 1 while the run is labelled Tier 2 |
+| C25 | Tier-2 over MCP: one field's name-model call failing twice refuses the whole call with no content; completion row `ok: false` and no `ok: true` row for the call (F3, note 7) | `packages/mcp-server/test/redact-tier.test.ts` | fails: plaintext |
+| C9b | At Tier 3 over MCP no string leaf in any read tool's payload (memory, project, board, list, resume) matches a month-and-day date pattern; `created_at` and the board's `date` are years (F4) | `packages/mcp-server/test/redact-tier.test.ts`, walking every read tool | fails: `"date":"2026-10-03"`, full `created_at` |
+| C26 | `memory_remember` is refused at Tiers 2 and 3 and allowed at Tier 1 (F5) | same file | fails: allowed at 2 and 3 |
+| C27 | `prepare` refuses a non-UUID id or a type outside the enum | `packages/converse/test/reviewApi.test.ts` | fails: no check |
+| C28 | The error sanitizer removes NBSP, fullwidth and unclosed fence lookalikes and variation selectors, and a 2000-code-point cap after an emoji never leaves a lone surrogate | `packages/converse/test/task-error-fence.test.ts` | fails: no sanitizer on the error path |
+| C29 | An error-path completion row carries `phase: "done"` and the call's `call_id` | `packages/mcp-server/test/log-first.test.ts` | fails: no call id |
+| C30 | `memory_retrieve` with an unwritable log opens no vault (no pre-embed read) | same file, with an instrumented vault open | fails: pre-embed opens it |
+| C31 | The review's pending row carries the ids and scopes to be sent; a completion-row failure after the sends still saves the report and ends `done` with the warning | `apps/web/test/review-api-redact.test.ts` | fails: no row |
+| C19 | The project_update description no longer says to prune the Log, and does not say a log entry is never refused | `packages/mcp-server/test/tool-text.test.ts`: contains "roll", not "prune", not "never refused"; plus the edge case of review attack 24 is refused with the cap message | fails: says "prune the Log" |
 
 ## Residuals (documented, not closed)
 
-- **R1. Collection names, ids and types leave as written** at every tier.
-  A collection named after a client or patient leaves with every review.
-  The panel says so.
+- **R1. Names in collection names leave as written** at every tier;
+  secrets in them are Tier-1 masked (F6). Ids and types leave as
+  written, and are validated as a UUID and an enum value. A collection
+  named after a client or patient leaves with every review. The panel
+  says so.
 - **R2. Masking is only as good as the tier.** Tier 1 masks secret
   shapes, not names; Tier 2 depends on the local name model's recall;
   Tier 3's floor is its dictionaries. Anything the tier does not detect
   leaves in plain text, as in chat.
-- **R3. Review quality drops.** The model reasons over placeholders; a
-  stale-date finding between two `[DATE-1948]` values cannot be
-  established at Tier 3, and some proposals will drop as ambiguous. This
-  is the cost of Jay's "Redact it".
+- **R3. Review quality drops.** The model reasons over placeholders; at
+  Tier 3 it sees `[k7q2:DATE_1948_1]` and `[k7q2:DATE_1948_2]` and cannot
+  tell which is later, and some proposals will drop (`uncited_original`,
+  `foreign_placeholder`). This is the cost of Jay's "Redact it".
 - **R4. Screens still apply to the trusted vault server.** A
   `memory_remember` containing an SSN, card, IBAN or API key is
   hard-denied by ADR 0029 even though the destination is the local
@@ -591,17 +742,42 @@ and exists to stop a later regression. A guard is not evidence of a fix.
   memories carry no writer session id, so unlike projects this cannot be
   reconciled from the vault.
 - **R8. The error fence reduces, and does not remove, prompt injection
-  through error text** (same limit KNOWN-LIMITS states for results).
+  through error text** (same limit KNOWN-LIMITS states for results). The
+  success path keeps today's `wrapUntrusted` list and code-unit
+  `truncateChars`, so NBSP or fullwidth fence lookalikes, variation
+  selectors and a split surrogate can still appear inside a successful
+  result's fence; the per-task nonce still holds (review attack 14).
+- **R9. `memory_remember` at Tier 1 over MCP** can store a Tier-1
+  placeholder the host read (`[EMAIL_1]`) as literal text (review attack
+  3). Those literals can no longer collide with a cloud review's tokens
+  (F1 closed by the run tag), but the memory itself holds a masked value.
+  Open item O1.
+- **R10. Provider behaviour with placeholders is unverified against a
+  real provider.** Whether real models copy `[k7q2:EMAIL_1]` exactly, or
+  invent tokens, has not been observed; F2's likelihood and the drop
+  rate depend on it. Before this is called done, one live review run on a
+  throwaway vault of fake data against a real provider is required (the
+  repo rule on verifying against reality); Jay runs it.
+- **R11. Tier 3 over MCP loses exact ordering by time.** All dates are
+  years (F4); list order is the only finer ordering the host gets.
 
 ## What this does not build
 
-- No change to chat, task, or mobile redaction; no change to published
-  placeholder shapes (`[DATE-YYYY]` stays un-numbered).
+- No change to chat, task, MCP or mobile redaction shapes: the tagged,
+  date-numbered tokens exist only inside a cloud review session.
 - No restoration of Tier-2 pseudonyms in MCP replies (there is still no
   response hook; ADR 0003's parked proxy).
 - No override that lets a loopback stub count as a `bounded` endpoint.
   Adding one would be a bypass in a privacy classifier.
-- No automatic upgrade of existing `strict` vault entries.
+- No automatic upgrade of existing `strict` vault entries (the user
+  confirms, Decision 4).
+- No fix to the hosted `project_update` description's "never refused for
+  size" sentence (a connector deploy; flagged for a separate change).
+- Out of scope, noted by the first review: the Tier-1 email detector
+  misses `mom+(old)@example.com` (note 11); the review report is
+  plaintext JSON on disk with memory snapshots, which contradicts
+  log.ts's header claim (note 12). Both are real and need their own
+  change.
 - No change to the hosted connector, sync, or the ADR 0029 screens.
 - No audit of other cloud send paths (guided consolidation, ADR 0047)
   beyond what the release pass already checked.
@@ -616,27 +792,32 @@ ADR 0033 Decision 3 and the config.ts comment; ADR 0052's call-log
 correction note. Each rewrite is a published claim and ships under the
 same review gate.
 
-## Decisions for Jay
+## Decision 7: Jay's decisions (2026-09-24, "Accept all")
 
-1. **`memory_edit` under masking.** Proposed: refuse content edits when
-   any MCP tier of 1 or more is on (type-only edits still work). The
-   alternative is to allow them and accept that a model can overwrite a
-   real value with a placeholder it saw.
-2. **An invalid `NORTHKEEP_REDACT_TIER` value** (for example `yes` or
-   `4`). Proposed: the server starts, but refuses every tool call with
-   "NORTHKEEP_REDACT_TIER=<value> is not 0, 1, 2 or 3", so the mistake
-   shows in the AI app rather than only in a log. Alternative: treat it
-   as Tier 1 plus a note, which keeps working but hides the typo.
-3. **Existing vault servers added as `strict`.** Proposed: the Tools
-   settings list shows, for a server whose launch matches the bundled
-   vault server, one button "This is my NorthKeep vault: save exactly
-   what I say", which sets `trusted` after a confirm. Alternative: a
-   release-note line telling users to remove and re-add it.
-4. **Tier 3 and `created_at`.** Proposed: year only at Tier 3 (1.1).
-   Alternative: always send it, for better stale detection.
-5. **Completion row failure.** Proposed: a write returns a content-free
-   "saved" acknowledgement with a warning; a read returns an error and no
+1. **Content edits under masking:** `memory_edit` with content is refused
+   whenever any MCP tier of 1 or more is on; type-only edits still work
+   (Decision 2).
+2. **A mistyped `NORTHKEEP_REDACT_TIER`:** every tool call is refused,
+   naming the bad value (Decision 2).
+3. **Existing installs:** a one-click "This is my NorthKeep vault" fix,
+   with a confirm, sets `trusted` (Decision 4).
+4. **Tier 3 cloud review:** recording dates go out as the year only
+   (1.1).
+5. **Log failure after a save:** a write returns a content-free "saved"
+   acknowledgement with a warning; a read returns an error and no
    payload (5.1).
+
+## Open items for Jay
+
+- **O1. `memory_remember` at Tier 1 over MCP.** Proposed: leave it
+  allowed (a Tier-1 host still needs to save new facts), accepting R9.
+  Alternative: refuse a save whose text contains a NorthKeep placeholder
+  shape such as `[EMAIL_1]`, which would also refuse the rare memory
+  that legitimately contains that text.
+- **O2. Names in collection names (R1).** They are sent as written at
+  every tier. Proposed: accept it, with the panel sentence. Alternative:
+  run the tier's name layers over scope names too (cheap, but a
+  collection named "Donna Keller" would reach the model as a token).
 
 ## Acceptance (Jay, from the CLI)
 
@@ -665,22 +846,27 @@ nk remember "Reach me at bob@example.com, born 03/15/1948" --scope personal
 2. **Tier 3 over MCP masks more (D4).** Point the name model at a port
    nothing listens on, so the degraded case is certain whether or not
    Ollama is running (`ollamaUrl()` accepts any loopback address):
-   `NORTHKEEP_OLLAMA_URL=http://127.0.0.1:9 app 3 list personal` prints `[EMAIL_1]`, `[DATE-1948]`, and the line
+   `NORTHKEEP_OLLAMA_URL=http://127.0.0.1:9 app 3 list personal` prints `[EMAIL_1]`, `[DATE-1948]`, a
+   `created_at` that is only a year, and the line
    `note: Tier 3 ran without the name model`.
 3. **Tier 2 without the name model refuses (D4).**
-   `NORTHKEEP_OLLAMA_URL=http://127.0.0.1:9 app 2 list personal` prints `refused: NORTHKEEP_REDACT_TIER=2 needs the local name model`
+   `NORTHKEEP_OLLAMA_URL=http://127.0.0.1:9 app 2 list personal` prints `refused: Name masking failed (NORTHKEEP_REDACT_TIER=2)`
    and no memory text.
 4. **A typo is refused (D4).** `app yes list personal` prints
    `refused: NORTHKEEP_REDACT_TIER=yes is not 0, 1, 2 or 3`.
-5. **No project writes while masking (D4).** `app 2 update demo` prints
-   a refusal naming masking; `nk projects list` shows no `demo`.
+5. **No content writes while masking (D4).** `app 2 update demo` and
+   `app 2 remember "Person-3 moved"` each print
+   `refused: Saving text is disabled while NORTHKEEP_REDACT_TIER=2`;
+   `nk projects list` shows no `demo`, and
+   `nk list --scope personal | grep -c "Person-3"` prints `0`.
 6. **Log before writing (D7).** `mv "$NORTHKEEP_HOME/mcp-calls.log" /tmp/nk-0060-acceptance/log.bak; mkdir "$NORTHKEEP_HOME/mcp-calls.log"`,
    then `app 0 remember "should not be saved"` prints
    `refused: NorthKeep could not write its call log`, and
    `nk list --scope personal | grep -c "should not be saved"` prints `0`.
    Restore with `rmdir "$NORTHKEEP_HOME/mcp-calls.log"; mv /tmp/nk-0060-acceptance/log.bak "$NORTHKEEP_HOME/mcp-calls.log"`.
-7. **Pending rows fold (D7).** `app 0 list personal` then `nk log -n 2`
-   shows one row for that call, not two.
+7. **Pending rows fold (D7).** `app 0 list personal` then `nk log -n 1`
+   shows that `memory_list` call, once, as succeeded (not a `pending`
+   row).
 8. **Vault server saves what you say (D6).**
    `app catalog-remember "my email is bob@example.com"` adds the vault
    server from the catalog in the throwaway home, runs one task through a
@@ -698,5 +884,59 @@ nk remember "Reach me at bob@example.com, born 03/15/1948" --scope personal
 
 ## Review history
 
-None yet. The adversarial review of this design, against code, is
-required before implementation and is recorded here when it runs.
+### First review, 2026-09-24: CLEARED WITH WOUNDS
+
+Fresh-eyes subagent, against code at `ae870d3`, in an isolated worktree
+with a throwaway `NORTHKEEP_HOME`; no real provider called. Report:
+`Reviews/adr-0060/r1-first-review.md`; scripts under the review
+worktree's `.adversarial/0060-r1/`. It confirmed by execution that D4
+(tiers 2, 3 and `yes` return plaintext) and D7 (a write lands with no
+row when the log append fails) are real on old code. No kill shot,
+because every cloud-review write needs a per-item Save of the exact
+text.
+
+Flesh wounds and how this revision closes them:
+
+- **F1** (run numbering collides with placeholder-looking text already
+  stored; the therapist's email restored into the ex's note, a literal
+  `Person-1` restored to "Donna Keller"): tokens are issued in a per-run
+  tagged namespace whose prefix is checked absent from all stored text,
+  dates are numbered inside a session, only issued tokens are restored,
+  and a restored original must occur in a cited entry (1.3, 1.4; C20,
+  C21, C23).
+- **F2** (a reply for one pack could restore a token only another pack
+  was shown): restoration accepts only the tokens that pack's own prompt
+  contained; others drop as `foreign_placeholder` (1.4 step 0; C22).
+- **F3** (one failed name-model call silently degraded one item while the
+  run stayed labelled Tier 2): degradation is judged per call, retried
+  once, and at Tier 2 refuses the whole run (D2) or the whole call (D4);
+  Tier 3 proceeds with a run-level flag (1.6, Decision 2; C24, C25).
+- **F4** (exact dates left at Tier 3 over MCP in `date` and
+  `created_at`): every date-valued field reduces to the year at Tier 3,
+  by key list and by a structural rule, with a test over every read tool
+  (Decision 2; C9b).
+- **F5** (`memory_remember` allowed under Tiers 2 and 3): refused at
+  Tiers 2 and 3; Tier 1 left as open item O1 (Decision 2; C26).
+- **F6** (Tier-1 shapes in collection names sent unmasked): scope names
+  are Tier-1 masked in the run session; display stays local and real;
+  scope-only tokens can never be restored (1.1; C1, C23).
+
+Notes taken: D6 condition 1 reworded (the pin does not detect an
+in-place file swap; the conclusion stands) and condition 3 closed with
+the review's evidence; the confirm button is named as the one sanctioned
+exception to "never inferred" (C15); D8 wording now states the true
+rule (C19); the D3 cap counts code points, the sanitizer adds NFKC,
+variation selectors and unclosed or lookalike fences, and the MCP
+client's fixed error pair is in the closed set (C28); D7 now specifies
+the error-path row (`phase`, `call_id`), in-flight versus interrupted
+labels, fold-then-slice counting, masking before the completion row,
+and the pre-embed moved inside the envelope (C29, C30); D2 1.7 now says
+what happens when the review's completion row fails (C31); `prepare`
+validates ids and types (C27). Notes 11 and 12 are out of scope and
+listed under "What this does not build". The unverified provider
+behaviour is residual R10.
+
+### Design fix round, 2026-09-24
+
+Design only, no product code. Jay's five decisions recorded as
+Decision 7. Awaiting the recheck.
