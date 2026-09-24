@@ -873,6 +873,9 @@ async function dispatch(
       vault_scopes: vaultScopes,
       counts,
       unlocked,
+      // A paired device may sync with nothing shared: that sync is how a project
+      // created in a connected app first arrives (ADR 0050 Decision 5).
+      paired: connectorPairedAt() !== null,
       // The URL the user pastes into Claude/ChatGPT to add the connector (the MCP
       // mount is /mcp on the connector server — apps/connector-server).
       mcp_url: config ? mcpUrl(config.server) : null,

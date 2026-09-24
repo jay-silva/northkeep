@@ -563,6 +563,15 @@ describe('POST /api/share/sync and /api/share/pair (ADR 0050 Decision 5)', () =>
     expect((res.body as { skipped: number }).skipped).toBe(1);
   });
 
+  it('reports whether this device has paired, so the GUI can enable Sync with nothing shared', async () => {
+    const before = await call('GET', '/api/share/status');
+    expect((before.body as { paired: boolean; shared_scopes: string[] }).paired).toBe(false);
+    expect((before.body as { shared_scopes: string[] }).shared_scopes).toEqual([]);
+    markConnectorPaired();
+    const after = await call('GET', '/api/share/status');
+    expect((after.body as { paired: boolean }).paired).toBe(true);
+  });
+
   it('records the pairing so the next sync folds from an empty shared list', async () => {
     stubConnector([]);
     const res = await call('POST', '/api/share/pair');

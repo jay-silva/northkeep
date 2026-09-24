@@ -1098,7 +1098,8 @@
     <h3 class="sect">Sync now</h3>
     <div class="card">
       <p class="muted" style="margin:0 0 10px;font-size:13px">Pull memories you created (or forgot) inside your
-        AI apps back into this vault, then re-push so the server matches. Runs only on your shared scopes.</p>
+        AI apps back into this vault, then re-push so the server matches. Pushes only your shared scopes. Once this
+        Mac is paired it also brings in a new project created in a connected app.</p>
       <div class="row"><button class="btn" id="shareSyncBtn">Sync now</button></div>
       <p class="muted" id="shareSyncResult" hidden style="margin:10px 0 0;font-size:13px"></p>
       <div class="err" id="shareSyncErr"></div>
@@ -5427,7 +5428,9 @@
     sl.textContent = s.server ? 'Connector server: ' + s.server : '';
     const hasServer = Boolean(s.server);
     $('sharePairBtn').disabled = !hasServer;
-    $('shareSyncBtn').disabled = !hasServer || (s.shared_scopes || []).length === 0;
+    // Paired with nothing shared still syncs: that is how a project created in
+    // a connected app first arrives (ADR 0050). Never paired means no account.
+    $('shareSyncBtn').disabled = !hasServer || ((s.shared_scopes || []).length === 0 && !s.paired);
     renderShareScopes(s);
   }
 
@@ -5618,7 +5621,11 @@
       startPairCountdown(r.expires_in_seconds || 600);
     } catch (e) {
       if (e.message !== 'locked') $('sharePairErr').textContent = e.message;
-    } finally { $('sharePairBtn').disabled = false; }
+    } finally {
+      $('sharePairBtn').disabled = false;
+      // Pairing is what enables Sync now with nothing shared; refresh the button.
+      await loadSharing();
+    }
   });
   // Copy helper: prefer the async Clipboard API (127.0.0.1 is a secure context),
   // fall back to a hidden textarea + execCommand for any browser that blocks it,
