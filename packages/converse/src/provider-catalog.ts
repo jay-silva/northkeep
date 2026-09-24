@@ -60,7 +60,7 @@ export const KNOWN_PROVIDERS: ProviderInfo[] = [
     keySteps: [
       'Sign in at console.anthropic.com.',
       'Open Settings → API keys and click Create Key.',
-      'Copy the key (starts with sk-ant-) — it is shown only once.',
+      'Copy the key (starts with sk-ant-). It is shown only once.',
     ],
     keyPrefix: 'sk-ant-',
     docsUrl: 'https://docs.anthropic.com/en/api/overview',
@@ -79,7 +79,7 @@ export const KNOWN_PROVIDERS: ProviderInfo[] = [
     keySteps: [
       'Sign in at platform.openai.com.',
       'Open API keys and click Create new secret key.',
-      'Copy the key (starts with sk-) — it is shown only once.',
+      'Copy the key (starts with sk-). It is shown only once.',
     ],
     keyPrefix: 'sk-',
     docsUrl: 'https://platform.openai.com/docs/api-reference',
@@ -161,7 +161,7 @@ export const KNOWN_PROVIDERS: ProviderInfo[] = [
     baseUrl: 'https://openrouter.ai/api/v1',
     keyUrl: 'https://openrouter.ai/keys',
     keySteps: [
-      "Meta has no first-party Llama API — NorthKeep hosts Llama via OpenRouter.",
+      "Meta has no first-party Llama API, so NorthKeep hosts Llama via OpenRouter.",
       'Sign in at openrouter.ai and open Keys → Create Key.',
       'Copy the key (starts with sk-or-).',
     ],

@@ -279,7 +279,7 @@ export function suggestBetterModel(
         modelLabel: bestOwned.ep.label,
         task,
         reason:
-          `${taskNoun(task)} — you have ${bestOwned.ep.label} connected, which is stronger here. ` +
+          `${taskNoun(task)}: you have ${bestOwned.ep.label} connected, which is stronger here. ` +
           `Route it there: "routing set ${task} <that endpoint>", or pick it for this chat.`,
       };
     }
@@ -301,7 +301,7 @@ export function suggestBetterModel(
   return {
     modelLabel,
     task,
-    reason: `${taskNoun(task)} — ${modelLabel} would handle this better; connect it to route it there.`,
+    reason: `${taskNoun(task)}: ${modelLabel} would handle this better; connect it to route it there.`,
   };
 }
 

@@ -59,7 +59,7 @@ NEVER record facts about anyone else. If the user pastes or describes a
 document, report, patient, client, colleague, or any third party, that content
 is their WORK, not facts about them. Do not turn a person named in that content
 into the user. For example, from a patient report about "Donna, a 77-year-old
-with macular degeneration," extract NOTHING — Donna is not the user. Never write
+with macular degeneration," extract NOTHING: Donna is not the user. Never write
 "The user is <a name found in pasted content>."
 
 Rules:

@@ -45,7 +45,7 @@ export function keychainDeleteMasterKey(): 'removed' | 'not-found' {
     // STORED (keychain locked/denied) — never report that as locked.
     if ((err as { status?: number }).status === 44) return 'not-found';
     throw new Error(
-      'Could not access the macOS Keychain to remove the key — the vault may still be unlocked. Try again.',
+      'Could not access the macOS Keychain to remove the key. The vault may still be unlocked. Try again.',
     );
   }
 }

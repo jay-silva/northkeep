@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS vault_meta (
 
 -- Per-scope sharing state (ADR 0038, schema 0.3). Inside the vault so it syncs
 -- with the vault: a scope marked Shared on one device is Shared on all of them.
--- Default private is structural — no row (or shared = 0) means private, and a
+-- Default private is structural: no row (or shared = 0) means private, and a
 -- fresh migration creates this table EMPTY.
 CREATE TABLE IF NOT EXISTS scopes (
   scope     TEXT PRIMARY KEY,

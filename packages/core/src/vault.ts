@@ -510,7 +510,7 @@ export class Vault {
     const matches = this.db.prepare(`${sql} ORDER BY rowid ASC`).all(...args) as EntryRow[];
     if (matches.length === 0) throw new Error(`No memory found matching id "${prefix}".`);
     if (matches.length > 1) {
-      throw new Error(`Id prefix "${prefix}" matches ${matches.length} memories — be more specific.`);
+      throw new Error(`Id prefix "${prefix}" matches ${matches.length} memories. Be more specific.`);
     }
     const row = matches[0]!;
     const forgottenAt = new Date().toISOString();
@@ -1390,7 +1390,7 @@ export class Vault {
     const matches = this.db.prepare(`${sql} ORDER BY rowid ASC`).all(...args) as EntryRow[];
     if (matches.length === 0) throw new Error(`No memory found matching id "${prefix}".`);
     if (matches.length > 1) {
-      throw new Error(`Id prefix "${prefix}" matches ${matches.length} memories — be more specific.`);
+      throw new Error(`Id prefix "${prefix}" matches ${matches.length} memories. Be more specific.`);
     }
     return rowToEntry(matches[0]!);
   }

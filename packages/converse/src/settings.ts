@@ -78,7 +78,7 @@ export function addEndpoint(input: AddEndpointInput): EndpointConfig {
   const hasKey = input.apiKey !== undefined && input.apiKey.length > 0;
   if (hasKey && tier === 'bounded' && new URL(baseUrl).protocol !== 'https:') {
     throw new Error(
-      'Refusing to store an API key for a plain-http public endpoint — the key would cross the network unencrypted. Use https.',
+      'Refusing to store an API key for a plain-http public endpoint: the key would cross the network unencrypted. Use https.',
     );
   }
   const file = load();
@@ -149,7 +149,7 @@ export function setEndpointKey(id: string, apiKey: string): void {
   if (/[\n\r]/.test(apiKey)) throw new Error('Malformed API key.');
   if (!keychainAvailable()) {
     throw new Error(
-      `No Keychain available on this system. For scripting/tests, pass the key via the ${keyEnvVar(id)} environment variable instead — NorthKeep never writes API keys to files.`,
+      `No Keychain available on this system. For scripting/tests, pass the key via the ${keyEnvVar(id)} environment variable instead. NorthKeep never writes API keys to files.`,
     );
   }
   // security -i takes commands on stdin so the key never hits a command

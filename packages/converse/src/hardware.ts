@@ -60,11 +60,11 @@ export function recommendLocalModel(hw: HardwareProfile = detectHardware()): {
 
   let reason: string;
   if (ram < 8) {
-    reason = `${ram} GB — runs a small ${tier.size} model (memory is tight).`;
+    reason = `${ram} GB: runs a small ${tier.size} model (memory is tight).`;
   } else if (ram < 16) {
-    reason = `${ram} GB — comfortably runs a ${tier.size} model (a safe default).`;
+    reason = `${ram} GB: comfortably runs a ${tier.size} model (a safe default).`;
   } else {
-    reason = `${ram} GB — comfortably runs a ${tier.size} model.`;
+    reason = `${ram} GB: comfortably runs a ${tier.size} model.`;
   }
 
   return { tag: tier.tag, label, sizeGB: tier.sizeGB, reason };
