@@ -2748,7 +2748,9 @@
     if (d.rescope) { openRescope(d.rescope, d.scope, e.target); return; }
     const id = d.forget;
     if (!id) return;
-    if (!confirm('Forget this memory?\nIts content is removed permanently; the deletion itself stays on the record.')) return;
+    if (!confirm('Forget this memory?\nIts content is removed from the vault; the deletion itself stays on the record. ' +
+      'Copies outside the vault are not touched: the previous vault state stays in the backup file until the next write, ' +
+      'and a plaintext file such as a saved memory review report may still hold it.')) return;
     await api('/api/forget', { method: 'POST', json: { id } });
     await refreshStatus();
   });

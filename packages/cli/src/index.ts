@@ -225,7 +225,8 @@ program
       const tombstone = vault.forget(id);
       vault.save();
       console.log(`✓ Forgot ${tombstone.id} (content removed; deletion recorded ${tombstone.forgotten_at})`);
-      console.log('  Note: the previous vault state remains in vault.nkv.bak until the next write.');
+      console.log('  Note: the previous vault state remains in vault.nkv.bak until the next write, and a plaintext');
+      console.log('  file outside the vault, such as a saved memory review report, may still hold a copy.');
     });
   });
 
