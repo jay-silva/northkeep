@@ -4,7 +4,7 @@
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** support@northkeep.ai · **Effective date:** July 27, 2026
+**Contact:** support@northkeep.ai · **Effective date:** 2026-09-XX
 
 These Terms govern your use of the NorthKeep software and the optional hosted
 sync service (together, the "Service"). By installing the software or using the
@@ -71,18 +71,23 @@ share** to a NorthKeep connector server so the AI apps you connect can reach
 them. It is part of the hosted subscription.
 
 - **Opt-in and reversible.** Sharing is off by default and happens per scope, only
-  after you confirm. You can unshare a scope at any time, which deletes its content
-  from the connector server (this cannot recall copies an app already retrieved).
+  after you confirm, with one exception: when an AI app you connected creates a
+  new project that does not yet exist on your device, your device marks that
+  project shared without a separate confirmation and adds the project document;
+  from then on it is an ordinary shared scope. You can unshare a scope at any
+  time, including after your subscription ends, which deletes its content from
+  the connector server (this cannot recall copies an app already retrieved).
 - **Encrypted at rest, decrypted per request.** The connector database stores your
   shared content as ciphertext, and NorthKeep keeps no key in that database that
-  can read it; the key is rebuilt for each request from your connected app's own
-  credential plus a secret held on our server. So a stolen database is only
+  can read it; the key is rebuilt for each request from the credential of the app
+  or device making the request plus a secret held on our server. So a stolen database is only
   ciphertext, but the running server can read your shared content while it serves
   your app's request. This is **not end-to-end encryption**, and it is a guarantee
   about the stored data, not a promise that content is never decrypted in
-  operation. Scope names, entry identifiers, counts, encrypted sizes, and
-  timestamps remain visible to the server. See the Privacy Policy for the full
-  description.
+  operation. Some information about your shared content, such as scope names,
+  entry identifiers, and timestamps, remains visible to the server, and the
+  connector keeps some records about your account and the apps you connect; the
+  Privacy Policy lists all of it.
 - **Your responsibility for what you share.** You are responsible for the content
   you choose to share and for having the right to share it. Do not share content
   you are not permitted to place on a third-party server, and do not use the
@@ -132,7 +137,7 @@ ours, when you use them.
   account there. We cannot revoke it; you revoke it directly at the provider.
   We store the resulting tokens, and any client credentials you create for
   that connection, only in the macOS Keychain, and never receive them.
-- **Acceptable use extends to these tools.** Section 6 (Acceptable Use) applies
+- **Acceptable use extends to these tools.** Section 7 (Acceptable Use) applies
   to your use of these tools as it does to the rest of the Service: do not use
   them for unlawful purposes, to store or transmit unlawful content, or to
   infringe others' rights.
