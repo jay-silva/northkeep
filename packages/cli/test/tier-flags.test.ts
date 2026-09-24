@@ -40,3 +40,10 @@ it('redact and converse refuse a tier they do not have, by name', () => {
   expect(c.status).not.toBe(0);
   expect(c.stderr).toContain('--tier 5 is not 0, 1, 2 or 3.');
 });
+
+it('ADR 0060 W2: the converse banner never calls Tier 3 off, and says it covers Tier 2', async () => {
+  const { tierBanner } = await import('../src/converseCmd.js');
+  expect(tierBanner(3)).toBe(' (everything Tier 2 masks, plus every date to the year and names on the built-in lists)');
+  expect(tierBanner(3)).not.toMatch(/OFF/);
+  expect(tierBanner(0)).toBe(' (OFF: private endpoint)');
+});

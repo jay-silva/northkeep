@@ -1296,4 +1296,25 @@ the tests.
   `Org-2`, `Place-4`, `Location-1`. "(ZIP 02532)", "ip-10-0-0-12" and
   "(email)" are kept (test R3, failed on the old code); every earlier
   mis-copy case still drops.
+- **W2 (claims recheck): Tier 3 masked fewer org names than Tier 2.** The
+  Tier 3 name-model pass used a strict gate that dropped finds made only
+  of common English words, so "First National Bank" and "Acme Widgets"
+  went out at Tier 3 while Tier 2 masked them, labelled Tier 3. Tier 3 now
+  runs the same full pass as Tier 2, reading the text before the name
+  lists (what Tier 2 sees), and masks its finds on top of the lists; when
+  the lists already masked part of a find, each remaining word of it is
+  masked. Tier 3 therefore masks at least everything Tier 2 masks on the
+  same text and name model. Property tests on `redact`, chat, the cloud
+  review and MCP (`tier3-superset.test.ts` in redact, converse and
+  mcp-server; shared inputs in `redact/test/superset-fixture.ts`): all 10
+  failed on the old code. Two older Tier 3 tests that pinned the strict
+  gate's non-masking were changed to assert Tier 2 parity. Real local
+  model, synthetic text: "Meet Dana at First National Bank" is
+  `Org-1` at both tiers (3 of 3); for "Call Zorblax Quintavius at Acme
+  Widgets" the model replied with a stray top-level "text" key, which is
+  unreadable, so both tiers report degraded (Tier 2 refuses toward a cloud
+  model, Tier 3 is labelled deterministic only). The CLI converse banner
+  now reads "everything Tier 2 masks, plus every date to the year and
+  names on the built-in lists" (it printed "OFF" for Tier 3 on this
+  branch), and KNOWN-LIMITS states the Tier 3 superset rule.
 

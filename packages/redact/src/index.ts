@@ -83,6 +83,7 @@ export async function redact(
     // Tier 3: the deterministic dictionary runs FIRST so it glues multi-token
     // names on pristine text and becomes a structural floor. See the header
     // note (the NER-first ordering leaked off-list first names to the cloud).
+    const beforeNames = working;
     if (tier === 3) {
       const scrubbed = scrubNames(working, pseudonyms);
       working = scrubbed.text;
@@ -92,10 +93,12 @@ export async function redact(
     if (options.nerMode !== 'replay-only') {
       const ollama = ollamaOverride !== undefined ? ollamaOverride : createOllamaClient();
       // Tier 2: NER is the only name layer, full recall over real names.
-      // Tier 3: strict-gated residual pass over the dict-masked text (the
-      // deterministic layer already owns common names) — a union-only ADD that
-      // can only add masks, never remove one the dictionary placed.
-      const t2 = await applyTier2(working, ollama, pseudonyms, tier === 3);
+      // Tier 3: the SAME full-recall pass, detected on the text before the
+      // dictionary ran (what Tier 2 sees) and applied over the dict-masked
+      // text, so Tier 3 masks at least everything Tier 2 masks (ADR 0060 W2:
+      // a strict gate here let "First National Bank" out at Tier 3 only).
+      // It can only add masks, never remove one the dictionary placed.
+      const t2 = await applyTier2(working, ollama, pseudonyms, false, tier === 3 ? beforeNames : undefined);
       working = t2.text;
       replacements.push(...t2.replacements);
       tier2Degraded = t2.degraded;
