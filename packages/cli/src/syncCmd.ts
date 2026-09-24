@@ -102,7 +102,7 @@ export async function syncPull(vaultPath: string, fail: (m: string) => never): P
   try {
     const result = await pullVault({ vaultPath, deviceSecret, masterKey });
     if (!result.ok) {
-      fail('Nothing to pull — no vault has been pushed to this sync server yet.');
+      fail('Nothing to pull: no vault has been pushed to this sync server yet.');
     }
     console.log(`✓ Pulled version ${result.version}. Your vault is up to date.`);
     if (!localExists) {
@@ -143,7 +143,7 @@ export async function syncStatusCmd(vaultPath: string, fail: (m: string) => neve
     } else if (sub.billing) {
       // Billing server, no subscription yet — allowlisted accounts sync free, so
       // this only matters if a push/pull is refused; still, surface the option.
-      console.log('Subscription: none. This server bills $10/month — run: northkeep sync subscribe');
+      console.log('Subscription: none. This server bills $10/month. Run: northkeep sync subscribe');
     }
   } catch {
     // Older servers (pre-billing) may not expose /api/subscription; stay quiet.
@@ -152,15 +152,15 @@ export async function syncStatusCmd(vaultPath: string, fail: (m: string) => neve
   // "In sync" means the bytes match, not just that the version numbers line up
   // — see syncState(). Everything else names what to run next.
   const messages: Record<typeof state, string> = {
-    'in-sync': '✓ In sync — this vault and the server hold the same bytes.',
-    behind: `↓ Behind — the server has newer changes (local v${localVersion}, server v${remoteVersion}). Run: northkeep sync pull`,
-    ahead: `↑ Ahead — this vault has changes the server does not have (local v${localVersion}, server v${remoteVersion}). Run: northkeep sync push`,
+    'in-sync': '✓ In sync: this vault and the server hold the same bytes.',
+    behind: `↓ Behind: the server has newer changes (local v${localVersion}, server v${remoteVersion}). Run: northkeep sync pull`,
+    ahead: `↑ Ahead: this vault has changes the server does not have (local v${localVersion}, server v${remoteVersion}). Run: northkeep sync push`,
     // Without a recorded baseline we only know the bytes differ, not that BOTH
     // sides moved — so don't claim they did. The advice is the same either way.
     diverged:
       (baselineKnown
-        ? `⚠ Diverged — this vault differs from the server's newer copy (local v${localVersion}, server v${remoteVersion}).\n`
-        : `⚠ Diverged — the server has newer changes and this vault may have changed too (local v${localVersion}, server v${remoteVersion}).\n`) +
+        ? `⚠ Diverged: this vault differs from the server's newer copy (local v${localVersion}, server v${remoteVersion}).\n`
+        : `⚠ Diverged: the server has newer changes and this vault may have changed too (local v${localVersion}, server v${remoteVersion}).\n`) +
       '  Pull first (your current vault is kept as vault.nkv.bak), then push:\n' +
       '  northkeep sync pull && northkeep sync push',
     'no-remote': 'No vault has been pushed to the server yet. Run: northkeep sync push',
@@ -196,7 +196,7 @@ export async function syncSubscribe(fail: (m: string) => never): Promise<void> {
   console.log('');
   console.log(`  ${url}`);
   console.log('');
-  console.log('Your card is entered on Stripe — it never touches NorthKeep. After you subscribe,');
+  console.log('Your card is entered on Stripe; it never touches NorthKeep. After you subscribe,');
   console.log('run "northkeep sync push" to start syncing.');
 }
 

@@ -49,8 +49,9 @@ export function loadConnectorConfig(): ConnectorConfig | null {
 
 export function saveConnectorConfig(config: ConnectorConfig): void {
   const target = connectorConfigPath();
-  const body: Record<string, unknown> = { server: config.server };
-  if (config.paired_at !== undefined) body.paired_at = config.paired_at;
+  // null, not absent: an absent key means a file written before paired_at
+  // existed, which connectorPaired() counts as paired.
+  const body: Record<string, unknown> = { server: config.server, paired_at: config.paired_at ?? null };
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   fs.writeFileSync(target, `${JSON.stringify(body, null, 2)}\n`, { mode: 0o600 });
 }
@@ -80,6 +81,23 @@ export function markConnectorPaired(now: Date = new Date()): void {
 /** When this device last paired with the configured server, or null. */
 export function connectorPairedAt(): string | null {
   return loadConnectorConfig()?.paired_at ?? null;
+}
+
+/**
+ * The gate for a sync with nothing shared (ADR 0050 Decision 5). Releases up to
+ * 0.21.0 paired without writing paired_at, so a server with no paired_at key
+ * counts as paired; current writers record unpaired as `paired_at: null`.
+ */
+export function connectorPaired(): boolean {
+  let raw: Record<string, unknown>;
+  try {
+    raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as Record<string, unknown>;
+  } catch {
+    return false;
+  }
+  if (raw === null || typeof raw !== 'object' || typeof raw.server !== 'string') return false;
+  if (!('paired_at' in raw)) return true;
+  return typeof raw.paired_at === 'string';
 }
 
 /**
@@ -161,8 +179,9 @@ export function assertConnectorUrl(rawUrl: string): URL {
  * is preserved verbatim until foldSidecarScopesIntoVault runs — rewriting it
  * away here would silently drop shares before they reach the vault.
  *
- * A pairing belongs to one server, so a different URL clears `paired_at`;
- * setting the same URL again keeps it.
+ * A pairing belongs to one server, so a different URL (or a first server)
+ * writes `paired_at: null`; setting the same URL again keeps what is there,
+ * including a legacy file's absent key (see connectorPaired).
  */
 export function setConnectorServer(serverUrl: string): ConnectorConfig {
   const url = assertConnectorUrl(serverUrl);
@@ -174,7 +193,7 @@ export function setConnectorServer(serverUrl: string): ConnectorConfig {
     // No existing file — start fresh.
   }
   const next: Record<string, unknown> = { ...raw, server };
-  if (raw.server !== server) delete next.paired_at;
+  if (raw.server !== server) next.paired_at = null;
   const target = connectorConfigPath();
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   fs.writeFileSync(target, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });

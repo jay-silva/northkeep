@@ -71,8 +71,8 @@ export function collectScopes(value: string, previous: string[]): string[] {
 
 function scopeSummary(scopes: string[]): string {
   return scopes.length
-    ? `scope "${scopes.join(', ')}" — the app sees ONLY memories in those scopes`
-    : 'FULL access (owner) — the app sees every scope in your vault';
+    ? `scope "${scopes.join(', ')}": the app sees ONLY memories in those scopes`
+    : 'FULL access (owner): the app sees every scope in your vault';
 }
 
 export function connectCmd(
@@ -95,7 +95,7 @@ export function connectCmd(
   console.log(connectRestartHint(target));
   console.log('');
   console.log('Note: Connect gives that app your portable memory under the scope above. It does');
-  console.log('NOT redact what you type into that app — the app still sends your chat to its');
+  console.log('NOT redact what you type into that app. The app still sends your chat to its');
   console.log('provider. For a redaction firewall over your chat, use "northkeep converse".');
 }
 
@@ -110,7 +110,7 @@ export function disconnectCmd(target: ConnectTarget, fail: (m: string) => never)
   console.log(
     removed
       ? `✓ Disconnected ${label}. Only NorthKeep's entry was removed; every other setting is untouched.`
-      : `${label} was not connected — nothing to remove.`,
+      : `${label} was not connected, so there is nothing to remove.`,
   );
   if (removed) {
     const hint = disconnectRestartHint(target);

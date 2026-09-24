@@ -188,10 +188,13 @@ export function sweepDates(line: string, now: Date): string[] {
   return found.sort((a, b) => a.at - b.at).map((f) => f.date);
 }
 
-/** Dated rows for one project's Next Actions and Open Questions, one per match. The sweep runs on the cut line. */
 /** A checked Markdown task (`- [x]`, `* [X]`, `1. [x]`): done, so not something due. */
 const CHECKED_TASK = /^(?:[-*+]|\d+[.)])\s+\[[xX]\]/;
 
+/**
+ * Dated rows for one project's Next Actions and Open Questions: one row per
+ * distinct date in a line, skipping checked tasks. The sweep runs on the cut line.
+ */
 export function datedItems(project: string, view: Pick<BoardView, 'next_actions' | 'open_questions'>, now: Date): BoardDatedRow[] {
   const rows: BoardDatedRow[] = [];
   for (const body of [view.next_actions, view.open_questions]) {

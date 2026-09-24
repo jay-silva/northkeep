@@ -90,6 +90,8 @@ export type TaskEvent =
       bytes: number;
       truncated: boolean;
       host?: string;
+      /** Cancelled while in flight: the outcome is unknown, not failed. */
+      cancelled?: boolean;
       /** On a FAILED call, the tool's own one-line guidance (M10d) — content-
        * free by construction (structured {error, guidance}, never page/query
        * text), so the driving surface can tell the user WHY, not just "error". */
@@ -986,6 +988,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                 bytes: toolOut.meta.bytes,
                 truncated: toolOut.meta.truncated,
                 ...(toolOut.meta.host !== undefined ? { host: toolOut.meta.host } : {}),
+                ...(toolOut.meta.cancelled === true ? { cancelled: true } : {}),
                 ...(errorLine !== undefined ? { error: errorLine } : {}),
               });
             }
@@ -1030,6 +1033,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           params: {},
           ok: decision === 'approved' && (execMeta?.ok ?? false),
           ...(decision !== 'approved' ? { denied: true } : {}),
+          ...(execMeta?.cancelled === true ? { outcome: 'unknown' as const } : {}),
           ...(egressHost !== undefined ? { endpoint_host: egressHost } : {}),
           ...(egressUrl !== null ? { privacy: egressTier } : {}),
           tool_call: {
@@ -1055,7 +1059,9 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
                 }
               : {}),
             ...(execMeta !== null ? { result_bytes: execMeta.bytes } : {}),
-            ok: execMeta?.ok ?? false,
+            // A call cancelled in flight may still have run: record "unknown",
+            // not a failure.
+            ...(execMeta?.cancelled === true ? { outcome: 'unknown' as const } : { ok: execMeta?.ok ?? false }),
           },
         };
         try {

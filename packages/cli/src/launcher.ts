@@ -72,15 +72,15 @@ function renderHome(s: HomeStatus): string {
   const lines = ['', logo(), ''];
 
   const vault = !s.vaultExists
-    ? c.yellow('no vault yet') + c.muted('  — run "init"')
+    ? c.yellow('no vault yet') + c.muted('  (run "init")')
     : s.unlocked
       ? c.green('unlocked') + c.muted(`  ${s.memoryCount ?? '?'} memories`)
-      : c.yellow('locked') + c.muted('  — run "unlock" or open the app');
+      : c.yellow('locked') + c.muted('  (run "unlock" or open the app)');
   lines.push(statusRow('Vault', vault));
 
   const models =
     s.endpointCount === 0
-      ? c.yellow('none') + c.muted('  — run "models add" to connect one')
+      ? c.yellow('none') + c.muted('  (run "models add" to connect one)')
       : `${s.defaultLabel ?? '(no default)'} ${s.defaultTier ? tierDot(s.defaultTier) : ''}` +
         c.muted(`  ${s.endpointCount} configured`);
   lines.push(statusRow('Models', models));
@@ -88,7 +88,7 @@ function renderHome(s: HomeStatus): string {
   lines.push(
     statusRow(
       'Local AI',
-      s.ollamaReady ? c.green('Ollama ready') : c.muted('off — "models install" to set up'),
+      s.ollamaReady ? c.green('Ollama ready') : c.muted('off ("models install" to set up)'),
     ),
   );
   lines.push(statusRow('Sync', s.syncConfigured ? c.green('configured') : c.muted('off')));
@@ -104,7 +104,7 @@ function renderHome(s: HomeStatus): string {
   lines.push(c.muted('  Commands'));
   const cmd = (name: string, desc: string): string =>
     `    ${c.bold(name.padEnd(18))}${c.muted(desc)}`;
-  lines.push(cmd('converse', 'talk to a model — memory + concierge routing'));
+  lines.push(cmd('converse', 'talk to a model with memory and concierge routing'));
   lines.push(cmd('models', 'add / install / list AI models'));
   lines.push(cmd('remember', 'save a memory'));
   lines.push(cmd('list', 'browse your memory'));

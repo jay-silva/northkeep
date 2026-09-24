@@ -176,7 +176,8 @@ export default function Settings() {
       <Text style={styles.footnote}>
         Make chosen memory scopes readable inside the AI apps you use (Claude, ChatGPT, Manus).
         Private by default: you pick each scope, confirm what leaves this phone, and can unshare
-        anytime.
+        anytime. One exception: a new project an AI app creates, which this phone does not have
+        yet, is marked Shared when it arrives, and later edits to it are pushed.
       </Text>
 
       <FieldLabel>This device</FieldLabel>

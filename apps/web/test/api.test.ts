@@ -523,6 +523,7 @@ describe('POST /api/share/sync and /api/share/pair (ADR 0050 Decision 5)', () =>
     expect(body.added).toBe(1);
     expect(body.held).toBe(0);
     expect(body.scopes).toContain('project:hosted-thing');
+    expect((res.body as { newly_shared: string[] }).newly_shared).toEqual(['project:hosted-thing']);
     expect(puts).toHaveLength(1);
     expect(puts[0]!.scopes).toContain('project:hosted-thing');
   });
@@ -561,6 +562,28 @@ describe('POST /api/share/sync and /api/share/pair (ADR 0050 Decision 5)', () =>
     const res = await call('POST', '/api/share/sync');
     expect(res.status).toBe(200);
     expect((res.body as { skipped: number }).skipped).toBe(1);
+  });
+
+  it('reports whether this device has paired, so the GUI can enable Sync with nothing shared', async () => {
+    const before = await call('GET', '/api/share/status');
+    expect((before.body as { paired: boolean; shared_scopes: string[] }).paired).toBe(false);
+    expect((before.body as { shared_scopes: string[] }).shared_scopes).toEqual([]);
+    markConnectorPaired();
+    const after = await call('GET', '/api/share/status');
+    expect((after.body as { paired: boolean }).paired).toBe(true);
+  });
+
+  it('treats a legacy pairing (connector.json with only the server) as paired: status and sync agree', async () => {
+    fs.writeFileSync(path.join(dir, 'connector.json'), `${JSON.stringify({ server: 'http://127.0.0.1:9' })}\n`, { mode: 0o600 });
+    const status = await call('GET', '/api/share/status');
+    expect((status.body as { paired: boolean }).paired).toBe(true);
+    const { puts } = stubConnector([
+      { server_id: 'conn_create_legacy', scope: 'project:legacy-proj', type: 'working', content: projectMarkdown('From 0.21.') },
+    ]);
+    const res = await call('POST', '/api/share/sync');
+    expect(res.status).toBe(200);
+    expect((res.body as { scopes: string[] }).scopes).toContain('project:legacy-proj');
+    expect(puts).toHaveLength(1);
   });
 
   it('records the pairing so the next sync folds from an empty shared list', async () => {

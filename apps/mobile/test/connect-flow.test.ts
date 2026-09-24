@@ -12,10 +12,12 @@ import {
   SYNC_PUSH_FAILED_FOLLOWUP,
   SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE,
   SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE,
+  canSyncNow,
   classifyConnectorError,
   connectorSyncSummary,
   formatPairingCountdown,
   mcpUrlFor,
+  newlySharedMessage,
   runConnectorSyncNow,
   runShareScope,
   runUnshareScope,
@@ -287,6 +289,7 @@ describe('runConnectorSyncNow', () => {
       held: 0,
       held_scopes: [],
       pushed: 9,
+      newlyShared: [],
     });
   });
 
@@ -318,6 +321,7 @@ describe('runConnectorSyncNow', () => {
       held: 0,
       held_scopes: [],
       pushed: 2,
+      newlyShared: [],
     });
   });
 
@@ -390,7 +394,10 @@ describe('runConnectorSyncNow', () => {
       },
     });
     expect(pushedWith).toEqual([['project:hosted-thing']]);
-    expect(outcome).toMatchObject({ kind: 'synced', added: 1, pushed: 1 });
+    expect(outcome).toMatchObject({ kind: 'synced', added: 1, pushed: 1, newlyShared: ['project:hosted-thing'] });
+    // The screen's summary tells the user the project is now Shared and that edits push.
+    expect(connectorSyncSummary(outcome as never)).toContain(newlySharedMessage('project:hosted-thing'));
+    expect(newlySharedMessage('project:hosted-thing')).toMatch(/now marked Shared\. Later edits to it are pushed/);
   });
 
   it('still refuses without a pairing, and never calls the connector', async () => {
@@ -458,6 +465,33 @@ describe('runConnectorSyncNow', () => {
       expect(outcome.errorKind).toBe('subscription-required');
       expectSteeringClean(outcome.message);
     }
+  });
+});
+
+describe('canSyncNow (the Sync button gate, ADR 0050)', () => {
+  it('is off on a phone that never paired and shares nothing', () => {
+    expect(canSyncNow({ sharedCount: 0, paired: false })).toBe(false);
+  });
+  it('is on for a paired phone with nothing shared, so a hosted project can arrive', () => {
+    expect(canSyncNow({ sharedCount: 0, paired: true })).toBe(true);
+  });
+  it('is on whenever a scope is shared', () => {
+    expect(canSyncNow({ sharedCount: 2, paired: false })).toBe(true);
+    expect(canSyncNow({ sharedCount: 1, paired: true })).toBe(true);
+  });
+  it('agrees with runConnectorSyncNow: a paired phone with nothing shared reaches the server', async () => {
+    let downSynced = 0;
+    const outcome = await runConnectorSyncNow({
+      store: { load: async () => [], save: async () => undefined } as unknown as SharedScopeStore,
+      downSync: async () => {
+        downSynced += 1;
+        return { added: 0, forgotten: 0, deduped: 0, held: 0, held_scopes: [], skipped: 0 } as never;
+      },
+      pushScopes: async () => ({ pushed: 0 }) as never,
+      paired: async () => true,
+    });
+    expect(downSynced).toBe(1);
+    expect(outcome.kind).toBe('synced-no-push');
   });
 });
 

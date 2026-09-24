@@ -1,6 +1,6 @@
 import { loadDeviceSecret, type Vault } from '@northkeep/core';
 import {
-  connectorPairedAt,
+  connectorPaired,
   deriveConnectorToken,
   deriveSyncCreds,
   downSyncConnector,
@@ -118,9 +118,9 @@ export async function shareAddCmd(
       if (!wasShared) {
         vault.setScopeShared(scope, false);
         vault.save();
-        throw new Error(`Sharing failed — the mark was rolled back, nothing is shared: ${msg}`);
+        throw new Error(`Sharing failed. The mark was rolled back, nothing is shared: ${msg}`);
       }
-      throw new Error(`Push failed — '${scope}' stays Shared (it already was): ${msg}`);
+      throw new Error(`Push failed: '${scope}' stays Shared (it already was): ${msg}`);
     }
   }).catch((err: unknown) => {
     fail(err instanceof Error ? err.message : String(err));
@@ -172,9 +172,10 @@ export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => ne
   const entitlement = await maybeEntitlement(deviceSecret);
   const result = await withVault(async (vault) => {
     foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
-    // A device that never started a pairing has no account on that server, so
-    // asking for pending rows would create one (and 402 on a gated server).
-    if (vault.sharedScopes().length === 0 && connectorPairedAt() === null) return null;
+    // A device that never paired has no account there, and asking for pending
+    // rows would create one (or 402). A pre-0.22 sidecar counts as paired
+    // (connectorPaired), so a server saved then without pairing still asks.
+    if (vault.sharedScopes().length === 0 && !connectorPaired()) return null;
     const down = await downSyncConnector({ server: cfg.server, deviceSecret, vault, entitlement });
     const scopes = vault.sharedScopes();
     if (scopes.length === 0) return { down, push: null };
@@ -256,7 +257,7 @@ export async function shareStatusCmd(withVault: WithVault): Promise<void> {
       "from your app's credential plus a server-side secret, and the AI apps you connect read them in full). " +
       'Marks live in the vault, so they apply on every device that syncs it:',
   );
-  for (const c of counts) console.log(`  ${c.scope} — ${c.count} ${c.count === 1 ? 'memory' : 'memories'}`);
+  for (const c of counts) console.log(`  ${c.scope}: ${c.count} ${c.count === 1 ? 'memory' : 'memories'}`);
 }
 
 /**

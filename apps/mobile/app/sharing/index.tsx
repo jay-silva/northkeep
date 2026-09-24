@@ -59,7 +59,8 @@ export default function SharingHub() {
       <Text style={styles.body}>
         Cloud Connect makes chosen memories usable inside the AI apps you already use (Claude,
         ChatGPT, Manus) by copying them to NorthKeep's connector server. Everything is private by
-        default. You share one scope at a time, on purpose, and you can unshare anytime.
+        default. You share one scope at a time, on purpose, and you can unshare anytime. The one
+        exception: a new project an AI app creates is marked Shared when it arrives.
       </Text>
       <View style={styles.banner}>
         <Text style={styles.bannerStrong}>
@@ -67,8 +68,10 @@ export default function SharingHub() {
         </Text>
         <Text style={styles.bannerBody}>
           Sync stores your vault as encrypted data the server can never read. Sharing copies a
-          scope's memories in plain, readable form so your AI apps can reach them. Only scopes you
-          turn on here ever leave this phone.
+          scope's memories to NorthKeep's connector server, which stores them encrypted and
+          decrypts them briefly to answer each request from your AI apps. Only scopes you turn on
+          here leave this phone, except a new project an AI app creates, which is marked Shared
+          when it arrives.
         </Text>
       </View>
 
@@ -77,7 +80,8 @@ export default function SharingHub() {
         <Text style={styles.footnote}>Loading...</Text>
       ) : shared.length === 0 ? (
         <Text style={styles.footnote}>
-          Nothing is shared. Every scope stays on this phone until you turn it on.
+          Nothing is shared. Every scope stays on this phone until you turn it on, except a new
+          project an AI app creates, which is marked Shared when it arrives.
         </Text>
       ) : (
         <View style={styles.summaryCard}>

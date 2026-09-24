@@ -34,6 +34,10 @@ export interface CallLogEntry {
     stale_days?: number;
   };
   ok: boolean;
+  /** 'unknown': a tool call cancelled while in flight, which may still have
+   * completed. Readers show it as unknown, not as a failure; ok stays false
+   * only because older readers require the field. */
+  outcome?: 'unknown';
   /** True when the call was refused by a scope grant. */
   denied?: boolean;
   result_count?: number;
@@ -83,7 +87,10 @@ export interface CallLogEntry {
      * e.g. "secret:ssn:query:decoded" — never matched text. */
     screen?: string[];
     result_bytes?: number;
-    ok: boolean;
+    /** Absent when outcome is 'unknown'. */
+    ok?: boolean;
+    /** 'unknown': cancelled while in flight, so it may still have completed. */
+    outcome?: 'unknown';
   };
 }
 

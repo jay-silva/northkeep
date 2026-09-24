@@ -22,6 +22,9 @@ export interface ToolResult {
     bytes: number;
     truncated: boolean;
     ok: boolean;
+    /** The task was cancelled while this call was in flight, so whether it
+     * took effect is unknown (an MCP server may finish the side effect). */
+    cancelled?: boolean;
   };
 }
 

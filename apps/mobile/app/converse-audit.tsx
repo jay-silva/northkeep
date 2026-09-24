@@ -36,7 +36,7 @@ export default function ConverseAudit() {
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <Stack.Screen options={{ title: 'What left this device' }} />
       {audit === null ? (
-        <Text style={styles.empty}>Send a message in Converse first — then this shows exactly what was transmitted.</Text>
+        <Text style={styles.empty}>Send a message in Converse first, then this shows exactly what was transmitted.</Text>
       ) : (
         <>
           {audit.onDevice ? (

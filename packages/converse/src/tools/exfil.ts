@@ -19,8 +19,8 @@ import { applyTier1 } from '@northkeep/redact';
  *
  * These are screens, not proofs. What still slips past is documented in
  * KNOWN-LIMITS.md and ADR 0029 (encryption/compression the model invents,
- * >3 encoding rounds, base64 embedded inside longer prose, semantic
- * paraphrase). The per-call gate showing the verbatim URL remains the
+ * layering deeper than the decode-round or variant budget below, base64
+ * embedded inside longer prose, semantic paraphrase). The per-call gate showing the verbatim URL remains the
  * backstop.
  */
 

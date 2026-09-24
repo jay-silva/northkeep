@@ -236,7 +236,7 @@ describe('C2 acceptance (CLI) — share work → AI reads it; personal never lea
     expect((fs.statSync(path.join(home, 'connector.json')).mode & 0o777)).toBe(0o600);
     // The vault carries the mark — `share status` reads it from there.
     const statusAfterAdd = await cli(['share', 'status']);
-    expect(statusAfterAdd.stdout).toMatch(/work\s+—\s+1 memory/);
+    expect(statusAfterAdd.stdout).toMatch(/work: 1 memory/);
 
     // Server now holds exactly the work row (personal was never sent).
     const rows = await storage.listEntries(accountHash());
@@ -265,7 +265,7 @@ describe('C2 acceptance (CLI) — share work → AI reads it; personal never lea
     const status = await cli(['share', 'status']);
     expect(status.code).toBe(0);
     expect(status.stdout).toContain(base);
-    expect(status.stdout).toMatch(/work\s+—\s+1 memory/);
+    expect(status.stdout).toMatch(/work: 1 memory/);
   });
 
   it('share remove work → the AI finds nothing; the account has zero rows + a tombstone', async () => {

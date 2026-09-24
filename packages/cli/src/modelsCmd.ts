@@ -88,8 +88,8 @@ export async function modelsList(): Promise<void> {
     state === 'ready'
       ? c.green('ready')
       : state === 'no-models'
-        ? c.yellow('installed, no models — run "northkeep models install"')
-        : c.muted('not installed — run "northkeep models install" to set up');
+        ? c.yellow('installed, no models (run "northkeep models install")')
+        : c.muted('not installed (run "northkeep models install" to set up)');
   console.log(`\n  ${c.muted('Local AI')}  ${localLabel}`);
 }
 
@@ -109,7 +109,7 @@ export async function modelsAdd(): Promise<void> {
     }
     const provider = KNOWN_PROVIDERS[providerIdx]!;
 
-    console.log(`\n${c.bold(provider.name)} — how to get an API key:`);
+    console.log(`\n${c.bold(provider.name)}: how to get an API key:`);
     console.log(`  ${c.pine(provider.keyUrl)}`);
     provider.keySteps.forEach((step) => console.log(`    ${c.muted('·')} ${step}`));
 
@@ -124,7 +124,7 @@ export async function modelsAdd(): Promise<void> {
     if (provider.keyPrefix && !apiKey.startsWith(provider.keyPrefix)) {
       // Soft validation — warn, don't block (key formats drift).
       console.log(
-        c.yellow(`⚠  That key doesn't start with "${provider.keyPrefix}" — double-check it, but I'll proceed.`),
+        c.yellow(`⚠  That key doesn't start with "${provider.keyPrefix}". Double-check it, but I'll proceed.`),
       );
     }
 
@@ -149,7 +149,7 @@ export async function modelsAdd(): Promise<void> {
       apiKey,
     });
     console.log(
-      `\n${c.green('✓')} Connected ${c.bold(endpoint.label)} ${c.dim(`(${endpoint.id})`)} — key stored in your Keychain.`,
+      `\n${c.green('✓')} Connected ${c.bold(endpoint.label)} ${c.dim(`(${endpoint.id})`)}: key stored in your Keychain.`,
     );
 
     const isFirst = listEndpoints().length === 1;
@@ -207,7 +207,7 @@ export async function modelsInstall(tag: string | undefined): Promise<void> {
   let model = tag?.trim();
   if (!model) {
     model = rec.tag;
-    console.log(`${c.muted('Recommended')}  ${c.bold(rec.label)} ${c.dim(`(${rec.tag})`)} — ${rec.reason}`);
+    console.log(`${c.muted('Recommended')}  ${c.bold(rec.label)} ${c.dim(`(${rec.tag})`)}: ${rec.reason}`);
     const io = createLineReader();
     try {
       const ans = (await io.nextLine(`\nInstall ${c.bold(rec.tag)} now? [Y/n]: `)) ?? '';
@@ -222,7 +222,7 @@ export async function modelsInstall(tag: string | undefined): Promise<void> {
 
   const state = await ollamaState();
   if (state === 'not-installed') {
-    console.log(`\n${c.yellow('Ollama isn\'t installed')} — it's the free local engine that runs models on your Mac.`);
+    console.log(`\n${c.yellow('Ollama isn\'t installed')}. It is the free local engine that runs models on your Mac.`);
     console.log('  Install it, then re-run this command:');
     console.log(`    ${c.pine('https://ollama.com/download')}`);
     console.log(`    ${c.bold('brew install ollama && brew services start ollama')}`);
@@ -240,12 +240,12 @@ export async function modelsInstall(tag: string | undefined): Promise<void> {
   process.stdout.write('\n');
 
   const endpoint = addEndpoint({
-    label: `This Mac — ${model}`,
+    label: `This Mac: ${model}`,
     baseUrl: 'http://127.0.0.1:11434',
     model,
     kind: 'openai-compatible',
   });
   console.log(`${c.green('✓')} Installed and connected ${c.bold(endpoint.label)} ${c.dim(`(${endpoint.id})`)}.`);
-  console.log(c.muted('  Runs entirely on your Mac — nothing leaves your machine.'));
+  console.log(c.muted('  Runs entirely on your Mac; nothing leaves your machine.'));
   console.log(`\nTry it:  ${c.bold('northkeep chat')}`);
 }

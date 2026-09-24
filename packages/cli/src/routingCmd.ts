@@ -28,7 +28,7 @@ const TASKS: ReadonlyArray<TaskKind | '*'> = [
 export function routingList(): void {
   const { rules } = loadRoutingPolicy();
   if (rules.length === 0) {
-    console.log('No routing rules — Auto uses your default endpoint for everything.');
+    console.log('No routing rules. Auto uses your default endpoint for everything.');
     console.log('Add one: northkeep routing set <task> <endpoint> [--model <m>]');
     console.log(`Tasks: ${TASKS.join(', ')}`);
     return;
@@ -38,10 +38,10 @@ export function routingList(): void {
     const ep = endpoints.get(r.endpointId);
     const where = ep
       ? `${ep.label} (${classifyEndpoint(ep.baseUrl).tier})`
-      : `${r.endpointId} — MISSING (rule is ignored)`;
+      : `${r.endpointId}: MISSING (rule is ignored)`;
     console.log(`  ${r.task.padEnd(12)} → ${where}${r.model ? ` · ${r.model}` : ''}`);
   }
-  console.log(`\nStored in ${routingPath()} (rules only — no secrets, no content).`);
+  console.log(`\nStored in ${routingPath()} (rules only: no secrets, no content).`);
 }
 
 export function routingSet(

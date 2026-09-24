@@ -2,10 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { Redirect, useLocalSearchParams } from 'expo-router';
 import {
-  SYNC_PUSH_FAILED_FOLLOWUP,
-  SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE,
-  SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE,
-  connectorSyncSummary,
+  applySyncOutcome,
+  canSyncNow,
   runConnectorSyncNow,
   runShareScope,
   runUnshareScope,
@@ -39,6 +37,7 @@ export default function ManageScopes() {
   const params = useLocalSearchParams<{ share?: string }>();
 
   const [sharedScopes, setSharedScopes] = useState<string[]>([]);
+  const [paired, setPaired] = useState(false);
 
   const [pendingShare, setPendingShare] = useState<string | null>(null);
   const [pendingUnshare, setPendingUnshare] = useState<string | null>(null);
@@ -61,6 +60,7 @@ export default function ManageScopes() {
     void (async () => {
       const scopes = await session.connectorScopeStore.load();
       setSharedScopes(scopes);
+      setPaired((await loadConnectorPairedAt()) !== null);
       const wanted = typeof params.share === 'string' ? params.share : null;
       if (wanted && !scopes.includes(wanted)) setPendingShare(wanted);
     })();
@@ -135,29 +135,12 @@ export default function ManageScopes() {
         paired: async () => (await loadConnectorPairedAt()) !== null,
       });
       setConnectorBusy(null);
-      if (outcome.kind === 'synced') {
-        setSyncResult(connectorSyncSummary(outcome));
-      } else if (outcome.kind === 'synced-no-push') {
-        // Nothing is shared now, so the push was skipped and no revoked
-        // plaintext went back up. Which of the two reasons it was matters.
-        const skipped =
-          outcome.reason === 'nothing-shared'
-            ? SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE
-            : SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE;
-        setSyncResult(`${connectorSyncSummary(outcome, { pushedBack: false })} ${skipped}`);
-        setSharedScopes(await store.load());
-      } else if (outcome.kind === 'partially-synced') {
-        // Both halves stay visible: the memories arrived AND the re-push failed.
-        setSyncResult(connectorSyncSummary(outcome, { pushedBack: false }));
-        setSyncError({
-          ...outcome.pushFailure,
-          message: `${outcome.pushFailure.message} ${SYNC_PUSH_FAILED_FOLLOWUP}`,
-        });
-      } else if (outcome.kind === 'nothing-shared') {
-        setSyncResult(outcome.message);
-      } else {
-        setSyncError(outcome);
-      }
+      await applySyncOutcome(outcome, {
+        reloadShared: () => store.load(),
+        setSharedScopes,
+        setSyncResult,
+        setSyncError,
+      });
     })();
   }
 
@@ -169,12 +152,16 @@ export default function ManageScopes() {
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.reminder}>
         <Text style={styles.reminderText}>
-          The connector server can read the scopes you share. Everything else stays on this phone.
+          The connector server can read the scopes you share, including a new project an AI app
+          creates, which is marked Shared when it arrives. Everything else stays on this phone.
         </Text>
       </View>
       <FieldLabel>Scopes</FieldLabel>
       <Text style={styles.footnote}>
-        Every scope is private until you turn Share on. Turning it on shows a confirmation first.
+        Every scope is private until you turn Share on, and turning it on shows a confirmation
+        first. One exception: a new project an AI app creates, which this phone does not have yet,
+        is marked Shared when it arrives, and later edits to it are pushed. What an app writes into
+        one of your private projects is held until you share it.
       </Text>
       {rows.length === 0 ? (
         <Text style={styles.footnote}>No scopes yet. Add memories, then share a scope here.</Text>
@@ -212,21 +199,22 @@ export default function ManageScopes() {
           <Text style={styles.confirmTitle}>Share "{pendingShare}"?</Text>
           <Text style={styles.confirmBody}>
             The {pendingCount} {pendingCount === 1 ? 'memory' : 'memories'} in "{pendingShare}"
-            will be copied off this phone to NorthKeep's connector server in plaintext-readable
-            form, so the AI apps you pair can read them.
+            will be copied off this phone to NorthKeep's connector server, so the AI apps you pair
+            can read them.
           </Text>
           <Text style={styles.confirmBody}>
-            The connector stores shared memories encrypted at rest, but it can read them to serve
-            your AI apps. Scope names, memory counts, and sizes are visible to the server as
+            The connector stores shared memories encrypted and decrypts them briefly to answer each
+            request from your AI apps, so it can read them while it does. Scope names, memory counts, and sizes are visible to the server as
             metadata.
           </Text>
           <Text style={styles.confirmBody}>
-            Every scope you have not shared stays private. Unsharing deletes the server
-            copies; your vault keeps everything.
+            Every scope you have not shared stays private, except a new project an AI app
+            creates, which is marked Shared when it arrives. Unsharing deletes the server copies;
+            your vault keeps everything.
           </Text>
           <Text style={styles.confirmBody}>
-            Sharing applies to this scope on every device that syncs this vault — including your
-            Mac — and so does unsharing.
+            Sharing applies to this scope on every device that syncs this vault, including your
+            Mac, and so does unsharing.
           </Text>
           <Button
             title="Share this scope"
@@ -275,14 +263,16 @@ export default function ManageScopes() {
       <FieldLabel>Sync app-written memories</FieldLabel>
       <Text style={styles.footnote}>
         Pull memories you created (or forgot) inside your AI apps back into this vault, then
-        re-push so the server matches. Runs only on your shared scopes.
+        re-push so the server matches. Pushes only your shared scopes. Once this phone is paired
+        it also brings in a new project an AI app created: that project is marked Shared, and later
+        edits to it are pushed.
       </Text>
       <Button
         title="Sync app-written memories"
         kind="secondary"
         onPress={onSyncNow}
         busy={connectorBusy === 'sync'}
-        disabled={connectorBusy !== null || sharedScopes.length === 0}
+        disabled={connectorBusy !== null || !canSyncNow({ sharedCount: sharedScopes.length, paired })}
         style={styles.stackedButton}
       />
       {syncError ? <ErrorNote message={syncError.message} /> : null}

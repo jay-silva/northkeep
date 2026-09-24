@@ -32,7 +32,7 @@ import {
   // @northkeep/sync client — the connector token is derived from the device
   // secret inside them and is never returned to the page.
   foldSidecarScopesIntoVault,
-  connectorPairedAt,
+  connectorPaired,
   downSyncConnector,
   fetchEntitlement,
   holdMessage,
@@ -873,6 +873,9 @@ async function dispatch(
       vault_scopes: vaultScopes,
       counts,
       unlocked,
+      // A paired device may sync with nothing shared: that sync is how a project
+      // created in a connected app first arrives (ADR 0050 Decision 5).
+      paired: connectorPaired(),
       // The URL the user pastes into Claude/ChatGPT to add the connector (the MCP
       // mount is /mcp on the connector server — apps/connector-server).
       mcp_url: config ? mcpUrl(config.server) : null,
@@ -978,15 +981,17 @@ async function dispatch(
     const result = await session.withVault(async (vault) => {
       foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
       // ADR 0050 Decision 5: a hosted project arrives only through the fold,
-      // which marks its scope. A device that never paired has no account on
-      // that server, so it makes no call at all.
-      if (vault.sharedScopes().length === 0 && connectorPairedAt() === null) return null;
+      // which marks its scope. A device that never paired makes no call; a
+      // pre-0.22 sidecar counts as paired (see connectorPaired).
+      if (vault.sharedScopes().length === 0 && !connectorPaired()) return null;
+      const before = new Set(vault.sharedScopes());
       const down = await downSyncConnector({ server: config.server, deviceSecret, vault, entitlement });
       // Re-read after the slow down-sync so a scope unshared mid-sync (on this
       // device or arriving via vault sync) is never re-pushed, and a scope the
       // fold just marked is.
       const scopes = vault.sharedScopes();
-      if (scopes.length === 0) return { down, push: null };
+      const newlyShared = scopes.filter((s) => !before.has(s));
+      if (scopes.length === 0) return { down, push: null, newlyShared };
       const push = await pushSharedScopes({
         server: config.server,
         deviceSecret,
@@ -994,7 +999,7 @@ async function dispatch(
         vault,
         entitlement,
       });
-      return { down, push };
+      return { down, push, newlyShared };
     });
     if (result === null) return bad(400, 'No scopes are shared yet.');
     return ok({
@@ -1007,6 +1012,8 @@ async function dispatch(
       skipped: result.down.skipped,
       pushed: result.push?.pushed ?? 0,
       scopes: result.push?.scopes ?? [],
+      // Scopes the fold marked Shared in this run (ADR 0050): the GUI says so.
+      newly_shared: result.newlyShared,
     });
   }
 
