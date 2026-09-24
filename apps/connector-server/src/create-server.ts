@@ -924,11 +924,11 @@ export function createConnectorServer(
 <p>Public origin: <code>${publicUrl}</code></p>
 <p>OAuth 2.1 authorization server + MCP resource server. Serves ONLY scopes the user marked Shared.</p>
 <ul>
-  <li><code>POST /mcp</code> — MCP streamable HTTP (bearer-protected, stateless). Tools: <code>memory_retrieve</code>, <code>memory_list</code>, <code>memory_remember</code>, <code>memory_forget</code>, <code>project_list</code>, <code>project_get</code>, <code>project_create</code>, <code>project_update</code>, and ChatGPT's <code>search</code> + <code>fetch</code></li>
-  <li><code>POST /pair/start</code> — pairing code from a connector token</li>
-  <li><code>GET /client/manifest</code>, <code>PUT /client/entries</code>, <code>DELETE /client/scope/:scope</code> — desktop push of shared scopes</li>
-  <li><code>GET /.well-known/oauth-authorization-server</code> — RFC 8414 AS metadata</li>
-  <li><code>GET /.well-known/oauth-protected-resource/mcp</code> — RFC 9728 PRM</li>
+  <li><code>POST /mcp</code>: MCP streamable HTTP (bearer-protected, stateless). Tools: <code>memory_retrieve</code>, <code>memory_list</code>, <code>memory_remember</code>, <code>memory_forget</code>, <code>project_list</code>, <code>project_get</code>, <code>project_create</code>, <code>project_update</code>, and ChatGPT's <code>search</code> + <code>fetch</code></li>
+  <li><code>POST /pair/start</code>: pairing code from a connector token</li>
+  <li><code>GET /client/manifest</code>, <code>PUT /client/entries</code>, <code>DELETE /client/scope/:scope</code>: desktop push of shared scopes</li>
+  <li><code>GET /.well-known/oauth-authorization-server</code>: RFC 8414 AS metadata</li>
+  <li><code>GET /.well-known/oauth-protected-resource/mcp</code>: RFC 9728 PRM</li>
 </ul>`);
   });
 

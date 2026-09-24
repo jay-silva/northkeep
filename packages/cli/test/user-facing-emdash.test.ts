@@ -33,6 +33,7 @@ const TS_ROOTS = [
   'packages/sync/src',
   'apps/web/src',
   'apps/sync-server/src',
+  'apps/connector-server/src',
   'apps/mobile/app',
   'apps/mobile/src',
 ];

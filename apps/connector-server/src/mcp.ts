@@ -298,7 +298,7 @@ export function createMcpServer(
     {
       title: 'Remember a new shared memory',
       description:
-        'Save a new memory into one of the scopes the user has already shared with this app. It flows back into the user’s NorthKeep vault. You cannot create a new scope — only add to a scope that is already shared.',
+        'Save a new memory into one of the scopes the user has already shared with this app. It flows back into the user’s NorthKeep vault. You cannot create a new scope; only add to a scope that is already shared.',
       inputSchema: {
         content: z.string().describe('The memory to remember'),
         type: z.string().describe('One of: episodic, semantic, procedural, working, identity'),
@@ -412,7 +412,7 @@ export function createMcpServer(
     {
       title: 'Forget a shared memory',
       description:
-        'Forget a shared memory by its id. Use the id shown by memory_remember or memory_list. The memory is hidden immediately and, on the next sync, tombstoned in the user’s vault — it never comes back.',
+        'Forget a shared memory by its id. Use the id shown by memory_remember or memory_list. The memory is hidden immediately and, on the next sync, tombstoned in the user’s vault; it never comes back.',
       inputSchema: { id: z.string().describe('The id of the memory to forget') },
     },
     async ({ id }) => {
@@ -429,7 +429,7 @@ export function createMcpServer(
         resultIds: row ? [entryId] : [],
       });
       const text = row
-        ? 'Forgotten. It is hidden now and will be removed from the vault on the next sync — it will not come back.'
+        ? 'Forgotten. It is hidden now and will be removed from the vault on the next sync. It will not come back.'
         : 'No shared memory with that id.';
       return { content: [{ type: 'text', text }] };
     },
