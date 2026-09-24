@@ -2,11 +2,8 @@ import React, { useEffect, useState } from 'react';
 import { ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { Redirect, useLocalSearchParams } from 'expo-router';
 import {
-  SYNC_PUSH_FAILED_FOLLOWUP,
-  SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE,
-  SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE,
+  applySyncOutcome,
   canSyncNow,
-  connectorSyncSummary,
   runConnectorSyncNow,
   runShareScope,
   runUnshareScope,
@@ -138,33 +135,12 @@ export default function ManageScopes() {
         paired: async () => (await loadConnectorPairedAt()) !== null,
       });
       setConnectorBusy(null);
-      // The fold can mark a newly arrived project Shared, so re-read the list
-      // after any sync that reached the server.
-      if (outcome.kind === 'synced' || outcome.kind === 'synced-no-push' || outcome.kind === 'partially-synced') {
-        setSharedScopes(await store.load());
-      }
-      if (outcome.kind === 'synced') {
-        setSyncResult(connectorSyncSummary(outcome));
-      } else if (outcome.kind === 'synced-no-push') {
-        // Nothing is shared now, so the push was skipped and no revoked
-        // plaintext went back up. Which of the two reasons it was matters.
-        const skipped =
-          outcome.reason === 'nothing-shared'
-            ? SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE
-            : SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE;
-        setSyncResult(`${connectorSyncSummary(outcome, { pushedBack: false })} ${skipped}`);
-      } else if (outcome.kind === 'partially-synced') {
-        // Both halves stay visible: the memories arrived AND the re-push failed.
-        setSyncResult(connectorSyncSummary(outcome, { pushedBack: false }));
-        setSyncError({
-          ...outcome.pushFailure,
-          message: `${outcome.pushFailure.message} ${SYNC_PUSH_FAILED_FOLLOWUP}`,
-        });
-      } else if (outcome.kind === 'nothing-shared') {
-        setSyncResult(outcome.message);
-      } else {
-        setSyncError(outcome);
-      }
+      await applySyncOutcome(outcome, {
+        reloadShared: () => store.load(),
+        setSharedScopes,
+        setSyncResult,
+        setSyncError,
+      });
     })();
   }
 

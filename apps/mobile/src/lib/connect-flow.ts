@@ -375,6 +375,45 @@ export function canSyncNow(state: { sharedCount: number; paired: boolean }): boo
   return state.sharedCount > 0 || state.paired;
 }
 
+export interface SyncOutcomeView {
+  reloadShared(): Promise<string[]>;
+  setSharedScopes(scopes: string[]): void;
+  setSyncResult(text: string | null): void;
+  setSyncError(failure: ConnectorFailure | null): void;
+}
+
+/**
+ * What the Sharing screen shows after "Sync app-written memories". Any sync
+ * that reached the server re-reads the shared list, because the fold can have
+ * marked a newly arrived project Shared (ADR 0050).
+ */
+export async function applySyncOutcome(outcome: ConnectorSyncOutcome, view: SyncOutcomeView): Promise<void> {
+  if (outcome.kind === 'synced' || outcome.kind === 'synced-no-push' || outcome.kind === 'partially-synced') {
+    view.setSharedScopes(await view.reloadShared());
+  }
+  if (outcome.kind === 'synced') {
+    view.setSyncResult(connectorSyncSummary(outcome));
+  } else if (outcome.kind === 'synced-no-push') {
+    // Which of the two reasons the push was skipped matters to the user.
+    const skipped =
+      outcome.reason === 'nothing-shared'
+        ? SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE
+        : SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE;
+    view.setSyncResult(`${connectorSyncSummary(outcome, { pushedBack: false })} ${skipped}`);
+  } else if (outcome.kind === 'partially-synced') {
+    // Both halves stay visible: the memories arrived AND the re-push failed.
+    view.setSyncResult(connectorSyncSummary(outcome, { pushedBack: false }));
+    view.setSyncError({
+      ...outcome.pushFailure,
+      message: `${outcome.pushFailure.message} ${SYNC_PUSH_FAILED_FOLLOWUP}`,
+    });
+  } else if (outcome.kind === 'nothing-shared') {
+    view.setSyncResult(outcome.message);
+  } else {
+    view.setSyncError(outcome);
+  }
+}
+
 /** A project an AI app created arrived and the fold marked it Shared (ADR 0050). */
 export function newlySharedMessage(scope: string): string {
   return `"${scope}" came from a connected app and is now marked Shared. Later edits to it are pushed; unshare it to stop.`;
