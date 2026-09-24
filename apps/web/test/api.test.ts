@@ -572,6 +572,19 @@ describe('POST /api/share/sync and /api/share/pair (ADR 0050 Decision 5)', () =>
     expect((after.body as { paired: boolean }).paired).toBe(true);
   });
 
+  it('treats a legacy pairing (connector.json with only the server) as paired: status and sync agree', async () => {
+    fs.writeFileSync(path.join(dir, 'connector.json'), `${JSON.stringify({ server: 'http://127.0.0.1:9' })}\n`, { mode: 0o600 });
+    const status = await call('GET', '/api/share/status');
+    expect((status.body as { paired: boolean }).paired).toBe(true);
+    const { puts } = stubConnector([
+      { server_id: 'conn_create_legacy', scope: 'project:legacy-proj', type: 'working', content: projectMarkdown('From 0.21.') },
+    ]);
+    const res = await call('POST', '/api/share/sync');
+    expect(res.status).toBe(200);
+    expect((res.body as { scopes: string[] }).scopes).toContain('project:legacy-proj');
+    expect(puts).toHaveLength(1);
+  });
+
   it('records the pairing so the next sync folds from an empty shared list', async () => {
     stubConnector([]);
     const res = await call('POST', '/api/share/pair');

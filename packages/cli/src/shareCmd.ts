@@ -1,6 +1,6 @@
 import { loadDeviceSecret, type Vault } from '@northkeep/core';
 import {
-  connectorPairedAt,
+  connectorPaired,
   deriveConnectorToken,
   deriveSyncCreds,
   downSyncConnector,
@@ -174,7 +174,7 @@ export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => ne
     foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
     // A device that never started a pairing has no account on that server, so
     // asking for pending rows would create one (and 402 on a gated server).
-    if (vault.sharedScopes().length === 0 && connectorPairedAt() === null) return null;
+    if (vault.sharedScopes().length === 0 && !connectorPaired()) return null;
     const down = await downSyncConnector({ server: cfg.server, deviceSecret, vault, entitlement });
     const scopes = vault.sharedScopes();
     if (scopes.length === 0) return { down, push: null };

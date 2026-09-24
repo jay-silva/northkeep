@@ -32,7 +32,7 @@ import {
   // @northkeep/sync client — the connector token is derived from the device
   // secret inside them and is never returned to the page.
   foldSidecarScopesIntoVault,
-  connectorPairedAt,
+  connectorPaired,
   downSyncConnector,
   fetchEntitlement,
   holdMessage,
@@ -875,7 +875,7 @@ async function dispatch(
       unlocked,
       // A paired device may sync with nothing shared: that sync is how a project
       // created in a connected app first arrives (ADR 0050 Decision 5).
-      paired: connectorPairedAt() !== null,
+      paired: connectorPaired(),
       // The URL the user pastes into Claude/ChatGPT to add the connector (the MCP
       // mount is /mcp on the connector server — apps/connector-server).
       mcp_url: config ? mcpUrl(config.server) : null,
@@ -983,7 +983,7 @@ async function dispatch(
       // ADR 0050 Decision 5: a hosted project arrives only through the fold,
       // which marks its scope. A device that never paired has no account on
       // that server, so it makes no call at all.
-      if (vault.sharedScopes().length === 0 && connectorPairedAt() === null) return null;
+      if (vault.sharedScopes().length === 0 && !connectorPaired()) return null;
       const down = await downSyncConnector({ server: config.server, deviceSecret, vault, entitlement });
       // Re-read after the slow down-sync so a scope unshared mid-sync (on this
       // device or arriving via vault sync) is never re-pushed, and a scope the

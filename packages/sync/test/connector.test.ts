@@ -7,6 +7,7 @@ import {
   assertConnectorUrl,
   connectorConfigPath,
   connectorPairedAt,
+  connectorPaired,
   foldSidecarScopesIntoVault,
   loadConnectorConfig,
   markConnectorPaired,
@@ -235,7 +236,30 @@ describe('paired_at marker (ADR 0050)', () => {
     expect(setConnectorServer('https://b.example.com').paired_at).toBeUndefined();
     expect(connectorPairedAt()).toBeNull();
     const raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as Record<string, unknown>;
-    expect('paired_at' in raw).toBe(false);
+    expect(raw.paired_at).toBeNull();
+    expect(connectorPaired()).toBe(false);
+  });
+
+  it('counts a legacy sidecar (server only, written before paired_at existed) as paired', () => {
+    fs.mkdirSync(path.dirname(connectorConfigPath()), { recursive: true });
+    fs.writeFileSync(connectorConfigPath(), `${JSON.stringify({ server: 'https://a.example.com' }, null, 2)}\n`, { mode: 0o600 });
+    expect(connectorPaired()).toBe(true);
+    expect(connectorPairedAt()).toBeNull();
+    // Re-setting the same server keeps the legacy pairing; a new server drops it.
+    setConnectorServer('https://a.example.com/');
+    expect(connectorPaired()).toBe(true);
+    setConnectorServer('https://b.example.com');
+    expect(connectorPaired()).toBe(false);
+  });
+
+  it('is not paired with no sidecar, a first server, or a non-string marker', () => {
+    expect(connectorPaired()).toBe(false);
+    setConnectorServer('https://a.example.com');
+    expect(connectorPaired()).toBe(false);
+    markConnectorPaired(new Date('2026-09-19T12:00:00.000Z'));
+    expect(connectorPaired()).toBe(true);
+    fs.writeFileSync(connectorConfigPath(), `${JSON.stringify({ server: 'https://a.example.com', paired_at: 17 })}\n`);
+    expect(connectorPaired()).toBe(false);
   });
 
   it('survives the ADR 0038 sidecar fold-in, which rewrites the same file', () => {

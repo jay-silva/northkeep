@@ -41,6 +41,7 @@ export {
   assertConnectorUrl,
   connectorConfigPath,
   connectorPairedAt,
+  connectorPaired,
   foldSidecarScopesIntoVault,
   markConnectorPaired,
   loadConnectorConfig,

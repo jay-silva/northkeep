@@ -120,6 +120,18 @@ describe('shareSyncCmd (ADR 0050 Decision 5)', () => {
     vault.close();
   });
 
+  it('treats a legacy pairing (connector.json with only the server, pre-0.22) as paired', async () => {
+    fs.writeFileSync(path.join(process.env.NORTHKEEP_HOME!, 'connector.json'), `${JSON.stringify({ server: SERVER })}\n`, { mode: 0o600 });
+    const vault = makeVault();
+    const { puts } = stubConnector([
+      { server_id: 'conn_create_legacy', scope: 'project:legacy-proj', type: 'working', content: projectMarkdown('From 0.21.') },
+    ]);
+    await shareSyncCmd(withVaultOf(vault), failHard);
+    expect(vault.sharedScopes()).toContain('project:legacy-proj');
+    expect(puts).toHaveLength(1);
+    vault.close();
+  });
+
   it('reports rows skipped for an unknown type instead of dropping them silently', async () => {
     const vault = makeVault();
     markConnectorPaired();
