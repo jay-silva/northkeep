@@ -16,7 +16,7 @@ NorthKeep works two ways:
   those apps and you set, per app, exactly what it may read. It does **not**
   redact what you type into that app, that's ownership and portability, not a
   firewall on your keystrokes.
-- **Converse**, you talk *through* NorthKeep instead (via `northkeep converse`), and it masks sensitive data out of your message *before* it leaves the
+- **Converse**, you talk *through* NorthKeep instead (in the terminal with `northkeep converse` from a source install, or in the iPhone app, in beta), and it masks sensitive data out of your message *before* it leaves the
   machine, then restores it locally in the reply. This is the real privacy
   firewall, against a local model (free, and with tools off nothing leaves
   your network) or a cloud model with your own key.
@@ -36,8 +36,10 @@ The Projects implementation is local and owner accepted. Its handoff checks cove
 
 **The Mac app (recommended).** Download the signed, notarized DMG, drag
 NorthKeep to Applications, and open it, a native window wraps the whole thing,
-no terminal required. It also installs a global `northkeep` command. *Apple
-Silicon only for now; Intel/Windows/Linux run from source (below).*
+no terminal required. The app does not install the `northkeep` command and
+no longer has a chat view; chat through NorthKeep (Converse) and the terminal
+commands below come from a source install. *Apple Silicon only for now;
+Intel/Windows/Linux run from source (below).*
 
 **From source (any platform).** Node 20+ and pnpm:
 
@@ -48,8 +50,8 @@ pnpm northkeep           # the branded home: status + what to do next
 pnpm northkeep ui        # or open the app in your browser (this machine only)
 ```
 
-Everything the app does has a CLI verb; every example below works from the app's
-global `northkeep` or, from source, as `pnpm northkeep`.
+Every example below runs from a source install as `pnpm northkeep` (or as
+`northkeep`, if you put the built command on your PATH yourself).
 
 ## Connect an AI app (Mode 1: portable memory)
 
@@ -82,12 +84,12 @@ someone else's app, for that, use Converse.
 
 ## Converse, talk to any model, privately (Mode 2: the firewall)
 
-Converse, available through `northkeep converse` in the terminal,
-is a chat surface where the privacy runs itself. On every message NorthKeep
+Converse, available through `northkeep converse` in the terminal (from a
+source install; the Mac app no longer has a chat view), is a chat surface where the privacy runs itself. On every message NorthKeep
 retrieves relevant memory,
 masks identifiers (and, at Tier 2 and up, names) *before* anything leaves the machine, calls the model you picked,
 restores names in the reply locally, distills what's worth keeping into the
-vault (visibly, with one-click undo), and writes a content-free audit row.
+vault (visibly; `:undo` removes them), and writes a content-free audit row.
 
 Getting a model connected is guided, pick a provider, paste a key (it goes
 straight to your macOS Keychain, never a file), and you're set. Cost is shown
@@ -103,8 +105,8 @@ Point it at **any** OpenAI-compatible endpoint, Ollama, LM Studio, vLLM,
 llama.cpp on a LAN box, a hosted API, or at Claude natively. Every endpoint
 wears an honest badge derived from where it actually is: **private** (loopback
 or your LAN, model traffic never leaves your network) or **bounded** (a cloud host, where
-Tier-1 masking always runs before a chat message or a cloud memory review is sent, a per-turn view in chat shows exactly what was
-masked, and the audit log records which tier ran). In chat and in a cloud memory review there is no way to send unredacted
+Tier-1 masking always runs before a chat message or a cloud memory review is sent, each chat reply names the tier that
+ran, and the audit log records it). In chat and in a cloud memory review there is no way to send unredacted
 text to a remote endpoint, not a setting, a code path that doesn't exist; the review masks at the tier you pick on its
 consent panel. In **Auto** mode a concierge routes
 each message to a capable model you've connected, favoring the cheapest; you can pin a
@@ -118,13 +120,15 @@ remote (an HTTPS service you sign in to, macOS only, tokens live in your
 Keychain and never in a file). Every tool call is approved by you, per call or
 under a grant you create at a live prompt and can revoke, and the arguments
 are screened, then masked before they go to the web, a remote server, or a
-local server you have not marked trusted; a per-turn proof shows what left
-(for web calls, as you approved it, before masking). A chat pinned private-only refuses remote MCP tools outright.
+local server you have not marked trusted. Each reply lists the tool calls it
+made, and an MCP call's line shows the masked arguments it sent; a web call
+shows its exact address or search at the approval prompt, which a site you
+allowed from then on skips. A chat pinned private-only refuses remote MCP tools outright.
 `KNOWN-LIMITS.md` states precisely what these tools do and do not send.
 
 ## Bring your memory with you
 
-Easiest: open the app, go to Import, and **drop your whole ChatGPT or Claude
+Easiest: open the app, go to Settings, then Import, and **drop your whole ChatGPT or Claude
 export**, the folder or the .zip. NorthKeep finds the conversation files (even
 when a big export is split into `conversations-000.json`, `-001.json`, …),
 ignores the rest, and figures out which service it came from.
@@ -156,7 +160,7 @@ account root, NorthKeep won't move it for you, by design), then `northkeep sync
 pull` and open the vault with your passphrase. Conflicts are version-guarded: if
 the vault changed elsewhere, push tells you to pull first (your prior local copy
 is kept as `vault.nkv.bak`). It's self-hostable (`apps/sync-server`), or deploy
-it to Vercel + Neon. There's a Sync tab in the app too.
+it to Vercel + Neon. Sync is also under Settings in the app.
 
 The hosted service is **$10/month** (self-hosting is free). Start a subscription
 with Stripe-hosted checkout, your card is entered on Stripe and never touches
@@ -187,7 +191,9 @@ server-side secret; the apps you connect read your shared memories in full; and
 your scope names, memory counts, sizes, and timestamps stay visible to the server
 even though the content is encrypted. Private is the default; you share one scope
 at a time, after a loud confirmation, and you can unshare anytime (that deletes it
-from the server).
+from the server). One exception: a new project that an app you connected creates
+arrives on your device already shared, so that app can keep updating it; it
+shows the SHARED badge and unshare revokes it.
 
 ```bash
 northkeep share server https://your-connector.example.com
@@ -196,14 +202,16 @@ northkeep share code            # a one-time code you enter when connecting the 
 northkeep share sync            # pull memories you made inside the apps back in
 ```
 
-There's a **Cloud Connect** tab in the app that does all of this with the same loud
+In the app, **Connect, then Cloud** does all of this with the same loud
 confirmation and a SHARED badge on every scope that leaves your machine.
 
 ## Scopes & audit (for professionals)
 
 A NorthKeep connection scoped to one matter physically cannot read or write
-anything else. Connect it scoped, optionally with Tier-1 masking on what's
-disclosed, then export the audit trail, who asked what, under which grant, what
+anything else. Connect it scoped, optionally with masking on what the vault
+returns (set `NORTHKEEP_REDACT_TIER` to 1, 2 or 3 in that app's server entry:
+secrets, then names, then dates to the year; while it is on, the app cannot
+rewrite memory text, see `KNOWN-LIMITS.md`), then export the audit trail, who asked what, under which grant, what
 was disclosed, what was denied, for an auditor:
 
 ```bash
@@ -223,7 +231,8 @@ Tier 1 deterministically masks keys with a known issuer prefix, card numbers,
 SSNs, emails, phone numbers and similar identifiers (a key with no recognizable
 prefix, or a password, is not caught); Tier 2 swaps
 names and orgs for consistent placeholders using a local model and can restore
-them in the AI's reply. All on your machine. It's a tool you route text
+them in the AI's reply; Tier 3 also turns every full date into its year and
+masks listed names even when the local model is off. All on your machine. It's a tool you route text
 *through*, NorthKeep can't scrub a prompt you type straight into a chat app,
 and doesn't pretend to.
 
@@ -232,8 +241,11 @@ and doesn't pretend to.
 - The vault is one encrypted file you can copy, back up, and take anywhere.
 - Export is always complete, human-readable JSON (`SPEC/memory-schema.md`).
   Embeddings are disposable cache, never required to rebuild a vault.
-- We never store plaintext. Everything you keep private stays encrypted on your
-  device, and we cannot read it. A scope you explicitly mark Shared is copied to
+- What you keep private stays on your device, in an encrypted vault we cannot
+  read. Two things NorthKeep writes on your device are plaintext: the report of
+  a memory review, which keeps the reviewed text even after you forget a memory,
+  and the projects mirror folder, if you turn it on. Sync stores only
+  ciphertext. A scope you explicitly mark Shared is copied to
   the connector, where it is stored encrypted at rest with no key in that database
   to read it (the key is rebuilt each request from your app's own credential plus a
   secret on our server, which briefly decrypts it so your AI apps can read the
