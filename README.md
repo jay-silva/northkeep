@@ -242,9 +242,10 @@ and doesn't pretend to.
 - Export is always complete, human-readable JSON (`SPEC/memory-schema.md`).
   Embeddings are disposable cache, never required to rebuild a vault.
 - What you keep private stays on your device, in an encrypted vault we cannot
-  read. Two things NorthKeep writes on your device are plaintext: the report of
-  a memory review, which keeps the reviewed text even after you forget a memory,
-  and the projects mirror folder, if you turn it on. Sync stores only
+  read. Some things NorthKeep writes on your device are plaintext, for example
+  the report of a memory review, which keeps the reviewed text even after you
+  forget a memory, the projects mirror folder if you turn it on, and files you
+  ask for, such as an export. Sync stores only
   ciphertext. A scope you explicitly mark Shared is copied to
   the connector, where it is stored encrypted at rest with no key in that database
   to read it (the key is rebuilt each request from your app's own credential plus a

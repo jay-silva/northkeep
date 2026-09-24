@@ -139,8 +139,8 @@ every milestone; if a limit is removed, say when and how.*
   tool or a cloud sync folder included, can read them. This applies only to
   project scopes, only after you turn it on, and only at a path you chose.
   It is not the only plaintext copy on disk: a memory review writes a
-  plaintext report beside the vault that survives forget (see Memory review
-  pass), and files you ask for, such as `northkeep export` or a
+  plaintext report in NorthKeep's home folder that survives forget (see
+  Memory review pass), and files you ask for, such as `northkeep export` or a
   `northkeep redact --map` file, are plaintext too.
 - **NorthKeep never pushes.** It commits in the folder and stops there. A
   push you make, to any remote, publishes the mirror to whoever can read that
@@ -1252,8 +1252,9 @@ every milestone; if a limit is removed, say when and how.*
   account, so any valid one opens any credential, and that request is
   treated as a paying one (it creates the account and records the unshare).
   A scope name or id containing a NUL character is refused with HTTP 400
-  before it reaches the database, on the routes your devices use and at app
-  registration, because the database cannot store it. Until this
+  before it reaches the database on the routes your devices use to push,
+  unshare and acknowledge (and a client id with one is refused at `/token`,
+  `/revoke` and consent), because the database cannot store it. Until this
   connector build is deployed, unshare after a lapsed subscription still
   returns 402.
 - **OAuth client secrets are hashed (ADR 0061).** An AI app that registers
