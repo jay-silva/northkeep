@@ -198,12 +198,12 @@ export default function ManageScopes() {
           <Text style={styles.confirmTitle}>Share "{pendingShare}"?</Text>
           <Text style={styles.confirmBody}>
             The {pendingCount} {pendingCount === 1 ? 'memory' : 'memories'} in "{pendingShare}"
-            will be copied off this phone to NorthKeep's connector server in plaintext-readable
-            form, so the AI apps you pair can read them.
+            will be copied off this phone to NorthKeep's connector server, so the AI apps you pair
+            can read them.
           </Text>
           <Text style={styles.confirmBody}>
-            The connector stores shared memories encrypted at rest, but it can read them to serve
-            your AI apps. Scope names, memory counts, and sizes are visible to the server as
+            The connector stores shared memories encrypted and decrypts them briefly to answer each
+            request from your AI apps, so it can read them while it does. Scope names, memory counts, and sizes are visible to the server as
             metadata.
           </Text>
           <Text style={styles.confirmBody}>

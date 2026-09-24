@@ -67,8 +67,10 @@ export default function SharingHub() {
         </Text>
         <Text style={styles.bannerBody}>
           Sync stores your vault as encrypted data the server can never read. Sharing copies a
-          scope's memories in plain, readable form so your AI apps can reach them. Only scopes you
-          turn on here ever leave this phone.
+          scope's memories to NorthKeep's connector server, which stores them encrypted and
+          decrypts them briefly to answer each request from your AI apps. Only scopes you turn on
+          here leave this phone, except a new project an AI app creates, which is marked Shared
+          when it arrives.
         </Text>
       </View>
 
