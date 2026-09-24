@@ -4,8 +4,8 @@
 - **Status:** Proposed. Design only, no product code on this branch yet.
   Design **CLEARED WITH WOUNDS after the recheck** (2026-09-24). The final
   design pass that closes the recheck's two wounds (R2-F1, R2-F2) and its
-  notes is **not re-reviewed**. Next step: build exactly this design, then
-  a full adversarial review of the code before merge. Jay's decisions D1
+  notes is **not re-reviewed**. Built on this branch 2026-09-24 (see Review
+  history); next step: a full adversarial review of the code before merge. Jay's decisions D1
   to D4 are pending; the build uses the recommendations. All three decisions sit behind the CLAUDE.md review gate:
   Decision 1 changes who decides (it adds a way to reach a route without the
   billing gate), Decision 2 changes how a credential is stored and checked
@@ -1004,3 +1004,37 @@ it would not take the lapsed path anyway.
     `clientsPlaintextRemaining` added; claim 21 counts admitted requests;
     self-host (Vercel or not) never purges by default; R14 and R15 added.
   - D1 to D4 still pending; the build uses the recommendations.
+- 2026-09-24, build (branch `fix022/connector`, not pushed): commits
+  `9225882` (connector), `cc4311e` (connector tests), `9234946` and `47f0a69`
+  (client copy and tests), `61b8975` (KNOWN-LIMITS, ADR 0038 and 0019
+  corrections). Built with D1 to D4 as recommended. Awaiting the full
+  adversarial review of the code.
+  - Implementation notes, where the code differs in shape (not behavior)
+    from the text above: the maintenance step is `runMaintenance(storage,
+    config)` in `src/maintenance.ts` over storage primitives
+    (`purgeLegacyPlaintext`, `gcOAuth`, `listClientSecretCandidates`,
+    `casClientRow`), not a single `ConnectorStorage.maintenance` method; the
+    migration lives in `src/client-secrets.ts` so storage never imports
+    crypto. The unshare CTE is `ConnectorStorage.unshareScope`, and
+    `deleteScope` now delegates to it with `paid: true`. There is no
+    connector README, so the self-host line sits in the `src/index.ts`
+    header and in KNOWN-LIMITS. The flag parser also accepts `yes`, as the
+    design lists.
+  - Claims to tests: 1-6, 24, 26 in
+    `apps/connector-server/test/adr0061-lapsed-unshare.test.ts`; 8-13, 21-23,
+    27, 28 in `adr0061-client-secret.test.ts`; 14-16 in
+    `adr0061-legacy-purge.test.ts`; 18, 19, 25 in `adr0061-maintenance.test.ts`;
+    7 and 17 are the existing tombstone, ADR 0050 and `c3-property` suites; 20
+    in `apps/web/test/adr0061-copy.test.ts`, `packages/cli/test/adr0061-copy.test.ts`,
+    `packages/sync/test/adr0061-connector-copy.test.ts` and
+    `apps/mobile/test/connect-flow.test.ts`.
+  - Fail-on-old, executed: with `apps/connector-server/src` at `6d67dd2`
+    (added files removed), every Yes row failed and claim 5 (guard) passed;
+    with the five client source files at `6d67dd2`, the claim 20 tests
+    failed. Mutations: the fix-round first-hop key fails claim 27 only; no
+    limiter of ours (the first-draft order) fails claims 21 and 27.
+  - Ladder: `pnpm -r build`, mobile `tsc --noEmit`, full suite (2,174 of
+    2,175 pass, 1 skipped; one 5 s timeout in
+    `packages/mcp-server/test/project-export-run.test.ts` passed 37 of 37
+    rerun alone), e2e 149 of 149. All with no database URL or pepper in the
+    environment and `NORTHKEEP_HOME` in a temporary directory.
