@@ -370,7 +370,7 @@ program
   .command('redact')
   .description('Mask secrets (and optionally pseudonymize names) in text before you paste it into any AI')
   .argument('[text]', 'text to redact; omit to read stdin')
-  .option('--tier <n>', '1 = secrets only; 2 = also pseudonymize names/orgs (needs Ollama)', '1')
+  .option('--tier <n>', '1 = known-prefix keys, cards, SSNs, emails, phones and similar identifiers; 2 = also pseudonymize names/orgs (needs Ollama)', '1')
   .option('--map <file>', 'write the restore map here (needed by "northkeep restore")')
   .action(async (text: string | undefined, options: { tier: string; map?: string }) => {
     const input = text ?? (await readStdin());
@@ -378,7 +378,7 @@ program
     const tier = options.tier === '2' ? 2 : 1;
     const result = await redact(input, { tier });
     if (result.tier2Degraded) {
-      console.error('⚠  Tier 2 unavailable (no Ollama) — names were NOT pseudonymized, only secrets masked.');
+      console.error('⚠  Tier 2 unavailable (no Ollama): names were NOT pseudonymized, only Tier 1 identifiers masked.');
       console.error('   Start Ollama for name pseudonymization: brew services start ollama');
     }
     process.stdout.write(result.redacted + (result.redacted.endsWith('\n') ? '' : '\n'));
@@ -578,7 +578,7 @@ providers
 program
   .command('converse')
   .alias('chat')
-  .description('Converse with a model through NorthKeep: memory injected, secrets masked, every turn audited')
+  .description('Converse with a model through NorthKeep: memory injected, Tier 1 identifiers masked, every turn audited')
   .option('--endpoint <id>', 'endpoint id (default: the configured default)')
   .option('--tier <n>', 'redaction tier: 0 (private endpoints only) | 1 | 2', '1')
   .option('--scope <scope>', 'scope for memories distilled from this conversation', 'personal')

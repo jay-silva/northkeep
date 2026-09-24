@@ -344,7 +344,7 @@ export default function Converse() {
         // (invariant #6, nothing left the device). Roll the turn fully back and
         // offer an explicit Tier-1 resend, in phone-true language (no Ollama here).
         setError(
-          'Names could not be pseudonymized on-device this turn, so nothing was sent. You can resend with Tier-1 protection (secrets are still masked, but names and places are not).',
+          'Names could not be checked on-device this turn, so nothing was sent. You can resend with deterministic masking only: keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers, every full date, street addresses, and dictionary-listed names are still masked, but other names, orgs, and places are not.',
         );
         setTier1RetryText(text);
         setMessages((prev) => prev.slice(0, -2));
@@ -532,7 +532,7 @@ export default function Converse() {
           accessibilityRole="button"
         >
           <Ionicons name="send-outline" size={14} color={colors.warnText} />
-          <Text style={styles.retryText}>Resend with Tier-1 only</Text>
+          <Text style={styles.retryText}>Resend with deterministic masking only</Text>
         </Pressable>
       ) : null}
 
@@ -608,12 +608,12 @@ function statusBanner(mode: Mode, nerAvailable: boolean): { tone: 'good' | 'warn
       ? {
           tone: 'good',
           message:
-            'On-device shield. Secrets, dates, addresses, and known names are always masked deterministically, and an on-device name recognizer adds a pseudonymization pass for other names, orgs, and places, before anything is sent. "What left this device" shows the proof for any turn.',
+            'On-device shield. Keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers, every full date, street addresses, and dictionary-listed names are always masked deterministically, and an on-device name recognizer adds a pseudonymization pass for other names, orgs, and places, before anything is sent. A key with no recognizable prefix, or a password, is not caught. "What left this device" shows the proof for any turn.',
         }
       : {
           tone: 'warn',
           message:
-            'Deterministic firewall only. Secrets, every full date, addresses, and dictionary-listed names are masked before sending, but on-device name recognition is not available here, so rare or unusual names can slip through. Check "What left this device" after any sensitive message.',
+            'Deterministic firewall only. Keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers, every full date, street addresses, and dictionary-listed names are masked before sending. A key with no recognizable prefix, or a password, is not caught, and on-device name recognition is not available here, so rare or unusual names can slip through. Check "What left this device" after any sensitive message.',
         };
   }
   return null;

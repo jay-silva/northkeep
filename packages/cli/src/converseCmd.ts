@@ -141,7 +141,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   console.log(`Converse — ${endpoint.label} (${endpoint.model})`);
   console.log(badgeLine(endpoint));
   console.log(
-    `Redaction tier ${tier}${tier === 2 ? ' (secrets masked + names pseudonymized)' : tier === 1 ? ' (secrets masked)' : ' (OFF — private endpoint)'}` +
+    `Redaction tier ${tier}${tier === 2 ? ' (identifiers masked + names pseudonymized)' : tier === 1 ? ' (identifiers masked: known-prefix keys, cards, SSNs, emails, phones)' : ' (OFF: private endpoint)'}` +
       ` · memory distillation: ${distillOllama ? 'local model' : 'heuristic (Ollama not running)'}`,
   );
   if (auto) console.log(`${GREEN}✦ Auto${RESET} — the concierge routes each message (":auto" toggles).`);

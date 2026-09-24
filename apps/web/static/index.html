@@ -643,11 +643,11 @@
       <div class="conv-toolbar">
         <div class="conv-controls">
           <select id="convEndpoint" title="Endpoint"></select>
-          <select id="convModel" title="Model — switch anytime, even mid-conversation" hidden></select>
-          <select id="convTierSel" title="Redaction tier">
-            <option value="1" selected>Tier 1 — mask secrets</option>
-            <option value="2">Tier 2 — also pseudonymize names</option>
-            <option value="3">Tier 3 — max: names + dates (PHI)</option>
+          <select id="convModel" title="Model: switch anytime, even mid-conversation" hidden></select>
+          <select id="convTierSel" title="Redaction tier. Tier 1 masks keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers. A key with no recognizable prefix, or a password, is not caught.">
+            <option value="1" selected>Tier 1: mask known-prefix keys, cards, SSNs, emails, phones</option>
+            <option value="2">Tier 2: also pseudonymize names</option>
+            <option value="3">Tier 3: max, names + dates (PHI)</option>
             <option value="0">Off (private endpoints only)</option>
           </select>
           <label class="pinchip" title="Pin this conversation to local models only — only local models read this chat (web tools, if on, still leave), and Auto may only pick private endpoints.">
@@ -754,22 +754,22 @@
         in Converse this happens automatically, so you only need this mode for text you're pasting
         somewhere else yourself.</p>
       <ul class="muted" style="margin:0 0 12px 18px;font-size:14px;line-height:1.6">
-        <li><strong>Tier 1</strong> masks secrets: emails, phone numbers, SSNs, card numbers, API keys. Always on.</li>
+        <li><strong>Tier 1</strong> masks keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers. A key with no recognizable prefix, or a password, is not caught. Always on.</li>
         <li><strong>Tier 2</strong> also replaces names and companies with consistent placeholders
           (e.g. Jane Doe becomes Person 1) and can restore them in the AI's reply. Needs a local AI (Ollama).</li>
       </ul>
       <div class="row" style="margin:10px 0">
         <select id="redactTier">
-          <option value="1">Tier 1 — mask secrets (emails, SSNs, cards, keys…)</option>
-          <option value="2">Tier 2 — also pseudonymize names &amp; orgs (needs local AI)</option>
+          <option value="1">Tier 1: mask known-prefix keys, cards, SSNs, emails, phones and similar</option>
+          <option value="2">Tier 2: also pseudonymize names &amp; orgs (needs local AI)</option>
         </select>
         <button class="btn primary" id="redactBtn">Redact</button>
       </div>
       <textarea id="redactIn" placeholder="Paste the text you're about to send to an AI…"
         style="width:100%;min-height:120px;font:inherit;color:inherit;background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 15px"></textarea>
       <div id="redactDegraded" class="banner" hidden style="margin-top:10px">
-        <strong>Tier 2 unavailable</strong> — local AI is off, so names were NOT pseudonymized
-        (secrets were still masked). Start Ollama to enable it.
+        <strong>Tier 2 unavailable:</strong> local AI is off, so names were NOT pseudonymized
+        (Tier 1 masking still ran). Start Ollama to enable it.
       </div>
       <div id="redactOutWrap" hidden style="margin-top:12px">
         <h3 class="sect">Redacted — safe to paste into any AI <button class="btn" id="copyRedacted" style="font-size:12px;padding:2px 10px;margin-left:8px">Copy</button></h3>
@@ -4611,7 +4611,7 @@
       }
       const note = el('p', 'muted',
         (ev.tier_applied === 2 ? 'Names are pseudonymized (put back only in the reply you see); other ' : 'These ') +
-        'secrets are one-way masked — the model only ever received the placeholders.');
+        'items are masked one way: the model only ever received the placeholders.');
       note.style.cssText = 'margin:10px 0 0;font-size:12px';
       head.appendChild(note);
     } else {
