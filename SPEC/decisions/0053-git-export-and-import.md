@@ -431,8 +431,14 @@ node $NK init   # then create two projects, demo and other, with node $NK projec
 9. **A killed write heals.** With `NORTHKEEP_EXPORT_CRASH_WRITE=1` (a test hook that kills the process after
    writing a temp), write to `demo` and export: `ls $R/projects` shows one `demo.md.northkeep-tmp-*`. Export
    again: the temp is gone and verify reports `matches`.
-10. **Schedule.** `--schedule hourly`, then `launchctl print gui/$(id -u)/com.northkeep.mirror-export` shows
-    it; `northkeep lock`, wait for a run, `--status` shows `vault_locked`; `--schedule off`.
+10. **Schedule (real vault only; do not run from a throwaway home).** There is one launchd job
+    (`com.northkeep.mirror-export`) and one stored key per Mac, so `--schedule` from any home
+    replaces the real schedule and `northkeep lock` clears the key the real schedule needs.
+    Verified on the real vault on 2026-09-23 instead: `--schedule daily --at 12:00` installed the
+    job, a `launchctl kickstart` run exited 0 and committed as `northkeep-schedule`, and the noon
+    run committed on its own. The locked-vault path (`vault_locked` in `--status`) is covered by
+    the CLI test "records a locked vault as a failure, never prompts, prints nothing, and --status
+    shows vault_locked" (packages/cli/test/projectsMirror.test.ts).
 
 **Canary output while this draft was written,** twice, git 2.54.0 (Apple Git-157), APFS, `TMPDIR=<scratch>
 bash scripts/adr-0053-canary.sh`. Both exited 0, the outputs were identical, each deleted its temp dir:
