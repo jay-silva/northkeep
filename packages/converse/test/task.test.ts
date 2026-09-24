@@ -556,7 +556,8 @@ describe('runTask — the agent loop', () => {
     const row = rows.find((r) => r.tool === 'tool_call')!;
     expect(row.tool_call!.outcome).toBe('unknown');
     expect('ok' in row.tool_call!).toBe(false);
-    expect(row.error).toBe('cancelled while running; outcome unknown');
+    expect(row.outcome).toBe('unknown');
+    expect(row.error).toBeUndefined();
     const toolMsg = session.plainHistory.find((m) => m.role === 'tool')!;
     expect(toolMsg.content).toContain('may still have completed');
   });

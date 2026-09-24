@@ -422,7 +422,7 @@ program
       return;
     }
     for (const entry of entries) {
-      const status = entry.ok ? '✓' : '✗';
+      const status = entry.ok ? '✓' : entry.outcome === 'unknown' ? '?' : '✗';
       const params = Object.entries(entry.params)
         .filter(([, v]) => v !== undefined)
         .map(([k, v]) => `${k}=${String(v)}`)
@@ -433,7 +433,9 @@ program
           : (entry.result_id?.slice(0, 8) ?? 'ok')
         : entry.denied
           ? 'denied'
-          : `error: ${entry.error}`;
+          : entry.outcome === 'unknown'
+            ? 'outcome unknown (cancelled while running; it may still have completed)'
+            : `error: ${entry.error}`;
       console.log(`${status} ${entry.ts}  ${entry.tool}  ${params}  → ${outcome}`);
       if (entry.result_ids && entry.result_ids.length > 0) {
         console.log(`    disclosed: ${entry.result_ids.map((id) => id.slice(0, 8)).join(' ')}`);

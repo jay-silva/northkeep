@@ -3087,7 +3087,7 @@
       ? '<p class="muted">No AI app has called your vault yet.</p>'
       : calls.map((c) => `
         <div class="logline">
-          <span style="color:${c.ok ? 'var(--ok)' : 'var(--danger)'}">${c.ok ? '✓' : (c.denied ? '⛔' : '✗')}</span>
+          <span style="color:${c.ok ? 'var(--ok)' : c.outcome === 'unknown' ? 'var(--muted)' : 'var(--danger)'}">${c.ok ? '✓' : (c.denied ? '⛔' : (c.outcome === 'unknown' ? '?' : '✗'))}</span>
           <strong style="color:var(--ink)">${esc(c.tool)}</strong>
           <span class="muted">${esc(c.ts.replace('T', ' ').slice(0, 19))}</span>
           ${c.provider ? `<span class="tag">${esc(c.provider)}</span>` : ''}
@@ -3097,6 +3097,7 @@
             .map(([k, v]) => k + '=' + v).join(' '))}</span>
           ${c.denied ? '<span style="color:var(--danger)">DENIED</span>' : ''}
           ${c.error && !c.denied ? `<span class="muted">${esc(c.error)}</span>` : ''}
+          ${c.outcome === 'unknown' ? '<span class="muted">outcome unknown: cancelled while running, it may still have completed</span>' : ''}
           ${c.disclosed_scopes && c.disclosed_scopes.length ? `<span class="muted">scopes: ${esc(c.disclosed_scopes.join(' '))}</span>` : ''}
           ${c.result_ids && c.result_ids.length ? `<div class="prov">disclosed: ${c.result_ids.map((i) => `<span class="tag">${esc(i.slice(0, 8))}</span>`).join(' ')}</div>` : ''}
         </div>`).join('');

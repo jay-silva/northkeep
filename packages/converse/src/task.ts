@@ -1033,7 +1033,7 @@ export async function runTask(options: TaskOptions): Promise<TaskResult> {
           params: {},
           ok: decision === 'approved' && (execMeta?.ok ?? false),
           ...(decision !== 'approved' ? { denied: true } : {}),
-          ...(execMeta?.cancelled === true ? { error: 'cancelled while running; outcome unknown' } : {}),
+          ...(execMeta?.cancelled === true ? { outcome: 'unknown' as const } : {}),
           ...(egressHost !== undefined ? { endpoint_host: egressHost } : {}),
           ...(egressUrl !== null ? { privacy: egressTier } : {}),
           tool_call: {

@@ -431,10 +431,11 @@ every milestone; if a limit is removed, say when and how.*
 - **Disconnect aborts the task (M10e).** In `northkeep converse --tools`,
   Ctrl-C while a task is running cancels that task: a pending approval is
   denied, tool calls not yet run are recorded as "Cancelled by the user.", and
-  you are back at the prompt. Cancelling stops NorthKeep waiting for a tool
-  call that is already running; it does not stop the tool. An MCP server may
-  still complete that call's side effect, so such a call is shown and logged
-  as cancelled with an unknown outcome, and the model is told the same. A
+  you are back at the prompt. For a tool call that is already running,
+  NorthKeep stops waiting and sends an MCP server a cancellation notice, but
+  the server may already have done the work or may not honor the notice. Such
+  a call is shown and logged as cancelled with an unknown outcome, and the
+  result kept in the conversation tells the model it may still have completed. A
   quick second Ctrl-C that lands after the task has stopped reaches an idle
   prompt and ends the REPL. At a terminal, an approval prompt takes only what
   you type after it appears. Ctrl-C at an idle prompt, or during a reply

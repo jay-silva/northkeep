@@ -12,7 +12,8 @@ const server = new Server({ name: 'marker', version: '1.0.0' }, { capabilities: 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
   tools: [{ name: 'touch', description: 'Append a line to a marker file.', inputSchema: { type: 'object' } }],
 }));
-server.setRequestHandler(CallToolRequestSchema, async (req) => {
+server.setRequestHandler(CallToolRequestSchema, async (req, extra) => {
+  extra?.signal?.addEventListener('abort', () => fs.appendFileSync(marker, 'SERVER SAW ABORT\n'));
   if (req.params?.arguments?.note === 'slow') await new Promise((r) => setTimeout(r, slowMs));
   fs.appendFileSync(marker, 'TOOL RAN\n');
   return { content: [{ type: 'text', text: 'touched' }] };

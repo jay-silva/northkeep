@@ -34,6 +34,10 @@ export interface CallLogEntry {
     stale_days?: number;
   };
   ok: boolean;
+  /** 'unknown': a tool call cancelled while in flight, which may still have
+   * completed. Readers show it as unknown, not as a failure; ok stays false
+   * only because older readers require the field. */
+  outcome?: 'unknown';
   /** True when the call was refused by a scope grant. */
   denied?: boolean;
   result_count?: number;
