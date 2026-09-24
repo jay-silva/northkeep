@@ -86,4 +86,17 @@ describe('no em dash in user-facing text', () => {
     const configHits = stringHits(config, fs.readFileSync(path.join(repo, config), 'utf8'), ts.ScriptKind.TS);
     expect([...tsHits('apps/mobile/app'), ...tsHits('apps/mobile/src'), ...configHits]).toEqual([]);
   });
+  it('README, KNOWN-LIMITS, the site and the upgrade guide', () => {
+    const files = [
+      'README.md',
+      'KNOWN-LIMITS.md',
+      'docs/update-memory-projects.md',
+      ...fs.readdirSync(path.join(repo, 'site')).filter((f) => f.endsWith('.html')).map((f) => `site/${f}`),
+    ];
+    const hits = files.flatMap((f) =>
+      fs.readFileSync(path.join(repo, f), 'utf8').split('\n').flatMap((l, i) =>
+        l.includes(EM) || /&mdash;|&#8212;|&#x2014;/i.test(l) ? [`${f}:${i + 1}: ${l.trim().slice(0, 90)}`] : []),
+    );
+    expect(hits).toEqual([]);
+  });
 });
