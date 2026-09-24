@@ -48,8 +48,9 @@ every milestone; if a limit is removed, say when and how.*
   same call id records the outcome. If only that second row fails, a read
   returns an error and discloses nothing, and a write that already saved
   returns "saved" with a warning and no content, so an app does not retry a
-  write that landed. A crash between the two rows leaves the first one alone,
-  shown as "outcome unknown (interrupted)". In a project's resume brief, a
+  write that landed. A crash between the two rows leaves the first one alone:
+  it shows as "in progress" for five minutes after the call started, then as
+  "outcome unknown (interrupted)". In a project's resume brief, a
   session whose write is recorded in the project's own history is not
   listed as open even without the second row; the project board still
   counts from the log alone, so it can list that session as open, and for
@@ -135,10 +136,12 @@ every milestone; if a limit is removed, say when and how.*
   mirror. The full backup is still the vault file, or `northkeep export`.
 - **Mirrored project files are plaintext in the folder you chose.** They are
   as private as that folder: anyone or anything that can read it, a backup
-  tool or a cloud sync folder included, can read them. This is the one
-  exception to the call log's rule that memory content is never written to
-  disk outside the encrypted vault, and it applies only to project scopes,
-  only after you turn it on, and only at a path you chose.
+  tool or a cloud sync folder included, can read them. This applies only to
+  project scopes, only after you turn it on, and only at a path you chose.
+  It is not the only plaintext copy on disk: a memory review writes a
+  plaintext report beside the vault that survives forget (see Memory review
+  pass), and files you ask for, such as `northkeep export` or a
+  `northkeep redact --map` file, are plaintext too.
 - **NorthKeep never pushes.** It commits in the folder and stops there. A
   push you make, to any remote, publishes the mirror to whoever can read that
   remote.
@@ -174,39 +177,39 @@ every milestone; if a limit is removed, say when and how.*
   in support@northkeep.ai (a Google Workspace alias). Cloudflare Email
   Sending / Email Routing are not used for this path.
 
-## M5 (vault sync) — current
+## M5 (vault sync), current
 
 - **The sync server can't read your memories, but it does hold your
   ciphertext.** Sync pushes the vault as its own encrypted blob; the server
   stores opaque bytes + a version number and never gets a key. That data does
-  live on managed infrastructure (Neon Postgres) — encrypted, but hosted. Want
+  live on managed infrastructure (Neon Postgres): encrypted, but hosted. Want
   full custody? The server is self-hostable.
 - **A second machine needs your `device.secret` file, copied over by hand.**
-  It's the account root — sync derives your identity from it. NorthKeep never
+  It's the account root: sync derives your identity from it. NorthKeep never
   transports it for you (that would defeat the two-secret model), and losing it
   still loses the vault. Guard it like a recovery key.
 - **Conflicts are whole-vault, last-writer-wins.** If two machines edit before
-  syncing, pulling replaces your local vault with the server's version — your
+  syncing, pulling replaces your local vault with the server's version; your
   prior local state is kept as `vault.nkv.bak`, not merged entry-by-entry.
   Per-entry merge is future work; for now, pull before you edit on a second
   machine.
 - **Access is gated by subscription OR allowlist.** The hosted service (M5b)
   requires a **$10/month Stripe subscription** for anyone not on the allowlist;
   a non-subscribed, non-allowlisted account gets a 402 and can't sync. The
-  allowlist (`NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES`) is the free/comp list —
+  allowlist (`NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES`) is the free/comp list;
   `northkeep sync id` prints your allowlist hash. A **self-hosted** server sets
   no Stripe env, so billing is off and only the allowlist gates; the ~4 MB size
   cap and rate limiting are the only guards on an open (no-allowlist,
   no-Stripe) server, so don't expose one publicly.
 - **Rate limiting is per-instance, not a precise global quota.** Every `/api/*`
-  request passes two throttles: a per-IP ceiling (4x the account cap — several
+  request passes two throttles: a per-IP ceiling (4x the account cap: several
   accounts can share a NAT, but rotating random tokens can't mint fresh keys
   past it, and it caps an unauthenticated webhook flood) and, when a token is
   presented, a per-account window (default 120 requests per 5 minutes). Over
   either → 429 with `Retry-After`. Tune with `NORTHKEEP_SYNC_RATE_LIMIT`
   (account requests per 5-minute window; `0` disables both). Counters live in
   process memory, so on serverless hosting each warm instance counts
-  separately — the effective ceiling is the limit times the number of
+  separately, so the effective ceiling is the limit times the number of
   instances. The client IP comes from `x-forwarded-for` (platform-set on
   Vercel; spoofable if you self-host directly on the internet, which
   KNOWN-LIMITS already advises against for open servers). It's a first line
@@ -327,14 +330,14 @@ every milestone; if a limit is removed, say when and how.*
 - **"Last synced" is per machine.** The age shown is this device's last
   successful push or pull, not proof the other device has caught up.
 
-## M5b (billing) — current
+## M5b (billing), current
 
 - **Paying on the hosted service creates a bounded payer↔vault link.** To bill,
   the server stores one new fact: your encrypted account's token hash next to
   your Stripe customer/subscription id and status. Your **email and card never
-  touch NorthKeep** — they live only in Stripe, and Checkout is Stripe-hosted
+  touch NorthKeep**: they live only in Stripe, and Checkout is Stripe-hosted
   (no card data, no PCI scope on us). The honest cost: the operator can now
-  correlate *which paying customer owns which encrypted vault* — never its
+  correlate *which paying customer owns which encrypted vault*, never its
   contents (still ciphertext-only). **Self-hosting stays fully anonymous** (no
   Stripe, allowlist only).
 - **The gate leans on Stripe webhooks.** A cancelled subscription flips your
@@ -347,7 +350,7 @@ every milestone; if a limit is removed, say when and how.*
 
 - **Approvals are per-call by default; auto-allow exists only as an explicit,
   named, revocable grant.** The ADR-0029 engine remembers "this session" and
-  "always" per (tool, exact host) — no wildcards, no subdomain inheritance,
+  "always" per (tool, exact host): no wildcards, no subdomain inheritance,
   and consequential (state-changing) tools never auto-allow regardless of
   grants. "Never" blocks a site without asking again. `northkeep tools
   grants` lists every persisted grant; `northkeep tools revoke` undoes them.
@@ -360,15 +363,15 @@ every milestone; if a limit is removed, say when and how.*
   READS attacker-authored text, and a model can be persuaded. The
   paraphrase-exfiltration channel (a hostile page talks the model into
   smuggling your context into its next tool-call URL) now has an ACTIVE
-  screen — see the exfiltration bullet below — but the approval prompt
+  screen (see the exfiltration bullet below), but the approval prompt
   showing the exact URL remains the real backstop.
 - **The exfiltration screens are syntactic, not semantic.** Every tool call's
   restored arguments are decomposed (host, decoded path, decoded query,
-  fragment, body leaves) and run through a bounded decode FIXPOINT — up to 6
+  fragment, body leaves) and run through a bounded decode FIXPOINT of up to 6
   rounds mixing percent-decode and base64/base64url, so layered encodings
   (base64-of-base64, percent-of-base64) unwrap, with base64 tried as UTF-8,
   UTF-16LE, and Latin-1 (and, when a decode is mostly binary, its printable
-  runs pulled out so a secret padded with high bytes cannot hide) — then
+  runs pulled out so a secret padded with high bytes cannot hide), then
   matched case/punctuation-insensitively against:
   Tier-1 secret shapes (SSN/card/IBAN/API-key hits hard-block the call;
   every other Tier-1 hit, such as email/phone/record-id/address/IP/GPS/ZIP,
@@ -385,8 +388,8 @@ every milestone; if a limit is removed, say when and how.*
   past the screen's size caps; a secret encoded past the 6-round budget or in
   an encoding we don't
   decode (ROT13, custom substitution, gzip); a value split across two URL
-  components or dribbled a few characters per call; and — by deliberate design
-  — a protected name or memory placed in the URL's HOST (the host is shown
+  components or dribbled a few characters per call; and, by deliberate design,
+  a protected name or memory placed in the URL's HOST (the host is shown
   verbatim at the gate, so it is screened for secret shapes only, not identity
   or memory, to avoid flagging every "fetch carolmansfield.com"). Screens
   narrow the channel; the human at the prompt and the fence discipline remain
@@ -501,7 +504,7 @@ every milestone; if a limit is removed, say when and how.*
 
 - **A configured LOCAL (stdio) MCP server is a program with your privileges.**
   Remote servers are covered in the "Remote (https) MCP servers" entry below and are a different shape
-  entirely — nothing on this machine, everything over the network. The
+  entirely: nothing on this machine, everything over the network. The
   launch fingerprint that binds your approvals covers the resolved command
   path, its arguments, the working directory and the environment the config
   sets. It detects CONFIGURATION changes, not PROGRAM changes: replace the file
@@ -512,9 +515,9 @@ every milestone; if a limit is removed, say when and how.*
 - **We can show what we sent a server. We cannot show what it did next.** A
   server may write to disk, spawn processes, or make its own network calls, none
   of which are visible to us. That is why arguments to a `strict` server get the
-  deterministic Tier-1 mask before it sees them. The "what left this machine"
-  strip names the server and shows the masked arguments an MCP call actually
-  sent, including calls auto-allowed by a standing grant where no prompt was
+  deterministic Tier-1 mask before it sees them. In `northkeep converse`, the
+  `sent to mcp:` line printed with the reply names the server and shows the
+  masked arguments an MCP call actually sent, including calls auto-allowed by a standing grant where no prompt was
   displayed. That proof is ephemeral: shown once with the reply, never stored.
   The audit log keeps only a hash, by design.
 - **Every MCP tool asks EVERY time until you declare it read-only.** Risk is
@@ -560,7 +563,7 @@ every milestone; if a limit is removed, say when and how.*
   a third party you signed in to. Specifically:
   - Its arguments always get the deterministic **Tier-1 floor**, never the
     conversation's full active tier, and it can never be marked `trusted`.
-  - **A chat pinned "Private only" refuses remote MCP tools outright** — not a
+  - **A chat pinned "Private only" refuses remote MCP tools outright**, not a
     prompt you can click through. Web search and fetch still work under a pin
     (see the privacy-ceiling entry above). That asymmetry is deliberate: a
     search query is transient and near-anonymous, a connected account server is
@@ -597,7 +600,7 @@ every milestone; if a limit is removed, say when and how.*
     using dynamic registration issue refresh tokens (seen in the Cloudflare
     record). Fix tracked in ADR 0035. Related, found
     the same day: Google's Gmail MCP server is a Workspace **Developer
-    Preview** feature — consumer Gmail is unsupported entirely, and without
+    Preview** feature: consumer Gmail is unsupported entirely, and without
     preview enrollment every TOOL CALL returns a bare permission error even
     when the sign-in, scopes, and API enablement are all correct (tools/list
     still answers, which makes the failure look like a client bug).
@@ -607,10 +610,10 @@ every milestone; if a limit is removed, say when and how.*
     error text rather than NorthKeep's "sign in again" message.
 - **A model that cannot drive tools may FAKE a tool result, convincingly.**
   Small local models (the 7B class this hardware runs) sometimes answer a
-  tools-enabled question by inventing a tool call and a plausible result —
-  fake function names, fake counts — with no prompt shown and nothing sent
-  anywhere. The tell: no approval prompt appeared and the proof strip shows no
-  egress. Nothing left the machine, but the ANSWER is fiction. Pin a
+  tools-enabled question by inventing a tool call and a plausible result
+  (fake function names, fake counts) with no prompt shown and nothing sent
+  anywhere. The tell: no approval prompt appeared and no tool call is listed
+  with the reply. Nothing left the machine, but the ANSWER is fiction. Pin a
   tool-capable model (any current cloud model) for work that uses tools; the
   concierge's cheapest-capable routing does not yet account for
   tool-use quality.
@@ -648,7 +651,8 @@ every milestone; if a limit is removed, say when and how.*
   working directory. Any other server can only be made `trusted` by editing
   `~/.northkeep/mcp.json` by hand. The exfiltration screens still run on the
   vault server's arguments, so a memory containing an SSN, card number,
-  IBAN or API key is still refused there.
+  IBAN or an API key with a recognized issuer prefix is still refused there
+  (a key with no recognizable prefix is not caught, see M3).
 
 ## M10d (web_search + spend budget), current
 
@@ -669,24 +673,24 @@ every milestone; if a limit is removed, say when and how.*
 - **web_search screens the query for catastrophic secrets only.** An SSN/card/
   IBAN/API-key in the query is hard-blocked, but identity and memory screening
   are deliberately off (the query goes to Brave, a trusted API, not an
-  attacker — ADR 0030). Warn-class PII (email, phone) in the query is not
+  attacker; ADR 0030). Warn-class PII (email, phone) in the query is not
   flagged, but the Tier-1 egress floor still masks it on the wire to Brave.
 - **The Brave subscription token is trusted to that one host.** It rides a
   single header bound to api.search.brave.com; a redirect on that request is
   refused rather than followed. If Brave itself were compromised or
-  impersonated past TLS, the token and the query are what it would see — the
+  impersonated past TLS, the token and the query are what it would see: the
   same trust any API key places in its provider.
 - **Search results are fenced but SEO-influenceable.** A hostile page can rank
   for a term; results enter the conversation as nonce-fenced untrusted data
   (like a fetched page), and any result URL the model then opens rides
   web_fetch's own SSRF guard. The model still reads attacker-authored result
-  text — prompt injection via results is the same open problem as via a
+  text; prompt injection via results is the same open problem as via a
   fetched page.
 
-## M6 (Converse, the mediated client) — current
+## M6 (Converse, the mediated client), current
 
 - **"Bounded" is bounded, not invisible.** Point Converse at a cloud
-  endpoint and your *redacted* text still reaches that provider — masked
+  endpoint and your *redacted* text still reaches that provider, masked
   before send, provable from the audit log, but on someone else's computer
   and subject to their retention. The absolute-privacy path is a local or
   LAN endpoint (the "private" badge), where nothing leaves your network.
@@ -694,13 +698,13 @@ every milestone; if a limit is removed, say when and how.*
   classified private because it's a loopback/RFC-1918/`.local` address. If
   you deliberately tunnel that address somewhere else (SSH forward, VPN),
   NorthKeep can't tell. Unrecognized and bare hostnames classify as
-  *bounded* — we fail closed, so a LAN box by hostname may need its IP.
+  *bounded*: we fail closed, so a LAN box by hostname may need its IP.
 - **Tier-1 masks are one-way in the conversation too.** The model sees
-  `[SSN_1]` and answers about `[SSN_1]` — your real number never comes back
+  `[SSN_1]` and answers about `[SSN_1]`; your real number never comes back
   into the transcript. That's the point, but it reads oddly the first time.
 - **Tier-2 toward a remote endpoint refuses to run degraded.** If Ollama is
   down and you asked for pseudonymization to a bounded endpoint, the message
-  is NOT sent — start the model or explicitly drop to Tier 1. Loud, not
+  is NOT sent: start the model or explicitly drop to Tier 1. Loud, not
   silent.
 - **Distillation quality tracks the small local model** (same as imports,
   M2). Auto-stored memories are listed after each turn, and `:undo` in
@@ -720,14 +724,14 @@ every milestone; if a limit is removed, say when and how.*
   tens of seconds while they are computed, and the standalone server starts
   computing them at launch.
 - **API keys need the macOS Keychain.** On other platforms (or
-  `NORTHKEEP_NO_KEYCHAIN=1`) keys are env-var-only for scripting — NorthKeep
+  `NORTHKEEP_NO_KEYCHAIN=1`) keys are env-var-only for scripting; NorthKeep
   refuses to write them to files.
 
-## M4 (scopes + audit) — current
+## M4 (scopes + audit), current
 
 - **Scope isolation binds what goes through NorthKeep, not what you paste
   yourself.** A connection granted only `client:henderson` physically can't
-  retrieve `client:acme` from the vault — but NorthKeep can't stop you from
+  retrieve `client:acme` from the vault, but NorthKeep can't stop you from
   typing Acme's details into a Henderson conversation by hand. The boundary
   is on the vault, not your keyboard.
 - **Scope labels are set at write time.** If a memory is saved under the
@@ -737,14 +741,16 @@ every milestone; if a limit is removed, say when and how.*
   MCP connection for a matter; you don't switch scopes mid-conversation (that
   would let the model widen its own access).
 - **Masking over MCP is opt-in and one-way** (ADR 0060).
-  `NORTHKEEP_REDACT_TIER=1` masks secrets in what the vault returns, `2` also
+  `NORTHKEEP_REDACT_TIER=1` masks secrets in the memory text and source
+  fields the vault returns, `2` also
   replaces names with `Person-1` style labels (consistent for the life of
   the server process, kept only in memory), and `3` also reduces every date
   to the year, including recording dates. Names are never put back: that
   needs a provider proxy that does not exist (parked). If the local name
-  model fails at Tier 2 the call is refused with nothing returned; at Tier 3
-  the call returns with a note, and whether you see that note depends on
-  the AI app. Collection and project names stay exact at every tier, even
+  model fails at Tier 2, a read is refused with nothing returned, and a
+  write that already landed (a type-only memory edit) answers "saved" with
+  a warning and shows nothing; at Tier 3 the call returns with a note, and
+  whether you see that note depends on the AI app. Collection and project names stay exact at every tier, even
   one named after a date, because the app must send them back. Any other
   value, such as `yes` or `4`, refuses every call and names the value.
   While masking is on, project writes and memory edits that change text are
@@ -752,14 +758,14 @@ every milestone; if a limit is removed, say when and how.*
   the app only saw masked text. Tiers 2 and 3 run the name model on every
   returned text, so large lists are slow.
 - **The audit log covers NorthKeep's own surface.** It records what AI apps
-  asked of the vault — it can't see what a provider did with the content
+  asked of the vault; it can't see what a provider did with the content
   after NorthKeep handed it over.
 
-## M3 (redaction) — current
+## M3 (redaction), current
 
-- **We redact text you route through us — we can't scrub what a chat app
-  sends.** `northkeep redact` (and the GUI Redact panel) mask text *you*
-  paste through them. NorthKeep is not a proxy between Claude Desktop and
+- **We redact text you route through us; we can't scrub what a chat app
+  sends.** `northkeep redact` masks text *you* pipe or paste through it (the
+  desktop app no longer shows its Redact panel). NorthKeep is not a proxy between Claude Desktop and
   Anthropic, so it cannot intercept a prompt you type directly into a chat
   client. Honest boundary, stated plainly.
 - **Tier 1 is pattern matching, not a guarantee.** It masks API keys and
@@ -797,15 +803,18 @@ every milestone; if a limit is removed, say when and how.*
   the pattern's minimum length is not masked.
 - **Tier 2 needs Ollama and is 85–95% in-domain.** A name it misses is a
   leak; Tier 1 always runs underneath as a backstop for secrets. Without
-  Ollama, Tier 2 is skipped and you're told loudly — names are NOT masked.
-  The name model reads long text in overlapping windows of about 6,000
+  Ollama, Tier 2 refuses wherever the text would leave the machine: a chat
+  turn to a non-private endpoint and a cloud memory review send nothing,
+  and MCP masking returns nothing. Where nothing leaves (a chat with a local or LAN model,
+  `northkeep redact`), it drops to Tier 1 and tells you: names are NOT
+  masked. The name model reads long text in overlapping windows of about 6,000
   characters, so a long text costs several calls; if any window fails, the
   whole text counts as unmasked for names (ADR 0060), and so does a reply
   from the model that cannot be read in full. Before 0.22.0 it read only
   the first 6,000 characters and kept only the last of two "entities" lists
   in a reply, and said nothing in either case.
   Tier 2 also generalizes DOB-labeled dates to year-only, deterministically.
-- **Tier 3 makes dates and listed names deterministic — not "all names."**
+- **Tier 3 makes dates and listed names deterministic, not "all names."**
   Full calendar dates in every recognized format (numeric US and day-first,
   month-name incl. "15th of March", ISO with attached timestamps) go to
   year-only (`[DATE-1948]`) by regex. Names mask deterministically across
@@ -813,7 +822,7 @@ every milestone; if a limit is removed, say when and how.*
   ALL-CAPS narratives, possessives, Mc/O'/hyphenated/accented forms,
   multi-surname names ("MARIA GARCIA LOPEZ HERNANDEZ"), face-sheet
   "SMITH, JOHN", mixed-casing "John SMITH", and rank-blocked common pairs
-  ("John Smith") via the FIRST→SUR pair signature — while clinical headers,
+  ("John Smith") via the FIRST→SUR pair signature, while clinical headers,
   acronyms, med lists, and chart labels stay untouched. The enumerated
   residuals (each falls to the NER union when Ollama is up): anchored caps
   names that are top-300 English words ("MR MAY"); bare unanchored single
@@ -831,7 +840,7 @@ every milestone; if a limit is removed, say when and how.*
   Bourne whose partner runs compliance" survives every content-level filter,
   at every tier. Stated plainly.
 - **Restore is one-directional for secrets.** Pseudonyms (names/orgs) come
-  back; a masked SSN or card number stays masked — by design.
+  back; a masked SSN or card number stays masked, by design.
 
 ## M13 (projects as vault memories), current
 
@@ -857,7 +866,8 @@ every milestone; if a limit is removed, say when and how.*
   16,384 characters: when an update would pass that, the oldest Log entries
   roll into archive memories in the project scope (ADR 0045), and
   `project_update` refuses, rather than silently truncating, only when the
-  hand-written sections alone are too long. The ~4 MB sync cap bounds the
+  document is still over the cap with just its newest Log entry kept (long
+  hand-written sections, or a long new entry on a nearly full document). The ~4 MB sync cap bounds the
   whole vault, projects included.
 - **`memory_edit` cannot move a memory between scopes.** Deliberate: over
   MCP, a scope change could turn private content into shared content. Rescope
@@ -894,7 +904,9 @@ every milestone; if a limit is removed, say when and how.*
 - **A device that never paired does not fetch hosted creates while it
   shares nothing.** The pairing marker is per device. A second device
   receives the project through vault sync, or folds it once it pairs or
-  once any scope is shared on it.
+  once any scope is shared on it. A Mac or the CLI paired before 0.22.0
+  counts as paired. A phone paired before 0.22.0 does not: while it shares
+  nothing, it does not fetch app-created projects until you pair it again.
 - **An old desktop client shadows instead of superseding.** A client that
   predates M14 folds a project update as a new working memory. Newest-wins
   then shows the folded document; the prior document remains live in the
@@ -1002,10 +1014,16 @@ every milestone; if a limit is removed, say when and how.*
   all forgets every member of the group after one confirmation. No
   automatic acceptance, vault-wide bulk removal, or many-to-one
   consolidation inside review (Guided consolidation is a separate flow).
-- **Recovery is local and revision-bound.** Review receipts are private
-  plaintext workflow files under NORTHKEEP_HOME (mode 0600), not encrypted
-  vault entries, and may retain reviewed content after a memory is forgotten.
-  They do not sync or travel with vault exports. Restoration creates a new
+- **The review report is plaintext at rest and survives forget.** Each
+  review writes one report file per vault under NORTHKEEP_HOME
+  (`review-report-<id>.json`, mode 0600). It holds the text of every
+  reviewed memory, the proposals and the change receipts, unencrypted.
+  Forgetting a memory, even every memory, does not remove it from that
+  file, and nothing in NorthKeep deletes the file; a later review may carry
+  it forward. Delete the file yourself if that matters. It does not sync or
+  travel with vault exports.
+- **Recovery is local and revision-bound.** Restoring a change reads the
+  receipts in that report. Restoration creates a new
   version or recovered memory; it refuses if the recorded result has changed.
   Legacy reports are read-only and require a fresh review to apply changes.
 - **Local Ollama is the default.** A first run on a large vault is slow
@@ -1035,27 +1053,27 @@ every milestone; if a limit is removed, say when and how.*
   no scope membership is changed by review. Project handoffs (ADR 0048)
   and open-session accounting (ADR 0052) are separate features.
 
-## GUI — current
+## GUI, current
 
 - **The app window is a local web page with a per-session key.** While the
   UI is unlocked, any process that can read that session's token (or your
-  Keychain, if you checked "keep unlocked") has vault access — the familiar
+  Keychain, if you checked "keep unlocked") has vault access: the familiar
   rule: your Mac login session is the wall.
 - **Closing the Tauri window kills the server and forgets the held key.**
   A browser tab from `northkeep ui` does the same when you Ctrl-C the
-  terminal — but not if you only close the tab; the server keeps running.
+  terminal, but not if you only close the tab; the server keeps running.
 - **Project documents on memory cards render a deliberate subset of
   Markdown** (the same renderer the retired Converse view used for replies).
   Headings,
   bold/italic, inline code, fenced code blocks, nested lists and rules are
-  formatted; **tables, images and raw HTML are not** — their lines stay as
+  formatted; **tables, images and raw HTML are not**: their lines stay as
   literal text, which is readable but unformatted. Nothing is ever parsed as
   HTML: the renderer only constructs DOM nodes, because since M10 a reply can
   quote a web page the agent fetched, and handing that page an HTML parser
   inside an unlocked vault UI would be a script-injection path.
 - **Emphasis is deliberately stricter than CommonMark, to avoid deleting
   characters.** Emphasis marks are consumed, so a wrong match changes what the
-  reply *says* — `some_long_name` must never render as `somelongname`. So
+  reply *says*: `some_long_name` must never render as `somelongname`. So
   emphasis cannot span its own delimiter or a line break, underscores need word
   boundaries, and `__bold__` is not supported at all (models write `**bold**`,
   while `__init__` and `__name__` are ordinary content). The cost is that
@@ -1065,7 +1083,7 @@ every milestone; if a limit is removed, say when and how.*
   like `C:\path\*.txt`. Inside `code spans` nothing is interpreted.
 - **Links in rendered Markdown are not clickable.** `[text](url)` renders as `text (url)`
   in plain text. A model relaying a URL out of a page it fetched should not be
-  one click away — see the M10c exfiltration screen. Copy the URL deliberately.
+  one click away; see the M10c exfiltration screen. Copy the URL deliberately.
 - **Formatting appeared when a reply completed, not while it streamed**
   (this applied to the Converse view, now retired from the app). Tokens
   stream as plain text and the formatted version replaces them at the end (the
@@ -1076,7 +1094,7 @@ every milestone; if a limit is removed, say when and how.*
   appended, the old version is kept as history, and the edited memory gets a
   new id. Forgetting is still a separate tombstone.
 
-## Desktop app / distribution (M7d) — current
+## Desktop app / distribution (M7d), current
 
 - **Apple Silicon (arm64) only for now.** The signed DMG bundles an arm64
   Node runtime; Intel Macs aren't built yet (ADR 0012 targets aarch64 first).
@@ -1097,28 +1115,28 @@ every milestone; if a limit is removed, say when and how.*
   installed; a plain source build without `gpg` warns loudly and falls back to
   SHA-256 only. On a Node security release we bump the pin and ship a new DMG.
   Residual: the pinned key list must track Node's release-key rotations
-  (cross-checked against nodejs.org) — an unlisted new signer fails the build
+  (cross-checked against nodejs.org): an unlisted new signer fails the build
   with instructions rather than being silently trusted.
 - **First launch may do an online Gatekeeper check.** The app and DMG are
-  notarized and stapled, so they open offline too — but an app copied out of
+  notarized and stapled, so they open offline too, but an app copied out of
   the DMG on a machine that's never seen it may do a one-time online check.
 
-## M2 (importers) — current
+## M2 (importers), current
 
 - **Extraction is a 3B model doing its best.** It misses facts (especially
   ones implied rather than stated), files almost everything under
   `semantic`, and occasionally paraphrases loosely. That's why every import
-  ends in a review step — read what it extracted before you accept it.
+  ends in a review step: read what it extracted before you accept it.
 - **Import speed is ~5 s per conversation** with the local model. A
   400-conversation ChatGPT history ≈ half an hour. Use `--limit 20` for a
   first taste.
 - **Without Ollama, extraction is much rougher** (first-person pattern
-  matching, confidence 0.4) — and the CLI tells you so in a banner you
+  matching, confidence 0.4), and the CLI tells you so in a banner you
   can't miss.
 - **Dedupe is lexical.** "Takes coffee black" and "drinks coffee without
   milk" both survive. Conflicts are flagged for you, never auto-resolved.
 - **The paste-prompt flow trusts the chatbot.** What Gemini claims to know
-  about you imports at confidence 0.7 — review it.
+  about you imports at confidence 0.7, so review it.
 - **ZIP imports need macOS/Linux** (the OS `unzip`). An already-extracted
   `conversations.json` works anywhere.
 - **Very large exports parse fully into memory first** (`--limit` caps the
@@ -1142,13 +1160,13 @@ every milestone; if a limit is removed, say when and how.*
   `NORTHKEEP_SCOPES` grant has full owner access and can read every scope;
   scope a connection down before pointing an untrusted MCP client at it.
 - **The call log shows traffic, not truth.** It logs what the server was
-  asked and how much came back — it cannot show what the AI *did* with the
+  asked and how much came back; it cannot show what the AI *did* with the
   content afterward. Calls rejected by input validation are answered before
   they reach the logger, so probing/malformed attempts do not appear. The M4
   audit log did not close this gap; it is still open.
 - **A stale `forget` survives in `.bak`** until the next write, as below.
 
-## M8 (Connect — memory into other apps) — current
+## M8 (Connect: memory into other apps), current
 
 - **Connect is Mode 2: portable memory, NOT a chat firewall.** Connecting an
   app (Claude Desktop, Claude Code, ChatGPT, Cursor) gives it your owned memory
@@ -1206,11 +1224,14 @@ every milestone; if a limit is removed, say when and how.*
   going forward), memory dumps of the live process, and the AI apps you connect,
   which read your shared content in full. See SPEC/security-model.md.
 - **Metadata stays visible even though content is encrypted.** The connector can
-  always see your scope NAMES and labels (a scope named after a client matter
-  reveals the matter; pick neutral names if that matters), entry ids, how many
-  memories each shared scope holds, ciphertext sizes (which approximate content
-  length), timestamps, entry hashes, and the content-free audit trail. Only the
-  content itself is ciphertext.
+  always see your scope NAMES (a scope named after a client matter reveals the
+  matter; pick neutral names if that matters), entry ids, how many memories
+  each shared scope holds, ciphertext sizes (which approximate content length),
+  timestamps, entry hashes, whether each row came from your vault or from an
+  app and whether it is still waiting to reach your vault, the scopes you
+  unshared and when, and the content-free audit trail. A memory's text and its
+  type are ciphertext (rows written before ADR 0020 encryption are the
+  exception, see below).
 - **Every connected AI provider sees what it retrieves.** Once an app is paired,
   its provider receives whatever it pulls from your shared scopes, under that
   provider's own policy. This is the same exposure as local Connect, now over the
@@ -1230,13 +1251,17 @@ every milestone; if a limit is removed, say when and how.*
   carries a valid subscriber attestation: attestations are not tied to one
   account, so any valid one opens any credential, and that request is
   treated as a paying one (it creates the account and records the unshare).
-  A scope name containing a NUL character is refused (400) on every route,
-  because the database cannot store it. Until this
+  A scope name or id containing a NUL character is refused with HTTP 400
+  before it reaches the database, on the routes your devices use and at app
+  registration, because the database cannot store it. Until this
   connector build is deployed, unshare after a lapsed subscription still
   returns 402.
-- **OAuth client secrets are stored as a hash only (ADR 0061).** An AI app that
-  registers with a client secret gets it once; the connector keeps only its
-  sha256 and a random placeholder, checks a presented secret in constant time,
+- **OAuth client secrets are hashed (ADR 0061).** An AI app that registers
+  with a client secret on this build gets it once; the connector keeps only
+  its sha256 and a random placeholder. An app registered before this build
+  keeps its secret in its stored registration, in the clear, until the
+  maintenance step below runs and replaces it with the hash; it can sign in
+  either way. The connector checks a presented secret in constant time,
   and limits `/token` and `/revoke` to 50 requests per 15 minutes per client
   address, grouped the way the MCP SDK's own limiter groups it: an IPv4
   address on its own, an IPv6 address by its /56 network (one IPv6 user
@@ -1309,7 +1334,7 @@ every milestone; if a limit is removed, say when and how.*
   so in principle a subscription token could be shared. This is a billing
   concern, not a memory-safety one; the beta gates on an allowlist instead.
 
-## M9 (effortless models) — current
+## M9 (effortless models), current
 
 - **Guided providers are curated, not exhaustive.** The one-click flow covers a
   vetted list (Anthropic, OpenAI, Google, xAI, OpenRouter, Meta-via-OpenRouter);
@@ -1317,7 +1342,7 @@ every milestone; if a limit is removed, say when and how.*
   in Settings, Models; it just isn't
   walked-through or cost-labelled until catalogued.
 - **Model ids drift.** Vendor model names change often; the catalog is a
-  point-in-time snapshot, re-verified each milestone. An unknown id still works —
+  point-in-time snapshot, re-verified each milestone. An unknown id still works;
   it just won't carry cost/strength metadata.
 - **Cost is approximate.** The $ / $$ / $$$ tiers are order-of-magnitude ranges,
   not per-request accounting. The CLI prints the "(approx)" range beside the
@@ -1349,7 +1374,7 @@ every milestone; if a limit is removed, say when and how.*
   (see ADR 0001).
 - **A crash mid-command can lose that command's write.** Saves are atomic
   (temp file + rename, previous version kept as `.nkv.bak`), so the vault
-  never corrupts — but a write that never reached `save()` is not on disk.
+  never corrupts, but a write that never reached `save()` is not on disk.
 - **`.nkv.bak` remembers what you just deleted.** The backup holds the
   immediately-previous vault state, encrypted with the same keys. A deletion
   is only durably gone once a later save overwrites the backup. Delete the
@@ -1360,14 +1385,14 @@ every milestone; if a limit is removed, say when and how.*
   accidental corruption and unsophisticated tampering, and we won't pretend
   otherwise (see SPEC/security-model.md).
 - **`superseded_at`/`superseded_by` now power scope edits (ADR 0015).**
-  `rescope` appends a new entry and marks the original superseded — the first
+  `rescope` appends a new entry and marks the original superseded, the first
   writer of these fields. General contradiction handling from the extraction
   pipeline (auto-superseding a fact when a newer one arrives) is still future.
 - **Scopes are labels in the vault file.** The `scope` field is stored and
   filterable; per-connection access enforcement shipped in M4 (see above),
   but anyone holding the unlocked vault can read every scope.
 - **Passphrase via `NORTHKEEP_PASSPHRASE` env var is convenient and less
-  safe** — it can end up in shell history or process listings. Interactive
+  safe**: it can end up in shell history or process listings. Interactive
   prompt is the recommended path. Either way, JavaScript strings are
   immutable: the passphrase string itself lingers in process memory until
   garbage collection (key *buffers* are actively zeroed; the source string
@@ -1375,10 +1400,10 @@ every milestone; if a limit is removed, say when and how.*
 - **The vault core has no network code.** Redaction shipped in M3; sync,
   the connector and model calls live in other packages.
 
-## Permanent (will not be "fixed" — see SPEC/security-model.md)
+## Permanent (will not be "fixed"; see SPEC/security-model.md)
 
 - Content-level redaction cannot make free text semantically anonymous
   ("the CFO whose wife works at the competitor" survives every filter).
   We will never claim otherwise.
 - Memory recall is good but not human-level; we compete on portability,
-  ownership, and auditability — not on recall benchmarks.
+  ownership, and auditability, not on recall benchmarks.
