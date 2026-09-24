@@ -59,7 +59,8 @@ export default function SharingHub() {
       <Text style={styles.body}>
         Cloud Connect makes chosen memories usable inside the AI apps you already use (Claude,
         ChatGPT, Manus) by copying them to NorthKeep's connector server. Everything is private by
-        default. You share one scope at a time, on purpose, and you can unshare anytime.
+        default. You share one scope at a time, on purpose, and you can unshare anytime. The one
+        exception: a new project an AI app creates is marked Shared when it arrives.
       </Text>
       <View style={styles.banner}>
         <Text style={styles.bannerStrong}>

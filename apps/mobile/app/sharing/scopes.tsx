@@ -152,7 +152,8 @@ export default function ManageScopes() {
     <ScrollView style={styles.screen} contentContainerStyle={styles.content}>
       <View style={styles.reminder}>
         <Text style={styles.reminderText}>
-          The connector server can read the scopes you share. Everything else stays on this phone.
+          The connector server can read the scopes you share, including a new project an AI app
+          creates, which is marked Shared when it arrives. Everything else stays on this phone.
         </Text>
       </View>
       <FieldLabel>Scopes</FieldLabel>
@@ -207,8 +208,9 @@ export default function ManageScopes() {
             metadata.
           </Text>
           <Text style={styles.confirmBody}>
-            Every scope you have not shared stays private. Unsharing deletes the server
-            copies; your vault keeps everything.
+            Every scope you have not shared stays private, except a new project an AI app
+            creates, which is marked Shared when it arrives. Unsharing deletes the server copies;
+            your vault keeps everything.
           </Text>
           <Text style={styles.confirmBody}>
             Sharing applies to this scope on every device that syncs this vault, including your

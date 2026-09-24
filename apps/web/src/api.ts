@@ -981,8 +981,8 @@ async function dispatch(
     const result = await session.withVault(async (vault) => {
       foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
       // ADR 0050 Decision 5: a hosted project arrives only through the fold,
-      // which marks its scope. A device that never paired has no account on
-      // that server, so it makes no call at all.
+      // which marks its scope. A device that never paired makes no call; a
+      // pre-0.22 sidecar counts as paired (see connectorPaired).
       if (vault.sharedScopes().length === 0 && !connectorPaired()) return null;
       const before = new Set(vault.sharedScopes());
       const down = await downSyncConnector({ server: config.server, deviceSecret, vault, entitlement });

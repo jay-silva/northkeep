@@ -172,8 +172,9 @@ export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => ne
   const entitlement = await maybeEntitlement(deviceSecret);
   const result = await withVault(async (vault) => {
     foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
-    // A device that never started a pairing has no account on that server, so
-    // asking for pending rows would create one (and 402 on a gated server).
+    // A device that never paired has no account there, and asking for pending
+    // rows would create one (or 402). A pre-0.22 sidecar counts as paired
+    // (connectorPaired), so a server saved then without pairing still asks.
     if (vault.sharedScopes().length === 0 && !connectorPaired()) return null;
     const down = await downSyncConnector({ server: cfg.server, deviceSecret, vault, entitlement });
     const scopes = vault.sharedScopes();

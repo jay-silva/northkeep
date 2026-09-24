@@ -1035,7 +1035,7 @@
     <div class="page-head"><div><h2>Cloud</h2><p class="muted">Choose which collections your connected AI apps can read.</p></div><span class="badge beta">BETA</span></div>
     <p class="muted"><span class="badge beta" style="margin-left:0;margin-right:8px">BETA</span>Make chosen memories usable inside the cloud AI apps you already pay for
       (Claude, ChatGPT, and others) by copying them to NorthKeep's connector server.
-      Everything is private by default. You share one scope at a time, on purpose.</p>
+      Everything is private by default. You share one scope at a time, on purpose; the one exception, a new project an AI app creates, is described below.</p>
     <div class="banner" style="margin:16px 0 22px">
       <strong>Sharing is different from Sync. What you share leaves this Mac, and the apps you connect read it in full.</strong>
       <div style="margin-top:6px">There it is stored encrypted, and NorthKeep holds no key in the database to read it: the key is rebuilt for each request from your app's own credential plus a secret held in our server. This is not end-to-end encryption, the server briefly decrypts in memory to answer each request, and the AI app you connect reads the result. The server can still see each shared scope's name, how many memories it holds, and when they change. Only shared scopes ever leave this Mac, and a scope becomes shared when you turn it on here, with one exception: a new project one of your AI apps creates, which this Mac does not have yet, is marked Shared when it arrives, and later edits to it are pushed. What an app writes into one of your private projects is held until you share it. You can unshare anytime, which deletes it from the server.</div>
@@ -1127,7 +1127,7 @@
     <ul style="margin:0 0 16px;padding-left:18px;font-size:14px;color:var(--ink);line-height:1.65">
       <li><strong>What leaves your Mac:</strong> the memories in this scope, as plain readable text.</li>
       <li><strong>How the server stores them:</strong> encrypted. The database holds only ciphertext and no key that can read it; it is decrypted only in memory to answer your app's request. <strong>What the server can still see:</strong> this scope's name, how many memories, and when they change.</li>
-      <li><strong>What stays private:</strong> every scope you have not shared never leaves this Mac.</li>
+      <li><strong>What stays private:</strong> every scope you have not shared stays on this Mac. The one exception is a new project an AI app creates, which is marked Shared when it arrives.</li>
       <li><strong>You can undo this:</strong> Unshare deletes these memories from the connector server.</li>
     </ul>
     <div class="err" id="shareConfirmErr"></div>
