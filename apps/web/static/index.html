@@ -645,7 +645,7 @@
           <select id="convEndpoint" title="Endpoint"></select>
           <select id="convModel" title="Model: switch anytime, even mid-conversation" hidden></select>
           <select id="convTierSel" title="Redaction tier. Tier 1 masks keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers. A key with no recognizable prefix, or a password, is not caught.">
-            <option value="1" selected>Tier 1: mask known-prefix keys, cards, SSNs, emails, phones</option>
+            <option value="1" selected>Tier 1: mask identifiers</option>
             <option value="2">Tier 2: also pseudonymize names</option>
             <option value="3">Tier 3: max, names + dates (PHI)</option>
             <option value="0">Off (private endpoints only)</option>
@@ -760,7 +760,7 @@
       </ul>
       <div class="row" style="margin:10px 0">
         <select id="redactTier">
-          <option value="1">Tier 1: mask known-prefix keys, cards, SSNs, emails, phones and similar</option>
+          <option value="1">Tier 1: mask identifiers (listed above)</option>
           <option value="2">Tier 2: also pseudonymize names &amp; orgs (needs local AI)</option>
         </select>
         <button class="btn primary" id="redactBtn">Redact</button>
