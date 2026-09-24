@@ -146,7 +146,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   console.log(`Converse: ${endpoint.label} (${endpoint.model})`);
   console.log(badgeLine(endpoint));
   console.log(
-    `Redaction tier ${tier}${tier === 2 ? ' (identifiers masked + names pseudonymized)' : tier === 1 ? ' (identifiers masked: known-prefix keys, cards, SSNs, emails, phones)' : ' (OFF: private endpoint)'}` +
+    `Redaction tier ${tier}${tier === 3 ? ' (identifiers masked + names pseudonymized + every date to the year)' : tier === 2 ? ' (identifiers masked + names pseudonymized)' : tier === 1 ? ' (identifiers masked: known-prefix keys, cards, SSNs, emails, phones)' : ' (OFF: private endpoint)'}` +
       ` · memory distillation: ${distillOllama ? 'local model' : 'heuristic (Ollama not running)'}`,
   );
   if (auto) console.log(`${GREEN}✦ Auto${RESET}: the concierge routes each message (":auto" toggles).`);
@@ -380,7 +380,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       // The tier-0 guard from startup applies to the NEW endpoint too: with
       // redaction off, the conversation may only ever face private endpoints.
       if (tier === 0 && classifyEndpoint(next.baseUrl).tier !== 'private') {
-        console.log(`${RED}✗ Not switching:${RESET} redaction is OFF (--tier 0) and "${next.label}" is not private. Restart with --tier 1 or 2 to use it.`);
+        console.log(`${RED}✗ Not switching:${RESET} redaction is OFF (--tier 0) and "${next.label}" is not private. Restart with --tier 1, 2 or 3 to use it.`);
         continue;
       }
       // So does the privacy pin — the promise binds manual switches too.

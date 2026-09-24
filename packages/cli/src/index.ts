@@ -218,7 +218,7 @@ program
 
 program
   .command('forget')
-  .description('Permanently remove the content of a memory (full id or unique prefix)')
+  .description('Remove the content of a memory from the vault (full id or unique prefix); plaintext files outside the vault, such as a memory review report, keep their copy')
   .argument('<id>', 'memory id from "northkeep list"')
   .action(async (id: string) => {
     await withVault(async (vault) => {
@@ -226,6 +226,7 @@ program
       vault.save();
       console.log(`✓ Forgot ${tombstone.id} (content removed; deletion recorded ${tombstone.forgotten_at})`);
       console.log('  Note: the previous vault state remains in vault.nkv.bak until the next write.');
+      console.log('  Files outside the vault, such as a memory review report, the projects mirror or an export, may still hold a copy.');
     });
   });
 
