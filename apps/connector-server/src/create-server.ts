@@ -350,7 +350,7 @@ export function createConnectorServer(
   });
 
   // ---- SDK OAuth authorization server (mounted at root) ------------------
-  // No global body parser before this — each SDK sub-route parses its own body
+  // No global body parser before this: each SDK sub-route parses its own body
   // (on /token and /revoke ours ran first; body-parser 2 keeps that req.body).
   app.use(
     mcpAuthRouter({
