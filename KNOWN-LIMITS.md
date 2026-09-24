@@ -3,7 +3,7 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
-## Local Projects handoffs, accepted locally
+## Local Projects handoffs, current
 
 - **Restart connected AI apps when updating.** An assistant left running across an update can keep the previous local MCP process. Version 0.21.0 uses the same vault schema and can still write projects without revision checks until that process exits. Quit NorthKeep and every connected local AI app before replacing the app, then reopen them and verify the new tools before continuing project work. Closing a window alone is not sufficient. The new guarantees apply to current local connections; the updater does not forcibly retire an old process.
 - Revision checks and durable retry receipts coordinate writes against one local vault. Hosted project tools and whole-vault sync retain their existing conflict behavior. A local save does not certify delivery.
@@ -14,7 +14,9 @@ every milestone; if a limit is removed, say when and how.*
 ## Project provenance and open sessions (ADR 0052), current
 
 - **The writer is host reported, not verified.** Every project write records
-  the name a client presented in its MCP handshake, so any process can
+  the name its client presented (a local MCP client's handshake name; a
+  write folded in from the hosted connector, or an import, records none),
+  so any process can
   present any name. The record is protected by the same chain that protects
   every memory: an edit that does not re-hash the tail is detected. That
   chain is unkeyed by design, so the record is tamper evident, not tamper
@@ -36,18 +38,22 @@ every milestone; if a limit is removed, say when and how.*
   log, and a session on another Mac is not seen either.
 - **Open sessions come from successful reads only.** A denied or failed read
   never opens a session, and a log row without a valid session id, host or
-  timestamp is skipped. A single unreadable line degrades the list: resume
+  timestamp is skipped, and so is a line that is not valid JSON, with no
+  note. A call log file that exists but cannot be read degrades the list: resume
   omits it and says so in a note rather than guessing.
 - **A call log NorthKeep cannot write to stops project work.** Every call is
-  logged before and after it runs, so if the log file is unreadable or is
-  replaced by a directory, project tools fail instead of running unlogged.
-  That is deliberate: nothing is disclosed without a record of it. Move or
+  logged once, after it runs, and a call whose log row cannot be written
+  (the log path replaced by a directory, or a file that cannot be appended
+  to) returns an error instead of its result. That is deliberate: nothing is
+  disclosed without a record of it. A write is the exception: it is already
+  saved when the logging fails, so read the project before retrying. Move or
   repair the file and the tools work again.
 - **The resume brief has no byte guarantee, only a shape guarantee.** The
   project cap is 16,384 characters and a brief is bytes of JSON, so a
   document of quote characters roughly doubles under escaping and a CJK
   document roughly triples. What holds is the shape: the default brief
-  never carries the document body, never prior revision text, and is
+  carries the document's sections once (never the whole text a second time
+  as `content`), never prior revision text, and is
   never larger than the same call with `history: true`.
 - **A generic memory edit drops the writer block.** Editing a project head
   with `memory_edit` mints a revision that the previous session did not
@@ -137,7 +143,7 @@ every milestone; if a limit is removed, say when and how.*
   Nothing you write in the mirror flows back into the vault; `northkeep
   projects import` is a separate, explicit step.
 
-## Guided consolidation, accepted locally
+## Guided consolidation, current
 
 - Consolidation covers 2-8 same-type memories in one private, non-project collection. It does not organize shared collections or coordinate project work.
 - Suggestions use the installed local review model, never an automatic cloud fallback. Work is limited to 24 packs of up to eight memories; oversized entries and comparisons across packs are not silently counted as complete.
@@ -201,7 +207,7 @@ every milestone; if a limit is removed, say when and how.*
   to `vault.nkv.bak` (recoverable), not merged. The automatic paths (below)
   never pull over local edits; only the Pull button and `northkeep sync pull`
   can, and the status line first says the vault differs from the server's
-  newer copy (the CLI adds, when this machine has no recorded baseline, that
+  newer copy (the CLI says instead, when this machine has no recorded baseline, that
   the server changed and this vault may have). Push before you pull by hand
   on a machine you've edited.
 - **HTTPS only.** The client refuses a non-https sync server (except loopback
@@ -214,11 +220,13 @@ every milestone; if a limit is removed, say when and how.*
   roll into an archive memory in the same project scope (one archive per
   roll, oldest first, headed `## Log archive: <project>`). `project_get`
   returns the live document; `project_get` with `history: true` adds the
-  archives. Nothing is summarized or dropped. Only hand-written sections that
-  are too long on their own are refused.
-- **The Command Repo file is separate.** `projects/<name>.md` in the command
-  repo is maintained by hand and keeps its full log; the vault document is
-  the shared index agents load at session start.
+  newest 20 archives (a count of all of them is always returned). Nothing is
+  summarized or dropped. A document still over the cap with its Log cut to
+  its newest entry is refused; the other sections, Decisions included, never
+  roll.
+- **The Command Repo file is an archive.** Since 2026-09-23 `projects/<name>.md`
+  in the command repo is read-only and no longer maintained; the vault
+  document is the record agents load at session start.
 
 ## Automatic sync (ADR 0044), current
 
@@ -230,7 +238,7 @@ every milestone; if a limit is removed, say when and how.*
   nothing dirty can only be a torn baseline, and the phone repairs that from
   the server, fast-forwarding whenever the server's copy differs, even at the
   same version. Both devices keep the displaced file as
-  `vault.nkv.auto-pull.bak` (two deep). A vault with no recorded post-sync
+  `vault.nkv.auto-pull.bak`. A vault with no recorded post-sync
   baseline counts as edited until a push or pull sets the baseline (the
   phone's first automatic establish push does too).
 - **An import on the phone is a write.** It replaces the phone's vault after
@@ -249,13 +257,17 @@ every milestone; if a limit is removed, say when and how.*
   server lifts the pause at once, and otherwise the next write or wake more
   than ten minutes later tries once more, so a headless host (the MCP server)
   is not stuck for the life of the session.
-- **Wake means launch, unlock, or return to the app**, not a schedule. Nothing
-  runs in the background on either device, and iOS background fetch is not
+- **Wake means launch, unlock, or return to the app**, not a schedule. No
+  sync runs in the background on either device (the opt-in scheduled mirror
+  export, `northkeep projects export --schedule`, reads the vault but never
+  pushes or pulls it), and iOS background fetch is not
   used. A phone left in your pocket does not sync until you open it.
 - **CLI commands push on exit only with a stored key.** `northkeep remember`
   and friends push right after the write when `northkeep unlock` has stored
   the key (or an env var supplies it). With a typed passphrase the command
-  says it did not push; the next unlock or `northkeep sync push` catches up.
+  says it did not push; the app's next wake, a later CLI write with a stored
+  key, or `northkeep sync push` catches up (`northkeep unlock` itself does not
+  push).
 - **Same machine, several processes.** The GUI, the MCP server and the CLI
   each push their own writes. They take turns on the vault's file lock and
   read the shared `sync.json` under it, so the second process pushes from the
@@ -280,17 +292,18 @@ every milestone; if a limit is removed, say when and how.*
   saved but not pushed; `northkeep sync push --vault` still pushes it by
   hand, replacing the account's copy as it always did. The standalone MCP
   server says so once on stderr when it starts on another vault.
-- **A CLI command never waits behind another process's transfer.** If the GUI
+- **A CLI command waits at most 2 s behind another process's transfer.** If the GUI
   or the MCP server is mid-push, `northkeep remember` prints that another
   process is syncing and returns; the running engine notices the new bytes
   after its own push and sends them.
 - **A process that exits while its push is uploading may leave the record
-  behind the server by one version.** The next wake (every host runs one at
-  start) finds the bytes already in sync and repairs the record. A write that
+  behind the server by one version.** The next wake (the app runs one at
+  launch or unlock and the MCP server at start; a CLI command does not) finds the bytes already in sync and repairs the record. A write that
   lands before that wake reads as diverged and is left to you; it is intact
   locally. Shutdown waits up to 10 s for an upload in flight.
 - **A lock left by a crashed process is stolen as soon as its pid is dead.**
-  Reads and writes are never blocked by a sync in progress; only other
+  Reads and writes wait only for a sync's brief local steps, never for its
+  network transfer; only other
   syncers wait, and only for a live one.
 - **The phone's pull-to-refresh is a manual pull.** It replaces the phone's vault with the server's copy after a warning when the phone holds unpushed bytes; the displaced copy is kept as a backup. It is refused, with the vault untouched, when the server's copy is older than what the phone last synced.
 - **A push bumps the sync generation once, not once per attempt.** The
@@ -350,14 +363,19 @@ every milestone; if a limit is removed, say when and how.*
   runs pulled out so a secret padded with high bytes cannot hide) — then
   matched case/punctuation-insensitively against:
   Tier-1 secret shapes (SSN/card/IBAN/API-key hits hard-block the call;
-  email/phone/record-id/address hits warn), protected names from this
+  every other Tier-1 hit, such as email/phone/record-id/address/IP/GPS/ZIP,
+  warns), protected names from this
   conversation, and overlap with vault memory disclosed anywhere in this
   CONVERSATION (16-gram overlap, or whole-form match for memories under 16
   normalized chars like a gate code). Warn-class hits force a warned prompt and
-  bypass grants. Arguments are length- and depth-capped so a giant or deeply
+  bypass grants, except on web_search, where only the hard-block classes are
+  kept and warn, name and memory hits are dropped. Arguments are length- and
+  depth-capped so a giant or deeply
   nested payload cannot hang the screen, and if the screen ever throws it fails
   closed to a hard deny. What still passes clean: SEMANTIC paraphrase in novel
-  words; a secret encoded past the 6-round budget or in an encoding we don't
+  words; an API key with no recognizable issuer prefix or format; content
+  past the screen's size caps; a secret encoded past the 6-round budget or in
+  an encoding we don't
   decode (ROT13, custom substitution, gzip); a value split across two URL
   components or dribbled a few characters per call; and — by deliberate design
   — a protected name or memory placed in the URL's HOST (the host is shown
@@ -378,7 +396,9 @@ every milestone; if a limit is removed, say when and how.*
 - **The URL itself leaks intent.** The approval prompt exists so you see the
   exact URL and arguments before they leave.
 - **The Tier-1 egress floor is a literal-string matcher, not a normalizer.**
-  It masks a plaintext SSN/card/API-key sitting in a tool argument, but an
+  It masks plaintext Tier-1 shapes in a tool argument (API keys with a known
+  issuer prefix or format, Luhn-valid card numbers, SSNs, IBANs, emails,
+  phones, addresses and the rest), but an
   encoded secret slips past IT specifically. The M10c exfiltration screens
   (above) now run over the decoded/normalized components and hard-block
   secret shapes, so the floor is defense-in-depth, not the only line. Do not
@@ -388,7 +408,8 @@ every milestone; if a limit is removed, say when and how.*
   whitespace collapsed. No JavaScript runs, no CSS is understood, and heavily
   scripted pages may extract thin. Upgrade path: a vetted readability library
   behind the same function if quality ever beats the dependency cost.
-- **Per-result truncation.** Responses cap at 2 MB on the wire (mid-body
+- **Per-result truncation.** Responses cap at 2 MB on the wire (a response
+  that declares a larger size is refused outright; otherwise mid-body
   abort, marked truncated) and tool results are truncated to a character
   budget before they reach the model, so a huge page cannot flood a
   conversation. What the model saw is what the (truncated) fence contains.
@@ -407,17 +428,19 @@ every milestone; if a limit is removed, say when and how.*
   host, listed by `northkeep tools grants`, and revocable at any time; every call
   still appears in the transcript and the audit log. Prefer "once" for a host you
   do not already trust.
-- **Disconnect aborts the task (M10e).** In the CLI, Ctrl-C mid-task cancels
-  the RUNNING TASK (not the REPL): it denies any pending approval, appends
-  "Cancelled by the user." and returns to the prompt. In the web GUI, closing
+- **Disconnect aborts the task (M10e).** In the CLI at an interactive
+  terminal, Ctrl-C closes the REPL's input rather than cancelling the task:
+  the pending approval and any later one in that task are denied, and the
+  REPL exits when the task ends. In the web GUI, closing
   the tab or reloading fires the response 'close' event, which aborts the loop
   and sweeps that turn's pending approvals; a late approve POST for a swept id
-  404s (the frontend re-asks). An unanswered approval still denies after the
+  404s (the page says the request expired and to send again). An unanswered approval still denies after the
   loop's 5-minute timeout.
 - **Approvals live in server memory, not across a restart.** A pending tool
   approval is held in the converse process's memory keyed by a random
   single-use id. If the UI server restarts while an approval is outstanding,
-  the id is gone: the browser's approve POST 404s (re-ask) and the killed
+  the id is gone: the browser's approve POST 404s (the page asks you to send
+  again) and the killed
   loop simply ended. Nothing is auto-approved across a restart.
 - **fetch is https-only, ports 443/8443, GET, no cookies, ever.** Content
   types beyond HTML/text/JSON/XML are refused without reading the body.
@@ -428,7 +451,7 @@ every milestone; if a limit is removed, say when and how.*
   vault does the retrieval; the model only phrases an answer from memories it
   was handed. It is adequate at that and weak at reasoning, code, writing and
   long documents. The Providers screen now says so before you pick it, because
-  the old label read as a capability claim and invited exactly the questions it
+  the label alone read as a capability claim and invited exactly the questions it
   answers badly.
 - **A hard question is OFFERED to a connected model, never sent to one.** When
   you are on the on-device model and ask something beyond it, NorthKeep names a
@@ -461,7 +484,7 @@ every milestone; if a limit is removed, say when and how.*
 ## M11 (MCP client tools), current
 
 - **A configured LOCAL (stdio) MCP server is a program with your privileges.**
-  Remote servers are covered in the M12 block below and are a different shape
+  Remote servers are covered in the "Remote (https) MCP servers" entry below and are a different shape
   entirely — nothing on this machine, everything over the network. The
   launch fingerprint that binds your approvals covers the resolved command
   path, its arguments, the working directory and the environment the config
@@ -500,9 +523,14 @@ every milestone; if a limit is removed, say when and how.*
   the server talking, with terminal escapes and bidirectional-text marks
   stripped and the length capped. Unlabelled, an error message is a channel for
   a hostile server to write sentences that read as NorthKeep speaking, and an
-  error path is precisely where such a server would choose to speak.
-- **Non-text tool results are omitted, not rendered.** Images and embedded
-  resources from a server show as `[image content omitted]`: they are another
+  error path is precisely where such a server would choose to speak. This
+  covers a server that fails to start or connect. When a single tool call
+  fails, the server's error text is passed to the model without that
+  stripping and outside the untrusted-content fence, capped only by the
+  result-size limit.
+- **Non-text tool results are omitted, not rendered.** Images, audio and embedded
+  resources from a server show as a placeholder such as
+  `[image content omitted]` or `[resource content omitted]`: they are another
   content channel we have not screened.
 - **One level deep.** NorthKeep is an MCP client here, not a proxy: it does not
   re-expose a connected server's tools to anything else.
@@ -518,8 +546,9 @@ every milestone; if a limit is removed, say when and how.*
     a standing grant to your mail or your documents.
   - **The sign-in lives in the macOS Keychain, so remote servers are macOS-only.**
     There is no file fallback, on purpose.
-  - **Two processes can race a token refresh.** Refreshes are serialized inside
-    one process, but the CLI and the GUI refreshing the same grant in the same
+  - **Two processes can race a token refresh.** Writes of the stored sign-in are
+    serialized inside one process, but the refresh request itself is not
+    locked, and the CLI and the GUI refreshing the same grant in the same
     instant can lose a rotated refresh token, which ends the grant until you
     sign in again. It cannot leak anything; it can break the connection.
   - **There is no one-click path to an official server, for anyone.** Google's
@@ -528,8 +557,9 @@ every milestone; if a limit is removed, say when and how.*
     secret. No client can do that step for you.
   - **Removing a server here does not revoke the grant.** Revoke it at the
     provider.
-  - **The proof and the approval prompt name the server, its origin and the
-    masked arguments — but not a per-call URL.** A remote MCP call posts to one
+  - **The approval prompt names the server and its origin and shows the
+    arguments before masking; the proof shows the masked arguments that were
+    sent. Neither names a per-call URL.** A remote MCP call posts to one
     constant endpoint, so "we can prove what we sent" is weaker here than for
     `web_fetch`, where every call carries a distinct URL.
   - **A read-only tool can hold an `always` grant, and then it does not ask.**
@@ -583,11 +613,15 @@ every milestone; if a limit is removed, say when and how.*
   NorthKeep will not pin whatever it happens to see first, because a server that
   is hostile on its very first connect would win that pin unexamined.
 - **The argument floor is Tier 1, not Tier 3.** Arguments to a `strict` server
-  get the deterministic Tier-1 mask (secrets by shape) rather than full
+  get the deterministic Tier-1 mask (keys, card numbers, SSNs, emails, phone
+  numbers, addresses and the rest of the Tier-1 list) rather than full
   name pseudonymization, because Tier 3 needs the local NER model and would make
   every MCP call fail whenever Ollama is stopped. Names and other Tier-2/3
-  content therefore reach a strict server unmasked. Declare a server `trusted`
-  only when it should see raw content, as NorthKeep's own vault server must.
+  content therefore reach a strict server unmasked. Only a server marked
+  `trusted` sees raw content. No command or GUI control sets that; it can only
+  be set by editing `~/.northkeep/mcp.json` by hand. NorthKeep's own vault
+  server is added from the catalog as `strict`, so its arguments are Tier-1
+  masked too.
 
 ## M10d (web_search + spend budget), current
 
@@ -597,9 +631,11 @@ every milestone; if a limit is removed, say when and how.*
   cost ledger is future work.
 - **The daily cap is enforced by an atomic reserve (M10e).** A costed tool
   reserves its daily slot in one synchronous read-check-write at execute time,
-  so concurrent conversations (the web GUI, an MCP server fronting several
-  clients) cannot both pass and overshoot — the second reserve sees the
-  incremented count and budget-denies. The rare visible edge: two concurrent
+  so concurrent conversations in one process (several chats in the web GUI)
+  cannot both pass and overshoot: the second reserve sees the incremented
+  count and budget-denies. The reserve is not locked across processes, so the
+  CLI and the GUI reserving the last slot at the same instant can still
+  overshoot. The rare visible edge: two concurrent
   prompts for a cap-1 tool can both appear, and the second approval is
   budget-denied AFTER consent. The budget is still a call COUNT, not a dollar
   ledger.
@@ -640,11 +676,13 @@ every milestone; if a limit is removed, say when and how.*
   is NOT sent — start the model or explicitly drop to Tier 1. Loud, not
   silent.
 - **Distillation quality tracks the small local model** (same as imports,
-  M2). Auto-stored memories are visible with one-click undo — glance at
+  M2). Auto-stored memories are listed after each turn, and `:undo` in
+  `northkeep converse` removes them. Glance at
   what a turn added.
 - **Conversation logs are not stored.** The vault keeps distilled memories
   and the content-free audit trail; the chat transcript itself lives only in
-  session memory and is gone when the session ends (sync of any kind is M5).
+  session memory and is gone when the session ends (sync carries only the
+  vault, so no transcript is ever synced).
 - **Retrieval by meaning needs the local embedder running.** Since 2026-09-13
   `memory_retrieve` ranks by meaning through the loopback Ollama embedder
   (`nomic-embed-text`) when it is reachable and says `search_mode: "semantic"`;
@@ -685,13 +723,15 @@ every milestone; if a limit is removed, say when and how.*
   paste through them. NorthKeep is not a proxy between Claude Desktop and
   Anthropic, so it cannot intercept a prompt you type directly into a chat
   client. Honest boundary, stated plainly.
-- **Tier 1 is ~99%, not a guarantee.** It targets specific identifier
-  formats (email, phone, SSN, card, IP, API keys, IBAN, street addresses,
-  ZIP codes, record/account IDs). An exotic format it
-  doesn't recognize can slip through — the leak test locks in the formats we
-  claim, and we add formats as we find gaps.
+- **Tier 1 is pattern matching, not a guarantee.** It masks API keys and
+  tokens that carry a known issuer prefix or format, payment card numbers
+  that pass the Luhn check, US Social Security numbers, IBANs, email
+  addresses, phone numbers, IP addresses, GPS coordinates, street addresses,
+  ZIP codes next to an address, and labeled record and account numbers. An
+  exotic format it doesn't recognize can slip through. The tests lock in the
+  formats we claim, and we add formats as we find gaps.
 - **API keys are matched by issuer prefix, so a key with no prefix is not
-  masked** (ADR 0059, proposed; reviewed twice, cleared with wounds, no wound open). Tier 1 masks
+  masked** (ADR 0059, merged for 0.22.0; reviewed twice, cleared with wounds, no wound open). Tier 1 masks
   tokens that start with a known issuer prefix: Anthropic `sk-ant-`, OpenAI
   `sk-proj-`/`sk-svcacct-`/`sk-admin-` and legacy `sk-`, OpenRouter, xAI,
   Groq, Replicate, Perplexity, Hugging Face, every GitHub token type
@@ -736,8 +776,10 @@ every milestone; if a limit is removed, say when and how.*
   multi-token names ("Zyler Quandril arrived"); lowercase common-word names;
   "de la Cruz"-style lowercase particles (only "Cruz" masks); and two exotic
   date forms ("March fifteenth 1948", "19480315"). A degraded (no-Ollama)
-  Tier 3 toward a remote endpoint refuses to send, same as Tier 2 — so the
-  residual exposure with no local model is bounded to private endpoints. We
+  Tier 3 toward a remote endpoint still sends, masked by the deterministic
+  layers only, and the reply notes that the NER net was offline (ADR 0022).
+  Unlike Tier 2 it does not refuse, so with no local model the residuals
+  above can reach a remote endpoint. We
   never claim 100% of names (ADR 0022; adversarial reviews 2026-07-17,
   rounds 1–4).
 - **We do not remove contextual identity.** "The paramedic lieutenant in
@@ -755,7 +797,9 @@ every milestone; if a limit is removed, say when and how.*
   because they change often.
 - **The contract is advisory.** An agent updates the project because its
   tools and a standing instruction tell it to. Nothing forces a session-end
-  handoff; a session that ends abruptly wrote nothing.
+  handoff; a session that ends abruptly keeps only what it saved with the
+  local `project_checkpoint`, and the next local `project_resume` lists it
+  as an open session. A hosted session has no checkpoint.
 - **Cloud agents can create and update a project (M14, ADR 0050).**
   Claude.ai via Cloud Connect can call `project_list`, `project_get`,
   `project_update`, and `project_create`; the first three need a shared
@@ -763,11 +807,13 @@ every milestone; if a limit is removed, say when and how.*
   live working document via `project_get`. Mobile has no project tools yet.
   ChatGPT still sees a shared project through `search` / `fetch` and the
   generic memory tools; it does not have to use the project tools.
-- **The Log grows the doc and the vault.** Every update stores a full
-  superseded copy; the doc caps at 16 KiB and `project_update` refuses with a
-  prune message rather than silently truncating. Long-running projects need
-  occasional Log pruning (handled manually today). The ~4 MB sync cap bounds
-  the whole vault, projects included.
+- **The Log grows the vault, not the doc.** Every update stores a full
+  superseded copy (the newest five are kept, ADR 0051). The live doc caps at
+  16,384 characters: when an update would pass that, the oldest Log entries
+  roll into archive memories in the project scope (ADR 0045), and
+  `project_update` refuses, rather than silently truncating, only when the
+  hand-written sections alone are too long. The ~4 MB sync cap bounds the
+  whole vault, projects included.
 - **`memory_edit` cannot move a memory between scopes.** Deliberate: over
   MCP, a scope change could turn private content into shared content. Rescope
   stays in the GUI and CLI.
@@ -793,13 +839,17 @@ every milestone; if a limit is removed, say when and how.*
   one on that device; the local document stays in history.
 - **Unshare is still the revoke.** A project created after an unshare is
   refused until the user re-shares the scope deliberately.
-- **A shared scope whose live memories were all forgotten refuses app
-  writes.** The scope's only rows are then the app's own pending ones, so
-  writes are refused until a memory is added or the scope is re-shared.
-  The scope is still shared; the refusal says so.
-- **A device that never paired does not fetch hosted creates.** The
-  pairing marker is per device. A second device receives the project
-  through vault sync, or folds it once it pairs.
+- **A shared scope whose live memories were all forgotten refuses
+  `memory_remember`.** When the scope's only rows are the app's own pending
+  ones, the refusal says the scope has no memory from the vault yet and
+  lasts until a memory is added or the scope is re-shared. With no rows at
+  all, the refusal says the scope is not shared, although it still is in
+  NorthKeep. `project_update` finds no live document there, and
+  `project_create` still works.
+- **A device that never paired does not fetch hosted creates while it
+  shares nothing.** The pairing marker is per device. A second device
+  receives the project through vault sync, or folds it once it pairs or
+  once any scope is shared on it.
 - **An old desktop client shadows instead of superseding.** A client that
   predates M14 folds a project update as a new working memory. Newest-wins
   then shows the folded document; the prior document remains live in the
@@ -844,7 +894,9 @@ every milestone; if a limit is removed, say when and how.*
 
 - **The contract is advisory.** An agent follows it because a host rule file
   and the tool descriptions say so. Nothing forces a session-end handoff; a
-  session that ends abruptly wrote nothing.
+  session that ends abruptly keeps only what it saved with the local
+  `project_checkpoint`, and the next local `project_resume` lists it as an
+  open session.
 - **Claude Desktop plain chat and ChatGPT chat are not covered.** Those
   surfaces have no on-disk instruction file. Hosted Claude.ai uses the
   connector project tools (M14), not this installer.
@@ -860,6 +912,12 @@ every milestone; if a limit is removed, say when and how.*
 - **NorthKeep never writes `~/.claude/CLAUDE.md`** and never edits
   `.gitignore`. A Cursor project rule may be committed; use
   `.git/info/exclude` if it should stay personal.
+- **The contract names tools only the local MCP server has.**
+  `project_resume`, `project_checkpoint` and `project_wrap` exist on the
+  local server only. The hosted connector offers `project_list`,
+  `project_get`, `project_create` and `project_update`, so an agent that
+  reaches NorthKeep only through the connector cannot follow the resume and
+  wrap steps.
 
 ## Memory review pass, current
 
@@ -882,9 +940,11 @@ every milestone; if a limit is removed, say when and how.*
   screen shows the reviewed source snapshot, not the model's paraphrase.
   Ambiguous disagreements can become questions for the user. This does not claim zero retention
   by a cloud provider on the optional API path.
-- **Dismiss hides; it does not forget.** Dismiss and Dismiss remaining
+- **Dismiss hides; it does not forget.** Dismiss (and `northkeep review reject-remaining` on the
+  command line)
   reject pending proposals and keep every memory. There is no
-  accept-all and no forget-all.
+  accept-all and no vault-wide forget-all. A duplicate group's Remove all
+  forgets each member of that group, one restorable receipt at a time.
 - **Search stays usable.** Collection review has its own queue and
   evidence/editor workspace; searching and browsing memories remain separate.
 - **Coverage is not correctness.** Missing or invalid embeddings, oversized
@@ -893,8 +953,10 @@ every milestone; if a limit is removed, say when and how.*
   No quality percentage or general accuracy claim is established by the small
   synthetic evaluation script.
 - **One confirmed change at a time.** Edited wording is previewed before
-  saving; duplicate removal explicitly retains another active member. No
-  automatic acceptance, bulk removal, or many-to-one consolidation.
+  saving. A single duplicate removal names another member to keep; Remove
+  all forgets every member of the group after one confirmation. No
+  automatic acceptance, vault-wide bulk removal, or many-to-one
+  consolidation inside review (Guided consolidation is a separate flow).
 - **Recovery is local and revision-bound.** Review receipts are private
   plaintext workflow files under NORTHKEEP_HOME (mode 0600), not encrypted
   vault entries, and may retain reviewed content after a memory is forgotten.
@@ -909,12 +971,13 @@ every milestone; if a limit is removed, say when and how.*
   consent panel). Clustering still happens on this machine first, so
   the cloud model sees packs, not a 25-slice of the vault. Consent
   still names the full selected count (over-consent, not a leak).
-  Consent is not remembered. You pay the provider. Local remains the
+  Consent is not remembered. You pay the provider. Pack text is sent as
+  stored: the cloud review path does not run a redaction tier. Local remains the
   default; neither path hops to the other.
 - **Review is collection-selected in the local vault.** `project:`
   documents remain excluded. Shared collections can be selected explicitly;
-  no scope membership is changed by review. Project handoffs and concurrent
-  agent coordination are separate, later milestones.
+  no scope membership is changed by review. Project handoffs (ADR 0048)
+  and open-session accounting (ADR 0052) are separate features.
 
 ## GUI — current
 
@@ -925,7 +988,9 @@ every milestone; if a limit is removed, say when and how.*
 - **Closing the Tauri window kills the server and forgets the held key.**
   A browser tab from `northkeep ui` does the same when you Ctrl-C the
   terminal — but not if you only close the tab; the server keeps running.
-- **Assistant replies render a deliberate subset of Markdown.** Headings,
+- **Project documents on memory cards render a deliberate subset of
+  Markdown** (the same renderer the retired Converse view used for replies).
+  Headings,
   bold/italic, inline code, fenced code blocks, nested lists and rules are
   formatted; **tables, images and raw HTML are not** — their lines stay as
   literal text, which is readable but unformatted. Nothing is ever parsed as
@@ -942,10 +1007,11 @@ every milestone; if a limit is removed, say when and how.*
   character is intentionally consumed is a backslash escape: `\*` renders as
   `*`, per Markdown, which also drops the backslash in an unquoted Windows path
   like `C:\path\*.txt`. Inside `code spans` nothing is interpreted.
-- **Links in replies are not clickable.** `[text](url)` renders as `text (url)`
+- **Links in rendered Markdown are not clickable.** `[text](url)` renders as `text (url)`
   in plain text. A model relaying a URL out of a page it fetched should not be
   one click away — see the M10c exfiltration screen. Copy the URL deliberately.
-- **Formatting appears when the reply completes, not while it streams.** Tokens
+- **Formatting appeared when a reply completed, not while it streamed**
+  (this applied to the Converse view, now retired from the app). Tokens
   stream as plain text and the formatted version replaces them at the end (the
   same swap that already restored redacted text). A long answer shows raw
   `**asterisks**` until it finishes.
@@ -961,11 +1027,11 @@ every milestone; if a limit is removed, say when and how.*
   Running from source still works on any platform.
 - **No auto-update; updates are manual.** There is a **manual** "Check for
   updates" button (Settings → About, ADR 0017): it runs only when you click it,
-  does a single version lookup against the public GitHub releases page, sends no
+  does a single version lookup against the public GitHub releases API, sends no
   vault data or identifiers, and downloads/installs nothing (it points you at the
   release page to grab the new DMG yourself). There is no background polling, no
-  on-launch check, and no auto-install — the app still never phones home on its
-  own. A signed background auto-updater remains possible future work behind its
+  on-launch check, and no auto-install. The app does not phone home for updates on its
+  own; if you set up sync, it does contact your sync server at launch. A signed background auto-updater remains possible future work behind its
   own opt-in ADR.
 - **The bundled Node runtime is a version we redistribute.** We pin it and
   verify it at build time two ways: the tarball's SHA-256 against
@@ -1010,20 +1076,20 @@ every milestone; if a limit is removed, say when and how.*
   logged-in session (including any MCP client you configure) can open the
   vault. Same trust level as saved browser passwords. `northkeep lock`
   revokes it.
-- **This server's retrieval is keyword matching, not semantic search.** The
-  MCP `memory_retrieve` tool and converse's per-turn memory recall rank by
-  word overlap, recency, and type priority, and will miss synonyms ("car"
-  won't find "vehicle"). Semantic (embedding-blended) search DID ship for the
-  direct surfaces — `northkeep search` and the GUI Memories tab — but has not
-  been wired into this MCP tool or chat recall.
-- **No scope enforcement yet.** Any connected MCP client can read every
-  scope. Per-conversation scope grants are M4; until then, don't point an
-  untrusted MCP client at your vault.
+- **Chat recall and the hosted connector use keyword matching.** Converse's
+  per-turn memory recall and the connector's `memory_retrieve` rank by word
+  overlap, recency, and type priority, and will miss synonyms ("car" won't
+  find "vehicle"). The local MCP `memory_retrieve` ranks by meaning when the
+  local embedder is running (see the M6 entry above), as do
+  `northkeep search` and the GUI Memories tab.
+- **Scope enforcement is per connection (M4).** A connection with no
+  `NORTHKEEP_SCOPES` grant has full owner access and can read every scope;
+  scope a connection down before pointing an untrusted MCP client at it.
 - **The call log shows traffic, not truth.** It logs what the server was
   asked and how much came back — it cannot show what the AI *did* with the
   content afterward. Calls rejected by input validation are answered before
-  they reach the logger, so probing/malformed attempts don't appear yet —
-  an audit-completeness gap that closes with the M4 audit log.
+  they reach the logger, so probing/malformed attempts do not appear. The M4
+  audit log did not close this gap; it is still open.
 - **A stale `forget` survives in `.bak`** until the next write, as below.
 
 ## M8 (Connect — memory into other apps) — current
@@ -1054,7 +1120,7 @@ every milestone; if a limit is removed, say when and how.*
   deny-all. No UI path writes the empty-present form.
 - **A connected app reads your vault while it's unlocked** (the Keychain grant,
   same as any MCP client). Lock, or scope the connection down, to limit it.
-- **macOS only** for now (matches the arm64 app); the config paths are
+- **macOS only** for now (matches the arm64 app); the Claude Desktop config path is
   macOS-specific.
 
 ## Connector for shared scopes, ADR 0019 + ADR 0020 (current)
@@ -1070,7 +1136,9 @@ every milestone; if a limit is removed, say when and how.*
   read." If you never share a scope, nothing changes.
 - **Sharing is per-scope and opt-in; private is the default.** A scope you do not
   turn on is never sent. Turning one on requires an explicit, loud confirmation,
-  and a shared scope shows a SHARED badge everywhere it appears.
+  and a shared scope shows a SHARED badge everywhere it appears. One exception
+  (ADR 0050): a project a connected app creates in a scope that is empty on
+  this device is marked Shared without a dialog when it arrives (see M14).
 - **A breach of the connector database alone yields ciphertext, not content.**
   Stolen database or backups, an insider with database-only access, or legal
   process against the database alone get encrypted content they cannot read (plus
@@ -1135,9 +1203,10 @@ every milestone; if a limit is removed, say when and how.*
   Connecting an AI app works by typing a one-time pairing code into that app's
   consent page. If someone tricks you into entering your code on a page you did
   not deliberately open, they can connect their own app to your account. The
-  blast radius is bounded: they could read, add, or forget memories only in
-  scopes you already marked Shared, never a private scope and never your keys or
-  vault. Still, only generate a code when you are actively connecting an app you
+  blast radius is bounded: they could read, add, update, or forget memories in
+  scopes you already marked Shared, and create a new project, which becomes
+  Shared when it lands in an empty scope (M14); never a private scope that
+  holds anything, and never your keys or vault. Still, only generate a code when you are actively connecting an app you
   trust, and check the app name shown on the consent page.
 - **The paid entitlement is not per-account bound (when the paid gate ships).**
   To keep the connector anonymous, the subscription proof carries no account id,
@@ -1148,15 +1217,18 @@ every milestone; if a limit is removed, say when and how.*
 
 - **Guided providers are curated, not exhaustive.** The one-click flow covers a
   vetted list (Anthropic, OpenAI, Google, xAI, OpenRouter, Meta-via-OpenRouter);
-  any other model still works via "Advanced — add any endpoint," it just isn't
+  any other model still works via "Add any endpoint by hand" under Advanced
+  in Settings, Models; it just isn't
   walked-through or cost-labelled until catalogued.
 - **Model ids drift.** Vendor model names change often; the catalog is a
   point-in-time snapshot, re-verified each milestone. An unknown id still works —
   it just won't carry cost/strength metadata.
 - **Cost is approximate.** The $ / $$ / $$$ tiers are order-of-magnitude ranges,
-  not per-request accounting; always shown labelled "approx."
+  not per-request accounting. The CLI prints the "(approx)" range beside the
+  symbol; the app shows the symbol and puts the range in a hover tooltip.
 - **Meta Llama routes through OpenRouter.** Meta wound down its first-party API;
-  "Meta Llama" uses an OpenRouter key scoped to `meta-llama/*`.
+  "Meta Llama" uses an ordinary OpenRouter key, with its model list limited
+  to `meta-llama/*` ids.
 - **Local install needs Ollama and the disk/RAM.** NorthKeep guides you to
   install Ollama (it doesn't auto-install the daemon) and recommends a model your
   Mac can run; the pull downloads several GB. Detection is macOS-shaped, and a
@@ -1195,17 +1267,17 @@ every milestone; if a limit is removed, say when and how.*
   `rescope` appends a new entry and marks the original superseded — the first
   writer of these fields. General contradiction handling from the extraction
   pipeline (auto-superseding a fact when a newer one arrives) is still future.
-- **Scopes are labels, not walls.** The `scope` field is stored and
-  filterable, but access enforcement (a conversation granted `personal`
-  cannot see `client:x`) lands at M4.
+- **Scopes are labels in the vault file.** The `scope` field is stored and
+  filterable; per-connection access enforcement shipped in M4 (see above),
+  but anyone holding the unlocked vault can read every scope.
 - **Passphrase via `NORTHKEEP_PASSPHRASE` env var is convenient and less
   safe** — it can end up in shell history or process listings. Interactive
   prompt is the recommended path. Either way, JavaScript strings are
   immutable: the passphrase string itself lingers in process memory until
   garbage collection (key *buffers* are actively zeroed; the source string
   cannot be).
-- **No redaction yet.** Nothing in M0 sends anything anywhere (there is no
-  network code at all), but once M1 connects AI apps, redaction is M3.
+- **The vault core has no network code.** Redaction shipped in M3; sync,
+  the connector and model calls live in other packages.
 
 ## Permanent (will not be "fixed" — see SPEC/security-model.md)
 
