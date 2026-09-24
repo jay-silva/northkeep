@@ -306,12 +306,18 @@ out ("through a local MCP server").
   nearer year, which can be the wrong one.
 - **Imported projects are aged from their Log.** An imported project whose
   live Log has no readable date is aged from the import, so it cannot go
-  stale for `N` days after the import. The recheck found 4 of the 33
-  command-repo projects in that state (bobby-hood, ledger, wine-cellar,
+  stale for `N` days after the import. The recheck, measured before the
+  2026-09-23 import fix, found 4 of the 33 command-repo projects in that state (bobby-hood, ledger, wine-cellar,
   wine-purchases-13mo); bobby-hood and ledger had every dated entry moved
   to archives because their documents were over the cap. The live Log is
-  also only as good as ADR 0053's import: an undated entry keeps source
-  order, and a Log written as headings parses as empty.
+  also only as good as ADR 0053's import. Since the import fix of
+  2026-09-23 (ADR 0053 addendum), a partly dated Log keeps the source's
+  sequence turned newest first by the direction its dated entries run, so
+  that direction is inferred and undated entries are never placed by date;
+  a Log written as headings is stored as dash entries the board reads, one
+  per dated heading (undated headings are text of the entry above).
+  Projects imported before that fix keep the old shape until deleted and
+  imported again.
 - **A large document costs time, not payload.** Until ADR 0056's
   prerequisite lands, a document stored past the cap through the raw memory
   path is read in full to find its dates.

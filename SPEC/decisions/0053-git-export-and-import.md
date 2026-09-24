@@ -319,7 +319,8 @@ line (`PROJECT_DRAFT_LINE_PREFIX`, project-doc.ts:280-284). Per file:
    sourceFile)`, with the `## Log archive: <slug>` first line (project-doc.ts:20, 267-274) that
    `getProjectView` finds (project-handoff.ts:226), not by replaying `project_update`, which would restamp
    dates (`datedBullet`, project-doc.ts:334-339). The newest `PROJECT_LOG_KEEP_ENTRIES` (10,
-   project-doc.ts:18) stay live.
+   project-doc.ts:18) stay live. How the newest are found in a partly dated Log, and how a Log written as headings is stored:
+   Addendum 2026-09-23 below.
 4. Whatever still exceeds `PROJECT_DOC_MAX_CHARS` becomes one `## Import overflow: <slug>` episodic memory.
 
 ## Decision 11: Backup scope (stated, not enforced)
@@ -575,3 +576,121 @@ WOUNDS, 11 of 13 prior findings closed. Two flesh wounds, fixed after it:
 - `refused.json` is the one file under `NORTHKEEP_HOME/export/` written without
   the export lock, by design; Decision 9's "covers every settings and state
   write" still holds for the journal, state and settings files.
+
+## Addendum 2026-09-23: Log direction and heading Logs (ADR 0054 review findings)
+
+The ADR 0054 reviews found two import defects, both in `planImport`
+(packages/core/src/project-import.ts). Fixed on branch `fix/import-log-shapes`.
+
+**1. A partly dated Log keeps its newest entries live.** Before, a Log where
+any entry lacked a readable date kept source order, so an oldest-first Log
+longer than ten entries kept its oldest ten live and archived the newest. The
+rule now:
+
+- When every entry has a readable date: newest ten by date live, archives
+  oldest first by date, `log_order: 'by date'`, as before. Same-day ties are
+  oriented by the direction rule below; before, they were oriented by the
+  first entry's date against the last's. The two differ when most dates run
+  one way but the first and last disagree, as with a year typo at the start
+  of an oldest-first Log: same-day entries then come out newest written
+  first, where before they came out oldest written first (review round 1,
+  f20).
+- Otherwise the entries are not sorted. The source's direction is read from
+  its dated entries in source order: the direction most adjacent dated pairs
+  take (equal dates cast no vote), then first dated against last dated on a
+  tie. If that says oldest first, the whole sequence is reversed
+  (`log_order: 'source order reversed'`); otherwise it is kept as written
+  (`log_order: 'source order'`), newest first being the live Log's own
+  direction. Reversing the whole sequence keeps each undated entry between
+  the same two neighbours. The first ten of the result stay live, and the
+  rest go to archives in the opposite order, oldest first as the dated
+  entries run. The archive note says the entries are not sorted by date.
+- Adjacent pairs rather than first against last, so one year typo at either
+  end (a `2099` for `2026`) does not flip a long Log.
+- Text before the first entry (a dash Log whose first line is prose) is the
+  Log's preamble, not an entry: it is never dated, never ordered, and stays
+  at the top of the live Log when the entries are reversed. Only if the
+  document is still over the cap with every entry archived does it join the
+  archives, ahead of the entries.
+
+**2. A Log written as headings becomes dash entries.** Before, a Log whose
+body was empty and whose entries were deeper headings (`### 2026-09-01 ...`)
+was stored as nested sections, so `ProjectView.log` read as empty, log
+rolling found nothing to roll, and the project board's `newestLogDate` aged
+the project from its import. Now:
+
+- The Log is read from the source lines, fence-aware: a `###` or deeper
+  line inside a code fence (```` ``` ```` or `~~~`) that closes is never a
+  heading and is never rewritten. A `#` or `##` line inside a fence still
+  ends the Log at the document level (the accepted f9 limit), so it is not
+  protected. An unclosed fence is read as if it never opened, so it cannot
+  swallow the rest of the Log.
+- Only a dated heading at the entry level opens an entry. The entry level is
+  the shallowest level any dated heading uses. Every other line, including
+  an undated heading at the entry level and any deeper heading, is text of
+  the entry above it. Text before the first dated heading is the Log's
+  preamble and stays at the top. In a heading Log it is always indented,
+  since it becomes the text under the converted Log; in a dash Log it is
+  indented only if one of its lines would otherwise re-read as a heading or
+  an entry. After the first project write, log rolling reads the preamble as
+  the body of the newest entry (no text is lost; dash Logs behaved the same
+  before this fix). A heading Log with no dated
+  heading is left exactly as written (review round 1, FW1: f8, f21).
+- A heading under the Log whose title, trimmed of surrounding whitespace
+  (including NBSP, BOM and Unicode spaces, as the document parser trims
+  titles), is an owned section (What & Why,
+  Current Status, Next Actions, Decisions, Log, Open Questions, Files, or
+  `Open Questions / Risks`) ends the Log there, even inside a fence, and it
+  and every section after it stay sections, as before this fix, so
+  `project_resume` still finds them (review round 1, FW2: f19).
+- The entry is stored as `- <heading title>`, then a blank line and the
+  section text with every non-empty line indented four spaces. Four, not
+  two, because a heading line indented up to three spaces still opens a
+  section; indented, a `- ` bullet or `####` heading in the body stays inside
+  its entry for `splitLogEntries`, `rollProjectLog` and the board.
+- When the title's first readable date is not at its start
+  (`### Week of 2026-09-01`), the entry opens `- 2026-09-01 - Week of
+  2026-09-01`, so the date import orders by is the one every dash-Log reader
+  finds. The title is kept whole.
+- The opening heading's level and marker are not kept; headings inside an
+  entry keep theirs, indented. The dry run's section map reports every
+  heading absorbed into the Log as stored in `Log`.
+- A heading Log is always converted, even when it is short and already in
+  order, and a round trip through the mirror reproduces the live Log.
+
+**Unchanged:** strict UTF-8, the 60,000-byte row cap and splitting, the dry
+run as the whole plan, refusal on a scope with any live row, archives as ADR
+0045 rows with their original dates, and nothing ever cut.
+
+**Residual.** The fix applies to imports run after it. Projects already
+imported (the M-A1 migration of 2026-09-23) keep the old shape: a heading Log
+still sits in nested sections with an empty live Log, and a partly dated,
+oldest-first Log still has its oldest entries live. The way out for one of
+them is `northkeep projects delete <slug>`, then import it again from the
+mirror or the source; that is the owner's call. Direction is inferred, not known: a Log whose dated entries
+are mostly out of order can be turned the wrong way, and a Log with fewer
+than two distinct dates is taken as newest first. Undated entries are never
+placed by date. Converted entries carry four spaces of indent the source did
+not have. A heading Log whose Log body opens with a prose line is not a
+heading Log (the shape is still chosen from the Log's first line), so its
+headings stay sections. A dated heading deeper than the entry level (a
+`####` under a `###`), or one before the first entry-level dated heading, is
+text, so its date is not read. An undated heading written as its own entry
+reads as part of the entry above. Sections after an owned heading nested
+under the Log are not converted. Fence detection covers the document's Log
+only: a fenced line elsewhere that looks like a heading still splits the
+document, as ADR 0053 already records.
+
+Tests: `packages/core/test/project-import-order.test.ts` ("Partly dated Log
+direction", "Heading Log shape", "Heading Log review round 1 (FW1, FW2)",
+"Dash Log preamble (review round 1 note)", and the rewritten heading test) and
+`packages/core/test/project-board.test.ts` ("ages an imported heading Log
+from its newest heading date").
+
+Review round 2 (recheck, `Reviews/import-log-shapes/r2-recheck.md`): FW1
+and FW2 closed for the reported cases; one wound remained, an owned heading
+with a trailing NBSP, BOM or Unicode space was still absorbed because the
+owned check compared the untrimmed title. Fixed by trimming as
+`parseProjectDoc` does, with a test for all three characters. The fence and
+preamble sentences above were corrected to match the code.
+
