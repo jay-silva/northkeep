@@ -230,6 +230,17 @@ describe('createReviewApiGenerator', () => {
     expect(bodies).toHaveLength(1);
   });
 
+  it('C35 (cloud review): Tier 2 masks a name after character 6,000 of a long memory', async () => {
+    process.env.NORTHKEEP_PROVIDER_KEY_OPENAI_TEST = 'sk-test-not-a-real-key';
+    const bodies = stubProvider('{"proposals":[]}');
+    let filler = '';
+    while (filler.length < 6100) filler += 'notes from the visit, nothing unusual. ';
+    const gen = createReviewApiGenerator(CLOUD, { tier: 2, ollama: flakyNer([]) });
+    const [h] = await gen.prepare([[entry(ID1, `${filler.slice(0, 6100)} Quennell Vos has the results.`)]]);
+    await gen.send(h!, { model: 'm', timeoutMs: 1000 });
+    expect(promptOf(bodies[0])).not.toContain('Quennell');
+  });
+
   it('C6b (adapter): Tier 3 proceeds when a name call fails twice and says so', async () => {
     process.env.NORTHKEEP_PROVIDER_KEY_OPENAI_TEST = 'sk-test-not-a-real-key';
     stubProvider('{"proposals":[]}');

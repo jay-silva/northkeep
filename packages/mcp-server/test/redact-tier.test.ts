@@ -101,6 +101,20 @@ describe('ADR 0060 D4: return tiers over MCP', () => {
     expect(seen).toEqual({ scope: true, board_date: true });
   });
 
+  it('C35 (MCP): Tier 2 masks a name after character 6,000 of a long memory', async () => {
+    h = createHarness();
+    let filler = '';
+    while (filler.length < 6100) filler += 'notes from the visit, nothing unusual. ';
+    const vault = h.openVault();
+    vault.remember({ content: `${filler.slice(0, 6100)} Quennell Abernathy-Vos has the results.`, type: 'semantic', scope: 'personal' });
+    vault.save();
+    vault.close();
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const r = await call('memory_list');
+    expect(r.isError).toBeFalsy();
+    expect(text(r)).not.toContain('Quennell');
+  });
+
   it('C10: Tier 2 with the name model offline returns an error and no content', async () => {
     h = createHarness({ ner: 'offline' });
     seedMemory();
