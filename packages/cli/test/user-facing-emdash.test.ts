@@ -82,6 +82,8 @@ describe('no em dash in user-facing text', () => {
     expect(webHits()).toEqual([]);
   });
   it('phone app', () => {
-    expect([...tsHits('apps/mobile/app'), ...tsHits('apps/mobile/src')]).toEqual([]);
+    const config = 'apps/mobile/app.config.ts'; // iOS permission prompts
+    const configHits = stringHits(config, fs.readFileSync(path.join(repo, config), 'utf8'), ts.ScriptKind.TS);
+    expect([...tsHits('apps/mobile/app'), ...tsHits('apps/mobile/src'), ...configHits]).toEqual([]);
   });
 });
