@@ -103,9 +103,10 @@ Point it at **any** OpenAI-compatible endpoint, Ollama, LM Studio, vLLM,
 llama.cpp on a LAN box, a hosted API, or at Claude natively. Every endpoint
 wears an honest badge derived from where it actually is: **private** (loopback
 or your LAN, model traffic never leaves your network) or **bounded** (a cloud host, where
-Tier-1 masking always runs before send, a per-turn view shows exactly what was
-masked, and the audit log records which tier ran). There is no way to send unredacted text to a remote endpoint, not a
-setting, a code path that doesn't exist. In **Auto** mode a concierge routes
+Tier-1 masking always runs before a chat message is sent, a per-turn view shows exactly what was
+masked, and the audit log records which tier ran). In chat there is no way to send unredacted text to a remote endpoint, not a
+setting, a code path that doesn't exist. One exception outside chat: a memory review you run on a cloud model, after you
+confirm it, sends the selected memories as stored, without masking. In **Auto** mode a concierge routes
 each message to a capable model you've connected, favoring the cheapest; you can pin a
 model, pin a task to a model, or force private-only.
 
@@ -239,7 +240,8 @@ and doesn't pretend to.
   result), and you can pull it back. No telemetry, none. Crash reports would be
   opt-in and content-free.
 - Plaintext never leaves your machine except (a) to the model provider you chose,
-  after redaction has run, (b) for a scope you explicitly share with the
+  after redaction has run (a memory review you run on a cloud model is the
+  exception: it sends the selected memories as stored, after you confirm), (b) for a scope you explicitly share with the
   connector, so your own AI apps can read it, or (c) the arguments of a tool
   call you allowed, screened and masked before they are sent, and only those
   arguments, never the vault, never the transcript. Private scopes never leave.
