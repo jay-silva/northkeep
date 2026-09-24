@@ -244,14 +244,16 @@ describe('redact() tier orchestration', () => {
     }
   });
 
-  it('a lowercase Latin stray word is still not masked at the strict gate', async () => {
-    // Guard the plausibility change did not start masking stray lowercase words.
+  it('a stray word the model returns is masked at Tier 3 exactly as at Tier 2 (ADR 0060 W2)', async () => {
+    // The strict gate is gone: Tier 3 must mask at least what Tier 2 masks.
     const ner = {
       available: async () => true,
       generateJson: async () => JSON.stringify({ entities: [{ text: 'vile', kind: 'person' }] }),
     } as never;
-    const r = await redact('The vile smell lingered.', { tier: 3 }, ner);
-    expect(r.redacted).toContain('vile');
+    const t2 = await redact('The vile smell lingered.', { tier: 2 }, ner);
+    const t3 = await redact('The vile smell lingered.', { tier: 3 }, ner);
+    expect(t2.redacted).not.toContain('vile');
+    expect(t3.redacted).not.toContain('vile');
   });
 
   it('the no-space substring fallback does NOT over-cut a Latin token inside a longer word', async () => {
@@ -515,7 +517,7 @@ describe('structured ePCR field report (2026-07-17 over-masking)', () => {
     expect(flat('Cody Craveiro Paramedic P')).toContain('Cody Craveiro');
   });
 
-  it('NER junk gate: placeholders, field labels, hex ids, and adjectives are refused', async () => {
+  it('NER at Tier 3 masks what Tier 2 masks; only placeholders are refused (ADR 0060 W2)', async () => {
     const junkOllama = {
       available: async () => true,
       generateJson: async () =>
@@ -534,21 +536,15 @@ describe('structured ePCR field report (2026-07-17 over-masking)', () => {
         }),
     } as never;
     const { redact: redactFn } = await import('../src/index.js');
-    // Tier 3: the STRICT gate applies (deterministic layers own common names;
-    // NER is residuals-only). "vile"/"date"/"sul" are census surnames, so the
-    // list-membership arm alone would re-admit them — strict requires
-    // off-English tokens.
-    const result = await redactFn(
-      'Sex F Date noted. Arrived vile 8ca72b71 Person-1 Org-1. Zyler Quandril of Barnstable County.',
-      { tier: 3 },
-      junkOllama,
-    );
-    // Only the plausible entities were masked.
-    expect(result.redacted).toContain('Sex');
-    expect(result.redacted).toContain('Date');
-    expect(result.redacted).toContain('Arrived');
-    expect(result.redacted).toContain('vile');
-    expect(result.redacted).toContain('8ca72b71');
+    // ADR 0060 W2: Tier 3 masks whatever Tier 2 masks, so the old strict
+    // gate is gone; only our own placeholders are still refused.
+    const text = 'Sex F Date noted. Arrived vile 8ca72b71 Person-1 Org-1. Zyler Quandril of Barnstable County.';
+    const result = await redactFn(text, { tier: 3 }, junkOllama);
+    const t2 = await redactFn(text, { tier: 2 }, junkOllama);
+    for (const word of ['Sex', 'Date', 'Arrived', 'vile', '8ca72b71']) {
+      expect(t2.redacted, word).not.toContain(word);
+      expect(result.redacted, word).not.toContain(word);
+    }
     expect(result.redacted).toContain('Person-1'); // placeholder NOT re-masked
     expect(result.redacted).toContain('Org-1');
     expect(result.redacted).not.toContain('Zyler');

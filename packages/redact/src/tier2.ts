@@ -30,17 +30,19 @@ export async function applyTier2(
   text: string,
   ollama: OllamaClient | null,
   pseudonyms: PseudonymMap,
-  /** Strict gate (Tier 3): the deterministic layers own common names there,
-   * so NER is restricted to plausible RESIDUALS (off-English tokens). Tier 2
-   * standalone keeps full legacy recall — NER is its only name layer. */
+  /** Strict gate: restricts NER to off-English residuals. No caller passes
+   * true any more: Tier 3 must mask everything Tier 2 masks (ADR 0060 W2). */
   strictGate = false,
+  /** Tier 3: detect on the text before the dictionary masked names (what
+   * Tier 2 would see), then mask in `text`; see the residual rule below. */
+  detectText?: string,
 ): Promise<Tier2Outcome> {
   if (ollama === null || !(await ollama.available())) {
     return { text, replacements: [], degraded: true };
   }
   let entities: EntityHit[];
   try {
-    entities = await detectEntities(text, ollama, strictGate);
+    entities = await detectEntities(detectText ?? text, ollama, strictGate);
   } catch {
     return { text, replacements: [], degraded: true };
   }
@@ -87,6 +89,20 @@ export async function applyTier2(
       // Greek/Armenian/Georgian reach the plain `continue`, so "Ann" is never
       // cut out of "Anna". Fail-closed inversion, adversarial review round 3.
       out = out.split(entity.text).join(placeholder);
+    } else if (detectText !== undefined) {
+      // Tier 3: the dictionary already masked part of this entity, so the
+      // whole span no longer appears. Mask each remaining word of it, so
+      // Tier 3 never sends a word Tier 2 would have masked (ADR 0060 W2).
+      let masked = false;
+      for (const word of entity.text.match(/\p{L}[\p{L}'\u2019\-]*/gu) ?? []) {
+        if (word.length < 2 || PLACEHOLDER_SPAN.test(word)) continue;
+        const wre = new RegExp(`(?<![\\p{L}\\p{N}_])${escapeRegex(word)}(?![\\p{L}\\p{N}_])`, 'giu');
+        if (wre.test(out)) {
+          out = out.replace(wre, placeholder);
+          masked = true;
+        }
+      }
+      if (!masked) continue;
     } else {
       continue;
     }

@@ -810,6 +810,12 @@ every milestone; if a limit is removed, say when and how.*
   the first 6,000 characters and kept only the last of two "entities" lists
   in a reply, and said nothing in either case.
   Tier 2 also generalizes DOB-labeled dates to year-only, deterministically.
+- **Tier 3 masks at least everything Tier 2 masks on the same text** (ADR
+  0060). The same name-model pass runs, reading the text before the name
+  lists do, and whatever it finds is masked on top of the lists. Before this
+  fix a filter dropped the model's finds made only of common English words
+  at Tier 3 only, so "First National Bank" or "Acme Widgets" could go out at
+  Tier 3 while Tier 2 masked them, and the result still said Tier 3.
 - **Tier 3 makes dates and listed names deterministic, not "all names."**
   Full calendar dates in every recognized format (numeric US and day-first,
   month-name incl. "15th of March", ISO with attached timestamps) go to

@@ -82,6 +82,18 @@ const truncateForLine = (text: string, max = 300): string =>
 const fmtKb = (bytes: number): string =>
   bytes < 1024 ? `${bytes} B` : `${(bytes / 1024).toFixed(1)} KB`;
 
+/**
+ * What each tier masks, in the words KNOWN-LIMITS uses. Tier 3 masks at least
+ * everything Tier 2 masks on the same text (ADR 0060 W2); names still depend
+ * on the local name model and the built-in lists, never "all names".
+ */
+export function tierBanner(tier: 0 | 1 | 2 | 3): string {
+  if (tier === 3) return ' (everything Tier 2 masks, plus every date to the year and names on the built-in lists)';
+  if (tier === 2) return ' (identifiers masked + names the local model finds pseudonymized)';
+  if (tier === 1) return ' (identifiers masked: known-prefix keys, cards, SSNs, emails, phones)';
+  return ' (OFF: private endpoint)';
+}
+
 export async function runConverse(options: ConverseCmdOptions, withVault: WithVault): Promise<void> {
   // A tier that is not 0 to 3 is refused, never read as 1 (invariant 6).
   if (!['0', '1', '2', '3'].includes(options.tier)) {
@@ -146,7 +158,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   console.log(`Converse: ${endpoint.label} (${endpoint.model})`);
   console.log(badgeLine(endpoint));
   console.log(
-    `Redaction tier ${tier}${tier === 3 ? ' (identifiers masked + names pseudonymized + every date to the year)' : tier === 2 ? ' (identifiers masked + names pseudonymized)' : tier === 1 ? ' (identifiers masked: known-prefix keys, cards, SSNs, emails, phones)' : ' (OFF: private endpoint)'}` +
+    `Redaction tier ${tier}${tierBanner(tier)}` +
       ` · memory distillation: ${distillOllama ? 'local model' : 'heuristic (Ollama not running)'}`,
   );
   if (auto) console.log(`${GREEN}✦ Auto${RESET}: the concierge routes each message (":auto" toggles).`);

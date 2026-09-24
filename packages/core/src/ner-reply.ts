@@ -5,11 +5,13 @@
  * name was thrown away and the text went out unmasked while reporting Tier 2.
  *
  * Shared by the desktop name layer (redact's applyTier2) and the phone's
- * per-kind pass (platform-mobile), ADR 0060 O3. This parser keeps every
- * duplicate key. A reply is accepted only when it can
- * be fully accounted for: one object whose keys are all "entities", each an
- * array of objects whose "text" values are strings. Anything else throws, and
- * the caller treats the text as degraded (refuse at Tier 2), never as clean.
+ * per-kind pass (platform-mobile), ADR 0060 O3. What it checks, and nothing
+ * more: the reply is one JSON object and nothing after it; every top-level
+ * key is "entities" (repeats allowed, all kept); each "entities" value is an
+ * array; each item is an object whose only keys are "text" and "kind"; each
+ * item has at least one "text" and every "text" is a string (a repeated
+ * "text" gives two spans). Anything else throws, and the caller marks the
+ * text degraded (Tier 2 refuses, Tier 3 runs deterministic only).
  */
 
 type Json = string | number | boolean | null | Json[] | { pairs: Array<[string, Json]> };
@@ -106,6 +108,9 @@ export function readNerReply(raw: string): NerReplyEntity[] {
     sawEntities = true;
     for (const item of list) {
       if (!isObject(item)) return reader.fail();
+      // A name under any other key (a nested "entities" list, "name", ...)
+      // would be ignored, so an item with any other key is unaccounted for.
+      if (item.pairs.some(([k]) => k !== 'text' && k !== 'kind')) return reader.fail();
       const texts = item.pairs.filter(([k]) => k === 'text').map(([, v]) => v);
       const kinds = item.pairs.filter(([k]) => k === 'kind').map(([, v]) => v);
       if (texts.length === 0 || texts.some((t) => typeof t !== 'string')) reader.fail();

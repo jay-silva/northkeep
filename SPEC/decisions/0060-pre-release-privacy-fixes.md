@@ -1268,3 +1268,54 @@ surviving restoration.
   typecheck, the offline Metro export (iOS bundle, 7.7 MB), the mobile
   tests, the full suite and e2e pass.
 
+### Code review recheck and final targeted fix, 2026-09-24
+
+Recheck report: `Reviews/adr-0060/code-r2-recheck.md`. K1, F2, F3 and F6
+closed; F1 still open by another route; a missed shape found. Jay approved
+this final targeted fix with no further review round; the lead verifies
+the tests.
+
+- **F1, second route.** A restored original may come only from a memory
+  that is both listed in the proposal's `entry_ids` and quoted with a
+  validated quote. Before, a validated quote from an unlisted memory
+  (its own placeholder, or one real character of it) cited that memory,
+  and the report, which shows only listed memories' quotes, hid it while
+  its value was spliced in. Tests R1a and R1b in `review-restore.test.ts`;
+  both failed on the old code.
+- **Names under an unexpected key.** The strict reader now also requires
+  each item's keys to be only "text" and "kind", so a nested "entities"
+  list or a name under another key fails the reply (Tier 2 refuses, Tier 3
+  runs deterministic only) instead of being ignored. The reader's header
+  and the phone parser's length comment now say only what the code checks.
+  Tests R2 in `tier2-reply.test.ts` (desktop) and `per-kind-ner.test.ts`
+  (phone); both failed on the old code. The recheck saw this shape in 0 of
+  54 real replies; it predates this ADR.
+- **Placeholder detector false positives.** The detector now matches only
+  shapes the redactor or a session emits and their mis-copies: a label
+  with an underscore index (in any brackets, with or without a tag),
+  bracketed `[DATE]`, `[DATE-1948]` and `[REDACTED]`, and `Person-3`,
+  `Org-2`, `Place-4`, `Location-1`. "(ZIP 02532)", "ip-10-0-0-12" and
+  "(email)" are kept (test R3, failed on the old code); every earlier
+  mis-copy case still drops.
+- **W2 (claims recheck): Tier 3 masked fewer org names than Tier 2.** The
+  Tier 3 name-model pass used a strict gate that dropped finds made only
+  of common English words, so "First National Bank" and "Acme Widgets"
+  went out at Tier 3 while Tier 2 masked them, labelled Tier 3. Tier 3 now
+  runs the same full pass as Tier 2, reading the text before the name
+  lists (what Tier 2 sees), and masks its finds on top of the lists; when
+  the lists already masked part of a find, each remaining word of it is
+  masked. Tier 3 therefore masks at least everything Tier 2 masks on the
+  same text and name model. Property tests on `redact`, chat, the cloud
+  review and MCP (`tier3-superset.test.ts` in redact, converse and
+  mcp-server; shared inputs in `redact/test/superset-fixture.ts`): all 10
+  failed on the old code. Two older Tier 3 tests that pinned the strict
+  gate's non-masking were changed to assert Tier 2 parity. Real local
+  model, synthetic text: "Meet Dana at First National Bank" is
+  `Org-1` at both tiers (3 of 3); for "Call Zorblax Quintavius at Acme
+  Widgets" the model replied with a stray top-level "text" key, which is
+  unreadable, so both tiers report degraded (Tier 2 refuses toward a cloud
+  model, Tier 3 is labelled deterministic only). The CLI converse banner
+  now reads "everything Tier 2 masks, plus every date to the year and
+  names on the built-in lists" (it printed "OFF" for Tier 3 on this
+  branch), and KNOWN-LIMITS states the Tier 3 superset rule.
+
