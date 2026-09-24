@@ -92,7 +92,7 @@ export function mcpAdd(
     console.log(`  Its tools will appear to the model as ${server.id}__<tool>.`);
     console.log(
       `  ${DIM}Every call asks for your approval. Tools you have not marked read-only ask EVERY time${RESET}\n` +
-        `  ${DIM}and can never be remembered with "always" — see: northkeep mcp safe-read ${server.id} <tools>${RESET}`,
+        `  ${DIM}and can never be remembered with "always". See: northkeep mcp safe-read ${server.id} <tools>${RESET}`,
     );
     // Say plainly what the fingerprint does and does not cover (ADR 0033 D1).
     console.log(
@@ -249,8 +249,8 @@ export function mcpAddRemote(
   console.log(`${GREEN}✓${RESET} Added remote MCP server "${id}".`);
   console.log(`  ${DIM}endpoint:${RESET} ${server.url}`);
   console.log(
-    `\n${YELLOW}Not connected yet.${RESET} NorthKeep will not contact this server — not even to list ` +
-      `its tools — until you sign in:\n  northkeep mcp connect ${id}`,
+    `\n${YELLOW}Not connected yet.${RESET} NorthKeep will not contact this server, not even to list ` +
+      `its tools, until you sign in:\n  northkeep mcp connect ${id}`,
   );
   console.log(
     `\n${DIM}Its tools will send your arguments to ${endpointOrigin(server.url)}, off this machine, ` +

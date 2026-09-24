@@ -46,8 +46,8 @@ type WithVault = <T>(fn: (vault: Vault) => Promise<T> | T) => Promise<T>;
 export function badgeLine(endpoint: EndpointConfig): string {
   const { tier, host, reason } = classifyEndpoint(endpoint.baseUrl);
   return tier === 'private'
-    ? `${GREEN}● private${RESET} — nothing leaves your network (${host}: ${reason})`
-    : `${YELLOW}● bounded${RESET} — masked before send, audited (${host}: ${reason})`;
+    ? `${GREEN}● private${RESET}: nothing leaves your network (${host}: ${reason})`
+    : `${YELLOW}● bounded${RESET}: masked before send, audited (${host}: ${reason})`;
 }
 
 export function providerFor(endpoint: EndpointConfig): ModelProvider {
@@ -103,7 +103,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   let ceiling: PrivacyCeiling = 'bounded-allowed';
   if (auto && tier === 0) {
     // Auto may route any message to a bounded endpoint; "off" is never safe there.
-    throw new Error('Redaction tier 0 needs a fixed private endpoint — it cannot ride --auto.');
+    throw new Error('Redaction tier 0 needs a fixed private endpoint; it cannot ride --auto.');
   }
 
   // --tools (M10b): opt-in agent tools, gated twice — the flag AND the
@@ -139,16 +139,16 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     distillOllama = null;
   }
 
-  console.log(`Converse — ${endpoint.label} (${endpoint.model})`);
+  console.log(`Converse: ${endpoint.label} (${endpoint.model})`);
   console.log(badgeLine(endpoint));
   console.log(
     `Redaction tier ${tier}${tier === 2 ? ' (identifiers masked + names pseudonymized)' : tier === 1 ? ' (identifiers masked: known-prefix keys, cards, SSNs, emails, phones)' : ' (OFF: private endpoint)'}` +
       ` · memory distillation: ${distillOllama ? 'local model' : 'heuristic (Ollama not running)'}`,
   );
-  if (auto) console.log(`${GREEN}✦ Auto${RESET} — the concierge routes each message (":auto" toggles).`);
+  if (auto) console.log(`${GREEN}✦ Auto${RESET}: the concierge routes each message (":auto" toggles).`);
   if (taskTools.length > 0) {
     console.log(
-      `${YELLOW}⚒ Tools${RESET} — ${taskTools.map((t) => t.name).join(', ')} available; calls ask for your approval (site grants are remembered — "northkeep tools grants" lists, "revoke" undoes).`,
+      `${YELLOW}⚒ Tools${RESET}: ${taskTools.map((t) => t.name).join(', ')} available; calls ask for your approval (site grants are remembered; "northkeep tools grants" lists, "revoke" undoes).`,
     );
   }
   console.log(`${DIM}Commands: :auto  :private  :model <name>  :models  :endpoint <label|id>  :endpoints  :undo  :memories  :quit${RESET}\n`);
@@ -206,16 +206,16 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         // must be able to tell a grant-based auto-allow from their own yes,
         // and a screen block must say WHY (content-free reasons).
         if (e.decision === 'approved' && e.via === 'grant') {
-          console.log(`${DIM}↳ ✓ ${e.name} auto-allowed (site grant — "northkeep tools revoke" undoes)${RESET}`);
+          console.log(`${DIM}↳ ✓ ${e.name} auto-allowed (site grant; "northkeep tools revoke" undoes)${RESET}`);
         } else if (e.decision !== 'approved' && e.via === 'screen') {
           console.log(`${RED}↳ ✗ ${e.name} blocked by the exfiltration screen:${RESET}`);
           for (const reason of e.reasons ?? []) console.log(`${RED}    ⚠ ${reason}${RESET}`);
         } else if (e.decision !== 'approved' && e.via === 'grant') {
           console.log(`${DIM}↳ ✗ ${e.name} refused (never-for-this-site grant)${RESET}`);
         } else if (e.decision !== 'approved' && e.via === 'budget') {
-          console.log(`${YELLOW}↳ ✗ ${e.name} skipped — ${(e.reasons ?? []).join('; ')} ("northkeep tools budget" to raise)${RESET}`);
+          console.log(`${YELLOW}↳ ✗ ${e.name} skipped: ${(e.reasons ?? []).join('; ')} ("northkeep tools budget" to raise)${RESET}`);
         } else if (e.decision !== 'approved') {
-          console.log(`${DIM}↳ ✗ ${e.name} ${e.decision === 'timeout' ? 'timed out — denied' : 'denied'}${RESET}`);
+          console.log(`${DIM}↳ ✗ ${e.name} ${e.decision === 'timeout' ? 'timed out, denied' : 'denied'}${RESET}`);
         }
       } else if (e.type === 'tool_result' && e.cancelled === true) {
         console.log(`${YELLOW}↳ ${e.name} cancelled; the tool may still have completed${RESET}`);
@@ -305,21 +305,21 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
     // to local models only — a promise that binds auto AND manual sends.
     if (trimmed === ':auto') {
       if (!auto && tier === 0) {
-        console.log('Redaction tier 0 needs a fixed private endpoint — it cannot ride auto.');
+        console.log('Redaction tier 0 needs a fixed private endpoint; it cannot ride auto.');
         continue;
       }
       auto = !auto;
       console.log(auto
-        ? `${GREEN}✦ Auto on${RESET} — each message routes by task${ceiling === 'private-only' ? ' (local models only — pinned)' : ''}.`
-        : `Auto off — staying on ${endpoint.label} (${model}).`);
+        ? `${GREEN}✦ Auto on${RESET}: each message routes by task${ceiling === 'private-only' ? ' (local models only, pinned)' : ''}.`
+        : `Auto off: staying on ${endpoint.label} (${model}).`);
       continue;
     }
 
     if (trimmed === ':private') {
       ceiling = ceiling === 'private-only' ? 'bounded-allowed' : 'private-only';
       console.log(ceiling === 'private-only'
-        ? `${GREEN}● Pinned private${RESET} — nothing in this conversation leaves your machine.`
-        : 'Unpinned — hosted endpoints are allowed again (redaction still applies).');
+        ? `${GREEN}● Pinned private${RESET}: nothing in this conversation leaves your machine.`
+        : 'Unpinned: hosted endpoints are allowed again (redaction still applies).');
       continue;
     }
 
@@ -330,7 +330,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       const wanted = trimmed.slice(6).trim();
       if (!wanted) {
         console.log(`Current model: ${model}${model !== endpoint.model ? ` (endpoint default: ${endpoint.model})` : ''}`);
-        console.log('Switch with ":model <name>" — ":models" lists what this endpoint serves.');
+        console.log('Switch with ":model <name>"; ":models" lists what this endpoint serves.');
       } else if (!/^[\w.:/-]{1,128}$/.test(wanted) || wanted.includes('..')) {
         console.log('That does not look like a model id.');
       } else {
@@ -346,7 +346,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         if (models.length === 0) console.log('The endpoint reported no models.');
         for (const m of models) console.log(`  ${m}${m === model ? '  ← current' : m === endpoint.model ? '  (endpoint default)' : ''}`);
       } catch {
-        console.log('Could not list models — is the endpoint running? (":model <name>" still works.)');
+        console.log('Could not list models. Is the endpoint running? (":model <name>" still works.)');
       }
       continue;
     }
@@ -442,12 +442,12 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
           defaultEndpointId: endpoint.id,
         });
         const chosen = getEndpoint(decision.endpointId);
-        if (!chosen) throw new RouteError('The routed endpoint disappeared — check :endpoints.');
+        if (!chosen) throw new RouteError('The routed endpoint disappeared. Check :endpoints.');
         // Re-check the ceiling on the OBJECT WE ACTUALLY USE: route() classified
         // a snapshot; getEndpoint() re-read the config file. If the baseUrl
         // changed in between, the pin must still hold (adversarial review M-1).
         if (ceiling === 'private-only' && classifyEndpoint(chosen.baseUrl).tier !== 'private') {
-          throw new RouteError(`"${chosen.label}" is no longer private — not sending (pinned).`);
+          throw new RouteError(`"${chosen.label}" is no longer private, so nothing was sent (pinned).`);
         }
         turnProvider = providerFor(chosen); // may throw (e.g. missing API key)
         turnModel = decision.model;
@@ -515,7 +515,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         console.log(`${YELLOW}[stopped: step limit]${RESET}`);
       }
       if (result.reply !== streamed) {
-        console.log(`${DIM}— restored —${RESET}`);
+        console.log(`${DIM}[restored reply]${RESET}`);
         console.log(result.reply);
       }
       lastCreated = result.memoriesCreated.map((m) => m.id);
@@ -549,7 +549,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
         for (const tc of taskResult.toolCallsMade) {
           if (tc.mcpServer !== undefined && tc.argsSent !== undefined) {
             console.log(
-              `  ${DIM}↳ sent to mcp:${tc.mcpServer}${tc.mcpOrigin !== undefined ? ` (${tc.mcpOrigin})` : ''} — ${truncateForLine(tc.argsSent)}${RESET}`,
+              `  ${DIM}↳ sent to mcp:${tc.mcpServer}${tc.mcpOrigin !== undefined ? ` (${tc.mcpOrigin})` : ''}: ${truncateForLine(tc.argsSent)}${RESET}`,
             );
           }
         }

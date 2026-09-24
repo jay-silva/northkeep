@@ -108,7 +108,7 @@ const program = new Command();
 
 program
   .name('northkeep')
-  .description('NorthKeep — your AI memory, in a vault you own.')
+  .description('NorthKeep: your AI memory, in a vault you own.')
   .version('0.2.0')
   .option('--vault <path>', 'vault file path', defaultVaultPath())
   // Bare `northkeep` (no subcommand) opens the branded launcher (M9a).
@@ -141,7 +141,7 @@ program
     console.log('⚠  BACK UP YOUR DEVICE SECRET NOW.');
     console.log(`   Copy ${deviceSecretPath()} somewhere safe (password manager, printed copy).`);
     console.log('   Opening this vault requires BOTH your passphrase AND that file.');
-    console.log('   If you lose either one, your vault is unrecoverable — by design.');
+    console.log('   If you lose either one, your vault is unrecoverable, by design.');
   });
 
 program
@@ -168,7 +168,7 @@ program
     }
     console.log('✓ Vault unlocked for background access via your macOS Keychain.');
     console.log('  Claude Desktop (and this CLI) can now open the vault without a passphrase.');
-    console.log('  Anyone using your logged-in Mac session has the same access — the same');
+    console.log('  Anyone using your logged-in Mac session has the same access, the same');
     console.log('  trust level as your saved browser passwords.');
     console.log('  Revoke anytime: northkeep lock');
   });
@@ -186,8 +186,8 @@ program
     );
     if (process.env.NORTHKEEP_MASTER_KEY || process.env.NORTHKEEP_PASSPHRASE) {
       console.log(
-        '⚠  NORTHKEEP_MASTER_KEY / NORTHKEEP_PASSPHRASE is set in this environment — ' +
-          'anything launched with those variables can still open the vault.',
+        '⚠  NORTHKEEP_MASTER_KEY / NORTHKEEP_PASSPHRASE is set in this environment. ' +
+          'Anything launched with those variables can still open the vault.',
       );
     }
   });
@@ -238,7 +238,7 @@ program
     await withVault(async (vault) => {
       const moved = vault.rescope(id, scope);
       vault.save();
-      console.log(`✓ [${moved.type}] memory is now in scope "${moved.scope}" — ${moved.id}`);
+      console.log(`✓ [${moved.type}] memory is now in scope "${moved.scope}" (${moved.id})`);
       console.log('  The previous version is kept as history (superseded), so the chain stays intact.');
     });
   });
@@ -305,7 +305,7 @@ program
       console.log(
         r.mode === 'semantic'
           ? '✦ semantic search (ranked by meaning)'
-          : `⚠ semantic unavailable — using keyword search (${r.reason}). Start Ollama + pull nomic-embed-text for meaning-based search.`,
+          : `⚠ semantic unavailable, using keyword search (${r.reason}). Start Ollama + pull nomic-embed-text for meaning-based search.`,
       );
       if (r.results.length === 0) {
         console.log('No memories found.');
@@ -413,7 +413,7 @@ program
 
 program
   .command('log')
-  .description('Show the MCP call log (what AI apps asked of your vault — never content)')
+  .description('Show the MCP call log (what AI apps asked of your vault, never content)')
   .option('-n, --count <n>', 'show the last N calls', '20')
   .action((options: { count: string }) => {
     const entries = readCallLog(Number(options.count) || 20);
@@ -524,7 +524,7 @@ providers
   .requiredOption('--base-url <url>', 'e.g. http://127.0.0.1:11434 or https://api.deepseek.com')
   .option('--model <model>', 'model id; omit to list what the endpoint offers')
   .option('--kind <kind>', 'openai-compatible | anthropic', 'openai-compatible')
-  .option('--api-key-stdin', 'read an API key from stdin (never from an argument — shell history)', false)
+  .option('--api-key-stdin', 'read an API key from stdin (never from an argument, which lands in shell history)', false)
   .action(async (options: { label: string; baseUrl: string; model?: string; kind: string; apiKeyStdin: boolean }) => {
     if (options.kind !== 'openai-compatible' && options.kind !== 'anthropic') {
       fail('kind must be openai-compatible or anthropic.');
@@ -537,7 +537,7 @@ providers
         for (const id of models) console.log(`  ${id}`);
         console.log('\nRe-run with --model <id> to add it.');
       } catch {
-        fail('Could not list models from that endpoint — is it running? Pass --model explicitly if you know it.');
+        fail('Could not list models from that endpoint. Is it running? Pass --model explicitly if you know it.');
       }
       return;
     }
@@ -554,7 +554,7 @@ providers
       ...(apiKey ? { apiKey } : {}),
     });
     const { tier, reason } = classifyEndpoint(endpoint.baseUrl);
-    console.log(`✓ Added ${endpoint.id} — ${endpoint.label} (${endpoint.model})`);
+    console.log(`✓ Added ${endpoint.id}: ${endpoint.label} (${endpoint.model})`);
     console.log(`  Privacy: ${tier} (${reason})${endpoint.hasKey ? ' · key stored in Keychain' : ''}`);
   });
 
@@ -591,7 +591,7 @@ program
 
 const mcpGroup = program
   .command('mcp')
-  .description('MCP servers your chat can use as tools (M11) — you configure them, never the model');
+  .description('MCP servers your chat can use as tools (M11): you configure them, never the model');
 
 mcpGroup
   .command('list', { isDefault: true })
@@ -603,7 +603,7 @@ mcpGroup
 mcpGroup
   .command('add')
   .description('Add an MCP server (approvals bind to its launch configuration)')
-  .argument('<id>', 'short id, lowercase letters/digits/hyphens — becomes the tool namespace')
+  .argument('<id>', 'short id, lowercase letters/digits/hyphens; becomes the tool namespace')
   .requiredOption('--command <path>', 'absolute path to the executable (PATH is never consulted)')
   .option('--arg <value...>', 'argument to pass (repeatable)')
   .option('--cwd <path>', 'working directory')
@@ -615,8 +615,8 @@ mcpGroup
 
 mcpGroup
   .command('add-remote')
-  .description('Add a remote MCP server over HTTPS (stores the address only — it is not contacted)')
-  .argument('<id>', 'short id, lowercase letters/digits/hyphens — becomes the tool namespace')
+  .description('Add a remote MCP server over HTTPS (stores the address only; it is not contacted)')
+  .argument('<id>', 'short id, lowercase letters/digits/hyphens; becomes the tool namespace')
   .requiredOption('--url <url>', 'the https endpoint, e.g. https://provider.example.com/mcp/v1')
   .option('--client-id <id>', 'OAuth client id you created with the provider')
   .option('--safe-read <tools>', 'comma-separated tools that only READ (may be remembered with "always")')
@@ -693,7 +693,7 @@ mcpGroup
 
 const toolsGroup = program
   .command('tools')
-  .description('Agent tools for "northkeep converse --tools" — everything ships disabled; you enable per tool');
+  .description('Agent tools for "northkeep converse --tools": everything ships disabled; you enable per tool');
 
 toolsGroup
   .command('list', { isDefault: true })
@@ -747,7 +747,7 @@ toolsGroup
 
 toolsGroup
   .command('brave-key')
-  .description('Store the Brave Search subscription token for web_search (interactive paste, a file, or stdin — never a shell argument)')
+  .description('Store the Brave Search subscription token for web_search (interactive paste, a file, or stdin; never a shell argument)')
   .option('--file <path>', 'read the key from a file (bulletproof: no shell or paste-escape mangling)')
   .action(async (options: { file?: string }) => {
     let key: string;
@@ -776,7 +776,7 @@ toolsGroup
     // A valid Brave token has no spaces; catch a shell-mangled or partial paste
     // loudly instead of storing a broken key that fails opaquely later.
     if (/\s/.test(key)) {
-      fail('That key contains a space — it looks mangled or partial. Re-copy it and use --file if a paste keeps breaking.');
+      fail('That key contains a space, so it looks mangled or partial. Re-copy it and use --file if a paste keeps breaking.');
     }
     setEndpointKey(BRAVE_KEY_ID, key);
     console.log(`✓ Brave Search key stored (${key.length} chars) in your Keychain. Enable search: northkeep tools enable web_search`);
@@ -784,7 +784,7 @@ toolsGroup
 
 const models = program
   .command('models')
-  .description('Connect and install AI models — guided hosted setup and 1-click local install');
+  .description('Connect and install AI models: guided hosted setup and 1-click local install');
 
 models
   .command('list', { isDefault: true })
@@ -879,7 +879,7 @@ sync
 
 sync
   .command('billing')
-  .description('Manage your subscription — update card or cancel (Stripe billing portal)')
+  .description('Manage your subscription: update card or cancel (Stripe billing portal)')
   .action(async () => {
     await syncBilling(fail);
   });

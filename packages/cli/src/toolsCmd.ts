@@ -41,7 +41,7 @@ export function toolsList(): void {
       `  ${name.padEnd(12)} ${enabled ? `${GREEN}enabled${RESET}` : `${DIM}disabled${RESET}`}`,
     );
   }
-  console.log(`\n${DIM}Stored in ${toolsConfigPath()} (settings only — no secrets, no content).${RESET}`);
+  console.log(`\n${DIM}Stored in ${toolsConfigPath()} (settings only: no secrets, no content).${RESET}`);
   console.log(`${DIM}Enable with: northkeep tools enable <name> · use with: northkeep converse --tools${RESET}`);
   if (KNOWN_TOOL_NAMES.some((n) => config.tools[n]?.enabled)) {
     console.log(
@@ -96,7 +96,7 @@ export function toolsGrants(): void {
       `  ${g.tool.padEnd(20)} ${subject.padEnd(28)} ${scope} · granted ${g.createdAt.slice(0, 10)}`,
     );
   }
-  console.log(`\n${DIM}Stored in ${permissionsPath()} (settings only — no secrets, no content).${RESET}`);
+  console.log(`\n${DIM}Stored in ${permissionsPath()} (settings only: no secrets, no content).${RESET}`);
   console.log(
     `${DIM}Revoke with: northkeep tools revoke <tool> <host|mcp:server> · everything: northkeep tools revoke --all${RESET}`,
   );
@@ -182,7 +182,7 @@ export function toolsBudget(
         `  ${name.padEnd(12)} used ${usage} today · ${b.perConversationCap}/conversation`,
       );
     }
-    console.log(`\n${DIM}Stored in ${budgetPath()} (settings only — no secrets, no content).${RESET}`);
+    console.log(`\n${DIM}Stored in ${budgetPath()} (settings only: no secrets, no content).${RESET}`);
     console.log(
       `${DIM}Change with: northkeep tools budget <tool> --daily <n> --per-conversation <n>${RESET}`,
     );

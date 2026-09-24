@@ -123,7 +123,7 @@ describe('M2 acceptance — importers', () => {
     expect(result.stdout).toContain('Found 3 conversations');
     expect(result.stdout).toContain('memory candidates');
     expect(result.stdout).toContain('duplicates dropped'); // conv-2/conv-3 collapse
-    expect(result.stdout).toContain('Dry run — nothing was written');
+    expect(result.stdout).toContain('Dry run: nothing was written');
     expect(result.stdout).not.toContain('DEGRADED');
     expect((await cli(['list'])).stdout).toContain('No memories found');
   });
