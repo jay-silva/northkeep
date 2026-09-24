@@ -78,6 +78,9 @@ every milestone; if a limit is removed, say when and how.*
 - **Month names are read only as "Sep 20".** Month first, title case:
   "sep 20", "SEP 20" and "20 Sep" produce no dated item, so that words like
   "may" and "march" are never read as dates.
+- **Checked tasks are not dated items.** A line written as a checked Markdown
+  task (`- [x]`) is treated as done and skipped, even if its date is still
+  ahead; a done item written as plain text still shows.
 - **The date sweep is literal.** "Next Tuesday" and "Q3" are not dates. A
   month-name date without a year resolves to the occurrence nearest today,
   so one more than six months away can land in the wrong year.

@@ -85,8 +85,10 @@ A month-name date without a year resolves to the occurrence nearest `now`:
 this year, last year or next year, whichever is closest, ties to the later
 one. So `Sep 20` read on 2026-09-23 is 2026-09-20 and shows as overdue at
 the top of the list, and `Jan 5` read on 2026-12-20 is 2027-01-05. An
-impossible date (`2026-02-30`) is not a match. One row per match: date,
-slug and the cut line. Sorted ascending by date, ties by slug then line. Dates in
+impossible date (`2026-02-30`) is not a match. One row per distinct
+date in a line (a line naming the same date twice is one item): date, slug
+and the cut line. A checked Markdown task (`- [x]`, `* [X]`, `1. [x]`) is
+done and gives no row (amended 2026-09-24 after the first real board). Sorted ascending by date, ties by slug then line. Dates in
 Decisions and Log are ignored: those are the record, not the plan.
 
 **Open sessions.** Exactly the derivation ADR 0052 Decision 2 defines and

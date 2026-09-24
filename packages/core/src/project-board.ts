@@ -189,13 +189,17 @@ export function sweepDates(line: string, now: Date): string[] {
 }
 
 /** Dated rows for one project's Next Actions and Open Questions, one per match. The sweep runs on the cut line. */
+/** A checked Markdown task (`- [x]`, `* [X]`, `1. [x]`): done, so not something due. */
+const CHECKED_TASK = /^(?:[-*+]|\d+[.)])\s+\[[xX]\]/;
+
 export function datedItems(project: string, view: Pick<BoardView, 'next_actions' | 'open_questions'>, now: Date): BoardDatedRow[] {
   const rows: BoardDatedRow[] = [];
   for (const body of [view.next_actions, view.open_questions]) {
     for (const raw of splitBoardLines(body)) {
       const line = tameBoardText(raw, BOARD_LINE_MAX_CHARS);
-      if (line.length === 0) continue;
-      for (const date of sweepDates(line, now)) rows.push({ date, project, line });
+      if (line.length === 0 || CHECKED_TASK.test(line)) continue;
+      // One row per distinct date: a line naming the same date twice is one item.
+      for (const date of new Set(sweepDates(line, now))) rows.push({ date, project, line });
     }
   }
   return rows;

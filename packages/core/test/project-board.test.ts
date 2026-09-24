@@ -93,9 +93,18 @@ describe('text made safe', () => {
     expect(rows.map((r) => r.date)).toEqual(['2026-10-02']);
     expect(rows.every((r) => r.line.length <= 160)).toBe(true);
   });
-  it('one row per match: a repeated line or a repeated date is not collapsed', () => {
+  it('one row per distinct date in a line: repeated lines stay separate, a date named twice in one line is one row', () => {
     const rows = datedItems('p', { next_actions: '- 2026-10-01 a\n- 2026-10-01 a\nOct 1 or 2026-10-01', open_questions: '' }, NOW);
-    expect(rows.map((r) => r.date)).toEqual(['2026-10-01', '2026-10-01', '2026-10-01', '2026-10-01']);
+    expect(rows.map((r) => r.date)).toEqual(['2026-10-01', '2026-10-01', '2026-10-01']);
+    const two = datedItems('p', { next_actions: '- move 2026-10-01 to 2026-10-03', open_questions: '' }, NOW);
+    expect(two.map((r) => r.date)).toEqual(['2026-10-01', '2026-10-03']);
+  });
+  it('skips checked tasks, which are done, and keeps open ones and plain lines', () => {
+    const rows = datedItems('p', {
+      next_actions: '- [x] shipped 2026-10-01\n* [X] done 2026-10-02\n1. [x] also done 2026-10-03\n- [ ] still due 2026-10-04\n- plain 2026-10-05\n- note about [x] on 2026-10-06',
+      open_questions: '',
+    }, NOW);
+    expect(rows.map((r) => r.date)).toEqual(['2026-10-04', '2026-10-05', '2026-10-06']);
   });
   it('splits Next Actions on every terminator', () => {
     const rows = datedItems('p', { next_actions: 'a 2026-10-01\u2028b 2026-10-02\u0085c 2026-10-03\rd 2026-10-04', open_questions: '' }, NOW);
