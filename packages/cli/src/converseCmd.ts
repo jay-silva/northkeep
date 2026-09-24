@@ -1,6 +1,7 @@
 import readline from 'node:readline/promises';
 import { DIM, GREEN, YELLOW, RED, RESET, createSpinner } from './ui.js';
 import { collectMcpToolsForCli } from './mcpCmd.js';
+import { createReplLines } from './converseInterrupt.js';
 import type { Vault } from '@northkeep/core';
 import { createOllamaClient, type OllamaClient } from '@northkeep/librarian';
 import {
@@ -163,31 +164,11 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
   // M9d: the last concierge tip we surfaced, so we don't nag it every turn.
   let lastTip: string | null = null;
 
-  // Queue lines instead of rl.question(): while a command awaits something
-  // async (e.g. :models hitting the endpoint), readline would silently DROP
-  // lines that arrive mid-await — breaking pasted input and piped scripting.
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  const pending: string[] = [];
-  const waiters: Array<(line: string | null) => void> = [];
-  let stdinClosed = false;
-  rl.on('line', (l) => {
-    const w = waiters.shift();
-    if (w) w(l);
-    else pending.push(l);
-  });
-  rl.on('close', () => {
-    stdinClosed = true;
-    // Stdio MCP servers are child processes; leaving them running after the
-    // REPL exits would strand them holding a vault handle.
-    void closeMcp?.();
-    while (waiters.length) waiters.shift()!(null);
-  });
-  const nextLine = (promptText: string): Promise<string | null> => {
-    if (pending.length > 0) return Promise.resolve(pending.shift()!);
-    if (stdinClosed) return Promise.resolve(null);
-    process.stdout.write(promptText);
-    return new Promise((r) => waiters.push(r));
-  };
+  // Stdio MCP servers are child processes; leaving them running after the REPL
+  // exits would strand them holding a vault handle.
+  const lines = createReplLines(rl, (text) => process.stdout.write(text), () => void closeMcp?.());
+  const nextLine = lines.nextLine;
 
   // The spinner fills every silent wait: after send until the first token,
   // and between agent steps while a tool runs or the model plans. It must be
@@ -489,20 +470,19 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       let taskResult: TaskResult | null = null;
       let result: TurnResult;
       if (taskTools.length > 0) {
-        // Ctrl-C cancels the RUNNING TASK rather than killing the REPL: the
-        // loop's own abort path denies any pending approval and appends
-        // "Cancelled by the user." (task.ts). Without this the CLI passed no
-        // signal at all, so a mid-task Ctrl-C could only kill the process —
-        // and KNOWN-LIMITS claimed otherwise. The listener is scoped to the
-        // task and removed in `finally`, so it can never accumulate across
-        // turns or swallow Ctrl-C at the prompt.
+        // Ctrl-C cancels the task, not the REPL: readline's SIGINT at a terminal
+        // (raw mode sends no signal), the process signal otherwise. Releasing the
+        // approval prompt stops the next line going to a dead waiter.
         const controller = new AbortController();
-        const onSigint = (): void => {
+        const cancel = (): void => {
+          if (controller.signal.aborted) return;
           spinner.stop();
           console.log(`\n${YELLOW}[cancelling…]${RESET}`);
           controller.abort();
+          lines.releaseWaiters();
         };
-        process.on('SIGINT', onSigint);
+        const endTask = lines.beginTask(cancel);
+        process.on('SIGINT', cancel);
         try {
           taskResult = await runTask({
             ...turnArgs,
@@ -515,7 +495,8 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
             signal: controller.signal,
           });
         } finally {
-          process.off('SIGINT', onSigint);
+          endTask();
+          process.off('SIGINT', cancel);
         }
         result = taskResult;
       } else {

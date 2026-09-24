@@ -428,10 +428,11 @@ every milestone; if a limit is removed, say when and how.*
   host, listed by `northkeep tools grants`, and revocable at any time; every call
   still appears in the transcript and the audit log. Prefer "once" for a host you
   do not already trust.
-- **Disconnect aborts the task (M10e).** In the CLI at an interactive
-  terminal, Ctrl-C closes the REPL's input rather than cancelling the task:
-  the pending approval and any later one in that task are denied, and the
-  REPL exits when the task ends. In the web GUI, closing
+- **Disconnect aborts the task (M10e).** In `northkeep converse --tools`,
+  Ctrl-C while a task is running cancels that task: a pending approval is
+  denied, tool calls not yet run are recorded as "Cancelled by the user.", and
+  you are back at the prompt. Ctrl-C at an idle prompt, or during a reply
+  without `--tools`, ends the REPL (after that reply finishes). In the web GUI, closing
   the tab or reloading fires the response 'close' event, which aborts the loop
   and sweeps that turn's pending approvals; a late approve POST for a swept id
   404s (the page says the request expired and to send again). An unanswered approval still denies after the
