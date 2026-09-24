@@ -40,6 +40,17 @@ is identical either way. See the open-questions note.
   `tier2Degraded` — the CLI and GUI say so unmissably (invariant #6). Never a
   silent downgrade.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the Tier 1 list
+above is the M3 list. In release 0.22.0 (ADR 0059,
+packages/redact/src/tier1.ts), Tier 1 always masks API keys and tokens that
+carry a known issuer prefix or format (36 issuer prefixes such as OpenAI,
+Anthropic, Stripe, GitHub, AWS and Slack, plus private-key blocks, Google API
+keys and JWTs), payment card numbers that pass the Luhn check, US Social
+Security numbers, IBANs, email addresses, phone numbers, IP addresses, GPS
+coordinates, street addresses, ZIP codes next to an address, and labeled
+record and account numbers. It does not catch a key with no recognizable
+prefix, a password, or a secret written in ordinary words.
+
 ## Decision 3: Restore is asymmetric, mapping stays with the caller
 
 Tier-2 pseudonyms are `restorable: true` and round-trip; Tier-1 secrets are

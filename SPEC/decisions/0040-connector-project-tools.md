@@ -24,6 +24,13 @@ NorthKeep is what makes a live working document visible to the connector.
 `project_update` merges into that document. The desktop fold supersedes
 the local live document so the vault keeps exactly one live working row.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** superseded by
+ADR 0050, which ships in release 0.22.0. A connected app can now create a
+project with the hosted `project_create` tool
+(apps/connector-server/src/mcp.ts:668-683). The status line above records
+that amendment; this sentence and the matching "Enforced exactly" bullet
+below describe M14 as built.
+
 Two load-bearing patches from the adversarial review are pinned here:
 
 1. No encrypted-envelope rider. The pending row holds the full merged
@@ -161,6 +168,8 @@ a module`). `vercel.json` `buildCommand` is `true` so Vercel compiles
 - Every stored update is ciphertext under the per-account DEK, same envelope, same custody chain as every other row. The row envelope format did not change.
 - Unshare deletes the scope's rows including a not-yet-delivered project update; the revoke wins.
 - The per-entry push cap of 65536 bytes applies only to working-type rows in valid project scopes; the ordinary 8192-byte cap and the 4 MB per-push total are unchanged, as is the `memory_remember` cap.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** two bullets above no longer hold in the shipped code. "Cloud cannot create a project" was superseded by ADR 0050: the hosted `project_create` writes the first document (apps/connector-server/src/mcp.ts:668-683). The 65536-byte cap now covers every row in a valid project scope, whatever its type (apps/connector-server/src/create-server.ts:97 and 568; ADR 0045 addendum 2026-09-19). The 8192-byte cap for other rows and the `memory_remember` cap are unchanged.
 
 **Heuristic:**
 - If a project scope abnormally holds more than one live working row (or more than one pending row after a concurrent-update race), the base document is chosen deterministically (pending first, then newest created, then highest entry id). Local supersession normally guarantees exactly one, so this fires only in an already-degenerate scope and never loses data: unchosen rows remain stored.

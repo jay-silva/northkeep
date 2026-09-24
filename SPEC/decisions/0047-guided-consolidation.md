@@ -2,6 +2,8 @@
 
 Status: implemented, integrated, and accepted locally by the owner on 2026-09-10; not released. Pre-implementation adversarial review completed before code changes. Owner approved the workflow and C sidebar/A vertical queue/Source memories/Proposed memory composition. Milestones 1 and 2 accepted. Rules version 2026-09-07.1.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** "not released" is stale. This work is merged on main after v0.21.0 and ships for the first time in release 0.22.0. The owner's local acceptance on 2026-09-10 is recorded in `docs/navigation-acceptance.md:46-48`.
+
 ## Decision
 
 Add a distinct guided consolidation workflow without changing milestone-1 reports. Operate on 2-8 full, live source snapshots of the same type in one private, non-project scope. Check current sharing and source identity at both draft and apply. A focused instruction (maximum 2,000 characters) guides local-model suggestions only. No remote model fallback, tools, cross-scope writes or autonomous apply.

@@ -34,6 +34,8 @@ computable from data the vault already holds. A third question, do two
 projects now claim contradicting things, is not computable and needs a
 model; that is ADR 0056.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** citation drift. The `project_list` tool is registered at packages/mcp-server/src/server.ts:588-613, and `listProjectViews` is at packages/core/src/project-handoff.ts:257-259.
+
 ## Decision 1: Five sections, computed without a model
 
 Pure functions in `packages/core`, over `ProjectView` and `ProjectSummary`
@@ -113,6 +115,8 @@ that nothing is open. The same reader replaces the one behind
 can never fire today because `readCallLog` never throws (review r3, note);
 that fix ships ahead of the board as an ADR 0052 bug fix.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the strict reader is `readCallLogStrict` (packages/mcp-server/src/log.ts:112-120). It returns the rows, `[]` only on `ENOENT`, and throws on any other read error; it does not return `{ rows }` or `{ unavailable: reason }`. `collectBoard` turns the throw into `{ unavailable: BOARD_CALL_LOG_UNREADABLE }`, a fixed sentence (packages/mcp-server/src/project-board-run.ts:21, 57-63). `readCallLog` is now at log.ts:96-105. The `project_resume` fix shipped (106fae3): resume uses `readCallLogStrict` at packages/mcp-server/src/server.ts:739 and its unreadable note at :747 can fire, so "can never fire today" no longer describes the code.
+
 **Drafts.** Every project with `draft: true` (ADR 0052 Decision 4), with the
 date of its current revision.
 
@@ -128,6 +132,8 @@ contributing nothing to the other sections:
   document. The board catches that refusal per project, so one bad document
   never takes the rest of the board with it. Only `ProjectHandoffError`
   refusals are caught this way; any other error still fails the call.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** citation drift in this Decision. `ProjectSummary` is at packages/core/src/project-handoff.ts:80 and now also carries `imported` (derived at :259); `ProjectView.next_actions` and `open_questions` are at :65 and :67. The duplicate-section refusal comes from `owned` (:134-136, throwing `ProjectHandoffError` through `fail` at :113), which `getProjectView` calls at :226; the per-project catch is packages/mcp-server/src/project-board-run.ts:47-52.
 
 ## Decision 2: Two surfaces, both read-only
 
@@ -157,6 +163,8 @@ the owner's full view. That difference is stated, not implied.
 **What the board returns.** Slugs, dates, revision ids, session ids, hosts,
 one-line statuses and dated lines. Never a whole document, never a Log, never
 a Decisions body, never a `content` field.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the payload carries no revision id. Its rows hold slugs, dates, session ids, hosts, open and last-read times, one-line statuses, dated lines, the activity source and the repair reason (packages/core/src/project-board.ts:37-41), plus `generated_at`, `stale_days`, `done_rule` and each section's `total` and `shown` (project-board.ts:44-53). The current revisions of the projects shown go only to the call log's `result_ids` (packages/mcp-server/src/project-board-run.ts:83, server.ts:640). The same applies to "revision ids" in Decision 3.
 
 ## Decision 3: Every string is made safe and capped before it is returned
 
@@ -213,6 +221,8 @@ reading of the row shapes, whose size script is not in the repository, so
 the two figures are not the same fixture. No figure is claimed for a typical
 board; acceptance step 2 measures the real one.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the build figures above predate 312a710, which lengthened `BOARD_DONE_RULE` (packages/core/src/project-board.ts:24-27) by 58 characters after they were recorded. On HEAD 0b95c01, `pnpm vitest run packages/mcp-server/test/project-board.test.ts packages/cli/test/projectsBoard.test.ts` measures 117,948 bytes for the widest variant (Tier-1 off and on alike), 108,614 off and 107,964 on for the mixed variant, and 77,791 bytes for the CLI's `--json`: each exactly 58 bytes above the figures recorded here. The ceiling is unchanged at 131,072 (`BOARD_WIRE_CEILING`, packages/mcp-server/test/board-fixture.ts:12), a margin of about 13 KB. 0b95c01 does not change the fixture's row counts: each fixture line names one date and none is a checked task.
+
 **Document size does not reach the payload.** The second pass found that
 `PROJECT_DOC_MAX_CHARS` is enforced only on the project tool path, so a
 `remember --scope project:x` can store a document of any size. For D1 that
@@ -234,6 +244,8 @@ review saw 120 units become 179) and a dated line can lose the date it was
 found in (two adjacent ISO dates can mask as a card number). The `date`
 field itself stays exact, and the wire ceiling is tested with masking on. The CLI
 masks the same way when `NORTHKEEP_REDACT_TIER=1` is set.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** `maskProjectPayload` is at packages/mcp-server/src/server.ts:126-128 and is applied to project tool results in `run()` at server.ts:279 and 300. The identifier set is `PROJECT_IDENTIFIER_KEYS` in packages/mcp-server/src/project-mask.ts:8-16 (shared with the CLI board), and the board added `date`, `last_activity`, `activity_source`, `reason` and `generated_at` to it, not only `date`. The board payload carries no revision id (row types at packages/core/src/project-board.ts:37-41), so "revision ids" here names nothing the board returns.
 
 ## Decision 4: The board is audited, and it is not a project read
 
@@ -269,6 +281,8 @@ out ("through a local MCP server").
 | An unreadable call log never shows as "no open sessions", and a missing one shows as none | Strict reader (Decision 1). Over MCP the only unreadable state that reaches the handler is a log the process can append to but not read, since an unappendable log refuses the call in `run()` (Decision 4); the tests use a real write-only (`0200`) log file, never a stubbed reader, and assert `unavailable` with the other sections present on `project_board` and the unreadable note on `project_resume` (shipped in 106fae3). CLI tests also use `chmod 000` and a directory at the log path, since the CLI appends nothing. A test with no log file asserts an empty list |
 | A board call is logged and opens no session | Decision 4; test calls `project_board`, asserts one call-log row with `disclosed_scopes`, and asserts `openSessions` is unchanged |
 | `project_board` output respects Tier-1 masking | `maskProjectPayload`; seeded-secret test over every text field, and identifiers asserted exact |
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** in the hostile-text row, the lone surrogate is not planted in a status or a Next Actions line. The vault stores UTF-8, so a lone surrogate in a document becomes U+FFFD before the board reads it; the test plants it in an open-session host in the call log instead, and the other classes in the status and Next Actions lines (packages/mcp-server/test/project-board.test.ts:190-206). The Tier-1 row's hosts are identifier keys and are asserted exact, not masked (project-board.test.ts:315; packages/mcp-server/src/project-mask.ts:13).
 
 ## What this deliberately does not build
 

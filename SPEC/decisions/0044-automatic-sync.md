@@ -3,6 +3,12 @@
 - **Date:** 2026-09-03
 - **Status:** Accepted by Jay 2026-09-03 ("Push and accepted"). Becomes the
   next milestone. Product code follows this record.
+  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** implemented
+  from 3e31353 through the eleventh-review fixes (a5138a6) and the live
+  verification record (a64998d), and shipped in release 0.21.0 (all are
+  ancestors of tag v0.21.0). The "Found in use" repair below (74cb81f:
+  `repairRecord`, packages/sync/src/auto.ts:552, and the 10 s shutdown
+  budgets) was committed after v0.21.0 and ships in release 0.22.0.
 - **Deciders:** Jay (product owner), adversarial reviewer
 - **Extends:** ADR 0009 (sync protocol), ADR 0038 addendum 2026-08-26
   (sync generation counter, phone last-writer-wins), M6-2 mobile conflict
@@ -80,6 +86,18 @@ A failed push is not retried in a tight loop. It backs off (30 s, 2 min,
 10 min, then hourly) and surfaces in the GUI sync indicator. A 402 or 403
 stops retrying until the next explicit user action, since retrying a paywall
 is noise.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** three rules
+from the fix rounds below narrow this Decision in the shipped code. Only the
+account's default vault syncs automatically (`isAutoSyncVault`,
+packages/sync/src/auto.ts:181 and packages/cli/src/autoPush.ts:38); other
+vaults keep manual push and pull. The CLI does not debounce: a writer
+command makes one push on exit and waits at most 2 s for the sync lock
+(`SYNC_LOCK_WAIT_MS`, packages/cli/src/autoPush.ts:32). A 402 or 403 pause
+ends on the next explicit user action. No timer lifts it: once 10 minutes
+have passed, the next wake or write gets one more attempt, and a fresh
+refusal pauses again (`PAUSE_RETRY_MS` and `expirePause`,
+packages/sync/src/auto.ts:126 and 628-631).
 
 ## Decision 2: Both devices pull on wake, fast-forward only
 
@@ -159,6 +177,9 @@ retry; it stays until the next success or user tap.
   the next milestone per the EAS batching rule.
 - The GUI sync panel gains the age line and a diverged message that never asserts this Mac changed.
 - The CLI is unchanged except that `northkeep sync status` reports the age.
+  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the CLI also
+  pushes once on exit after a write to the default vault
+  (packages/cli/src/autoPush.ts), as the Implementation section records.
 
 ## Open questions, with the defaults that apply unless Jay overrides
 
@@ -847,6 +868,12 @@ hosted push and pull have now run for a real account. What remains
 is rule 2 of the review skill: one live push and one live pull against the
 hosted server with Jay's own account, which no throwaway credential can
 perform (an unknown bearer is answered 402, not 401).
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the paragraph
+above contradicts the Live verification section: the live push and pull
+with Jay's own account already ran on 2026-09-04. What that section left
+unexercised live is a real 409 and the phone's new client on a device; this
+repository holds no record of either run.
 
 ## Status of this record
 

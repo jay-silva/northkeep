@@ -2,6 +2,8 @@
 
 Status: implemented, verified, and accepted locally by the owner on 2026-09-10; release pending. Screen designs approved by the owner. Extends 0043 and 0015. This is the first curation milestone; local project coordination is implemented separately in ADR 0048.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** "release pending" is stale. This work is merged on main after v0.21.0 and ships for the first time in release 0.22.0. The owner's local acceptance on 2026-09-10 is recorded in `docs/curation-acceptance.md:3`.
+
 ## Boundaries
 
 Reuse the token-authenticated, unlocked local web session. New review collection/history/action routes require the same gate as existing memory edits. No new provider, dependency, credentials, sharing change, crypto primitive or database schema is planned. Review-model text and source memories remain untrusted data and are rendered as text.
@@ -29,6 +31,8 @@ After/retry reconciliation uses full entry identity and content, including type,
 ## History and restoration
 
 Expose retained local changes across review runs with complete before/after text. Restore an accepted edit with a new superseding revision only if its recorded result is still the live head. Do not restore an entire vault or alter historical rows. For an explicitly removed duplicate, a restore creates a new memory from the retained before-snapshot, with recovery provenance; the forgotten row remains forgotten. Refuse after a later incompatible change. Restoration itself is an idempotent prepared/committed operation and keeps history. At least one duplicate member must remain live; the UI names the retained member and explicitly confirms the one removed member. No bulk write action.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** since c1954f2 (owner request 2026-09-13) a duplicate group has a "Remove all" action. After one confirmation that lists every member, it forgets each member in turn, one prepared/committed receipt per removal, with no survivor (apps/web/static/index.html:3618-3621). `survivor_id` is now optional on a forget, and when present it must still name another member of the group (packages/librarian/src/reviewSession.ts:143-146). Each removal stays restorable from change history (e2e/curation.test.ts:174). "At least one duplicate member must remain live" and "No bulk write action" no longer hold for duplicate groups; there is still no bulk accept or apply across proposals.
 
 ## Validation
 

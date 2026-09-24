@@ -39,6 +39,14 @@ archive per roll; a roll happens once every ten or so sessions on a busy
 project. Nothing is summarized or dropped by the tool. Summarizing an old
 archive is a job for the review pass (ADR 0043), on request, never here.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the review pass
+excludes every project scope (packages/librarian/src/review.ts:70-72,
+apps/web/src/curationApi.ts:99), so no shipped tool summarizes an archive.
+The Mac Memories search also leaves project scopes out (`exclude_projects`,
+apps/web/src/api.ts:564, ADR 0049); an archive is found through
+`memory_retrieve`, `memory_list` or `project_get` with `history: true`,
+not through the app's Memories search.
+
 ## Decision 3: `project_get` returns the index by default and history on request
 
 `project_get` gains an optional `history` flag. Off, it returns the live
@@ -46,12 +54,30 @@ document as today. On, it also returns the scope's archive memories, newest
 first. The session contract keeps calling it without the flag at session
 start.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the session
+contract now calls `project_resume` at session start, not `project_get`
+(packages/mcp-server/src/project-recipe.ts:18-19, ADR 0048 and ADR 0052).
+Without `history`, resume returns only an archive count and dates
+(`archive_summary`, packages/core/src/project-handoff.ts:234); with
+`history: true` it returns up to 20 archives. `project_get` behaves as this
+Decision says.
+
 ## Decision 4: The tool asks for short entries
 
 The `log_entry` description asks for a few hundred characters and says that
 detail belongs in its own episodic memory in the project scope. The tool
 reports when it rolled and where the archive went, so an agent that just
 lost visibility of an entry knows how to get it back.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** only the hosted
+connector's `project_update` reports the roll ("Archived N older log entries
+to <id>", apps/connector-server/src/mcp.ts:967-968). Since the ADR 0048
+rewrite (caa8646) the local `project_update` returns the project view, which
+carries an archive count (`archive_summary`) but no roll count and no
+archive id (packages/core/src/vault.ts:597-600; confirmed by a probe that
+rolled a temp vault's Log). Local `project_checkpoint` and `project_wrap`
+receipts name the archive in `archive_ids` (vault.ts:900). Acceptance step 2
+below holds for the hosted connector only.
 
 ## Where it lives
 
@@ -81,6 +107,10 @@ From Claude Code with the NorthKeep project scope granted:
 - KNOWN-LIMITS gains the roll rule and the "one archive per roll" note.
 - The Command Repo file `projects/<name>.md` is unaffected; it keeps the
   full log by hand, as before.
+  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the Command
+  Repo became a read-only archive on 2026-09-23 (owner decision, recorded in
+  the NorthKeep project instructions) and no longer keeps project logs;
+  NorthKeep's project documents and their archives are the record.
 
 ## Addendum 2026-09-19: archives and the connector push cap
 

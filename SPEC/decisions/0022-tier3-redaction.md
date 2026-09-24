@@ -23,6 +23,16 @@ with models only ever adding masks on top**. That is what Tier 3 does.
 
 - **Tier 1** — deterministic secrets (email, SSN, card, phone, IP, IBAN, API
   key). Unchanged. Still the leak-test gate.
+  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** Tier 1 has
+  changed since this ADR (ADR 0059, packages/redact/src/tier1.ts). It always
+  masks API keys and tokens that carry a known issuer prefix or format (36
+  issuer prefixes such as OpenAI, Anthropic, Stripe, GitHub, AWS and Slack,
+  plus private-key blocks, Google API keys and JWTs), payment card numbers
+  that pass the Luhn check, US Social Security numbers, IBANs, email
+  addresses, phone numbers, IP addresses, GPS coordinates, street addresses,
+  ZIP codes next to an address, and labeled record and account numbers. It
+  does not catch a key with no recognizable prefix, a password, or a secret
+  written in ordinary words.
 - **Tier 2** — Tier 1 + NER pseudonymization (unchanged) + **DOB-labeled dates
   → year only** (deterministic: a date within reach of "DOB", "date of birth",
   "born", "birthdate" labels becomes `[DATE-1948]`).

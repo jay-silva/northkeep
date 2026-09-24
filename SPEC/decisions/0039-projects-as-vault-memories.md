@@ -45,6 +45,19 @@ Edits go through the existing supersession primitive (`Vault.editMemory`,
 ADR 0015). Updating a project appends a new live entry and keeps the previous
 document as superseded history. The provenance chain stays intact.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** three rules in
+this Decision changed in releases after this ADR. More than one live
+`working` entry in a project scope is now refused as a conflict, not
+resolved newest-wins (`project_conflict`,
+packages/core/src/project-handoff.ts:225, ADR 0048). Project writes go
+through the dedicated `Vault.updateProject` and `Vault.checkpointProject`
+primitives, not `editMemory` (packages/core/src/vault.ts:597, 822,
+ADR 0048). Superseded history is compacted on every supersession: the
+newest five superseded revisions are kept, plus any that a handoff receipt
+names; older ones are blanked to tombstones with the chain intact
+(vault.ts:165 and 773-779, ADR 0051). A draft line and a writer block were
+also added (ADR 0052).
+
 ## Decision 2: MCP surface is `memory_edit` plus three project tools (local only)
 
 Local MCP (`packages/mcp-server`) gains:
@@ -66,6 +79,15 @@ the user names a project; call `project_update` with status, next actions, and
 a log entry when a working session ends. A standing-instruction string in
 `project-recipe.ts` says the same thing so it can be stored as a procedural
 memory.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** in 0.22.0,
+`project_update` creates a project only when called with
+`expected_revision: null`, and it needs the current revision to change an
+existing one (packages/core/src/vault.ts:881-885). A separate
+`project_create` tool also exists (packages/mcp-server/src/server.ts:861).
+The standing instruction now says to call `project_resume` at session start
+and `project_wrap` at session end
+(packages/mcp-server/src/project-recipe.ts:18-26, ADR 0048).
 
 The Cloud Connect connector does **not** grow these tools this milestone.
 Claude.ai and ChatGPT see a project only if its scope is Shared, through the
@@ -89,6 +111,14 @@ past that size with a message that tells the caller to prune the Log. The
 server must not silently truncate. Every update already stores a full
 superseded copy (ADR 0015); the cap keeps a long-running project's doc from
 growing without bound. The ~4 MB sync cap still bounds the whole vault.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** superseded by
+ADR 0045. An over-cap update now moves the oldest Log entries into an
+archive memory instead of being refused. It is refused only when the
+hand-written sections alone exceed the cap
+(packages/core/src/project-doc.ts:241-263). Every update no longer keeps a
+full superseded copy forever: ADR 0051 compaction keeps the newest five
+(packages/core/src/vault.ts:165).
 
 ## What this milestone deliberately does not build
 
@@ -154,6 +184,9 @@ with the chain intact.
   confirmation already lives.
 - Long-running projects need occasional Log pruning by hand. The tool will
   say so rather than drop history on the floor.
+  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** superseded by
+  ADR 0045. The Log rolls into archive memories automatically, so no hand
+  pruning is needed.
 - Two machines editing the same project before sync still lose one side
   (whole-vault last-writer-wins). Same limit as every memory; projects make
   it more visible because they change often. Recorded in KNOWN-LIMITS.

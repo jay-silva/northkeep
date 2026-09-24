@@ -7,6 +7,13 @@
   fixed (2026-09-21). Jay
   chose wave 1 ("M-C+E and M-F together") on 2026-09-21 after the
   migration-prerequisite scoping.
+
+  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** "pending"
+  is stale. ADR 0052 is merged to main as dd4e78b (2026-09-22) and ships
+  for the first time in 0.22.0. The merge commit message records the
+  acceptance: "Accepted by Jay 2026-09-22 after a seven-step acceptance
+  run". docs/adr-0052-acceptance.md holds its author's 2026-09-21 run,
+  not Jay's; no separate transcript of Jay's run is in docs/.
 - **Deciders:** Jay (product owner), Claude Code
 - **Extends:** ADR 0039 (projects as vault memories), ADR 0042 (contract
   installer), ADR 0045 (log rolling), ADR 0048 (handoff receipts),
@@ -63,6 +70,13 @@ rather than accepting them quietly, and `readProjectProvenance`
 (project-handoff.ts:158-169) returns null for a stored block that
 violates them, so a block written before this rule reads as absent
 rather than as a record.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the citations
+have moved: `validateProjectWriter` is packages/core/src/project-handoff.ts:152-159
+and `readProjectProvenance` is project-handoff.ts:165-176. The sanitizer
+(`tameOneLine`, packages/core/src/text-safe.ts:21-33) also removes unpaired
+surrogate halves and counts both caps in UTF-16 units without splitting a
+pair, per the third pass's amendments; core refuses unpaired halves too.
 
 The block is written from a caller-supplied `writer` on the request
 (`{ host, host_version?, session_id }`), validated in core, and never
@@ -133,6 +147,26 @@ validates a stored block (packages/core/src/project-handoff.ts:158-168):
    fails every tool before the derivation is reached; see the scar tissue
    below.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** rule 6 and the
+sentence after it are stale. Since commit 106fae3 the derivation reads the
+log with `readCallLogStrict` (packages/mcp-server/src/log.ts:112-121, called
+at packages/mcp-server/src/server.ts:739), which returns an empty list only
+when the file does not exist and throws on any other read error. The catch
+at server.ts:738-742 then omits `open_sessions` and returns
+`open_sessions_note`, "Open sessions could not be read from this machine's
+call log." (packages/mcp-server/src/open-sessions.ts:26-27, server.ts:745-751).
+So a log file that exists but cannot be read, such as mode 0200, now
+degrades resume instead of failing it
+(packages/mcp-server/test/server-tools.test.ts:880-903). A malformed line
+does not produce that note: an unparseable line is dropped by
+`parseCallLog` (log.ts:123-133) and an invalid row by `validateRow`
+(open-sessions.ts:75-100), silently. What still fails every tool is a log
+that cannot be appended to (a directory at the path, or no write
+permission), and that failure happens when `run` appends after the tool
+body has run (server.ts:263-284), not before the derivation. The
+`readProjectProvenance` citation above is now
+packages/core/src/project-handoff.ts:165-176.
+
 The call log is per machine and the hosted connector never touches it,
 so hosted sessions are invisible here. Stated in KNOWN-LIMITS.
 
@@ -161,6 +195,14 @@ packages/core/src/project-doc.ts:10) and from JSON escaping: a plain ASCII
 document at the cap measured about 20 KB, a quote-only document about
 34 KB, a CJK document about 50 KB. Acceptance asserts the invariant on
 all three fixtures and prints the bytes for the record.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the citation
+for the view carrying the document has moved: `content` is set at
+packages/core/src/project-handoff.ts:235 (declared at :60), and the resume
+brief strips it with `files_text` at packages/mcp-server/src/server.ts:134.
+The behaviour is unchanged: `node docs/adr-0052-acceptance.mjs payload` in a
+temporary home on this branch printed 20,083, 33,746 and 49,974 bytes with
+every invariant holding.
 
 ## Decision 4: Draft projects
 
@@ -231,6 +273,11 @@ acceptance test. A change that grows a default read fails acceptance.
    different place (`model` on a Converse call log row,
    packages/mcp-server/src/log.ts:44-45), and this ADR does not touch it.
 
+   **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the claim
+   holds (`model: null` is fixed in the block's type and writer,
+   packages/core/src/project-handoff.ts:47 and 162), but the citation has
+   moved: Converse's `model` field is packages/mcp-server/src/log.ts:50-51.
+
 ## Accepted scar tissue
 
 Named here so a later reader knows these were seen and left, not missed.
@@ -276,6 +323,25 @@ Named here so a later reader knows these were seen and left, not missed.
   than degrading. Kept deliberately: no unlogged disclosure. The cost is
   that a broken log file blocks project work until it is moved, and the
   failure names the path.
+
+  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** this item
+  is stale in two ways. First, only a log that cannot be appended to (a
+  directory at the path, or a file without write permission) fails every
+  tool. A log that exists but cannot be read, such as mode 0200, now
+  degrades resume with a note instead of failing it (commit 106fae3; see
+  the Decision 2 correction). Second, a failing log does not block writes.
+  `run` executes the tool body, including `vault.save()`, before it calls
+  `appendCallLog` (packages/mcp-server/src/server.ts:263-284), so a
+  `project_update`, `project_checkpoint` or `project_wrap` made while the
+  log is a directory is saved with no call-log row, while its reply is an
+  error naming the log path. Executed 2026-09-24 against the built server
+  in a temporary home: `project_update` returned `EISDIR`, and once the
+  directory was removed `project_get` showed the new status; a checkpoint
+  made the same way also landed, and its retry with the same operation id
+  replayed. No content is returned in that state, so there is still no
+  unlogged disclosure, but a write can land unlogged. The citations have
+  moved: `appendCallLog` is packages/mcp-server/src/log.ts:90-94 and the
+  two calls are server.ts:271 and 284.
 - **Decision 5's enforcement is the avoided question.** The call log
   shows 0 `project_wrap` and 0 `project_checkpoint` calls in 2.5 months.
   Nothing here makes a host call either one. The contract install is
@@ -480,6 +546,17 @@ archives; bytes of the tool result text as it goes over the wire):
   and why acceptance measures at the cap rather than on this fixture.
 - The same call with `history: true`: 84,738 bytes, eight times larger, and
   it does contain the prior revision text.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the two byte
+figures above predate the amendment that dropped `content` and `files_text`
+from the brief (packages/mcp-server/src/server.ts:134). The same fixture
+(packages/mcp-server/test/server-tools.test.ts:1119-1164: a create, 20 small
+updates, one long status, three long Log entries and a final status) run
+against the built server on this branch on 2026-09-24 gives 6,357 bytes with
+defaults and 80,424 bytes with `history: true`, about 12.7 times larger, with
+5 revision summaries and 3 archives. The test itself asserts only that the
+brief is under 24 KiB and smaller than `history: true`. Neither number is a
+published bound (third pass, binding amendment 1).
 
 Tier-1 masking treats `host`, `host_version`, `recorded_at` and the archive
 summary stamps as identifiers, so a host name shaped like an address still

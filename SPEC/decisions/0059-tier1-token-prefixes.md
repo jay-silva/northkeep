@@ -7,6 +7,14 @@
   publishes a claim in KNOWN-LIMITS, so the CLAUDE.md review gate applies. The implementation sits on branch
   `adr-0059/tier1-tokens`, unmerged, so the reviewer can attack code rather
   than prose.
+
+  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** this status
+  is stale. The branch was merged into main as merge commit `3c0d306`
+  ("Merge adr-0059/tier1-tokens: Tier-1 token prefixes (ADR 0059)"), and the
+  change ships for the first time in release 0.22.0. The table in Decision 1
+  matches `TOKEN_PREFIX_PATTERNS` in packages/redact/src/tier1.ts:32 entry
+  for entry (36 families), and acceptance steps 1 to 7 and 9 below were
+  re-run against the built CLI on this date with the stated output.
 - **Deciders:** Jay (product owner), Claude Code
 - **Depends on:** ADR 0029 (exfiltration screens and the hard-deny set),
   ADR 0030 (trusted-API egress keeps only the hard-deny kinds), ADR 0033
@@ -220,6 +228,15 @@ Every new pattern needs a literal issuer prefix and a body of at least 20
 characters (most need 30 to 100) drawn from a restricted alphabet with no
 whitespace. Ordinary English cannot produce that. The realistic risks are
 identifiers that share a prefix, and those are the near-miss tests.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** "a body of at
+least 20 characters" is not true of every entry. In
+packages/redact/src/tier1.ts:32-84 the Slack and Slack app bodies need 10
+or more characters (`xox[baprse]-[A-Za-z0-9-]{10,}`,
+`xapp-\d-[A-Za-z0-9-]{10,}`), the Stripe body 16 or more, and the new AWS
+prefixes (`ASIA`, `ABIA`, `ACCA`) exactly 16. Every other entry needs 20 or
+more. The bare Telegram arm has no issuer prefix: it is 8 to 10 digits, the
+literal `:AA`, and 32 or more body characters.
 
 **Measured, old detector versus new, counting `api_key` spans the new one
 finds that the old one did not:**

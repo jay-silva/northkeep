@@ -45,6 +45,17 @@ lines. No em dashes. Under 2048 bytes (unit-tested). Conditional wording:
 only when the user names a project or the work clearly belongs to one; if
 unsure, one `project_list`; otherwise do nothing.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** in 0.22.0,
+`CONTRACT_TEXT` has no hosted-surface line. It is composed of the standing
+instruction, which now names `project_resume`, `project_wrap`,
+`project_checkpoint`, `project_update` and `project_list`
+(packages/mcp-server/src/project-recipe.ts:18-26), then the only-when,
+no-false-pass, no-secrets and when-to-create (`project_create`) lines, the
+P6 clause, and a second paragraph with the bootstrap recipe
+(packages/mcp-server/src/contract.ts:66-75, ADR 0052 Decision 5). It is
+unit-tested to be under 4096 bytes, not 2048
+(packages/mcp-server/test/contract.test.ts:60-64).
+
 `ContractTarget` is `'claude' | 'codex' | 'cursor-project'`. Every switch
 over that union includes a `default` with a `never` check. Imports stay at
 the top of the module.
@@ -291,6 +302,9 @@ Do not point automated tests at the real host files.
    Say "where did we leave off on northkeep". It calls `project_get` before
    answering. Say "we are done, wrap up". It calls `project_update` with
    status and a log entry (verify in the GUI audit log).
+   **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** with the
+   0.22.0 contract, the expected calls are `project_resume` at the start and
+   `project_wrap` at the end (packages/mcp-server/src/project-recipe.ts:18-22).
 3. In another cold session ask for something unrelated ("write a haiku").
    No project tool call fires.
 4. Seed a fake `~/.codex/AGENTS.md` via `NORTHKEEP_CODEX_AGENTS` (or

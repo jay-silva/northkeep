@@ -136,6 +136,16 @@ to "in sync" after the automatic push. `project_get northkeep` with
 
 - Old project revisions beyond the newest five are gone once compacted.
   The user chooses when.
+
+  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** "The user
+  chooses when" predates Decision 4 and is no longer true. Compaction runs
+  automatically whenever a project document is superseded: `writeProject`
+  calls `autoCompactScope` (packages/core/src/vault.ts:898) and so does the
+  generic supersede path used by `editMemory` and the connector fold
+  (packages/core/src/vault.ts:1458, packages/sync/src/connector-client.ts:344),
+  always with the default keep of five (packages/core/src/vault.ts:165). The
+  user chooses only when to run the manual command, for example with a
+  different `--keep`.
 - The vault file tracks live content plus a bounded history instead of
   growing without limit.
 - Handoff receipts keep their referenced revisions, so replay stays exact.

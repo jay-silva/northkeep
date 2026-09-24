@@ -196,6 +196,16 @@ Accept (contradiction / undated / stale) calls ADR 0015 supersede only.
 Forget (one duplicate-cluster member) calls existing `Vault.forget`.
 Keep and reject are vault no-ops. The model cannot trigger either.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the review
+that ships in 0.22.0 (ADR 0046) adds one user-confirmed group write. "Remove
+all" on a duplicate group forgets every member of that group, one receipt
+per member, after a single confirmation that lists each one
+(apps/web/static/index.html:3618-3621, commit c1954f2). Each removal is
+restorable from change history. There is still no accept-all across
+proposals, no auto-apply and no scheduled write. ADR 0047 guided
+consolidation also supersedes 2-8 sources in one user-confirmed operation
+(packages/core/src/vault.ts:912).
+
 **P7 — The report is not a memory.** It is not stored via `remember`.
 It is not synced as vault content. Re-opening the report does not write
 the vault.

@@ -7,6 +7,16 @@
   question on 2026-09-19: mark on arrival, badge only; revisions 3 and 4
   narrowed when that mark may be made until the rule needs no
   provenance signal at all.
+
+  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the
+  closing status line of this ADR ("implemented on branch
+  `adr-0050/finish`, pending ... a merge to main") is stale. The branch
+  was merged into main as eabb35c ("Merge ADR 0050: a connected app can
+  create a project", 2026-09-19); `git branch --contains eabb35c` lists
+  `main` and `release/0.22.0`. It ships for the first time in 0.22.0
+  (not in v0.21.0). This repo holds no record that the connector was
+  deployed to production with this code, so whether that deploy has
+  happened is unknown from the repo.
 - **Deciders:** Jay (product owner; chose "hosted connector too" on
   2026-09-19), adversarial reviewer, Claude Code
 - **Amends:** ADR 0040 Decision 5 ("Cloud cannot create a project") and
@@ -17,6 +27,11 @@
 - **Does not touch:** the row envelope and DEK custody (ADR 0020), vault
   schema 0.3, the `scopes` table shape (ADR 0038), `memory_remember` and
   its 8 KiB cap, revision-bound local handoffs (ADR 0048), the sync server
+
+  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the vault
+  schema was already 0.4 when this ADR was written, not 0.3
+  (`packages/core/src/types.ts:149`, `SCHEMA_VERSION = '0.4'`, since
+  e0875ef on 2026-08-26). ADR 0050 made no schema change either way.
 
 ## Context
 
@@ -100,6 +115,14 @@ the agent must say what it is and where it stands. Log and Decisions start
 empty. No `log_entry` on create: the first log entry belongs to the first
 session that does work.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the two
+signatures are not identical. Hosted `project_create` takes `project`,
+`what_why`, `status` and optional `next_actions` only
+(`apps/connector-server/src/mcp.ts:678-683`; no `title`, per Decision 6).
+Local `project_create` also takes optional `title` (up to 120) and, since
+dc9fc40 (ADR 0052, 2026-09-21), optional `draft`
+(`packages/mcp-server/src/server.ts:870-880`).
+
 ## Decision 2: Hosted create writes one pending working row, same envelope
 
 Hosted `project_create` builds the document with the same pure functions
@@ -111,6 +134,13 @@ the desktop uses (`emptyProjectDoc`, `mergeProjectDoc`,
 writes when it starts from a vault-pushed base (ADR 0040 Decision 2). No
 new storage method, no schema change, no envelope change, no change to
 `/client/pending`.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the create
+row's id is not `conn_<uuid>`. It is `conn_create_` plus the first 32 hex
+characters of sha256 of the scope, as Decision 3 check 4 pins
+(`apps/connector-server/src/mcp.ts:755`). `/client/pending` did change:
+it purges rows in tombstoned scopes, as Decision 3 requires
+(`apps/connector-server/src/create-server.ts:699-707`).
 
 The at-rest claim is unchanged: the database alone yields no key and no
 plaintext.
@@ -269,6 +299,15 @@ history. The sync surface's hold message says so: "Sharing it lets the
 app's document replace the one on this device; the current one stays in
 history."
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** "stays in
+history" is now bounded. Since 23d1591 (ADR 0051 Decision 4, 2026-09-21)
+every supersession of a working row in a project scope, including the
+fold's `editMemory` (proved by 290c550), blanks superseded revisions past
+the newest five (`PROJECT_COMPACT_DEFAULT_KEEP = 5`,
+`packages/core/src/vault.ts:165`), keeping any a handoff receipt still
+names. The replaced document keeps its content until five later
+revisions of that project have superseded it.
+
 "Empty" means `vault.list({scope})` returns nothing: no live entry.
 Superseded and forgotten rows may remain in the scope's history; they are
 never pushed, because `pushSharedScopes` lists live entries only. That
@@ -301,6 +340,15 @@ Why the mark is made without a dialog:
 - **The mark is visible and reversible.** The Projects page and
   `project_get` already show `shared: true`. Unshare deletes the server
   rows and tombstones the scope; the vault keeps the document.
+
+  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the
+  Projects page does not show a Shared badge. Its project pills are only
+  "Project" or "Needs attention", "Draft", and "Ready to resume"
+  (`apps/web/static/index.html:2202-2203`, `:2246`). The SHARED badge is
+  on the Sharing panel's scope list (`index.html:5462`) and the memory
+  list labels each scope "Shared" or "Private" (`index.html:2040`).
+  `project_get` does return `shared`
+  (`packages/core/src/project-handoff.ts:235`).
 - **The forward-looking cost is already governed.** The installed contract
   forbids secrets, credentials, PHI, and personal identifying information
   in any project document, on every surface, shared or not. A local
@@ -368,6 +416,22 @@ vault id and no other row for that scope. `project_get` and
 `project_update` on the hosted side keep working against it. Nothing is
 lost in the gap.
 
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the fold
+from an empty shared list is implemented in the sync functions and the
+CLI, but the two GUI buttons that call them were not changed. The
+desktop Sharing panel disables "Sync now" whenever no scope is shared
+(`apps/web/static/index.html:5430`), and the mobile "Sync app-written
+memories" button is disabled when `sharedScopes.length === 0`
+(`apps/mobile/app/sharing/scopes.tsx:285`). So on a device with nothing
+shared, `northkeep share sync` is the only user-facing way to receive a
+first hosted create; `POST /api/share/sync` (`apps/web/src/api.ts:973`)
+and `runConnectorSyncNow` (`apps/mobile/src/lib/connect-flow.ts:336`)
+do fold when called. Also, "no new network call" means no call to the
+connector server: when vault sync is configured, the CLI and desktop
+still ask the sync server for the entitlement before the pairing check,
+as before this ADR (`packages/cli/src/shareCmd.ts:172`,
+`apps/web/src/api.ts:977`).
+
 ## Decision 6: Title parity is out of scope
 
 The local server accepts `title` on `project_update` (2c59469). The hosted
@@ -394,6 +458,14 @@ contract stays under 2048 bytes with no em dash; the existing test
 enforces both. `northkeep contract install` rewrites the installed files
 (Claude Code rule, Codex `AGENTS.md`, Cursor rule) with the new text; the
 ownership markers make that idempotent.
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the
+composed contract is no longer under 2048 bytes. f301351 (ADR 0052
+Decision 5, 2026-09-21) added the bootstrap recipe as a second paragraph;
+`CONTRACT_TEXT` is now 2301 bytes and the test bound is 4096
+(`packages/mcp-server/test/contract.test.ts:64`). The `project_create`
+sentence above is still in the contract verbatim
+(`packages/mcp-server/src/contract.ts:72`) and there is still no em dash.
 
 ## Decision 8: Gate statement
 
@@ -438,6 +510,19 @@ server. No new HTTP route, no new env var, no new default-open check.
 | A typo in `project_update`'s slug still cannot create a project | Existing M14 test "refuses unshared, never-shared" stays green |
 | Unshare deletes a not-yet-delivered create | Existing `deleteScope` path; test reused from M14 |
 | Local `project_create` refuses when a live document exists | Core `writeProject` with `expected_revision: null` throws `stale_project` on an existing head; the tool maps it to "already exists" |
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** two rows
+hold only below the GUI. "Mobile, desktop and CLI each run the fold from
+an empty shared list" and "including when nothing was shared before" are
+true of the CLI command, the desktop route and the mobile sync function
+(`packages/cli/test/shareSync.test.ts:100`, `apps/web/test/api.test.ts:510`,
+`apps/mobile/test/connect-flow.test.ts:375`), but the desktop and mobile sync
+buttons are disabled when no scope is shared
+(`apps/web/static/index.html:5430`, `apps/mobile/app/sharing/scopes.tsx:285`),
+so a GUI user cannot start that fold. "Makes no network call" means no
+connector call: with vault sync configured, the CLI and desktop still
+fetch the entitlement from the sync server first
+(`packages/cli/src/shareCmd.ts:172`, `apps/web/src/api.ts:977`).
 
 ## Residual (documented, accepted)
 
@@ -906,3 +991,9 @@ more useful wording for an API caller.
 **Status after review: implemented on branch `adr-0050/finish`, pending
 Jay's acceptance test (docs/hosted-project-create-acceptance.md), then a
 merge to main and the connector deploy on his explicit OK.**
+
+**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** stale. The
+branch was merged into main as eabb35c on 2026-09-19 and ships first in
+0.22.0. Whether Jay ran the acceptance test and whether the connector was
+deployed with this code is not recorded in the repo; see the note under
+Status.
