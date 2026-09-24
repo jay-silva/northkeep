@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { LEAK_CORPUS } from '../packages/redact/test/corpus.js';
+import { LEAK_CORPUS, survivingWindow } from '../packages/redact/test/corpus.js';
 
 /**
  * M3 acceptance, driven through the real CLI:
@@ -83,7 +83,10 @@ describe('M3 acceptance — redaction', () => {
   it('leak gate: the CLI masks every seeded secret (zero misses)', async () => {
     const blob = LEAK_CORPUS.map((s) => s.sentence).join(' ');
     const { stdout } = await cli(['redact', blob, '--tier', '1']);
-    const leaked = LEAK_CORPUS.filter((s) => stdout.includes(s.secret)).map((s) => s.secret);
+    // A window check, not includes(): a partly masked key still leaks (ADR 0059).
+    const leaked = LEAK_CORPUS.filter((s) => stdout.includes(s.secret) || survivingWindow(s.secret, stdout)).map(
+      (s) => s.secret,
+    );
     expect(leaked, `leaked: ${leaked.join(', ')}`).toEqual([]);
   });
 
