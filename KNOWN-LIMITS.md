@@ -710,8 +710,10 @@ every milestone; if a limit is removed, say when and how.*
   MCP connection for a matter; you don't switch scopes mid-conversation (that
   would let the model widen its own access).
 - **Tier-1 masking over MCP is opt-in and one-way.** `NORTHKEEP_REDACT_TIER=1`
-  masks secrets in retrieved content; full name-pseudonymization over MCP
-  needs a provider proxy that doesn't exist yet (parked).
+  applies the Tier-1 mask to retrieved content; full name-pseudonymization over MCP
+  needs a provider proxy that doesn't exist yet (parked). Only the exact
+  value `1` turns masking on: `2`, `3` or any other value means no masking
+  at all, with no warning (packages/mcp-server/src/server.ts:73-75).
 - **The audit log covers NorthKeep's own surface.** It records what AI apps
   asked of the vault — it can't see what a provider did with the content
   after NorthKeep handed it over.
