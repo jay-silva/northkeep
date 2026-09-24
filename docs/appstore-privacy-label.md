@@ -107,8 +107,9 @@ identifier. Every row not marked Yes is "Not Collected".
      content. That meets the test more clearly than the sync blob does; the
      "we cannot read it" argument from item 1 is not available here.
    - It is linked: every row is keyed on the connector account hash, a
-     persistent account identifier (Apple treats data tied to a User ID as
-     linked even when the ID is pseudonymous).
+     persistent account identifier. The conservative reading of Apple's
+     definition treats data tied to a User ID as linked even when the ID is
+     pseudonymous; counsel may confirm.
    - It is not tracking: it is not combined with third-party data or shared
      with data brokers. The user's own connected AI apps read it at the user's
      direction, under those apps' own policies.

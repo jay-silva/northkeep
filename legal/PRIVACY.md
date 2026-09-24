@@ -10,7 +10,8 @@ limited liability company.
 NorthKeep is built on a simple promise: **your AI memory lives on your device,
 encrypted, and we never see its contents** (the exceptions are content you
 deliberately choose to share or send: a scope you share with the optional
-connector, described below, and the arguments of a tool call you approve,
+connector, or a project one of your connected apps creates there, described
+below, and the arguments of a tool call you approve,
 described in "Tools" below). This policy explains the little data that does
 exist, where it lives, and what we do, and don't, do with it. It covers the
 NorthKeep app for Mac, the NorthKeep app for iPhone, our optional hosted sync
@@ -56,7 +57,10 @@ vault file can be included in your device or iCloud backup like other app
 data; it remains encrypted there. If you turn on the optional
 local project mirror on a Mac, NorthKeep also writes your project documents as
 plain, unencrypted text files into a folder you choose and records them with
-git on your Mac; NorthKeep never pushes that folder anywhere. None of this is
+git on your Mac; NorthKeep never pushes that folder anywhere. When you run a
+memory review on a Mac, NorthKeep keeps review records as unencrypted files in
+its own folder on your Mac so you can undo a change; they can still contain
+reviewed text after you forget a memory. None of this is
 transmitted to us. There is no account to create to use NorthKeep locally.
 
 **If you enable hosted sync**, our sync server receives and stores:
@@ -169,7 +173,9 @@ memories you choose. You can use it from the Mac app and from the iPhone app
   device next syncs. Deletion removes exactly what you
   chose to expose; it cannot recall copies an AI app already retrieved. The
   records listed above (unshared scope names, the request log, and connected-app
-  registrations) remain until you ask us to delete them.
+  registrations) remain until you ask us to delete them, as does anything an
+  app writes that your device holds back without adding (for example, into a
+  project that already exists on your device but is not shared).
 
 Self-hosting the connector, or simply never sharing a scope and never
 connecting an app to it, means no shared memory ever transits our server.
@@ -178,7 +184,8 @@ connecting an app to it, means no shared memory ever transits our server.
 
 - We do **not** collect, read, store, or transmit the contents of your memories
   or conversations, with two exceptions you turn on yourself: (1) a scope you
-  deliberately share with the optional connector (see "Shared scopes" above),
+  deliberately share with the optional connector, or a project one of your
+  connected apps creates there (see "Shared scopes" above),
   which is stored there encrypted at rest and briefly decrypted per request so
   your own AI apps can read it, and (2) the arguments of a tool call you
   approve (a web search, a web fetch, or a call to an MCP server you've
@@ -198,13 +205,15 @@ connecting an app to it, means no shared memory ever transits our server.
 
 NorthKeep can send text to AI models **you** connect:
 
-- In **Chat** mode, your message, together with the memories retrieved to
-  answer it, after on-device redaction, is sent to the model provider you
+- In **Chat** mode, your message, the earlier turns of that conversation, the
+  text of any file you attach, and the memories retrieved to answer it, after
+  on-device redaction, are sent to the model provider you
   selected (for example a local model on your own machine, or a cloud provider
   using your own API key). When it's a cloud provider, that provider receives
   your redacted text and handles it under **their** privacy policy; we are not
   in that path and do not receive a copy. Redaction can be turned off only for
-  a model on your own machine or local network, never for a cloud provider. On
+  a model at a private network address (your own machine or a private
+  network), never for a cloud provider. On
   an iPhone with
   Apple Intelligence, you can instead chat with the model built into the phone,
   which runs on the device.
