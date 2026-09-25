@@ -196,6 +196,15 @@ would make the review refuse, which is the safe direction.
 The web route is the only caller that passes a `ReviewOutbound`; it must,
 because the adapter no longer offers a free-text send.
 
+Amended 2026-09-25 (prompt audit PA-F10): when the endpoint is native
+Anthropic and the model is on the `supportsStructuredOutputs` allowlist in
+reviewApi.ts, `send` also passes `REVIEW_OUTPUT_SCHEMA` (librarian
+review.ts), which the Anthropic provider sends as `output_config.format`.
+The schema is a fixed shape with no memory content, so what leaves the
+machine is unchanged except for that constant. Other endpoints and models
+get the same request as before, and every reply still goes through the
+validation and restoration in 1.4.
+
 ### 1.3 One numbering across the whole run, in a namespace of its own
 
 Redaction gains an optional shared state,
@@ -402,6 +411,14 @@ gains `tier` and `degraded`.
 
 `northkeep review` and the GUI's local run pass no `outbound`, send
 nothing off the machine, and keep today's prompt and validation.
+
+Amended 2026-09-25 (prompt audit PA-F7): the shared review instructions
+no longer carry the line "Do not propose undated facts." It read as a ban
+on facts without dates, which pulls against the `stale` rule; its intent,
+disabling the `undated` kind, is already enforced in reviewSchema.ts,
+which drops that kind. The local prompt therefore changed by that one
+line, and the C8g fixture (librarian/test/fixtures/local-review-prompt.txt)
+was updated with it. Nothing else about the local path changed.
 
 ## Decision 2 (D4): any MCP return tier of 1 or more masks at least Tier 1
 
