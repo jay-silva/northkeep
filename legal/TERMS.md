@@ -4,7 +4,7 @@
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** support@northkeep.ai · **Effective date:** 2026-09-XX
+**Contact:** support@northkeep.ai · **Effective date:** 2026-09-24
 
 These Terms govern your use of the NorthKeep software and the optional hosted
 sync service (together, the "Service"). By installing the software or using the

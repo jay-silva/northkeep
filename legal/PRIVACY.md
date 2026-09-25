@@ -2,7 +2,7 @@
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** support@northkeep.ai · **Effective date:** 2026-09-XX
+**Contact:** support@northkeep.ai · **Effective date:** 2026-09-24
 
 NorthKeep is built on a simple promise: **your AI memory lives on your device,
 encrypted, and we never see its contents** (the exceptions are content you
@@ -102,6 +102,23 @@ If you write to support@northkeep.ai, we receive your email address and what
 you write, and use them only to answer you. When you ask for sync access, the
 iPhone app can open an email to us that contains your sync account identifier;
 if you send it, we can associate that identifier with your email address.
+
+## Service providers that host NorthKeep
+
+Our hosted services run on infrastructure providers that process data on our
+behalf:
+
+- **Vercel** runs the sync server and the connector server.
+- **Neon** hosts their databases: for sync, the encrypted vault blobs and the
+  billing mapping described above; for the connector, the encrypted shared
+  content and the connector records described below.
+- **Cloudflare** hosts the northkeep.ai website and runs the waitlist form.
+
+Like most hosting providers, they keep standard request logs of the traffic
+they carry, such as IP addresses, request times and the addresses requested.
+Those logs are kept under their own policies and retention periods, not ours.
+Our own code does not store your IP address; it holds it briefly in memory to
+limit request rates.
 
 ## Shared scopes (optional connector)
 
@@ -215,7 +232,8 @@ connecting an app to it, means no shared memory ever transits our server.
 
 NorthKeep can send text to AI models **you** connect:
 
-- In **Chat** mode, your message, the earlier turns of that conversation, the
+- In **Chat**, which runs in the iPhone app and, on a Mac, through the
+  `northkeep converse` command line, your message, the earlier turns of that conversation, the
   text of any file you attach, and the memories retrieved to answer it, after
   on-device redaction, are sent to the model provider you
   selected (for example a local model on your own machine, or a cloud provider
@@ -251,8 +269,8 @@ You control which providers you use and can disconnect them at any time.
 
 ## Tools: web search, web fetch, and MCP servers
 
-The NorthKeep app for Mac can optionally let the model take actions beyond
-answering from your vault: searching the web, fetching a page, or calling a tool
+On a Mac, NorthKeep's command line (`northkeep converse`) can optionally let
+the model take actions beyond answering from your vault: searching the web, fetching a page, or calling a tool
 exposed by an MCP server you connect. The iPhone app has none of these tools.
 **All of this is off by default.** Turning any of it on creates data flows to
 third parties you choose, described here.
@@ -367,9 +385,9 @@ UK, the GDPR's 72-hour notification rule, without undue delay.
 - **Connector data:** unshare scopes as described above, or request deletion at
   support@northkeep.ai, and we will delete your shared content and the connector
   records linked to your account.
-- **Consent records:** where we record your consent to subscription auto-renewal,
-  we keep that record only as long as needed to show the consent was given, as
-  required by applicable automatic-renewal laws, and then delete it.
+- Deletion removes data from our live databases. A copy can remain in our
+  database provider's backups until those backups expire under its retention
+  settings.
 - Losing your passphrase or your `device.secret` file means the vault is
   **unrecoverable**, by design, there is no back door, which also means we
   cannot access or restore your data for you.
