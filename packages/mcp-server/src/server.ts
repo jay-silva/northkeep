@@ -494,8 +494,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       title: 'Retrieve memories',
       description:
         "Search the user's personal memory vault for facts, preferences, past events, and " +
-        'how they like things done. Call this at the start of a conversation and whenever ' +
-        'personal context would help. Returns entries ranked by meaning when the local search ' +
+        'how they like things done. Use it when the answer depends on who the user is, what they ' +
+        'have done, or how they like things done. Returns entries ranked by meaning when the local search ' +
         'model is available (search_mode "semantic"), otherwise by keyword + recency ' +
         '(search_mode "keyword"); the response says which.',
       inputSchema: {
