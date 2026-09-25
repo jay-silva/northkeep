@@ -1062,26 +1062,38 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
   );
 
   const checkpointSchema = {
-    vault_id: idSchema,
-    project: projectSlugSchema,
-    operation_id: z.string().uuid(),
-    expected_revision: idSchema,
-    status: z.string().min(1).max(16384),
-    completed: z.string().min(1).max(4096),
-    next_actions: z.string().max(16384),
-    decision: z.string().min(1).max(4096).optional(),
-    open_questions: z.string().max(16384).optional(),
+    vault_id: idSchema.describe('The vault_id returned by project_resume for this project'),
+    project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
+    operation_id: z.string().uuid().describe('A new lowercase UUID you generate for this save; project_resume does not return one. Reuse it only to retry this exact request.'),
+    expected_revision: idSchema.describe('The revision returned by project_resume (or project_get) that this save starts from'),
+    status: z.string().min(1).max(16384).describe('Replacement Current Status section'),
+    completed: z.string().min(1).max(4096).describe('What was done, a few hundred characters at most; becomes the new Log entry. Do not include a date; the tool prefixes it.'),
+    next_actions: z.string().max(16384).describe('Replacement Next Actions section; empty clears it'),
+    decision: z.string().min(1).max(4096).optional().describe('New Decisions entry (appended), without a date'),
+    open_questions: z.string().max(16384).optional().describe('Replacement Open Questions section'),
     files: z.array(z.object({
       type: z.string().min(1).max(32), label: z.string().min(1).max(512),
       locator: z.string().min(1).max(4096),
       access: z.enum(['reported_available', 'unavailable', 'unverified']),
       checked_at: z.string().max(64).optional(), context: z.string().max(2048).optional(),
-    })).max(40).optional(),
+    })).max(40).optional().describe('Files this work produced or relied on, so the next session can find them'),
   };
+  const HANDOFF_DESCRIPTION = {
+    checkpoint:
+      'Save progress part-way through a working session on a project, without ending it. Writes the new ' +
+      'Current Status and Next Actions and adds a "Checkpoint:" Log entry from completed. ',
+    wrap:
+      'Hand off a project when a working session ends: writes the new Current Status and Next Actions, ' +
+      'adds a "Wrap up:" Log entry from completed, and clears the draft line. ',
+  } as const;
+  const HANDOFF_CONTRACT =
+    'The save is atomic and bound to expected_revision: if the project changed since you read it, the save is ' +
+    'refused as stale_project. Retrying the exact same request with the same operation id is safe. After a ' +
+    'stale_project refusal, read the project again and use a new operation id.';
   const registerHandoff = (name: 'project_checkpoint' | 'project_wrap', mode: 'checkpoint' | 'wrap') => {
     server.registerTool(name, {
       title: mode === 'checkpoint' ? 'Checkpoint project' : 'Wrap up project',
-      description: 'Atomically save a revision-bound project handoff. Retrying the exact same request with the same operation id is safe. After a stale_project refusal, read the project again and use a new operation id.',
+      description: HANDOFF_DESCRIPTION[mode] + HANDOFF_CONTRACT,
       inputSchema: checkpointSchema,
     }, async (args) => run(ctx, name, {
       scope: `project:${args.project}`, id: args.operation_id,
