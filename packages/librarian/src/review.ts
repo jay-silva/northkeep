@@ -43,6 +43,45 @@ Rules:
 - If nothing in this pack is a same-fact duplicate, a contradiction, or a stale replacement, return {"proposals":[]}.
 - explanation is a short note for the user. It is never applied as a write.`;
 
+const NULLABLE_STRING = { anyOf: [{ type: 'string' }, { type: 'null' }] };
+
+/**
+ * The reply shape SYSTEM_INSTRUCTIONS asks for, as a JSON schema for providers
+ * that can enforce it. Validation in reviewSchema.ts still runs on every reply.
+ */
+export const REVIEW_OUTPUT_SCHEMA: Record<string, unknown> = {
+  type: 'object',
+  properties: {
+    proposals: {
+      type: 'array',
+      items: {
+        type: 'object',
+        properties: {
+          kind: { type: 'string', enum: ['duplicate', 'contradiction', 'stale', 'question'] },
+          entry_ids: { type: 'array', items: { type: 'string' } },
+          quotes: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: { entry_id: { type: 'string' }, quote: { type: 'string' } },
+              required: ['entry_id', 'quote'],
+              additionalProperties: false,
+            },
+          },
+          explanation: { type: 'string' },
+          target_entry_id: NULLABLE_STRING,
+          proposed_content: NULLABLE_STRING,
+          question: NULLABLE_STRING,
+        },
+        required: ['kind', 'entry_ids', 'quotes', 'explanation', 'target_entry_id', 'proposed_content', 'question'],
+        additionalProperties: false,
+      },
+    },
+  },
+  required: ['proposals'],
+  additionalProperties: false,
+};
+
 export interface ReviewPassResult {
   proposals: ReviewProposal[];
   drops: Record<string, number>;

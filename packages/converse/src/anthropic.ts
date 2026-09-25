@@ -151,6 +151,9 @@ export function createAnthropicProvider(config: AnthropicProviderConfig): ModelP
             model: options.model || DEFAULT_ANTHROPIC_MODEL,
             max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
             thinking: { type: 'adaptive' },
+            ...(options.outputSchema !== undefined
+              ? { output_config: { format: { type: 'json_schema' as const, schema: options.outputSchema } } }
+              : {}),
             ...(system.length > 0 ? { system } : {}),
             messages: turns as Parameters<typeof client.messages.stream>[0]['messages'],
             ...(options.tools !== undefined && options.tools.length > 0

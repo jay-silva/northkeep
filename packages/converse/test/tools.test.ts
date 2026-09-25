@@ -539,5 +539,28 @@ describe('Anthropic provider — chatTurn tool plumbing', () => {
         input_schema: WEATHER_TOOL.inputSchema,
       },
     ]);
+    // No outputSchema option -> no output_config in the request.
+    expect(sent).not.toHaveProperty('output_config');
+  });
+
+  it('sends outputSchema as output_config.format json_schema', async () => {
+    fake.requests.length = 0;
+    const provider = createAnthropicProvider({ apiKey: 'test-key', baseUrl });
+    const schema = { type: 'object', properties: {}, required: [], additionalProperties: false };
+    await provider.chatTurn([{ role: 'user', content: 'hi' }], { model: 'claude-test', outputSchema: schema });
+    const sent = JSON.parse(fake.requests[0]!) as { output_config?: unknown };
+    expect(sent.output_config).toEqual({ format: { type: 'json_schema', schema } });
+  });
+});
+
+describe('review pass structured-output gate', () => {
+  it('only names Claude models documented to accept output_config.format', async () => {
+    const { supportsStructuredOutputs } = await import('../src/reviewApi.js');
+    expect(supportsStructuredOutputs('claude-opus-4-8')).toBe(true);
+    expect(supportsStructuredOutputs('claude-sonnet-5')).toBe(true);
+    expect(supportsStructuredOutputs('claude-fable-5-1')).toBe(true);
+    expect(supportsStructuredOutputs('claude-opus-4-7')).toBe(false);
+    expect(supportsStructuredOutputs('claude-opus-4-80')).toBe(false);
+    expect(supportsStructuredOutputs('gpt-4o')).toBe(false);
   });
 });

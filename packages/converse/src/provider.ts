@@ -63,6 +63,12 @@ export interface ChatOptions {
   maxTokens?: number;
   /** Tools to offer the model (M10a, ADR 0027). Omitted = plain chat. */
   tools?: ToolSpec[];
+  /**
+   * JSON schema the reply must match. The Anthropic provider enforces it with
+   * structured outputs; other providers ignore it, so the prompt must still ask
+   * for JSON and the caller must still validate the reply.
+   */
+  outputSchema?: Record<string, unknown>;
 }
 
 /**

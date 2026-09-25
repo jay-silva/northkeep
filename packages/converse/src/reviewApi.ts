@@ -9,6 +9,7 @@ import { createOpenAICompatibleProvider } from './openai.js';
 import { MEMORY_TYPES, type MemoryEntry } from '@northkeep/core';
 import {
   formatReviewPrompt,
+  REVIEW_OUTPUT_SCHEMA,
   type OllamaClient,
   type ReviewOutbound,
   type ReviewPackHandle,
@@ -66,6 +67,20 @@ function providerFor(endpoint: EndpointConfig, apiKey: string): ModelProvider {
       throw new Error(`Unknown endpoint kind: ${String(_never)}`);
     }
   }
+}
+
+/**
+ * Claude models documented to accept output_config.format. Any other id (typed
+ * by the user, or older) keeps the prompt-only JSON path, so no model that
+ * worked before can start failing with a 400.
+ */
+const STRUCTURED_OUTPUT_MODELS = [
+  'claude-fable-5', 'claude-mythos-5', 'claude-opus-5', 'claude-opus-4-8',
+  'claude-sonnet-5', 'claude-haiku-4-5', 'claude-opus-4-5', 'claude-opus-4-1',
+];
+
+export function supportsStructuredOutputs(model: string): boolean {
+  return STRUCTURED_OUTPUT_MODELS.some((id) => model === id || model.startsWith(`${id}-`));
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -210,7 +225,9 @@ export function createReviewApiGenerator(endpoint: EndpointConfig, options: Revi
         throw new Error(LOCAL_REFUSE);
       }
       const prompt = formatReviewPrompt(prepared.entries, { placeholderTag: handle.tag });
-      const chatOpts: { model: string; signal?: AbortSignal } = { model: opts.model ?? endpoint.model };
+      const model = opts.model ?? endpoint.model;
+      const chatOpts: { model: string; signal?: AbortSignal; outputSchema?: Record<string, unknown> } = { model };
+      if (endpoint.kind === 'anthropic' && supportsStructuredOutputs(model)) chatOpts.outputSchema = REVIEW_OUTPUT_SCHEMA;
       if (opts.timeoutMs !== undefined) chatOpts.signal = AbortSignal.timeout(opts.timeoutMs);
       const reply = await provider.chat([{ role: 'user', content: prompt }], chatOpts);
       return stripJsonFences(reply);

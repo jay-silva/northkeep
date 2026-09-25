@@ -24,6 +24,7 @@ export { dedupeCandidates, jaccard, tokenize, type DedupeResult } from './dedupe
 export { runImport, type ImportRunOptions, type ImportRunResult } from './import.js';
 export {
   formatReviewPrompt,
+  REVIEW_OUTPUT_SCHEMA,
   runReviewPass,
   selectReviewEntries,
   type ReviewOutbound,
