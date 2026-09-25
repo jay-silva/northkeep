@@ -41,7 +41,6 @@ Rules:
 - created_at is only when NorthKeep recorded a memory. It is not an effective date, truth ranking, or authority signal.
 - A temporary exception, one-time event, conditional statement, or narrower scope is not necessarily a reversal. When uncertain, emit a question instead of forcing a replacement.
 - If nothing in this pack is a same-fact duplicate, a contradiction, or a stale replacement, return {"proposals":[]}.
-- Do not propose undated facts.
 - explanation is a short note for the user. It is never applied as a write.`;
 
 export interface ReviewPassResult {
