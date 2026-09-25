@@ -775,8 +775,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     {
       title: 'Read a project',
       description:
-        'Read the current project document when the user names a project. Call this at session start so ' +
-        'you pick up Current Status, Next Actions, and the Log. Conflicting current documents are refused. ' +
+        'Read the full text of the current project document. To start a working session on a project, ' +
+        'use project_resume instead; use this tool when you need the whole document as one block of text. ' +
+        'Conflicting current documents are refused. ' +
         'The live document keeps only its newest Log entries; ' +
         'pass history: true to also get the archive memories holding older entries, newest first. ' +
         'Pass a revision id from the resume brief to read that one earlier revision in full instead.',
