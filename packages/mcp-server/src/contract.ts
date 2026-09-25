@@ -67,7 +67,7 @@ export const CONTRACT_TEXT =
   PROJECT_STANDING_INSTRUCTION +
   ' Only do this when the user names a project or the work clearly belongs to one. ' +
   'If you are unsure whether the work is a tracked project, call project_list once and match; if nothing matches, do nothing. ' +
-  'Do not claim a project was updated unless the project_update call succeeded. ' +
+  'Do not claim a project was updated unless the project_wrap, project_checkpoint, or project_update call succeeded. ' +
   'Never write secrets, credentials, PHI, or personal identifying information into a project document. ' +
   'Create a project with project_create only when the user asks for one; never create one to hold notes that belong in an existing project or in a memory. ' +
   CONTRACT_GRACEFUL_DEGRADATION +
