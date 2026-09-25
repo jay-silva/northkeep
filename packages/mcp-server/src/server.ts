@@ -894,8 +894,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     {
       title: 'Update a project',
       description:
-        'Create or update a project document. Call this when a working session ends, with the new ' +
-        'Current Status, Next Actions, and a log entry describing what was done. Optional What & Why ' +
+        'Create or update a project document outside a working session: a correction, a status fix, or a ' +
+        'new decision. To hand off at the end of a working session use project_wrap, and part-way through ' +
+        'one use project_checkpoint. Accepts new Current Status, Next Actions, a log entry, an optional What & Why ' +
         'replacement and a dated decision. Updates merge into the existing sections; they do not ' +
         'replace the whole document. The live document keeps only its newest Log entries; older ones ' +
         "roll into an archive memory in the project scope (the result's archive_summary counts them), so " +
