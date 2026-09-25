@@ -594,7 +594,7 @@ task.ts:960-967), for **every** tool, not only MCP:
 - Existing installs (Jay decision 3): the MCP settings list shows, for a
   stdio server whose resolved command and args equal the bundled vault
   server's **and which has no `env` and no `cwd`** (F8), one button,
-  "This is my NorthKeep vault: save exactly what I say". It opens a confirm that names the program path, and only the
+  "I trust this vault: save my memories unmasked" (reworded by Jay 2026-09-24; was "This is my NorthKeep vault: save exactly what I say"). It opens a confirm that names the program path, and only the
   confirm sets `trusted`. This is the one sanctioned exception to "never
   inferred from a matching command": the match only offers the button,
   and the user decides. C15 is amended accordingly: a matching custom

@@ -1531,17 +1531,18 @@
       // ADR 0060 Decision 4: offered only for the exact NorthKeep vault server
       // with no extra settings; the server decides that. One click and a confirm.
       if (s.vault_trust_offer) {
-        const trustBtn = el('button', 'btn', 'This is my NorthKeep vault: save exactly what I say');
+        const trustBtn = el('button', 'btn', 'I trust this vault: save my memories unmasked');
         trustBtn.style.cssText = 'min-height:44px;margin-top:8px';
         card.insertBefore(trustBtn, detail);
         trustBtn.addEventListener('click', () => {
           detail.textContent = '';
           const form = el('div', 'card');
           form.appendChild(el('p', '',
-            'Right now, what you ask this server to remember is saved with emails, phone numbers and similar details masked. '
+            'Right now, when a chat saves a memory here, emails, phone numbers and similar details are masked before it is saved. '
+            + 'Trusting this vault saves them exactly as you wrote them. What is sent to AI providers is still masked at the tier you choose. '
             + 'Confirm only if this is your own NorthKeep vault on this Mac. This program will be trusted:'));
           form.appendChild(el('p', 'muted', s.command + ' ' + (s.args || []).join(' ')));
-          const go = el('button', 'btn primary', 'Yes, this is my vault');
+          const go = el('button', 'btn primary', 'Yes, I trust this vault');
           go.style.cssText = 'min-height:44px';
           const msg = el('p', 'muted');
           form.appendChild(go);
