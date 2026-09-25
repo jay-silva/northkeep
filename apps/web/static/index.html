@@ -1491,6 +1491,7 @@
       const head = el('div', 'row');
       head.style.cssText = 'justify-content:space-between;align-items:center';
       const title = el('div');
+      title.style.cssText = 'display:flex;flex-wrap:wrap;align-items:center;gap:6px 8px';
       title.appendChild(el('strong', '', s.id));
       title.appendChild(el('span', 'tag', s.reviewed ? 'reviewed' : 'not reviewed'));
       title.appendChild(el('span', 'tag', s.trust === 'trusted' ? 'trusted' : 'strict'));
