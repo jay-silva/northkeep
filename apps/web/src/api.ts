@@ -84,13 +84,14 @@ import {
 } from '@northkeep/librarian';
 import {
   auditAsCsv,
-  claudeCodeAvailable,
+  claudeCodeAvailableAsync,
   CONTRACT_TEXT,
   connect,
-  connectStatus,
+  connectStatusAsync,
   contractStatus,
   disconnect,
   installContract,
+  isCodexDetected,
   keychainAvailable,
   keychainDeleteMasterKey,
   keychainSetMasterKey,
@@ -1617,17 +1618,18 @@ async function dispatch(
     const scopesInVault = session.isUnlocked()
       ? await session.withVault((vault) => vault.scopes())
       : [];
-    const target = (id: ConnectTarget, label: string, available: boolean) => {
-      const status = connectStatus(id);
-      return { id, label, available, connected: status.connected, scopes: status.scopes ?? null };
+    // Async: `claude mcp get` can take seconds and must not stall other requests.
+    const target = async (id: ConnectTarget, label: string, available: boolean | Promise<boolean>) => {
+      const [status, isAvailable] = await Promise.all([connectStatusAsync(id), available]);
+      return { id, label, available: isAvailable, connected: status.connected, scopes: status.scopes ?? null };
     };
     return ok({
-      targets: [
+      targets: await Promise.all([
         target('claude-desktop', 'Claude Desktop', true),
-        target('claude-code', 'Claude Code', claudeCodeAvailable()),
+        target('claude-code', 'Claude Code', claudeCodeAvailableAsync()),
         target('chatgpt', 'ChatGPT', true),
         target('cursor', 'Cursor', true),
-      ],
+      ]),
       scopes_in_vault: scopesInVault,
     });
   }
@@ -1666,15 +1668,16 @@ async function dispatch(
   // Claude and Codex only: Cursor is per-project and CLI-only.
 
   if (method === 'GET' && route === '/api/contract') {
-    const row = (id: 'claude' | 'codex', label: string) => {
+    // detected mirrors `contract install all`, which skips Codex when ~/.codex is missing.
+    const row = (id: 'claude' | 'codex', label: string, detected: boolean) => {
       const s = contractStatus(id);
-      return { id, label, status: s.status, path: s.path, message: s.message ?? null };
+      return { id, label, status: s.status, path: s.path, message: s.message ?? null, detected };
     };
     return ok({
       contract_text: CONTRACT_TEXT,
       targets: [
-        row('claude', 'Claude Code'),
-        row('codex', 'Codex'),
+        row('claude', 'Claude Code', true),
+        row('codex', 'Codex', isCodexDetected()),
       ],
     });
   }

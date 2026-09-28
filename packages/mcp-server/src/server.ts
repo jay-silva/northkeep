@@ -1064,8 +1064,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
   const checkpointSchema = {
     vault_id: idSchema.describe('The vault_id returned by project_resume for this project'),
     project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
-    operation_id: z.string().uuid().describe('A new lowercase UUID you generate for this save; project_resume does not return one. Reuse it only to retry this exact request.'),
-    expected_revision: idSchema.describe('The revision returned by project_resume (or project_get) that this save starts from'),
+    operation_id: z.string().uuid().describe('A random version-4 UUID, in lowercase, that you generate for this save; project_resume does not return one. Reuse it only to retry this exact request.'),
+    expected_revision: idSchema.describe('The revision this save starts from, taken from the latest resume or save result (project_resume, project_get, or receipt.result_revision from your last checkpoint)'),
     status: z.string().min(1).max(16384).describe('Replacement Current Status section'),
     completed: z.string().min(1).max(4096).describe('What was done, a few hundred characters at most; becomes the new Log entry. Do not include a date; the tool prefixes it.'),
     next_actions: z.string().max(16384).describe('Replacement Next Actions section; empty clears it'),

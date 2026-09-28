@@ -22,6 +22,13 @@ import type {
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5';
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 const DEFAULT_MAX_TOKENS = 64_000;
+const ADAPTIVE_THINKING_MODELS = [
+  'claude-fable-5', 'claude-mythos-5', 'claude-opus-5', 'claude-opus-4-8',
+  'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6',
+];
+function supportsAdaptiveThinking(model: string): boolean {
+  return ADAPTIVE_THINKING_MODELS.some((id) => model === id || model.startsWith(`${id}-`));
+}
 
 export interface AnthropicProviderConfig {
   apiKey: string;
@@ -145,12 +152,13 @@ export function createAnthropicProvider(config: AnthropicProviderConfig): ModelP
         .join('\n\n');
       const turns = toAnthropicTurns(messages);
 
+      const model = options.model || DEFAULT_ANTHROPIC_MODEL;
       try {
         const stream = client.messages.stream(
           {
-            model: options.model || DEFAULT_ANTHROPIC_MODEL,
+            model,
             max_tokens: options.maxTokens ?? DEFAULT_MAX_TOKENS,
-            thinking: { type: 'adaptive' },
+            ...(supportsAdaptiveThinking(model) ? { thinking: { type: 'adaptive' as const } } : {}),
             ...(options.outputSchema !== undefined
               ? { output_config: { format: { type: 'json_schema' as const, schema: options.outputSchema } } }
               : {}),

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -13,7 +14,8 @@ import { PROJECT_BOOTSTRAP_INSTRUCTION, PROJECT_STANDING_INSTRUCTION } from './p
 
 export type ContractTarget = 'claude' | 'codex' | 'cursor-project';
 
-export type ContractStatusKind = 'installed' | 'stale' | 'absent' | 'blocked';
+/** stale: an earlier NorthKeep release. edited: the user changed the contract, so nothing offers to replace it. */
+export type ContractStatusKind = 'installed' | 'stale' | 'edited' | 'absent' | 'blocked';
 
 export interface ContractOpts {
   /** File-path override for a single-target call. */
@@ -37,12 +39,17 @@ export interface ContractStatusResult {
   message?: string;
 }
 
+/** What an install overwrote. Absent when there was no earlier contract. */
+export type ReplacedContract = 'current' | 'earlier-release' | 'edited';
+
 export interface InstallResult {
   target: ContractTarget;
   path: string;
+  replaced?: ReplacedContract;
   skipped?: boolean;
   skipReason?: string;
   warning?: string;
+  backupPath?: string;
 }
 
 export interface UninstallResult {
@@ -110,8 +117,42 @@ function hasOwnershipMarker(text: string): boolean {
   return text.split('\n').some((line) => BEGIN_LINE.test(line));
 }
 
-function bytesMatchRender(existing: string, rendered: string): boolean {
-  return withOneTrailingNewline(existing) === withOneTrailingNewline(rendered);
+// SHA-256 of the Claude file, Cursor rule, and Codex block interior renders from v0.19.0 to v0.21.0, v0.22.0, v0.22.1, and the current text; append on every text change.
+export const RELEASED_CONTRACT_RENDER_SHA256: ReadonlySet<string> = new Set([
+  '38621a9338f127cd5a45ae3746f6d476eabdb85f906ecce7dfed826c85140788',
+  '2f876e48527210118f7b004f21241dccc426b5464b9e415b07921b84028381f5',
+  '66e5610e2dc30aec9adec15ac6ac2f952cd6b6398eae4093db95b34ad098c303',
+  'd669d01bea0f3963b7c1f991089fdfab78b9e90716bb9e7dbcf3a966472df092',
+  '8600f641fdbf381baec55107b95828d0942b174996d325d6f47c9c4ec5812c86',
+  'df1fab5c6c2f95fd983ceb4618cc21461dfac60c2084f468a0ba10757686218b',
+  '1588b4c4e1c2b6d4978c4a7053b4b81cd2f8a1056f88161e6f14ea63cca8c0c1',
+  '650f5383b5f133da0029aaf655afef120ce81e7a0e53074b9d7453233f3f450a',
+  '175cfa3017060b35ab52da8071f5fae00c785614834e1cdf369d09d48cef3279',
+  '90bdfaebee36e732bfdd1c25846cf282e8ff3ef295ace463f897ef265ff19138',
+  'd8a57f08ff3a2ff9d5534c0799c7b9bf586c5eaccb52ff2c24519db90122380e',
+  'cd2739f54788421edf228a5657b5ae46bb2d5811c2bd89b4bb491103a51e1df2',
+]);
+
+function classifyReplaced(existing: string, rendered: string): ReplacedContract {
+  const normalized = withOneTrailingNewline(existing);
+  if (normalized === withOneTrailingNewline(rendered)) return 'current';
+  const digest = createHash('sha256').update(normalized, 'utf8').digest('hex');
+  return RELEASED_CONTRACT_RENDER_SHA256.has(digest) ? 'earlier-release' : 'edited';
+}
+
+function statusFromReplaced(replaced: ReplacedContract): ContractStatusKind {
+  switch (replaced) {
+    case 'current':
+      return 'installed';
+    case 'earlier-release':
+      return 'stale';
+    case 'edited':
+      return 'edited';
+    default: {
+      const _exhaustive: never = replaced;
+      throw new Error(`Unhandled replaced kind: ${String(_exhaustive)}`);
+    }
+  }
 }
 
 /** Exact bytes install writes and status compares (P4). */
@@ -219,14 +260,38 @@ function foreignFileRefusal(file: string): Error {
   );
 }
 
+function findOrWriteBackup(file: string, contents: string): string {
+  for (let n = 1; ; n++) {
+    const bak = n === 1 ? `${file}.northkeep-bak` : `${file}.northkeep-bak-${n}`;
+    try {
+      fs.writeFileSync(bak, contents, { mode: 0o600, flag: 'wx' });
+      return bak;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      if (fs.readFileSync(bak, 'utf8') === contents) return bak;
+    }
+  }
+}
+
 function installOwnedFile(target: 'claude' | 'cursor-project', file: string): InstallResult {
   const rendered = renderContract(target);
-  if (fs.existsSync(file)) {
-    const existing = fs.readFileSync(file, 'utf8');
-    if (!hasOwnershipMarker(existing)) throw foreignFileRefusal(file);
+  if (!fs.existsSync(file)) {
+    atomicWrite(file, rendered);
+    return { target, path: file };
   }
+  const existing = fs.readFileSync(file, 'utf8');
+  if (!hasOwnershipMarker(existing)) throw foreignFileRefusal(file);
+  const replaced = classifyReplaced(existing, rendered);
+  const backupPath = replaced === 'edited' ? findOrWriteBackup(file, existing) : undefined;
   atomicWrite(file, rendered);
-  return { target, path: file };
+  if (!backupPath) return { target, path: file, replaced };
+  return {
+    target,
+    path: file,
+    replaced,
+    backupPath,
+    warning: `The file differed from this contract, so the previous copy was kept at ${path.basename(backupPath)}.`,
+  };
 }
 
 function uninstallOwnedFile(
@@ -235,13 +300,13 @@ function uninstallOwnedFile(
 ): UninstallResult {
   if (!fs.existsSync(file)) return { target, path: file, action: 'absent' };
   const existing = fs.readFileSync(file, 'utf8');
-  if (bytesMatchRender(existing, renderContract(target))) {
+  if (classifyReplaced(existing, renderContract(target)) !== 'edited') {
     fs.rmSync(file);
     return { target, path: file, action: 'deleted' };
   }
   if (hasOwnershipMarker(existing)) {
-    const bak = `${file}.northkeep-bak`;
-    fs.renameSync(file, bak);
+    const bak = findOrWriteBackup(file, existing);
+    fs.rmSync(file);
     return {
       target,
       path: file,
@@ -272,10 +337,7 @@ function statusOwnedFile(
       message: 'A file exists at this path without a NorthKeep ownership marker.',
     };
   }
-  if (bytesMatchRender(existing, renderContract(target))) {
-    return { target, path: file, status: 'installed' };
-  }
-  return { target, path: file, status: 'stale' };
+  return { target, path: file, status: statusFromReplaced(classifyReplaced(existing, renderContract(target))) };
 }
 
 interface MarkerHit {
@@ -323,6 +385,7 @@ function installCodex(file: string): InstallResult {
   const { bom, rest } = stripBom(raw);
   const markers = classifyCodexMarkers(file, rest);
   let next: string;
+  let replaced: ReplacedContract | undefined;
   if (markers.kind === 'none') {
     if (rest.trim() === '') {
       next = renderContract('codex');
@@ -332,11 +395,14 @@ function installCodex(file: string): InstallResult {
     }
   } else {
     const interior = withOneTrailingNewline(CONTRACT_TEXT);
+    replaced = classifyReplaced(rest.slice(markers.begin.end, markers.end.start), interior);
     next = rest.slice(0, markers.begin.end) + interior + rest.slice(markers.end.start);
   }
-  if (fs.existsSync(file)) backupOnce(file);
+  const ours = replaced === 'current' || replaced === 'earlier-release';
+  if (fs.existsSync(file) && !ours) backupOnce(file);
   atomicWrite(file, bom + next);
   const result: InstallResult = { target: 'codex', path: file };
+  if (replaced) result.replaced = replaced;
   if (fs.existsSync(codexOverridePath(file))) {
     result.warning = CODEX_OVERRIDE_WARNING;
   }
@@ -394,10 +460,7 @@ function statusCodex(file: string): ContractStatusResult {
     return { target: 'codex', path: file, status: 'blocked', message: CODEX_OVERRIDE_WARNING };
   }
   const interior = rest.slice(markers.begin.end, markers.end.start);
-  if (bytesMatchRender(interior, CONTRACT_TEXT)) {
-    return { target: 'codex', path: file, status: 'installed' };
-  }
-  return { target: 'codex', path: file, status: 'stale' };
+  return { target: 'codex', path: file, status: statusFromReplaced(classifyReplaced(interior, CONTRACT_TEXT)) };
 }
 
 export function installContract(target: ContractTarget, opts: ContractOpts = {}): InstallResult {

@@ -598,6 +598,52 @@
     .pinchip:has(input:checked) { background: #22382c; }
     .toolchip:has(input:checked) { background: #22382c; border-color: var(--accent); color: var(--accent); }
   }
+  /* One-time session contract offer on Projects. */
+  .contract-offer { position:relative; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:20px 36px; align-items:end;
+    margin:0 0 22px; padding:22px 24px; border:1px solid color-mix(in srgb,var(--accent) 32%,var(--line)); border-radius:14px;
+    background:color-mix(in srgb,var(--accent) 7%,var(--panel)); animation:project-reveal .32s cubic-bezier(.16,1,.3,1); }
+  .contract-offer[hidden] { display:none; }
+  .contract-offer h3 { margin:0 0 6px; font:500 22px/1.2 var(--serif); letter-spacing:-.01em; color:var(--ink); }
+  .contract-offer .lead { margin:0; max-width:64ch; color:var(--ink); }
+  .contract-offer .targets { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 12px; }
+  .contract-reach { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:8px 16px; margin:16px 0 0; font-size:14px; }
+  .contract-reach dt { color:var(--muted); font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding-top:2px; }
+  .contract-reach dd { margin:0; display:flex; flex-wrap:wrap; gap:6px 18px; }
+  .contract-reach dd span { display:inline-flex; align-items:center; gap:6px; }
+  .contract-reach svg { width:15px; height:15px; flex:none; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
+  .contract-reach .yes svg { color:var(--accent); }
+  .contract-reach .no { color:var(--muted); }
+  .contract-reach small { color:var(--muted); font-size:12px; }
+  .contract-offer .fine { margin:12px 0 0; font-size:12px; color:var(--muted); }
+  .contract-offer-actions { display:flex; flex-direction:column; align-items:stretch; gap:8px; min-width:250px; max-width:320px; }
+  .contract-offer-actions .err { margin:0; min-height:0; overflow-wrap:anywhere; }
+  .contract-offer.done { grid-template-columns:auto minmax(0,1fr) auto; align-items:center; }
+  .contract-offer .done-mark { width:36px; height:36px; border-radius:50%; display:grid; place-items:center; background:var(--accent); color:var(--accent-ink); }
+  .contract-offer .done-mark svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
+  .contract-offer.done h3 { font-size:19px; margin-bottom:2px; }
+  .contract-offer.done p { margin:0; color:var(--muted); font-size:14px; }
+  .contract-offer .kept { margin-top:6px; overflow-wrap:anywhere; }
+  #projectsHeading:focus, #connectHeading:focus { outline:none; }
+  .contract-offer .kept:empty { margin:0; }
+  .contract-offer.done .contract-offer-actions { min-width:0; }
+  @media (max-width: 860px) {
+    .contract-offer, .contract-offer.done { grid-template-columns:minmax(0,1fr); }
+    .contract-offer-actions { min-width:0; max-width:none; }
+    .contract-reach { grid-template-columns:minmax(0,1fr); gap:4px; }
+    .contract-reach dd { margin-bottom:8px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .contract-offer { animation:none; } }
+  /* Support NorthKeep row in Settings, About. */
+  .sr-only { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+  .support-row { display:flex; align-items:center; justify-content:space-between; gap:18px; flex-wrap:wrap;
+    margin-top:28px; padding:18px 0 0; border-top:1px solid var(--line); }
+  .support-row p { margin:0; max-width:52ch; }
+  .support-row strong { display:block; font:500 19px/1.25 var(--serif); margin-bottom:3px; }
+  a.btn-link { display:inline-flex; align-items:center; gap:8px; min-height:44px; padding:9px 16px; border:1px solid var(--line);
+    border-radius:10px; background:var(--panel); color:var(--ink); font:500 14px/1 var(--sans); text-decoration:none; }
+  a.btn-link:hover { border-color:var(--accent); color:var(--accent); }
+  a.btn-link:focus-visible { outline:2px solid var(--accent); outline-offset:2px; }
+  a.btn-link svg { width:15px; height:15px; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round; }
 </style>
 </head>
 <body>
@@ -819,7 +865,8 @@
     </div>
   </section>
   <section id="view-projects" hidden>
-    <div class="page-head"><div><h2>Projects</h2><p class="muted">Pick up the work with its latest state, evidence, and next move.</p></div></div>
+    <div class="page-head"><div><h2 id="projectsHeading" tabindex="-1">Projects</h2><p class="muted">Pick up the work with its latest state, evidence, and next move.</p></div></div>
+    <section id="contractOffer" class="contract-offer" hidden></section>
     <div class="projects-summary"><strong id="projectsSummaryTitle">Projects</strong><span class="muted" id="projectsSummaryMeta">Loading…</span><span class="pill" id="projectsLocalPill">Local vault</span><span class="muted projects-mirror" id="projectsMirrorMeta" hidden></span></div>
     <div class="projects-workspace">
       <aside class="projects-rail" aria-label="Projects"><div class="review-meta-title">Projects</div><div id="projectList"></div></aside>
@@ -1020,7 +1067,7 @@
       over, set the same sync server, then Pull.</p>
   </section>
   <section id="view-connect" hidden>
-    <div class="page-head"><div><h2>Desktop</h2><p class="muted">Bring your memory to the AI apps you use on this Mac.</p></div></div>
+    <div class="page-head"><div><h2 id="connectHeading" tabindex="-1">Desktop</h2><p class="muted">Bring your memory to the AI apps you use on this Mac.</p></div></div>
     <p class="muted">Give the AI apps you already use (Claude Desktop, Claude Code, ChatGPT, and Cursor)
       access to your NorthKeep memory, on your existing subscription. One click registers the memory
       server that ships inside NorthKeep; no terminal, no config files to edit by hand.</p>
@@ -1120,6 +1167,7 @@
     <button class="btn primary" id="checkUpdateBtn">Check for updates</button>
     <p id="updateResult" style="margin-top:12px;font-size:14px"></p>
     <p class="muted" style="font-size:12px;margin-top:14px">This checks the public release page only when you click the button. Nothing about you or your vault is sent, and updates are never downloaded or installed automatically.</p>
+    <div class="support-row"><p><strong>Support NorthKeep</strong><span class="muted">Everything on your Mac is free. If NorthKeep helps you, you can leave a tip.</span></p><a class="btn-link" href="https://northkeep.ai/support" target="_blank" rel="noopener noreferrer">Open support page<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M17 14v5H5V7h5"/></svg><span class="sr-only"> (opens in your browser)</span></a></div>
   </section>
 </main>
 </div>
@@ -1353,8 +1401,8 @@
   let currentSub = 'import';
   function runLoader(v) {
     if (v === 'activity') loadLog();
-    else if (v === 'memories') loadMemories();
-    else if (v === 'projects') loadProjects();
+    else if (v === 'memories') { loadMemories(); loadScopes(); }
+    else if (v === 'projects') { loadProjects(); renderContractOffer(); }
     else if (v === 'curation') { loadReviewPanel(); loadReviewCollections(); loadCurationCollections(); }
     else if (v === 'models') loadProviders();
     else if (v === 'sync') loadSyncStatus();
@@ -2082,8 +2130,14 @@
   });
 
   // --- memories
-  const TYPES = ['episodic', 'semantic', 'procedural', 'working', 'identity'];
-  const MEMORY_TYPE_LABELS = { episodic:'Event', semantic:'Preference', procedural:'Procedure', working:'Working note', identity:'About me' };
+  const MEMORY_TYPE_LABELS = {
+    episodic: { label: 'Event', help: 'An event or experience. e.g. "Met the Hendersons about their filing on June 12."' },
+    semantic: { label: 'Fact', help: 'A lasting fact worth remembering. e.g. "Our office moved to 12 Main Street in March."' },
+    procedural: { label: 'Procedure', help: 'A preference or how-to. e.g. "Draft my emails short and direct, no bullet points."' },
+    working: { label: 'Working note', help: 'Current context that ages out. e.g. "This week I am focused on the budget review."' },
+    identity: { label: 'About me', help: 'A stable fact about who you are. e.g. "I am a compliance officer and EMS lieutenant."' },
+  };
+  const TYPES = Object.keys(MEMORY_TYPE_LABELS);
   let filterType = '', filterScope = '', searchTimer = null;
   let knownScopes = [];
   let memorySharedScopes = null;
@@ -2540,7 +2594,7 @@
     }
   });
   $('typeChips').innerHTML = '<option value="">All types</option>' + TYPES.map((type) =>
-    `<option value="${type}">${MEMORY_TYPE_LABELS[type]}</option>`).join('');
+    `<option value="${type}">${MEMORY_TYPE_LABELS[type].label}</option>`).join('');
   $('typeChips').addEventListener('change', () => {
     filterType = $('typeChips').value;
     loadMemories();
@@ -2562,6 +2616,7 @@
     const counts = new Map();
     for (const memory of visibleMemories) counts.set(memory.scope, (counts.get(memory.scope) || 0) + 1);
     const totalCount = visibleMemories.length;
+    $('countPill').textContent = totalCount + ' memories';
     $('memoryVaultSummary').textContent = totalCount + ' ' + (totalCount === 1 ? 'memory' : 'memories') + ' · ' + memoryScopes.length + ' ' + (memoryScopes.length === 1 ? 'collection' : 'collections');
     $('scopeChips').replaceChildren();
     for (const scope of ['', ...memoryScopes]) {
@@ -2651,7 +2706,7 @@
         <div class="card" id="mem-${esc(m.id)}">
           <div class="content">${esc(m.content)}</div>
           <div class="prov">
-            <span>${esc(MEMORY_TYPE_LABELS[m.type] || m.type)}</span>
+            <span>${esc(MEMORY_TYPE_LABELS[m.type]?.label || m.type)}</span>
             <span>${esc(m.scope)}</span>
             ${isLiveProjectDoc(m)
               ? `<span class="badge project" title="Live project document. Agents read this at session start and update it when a session ends.">LIVE PROJECT</span>`
@@ -2888,28 +2943,12 @@
   // --- add a memory (GUI-created, explicit scope). '+' isn't in the scope
   // charset, so NEW_SCOPE can never collide with a real scope value.
   const NEW_SCOPE = '+new';
-  // Plain-language glosses for the memory types (jargon otherwise). The short
-  // label shows in the dropdown; the fuller help line explains the choice.
-  const TYPE_LABELS = {
-    episodic: 'episodic: something that happened',
-    semantic: 'semantic: a durable fact',
-    procedural: 'procedural: how you like things done',
-    working: 'working: a current, temporary note',
-    identity: 'identity: who you are',
-  };
-  const TYPE_HELP = {
-    episodic: 'An event or experience. e.g. "Met the Hendersons about their filing on June 12."',
-    semantic: 'A lasting fact worth remembering. e.g. "I prefer concise answers without filler."',
-    procedural: 'A preference or how-to. e.g. "Draft my emails short and direct, no bullet points."',
-    working: 'Current context that ages out. e.g. "This week I am focused on the budget review."',
-    identity: 'A stable fact about who you are. e.g. "I am a compliance officer and EMS lieutenant."',
-  };
   for (const t of TYPES) {
-    const o = el('option', undefined, TYPE_LABELS[t] || t);
+    const o = el('option', undefined, MEMORY_TYPE_LABELS[t].label);
     o.value = t;
     $('addMemType').appendChild(o);
   }
-  function updateTypeHelp() { $('addMemTypeHelp').textContent = TYPE_HELP[$('addMemType').value] || ''; }
+  function updateTypeHelp() { $('addMemTypeHelp').textContent = MEMORY_TYPE_LABELS[$('addMemType').value]?.help || ''; }
   $('addMemType').addEventListener('change', updateTypeHelp);
   updateTypeHelp();
   $('addMemScope').addEventListener('change', () => {
@@ -5305,7 +5344,7 @@
     loadContract();
   }
 
-  async function loadContract() {
+  async function loadContract(notice = '') {
     const box = $('contractCard');
     if (!box) return;
     box.textContent = '';
@@ -5327,21 +5366,21 @@
       const left = el('div', '');
       left.appendChild(el('span', '', t.label + '  '));
       left.appendChild(el('span', 'badge ' + (t.status === 'installed' ? 'private' : 'auto'),
-        String(t.status || 'absent').toUpperCase()));
+        t.status === 'edited' ? 'EDITED BY YOU' : String(t.status || 'absent').toUpperCase()));
       row.appendChild(left);
       const btns = el('div', 'row');
-      const installBtn = el('button', 'btn primary', t.status === 'installed' ? 'Reinstall' : 'Install');
+      const installBtn = el('button', 'btn primary', t.status === 'installed' || t.status === 'edited' ? 'Reinstall' : 'Install');
       installBtn.addEventListener('click', async () => {
         err.textContent = '';
         try {
-          await api('/api/contract/install/' + t.id, { method: 'POST' });
-          await loadContract();
+          const result = await api('/api/contract/install/' + t.id, { method: 'POST' });
+          await loadContract(contractBackupLine(t.label, result));
         } catch (e) {
           if (e.message !== 'locked') err.textContent = e.message;
         }
       });
       btns.appendChild(installBtn);
-      if (t.status === 'installed' || t.status === 'stale' || t.status === 'blocked') {
+      if (t.status === 'installed' || t.status === 'stale' || t.status === 'edited' || t.status === 'blocked') {
         const removeBtn = el('button', 'btn danger', 'Remove');
         removeBtn.addEventListener('click', async () => {
           err.textContent = '';
@@ -5358,6 +5397,7 @@
       card.appendChild(row);
       if (t.message) card.appendChild(el('p', 'muted', t.message));
     }
+    if (notice) card.appendChild(el('p', 'muted', notice)).style.overflowWrap = 'anywhere';
     card.appendChild(err);
     const copyRow = el('div', 'row');
     copyRow.style.marginTop = '12px';
@@ -5366,6 +5406,187 @@
     copyRow.appendChild(copyBtn);
     card.appendChild(copyRow);
     box.appendChild(card);
+  }
+
+  // One line when an install kept the user's edited copy aside, so they know where it went.
+  function contractBackupLine(label, result) {
+    if (!result || !result.backupPath) return '';
+    return label + ': you had edited the file, so the previous copy was kept at ' + result.backupPath + '.';
+  }
+
+  // One-time offer on Projects. Update and install are dismissed separately, so a
+  // contract that goes stale after a dismissed install still gets one update offer.
+  const CONTRACT_OFFER_KEYS = { install: 'nk_contract_offer_dismissed_install', update: 'nk_contract_offer_dismissed_update' };
+  let contractOfferBusy = false;
+
+  // Update covers stale targets only, so a dismissed install never rides along.
+  // Edited targets were customized on purpose and blocked ones are left to
+  // Connect, Desktop, which explains them, so neither is offered here.
+  function contractOfferPlan(targets, dismissed) {
+    const stale = targets.filter((t) => t.status === 'stale');
+    const absent = targets.filter((t) => t.status === 'absent');
+    if (stale.length && !dismissed.update) return { kind: 'update', needs: stale };
+    if (absent.length && !dismissed.install) return { kind: 'install', needs: absent };
+    return null;
+  }
+
+  function contractOfferDismissed() {
+    const out = { install: false, update: false };
+    for (const kind of ['install', 'update']) {
+      try { out[kind] = localStorage.getItem(CONTRACT_OFFER_KEYS[kind]) === '1'; } catch { out[kind] = false; }
+    }
+    return out;
+  }
+
+  function contractOfferItem(kind, text, note) {
+    const s = el('span', kind);
+    s.innerHTML = kind === 'yes'
+      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>'
+      : '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M6.5 17.5l11-11"/></svg>';
+    s.appendChild(document.createTextNode(text));
+    if (note) s.appendChild(el('small', '', note));
+    return s;
+  }
+
+  // Drops the Node error code (EACCES: ...) and the syscall's quoted path, and shortens
+  // any other absolute path to its file name, so the card shows the kind of failure.
+  function contractErrorText(message) {
+    let text = String(message || '')
+      .replace(/^E[A-Z]+:\s*/, '')
+      .replace(/,\s*[a-z]+\s+'[^']*'(?:\s*->\s*'[^']*')?/g, '')
+      .replace(/(?:~|\/)[^\s:']*\/([^\s:'\/]+)/g, '$1')
+      .trim();
+    if (!text) text = 'Unknown error';
+    text = text.charAt(0).toUpperCase() + text.slice(1);
+    return /[.!?]$/.test(text) ? text : text + '.';
+  }
+
+  // Same warning the CLI prints after install. Codex connects through the ChatGPT card.
+  function contractConnectLine(labels) {
+    if (!labels.length) return '';
+    const many = labels.length > 1;
+    return labels.join(' and ') + (many ? ' are' : ' is') + ' not connected to NorthKeep yet. ' +
+      'The contract is installed, but project tools will not be available until you connect ' + (many ? 'them' : 'it') + ' in Connect, Desktop.';
+  }
+
+  // Same as picking Connect, Desktop in the sidebar: expand the group, show the page, focus its heading.
+  function openConnectDesktop() {
+    $('connectToggle').setAttribute('aria-expanded', 'true');
+    $('connectNavChildren').hidden = false;
+    showTop('connect');
+    $('connectHeading').focus();
+  }
+
+  async function renderContractOffer() {
+    const box = $('contractOffer');
+    if (!box || contractOfferBusy) return;
+    let data;
+    try { data = await api('/api/contract'); } catch { box.hidden = true; return; }
+    const targets = (data.targets || []).filter((t) => t.detected !== false);
+    const plan = contractOfferPlan(targets, contractOfferDismissed());
+    if (!plan) { box.hidden = true; return; }
+    const update = plan.kind === 'update';
+    let pending = plan.needs.slice();
+    const names = plan.needs.map((t) => t.label).join(' and ');
+    const kept = [];
+    const close = () => { box.hidden = true; const heading = $('projectsHeading'); if (heading) heading.focus(); };
+
+    box.className = 'contract-offer';
+    box.replaceChildren();
+    box.hidden = false;
+    const main = el('div');
+    const title = el('h3', '', update ? 'Your project session contract needs an update' : 'Let ' + names + ' keep your projects current');
+    title.id = 'contractOfferTitle';
+    box.setAttribute('aria-labelledby', 'contractOfferTitle');
+    main.appendChild(title);
+    if (update) {
+      const row = el('div', 'targets');
+      const word = { installed: 'current', stale: 'out of date', edited: 'edited by you', absent: 'not installed', blocked: 'needs attention' };
+      for (const t of targets) row.appendChild(el('span', 'pill ' + (t.status === 'installed' ? 'ok' : 'draft'), t.label + ': ' + (word[t.status] || t.status)));
+      main.appendChild(row);
+    }
+    main.appendChild(el('p', 'lead', (update ? 'NorthKeep has a newer contract than the one installed. ' : '') +
+      'The session contract tells ' + names + ' to resume the project at the start of a session, save a checkpoint partway, and wrap up at the end.'));
+    const reach = el('dl', 'contract-reach');
+    const yes = el('dd');
+    yes.appendChild(contractOfferItem('yes', 'Claude Code'));
+    if (targets.some((t) => t.id === 'codex')) yes.appendChild(contractOfferItem('yes', 'Codex'));
+    yes.appendChild(contractOfferItem('yes', 'Cursor ', 'per project, from Connect, Desktop'));
+    const no = el('dd');
+    no.append(contractOfferItem('no', 'Claude Desktop plain chat'), contractOfferItem('no', 'ChatGPT'));
+    reach.append(el('dt', '', 'Reaches'), yes, el('dt', '', 'Does not reach'), no);
+    main.appendChild(reach);
+    main.appendChild(el('p', 'fine', 'A standing instruction the apps read, not a lock. Remove it any time in Connect, Desktop.'));
+
+    const actions = el('div', 'contract-offer-actions');
+    const install = el('button', 'btn primary', (update ? 'Update' : 'Install') + ' for ' + names);
+    install.type = 'button';
+    install.id = 'contractOfferInstall';
+    const later = el('button', 'btn', 'Not now');
+    later.type = 'button';
+    const err = el('p', 'err');
+    err.setAttribute('role', 'alert');
+    later.addEventListener('click', () => {
+      try { localStorage.setItem(CONTRACT_OFFER_KEYS[plan.kind], '1'); } catch { /* the card still hides for this visit */ }
+      close();
+    });
+    install.addEventListener('click', async () => {
+      contractOfferBusy = true;
+      install.disabled = later.disabled = true;
+      install.textContent = update ? 'Updating…' : 'Installing…';
+      err.textContent = '';
+      const failed = [];
+      for (const t of pending) {
+        try {
+          const line = contractBackupLine(t.label, await api('/api/contract/install/' + t.id, { method: 'POST' }));
+          if (line) kept.push(line);
+        } catch (e) {
+          if (e.message === 'locked') { contractOfferBusy = false; box.hidden = true; return; }
+          failed.push({ target: t, message: e.message });
+        }
+      }
+      contractOfferBusy = false;
+      if (failed.length) {
+        pending = failed.map((f) => f.target);
+        install.disabled = later.disabled = false;
+        install.textContent = 'Try again';
+        err.textContent = failed.map((f) => 'Could not ' + (update ? 'update' : 'install') + ' for ' + f.target.label + '. ' + contractErrorText(f.message)).join(' ');
+        return;
+      }
+      box.className = 'contract-offer done';
+      box.replaceChildren();
+      const mark = el('div', 'done-mark');
+      mark.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>';
+      const copy = el('div');
+      const doneTitle = el('h3', '', (update ? 'Updated' : 'Installed') + ' for ' + names);
+      doneTitle.id = 'contractOfferTitle';
+      copy.append(doneTitle, el('p', '', 'It takes effect the next time you start a session in each app. Manage it in Connect, Desktop.'));
+      for (const line of kept) copy.appendChild(el('p', 'kept', line));
+      const connectNote = el('p', 'kept');
+      connectNote.setAttribute('role', 'status');
+      copy.appendChild(connectNote);
+      const doneActions = el('div', 'contract-offer-actions');
+      const done = el('button', 'btn', 'Done');
+      done.type = 'button';
+      done.addEventListener('click', close);
+      doneActions.appendChild(done);
+      box.append(mark, copy, doneActions);
+      done.focus();
+      let connectTargets = [];
+      try { connectTargets = (await api('/api/connect')).targets || []; } catch { return; }
+      const connectId = { claude: 'claude-code', codex: 'chatgpt' };
+      const connectLabel = { claude: 'Claude Code', codex: 'ChatGPT / Codex' };
+      const unconnected = plan.needs.filter((t) => connectTargets.some((c) => c.id === connectId[t.id] && c.connected === false));
+      const line = contractConnectLine(unconnected.map((t) => connectLabel[t.id] || t.label));
+      if (!line || box.hidden) return;
+      connectNote.textContent = line;
+      const open = el('button', 'btn', 'Open Connect, Desktop');
+      open.type = 'button';
+      open.addEventListener('click', () => { box.hidden = true; openConnectDesktop(); });
+      doneActions.insertBefore(open, done);
+    });
+    actions.append(install, later, err);
+    box.append(main, actions);
   }
 
   function connectCard(t, scopesInVault, note) {

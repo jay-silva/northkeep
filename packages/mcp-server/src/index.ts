@@ -35,7 +35,9 @@ export {
   SERVER_NAME,
   chatgptStatus,
   claudeCodeAvailable,
+  claudeCodeAvailableAsync,
   claudeCodeStatus,
+  claudeCodeStatusAsync,
   claudeDesktopConfigPath,
   claudeDesktopStatus,
   codexConfigPath,
@@ -45,6 +47,7 @@ export {
   connectClaudeDesktop,
   connectCursor,
   connectStatus,
+  connectStatusAsync,
   cursorConfigPath,
   cursorStatus,
   disconnect,
@@ -79,6 +82,7 @@ export {
   type ContractStatusResult,
   type ContractTarget,
   type InstallResult,
+  type ReplacedContract,
   type UninstallResult,
 } from './contract.js';
 export {
