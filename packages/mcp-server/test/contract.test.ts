@@ -82,6 +82,13 @@ describe('CONTRACT_TEXT', () => {
       'If the NorthKeep project tools are unavailable, disabled, or a call returns a scope or permission error, mention it once and continue without them; never retry in a loop and never block the session on it.',
     );
   });
+
+  it('tells the app which revision and which kind of UUID a save needs', () => {
+    const rendered = renderContract('claude');
+    expect(rendered).toContain('the revision from the latest resume or save result as expected_revision');
+    expect(rendered).toContain('a random version-4 UUID, in lowercase, that you generate as operation_id');
+    expect(rendered).not.toContain('revision from that resume');
+  });
 });
 
 describe('Claude contract', () => {

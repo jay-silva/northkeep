@@ -36,3 +36,16 @@ describe('ADR 0060 D8: project_update tells the truth about size', () => {
     expect(text(r)).toContain(PROJECT_DOC_CAP_MESSAGE);
   });
 });
+
+describe('project_checkpoint and project_wrap name the ids the core accepts', () => {
+  it('asks for a random version-4 UUID and the latest resume or save revision', async () => {
+    h = createHarness();
+    const mcp = await h.connect();
+    const { tools } = await mcp.listTools();
+    for (const name of ['project_checkpoint', 'project_wrap']) {
+      const properties = tools.find((t) => t.name === name)!.inputSchema.properties as Record<string, { description?: string }>;
+      expect(properties.operation_id!.description).toContain('A random version-4 UUID, in lowercase,');
+      expect(properties.expected_revision!.description).toContain('the latest resume or save result');
+    }
+  });
+});
