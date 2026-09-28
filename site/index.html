@@ -16,7 +16,7 @@
   :root{
     --bg:#f6f4ef; --panel:#fffdf8; --ink:#24221c; --muted:#6f695c;
     --line:#e6e0d4; --accent:#2f6a54; --accent-soft:#e4efe8; --gold:#b9862f;
-    --chip:#efeadd; --radius:14px;
+    --chip:#efeadd; --radius:14px; --on-accent:#fff;
     --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   }
@@ -24,16 +24,16 @@
     :root{
       --bg:#16140f; --panel:#211e17; --ink:#ece7db; --muted:#a39a88;
       --line:#38332a; --accent:#79b394; --accent-soft:#23302a; --gold:#d8b872;
-      --chip:#2b2820;
+      --chip:#2b2820; --on-accent:#211e17;
     }
   }
   :root[data-theme="light"]{
     --bg:#f6f4ef; --panel:#fffdf8; --ink:#24221c; --muted:#6f695c; --line:#e6e0d4;
-    --accent:#2f6a54; --accent-soft:#e4efe8; --gold:#b9862f; --chip:#efeadd;
+    --accent:#2f6a54; --accent-soft:#e4efe8; --gold:#b9862f; --chip:#efeadd; --on-accent:#fff;
   }
   :root[data-theme="dark"]{
     --bg:#16140f; --panel:#211e17; --ink:#ece7db; --muted:#a39a88; --line:#38332a;
-    --accent:#79b394; --accent-soft:#23302a; --gold:#d8b872; --chip:#2b2820;
+    --accent:#79b394; --accent-soft:#23302a; --gold:#d8b872; --chip:#2b2820; --on-accent:#211e17;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
@@ -55,11 +55,24 @@
   .nav a.navlink{color:var(--ink);font-size:15px;margin-left:22px}
   .nav a.navlink:hover{color:var(--accent);text-decoration:none}
   @media(max-width:640px){.nav a.navlink{display:none}}
+  .nav a.support-pill{display:inline-flex;align-items:center;gap:7px;min-height:44px;margin-left:22px;padding:0 16px;
+    border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);
+    font-size:14px;font-weight:600;white-space:nowrap;text-decoration:none;transition:background .15s ease-out,color .15s ease-out}
+  .nav a.support-pill svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  .nav a.support-pill:hover,.nav a.support-pill[aria-current="page"]{background:var(--accent);color:var(--on-accent);text-decoration:none}
+  @media(max-width:640px){.nav a.support-pill{margin-left:0;padding:0 14px}}
+  @media(max-width:420px){.nav .wrap{gap:8px}.nav a.support-pill{padding:0 12px}}
+  @media(max-width:374px){.nav a.support-pill svg{display:none}}
+  /* The pill needs room: the header row runs wider than the 960px content column, and two links the footer repeats fold away first. */
+  .nav .wrap{max-width:1160px}
+  .nav a.navlink{white-space:nowrap}
+  @media(max-width:1180px){.nav a.navlink[href*="roadmap"],.nav a.navlink[href*="github.com"]{display:none}}
+  @media(max-width:980px){.nav a.navlink{display:none}}
 
   /* buttons */
   .btn{display:inline-block;padding:12px 22px;border-radius:10px;font-weight:600;
     font-size:16px;border:1px solid transparent;cursor:pointer}
-  .btn.primary{background:var(--accent);color:#fff}
+  .btn.primary{background:var(--accent);color:var(--on-accent)}
   .btn.primary:hover{filter:brightness(1.06);text-decoration:none}
   .btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
   .btn.ghost:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
@@ -114,7 +127,7 @@
   summary{cursor:pointer;font-weight:600;padding:12px 0;list-style:none;display:flex;justify-content:space-between;align-items:center;gap:12px}
   summary::-webkit-details-marker{display:none}
   summary::after{content:"+";color:var(--muted);font-weight:400;flex:none;width:1em;text-align:center}
-  details[open] summary::after{content:"–"}
+  details[open] summary::after{content:"−"}
   details p{margin:0 0 14px;color:var(--muted)}
 
   /* waitlist */
@@ -127,7 +140,78 @@
   footer{border-top:1px solid var(--line);padding:34px 0;color:var(--muted);font-size:14px}
   footer .wrap{display:flex;flex-wrap:wrap;gap:18px;align-items:center}
   footer .spacer{flex:1}
+  @media(max-width:640px){footer .wrap{gap:0 18px}footer .wrap a{display:inline-flex;align-items:center;min-height:44px;min-width:44px}}
   code{background:var(--chip);padding:2px 7px;border-radius:6px;font-size:.9em}
+
+  ::selection{background:var(--accent-soft);color:var(--ink)}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:4px}
+  code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+
+  /* projects: the three-step flow */
+  .flow{list-style:none;margin:30px 0 0;padding:0;display:grid;grid-template-columns:repeat(3,1fr);gap:28px}
+  .flow li{position:relative;padding-top:54px}
+  .flow li::before{content:"";position:absolute;top:18px;left:46px;right:-18px;height:1px;background:var(--line)}
+  .flow li:last-child::before{display:none}
+  .flow .n{position:absolute;top:0;left:0;width:36px;height:36px;border-radius:50%;
+    border:1px solid var(--accent);color:var(--accent);background:var(--bg);
+    font-family:var(--serif);font-size:18px;font-weight:600;display:grid;place-items:center}
+  .flow h3{font-size:22px;margin:0 0 6px}
+  .flow h3 code{font-size:13px;font-weight:500;margin-left:8px;vertical-align:3px;color:var(--muted)}
+  .flow p{margin:0;color:var(--muted);font-size:15px;max-width:34ch}
+  @media(max-width:760px){
+    .flow{grid-template-columns:1fr;gap:26px}
+    .flow li{padding:4px 0 0 56px}
+    .flow li::before{top:46px;bottom:-22px;left:18px;right:auto;width:1px;height:auto}
+    .flow p{max-width:none}
+  }
+  .boundary{margin:30px 0 0;padding:16px 20px;border:1px dashed var(--line);border-radius:var(--radius);
+    font-size:15px;color:var(--muted);max-width:760px}
+  .boundary strong{color:var(--ink);font-weight:600}
+
+  /* projects: illustration of a project document and the board */
+  .doc{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:0 14px 40px -12px rgba(36,34,28,.18);padding:22px 24px 20px;text-align:left;font-size:14.5px;line-height:1.5}
+  .doc-head{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;
+    padding-bottom:14px;border-bottom:1px solid var(--line)}
+  .doc-title{font-family:var(--serif);font-size:22px;font-weight:600;line-height:1.2}
+  .badge{font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;background:var(--chip);color:var(--muted);white-space:nowrap}
+  .doc dl{margin:0}
+  .doc dt{font-size:13px;font-weight:700;color:var(--ink);margin:16px 0 4px}
+  .doc dd{margin:0;color:var(--muted)}
+  .doc ul{margin:0;padding-left:18px}
+  .doc li{margin:2px 0}
+  .doc .log li{list-style:none;margin-left:-18px;display:flex;gap:10px}
+  .doc .log time{color:var(--ink);font-variant-numeric:tabular-nums;flex:none;width:3.6em}
+  .doc-foot{margin-top:16px;padding-top:12px;border-top:1px solid var(--line);font-size:13px;color:var(--muted)}
+  .board{background:var(--chip);border-radius:var(--radius);padding:18px 20px;font-size:14px;line-height:1.45}
+  .board .cmd{font-size:13px;color:var(--muted);margin:0 0 12px}
+  .board .cmd code{background:transparent;padding:0;color:var(--ink)}
+  .board dl{margin:0;display:grid;grid-template-columns:max-content 1fr;gap:9px 18px}
+  .board dt{font-weight:600}
+  .board dd{margin:0;color:var(--muted)}
+  @media(max-width:520px){.board dl{grid-template-columns:1fr;gap:2px}.board dd{margin-bottom:8px}}
+  .doc-fig,.board-fig{margin:0}
+  figcaption{font-size:13px;color:var(--muted);margin-top:12px}
+
+  /* projects: what else projects do */
+  .pmore{display:grid;grid-template-columns:1fr 1fr;gap:0 44px;margin-top:40px;border-top:1px solid var(--line)}
+  .pmore div{padding:22px 0;border-bottom:1px solid var(--line)}
+  .pmore h3{font-size:19px;margin:0 0 6px}
+  .pmore p{margin:0;color:var(--muted);font-size:15px}
+  @media(max-width:760px){.pmore{grid-template-columns:1fr}}
+
+
+  /* mock B: projects section right after the hero */
+  #projects{padding:60px 0 52px}
+  #projects h2{font-size:clamp(28px,4.2vw,40px);max-width:720px}
+  #projects > .wrap > .lede{font-size:18px;max-width:680px}
+  .pfig{display:grid;grid-template-columns:1.1fr .9fr;gap:24px;align-items:start;margin:40px 0 0}
+  .pfig figure{margin:0}
+  @media(max-width:820px){.pfig{grid-template-columns:1fr}}
+
+  /* feature grid, seven items */
+  .feat.wide{grid-column:span 2}
+  @media(max-width:760px){.feat.wide{grid-column:auto}}
 </style>
 </head>
 <body>
@@ -136,19 +220,21 @@
   <div class="wrap">
     <span class="brand"><img src="./northkeep-icon.png" alt="">NorthKeep</span>
     <span class="spacer"></span>
+    <a class="navlink" href="#projects">Projects</a>
     <a class="navlink" href="#how">How it works</a>
     <a class="navlink" href="#pricing">Pricing</a>
     <a class="navlink" href="./start.html">Getting started</a>
     <a class="navlink" href="./roadmap.html">Roadmap</a>
     <a class="navlink" href="https://github.com/jay-silva/northkeep">GitHub</a>
     <a class="navlink" href="#download">Download</a>
+    <a class="support-pill" href="./support.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>Support NorthKeep</a>
   </div>
 </header>
 
 <div class="hero wrap" id="download">
   <img class="mark" src="./northkeep-icon-512.png" alt="NorthKeep">
   <h1>Your AI memory belongs to you.</h1>
-  <p class="tag">An encrypted memory vault that lives on your Mac. Your memories, your projects, and your working state follow <em>you</em> across the AI apps you use. Start a piece of work in Claude, pick it up in Codex or Cursor, and the second agent knows what the first one knew.</p>
+  <p class="tag">An encrypted memory vault that lives on your Mac. Your memories, your projects, and your working state follow <em>you</em> across the AI apps you use. Start a piece of work in Claude, pick it up in Codex or Cursor, and the second agent can pick up where the first one stopped.</p>
   <div class="cta">
     <a class="btn primary" href="https://github.com/jay-silva/northkeep/releases/download/v0.22.1/NorthKeep_0.22.1_aarch64.dmg">Download for Mac</a>
     <a class="btn ghost" href="./start.html">Getting started</a>
@@ -157,6 +243,66 @@
   <p class="subtle muted">Free and open source · Apple Silicon · signed &amp; notarized ·
     private by default, nothing leaves your machine unencrypted unless you share it (a new project an app you connected creates is shared automatically, and so are your later edits to it), message a cloud model you picked or run a memory review on one (masked first, either way), or approve a tool call</p>
 </div>
+
+<section id="projects">
+  <div class="wrap">
+    <h2>Projects: pick up where the last session stopped</h2>
+    <p class="lede">Start a project in Claude Code, pick it up in Codex or Cursor. Its status, next actions, decisions and log live in your vault, and the next app can resume where the last session stopped.</p>
+    <ol class="flow">
+      <li><span class="n" aria-hidden="true">1</span>
+        <h3>Resume <code>project_resume</code></h3>
+        <p>When a session starts, the app reads the live project and picks up where the last session stopped. It also lists up to three other sessions on this Mac, from the last 30 days, that read the project and did not save back.</p></li>
+      <li><span class="n" aria-hidden="true">2</span>
+        <h3>Checkpoint <code>project_checkpoint</code></h3>
+        <p>Part of the way through, the app saves progress. On this Mac, each save names the version it read, and a save made from an outdated copy is refused.</p></li>
+      <li><span class="n" aria-hidden="true">3</span>
+        <h3>Wrap <code>project_wrap</code></h3>
+        <p>When the work is done, the app saves once more and ends the session. On any save, older Log entries move into archive memories, so the live document stays small for the next app.</p></li>
+    </ol>
+    <p class="boundary"><strong>Honest boundary:</strong> the session contract, a short standing instruction, asks the app to take these steps. It installs only into Claude Code, Codex, and Cursor (per project). Claude Desktop plain chat and ChatGPT have no instruction file, and apps reaching NorthKeep only through Cloud Connect cannot follow the three local tools. It is advisory: a session that ends abruptly keeps only what it saved with a checkpoint.</p>
+    <div class="pfig">
+    <figure class="doc-fig" aria-label="Illustration of an example project">
+      <div class="doc">
+        <div class="doc-head">
+          <span class="doc-title">Recipe site rebuild</span>
+          <span class="badge">Last save from Codex</span>
+        </div>
+        <dl>
+          <dt>Current Status</dt>
+          <dd>Search page rebuilt. Filters still call the old API.</dd>
+          <dt>Next Actions</dt>
+          <dd><ul><li>Move the filters to the new API</li><li>Check the results grid on a phone</li></ul></dd>
+          <dt>Decisions</dt>
+          <dd><ul><li>Keep recipe pages server rendered</li></ul></dd>
+          <dt>Log</dt>
+          <dd><ul class="log"><li><time>Sep 26</time><span>Search page rebuilt and tested</span></li><li><time>Sep 24</time><span>Chose server rendering for recipe pages</span></li></ul></dd>
+        </dl>
+        <p class="doc-foot">The app name on a save is the one the app reported. NorthKeep records it and does not verify it.</p>
+      </div>
+      <figcaption>Illustration, not a screenshot: an example project.</figcaption>
+    </figure>
+    <figure class="board-fig" aria-label="Illustration of the project board">
+      <div class="board">
+        <p class="cmd"><code>northkeep projects board</code></p>
+        <dl>
+          <dt>Stale projects</dt><dd>Garden plan</dd>
+          <dt>Dated items</dt><dd>Recipe site rebuild: launch Oct 3</dd>
+          <dt>Open sessions</dt><dd>Recipe site rebuild, read in Cursor and not saved back</dd>
+          <dt>Drafts</dt><dd>Newsletter</dd>
+          <dt>Needs repair</dt><dd>None</dd>
+        </dl>
+      </div>
+      <figcaption>Illustration, not a screenshot: the board's five lists, with example projects.</figcaption>
+    </figure>
+    </div>
+    <div class="pmore">
+      <div><h3>A Projects page on your Mac</h3><p>Each project shows its current status, next actions and decisions, the app name reported with the last save, and whether it is still a draft. You can rename a project, edit its summary, or delete it after a confirmation that names it.</p></div>
+      <div><h3>Started from Claude.ai (Cloud Connect, Beta)</h3><p>An AI app using the hosted connector, for example Claude.ai, can create a project. When you sync, the new project arrives marked Shared, and later edits to it are pushed. Anything an app writes into a project you have not shared is held until you share it.</p></div>
+      <div><h3>A copy in git, never pushed</h3><p><code>northkeep projects export</code> writes your projects as readable files into a git folder you set up and commits them. It never pushes or fetches, and <code>--schedule</code> runs it hourly or daily. The files are plaintext in the folder you chose.</p></div>
+      <div><h3>One board for what is slipping</h3><p><code>northkeep projects board</code> lists stale projects, dated items, open sessions, drafts and projects that need repair, with no model and no network. Connected apps on this Mac can read it with <code>project_board</code>.</p></div>
+    </div>
+  </div>
+</section>
 
 <section id="how">
   <div class="wrap">
@@ -205,14 +351,12 @@
     <h2>What you get</h2>
     <div class="grid">
       <div class="feat"><h3><span class="dot"></span>Owned &amp; portable</h3><p>One encrypted file you can copy, back up, and move. Your memory lives in none of the AI apps, so switching costs nothing.</p></div>
-      <div class="feat"><h3><span class="dot"></span>Projects across agents</h3><p>Start a project in Claude, pick it up in Codex or Cursor. Status, next actions, and a log live in your vault, so the second agent knows what the first one knew.</p></div>
-      <div class="feat"><h3><span class="dot"></span>The session contract</h3><p>A short standing instruction tells connected agents to read the live project and write it back when they finish. It is advisory: a session that ends abruptly wrote nothing.</p></div>
-      <div class="feat"><h3><span class="dot"></span>On-device redaction</h3><p>Keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers are always masked before a chat message or a cloud memory review leaves your machine, and names too at Tier 2 and up. A key with no recognizable prefix or a password is not caught. In the iPhone app, each turn shows exactly what left the device; in the terminal, each reply names the tier that ran.</p></div>
+      <div class="feat wide"><h3><span class="dot"></span>On-device redaction</h3><p>Keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers are always masked before a chat message or a cloud memory review leaves your machine, and names too at Tier 2 and up. A key with no recognizable prefix or a password is not caught. In the iPhone app, each turn shows exactly what left the device; in the terminal, each reply names the tier that ran.</p></div>
       <div class="feat"><h3><span class="dot"></span>Per-app scopes</h3><p>Grant one app your work memory only, another nothing sensitive. Enforced at the vault, not on trust.</p></div>
       <div class="feat"><h3><span class="dot"></span>Bring your history</h3><p>Import your ChatGPT or Claude export. Extraction runs entirely on your machine, and you review every memory before it's kept.</p></div>
       <div class="feat"><h3><span class="dot"></span>Any model</h3><p>Local models via Ollama, or any provider with your own key. A concierge routes each question to a capable model, favoring the cheapest, cost shown up front.</p></div>
       <div class="feat"><h3><span class="dot"></span>Encrypted sync</h3><p>Move your vault between machines. The server only ever holds ciphertext it cannot decrypt, never a key, never plaintext. We could not read it if we wanted to.</p></div>
-      <div class="feat"><h3><span class="dot"></span>Cloud Connect (Beta)</h3><p>Share the scopes you choose to the AI apps you already use, so Claude and ChatGPT remember you on your phone too. Stored encrypted at rest with no key kept in that database; decrypted only for the moment it takes to answer your app. Opt-in per scope (a new project an app you connected creates arrives shared), reversible.</p></div>
+      <div class="feat wide"><h3><span class="dot"></span>Cloud Connect (Beta)</h3><p>Share the scopes you choose to the AI apps you already use, so Claude and ChatGPT remember you on your phone too. Stored encrypted at rest with no key kept in that database; decrypted only for the moment it takes to answer your app. Opt-in per scope (a new project an app you connected creates arrives shared), reversible.</p></div>
     </div>
   </div>
 </section>
@@ -223,6 +367,8 @@
       <h3>What it doesn't do, because saying so is the point</h3>
       <ul>
         <li>It can't scrub what you type into someone else's app. Connect is portability, not a firewall. Use Converse for that.</li>
+        <li>Nothing forces an AI app to save a project. The session contract asks it to; a session that ends abruptly keeps only what it saved with a checkpoint.</li>
+        <li>Two machines that edit the same project before syncing keep one machine's version, not a merge.</li>
         <li>Redaction masks identifiers and names well, but can't make free text anonymous. "The lieutenant in Bourne whose partner runs compliance" survives every filter. We never claim otherwise.</li>
         <li>No recovery. Lose your passphrase or device secret and the vault is gone. There's no back door, which is the whole point. Back up your secret.</li>
         <li>Apple Silicon Macs for now. Other platforms run from source.</li>
@@ -243,6 +389,7 @@
         <ul>
           <li>The Mac app, on your machine</li>
           <li>Connect to your AI apps</li>
+          <li>Projects: resume, checkpoint, wrap, board, export</li>
           <li>Converse (chat with masking) with local or your-own-key models, in the iPhone app (beta) or a source install; the Mac app has no chat view</li>
           <li>Redaction, import, scopes, audit</li>
           <li>Self-host sync yourself</li>
@@ -280,6 +427,7 @@
 <section>
   <div class="wrap">
     <h2>Questions</h2>
+    <details><summary>What if an AI app forgets to save the project?</summary><p>Then that session's work is not in the project. The session contract asks each app to checkpoint and wrap, but it is advisory, and a session that ends abruptly keeps only what it saved with a checkpoint. If the session read the project through NorthKeep's local server on this Mac, the next resume lists it as an open session, so you can see that it happened.</p></details>
     <details><summary>Do you ever see my memories?</summary><p>No, with one exception you turn on yourself. Your vault is encrypted on your device, and we never receive your key. If you use hosted sync, our server stores only ciphertext it cannot decrypt plus a version number. The exception is a scope you deliberately share with the connector (see Connect above): it is stored encrypted at rest, the connector database holds no key that can read it, and the server briefly rebuilds the key per request (from your app's credential plus a server-side secret) to decrypt it so your AI apps can read it. There's no telemetry and no analytics in the app.</p></details>
     <details><summary>How is this different from ChatGPT or Claude's built-in memory?</summary><p>Their memory lives on their servers and stays in their app. NorthKeep's memory lives on your machine and plugs into whichever apps you use, so it's portable, owned by you, and you set what each app can read.</p></details>
     <details><summary>Does Connect make my chats private?</summary><p>No, and we won't pretend it does. When you type into another company's app, that company sees what you type. Connect gives you portable, owned memory with per-app scopes. For an actual redaction firewall on your messages, use Converse.</p></details>

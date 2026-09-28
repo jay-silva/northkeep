@@ -7,10 +7,10 @@
 <meta name="robots" content="noindex">
 <link rel="icon" href="./northkeep-icon.png">
 <style>
-  :root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd;--serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
-  @media (prefers-color-scheme:dark){:root{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820}}
-  :root[data-theme="light"]{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd}
-  :root[data-theme="dark"]{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820}
+  :root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd;--accent-soft:#e4efe8;--on-accent:#fff;--serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  @media (prefers-color-scheme:dark){:root{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820;--accent-soft:#23302a;--on-accent:#211e17}}
+  :root[data-theme="light"]{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd;--accent-soft:#e4efe8;--on-accent:#fff}
+  :root[data-theme="dark"]{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820;--accent-soft:#23302a;--on-accent:#211e17}
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.65;font-size:17px;-webkit-font-smoothing:antialiased}
   a{color:var(--accent)} a:hover{text-decoration:underline}
@@ -30,10 +30,21 @@
   .updated{color:var(--muted);font-size:15px;margin:0 0 6px}
   footer{border-top:1px solid var(--line);padding:28px 0;color:var(--muted);font-size:14px}
   footer .wrap{display:flex;gap:18px;flex-wrap:wrap}
+  .nav .spacer{flex:1}
+  a.brand{min-height:44px}
+  .nav a.support-pill{display:inline-flex;align-items:center;gap:7px;min-height:44px;margin-left:22px;padding:0 16px;
+    border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);
+    font-size:14px;font-weight:600;white-space:nowrap;text-decoration:none;transition:background .15s ease-out,color .15s ease-out}
+  .nav a.support-pill svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  .nav a.support-pill:hover,.nav a.support-pill[aria-current="page"]{background:var(--accent);color:var(--on-accent);text-decoration:none}
+  @media(max-width:640px){.nav a.support-pill{margin-left:0;padding:0 14px}}
+  @media(max-width:420px){.nav .wrap{gap:8px}.nav a.support-pill{padding:0 12px}}
+  @media(max-width:374px){.nav a.support-pill svg{display:none}}
+  @media(max-width:640px){footer .wrap{gap:0 18px}footer .wrap a{display:inline-flex;align-items:center;min-height:44px;min-width:44px}}
 </style>
 </head>
 <body>
-<header class="nav"><div class="wrap"><a class="brand" href="./index.html"><img src="./northkeep-icon.png" alt="">NorthKeep</a></div></header>
+<header class="nav"><div class="wrap"><a class="brand" href="./index.html"><img src="./northkeep-icon.png" alt="">NorthKeep</a><span class="spacer"></span><a class="support-pill" href="./support.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>Support NorthKeep</a></div></header>
 <main><div class="wrap">
 <p class="updated">Last updated: 2026-09-24</p>
 <h1>NorthKeep Privacy Policy</h1>
@@ -45,7 +56,7 @@
 <p><strong>On your device (not sent to us):</strong> your memories, their scopes, provenance, your passphrase, and the credentials NorthKeep stores in your device&#x27;s keychain. On a Mac, that is the <strong>macOS Keychain</strong>, which holds your AI provider API keys, your Brave Search key (if you enable web search), and any OAuth tokens and client credentials for the remote MCP servers you connect. On an iPhone, that is the <strong>iOS Keychain</strong>, which holds your device secret, your AI provider API keys, your sync and connector settings, and, if you turn on Face ID unlock, a copy of your vault key that the Keychain releases only after Face ID succeeds. (On a platform without a Keychain, API keys fall back to an environment variable you supply, and remote MCP sign-in is not available at all.) On an iPhone, the encrypted vault file can be included in your device or iCloud backup like other app data; it remains encrypted there. If you turn on the optional local project mirror on a Mac, NorthKeep also writes your project documents as plain, unencrypted text files into a folder you choose and records them with git on your Mac; NorthKeep never pushes that folder anywhere. When you run a memory review on a Mac, NorthKeep keeps review records as unencrypted files in its own folder on your Mac so you can undo a change; they can still contain reviewed text after you forget a memory. None of this is transmitted to us. There is no account to create to use NorthKeep locally.</p>
 <p><strong>If you enable hosted sync</strong>, our sync server receives and stores:</p>
 <ul><li>an <strong>opaque, client-side-encrypted copy of your vault</strong> (ciphertext bytes we cannot decrypt, because we never receive your key; the file&#x27;s short unencrypted header holds only the non-secret settings needed to decrypt it), together with a version number, its size, a checksum of the ciphertext, and the time it last changed;</li><li>an <strong>account identifier derived from your device secret</strong> (a one-way hash, of which our server stores only a further hash), so your encrypted vault can be matched to your account. It is not linked to your name, email, or device unless you subscribe, or you send it to us yourself (see &quot;Email you send us&quot;).</li></ul>
-<p><strong>If you subscribe to hosted sync</strong>, to operate billing we additionally store a mapping between your hashed account identifier and your <strong>Stripe customer and subscription IDs, subscription status, and current period end,</strong> and the time that record last changed. We pass your hashed account identifier to Stripe as the checkout reference, so the subscription can be matched to your account. Your <strong>payment card and email are collected and held by Stripe</strong>, our payment processor, not by us. Checkout is Stripe-hosted; card data never touches NorthKeep. See Stripe&#x27;s privacy policy at https://stripe.com/privacy. The honest consequence: while a subscription is active, we can tell <em>which paying customer is associated with which encrypted vault</em>, but never that vault&#x27;s contents, which remain ciphertext to us. The billing record stays after a subscription ends, marked as ended, until you ask us to delete it.</p>
+<p><strong>If you subscribe to hosted sync</strong>, to operate billing we additionally store a mapping between your hashed account identifier and your <strong>Stripe customer and subscription IDs, subscription status, and current period end,</strong> and the time that record last changed. We pass your hashed account identifier to Stripe as the checkout reference, so the subscription can be matched to your account. Your <strong>payment card and email are collected and held by Stripe</strong>, our payment processor, not by us. Checkout is Stripe-hosted; card data never touches NorthKeep. See Stripe&#x27;s privacy policy at https://stripe.com/privacy. The honest consequence: while a subscription is active, we can tell <em>which paying customer is associated with which encrypted vault</em>, but never that vault&#x27;s contents, which remain ciphertext to us. The billing record stays after a subscription ends, marked as ended, until you ask us to delete it. Optional tips you leave at northkeep.ai/support are processed by Stripe the same way: Stripe collects your card and email, and we receive Stripe&#x27;s record of the payment; our sync server keeps no record of it.</p>
 <h2>Website waitlist (optional)</h2>
 <p>If you submit the waitlist form on northkeep.ai, your email address is delivered to our inbox at support@northkeep.ai by <strong>Resend</strong>, our email delivery provider. We use it only to send NorthKeep updates. It is not added to any marketing list. We delete it on request to the same address. The form sets no cookies and the site has no analytics. See Resend&#x27;s privacy policy at https://resend.com/legal/privacy-policy.</p>
 <h2>Email you send us</h2>

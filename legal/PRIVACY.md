@@ -85,7 +85,10 @@ NorthKeep. See Stripe's privacy policy at https://stripe.com/privacy. The honest
 consequence: while a subscription is active, we can tell *which paying customer
 is associated with which encrypted vault*, but never that vault's contents,
 which remain ciphertext to us. The billing record stays after a subscription
-ends, marked as ended, until you ask us to delete it.
+ends, marked as ended, until you ask us to delete it. Optional tips you leave at
+northkeep.ai/support are processed by Stripe the same way: Stripe collects your
+card and email, and we receive Stripe's record of the payment; our sync server
+keeps no record of it.
 
 ## Website waitlist (optional)
 
