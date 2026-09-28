@@ -598,6 +598,38 @@
     .pinchip:has(input:checked) { background: #22382c; }
     .toolchip:has(input:checked) { background: #22382c; border-color: var(--accent); color: var(--accent); }
   }
+  /* One-time session contract offer on Projects. */
+  .contract-offer { position:relative; display:grid; grid-template-columns:minmax(0,1fr) auto; gap:20px 36px; align-items:end;
+    margin:0 0 22px; padding:22px 24px; border:1px solid color-mix(in srgb,var(--accent) 32%,var(--line)); border-radius:14px;
+    background:color-mix(in srgb,var(--accent) 7%,var(--panel)); animation:project-reveal .32s cubic-bezier(.16,1,.3,1); }
+  .contract-offer[hidden] { display:none; }
+  .contract-offer h3 { margin:0 0 6px; font:500 22px/1.2 var(--serif); letter-spacing:-.01em; color:var(--ink); }
+  .contract-offer .lead { margin:0; max-width:64ch; color:var(--ink); }
+  .contract-offer .targets { display:flex; flex-wrap:wrap; gap:6px; margin:0 0 12px; }
+  .contract-reach { display:grid; grid-template-columns:max-content minmax(0,1fr); gap:8px 16px; margin:16px 0 0; font-size:14px; }
+  .contract-reach dt { color:var(--muted); font-size:12px; font-weight:600; letter-spacing:.06em; text-transform:uppercase; padding-top:2px; }
+  .contract-reach dd { margin:0; display:flex; flex-wrap:wrap; gap:6px 18px; }
+  .contract-reach dd span { display:inline-flex; align-items:center; gap:6px; }
+  .contract-reach svg { width:15px; height:15px; flex:none; fill:none; stroke:currentColor; stroke-width:1.9; stroke-linecap:round; stroke-linejoin:round; }
+  .contract-reach .yes svg { color:var(--accent); }
+  .contract-reach .no { color:var(--muted); }
+  .contract-reach small { color:var(--muted); font-size:12px; }
+  .contract-offer .fine { margin:12px 0 0; font-size:12px; color:var(--muted); }
+  .contract-offer-actions { display:flex; flex-direction:column; align-items:stretch; gap:8px; min-width:250px; }
+  .contract-offer-actions .err { margin:0; min-height:0; }
+  .contract-offer.done { grid-template-columns:auto minmax(0,1fr) auto; align-items:center; }
+  .contract-offer .done-mark { width:36px; height:36px; border-radius:50%; display:grid; place-items:center; background:var(--accent); color:var(--accent-ink); }
+  .contract-offer .done-mark svg { width:18px; height:18px; fill:none; stroke:currentColor; stroke-width:2.2; stroke-linecap:round; stroke-linejoin:round; }
+  .contract-offer.done h3 { font-size:19px; margin-bottom:2px; }
+  .contract-offer.done p { margin:0; color:var(--muted); font-size:14px; }
+  .contract-offer .kept { margin-top:6px; overflow-wrap:anywhere; }
+  @media (max-width: 860px) {
+    .contract-offer, .contract-offer.done { grid-template-columns:minmax(0,1fr); }
+    .contract-offer-actions { min-width:0; }
+    .contract-reach { grid-template-columns:minmax(0,1fr); gap:4px; }
+    .contract-reach dd { margin-bottom:8px; }
+  }
+  @media (prefers-reduced-motion: reduce) { .contract-offer { animation:none; } }
 </style>
 </head>
 <body>
@@ -820,6 +852,7 @@
   </section>
   <section id="view-projects" hidden>
     <div class="page-head"><div><h2>Projects</h2><p class="muted">Pick up the work with its latest state, evidence, and next move.</p></div></div>
+    <section id="contractOffer" class="contract-offer" hidden></section>
     <div class="projects-summary"><strong id="projectsSummaryTitle">Projects</strong><span class="muted" id="projectsSummaryMeta">Loading…</span><span class="pill" id="projectsLocalPill">Local vault</span><span class="muted projects-mirror" id="projectsMirrorMeta" hidden></span></div>
     <div class="projects-workspace">
       <aside class="projects-rail" aria-label="Projects"><div class="review-meta-title">Projects</div><div id="projectList"></div></aside>
@@ -1354,7 +1387,7 @@
   function runLoader(v) {
     if (v === 'activity') loadLog();
     else if (v === 'memories') { loadMemories(); loadScopes(); }
-    else if (v === 'projects') loadProjects();
+    else if (v === 'projects') { loadProjects(); renderContractOffer(); }
     else if (v === 'curation') { loadReviewPanel(); loadReviewCollections(); loadCurationCollections(); }
     else if (v === 'models') loadProviders();
     else if (v === 'sync') loadSyncStatus();
@@ -5364,6 +5397,131 @@
   function contractBackupLine(label, result) {
     if (!result || !result.backupPath) return '';
     return label + ': you had edited the file, so the previous copy was kept at ' + result.backupPath + '.';
+  }
+
+  // One-time offer on Projects. Update and install are dismissed separately, so a
+  // contract that goes stale after a dismissed install still gets one update offer.
+  const CONTRACT_OFFER_KEYS = { install: 'nk_contract_offer_dismissed_install', update: 'nk_contract_offer_dismissed_update' };
+  let contractOfferBusy = false;
+
+  // Update covers stale targets only, so a dismissed install never rides along.
+  // Blocked targets are left to Connect, Desktop, which explains them.
+  function contractOfferPlan(targets, dismissed) {
+    const stale = targets.filter((t) => t.status === 'stale');
+    const absent = targets.filter((t) => t.status === 'absent');
+    if (stale.length && !dismissed.update) return { kind: 'update', needs: stale };
+    if (absent.length && !dismissed.install) return { kind: 'install', needs: absent };
+    return null;
+  }
+
+  function contractOfferDismissed() {
+    const out = { install: false, update: false };
+    for (const kind of ['install', 'update']) {
+      try { out[kind] = localStorage.getItem(CONTRACT_OFFER_KEYS[kind]) === '1'; } catch { out[kind] = false; }
+    }
+    return out;
+  }
+
+  function contractOfferItem(kind, text, note) {
+    const s = el('span', kind);
+    s.innerHTML = kind === 'yes'
+      ? '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>'
+      : '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M6.5 17.5l11-11"/></svg>';
+    s.appendChild(document.createTextNode(text));
+    if (note) s.appendChild(el('small', '', note));
+    return s;
+  }
+
+  async function renderContractOffer() {
+    const box = $('contractOffer');
+    if (!box || contractOfferBusy) return;
+    let data;
+    try { data = await api('/api/contract'); } catch { box.hidden = true; return; }
+    const targets = data.targets || [];
+    const plan = contractOfferPlan(targets, contractOfferDismissed());
+    if (!plan) { box.hidden = true; return; }
+    const update = plan.kind === 'update';
+    let pending = plan.needs.slice();
+    const names = plan.needs.map((t) => t.label).join(' and ');
+    const kept = [];
+
+    box.className = 'contract-offer';
+    box.replaceChildren();
+    box.hidden = false;
+    const main = el('div');
+    const title = el('h3', '', update ? 'Your project session contract needs an update' : 'Let Claude Code and Codex keep your projects current');
+    title.id = 'contractOfferTitle';
+    box.setAttribute('aria-labelledby', 'contractOfferTitle');
+    main.appendChild(title);
+    if (update) {
+      const row = el('div', 'targets');
+      const word = { installed: 'current', stale: 'out of date', absent: 'not installed', blocked: 'needs attention' };
+      for (const t of targets) row.appendChild(el('span', 'pill ' + (t.status === 'installed' ? 'ok' : 'draft'), t.label + ': ' + (word[t.status] || t.status)));
+      main.appendChild(row);
+    }
+    main.appendChild(el('p', 'lead', (update ? 'NorthKeep has a newer contract than the one installed. ' : '') +
+      'The session contract tells Claude Code and Codex to resume the project at the start of a session, save a checkpoint partway, and wrap up at the end.'));
+    const reach = el('dl', 'contract-reach');
+    const yes = el('dd');
+    yes.append(contractOfferItem('yes', 'Claude Code'), contractOfferItem('yes', 'Codex'), contractOfferItem('yes', 'Cursor ', 'per project, from Connect, Desktop'));
+    const no = el('dd');
+    no.append(contractOfferItem('no', 'Claude Desktop plain chat'), contractOfferItem('no', 'ChatGPT'));
+    reach.append(el('dt', '', 'Reaches'), yes, el('dt', '', 'Does not reach'), no);
+    main.appendChild(reach);
+    main.appendChild(el('p', 'fine', 'A standing instruction the apps read, not a lock. Remove it any time in Connect, Desktop.'));
+
+    const actions = el('div', 'contract-offer-actions');
+    const install = el('button', 'btn primary', (update ? 'Update' : 'Install') + ' for ' + names);
+    install.type = 'button';
+    install.id = 'contractOfferInstall';
+    const later = el('button', 'btn', 'Not now');
+    later.type = 'button';
+    const err = el('p', 'err');
+    err.setAttribute('role', 'alert');
+    later.addEventListener('click', () => {
+      try { localStorage.setItem(CONTRACT_OFFER_KEYS[plan.kind], '1'); } catch { /* the card still hides for this visit */ }
+      box.hidden = true;
+    });
+    install.addEventListener('click', async () => {
+      contractOfferBusy = true;
+      install.disabled = later.disabled = true;
+      install.textContent = update ? 'Updating…' : 'Installing…';
+      err.textContent = '';
+      const failed = [];
+      for (const t of pending) {
+        try {
+          const line = contractBackupLine(t.label, await api('/api/contract/install/' + t.id, { method: 'POST' }));
+          if (line) kept.push(line);
+        } catch (e) {
+          if (e.message === 'locked') { contractOfferBusy = false; box.hidden = true; return; }
+          failed.push({ target: t, message: e.message });
+        }
+      }
+      contractOfferBusy = false;
+      if (failed.length) {
+        pending = failed.map((f) => f.target);
+        install.disabled = later.disabled = false;
+        install.textContent = 'Try again';
+        err.textContent = failed.map((f) => 'Could not ' + (update ? 'update' : 'install') + ' for ' + f.target.label + '. ' + f.message).join(' ');
+        return;
+      }
+      box.className = 'contract-offer done';
+      box.replaceChildren();
+      const mark = el('div', 'done-mark');
+      mark.innerHTML = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12.5l4.2 4.2L19 7"/></svg>';
+      const copy = el('div');
+      const doneTitle = el('h3', '', (update ? 'Updated' : 'Installed') + ' for ' + names);
+      doneTitle.id = 'contractOfferTitle';
+      copy.append(doneTitle, el('p', '', 'It takes effect the next time you start a session in each app. Manage it in Connect, Desktop.'));
+      for (const line of kept) copy.appendChild(el('p', 'kept', line));
+      const done = el('button', 'btn', 'Done');
+      done.type = 'button';
+      done.addEventListener('click', () => { box.hidden = true; });
+      box.append(mark, copy, done);
+      done.focus();
+    });
+    actions.append(install, later, err);
+    box.append(main, actions);
   }
 
   function connectCard(t, scopesInVault, note) {

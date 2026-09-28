@@ -33,7 +33,7 @@ describe('Projects handoff UI', () => {
     expect(html).toMatch(/<button data-view="projects">[\s\S]*?<svg[\s\S]*?Projects<\/button>/);
     expect(html).toContain('<section id="view-projects" hidden>');
     expect(html).toContain("'memories', 'projects', 'curation'");
-    expect(html).toContain("else if (v === 'projects') loadProjects()");
+    expect(html).toContain("else if (v === 'projects') { loadProjects(); renderContractOffer(); }");
     expect(html).toContain('.projects-workspace { display:grid; grid-template-columns:260px minmax(0,1fr);');
     expect(html).toContain('.projects-workspace { display:block; min-height:0; }');
     expect(html).toContain('.projects-mobile-select { display:block; }');
