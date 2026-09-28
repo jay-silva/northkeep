@@ -220,12 +220,7 @@ function foreignFileRefusal(file: string): Error {
   );
 }
 
-/**
- * Copies `contents` to the first free `<file>.northkeep-bak[-N]`, or returns
- * the existing backup that already holds these exact bytes. Never overwrites
- * a backup, so every distinct edit stays recoverable.
- */
-function keepBackup(file: string, contents: string): string {
+function findOrWriteBackup(file: string, contents: string): string {
   for (let n = 1; ; n++) {
     const bak = n === 1 ? `${file}.northkeep-bak` : `${file}.northkeep-bak-${n}`;
     try {
@@ -244,7 +239,7 @@ function installOwnedFile(target: 'claude' | 'cursor-project', file: string): In
   if (fs.existsSync(file)) {
     const existing = fs.readFileSync(file, 'utf8');
     if (!hasOwnershipMarker(existing)) throw foreignFileRefusal(file);
-    if (!bytesMatchRender(existing, rendered)) backupPath = keepBackup(file, existing);
+    if (!bytesMatchRender(existing, rendered)) backupPath = findOrWriteBackup(file, existing);
   }
   atomicWrite(file, rendered);
   if (!backupPath) return { target, path: file };
@@ -267,7 +262,7 @@ function uninstallOwnedFile(
     return { target, path: file, action: 'deleted' };
   }
   if (hasOwnershipMarker(existing)) {
-    const bak = keepBackup(file, existing);
+    const bak = findOrWriteBackup(file, existing);
     fs.rmSync(file);
     return {
       target,

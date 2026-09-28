@@ -22,7 +22,6 @@ import type {
 export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5';
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 const DEFAULT_MAX_TOKENS = 64_000;
-// Haiku 4.5 and older models reject {type:'adaptive'} with a 400.
 const ADAPTIVE_THINKING_MODELS = [
   'claude-fable-5', 'claude-mythos-5', 'claude-opus-5', 'claude-opus-4-8',
   'claude-opus-4-7', 'claude-opus-4-6', 'claude-sonnet-5', 'claude-sonnet-4-6',
