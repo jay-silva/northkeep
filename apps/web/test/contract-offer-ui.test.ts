@@ -269,3 +269,13 @@ describe('Connect, Desktop contract card', () => {
     expect(text).not.toContain('previous copy was kept');
   });
 });
+
+describe('Settings, About support row', () => {
+  it('opens the support page through an external anchor the desktop handler routes to the browser', () => {
+    const about = html.match(/<section id="view-about"[\s\S]*?<\/section>/)?.[0] ?? '';
+    expect(about).toContain('<strong>Support NorthKeep</strong>');
+    expect(about).toContain('Everything on your Mac is free. If NorthKeep helps you, you can leave a tip.');
+    expect(about).toMatch(/<a class="btn-link" href="https:\/\/northkeep\.ai\/support" target="_blank" rel="noopener noreferrer">Open support page/);
+    expect(script).toContain("e.target.closest('a[target=\"_blank\"]')");
+  });
+});
