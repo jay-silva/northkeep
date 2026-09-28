@@ -10,7 +10,10 @@ import {
   listProjectViews,
   withFileLock,
 } from '@northkeep/core';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+// Each case runs real git subprocesses; under a full-suite load they pass 5 s.
+vi.setConfig({ testTimeout: 30_000 });
 import { ExportRefusal, readRemotes, repoKey, setGitSpawnObserver } from '../src/git-plumbing.js';
 import {
   acquireExportLock,
