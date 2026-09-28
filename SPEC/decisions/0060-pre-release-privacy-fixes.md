@@ -881,7 +881,12 @@ and exists to stop a later regression. A guard is not evidence of a fix.
   `Person-` or `Company-` label left in any proposal. At Tier 2 the
   proposals carried the real fake names (4 people, 1 company), both emails
   and all three phone numbers restored. Call log: a `pending` row before
-  and a `done` row after each send. One model, one small vault: this shows
+  and a `done` row after each send.
+  **Rerun 2026-09-28 (0.22.1, after PA-F10's structured outputs):** Jay's
+  run on claude-opus-5-5 at Tier 2 (name model not degraded), which now
+  sends `output_config.format`: Anthropic accepted it; 12 of 12 compared,
+  5 proposals, `drops` empty, no leftover token; real fake names, email and
+  phone numbers restored. One model, one small vault: this shows
   the tokens survive a real provider, not that every model copies them.
 - **R11. Tier 3 over MCP loses exact ordering by time.** All dates are
   years (F4); list order is the only finer ordering the host gets.
