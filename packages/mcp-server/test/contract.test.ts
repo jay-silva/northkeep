@@ -145,6 +145,40 @@ describe('Claude contract', () => {
     expect(contractStatus('claude', { path: file }).status).toBe('blocked');
   });
 
+  it('install over an edited rules file keeps every edit in a backup first', () => {
+    const prevHome = process.env.HOME;
+    process.env.HOME = dir;
+    try {
+      const file = path.join(dir, '.claude', 'rules', 'northkeep-projects.md');
+      expect(claudeRulesPath()).toBe(file);
+      installContract('claude', { path: file });
+      expect(installContract('claude', { path: file }).backupPath).toBeUndefined();
+      expect(fs.readdirSync(path.dirname(file))).toEqual(['northkeep-projects.md']);
+
+      fs.appendFileSync(file, 'Always cite the ticket number.\n');
+      const first = installContract('claude', { path: file });
+      expect(first.backupPath).toBe(`${file}.northkeep-bak`);
+      expect(first.warning).toBe('The file differed from this contract, so the previous copy was kept at northkeep-projects.md.northkeep-bak.');
+      expect(fs.readFileSync(`${file}.northkeep-bak`, 'utf8')).toContain('Always cite the ticket number.');
+      expect(fs.readFileSync(file, 'utf8')).toBe(renderContract('claude'));
+
+      fs.appendFileSync(file, 'Second edit.\n');
+      expect(installContract('claude', { path: file }).backupPath).toBe(`${file}.northkeep-bak-2`);
+      expect(fs.readFileSync(`${file}.northkeep-bak`, 'utf8')).toContain('Always cite the ticket number.');
+      expect(fs.readFileSync(`${file}.northkeep-bak-2`, 'utf8')).toContain('Second edit.');
+
+      fs.appendFileSync(file, 'Third edit.\n');
+      const removed = uninstallContract('claude', { path: file });
+      expect(removed.action).toBe('moved-aside');
+      expect(removed.backupPath).toBe(`${file}.northkeep-bak-3`);
+      expect(fs.readFileSync(`${file}.northkeep-bak`, 'utf8')).toContain('Always cite the ticket number.');
+      expect(fs.readFileSync(`${file}.northkeep-bak-3`, 'utf8')).toContain('Third edit.');
+    } finally {
+      if (prevHome === undefined) delete process.env.HOME;
+      else process.env.HOME = prevHome;
+    }
+  });
+
   it('claudeRulesPath honors NORTHKEEP_CLAUDE_RULES_DIR', () => {
     const rules = path.join(dir, 'env-rules');
     process.env.NORTHKEEP_CLAUDE_RULES_DIR = rules;
