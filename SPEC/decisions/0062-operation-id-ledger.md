@@ -487,10 +487,11 @@ entry, the text from "A checkpoint or wrap retried unchanged" through
 | C8 | Blanked rows never carry the ledger | `keptProvenanceMetadata` vault.ts:1982 (unchanged) | T6, T7 |
 | C9 | A vault written by this code opens, verifies, exports and compacts on the v0.22.0 core, which carries the ledger forward | nothing on forgotten rows; `verifyChain` vault.ts:1841 unchanged | T7 |
 | C10 | A malformed record carrying the request's id (a bare string equal to it, or an object whose own `operation_id` equals it, per Decision 1) refuses as `operation_conflict` | `readProjectOperations` in project-handoff.ts | T8 |
-| C14 | A checkpoint on a 30-project vault is at most 20 percent slower than trunk | one-pass scan, Decision 3 step 1 | perf gate (Acceptance) |
 | C11 | An id in a scope outside the grant is not found, as before compaction | scan honours `allowedScopes`, vault.ts:853 | T9 |
 | C12 | The ledger never leaves the machine and is never returned to a model | `pushSharedScopes` connector-client.ts:158-165; `ProjectView` project-handoff.ts:222 | code reading; no new path |
 | C13 | A full ledger is 2,957 bytes; at most about 24 KB per project | Decision 2 cap | measured with `node -e`; T6 asserts the count |
+| C14 | A checkpoint on a 30-project vault is at most 20 percent slower than trunk when both open the same head-built fixture | one-pass scan, Decision 3 step 1 | relative perf gate |
+| C15 | A checkpoint on a 30-project vault with ledgers takes at most 2 ms longer (median) than trunk on its own vault without them | one-pass scan; ledger size (Decision 2 cap) | absolute perf gate |
 
 ## Tests
 
@@ -629,17 +630,38 @@ node packages/core/test/adr-0062/acceptance.mjs
 
 ### Perf gate
 
-The PLAN's P2 perf box is the gate for C14: median `checkpointProject`
-time over two hundred interleaved checkpoints per side, trunk measured
-first, fail above 20 percent. It uses a vault with many projects, the
-PLAN's 30, not a small one. The headroom is thin: the first review's
-prototype measured +17 to 18 percent (trunk 6.87 and 6.75 ms, prototype
-8.13 and 7.88 ms, two runs) on only 15 projects of 21 revisions plus 3,000
-memories. The extra cost is parsing up to eight ledgers per project on
-every checkpoint's scan, so it grows with the project count. The fixture
-therefore gives every project a full ledger of 16 on all eight rows that
-can carry one. If the gate fails, the build stops and returns to Jay; this
-ADR does not pre-approve a caching change to pass it.
+Two gates, both run by `packages/core/test/adr-0062/perf.mjs` (wrapped by
+`perf.sh`). "Trunk" is the v0.22.0 core, whose `packages/core/src` and
+`packages/platform-node/src` are byte-identical to `3202785` and
+`a7eecbf` (`git diff --quiet` exits 0).
+
+The fixture shape, fixed before the first measurement:
+
+- 30 projects. Each is created, then saved by 24 checkpoints, so every
+  live row that carries a ledger holds a full 16 records. How many rows
+  per project carry one is whatever 0.22 compaction leaves; the script
+  prints it.
+- Filler of 0, 1,000 and 3,000 `personal` memories of about 210
+  characters each.
+- The probe: 200 checkpoints per side in one process, interleaved (a
+  trunk checkpoint, then a head checkpoint), round robin over the 30
+  projects. The metric is each side's median `checkpointProject` time.
+
+**Relative gate (C14).** Both sides open their own copy of the same
+head-built fixture file, so both scan identical rows. Fail when the head
+median exceeds the trunk median by more than 20 percent at any filler
+size. This is what the PLAN's P2 perf box measures: the cost of the new
+lookup and append on the same data.
+
+**Absolute gate (C15).** Each side builds its own vault with its own core,
+so trunk's vault holds no ledgers. This measures what a user feels moving
+from a vault without ledgers to one with them, including the cost of
+decrypting and parsing the larger metadata on every scan. Fail when the
+head median exceeds the trunk median by more than 2 ms per checkpoint at
+any filler size. Three runs per filler size; the gate uses the worst run.
+
+If either gate fails, the build stops and returns to Jay; this ADR does
+not pre-approve a caching change to pass it.
 
 ## Open questions for Jay
 
