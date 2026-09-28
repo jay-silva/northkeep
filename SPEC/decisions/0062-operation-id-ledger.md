@@ -1,9 +1,8 @@
 # ADR 0062: Remember operation ids past compaction (an operation ledger on the live project document)
 
 - **Date:** 2026-09-28
-- **Status:** Proposed. Design only. First review CLEARED WITH WOUNDS;
-  this revision is the author's fix round, awaiting recheck. No product
-  code has been written for it.
+- **Status:** Accepted and built on branch p2/opid-ledger; code review
+  pending. First review CLEARED WITH WOUNDS, recheck CLEARED.
 - **Deciders:** Jay (product owner), Claude Code
 - **Branch:** `p2/opid-ledger` (base `3202785`)
 - **Rules:** `~/Claude/Claude Context/RULES.md`, Version 2026-09-26.2
@@ -196,22 +195,28 @@ The new flow, replacing vault.ts:861-878:
 1. **Scan (one pass).** The existing loop at vault.ts:853 also reads the
    ledger of every entry that is `type = 'working'`, has
    `superseded_at` and `forgotten_at` null, and sits in a slug-valid
-   `project:*` scope. It collects each record whose `operation_id` equals
-   the request's, with that head's scope. The loop already iterates every
+   `project:*` scope. It collects each well-formed record whose
+   `operation_id` equals the request's, with that head's scope, and notes
+   whether any malformed record carries the id (Decision 1). The loop already iterates every
    visible entry and honours `allowedScopes`, so no second `list()` runs.
    The 20 percent perf budget in the PLAN depends on this.
 2. **Original receipt found.** If `matches` is non-empty, the existing
    branch (vault.ts:862-877) runs unchanged. It replays, refuses as
    `stale_project` when the base was blanked, or refuses as
    `operation_conflict`.
-3. **Ledger hit.** Otherwise, if any ledger record carries the id:
+3. **Malformed record.** Otherwise, if a malformed record on any live
+   head carries the id: `operation_conflict` "Malformed project operation
+   record." (Decision 6). This runs before the ledger hit, so a malformed
+   record beside a well-formed one for the same id still refuses.
+4. **Ledger hit.** Otherwise, if any well-formed ledger record names the
+   id:
    - every hit is on the request's own project head and every hit's
      fingerprint equals the request's: `stale_project` with the current
      document (Decision 4);
    - any other combination: `operation_conflict`.
-4. **Copied receipt.** Otherwise, if `copied` is non-empty, apply
+5. **Copied receipt.** Otherwise, if `copied` is non-empty, apply
    Decision 5.
-5. **Fresh id.** Otherwise, call `writeProject`, which records the id.
+6. **Fresh id.** Otherwise, call `writeProject`, which records the id.
 
 The ledger must come after the matches branch. The new save records its
 own id, so a ledger-first lookup would refuse every legitimate verbatim
@@ -233,10 +238,15 @@ against an uncompacted baseline:
 - **Forgetting only the head.** After `memory_forget` of a project's live
   head (or the phone's forget) and a recreate, a resend of a blanked id is
   written where an uncompacted vault refuses. Residual 3.
+- **Ids past the newest 16.** A resend of a project's 17th newest or older
+  checkpoint or wrap id, after its revision was blanked, is written where
+  an uncompacted vault refuses. Residual 2.
 
 Everything else the review ran (plain updates, generic edits and folds,
-manual compaction keeping one to five, log roll-over, cross-project,
-import) matched the uncompacted answer.
+manual compaction keeping one to five, the newest 16 ids across a log
+roll-over, cross-project, import) matched the uncompacted answer. Saves
+made by old code, or resends handled by it, are outside this comparison
+(Residual 1).
 
 | Situation | Code | Message | Current document |
 |---|---|---|---|
@@ -663,6 +673,26 @@ any filler size. Three runs per filler size; the gate uses the worst run.
 If either gate fails, the build stops and returns to Jay; this ADR does
 not pre-approve a caching change to pass it.
 
+**Measured at build (2026-09-28, two full passes of `perf.sh`, Apple
+silicon Mac).** Every live row carrying a ledger held 16 records; 7 rows
+per project carry one (the head and the newest five superseded, plus one
+receipt-protected base).
+
+| Gate | Filler | Trunk median | Head median | Added |
+|---|---|---|---|---|
+| Relative, shared fixture | 0 | 4.41 / 3.75 ms | 4.58 / 3.96 ms | +3.8 / +5.7% |
+| Relative, shared fixture | 1,000 | 6.82 / 4.35 ms | 7.17 / 4.44 ms | +5.1 / +2.1% |
+| Relative, shared fixture | 3,000 | 10.43 / 7.58 ms | 10.94 / 7.87 ms | +4.9 / +3.8% |
+| Absolute, separate vaults | 0 | 1.90 to 2.57 ms | 2.72 to 3.63 ms | +0.81 to +1.07 ms |
+| Absolute, separate vaults | 1,000 | 3.50 to 5.09 ms | 4.36 to 6.47 ms | +0.86 to +1.38 ms |
+| Absolute, separate vaults | 3,000 | 7.11 to 12.16 ms | 8.25 to 13.85 ms | +0.78 to +1.69 ms |
+
+Both gates pass. The worst relative result is +5.7 percent against a 20
+percent limit. The worst absolute run is +1.69 ms against a 2 ms limit,
+so the absolute headroom is thin (about 0.3 ms). In relative terms the
+separate-vault cost is +8.6 to +46 percent, largest on a small vault
+where a checkpoint is fastest.
+
 ## Open questions for Jay
 
 1. **Accept residual 1 without a rollout gate?** Saves made by an
@@ -677,6 +707,60 @@ not pre-approve a caching change to pass it.
    at most). Every extra 8 records add about 1.5 KB per row, and up to
    eight rows per project carry the ledger, so up to about 12 KB more per
    project.
+
+## Build notes
+
+Built on `p2/opid-ledger` from `a7eecbf`. Where the build differs from
+the text above, or settles something the text left open:
+
+- **Reader shape.** `readProjectOperations(entry, id)` takes any
+  `{ metadata }` and returns `{ records, malformedCarriesId }`. The append
+  in `writeProject` reuses it on the copied metadata, so one rule decides
+  what is well formed on read and what is kept on write.
+- **Decision 5 type check.** A copy whose `result_id` is not a string
+  does not qualify, so it keeps today's "exists without its original
+  result" refusal.
+- **Tests.** T1 to T9 are one `describe` block in
+  `project-compact.test.ts`, T4b included (the Tests section listed it
+  separately). The tests use the literal key and messages rather than the
+  new exports, so on the old code they fail on assertions, not on missing
+  imports. T8 also pins recheck note 4: after the refusal, a checkpoint
+  with another id is written and drops the malformed record, and the id
+  it named is then written too.
+- **Fail-before.** `packages/core/test/adr-0062/fail-before.sh` checks
+  out `a7eecbf^` product code (its `packages/core/src` equals `3202785`),
+  runs the block, restores HEAD and runs it again. At `a7eecbf^`: T1, T2,
+  T4a, T4b, T5, T6 and T8 fail with the measured trunk answers (T1, T5
+  and T8 are written; T2 gets "Project changed after it was read."; T4a
+  and T4b get "Operation receipt metadata exists without its original
+  result."; T6 finds no ledger). T3 and T9 pass, as guards should. At
+  HEAD all nine pass.
+- **Fixture.** `packages/core/test/fixtures/v0220-carry-forward.nkv` is
+  committed through a negation in `packages/core/test/.gitignore`,
+  because the root `.gitignore` excludes `*.nkv`. The synthetic
+  passphrase, the synthetic device secret and the X request sit beside it
+  in `v0220-carry-forward.json`. T4b copies the vault into a temp folder
+  before opening it.
+- **Helper scripts.** `temp-home.mjs` holds the one home check every
+  `.mjs` harness uses: `NORTHKEEP_HOME` must resolve under the system
+  temp folder, and `DATABASE_URL` and `CONNECTOR_KEK_PEPPER` must be
+  unset. `make-v0220-fixture.sh`, `old-core-check.sh` and `perf.sh`
+  accept `OLD=<built v0.22.0 checkout>` to skip their own worktree build,
+  and build with `pnpm install --offline`.
+- **Acceptance.** `acceptance.mjs` uses a random project suffix and
+  random operation ids, so a second run in the same home does not collide.
+  All five acceptance steps were run once in a temp home at the build
+  head, step 4 with the v0.22.0 CLI built from the tag. The output matched
+  the expected lines; both exports held the key (26 matches each), the
+  old compaction completed, and both `list` runs ended "✓ Provenance
+  chain verified."
+- **Perf fixture.** The text asked for full ledgers "on all eight rows
+  that can carry one". With checkpoint-only saves 0.22 compaction leaves
+  seven such rows per project, all full. The gate text now describes the
+  fixture that was run.
+- **Decision 3 and Decision 4 edits (recheck notes 2 and 3).** The
+  malformed check is its own step 3 in the lookup order, and Decision 4
+  lists ids past the newest 16 as a fourth exception.
 
 ## Review history
 
@@ -742,3 +826,14 @@ not pre-approve a caching change to pass it.
   - Also from the review's method: Decision 5's multi-copy rule made
     explicit (every copy must qualify), matching the charitable reading
     the review tested.
+- 2026-09-28, recheck (`Reviews/release-0.22.2/adr-0062-r2-recheck.md`,
+  evidence in `Reviews/release-0.22.2/adr-0062-r2/`): **CLEARED.** W1
+  closed. Notes: the perf gate did not say whether both sides share one
+  fixture (+1 to 7 percent shared, +28 to 53 percent separate); Decision
+  4 missed ids past 16; the malformed check was not a Decision 3 step; a
+  malformed record guards its id only until the next checkpoint; C14 out
+  of order; "trunk first" against "interleaved"; the own-property clause
+  cannot be planted through JSON.
+- 2026-09-28, build (branch `p2/opid-ledger`): recheck notes 1, 2, 3, 4
+  and 5 applied (see Build notes and the Perf gate). The perf gate is now
+  two gates, measured and passed. Code review pending.
