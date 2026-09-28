@@ -19,7 +19,7 @@ import type {
  * response bodies (which can echo prompt content) and never the API key.
  */
 
-export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5';
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-5-5';
 const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
 const DEFAULT_MAX_TOKENS = 64_000;
 const ADAPTIVE_THINKING_MODELS = [

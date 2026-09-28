@@ -34,7 +34,7 @@ const OPTIONS: SecureStore.SecureStoreOptions = {
 };
 
 export const ANTHROPIC_BASE_URL = 'https://api.anthropic.com';
-export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5';
+export const DEFAULT_ANTHROPIC_MODEL = 'claude-sonnet-5-5';
 
 /**
  * Current Claude models offered as one-tap picks in the provider screen (a user
@@ -42,8 +42,8 @@ export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-5-5';
  * exact — Anthropic model ids are complete as-is, never date-suffixed.
  */
 export const CLAUDE_MODELS: { id: string; label: string; note: string }[] = [
-  { id: 'claude-opus-5-5', label: 'Opus 5.5', note: 'Best default' },
-  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', note: 'Half the price of Opus 5.5' },
+  { id: 'claude-sonnet-5-5', label: 'Sonnet 5.5', note: 'Best default' },
+  { id: 'claude-opus-5-5', label: 'Opus 5.5', note: 'Twice the price of Sonnet 5.5' },
   { id: 'claude-fable-5-1', label: 'Fable 5.1', note: 'Most capable, premium price' },
 ];
 
