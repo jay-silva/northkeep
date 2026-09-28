@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import net from 'node:net';
@@ -11,6 +11,9 @@ import { deriveConnectorToken, downSyncConnector, pushSharedScopes, startPairing
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
 import { decryptedEntries, seedEncryptedEntry } from './helpers.js';
+
+// The random sequence runs many real vault crypto and sync round trips; under full-suite load it passes 5 s.
+vi.setConfig({ testTimeout: 30_000 });
 
 /**
  * C3 property test — random sequences over {remember, forget, unshare, re-share,
