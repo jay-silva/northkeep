@@ -673,10 +673,13 @@ any filler size. Three runs per filler size; the gate uses the worst run.
 If either gate fails, the build stops and returns to Jay; this ADR does
 not pre-approve a caching change to pass it.
 
-**Measured at build (2026-09-28, two full passes of `perf.sh`, Apple
-silicon Mac).** Every live row carrying a ledger held 16 records; 7 rows
-per project carry one (the head and the newest five superseded, plus one
-receipt-protected base).
+**Measured at build (2026-09-28, two full passes of `perf.sh` on an
+Apple M5 Pro, arm64).** The machine was busy with other work (load
+average about 27 to 36), which is why trunk's own medians swing, for
+example 7.11 to 12.16 ms at 3,000 memories. Every live row carrying a
+ledger held 16 records. Seven rows per project carry one: the head, the
+newest five superseded revisions, and the base the oldest of those names
+in its receipt (checked with a one-project run).
 
 | Gate | Filler | Trunk median | Head median | Added |
 |---|---|---|---|---|
