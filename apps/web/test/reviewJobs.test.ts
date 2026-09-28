@@ -9,7 +9,7 @@ const reviewMock = vi.hoisted(() => {
     run: vi.fn(() => new Promise((resolve) => { resolveResult = resolve; })),
     finish() {
       resolveResult?.({
-        model: 'fixture-review', batches: 1, proposals: [], drops: {},
+        model: 'fixture-review', batches: 1, failedBatches: 0, proposals: [], drops: {},
         coverage: { selected: 1, compared: 1, skipped: 0, failed: 0, complete: true },
       });
       resolveResult = undefined;

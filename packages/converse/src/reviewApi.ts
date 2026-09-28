@@ -114,6 +114,8 @@ export interface ReviewApiOptions {
   /** Runs after every pack is masked and before the first send; a throw refuses the run. */
   beforeSend?: (summary: ReviewPrepareSummary) => void | Promise<void>;
   onDegraded?: (message: string) => void;
+  /** Memories masked so far, out of the unique memories in this run. Counts only. */
+  onMaskProgress?: (done: number, total: number) => void;
 }
 
 interface PreparedPack {
@@ -163,6 +165,8 @@ export function createReviewApiGenerator(endpoint: EndpointConfig, options: Revi
       // Pass 1: detect in every memory and collection name before rendering
       // any, so a name found in one memory is masked in all of them (code
       // review F2).
+      let masked = 0;
+      options.onMaskProgress?.(0, unique.size);
       for (const entry of unique.values()) {
         let r = await detectContentInSession(session, entry.content, tier, options.ollama);
         // F3: judged per call; one retry, then the run-level rule.
@@ -172,6 +176,8 @@ export function createReviewApiGenerator(endpoint: EndpointConfig, options: Revi
           else degradedIds.add(entry.id);
         }
         detectScopeInSession(session, entry.scope, tier);
+        masked += 1;
+        options.onMaskProgress?.(masked, unique.size);
       }
       if (failed.size > 0) {
         throw new ReviewApiRefusal(

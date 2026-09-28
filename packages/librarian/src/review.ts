@@ -87,6 +87,8 @@ export interface ReviewPassResult {
   drops: Record<string, number>;
   model: string;
   batches: number;
+  /** Batches with no usable reply after a retry (a provider error, a timeout, or unparseable output). */
+  failedBatches: number;
   coverage: {
     selected: number;
     compared: number;
@@ -97,10 +99,20 @@ export interface ReviewPassResult {
   };
 }
 
+/**
+ * Where a review pass is, for a progress bar. Counts only: a phase never
+ * carries memory text, scope names, or ids. `batch.done` is the number of
+ * batches finished, so the batch being worked on is `done + 1`.
+ */
+export type ReviewPassPhase =
+  | { phase: 'comparing'; done: number; total: number }
+  | { phase: 'masking' }
+  | { phase: 'batch'; done: number; total: number; failed: number };
+
 export interface ReviewPassOptions {
   model?: string;
   timeoutMs?: number;
-  onProgress?: (done: number, total: number) => void;
+  onPhase?: (phase: ReviewPassPhase) => void;
   onStatus?: (msg: string) => void;
   /** RAM-only embedder. Never persist. Missing means exact-hash only. */
   embed?: (text: string) => Promise<ArrayLike<number>>;
@@ -165,11 +177,14 @@ async function generateBatch(
 async function embedSingletons(
   singletons: MemoryEntry[],
   embed: (text: string) => Promise<ArrayLike<number>>,
+  onEmbedded?: (done: number, total: number) => void,
 ): Promise<{ embeddings: Map<string, Float32Array>; failed: Set<string> }> {
   const map = new Map<string, Float32Array>();
   const failed = new Set<string>();
   let dimensions: number | null = null;
-  for (const entry of singletons) {
+  onEmbedded?.(0, singletons.length);
+  for (const [index, entry] of singletons.entries()) {
+    if (index > 0) onEmbedded?.(index, singletons.length);
     try {
       const vec = await embed(entry.content);
       const value = Float32Array.from(vec);
@@ -190,6 +205,7 @@ async function embedSingletons(
       failed.add(entry.id);
     }
   }
+  onEmbedded?.(singletons.length, singletons.length);
   return { embeddings: map, failed };
 }
 
@@ -212,6 +228,7 @@ export async function runReviewPass(
   const comparedIds = new Set<string>();
   const skippedIds = new Set<string>();
   const failedIds = new Set<string>();
+  let failedBatches = 0;
 
   const prelim = clusterReviewEntries(entries);
   for (const cluster of prelim) {
@@ -238,6 +255,7 @@ export async function runReviewPass(
       drops,
       model,
       batches,
+      failedBatches,
       coverage: {
         selected: entries.length,
         compared,
@@ -268,7 +286,8 @@ export async function runReviewPass(
     skippedIds.add(entry.id);
     return false;
   });
-  const embedded = await embedSingletons(embeddable, opts.embed);
+  const embedded = await embedSingletons(embeddable, opts.embed, (done, total) =>
+    opts.onPhase?.({ phase: 'comparing', done, total }));
   for (const id of embedded.failed) failedIds.add(id);
   if (embedded.failed.size > 0) {
     drops.embedding_failed = embedded.failed.size;
@@ -307,9 +326,11 @@ export async function runReviewPass(
   }
 
   // Every pack is masked before the first send, so a refusal leaves nothing sent.
+  if (isOutbound(ollama)) opts?.onPhase?.({ phase: 'masking' });
   const handles = isOutbound(ollama) ? await ollama.prepare(modelPacks) : null;
 
   for (let i = 0; i < modelPacks.length; i++) {
+    opts?.onPhase?.({ phase: 'batch', done: i, total: modelPacks.length, failed: failedBatches });
     const pack = modelPacks[i]!;
     const handle = handles?.[i];
     let parsed: unknown | null = null;
@@ -327,7 +348,7 @@ export async function runReviewPass(
       drops.parse_failed = (drops.parse_failed ?? 0) + 1;
       for (const entry of pack) failedIds.add(entry.id);
       opts?.onStatus?.(`Review batch ${i + 1} failed validation after retry.`);
-      opts?.onProgress?.(i + 1, modelPacks.length);
+      failedBatches += 1;
       continue;
     }
     const restored = handle !== undefined ? restoreReviewReply(parsed, pack, handle) : { parsed, drops: {} };
@@ -341,8 +362,8 @@ export async function runReviewPass(
     } else {
       for (const entry of pack) comparedIds.add(entry.id);
     }
-    opts?.onProgress?.(i + 1, modelPacks.length);
   }
+  opts?.onPhase?.({ phase: 'batch', done: modelPacks.length, total: modelPacks.length, failed: failedBatches });
 
   if (skippedIds.size > 0) {
     drops.oversized_entry = skippedIds.size;
