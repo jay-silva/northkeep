@@ -169,7 +169,12 @@
   #addMemCard[hidden] { display:none; }
   .review-mode { padding:22px 0; border-top:1px solid var(--line); }
   .review-mode:first-of-type { border-top:0; padding-top:0; }
-  details.review-mode > summary { min-height:44px; display:flex; align-items:center; cursor:pointer; font-weight:600; color:var(--ink); }
+  details.review-mode > summary { min-height:44px; display:flex; align-items:center; gap:10px; cursor:pointer; font-weight:600; color:var(--ink); list-style:none; }
+  details.review-mode > summary::-webkit-details-marker { display:none; }
+  details.review-mode > summary::before { content:''; flex:none; width:7px; height:7px; margin:0 4px 0 2px; border-right:2px solid currentColor; border-bottom:2px solid currentColor; transform:rotate(-45deg); transition:transform .16s ease-out; }
+  details.review-mode[open] > summary::before { transform:rotate(45deg); }
+  details.review-mode > summary:hover, details.review-mode > summary:focus-visible { color:var(--accent); }
+  @media (prefers-reduced-motion: reduce) { details.review-mode > summary::before { transition:none; } }
   #countPill { background: #e6efe8; color: var(--ok); display: inline-flex; align-items: center; gap: 7px; }
   #countPill::before { content: ""; width: 6px; height: 6px; border-radius: 999px; background: var(--ok); flex: none; }
   .prov { font: 500 12px/1.4 var(--sans); color: var(--muted); margin-top: 6px; display: flex; flex-wrap: wrap; gap: 9px 16px; }
@@ -827,7 +832,7 @@
   </section>
   <section id="view-curation" hidden>
     <div class="page-head"><div><h2>Review</h2><p class="muted">Review suggestions, check the sources, and decide what to keep.</p></div></div>
-    <details class="review-mode" id="detailedReview"><summary>Detailed memory review</summary>
+    <details class="review-mode" id="detailedReview"><summary>Detailed memory review <span class="muted" style="font-weight:400">(Start review, or review with a cloud model)</span></summary>
     <div class="review-launch" id="reviewLaunch">
       <div class="review-launch-head">
         <div><h2>Make room for what matters.</h2><p class="muted">Review suggestions, check the sources, and decide what to keep.</p></div>
