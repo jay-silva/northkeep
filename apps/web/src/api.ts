@@ -111,7 +111,7 @@ import {
   createReviewApiGenerator,
   ReviewApiRefusal,
   REVIEW_MODEL_FLOOR_MESSAGE,
-  claudeModelBelowReviewFloor,
+  claudeModelRefusedForReview,
   type ReviewPrepareSummary,
   listReviewApiEndpoints,
   reviewSelectionFingerprint,
@@ -2057,7 +2057,7 @@ function requireBoundedReviewEndpoint(endpointId: string):
   if (tier !== 'bounded') {
     return { ok: false, response: bad(400, 'That endpoint is local. Use Review pass for on-device models.') };
   }
-  if (claudeModelBelowReviewFloor(endpoint.model)) {
+  if (claudeModelRefusedForReview(endpoint.model)) {
     return { ok: false, response: bad(400, REVIEW_MODEL_FLOOR_MESSAGE) };
   }
   return { ok: true, endpoint, host: reviewApiHost(endpoint.baseUrl) };

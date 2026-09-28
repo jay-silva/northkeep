@@ -80,16 +80,18 @@ const STRUCTURED_OUTPUT_MODELS = [
 ];
 
 /**
- * Claude Sonnet 5 is the least capable Claude model a cloud review accepts.
- * Matched on the last path segment so a routed id such as
- * "anthropic/claude-3-haiku" is caught too; non-Claude ids are not judged here.
+ * The only Claude models a cloud review accepts. A routed id is normalized
+ * first ("anthropic/claude-sonnet-5.5" on OpenRouter, "anthropic.claude-..."
+ * on Bedrock); ids from other providers are not judged here.
  */
-const BELOW_REVIEW_FLOOR = /^claude-(?:haiku|instant|[0-3](?:[-.]|$)|sonnet-[0-4](?:[-.]|$))/i;
+const REVIEW_CLAUDE_MODELS = new Set(['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1']);
 export const REVIEW_MODEL_FLOOR_MESSAGE =
-  'Memory review needs Claude Sonnet 5 or a more capable model. Choose Claude Sonnet 5, Opus 4.8 or Opus 5.5 for this endpoint under Settings, Models. Nothing was sent.';
+  'Memory review with Claude uses Claude Sonnet 5.5, Claude Opus 5.5 or Claude Fable 5.1. Choose one of those for this endpoint under Settings, Models. Nothing was sent.';
 
-export function claudeModelBelowReviewFloor(model: string): boolean {
-  return BELOW_REVIEW_FLOOR.test(model.trim().split('/').pop() ?? '');
+export function claudeModelRefusedForReview(model: string): boolean {
+  const id = (model.trim().split('/').pop() ?? '').toLowerCase().replace(/^anthropic\./, '');
+  if (!/claude/.test(id)) return false;
+  return !REVIEW_CLAUDE_MODELS.has(id.replace(/:.*$/, '').replace(/\./g, '-'));
 }
 
 export function supportsStructuredOutputs(model: string): boolean {
@@ -150,7 +152,7 @@ export function createReviewApiGenerator(endpoint: EndpointConfig, options: Revi
   if (key === null || key.length === 0) {
     throw new Error(`No API key is stored for "${endpoint.label}". Add one under Settings.`);
   }
-  if (claudeModelBelowReviewFloor(endpoint.model)) throw new Error(REVIEW_MODEL_FLOOR_MESSAGE);
+  if (claudeModelRefusedForReview(endpoint.model)) throw new Error(REVIEW_MODEL_FLOOR_MESSAGE);
   const provider = providerFor(endpoint, key);
   const tier = options.tier;
   if (tier !== 1 && tier !== 2 && tier !== 3) throw new Error('A cloud review needs Tier 1, 2 or 3.');
@@ -240,7 +242,7 @@ export function createReviewApiGenerator(endpoint: EndpointConfig, options: Revi
       }
       const prompt = formatReviewPrompt(prepared.entries, { placeholderTag: handle.tag });
       const model = opts.model ?? endpoint.model;
-      if (claudeModelBelowReviewFloor(model)) throw new Error(REVIEW_MODEL_FLOOR_MESSAGE);
+      if (claudeModelRefusedForReview(model)) throw new Error(REVIEW_MODEL_FLOOR_MESSAGE);
       const chatOpts: { model: string; signal?: AbortSignal; outputSchema?: Record<string, unknown> } = { model };
       if (endpoint.kind === 'anthropic' && supportsStructuredOutputs(model)) chatOpts.outputSchema = REVIEW_OUTPUT_SCHEMA;
       if (opts.timeoutMs !== undefined) chatOpts.signal = AbortSignal.timeout(opts.timeoutMs);

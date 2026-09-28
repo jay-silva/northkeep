@@ -257,7 +257,7 @@ export {
 export {
   ReviewApiRefusal,
   REVIEW_MODEL_FLOOR_MESSAGE,
-  claudeModelBelowReviewFloor,
+  claudeModelRefusedForReview,
   createReviewApiGenerator,
   listReviewApiEndpoints,
   reviewSelectionFingerprint,

@@ -6,7 +6,7 @@ import type { MemoryEntry } from '@northkeep/core';
 import type { OllamaClient } from '@northkeep/librarian';
 import {
   ReviewApiRefusal,
-  claudeModelBelowReviewFloor,
+  claudeModelRefusedForReview,
   createReviewApiGenerator,
   listReviewApiEndpoints,
   type EndpointConfig,
@@ -131,7 +131,7 @@ describe('createReviewApiGenerator', () => {
     );
   });
 
-  it('refuses a Claude model below Sonnet 5 before anything is sent', async () => {
+  it('refuses a Claude model outside the review list before anything is sent', async () => {
     process.env.NORTHKEEP_PROVIDER_KEY_CLAUDE_TEST = 'sk-ant-test-not-a-real-key';
     const bodies = stubProvider('{"findings":[]}');
     const haiku: EndpointConfig = {
@@ -139,7 +139,7 @@ describe('createReviewApiGenerator', () => {
       model: 'claude-haiku-4-5', kind: 'anthropic', hasKey: true,
     };
     expect(() => createReviewApiGenerator(haiku, { tier: 1 })).toThrow(
-      'Memory review needs Claude Sonnet 5 or a more capable model. Choose Claude Sonnet 5, Opus 4.8 or Opus 5.5 for this endpoint under Settings, Models. Nothing was sent.',
+      'Memory review with Claude uses Claude Sonnet 5.5, Claude Opus 5.5 or Claude Fable 5.1. Choose one of those for this endpoint under Settings, Models. Nothing was sent.',
     );
     expect(bodies).toEqual([]);
   });
@@ -277,15 +277,19 @@ describe('createReviewApiGenerator', () => {
   });
 });
 
-describe('claudeModelBelowReviewFloor', () => {
-  it('refuses Haiku, Claude 3 and earlier, and Sonnet 4.x', () => {
-    const below = ['claude-haiku-4-5', 'claude-3-haiku-20240307', 'claude-3-5-sonnet-latest', 'claude-3.7-sonnet',
-      'claude-instant-1', 'claude-2.1', 'claude-sonnet-4-6', 'claude-sonnet-4', 'anthropic/claude-3-haiku', 'Claude-Haiku-4-5'];
-    expect(below.filter((m) => !claudeModelBelowReviewFloor(m))).toEqual([]);
+describe('claudeModelRefusedForReview', () => {
+  it('accepts only Sonnet 5.5, Opus 5.5 and Fable 5.1, in native and routed forms', () => {
+    const ok = ['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-fable-5-1', 'Claude-Opus-5-5',
+      'anthropic/claude-sonnet-5.5', 'anthropic/claude-opus-5.5', 'anthropic/claude-fable-5.1:batch', 'anthropic.claude-sonnet-5-5'];
+    expect(ok.filter((m) => claudeModelRefusedForReview(m))).toEqual([]);
   });
-  it('accepts Sonnet 5 and above, and leaves other providers alone', () => {
-    const ok = ['claude-sonnet-5', 'claude-sonnet-5-1', 'claude-opus-4-8', 'claude-opus-5-5', 'claude-fable-5-1',
-      'anthropic/claude-sonnet-5', 'gpt-4o-mini', 'qwen2.5:14b'];
-    expect(ok.filter((m) => claudeModelBelowReviewFloor(m))).toEqual([]);
+  it('refuses every other Claude model', () => {
+    const refused = ['claude-haiku-4-5', 'claude-haiku-4-5-20251001', 'claude-sonnet-5', 'claude-sonnet-4-6', 'claude-opus-4-8',
+      'claude-opus-5', 'claude-fable-5', 'claude-3-5-sonnet-latest', 'anthropic/claude-opus-4.8', '~anthropic/claude-fable-latest',
+      'claude-sonnet-5-5-extra'];
+    expect(refused.filter((m) => !claudeModelRefusedForReview(m))).toEqual([]);
+  });
+  it('leaves other providers alone', () => {
+    expect(['gpt-4o-mini', 'openai/gpt-5.6-terra', 'qwen2.5:14b'].filter((m) => claudeModelRefusedForReview(m))).toEqual([]);
   });
 });

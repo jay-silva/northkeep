@@ -66,8 +66,8 @@ export const KNOWN_PROVIDERS: ProviderInfo[] = [
     docsUrl: 'https://docs.anthropic.com/en/api/overview',
     models: [
       { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', costTier: 'high', contextWindow: 1_000_000, strengths: ['code', 'reasoning', 'long-context', 'creative'], recommended: true },
-      { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', costTier: 'high', contextWindow: 1_000_000, strengths: ['code', 'reasoning', 'long-context', 'creative'] },
-      { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', costTier: 'medium', contextWindow: 1_000_000, strengths: ['code', 'reasoning', 'long-context'] },
+      { id: 'claude-sonnet-5-5', label: 'Claude Sonnet 5.5', costTier: 'medium', contextWindow: 1_000_000, strengths: ['code', 'reasoning', 'long-context'] },
+      { id: 'claude-fable-5-1', label: 'Claude Fable 5.1', costTier: 'high', contextWindow: 1_000_000, strengths: ['code', 'reasoning', 'long-context', 'creative'] },
     ],
   },
   {
@@ -143,7 +143,7 @@ export const KNOWN_PROVIDERS: ProviderInfo[] = [
     keyPrefix: 'sk-or-',
     docsUrl: 'https://openrouter.ai/docs',
     models: [
-      { id: 'anthropic/claude-opus-4-8', label: 'Claude Opus 4.8 (via OpenRouter)', costTier: 'high', contextWindow: 1_000_000, strengths: ['code', 'reasoning', 'long-context', 'creative'], recommended: true },
+      { id: 'anthropic/claude-opus-5.5', label: 'Claude Opus 5.5 (via OpenRouter)', costTier: 'high', contextWindow: 1_000_000, strengths: ['code', 'reasoning', 'long-context', 'creative'], recommended: true },
       { id: 'openai/gpt-5.6-terra', label: 'GPT-5.6 Terra (via OpenRouter)', costTier: 'medium', contextWindow: 400_000, strengths: ['code', 'reasoning', 'general'] },
       { id: 'deepseek/deepseek-chat', label: 'DeepSeek Chat (via OpenRouter)', costTier: 'low', contextWindow: 128_000, strengths: ['general', 'code', 'reasoning'] },
       { id: 'meta-llama/llama-4-maverick', label: 'Llama 4 Maverick (via OpenRouter)', costTier: 'low', contextWindow: 1_000_000, strengths: ['general', 'code', 'reasoning'] },
