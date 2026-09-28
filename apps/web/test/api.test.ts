@@ -622,3 +622,37 @@ describe('GET /api/contract reports whether each app is on this Mac', () => {
     }
   });
 });
+
+describe('GET /api/connect does not stall other requests', () => {
+  it('answers a concurrent request while a slow `claude mcp get` is still running', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'northkeep-connect-slow-'));
+    const bin = path.join(home, 'bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'claude'), '#!/bin/sh\nsleep 2\nexit 0\n', { mode: 0o755 });
+    const saved = { HOME: process.env.HOME, PATH: process.env.PATH, CODEX_HOME: process.env.CODEX_HOME, NORTHKEEP_NO_KEYCHAIN: process.env.NORTHKEEP_NO_KEYCHAIN };
+    process.env.HOME = home;
+    process.env.PATH = `${bin}:/usr/bin:/bin`;
+    delete process.env.CODEX_HOME;
+    process.env.NORTHKEEP_NO_KEYCHAIN = '1';
+    try {
+      const session = new UiSession(path.join(home, 'vault.nkv'));
+      const started = Date.now();
+      const slow = handleApi(session, 'GET', '/api/connect', new URLSearchParams(), Buffer.from(''));
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      const other = await handleApi(session, 'GET', '/api/contract', new URLSearchParams(), Buffer.from(''));
+      const otherDone = Date.now() - started;
+      expect(other.status).toBe(200);
+      expect(otherDone).toBeLessThan(1000);
+      const res = await slow;
+      expect(Date.now() - started).toBeGreaterThanOrEqual(1900);
+      const code = (res.body as { targets: Array<{ id: string; available: boolean; connected: boolean }> }).targets
+        .find((t) => t.id === 'claude-code');
+      expect(code).toMatchObject({ available: true, connected: true });
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  }, 15000);
+});

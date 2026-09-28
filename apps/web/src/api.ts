@@ -84,10 +84,10 @@ import {
 } from '@northkeep/librarian';
 import {
   auditAsCsv,
-  claudeCodeAvailable,
+  claudeCodeAvailableAsync,
   CONTRACT_TEXT,
   connect,
-  connectStatus,
+  connectStatusAsync,
   contractStatus,
   disconnect,
   installContract,
@@ -1618,17 +1618,18 @@ async function dispatch(
     const scopesInVault = session.isUnlocked()
       ? await session.withVault((vault) => vault.scopes())
       : [];
-    const target = (id: ConnectTarget, label: string, available: boolean) => {
-      const status = connectStatus(id);
-      return { id, label, available, connected: status.connected, scopes: status.scopes ?? null };
+    // Async: `claude mcp get` can take seconds and must not stall other requests.
+    const target = async (id: ConnectTarget, label: string, available: boolean | Promise<boolean>) => {
+      const [status, isAvailable] = await Promise.all([connectStatusAsync(id), available]);
+      return { id, label, available: isAvailable, connected: status.connected, scopes: status.scopes ?? null };
     };
     return ok({
-      targets: [
+      targets: await Promise.all([
         target('claude-desktop', 'Claude Desktop', true),
-        target('claude-code', 'Claude Code', claudeCodeAvailable()),
+        target('claude-code', 'Claude Code', claudeCodeAvailableAsync()),
         target('chatgpt', 'ChatGPT', true),
         target('cursor', 'Cursor', true),
-      ],
+      ]),
       scopes_in_vault: scopesInVault,
     });
   }

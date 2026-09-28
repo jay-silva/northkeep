@@ -1,4 +1,4 @@
-import { execFileSync } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -261,6 +261,26 @@ export function claudeCodeStatus(): ConnectStatus {
   } catch {
     return { connected: false };
   }
+}
+
+const STATUS_TIMEOUT_MS = 5000;
+
+/** Resolves to whether the command exited 0; a timeout or spawn failure counts as not. */
+function exitsCleanly(file: string, args: string[]): Promise<boolean> {
+  return new Promise((resolve) => {
+    execFile(file, args, { timeout: STATUS_TIMEOUT_MS }, (err) => resolve(!err));
+  });
+}
+
+/** claudeCodeAvailable without blocking the event loop, for the app server. */
+export function claudeCodeAvailableAsync(): Promise<boolean> {
+  return exitsCleanly('which', ['claude']);
+}
+
+/** claudeCodeStatus without blocking the event loop, for the app server. */
+export async function claudeCodeStatusAsync(): Promise<ConnectStatus> {
+  if (!(await claudeCodeAvailableAsync())) return { connected: false };
+  return { connected: await exitsCleanly('claude', ['mcp', 'get', SERVER_NAME]) };
 }
 
 /**
@@ -711,6 +731,11 @@ export function disconnect(target: ConnectTarget): { removed: boolean } {
       throw new Error(`Unhandled Connect target: ${String(_exhaustive)}`);
     }
   }
+}
+
+/** connectStatus with the Claude Code check off the event loop. */
+export function connectStatusAsync(target: ConnectTarget): Promise<ConnectStatus> {
+  return target === 'claude-code' ? claudeCodeStatusAsync() : Promise.resolve(connectStatus(target));
 }
 
 export function connectStatus(target: ConnectTarget): ConnectStatus {
