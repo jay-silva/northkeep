@@ -1,5 +1,6 @@
 #!/bin/bash
-# Mutation check for the ADR 0062 block (mutants from the first code review, adr-0062-code-r1).
+# Mutation check for the ADR 0062 block (mutants M1 to M14 from the first code review, adr-0062-code-r1;
+# X1 to X9 survivors from its recheck, adr-0062-code-r2-recheck).
 # Each mutant edits packages/core/src, reruns the block and lists the tests that fail; a mutant
 # no test catches fails the script. packages/core/src must be committed; it is restored after.
 set -u
@@ -33,6 +34,15 @@ run "M11 bare string not carrying"   $H 's/if\(typeof value===.string.\)return v
 run "M12 ledger also on superseded"  $V 's/entry\.type===.working.&&entry\.superseded_at===null&&entry\.forgotten_at===null&&parseProjectSlug/entry.type==="working"\&\&entry.forgotten_at===null\&\&parseProjectSlug/'
 run "M13 D5 back to trunk throw"     $V 's/if\(copied\.length\)\{/if(copied.length){throw new ProjectHandoffError("operation_conflict","Operation receipt metadata exists without its original result.");/'
 run "M14 malformed after ledger hit" $V 's/if\(malformedLedger\)throw new ProjectHandoffError\(.operation_conflict.,.Malformed project operation record..\);\n(\s*)if\(ledgerHits\.length\)\{\n(.*\n.*\n\s*\})/$1if(ledgerHits.length){\n$2\n$1if(malformedLedger)throw new ProjectHandoffError("operation_conflict","Malformed project operation record.");/'
+run "X1 lookup ignores head type"      $V 's/if\(entry\.type===.working.&&entry\.superseded_at===null&&entry\.forgotten_at===null&&parseProjectSlug/if(entry.superseded_at===null\&\&entry.forgotten_at===null\&\&parseProjectSlug/'
+run "X2 cap keeps oldest 16"           $V 's/\.slice\(-PROJECT_OPERATIONS_LIMIT\)/.slice(0,PROJECT_OPERATIONS_LIMIT)/'
+run "X3 saved_at not head time"        $V 's/saved_at:now\}\]/saved_at:new Date(0).toISOString()}]/'
+run "X4 record accepts extra keys"     $H 's/keys\.length===OPERATION_RECORD_KEYS\.length&&//'
+run "X5 ledger stale without document" $V 's/(send any new save with a new operation id\.).,current\);\};/$1\x27,undefined);};/'
+run "X6 D5 ignores original scope"     $V 's/original\.scope===scope&&//'
+run "X7 saved_at not validated"        $H 's/&&typeof r\.saved_at===.string.&&Number\.isFinite\(Date\.parse\(r\.saved_at\)\)//'
+run "X8 fingerprint any hex length"    $H 's/\/\^\[0-9a-f\]\{64\}\$\/\.test\(r\.request_fingerprint\)/\/^[0-9a-f]+\$\/.test(r.request_fingerprint)/'
+run "X9 ledger hits every -> some"     $V 's/ledgerHits\.every\(/ledgerHits.some(/'
 git checkout -q HEAD -- packages/core/src
 git diff --quiet -- packages/core/src && echo "restored clean"
 echo "survivors: $survivors"

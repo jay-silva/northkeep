@@ -472,23 +472,25 @@ entry, the text from "A checkpoint or wrap retried unchanged" through
 > when the project was renamed since, when the same operation id was
 > also used on another project, or when a receipt copy made by NorthKeep
 > 0.22.1 or earlier does not prove the save, and as `not_found` when the
-> project no longer has a live document. The vault remembers the
-> operation ids of each project's newest 16 checkpoint or wrap saves on
-> the live project document (ADR 0062), so resending one of those ids
-> with a different request, including against the new head, is refused
-> as `operation_conflict` and writes nothing, when the resend reaches
-> NorthKeep 0.22.2 or later and the app's connection can see that
-> project. Three gaps remain. A save made by NorthKeep 0.22.1 or earlier
-> is not recorded, and a resend handled by NorthKeep 0.22.1 or earlier
-> (for example on a second Mac that has not updated) is never checked
-> against the recorded ids; in either case, once the save's revision is
-> blanked, resending its id against the new head is saved again
-> (duplicate Log line, older Status and Next Actions back on top). An id
-> older than its project's newest 16 checkpoint or wrap saves is
-> forgotten the same way, and so are the ids of a project that was
-> deleted or whose live document was forgotten, changed to another type,
-> or moved out of the project. Use a new operation id for every new
-> save.
+> project no longer has a live document. When only the save's base was
+> blanked, not its own revision, a forgotten, retyped or moved-out head,
+> or a rename, answers `stale_project` with no document instead. The
+> vault remembers the operation ids of each project's newest 16
+> checkpoint or wrap saves on the live project document (ADR 0062), so
+> resending one of those ids with a different request, including against
+> the new head, is refused as `operation_conflict` and writes nothing,
+> when the resend reaches NorthKeep 0.22.2 or later and the app's
+> connection can see that project. Three gaps remain. A save made by
+> NorthKeep 0.22.1 or earlier is not recorded, and a resend handled by
+> NorthKeep 0.22.1 or earlier (for example on a second Mac that has not
+> updated) is never checked against the recorded ids; in either case,
+> once the save's revision is blanked, resending its id against the new
+> head is saved again (duplicate Log line, older Status and Next Actions
+> back on top). An id older than its project's newest 16 checkpoint or
+> wrap saves is forgotten the same way, and so are the ids of a project
+> that was deleted or whose live document was forgotten, changed to
+> another type, or moved out of the project. Use a new operation id for
+> every new save.
 
 **ADR 0051, "Correction, 2026-09-24"**:
 
@@ -808,28 +810,44 @@ the text above, or settles something the text left open:
   on the old code at its ledger assertion, because the old code keeps no
   ledger.
 - **Mutation check.** `packages/core/test/adr-0062/mutate.sh` reruns the
-  first code review's fourteen mutants and fails if any survives. The
-  fix round added T4c (Decision 5's scope and forgotten-original
-  checks), T5b (the ledger's same-project check, through a rename), a T8
-  case with a malformed and a well-formed record for the same id (the
+  first code review's fourteen mutants (M1 to M14) and the nine from its
+  recheck (X1 to X9), and fails if any survives. The code review fix
+  round added T4c (Decision 5's scope and forgotten-original checks), T5b
+  (the ledger's same-project check, through a rename), a T8 case with a
+  malformed and a well-formed record for the same id (the
   malformed-before-ledger order), and a second half of T4a that runs past
-  the copy's life, so it fails without the ledger. Output:
+  the copy's life, so it fails without the ledger. The final tidy added
+  T10 (only `working` heads are read; Residual 3's type change), a T6
+  check that each new record is exactly the id, the receipt's fingerprint
+  and the head's `created_at`, T8 cases for an extra key and a bad
+  `saved_at` carrying the id, a T4c copy whose original is forgotten in
+  another scope, and a T9 case where hits on two projects refuse even
+  though one is the request's own. Output:
 
   ```
-  M1 no ledger lookup: caught by T1 T2 T4a T5 T5b T8 
-  M2 no append in writeProject: caught by T1 T2 T4a T5 T5b T6 T8 
-  M3 no malformed refusal: caught by T8 
-  M4 D5 ignores fingerprint: caught by T4b 
-  M5 D5 ignores forgotten: caught by T4c 
-  M6 D5 ignores copy scope: caught by T4c 
-  M7 ledger ignores scope: caught by T5b 
-  M8 ledger ignores fingerprint: caught by T1 T4a 
-  M9 cap 17: caught by T6 
-  M10 keep malformed on write: caught by T8 
-  M11 bare string not carrying: caught by T8 
-  M12 ledger also on superseded: caught by T8 
-  M13 D5 back to trunk throw: caught by T4b 
-  M14 malformed after ledger hit: caught by T8 
+  M1 no ledger lookup: caught by T1 T2 T4a T5 T5b T8 T9
+  M2 no append in writeProject: caught by T1 T2 T4a T5 T5b T6 T8 T9
+  M3 no malformed refusal: caught by T8
+  M4 D5 ignores fingerprint: caught by T4b
+  M5 D5 ignores forgotten: caught by T4c
+  M6 D5 ignores copy scope: caught by T4c
+  M7 ledger ignores scope: caught by T5b
+  M8 ledger ignores fingerprint: caught by T1 T4a
+  M9 cap 17: caught by T6
+  M10 keep malformed on write: caught by T8
+  M11 bare string not carrying: caught by T8
+  M12 ledger also on superseded: caught by T8 T10
+  M13 D5 back to trunk throw: caught by T4b
+  M14 malformed after ledger hit: caught by T8
+  X1 lookup ignores head type: caught by T10
+  X2 cap keeps oldest 16: caught by T6
+  X3 saved_at not head time: caught by T6
+  X4 record accepts extra keys: caught by T8
+  X5 ledger stale without document: caught by T2 T4a T4b
+  X6 D5 ignores original scope: caught by T4c
+  X7 saved_at not validated: caught by T8
+  X8 fingerprint any hex length: caught by T8
+  X9 ledger hits every -> some: caught by T9
   restored clean
   survivors: 0
   ```
@@ -966,3 +984,21 @@ the text above, or settles something the text left open:
     more passes were run: pass 3 breached C15 on one run (2.94 ms), pass
     4 passed. Recorded under the Perf gate for Jay.
   - Note 4: Size, C13 and the Build notes say 2,955 bytes.
+- 2026-09-28, code recheck (`Reviews/release-0.22.2/adr-0062-code-r2-recheck.md`,
+  evidence beside it): **CLEARED.** W1 and W2 closed; the fix round
+  touched no product code. Notes: six more mutants (X1, X3, X4, X6, X7,
+  X9) survived the block; in the base-only shape a forgotten, retyped or
+  moved-out head, or a rename, answers `stale_project` with no document,
+  which the KNOWN-LIMITS sentence did not say; a non-numeric perf limit
+  would pass.
+- 2026-09-28, final tidy (this revision; no product code changed):
+  - Tests pin the six survivors (T10, and new cases in T4c, T6, T8 and
+    T9); `mutate.sh` now runs all 23 mutants, survivors 0.
+  - The KNOWN-LIMITS sentence and its copy here gain the base-only case.
+    The recheck's suggested parenthetical was attached to the `not_found`
+    clause, where a deleted project still answers `not_found` and a rename
+    is not covered, so the build states the case as its own sentence.
+  - `perf.mjs` exits 2 when `REL_LIMIT_PCT` or `ABS_LIMIT_MS` is set but
+    is empty or not a finite number (checked with `abc`, empty, a space,
+    `NaN`, `Infinity` and `2ms`); `perf.sh` then exits 1. Perf numbers
+    were not remeasured.

@@ -644,6 +644,14 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     const liveOriginal = plantCopy('project:carry', (receipt, v) => ({ ...receipt, result_id: head(v, 'carry').id }));
     expect(attempt(() => liveOriginal.v.checkpointProject(liveOriginal.spec.x_request))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
     liveOriginal.v.close();
+
+    const otherScope = plantCopy('project:carry', (receipt, v) => {
+      const stray = v.remember({ content: 'Stray.', type: 'episodic', scope: 'personal', source: 'test' }).id;
+      v.forget(stray);
+      return { ...receipt, result_id: stray };
+    });
+    expect(attempt(() => otherScope.v.checkpointProject(otherScope.spec.x_request))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
+    otherScope.v.close();
   });
 
   it('T5: an id used on one project is refused on another, before and after its revision is blanked', () => {
@@ -686,9 +694,12 @@ describe('operation ids survive compaction (ADR 0062)', () => {
       if (r < 0.5) {
         const id = `0062cccc-0000-4000-8000-${String(i).padStart(12, '0')}`;
         const mode = r < 0.25 ? 'checkpoint' : 'wrap';
-        v.checkpointProject({ ...request(v, 'demo', id, current.id, `Did ${i}.`), mode });
+        const { receipt } = v.checkpointProject({ ...request(v, 'demo', id, current.id, `Did ${i}.`), mode });
         saved.push(id);
         kinds.add(mode);
+        const written = head(v, 'demo');
+        const ledger = written.metadata![LEDGER] as Array<Record<string, unknown>>;
+        expect(ledger.at(-1)).toEqual({ operation_id: id, request_fingerprint: receipt.request_fingerprint, saved_at: written.created_at });
       } else if (r < 0.8) {
         v.updateProject({ project: 'demo', expected_revision: current.id, status: `Update ${i}.` });
         kinds.add('update');
@@ -713,6 +724,11 @@ describe('operation ids survive compaction (ADR 0062)', () => {
       v.remember({ content: DOC, type: 'working', scope: `project:${project}`, source: 'test', metadata: { [LEDGER]: ledger } }).id;
     const now = new Date().toISOString();
     const ids = (n: number) => `0062dddd-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+    const extraKey = plant('m6', [{ operation_id: ids(11), request_fingerprint: 'a'.repeat(64), saved_at: now, note: 'extra' }]);
+    expect(attempt(() => v.checkpointProject(request(v, 'm6', ids(11), extraKey)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
+    const badTime = plant('m7', [{ operation_id: ids(12), request_fingerprint: 'a'.repeat(64), saved_at: 'not a time' }]);
+    expect(attempt(() => v.checkpointProject(request(v, 'm7', ids(12), badTime)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
 
     const shortFingerprint = plant('m1', [{ operation_id: ids(1), request_fingerprint: '0123456789', saved_at: now }]);
     expect(attempt(() => v.checkpointProject(request(v, 'm1', ids(1), shortFingerprint)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
@@ -745,12 +761,27 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     v.close();
   });
 
-  it('T9: an id used in a scope outside the grant is not found, as before compaction', () => {
+  it('T9: an id used in a scope outside the grant is not found, as before compaction; seen again beside its own project, it refuses', () => {
     const v = vault();
     compactedCheckpoint(v, 'a');
     const bHead = create(v, 'b');
-    expect(attempt(() => v.checkpointProject(request(v, 'b', X, bHead), ['project:b']))).toBe('written');
+    const xb = request(v, 'b', X, bHead);
+    expect(attempt(() => v.checkpointProject(xb, ['project:b']))).toBe('written');
     expect(didCount(v, 'b', 'Did X.')).toBe(1);
+
+    // Hits on both projects, one of them the request's own with its fingerprint, still refuse.
+    updates(v, 'b', 12);
+    expect(attempt(() => v.checkpointProject(xb))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    v.close();
+  });
+
+  it('T10: a head changed to another type leaves the lookup, so a recreated project writes the id (Residual 3)', () => {
+    const v = vault();
+    compactedCheckpoint(v, 'a');
+    v.editMemory(head(v, 'a').id, { type: 'semantic' });
+    const recreated = create(v, 'a');
+    expect(attempt(() => v.checkpointProject(request(v, 'a', X, recreated)))).toBe('written');
+    expect(didCount(v, 'a', 'Did X.')).toBe(1);
     v.close();
   });
 });
