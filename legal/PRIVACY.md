@@ -2,7 +2,7 @@
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** support@northkeep.ai · **Effective date:** 2026-09-24
+**Contact:** support@northkeep.ai · **Effective date:** 2026-09-28
 
 NorthKeep is built on a simple promise: **your AI memory lives on your device,
 encrypted, and we never see its contents** (the exceptions are content you
