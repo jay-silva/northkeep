@@ -118,6 +118,7 @@ function harness(targets: Target[], opts: { stored?: Record<string, string>; sto
     ${functionSource('contractOfferItem')}
     ${optionalFunction('contractErrorText')}
     ${optionalFunction('contractConnectLine')}
+    ${optionalFunction('openConnectDesktop')}
     ${functionSource('renderContractOffer')}
     this.renderContractOffer = renderContractOffer;
     this.contractOfferPlan = contractOfferPlan;
@@ -130,7 +131,7 @@ function harness(targets: Target[], opts: { stored?: Record<string, string>; sto
     ${offer}
   `, context);
   return {
-    box: $('contractOffer'), card: $('contractCard'), heading: $('projectsHeading'), posts, stored, shown,
+    box: $('contractOffer'), card: $('contractCard'), heading: $('projectsHeading'), node: $, posts, stored, shown,
     render: () => context.renderContractOffer() as Promise<void>,
     loadContract: () => context.loadContract() as Promise<void>,
     plan: (list: Target[], dismissed: Record<string, boolean>) => context.contractOfferPlan(list, dismissed),
@@ -310,6 +311,16 @@ describe('contract offer only for detected apps', () => {
     expect(h.box.hidden).toBe(true);
   });
 
+  it('leaves an undetected Codex out of the Reaches row', async () => {
+    const reach = async (list: Target[]) => {
+      const h = harness(list);
+      await h.render();
+      return byClass(h.box, 'yes').map((n) => n.textContent);
+    };
+    expect(await reach([claude('absent'), noCodex('absent')])).toEqual(['Claude Code', 'Cursor per project, from Connect, Desktop']);
+    expect(await reach([claude('absent'), codex('absent')])).toEqual(['Claude Code', 'Codex', 'Cursor per project, from Connect, Desktop']);
+  });
+
   it('leaves an undetected app out of the update pills', async () => {
     const h = harness([claude('stale'), noCodex('absent')]);
     await h.render();
@@ -359,8 +370,13 @@ describe('contract offer confirmation and focus', () => {
     await click(button(h.box, 'Install for Claude Code and Codex'));
     const text = all(h.box).filter((n) => n.tag === 'p').map((n) => n.textContent);
     expect(text).toContain('Claude Code is not connected to NorthKeep yet. The contract is installed, but project tools will not be available until you connect it in Connect, Desktop.');
+    const note = all(h.box).find((n) => n.textContent.startsWith('Claude Code is not connected'))!;
+    expect(note.attrs.role).toBe('status');
     await click(button(h.box, 'Open Connect, Desktop'));
     expect(h.shown).toEqual(['connect']);
+    expect(h.node('connectToggle').attrs['aria-expanded']).toBe('true');
+    expect(h.node('connectNavChildren').hidden).toBe(false);
+    expect(h.node('connectHeading').focused).toBe(true);
   });
 
   it('names both apps when neither is connected', async () => {

@@ -623,7 +623,8 @@
   .contract-offer.done h3 { font-size:19px; margin-bottom:2px; }
   .contract-offer.done p { margin:0; color:var(--muted); font-size:14px; }
   .contract-offer .kept { margin-top:6px; overflow-wrap:anywhere; }
-  #projectsHeading:focus { outline:none; }
+  #projectsHeading:focus, #connectHeading:focus { outline:none; }
+  .contract-offer .kept:empty { margin:0; }
   .contract-offer.done .contract-offer-actions { min-width:0; }
   @media (max-width: 860px) {
     .contract-offer, .contract-offer.done { grid-template-columns:minmax(0,1fr); }
@@ -1066,7 +1067,7 @@
       over, set the same sync server, then Pull.</p>
   </section>
   <section id="view-connect" hidden>
-    <div class="page-head"><div><h2>Desktop</h2><p class="muted">Bring your memory to the AI apps you use on this Mac.</p></div></div>
+    <div class="page-head"><div><h2 id="connectHeading" tabindex="-1">Desktop</h2><p class="muted">Bring your memory to the AI apps you use on this Mac.</p></div></div>
     <p class="muted">Give the AI apps you already use (Claude Desktop, Claude Code, ChatGPT, and Cursor)
       access to your NorthKeep memory, on your existing subscription. One click registers the memory
       server that ships inside NorthKeep; no terminal, no config files to edit by hand.</p>
@@ -5447,7 +5448,8 @@
     return s;
   }
 
-  // Server errors can carry absolute paths; the card keeps the kind and the file name.
+  // Drops the Node error code (EACCES: ...) and the syscall's quoted path, and shortens
+  // any other absolute path to its file name, so the card shows the kind of failure.
   function contractErrorText(message) {
     let text = String(message || '')
       .replace(/^E[A-Z]+:\s*/, '')
@@ -5465,6 +5467,14 @@
     const many = labels.length > 1;
     return labels.join(' and ') + (many ? ' are' : ' is') + ' not connected to NorthKeep yet. ' +
       'The contract is installed, but project tools will not be available until you connect ' + (many ? 'them' : 'it') + ' in Connect, Desktop.';
+  }
+
+  // Same as picking Connect, Desktop in the sidebar: expand the group, show the page, focus its heading.
+  function openConnectDesktop() {
+    $('connectToggle').setAttribute('aria-expanded', 'true');
+    $('connectNavChildren').hidden = false;
+    showTop('connect');
+    $('connectHeading').focus();
   }
 
   async function renderContractOffer() {
@@ -5499,7 +5509,9 @@
       'The session contract tells ' + names + ' to resume the project at the start of a session, save a checkpoint partway, and wrap up at the end.'));
     const reach = el('dl', 'contract-reach');
     const yes = el('dd');
-    yes.append(contractOfferItem('yes', 'Claude Code'), contractOfferItem('yes', 'Codex'), contractOfferItem('yes', 'Cursor ', 'per project, from Connect, Desktop'));
+    yes.appendChild(contractOfferItem('yes', 'Claude Code'));
+    if (targets.some((t) => t.id === 'codex')) yes.appendChild(contractOfferItem('yes', 'Codex'));
+    yes.appendChild(contractOfferItem('yes', 'Cursor ', 'per project, from Connect, Desktop'));
     const no = el('dd');
     no.append(contractOfferItem('no', 'Claude Desktop plain chat'), contractOfferItem('no', 'ChatGPT'));
     reach.append(el('dt', '', 'Reaches'), yes, el('dt', '', 'Does not reach'), no);
@@ -5550,6 +5562,9 @@
       doneTitle.id = 'contractOfferTitle';
       copy.append(doneTitle, el('p', '', 'It takes effect the next time you start a session in each app. Manage it in Connect, Desktop.'));
       for (const line of kept) copy.appendChild(el('p', 'kept', line));
+      const connectNote = el('p', 'kept');
+      connectNote.setAttribute('role', 'status');
+      copy.appendChild(connectNote);
       const doneActions = el('div', 'contract-offer-actions');
       const done = el('button', 'btn', 'Done');
       done.type = 'button';
@@ -5564,10 +5579,10 @@
       const unconnected = plan.needs.filter((t) => connectTargets.some((c) => c.id === connectId[t.id] && c.connected === false));
       const line = contractConnectLine(unconnected.map((t) => connectLabel[t.id] || t.label));
       if (!line || box.hidden) return;
-      copy.appendChild(el('p', 'kept', line));
+      connectNote.textContent = line;
       const open = el('button', 'btn', 'Open Connect, Desktop');
       open.type = 'button';
-      open.addEventListener('click', () => { box.hidden = true; showTop('connect'); });
+      open.addEventListener('click', () => { box.hidden = true; openConnectDesktop(); });
       doneActions.insertBefore(open, done);
     });
     actions.append(install, later, err);
