@@ -70,22 +70,10 @@
 <p>Your chosen memory scopes reach Claude, ChatGPT, and Manus wherever you use them, including your phone. Shared content is encrypted at rest, the connector database holds no key that can read it, and the server decrypts it briefly to answer each request.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>Cross-app conversation journal</h3>
-<p>Your AI apps summarize your conversations into your vault automatically, so your history survives switching apps. Step 9 in the <a href="./start.html">getting-started guide</a>.</p></div>
+<p>Your AI apps summarize your conversations into your vault automatically, so your history survives switching apps. Step 7 in the <a href="./start.html">getting-started guide</a>.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>Tiered on-device redaction, up to Tier 3</h3>
-<p>Identifiers such as keys with a known issuer prefix, card numbers, addresses, and record numbers, plus names and dates at the higher tiers, masked on your machine before a chat message or a cloud memory review is sent. The iPhone app shows exactly what left on every turn; in the terminal, each reply names the tier that ran. A key with no recognizable prefix or a password is not caught.</p></div>
-<div class="card"><span class="tag live">Live</span>
-<h3>Web search and fetch, with per-call approval</h3>
-<p>Your chat can look things up on the web. The first call to any site stops and asks, showing the exact search or address it is about to send, and you can allow it once, allow that site from then on, or refuse. Each reply then lists the calls it made and the sites they went to. Off unless you turn it on.</p></div>
-<div class="card"><span class="tag live">Live</span>
-<h3>Your own tools, under the same approval gate</h3>
-<p>Your chat can use MCP servers you configure, starting with your vault itself, so it can search your memories while it answers. You approve what a server offers before it can run anything, and it stops working if those tools change. Tools that only read can be remembered; anything that changes something asks every time.</p></div>
-<div class="card"><span class="tag live">Live</span>
-<h3>Connect a service you sign in to</h3>
-<p>Beyond tools that run on your Mac, your chat can use a remote MCP service you sign in to with your own account. Signing in needs your vault passphrase, and NorthKeep shows you where the service wants to send you before any browser opens. Its call arguments always get the Tier-1 masking floor, and a chat you have pinned private refuses them outright. Providers like Google require you to create the OAuth client yourself, so this is a paste-two-values setup, not one click.</p></div>
-<div class="card"><span class="tag live">Live</span>
-<h3>Model concierge</h3>
-<p>Automatic model routing per message, under a privacy ceiling you set. A chat you have pinned private is never silently escalated to a cloud model, and every reply tells you which model answered, and in Auto mode why.</p></div>
+<p>Identifiers such as keys with a known issuer prefix, card numbers, addresses, and record numbers, plus names and dates at the higher tiers, masked on your machine before a cloud memory review, or a message in legacy Converse, is sent. A key with no recognizable prefix or a password is not caught.</p></div>
 
 <div class="card"><span class="tag live">Live</span>
 <h3>A review pass over your vault</h3>
@@ -94,7 +82,7 @@
 <h2>In testing</h2>
 <div class="card"><span class="tag">Beta</span>
 <h3>iPhone app</h3>
-<p>Your vault, chat with masking, and the privacy proof screen on your phone. Currently with design partners on TestFlight.</p></div>
+<p>Your vault, legacy Converse chat with masking, and the privacy proof screen on your phone. Currently with design partners on TestFlight.</p></div>
 <div class="card"><span class="tag">Beta</span>
 <h3>PDF attachments on the phone</h3>
 <p>The same on-device extraction the Mac app uses: the PDF never leaves your phone, only its redacted text does.</p></div>
@@ -114,6 +102,21 @@
 <div class="card"><span class="tag">Exploring</span>
 <h3>Windows and Intel Mac builds</h3>
 <p>Both run from source today; packaged builds are on the list.</p></div>
+
+<h2>Legacy: Converse</h2>
+<p>These shipped as part of Converse, NorthKeep's own chat with masking. Converse wasn't getting much use, so NorthKeep now focuses on Connect, Projects and memory review. Converse still runs in the iPhone app (beta) and from a source install, but we are not adding to it, and it will be retired over time.</p>
+<div class="card"><span class="tag">Legacy</span>
+<h3>Web search and fetch, with per-call approval</h3>
+<p>Your chat can look things up on the web. The first call to any site stops and asks, showing the exact search or address it is about to send, and you can allow it once, allow that site from then on, or refuse. Each reply then lists the calls it made and the sites they went to. Off unless you turn it on.</p></div>
+<div class="card"><span class="tag">Legacy</span>
+<h3>Your own tools, under the same approval gate</h3>
+<p>Your chat can use MCP servers you configure, starting with your vault itself, so it can search your memories while it answers. You approve what a server offers before it can run anything, and it stops working if those tools change. Tools that only read can be remembered; anything that changes something asks every time.</p></div>
+<div class="card"><span class="tag">Legacy</span>
+<h3>Connect a service you sign in to</h3>
+<p>Beyond tools that run on your Mac, your chat can use a remote MCP service you sign in to with your own account. Signing in needs your vault passphrase, and NorthKeep shows you where the service wants to send you before any browser opens. Its call arguments always get the Tier-1 masking floor, and a chat you have pinned private refuses them outright. Providers like Google require you to create the OAuth client yourself, so this is a paste-two-values setup, not one click.</p></div>
+<div class="card"><span class="tag">Legacy</span>
+<h3>Model concierge</h3>
+<p>Automatic model routing per message, under a privacy ceiling you set. A chat you have pinned private is never silently escalated to a cloud model, and every reply tells you which model answered, and in Auto mode why.</p></div>
 
 <h2>Suggest a feature</h2>
 <p>This list is shaped by the people using NorthKeep on real work. If something is missing, slow, or wrong, tell us. A human reads every note.</p>

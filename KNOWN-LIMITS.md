@@ -1039,7 +1039,7 @@ every milestone; if a limit is removed, say when and how.*
   incomplete. Even a complete pass can miss issues or suggest a bad correction.
   No quality percentage or general accuracy claim is established by the small
   synthetic evaluation script.
-- **One confirmed change at a time.** Edited wording is previewed before
+- **You confirm every change.** Edited wording is previewed before
   saving. A single duplicate removal names another member to keep; Remove
   all forgets every member of the group after one confirmation. No
   automatic acceptance, vault-wide bulk removal, or many-to-one
