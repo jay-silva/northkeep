@@ -573,7 +573,7 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     v.close();
   });
 
-  it('T4a: the carry-forward route answers from the ledger, stale for a verbatim retry and a conflict for a changed request', () => {
+  it('T4a: the carry-forward route with a ledger answers stale for a verbatim retry and a conflict for a changed request, also once the copy is blanked', () => {
     const v = vault();
     const x = request(v, 'demo', X, create(v, 'demo'));
     const xResult = v.checkpointProject(x).receipt.result_revision;
@@ -588,10 +588,19 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     expect(ledgerIds(head(v, 'demo'))).toEqual([X, Z]);
     expect(head(v, 'demo').id).toBe(before);
     expect(didCount(v, 'demo', 'Did X.')).toBe(1);
+
+    updates(v, 'demo', 1);
+    expect(isBlanked(v, edited)).toBe(true);
+    const later = head(v, 'demo').id;
+    expect(attempt(() => v.checkpointProject(x))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
+    expect(attempt(() => v.checkpointProject(request(v, 'demo', X, later)))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(head(v, 'demo').id).toBe(later);
+    expect(didCount(v, 'demo', 'Did X.')).toBe(1);
     v.close();
   });
 
-  it('T4b: the carry-forward route on a v0.22.0-written vault answers from the copied receipt alone', () => {
+  /** The v0.22.0-written fixture, copied to the temp dir, after five updates by this code: X's original blanked, its copy live. */
+  function openFixture() {
     const fixtures = path.join(__dirname, 'fixtures');
     const spec = JSON.parse(fs.readFileSync(path.join(fixtures, 'v0220-carry-forward.json'), 'utf8')) as {
       passphrase: string; device_secret_hex: string; x_request: ReturnType<typeof request>; x_result: string; edited_revision: string;
@@ -599,8 +608,12 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     fs.copyFileSync(path.join(fixtures, 'v0220-carry-forward.nkv'), vaultPath);
     const v = Vault.open({ path: vaultPath, passphrase: spec.passphrase, deviceSecret: Buffer.from(spec.device_secret_hex, 'hex') });
     expect(v.verifyChain().ok).toBe(true);
-    const project = spec.x_request.project;
-    updates(v, project, 5);
+    updates(v, spec.x_request.project, 5);
+    return { v, spec, project: spec.x_request.project };
+  }
+
+  it('T4b: the carry-forward route on a v0.22.0-written vault answers from the copied receipt alone', () => {
+    const { v, spec, project } = openFixture();
     expect(isBlanked(v, spec.x_result)).toBe(true);
     expect(isBlanked(v, spec.edited_revision)).toBe(false);
     const all = v.list({ includeSuperseded: true, includeForgotten: true });
@@ -613,6 +626,26 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     v.close();
   });
 
+  it('T4c: a copied receipt proves nothing unless every copy sits in the project and its original was forgotten', () => {
+    const RECEIPT = 'northkeep_project_handoff_v1';
+    const plantCopy = (scope: string, retarget: (receipt: Record<string, unknown>, v: Vault) => Record<string, unknown>) => {
+      const { v, spec, project } = openFixture();
+      const copy = v.list({ scope: `project:${project}`, includeSuperseded: true }).find((e) => e.id === spec.edited_revision)!;
+      const receipt = copy.metadata![RECEIPT] as Record<string, unknown>;
+      v.remember({ content: 'Planted copy.', type: 'episodic', scope, source: 'test', metadata: { [RECEIPT]: retarget({ ...receipt }, v) } });
+      return { v, spec, project };
+    };
+    const UNPROVEN = 'Operation receipt metadata exists without its original result.';
+
+    const elsewhere = plantCopy('project:other', (receipt) => receipt);
+    expect(attempt(() => elsewhere.v.checkpointProject(elsewhere.spec.x_request))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
+    elsewhere.v.close();
+
+    const liveOriginal = plantCopy('project:carry', (receipt, v) => ({ ...receipt, result_id: head(v, 'carry').id }));
+    expect(attempt(() => liveOriginal.v.checkpointProject(liveOriginal.spec.x_request))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
+    liveOriginal.v.close();
+  });
+
   it('T5: an id used on one project is refused on another, before and after its revision is blanked', () => {
     const v = vault();
     const aBase = create(v, 'a');
@@ -623,6 +656,15 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     expect(isBlanked(v, xResult)).toBe(true);
     expect(attempt(() => v.checkpointProject(request(v, 'b', X, bHead)))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
     expect(head(v, 'b').id).toBe(bHead);
+    v.close();
+  });
+
+  it('T5b: after a rename, a verbatim retry for the old slug is a conflict, because the remembered id sits on another project', () => {
+    const v = vault();
+    const x = compactedCheckpoint(v, 'a');
+    v.rescope(head(v, 'a').id, 'project:b');
+    expect(ledgerIds(head(v, 'b'))).toEqual([X]);
+    expect(attempt(() => v.checkpointProject(x))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
     v.close();
   });
 
@@ -675,6 +717,9 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     const shortFingerprint = plant('m1', [{ operation_id: ids(1), request_fingerprint: '0123456789', saved_at: now }]);
     expect(attempt(() => v.checkpointProject(request(v, 'm1', ids(1), shortFingerprint)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
     expect(head(v, 'm1').id).toBe(shortFingerprint);
+
+    const both = plant('m0', [ids(10), { operation_id: ids(10), request_fingerprint: 'a'.repeat(64), saved_at: now }]);
+    expect(attempt(() => v.checkpointProject(request(v, 'm0', ids(10), both)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
 
     const bareString = plant('m2', [ids(2)]);
     expect(attempt(() => v.checkpointProject(request(v, 'm2', ids(2), bareString)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
