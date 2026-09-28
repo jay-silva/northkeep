@@ -1,11 +1,13 @@
 # ADR 0062: Remember operation ids past compaction (an operation ledger on the live project document)
 
 - **Date:** 2026-09-28
-- **Status:** Accepted and built on branch p2/opid-ledger; code review
-  pending. First review CLEARED WITH WOUNDS, recheck CLEARED. First code
-  review CLEARED WITH WOUNDS; its fix round is on the branch, awaiting
-  recheck. One of four perf passes breached the absolute gate on one run
-  (Perf gate); that decision is Jay's.
+- **Status:** Accepted and built; first released in 0.22.2. Design review
+  CLEARED WITH WOUNDS, recheck CLEARED. Code review CLEARED WITH WOUNDS,
+  recheck CLEARED. One of 36 separate-vault perf runs breached the 2 ms
+  absolute gate (2.94 ms) while the machine's load average was about 31;
+  35 of 36 stayed at or under 1.69 ms. Jay accepted the gate on
+  2026-09-28 without a quiet re-measure ("skip the speed check. It was
+  def overloaded").
 - **Deciders:** Jay (product owner), Claude Code
 - **Branch:** `p2/opid-ledger` (base `3202785`)
 - **Rules:** `~/Claude/Claude Context/RULES.md`, Version 2026-09-26.2
