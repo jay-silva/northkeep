@@ -5462,7 +5462,7 @@
     box.replaceChildren();
     box.hidden = false;
     const main = el('div');
-    const title = el('h3', '', update ? 'Your project session contract needs an update' : 'Let Claude Code and Codex keep your projects current');
+    const title = el('h3', '', update ? 'Your project session contract needs an update' : 'Let ' + names + ' keep your projects current');
     title.id = 'contractOfferTitle';
     box.setAttribute('aria-labelledby', 'contractOfferTitle');
     main.appendChild(title);
@@ -5473,7 +5473,7 @@
       main.appendChild(row);
     }
     main.appendChild(el('p', 'lead', (update ? 'NorthKeep has a newer contract than the one installed. ' : '') +
-      'The session contract tells Claude Code and Codex to resume the project at the start of a session, save a checkpoint partway, and wrap up at the end.'));
+      'The session contract tells ' + names + ' to resume the project at the start of a session, save a checkpoint partway, and wrap up at the end.'));
     const reach = el('dl', 'contract-reach');
     const yes = el('dd');
     yes.append(contractOfferItem('yes', 'Claude Code'), contractOfferItem('yes', 'Codex'), contractOfferItem('yes', 'Cursor ', 'per project, from Connect, Desktop'));

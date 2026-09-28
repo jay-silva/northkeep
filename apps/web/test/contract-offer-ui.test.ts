@@ -147,6 +147,20 @@ describe('contract offer on Projects', () => {
     expect(buttons(h.box).map((b) => b.textContent)).toEqual(['Install for Codex', 'Not now']);
   });
 
+  it('names only Codex in the headline and lead when only Codex is offered', async () => {
+    const h = harness([claude('installed'), codex('absent')]);
+    await h.render();
+    expect(all(h.box).find((n) => n.tag === 'h3')?.textContent).toBe('Let Codex keep your projects current');
+    expect(byClass(h.box, 'lead')[0].textContent).toBe('The session contract tells Codex to resume the project at the start of a session, save a checkpoint partway, and wrap up at the end.');
+  });
+
+  it('names only Claude Code in the headline and lead when only Claude Code is offered', async () => {
+    const h = harness([claude('absent'), codex('installed')]);
+    await h.render();
+    expect(all(h.box).find((n) => n.tag === 'h3')?.textContent).toBe('Let Claude Code keep your projects current');
+    expect(byClass(h.box, 'lead')[0].textContent).toBe('The session contract tells Claude Code to resume the project at the start of a session, save a checkpoint partway, and wrap up at the end.');
+  });
+
   it('shows no card for a contract the user edited', async () => {
     const h = harness([claude('edited'), codex('installed')]);
     await h.render();
@@ -158,7 +172,7 @@ describe('contract offer on Projects', () => {
     const h = harness([claude('edited'), codex('stale')]);
     await h.render();
     expect(byClass(h.box, 'pill').map((p) => p.textContent)).toEqual(['Claude Code: edited by you', 'Codex: out of date']);
-    expect(byClass(h.box, 'lead')[0].textContent).toBe('NorthKeep has a newer contract than the one installed. The session contract tells Claude Code and Codex to resume the project at the start of a session, save a checkpoint partway, and wrap up at the end.');
+    expect(byClass(h.box, 'lead')[0].textContent).toBe('NorthKeep has a newer contract than the one installed. The session contract tells Codex to resume the project at the start of a session, save a checkpoint partway, and wrap up at the end.');
     await click(button(h.box, 'Update for Codex'));
     expect(h.posts).toEqual(['/api/contract/install/codex']);
   });
