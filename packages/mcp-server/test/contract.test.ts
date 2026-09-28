@@ -438,7 +438,7 @@ describe('reinstall over an earlier release', () => {
     const sha = (s: string) => createHash('sha256').update(s, 'utf8').digest('hex');
     const codexInterior = `${CONTRACT_TEXT.replace(/\n+$/, '')}\n`;
     for (const render of [renderContract('claude'), renderContract('cursor-project'), codexInterior]) {
-      expect(RELEASED_CONTRACT_RENDER_SHA256.has(sha(render))).toBe(true);
+      expect([...RELEASED_CONTRACT_RENDER_SHA256]).toContain(sha(render));
     }
   });
 
@@ -481,6 +481,14 @@ describe('reinstall over an earlier release', () => {
     const result = installContract('cursor-project', { projectDir: proj });
     expect(result).toEqual({ target: 'cursor-project', path: file, replaced: 'earlier-release' });
     expect(fs.readdirSync(path.dirname(file))).toEqual(['northkeep.mdc']);
+  });
+
+  it('Claude: uninstall deletes a v0.22.1 render instead of moving it aside', () => {
+    const file = claudeFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, v0221Claude);
+    expect(uninstallContract('claude', { path: file })).toEqual({ target: 'claude', path: file, action: 'deleted' });
+    expect(fs.readdirSync(path.dirname(file))).toEqual([]);
   });
 
   it('Codex: replaces a v0.22.1 block with no backup', () => {

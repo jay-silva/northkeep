@@ -79,6 +79,7 @@ export {
   type ContractStatusResult,
   type ContractTarget,
   type InstallResult,
+  type ReplacedContract,
   type UninstallResult,
 } from './contract.js';
 export {

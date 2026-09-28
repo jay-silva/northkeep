@@ -288,7 +288,7 @@ function uninstallOwnedFile(
 ): UninstallResult {
   if (!fs.existsSync(file)) return { target, path: file, action: 'absent' };
   const existing = fs.readFileSync(file, 'utf8');
-  if (bytesMatchRender(existing, renderContract(target))) {
+  if (classifyReplaced(existing, renderContract(target)) !== 'edited') {
     fs.rmSync(file);
     return { target, path: file, action: 'deleted' };
   }
