@@ -50,7 +50,7 @@
 <p>One click wires NorthKeep into Cursor, the same way it already does for Claude Desktop, Claude Code, and ChatGPT. You pick the scopes each app may see.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>The session contract</h3>
-<p>A short standing instruction tells connected agents to read the live project at the start of a session and write status when they finish. It is advisory: a session that ends abruptly wrote nothing.</p></div>
+<p>A short standing instruction tells connected agents to read the live project at the start of a session and write status when they finish. It is advisory: a session that ends abruptly keeps only what it saved with a checkpoint.</p></div>
 <div class="card"><span class="tag live">Live</span>
 <h3>Sync replay hardening and share revocation</h3>
 <p>Your synced vault now carries a sealed generation counter, so a sync server that serves you an older copy of your own vault is refused. On our hosted connector, unsharing a scope now also blocks a lagging device from re-pushing it. Honest limits: two devices that edit simultaneously produce copies the counter cannot order, and a brand-new machine's first download has nothing to compare against.</p></div>
