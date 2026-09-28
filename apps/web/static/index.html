@@ -5296,7 +5296,7 @@
     loadContract();
   }
 
-  async function loadContract() {
+  async function loadContract(notice = '') {
     const box = $('contractCard');
     if (!box) return;
     box.textContent = '';
@@ -5325,8 +5325,8 @@
       installBtn.addEventListener('click', async () => {
         err.textContent = '';
         try {
-          await api('/api/contract/install/' + t.id, { method: 'POST' });
-          await loadContract();
+          const result = await api('/api/contract/install/' + t.id, { method: 'POST' });
+          await loadContract(contractBackupLine(t.label, result));
         } catch (e) {
           if (e.message !== 'locked') err.textContent = e.message;
         }
@@ -5349,6 +5349,7 @@
       card.appendChild(row);
       if (t.message) card.appendChild(el('p', 'muted', t.message));
     }
+    if (notice) card.appendChild(el('p', 'muted', notice)).style.overflowWrap = 'anywhere';
     card.appendChild(err);
     const copyRow = el('div', 'row');
     copyRow.style.marginTop = '12px';
@@ -5357,6 +5358,12 @@
     copyRow.appendChild(copyBtn);
     card.appendChild(copyRow);
     box.appendChild(card);
+  }
+
+  // One line when an install kept the user's edited copy aside, so they know where it went.
+  function contractBackupLine(label, result) {
+    if (!result || !result.backupPath) return '';
+    return label + ': you had edited the file, so the previous copy was kept at ' + result.backupPath + '.';
   }
 
   function connectCard(t, scopesInVault, note) {
