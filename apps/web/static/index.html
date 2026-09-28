@@ -1353,7 +1353,7 @@
   let currentSub = 'import';
   function runLoader(v) {
     if (v === 'activity') loadLog();
-    else if (v === 'memories') loadMemories();
+    else if (v === 'memories') { loadMemories(); loadScopes(); }
     else if (v === 'projects') loadProjects();
     else if (v === 'curation') { loadReviewPanel(); loadReviewCollections(); loadCurationCollections(); }
     else if (v === 'models') loadProviders();
@@ -2562,6 +2562,7 @@
     const counts = new Map();
     for (const memory of visibleMemories) counts.set(memory.scope, (counts.get(memory.scope) || 0) + 1);
     const totalCount = visibleMemories.length;
+    $('countPill').textContent = totalCount + ' memories';
     $('memoryVaultSummary').textContent = totalCount + ' ' + (totalCount === 1 ? 'memory' : 'memories') + ' · ' + memoryScopes.length + ' ' + (memoryScopes.length === 1 ? 'collection' : 'collections');
     $('scopeChips').replaceChildren();
     for (const scope of ['', ...memoryScopes]) {

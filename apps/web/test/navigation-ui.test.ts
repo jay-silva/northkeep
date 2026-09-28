@@ -138,6 +138,31 @@ describe('navigation UI', () => {
     expect(context.known()).toContain('project:garden');
   });
 
+  it('reloads the collection counts every time Memories opens', () => {
+    const context = vm.createContext({ loadMemories: vi.fn(), loadScopes: vi.fn() });
+    vm.runInContext(`${functionSource('runLoader')}; runLoader('memories');`, context);
+    expect(context.loadMemories).toHaveBeenCalledOnce();
+    expect(context.loadScopes).toHaveBeenCalledOnce();
+  });
+
+  it('sets the header pill from the freshly loaded memory list', async () => {
+    const context = vm.createContext({});
+    vm.runInContext(`
+      let memoryScopeEpoch=0,scopeLoadSequence=0,filterScope='',knownScopes=[],memorySharedScopes;
+      const status={unlocked:true}; const NEW_SCOPE='+new';
+      const makeNode=()=>({textContent:'',value:'',children:[],options:[],dataset:{},replaceChildren(){this.children=[];this.options=[];},append(...nodes){this.children.push(...nodes);},appendChild(node){this.children.push(node);this.options.push(node);return node;}});
+      const nodes=new Map(); const $=(id)=>{if(!nodes.has(id))nodes.set(id,makeNode());return nodes.get(id);};
+      const el=()=>makeNode(); const esc=(text)=>text; const memoryPrivacyLabel=()=>'';
+      const memories=Array.from({length:13},(_,i)=>({scope:i<10?'personal':'work'})).concat([{scope:'project:garden'}]);
+      const api=async(route)=>route==='/api/scopes'?{scopes:['personal','work','project:garden']}:
+        route==='/api/share/status'?{shared_scopes:[]}:{memories};
+      ${functionSource('loadScopes')}
+      this.load=loadScopes;this.nodes=nodes;
+    `, context);
+    await context.load();
+    expect(context.nodes.get('countPill').textContent).toBe('13 memories');
+  });
+
   it('does not render delayed scopes or counts after a newer scope refresh starts', async () => {
     let resolveOldScopes!: (value: unknown) => void;
     let resolveOldMemories!: (value: unknown) => void;
