@@ -1,0 +1,2 @@
+# The ADR 0062 fixture vault is synthetic and must be committed (the root ignores *.nkv).
+!fixtures/v0220-carry-forward.nkv

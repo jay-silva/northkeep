@@ -1,0 +1,18 @@
+{
+  "note": "Synthetic test fixture written by the v0.22.0 core (packages/core/test/adr-0062/make-v0220-fixture.sh). Not a real vault.",
+  "passphrase": "synthetic adr-0062 v0.22.0 fixture passphrase",
+  "device_secret_hex": "58fca2157a7f6048a258ad97a0da3f5bd6eb1710335cea75688495ab02532aeb",
+  "x_request": {
+    "vault_id": "91bb15bb-5804-4ed9-96ad-98b02056e1a5",
+    "project": "carry",
+    "mode": "checkpoint",
+    "operation_id": "0062f1f1-0000-4000-8000-00000000000a",
+    "expected_revision": "87e29099-db2f-49f4-b25c-74aaef86979e",
+    "status": "Old status from X.",
+    "completed": "Did X.",
+    "next_actions": "- [ ] old next from X"
+  },
+  "x_result": "72225349-051d-4d6a-a1b5-12ddbdad59a0",
+  "edited_revision": "dba698c6-a81d-497c-aafd-d905a71cd1cf",
+  "z_result": "57015aa2-1837-40e5-979f-97c1e635ce8b"
+}
