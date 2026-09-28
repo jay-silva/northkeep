@@ -931,12 +931,16 @@ every milestone; if a limit is removed, say when and how.*
   receipts protected each other back through the whole history, and a
   project saved by checkpoint or wrap was never compacted. A checkpoint or
   wrap retried unchanged after its revision (or its base) was blanked is
-  refused as `stale_project` with the current document, never applied
-  twice. The vault remembers the operation ids of each project's newest 16
-  checkpoint or wrap saves on the live project document (ADR 0062), so
-  resending one of those ids with a different request, including against
-  the new head, is refused as `operation_conflict` and writes nothing,
-  when the resend reaches NorthKeep 0.22.2 or later and the app's
+  refused, never applied twice: as `stale_project` with the current
+  document, or as `operation_conflict` with no document when the project
+  was renamed since, when the same operation id was also used on another
+  project, or when a receipt copy made by NorthKeep 0.22.1 or earlier does
+  not prove the save, and as `not_found` when the project no longer has a
+  live document. The vault remembers the operation ids of each project's
+  newest 16 checkpoint or wrap saves on the live project document (ADR
+  0062), so resending one of those ids with a different request, including
+  against the new head, is refused as `operation_conflict` and writes
+  nothing, when the resend reaches NorthKeep 0.22.2 or later and the app's
   connection can see that project. Three gaps remain. A save made by
   NorthKeep 0.22.1 or earlier is not recorded, and a resend handled by
   NorthKeep 0.22.1 or earlier (for example on a second Mac that has not
@@ -945,9 +949,10 @@ every milestone; if a limit is removed, say when and how.*
   saved again (duplicate Log line, older Status and Next Actions back on
   top). An id older than its project's newest 16 checkpoint or wrap saves
   is forgotten the same way, and so are the ids of a project that was
-  deleted or whose live document was forgotten. Use a new operation id for
-  every new save. The text of older revisions is gone. The live document
-  and its Log archives are never touched. `northkeep projects compact` (dry
+  deleted or whose live document was forgotten, changed to another type,
+  or moved out of the project. Use a new operation id for every new save.
+  The text of older revisions is gone. The live document and its Log
+  archives are never touched. `northkeep projects compact` (dry
   run by default, `--yes` to apply) does the same on demand, for vaults
   with history from before this rule or for a different keep count; the
   desktop has it at `POST /api/projects/compact`, a button follows an

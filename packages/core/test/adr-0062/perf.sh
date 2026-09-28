@@ -16,8 +16,11 @@ test "$(git -C "$OLD" rev-parse HEAD)" = "$(git -C "$REPO" rev-parse 'v0.22.0^{c
 run() {
   NORTHKEEP_HOME="$(mktemp -d)"; export NORTHKEEP_HOME
   case "$NORTHKEEP_HOME" in "$HOME/.northkeep"*|"") echo "refusing: NORTHKEEP_HOME=$NORTHKEEP_HOME" >&2; exit 2;; esac
-  NEW="$REPO" OLD="$OLD" MODE="$1" MEMS="$2" node "$HERE/perf.mjs"
+  NEW="$REPO" OLD="$OLD" MODE="$1" MEMS="$2" node "$HERE/perf.mjs" || failed=1
   rm -rf "$NORTHKEEP_HOME"
 }
-for mems in 0 1000 3000; do run shared "$mems"; done
-for mems in 0 1000 3000; do for n in 1 2 3; do run separate "$mems"; done; done
+failed=0
+for mems in ${PERF_MEMS:-0 1000 3000}; do run shared "$mems"; done
+for mems in ${PERF_MEMS:-0 1000 3000}; do for n in 1 2 3; do run separate "$mems"; done; done
+if [ "$failed" -ne 0 ]; then echo "perf gate FAILED"; exit 1; fi
+echo "perf gates passed"

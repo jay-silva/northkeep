@@ -1,5 +1,6 @@
 // ADR 0062 perf gates. MODE=shared: both cores open copies of one head-built fixture (C14).
-// MODE=separate: each core builds its own vault (C15). Prints one result line.
+// MODE=separate: each core builds its own vault (C15). Prints one result line and exits 3 on a breach
+// (REL_LIMIT_PCT, default 20; ABS_LIMIT_MS, default 2).
 //   NEW=<this checkout> OLD=<v0.22.0 checkout> MODE=shared|separate MEMS=<n> node perf.mjs
 import fs from 'node:fs';
 import path from 'node:path';
@@ -65,3 +66,9 @@ const mt = median(t.trunk), mh = median(t.head);
 console.log(`${MODE.padEnd(8)} mems=${String(MEMS).padEnd(5)} ledger rows/project ${Math.min(...rows)}..${Math.max(...rows)} all full: ${full}  trunk ${mt.toFixed(2)} ms  head ${mh.toFixed(2)} ms  +${(mh - mt).toFixed(2)} ms  ${(100 * (mh / mt - 1)).toFixed(1)}%`);
 trunk.close();
 head.close();
+const relLimit = Number(process.env.REL_LIMIT_PCT ?? 20), absLimit = Number(process.env.ABS_LIMIT_MS ?? 2);
+const breach = MODE === 'shared' ? 100 * (mh / mt - 1) > relLimit : mh - mt > absLimit;
+if (breach) {
+  console.log(`FAIL ${MODE === 'shared' ? `C14: head exceeds trunk by more than ${relLimit}%` : `C15: head adds more than ${absLimit} ms`}`);
+  process.exitCode = 3;
+}

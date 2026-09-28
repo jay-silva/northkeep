@@ -2,7 +2,10 @@
 
 - **Date:** 2026-09-28
 - **Status:** Accepted and built on branch p2/opid-ledger; code review
-  pending. First review CLEARED WITH WOUNDS, recheck CLEARED.
+  pending. First review CLEARED WITH WOUNDS, recheck CLEARED. First code
+  review CLEARED WITH WOUNDS; its fix round is on the branch, awaiting
+  recheck. One of four perf passes breached the absolute gate on one run
+  (Perf gate); that decision is Jay's.
 - **Deciders:** Jay (product owner), Claude Code
 - **Branch:** `p2/opid-ledger` (base `3202785`)
 - **Rules:** `~/Claude/Claude Context/RULES.md`, Version 2026-09-26.2
@@ -235,9 +238,11 @@ against an uncompacted baseline:
   `operation_conflict` where an uncompacted vault answers `not_found`,
   because the ledger rode to the renamed head. Both refuse and neither
   writes.
-- **Forgetting only the head.** After `memory_forget` of a project's live
-  head (or the phone's forget) and a recreate, a resend of a blanked id is
-  written where an uncompacted vault refuses. Residual 3.
+- **Forgetting, retyping or moving out only the head.** After
+  `memory_forget` of a project's live head (or the phone's forget), a
+  change of the head's type, or a rescope of the head out of `project:*`,
+  and a recreate, a resend of a blanked id is written where an
+  uncompacted vault refuses. Residual 3.
 - **Ids past the newest 16.** A resend of a project's 17th newest or older
   checkpoint or wrap id, after its revision was blanked, is written where
   an uncompacted vault refuses. Residual 2.
@@ -375,14 +380,16 @@ already give the rule. This ADR makes the vault enforce it for the last
 ## Size
 
 Measured with `node -e` over a record with a 36-character id, a 64-hex
-fingerprint and an ISO time: 182 bytes per record, 2,957 bytes for a full
-ledger of 16 including the key. Every revision carries the ledger it was
+fingerprint and an ISO time: 182 bytes per record, 2,955 bytes for a full
+ledger of 16 including the key (`JSON.stringify` of `{key: ledger}`
+without its outer braces; remeasured at build, see Build notes). Every revision carries the ledger it was
 written with. At most eight rows per project hold one while live (the
 head, the newest five superseded, at most two receipt-protected), so at
 most about 24 KB per project. Fifteen active projects cost at most about
 355 KB against the sync server's 4 MB cap. Blanked rows hold none. The
 first review measured the bound over 400 seeded mixed operations: at most
-eight live rows in one scope, and a largest ledger of 2,957 bytes.
+eight live rows in one scope, and a largest ledger of 2,957 bytes by its
+count (2,955 by the count above).
 
 The eight-row bound assumes 0.22 compaction. A pre-0.22 device (0.21 has
 no compaction but carries metadata in `supersedeEntry`) leaves the ledger
@@ -415,11 +422,22 @@ executed; recorded from the first review's reading.
 2. **Ids older than the newest 16 are forgotten.** A resend of the 17th
    newest checkpoint or wrap id of a project, after its revision was
    blanked, is written again.
-3. **A deleted or head-forgotten project forgets its ids.** Deleting a
-   project, or forgetting only its live head (`memory_forget`, or the
-   phone's forget), removes its ledger from the lookup. Superseded
-   revisions not yet blanked still carry the ledger, but the lookup reads
-   only live heads, so it is not consulted.
+3. **A project whose live head is deleted, forgotten, retyped or moved
+   out forgets its ids.** The lookup reads only live `working` heads in a
+   `project:*` scope, so each of these removes the ledger from it:
+   - deleting the project;
+   - forgetting only its live head (`memory_forget`, or the phone's
+     forget);
+   - changing the head's type (`memory_edit`, `northkeep edit --type`,
+     the desktop or the phone);
+   - rescoping the head out of `project:*` (`northkeep rescope`,
+     `northkeep edit --scope`, or the desktop).
+
+   After any of these, recreating the slug and resending a blanked id at
+   the new head is saved again, as today. Superseded revisions not yet
+   blanked still carry the ledger, but they are not consulted. Measured by
+   the first code review for the type change and the rescope
+   (`Reviews/release-0.22.2/adr-0062-code-r1/out-attack-vanish.txt`).
 4. **Scopes outside a connection's grant stay invisible.** An id used in
    a project the calling connection cannot see is not found, exactly as
    before compaction. This is the ADR 0048 rule ("Callers enforce grants
@@ -448,13 +466,17 @@ executed; recorded from the first review's reading.
 entry, the text from "A checkpoint or wrap retried unchanged" through
 "(ADR 0051 correction)." becomes:
 
-> A checkpoint or wrap retried unchanged after its revision (or its base)
-> was blanked is refused as `stale_project` with the current document,
-> never applied twice. The vault remembers the operation ids of each
-> project's newest 16 checkpoint or wrap saves on the live project
-> document (ADR 0062), so resending one of those ids with a different
-> request, including against the new head, is refused as
-> `operation_conflict` and writes nothing, when the resend reaches
+> A checkpoint or wrap retried unchanged after its revision (or its
+> base) was blanked is refused, never applied twice: as `stale_project`
+> with the current document, or as `operation_conflict` with no document
+> when the project was renamed since, when the same operation id was
+> also used on another project, or when a receipt copy made by NorthKeep
+> 0.22.1 or earlier does not prove the save, and as `not_found` when the
+> project no longer has a live document. The vault remembers the
+> operation ids of each project's newest 16 checkpoint or wrap saves on
+> the live project document (ADR 0062), so resending one of those ids
+> with a different request, including against the new head, is refused
+> as `operation_conflict` and writes nothing, when the resend reaches
 > NorthKeep 0.22.2 or later and the app's connection can see that
 > project. Three gaps remain. A save made by NorthKeep 0.22.1 or earlier
 > is not recorded, and a resend handled by NorthKeep 0.22.1 or earlier
@@ -464,8 +486,9 @@ entry, the text from "A checkpoint or wrap retried unchanged" through
 > (duplicate Log line, older Status and Next Actions back on top). An id
 > older than its project's newest 16 checkpoint or wrap saves is
 > forgotten the same way, and so are the ids of a project that was
-> deleted or whose live document was forgotten. Use a new operation id
-> for every new save.
+> deleted or whose live document was forgotten, changed to another type,
+> or moved out of the project. Use a new operation id for every new
+> save.
 
 **ADR 0051, "Correction, 2026-09-24"**:
 
@@ -490,8 +513,8 @@ entry, the text from "A checkpoint or wrap retried unchanged" through
 | C1 | Resending a blanked checkpoint's id against the current head is refused as `operation_conflict` and writes nothing | new ledger lookup in `checkpointProject`, replacing vault.ts:861-878 | T1 |
 | C2 | A verbatim retry of a blanked save answers `stale_project` with the current document: the Decision 4 message when its own revision was blanked, the vault.ts:871 message when only its base was | same; matches branch vault.ts:871 (unchanged) | T2 |
 | C3 | A verbatim retry of the newest save still replays | lookup after the matches branch, vault.ts:862 | T3 |
-| C4 | The carry-forward route answers `stale_project` for a verbatim retry and `operation_conflict` for a changed request, with and without a ledger record | ledger lookup; Decision 5 replacing vault.ts:861 | T4a, T4b |
-| C5 | An id used on project A and sent to project B is refused as `operation_conflict`, blanked or not | ledger lookup across visible heads; matches branch vault.ts:866 | T5 |
+| C4 | The carry-forward route answers `stale_project` for a verbatim retry and `operation_conflict` for a changed request, with and without a ledger record; a copy outside the project, or one whose original is not forgotten, proves nothing | ledger lookup; Decision 5 replacing vault.ts:861 | T4a, T4b, T4c |
+| C5 | An id used on project A and sent to project B is refused as `operation_conflict`, blanked or not; a ledger hit on another project never answers `stale_project` | ledger lookup across visible heads; matches branch vault.ts:866 | T5, T5b |
 | C6 | The ledger holds exactly the newest 16 checkpoint or wrap ids of its project, in order, and `verifyChain` passes after every write | append in `writeProject` after vault.ts:905 | T6 |
 | C7 | `project_update` and generic edits carry the ledger forward unchanged | deep copy in `writeProject` vault.ts:903, `supersedeEntry` vault.ts:1416 | T6 |
 | C8 | Blanked rows never carry the ledger | `keptProvenanceMetadata` vault.ts:1982 (unchanged) | T6, T7 |
@@ -499,7 +522,7 @@ entry, the text from "A checkpoint or wrap retried unchanged" through
 | C10 | A malformed record carrying the request's id (a bare string equal to it, or an object whose own `operation_id` equals it, per Decision 1) refuses as `operation_conflict` | `readProjectOperations` in project-handoff.ts | T8 |
 | C11 | An id in a scope outside the grant is not found, as before compaction | scan honours `allowedScopes`, vault.ts:853 | T9 |
 | C12 | The ledger never leaves the machine and is never returned to a model | `pushSharedScopes` connector-client.ts:158-165; `ProjectView` project-handoff.ts:222 | code reading; no new path |
-| C13 | A full ledger is 2,957 bytes; at most about 24 KB per project | Decision 2 cap | measured with `node -e`; T6 asserts the count |
+| C13 | A full ledger is 2,955 bytes; at most about 24 KB per project | Decision 2 cap | measured with `node -e`; T6 asserts the count |
 | C14 | A checkpoint on a 30-project vault is at most 20 percent slower than trunk when both open the same head-built fixture | one-pass scan, Decision 3 step 1 | relative perf gate |
 | C15 | A checkpoint on a 30-project vault with ledgers takes at most 2 ms longer (median) than trunk on its own vault without them | one-pass scan; ledger size (Decision 2 cap) | absolute perf gate |
 
@@ -690,11 +713,30 @@ in its receipt (checked with a one-project run).
 | Absolute, separate vaults | 1,000 | 3.50 to 5.09 ms | 4.36 to 6.47 ms | +0.86 to +1.38 ms |
 | Absolute, separate vaults | 3,000 | 7.11 to 12.16 ms | 8.25 to 13.85 ms | +0.78 to +1.69 ms |
 
-Both gates pass. The worst relative result is +5.7 percent against a 20
-percent limit. The worst absolute run is +1.69 ms against a 2 ms limit,
-so the absolute headroom is thin (about 0.3 ms). In relative terms the
-separate-vault cost is +8.6 to +46 percent, largest on a small vault
-where a checkpoint is fastest.
+Both gates pass on these two passes. The worst relative result is +5.7
+percent against a 20 percent limit. The worst absolute run is +1.69 ms
+against a 2 ms limit, so the absolute headroom is thin (about 0.3 ms). In
+relative terms the separate-vault cost is +8.6 to +46 percent, largest on
+a small vault where a checkpoint is fastest.
+
+**Code review fix round (two more passes, same product code, load
+average 22 to 36).** `perf.sh` now exits non-zero on a breach (checked by
+forcing both limits to fail: exit 1).
+
+- Pass 3 **failed C15**: one of its three 3,000-memory runs added 2.94 ms
+  (trunk 9.56 ms, head 12.50 ms), with the load average near 31. Its
+  other two runs at that size added 1.37 and 0.93 ms. Every other run in
+  the pass was within 1.22 ms, and the relative gate reached at most +9.7
+  percent.
+- Pass 4 passed both gates: at most +6.6 percent relative and +1.14 ms
+  absolute.
+
+Across all four passes, 35 of 36 separate-vault runs added at most
+1.69 ms and one added 2.94 ms. The rule above says a failure stops the
+build and returns it to Jay, so this is recorded as a failed gate, not
+explained away. The likely cause is machine load (inferred, not proven):
+the product code did not change between passes 3 and 4. No caching was
+added.
 
 ## Open questions for Jay
 
@@ -732,12 +774,69 @@ the text above, or settles something the text left open:
   it named is then written too.
 - **Fail-before.** `packages/core/test/adr-0062/fail-before.sh` checks
   out `a7eecbf^` product code (its `packages/core/src` equals `3202785`),
-  runs the block, restores HEAD and runs it again. At `a7eecbf^`: T1, T2,
-  T4a, T4b, T5, T6 and T8 fail with the measured trunk answers (T1, T5
-  and T8 are written; T2 gets "Project changed after it was read."; T4a
-  and T4b get "Operation receipt metadata exists without its original
-  result."; T6 finds no ledger). T3 and T9 pass, as guards should. At
-  HEAD all nine pass.
+  runs the block, restores HEAD and runs it again. The copy committed in
+  the first build did not parse (code review W1); the report parser now
+  lives in `vitest-report.mjs`. Run end to end with `sh` in the fix round:
+
+  ```
+  base  failed  T1  received: 'written'
+  base  failed  T2  received: "message": "Project changed after it was read.",
+  base  passed  T3
+  base  failed  T4a  received: "code": "operation_conflict", "current": false, "message": "Operation receipt metadata exists without its original result.",
+  base  failed  T4b  received: "code": "operation_conflict", "current": false, "message": "Operation receipt metadata exists without its original result.",
+  base  passed  T4c
+  base  failed  T5  received: 'written'
+  base  failed  T5b  received: []
+  base  failed  T6  received: []
+  base  failed  T8  received: 'written'
+  base  passed  T9
+  head  passed  T1
+  head  passed  T2
+  head  passed  T3
+  head  passed  T4a
+  head  passed  T4b
+  head  passed  T4c
+  head  passed  T5
+  head  passed  T5b
+  head  passed  T6
+  head  passed  T8
+  head  passed  T9
+  ```
+
+  T3 and T9 are guards and pass on the old code. T4c is a guard too: the
+  old code refuses both planted copies with the same message. T5b fails
+  on the old code at its ledger assertion, because the old code keeps no
+  ledger.
+- **Mutation check.** `packages/core/test/adr-0062/mutate.sh` reruns the
+  first code review's fourteen mutants and fails if any survives. The
+  fix round added T4c (Decision 5's scope and forgotten-original
+  checks), T5b (the ledger's same-project check, through a rename), a T8
+  case with a malformed and a well-formed record for the same id (the
+  malformed-before-ledger order), and a second half of T4a that runs past
+  the copy's life, so it fails without the ledger. Output:
+
+  ```
+  M1 no ledger lookup: caught by T1 T2 T4a T5 T5b T8 
+  M2 no append in writeProject: caught by T1 T2 T4a T5 T5b T6 T8 
+  M3 no malformed refusal: caught by T8 
+  M4 D5 ignores fingerprint: caught by T4b 
+  M5 D5 ignores forgotten: caught by T4c 
+  M6 D5 ignores copy scope: caught by T4c 
+  M7 ledger ignores scope: caught by T5b 
+  M8 ledger ignores fingerprint: caught by T1 T4a 
+  M9 cap 17: caught by T6 
+  M10 keep malformed on write: caught by T8 
+  M11 bare string not carrying: caught by T8 
+  M12 ledger also on superseded: caught by T8 
+  M13 D5 back to trunk throw: caught by T4b 
+  M14 malformed after ledger hit: caught by T8 
+  restored clean
+  survivors: 0
+  ```
+- **Ledger size.** Remeasured on a real 16-record ledger: 182 bytes per
+  record, 2,955 bytes for `{key: ledger}` as JSON without the outer
+  braces (2,929 for the array alone). The first review's 2,957 counted
+  differently; nothing depends on the difference.
 - **Fixture.** `packages/core/test/fixtures/v0220-carry-forward.nkv` is
   committed through a negation in `packages/core/test/.gitignore`,
   because the root `.gitignore` excludes `*.nkv`. The synthetic
@@ -840,3 +939,30 @@ the text above, or settles something the text left open:
 - 2026-09-28, build (branch `p2/opid-ledger`): recheck notes 1, 2, 3, 4
   and 5 applied (see Build notes and the Perf gate). The perf gate is now
   two gates, measured and passed. Code review pending.
+- 2026-09-28, first code review
+  (`Reviews/release-0.22.2/adr-0062-code-r1.md`, evidence beside it):
+  **CLEARED WITH WOUNDS.** The build reproduced the cleared prototype on
+  every r1 and r2 scenario. W1: the committed `fail-before.sh` did not
+  parse. W2: the published gap list left out changing the head's type
+  and rescoping it out of `project:*`. Notes: four conditions no test
+  pinned (mutants M5, M6, M7, M14) and T4a not depending on the ledger;
+  the KNOWN-LIMITS stale sentence was unconditional; the perf scripts
+  never failed on a breach; the full ledger is 2,955 bytes.
+- 2026-09-28, code review fix round (this revision):
+  - W1: the parser moved to `vitest-report.mjs`; the script parses in
+    `sh`, `bash` and `zsh` and was run end to end (Build notes).
+  - W2: Residual 3, the Decision 4 exception and the KNOWN-LIMITS gap
+    sentence now name the type change and the rescope out. The ADR 0051
+    addendum points at the Residuals and lists no gaps, so it is
+    unchanged.
+  - Note 1: T4c, T5b and a T8 case added and T4a extended; `mutate.sh`
+    shows all fourteen mutants caught.
+  - Note 2: the KNOWN-LIMITS sentence now names the `operation_conflict`
+    cases (renamed project, the id used on another project, an old copy
+    that proves nothing) and `not_found` when the project has no live
+    document. The `not_found` answer was checked for a deleted project, a
+    forgotten head, a retyped head and a head moved out.
+  - Note 3: `perf.mjs` exits 3 and `perf.sh` exits 1 on a breach. Two
+    more passes were run: pass 3 breached C15 on one run (2.94 ms), pass
+    4 passed. Recorded under the Perf gate for Jay.
+  - Note 4: Size, C13 and the Build notes say 2,955 bytes.
