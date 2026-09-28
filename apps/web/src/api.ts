@@ -91,6 +91,7 @@ import {
   contractStatus,
   disconnect,
   installContract,
+  isCodexDetected,
   keychainAvailable,
   keychainDeleteMasterKey,
   keychainSetMasterKey,
@@ -1666,15 +1667,16 @@ async function dispatch(
   // Claude and Codex only: Cursor is per-project and CLI-only.
 
   if (method === 'GET' && route === '/api/contract') {
-    const row = (id: 'claude' | 'codex', label: string) => {
+    // detected mirrors `contract install all`, which skips Codex when ~/.codex is missing.
+    const row = (id: 'claude' | 'codex', label: string, detected: boolean) => {
       const s = contractStatus(id);
-      return { id, label, status: s.status, path: s.path, message: s.message ?? null };
+      return { id, label, status: s.status, path: s.path, message: s.message ?? null, detected };
     };
     return ok({
       contract_text: CONTRACT_TEXT,
       targets: [
-        row('claude', 'Claude Code'),
-        row('codex', 'Codex'),
+        row('claude', 'Claude Code', true),
+        row('codex', 'Codex', isCodexDetected()),
       ],
     });
   }

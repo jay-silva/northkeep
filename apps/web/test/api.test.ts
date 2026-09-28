@@ -594,3 +594,31 @@ describe('POST /api/share/sync and /api/share/pair (ADR 0050 Decision 5)', () =>
     expect(after.status).toBe(200);
   });
 });
+
+describe('GET /api/contract reports whether each app is on this Mac', () => {
+  it('marks Codex undetected in a home without ~/.codex and detected once it exists', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'northkeep-contract-detect-'));
+    const saved = { HOME: process.env.HOME, CODEX_HOME: process.env.CODEX_HOME };
+    process.env.HOME = home;
+    delete process.env.CODEX_HOME;
+    try {
+      const read = async () => {
+        const res = await handleApi(newSession(), 'GET', '/api/contract', new URLSearchParams(), Buffer.from(''));
+        return (res.body as { targets: Array<{ id: string; detected: boolean }> }).targets
+          .map(({ id, detected }) => ({ id, detected }));
+      };
+      expect(await read()).toEqual([
+        { id: 'claude', detected: true },
+        { id: 'codex', detected: false },
+      ]);
+      expect(fs.existsSync(path.join(home, '.codex'))).toBe(false);
+      fs.mkdirSync(path.join(home, '.codex'));
+      expect((await read())[1]).toEqual({ id: 'codex', detected: true });
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
