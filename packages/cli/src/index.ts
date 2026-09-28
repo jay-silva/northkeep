@@ -1166,7 +1166,7 @@ contractGroup
 
 contractGroup
   .command('status', { isDefault: true })
-  .description('Show whether the session contract is installed, stale, absent, or blocked')
+  .description('Show whether the session contract is installed, stale (an earlier release), edited by you, absent, or blocked')
   .option('--project <dir>', 'also check a Cursor project rule')
   .action((options: { project?: string }) => contractStatusCmd(options));
 

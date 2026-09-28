@@ -133,7 +133,7 @@ describe('Claude contract', () => {
     expect(fs.readFileSync(`${file}.northkeep-bak`, 'utf8')).toContain('my notes');
   });
 
-  it('status reports absent, installed, stale, and blocked', () => {
+  it('status reports absent, installed, edited, and blocked', () => {
     const file = claudeFile();
     expect(contractStatus('claude', { path: file }).status).toBe('absent');
 
@@ -141,7 +141,7 @@ describe('Claude contract', () => {
     expect(contractStatus('claude', { path: file }).status).toBe('installed');
 
     fs.writeFileSync(file, `${renderContract('claude')}\nextra\n`);
-    expect(contractStatus('claude', { path: file }).status).toBe('stale');
+    expect(contractStatus('claude', { path: file }).status).toBe('edited');
 
     fs.writeFileSync(file, 'not ours\n');
     expect(contractStatus('claude', { path: file }).status).toBe('blocked');
@@ -387,11 +387,11 @@ describe('Cursor contract', () => {
 });
 
 describe('contract staleness after the ADR 0052 rewrite', () => {
-  it('reads stale for a file holding the pre-0052 block and installed after a reinstall', () => {
+  it('reads edited for a hand-built pre-0052 block and installed after a reinstall', () => {
     const file = claudeFile();
     fs.mkdirSync(path.dirname(file), { recursive: true });
     // The block as ADR 0042 shipped it: our marker, one paragraph, no
-    // bootstrap recipe. Staleness is a byte comparison against renderContract.
+    // bootstrap recipe. Rebuilt by hand, so it matches no released render and reads as edited.
     const oldBlock =
       `${OWNERSHIP_MARKER}\n` +
       'When I name a project, read it from NorthKeep with project_get at the start of the session. ' +
@@ -400,21 +400,21 @@ describe('contract staleness after the ADR 0052 rewrite', () => {
       CONTRACT_GRACEFUL_DEGRADATION +
       '\n';
     fs.writeFileSync(file, oldBlock);
-    expect(contractStatus('claude', { path: file }).status).toBe('stale');
+    expect(contractStatus('claude', { path: file }).status).toBe('edited');
 
     installContract('claude', { path: file });
     expect(contractStatus('claude', { path: file }).status).toBe('installed');
     expect(fs.readFileSync(file, 'utf8')).toContain(PROJECT_BOOTSTRAP_INSTRUCTION);
   });
 
-  it('reads stale for a Codex block holding the old contract interior', () => {
+  it('reads edited for a Codex block holding text that no release shipped', () => {
     const file = codexFile();
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(
       file,
       `# Notes\n\n<!-- northkeep-contract -->\nOld contract text.\n<!-- /northkeep-contract -->\n`,
     );
-    expect(contractStatus('codex', { path: file }).status).toBe('stale');
+    expect(contractStatus('codex', { path: file }).status).toBe('edited');
     installContract('codex', { path: file });
     expect(contractStatus('codex', { path: file }).status).toBe('installed');
     expect(fs.readFileSync(file, 'utf8')).toContain('# Notes');
@@ -508,5 +508,49 @@ describe('reinstall over an earlier release', () => {
     fs.writeFileSync(file, original);
     expect(installContract('codex', { path: file }).replaced).toBe('edited');
     expect(fs.readFileSync(`${file}.northkeep-bak`, 'utf8')).toBe(original);
+  });
+});
+
+describe('status tells an earlier release from a file the user edited', () => {
+  const v0221Claude = fs.readFileSync(
+    new URL('./fixtures/contract-v0.22.1-claude.md', import.meta.url),
+    'utf8',
+  );
+  const v0221Interior = v0221Claude.slice(`${OWNERSHIP_MARKER}\n`.length);
+
+  it('Claude: a v0.22.1 render is stale, the same render with a line added is edited', () => {
+    const file = claudeFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, v0221Claude);
+    expect(contractStatus('claude', { path: file })).toEqual({ target: 'claude', path: file, status: 'stale' });
+    fs.writeFileSync(file, `${v0221Claude}My own line.\n`);
+    expect(contractStatus('claude', { path: file })).toEqual({ target: 'claude', path: file, status: 'edited' });
+  });
+
+  it('Claude: the current render with a line added is edited, not stale', () => {
+    const file = claudeFile();
+    installContract('claude', { path: file });
+    fs.appendFileSync(file, 'Always cite the ticket number.\n');
+    expect(contractStatus('claude', { path: file }).status).toBe('edited');
+  });
+
+  it('Codex: a v0.22.1 block is stale, an edited block is edited', () => {
+    const file = codexFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `# Notes\n\n${OWNERSHIP_MARKER}\n${v0221Interior}<!-- /northkeep-contract -->\n`);
+    expect(contractStatus('codex', { path: file })).toEqual({ target: 'codex', path: file, status: 'stale' });
+    fs.writeFileSync(file, `# Notes\n\n${OWNERSHIP_MARKER}\n${v0221Interior}Mine.\n<!-- /northkeep-contract -->\n`);
+    expect(contractStatus('codex', { path: file })).toEqual({ target: 'codex', path: file, status: 'edited' });
+  });
+
+  it('Cursor: a v0.22.1 rule is stale, an edited rule is edited', () => {
+    const proj = projectDir();
+    fs.mkdirSync(path.join(proj, '.git'), { recursive: true });
+    const file = path.join(fs.realpathSync(proj), '.cursor', 'rules', 'northkeep.mdc');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, `---\nalwaysApply: true\n---\n${v0221Claude}`);
+    expect(contractStatus('cursor-project', { projectDir: proj }).status).toBe('stale');
+    fs.appendFileSync(file, 'Mine.\n');
+    expect(contractStatus('cursor-project', { projectDir: proj }).status).toBe('edited');
   });
 });

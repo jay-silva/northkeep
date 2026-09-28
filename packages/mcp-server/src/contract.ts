@@ -14,7 +14,8 @@ import { PROJECT_BOOTSTRAP_INSTRUCTION, PROJECT_STANDING_INSTRUCTION } from './p
 
 export type ContractTarget = 'claude' | 'codex' | 'cursor-project';
 
-export type ContractStatusKind = 'installed' | 'stale' | 'absent' | 'blocked';
+/** stale: an earlier NorthKeep release. edited: the user changed the contract, so nothing offers to replace it. */
+export type ContractStatusKind = 'installed' | 'stale' | 'edited' | 'absent' | 'blocked';
 
 export interface ContractOpts {
   /** File-path override for a single-target call. */
@@ -116,10 +117,6 @@ function hasOwnershipMarker(text: string): boolean {
   return text.split('\n').some((line) => BEGIN_LINE.test(line));
 }
 
-function bytesMatchRender(existing: string, rendered: string): boolean {
-  return withOneTrailingNewline(existing) === withOneTrailingNewline(rendered);
-}
-
 // SHA-256 of the Claude file, Cursor rule, and Codex block interior renders from v0.19.0 to v0.21.0, v0.22.0, v0.22.1, and the current text; append on every text change.
 export const RELEASED_CONTRACT_RENDER_SHA256: ReadonlySet<string> = new Set([
   '38621a9338f127cd5a45ae3746f6d476eabdb85f906ecce7dfed826c85140788',
@@ -141,6 +138,21 @@ function classifyReplaced(existing: string, rendered: string): ReplacedContract 
   if (normalized === withOneTrailingNewline(rendered)) return 'current';
   const digest = createHash('sha256').update(normalized, 'utf8').digest('hex');
   return RELEASED_CONTRACT_RENDER_SHA256.has(digest) ? 'earlier-release' : 'edited';
+}
+
+function statusFromReplaced(replaced: ReplacedContract): ContractStatusKind {
+  switch (replaced) {
+    case 'current':
+      return 'installed';
+    case 'earlier-release':
+      return 'stale';
+    case 'edited':
+      return 'edited';
+    default: {
+      const _exhaustive: never = replaced;
+      throw new Error(`Unhandled replaced kind: ${String(_exhaustive)}`);
+    }
+  }
 }
 
 /** Exact bytes install writes and status compares (P4). */
@@ -325,10 +337,7 @@ function statusOwnedFile(
       message: 'A file exists at this path without a NorthKeep ownership marker.',
     };
   }
-  if (bytesMatchRender(existing, renderContract(target))) {
-    return { target, path: file, status: 'installed' };
-  }
-  return { target, path: file, status: 'stale' };
+  return { target, path: file, status: statusFromReplaced(classifyReplaced(existing, renderContract(target))) };
 }
 
 interface MarkerHit {
@@ -451,10 +460,7 @@ function statusCodex(file: string): ContractStatusResult {
     return { target: 'codex', path: file, status: 'blocked', message: CODEX_OVERRIDE_WARNING };
   }
   const interior = rest.slice(markers.begin.end, markers.end.start);
-  if (bytesMatchRender(interior, CONTRACT_TEXT)) {
-    return { target: 'codex', path: file, status: 'installed' };
-  }
-  return { target: 'codex', path: file, status: 'stale' };
+  return { target: 'codex', path: file, status: statusFromReplaced(classifyReplaced(interior, CONTRACT_TEXT)) };
 }
 
 export function installContract(target: ContractTarget, opts: ContractOpts = {}): InstallResult {

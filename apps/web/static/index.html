@@ -5363,10 +5363,10 @@
       const left = el('div', '');
       left.appendChild(el('span', '', t.label + '  '));
       left.appendChild(el('span', 'badge ' + (t.status === 'installed' ? 'private' : 'auto'),
-        String(t.status || 'absent').toUpperCase()));
+        t.status === 'edited' ? 'EDITED BY YOU' : String(t.status || 'absent').toUpperCase()));
       row.appendChild(left);
       const btns = el('div', 'row');
-      const installBtn = el('button', 'btn primary', t.status === 'installed' ? 'Reinstall' : 'Install');
+      const installBtn = el('button', 'btn primary', t.status === 'installed' || t.status === 'edited' ? 'Reinstall' : 'Install');
       installBtn.addEventListener('click', async () => {
         err.textContent = '';
         try {
@@ -5377,7 +5377,7 @@
         }
       });
       btns.appendChild(installBtn);
-      if (t.status === 'installed' || t.status === 'stale' || t.status === 'blocked') {
+      if (t.status === 'installed' || t.status === 'stale' || t.status === 'edited' || t.status === 'blocked') {
         const removeBtn = el('button', 'btn danger', 'Remove');
         removeBtn.addEventListener('click', async () => {
           err.textContent = '';
@@ -5417,7 +5417,8 @@
   let contractOfferBusy = false;
 
   // Update covers stale targets only, so a dismissed install never rides along.
-  // Blocked targets are left to Connect, Desktop, which explains them.
+  // Edited targets were customized on purpose and blocked ones are left to
+  // Connect, Desktop, which explains them, so neither is offered here.
   function contractOfferPlan(targets, dismissed) {
     const stale = targets.filter((t) => t.status === 'stale');
     const absent = targets.filter((t) => t.status === 'absent');
@@ -5467,7 +5468,7 @@
     main.appendChild(title);
     if (update) {
       const row = el('div', 'targets');
-      const word = { installed: 'current', stale: 'out of date', absent: 'not installed', blocked: 'needs attention' };
+      const word = { installed: 'current', stale: 'out of date', edited: 'edited by you', absent: 'not installed', blocked: 'needs attention' };
       for (const t of targets) row.appendChild(el('span', 'pill ' + (t.status === 'installed' ? 'ok' : 'draft'), t.label + ': ' + (word[t.status] || t.status)));
       main.appendChild(row);
     }

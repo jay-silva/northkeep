@@ -147,6 +147,22 @@ describe('contract offer on Projects', () => {
     expect(buttons(h.box).map((b) => b.textContent)).toEqual(['Install for Codex', 'Not now']);
   });
 
+  it('shows no card for a contract the user edited', async () => {
+    const h = harness([claude('edited'), codex('installed')]);
+    await h.render();
+    expect(h.box.hidden).toBe(true);
+    expect(buttons(h.box)).toEqual([]);
+  });
+
+  it('offers the update for an earlier release beside an edited target without touching the edited one', async () => {
+    const h = harness([claude('edited'), codex('stale')]);
+    await h.render();
+    expect(byClass(h.box, 'pill').map((p) => p.textContent)).toEqual(['Claude Code: edited by you', 'Codex: out of date']);
+    expect(byClass(h.box, 'lead')[0].textContent).toBe('NorthKeep has a newer contract than the one installed. The session contract tells Claude Code and Codex to resume the project at the start of a session, save a checkpoint partway, and wrap up at the end.');
+    await click(button(h.box, 'Update for Codex'));
+    expect(h.posts).toEqual(['/api/contract/install/codex']);
+  });
+
   it('offers an update naming only the stale target', async () => {
     const h = harness([claude('stale'), codex('installed')]);
     await h.render();
@@ -256,6 +272,14 @@ describe('Connect, Desktop contract card', () => {
     await click(buttons(h.card).find((b) => b.textContent === 'Install')!);
     const text = all(h.card).filter((n) => n.tag === 'p').map((n) => n.textContent);
     expect(text).toContain('Claude Code: you had edited the file, so the previous copy was kept at /h/.claude/rules/northkeep-projects.md.bak.');
+  });
+
+  it('labels an edited target Edited by you and keeps Reinstall and Remove', async () => {
+    const h = harness([claude('edited'), codex('installed')], { only: 'connect' });
+    await h.loadContract();
+    expect(byClass(h.card, 'badge').map((b) => b.textContent)).toEqual(['EDITED BY YOU', 'INSTALLED']);
+    const claudeRow = all(h.card).find((n) => n.className === 'row' && n.textContent.startsWith('Claude Code'))!;
+    expect(buttons(claudeRow).map((b) => b.textContent)).toEqual(['Reinstall', 'Remove']);
   });
 
   it('adds no backup line when the install replaced an unedited copy', async () => {
