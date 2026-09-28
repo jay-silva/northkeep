@@ -623,6 +623,8 @@
   .contract-offer.done h3 { font-size:19px; margin-bottom:2px; }
   .contract-offer.done p { margin:0; color:var(--muted); font-size:14px; }
   .contract-offer .kept { margin-top:6px; overflow-wrap:anywhere; }
+  #projectsHeading:focus { outline:none; }
+  .contract-offer.done .contract-offer-actions { min-width:0; }
   @media (max-width: 860px) {
     .contract-offer, .contract-offer.done { grid-template-columns:minmax(0,1fr); }
     .contract-offer-actions { min-width:0; max-width:none; }
@@ -862,7 +864,7 @@
     </div>
   </section>
   <section id="view-projects" hidden>
-    <div class="page-head"><div><h2>Projects</h2><p class="muted">Pick up the work with its latest state, evidence, and next move.</p></div></div>
+    <div class="page-head"><div><h2 id="projectsHeading" tabindex="-1">Projects</h2><p class="muted">Pick up the work with its latest state, evidence, and next move.</p></div></div>
     <section id="contractOffer" class="contract-offer" hidden></section>
     <div class="projects-summary"><strong id="projectsSummaryTitle">Projects</strong><span class="muted" id="projectsSummaryMeta">Loading…</span><span class="pill" id="projectsLocalPill">Local vault</span><span class="muted projects-mirror" id="projectsMirrorMeta" hidden></span></div>
     <div class="projects-workspace">
@@ -5445,18 +5447,39 @@
     return s;
   }
 
+  // Server errors can carry absolute paths; the card keeps the kind and the file name.
+  function contractErrorText(message) {
+    let text = String(message || '')
+      .replace(/^E[A-Z]+:\s*/, '')
+      .replace(/,\s*[a-z]+\s+'[^']*'(?:\s*->\s*'[^']*')?/g, '')
+      .replace(/(?:~|\/)[^\s:']*\/([^\s:'\/]+)/g, '$1')
+      .trim();
+    if (!text) text = 'Unknown error';
+    text = text.charAt(0).toUpperCase() + text.slice(1);
+    return /[.!?]$/.test(text) ? text : text + '.';
+  }
+
+  // Same warning the CLI prints after install. Codex connects through the ChatGPT card.
+  function contractConnectLine(labels) {
+    if (!labels.length) return '';
+    const many = labels.length > 1;
+    return labels.join(' and ') + (many ? ' are' : ' is') + ' not connected to NorthKeep yet. ' +
+      'The contract is installed, but project tools will not be available until you connect ' + (many ? 'them' : 'it') + ' in Connect, Desktop.';
+  }
+
   async function renderContractOffer() {
     const box = $('contractOffer');
     if (!box || contractOfferBusy) return;
     let data;
     try { data = await api('/api/contract'); } catch { box.hidden = true; return; }
-    const targets = data.targets || [];
+    const targets = (data.targets || []).filter((t) => t.detected !== false);
     const plan = contractOfferPlan(targets, contractOfferDismissed());
     if (!plan) { box.hidden = true; return; }
     const update = plan.kind === 'update';
     let pending = plan.needs.slice();
     const names = plan.needs.map((t) => t.label).join(' and ');
     const kept = [];
+    const close = () => { box.hidden = true; const heading = $('projectsHeading'); if (heading) heading.focus(); };
 
     box.className = 'contract-offer';
     box.replaceChildren();
@@ -5493,7 +5516,7 @@
     err.setAttribute('role', 'alert');
     later.addEventListener('click', () => {
       try { localStorage.setItem(CONTRACT_OFFER_KEYS[plan.kind], '1'); } catch { /* the card still hides for this visit */ }
-      box.hidden = true;
+      close();
     });
     install.addEventListener('click', async () => {
       contractOfferBusy = true;
@@ -5515,7 +5538,7 @@
         pending = failed.map((f) => f.target);
         install.disabled = later.disabled = false;
         install.textContent = 'Try again';
-        err.textContent = failed.map((f) => 'Could not ' + (update ? 'update' : 'install') + ' for ' + f.target.label + '. ' + f.message).join(' ');
+        err.textContent = failed.map((f) => 'Could not ' + (update ? 'update' : 'install') + ' for ' + f.target.label + '. ' + contractErrorText(f.message)).join(' ');
         return;
       }
       box.className = 'contract-offer done';
@@ -5527,11 +5550,25 @@
       doneTitle.id = 'contractOfferTitle';
       copy.append(doneTitle, el('p', '', 'It takes effect the next time you start a session in each app. Manage it in Connect, Desktop.'));
       for (const line of kept) copy.appendChild(el('p', 'kept', line));
+      const doneActions = el('div', 'contract-offer-actions');
       const done = el('button', 'btn', 'Done');
       done.type = 'button';
-      done.addEventListener('click', () => { box.hidden = true; });
-      box.append(mark, copy, done);
+      done.addEventListener('click', close);
+      doneActions.appendChild(done);
+      box.append(mark, copy, doneActions);
       done.focus();
+      let connectTargets = [];
+      try { connectTargets = (await api('/api/connect')).targets || []; } catch { return; }
+      const connectId = { claude: 'claude-code', codex: 'chatgpt' };
+      const connectLabel = { claude: 'Claude Code', codex: 'ChatGPT / Codex' };
+      const unconnected = plan.needs.filter((t) => connectTargets.some((c) => c.id === connectId[t.id] && c.connected === false));
+      const line = contractConnectLine(unconnected.map((t) => connectLabel[t.id] || t.label));
+      if (!line || box.hidden) return;
+      copy.appendChild(el('p', 'kept', line));
+      const open = el('button', 'btn', 'Open Connect, Desktop');
+      open.type = 'button';
+      open.addEventListener('click', () => { box.hidden = true; showTop('connect'); });
+      doneActions.insertBefore(open, done);
     });
     actions.append(install, later, err);
     box.append(main, actions);

@@ -2,7 +2,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
+import os from 'node:os';
 import { describe, expect, it } from 'vitest';
+import { handleApi } from '../src/api.js';
+import { UiSession } from '../src/session.js';
 
 const html = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', 'static', 'index.html'), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)?.[1] ?? '';
@@ -26,12 +29,13 @@ function declaration(pattern: RegExp) {
   return found;
 }
 
-type Target = { id: string; label: string; status: string };
+type Target = { id: string; label: string; status: string; detected?: boolean; connected?: boolean };
 type FakeNode = {
   tag: string; className: string; id: string; type: string; hidden: boolean; disabled: boolean;
   textContent: string; innerHTML: string; children: FakeNode[]; attrs: Record<string, string>;
   listeners: Record<string, () => unknown>; focused: boolean; style: Record<string, string>;
   append(...nodes: FakeNode[]): void; appendChild(node: FakeNode): FakeNode; replaceChildren(...nodes: FakeNode[]): void;
+  insertBefore(node: FakeNode, ref: FakeNode): FakeNode;
   setAttribute(name: string, value: string): void; addEventListener(event: string, fn: () => unknown): void; focus(): void;
 };
 
@@ -43,6 +47,7 @@ function fakeNode(tag: string): FakeNode {
     set textContent(value: string) { this.children = []; this._text = String(value); },
     append(...nodes) { this.children.push(...nodes); },
     appendChild(child) { this.children.push(child); return child; },
+    insertBefore(child, ref) { this.children.splice(this.children.indexOf(ref), 0, child); return child; },
     replaceChildren(...nodes) { this.children = [...nodes]; },
     setAttribute(name, value) { this.attrs[name] = value; },
     addEventListener(event, fn) { this.listeners[event] = fn; },
@@ -69,7 +74,9 @@ function optionalFunction(name: string) {
   return script.includes(`function ${name}(`) ? functionSource(name) : '';
 }
 
-function harness(targets: Target[], opts: { stored?: Record<string, string>; storageThrows?: boolean; replies?: Record<string, InstallReply[]>; only?: 'connect' } = {}) {
+type Api = (route: string, init?: { method?: string }) => Promise<unknown>;
+
+function harness(targets: Target[], opts: { stored?: Record<string, string>; storageThrows?: boolean; replies?: Record<string, InstallReply[]>; only?: 'connect'; api?: Api } = {}) {
   const nodes = new Map<string, FakeNode>();
   const $ = (id: string) => { if (!nodes.has(id)) nodes.set(id, fakeNode('section')); return nodes.get(id)!; };
   const stored: Record<string, string> = { ...(opts.stored ?? {}) };
@@ -79,8 +86,14 @@ function harness(targets: Target[], opts: { stored?: Record<string, string>; sto
     getItem(key: string) { if (opts.storageThrows) throw new Error('denied'); return key in stored ? stored[key] : null; },
     setItem(key: string, value: string) { if (opts.storageThrows) throw new Error('denied'); stored[key] = value; },
   };
-  const api = async (route: string, init?: { method?: string }) => {
+  const shown: string[] = [];
+  const showTop = (view: string) => { shown.push(view); };
+  const fakeApi = async (route: string, init?: { method?: string }) => {
     if (route === '/api/contract') return { contract_text: 'CONTRACT', targets };
+    if (route === '/api/connect') {
+      const byId = (id: string) => targets.find((t) => t.id === id)?.connected;
+      return { targets: [{ id: 'claude-code', connected: byId('claude') }, { id: 'chatgpt', connected: byId('codex') }] };
+    }
     if (init?.method === 'POST') {
       posts.push(route);
       const id = route.split('/').pop()!;
@@ -95,13 +108,16 @@ function harness(targets: Target[], opts: { stored?: Record<string, string>; sto
     throw new Error('unexpected route ' + route);
   };
   const document = { createElement: fakeNode, createTextNode: (text: string) => Object.assign(fakeNode('#text'), { textContent: text }) };
-  const context = vm.createContext({ $, api, localStorage, document, copyToClipboard: () => {} });
+  const api = opts.api ?? fakeApi;
+  const context = vm.createContext({ $, api, showTop, localStorage, document, copyToClipboard: () => {} });
   const offer = opts.only === 'connect' ? '' : `
     ${declaration(/const CONTRACT_OFFER_KEYS = \{[^}]*\};/)}
     ${declaration(/let contractOfferBusy = false;/)}
     ${functionSource('contractOfferPlan')}
     ${functionSource('contractOfferDismissed')}
     ${functionSource('contractOfferItem')}
+    ${optionalFunction('contractErrorText')}
+    ${optionalFunction('contractConnectLine')}
     ${functionSource('renderContractOffer')}
     this.renderContractOffer = renderContractOffer;
     this.contractOfferPlan = contractOfferPlan;
@@ -114,7 +130,7 @@ function harness(targets: Target[], opts: { stored?: Record<string, string>; sto
     ${offer}
   `, context);
   return {
-    box: $('contractOffer'), card: $('contractCard'), posts, stored,
+    box: $('contractOffer'), card: $('contractCard'), heading: $('projectsHeading'), posts, stored, shown,
     render: () => context.renderContractOffer() as Promise<void>,
     loadContract: () => context.loadContract() as Promise<void>,
     plan: (list: Target[], dismissed: Record<string, boolean>) => context.contractOfferPlan(list, dismissed),
@@ -273,6 +289,127 @@ describe('contract offer on Projects', () => {
     expect(h.box.hidden).toBe(false);
     await click(button(h.box, 'Not now'));
     expect(h.box.hidden).toBe(true);
+  });
+});
+
+describe('contract offer only for detected apps', () => {
+  const noCodex = (status: string): Target => ({ ...codex(status), detected: false });
+
+  it('offers Claude Code alone when Codex is not on this Mac', async () => {
+    const h = harness([claude('absent'), noCodex('absent')]);
+    await h.render();
+    expect(all(h.box).find((n) => n.tag === 'h3')?.textContent).toBe('Let Claude Code keep your projects current');
+    expect(buttons(h.box).map((b) => b.textContent)).toEqual(['Install for Claude Code', 'Not now']);
+    await click(button(h.box, 'Install for Claude Code'));
+    expect(h.posts).toEqual(['/api/contract/install/claude']);
+  });
+
+  it('shows no card when the only target needing the contract is not detected', async () => {
+    const h = harness([claude('installed'), noCodex('absent')]);
+    await h.render();
+    expect(h.box.hidden).toBe(true);
+  });
+
+  it('leaves an undetected app out of the update pills', async () => {
+    const h = harness([claude('stale'), noCodex('absent')]);
+    await h.render();
+    expect(byClass(h.box, 'pill').map((p) => p.textContent)).toEqual(['Claude Code: out of date']);
+  });
+
+  it('against the real API in a home without Codex, installs Claude Code only and creates no .codex', async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'northkeep-offer-home-'));
+    const saved = { HOME: process.env.HOME, CODEX_HOME: process.env.CODEX_HOME, PATH: process.env.PATH, NORTHKEEP_NO_KEYCHAIN: process.env.NORTHKEEP_NO_KEYCHAIN };
+    process.env.HOME = home;
+    delete process.env.CODEX_HOME;
+    process.env.PATH = '/usr/bin:/bin';
+    process.env.NORTHKEEP_NO_KEYCHAIN = '1';
+    try {
+      const session = new UiSession(path.join(home, 'vault.nkv'));
+      const realApi: Api = async (route, init) => {
+        const res = await handleApi(session, init?.method ?? 'GET', route, new URLSearchParams(), Buffer.from('{}'));
+        if (res.status !== 200) throw new Error((res.body as { error?: string }).error ?? 'HTTP ' + res.status);
+        return res.body;
+      };
+      const h = harness([], { api: realApi });
+      await h.render();
+      expect(buttons(h.box).map((b) => b.textContent)).toEqual(['Install for Claude Code', 'Not now']);
+      await click(button(h.box, 'Install for Claude Code'));
+      expect(all(h.box).find((n) => n.tag === 'h3')?.textContent).toBe('Installed for Claude Code');
+      expect(fs.existsSync(path.join(home, '.claude', 'rules', 'northkeep-projects.md'))).toBe(true);
+      expect(fs.existsSync(path.join(home, '.codex'))).toBe(false);
+
+      fs.rmSync(path.join(home, '.claude'), { recursive: true });
+      fs.mkdirSync(path.join(home, '.codex'));
+      const both = harness([], { api: realApi });
+      await both.render();
+      expect(buttons(both.box).map((b) => b.textContent)).toEqual(['Install for Claude Code and Codex', 'Not now']);
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('contract offer confirmation and focus', () => {
+  it('says an unconnected app still needs connecting and opens Connect, Desktop', async () => {
+    const h = harness([{ ...claude('absent'), connected: false }, { ...codex('absent'), connected: true }]);
+    await h.render();
+    await click(button(h.box, 'Install for Claude Code and Codex'));
+    const text = all(h.box).filter((n) => n.tag === 'p').map((n) => n.textContent);
+    expect(text).toContain('Claude Code is not connected to NorthKeep yet. The contract is installed, but project tools will not be available until you connect it in Connect, Desktop.');
+    await click(button(h.box, 'Open Connect, Desktop'));
+    expect(h.shown).toEqual(['connect']);
+  });
+
+  it('names both apps when neither is connected', async () => {
+    const h = harness([{ ...claude('absent'), connected: false }, { ...codex('absent'), connected: false }]);
+    await h.render();
+    await click(button(h.box, 'Install for Claude Code and Codex'));
+    const text = all(h.box).filter((n) => n.tag === 'p').map((n) => n.textContent);
+    expect(text).toContain('Claude Code and ChatGPT / Codex are not connected to NorthKeep yet. The contract is installed, but project tools will not be available until you connect them in Connect, Desktop.');
+  });
+
+  it('adds no connect line when every installed app is connected', async () => {
+    const h = harness([{ ...claude('absent'), connected: true }, { ...codex('absent'), connected: true }]);
+    await h.render();
+    await click(button(h.box, 'Install for Claude Code and Codex'));
+    expect(all(h.box).map((n) => n.textContent).join(' ')).not.toContain('not connected');
+    expect(buttons(h.box).map((b) => b.textContent)).toEqual(['Done']);
+  });
+
+  it('moves focus to the Projects heading after Not now', async () => {
+    const h = harness([claude('absent'), codex('absent')]);
+    await h.render();
+    await click(button(h.box, 'Not now'));
+    expect(h.heading.focused).toBe(true);
+  });
+
+  it('moves focus to the Projects heading after Done', async () => {
+    const h = harness([claude('absent'), codex('absent')]);
+    await h.render();
+    await click(button(h.box, 'Install for Claude Code and Codex'));
+    await click(button(h.box, 'Done'));
+    expect(h.heading.focused).toBe(true);
+  });
+
+  it('shows the kind of a filesystem failure without the path', async () => {
+    const h = harness([claude('absent'), codex('installed')], {
+      replies: { claude: [new Error("EACCES: permission denied, open '/Users/you/.claude/rules/northkeep-projects.md.northkeep-tmp'")] },
+    });
+    await h.render();
+    await click(button(h.box, 'Install for Claude Code'));
+    expect(byClass(h.box, 'err')[0].textContent).toBe('Could not install for Claude Code. Permission denied.');
+  });
+
+  it('keeps a refusal readable with the file name in place of its path', async () => {
+    const h = harness([claude('installed'), codex('absent')], {
+      replies: { codex: [new Error('Refusing to modify /Users/you/.codex/AGENTS.md: NorthKeep\'s contract markers are duplicated or unpaired. Fix or remove them, then reinstall.')] },
+    });
+    await h.render();
+    await click(button(h.box, 'Install for Codex'));
+    expect(byClass(h.box, 'err')[0].textContent).toBe("Could not install for Codex. Refusing to modify AGENTS.md: NorthKeep's contract markers are duplicated or unpaired. Fix or remove them, then reinstall.");
   });
 });
 
