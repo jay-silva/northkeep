@@ -123,20 +123,25 @@ describe('the export lock', () => {
 
   it('16 contenders on a dead-owner lock never hold it at the same time (a5c)', async () => {
     expect(fs.existsSync(RUN_DIST), 'build @northkeep/mcp-server first').toBe(true);
+    // Order comes from one O_APPEND log, not from clocks read in separate processes.
+    const orderLog = path.join(lab.home, 'a5c-order.log');
     const child = `const run = await import(${JSON.stringify(RUN_DIST)});
+const fs = await import('node:fs');
 const go = Number(process.argv[1]); while (Date.now() < go) {}
 let lock;
 try { lock = await run.acquireExportLock({ repo: ${JSON.stringify(repo)}, home: ${JSON.stringify(lab.home)}, vaultPath: '/nonexistent/v.nkv' }, { waitMs: 20000, pollMs: 5 }); }
 catch (e) { console.log(JSON.stringify({ refused: e.code })); process.exit(0); }
-const t0 = performance.timeOrigin + performance.now(); const until = Date.now() + 120; while (Date.now() < until) {}
-const held = lock.held(); const t1 = performance.timeOrigin + performance.now(); lock.release();
-console.log(JSON.stringify({ t0, t1, held }));`;
+fs.appendFileSync(${JSON.stringify(orderLog)}, 'S ' + process.pid + '\\n');
+const until = Date.now() + 120; while (Date.now() < until) {}
+const held = lock.held(); fs.appendFileSync(${JSON.stringify(orderLog)}, 'E ' + process.pid + '\\n'); lock.release();
+console.log(JSON.stringify({ held }));`;
     const lockFile = path.join(repo, '.git', EXPORT_LOCK_NAME);
     let overlaps = 0;
     let lost = 0;
     let holds = 0;
     for (let round = 0; round < 6; round++) {
       fs.writeFileSync(lockFile, `${JSON.stringify({ pid: deadPid(), started_at: 'x', nonce: 'dead' })}\n`);
+      fs.rmSync(orderLog, { force: true });
       const go = Date.now() + 900;
       const outs = await Promise.all(
         Array.from({ length: 16 }, () =>
@@ -148,9 +153,13 @@ console.log(JSON.stringify({ t0, t1, held }));`;
           }),
         ),
       );
-      const iv = outs.filter(Boolean).map((l) => JSON.parse(l) as { t0?: number; t1?: number; held?: boolean }).filter((x) => x.t0 !== undefined);
-      iv.sort((a, b) => a.t0! - b.t0!);
-      for (let i = 1; i < iv.length; i++) if (iv[i]!.t0! < iv[i - 1]!.t1!) overlaps++;
+      const iv = outs.filter(Boolean).map((l) => JSON.parse(l) as { held?: boolean }).filter((x) => x.held !== undefined);
+      const order = fs.existsSync(orderLog) ? fs.readFileSync(orderLog, 'utf8').trim().split('\n') : [];
+      expect(order.length).toBe(iv.length * 2);
+      for (let i = 0; i < order.length; i += 2) {
+        const [s, e] = [order[i]!.split(' '), order[i + 1]?.split(' ')];
+        if (s[0] !== 'S' || e?.[0] !== 'E' || e[1] !== s[1]) overlaps++;
+      }
       lost += iv.filter((x) => !x.held).length;
       holds += iv.length;
     }
