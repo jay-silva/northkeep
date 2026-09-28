@@ -23,6 +23,9 @@ export const PROJECT_IMPORT_SOURCE = 'northkeep:project-import';
 export const PROJECT_HANDOFF_METADATA_KEY = 'northkeep_project_handoff_v1';
 /** Reserved metadata key for the writer of a project head (ADR 0052 Decision 1). */
 export const PROJECT_PROVENANCE_METADATA_KEY = 'northkeep_provenance_v1';
+/** Reserved key on live project heads: the newest checkpoint and wrap operation ids (ADR 0062). */
+export const PROJECT_OPERATIONS_METADATA_KEY = 'northkeep_operations_v1';
+export const PROJECT_OPERATIONS_LIMIT = 16;
 export const PROJECT_REVISION_SUMMARY_LIMIT = 20;
 export const PROJECT_HANDOFF_METADATA_VERSION = 1;
 export const PROJECT_HISTORY_LIMIT = 20;
@@ -103,6 +106,9 @@ export interface ProjectHandoffMetadata {
   version:1; operation_id:string; result_id:string; project:string; base_revision:string; mode:ProjectHandoffMode;
   request_fingerprint:string; archive_ids:string[]; saved_at:string;
 }
+
+/** One remembered checkpoint or wrap save; `saved_at` equals the head's created_at (ADR 0062 Decision 1). */
+export interface ProjectOperationRecord { operation_id:string; request_fingerprint:string; saved_at:string }
 
 export class ProjectHandoffError extends Error {
   constructor(public readonly code:ProjectHandoffErrorCode, message:string, public readonly current?:ProjectView) { super(message); this.name='ProjectHandoffError'; }
@@ -200,6 +206,29 @@ export function readProjectHandoffMetadata(entry:MemoryEntry):ProjectHandoffMeta
   const exactKeys=new Set(['version','operation_id','result_id','project','base_revision','mode','request_fingerprint','archive_ids','saved_at']);
   if(Object.keys(m).length!==exactKeys.size||Object.keys(m).some((key)=>!exactKeys.has(key))||m.version!==1||!['checkpoint','wrap'].includes(String(m.mode))||keys.some((k)=>typeof m[k]!=='string')||!Array.isArray(m.archive_ids)||m.archive_ids.some((x)=>typeof x!=='string')||m.result_id!==entry.id||!/^[0-9a-f]{64}$/.test(String(m.request_fingerprint))||!Number.isFinite(Date.parse(String(m.saved_at))))throw new ProjectHandoffError('operation_conflict','Malformed project handoff receipt metadata.');
   return m as unknown as ProjectHandoffMetadata;
+}
+const OPERATION_ID_PATTERN=/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const OPERATION_RECORD_KEYS=['operation_id','request_fingerprint','saved_at'];
+function isOperationRecord(value:unknown):value is ProjectOperationRecord {
+  if(value===null||typeof value!=='object'||Array.isArray(value))return false;
+  const r=value as Record<string,unknown>; const keys=Object.keys(r);
+  return keys.length===OPERATION_RECORD_KEYS.length&&OPERATION_RECORD_KEYS.every((k)=>keys.includes(k))
+    &&typeof r.operation_id==='string'&&OPERATION_ID_PATTERN.test(r.operation_id)
+    &&typeof r.request_fingerprint==='string'&&/^[0-9a-f]{64}$/.test(r.request_fingerprint)
+    &&typeof r.saved_at==='string'&&Number.isFinite(Date.parse(r.saved_at));
+}
+/** ADR 0062 Decision 1: a malformed element carries an id only as a bare equal string or an own, equal `operation_id` string. */
+function malformedCarriesId(value:unknown,id:string):boolean {
+  if(typeof value==='string')return value===id;
+  if(value===null||typeof value!=='object'||Array.isArray(value)||!Object.hasOwn(value,'operation_id'))return false;
+  return (value as Record<string,unknown>).operation_id===id;
+}
+/** The well-formed ledger records in order, and whether a malformed record carries `id`. A non-array ledger has no records. */
+export function readProjectOperations(entry:Pick<MemoryEntry,'metadata'>,id?:string):{records:ProjectOperationRecord[];malformedCarriesId:boolean} {
+  const raw=entry.metadata?.[PROJECT_OPERATIONS_METADATA_KEY]; const records:ProjectOperationRecord[]=[]; let malformedCarries=false;
+  if(!Array.isArray(raw))return {records,malformedCarriesId:false};
+  for(const value of raw){if(isOperationRecord(value))records.push(value);else if(id!==undefined&&malformedCarriesId(value,id))malformedCarries=true;}
+  return {records,malformedCarriesId:malformedCarries};
 }
 export function projectReceiptMode(entry:MemoryEntry):ProjectHandoffMode|undefined { try{return readProjectHandoffMetadata(entry)?.mode;}catch{return undefined;} }
 
