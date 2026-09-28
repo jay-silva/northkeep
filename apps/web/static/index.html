@@ -2082,8 +2082,15 @@
   });
 
   // --- memories
-  const TYPES = ['episodic', 'semantic', 'procedural', 'working', 'identity'];
-  const MEMORY_TYPE_LABELS = { episodic:'Event', semantic:'Preference', procedural:'Procedure', working:'Working note', identity:'About me' };
+  // The one label table for memory types. SPEC/memory-schema.md defines semantic as durable facts.
+  const MEMORY_TYPE_LABELS = {
+    episodic: { label: 'Event', help: 'An event or experience. e.g. "Met the Hendersons about their filing on June 12."' },
+    semantic: { label: 'Fact', help: 'A lasting fact worth remembering. e.g. "Our office moved to 12 Main Street in March."' },
+    procedural: { label: 'Procedure', help: 'A preference or how-to. e.g. "Draft my emails short and direct, no bullet points."' },
+    working: { label: 'Working note', help: 'Current context that ages out. e.g. "This week I am focused on the budget review."' },
+    identity: { label: 'About me', help: 'A stable fact about who you are. e.g. "I am a compliance officer and EMS lieutenant."' },
+  };
+  const TYPES = Object.keys(MEMORY_TYPE_LABELS);
   let filterType = '', filterScope = '', searchTimer = null;
   let knownScopes = [];
   let memorySharedScopes = null;
@@ -2540,7 +2547,7 @@
     }
   });
   $('typeChips').innerHTML = '<option value="">All types</option>' + TYPES.map((type) =>
-    `<option value="${type}">${MEMORY_TYPE_LABELS[type]}</option>`).join('');
+    `<option value="${type}">${MEMORY_TYPE_LABELS[type].label}</option>`).join('');
   $('typeChips').addEventListener('change', () => {
     filterType = $('typeChips').value;
     loadMemories();
@@ -2652,7 +2659,7 @@
         <div class="card" id="mem-${esc(m.id)}">
           <div class="content">${esc(m.content)}</div>
           <div class="prov">
-            <span>${esc(MEMORY_TYPE_LABELS[m.type] || m.type)}</span>
+            <span>${esc(MEMORY_TYPE_LABELS[m.type]?.label || m.type)}</span>
             <span>${esc(m.scope)}</span>
             ${isLiveProjectDoc(m)
               ? `<span class="badge project" title="Live project document. Agents read this at session start and update it when a session ends.">LIVE PROJECT</span>`
@@ -2889,28 +2896,12 @@
   // --- add a memory (GUI-created, explicit scope). '+' isn't in the scope
   // charset, so NEW_SCOPE can never collide with a real scope value.
   const NEW_SCOPE = '+new';
-  // Plain-language glosses for the memory types (jargon otherwise). The short
-  // label shows in the dropdown; the fuller help line explains the choice.
-  const TYPE_LABELS = {
-    episodic: 'episodic: something that happened',
-    semantic: 'semantic: a durable fact',
-    procedural: 'procedural: how you like things done',
-    working: 'working: a current, temporary note',
-    identity: 'identity: who you are',
-  };
-  const TYPE_HELP = {
-    episodic: 'An event or experience. e.g. "Met the Hendersons about their filing on June 12."',
-    semantic: 'A lasting fact worth remembering. e.g. "I prefer concise answers without filler."',
-    procedural: 'A preference or how-to. e.g. "Draft my emails short and direct, no bullet points."',
-    working: 'Current context that ages out. e.g. "This week I am focused on the budget review."',
-    identity: 'A stable fact about who you are. e.g. "I am a compliance officer and EMS lieutenant."',
-  };
   for (const t of TYPES) {
-    const o = el('option', undefined, TYPE_LABELS[t] || t);
+    const o = el('option', undefined, MEMORY_TYPE_LABELS[t].label);
     o.value = t;
     $('addMemType').appendChild(o);
   }
-  function updateTypeHelp() { $('addMemTypeHelp').textContent = TYPE_HELP[$('addMemType').value] || ''; }
+  function updateTypeHelp() { $('addMemTypeHelp').textContent = MEMORY_TYPE_LABELS[$('addMemType').value]?.help || ''; }
   $('addMemType').addEventListener('change', updateTypeHelp);
   updateTypeHelp();
   $('addMemScope').addEventListener('change', () => {

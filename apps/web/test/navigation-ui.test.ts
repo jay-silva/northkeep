@@ -22,6 +22,12 @@ function functionSource(name: string) {
   throw new Error(`Unclosed function ${name}`);
 }
 
+function memoryTypeTable() {
+  const table = script.match(/const MEMORY_TYPE_LABELS = \{[\s\S]*?\};\n/)?.[0];
+  if (!table) throw new Error('Missing MEMORY_TYPE_LABELS');
+  return table;
+}
+
 describe('navigation UI', () => {
   it('starts Connect collapsed with only Desktop and Cloud children', () => {
     expect(html).toContain('id="connectToggle" class="nav-disclosure" type="button" aria-expanded="false" aria-controls="connectNavChildren"');
@@ -161,6 +167,42 @@ describe('navigation UI', () => {
     `, context);
     await context.load();
     expect(context.nodes.get('countPill').textContent).toBe('13 memories');
+  });
+
+  it('labels semantic memories "Fact" in the list, the type filter, and the add form from one table', () => {
+    expect(script).not.toMatch(/\bTYPE_LABELS\b|\bTYPE_HELP\b/);
+    const typeFilter = script.match(/\$\('typeChips'\)\.innerHTML = [\s\S]*?\.join\(''\);/)?.[0];
+    const addForm = script.match(/for \(const t of TYPES\) \{[\s\S]*?\n {2}\}/)?.[0];
+    const context = vm.createContext({});
+    vm.runInContext(`
+      const nodes=new Map();
+      const $=(id)=>{if(!nodes.has(id))nodes.set(id,{innerHTML:'',options:[],appendChild(node){this.options.push(node);}});return nodes.get(id);};
+      const el=(tag,klass,text)=>({text,value:''});
+      ${memoryTypeTable()}
+      const TYPES=Object.keys(MEMORY_TYPE_LABELS);
+      ${typeFilter}
+      ${addForm}
+      this.labels=MEMORY_TYPE_LABELS; this.nodes=nodes;
+    `, context);
+    expect(context.labels.semantic.label).toBe('Fact');
+    expect(context.nodes.get('typeChips').innerHTML).toContain('<option value="semantic">Fact</option>');
+    expect(context.nodes.get('addMemType').options.find((o: { value: string }) => o.value === 'semantic').text).toBe('Fact');
+  });
+
+  it('shows a semantic memory in the list as "Fact"', async () => {
+    const context = vm.createContext({ URLSearchParams });
+    vm.runInContext(`
+      let memoryLoadSequence=0, filterType='', filterScope='', localSearchBusy=false;
+      const status={unlocked:true};
+      const nodes=new Map(); const $=(id)=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',innerHTML:''});return nodes.get(id);};
+      const esc=(text)=>String(text); const memoryPrivacyLabel=()=>''; const renderMemorySearchStatus=async()=>{}; const showLocalSearchState=()=>{};
+      const api=async()=>({memories:[{id:'m1',type:'semantic',scope:'personal',content:'Office is on Main Street',source:'cli',confidence:1,created_at:'2026-09-28T00:00:00Z'}]});
+      ${memoryTypeTable()}
+      ${functionSource('loadMemories')}
+      this.load=loadMemories; this.nodes=nodes;
+    `, context);
+    await context.load();
+    expect(context.nodes.get('memList').innerHTML).toContain('<span>Fact</span>');
   });
 
   it('does not render delayed scopes or counts after a newer scope refresh starts', async () => {
