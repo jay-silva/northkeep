@@ -67,11 +67,11 @@ describe('estimateTurnCost', () => {
     expect(estimateTurnCost({ inputTokens: 100, outputTokens: 100 }, noPrice)).toBeNull();
   });
 
-  it('uses the real baseline prices (claude-opus ≈ $15/$75)', () => {
+  it('uses the real baseline prices (claude-opus-4-8 = $5/$25)', () => {
     const opus = lookupModel('claude-opus-4-8', catalog);
-    // 10,000 in × $15/1M + 2,000 out × $75/1M = 0.15 + 0.15 = 0.30.
+    // 10,000 in × $5/1M + 2,000 out × $25/1M = 0.05 + 0.05 = 0.10.
     const cost = estimateTurnCost({ inputTokens: 10_000, outputTokens: 2000 }, opus);
-    expect(cost?.usd).toBeCloseTo(0.3, 10);
+    expect(cost?.usd).toBeCloseTo(0.1, 10);
   });
 });
 
@@ -163,8 +163,8 @@ describe('runTurn — cost metering', () => {
       catalog,
     });
     expect(result.usage).toEqual({ inputTokens: 10_000, outputTokens: 2000, estimated: false });
-    // opus ≈ $15/$75 per 1M → 0.15 + 0.15 = 0.30.
-    expect(result.cost?.usd).toBeCloseTo(0.3, 10);
+    // opus 4.8 = $5/$25 per 1M → 0.05 + 0.05 = 0.10.
+    expect(result.cost?.usd).toBeCloseTo(0.1, 10);
     expect(result.cost?.approximate).toBe(true);
   });
 

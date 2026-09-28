@@ -40,8 +40,8 @@ describe('suggestBetterModel', () => {
     const s = suggestBetterModel('fix this ```code``` please', [ep('local', 'llama3.2:3b')]);
     expect(s).not.toBeNull();
     expect(s!.task).toBe('code');
-    expect(s!.modelLabel).toBe('Claude Opus');
-    expect(s!.reason).toContain('Claude Opus');
+    expect(s!.modelLabel).toBe('Claude Opus 5.5');
+    expect(s!.reason).toContain('Claude Opus 5.5');
   });
 
   it('stays silent when a strong-enough model for the task is already configured', () => {

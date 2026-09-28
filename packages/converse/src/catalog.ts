@@ -80,11 +80,14 @@ export const BASELINE_CATALOG: readonly CatalogEntry[] = [
   { id: 'mistral', strengths: ['quick', 'general'], contextWindow: 32_000, costTier: 'free-local', inputPer1M: 0, outputPer1M: 0, speedTier: 'fast', toolCapable: true, sizeGB: 4 },
   { id: 'gemma3', aliases: ['gemma2'], strengths: ['general', 'creative'], contextWindow: 128_000, costTier: 'free-local', inputPer1M: 0, outputPer1M: 0, speedTier: 'fast', sizeGB: 5 },
   { id: 'phi4', strengths: ['reasoning', 'code'], contextWindow: 16_000, costTier: 'free-local', inputPer1M: 0, outputPer1M: 0, speedTier: 'fast', sizeGB: 9 },
-  // --- Anthropic (native provider). IDs current as of 2026-07. Prices ≈ Claude
-  // list (opus $15/$75, sonnet $3/$15, haiku $0.80/$4 per 1M).
-  { id: 'claude-opus', strengths: ['code', 'reasoning', 'long-context', 'creative'], contextWindow: 1_000_000, costTier: 'high', inputPer1M: 15, outputPer1M: 75, speedTier: 'medium', toolCapable: true, notes: 'Frontier-class; strongest all-rounder.' },
+  // --- Anthropic (native provider). Prices = Claude list as of 2026-09 (USD per
+  // 1M in/out): Opus 5.5 $4/$20; Opus 5 and 4.x $5/$25; Sonnet 5 $2/$10;
+  // Sonnet 4.6 $3/$15; Haiku 4.5 $1/$5. Longest matching id wins.
+  { id: 'claude-opus-5-5', strengths: ['code', 'reasoning', 'long-context', 'creative'], contextWindow: 1_000_000, costTier: 'high', inputPer1M: 4, outputPer1M: 20, speedTier: 'medium', toolCapable: true, notes: 'Frontier-class; strongest all-rounder.' },
+  { id: 'claude-opus', strengths: ['code', 'reasoning', 'long-context', 'creative'], contextWindow: 1_000_000, costTier: 'high', inputPer1M: 5, outputPer1M: 25, speedTier: 'medium', toolCapable: true, notes: 'Frontier-class; strongest all-rounder.' },
+  { id: 'claude-sonnet-5', strengths: ['code', 'reasoning', 'long-context'], contextWindow: 1_000_000, costTier: 'medium', inputPer1M: 2, outputPer1M: 10, speedTier: 'medium', toolCapable: true },
   { id: 'claude-sonnet', strengths: ['code', 'reasoning', 'long-context'], contextWindow: 1_000_000, costTier: 'medium', inputPer1M: 3, outputPer1M: 15, speedTier: 'medium', toolCapable: true },
-  { id: 'claude-haiku', strengths: ['quick', 'general'], contextWindow: 200_000, costTier: 'low', inputPer1M: 0.8, outputPer1M: 4, speedTier: 'fast', toolCapable: true },
+  { id: 'claude-haiku', strengths: ['quick', 'general'], contextWindow: 200_000, costTier: 'low', inputPer1M: 1, outputPer1M: 5, speedTier: 'fast', toolCapable: true },
   // --- OpenAI. gpt-5 family (gpt-5.6 sol/terra/luna) + o-series reasoners.
   { id: 'gpt-5', aliases: ['gpt-5.6', 'gpt-5.5'], strengths: ['code', 'reasoning', 'general', 'long-context'], contextWindow: 400_000, costTier: 'high', inputPer1M: 10, outputPer1M: 30, speedTier: 'medium', toolCapable: true, notes: 'Frontier OpenAI generalist.' },
   { id: 'o3', aliases: ['o4-mini', 'o1'], strengths: ['reasoning', 'code'], contextWindow: 200_000, costTier: 'high', inputPer1M: 10, outputPer1M: 40, speedTier: 'slow', toolCapable: true, notes: 'OpenAI o-series deliberate reasoner.' },

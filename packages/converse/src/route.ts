@@ -306,11 +306,14 @@ export function suggestBetterModel(
 }
 
 function prettyModelLabel(id: string): string {
-  return id
-    .split(/[-_./]/)
-    .filter((w) => w.length > 0)
-    .map((w) => (/^(gpt|xai|ai|llm)$/i.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1)))
-    .join(' ');
+  const words: string[] = [];
+  for (const w of id.split(/[-_./]/).filter((part) => part.length > 0)) {
+    const prev = words[words.length - 1];
+    // Version parts split by a dash read as one number: claude-opus-5-5 is "Opus 5.5".
+    if (/^\d+$/.test(w) && prev !== undefined && /^\d+(\.\d+)*$/.test(prev)) words[words.length - 1] = `${prev}.${w}`;
+    else words.push(/^(gpt|xai|ai|llm)$/i.test(w) ? w.toUpperCase() : w.charAt(0).toUpperCase() + w.slice(1));
+  }
+  return words.join(' ');
 }
 
 function taskNoun(task: TaskKind): string {
