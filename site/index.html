@@ -220,8 +220,8 @@
   <div class="wrap">
     <span class="brand"><img src="./northkeep-icon.png" alt="">NorthKeep</span>
     <span class="spacer"></span>
-    <a class="navlink" href="#projects">Projects</a>
     <a class="navlink" href="#how">How it works</a>
+    <a class="navlink" href="#projects">Projects</a>
     <a class="navlink" href="#pricing">Pricing</a>
     <a class="navlink" href="./start.html">Getting started</a>
     <a class="navlink" href="./roadmap.html">Roadmap</a>
@@ -243,6 +243,57 @@
   <p class="subtle muted">Free and open source · Apple Silicon · signed &amp; notarized ·
     private by default, nothing leaves your machine unencrypted unless you share it (a new project an app you connected creates is shared automatically, and so are your later edits to it), message a cloud model you picked or run a memory review on one (masked first, either way), or approve a tool call</p>
 </div>
+
+<section id="how">
+  <div class="wrap">
+    <h2>Connect your apps, then keep working</h2>
+    <p class="lede">Both start from the same encrypted vault on your machine. You
+      decide what each app may read, and NorthKeep is honest about what reaches
+      the cloud.</p>
+    <div class="modes">
+      <div class="card">
+        <span class="kicker">Connect</span>
+        <h3>Your memory, in the apps you already pay for</h3>
+        <p>One click wires NorthKeep into Claude Desktop, Claude Code, or Cursor
+          on this Mac. For the cloud apps you use elsewhere (ChatGPT, Claude on
+          your phone), an optional connector lets the scopes you choose reach them.
+          Either way you decide, per app and per scope, exactly what it may
+          read.</p>
+        <p><strong>Review what they save.</strong> As your apps add memories, the
+          Review page finds exact duplicates and has a model suggest fixes for
+          near-duplicates, showing the stored memories each suggestion is based on.
+          Nothing changes until you approve it, and each change is recorded so you can
+          restore it from change history. Review runs on a local model via Ollama by
+          default; a cloud model with your own key is a choice you confirm each run,
+          and memories are masked, at the tier you choose, before they are sent.
+          Near-duplicate checks need Ollama on this Mac either way.</p>
+        <p class="note">Honest boundary: Connect gives you ownership and
+          portability, not a firewall, and it can't redact what you type into
+          someone else's app. The cloud connector is opt-in per scope, with one
+          exception: a new project that an app you connected creates arrives
+          already shared, so that app can keep it updated. Shared
+          memories are encrypted at rest there: the connector database holds no
+          key that can read them, and the key is rebuilt each request from your
+          app's own credential plus a secret on our server, which briefly decrypts
+          them so the apps you connect can read the result in full. Scope names,
+          counts, and timestamps stay visible to the server. Private scopes never
+          leave your machine.</p>
+      </div>
+      <div class="card">
+        <span class="kicker">Projects</span>
+        <h3>Pick up the work in whichever app you open next</h3>
+        <p>Each project keeps its status, next actions, decisions and log in your
+          vault. Claude Code, Codex and Cursor (per project) resume it when a session starts,
+          checkpoint along the way, and wrap it when the work is done, so the next
+          app starts from the latest save instead of from scratch.</p>
+        <p><a href="#projects">How Projects work</a></p>
+        <p class="note">Honest boundary: a short standing instruction asks each app
+          to resume and save. It is advisory, so a session that ends abruptly keeps only what
+          it saved with a checkpoint.</p>
+      </div>
+    </div>
+  </div>
+</section>
 
 <section id="projects">
   <div class="wrap">
@@ -304,57 +355,16 @@
   </div>
 </section>
 
-<section id="how">
-  <div class="wrap">
-    <h2>Two ways to use it</h2>
-    <p class="lede">Both start from the same encrypted vault on your machine. You
-      choose how much reaches the cloud, and NorthKeep is honest about the
-      difference.</p>
-    <div class="modes">
-      <div class="card">
-        <span class="kicker">Connect</span>
-        <h3>Your memory, in the apps you already pay for</h3>
-        <p>One click wires NorthKeep into Claude Desktop, Claude Code, or Cursor
-          on this Mac. For the cloud apps you use elsewhere (ChatGPT, Claude on
-          your phone), an optional connector lets the scopes you choose reach them.
-          Either way you decide, per app and per scope, exactly what it may
-          read.</p>
-        <p class="note">Honest boundary: Connect gives you ownership and
-          portability, not a firewall, and it can't redact what you type into
-          someone else's app. The cloud connector is opt-in per scope, with one
-          exception: a new project that an app you connected creates arrives
-          already shared, so that app can keep it updated. Shared
-          memories are encrypted at rest there: the connector database holds no
-          key that can read them, and the key is rebuilt each request from your
-          app's own credential plus a secret on our server, which briefly decrypts
-          them so the apps you connect can read the result in full. Scope names,
-          counts, and timestamps stay visible to the server. Private scopes never
-          leave your machine.</p>
-      </div>
-      <div class="card">
-        <span class="kicker">Converse</span>
-        <h3>Talk through NorthKeep when privacy has to be absolute</h3>
-        <p>Converse runs the privacy for you: it masks sensitive data <em>before</em>
-          your message leaves the machine, calls the model, and restores the
-          details locally in the reply.</p>
-        <p class="note">The real firewall, against a local model (with tools off,
-          nothing leaves your network) or a cloud model with your own key. It runs
-          in the iPhone app (beta) and in the terminal from a source install; the
-          Mac app no longer has a chat view.</p>
-      </div>
-    </div>
-  </div>
-</section>
 
 <section>
   <div class="wrap">
     <h2>What you get</h2>
     <div class="grid">
       <div class="feat"><h3><span class="dot"></span>Owned &amp; portable</h3><p>One encrypted file you can copy, back up, and move. Your memory lives in none of the AI apps, so switching costs nothing.</p></div>
-      <div class="feat wide"><h3><span class="dot"></span>On-device redaction</h3><p>Keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers are always masked before a chat message or a cloud memory review leaves your machine, and names too at Tier 2 and up. A key with no recognizable prefix or a password is not caught. In the iPhone app, each turn shows exactly what left the device; in the terminal, each reply names the tier that ran.</p></div>
+      <div class="feat wide"><h3><span class="dot"></span>On-device redaction</h3><p>Keys with a known issuer prefix, card numbers, SSNs, emails, phone numbers and similar identifiers are always masked before a cloud memory review or a chat message leaves your machine, and names too at Tier 2 and up. A key with no recognizable prefix or a password is not caught. In the iPhone app, each turn shows exactly what left the device; in the terminal, each reply names the tier that ran.</p></div>
       <div class="feat"><h3><span class="dot"></span>Per-app scopes</h3><p>Grant one app your work memory only, another nothing sensitive. Enforced at the vault, not on trust.</p></div>
       <div class="feat"><h3><span class="dot"></span>Bring your history</h3><p>Import your ChatGPT or Claude export. Extraction runs entirely on your machine, and you review every memory before it's kept.</p></div>
-      <div class="feat"><h3><span class="dot"></span>Any model</h3><p>Local models via Ollama, or any provider with your own key. A concierge routes each question to a capable model, favoring the cheapest, cost shown up front.</p></div>
+      <div class="feat"><h3><span class="dot"></span>Any model</h3><p>Run memory review on a local model via Ollama, or on Anthropic or an OpenAI-compatible endpoint with your own key. Near-duplicate checks still need Ollama with nomic-embed-text on this Mac. You pay the provider directly.</p></div>
       <div class="feat"><h3><span class="dot"></span>Encrypted sync</h3><p>Move your vault between machines. The server only ever holds ciphertext it cannot decrypt, never a key, never plaintext. We could not read it if we wanted to.</p></div>
       <div class="feat wide"><h3><span class="dot"></span>Cloud Connect (Beta)</h3><p>Share the scopes you choose to the AI apps you already use, so Claude and ChatGPT remember you on your phone too. Stored encrypted at rest with no key kept in that database; decrypted only for the moment it takes to answer your app. Opt-in per scope (a new project an app you connected creates arrives shared), reversible.</p></div>
     </div>
@@ -366,7 +376,7 @@
     <div class="honest">
       <h3>What it doesn't do, because saying so is the point</h3>
       <ul>
-        <li>It can't scrub what you type into someone else's app. Connect is portability, not a firewall. Use Converse for that.</li>
+        <li>It can't scrub what you type into someone else's app. Connect is portability, not a firewall.</li>
         <li>Nothing forces an AI app to save a project. The session contract asks it to; a session that ends abruptly keeps only what it saved with a checkpoint.</li>
         <li>Two machines that edit the same project before syncing keep one machine's version, not a merge.</li>
         <li>Redaction masks identifiers and names well, but can't make free text anonymous. "The lieutenant in Bourne whose partner runs compliance" survives every filter. We never claim otherwise.</li>
@@ -390,7 +400,7 @@
           <li>The Mac app, on your machine</li>
           <li>Connect to your AI apps</li>
           <li>Projects: resume, checkpoint, wrap, board, export</li>
-          <li>Converse (chat with masking) with local or your-own-key models, in the iPhone app (beta) or a source install; the Mac app has no chat view</li>
+          <li>Memory review on a local model via Ollama, or a cloud model with your own key</li>
           <li>Redaction, import, scopes, audit</li>
           <li>Self-host sync yourself</li>
         </ul>
@@ -430,7 +440,7 @@
     <details><summary>What if an AI app forgets to save the project?</summary><p>Then that session's work is not in the project. The session contract asks each app to checkpoint and wrap, but it is advisory, and a session that ends abruptly keeps only what it saved with a checkpoint. If the session read the project through NorthKeep's local server on this Mac, the next resume lists it as an open session, so you can see that it happened.</p></details>
     <details><summary>Do you ever see my memories?</summary><p>No, with one exception you turn on yourself. Your vault is encrypted on your device, and we never receive your key. If you use hosted sync, our server stores only ciphertext it cannot decrypt plus a version number. The exception is a scope you deliberately share with the connector (see Connect above): it is stored encrypted at rest, the connector database holds no key that can read it, and the server briefly rebuilds the key per request (from your app's credential plus a server-side secret) to decrypt it so your AI apps can read it. There's no telemetry and no analytics in the app.</p></details>
     <details><summary>How is this different from ChatGPT or Claude's built-in memory?</summary><p>Their memory lives on their servers and stays in their app. NorthKeep's memory lives on your machine and plugs into whichever apps you use, so it's portable, owned by you, and you set what each app can read.</p></details>
-    <details><summary>Does Connect make my chats private?</summary><p>No, and we won't pretend it does. When you type into another company's app, that company sees what you type. Connect gives you portable, owned memory with per-app scopes. For an actual redaction firewall on your messages, use Converse.</p></details>
+    <details><summary>Does Connect make my chats private?</summary><p>No, and we won't pretend it does. When you type into another company's app, that company sees what you type. Connect gives you portable, owned memory with per-app scopes.</p></details>
     <details><summary>What happens if I lose my passphrase?</summary><p>The vault is unrecoverable. There's no back door, which is exactly why no one else can get in either. Back up your <code>device.secret</code> file and keep your passphrase safe.</p></details>
     <details><summary>Is it really open source?</summary><p>Yes, AGPL-3.0. You can read the code, run it, and self-host the sync server for free. A commercial license is available for businesses that don't want the AGPL's obligations.</p></details>
   </div>
