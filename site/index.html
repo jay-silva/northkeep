@@ -16,7 +16,7 @@
   :root{
     --bg:#f6f4ef; --panel:#fffdf8; --ink:#24221c; --muted:#6f695c;
     --line:#e6e0d4; --accent:#2f6a54; --accent-soft:#e4efe8; --gold:#b9862f;
-    --chip:#efeadd; --radius:14px;
+    --chip:#efeadd; --radius:14px; --on-accent:#fff;
     --serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;
     --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
   }
@@ -24,16 +24,16 @@
     :root{
       --bg:#16140f; --panel:#211e17; --ink:#ece7db; --muted:#a39a88;
       --line:#38332a; --accent:#79b394; --accent-soft:#23302a; --gold:#d8b872;
-      --chip:#2b2820;
+      --chip:#2b2820; --on-accent:#211e17;
     }
   }
   :root[data-theme="light"]{
     --bg:#f6f4ef; --panel:#fffdf8; --ink:#24221c; --muted:#6f695c; --line:#e6e0d4;
-    --accent:#2f6a54; --accent-soft:#e4efe8; --gold:#b9862f; --chip:#efeadd;
+    --accent:#2f6a54; --accent-soft:#e4efe8; --gold:#b9862f; --chip:#efeadd; --on-accent:#fff;
   }
   :root[data-theme="dark"]{
     --bg:#16140f; --panel:#211e17; --ink:#ece7db; --muted:#a39a88; --line:#38332a;
-    --accent:#79b394; --accent-soft:#23302a; --gold:#d8b872; --chip:#2b2820;
+    --accent:#79b394; --accent-soft:#23302a; --gold:#d8b872; --chip:#2b2820; --on-accent:#211e17;
   }
   *{box-sizing:border-box}
   body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);
@@ -55,11 +55,24 @@
   .nav a.navlink{color:var(--ink);font-size:15px;margin-left:22px}
   .nav a.navlink:hover{color:var(--accent);text-decoration:none}
   @media(max-width:640px){.nav a.navlink{display:none}}
+  .nav a.support-pill{display:inline-flex;align-items:center;gap:7px;min-height:44px;margin-left:22px;padding:0 16px;
+    border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);
+    font-size:14px;font-weight:600;white-space:nowrap;text-decoration:none;transition:background .15s ease-out,color .15s ease-out}
+  .nav a.support-pill svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  .nav a.support-pill:hover,.nav a.support-pill[aria-current="page"]{background:var(--accent);color:var(--on-accent);text-decoration:none}
+  @media(max-width:640px){.nav a.support-pill{margin-left:0;padding:0 14px}}
+  @media(max-width:420px){.nav .wrap{gap:8px}.nav a.support-pill{padding:0 12px}}
+  @media(max-width:374px){.nav a.support-pill svg{display:none}}
+  /* The pill needs room: the header row runs wider than the 960px content column, and two links the footer repeats fold away first. */
+  .nav .wrap{max-width:1160px}
+  .nav a.navlink{white-space:nowrap}
+  @media(max-width:1180px){.nav a.navlink[href*="roadmap"],.nav a.navlink[href*="github.com"]{display:none}}
+  @media(max-width:980px){.nav a.navlink{display:none}}
 
   /* buttons */
   .btn{display:inline-block;padding:12px 22px;border-radius:10px;font-weight:600;
     font-size:16px;border:1px solid transparent;cursor:pointer}
-  .btn.primary{background:var(--accent);color:#fff}
+  .btn.primary{background:var(--accent);color:var(--on-accent)}
   .btn.primary:hover{filter:brightness(1.06);text-decoration:none}
   .btn.ghost{background:transparent;color:var(--ink);border-color:var(--line)}
   .btn.ghost:hover{border-color:var(--accent);color:var(--accent);text-decoration:none}
@@ -214,6 +227,7 @@
     <a class="navlink" href="./roadmap.html">Roadmap</a>
     <a class="navlink" href="https://github.com/jay-silva/northkeep">GitHub</a>
     <a class="navlink" href="#download">Download</a>
+    <a class="support-pill" href="./support.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>Support NorthKeep</a>
   </div>
 </header>
 
