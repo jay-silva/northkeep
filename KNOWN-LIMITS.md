@@ -1078,6 +1078,11 @@ every milestone; if a limit is removed, say when and how.*
   placeholders, and some suggestions are dropped. How real providers copy
   the placeholders has not yet been checked against a live provider. Local
   remains the default; neither path hops to the other.
+- **Claude Sonnet 5 is the floor for a Claude review model.** A cloud
+  review refuses Claude Haiku, Claude 3 and earlier, and Sonnet 4.x (matched
+  by model id, including a routed id such as `anthropic/claude-3-haiku`),
+  at the consent panel and again before the first send, with nothing sent.
+  Models from other providers are not judged by this check.
 - **Review is collection-selected in the local vault.** `project:`
   documents remain excluded. Shared collections can be selected explicitly;
   no scope membership is changed by review. Project handoffs (ADR 0048)
