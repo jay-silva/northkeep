@@ -44,7 +44,6 @@ export const DEFAULT_ANTHROPIC_MODEL = 'claude-opus-4-8';
 export const CLAUDE_MODELS: { id: string; label: string; note: string }[] = [
   { id: 'claude-opus-4-8', label: 'Opus 4.8', note: 'Most capable, best default' },
   { id: 'claude-sonnet-5', label: 'Sonnet 5', note: 'Near-Opus quality, lower cost' },
-  { id: 'claude-haiku-4-5', label: 'Haiku 4.5', note: 'Fastest and cheapest' },
   { id: 'claude-fable-5', label: 'Fable 5', note: 'Most capable overall, premium price' },
   { id: 'claude-opus-4-7', label: 'Opus 4.7', note: 'Previous-generation Opus' },
 ];

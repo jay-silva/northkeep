@@ -76,8 +76,21 @@ function providerFor(endpoint: EndpointConfig, apiKey: string): ModelProvider {
  */
 const STRUCTURED_OUTPUT_MODELS = [
   'claude-fable-5', 'claude-mythos-5', 'claude-opus-5', 'claude-opus-4-8',
-  'claude-sonnet-5', 'claude-haiku-4-5', 'claude-opus-4-5', 'claude-opus-4-1',
+  'claude-sonnet-5', 'claude-opus-4-5', 'claude-opus-4-1',
 ];
+
+/**
+ * Claude Sonnet 5 is the least capable Claude model a cloud review accepts.
+ * Matched on the last path segment so a routed id such as
+ * "anthropic/claude-3-haiku" is caught too; non-Claude ids are not judged here.
+ */
+const BELOW_REVIEW_FLOOR = /^claude-(?:haiku|instant|[0-3](?:[-.]|$)|sonnet-[0-4](?:[-.]|$))/i;
+export const REVIEW_MODEL_FLOOR_MESSAGE =
+  'Memory review needs Claude Sonnet 5 or a more capable model. Choose Claude Sonnet 5, Opus 4.8 or Opus 5.5 for this endpoint under Settings, Models. Nothing was sent.';
+
+export function claudeModelBelowReviewFloor(model: string): boolean {
+  return BELOW_REVIEW_FLOOR.test(model.trim().split('/').pop() ?? '');
+}
 
 export function supportsStructuredOutputs(model: string): boolean {
   return STRUCTURED_OUTPUT_MODELS.some((id) => model === id || model.startsWith(`${id}-`));
@@ -137,6 +150,7 @@ export function createReviewApiGenerator(endpoint: EndpointConfig, options: Revi
   if (key === null || key.length === 0) {
     throw new Error(`No API key is stored for "${endpoint.label}". Add one under Settings.`);
   }
+  if (claudeModelBelowReviewFloor(endpoint.model)) throw new Error(REVIEW_MODEL_FLOOR_MESSAGE);
   const provider = providerFor(endpoint, key);
   const tier = options.tier;
   if (tier !== 1 && tier !== 2 && tier !== 3) throw new Error('A cloud review needs Tier 1, 2 or 3.');
@@ -226,6 +240,7 @@ export function createReviewApiGenerator(endpoint: EndpointConfig, options: Revi
       }
       const prompt = formatReviewPrompt(prepared.entries, { placeholderTag: handle.tag });
       const model = opts.model ?? endpoint.model;
+      if (claudeModelBelowReviewFloor(model)) throw new Error(REVIEW_MODEL_FLOOR_MESSAGE);
       const chatOpts: { model: string; signal?: AbortSignal; outputSchema?: Record<string, unknown> } = { model };
       if (endpoint.kind === 'anthropic' && supportsStructuredOutputs(model)) chatOpts.outputSchema = REVIEW_OUTPUT_SCHEMA;
       if (opts.timeoutMs !== undefined) chatOpts.signal = AbortSignal.timeout(opts.timeoutMs);

@@ -68,7 +68,6 @@ export const KNOWN_PROVIDERS: ProviderInfo[] = [
       { id: 'claude-opus-5-5', label: 'Claude Opus 5.5', costTier: 'high', contextWindow: 1_000_000, strengths: ['code', 'reasoning', 'long-context', 'creative'], recommended: true },
       { id: 'claude-opus-4-8', label: 'Claude Opus 4.8', costTier: 'high', contextWindow: 1_000_000, strengths: ['code', 'reasoning', 'long-context', 'creative'] },
       { id: 'claude-sonnet-5', label: 'Claude Sonnet 5', costTier: 'medium', contextWindow: 1_000_000, strengths: ['code', 'reasoning', 'long-context'] },
-      { id: 'claude-haiku-4-5', label: 'Claude Haiku 4.5', costTier: 'low', contextWindow: 200_000, strengths: ['quick', 'general'] },
     ],
   },
   {
