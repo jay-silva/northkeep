@@ -477,3 +477,311 @@ describe('compaction keeps the writer block (ADR 0051 addendum, ADR 0052)', () =
     v.close();
   });
 });
+
+describe('operation ids survive compaction (ADR 0062)', () => {
+  const LEDGER = 'northkeep_operations_v1';
+  const DIFFERENT = 'Operation id was already used for a different project request.';
+  const COMPACTED = 'This save was already applied and has since been compacted, so it cannot be replayed. Read the project again; send any new save with a new operation id.';
+  const BASE_COMPACTED = 'This save was already applied, and the version it started from has since been compacted, so it cannot be replayed. Read the project again; send any new save with a new operation id.';
+  const MALFORMED = 'Malformed project operation record.';
+  const X = '0062aaaa-0000-4000-8000-00000000000a';
+  const Z = '0062aaaa-0000-4000-8000-00000000000b';
+  const DOC = '## What & Why\nW.\n\n## Current Status\nS.\n\n## Next Actions\n- [ ] N\n\n## Decisions\n\n## Log\n\n## Open Questions\n\n## Files\n';
+
+  type Outcome = 'written' | 'replayed' | { code: string; message: string; current: boolean };
+  function attempt(run: () => { replayed: boolean }): Outcome {
+    try {
+      return run().replayed ? 'replayed' : 'written';
+    } catch (error) {
+      const e = error as { code?: string; message: string; current?: unknown };
+      return { code: e.code ?? 'error', message: e.message, current: e.current !== undefined };
+    }
+  }
+  function request(v: Vault, project: string, operation_id: string, expected_revision: string, completed = 'Did X.') {
+    return {
+      vault_id: v.getVaultId(), project, mode: 'checkpoint' as const, operation_id, expected_revision,
+      status: `Status from ${operation_id.slice(-4)}.`, completed, next_actions: `- [ ] Next from ${operation_id.slice(-4)}`,
+    };
+  }
+  function head(v: Vault, project: string): MemoryEntry {
+    const heads = v.list({ scope: `project:${project}` }).filter((e) => e.type === 'working');
+    expect(heads).toHaveLength(1);
+    return heads[0]!;
+  }
+  function ledgerIds(entry: MemoryEntry): string[] {
+    const ledger = entry.metadata?.[LEDGER];
+    return Array.isArray(ledger) ? ledger.map((r) => (r as { operation_id: string }).operation_id) : [];
+  }
+  function didCount(v: Vault, project: string, line: string): number {
+    return head(v, project).content.split(line).length - 1;
+  }
+  function isBlanked(v: Vault, id: string): boolean {
+    return v.list({ includeSuperseded: true, includeForgotten: true }).find((e) => e.id === id)!.forgotten_at !== null;
+  }
+  function updates(v: Vault, project: string, count: number): void {
+    for (let i = 0; i < count; i += 1) v.updateProject({ project, expected_revision: head(v, project).id, status: `Newer status ${i}.` });
+  }
+  function create(v: Vault, project: string): string {
+    return v.updateProject({ project, expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: '- [ ] Begin' }).revision;
+  }
+  /** Checkpoint X on a fresh project, then twelve updates, which blank X's revision. */
+  function compactedCheckpoint(v: Vault, project = 'demo') {
+    const x = request(v, project, X, create(v, project));
+    const result = v.checkpointProject(x).receipt.result_revision;
+    updates(v, project, 12);
+    expect(isBlanked(v, result)).toBe(true);
+    return x;
+  }
+
+  it('T1: refuses an F1 resend of a blanked checkpoint at the current head and writes nothing', () => {
+    const v = vault();
+    compactedCheckpoint(v);
+    const before = head(v, 'demo').id;
+    expect(attempt(() => v.checkpointProject(request(v, 'demo', X, before)))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(head(v, 'demo').id).toBe(before);
+    expect(didCount(v, 'demo', 'Did X.')).toBe(1);
+    expect(v.verifyChain().ok).toBe(true);
+    v.close();
+  });
+
+  it('T2: a verbatim retry after blanking answers stale_project, with a message for the blanked save and another for a blanked base', () => {
+    const v = vault();
+    const x = compactedCheckpoint(v);
+    const before = head(v, 'demo').id;
+    expect(attempt(() => v.checkpointProject(x))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
+    expect(head(v, 'demo').id).toBe(before);
+
+    const base = create(v, 'base');
+    const xBase = request(v, 'base', X.replace('a', 'b'), base);
+    const xResult = v.checkpointProject(xBase).receipt.result_revision;
+    const zResult = v.checkpointProject(request(v, 'base', Z, xResult, 'Did Z.')).receipt.result_revision;
+    v.updateProject({ project: 'base', expected_revision: zResult, status: 'One update.' });
+    expect(v.compactProjectHistory({ project: 'base', keep: 1 }).blanked).toBe(1);
+    expect(isBlanked(v, base)).toBe(true);
+    expect(isBlanked(v, xResult)).toBe(false);
+    expect(attempt(() => v.checkpointProject(xBase))).toEqual({ code: 'stale_project', message: BASE_COMPACTED, current: true });
+    v.close();
+  });
+
+  it('T3: a verbatim retry of the newest save still replays its receipt', () => {
+    const v = vault();
+    const x = request(v, 'demo', X, create(v, 'demo'));
+    const receipt = v.checkpointProject(x).receipt;
+    const replay = v.checkpointProject(x);
+    expect(replay.replayed).toBe(true);
+    expect(replay.receipt).toEqual(receipt);
+    v.close();
+  });
+
+  it('T4a: the carry-forward route with a ledger answers stale for a verbatim retry and a conflict for a changed request, also once the copy is blanked', () => {
+    const v = vault();
+    const x = request(v, 'demo', X, create(v, 'demo'));
+    const xResult = v.checkpointProject(x).receipt.result_revision;
+    const edited = v.editMemory(xResult, { content: `${head(v, 'demo').content}\nEdited by hand.` }).id;
+    v.checkpointProject(request(v, 'demo', Z, edited, 'Did Z.'));
+    updates(v, 'demo', 5);
+    expect(isBlanked(v, xResult)).toBe(true);
+    expect(isBlanked(v, edited)).toBe(false);
+    const before = head(v, 'demo').id;
+    expect(attempt(() => v.checkpointProject(x))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
+    expect(attempt(() => v.checkpointProject(request(v, 'demo', X, before)))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(ledgerIds(head(v, 'demo'))).toEqual([X, Z]);
+    expect(head(v, 'demo').id).toBe(before);
+    expect(didCount(v, 'demo', 'Did X.')).toBe(1);
+
+    updates(v, 'demo', 1);
+    expect(isBlanked(v, edited)).toBe(true);
+    const later = head(v, 'demo').id;
+    expect(attempt(() => v.checkpointProject(x))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
+    expect(attempt(() => v.checkpointProject(request(v, 'demo', X, later)))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(head(v, 'demo').id).toBe(later);
+    expect(didCount(v, 'demo', 'Did X.')).toBe(1);
+    v.close();
+  });
+
+  /** The v0.22.0-written fixture, copied to the temp dir, after five updates by this code: X's original blanked, its copy live. */
+  function openFixture() {
+    const fixtures = path.join(__dirname, 'fixtures');
+    const spec = JSON.parse(fs.readFileSync(path.join(fixtures, 'v0220-carry-forward.json'), 'utf8')) as {
+      passphrase: string; device_secret_hex: string; x_request: ReturnType<typeof request>; x_result: string; edited_revision: string;
+    };
+    fs.copyFileSync(path.join(fixtures, 'v0220-carry-forward.nkv'), vaultPath);
+    const v = Vault.open({ path: vaultPath, passphrase: spec.passphrase, deviceSecret: Buffer.from(spec.device_secret_hex, 'hex') });
+    expect(v.verifyChain().ok).toBe(true);
+    updates(v, spec.x_request.project, 5);
+    return { v, spec, project: spec.x_request.project };
+  }
+
+  it('T4b: the carry-forward route on a v0.22.0-written vault answers from the copied receipt alone', () => {
+    const { v, spec, project } = openFixture();
+    expect(isBlanked(v, spec.x_result)).toBe(true);
+    expect(isBlanked(v, spec.edited_revision)).toBe(false);
+    const all = v.list({ includeSuperseded: true, includeForgotten: true });
+    expect(all.filter((e) => ledgerIds(e).includes(spec.x_request.operation_id))).toEqual([]);
+    const before = head(v, project).id;
+    expect(attempt(() => v.checkpointProject(spec.x_request))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
+    expect(attempt(() => v.checkpointProject({ ...spec.x_request, expected_revision: before }))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(head(v, project).id).toBe(before);
+    expect(didCount(v, project, 'Did X.')).toBe(1);
+    v.close();
+  });
+
+  it('T4c: a copied receipt proves nothing unless every copy sits in the project and its original was forgotten', () => {
+    const RECEIPT = 'northkeep_project_handoff_v1';
+    const plantCopy = (scope: string, retarget: (receipt: Record<string, unknown>, v: Vault) => Record<string, unknown>) => {
+      const { v, spec, project } = openFixture();
+      const copy = v.list({ scope: `project:${project}`, includeSuperseded: true }).find((e) => e.id === spec.edited_revision)!;
+      const receipt = copy.metadata![RECEIPT] as Record<string, unknown>;
+      v.remember({ content: 'Planted copy.', type: 'episodic', scope, source: 'test', metadata: { [RECEIPT]: retarget({ ...receipt }, v) } });
+      return { v, spec, project };
+    };
+    const UNPROVEN = 'Operation receipt metadata exists without its original result.';
+
+    const elsewhere = plantCopy('project:other', (receipt) => receipt);
+    expect(attempt(() => elsewhere.v.checkpointProject(elsewhere.spec.x_request))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
+    elsewhere.v.close();
+
+    const liveOriginal = plantCopy('project:carry', (receipt, v) => ({ ...receipt, result_id: head(v, 'carry').id }));
+    expect(attempt(() => liveOriginal.v.checkpointProject(liveOriginal.spec.x_request))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
+    liveOriginal.v.close();
+
+    const otherScope = plantCopy('project:carry', (receipt, v) => {
+      const stray = v.remember({ content: 'Stray.', type: 'episodic', scope: 'personal', source: 'test' }).id;
+      v.forget(stray);
+      return { ...receipt, result_id: stray };
+    });
+    expect(attempt(() => otherScope.v.checkpointProject(otherScope.spec.x_request))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
+    otherScope.v.close();
+  });
+
+  it('T5: an id used on one project is refused on another, before and after its revision is blanked', () => {
+    const v = vault();
+    const aBase = create(v, 'a');
+    const bHead = create(v, 'b');
+    const xResult = v.checkpointProject(request(v, 'a', X, aBase)).receipt.result_revision;
+    expect(attempt(() => v.checkpointProject(request(v, 'b', X, bHead)))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    updates(v, 'a', 12);
+    expect(isBlanked(v, xResult)).toBe(true);
+    expect(attempt(() => v.checkpointProject(request(v, 'b', X, bHead)))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(head(v, 'b').id).toBe(bHead);
+    v.close();
+  });
+
+  it('T5b: after a rename, a verbatim retry for the old slug is a conflict, because the remembered id sits on another project', () => {
+    const v = vault();
+    const x = compactedCheckpoint(v, 'a');
+    v.rescope(head(v, 'a').id, 'project:b');
+    expect(ledgerIds(head(v, 'b'))).toEqual([X]);
+    expect(attempt(() => v.checkpointProject(x))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    v.close();
+  });
+
+  it('T6: the head keeps exactly the newest 16 checkpoint and wrap ids through two hundred mixed saves', () => {
+    const v = vault();
+    create(v, 'demo');
+    let seed = 0x0062;
+    const random = () => {
+      seed = (seed + 0x6d2b79f5) | 0;
+      let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+      t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+    const saved: string[] = [];
+    const kinds = new Set<string>();
+    for (let i = 0; i < 200; i += 1) {
+      const r = random();
+      const current = head(v, 'demo');
+      if (r < 0.5) {
+        const id = `0062cccc-0000-4000-8000-${String(i).padStart(12, '0')}`;
+        const mode = r < 0.25 ? 'checkpoint' : 'wrap';
+        const { receipt } = v.checkpointProject({ ...request(v, 'demo', id, current.id, `Did ${i}.`), mode });
+        saved.push(id);
+        kinds.add(mode);
+        const written = head(v, 'demo');
+        const ledger = written.metadata![LEDGER] as Array<Record<string, unknown>>;
+        expect(ledger.at(-1)).toEqual({ operation_id: id, request_fingerprint: receipt.request_fingerprint, saved_at: written.created_at });
+      } else if (r < 0.8) {
+        v.updateProject({ project: 'demo', expected_revision: current.id, status: `Update ${i}.` });
+        kinds.add('update');
+      } else {
+        v.editMemory(current.id, { content: `${current.content}\nEdit ${i}.` });
+        kinds.add('edit');
+      }
+      expect(ledgerIds(head(v, 'demo'))).toEqual(saved.slice(-16));
+      const blankedWithKey = v.list({ includeSuperseded: true, includeForgotten: true })
+        .filter((e) => e.forgotten_at !== null && e.metadata !== null && LEDGER in e.metadata);
+      expect(blankedWithKey).toEqual([]);
+      expect(v.verifyChain().ok).toBe(true);
+    }
+    expect(kinds).toEqual(new Set(['checkpoint', 'wrap', 'update', 'edit']));
+    expect(saved.length).toBeGreaterThan(40);
+    v.close();
+  });
+
+  it('T8: a malformed record carrying the id refuses, other malformed shapes are ignored and dropped', () => {
+    const v = vault();
+    const plant = (project: string, ledger: unknown) =>
+      v.remember({ content: DOC, type: 'working', scope: `project:${project}`, source: 'test', metadata: { [LEDGER]: ledger } }).id;
+    const now = new Date().toISOString();
+    const ids = (n: number) => `0062dddd-0000-4000-8000-${String(n).padStart(12, '0')}`;
+
+    const extraKey = plant('m6', [{ operation_id: ids(11), request_fingerprint: 'a'.repeat(64), saved_at: now, note: 'extra' }]);
+    expect(attempt(() => v.checkpointProject(request(v, 'm6', ids(11), extraKey)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
+    const badTime = plant('m7', [{ operation_id: ids(12), request_fingerprint: 'a'.repeat(64), saved_at: 'not a time' }]);
+    expect(attempt(() => v.checkpointProject(request(v, 'm7', ids(12), badTime)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
+
+    const shortFingerprint = plant('m1', [{ operation_id: ids(1), request_fingerprint: '0123456789', saved_at: now }]);
+    expect(attempt(() => v.checkpointProject(request(v, 'm1', ids(1), shortFingerprint)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
+    expect(head(v, 'm1').id).toBe(shortFingerprint);
+
+    const both = plant('m0', [ids(10), { operation_id: ids(10), request_fingerprint: 'a'.repeat(64), saved_at: now }]);
+    expect(attempt(() => v.checkpointProject(request(v, 'm0', ids(10), both)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
+
+    const bareString = plant('m2', [ids(2)]);
+    expect(attempt(() => v.checkpointProject(request(v, 'm2', ids(2), bareString)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
+    expect(head(v, 'm2').id).toBe(bareString);
+
+    const accepted: Array<[string, unknown, string]> = [
+      ['m3', [{ operation_id: ids(3).toUpperCase(), request_fingerprint: 'a'.repeat(64), saved_at: now }], ids(3)],
+      ['m4', { operation_id: ids(4) }, ids(4)],
+      ['m5', [{ operation_id: ids(99), request_fingerprint: 'short', saved_at: now }], ids(5)],
+    ];
+    for (const [project, ledger, id] of accepted) {
+      const planted = plant(project, ledger);
+      expect(attempt(() => v.checkpointProject(request(v, project, id, planted)))).toBe('written');
+      expect(ledgerIds(head(v, project))).toEqual([id]);
+    }
+
+    // A malformed record guards its id only until the next checkpoint drops it (Decision 2).
+    const other = ids(6);
+    expect(attempt(() => v.checkpointProject(request(v, 'm2', other, bareString)))).toBe('written');
+    expect(ledgerIds(head(v, 'm2'))).toEqual([other]);
+    expect(attempt(() => v.checkpointProject(request(v, 'm2', ids(2), head(v, 'm2').id)))).toBe('written');
+    expect(v.verifyChain().ok).toBe(true);
+    v.close();
+  });
+
+  it('T9: an id used in a scope outside the grant is not found, as before compaction; seen again beside its own project, it refuses', () => {
+    const v = vault();
+    compactedCheckpoint(v, 'a');
+    const bHead = create(v, 'b');
+    const xb = request(v, 'b', X, bHead);
+    expect(attempt(() => v.checkpointProject(xb, ['project:b']))).toBe('written');
+    expect(didCount(v, 'b', 'Did X.')).toBe(1);
+
+    // Hits on both projects, one of them the request's own with its fingerprint, still refuse.
+    updates(v, 'b', 12);
+    expect(attempt(() => v.checkpointProject(xb))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    v.close();
+  });
+
+  it('T10: a head changed to another type leaves the lookup, so a recreated project writes the id (Residual 3)', () => {
+    const v = vault();
+    compactedCheckpoint(v, 'a');
+    v.editMemory(head(v, 'a').id, { type: 'semantic' });
+    const recreated = create(v, 'a');
+    expect(attempt(() => v.checkpointProject(request(v, 'a', X, recreated)))).toBe('written');
+    expect(didCount(v, 'a', 'Did X.')).toBe(1);
+    v.close();
+  });
+});

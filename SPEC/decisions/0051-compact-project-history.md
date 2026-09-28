@@ -211,8 +211,11 @@ Retries after compaction (fix review `Reviews/release-0.22.0/compaction-fix-r1.m
   checkpoint Y on that revision, then enough saves to blank X's result. A
   verbatim retry of X is refused, never applied twice, but with the wrong
   code (recheck `Reviews/release-0.22.0/compaction-fix-r2-recheck.md`).
-  Fixed together with F1 in 0.22.1. The stale message also says "compacted"
-  when the base was removed by `memory_forget`; the refusal is still
+  Fixed together with F1 in 0.22.2 (ADR 0062): a verbatim retry
+  through this route now answers `stale_project` with the current
+  document, and a changed request `operation_conflict`. The stale
+  message also says "compacted" when the base was removed by
+  `memory_forget`; the refusal is still
   correct. Before the second fix a
   retry whose base alone was blanked reported a false "content does not
   match" `operation_conflict` (F2).
@@ -227,6 +230,15 @@ Retries after compaction (fix review `Reviews/release-0.22.0/compaction-fix-r1.m
   proper fix (remembering operation ids past compaction) changes what a
   forgotten row may carry and so the integrity check on every device; it is
   its own ADR for 0.22.1.
+
+  Fixed in 0.22.2 by ADR 0062 for saves made by 0.22.2 or later and
+  resends handled by 0.22.2 or later. The note above that the fix changes
+  what a forgotten row may carry was wrong: ADR 0062 keeps the ids of each
+  project's newest 16 checkpoint or wrap saves on the live project
+  document instead, so forgotten rows and `verifyChain` are unchanged and
+  un-updated devices keep working. Saves made by older versions are not
+  recorded, and resends handled by older versions are not checked (ADR
+  0062, Residuals).
 
 Tests: `packages/core/test/project-compact.test.ts`: surviving receipts
 only, twenty checkpoints staying bounded, a retry refused once blanked

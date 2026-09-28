@@ -31,12 +31,15 @@ import {
   PROJECT_HANDOFF_METADATA_KEY,
   PROJECT_HANDOFF_METADATA_VERSION,
   PROJECT_IMPORT_SOURCE,
+  PROJECT_OPERATIONS_LIMIT,
+  PROJECT_OPERATIONS_METADATA_KEY,
   PROJECT_PROVENANCE_METADATA_KEY,
   ProjectHandoffError,
   applyProjectUpdate,
   getProjectView,
   projectProvenanceBlock,
   readProjectHandoffMetadata,
+  readProjectOperations,
   readProjectProvenance,
   validateProjectWriter,
   type ProjectCheckpointRequest,
@@ -850,7 +853,13 @@ export class Vault {
     // draft:false is derived from the mode, so replay rebuilds the same content.
     const update:ProjectUpdateRequest={project:request.project,expected_revision:request.expected_revision,status:request.status,next_actions:request.next_actions,log_entry:`${request.mode==='checkpoint'?'Checkpoint':'Wrap up'}: ${request.completed}`,...(request.decision!==undefined?{decision:request.decision}:{}),...(request.open_questions!==undefined?{open_questions:request.open_questions}:{}),...(request.files!==undefined?{files:request.files}:{}),...(request.mode==='wrap'?{draft:false}:{}),...(request.writer!==undefined?{writer:request.writer}:{})};
     const matches: Array<{entry:MemoryEntry;meta:ProjectHandoffMetadata}> = []; const copied:Array<{entry:MemoryEntry;raw:Record<string,unknown>}>=[];
+    const ledgerHits:Array<{scope:string;fingerprint:string}>=[]; let malformedLedger=false;
     for (const entry of this.list({ includeForgotten:true, includeSuperseded:true, allowedScopes })) {
+      if(entry.type==='working'&&entry.superseded_at===null&&entry.forgotten_at===null&&parseProjectSlug(entry.scope)!==null){
+        const ledger=readProjectOperations(entry,request.operation_id);
+        if(ledger.malformedCarriesId)malformedLedger=true;
+        for(const record of ledger.records)if(record.operation_id===request.operation_id)ledgerHits.push({scope:entry.scope,fingerprint:record.request_fingerprint});
+      }
       const raw=entry.metadata?.[PROJECT_HANDOFF_METADATA_KEY];
       if(!raw||typeof raw!=='object'||Array.isArray(raw)||(raw as Record<string,unknown>).operation_id!==request.operation_id)continue;
       if((raw as Record<string,unknown>).result_id!==entry.id){copied.push({entry,raw:raw as Record<string,unknown>});continue;}
@@ -858,7 +867,6 @@ export class Vault {
       try { meta=readProjectHandoffMetadata(entry); } catch { throw new ProjectHandoffError('operation_conflict','Malformed or copied project handoff receipt.'); }
       if(meta?.operation_id===request.operation_id)matches.push({entry,meta});
     }
-    if(!matches.length&&copied.length)throw new ProjectHandoffError('operation_conflict','Operation receipt metadata exists without its original result.');
     if (matches.length) {
       if (matches.length!==1) throw new ProjectHandoffError('operation_conflict','Ambiguous project handoff operation.');
       const {entry,meta}=matches[0]!;
@@ -874,6 +882,19 @@ export class Vault {
       for(const id of meta.archive_ids){const archive=this.getEntry(id);const expectedContent=formatLogArchive(request.project,expected.archives,new Date(meta.saved_at));if(!archive||archive.scope!==scope||archive.type!=='episodic'||archive.source!=='northkeep:project-log-archive'||archive.created_at!==meta.saved_at||archive.content!==expectedContent||computeEntryHash(archive,this.platform.crypto)!==archive.entry_hash)throw new ProjectHandoffError('operation_conflict','Project handoff receipt archive is invalid.');}
       const receipt={operation_id:meta.operation_id,project:meta.project,mode:meta.mode,base_revision:meta.base_revision,result_revision:meta.result_id,request_fingerprint:meta.request_fingerprint,archive_ids:[...meta.archive_ids],saved_at:meta.saved_at,local_only:true as const};
       return {receipt,current:getProjectView(this,request.project,allowedScopes),replayed:true};
+    }
+    // ADR 0062 Decision 3: past the receipts, the ledgers on live heads answer, then copied receipts.
+    const appliedAndCompacted=():never=>{let current:ProjectView|undefined;try{current=getProjectView(this,request.project,allowedScopes);}catch{}throw new ProjectHandoffError('stale_project','This save was already applied and has since been compacted, so it cannot be replayed. Read the project again; send any new save with a new operation id.',current);};
+    if(malformedLedger)throw new ProjectHandoffError('operation_conflict','Malformed project operation record.');
+    if(ledgerHits.length){
+      if(ledgerHits.every((hit)=>hit.scope===scope&&hit.fingerprint===fingerprint))appliedAndCompacted();
+      throw new ProjectHandoffError('operation_conflict','Operation id was already used for a different project request.');
+    }
+    if(copied.length){
+      const proven=copied.every(({entry,raw})=>{if(entry.scope!==scope||typeof raw.result_id!=='string')return false;const original=this.getEntry(raw.result_id);return original!==null&&original.scope===scope&&original.forgotten_at!==null;});
+      if(!proven)throw new ProjectHandoffError('operation_conflict','Operation receipt metadata exists without its original result.');
+      if(copied.every(({raw})=>raw.request_fingerprint===fingerprint))appliedAndCompacted();
+      throw new ProjectHandoffError('operation_conflict','Operation id was already used for a different project request.');
     }
     return this.writeProject(update,allowedScopes,{operation_id:request.operation_id,mode:request.mode,fingerprint});
   }
@@ -902,7 +923,11 @@ export class Vault {
       // Both reserved blocks are rebuilt from this write, never inherited.
       const built:Record<string,unknown>=old?.metadata?JSON.parse(JSON.stringify(old.metadata)) as Record<string,unknown>:{};
       delete built[PROJECT_HANDOFF_METADATA_KEY];delete built[PROJECT_PROVENANCE_METADATA_KEY];
-      if(handoff)built[PROJECT_HANDOFF_METADATA_KEY]={version:PROJECT_HANDOFF_METADATA_VERSION,operation_id:handoff.operation_id,result_id:resultId,project:request.project,base_revision:request.expected_revision as string,mode:handoff.mode,request_fingerprint:handoff.fingerprint,archive_ids:archiveIds,saved_at:now};
+      if(handoff){
+        built[PROJECT_HANDOFF_METADATA_KEY]={version:PROJECT_HANDOFF_METADATA_VERSION,operation_id:handoff.operation_id,result_id:resultId,project:request.project,base_revision:request.expected_revision as string,mode:handoff.mode,request_fingerprint:handoff.fingerprint,archive_ids:archiveIds,saved_at:now};
+        // Malformed records and a non-array ledger are dropped here (ADR 0062 Decision 6); a plain update carries the ledger as is.
+        built[PROJECT_OPERATIONS_METADATA_KEY]=[...readProjectOperations({metadata:built}).records,{operation_id:handoff.operation_id,request_fingerprint:handoff.fingerprint,saved_at:now}].slice(-PROJECT_OPERATIONS_LIMIT);
+      }
       if(request.writer!==undefined)built[PROJECT_PROVENANCE_METADATA_KEY]=projectProvenanceBlock(request.writer,now);
       const meta:Record<string,unknown>|null=Object.keys(built).length===0?null:built;
       const head=this.makeProjectEntry('working',merged.content,scope,handoff?'northkeep:project-handoff':'northkeep:project-update',meta,chain,now,resultId);insert.run(this.entryParams(head));
