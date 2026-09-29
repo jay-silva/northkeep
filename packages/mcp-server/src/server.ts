@@ -965,7 +965,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         expected_revision: idSchema.nullable().describe('Revision returned by project_get/resume, or null only when creating'),
         title: z.string().max(120).optional().describe('Display title shown in the app (single line, up to 120 characters). Empty string removes it and the slug is shown instead.'),
-        what_why: z.string().min(1).max(16384).optional().describe('Replacement What & Why section'),
+        what_why: z.string().min(1).max(16384).optional().describe(`Replacement What & Why section. ${SECTION_TEXT_RULES}`),
         status: z.string().min(1).max(16384).optional().describe(`Replacement Current Status section. ${SECTION_TEXT_RULES}`),
         next_actions: z.string().max(16384).optional().describe(`Replacement Next Actions section; empty clears it. ${SECTION_TEXT_RULES}`),
         log_entry: z
@@ -1063,9 +1063,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
         title: z.string().max(120).optional().describe('Display title shown in the app (single line, up to 120 characters).'),
-        what_why: z.string().min(1).max(16384).describe('What & Why section: what this project is and why it exists'),
-        status: z.string().min(1).max(16384).describe('Current Status section: where the project stands right now'),
-        next_actions: z.string().max(16384).optional().describe('Next Actions section'),
+        what_why: z.string().min(1).max(16384).describe(`What & Why section: what this project is and why it exists. ${SECTION_TEXT_RULES}`),
+        status: z.string().min(1).max(16384).describe(`Current Status section: where the project stands right now. ${SECTION_TEXT_RULES}`),
+        next_actions: z.string().max(16384).optional().describe(`Next Actions section. ${SECTION_TEXT_RULES}`),
         draft: z
           .boolean()
           .optional()

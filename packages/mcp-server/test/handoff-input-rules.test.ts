@@ -85,6 +85,13 @@ describe('F1: the served schema states the rules core enforces', () => {
       expect(props[field]!.description).toContain('a line starting with # and a space is refused');
       expect(props[field]!.description).toContain('Line breaks at either end are removed and CRLF becomes LF.');
     }
+    for (const [tool, fields] of [
+      ['project_update', ['what_why', 'status', 'next_actions', 'log_entry', 'decision', 'open_questions']],
+      ['project_create', ['what_why', 'status', 'next_actions']],
+    ] as const) {
+      const own = tools.find((t) => t.name === tool)!.inputSchema.properties as Record<string, { description?: string }>;
+      for (const field of fields) expect(own[field]!.description, `${tool}.${field}`).toContain('Line breaks at either end are removed');
+    }
     expect(wrap.description).toContain('A refusal that names a field and a rule saved nothing');
     expect(JSON.stringify(tools)).not.toContain('\u2014');
   });
