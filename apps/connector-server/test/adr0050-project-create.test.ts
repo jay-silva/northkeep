@@ -501,7 +501,10 @@ async function appToken(): Promise<string> {
  * and records an audit failure.
  */
 const HEADING = 'why\n\n## Current Status\n\nsmuggled';
-const FORMAT = (field: string): string => `${field} contains unsupported section formatting.`;
+const HEADING_RULE = (field: string): string =>
+  `${field} cannot contain a Markdown heading (a line starting with # and a space); it would split the project document.`;
+const CR_RULE = (field: string): string => `${field} cannot contain a carriage return; use plain line breaks (\\n).`;
+const EDGE_RULE = (field: string): string => `${field} cannot start or end with a line break.`;
 
 function auditSince(before: number) {
   return storage.auditRows().slice(before);
@@ -509,15 +512,15 @@ function auditSince(before: number) {
 
 describe('ADR 0050 hosted text validation', () => {
   const badCreates: Array<[string, Record<string, unknown>, string]> = [
-    ['a heading in what_why', { what_why: HEADING, status: 'ok' }, FORMAT('what_why')],
-    ['a heading in status', { what_why: 'ok', status: HEADING }, FORMAT('status')],
-    ['a heading in next_actions', { what_why: 'ok', status: 'ok', next_actions: HEADING }, FORMAT('next_actions')],
-    ['a carriage return', { what_why: 'line one\r\nline two', status: 'ok' }, FORMAT('what_why')],
-    ['a leading newline', { what_why: 'ok', status: '\nleading' }, FORMAT('status')],
-    ['a trailing newline', { what_why: 'ok', status: 'ok', next_actions: 'trailing\n' }, FORMAT('next_actions')],
+    ['a heading in what_why', { what_why: HEADING, status: 'ok' }, HEADING_RULE('what_why')],
+    ['a heading in status', { what_why: 'ok', status: HEADING }, HEADING_RULE('status')],
+    ['a heading in next_actions', { what_why: 'ok', status: 'ok', next_actions: HEADING }, HEADING_RULE('next_actions')],
+    ['a carriage return', { what_why: 'line one\r\nline two', status: 'ok' }, CR_RULE('what_why')],
+    ['a leading newline', { what_why: 'ok', status: '\nleading' }, EDGE_RULE('status')],
+    ['a trailing newline', { what_why: 'ok', status: 'ok', next_actions: 'trailing\n' }, EDGE_RULE('next_actions')],
     ['whitespace-only what_why', { what_why: '   ', status: 'ok' }, 'what_why must not be empty.'],
     ['whitespace-only status', { what_why: 'ok', status: ' \t ' }, 'status must not be empty.'],
-    ['whitespace-only next_actions', { what_why: 'ok', status: 'ok', next_actions: '  ' }, 'next_actions cannot contain only whitespace.'],
+    ['whitespace-only next_actions', { what_why: 'ok', status: 'ok', next_actions: '  ' }, 'next_actions cannot contain only whitespace; send an empty string to clear it.'],
   ];
 
   for (const [label, fields, message] of badCreates) {
@@ -536,14 +539,14 @@ describe('ADR 0050 hosted text validation', () => {
   }
 
   const badUpdates: Array<[string, Record<string, unknown>, string]> = [
-    ['a heading in what_why', { what_why: HEADING }, FORMAT('what_why')],
-    ['a heading in status', { status: HEADING }, FORMAT('status')],
-    ['a heading in next_actions', { next_actions: HEADING }, FORMAT('next_actions')],
-    ['a heading in log_entry', { log_entry: HEADING }, FORMAT('log_entry')],
-    ['a heading in decision', { decision: HEADING }, FORMAT('decision')],
-    ['a carriage return', { status: 'line one\r\nline two' }, FORMAT('status')],
-    ['a leading newline', { status: '\nleading' }, FORMAT('status')],
-    ['a trailing newline', { status: 'trailing\n' }, FORMAT('status')],
+    ['a heading in what_why', { what_why: HEADING }, HEADING_RULE('what_why')],
+    ['a heading in status', { status: HEADING }, HEADING_RULE('status')],
+    ['a heading in next_actions', { next_actions: HEADING }, HEADING_RULE('next_actions')],
+    ['a heading in log_entry', { log_entry: HEADING }, HEADING_RULE('log_entry')],
+    ['a heading in decision', { decision: HEADING }, HEADING_RULE('decision')],
+    ['a carriage return', { status: 'line one\r\nline two' }, CR_RULE('status')],
+    ['a leading newline', { status: '\nleading' }, EDGE_RULE('status')],
+    ['a trailing newline', { status: 'trailing\n' }, EDGE_RULE('status')],
     ['whitespace-only what_why', { what_why: '   ' }, 'what_why must not be empty.'],
     ['whitespace-only status', { status: ' \t ' }, 'status must not be empty.'],
   ];

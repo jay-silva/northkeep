@@ -38,6 +38,7 @@ import {
   applyProjectUpdate,
   getProjectView,
   projectProvenanceBlock,
+  projectTextProblem,
   readProjectHandoffMetadata,
   readProjectOperations,
   readProjectProvenance,
@@ -840,7 +841,8 @@ export class Vault {
     if (request.mode !== 'checkpoint' && request.mode !== 'wrap') throw new ProjectHandoffError('invalid_request', 'Invalid project handoff mode.');
     if (typeof request.expected_revision !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.expected_revision) || typeof request.status !== 'string' || typeof request.completed !== 'string' || typeof request.next_actions !== 'string') throw new ProjectHandoffError('invalid_request','Checkpoint requires a valid revision, status, completed work, and next actions.');
     if(request.writer!==undefined)validateProjectWriter(request.writer);
-    if(request.completed.trim().length===0||/[\r]/.test(request.completed)||/^\n|\n$/.test(request.completed)||/^( {0,3})#{1,6}[ \t]+\S/m.test(request.completed))throw new ProjectHandoffError('invalid_request','Completed work is invalid.');
+    const completedProblem=projectTextProblem(request.completed,'completed',false);
+    if(completedProblem!==null)throw new ProjectHandoffError('invalid_request',completedProblem);
     const logical = {
       vault_id: request.vault_id, project: request.project, mode: request.mode,
       expected_revision: request.expected_revision, status: request.status, completed: request.completed,
