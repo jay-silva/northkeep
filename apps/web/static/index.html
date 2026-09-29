@@ -3593,7 +3593,8 @@
       case 'checking': {
         const current = Math.min(phase.done + 1, phase.total);
         const verb = phase.name === 'sending' ? 'Sending batch ' + current + ' of ' + phase.total + to : 'Checking batch ' + current + ' of ' + phase.total;
-        return { text: phase.done >= phase.total ? 'Reading the replies' : verb, ...count(phase.done, phase.total) };
+        const view = count(phase.done, phase.total);
+        return { text: phase.done >= phase.total ? 'Reading the replies' : verb, value: view.value, count: view.count ? view.count + ' done' : '' };
       }
       case 'saving': return { text: 'Saving suggestions', value: null, count: '' };
       case 'done': {
@@ -3617,7 +3618,7 @@
       bar.setAttribute('aria-valuenow', String(view.value));
       bar.firstElementChild.style.width = view.value + '%';
     }
-    bar.setAttribute('aria-valuetext', view.text + (view.count ? ', ' + view.count : ''));
+    bar.setAttribute('aria-valuetext', view.text.replace(/\.$/, '') + (view.count ? ', ' + view.count : ''));
     $('reviewRunCount').textContent = view.count;
     // Rewrite the live line only when it changes, so a screen reader hears each
     // phase and batch once rather than every poll.

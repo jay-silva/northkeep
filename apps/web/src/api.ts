@@ -2128,6 +2128,12 @@ async function ramReviewEmbed(
   };
 }
 
+/** A status note belongs to the phase that raised it; drop it when the phase moves on. */
+function setReviewJobPhase(job: ReviewJob, phase: ReviewJobPhase): void {
+  if (phase.name !== job.phase.name) job.progress = undefined;
+  job.phase = phase;
+}
+
 /** Local runs check batches on this machine; cloud runs send them. */
 function reviewJobPhase(phase: ReviewPassPhase, batchVerb: 'sending' | 'checking'): ReviewJobPhase {
   switch (phase.phase) {
@@ -2184,7 +2190,7 @@ async function startReviewRun(session: UiSession, body: Buffer): Promise<ApiResp
       const result = await runReviewPass(selected, ollama, {
         model,
         embed,
-        onPhase: (phase) => { job.phase = reviewJobPhase(phase, 'checking'); },
+        onPhase: (phase) => { setReviewJobPhase(job, reviewJobPhase(phase, 'checking')); },
         onStatus: (msg) => {
           job.progress = msg;
         },
@@ -2310,7 +2316,7 @@ async function startReviewApiRun(
         onPhase: (phase) => {
           // The pass announces masking before prepare; prepare then reports counts.
           if (phase.phase === 'masking' && job.phase.name === 'masking') return;
-          job.phase = reviewJobPhase(phase, 'sending');
+          setReviewJobPhase(job, reviewJobPhase(phase, 'sending'));
         },
         onStatus: (msg) => {
           job.progress = msg;

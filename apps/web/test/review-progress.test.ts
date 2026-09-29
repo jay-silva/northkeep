@@ -170,8 +170,10 @@ describe('review progress record', () => {
     gates.generate = false;
     release();
 
-    expect((await until(jobId, (s) => s.phase.name === 'sending')).phase)
-      .toEqual({ name: 'sending', done: 0, total: 2, failed: 0 });
+    const sending = await until(jobId, (s) => s.phase.name === 'sending');
+    expect(sending.phase).toEqual({ name: 'sending', done: 0, total: 2, failed: 0 });
+    // The comparing phase's note does not linger into sending.
+    expect(sending.progress).toBeUndefined();
     expect(providerCalls).toBe(1);
     release();
     expect((await until(jobId, (s) => s.phase.name === 'sending' && s.phase.done === 1)).phase)
