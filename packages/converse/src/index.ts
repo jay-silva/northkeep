@@ -256,6 +256,8 @@ export {
 } from './settings.js';
 export {
   ReviewApiRefusal,
+  REVIEW_MODEL_FLOOR_MESSAGE,
+  claudeModelRefusedForReview,
   createReviewApiGenerator,
   listReviewApiEndpoints,
   reviewSelectionFingerprint,

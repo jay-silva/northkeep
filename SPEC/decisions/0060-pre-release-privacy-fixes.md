@@ -888,6 +888,12 @@ and exists to stop a later regression. A guard is not evidence of a fix.
   5 proposals, `drops` empty, no leftover token; real fake names, email and
   phone numbers restored. One model, one small vault: this shows
   the tokens survive a real provider, not that every model copies them.
+  **Rerun 2026-09-28 (0.22.3, Claude Sonnet 5.5 becomes the recommended
+  default):** Jay's run on claude-sonnet-5-5, once at Tier 1 and once at
+  Tier 2, with `output_config.format` sent: Anthropic accepted it; each run
+  12 of 12 compared, 5 proposals, `drops` empty, 0 token drops, 0
+  unrestored tokens. Claude Fable 5.1, the third model a Claude review
+  accepts, has not had a live run.
 - **R11. Tier 3 over MCP loses exact ordering by time.** All dates are
   years (F4); list order is the only finer ordering the host gets.
 - **R12. Dated handles stay exact over MCP at Tier 3** (scar tissue,
