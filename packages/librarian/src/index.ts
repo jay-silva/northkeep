@@ -29,6 +29,7 @@ export {
   selectReviewEntries,
   type ReviewOutbound,
   type ReviewPassOptions,
+  type ReviewPassPhase,
   type ReviewPassResult,
 } from './review.js';
 export {

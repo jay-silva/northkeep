@@ -377,8 +377,20 @@
   .review-workspace { margin:18px 0 22px; border-top:1px solid var(--line); }
   .review-summary { display:grid; grid-template-columns:1fr auto; gap:12px; align-items:center; padding:16px 0; border-bottom:1px solid var(--line); }
   .review-summary strong { display:block; margin-top:3px; }
-  .review-progress { height:6px; border-radius:5px; background:var(--line); overflow:hidden; margin-top:10px; }
-  .review-progress > i { display:block; height:100%; width:0; background:var(--accent); }
+  .review-run { display:grid; grid-template-columns:1fr auto; align-items:center; gap:12px; margin:14px 0 2px; }
+  .review-run[hidden] { display:none; }
+  .review-run-bar { position:relative; height:8px; border-radius:5px; background:var(--line); overflow:hidden; }
+  .review-run-bar > i { position:absolute; inset:0 auto 0 0; width:0; border-radius:inherit; background:var(--accent); transition:width .35s ease; }
+  .review-run-bar.indeterminate > i { width:34%; animation:review-run-slide 1.3s ease-in-out infinite; }
+  .review-run-bar.stopped > i { background:var(--danger); }
+  .review-run-count { min-width:64px; text-align:right; font-size:12px; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .review-run-note { margin:0 0 6px; font-size:12px; color:var(--muted); }
+  .review-run-note.warn { color:var(--warn-ink); background:var(--warn-bg); border:1px solid var(--warn-line); border-radius:6px; padding:6px 9px; font-size:13px; }
+  @keyframes review-run-slide { from { left:-34%; } to { left:100%; } }
+  @media (prefers-reduced-motion: reduce) {
+    .review-run-bar > i { transition:none; }
+    .review-run-bar.indeterminate > i { animation:none; width:100%; opacity:.45; }
+  }
   .review-grid { display:grid; grid-template-columns:minmax(210px, 29%) minmax(0, 1fr); min-height:410px; }
   .review-queue { border-right:1px solid var(--line); padding:16px 14px 16px 0; }
   .review-queue-head { display:flex; justify-content:space-between; gap:10px; margin-bottom:8px; font:600 11px/1 var(--sans); letter-spacing:.1em; color:var(--muted); text-transform:uppercase; }
@@ -896,11 +908,17 @@
         <button class="btn" id="reviewApiBtn" disabled>Review with a cloud model…</button>
         <button class="btn" id="reviewChangeCollectionBtn" hidden>Change collection</button>
       </div>
+      <div class="review-run" id="reviewRun" hidden>
+        <div class="review-run-bar" id="reviewRunBar" role="progressbar" aria-label="Review progress" aria-valuemin="0" aria-valuemax="100"><i></i></div>
+        <span class="review-run-count" id="reviewRunCount"></span>
+      </div>
       <div id="reviewPassStatus" class="review-live" role="status" aria-live="polite"></div>
+      <div class="review-run-note warn" id="reviewRunDegraded" hidden></div>
+      <div class="review-run-note" id="reviewRunNote" hidden></div>
     </div>
-    <div class="err" id="reviewPassErr"></div>
+    <div class="err" id="reviewPassErr" role="alert"></div>
     <div id="reviewPanel" class="review-workspace" hidden>
-      <div class="review-summary"><div><span class="review-kind">Reviewing</span><strong id="reviewSummaryTitle"></strong><div class="review-progress" id="reviewProgress" hidden><i></i></div></div><div class="muted" id="reviewCoverage"></div></div>
+      <div class="review-summary"><div><span class="review-kind">Reviewing</span><strong id="reviewSummaryTitle"></strong></div><div class="muted" id="reviewCoverage"></div></div>
       <div class="review-grid"><div class="review-queue"><div class="review-queue-head"><span>Suggestions</span><span id="reviewQueueCount"></span></div><div id="reviewQueue"></div></div><div class="review-detail" id="reviewDetail"></div></div>
     </div>
     </details>
@@ -3280,6 +3298,8 @@
 
   // --- trustworthy memory review (ADR 0046). All supplied text stays text.
   let reviewPolling = null;
+  let reviewRunDestination = '';
+  let reviewRunTier = null;
   let reviewApiPreflight = null;
   let reviewReport = null;
   let reviewSelectedId = null;
@@ -3293,6 +3313,7 @@
     reviewCollectionLoadSequence += 1;
     if (reviewPolling) clearInterval(reviewPolling);
     reviewPolling = null;
+    hideReviewRun();
     reviewApiPreflight = null;
     reviewReport = null;
     reviewSelectedId = null;
@@ -3389,7 +3410,9 @@
     const scopes = picked.length ? picked : reviewSelectedScopes;
     if (!scopes.length) return;
     $('reviewPassErr').textContent = '';
-    $('reviewPassStatus').textContent = 'Reviewing your collection. You can keep browsing memories below.';
+    reviewRunDestination = '';
+    reviewRunTier = null;
+    renderReviewRun({ name: 'starting' });
     setReviewButtonsDisabled(true);
     try {
       reviewSelectedScopes = scopes;
@@ -3397,16 +3420,14 @@
       showReviewRunning();
       pollReviewJob(started.job_id);
     } catch (ex) {
-      if (ex.message !== 'locked') {
-        $('reviewPassErr').textContent = ex.message;
-        $('reviewPassStatus').textContent = '';
-      }
+      hideReviewRun();
+      if (ex.message !== 'locked') $('reviewPassErr').textContent = ex.message;
       setReviewButtonsDisabled(false);
     }
   });
   $('reviewChangeCollectionBtn').addEventListener('click', async () => {
     $('reviewCollectionPicker').hidden = false; $('reviewChangeCollectionBtn').hidden = true; $('reviewPanel').hidden = true;
-    reviewSelectedScopes = []; $('reviewPassBtn').textContent = 'Start review'; $('reviewPassBtn').disabled = true; $('reviewApiBtn').disabled = true; $('reviewPassStatus').textContent = '';
+    reviewSelectedScopes = []; $('reviewPassBtn').textContent = 'Start review'; $('reviewPassBtn').disabled = true; $('reviewApiBtn').disabled = true; hideReviewRun();
     await loadReviewCollections();
   });
   $('reviewHistoryBtn').addEventListener('click', openReviewHistory);
@@ -3431,9 +3452,11 @@
           tier: reviewApiPreflight.tier,
         },
       });
+      reviewRunDestination = reviewApiPreflight.endpoint.label || host;
+      reviewRunTier = reviewApiPreflight.tier;
       closeReviewApiConsent();
       $('reviewPassErr').textContent = '';
-      $('reviewPassStatus').textContent = 'Masking memories at Tier ' + reviewApiPreflight.tier + ', then sending to ' + host + '…';
+      renderReviewRun({ name: 'starting' });
       setReviewButtonsDisabled(true);
       pollReviewJob(started.job_id);
     } catch (ex) {
@@ -3558,37 +3581,93 @@
     box.appendChild(el('p', 'muted', 'This choice is not remembered. You will see this panel every time.'));
   }
 
+  function plural(n, one, many) { return n + ' ' + (n === 1 ? one : many); }
+  // One phase record from the server (names and counts only) to what the bar shows.
+  function reviewPhaseView(phase) {
+    const to = reviewRunDestination ? ' to ' + reviewRunDestination : '';
+    const count = (done, total) => ({ value: total > 0 ? Math.min(100, Math.round((done / total) * 100)) : null, count: total > 0 ? done + ' of ' + total : '' });
+    switch (phase && phase.name) {
+      case 'comparing': return { text: 'Comparing memories', ...count(phase.done, phase.total) };
+      case 'masking': return { text: 'Masking memories' + (reviewRunTier ? ' at Tier ' + reviewRunTier : ''), ...(phase.total ? count(phase.done, phase.total) : { value: null, count: '' }) };
+      case 'sending':
+      case 'checking': {
+        const current = Math.min(phase.done + 1, phase.total);
+        const verb = phase.name === 'sending' ? 'Sending batch ' + current + ' of ' + phase.total + to : 'Checking batch ' + current + ' of ' + phase.total;
+        const view = count(phase.done, phase.total);
+        return { text: phase.done >= phase.total ? 'Reading the replies' : verb, value: view.value, count: view.count ? view.count + ' done' : '' };
+      }
+      case 'saving': return { text: 'Saving suggestions', value: null, count: '' };
+      case 'done': {
+        const failedAll = phase.batches > 0 && phase.failed >= phase.batches;
+        if (failedAll) return { text: 'Stopped: no batch got a usable reply' + (reviewRunDestination ? ' from ' + reviewRunDestination : '') + '. Check the model settings and try again.', value: 100, count: phase.failed + ' of ' + phase.batches + ' failed', stopped: true };
+        return { text: 'Done: ' + plural(phase.suggestions, 'suggestion', 'suggestions') + (phase.failed > 0 ? '. ' + phase.failed + ' of ' + phase.batches + ' batches got no usable reply' : '') + '.', value: 100, count: phase.batches > 0 ? plural(phase.batches, 'batch', 'batches') : '' };
+      }
+      default: return { text: 'Starting review', value: null, count: '' };
+    }
+  }
+  function renderReviewRun(phase, extra) {
+    const view = reviewPhaseView(phase);
+    const bar = $('reviewRunBar');
+    $('reviewRun').hidden = false;
+    bar.classList.toggle('indeterminate', view.value === null);
+    bar.classList.toggle('stopped', !!view.stopped);
+    if (view.value === null) {
+      bar.removeAttribute('aria-valuenow');
+      bar.firstElementChild.style.width = '';
+    } else {
+      bar.setAttribute('aria-valuenow', String(view.value));
+      bar.firstElementChild.style.width = view.value + '%';
+    }
+    bar.setAttribute('aria-valuetext', view.text.replace(/\.$/, '') + (view.count ? ', ' + view.count : ''));
+    $('reviewRunCount').textContent = view.count;
+    // Rewrite the live line only when it changes, so a screen reader hears each
+    // phase and batch once rather than every poll.
+    const line = view.text + (extra ? ' ' + extra : '');
+    if ($('reviewPassStatus').textContent !== line) $('reviewPassStatus').textContent = line;
+    return view;
+  }
+  function stopReviewRun(message) {
+    const bar = $('reviewRunBar');
+    bar.classList.remove('indeterminate');
+    bar.classList.add('stopped');
+    if (!bar.hasAttribute('aria-valuenow')) { bar.setAttribute('aria-valuenow', '0'); bar.firstElementChild.style.width = '0%'; }
+    bar.setAttribute('aria-valuetext', 'Stopped');
+    $('reviewRunCount').textContent = 'Stopped';
+    $('reviewPassStatus').textContent = 'Review stopped.';
+    $('reviewPassErr').textContent = message;
+  }
+  function hideReviewRun() {
+    $('reviewRun').hidden = true;
+    for (const id of ['reviewRunNote', 'reviewRunDegraded']) { $(id).hidden = true; $(id).textContent = ''; }
+    $('reviewPassStatus').textContent = '';
+  }
+  function renderReviewNote(p) {
+    const lines = [['reviewRunDegraded', p.degraded || ''], ['reviewRunNote', p.progress && p.progress !== p.degraded ? p.progress : '']];
+    for (const [id, text] of lines) {
+      $(id).hidden = !text;
+      if ($(id).textContent !== text) $(id).textContent = text;
+    }
+  }
   function pollReviewJob(jobId) {
     if (reviewPolling) clearInterval(reviewPolling);
     reviewPolling = setInterval(async () => {
       try {
         const p = await api('/api/review/progress/' + jobId);
-        if (p.progress) {
-          $('reviewPassStatus').textContent = p.progress;
-        } else if (p.batches_total > 0) {
-          $('reviewPassStatus').textContent = 'Review pass: batch ' + p.batches_done + ' of ' + p.batches_total;
-          const pct = Math.round((p.batches_done / p.batches_total) * 100);
-          $('reviewProgress').hidden = false; $('reviewProgress').firstElementChild.style.width = pct + '%';
-        }
-        if (p.done) {
-          clearInterval(reviewPolling);
-          reviewPolling = null;
-          setReviewButtonsDisabled(false);
-          if (p.error) {
-            $('reviewPassErr').textContent = p.error;
-            $('reviewPassStatus').textContent = '';
-            return;
-          }
-          $('reviewPassStatus').textContent = 'Review pass finished. Nothing was written to the vault.'
-            + (p.progress && /^Tier 3, deterministic only/.test(p.progress) ? ' ' + p.progress + '.' : '')
-            + (p.warning ? ' ' + p.warning : '');
-          await loadReviewPanel();
-        }
+        renderReviewNote(p);
+        if (!p.done) { renderReviewRun(p.phase); return; }
+        clearInterval(reviewPolling);
+        reviewPolling = null;
+        setReviewButtonsDisabled(false);
+        if (p.error) { stopReviewRun(p.error); return; }
+        const view = renderReviewRun(p.phase, 'Nothing was written to the vault.' + (p.warning ? ' ' + p.warning : ''));
+        if (view.stopped) $('reviewPassErr').textContent = 'The review finished without checking anything.';
+        await loadReviewPanel();
       } catch (ex) {
         clearInterval(reviewPolling);
         reviewPolling = null;
         setReviewButtonsDisabled(false);
-        if (ex.message !== 'locked') $('reviewPassErr').textContent = ex.message;
+        if (ex.message === 'locked') { hideReviewRun(); return; }
+        stopReviewRun(ex.status === 404 ? 'This review is no longer running. Start it again.' : ex.message);
       }
     }, 800);
   }
@@ -3596,8 +3675,7 @@
   function showReviewRunning() {
     $('reviewCollectionPicker').hidden = true; $('reviewChangeCollectionBtn').hidden = false;
     $('reviewPanel').hidden = false; $('reviewSummaryTitle').textContent = reviewSelectedScopes.join(', ');
-    $('reviewCoverage').textContent = 'Checking memories…'; $('reviewProgress').hidden = false;
-    $('reviewProgress').firstElementChild.style.width = '4%';
+    $('reviewCoverage').textContent = 'Checking memories…';
     const queue = $('reviewQueue'); queue.replaceChildren();
     const state = el('div', 'review-state'); state.append(el('h2', undefined, 'Reviewing your collection'), el('p', undefined, 'Suggestions will appear here when the pass finishes. Search and browse remain available.'));
     queue.appendChild(state); $('reviewDetail').replaceChildren();
@@ -3654,8 +3732,11 @@
   function renderReviewCoverage(c) {
     const incomplete = c.complete === false || c.skipped > 0 || c.failed > 0;
     $('reviewCoverage').textContent = (c.compared || 0) + ' checked · ' + (reviewReport.proposals || []).filter((p) => p.status === 'pending').length + ' suggestions' + (incomplete ? ' · Incomplete' : '');
-    $('reviewProgress').hidden = true;
-    if (incomplete) $('reviewPassStatus').textContent = (c.skipped || c.failed) ? 'Some memories could not be compared: ' + (c.skipped || 0) + ' skipped, ' + (c.failed || 0) + ' failed. Review only covers the memories checked.' : 'This review is incomplete. Some comparisons were not completed, even though no individual memory was skipped or failed.';
+    if (!incomplete) return;
+    // Just after a run, keep its Done line and put the coverage caveat under it.
+    const target = $('reviewRun').hidden ? $('reviewPassStatus') : $('reviewRunNote');
+    target.hidden = false;
+    target.textContent = (c.skipped || c.failed) ? 'Some memories could not be compared: ' + (c.skipped || 0) + ' skipped, ' + (c.failed || 0) + ' failed. Review only covers the memories checked.' : 'This review is incomplete. Some comparisons were not completed, even though no individual memory was skipped or failed.';
   }
   function reviewKindLabel(kind) { return ({duplicate:'Possible repeat', contradiction:'Possible update', stale:'May be outdated', undated:'Date missing', question:'Question for you'})[kind] || 'Suggestion'; }
   function proposalTitle(p, index) { return p.title || p.question || (p.kind === 'duplicate' ? 'Choose what stays' : 'Suggestion ' + (index + 1)); }

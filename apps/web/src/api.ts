@@ -80,6 +80,8 @@ import {
   saveReviewReport,
   restoreReviewOperation,
   selectReviewEntries,
+  type ReviewPassPhase,
+  type ReviewPassResult,
   type ReviewReport,
 } from '@northkeep/librarian';
 import {
@@ -266,14 +268,30 @@ interface PullJob {
 }
 const pullJobs = new Map<string, PullJob>();
 
+/**
+ * Where a review run is, for the page's progress bar. Phase names and counts
+ * only: the page polls this, so it must never hold memory text or scope names.
+ * `done` on a batch phase counts finished batches; the one in flight is done + 1.
+ */
+export type ReviewJobPhase =
+  | { name: 'starting' }
+  | { name: 'comparing'; done: number; total: number }
+  | { name: 'masking'; done?: number; total?: number }
+  | { name: 'sending' | 'checking'; done: number; total: number; failed: number }
+  | { name: 'saving' }
+  | { name: 'done'; suggestions: number; batches: number; failed: number }
+  | { name: 'failed' };
+
 interface ReviewJob {
   id: string;
   createdAt: number;
   status: 'running' | 'done' | 'failed';
-  batches_done: number;
-  batches_total: number;
+  phase: ReviewJobPhase;
   error?: string;
+  /** The latest status note from the pass (counts only, never memory text). */
   progress?: string;
+  /** Set once when names could not be masked by the model; kept for the whole run (invariant 6). */
+  degraded?: string;
   /** Finished, but something the user should know (for example an incomplete log row). */
   warning?: string;
   vaultPath: string;
@@ -1795,11 +1813,11 @@ async function dispatch(
     if (!job || path.resolve(job.vaultPath) !== path.resolve(session.vaultPath)) return bad(404, 'Unknown review job.');
     return ok({
       status: job.status,
-      batches_done: job.batches_done,
-      batches_total: job.batches_total,
+      phase: job.phase,
       done: job.status !== 'running',
       error: job.error,
       progress: job.progress,
+      degraded: job.degraded,
       warning: job.warning,
     });
   }
@@ -2115,6 +2133,25 @@ async function ramReviewEmbed(
   };
 }
 
+/** A status note belongs to the phase that raised it; drop it when the phase moves on. */
+function setReviewJobPhase(job: ReviewJob, phase: ReviewJobPhase): void {
+  if (phase.name !== job.phase.name) job.progress = undefined;
+  job.phase = phase;
+}
+
+/** Local runs check batches on this machine; cloud runs send them. */
+function reviewJobPhase(phase: ReviewPassPhase, batchVerb: 'sending' | 'checking'): ReviewJobPhase {
+  switch (phase.phase) {
+    case 'comparing': return { name: 'comparing', done: phase.done, total: phase.total };
+    case 'masking': return { name: 'masking' };
+    case 'batch': return { name: batchVerb, done: phase.done, total: phase.total, failed: phase.failed };
+  }
+}
+
+function finishedPhase(result: ReviewPassResult): ReviewJobPhase {
+  return { name: 'done', suggestions: result.proposals.length, batches: result.batches, failed: result.failedBatches };
+}
+
 async function startReviewRun(session: UiSession, body: Buffer): Promise<ApiResponse> {
   const parsed = parseJson<{
     mode?: string;
@@ -2145,8 +2182,7 @@ async function startReviewRun(session: UiSession, body: Buffer): Promise<ApiResp
     id: randomUUID(),
     createdAt: Date.now(),
     status: 'running',
-    batches_done: 0,
-    batches_total: 0,
+    phase: { name: 'starting' },
     vaultPath: session.vaultPath,
   };
   reviewJobs.set(job.id, job);
@@ -2159,14 +2195,12 @@ async function startReviewRun(session: UiSession, body: Buffer): Promise<ApiResp
       const result = await runReviewPass(selected, ollama, {
         model,
         embed,
-        onProgress: (done, total) => {
-          job.batches_done = done;
-          job.batches_total = total;
-        },
+        onPhase: (phase) => { setReviewJobPhase(job, reviewJobPhase(phase, 'checking')); },
         onStatus: (msg) => {
           job.progress = msg;
         },
       });
+      job.phase = { name: 'saving' };
       await session.withVault((vault) => {
         if (reviewJobs.get(job.id) !== job || job.vaultPath !== session.vaultPath) throw new Error('Review job no longer owns this vault.');
         const current = selectReviewEntries(vault.list()).filter((entry) => parsed.scopes!.includes(entry.scope));
@@ -2190,10 +2224,10 @@ async function startReviewRun(session: UiSession, body: Buffer): Promise<ApiResp
       });
         saveReviewReport(report, session.vaultPath);
       });
-      job.batches_done = result.batches;
-      job.batches_total = result.batches;
+      job.phase = finishedPhase(result);
       job.status = 'done';
     } catch (err: unknown) {
+      job.phase = { name: 'failed' };
       job.status = 'failed';
       job.error = err instanceof Error ? err.message : String(err);
     } finally {
@@ -2245,9 +2279,7 @@ async function startReviewApiRun(
     id: randomUUID(),
     createdAt: Date.now(),
     status: 'running',
-    batches_done: 0,
-    batches_total: 0,
-    progress: `Masking memories at Tier ${tier} before sending to ${checked.host}…`,
+    phase: { name: 'starting' },
     vaultPath: session.vaultPath,
   };
   reviewJobs.set(job.id, job);
@@ -2279,21 +2311,23 @@ async function startReviewApiRun(
           }
           pendingWritten = true;
         },
-        onDegraded: (message) => { job.progress = message; },
+        onDegraded: (message) => { job.degraded = message; job.progress = message; },
+        onMaskProgress: (done, total) => { job.phase = { name: 'masking', done, total }; },
       });
       const embed = await ramReviewEmbed(createOllamaClient());
       const result = await runReviewPass(selected, generator, {
         model: checked.endpoint.model,
         embed,
-        onProgress: (done, total) => {
-          job.batches_done = done;
-          job.batches_total = total;
-          job.progress = `Review pass via ${checked.host}: batch ${done} of ${total}`;
+        onPhase: (phase) => {
+          // The pass announces masking before prepare; prepare then reports counts.
+          if (phase.phase === 'masking' && job.phase.name === 'masking') return;
+          setReviewJobPhase(job, reviewJobPhase(phase, 'sending'));
         },
         onStatus: (msg) => {
           job.progress = msg;
         },
       });
+      job.phase = { name: 'saving' };
       const sent = summary as ReviewPrepareSummary | null;
       await session.withVault((vault) => {
         if (reviewJobs.get(job.id) !== job || job.vaultPath !== session.vaultPath) throw new Error('Review job no longer owns this vault.');
@@ -2330,10 +2364,10 @@ async function startReviewApiRun(
       } catch {
         job.warning = 'The review finished, but its log entry could not be completed.';
       }
-      job.batches_done = result.batches;
-      job.batches_total = result.batches;
+      job.phase = finishedPhase(result);
       job.status = 'done';
     } catch (err: unknown) {
+      job.phase = { name: 'failed' };
       job.status = 'failed';
       job.error = err instanceof Error ? err.message : String(err);
       try {
