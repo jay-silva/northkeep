@@ -37,7 +37,7 @@ redaction guarantees are unit-tested.
 
 **`AnthropicProvider`** (`anthropic.ts`, via `@anthropic-ai/sdk` — the M6
 dependency, ADR 0007 §5) gives the best Claude experience: true streaming and
-adaptive thinking, default `claude-opus-4-8`. It is a quality nicety, not a
+adaptive thinking, default `claude-sonnet-5-5` (since 0.22.3). It is a quality nicety, not a
 requirement — Claude is also reachable through OpenAI-compatible gateways if
 the user prefers zero dependencies.
 

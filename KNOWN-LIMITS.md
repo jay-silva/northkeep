@@ -9,6 +9,7 @@ every milestone; if a limit is removed, say when and how.*
 - Revision checks and durable retry receipts coordinate writes against one local vault. Hosted project tools and whole-vault sync retain their existing conflict behavior. A local save does not certify delivery.
 - File references describe caller-reported access. Resume treats reported availability as unverified for the receiving assistant. The UI displays and preserves references; structured project tools can edit them. No file or URL is opened automatically.
 - Lock clears drafts and pending request text. Browser retry convenience requires the retained draft; saved operation receipts remain in the vault. Forgetting a receipt removes its retry guarantee. History shows at most 20 saved versions and 20 log archives.
+- Local and hosted project tools treat line endings differently. The local MCP server removes line breaks at either end of a section field and converts CRLF to LF before saving; the hosted connector, the web UI and the CLI refuse both and say why.
 - The real Codex to Claude Desktop test used local tools and a disposable MCP client. It did not upgrade installed assistant configuration or certify hosted sync or packaged mobile.
 
 ## Project provenance and open sessions (ADR 0052), current
