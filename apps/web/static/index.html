@@ -3659,8 +3659,7 @@
         reviewPolling = null;
         setReviewButtonsDisabled(false);
         if (p.error) { stopReviewRun(p.error); return; }
-        const view = renderReviewRun(p.phase, 'Nothing was written to the vault.' + (p.warning ? ' ' + p.warning : ''));
-        if (view.stopped) $('reviewPassErr').textContent = 'The review finished without checking anything.';
+        renderReviewRun(p.phase, 'Nothing was written to the vault.' + (p.warning ? ' ' + p.warning : ''));
         await loadReviewPanel();
       } catch (ex) {
         clearInterval(reviewPolling);
