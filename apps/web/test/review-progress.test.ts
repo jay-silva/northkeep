@@ -204,6 +204,24 @@ describe('review progress record', () => {
     expectNoMemoryText();
   });
 
+  it('cloud Tier 3 with the name model offline: the degraded warning stays on the record through every phase', async () => {
+    nerMode = 'fail';
+    gates.provider = true;
+    const jobId = await startCloud(3);
+    const sending = await until(jobId, (s) => s.phase.name === 'sending');
+    const warning = /^Tier 3, deterministic only \(name model offline for 4 of 4 memories\)/;
+    expect(sending.degraded).toMatch(warning);
+    gates.provider = false;
+    release();
+    const end = await until(jobId, finished);
+    expect(end.status).toBe('done');
+    expect(end.degraded).toMatch(warning);
+    const afterMasking = seen.filter((s) => ['sending', 'saving', 'done'].includes(s.phase.name));
+    expect(afterMasking.length).toBeGreaterThan(0);
+    expect(afterMasking.every((s) => warning.test(String(s.degraded)))).toBe(true);
+    expectNoMemoryText();
+  });
+
   it('cloud provider error: every batch fails, and the done record says so instead of looking clean', async () => {
     providerMode = 'fail';
     const jobId = await startCloud(1);

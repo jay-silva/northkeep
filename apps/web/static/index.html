@@ -3632,6 +3632,7 @@
     bar.classList.add('stopped');
     if (!bar.hasAttribute('aria-valuenow')) { bar.setAttribute('aria-valuenow', '0'); bar.firstElementChild.style.width = '0%'; }
     bar.setAttribute('aria-valuetext', 'Stopped');
+    $('reviewRunCount').textContent = 'Stopped';
     $('reviewPassStatus').textContent = 'Review stopped.';
     $('reviewPassErr').textContent = message;
   }
