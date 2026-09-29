@@ -6,6 +6,12 @@ import {
   BOARD_DEFAULT_STALE_DAYS,
   BOARD_MAX_STALE_DAYS,
   MEMORY_TYPES,
+  PROJECT_FILE_ACCESS,
+  PROJECT_FILE_CONTEXT_MAX_CHARS,
+  PROJECT_FILE_LABEL_MAX_CHARS,
+  PROJECT_FILE_LIMIT,
+  PROJECT_FILE_LOCATOR_MAX_CHARS,
+  PROJECT_FILE_TYPES,
   ProjectHandoffError,
   Vault,
   VaultAuthError,
@@ -120,6 +126,58 @@ const scopeSchema = z
 const projectSlugSchema = z
   .string()
   .regex(/^[a-z0-9-]{1,40}$/, 'project slugs are 1-40 lowercase letters, digits, or hyphens');
+
+// The published file-reference schema states core's own limits
+// (validateProjectFileReferences), so a host that follows it is not refused.
+const projectFilesSchema = z.array(z.object({
+  type: z.enum(PROJECT_FILE_TYPES, {
+    errorMap: () => ({ message: `type must be one of ${PROJECT_FILE_TYPES.join(', ')}` }),
+  }).describe('local_path (a path on the machine where the work happened), url (a web address), or memory (a NorthKeep memory)'),
+  label: z.string().min(1).max(PROJECT_FILE_LABEL_MAX_CHARS, `label is limited to ${PROJECT_FILE_LABEL_MAX_CHARS} characters`)
+    .describe(`Short name for the file, one line, up to ${PROJECT_FILE_LABEL_MAX_CHARS} characters`),
+  locator: z.string().min(1).max(PROJECT_FILE_LOCATOR_MAX_CHARS, `locator is limited to ${PROJECT_FILE_LOCATOR_MAX_CHARS} characters`)
+    .describe(`The path, URL or memory id, one line, up to ${PROJECT_FILE_LOCATOR_MAX_CHARS} characters`),
+  access: z.enum(PROJECT_FILE_ACCESS).describe(
+    'reported_available only if you checked just now that the file exists; it then requires checked_at and context. ' +
+    'Otherwise unavailable or unverified, with no checked_at and no context.',
+  ),
+  checked_at: z.string().max(64).optional().describe(
+    'Required with reported_available, refused otherwise: when you checked, as a UTC timestamp with milliseconds ' +
+    'in exactly this form: 2026-09-28T10:00:00.000Z',
+  ),
+  context: z.string().max(PROJECT_FILE_CONTEXT_MAX_CHARS, `context is limited to ${PROJECT_FILE_CONTEXT_MAX_CHARS} characters`).optional().describe(
+    `Required with reported_available, refused otherwise: how you checked, one line, up to ${PROJECT_FILE_CONTEXT_MAX_CHARS} characters`,
+  ),
+})).max(PROJECT_FILE_LIMIT).optional().describe(
+  'Files this work produced or relied on, so the next session can find them. Replaces the whole earlier Files list, ' +
+  'so include earlier files you want to keep; omit files to leave the list unchanged; an empty list clears it.',
+);
+
+// What every multi-line section field accepts, stated where hosts read it.
+const SECTION_TEXT_RULES =
+  'Markdown without headings: a line starting with # and a space is refused. ' +
+  'Line breaks at either end are removed and CRLF becomes LF.';
+
+/**
+ * F1: line-ending noise is removed before core sees a section field. CRLF
+ * becomes LF and runs of line breaks at either end are dropped; nothing else
+ * changes, so text core already accepts is stored byte for byte and its
+ * request fingerprint is unchanged. Headings and every other rule stay with
+ * core, which refuses them by name.
+ */
+function normalizeSectionText(value: string, field: string, allowEmpty: boolean): string;
+function normalizeSectionText(value: string | undefined, field: string, allowEmpty: boolean): string | undefined;
+function normalizeSectionText(value: string | undefined, field: string, allowEmpty: boolean): string | undefined {
+  if (value === undefined) return undefined;
+  const normalized = value.replace(/\r\n/g, '\n').replace(/^\n+|\n+$/g, '');
+  // A value of only line breaks must not turn into a silent clear.
+  if (normalized === '' && value !== '') {
+    throw new ProjectHandoffError('invalid_request', allowEmpty
+      ? `${field} contains only line breaks; send an empty string to clear it.`
+      : `${field} must not be empty.`);
+  }
+  return normalized;
+}
 
 interface ToolOk {
   [key: string]: unknown;
@@ -907,34 +965,27 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         expected_revision: idSchema.nullable().describe('Revision returned by project_get/resume, or null only when creating'),
         title: z.string().max(120).optional().describe('Display title shown in the app (single line, up to 120 characters). Empty string removes it and the slug is shown instead.'),
-        what_why: z.string().min(1).max(16384).optional().describe('Replacement What & Why section'),
-        status: z.string().min(1).max(16384).optional().describe('Replacement Current Status section'),
-        next_actions: z.string().max(16384).optional().describe('Replacement Next Actions section; empty clears it'),
+        what_why: z.string().min(1).max(16384).optional().describe(`Replacement What & Why section. ${SECTION_TEXT_RULES}`),
+        status: z.string().min(1).max(16384).optional().describe(`Replacement Current Status section. ${SECTION_TEXT_RULES}`),
+        next_actions: z.string().max(16384).optional().describe(`Replacement Next Actions section; empty clears it. ${SECTION_TEXT_RULES}`),
         log_entry: z
           .string()
           .min(1)
           .max(4096)
           .optional()
-          .describe('New Log entry (newest first), a few hundred characters at most; put detail in its own episodic memory in the project scope. Do not include a date; the tool prefixes YYYY-MM-DD.'),
+          .describe(`New Log entry (newest first), a few hundred characters at most; put detail in its own episodic memory in the project scope. Do not include a date; the tool prefixes YYYY-MM-DD. ${SECTION_TEXT_RULES}`),
         decision: z
           .string()
           .min(1)
           .max(4096)
           .optional()
-          .describe('New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD.'),
-        open_questions: z.string().max(16384).optional(),
+          .describe(`New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD. ${SECTION_TEXT_RULES}`),
+        open_questions: z.string().max(16384).optional().describe(`Replacement Open Questions section; empty clears it. ${SECTION_TEXT_RULES}`),
         draft: z
           .boolean()
           .optional()
           .describe('Only false is meaningful on a project that already exists: it clears the draft line. Passing true is refused; a draft can only be marked when the project is created.'),
-        files: z.array(z.object({
-          type: z.string().min(1).max(32),
-          label: z.string().min(1).max(512),
-          locator: z.string().min(1).max(4096),
-          access: z.enum(['reported_available', 'unavailable', 'unverified']),
-          checked_at: z.string().max(64).optional(),
-          context: z.string().max(2048).optional(),
-        })).max(40).optional(),
+        files: projectFilesSchema,
       },
     },
     async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, draft, files }) =>
@@ -976,8 +1027,14 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           const scope = projectScope(project);
           assertProjectGranted(scope, granted);
           const request: ProjectUpdateRequest = {
-            project, expected_revision, title, what_why, status, next_actions, log_entry, decision,
-            open_questions, files: files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
+            project, expected_revision, title,
+            what_why: normalizeSectionText(what_why, 'what_why', false),
+            status: normalizeSectionText(status, 'status', false),
+            next_actions: normalizeSectionText(next_actions, 'next_actions', true),
+            log_entry: normalizeSectionText(log_entry, 'log_entry', false),
+            decision: normalizeSectionText(decision, 'decision', false),
+            open_questions: normalizeSectionText(open_questions, 'open_questions', true),
+            files: files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
             ...(draft !== undefined ? { draft } : {}),
           };
           const current = vault.updateProject(request, granted);
@@ -1006,9 +1063,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
         title: z.string().max(120).optional().describe('Display title shown in the app (single line, up to 120 characters).'),
-        what_why: z.string().min(1).max(16384).describe('What & Why section: what this project is and why it exists'),
-        status: z.string().min(1).max(16384).describe('Current Status section: where the project stands right now'),
-        next_actions: z.string().max(16384).optional().describe('Next Actions section'),
+        what_why: z.string().min(1).max(16384).describe(`What & Why section: what this project is and why it exists. ${SECTION_TEXT_RULES}`),
+        status: z.string().min(1).max(16384).describe(`Current Status section: where the project stands right now. ${SECTION_TEXT_RULES}`),
+        next_actions: z.string().max(16384).optional().describe(`Next Actions section. ${SECTION_TEXT_RULES}`),
         draft: z
           .boolean()
           .optional()
@@ -1034,7 +1091,10 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           const scope = projectScope(project);
           assertProjectGranted(scope, granted);
           const request: ProjectUpdateRequest = {
-            project, expected_revision: null, title, what_why, status, next_actions,
+            project, expected_revision: null, title,
+            what_why: normalizeSectionText(what_why, 'what_why', false),
+            status: normalizeSectionText(status, 'status', false),
+            next_actions: normalizeSectionText(next_actions, 'next_actions', true),
             writer: writerFor(ctx), ...(draft !== undefined ? { draft } : {}),
           };
           let current;
@@ -1066,17 +1126,12 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
     operation_id: z.string().uuid().describe('A random version-4 UUID, in lowercase, that you generate for this save; project_resume does not return one. Reuse it only to retry this exact request.'),
     expected_revision: idSchema.describe('The revision this save starts from, taken from the latest resume or save result (project_resume, project_get, or receipt.result_revision from your last checkpoint)'),
-    status: z.string().min(1).max(16384).describe('Replacement Current Status section'),
-    completed: z.string().min(1).max(4096).describe('What was done, a few hundred characters at most; becomes the new Log entry. Do not include a date; the tool prefixes it.'),
-    next_actions: z.string().max(16384).describe('Replacement Next Actions section; empty clears it'),
-    decision: z.string().min(1).max(4096).optional().describe('New Decisions entry (appended), without a date'),
-    open_questions: z.string().max(16384).optional().describe('Replacement Open Questions section'),
-    files: z.array(z.object({
-      type: z.string().min(1).max(32), label: z.string().min(1).max(512),
-      locator: z.string().min(1).max(4096),
-      access: z.enum(['reported_available', 'unavailable', 'unverified']),
-      checked_at: z.string().max(64).optional(), context: z.string().max(2048).optional(),
-    })).max(40).optional().describe('Files this work produced or relied on, so the next session can find them'),
+    status: z.string().min(1).max(16384).describe(`Replacement Current Status section. ${SECTION_TEXT_RULES}`),
+    completed: z.string().min(1).max(4096).describe(`What was done, a few hundred characters at most; becomes the new Log entry. Do not include a date; the tool prefixes it. ${SECTION_TEXT_RULES}`),
+    next_actions: z.string().max(16384).describe(`Replacement Next Actions section; empty clears it. ${SECTION_TEXT_RULES}`),
+    decision: z.string().min(1).max(4096).optional().describe(`New Decisions entry (appended), without a date. ${SECTION_TEXT_RULES}`),
+    open_questions: z.string().max(16384).optional().describe(`Replacement Open Questions section; empty clears it. ${SECTION_TEXT_RULES}`),
+    files: projectFilesSchema,
   };
   const HANDOFF_DESCRIPTION = {
     checkpoint:
@@ -1089,7 +1144,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
   const HANDOFF_CONTRACT =
     'The save is atomic and bound to expected_revision: if the project changed since you read it, the save is ' +
     'refused as stale_project. Retrying the exact same request with the same operation id is safe. After a ' +
-    'stale_project refusal, read the project again and use a new operation id.';
+    'stale_project refusal, read the project again and use a new operation id. A refusal that names a field ' +
+    'and a rule saved nothing; fix that field and send the save again.';
   const registerHandoff = (name: 'project_checkpoint' | 'project_wrap', mode: 'checkpoint' | 'wrap') => {
     server.registerTool(name, {
       title: mode === 'checkpoint' ? 'Checkpoint project' : 'Wrap up project',
@@ -1102,8 +1158,16 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       refuseProjectWriteUnderMasking();
       const scope = projectScope(args.project);
       assertProjectGranted(scope, granted);
+      // Normalized before core computes the request fingerprint, so an exact
+      // retry of the same raw input still replays.
       const request: ProjectCheckpointRequest = {
-        ...args, mode, files: args.files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
+        ...args, mode,
+        status: normalizeSectionText(args.status, 'status', false),
+        completed: normalizeSectionText(args.completed, 'completed', false),
+        next_actions: normalizeSectionText(args.next_actions, 'next_actions', true),
+        decision: normalizeSectionText(args.decision, 'decision', false),
+        open_questions: normalizeSectionText(args.open_questions, 'open_questions', true),
+        files: args.files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
       };
       const result = vault.checkpointProject(request, granted);
       if (!result.replayed) vault.save();

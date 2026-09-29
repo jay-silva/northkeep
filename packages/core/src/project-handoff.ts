@@ -117,22 +117,51 @@ export class ProjectHandoffError extends Error {
 export interface ProjectVaultReader { list(filter?:Record<string,unknown>):MemoryEntry[]; getVaultId():string; sharedScopes():string[] }
 
 function fail(message:string):never { throw new ProjectHandoffError('invalid_request',message); }
-export function assertProjectText(value:string, field:string, allowEmpty:boolean):void {
-  if (typeof value !== 'string' || value.length > PROJECT_FIELD_MAX_CHARS) fail(`${field} is invalid or too long.`);
-  if (/\r/.test(value) || /^\n|\n$/.test(value) || /^( {0,3})#{1,6}[ \t]+\S/m.test(value)) fail(`${field} contains unsupported section formatting.`);
-  if (!allowEmpty && value.trim().length===0) fail(`${field} must not be empty.`);
-  if (value.length>0 && value.trim().length===0) fail(`${field} cannot contain only whitespace.`);
+const HEADING_LINE=/^( {0,3})#{1,6}[ \t]+\S/m;
+/** The rule a section field broke, in plain words, or null. Each refusal names the field and the rule. */
+export function projectTextProblem(value:string, field:string, allowEmpty:boolean):string|null {
+  if (typeof value !== 'string') return `${field} must be a string.`;
+  if (value.length > PROJECT_FIELD_MAX_CHARS) return `${field} is ${value.length} characters; the limit is ${PROJECT_FIELD_MAX_CHARS}.`;
+  if (/\r/.test(value)) return `${field} cannot contain a carriage return; use plain line breaks (\\n).`;
+  if (/^\n|\n$/.test(value)) return `${field} cannot start or end with a line break.`;
+  if (HEADING_LINE.test(value)) return `${field} cannot contain a Markdown heading (a line starting with # and a space); it would split the project document.`;
+  if (!allowEmpty && value.trim().length===0) return `${field} must not be empty.`;
+  if (value.length>0 && value.trim().length===0) return `${field} cannot contain only whitespace; send an empty string to clear it.`;
+  return null;
 }
+export function assertProjectText(value:string, field:string, allowEmpty:boolean):void {
+  const problem=projectTextProblem(value,field,allowEmpty); if(problem!==null) fail(problem);
+}
+export const PROJECT_FILE_TYPES = ['local_path','url','memory'] as const;
+export const PROJECT_FILE_ACCESS = ['reported_available','unavailable','unverified'] as const;
+export const PROJECT_FILE_LABEL_MAX_CHARS = 200;
+export const PROJECT_FILE_LOCATOR_MAX_CHARS = 2048;
+export const PROJECT_FILE_CONTEXT_MAX_CHARS = 500;
+const FILE_FIELDS = ['type','label','locator','access','checked_at','context'] as const;
+const CHECKED_AT_EXAMPLE = '2026-09-28T10:00:00.000Z';
 export function validateProjectFileReferences(files:ProjectFileReference[]):ProjectFileReference[] {
-  if (!Array.isArray(files) || files.length>PROJECT_FILE_LIMIT) fail(`files must contain at most ${PROJECT_FILE_LIMIT} references.`);
-  return files.map((file) => {
-    if (!file || !['local_path','url','memory'].includes(file.type) || !['reported_available','unavailable','unverified'].includes(file.access)) fail('A file reference is malformed.');
-    const allowed=new Set(['type','label','locator','access','checked_at','context']); if(Object.keys(file).some((key)=>!allowed.has(key)))fail('A file reference has unsupported fields.');
-    for (const [name,value,max] of [['label',file.label,200],['locator',file.locator,2048]] as const) if(typeof value!=='string'||value.trim().length===0||value.length>max||/[\r\n]/.test(value)) fail(`File ${name} is invalid.`);
+  if (!Array.isArray(files)) fail('files must be a list of file references.');
+  if (files.length>PROJECT_FILE_LIMIT) fail(`files has ${files.length} references; the limit is ${PROJECT_FILE_LIMIT}.`);
+  return files.map((file, index) => {
+    const at=`files[${index}]`;
+    if (!file || typeof file!=='object' || Array.isArray(file)) fail(`${at} must be an object.`);
+    if (!(PROJECT_FILE_TYPES as readonly unknown[]).includes(file.type)) fail(`${at}.type must be one of ${PROJECT_FILE_TYPES.join(', ')}.`);
+    if (!(PROJECT_FILE_ACCESS as readonly unknown[]).includes(file.access)) fail(`${at}.access must be one of ${PROJECT_FILE_ACCESS.join(', ')}.`);
+    const allowed=new Set<string>(FILE_FIELDS); if(Object.keys(file).some((key)=>!allowed.has(key)))fail(`${at} has a field other than ${FILE_FIELDS.join(', ')}.`);
+    for (const [name,value,max] of [['label',file.label,PROJECT_FILE_LABEL_MAX_CHARS],['locator',file.locator,PROJECT_FILE_LOCATOR_MAX_CHARS]] as const) {
+      if (typeof value!=='string') fail(`${at}.${name} must be a string.`);
+      if (value.trim().length===0) fail(`${at}.${name} must not be blank.`);
+      if (value.length>max) fail(`${at}.${name} is ${value.length} characters; the limit is ${max}.`);
+      if (/[\r\n]/.test(value)) fail(`${at}.${name} must be a single line.`);
+    }
     if (file.access==='reported_available') {
-      const checkedAt=typeof file.checked_at==='string'?Date.parse(file.checked_at):NaN;
-      if (typeof file.checked_at!=='string' || !Number.isFinite(checkedAt) || new Date(checkedAt).toISOString()!==file.checked_at || typeof file.context!=='string' || file.context.trim().length===0 || file.context.length>500 || /[\r\n\u0000-\u001f]/.test(file.context)) fail('Reported file availability requires checked_at and context.');
-    } else if (file.checked_at!==undefined || file.context!==undefined) fail('Only reported_available files may include checked_at or context.');
+      if (typeof file.checked_at!=='string') fail(`${at} has access reported_available, so it needs checked_at: when you checked the file, as a UTC timestamp with milliseconds, e.g. ${CHECKED_AT_EXAMPLE}.`);
+      const checkedAt=Date.parse(file.checked_at);
+      if (!Number.isFinite(checkedAt) || new Date(checkedAt).toISOString()!==file.checked_at) fail(`${at}.checked_at must be a UTC timestamp with milliseconds in exactly this form: ${CHECKED_AT_EXAMPLE}.`);
+      if (typeof file.context!=='string' || file.context.trim().length===0) fail(`${at} has access reported_available, so it needs context: a short note on how you checked the file.`);
+      if (file.context.length>PROJECT_FILE_CONTEXT_MAX_CHARS) fail(`${at}.context is ${file.context.length} characters; the limit is ${PROJECT_FILE_CONTEXT_MAX_CHARS}.`);
+      if (/[\r\n\u0000-\u001f]/.test(file.context)) fail(`${at}.context must be a single line without control characters.`);
+    } else if (file.checked_at!==undefined || file.context!==undefined) fail(`${at} has access ${file.access}; checked_at and context are allowed only when access is reported_available.`);
     return {type:file.type,label:file.label,locator:file.locator,access:file.access,...(file.checked_at!==undefined?{checked_at:file.checked_at}:{}),...(file.context!==undefined?{context:file.context}:{})};
   });
 }
@@ -183,8 +212,8 @@ export function readProjectProvenance(entry:MemoryEntry):ProjectProvenance|null{
 
 export function applyProjectUpdate(content:string, request:ProjectUpdateRequest, now=new Date()):{content:string;archives:string[]} {
   const doc=parseProjectDoc(content); for(const h of ['What & Why','Current Status','Next Actions','Decisions','Log','Open Questions','Files']) owned(doc,h);
-  const replacements:[string,string|undefined,boolean][]=[['What & Why',request.what_why,false],['Current Status',request.status,false],['Next Actions',request.next_actions,true],['Open Questions',request.open_questions,true]];
-  for(const [heading,value,empty] of replacements) if(value!==undefined){assertProjectText(value,heading,empty);setSection(doc,heading,value);}
+  const replacements:[string,string,string|undefined,boolean][]=[['What & Why','what_why',request.what_why,false],['Current Status','status',request.status,false],['Next Actions','next_actions',request.next_actions,true],['Open Questions','open_questions',request.open_questions,true]];
+  for(const [heading,field,value,empty] of replacements) if(value!==undefined){assertProjectText(value,field,empty);setSection(doc,heading,value);}
   if(request.title!==undefined)setProjectTitle(doc,request.title);
   const date=now.toISOString().slice(0,10);
   if(request.decision!==undefined){assertProjectText(request.decision,'decision',false);const old=owned(doc,'Decisions');setSection(doc,'Decisions',`${old}${old?'\n':''}- ${date} - ${request.decision}`);}

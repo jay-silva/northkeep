@@ -50,7 +50,7 @@ import {
 import { z } from 'zod';
 import type { ConnectorStorage, SharedEntry } from './storage.js';
 import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
-import { firstProjectTextError } from './project-text.js';
+import { HOSTED_SECTION_TEXT_RULES, firstProjectTextError } from './project-text.js';
 import { TOMBSTONE_USER_MESSAGE } from './tombstones.js';
 
 const MAX_RESULTS = 20;
@@ -677,9 +677,9 @@ export function createMcpServer(
         'Use project_update to change a project that already exists.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
-        what_why: z.string().min(1).max(16384).describe('What this project is and why it exists'),
-        status: z.string().min(1).max(16384).describe('Where the project stands right now'),
-        next_actions: z.string().max(16384).optional().describe('The next concrete actions'),
+        what_why: z.string().min(1).max(16384).describe(`What this project is and why it exists. ${HOSTED_SECTION_TEXT_RULES}`),
+        status: z.string().min(1).max(16384).describe(`Where the project stands right now. ${HOSTED_SECTION_TEXT_RULES}`),
+        next_actions: z.string().max(16384).optional().describe(`The next concrete actions. ${HOSTED_SECTION_TEXT_RULES}`),
       },
     },
     async ({ project, what_why, status, next_actions }) => {
@@ -795,21 +795,21 @@ export function createMcpServer(
         'use project_create for a new project.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
-        what_why: z.string().min(1).max(16384).optional().describe('Replacement What & Why section'),
-        status: z.string().min(1).max(16384).optional().describe('Replacement Current Status section'),
-        next_actions: z.string().max(16384).optional().describe('Replacement Next Actions section; empty clears it'),
+        what_why: z.string().min(1).max(16384).optional().describe(`Replacement What & Why section. ${HOSTED_SECTION_TEXT_RULES}`),
+        status: z.string().min(1).max(16384).optional().describe(`Replacement Current Status section. ${HOSTED_SECTION_TEXT_RULES}`),
+        next_actions: z.string().max(16384).optional().describe(`Replacement Next Actions section; empty clears it. ${HOSTED_SECTION_TEXT_RULES}`),
         log_entry: z
           .string()
           .min(1)
           .max(4096)
           .optional()
-          .describe('New Log entry (newest first), a few hundred characters at most; put detail in its own episodic memory in the project scope. Do not include a date; the tool prefixes YYYY-MM-DD.'),
+          .describe(`New Log entry (newest first), a few hundred characters at most; put detail in its own episodic memory in the project scope. Do not include a date; the tool prefixes YYYY-MM-DD. ${HOSTED_SECTION_TEXT_RULES}`),
         decision: z
           .string()
           .min(1)
           .max(4096)
           .optional()
-          .describe('New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD.'),
+          .describe(`New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD. ${HOSTED_SECTION_TEXT_RULES}`),
       },
     },
     async ({ project, what_why, status, next_actions, log_entry, decision }) => {
