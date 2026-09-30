@@ -7,7 +7,7 @@ import path from 'node:path';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Vault, KDF_INTERACTIVE, generateDeviceSecret } from '@northkeep/core';
-import { deriveConnectorToken, downSyncConnector, pushSharedScopes, startPairing, tokenHash } from '@northkeep/sync';
+import { applyDownSync, deriveConnectorToken, fetchPending, planDownSync, pushSharedScopes, startPairing, tokenHash } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
 import { decryptedEntries, seedEncryptedEntry } from './helpers.js';
@@ -18,6 +18,8 @@ vi.setConfig({ testTimeout: 30_000 });
 /**
  * C3 property test — random sequences over {remember, forget, unshare, re-share,
  * downSync, push} against a real temp vault + an in-memory connector server.
+ * The down-sync approves every forget it previews (ADR 0063 D3), as a user
+ * answering yes to Sync now.
  * After every down-sync+push, all FIVE invariants must hold:
  *   (1) Vault.verifyChain() is true;
  *   (2) no duplicate vault entry per connector server_id (dedupe + pending filter);
@@ -228,7 +230,8 @@ describe('C3 property: down-sync invariants under random operation sequences', (
 
     async function downSyncAndPush(): Promise<void> {
       await withVault(async (v) => {
-        await downSyncConnector({ server: base, deviceSecret, vault: v });
+        const plan = planDownSync({ vault: v, pending: await fetchPending({ server: base, deviceSecret }) });
+        await applyDownSync({ server: base, deviceSecret, vault: v, approve: { forget_ids: plan.forgets.map((f) => f.entry_id) } });
         await pushSharedScopes({ server: base, deviceSecret, scopes: [...shared], vault: v });
       });
       await checkInvariants();
@@ -286,7 +289,7 @@ describe('C3 property: down-sync invariants under random operation sequences', (
       entryId: 'conn_dupe_test', scope: 'work', type: 'semantic', content: anchorContent,
       entryHash: '', origin: 'connector', pending: true, createdAt: new Date().toISOString(),
     });
-    const dup = await withVault((v) => downSyncConnector({ server: base, deviceSecret, vault: v }));
+    const dup = await withVault((v) => applyDownSync({ server: base, deviceSecret, vault: v }));
     expect(dup.deduped).toBe(1);
     expect(dup.added).toBe(0);
     // The server row was acked/remapped onto the existing vault id, not duplicated.

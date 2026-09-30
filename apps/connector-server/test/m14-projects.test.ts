@@ -17,7 +17,7 @@ import {
   serializeProjectDoc,
 } from '@northkeep/core/project-doc';
 import { Vault, KDF_INTERACTIVE, generateDeviceSecret } from '@northkeep/core';
-import { deriveConnectorToken, downSyncConnector, pushSharedScopes, startPairing, tokenHash } from '@northkeep/sync';
+import { applyDownSync, deriveConnectorToken, pushSharedScopes, startPairing, tokenHash } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
 import { decryptedEntries, decryptedPendingEntries, seedEncryptedEntry } from './helpers.js';
@@ -516,7 +516,7 @@ describe('M14 connector project tools (step 4)', () => {
 });
 
 describe('M14 desktop fold (step 5)', () => {
-  it('an old client never receives the cloud document (ADR 0063 v1 gate); ?v=2 gets it with its base; old-client remember-fold leaves the prior doc live', async () => {
+  it('an old client never receives the cloud document (ADR 0063 v1 gate); ?v=2 gets it with its base and the new client holds it; old-client remember-fold leaves the prior doc live', async () => {
     await seedEncryptedEntry(storage, account, connToken, {
       entryId: 'fold-base',
       scope: 'project:foldme',
@@ -539,10 +539,19 @@ describe('M14 desktop fold (step 5)', () => {
     });
     expect(updated.isError).toBe(false);
 
-    // The 0.22.x downSyncConnector sends no ?v=2 and would write this over
-    // the local head without a base check, so the connector withholds it.
-    const down = await withVault((v) => downSyncConnector({ server: base, deviceSecret, vault: v }));
-    expect(down.added).toBe(0);
+    // The 0.22.x down-sync sends no ?v=2 and would write this over the local
+    // head without a base check, so the connector withholds it.
+    const v1 = (await fetch(`${base}/client/pending`, { headers: { authorization: `Bearer ${connToken}` } }).then((r) =>
+      r.json(),
+    )) as { entries: Array<{ scope: string }> };
+    expect(v1.entries.filter((e) => e.scope === 'project:foldme')).toEqual([]);
+
+    // The new client sees it, but its base is not this vault's head: held, never applied.
+    const down = await withVault((v) => applyDownSync({ server: base, deviceSecret, vault: v }));
+    expect({ added: down.added, replaced: down.replaced }).toEqual({ added: 0, replaced: 0 });
+    expect(down.conflicts.map((c) => ({ scope: c.scope, base: c.base_revision, reason: c.reason }))).toEqual([
+      { scope: 'project:foldme', base: 'fold-base', reason: 'moved' },
+    ]);
     await withVault((v) => {
       const live = v.list({ scope: 'project:foldme', type: 'working' });
       expect(live).toHaveLength(1);

@@ -6,7 +6,7 @@ import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { KDF_INTERACTIVE, Vault, generateDeviceSecret, getProjectView } from '@northkeep/core';
 import { emptyProjectDoc, mergeProjectDoc, serializeProjectDoc } from '@northkeep/core/project-doc';
-import { deriveConnectorToken, downSyncConnector, pushSharedScopes, startPairing, tokenHash } from '@northkeep/sync';
+import { applyDownSync, deriveConnectorToken, pushSharedScopes, startPairing, STALE_PUSH_MESSAGE, tokenHash } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage, type ConnectorStorage, type SharedEntry } from '../src/storage.js';
 import { NeonConnectorStorage } from '../src/neon-storage.js';
@@ -155,9 +155,14 @@ for (const kind of ['memory', 'pglite'] as const) {
       w.vault.save();
       const r2 = w.head().revision;
 
-      // (a) The 0.22.x down-sync: nothing arrives, the head stays R2, the row stays pending.
-      const down = await downSyncConnector({ server: base, deviceSecret: w.deviceSecret, vault: w.vault });
-      expect({ added: down.added, deduped: down.deduped, held: down.held }).toEqual({ added: 0, deduped: 0, held: 0 });
+      // (a) A 0.22.x client reads /client/pending without ?v=2 and never sees the document.
+      expect((await w.pending(false)).entries.filter((e) => e.scope === 'project:a')).toEqual([]);
+      // (a2) The new client holds it as a conflict: the head stays R2, the row stays pending.
+      const down = await applyDownSync({ server: base, deviceSecret: w.deviceSecret, vault: w.vault });
+      expect({ added: down.added, replaced: down.replaced, deduped: down.deduped }).toEqual({ added: 0, replaced: 0, deduped: 0 });
+      expect(down.conflicts.map((c) => ({ id: c.server_id, base: c.base_revision, local: c.local_revision, reason: c.reason }))).toEqual([
+        { id: cloudId, base: r1, local: r2, reason: 'moved' },
+      ]);
       expect(w.head().revision).toBe(r2);
       expect(w.head().content).toContain('R2 LOCAL SAVE.');
       expect((await storage.getEntry(w.account, cloudId))?.pending).toBe(true);
@@ -344,9 +349,9 @@ for (const kind of ['memory', 'pglite'] as const) {
         vault_version: 2,
       });
       expect((await w.mcp('project_get', { project: 'd' })).text).toContain('R2 NEW.');
-      // An old client (no vault) is refused once a pair is recorded.
+      // A push with no vault (an old client, or a device with no vault sync) is refused once a pair is recorded.
       const oldClient = await w.push().then(() => 200, (e: Error) => e.message);
-      expect(oldClient).toBe('Connector server returned HTTP 428 on push.');
+      expect(oldClient).toBe(STALE_PUSH_MESSAGE);
       const equal = await w.rawPush({ scopes: ['project:d'], entries: [entry('R2 NEW.')], vault: { server: S, version: 2 } });
       expect(equal.status).toBe(200);
       const reset = await w.rawPush({ scopes: ['project:d'], entries: [entry('RESTARTED.')], vault: { server: S, version: 1 }, reset: true });

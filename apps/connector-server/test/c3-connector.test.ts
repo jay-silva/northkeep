@@ -8,8 +8,10 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { Vault, KDF_INTERACTIVE, generateDeviceSecret } from '@northkeep/core';
 import {
+  applyDownSync,
   deriveConnectorToken,
-  downSyncConnector,
+  fetchPending,
+  planDownSync,
   pushSharedScopes,
   startPairing,
   tokenHash,
@@ -22,9 +24,10 @@ import { decryptedEntries, decryptedPendingEntries } from './helpers.js';
  * C3 acceptance — write-back down-sync + the billing gate (ADR 0019).
  *
  * Proves: a memory created INSIDE an AI flow (memory_remember over /mcp) surfaces
- * on /client/pending, flows into the vault on downSyncConnector (verifyChain
+ * on /client/pending, flows into the vault on applyDownSync (verifyChain
  * intact), and after a re-push the server row carries the vault-local id with
- * pending cleared; memory_forget then removes it from BOTH vault and server. A
+ * pending cleared; memory_forget then removes it from BOTH vault and server
+ * once the user approves the forget (ADR 0063 D3). A
  * push that RACES ahead of a down-sync does NOT clobber the pending connector
  * row. And the billing gate: non-entitled ⇒ 402, allowlisted ⇒ free, a valid
  * HMAC entitlement ⇒ allowed, forged/expired ⇒ 402.
@@ -73,6 +76,12 @@ describe('C3 write-back down-sync', () => {
   function withVault<T>(fn: (v: Vault) => T | Promise<T>): Promise<T> {
     const vault = Vault.open({ path: vaultPath, passphrase, deviceSecret });
     return Promise.resolve(fn(vault)).finally(() => vault.close());
+  }
+
+  /** Sync now with every planned forget approved, as a user who answers yes to the preview. */
+  async function downSyncApproving(v: Vault) {
+    const plan = planDownSync({ vault: v, pending: await fetchPending({ server: base, deviceSecret }) });
+    return applyDownSync({ server: base, deviceSecret, vault: v, approve: { forget_ids: plan.forgets.map((f) => f.entry_id) } });
   }
 
   beforeAll(async () => {
@@ -229,7 +238,7 @@ describe('C3 write-back down-sync', () => {
     expect(pending[0]!.origin).toBe('connector');
 
     // 3. Down-sync: it lands in the vault as a normal append; chain stays valid.
-    const down = await withVault((v) => downSyncConnector({ server: base, deviceSecret, vault: v }));
+    const down = await withVault((v) => applyDownSync({ server: base, deviceSecret, vault: v }));
     expect(down.added).toBe(1);
     let localId = '';
     await withVault((v) => {
@@ -259,7 +268,16 @@ describe('C3 write-back down-sync', () => {
     const listAfterForget = await mcpCall(token, 'memory_list', {});
     expect(listAfterForget).not.toContain(FERRY);
 
-    const down2 = await withVault((v) => downSyncConnector({ server: base, deviceSecret, vault: v }));
+    // Unapproved, the forget waits for review: nothing is forgotten or acked.
+    const unapproved = await withVault((v) => applyDownSync({ server: base, deviceSecret, vault: v }));
+    expect({ forgotten: unapproved.forgotten, review: unapproved.needs_review.forgets.map((f) => f.entry_id) }).toEqual({
+      forgotten: 0,
+      review: [localId],
+    });
+    await withVault((v) => expect(v.list({ scope: 'work' }).some((e) => e.content === FERRY)).toBe(true));
+    expect(await storage.listPendingForgets(account)).toEqual([localId]);
+
+    const down2 = await withVault((v) => downSyncApproving(v));
     expect(down2.forgotten).toBe(1);
     await withVault((v) => {
       expect(v.list({ scope: 'work' }).some((e) => e.content === FERRY)).toBe(false);
@@ -283,7 +301,7 @@ describe('C3 write-back down-sync', () => {
     expect(stillPending.some((e) => e.entryId === serverId && e.content === RACE)).toBe(true);
 
     // Now the down-sync succeeds and the memory reaches the vault.
-    const down = await withVault((v) => downSyncConnector({ server: base, deviceSecret, vault: v }));
+    const down = await withVault((v) => applyDownSync({ server: base, deviceSecret, vault: v }));
     expect(down.added).toBe(1);
     await withVault((v) => {
       expect(v.list({ scope: 'work' }).some((e) => e.content === RACE)).toBe(true);
@@ -337,7 +355,8 @@ describe('C3 write-back down-sync', () => {
 
     // 5. A down-sync now propagates the forget: the vault entry is tombstoned and
     //    the server row deleted — the memory is FORGOTTEN, not orphaned.
-    await withVault((v) => downSyncConnector({ server: base, deviceSecret, vault: v }));
+    const down = await withVault((v) => downSyncApproving(v));
+    expect(down.forgotten).toBe(1);
     await withVault((v) => {
       expect(v.list({ scope: 'work' }).some((e) => e.content === RACED)).toBe(false); // not live
       const tomb = v.list({ scope: 'work', includeForgotten: true }).find((e) => e.id === localId);
