@@ -19,7 +19,7 @@ type Tab = {
  */
 const TABS: Tab[] = [
   { route: '/memories', label: 'Memories', icon: 'albums-outline', activeIcon: 'albums' },
-  { route: '/converse', label: 'Converse', icon: 'chatbubble-ellipses-outline', activeIcon: 'chatbubble-ellipses' },
+  { route: '/projects', label: 'Projects', icon: 'folder-open-outline', activeIcon: 'folder-open' },
   { route: '/settings', label: 'Settings', icon: 'settings-outline', activeIcon: 'settings' },
 ];
 

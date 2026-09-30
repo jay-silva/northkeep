@@ -118,8 +118,11 @@ export default function RootLayout() {
               <Stack.Screen name="memory/new" options={{ title: 'Add memory', presentation: 'modal' }} />
               <Stack.Screen name="memory/[id]" options={{ title: 'Memory' }} />
               {/* Section screens: no back arrow — the bottom nav switches between them. */}
-              <Stack.Screen name="converse" options={{ title: 'Converse', headerBackVisible: false }} />
+              <Stack.Screen name="projects" options={{ title: 'Projects', headerBackVisible: false }} />
+              <Stack.Screen name="project/[slug]" options={{ title: 'Project' }} />
               <Stack.Screen name="settings" options={{ title: 'Settings', headerBackVisible: false }} />
+              {/* Legacy chat, pushed from Settings now that it has no tab, so it keeps the back arrow. */}
+              <Stack.Screen name="converse" options={{ title: 'Converse' }} />
               {/* Pushed detail screens from Converse (keep the back arrow). */}
               <Stack.Screen name="providers" options={{ title: 'Providers' }} />
               {/* Add/edit provider form, split off the Providers list (Wave 3);

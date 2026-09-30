@@ -180,6 +180,13 @@ export default function Settings() {
         yet, is marked Shared when it arrives, and later edits to it are pushed.
       </Text>
 
+      <FieldLabel>Converse</FieldLabel>
+      <Button title="Converse (legacy)" kind="secondary" onPress={() => router.push('/converse')} />
+      <Text style={styles.footnote}>
+        The in-app chat is being retired. Your AI apps now work with your vault through Projects
+        and Cloud Connect.
+      </Text>
+
       <FieldLabel>This device</FieldLabel>
       <Info label="Linked" value={session.accountIdShort ? `yes (account ${session.accountIdShort})` : 'no'} />
       <Info label="Vault on this phone" value={vaultPresent === null ? 'unknown' : vaultPresent ? 'yes' : 'no'} />
