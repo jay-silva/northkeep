@@ -179,7 +179,8 @@ export async function pushSharedScopes(opts: {
   server: string;
   deviceSecret: Buffer;
   scopes: string[];
-  vault: Vault;
+  /** An open vault, or a snapshot of one taken under the vault lock (ADR 0063 D5). */
+  vault: Pick<Vault, 'list' | 'sharedScopeRows'>;
   /** Optional entitlement attestation forwarded to the connector's billing gate. */
   entitlement?: string;
   /** ADR 0063 D5: the vault-sync copy this push was taken from. Absent on a device with no vault sync. */

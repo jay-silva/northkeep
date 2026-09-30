@@ -97,3 +97,22 @@ export {
   UNSHARE_LOCAL_SAVE_FAILED_MESSAGE,
   LAPSED_UNSHARE_HINT,
 } from './connector-client.js';
+export {
+  CONNECTOR_AUTO_PUSH_MESSAGES,
+  ConnectorAutoPush,
+  type ConnectorAutoPushEvent,
+  type ConnectorAutoPushOptions,
+  type ConnectorAutoPushPhase,
+  type ConnectorAutoPushReason,
+  type ConnectorAutoPushStatus,
+} from './connector-auto.js';
+export {
+  ConnectorPushBlockedError,
+  manualConnectorPush,
+  manualVaultStamp,
+  pushSnapshot,
+  snapshotSharedScopes,
+  vaultServerHash,
+  type PushBlockedReason,
+  type SharedSnapshot,
+} from './connector-push.js';
