@@ -5656,6 +5656,11 @@
       default: return 'Sync status: ' + s.state;
     }
   }
+  // ADR 0063 D6: the engine's refusal names the CLI; here the Pull button opens the review.
+  function pullRefusalSentence(message) {
+    return String(message).replace(/Review what would change with: northkeep sync pull\.?$/, 'Use Pull to review what would change on this Mac.');
+  }
+
   async function loadSyncStatus() {
     const line = $('syncStatusLine'), serverLine = $('syncServerLine');
     try {
@@ -5674,7 +5679,7 @@
       try {
         const a = await api('/api/sync/auto');
         updateSyncPill(a);
-        if (a.phase === 'error' && a.message) sentence = a.message;
+        if (a.phase === 'error' && a.message) sentence = pullRefusalSentence(a.message);
         else if (a.phase === 'paused' && a.message) sentence = sentence + ' Automatic sync is paused: ' + a.message;
         if (a.age) sentence = 'Last synced ' + a.age + '. ' + sentence;
       } catch (e) { /* the manual status still shows */ }
