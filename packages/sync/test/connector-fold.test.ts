@@ -8,7 +8,7 @@ import {
   mergeProjectDoc,
   serializeProjectDoc,
 } from '@northkeep/core/project-doc';
-import { downSyncConnector, holdMessage, pushSharedScopes } from '../src/connector-client.js';
+import { applyDownSync, holdMessage, pushSharedScopes } from '../src/connector-client.js';
 
 let home = '';
 const priorHome = process.env.NORTHKEEP_HOME;
@@ -45,13 +45,18 @@ function projectMarkdown(status: string): string {
   );
 }
 
-function stubPending(entries: Array<{ server_id: string; scope: string; type: string; content: string }>): void {
+/** Rows default to base `new`, as a post-ADR 0063 hosted create writes them. */
+function withBase<T extends { base_revision?: string | null }>(rows: T[]): T[] {
+  return rows.map((r) => ('base_revision' in r ? r : { ...r, base_revision: 'new' }));
+}
+
+function stubPending(entries: Array<{ server_id: string; scope: string; type: string; content: string; base_revision?: string | null }>): void {
   vi.stubGlobal(
     'fetch',
     async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
-      if (url.endsWith('/client/pending')) {
-        return new Response(JSON.stringify({ entries, forgets: [] }), { status: 200 });
+      if (url.includes('/client/pending?v=2')) {
+        return new Response(JSON.stringify({ entries: withBase(entries), forgets: [] }), { status: 200 });
       }
       if (url.endsWith('/client/ack')) {
         const body = JSON.parse(String(init?.body ?? '{}')) as {
@@ -64,25 +69,26 @@ function stubPending(entries: Array<{ server_id: string; scope: string; type: st
   );
 }
 
-describe('downSyncConnector project fold (M14)', () => {
+describe('applyDownSync project fold (M14)', () => {
   it('supersedes the newest live working doc in a slug-valid project scope', async () => {
     const vault = makeVault();
     const local = projectMarkdown('Local status.');
-    vault.remember({ content: local, type: 'working', scope: 'project:northkeep' });
+    const head = vault.remember({ content: local, type: 'working', scope: 'project:northkeep' });
     // ADR 0050 holds hosted rows for an UNSHARED project scope, so the M14
     // supersede path is only reachable in a scope the user shared.
     vault.setScopeShared('project:northkeep', true);
     const incoming = projectMarkdown('Cloud status.');
     stubPending([
-      { server_id: 'conn_fold1', scope: 'project:northkeep', type: 'working', content: incoming },
+      { server_id: 'conn_fold1', scope: 'project:northkeep', type: 'working', content: incoming, base_revision: head.id },
     ]);
 
-    const result = await downSyncConnector({
+    const result = await applyDownSync({
       server: 'http://127.0.0.1:9',
       deviceSecret,
       vault,
+      approve: { server_ids: ['conn_fold1'] },
     });
-    expect(result.added).toBe(1);
+    expect(result.replaced).toBe(1);
     expect(result.deduped).toBe(0);
 
     const live = vault.list({ scope: 'project:northkeep', type: 'working' });
@@ -97,13 +103,14 @@ describe('downSyncConnector project fold (M14)', () => {
 
   it('bounds project history: twenty folds leave five superseded revisions with content', async () => {
     const vault = makeVault();
-    vault.remember({ content: projectMarkdown('Fold 0.'), type: 'working', scope: 'project:northkeep' });
+    let head = vault.remember({ content: projectMarkdown('Fold 0.'), type: 'working', scope: 'project:northkeep' }).id;
     vault.setScopeShared('project:northkeep', true);
     for (let i = 1; i <= 20; i += 1) {
       stubPending([
-        { server_id: `conn_bound${i}`, scope: 'project:northkeep', type: 'working', content: projectMarkdown(`Fold ${i}.`) },
+        { server_id: `conn_bound${i}`, scope: 'project:northkeep', type: 'working', content: projectMarkdown(`Fold ${i}.`), base_revision: head },
       ]);
-      await downSyncConnector({ server: 'http://127.0.0.1:9', deviceSecret, vault });
+      await applyDownSync({ server: 'http://127.0.0.1:9', deviceSecret, vault, approve: { server_ids: [`conn_bound${i}`] } });
+      head = vault.list({ scope: 'project:northkeep', type: 'working' })[0]!.id;
     }
     const history = vault.list({ scope: 'project:northkeep', type: 'working', includeSuperseded: true });
     expect(history.filter((e) => e.superseded_at !== null && e.content.length > 0)).toHaveLength(5);
@@ -115,13 +122,13 @@ describe('downSyncConnector project fold (M14)', () => {
   it('dedupes identical content without a second write', async () => {
     const vault = makeVault();
     const same = projectMarkdown('Already here.');
-    vault.remember({ content: same, type: 'working', scope: 'project:northkeep' });
+    const head = vault.remember({ content: same, type: 'working', scope: 'project:northkeep' });
     vault.setScopeShared('project:northkeep', true);
     stubPending([
-      { server_id: 'conn_dup', scope: 'project:northkeep', type: 'working', content: same },
+      { server_id: 'conn_dup', scope: 'project:northkeep', type: 'working', content: same, base_revision: head.id },
     ]);
 
-    const result = await downSyncConnector({
+    const result = await applyDownSync({
       server: 'http://127.0.0.1:9',
       deviceSecret,
       vault,
@@ -139,7 +146,7 @@ describe('downSyncConnector project fold (M14)', () => {
       { server_id: 'conn_new', scope: 'project:fresh', type: 'working', content: incoming },
     ]);
 
-    const result = await downSyncConnector({
+    const result = await applyDownSync({
       server: 'http://127.0.0.1:9',
       deviceSecret,
       vault,
@@ -163,7 +170,7 @@ describe('downSyncConnector project fold (M14)', () => {
       { server_id: 'conn_prefix', scope: 'project:foo_bar', type: 'working', content: incoming },
     ]);
 
-    await downSyncConnector({ server: 'http://127.0.0.1:9', deviceSecret, vault });
+    await applyDownSync({ server: 'http://127.0.0.1:9', deviceSecret, vault });
     const live = vault.list({ scope: 'project:foo_bar', type: 'working' });
     expect(live).toHaveLength(2);
     expect(live.some((e) => e.content.includes('Local underscore scope.') && e.superseded_at === null)).toBe(true);
@@ -176,7 +183,7 @@ describe('downSyncConnector project fold (M14)', () => {
     vault.remember({ content: 'Existing work note.', type: 'semantic', scope: 'work' });
     stubPending([{ server_id: 'conn_work', scope: 'work', type: 'semantic', content: 'New work note.' }]);
 
-    const result = await downSyncConnector({
+    const result = await applyDownSync({
       server: 'http://127.0.0.1:9',
       deviceSecret,
       vault,
@@ -199,6 +206,7 @@ interface PendingRow {
   scope: string;
   type: string;
   content: string;
+  base_revision?: string | null;
 }
 
 interface FoldStub {
@@ -218,8 +226,8 @@ function stubServer(opts: {
   let ackCalls = 0;
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
-    if (url.endsWith('/client/pending')) {
-      return new Response(JSON.stringify({ entries: opts.entries, forgets: opts.forgets ?? [] }), { status: 200 });
+    if (url.includes('/client/pending?v=2')) {
+      return new Response(JSON.stringify({ entries: withBase(opts.entries), forgets: opts.forgets ?? [] }), { status: 200 });
     }
     if (url.endsWith('/client/ack')) {
       ackCalls++;
@@ -237,15 +245,15 @@ function stubServer(opts: {
   return stub;
 }
 
-function fold(vault: Vault) {
-  return downSyncConnector({ server: 'http://127.0.0.1:9', deviceSecret, vault });
+function fold(vault: Vault, approve?: { server_ids?: string[]; forget_ids?: string[] }) {
+  return applyDownSync({ server: 'http://127.0.0.1:9', deviceSecret, vault, ...(approve ? { approve } : {}) });
 }
 
 function ackedIds(stub: FoldStub): string[] {
   return stub.acks.flatMap((a) => a.acked.map((row) => row.server_id));
 }
 
-describe('downSyncConnector hosted create fold (ADR 0050 Decision 4)', () => {
+describe('applyDownSync hosted create fold (ADR 0050 Decision 4)', () => {
   it('marks and applies an empty project scope that receives one working row', async () => {
     const vault = makeVault();
     const doc = projectMarkdown('Created in the app.');
@@ -412,18 +420,18 @@ describe('downSyncConnector hosted create fold (ADR 0050 Decision 4)', () => {
 
   it('leaves an already-shared scope on the M14 path with its shared_at intact', async () => {
     const vault = makeVault();
-    vault.remember({ content: projectMarkdown('Local status.'), type: 'working', scope: 'project:shared' });
+    const head = vault.remember({ content: projectMarkdown('Local status.'), type: 'working', scope: 'project:shared' });
     vault.setScopeShared('project:shared', true);
     const before = vault.sharedScopeRows().find((r) => r.scope === 'project:shared')!.shared_at;
     const stub = stubServer({
-      entries: [{ server_id: 'conn_m14', scope: 'project:shared', type: 'working', content: projectMarkdown('Cloud status.') }],
+      entries: [{ server_id: 'conn_m14', scope: 'project:shared', type: 'working', content: projectMarkdown('Cloud status.'), base_revision: head.id }],
     });
 
-    const result = await fold(vault);
+    const result = await fold(vault, { server_ids: ['conn_m14'] });
 
     expect(result.held).toBe(0);
     expect(result.held_scopes).toEqual([]);
-    expect(result.added).toBe(1);
+    expect(result.replaced).toBe(1);
     const live = vault.list({ scope: 'project:shared', type: 'working' });
     expect(live).toHaveLength(1);
     expect(live[0]!.content).toContain('Cloud status.');
@@ -479,7 +487,7 @@ describe('downSyncConnector hosted create fold (ADR 0050 Decision 4)', () => {
       forgets: [{ entry_id: doomed.id }],
     });
 
-    const result = await fold(vault);
+    const result = await fold(vault, { forget_ids: [doomed.id] });
 
     expect(result.held).toBe(1);
     expect(result.held_scopes).toEqual(['project:held']);
@@ -506,7 +514,7 @@ describe('holdMessage', () => {
  * buggy server may pad a scope or invent a type, and neither may reach past
  * the hold or abort the fold.
  */
-describe('downSyncConnector scope and type normalisation (ADR 0050 fix round)', () => {
+describe('applyDownSync scope and type normalisation (ADR 0050 fix round)', () => {
   it.each([[' project:plan'], ['project:plan '], ['project:plan\n'], ['\tproject:plan']])(
     'holds a padded scope %j instead of landing a second document in a private project',
     async (paddedScope) => {
