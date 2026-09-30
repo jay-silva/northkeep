@@ -1236,6 +1236,13 @@ every milestone; if a limit is removed, say when and how.*
 
 ## Connector for shared scopes, ADR 0019 + ADR 0020 (current)
 
+- **Cloud Connect's copy updates only when you push.** Shared scopes reach
+  the connector server when you share a scope, click Sync now under Connect,
+  Cloud, or run `northkeep share sync` or `northkeep share push`. Automatic
+  device sync does not push to the connector. A memory or project an AI app
+  saves on this Mac in a shared scope is invisible to your cloud apps until
+  the next push. The Cloud screen shows when this Mac last pushed (recorded
+  from 0.22.4 on; earlier pushes are not on record).
 - **This is the one place your shared memory is decrypted on our server.** Sync
   stays ciphertext-only and keyless. A scope you mark Shared is copied to
   NorthKeep's connector server, where it is stored encrypted at rest: the database

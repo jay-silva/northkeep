@@ -40,6 +40,8 @@ import {
   markConnectorPaired,
   ConnectorTombstoneError,
   pushSharedScopes,
+  markConnectorPushed,
+  connectorLastPushedAt,
   setConnectorServer,
   startPairing,
   unshareScope,
@@ -910,6 +912,8 @@ async function dispatch(
       // A paired device may sync with nothing shared: that sync is how a project
       // created in a connected app first arrives (ADR 0050 Decision 5).
       paired: connectorPaired(),
+      // When this Mac last pushed its shared scopes (null before 0.22.4 or never).
+      last_pushed_at: connectorLastPushedAt(),
       // The URL the user pastes into Claude/ChatGPT to add the connector (the MCP
       // mount is /mcp on the connector server — apps/connector-server).
       mcp_url: config ? mcpUrl(config.server) : null,
@@ -945,7 +949,9 @@ async function dispatch(
         vault.setScopeShared(targetScope, true);
         vault.save();
         try {
-          return await pushSharedScopes({ server: config.server, deviceSecret, scopes: vault.sharedScopes(), vault, entitlement });
+          const pushed = await pushSharedScopes({ server: config.server, deviceSecret, scopes: vault.sharedScopes(), vault, entitlement });
+          markConnectorPushed();
+          return pushed;
         } catch (err) {
           // The push did not land (offline, over the sharing caps, or the
           // billing gate refused). Roll the mark back — unless it was already
@@ -1045,6 +1051,7 @@ async function dispatch(
         vault,
         entitlement,
       });
+      markConnectorPushed();
       return { down, push, newlyShared };
     });
     if (result === null) return bad(400, 'No scopes are shared yet.');

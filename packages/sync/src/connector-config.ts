@@ -78,6 +78,31 @@ export function markConnectorPaired(now: Date = new Date()): void {
   fs.writeFileSync(target, `${JSON.stringify({ ...raw, paired_at: now.toISOString() }, null, 2)}\n`, { mode: 0o600 });
 }
 
+/**
+ * Record a push of the shared scopes that the connector server accepted, so
+ * the GUI can say how old Cloud Connect's copy is. Device-local and not a
+ * secret. Best effort: a failed write never fails the push it follows.
+ */
+export function markConnectorPushed(now: Date = new Date()): void {
+  try {
+    const raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as Record<string, unknown>;
+    if (raw === null || typeof raw !== 'object' || typeof raw.server !== 'string') return;
+    fs.writeFileSync(connectorConfigPath(), `${JSON.stringify({ ...raw, last_pushed_at: now.toISOString() }, null, 2)}\n`, { mode: 0o600 });
+  } catch {
+    // No config, or unwritable: the push itself already succeeded.
+  }
+}
+
+/** When this device last pushed its shared scopes to the configured server, or null. */
+export function connectorLastPushedAt(): string | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as Record<string, unknown>;
+    return typeof raw?.last_pushed_at === 'string' ? raw.last_pushed_at : null;
+  } catch {
+    return null;
+  }
+}
+
 /** When this device last paired with the configured server, or null. */
 export function connectorPairedAt(): string | null {
   return loadConnectorConfig()?.paired_at ?? null;
@@ -193,7 +218,10 @@ export function setConnectorServer(serverUrl: string): ConnectorConfig {
     // No existing file — start fresh.
   }
   const next: Record<string, unknown> = { ...raw, server };
-  if (raw.server !== server) next.paired_at = null;
+  if (raw.server !== server) {
+    next.paired_at = null;
+    delete next.last_pushed_at;
+  }
   const target = connectorConfigPath();
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
   fs.writeFileSync(target, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
