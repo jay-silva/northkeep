@@ -3,6 +3,9 @@
 - **Date:** 2026-09-03
 - **Status:** Accepted by Jay 2026-09-03 ("Push and accepted"). Becomes the
   next milestone. Product code follows this record.
+  **Amended by ADR 0063 (2026-09-30):** the automatic pull refuses a copy
+  that would remove or undo anything on this device (D6), and a successful
+  push or an in-sync wake also updates Cloud Connect (D5).
   **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** implemented
   from 3e31353 through the eleventh-review fixes (a5138a6) and the live
   verification record (a64998d), and shipped in release 0.21.0 (all are

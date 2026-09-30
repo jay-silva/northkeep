@@ -580,7 +580,9 @@ fetch the entitlement from the sync server first
   "share is write access" (KNOWN-LIMITS M14). Unshare, not delete, is the
   revoke.
 - **Stale-base last-writer-wins on hosted updates** is unchanged from
-  ADR 0040; the hosted tools remain revision-free.
+  ADR 0040; the hosted tools remain revision-free. (Superseded by ADR 0063,
+  2026-09-30: hosted `project_update` requires `expected_revision`, and the
+  fold applies a create only from a row whose base is `new`.)
 
 ## Adversarial review
 

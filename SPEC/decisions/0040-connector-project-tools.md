@@ -3,6 +3,7 @@
 - **Date:** 2026-08-25
 - **Status:** Accepted (M14), KEEP WITH PATCHES
   Decision 5 and Decision 7 amended by ADR 0050 (2026-09-19): a connected app can create a project; the fold marks an empty scope Shared on arrival.
+  Amended by ADR 0063 (2026-09-30): hosted `project_update` requires `expected_revision`, and the down-sync (now `applyDownSync`) applies a cloud document only as a fast-forward of the local head; anything else waits as a conflict.
 - **Deciders:** Jay (product owner; ordered the adversarial review, then
   implementation of the patched design), adversarial reviewer, Cursor
 - **Does not touch:** ADR 0039 (local project tools and `memory_edit`),
