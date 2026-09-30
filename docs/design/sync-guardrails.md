@@ -112,7 +112,8 @@ head from `getProjectView` (not the last item of `list()`):
 
 | Row | Local state | Action |
 |---|---|---|
-| any | content identical to `H.content` | ack against `H.id` as a dedupe (no vault write) |
+| current (not stale, base recorded) | content identical to `H.content` | ack against `H.id` as a dedupe (no vault write) |
+| stale or legacy | content identical to `H.content` | discard the row by id (`/client/discard`), no vault write |
 | `stale: true` | any | **conflict** |
 | base absent (legacy) | any | **conflict**, always |
 | base equal to `H.id`, not stale | one live head | apply with the guarded project write (below), ack |
@@ -120,9 +121,13 @@ head from `getProjectView` (not the last item of `list()`):
 | anything else | | **conflict**: not applied, not acked |
 | any | `getProjectView` throws `project_conflict` (several live docs) | conflict |
 
-Rows are matched top to bottom. The dedupe row writes nothing to the vault, so
-it is safe for a legacy row too: acking renames the connector row to a head the
-device already has.
+Rows are matched top to bottom. Neither dedupe row writes to the vault. Only a
+current row's dedupe acks: an ack renames the row to `H.id` with a new, higher
+`write_seq`, which makes `H` the connector's `P` (D2). For a stale or legacy
+row, `H` may be behind the connector's head, so an ack would move the head
+backward through the ack path, the A4 regression by another route. Those rows
+are discarded by id instead, which bumps `scope_seq` and leaves `P` alone.
+Under `additiveOnly` (the phone) neither dedupe row runs; the row is held.
 
 **Legacy rows are never applied automatically.** No client, desktop, CLI or
 phone, applies a row with no recorded base. It is held for the user with the
@@ -400,14 +405,20 @@ vault it was taken from:
   push their manual pushes get 428 until they upgrade. That is the point: an
   old client is exactly the device that cannot tell whether it is behind.
 
-Manual pushes (Sync now, `share push|sync`) send the same body. Sync now pushes
-the vault first, so it is in sync when it reaches the connector.
+Manual pushes (Sync now, `share push|sync`) send the same body and need the
+same state. When the device is `ahead`, they push the vault first and send the
+version the sync server returns; when it is `behind` or `diverged`, they refuse
+with "Sync this Mac first". Two `ahead` devices therefore never send the same
+version for different vaults: the sync server's compare-and-swap lets only one
+of them become `in-sync` at that version.
 
 **Tombstone enforcement is required.** D5's 412 path exists only when the
 connector runs with `CONNECTOR_TOMBSTONE_ENFORCE` on (`tombstones.ts:20-23`,
 default off). With it off, a push racing an unshare re-uploads the unshared
 scope (first review A5). So `GET /client/manifest` gains
-`tombstone_enforce: boolean`, and the engine stays paused with "Cloud Connect
+`tombstone_enforce: boolean`, the unauthenticated health page
+(`create-server.ts:919-932`) gains one line, "Tombstone enforcement: on" or
+"off", computed by `isTombstoneEnforceOn()`, and the engine stays paused with "Cloud Connect
 is not refusing pushes to unshared scopes, so automatic push is off" when it is
 false. A self-hosted connector without the flag therefore gets manual pushes
 only. A 412 from a deliberate unshare on this device clears the scope from the
@@ -446,8 +457,18 @@ would take it away or undo it:
   (first review L2);
 - entries superseded here whose replacement is absent there (the replacement
   is already in the first bullet; the report names the project or memory once);
-- projects whose local head id is absent from the pulled vault, by name;
-- scopes marked shared here and not there, and the reverse.
+- projects whose local head id is absent from the pulled vault, by name.
+
+Scope marks that differ (shared here and not there, or the reverse) are listed
+on the manual report as information and are **not** part of the drop set. The
+automatic pull runs only in `behind`, where this device has not changed since
+its last sync, so a mark difference there is another device's deliberate share
+or unshare; refusing on it would wedge every normal share. A local mark change
+the pull would undo can only exist when the device is diverged, which is the
+manual path, where the report shows it. The other rules need no such
+exception: an entry id is never removed from a vault and a forget is never
+reversed, so in `behind` a non-empty drop set always means the server copy
+lost something this device had.
 
 **Automatic pull.** `pullVault` computes the drop set itself, on `tmpPath`,
 after the open-verify and under the file lock (`client.ts:403-455`), so it
@@ -568,7 +589,9 @@ acceptance uses the in-memory store.
   `stale: true`. `project_update` with no `expected_revision` refuses.
   `expected_revision=R1` refuses `stale_project` and returns R2. Two successive
   updates get distinct revisions, and the second carries the first's base. An
-  ack with no re-push leaves both stores naming the acked row as `P` (A3).
+  ack with no re-push leaves both stores naming the acked row as `P` (A3). A
+  stale row whose text equals an older device head is discarded, not acked,
+  and `P` is unchanged.
 - **D2 concurrency.** Two `project_update` calls with the same
   `expected_revision`, fired together against PGlite: exactly one succeeds and
   one pending working row exists. A held stale row survives both.
@@ -615,12 +638,14 @@ Pushing `main` deploys the connector (production). Each step needs Jay's yes.
    on the founder's account says how many conflicts to expect (**unverified**
    today).
 3. **Verify tombstone enforcement, read-only.** After the deploy, one
-   authenticated `GET /client/manifest` from the founder's CLI
-   (`northkeep share status`, which prints the new field) must show
-   `tombstone_enforce: true`. Also `vercel env ls production` for the
-   connector project must list `CONNECTOR_TOMBSTONE_ENFORCE` (names only; do
-   not pull values). If either fails, D5 stays paused by design and the step
-   is to set the variable, which is its own Tier 2 yes.
+   unauthenticated `curl -s` of the production connector's health page (`/`)
+   must show "Tombstone enforcement: on". That page reads no storage and
+   writes nothing, and it reports the parsed flag, so a variable set to `0`
+   shows "off". `GET /client/manifest` is not used here: it upserts the
+   account and stamps entitlement. `vercel env ls production` for the
+   connector project is a presence check only (names, never values) and does
+   not prove the flag is on. If the page says "off", D5 stays paused by design
+   and setting the variable is its own Tier 2 yes.
 4. **Desktop and CLI release** with D1, D3, D4, D5 and D6, sending `?v=2` and
    the push `vault` field.
 5. **Phone build** with D1's additive-only down-sync and `?v=2`, batched with
@@ -692,7 +717,7 @@ script is written.
     (D1, section 6 step 2); `base_revision` gets a `new` sentinel so legacy
     stays distinct (section 2).
   - FLESH WOUND L2 (forgets): the drop set counts local forgets the pull would
-    resurrect, and scope marks (D6).
+    resurrect; scope-mark differences are shown on the manual report (D6).
   - FLESH WOUND L3 (confirm window): the manual pull installs the held
     dry-pass bytes after re-checking the server version and sha (D6).
   - FLESH WOUND A4 + D5 (regressed push): auto-push only when `in-sync`,
@@ -703,6 +728,9 @@ script is written.
     statement (D2); the delete names only the replaced row (D2); stale rows
     are flagged in `?v=2` (D2); the automatic-pull check is load-bearing for
     the phone's last-writer-wins (D6); D5 needs tombstone enforcement,
-    verified read-only at rollout (D5, section 6 step 3); crash-after-save
-    wording (D1).
+    verified read-only from the health page at rollout (D5, section 6 step
+    3); crash-after-save wording (D1).
+  - Found while revising: a dedupe ack of a stale or legacy row would move the
+    connector's head backward through the ack path; such rows are discarded
+    by id instead (D1).
   - Founder decisions recorded (section 8).
