@@ -479,7 +479,8 @@ field, and a client whose JSON and column disagree.
 ### 3. Legacy plaintext rows are purged by an idempotent startup step
 
 **Where.** It runs in the maintenance step (Decision 5) at the first request
-of each server process. It is **not** added to `SCHEMA_STATEMENTS`, because
+of each server process other than the health page `GET /` (amended by ADR
+0063, whose rollout reads that page and needs it to touch no storage). It is **not** added to `SCHEMA_STATEMENTS`, because
 `SCHEMA_SQL` is exported for self-hosters to run by hand, and a delete in
 there would wipe an opted-in self-host's data. No admin route: that would
 be a new network-facing route needing its own gate, for a job that needs no
@@ -601,7 +602,8 @@ reason (for example `connector maintenance: skipped
 (NORTHKEEP_CONNECTOR_MAINTENANCE not on)`), never a database name, a URL or
 a flag's value beyond on or off.
 Each part is independent. `createConnectorServer` runs it through a
-memoized promise before the first request is handled (it awaits it). A
+memoized promise before the first request other than `GET /` is handled
+(it awaits it; ADR 0063 exempts the health page). A
 failure is logged (message only) and does not fail the request: every
 reader already copes with un-migrated state (legacy rows are hidden, and
 `getClient` handles both JSON forms). The promise is not cached on failure,
@@ -664,7 +666,7 @@ sets only `buildCommand` and `regions`, and `db-url.ts` takes whatever
 Postgres URL the environment injects. Previews are known to build for this
 account (the sync server's entry-point fix was verified on a preview), so
 the risk is real. If a preview of this branch ran against the production
-connector database, its first request would run the purge and the
+connector database, its first request other than the health page would run the purge and the
 client-secret scrub before the merge and before Jay's part B counts, and
 the old production code would then reject every confidential client.
 

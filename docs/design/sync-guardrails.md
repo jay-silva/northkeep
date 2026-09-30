@@ -735,6 +735,20 @@ script is written.
     connector's head backward through the ack path; such rows are discarded
     by id instead (D1).
   - Founder decisions recorded (section 8).
+- 2026-09-30, recheck, CLEARED:
+  `~/Claude/Projects/NorthKeep/Reviews/adr-0063/recheck.md` (attacks in
+  `recheck-attacks/`). A2, L2, L3 and A4 closed on both stores; no kill
+  shot or flesh wound in the fix diff.
+  - SCAR TISSUE R-428c (different sync servers): recorded in KNOWN-LIMITS.
+  - R-S1 (working rows through `memory_remember`) and R-W1 (`write_seq`
+    NULL at deploy): fixed on the connector (connector notes).
+  - R-S2 (a stale create revives after a delete): fixed on the client
+    (client notes, "Recheck R-S2").
+  - R-428b and R-428d behave as measured; R-428d's reset wording is in
+    KNOWN-LIMITS and the integration notes. R-S3: the deterministic create
+    id was retired.
+  - The recheck asked Jay whether the fix round's new mechanisms call for a
+    fresh first review instead of a recheck. Not answered on record.
 
 ## Build notes
 
@@ -826,7 +840,10 @@ wire shapes, so the client build and the reviewers can check against them.
   backfill.
 - Consequence: at deploy, a scope that holds an acked row next to its old
   pushed row has both at 0. It reads as several heads until the next push.
-  The desktop and CLI re-push after every down-sync. A phone ack made before
+  The desktop and CLI re-push after every down-sync they apply (checked at
+  integration: `share sync` and `POST /api/share/sync` push after
+  `applyDownSync`); when they refuse because the device is behind or
+  diverged they apply and ack nothing, so no new tie forms. A phone ack made before
   the deploy leaves the tie in place until the Mac next pushes. The connector
   ships before any client with D5, so until the desktop release that push is
   a manual Sync now from 0.22.x. The guard accepts it while no pair is
@@ -900,8 +917,9 @@ wire shapes, so the client build and the reviewers can check against them.
   project, discard that scope's pending working rows by id through
   `/client/discard`, after saving each as a "Cloud version not kept" memory.
 - R-428b (equal versions across an ack) and R-428c (devices on different
-  sync servers) behave as the recheck measured them. R-428c still needs its
-  KNOWN-LIMITS line, which is outside this branch.
+  sync servers) behave as the recheck measured them. R-428c's KNOWN-LIMITS
+  line shipped with the client half.
+- R-S2 was fixed on the client instead (see the client notes, "Recheck R-S2").
 - The read-only count of the founder's pending working rows before deploy
   (section 6 step 2) was not run: no production access here.
 
@@ -1030,16 +1048,89 @@ approve: {} }`: additions only, and the rest is named with the CLI command.
 Pull shows the 409 report's sentence. The Cloud screen's fixed "does not
 update on its own" sentence now reads the engine status. No new screens.
 
-**Open for the merge and the phone build.**
-- `apps/connector-server` tests that import `downSyncConnector`
-  (`c3-connector`, `c3-property`, `m14-projects`) fail on this branch by
-  design: the export is now `applyDownSync`, forgets and replacements need
-  approval, and project rows need a base. With approvals, `c3-connector`
-  passes 7 of 7 against today's connector (run locally, not committed).
-- The phone's Sync now still re-pushes shared scopes after its down-sync
-  (`connect-flow.ts runConnectorSyncNow`), and its share add pushes, both
-  with no vault stamp, so both get 428 once a D5 client has pushed. The
-  design says the phone never re-pushes; it does. Drop the re-push or stamp it
-  in the phone build.
-- The section 9 acceptance script needs the PGlite connector from
-  `g63/connector`; it is written after the merge.
+**Open for the merge and the phone build (all closed at integration).**
+- The `apps/connector-server` suites that imported `downSyncConnector`
+  (`c3-connector`, `c3-property`, `m14-projects`) now run `applyDownSync`.
+- The phone's Sync now re-push is removed and its share push is stamped
+  (see "Integration" below).
+- The section 9 acceptance script is `scripts/adr-0063-acceptance.sh`.
+
+### Integration (g63/integrate)
+
+Branch `g63/integrate` from `main` at `86d96af` (the iPhone Projects tab,
+Expo 57 and the sqlite fix), then `g63/connector` and `g63/client` merged
+with `--no-ff`. The only textual conflict was these build notes. KNOWN-LIMITS
+and `apps/mobile` (Expo 57 on `main`, additions-only down-sync on
+`g63/client`) merged without conflicts, and mobile tsc, the mobile tests and
+`npx expo export --platform ios` passed on the merged tree before any fix.
+
+**Wire, checked against both build-notes sections and the code.** No
+mismatch needed a code change.
+- `vault.server`: the client hashes `sync.json`'s URL (already normalized by
+  `setSyncServer`) to 16 lowercase hex; the connector accepts exactly 16
+  lowercase hex. The phone normalizes the same way before hashing
+  (`vaultServerHashForPhone`), and a test pins it equal to the desktop's
+  `vaultServerHash`, because a mismatch would read every phone push as a
+  different sync server and replace the recorded order (R-428c on every
+  push).
+- `base_revision`: the connector omits it for a legacy row; the client reads
+  absent, empty or non-string as legacy.
+- `stale`: always present from the connector; the client honors only a
+  literal `true`.
+- `/client/discard { server_ids }`: the client reads only the status. It
+  sends every stale or legacy duplicate of one sync in one call; a plan over
+  5000 such rows would get 413 (not reachable in practice, not handled).
+- 428: the client reads it before every other status and does not use the
+  connector's `error` text, so the two wordings may differ.
+- `reset`: sent only from a manual push. With vault sync configured it
+  carries the stamp and replaces the pair. From a device with no vault sync
+  it carries no `vault` and clears the pair, so pushes with no `vault` (old
+  clients, devices with no vault sync) pass again until a stamped push.
+  This answers the recheck's R-428d question about what `--reset-order`
+  records with no sync config; KNOWN-LIMITS says it.
+- `tombstone_enforce` missing reads as off on the client; the connector
+  always sends it.
+
+**Phone (D1, D5).** The design (D1, "Phone") said the phone never re-pushes
+to the connector after a down-sync; the code did, and its share add pushed
+with no stamp. Both would have been refused with 428 once a D5 desktop
+pushed.
+- Sync now no longer pushes to the connector. `runConnectorSyncNow` has no
+  push port, so its outcome is `synced`, `nothing-shared` or a failure. The
+  vault change still goes to the sync server, and the Mac updates Cloud
+  Connect once it is in sync.
+- Share add stamps the push with `{ server, version }` only when the phone's
+  vault file sha equals the sha a live `/api/status` reports, read with the
+  entries under one vault-gate hold. Otherwise it refuses before any request
+  ("This phone is not in sync with your other devices yet, ..."). It never
+  pushes the vault first as the desktop does when ahead: the phone's
+  last-writer-wins push could displace a newer Mac vault and then stamp it as
+  the newest. With no sync server configured it sends no stamp, like a
+  desktop with no vault sync. A 428 on the phone reads "Another device pushed
+  a newer copy to Cloud Connect. Let this phone finish syncing, then share
+  again.", not the Mac's command.
+- This needs the next phone build; build 28 and earlier keep the old
+  behavior and get 428 once a D5 client pushes.
+
+**Tests ported.** `c3-connector` (3), `c3-property` (1) and `m14-projects`
+(1) call `applyDownSync`: a forget applies only when approved (an unapproved
+one is shown waiting), and a document whose base is not the local head is
+held as `moved`. The adr0063 connector suite reads the old-client gate on
+the v1 wire instead of the retired `downSyncConnector`, asserts the client's
+428 message, and gains one case running the client's approve and keep-mine
+paths against the real connector on both stores.
+
+**Acceptance.** `scripts/adr-0063-acceptance.sh` follows section 9 with
+these differences, forced by the built code:
+- The conflict in step 1 reads "Cloud Connect already has a newer copy than
+  the one this cloud version started from" rather than `moved`: the CLI's
+  automatic push after the local save sends R2 to the connector (D5), so the
+  row is stale by the time `share sync` runs.
+- `share sync` asks nothing there, because a conflict alone is never applied
+  (client D3 note); there is no "answer n".
+- Step 5 makes its row legacy through a loopback-only side door in
+  `scripts/adr-0063-servers.mjs` that nulls one pending row's base in the
+  throwaway PGlite database. No connector route writes a base-less row any
+  more (R-S1 is refused).
+- The sync server is this repo's `apps/sync-server` on its in-memory store;
+  the connector is this repo's on PGlite. `all` runs the sequence unattended.

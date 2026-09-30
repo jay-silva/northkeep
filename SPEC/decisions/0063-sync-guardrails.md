@@ -1,6 +1,6 @@
 # ADR 0063: Sync guardrails: cloud project writes fast-forward only, destructive syncs preview first
 
-Status: Proposed · Review: first review NOT CLEARED 2026-09-30, revised; recheck pending (docs/design/sync-guardrails.md)
+Status: Accepted 2026-09-30; Jay's decisions are the Founder line below (design section 8) · Review: first review NOT CLEARED, recheck CLEARED, both 2026-09-30 (design, Review history)
 
 ## Context
 On 2026-09-30 one Sync now rolled five projects back 7 to 9 days. Down-sync writes every pending cloud document over the local head (`connector-client.ts:366-374`). The connector serves pending rows ahead of newer pushes (`mcp.ts:104-118`) and accepts an older push over a newer one. A diverged pull replaces the vault silently. A cloud write never records its base.

@@ -918,16 +918,21 @@ every milestone; if a limit is removed, say when and how.*
   once any scope is shared on it. A Mac or the CLI paired before 0.22.0
   counts as paired. A phone paired before 0.22.0 does not: while it shares
   nothing, it does not fetch app-created projects until you pair it again.
-- **An old desktop client shadows instead of superseding.** A client that
-  predates M14 folds a project update as a new working memory. Newest-wins
-  then shows the folded document; the prior document remains live in the
-  vault and is recoverable. Nothing is deleted. Upgrade the desktop to get
-  a single live document.
-- **Stale-base last-writer-wins per section.** Two cloud sessions that
-  `project_update` without a fresh `project_get` each merge against the
-  document they last read. Status, Next Actions, and What & Why replace;
-  the later write wins those sections. Log and Decisions append, so both
-  sides' entries survive. The revision-bound local tools introduced in ADR 0048 refuse this stale-write race. Hosted tools remain unchanged.
+- **Clients from before ADR 0063 receive no cloud project updates, and
+  cannot push to Cloud Connect once a newer client has.** Desktop and CLI
+  0.22.x and phone build 28 and earlier still receive new memories from
+  your cloud apps, but the connector withholds every cloud project document
+  from them, because they would write it over the local one unchecked. Once
+  a newer device pushes, their pushes are refused (HTTP 428) until they
+  upgrade.
+- **A hosted `project_update` must name the revision it read (ADR 0063
+  D2).** Hosted `project_get` returns the document with its revision.
+  `project_update` without `expected_revision`, or with one that is no
+  longer current, saves nothing and returns the current document and its
+  revision, as the local tools do (ADR 0048). Every cloud update gets a new
+  revision, so two cloud sessions that read the same document cannot both
+  save over it. A cloud bot whose instructions do not pass the revision is
+  refused until its instructions change.
 - **Share is write access.** Sharing a project scope lets the connected
   AI update that project. Unshare deletes the scope's rows, including a
   not-yet-delivered project update. The revoke wins.
@@ -1265,6 +1270,20 @@ every milestone; if a limit is removed, say when and how.*
   `CONNECTOR_TOMBSTONE_ENFORCE=1`.** Without it the connector does not refuse
   pushes to a scope unshared elsewhere, so automatic push stays off and says
   so; pushing by hand still works.
+- **Cloud Connect refuses a push from an older copy of your vault (ADR 0063
+  D5).** Every push names the sync-server version it was taken from, and the
+  connector refuses (HTTP 428) a lower version than the last one it
+  accepted, and a push that names no version once one is recorded: an older
+  client, or a device with no vault sync. `northkeep share push
+  --reset-order` replaces the recorded version, for a sync account that was
+  recreated and started counting again. Sent from a device with no vault
+  sync it clears the record, so pushes that name no version are accepted
+  again until a device with vault sync pushes.
+- **Cloud Connect follows the newest vault version, not the newest
+  content.** When the phone's last-writer-wins recovery, or an older vault
+  file you restored, becomes the newest copy on your sync server, a Mac that
+  syncs to it is in sync and pushes that copy to Cloud Connect. The Mac that
+  lost work refuses the automatic pull and shows what would drop (M5).
 - **While your devices use different sync servers, Cloud Connect may show
   the copy from whichever device pushed last.** The connector orders pushes
   by sync-server version, and versions from two servers do not compare.
@@ -1286,8 +1305,12 @@ every milestone; if a limit is removed, say when and how.*
 - **From the first phone build after build 28, the phone applies only new
   memories and new projects from your cloud apps.** Replacements and
   deletions wait for your Mac, and the phone never confirms a deletion to the
-  connector, so your Mac still sees it. Build 28 and earlier still apply
-  them; the connector withholds cloud project updates from those builds.
+  connector, so your Mac still sees it. That phone never pushes to Cloud
+  Connect after its sync; your Mac updates Cloud Connect once it is in sync.
+  Sharing a scope on that phone pushes only while the phone holds exactly
+  the copy on your sync server, and otherwise asks you to let sync finish.
+  Build 28 and earlier still apply replacements and deletions; the connector
+  withholds cloud project updates from those builds.
 - **Deleting a shared project also deletes it from Cloud Connect.** The
   scope is unshared on the connector first, including any cloud write not
   yet delivered, so a cloud copy cannot come back later without a question.
