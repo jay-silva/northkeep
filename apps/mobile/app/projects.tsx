@@ -36,9 +36,10 @@ export default function Projects() {
           <View>
             <Text style={styles.emptyTitle}>No projects yet</Text>
             <Text style={styles.empty}>
-              Projects are kept by the AI apps you connect on your Mac. When an app resumes,
-              checkpoints, or wraps up a project, it saves the project to your vault, and it shows
-              up here after this phone syncs.
+              Projects are kept by the AI apps you connect on your Mac. An app resumes a project to
+              pick up where you left off, and saves it to your vault when it checkpoints or wraps
+              up. Saved projects show up here after this phone syncs: pull down on Memories to sync
+              now.
             </Text>
           </View>
         }

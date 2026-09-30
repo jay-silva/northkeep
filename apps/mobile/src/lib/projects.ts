@@ -166,7 +166,7 @@ export function projectDetail(entries: readonly MemoryEntry[], slug: string): Pr
       return { ok: false, message: 'This project document cannot be read here. Open it on your Mac to fix it.' };
     }
     // not_found, and an invalid slug from a hand-typed route.
-    return { ok: false, message: 'That project is not on this phone. Go back and sync.' };
+    return { ok: false, message: 'That project is not on this phone. Pull down on Memories to sync.' };
   }
 }
 

@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KDF_INTERACTIVE, MEMORY_TYPES, Vault, generateDeviceSecret } from '@northkeep/core';
-import { DEMO_MEMORIES, DEMO_PASSPHRASE } from '../src/lib/demo-vault.js';
+import { DEMO_PASSPHRASE, demoSeed } from '../src/lib/demo-vault.js';
 
 /**
  * The demo seed (M6-2b) is data that gets fed straight into core's
@@ -20,8 +20,8 @@ describe('demo vault seed', () => {
   });
 
   it('uses only valid memory types and non-empty synthetic content', () => {
-    expect(DEMO_MEMORIES.length).toBeGreaterThan(0);
-    for (const memory of DEMO_MEMORIES) {
+    expect(demoSeed().length).toBeGreaterThan(0);
+    for (const memory of demoSeed()) {
       expect(MEMORY_TYPES).toContain(memory.type);
       expect(memory.content.trim().length).toBeGreaterThan(0);
       // Synthetic-only: the demo must never ship a real-looking credential.
@@ -41,13 +41,13 @@ describe('demo vault seed', () => {
       deviceSecret: Buffer.from(secret),
       kdf: KDF_INTERACTIVE,
     });
-    for (const memory of DEMO_MEMORIES) vault.remember(memory);
+    for (const memory of demoSeed()) vault.remember(memory);
     vault.save();
     vault.close();
 
     // Reopen with the same two secrets to prove it is a valid encrypted vault.
     const reopened = Vault.open({ path, passphrase: DEMO_PASSPHRASE, deviceSecret: Buffer.from(secret) });
-    expect(reopened.list().length).toBe(DEMO_MEMORIES.length);
+    expect(reopened.list().length).toBe(demoSeed().length);
     reopened.close();
   });
 });

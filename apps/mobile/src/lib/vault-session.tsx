@@ -31,7 +31,7 @@ import {
   type DownSyncResult,
 } from '@northkeep/sync';
 import { DEFAULT_CONNECTOR_SERVER_URL, allowlistHashFromToken } from './connect-flow';
-import { DEMO_MEMORIES, DEMO_PASSPHRASE } from './demo-vault';
+import { DEMO_PASSPHRASE, demoSeed } from './demo-vault';
 import { deleteIfExists, demoVaultPath, recoverVaultFileIfMissing, vaultPath, vaultSidecarPaths } from './paths';
 import {
   biometricUnlockEnabled,
@@ -510,7 +510,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     } finally {
       memzero(secret);
     }
-    for (const memory of DEMO_MEMORIES) vault.remember(memory);
+    for (const memory of demoSeed()) vault.remember(memory);
     vault.save();
     // Drop any prior session state (there should be none coming from onboarding).
     closeSession();

@@ -72,9 +72,10 @@ function demoProjectContent(): string {
 
 /**
  * One synthetic project so the Projects tab has something to show in the demo
- * and in App Store review. The provenance block names an invented app.
+ * and in App Store review. The provenance block names an invented app. Built
+ * on demand, not at import, so core code never runs during app launch.
  */
-export const DEMO_PROJECT: RememberInput = {
+const demoProject = (): RememberInput => ({
   content: demoProjectContent(),
   type: 'working',
   scope: projectScope(DEMO_PROJECT_SLUG),
@@ -90,7 +91,15 @@ export const DEMO_PROJECT: RememberInput = {
       recorded_at: '2026-09-27T15:00:00.000Z',
     },
   },
-};
+});
+
+/**
+ * Everything startDemo writes. The project goes first so it lands at the
+ * bottom of the newest-first Memories list instead of leading it as raw Markdown.
+ */
+export function demoSeed(): RememberInput[] {
+  return [demoProject(), ...DEMO_MEMORIES];
+}
 
 /** Newest-looking last, so list().reverse() surfaces a sensible order. */
 export const DEMO_MEMORIES: RememberInput[] = [
@@ -150,5 +159,4 @@ export const DEMO_MEMORIES: RememberInput[] = [
     source: 'demo',
     confidence: 0.85,
   },
-  DEMO_PROJECT,
 ];

@@ -11,7 +11,7 @@ import {
   listProjectViews,
 } from '@northkeep/core';
 import { entriesReader, projectDetail, projectRows, textBlocks, updatedLabel } from '../src/lib/projects.js';
-import { DEMO_MEMORIES, DEMO_PASSPHRASE } from '../src/lib/demo-vault.js';
+import { DEMO_PASSPHRASE, demoSeed } from '../src/lib/demo-vault.js';
 
 /**
  * The Projects tab's data mapping, driven through a real Vault the way the
@@ -159,7 +159,7 @@ describe('projects data mapping', () => {
   });
 
   it('says a missing or malformed slug is not on this phone', () => {
-    const expected = { ok: false, message: 'That project is not on this phone. Go back and sync.' };
+    const expected = { ok: false, message: 'That project is not on this phone. Pull down on Memories to sync.' };
     expect(projectDetail(entries(), 'nope')).toEqual(expected);
     expect(projectDetail(entries(), '../etc')).toEqual(expected);
   });
@@ -207,7 +207,7 @@ describe('demo project', () => {
         deviceSecret: Buffer.from(generateDeviceSecret()),
         kdf: KDF_INTERACTIVE,
       });
-      for (const memory of DEMO_MEMORIES) vault.remember(memory);
+      for (const memory of demoSeed()) vault.remember(memory);
       const entries = vault.list().reverse();
       vault.close();
 
