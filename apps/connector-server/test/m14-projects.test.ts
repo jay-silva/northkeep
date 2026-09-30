@@ -516,7 +516,7 @@ describe('M14 connector project tools (step 4)', () => {
 });
 
 describe('M14 desktop fold (step 5)', () => {
-  it('supersedes the local live working doc; old-client remember-fold leaves the prior doc live', async () => {
+  it('an old client never receives the cloud document (ADR 0063 v1 gate); ?v=2 gets it with its base; old-client remember-fold leaves the prior doc live', async () => {
     await seedEncryptedEntry(storage, account, connToken, {
       entryId: 'fold-base',
       scope: 'project:foldme',
@@ -539,19 +539,27 @@ describe('M14 desktop fold (step 5)', () => {
     });
     expect(updated.isError).toBe(false);
 
+    // The 0.22.x downSyncConnector sends no ?v=2 and would write this over
+    // the local head without a base check, so the connector withholds it.
     const down = await withVault((v) => downSyncConnector({ server: base, deviceSecret, vault: v }));
-    expect(down.added).toBeGreaterThanOrEqual(1);
-
+    expect(down.added).toBe(0);
     await withVault((v) => {
       const live = v.list({ scope: 'project:foldme', type: 'working' });
       expect(live).toHaveLength(1);
-      expect(live[0]!.content).toContain('Cloud wrote this.');
-      expect(live[0]!.content).toContain('Fold acceptance.');
-      const all = v.list({ scope: 'project:foldme', type: 'working', includeSuperseded: true });
-      expect(all.length).toBeGreaterThanOrEqual(2);
-      expect(all.some((e) => e.content.includes('Local live.') && e.superseded_at !== null)).toBe(true);
+      expect(live[0]!.content).toContain('Local live.');
       expect(v.verifyChain().ok).toBe(true);
     });
+    const cloudRow = (await storage.listPendingEntries(account)).find((e) => e.scope === 'project:foldme')!;
+    expect(cloudRow.baseRevision).toBe('fold-base');
+
+    const v2 = (await fetch(`${base}/client/pending?v=2`, { headers: { authorization: `Bearer ${connToken}` } }).then((r) =>
+      r.json(),
+    )) as { entries: Array<{ server_id: string; scope: string; type: string; content: string; base_revision?: string; stale: boolean }> };
+    const delivered = v2.entries.filter((e) => e.scope === 'project:foldme');
+    expect(delivered.map((e) => ({ id: e.server_id, type: e.type, base: e.base_revision, stale: e.stale }))).toEqual([
+      { id: cloudRow.entryId, type: 'working', base: 'fold-base', stale: false },
+    ]);
+    expect(delivered[0]!.content).toContain('Cloud wrote this.');
 
     // Old-client residual: remember-fold, newest-wins shows the folded doc,
     // prior document remains live.

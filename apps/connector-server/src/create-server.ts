@@ -27,6 +27,9 @@
  *     GET    /client/manifest    (Bearer connector_token -> [{entry_id,entry_hash,scope}])
  *     PUT    /client/entries     (Bearer; "make these scopes match" batch push)
  *     DELETE /client/scope/:scope (Bearer; unshare -> delete rows + tombstone)
+ *     GET    /client/pending     (Bearer; connector-born rows to down-sync; ?v=2 adds ADR 0063 fields)
+ *     POST   /client/ack         (Bearer; applied rows -> vault ids)
+ *     POST   /client/discard     (Bearer; delete named pending rows, ADR 0063)
  *     POST /debug/seed           (test-only, env-gated; seed shared rows)
  *     GET  /.well-known/oauth-protected-resource   (PRM root, compat)
  *     GET  /                     (health page)
@@ -39,8 +42,9 @@ import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handle
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { OAuthError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { parseProjectSlug } from './project-doc.js';
-import type { ConnectorStorage, SharedEntry } from './storage.js';
-import { InMemoryConnectorStorage } from './storage.js';
+import type { ConnectorStorage, SharedEntry, VaultOrderClaim } from './storage.js';
+import { InMemoryConnectorStorage, StalePushError } from './storage.js';
+import { projectScopeView } from './project-head.js';
 import {
   isTombstoneEnforceOn,
   parseSharedAtMap,
@@ -113,6 +117,27 @@ const PER_ENTRY_CAP_MESSAGE =
 // in-handler, not silently 413'd by the parser.
 const CLIENT_BODY_LIMIT = '8mb';
 
+/** ADR 0063 D5: the refusal of a push older than the last one accepted. */
+const STALE_PUSH_MESSAGE =
+  'Cloud Connect already has a copy from a newer version of your vault. Sync this device first. ' +
+  'If your sync account was recreated, push once with northkeep share push --reset-order.';
+
+/**
+ * The push body's ADR 0063 D5 claim: `vault: { server, version }` and an
+ * optional `reset: true`. No `vault` is an old client's push. Anything else
+ * malformed is null, and the route answers 400.
+ */
+export function parseVaultClaim(vault: unknown, reset: unknown): VaultOrderClaim | null {
+  if (reset !== undefined && typeof reset !== 'boolean') return null;
+  const r = reset === true;
+  if (vault === undefined || vault === null) return { server: null, version: null, reset: r };
+  if (typeof vault !== 'object' || Array.isArray(vault)) return null;
+  const v = vault as { server?: unknown; version?: unknown };
+  if (typeof v.server !== 'string' || !/^[0-9a-f]{16}$/.test(v.server)) return null;
+  if (typeof v.version !== 'number' || !Number.isSafeInteger(v.version) || v.version < 0) return null;
+  return { server: v.server, version: v.version, reset: r };
+}
+
 export type ConnectorServerOptions = {
   /**
    * Override CONNECTOR_TOMBSTONE_ENFORCE (tests). Production omits this so
@@ -156,6 +181,9 @@ export function createConnectorServer(
   // served or synced (belt-and-suspenders against a DB-writer injecting chosen
   // plaintext "memories"). The hosted deploy does NOT set this.
   const allowLegacyPlaintext = process.env.NORTHKEEP_CONNECTOR_ALLOW_LEGACY_PLAINTEXT === '1';
+
+  /** CONNECTOR_TOMBSTONE_ENFORCE, parsed at request time (tests may override). */
+  const tombstoneEnforce = (): boolean => opts.tombstoneEnforce ?? isTombstoneEnforceOn();
 
   const provider = new ConnectorOAuthProvider(storage, mcpResourceUrl, kekPepper, opts.clientSecretBinder);
 
@@ -605,6 +633,8 @@ export function createConnectorServer(
     const entries = await storage.listEntries(accountHash);
     res.status(200).json({
       entries: entries.map((e) => ({ entry_id: e.entryId, entry_hash: e.entryHash ?? '', scope: e.scope })),
+      // ADR 0063 D5: automatic push stays paused unless unshares are enforced.
+      tombstone_enforce: tombstoneEnforce(),
     });
   }));
 
@@ -632,6 +662,13 @@ export function createConnectorServer(
     const body = req.body as { scopes?: unknown; entries?: unknown; shared_at?: unknown };
     if (!Array.isArray(body.scopes) || !Array.isArray(body.entries)) {
       res.status(400).json({ error: 'Provide a scopes[] array and an entries[] array.' });
+      return;
+    }
+    const claim = parseVaultClaim((req.body as { vault?: unknown }).vault, (req.body as { reset?: unknown }).reset);
+    if (claim === null) {
+      res.status(400).json({
+        error: 'vault must be { server: 16 lowercase hex characters, version: a whole number of 0 or more }, and reset must be true or false.',
+      });
       return;
     }
     const scopes = body.scopes.filter((s): s is string => typeof s === 'string');
@@ -702,14 +739,26 @@ export function createConnectorServer(
       })),
     );
     const sharedAt = parseSharedAtMap(body.shared_at);
-    const enforce = opts.tombstoneEnforce ?? isTombstoneEnforceOn();
+    const enforce = tombstoneEnforce();
+    const refuseStale = async (): Promise<void> => {
+      res.status(428).json({
+        error: STALE_PUSH_MESSAGE,
+        code: 'stale_push',
+        vault_version: (await storage.getVaultOrder(accountHash)).version,
+      });
+    };
     // ADR 0050 Decision 3: always attempt the accepting path so a deliberate
     // re-share clears the tombstone in both flag states. Only the 412 refusal
     // is behind the flag; with it off a conflict falls back to a plain replace
-    // and leaves the tombstone standing.
+    // and leaves the tombstone standing. ADR 0063 D5: both paths apply the
+    // vault-order guard first and refuse an older push with 428.
     try {
-      await storage.replaceScopesAcceptingReshare(accountHash, scopes, encrypted, sharedAt);
+      await storage.replaceScopesAcceptingReshare(accountHash, scopes, encrypted, sharedAt, claim);
     } catch (err) {
+      if (err instanceof StalePushError) {
+        await refuseStale();
+        return;
+      }
       if (err instanceof TombstoneConflictError) {
         if (enforce) {
           res.status(412).json({
@@ -718,7 +767,13 @@ export function createConnectorServer(
           });
           return;
         }
-        await storage.replaceScopes(accountHash, scopes, encrypted);
+        try {
+          await storage.replaceScopes(accountHash, scopes, encrypted, claim);
+        } catch (fallbackErr) {
+          if (!(fallbackErr instanceof StalePushError)) throw fallbackErr;
+          await refuseStale();
+          return;
+        }
       } else {
         res.status(503).json({
           error: 'Could not check share tombstones. Nothing was changed.',
@@ -786,6 +841,12 @@ export function createConnectorServer(
   // GET /client/pending -> the connector-born memories not yet pulled into the
   // vault, plus the queued forgets. Content-bearing but account-scoped; the
   // desktop applies these to the OPEN vault then acks.
+  //
+  // ADR 0063: a client that does not send ?v=2 (0.22.x desktop, phone builds
+  // before the guardrails) applies a project document blind, so it never gets
+  // one: pending working rows in project scopes are withheld from it. With
+  // ?v=2 every entry carries base_revision (absent for a legacy row) and
+  // stale, which is true for a project document D2 would not serve.
   app.get('/client/pending', asyncRoute(async (req: Request, res: Response) => {
     const connToken = bearerToken(req);
     const accountHash = connToken ? sha256hex(connToken) : null;
@@ -793,6 +854,7 @@ export function createConnectorServer(
       res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
       return;
     }
+    const v2 = req.query.v === '2';
     await stampEntitlement(req, accountHash);
     if (!(await isEntitled(accountHash))) {
       deny402(res);
@@ -819,26 +881,50 @@ export function createConnectorServer(
     // Legacy gate (ADR 0020 crypto review): a non-encrypted row is served/synced
     // ONLY when self-host opted in. On the hosted deploy it is silently dropped,
     // so a DB-writer cannot inject a chosen-plaintext memory into a vault.
-    const deliverable = live.filter(
-      (e) => !forgottenSet.has(e.entryId) && (isEncryptedRow(e.content) || allowLegacyPlaintext),
-    );
+    const openable = (e: SharedEntry): boolean => isEncryptedRow(e.content) || allowLegacyPlaintext;
+    const deliverable = live.filter((e) => !forgottenSet.has(e.entryId) && openable(e));
     // ADR 0020: decrypt each connector-born row for the desktop with the DEK
     // resolved from the presented connector token. A row that will not open is
     // a 409 — the client tells the user to re-push (vault is the source of truth).
-    let entriesOut: Array<{ server_id: string; scope: string; type: string; content: string }>;
+    const isDocument = (e: SharedEntry): boolean => e.type === 'working' && parseProjectSlug(e.scope) !== null;
+    let entriesOut: Array<Record<string, unknown>>;
     try {
-      const needsDek = deliverable.some((e) => isEncryptedRow(e.content));
-      const dek = needsDek ? await resolveAccountDek(accountHash, connToken) : null;
-      entriesOut = await Promise.all(
-        deliverable.map(async (e) => {
-          if (!dek || !isEncryptedRow(e.content)) {
-            // Only reached for a legacy row when allowLegacyPlaintext is on.
-            return { server_id: e.entryId, scope: e.scope, type: e.type, content: e.content };
+      let dek: Promise<Uint8Array> | null = null;
+      const open = async (e: SharedEntry): Promise<SharedEntry> => {
+        if (!isEncryptedRow(e.content)) return e; // only reached when allowLegacyPlaintext is on
+        dek ??= resolveAccountDek(accountHash, connToken);
+        const plain = await decryptRow(e.content, accountHash, await dek);
+        return { ...e, type: plain.type, content: plain.content };
+      };
+      const opened = await Promise.all(deliverable.map(open));
+      if (!v2) {
+        entriesOut = opened
+          .filter((e) => !isDocument(e))
+          .map((e) => ({ server_id: e.entryId, scope: e.scope, type: e.type, content: e.content }));
+      } else {
+        // D2 over a fresh read of the scopes that have a document to deliver,
+        // with the same visibility the MCP tools use.
+        const docScopes = new Set(opened.filter(isDocument).map((e) => e.scope));
+        const headByScope = new Map<string, string | null>();
+        if (docScopes.size > 0) {
+          const snapshot = (await storage.listEntries(accountHash)).filter(
+            (e) => docScopes.has(e.scope) && !forgottenSet.has(e.entryId) && openable(e),
+          );
+          const openedSnapshot = await Promise.all(snapshot.map(open));
+          for (const scope of docScopes) {
+            const view = projectScopeView(openedSnapshot.filter((e) => e.scope === scope));
+            headByScope.set(scope, view.head.kind === 'head' ? view.head.row.entryId : null);
           }
-          const plain = await decryptRow(e.content, accountHash, dek);
-          return { server_id: e.entryId, scope: e.scope, type: plain.type, content: plain.content };
-        }),
-      );
+        }
+        entriesOut = opened.map((e) => ({
+          server_id: e.entryId,
+          scope: e.scope,
+          type: e.type,
+          content: e.content,
+          ...(e.baseRevision === undefined ? {} : { base_revision: e.baseRevision }),
+          stale: isDocument(e) && headByScope.get(e.scope) !== e.entryId,
+        }));
+      }
     } catch (err) {
       if (err instanceof ConnectorCryptoError) {
         deny409(res);
@@ -910,6 +996,49 @@ export function createConnectorServer(
     res.status(200).json({ ok: true, acked: ackedCount, forgotten: forgottenCount });
   }));
 
+  // POST /client/discard -> ADR 0063: delete exactly these pending rows by id
+  // (keep mine, and the dedupe of a stale or legacy row whose text the device
+  // already has). Body: { server_ids: string[] }. Gate: the connector token's
+  // account and the entitlement, like /client/ack; it can only delete the
+  // caller's own pending rows, never a pushed one.
+  app.post('/client/discard', express.json({ limit: CLIENT_BODY_LIMIT }), asyncRoute(async (req: Request, res: Response) => {
+    const accountHash = bearerAccount(req);
+    if (!accountHash) {
+      res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
+      return;
+    }
+    const raw = (req.body as { server_ids?: unknown } | undefined)?.server_ids;
+    if (!Array.isArray(raw) || !raw.every((id) => typeof id === 'string')) {
+      res.status(400).json({ error: 'Provide a server_ids array of strings.' });
+      return;
+    }
+    if (raw.some(hasNul)) {
+      res.status(400).json({ error: 'A name or id contains a character the connector cannot store (U+0000).' });
+      return;
+    }
+    await stampEntitlement(req, accountHash);
+    if (!(await isEntitled(accountHash))) {
+      deny402(res);
+      return;
+    }
+    await storage.upsertAccount(accountHash);
+    if (raw.length > MAX_SHARED_ENTRIES) {
+      res.status(413).json({ error: `Too many ids in one discard (${raw.length}). The cap is ${MAX_SHARED_ENTRIES}.` });
+      return;
+    }
+    const discarded = await storage.discardPending(accountHash, raw as string[]);
+    await storage.appendAudit({
+      ts: new Date().toISOString(),
+      accountHash,
+      tool: 'client_discard',
+      params: { limit: raw.length },
+      ok: true,
+      resultCount: discarded,
+      resultIds: [],
+    });
+    res.status(200).json({ ok: true, discarded });
+  }));
+
   // (Removed: the env-gated POST /debug/seed test helper. It trusted a
   // caller-supplied account_hash from the body with no OAuth or entitlement
   // check — a latent cross-account memory-poisoning write if the env flag were
@@ -917,16 +1046,20 @@ export function createConnectorServer(
   // (PUT /client/entries); the e2e seeds via the storage method directly.)
 
   // ---- health page ------------------------------------------------------
+  // Reads no storage: the tombstone line reports the parsed flag (ADR 0063
+  // rollout step 3), so a variable set to 0 shows "off".
   app.get('/', (_req: Request, res: Response) => {
     res.type('html').send(`<!doctype html><meta charset="utf-8">
 <title>NorthKeep Connector</title>
 <h1>NorthKeep hosted shareable-scope connector</h1>
 <p>Public origin: <code>${publicUrl}</code></p>
 <p>OAuth 2.1 authorization server + MCP resource server. Serves ONLY scopes the user marked Shared.</p>
+<p>Tombstone enforcement: ${tombstoneEnforce() ? 'on' : 'off'}</p>
 <ul>
   <li><code>POST /mcp</code>: MCP streamable HTTP (bearer-protected, stateless). Tools: <code>memory_retrieve</code>, <code>memory_list</code>, <code>memory_remember</code>, <code>memory_forget</code>, <code>project_list</code>, <code>project_get</code>, <code>project_create</code>, <code>project_update</code>, and ChatGPT's <code>search</code> + <code>fetch</code></li>
   <li><code>POST /pair/start</code>: pairing code from a connector token</li>
   <li><code>GET /client/manifest</code>, <code>PUT /client/entries</code>, <code>DELETE /client/scope/:scope</code>: desktop push of shared scopes</li>
+  <li><code>GET /client/pending</code>, <code>POST /client/ack</code>, <code>POST /client/discard</code>: desktop down-sync of what connected apps wrote</li>
   <li><code>GET /.well-known/oauth-authorization-server</code>: RFC 8414 AS metadata</li>
   <li><code>GET /.well-known/oauth-protected-resource/mcp</code>: RFC 9728 PRM</li>
 </ul>`);
