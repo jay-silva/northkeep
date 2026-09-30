@@ -1102,7 +1102,14 @@ async function dispatch(
     await assertDeviceCanPush({ vaultPath: session.vaultPath, deviceSecret });
     const down = await session.withVault((vault) => applyDownSync({ ...conn, vault, approve: { server_ids: approve.server_ids!, forget_ids: approve.forget_ids! } }));
     const after = await session.withVault((vault) => vault.sharedScopes());
-    const push = await manualPush(session, config.server, deviceSecret, entitlement);
+    // The apply is saved either way; a failed push must not hide what it did.
+    let push: PushSharedResult | null = null;
+    let pushError: string | null = null;
+    try {
+      push = await manualPush(session, config.server, deviceSecret, entitlement);
+    } catch (err) {
+      pushError = err instanceof Error ? err.message : String(err);
+    }
     const review = down.needs_review.replacements.length + down.needs_review.forgets.length;
     const reviewParts: string[] = [];
     if (review > 0) reviewParts.push(`${review} change${review === 1 ? '' : 's'} need${review === 1 ? 's' : ''} your review before ${review === 1 ? 'it is' : 'they are'} applied. Run: northkeep share sync`);
@@ -1122,6 +1129,7 @@ async function dispatch(
       review_messages: reviewParts,
       pushed: push?.pushed ?? 0,
       scopes: push?.scopes ?? [],
+      ...(pushError !== null ? { push_error: pushError } : {}),
       // Scopes the fold marked Shared in this run (ADR 0050): the GUI says so.
       newly_shared: after.filter((s) => !before.includes(s)),
     });

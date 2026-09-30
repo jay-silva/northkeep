@@ -1129,7 +1129,8 @@ share
   .option('--take-theirs', 'make the cloud version current; this version stays in history')
   .option('--keep-mine', 'keep this version; save the cloud text as a memory in the project')
   .option('--id <server-id>', 'which cloud version, when several are waiting')
-  .action(async (slug: string, options: { takeTheirs?: boolean; keepMine?: boolean; id?: string }) => {
+  .option('--expected-revision <id>', "with --take-theirs: refuse unless this Mac's version is still this one (from share conflicts --show)")
+  .action(async (slug: string, options: { takeTheirs?: boolean; keepMine?: boolean; id?: string; expectedRevision?: string }) => {
     await withShareDeps((deps) => shareResolveCmd(slug, options, deps, fail));
   });
 

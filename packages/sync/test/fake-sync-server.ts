@@ -17,6 +17,8 @@ export function fakeServer(): {
   mode: (m: Mode) => void;
   omitSha: (v: boolean) => void;
   conflictOnce: () => void;
+  /** Answer POST /api/entitlement with this attestation; null (the default) answers 404, as a server with no bridge does. */
+  entitle: (token: string | null) => void;
   parked: () => Promise<void>;
   release: () => void;
 } {
@@ -26,6 +28,7 @@ export function fakeServer(): {
   let noSha = false;
   /** Answer exactly one PUT with a 409 at the current version, then behave. */
   let conflictNext = false;
+  let entitlement: string | null = null;
   /** Responses a slow mode is holding back, and waiters for the next one to be held. */
   const held: (() => void)[] = [];
   const parkWaiters: (() => void)[] = [];
@@ -111,6 +114,11 @@ export function fakeServer(): {
         else accept();
         return;
       }
+      if (req.method === 'POST' && req.url === '/api/entitlement' && entitlement !== null) {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ entitlement }));
+        return;
+      }
       res.writeHead(404).end();
     });
   });
@@ -126,6 +134,9 @@ export function fakeServer(): {
     },
     conflictOnce: () => {
       conflictNext = true;
+    },
+    entitle: (token) => {
+      entitlement = token;
     },
     /** Resolves once a slow mode is holding a request. */
     parked: () => (held.length > 0 ? Promise.resolve() : new Promise<void>((r) => parkWaiters.push(r))),

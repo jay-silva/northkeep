@@ -776,7 +776,10 @@ same scenarios against the real connector.
 - Keep mine writes `# Cloud version not kept, YYYY-MM-DD` then a blank line
   then the cloud text, `metadata.connector.discarded = <server_id>`. With
   several rows waiting for one project it keeps each; take theirs needs one
-  id (`--id`). Take theirs refuses on `several_heads`.
+  id (`--id`). Take theirs refuses on `several_heads`. The CLI's take theirs
+  binds to the head the user saw with `--expected-revision` (printed by
+  `share conflicts --show`) and otherwise to the head read under the lock;
+  the API takes `expected_revision`.
 - A forget for an entry not live here changes nothing and is acked on the
   desktop without asking. The phone never acks a forget.
 - The phone (`additiveOnly`) still runs the ADR 0050 fold for a base-`new`
@@ -805,10 +808,16 @@ lock.
 
 **D5.**
 - Triggers: AutoSync's `pushed`, `pulled` and `in-sync` events, debounced 5 s,
-  and a device with no vault sync on its own save. The engine then checks the
-  switch, the AutoSync status (off, paused, error, diverged, a pending pull
-  review), `syncState` (exactly `in-sync`), the manifest flag, and the
-  fingerprint, in that order.
+  and a device with no vault sync on its own save. The engine checks, in
+  order: the switch; a local snapshot (nothing shared, or the fingerprint
+  unchanged, ends the run with no network call, so an unpaired device never
+  creates an account on the connector); the AutoSync status (off, paused,
+  error, diverged, a pending pull review); `syncState` (exactly `in-sync`);
+  the manifest flag; then a second snapshot for the upload, because the first
+  may predate a pull that `syncState` then reports.
+- Every automatic push forwards the sync server's entitlement attestation,
+  as the manual paths do; the hosted billing gate refuses `/client` calls
+  without it.
 - Pauses that wait for the user: 402 (lifts after 10 minutes, like AutoSync),
   409, 412 (unless a local unshare raced the push) and 428. A manual push,
   the switch or a server change lifts them. The others are re-checked on

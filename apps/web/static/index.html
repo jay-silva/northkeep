@@ -6081,6 +6081,7 @@
       var text = 'Done. Pulled back ' + r.added + ' new, ' +
         r.deduped + ' already present. Re-pushed ' + r.pushed + ' memories to the connector server.';
       (r.review_messages || []).forEach(function (m) { text += '\n' + m; });
+      if (r.push_error) text += '\nSaved on this Mac, but Cloud Connect was not updated: ' + r.push_error;
       // Held rows are the whole point of a sync that pulled nothing: a connected
       // app wrote to a project this device keeps private.
       (r.held_messages || []).forEach(function (m) { text += '\n' + m; });

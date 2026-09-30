@@ -2,9 +2,10 @@ import { loadDeviceSecret as coreLoadDeviceSecret, memzero, Vault, withFileLock 
 import { PAUSE_RETRY_MS, type AutoSyncClock, type AutoSyncStatus } from './auto.js';
 import { isAutoSyncVault, syncState } from './client.js';
 import { loadSyncConfig } from './config.js';
-import { ConnectorStalePushError, ConnectorTombstoneError, getConnectorManifest } from './connector-client.js';
+import { ConnectorStalePushError, ConnectorTombstoneError, fetchEntitlement, getConnectorManifest } from './connector-client.js';
+import { deriveSyncCreds } from './creds.js';
 import { connectorAutoPushEnabled, connectorLastPushedAt, connectorPushFingerprint, loadConnectorConfig } from './connector-config.js';
-import { pushSnapshot, snapshotSharedScopes, vaultServerHash } from './connector-push.js';
+import { pushSnapshot, snapshotSharedScopes, vaultServerHash, type SharedSnapshot } from './connector-push.js';
 
 /**
  * ConnectorAutoPush (ADR 0063 D5). Keeps Cloud Connect's copy of the shared
@@ -86,8 +87,8 @@ export interface ConnectorAutoPushOptions {
   loadDeviceSecret?: () => Buffer;
   /** The host's AutoSync status; null when the host runs no engine (the CLI). */
   autoSyncStatus?: () => AutoSyncStatus | null;
-  /** Entitlement for the connector's billing gate, when there is one. */
-  entitlement?: () => Promise<string | undefined>;
+  /** Entitlement for the connector's billing gate. Default: the same best-effort attestation the manual pushes forward. */
+  entitlement?: (deviceSecret: Buffer) => Promise<string | undefined>;
   onEvent?: (event: ConnectorAutoPushEvent) => void;
   /** Default 5 s, like AutoSync. */
   debounceMs?: number;
@@ -95,6 +96,21 @@ export interface ConnectorAutoPushOptions {
   /** Tests only. */
   allowAnyVault?: boolean;
   pauseRetryMs?: number;
+}
+
+/**
+ * The anonymous "active subscriber" attestation from the sync server, which
+ * the hosted connector's billing gate requires on every /client call. Absent
+ * with no vault sync or no bridge; never fails the push by itself.
+ */
+async function bestEffortEntitlement(deviceSecret: Buffer): Promise<string | undefined> {
+  const sync = loadSyncConfig();
+  if (sync === null) return undefined;
+  try {
+    return (await fetchEntitlement({ syncServer: sync.serverUrl, syncToken: deriveSyncCreds(deviceSecret).token })) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 const SYSTEM_CLOCK: AutoSyncClock = {
@@ -227,6 +243,18 @@ export class ConnectorAutoPush {
       return;
     }
     try {
+      // Local checks first: a device with nothing shared, or nothing changed,
+      // makes no network call at all (asking the connector anything would
+      // create an account there, or answer 402).
+      const gate = await this.snapshot(key);
+      if (gate.scopes.length === 0) {
+        this.set('idle', 'nothing_shared');
+        return;
+      }
+      if (gate.fingerprint === connectorPushFingerprint()) {
+        this.set('idle', null);
+        return;
+      }
       const deviceSecret = (this.opts.loadDeviceSecret ?? coreLoadDeviceSecret)();
       const sync = loadSyncConfig();
       let vaultStamp: { server: string; version: number } | undefined;
@@ -248,18 +276,13 @@ export class ConnectorAutoPush {
         }
         vaultStamp = { server: vaultServerHash(sync.serverUrl), version: s.remoteVersion };
       }
-      const entitlement = await this.opts.entitlement?.();
+      const entitlement = await (this.opts.entitlement ?? bestEffortEntitlement)(deviceSecret);
       const manifest = await getConnectorManifest({ server: connector.server, deviceSecret, ...(entitlement ? { entitlement } : {}) });
       if (!manifest.tombstone_enforce) return this.pause('tombstone_off');
 
-      const snapshot = await withFileLock(this.opts.vaultPath, () => {
-        const vault = Vault.openWithKey(this.opts.vaultPath, Buffer.from(key));
-        try {
-          return snapshotSharedScopes(vault);
-        } finally {
-          vault.close();
-        }
-      });
+      // Taken again after syncState: the gate's copy may predate a pull that
+      // syncState then reports, and older entries must never carry a newer version.
+      const snapshot = await this.snapshot(key);
       if (snapshot.scopes.length === 0) {
         this.set('idle', 'nothing_shared');
         return;
@@ -293,6 +316,17 @@ export class ConnectorAutoPush {
     } finally {
       memzero(key);
     }
+  }
+
+  private snapshot(key: Buffer): Promise<SharedSnapshot> {
+    return withFileLock(this.opts.vaultPath, () => {
+      const vault = Vault.openWithKey(this.opts.vaultPath, Buffer.from(key));
+      try {
+        return snapshotSharedScopes(vault);
+      } finally {
+        vault.close();
+      }
+    });
   }
 
   private async stillShared(key: Buffer, scopes: string[]): Promise<boolean> {

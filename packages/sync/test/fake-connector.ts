@@ -44,7 +44,7 @@ export interface FakeConnector {
   failNext: (path: string, status: number, body?: unknown) => void;
 }
 
-export async function startFakeConnector(options: { tombstoneEnforce?: boolean } = {}): Promise<FakeConnector> {
+export async function startFakeConnector(options: { tombstoneEnforce?: boolean; requireEntitlement?: string } = {}): Promise<FakeConnector> {
   const rows = new Map<string, FakeRow>();
   const scopeSeq = new Map<string, number>();
   const forgetQueue: string[] = [];
@@ -88,6 +88,11 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean }
         res.writeHead(status, { 'content-type': 'application/json' });
         res.end(body === undefined ? '{}' : JSON.stringify(body));
       };
+      // The hosted billing gate: every /client call carries the attestation or gets 402.
+      if (options.requireEntitlement !== undefined && url.pathname.startsWith('/client/') && req.headers['x-nb-entitlement'] !== options.requireEntitlement) {
+        send(402, { error: 'subscription_required' });
+        return;
+      }
       const failure = failures.get(url.pathname);
       if (failure) {
         failures.delete(url.pathname);

@@ -363,20 +363,22 @@ export async function shareConflictsCmd(options: { show?: string }, deps: ShareD
     console.log('  See both versions: northkeep share conflicts --show <project>');
     return;
   }
-  console.log(report.local ? `This Mac's version (revision ${report.local.id.slice(0, 8)}):` : 'This Mac has no current version of this project.');
+  console.log(report.local ? `This Mac's version (revision ${report.local.id}):` : 'This Mac has no current version of this project.');
   if (report.local) console.log(report.local.content);
   for (const c of report.conflicts) {
     console.log(`Cloud version (id ${c.server_id}; ${REASONS[c.reason]}):`);
     console.log(c.content);
     if (report.history.includes(c.content)) console.log('This cloud version is already in your history.');
   }
-  console.log(`Keep one: northkeep share resolve ${options.show} --take-theirs | --keep-mine`);
+  console.log(
+    `Keep one: northkeep share resolve ${options.show} --keep-mine, or --take-theirs${report.local ? ` --expected-revision ${report.local.id}` : ''} (refused if this Mac's version changes first)`,
+  );
 }
 
 /** `northkeep share resolve <slug> --take-theirs|--keep-mine [--id <server id>]`, then push. */
 export async function shareResolveCmd(
   slug: string,
-  options: { takeTheirs?: boolean; keepMine?: boolean; id?: string },
+  options: { takeTheirs?: boolean; keepMine?: boolean; id?: string; expectedRevision?: string },
   deps: ShareDeps,
   fail: (m: string) => never,
 ): Promise<void> {
@@ -399,7 +401,17 @@ export async function shareResolveCmd(
   const now = new Date();
   try {
     resolved = await deps.withVault((vault) =>
-      resolveConflict({ server: cfg.server, deviceSecret, vault, project: slug, choice, now, ...(options.id ? { server_id: options.id } : {}), ...(entitlement ? { entitlement } : {}) }),
+      resolveConflict({
+        server: cfg.server,
+        deviceSecret,
+        vault,
+        project: slug,
+        choice,
+        now,
+        ...(options.id ? { server_id: options.id } : {}),
+        ...(options.expectedRevision ? { expected_revision: options.expectedRevision } : {}),
+        ...(entitlement ? { entitlement } : {}),
+      }),
     );
   } catch (err) {
     fail(message(err));

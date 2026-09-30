@@ -1283,9 +1283,11 @@ every milestone; if a limit is removed, say when and how.*
   question, and with no terminal it changes nothing. Until the app's preview
   screen ships, the app's Sync now applies only new memories and new projects
   and names the rest for review on the command line.
-- **The phone applies only new memories and new projects from your cloud
-  apps.** Replacements and deletions wait for your Mac, and the phone never
-  confirms a deletion to the connector, so your Mac still sees it.
+- **From the first phone build after build 28, the phone applies only new
+  memories and new projects from your cloud apps.** Replacements and
+  deletions wait for your Mac, and the phone never confirms a deletion to the
+  connector, so your Mac still sees it. Build 28 and earlier still apply
+  them; the connector withholds cloud project updates from those builds.
 - **Deleting a shared project also deletes it from Cloud Connect.** The
   scope is unshared on the connector first, including any cloud write not
   yet delivered, so a cloud copy cannot come back later without a question.

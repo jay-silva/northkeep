@@ -250,6 +250,45 @@ describe('ADR 0063 D5: automatic push to Cloud Connect', () => {
     expect(pushedToConnector().map((p) => [p.scopes, p.vault])).toEqual([[['work'], undefined]]);
   });
 
+  it('forwards the sync server entitlement, which the hosted billing gate requires on every /client call', async () => {
+    await setup();
+    await conn.close();
+    conn = await startFakeConnector({ requireEntitlement: 'ent-attestation' });
+    setConnectorServer(conn.url());
+    sync.entitle('ent-attestation');
+    write(homeA, 'change to send', 'work');
+    expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+    const cap = new ConnectorAutoPush({ vaultPath: vaultPath(homeA), getMasterKey: () => keyFor(homeA), loadDeviceSecret: () => Buffer.from(deviceSecret), allowAnyVault: true });
+    stops.push(() => cap.stop());
+    const status = await cap.runOnce();
+    expect([status.phase, status.reason]).toEqual(['idle', null]);
+    expect(pushedToConnector()).toHaveLength(1);
+  });
+
+  it('makes no network call when nothing is shared, or when nothing changed since the last push', async () => {
+    await setup();
+    withVaultAt(homeA, (v) => {
+      v.setScopeShared('work', false);
+      v.save();
+    });
+    expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+    const cap = new ConnectorAutoPush({ vaultPath: vaultPath(homeA), getMasterKey: () => keyFor(homeA), loadDeviceSecret: () => Buffer.from(deviceSecret), allowAnyVault: true });
+    stops.push(() => cap.stop());
+    expect((await cap.runOnce()).reason).toBe('nothing_shared');
+    expect(conn.requests()).toEqual([]);
+
+    withVaultAt(homeA, (v) => {
+      v.setScopeShared('work', true);
+      v.save();
+    });
+    expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+    await cap.runOnce();
+    const afterPush = conn.requests().length;
+    expect(pushedToConnector()).toHaveLength(1);
+    await cap.runOnce();
+    expect(conn.requests()).toHaveLength(afterPush);
+  });
+
   it('R-428b: a down-sync apply and ack never update the fingerprint; only an accepted push does', async () => {
     await setup();
     const cap = new ConnectorAutoPush({ vaultPath: vaultPath(homeA), getMasterKey: () => keyFor(homeA), loadDeviceSecret: () => Buffer.from(deviceSecret), allowAnyVault: true });

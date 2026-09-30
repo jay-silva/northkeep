@@ -135,6 +135,8 @@ describe('share sync (D3)', () => {
     fake.cloudUpdate('project:demo', cloud('Cloud on R3.'));
     vault.updateProject({ project: 'demo', expected_revision: r3, status: 'R4 local.' });
     vault.save();
+    await expect(shareResolveCmd('demo', { takeTheirs: true, expectedRevision: r3 }, deps(), fail)).rejects.toThrow('Project changed after it was read.');
+    expect(getProjectView(vault, 'demo').status).toBe('R4 local.');
     await shareResolveCmd('demo', { takeTheirs: true }, deps(), fail);
     expect(getProjectView(vault, 'demo').status).toBe('Cloud on R3.');
   });
