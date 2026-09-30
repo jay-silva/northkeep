@@ -127,7 +127,7 @@ describe('Projects handoff UI', () => {
 
   it('shows current Log entries with older history and uses correct file grammar', () => {
     expect(projects).toContain('log = projectLines(project.log)');
-    expect(projects).toContain("el('time', undefined, 'Current')");
+    expect(projects).toContain("el('div', 'review-meta-title hist-sub', 'Log')");
     expect(projects).toContain("values.length === 1 ? 'reference' : 'references'");
   });
 
@@ -216,10 +216,12 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
 
   it('badges draft rows only, and shows the last writer host when one is recorded', () => {
     const setup = `
-      const lists = { projectList: el('div'), projectSelect: el('select') };
+      const lists = { projectList: el('div'), projectSelect: el('select'), projectsSummaryMeta: { textContent: '' } };
       const $ = (id) => lists[id];
       const currentProjectSlug = '';
       const loadProject = () => {};
+      const openProjectFromList = () => {};
+      const projectDecisions = new Map([['trail-journal', 1]]);
       ${functionSource('projectName')}
       ${functionSource('projectPill')}
       const projectIndex = [
@@ -227,21 +229,29 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
         { project: 'trail-journal', title: 'Trail Journal', status: 'Ready', conflict: false, draft: false, last_writer_host: null },
       ];
       ${functionSource('renderProjectChoices')}`;
-    const rows = run(setup, 'renderProjectChoices(); return lists.projectList.children;') as { children: unknown[] }[];
+    const { rows, meta } = run(setup, 'renderProjectChoices(); return { rows: lists.projectList.children, meta: lists.projectsSummaryMeta.textContent };') as { rows: { children: unknown[] }[]; meta: string };
     expect(rows).toHaveLength(2);
     const draftRow = textOf(rows[0]!), plainRow = textOf(rows[1]!);
     expect(draftRow).toContain('Draft');
     expect(draftRow).toContain('last: claude-code');
     expect(plainRow).not.toContain('Draft');
     expect(plainRow).not.toContain('last:');
+    expect(draftRow).not.toContain('Needs your decision');
+    expect(plainRow).toContain('Needs your decision');
+    expect(meta).toBe('2 projects · 1 needs your decision');
   });
 
-  it('lists saved versions from content-free summaries, never their text', () => {
-    const setup = `
+  const historySetup = `
       ${functionSource('projectLines')}
       ${functionSource('projectDate')}
+      ${functionSource('projectPill')}
+      ${functionSource('plural')}
+      ${functionSource('projectLogRow')}
+      ${functionSource('projectVersionRows')}
       ${functionSource('renderProjectHistory')}`;
-    const section = run(setup, `return renderProjectHistory({
+
+  it('lists saved versions from content-free summaries, never their text', () => {
+    const section = run(historySetup, `return renderProjectHistory({
       log: '- Current entry',
       history: [{ id: 'a', updated_at: '2026-09-20T10:00:00Z', content: 'SECRET REVISION BODY', mode: 'wrap' }],
       revisions: [
@@ -255,24 +265,47 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
     expect(text).toContain('Written by claude-code');
     expect(text).not.toContain('SECRET REVISION BODY');
     expect(text).toContain('Current entry');
-    expect(text).toContain('Session history · 3 recent');
+    expect(text).toContain('Session history · 2 saved versions · 1 log entry');
   });
 
-  it('falls back to the older payload shape, which still carries revision text', () => {
-    const setup = `
-      ${functionSource('projectLines')}
-      ${functionSource('projectDate')}
-      ${functionSource('renderProjectHistory')}`;
-    const section = run(setup, `return renderProjectHistory({
+  it('splits Saved versions from the Log, offers Restore only where the text survives, and marks the current one', () => {
+    const section = run(historySetup, `return renderProjectHistory({
+      revision: 'head', updated_at: '2026-09-30T08:02:00Z', last_writer: { host: 'claude-code' },
+      log: '- 2026-09-30: Removed the old import script.',
+      history: [{ id: 'a', updated_at: '2026-09-29T18:40:00Z', content: '## Current Status\\nOlder.', mode: 'checkpoint' }],
+      revisions: [{ id: 'a', updated_at: '2026-09-29T18:40:00Z', mode: 'checkpoint', chars: 20 }],
+      cleared_revisions: [{ id: 'old', updated_at: '2026-09-15T09:12:00Z', writer: { host: 'chatgpt' } }],
+      archives: [],
+    });`) as { children: unknown[] };
+    const body = (section.children[0] as { children: unknown[] }).children[1] as { children: { cls?: string; text?: string; children: unknown[] }[] };
+    const rows = body.children.filter((n) => n.cls?.startsWith('ver-row')).map((n) => textOf(n));
+    expect(rows).toHaveLength(3);
+    expect(rows[0]).toContain('Current version');
+    expect(rows[1]).toContain('Checkpoint');
+    expect(rows[1]).toContain('Restore this version');
+    expect(rows[2]).toContain('Written by chatgpt');
+    expect(rows[2]).toContain('Text cleared to save space. Cannot restore.');
+    expect(rows[2]).not.toContain('Restore this version');
+    const titles = body.children.filter((n) => n.cls === 'review-meta-title hist-sub').map((n) => n.text);
+    expect(titles).toEqual(['Saved versions', 'Log']);
+    const log = textOf(body.children.find((n) => n.cls === 'project-event')!);
+    expect(log).toContain('Removed the old import script.');
+    expect(log).not.toContain('2026-09-30');
+    expect(textOf(section)).toContain('Session history · 3 saved versions · 1 log entry');
+  });
+
+  it('falls back to the older payload shape, listing its versions without their text', () => {
+    const section = run(historySetup, `return renderProjectHistory({
       log: '',
       history: [{ id: 'a', updated_at: '2026-09-20T10:00:00Z', content: 'Older revision body', mode: 'checkpoint' }],
       archives: [{ id: 'z', updated_at: '2026-09-01T10:00:00Z', content: 'Archived log entry' }],
     });`) as { children: unknown[] };
     const text = textOf(section);
     expect(text).toContain('Checkpoint');
-    expect(text).toContain('Older revision body');
+    expect(text).toContain('Restore this version');
+    expect(text).not.toContain('Older revision body');
     expect(text).toContain('Archived log entry');
-    expect(text).toContain('Session history · 1 recent · 1 archived');
+    expect(text).toContain('Session history · 1 saved version · 0 log entries · 1 archived');
   });
 });
 

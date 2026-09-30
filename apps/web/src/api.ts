@@ -14,6 +14,7 @@ import {
   memzero,
   northkeepHome,
   ProjectHandoffError,
+  readProjectProvenance,
   type MemoryEntry,
   type MemoryType,
 } from '@northkeep/core';
@@ -850,7 +851,7 @@ async function dispatch(
     const vaultPath = session.vaultPath;
     const review = (preview: Extract<PullPreview, { ok: true }>, code: string, message: string): ApiResponse => ({
       status: 409,
-      body: { error: message, code, version: preview.version, sha256: preview.sha256, report: preview.report, review_command: 'northkeep sync pull' },
+      body: { error: message, code, version: preview.version, sha256: preview.sha256, report: preview.report, backup_file: `${path.basename(vaultPath)}.bak`, review_command: 'northkeep sync pull' },
     });
     try {
       return await session.autoSync.runManual(async () => {
@@ -1096,8 +1097,10 @@ async function dispatch(
     const conn = { server: config.server, deviceSecret, ...(entitlement ? { entitlement } : {}) };
     if (input.dry_run !== false) {
       const pending = await fetchPending(conn);
-      const plan = await session.withVault((vault) => planDownSync({ vault, pending }));
-      return ok(describePlanForPage(plan));
+      return ok(await session.withVault((vault) => {
+        const plan = planDownSync({ vault, pending });
+        return describePlanForPage(plan, revisionTimes(vault, [...plan.replacements, ...plan.conflicts].map((r) => r.scope)));
+      }));
     }
     await assertDeviceCanPush({ vaultPath: session.vaultPath, deviceSecret });
     const down = await session.withVault((vault) => applyDownSync({ ...conn, vault, approve: { server_ids: approve.server_ids!, forget_ids: approve.forget_ids! } }));
@@ -1136,25 +1139,32 @@ async function dispatch(
   }
 
   // ADR 0063 D1: the cloud versions held as conflicts, with both texts, for the conflict view.
+  // Same gate as Sync now: a device that never paired and shares nothing makes
+  // no call, because fetching pending rows can create an account on the server.
   if (method === 'GET' && route === '/api/share/conflicts') {
     const config = loadConnectorConfig();
     if (!config) return bad(400, 'Set a connector server first.');
     const deviceSecret = deviceSecretOrError();
+    const shared = await session.withVault((vault) => vault.sharedScopes());
+    if (shared.length === 0 && !connectorPaired()) return ok({ conflicts: [], local: {} });
     const entitlement = await maybeEntitlement(deviceSecret);
     const pending = await fetchPending({ server: config.server, deviceSecret, ...(entitlement ? { entitlement } : {}) });
     return ok(await session.withVault((vault) => {
       const conflicts = planDownSync({ vault, pending }).conflicts;
-      const local: Record<string, { revision: string; content: string } | null> = {};
+      const times = revisionTimes(vault, conflicts.map((c) => c.scope));
+      const local: Record<string, { revision: string; content: string; updated_at: string; writer: { host: string; host_version: string | null } | null } | null> = {};
       const history = new Map<string, string[]>();
       for (const c of conflicts) {
         if (c.project in local) continue;
         const rows = vault.list({ scope: c.scope, type: 'working', includeSuperseded: true });
         const heads = rows.filter((r) => r.superseded_at === null);
-        local[c.project] = heads.length === 1 ? { revision: heads[0]!.id, content: heads[0]!.content } : null;
+        const head = heads.length === 1 ? heads[0]! : null;
+        const writer = head ? readProjectProvenance(head) : null;
+        local[c.project] = head ? { revision: head.id, content: head.content, updated_at: head.created_at, writer: writer ? { host: writer.host, host_version: writer.host_version } : null } : null;
         history.set(c.project, rows.filter((r) => r.superseded_at !== null).map((r) => r.content));
       }
       return {
-        conflicts: conflicts.map((c) => ({ ...c, in_history: history.get(c.project)?.includes(c.content) ?? false })),
+        conflicts: conflicts.map((c) => ({ ...c, base_updated_at: baseTime(times, c.base_revision), in_history: history.get(c.project)?.includes(c.content) ?? false })),
         local,
       };
     }));
@@ -2622,8 +2632,22 @@ function stringList(value: unknown): string[] | null {
   return value as string[];
 }
 
-/** D3's preview in the shape the Sync now screen will render. Conflict text stays behind /api/share/conflicts. */
-function describePlanForPage(plan: DownSyncPlan): Record<string, unknown> {
+/** When each working revision of these scopes was saved, compacted ones included, keyed by entry id. */
+function revisionTimes(vault: Vault, scopes: string[]): Map<string, string> {
+  const times = new Map<string, string>();
+  for (const scope of new Set(scopes)) {
+    for (const row of vault.list({ scope, type: 'working', includeSuperseded: true, includeForgotten: true })) times.set(row.id, row.created_at);
+  }
+  return times;
+}
+
+/** The save time of the version a cloud write started from; null for `new`, legacy, or an id this Mac never had. */
+function baseTime(times: Map<string, string>, base: string | null): string | null {
+  return base ? times.get(base) ?? null : null;
+}
+
+/** D3's preview in the shape the Sync now screen renders. Conflict text stays behind /api/share/conflicts. */
+function describePlanForPage(plan: DownSyncPlan, times: Map<string, string>): Record<string, unknown> {
   const memories = plan.additions.filter((a) => a.kind === 'memory');
   const byScope: Record<string, number> = {};
   for (const a of memories) byScope[a.scope] = (byScope[a.scope] ?? 0) + 1;
@@ -2632,9 +2656,13 @@ function describePlanForPage(plan: DownSyncPlan): Record<string, unknown> {
     needs_confirmation: planNeedsConfirmation(plan),
     additions: { count: memories.length, by_scope: byScope },
     new_projects: plan.additions.filter((a) => a.kind === 'project').map((a) => heldSlug(a.scope)),
-    replacements: plan.replacements.map((r) => ({ project: r.project, server_id: r.server_id, local_revision: r.local_revision })),
+    replacements: plan.replacements.map((r) => ({ project: r.project, server_id: r.server_id, local_revision: r.local_revision, local_updated_at: times.get(r.local_revision) ?? null })),
     forgets: plan.forgets,
-    conflicts: plan.conflicts.map(({ content: _content, ...c }) => c),
+    conflicts: plan.conflicts.map(({ content: _content, ...c }) => ({
+      ...c,
+      base_updated_at: baseTime(times, c.base_revision),
+      local_updated_at: c.local_revision ? times.get(c.local_revision) ?? null : null,
+    })),
     held_scopes: plan.held_scopes,
     held_messages: plan.held_scopes.map((s) => holdMessage(heldSlug(s))),
     skipped: plan.skipped,

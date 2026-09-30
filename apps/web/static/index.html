@@ -21,6 +21,7 @@
     --line: #e6e0d4; --accent: #2f6a54; --accent-ink: #fdfcf7;
     --danger: #b0402b; --ok: #2f6a54; --warn-bg: #f2ede0; --warn-ink: #6f5a2c;
     --warn-line: #e6dcc0; --danger-line: #e6cfc7; --chip: #efeadd;
+    --danger-bg: #f6e4dd; --ok-bg: #e6efe8;
     --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
     /* Intended fonts named first; system fallbacks keep the app 100% local
        (no external font requests — CSP + the "nothing leaves your network"
@@ -39,6 +40,7 @@
       --line: #38332a; --chip: #2f2b21; --accent: #5f9d83; --accent-ink: #14170f;
       --warn-bg: #322b1b; --warn-ink: #d8b676; --warn-line: #48401f;
       --danger: #e08a72; --danger-line: #4a332b; --ok: #5f9d83;
+      --danger-bg: #3a241d; --ok-bg: #22382c;
     }
     .pill.ok { background: #22382c; }
     .pill.locked { background: #3a241d; }
@@ -595,6 +597,91 @@
     .project-operation { animation:none; }
     .project-history summary::before { transition:none; }
   }
+  /* ADR 0063 sync guardrails: Sync now preview, conflict view, saved versions, pull report. */
+  @media not (prefers-color-scheme: dark) {
+    #guardDialogOverlay { --muted: #6d675c; }
+  }
+  .sync-dialog, .pull-dialog { width:min(640px, calc(100vw - 32px)); }
+  .guard-dialog > h2 { overflow-wrap:anywhere; }
+  .dialog p.lead { margin:4px 0 16px; }
+  .plan-group { border-top:1px solid var(--line); padding:14px 0 8px; }
+  .plan-group h3 { display:flex; align-items:center; gap:8px; margin:0 0 6px; font:600 12px/1 var(--sans); text-transform:uppercase; letter-spacing:.1em; color:var(--muted); }
+  .plan-group h3 .count { font:600 11px/1 var(--sans); letter-spacing:0; padding:4px 8px; border-radius:999px; background:var(--chip); color:var(--ink); }
+  .plan-group.decide h3 { color:var(--warn-ink); }
+  .plan-group.decide h3 .count { background:var(--warn-bg); color:var(--warn-ink); border:1px solid var(--warn-line); }
+  .dialog p.plan-note { margin:0 0 8px; font-size:13px; }
+  .plan-item { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 12px; align-items:center; padding:10px 0; border-top:1px solid var(--line); }
+  .plan-item:first-of-type { border-top:0; }
+  .plan-item strong { font-weight:600; overflow-wrap:anywhere; }
+  .dialog .plan-item p { margin:2px 0 0; font-size:13px; }
+  .dialog .plan-item .plan-quote { color:var(--ink); font-family:var(--serif); font-size:15px; overflow-wrap:anywhere; }
+  .plan-item.pick { grid-template-columns:22px minmax(0,1fr); align-items:start; cursor:pointer; min-height:44px; }
+  .dialog .plan-item.pick input { width:18px; height:18px; margin:3px 0 0; accent-color:var(--accent); }
+  .plan-group.decide .plan-item { border:1px solid var(--warn-line); background:var(--warn-bg); border-radius:10px; padding:10px 12px; margin-bottom:8px; }
+  .dialog .plan-group.decide .plan-item p { color:var(--warn-ink); }
+  .dialog .plan-held { margin:10px 0 0; padding:10px 12px; border-radius:10px; background:var(--chip); font-size:13px; }
+  .plan-foot { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-top:12px; padding-top:14px; border-top:1px solid var(--line); }
+  .dialog .plan-foot p { margin:0; font-size:12px; max-width:34ch; }
+  .plan-foot .row { margin-left:auto; }
+  .pill.decide { white-space:nowrap; background:var(--warn-bg); color:var(--warn-ink); border:1px solid var(--warn-line); }
+  .cmp { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:0 18px; }
+  .cmp-head { padding:0 0 12px; }
+  .cmp-head h4 { margin:0 0 3px; font:600 15px/1.3 var(--sans); }
+  .cmp-head p { margin:0; }
+  .cmp-sec { grid-column:1 / -1; display:flex; align-items:center; gap:8px; padding:14px 0 8px; border-top:1px solid var(--line); font:600 11px/1 var(--sans); letter-spacing:.1em; text-transform:uppercase; color:var(--muted); }
+  .cmp-sec .tag { font:600 11px/1 var(--sans); letter-spacing:.02em; text-transform:none; padding:4px 8px; border-radius:999px; }
+  .cmp-sec .tag.diff { background:var(--warn-bg); color:var(--warn-ink); border:1px solid var(--warn-line); }
+  .cmp-cell { white-space:pre-wrap; overflow-wrap:anywhere; padding:12px 14px; margin-bottom:8px; border-radius:10px; background:var(--chip); font-size:14px; line-height:1.55; }
+  .cmp-cell.diff { background:var(--panel); border:1px solid var(--warn-line); box-shadow:inset 3px 0 0 var(--warn-ink); }
+  .cmp-cell .who { display:none; margin-bottom:6px; font:600 11px/1 var(--sans); letter-spacing:.08em; text-transform:uppercase; color:var(--muted); }
+  .cmp mark { background:color-mix(in srgb, var(--accent) 20%, transparent); color:inherit; border-radius:3px; padding:0 2px; }
+  .cmp-same { grid-column:1 / -1; margin:0 0 10px; font-size:13px; }
+  .cmp-legend { margin:0 0 14px; font-size:13px; }
+  .choices { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr) auto; gap:14px; align-items:start; margin-top:16px; padding-top:16px; border-top:1px solid var(--line); }
+  .choice { padding:14px; border:1px solid var(--line); border-radius:12px; background:var(--panel); }
+  .choice p { margin:8px 0 0; font-size:13px; color:var(--muted); }
+  .choice p strong { color:var(--ink); font-weight:600; }
+  .choices .cancel-col { display:grid; gap:6px; justify-items:end; }
+  .choices .cancel-col small { color:var(--muted); font-size:12px; max-width:18ch; text-align:right; }
+  .project-notice .btn { margin-top:10px; }
+  .project-announce { margin:0 0 12px; font-size:14px; color:var(--ok); }
+  .project-announce:empty { display:none; }
+  .project-announce.bad { color:var(--danger); }
+  .hist-sub { margin:16px 0 2px; }
+  .ver-row { display:grid; grid-template-columns:110px minmax(0,1fr) auto; gap:14px; align-items:center; padding:12px 0; border-top:1px solid var(--line); }
+  .ver-row time { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
+  .ver-row p { margin:0; }
+  .ver-row p small { display:block; color:var(--muted); font-size:12px; }
+  .ver-row .cleared { color:var(--muted); font-size:12px; max-width:26ch; text-align:right; }
+  .ver-row.is-cleared p { color:var(--muted); }
+  .restore-dialog .review-compare small { font:600 11px/1 var(--sans); letter-spacing:.08em; text-transform:uppercase; }
+  .restore-dialog .review-compare b { display:block; margin:8px 0 2px; font-size:12px; color:var(--muted); font-weight:600; }
+  .restore-dialog .review-compare b:first-of-type { margin-top:0; }
+  .dialog p.shared-note { display:flex; gap:8px; align-items:flex-start; color:var(--ink); }
+  .switch-row { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:44px; margin:0 0 12px; cursor:pointer; }
+  .switch-row strong { display:block; font-size:14px; font-weight:600; }
+  .switch-row small { display:block; margin-top:2px; font-size:13px; color:var(--muted); overflow-wrap:anywhere; }
+  .switch-row input { appearance:none; -webkit-appearance:none; flex:none; position:relative; width:44px; height:26px; margin:0; border-radius:999px; background:var(--line); border:1px solid var(--muted); cursor:pointer; transition:background .16s ease-out; }
+  .switch-row input::after { content:""; position:absolute; top:2px; left:2px; width:20px; height:20px; border-radius:50%; background:var(--panel); box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .16s ease-out; }
+  .switch-row input:checked { background:var(--accent); border-color:var(--accent); }
+  .switch-row input:checked::after { transform:translateX(18px); }
+  .switch-row input:disabled { opacity:.5; cursor:not-allowed; }
+  @media (max-width:600px) {
+    .plan-item:not(.pick) { grid-template-columns:minmax(0,1fr); }
+    .plan-item .btn { justify-self:start; }
+    .plan-foot .row { margin-left:0; width:100%; }
+    .plan-foot .row .btn { flex:1; }
+    .cmp { grid-template-columns:minmax(0,1fr); }
+    .cmp-cell .who { display:block; }
+    .choices { grid-template-columns:minmax(0,1fr); }
+    .choices .cancel-col { justify-items:start; }
+    .choices .cancel-col small { text-align:left; max-width:none; }
+    .ver-row { grid-template-columns:74px minmax(0,1fr); }
+    .ver-row > :nth-child(3) { grid-column:2; justify-self:start; text-align:left; }
+  }
+  @media (prefers-reduced-motion:reduce) {
+    .switch-row input, .switch-row input::after { transition:none; }
+  }
   /* Connect-a-model wizard provider cards + the concierge suggestion tip. */
   .cwcard { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
     margin-bottom: 8px; padding: 12px 14px; }
@@ -884,7 +971,9 @@
       <aside class="projects-rail" aria-label="Projects"><div class="review-meta-title">Projects</div><div id="projectList"></div></aside>
       <div class="projects-pane">
         <select class="projects-mobile-select" id="projectSelect" aria-label="Project"></select>
+        <p id="projectAnnounce" class="project-announce" role="status" aria-live="polite"></p>
         <div id="projectLive" role="status" aria-live="polite"></div>
+        <div id="projectDecision" class="project-decision"></div>
         <div id="projectDetail"></div>
       </div>
     </div>
@@ -1075,7 +1164,7 @@
         <button class="btn" id="syncPushBtn">Push</button>
         <button class="btn" id="syncPullBtn">Pull</button>
       </div>
-      <p class="muted" id="syncResult" hidden style="margin:10px 0 0;font-size:13px"></p>
+      <p class="muted" id="syncResult" role="status" aria-live="polite" hidden style="margin:10px 0 0;font-size:13px"></p>
       <p class="muted" style="margin:10px 0 0;font-size:13px">NorthKeep now syncs on its own: it pushes a few
         seconds after every change and pulls when you open or return to the app, only when this Mac has
         nothing unsynced. The buttons stay for when you want to force it.</p>
@@ -1173,11 +1262,11 @@
         AI apps back into this vault, then re-push so the server matches. Pushes only your shared scopes. Once this
         Mac is paired it also brings in a new project an AI app created: that project is marked Shared,
         and later edits to it are pushed.</p>
-      <p style="margin:0 0 10px;font-size:13px" id="shareAutoPushLine"></p>
+      <label class="switch-row" for="shareAutoPush"><span><strong>Keep Cloud Connect up to date automatically</strong><small id="shareAutoPushLine" role="status" aria-live="polite"></small></span><input type="checkbox" role="switch" id="shareAutoPush"></label>
       <p class="muted" id="shareLastPushed" style="margin:0 0 10px;font-size:13px"></p>
       <div class="row"><button class="btn" id="shareSyncBtn">Sync now</button></div>
-      <p class="muted" id="shareSyncResult" hidden style="margin:10px 0 0;font-size:13px"></p>
-      <div class="err" id="shareSyncErr"></div>
+      <div class="muted" id="shareSyncResult" role="status" aria-live="polite" hidden style="margin:10px 0 0;font-size:13px;white-space:pre-line"></div>
+      <div class="err" id="shareSyncErr" role="alert"></div>
     </div>
   </section>
   <section id="view-about" hidden>
@@ -1238,6 +1327,12 @@
     <div id="reviewDialogBody"></div>
     <div class="err" id="reviewDialogErr" role="alert"></div>
     <div class="row" id="reviewDialogActions" style="justify-content:flex-end"></div>
+  </div>
+</div>
+<div class="overlay" id="guardDialogOverlay" hidden>
+  <div class="dialog review-dialog guard-dialog" id="guardDialog" role="dialog" aria-modal="true" aria-labelledby="guardDialogTitle">
+    <h2 id="guardDialogTitle"></h2>
+    <div id="guardDialogBody"></div>
   </div>
 </div>
 <div class="overlay" id="curationDialogOverlay" hidden>
@@ -1393,7 +1488,7 @@
     });
     const data = await res.json().catch(() => ({}));
     if (res.status === 423) { showUnlock(); throw new Error('locked'); }
-    if (!res.ok) { const e = new Error(data.error || ('HTTP ' + res.status)); e.status = res.status; e.code = data.code; e.current = data.current; throw e; }
+    if (!res.ok) { const e = new Error(data.error || ('HTTP ' + res.status)); e.status = res.status; e.code = data.code; e.current = data.current; e.data = data; throw e; }
     return data;
   }
 
@@ -2200,16 +2295,23 @@
   let projectIndex = [], currentProjectSlug = '', currentProject = null;
   let projectReview = null, projectReturnFocus = null;
   const projectPendingOperations = new Map();
+  // ADR 0063 D1: cloud versions waiting for a decision, by project, from the last
+  // conflicts read, preview, or sync. pendingDecisionSlug opens the conflict view
+  // once that project has loaded.
+  let projectDecisions = new Map(), projectDecisionsLoaded = false, pendingDecisionSlug = '';
 
   function invalidateProjectView() {
     projectLoadSequence += 1;
     projectActionSequence += 1;
     projectReview = null;
     $('projectLive').replaceChildren();
+    $('projectDecision').replaceChildren();
+    $('projectAnnounce').textContent = '';
   }
 
   function clearProjectsSensitive() {
     invalidateProjectView();
+    projectDecisions = new Map(); projectDecisionsLoaded = false; pendingDecisionSlug = '';
     projectIndex = [];
     currentProjectSlug = '';
     currentProject = null;
@@ -2288,6 +2390,7 @@
   }
 
   async function loadProjects(preferredSlug = '') {
+    preferredSlug = preferredSlug || pendingDecisionSlug;
     const requestId = ++projectLoadSequence;
     $('projectsSummaryMeta').textContent = 'Loading…';
     showProjectsMirror(null);
@@ -2303,9 +2406,9 @@
     if (requestId !== projectLoadSequence || !status.unlocked || $('view-projects').hidden) return;
     projectIndex = Array.isArray(data.projects) ? data.projects : [];
     $('projectsSummaryTitle').textContent = projectIndex.length ? 'In progress' : 'Projects';
-    $('projectsSummaryMeta').textContent = projectIndex.length + ' ' + (projectIndex.length === 1 ? 'project' : 'projects');
     showProjectsMirror(data.mirror);
     renderProjectChoices();
+    if (!projectDecisionsLoaded) refreshProjectDecisions();
     if (!projectIndex.length) { renderProjectsEmpty(); return; }
     const usable = projectIndex.filter((item) => !item.conflict);
     const chosen = projectIndex.some((item) => item.project === preferredSlug)
@@ -2316,7 +2419,10 @@
   function renderProjectChoices() {
     const list = $('projectList'), select = $('projectSelect');
     list.replaceChildren(); select.replaceChildren();
+    const deciding = projectIndex.filter((item) => projectDecisions.has(item.project)).length;
+    $('projectsSummaryMeta').textContent = projectIndex.length + ' ' + (projectIndex.length === 1 ? 'project' : 'projects') + (deciding ? ' · ' + deciding + (deciding === 1 ? ' needs' : ' need') + ' your decision' : '');
     for (const item of projectIndex) {
+      const decide = projectDecisions.has(item.project);
       const button = el('button', 'project-choice');
       button.type = 'button'; button.dataset.project = item.project;
       button.setAttribute('aria-current', String(item.project === currentProjectSlug));
@@ -2325,12 +2431,12 @@
       button.append(el('strong', undefined, item.title || projectName(item.project)), secondaryNode);
       if (item.last_writer_host) button.appendChild(el('small', 'project-writer', 'last: ' + item.last_writer_host));
       const badges = el('div', 'row');
-      badges.appendChild(projectPill(item.conflict ? 'Needs attention' : 'Project', item.conflict ? 'locked' : ''));
+      badges.appendChild(decide ? projectPill('Needs your decision', 'decide') : projectPill(item.conflict ? 'Needs attention' : 'Project', item.conflict ? 'locked' : ''));
       if (item.draft) badges.appendChild(projectPill('Draft', 'draft'));
       button.appendChild(badges);
-      button.addEventListener('click', () => loadProject(item.project));
+      button.addEventListener('click', () => openProjectFromList(item.project));
       list.appendChild(button);
-      const option = el('option', undefined, (item.title || projectName(item.project)) + (item.conflict ? ' (needs attention)' : ''));
+      const option = el('option', undefined, (item.title || projectName(item.project)) + (decide ? ' (needs your decision)' : item.conflict ? ' (needs attention)' : ''));
       option.value = item.project; select.appendChild(option);
     }
     if (currentProjectSlug) select.value = currentProjectSlug;
@@ -2347,7 +2453,7 @@
 
   async function loadProject(slug) {
     const requestId = ++projectLoadSequence;
-    projectActionSequence += 1; projectReview = null; $('projectLive').replaceChildren();
+    projectActionSequence += 1; projectReview = null; $('projectLive').replaceChildren(); $('projectDecision').replaceChildren();
     currentProjectSlug = slug; renderProjectChoices();
     $('projectSelect').hidden = false; $('projectSelect').value = slug;
     $('projectDetail').replaceChildren(el('p', 'muted', 'Loading project…'));
@@ -2355,6 +2461,7 @@
       const data = await api('/api/projects/' + encodeURIComponent(slug));
       if (requestId !== projectLoadSequence || !status.unlocked || $('view-projects').hidden || currentProjectSlug !== slug) return;
       currentProject = data; renderProjectChoices(); renderProjectDetail(data);
+      if (pendingDecisionSlug === slug) { pendingDecisionSlug = ''; openProjectDecision(slug); }
     } catch (ex) {
       if (requestId !== projectLoadSequence || ex.message === 'locked') return;
       currentProject = null;
@@ -2377,6 +2484,7 @@
       button.addEventListener('click', (event) => openProjectAction(action, event.currentTarget)); actions.appendChild(button);
     }
     head.append(title, actions); root.appendChild(head);
+    if (projectDecisions.has(project.project)) root.appendChild(projectDecisionNotice(project.project));
     if (project.draft) root.appendChild(projectDraftBanner());
     const facts = el('div', 'project-facts');
     const statusBox = el('div'); statusBox.append(el('div', 'review-meta-title', 'Current summary'), el('p', 'project-status-copy', project.status || 'No current status yet.'));
@@ -2411,30 +2519,323 @@
     section.append(head, body); return section;
   }
 
-  function renderProjectHistory(project) {
-    const section = el('section', 'project-section'); const details = el('details', 'project-history');
-    const history = Array.isArray(project.history) ? project.history : [], archives = Array.isArray(project.archives) ? project.archives : [], log = projectLines(project.log);
-    // ADR 0052: saved versions are listed from content-free summaries. Older
-    // revision text can be blanked by compaction, so the rows never show it.
-    const revisions = Array.isArray(project.revisions) && project.revisions.length ? project.revisions : null;
-    const saved = revisions || history;
-    details.appendChild(el('summary', undefined, 'Session history · ' + (saved.length + log.length) + ' recent' + (archives.length ? ' · ' + archives.length + ' archived' : '')));
-    const body = el('div');
-    for (const entry of log) {
-      const row = el('div', 'project-event'); row.append(el('time', undefined, 'Current'), el('p', undefined, entry)); body.appendChild(row);
+  // ADR 0063 D4: every saved version newest first, the current one on top.
+  // Restorable means the text is still here; compaction (ADR 0051) blanks
+  // older text, and those rows say so instead of offering a button.
+  function projectVersionRows(project) {
+    const texts = new Map((Array.isArray(project.history) ? project.history : []).map((entry) => [entry.id, entry.content]));
+    const rows = [];
+    if (project.revision) rows.push({ id: project.revision, updated_at: project.updated_at, writer: project.last_writer || null, state: 'current' });
+    const summaries = Array.isArray(project.revisions) && project.revisions.length ? project.revisions : (Array.isArray(project.history) ? project.history : []);
+    for (const entry of summaries) {
+      rows.push({ id: entry.id, updated_at: entry.updated_at, mode: entry.mode, writer: entry.writer || null, state: texts.get(entry.id) ? 'restorable' : 'cleared', content: texts.get(entry.id) || '' });
     }
-    for (const entry of saved) {
-      const lines = [];
-      if (entry.mode) lines.push(entry.mode[0].toUpperCase() + entry.mode.slice(1));
-      if (revisions) { if (entry.writer && entry.writer.host) lines.push('Written by ' + entry.writer.host); }
-      else if (entry.content) lines.push(entry.content);
-      const row = el('div', 'project-event'); row.append(el('time', undefined, projectDate(entry.updated_at)), el('p', undefined, lines.join('\n') || 'Saved version')); body.appendChild(row);
+    for (const entry of Array.isArray(project.cleared_revisions) ? project.cleared_revisions : []) {
+      rows.push({ id: entry.id, updated_at: entry.updated_at, writer: entry.writer || null, state: 'cleared' });
+    }
+    return rows.sort((a, b) => (a.state === 'current' ? -1 : b.state === 'current' ? 1 : String(b.updated_at).localeCompare(String(a.updated_at))));
+  }
+
+  // A log line usually starts with its date ("2026-09-30: ..."); show that date in the time column.
+  function projectLogRow(line) {
+    const match = /^(\d{4}-\d{2}-\d{2})(?:[ T][\d:]+Z?)?\s*[:·-]?\s*(.*)$/.exec(line);
+    const date = match ? new Date(match[1] + 'T12:00:00') : null;
+    return { when: date && !Number.isNaN(date.getTime()) ? date.toLocaleDateString([], { month:'short', day:'numeric' }) : '', text: match && match[2] ? match[2] : line };
+  }
+
+  function plural(count, one, many) { return count + ' ' + (count === 1 ? one : many); }
+
+  function renderProjectHistory(project) {
+    const section = el('section', 'project-section'); const details = el('details', 'project-history'); details.id = 'projectHistory';
+    const archives = Array.isArray(project.archives) ? project.archives : [], log = projectLines(project.log);
+    const versions = projectVersionRows(project);
+    details.appendChild(el('summary', undefined, 'Session history · ' + plural(versions.length, 'saved version', 'saved versions') + ' · ' + plural(log.length, 'log entry', 'log entries') + (archives.length ? ' · ' + archives.length + ' archived' : '')));
+    const body = el('div');
+    body.appendChild(el('div', 'review-meta-title hist-sub', 'Saved versions'));
+    for (const row of versions) {
+      const item = el('div', 'ver-row' + (row.state === 'cleared' ? ' is-cleared' : ''));
+      const copy = el('p', undefined, row.state === 'current' ? 'Current' : row.mode ? row.mode[0].toUpperCase() + row.mode.slice(1) : 'Saved version');
+      if (row.writer && row.writer.host) copy.appendChild(el('small', undefined, 'Written by ' + row.writer.host));
+      item.append(el('time', undefined, projectDate(row.updated_at)), copy);
+      if (row.state === 'current') item.appendChild(projectPill('Current version', 'ok'));
+      else if (row.state === 'cleared') item.appendChild(el('span', 'cleared', 'Text cleared to save space. Cannot restore.'));
+      else {
+        const restore = el('button', 'btn', 'Restore this version'); restore.type = 'button';
+        restore.addEventListener('click', () => confirmProjectRestore(project, row));
+        item.appendChild(restore);
+      }
+      body.appendChild(item);
+    }
+    body.appendChild(el('div', 'review-meta-title hist-sub', 'Log'));
+    for (const line of log) {
+      const entry = projectLogRow(line);
+      const row = el('div', 'project-event'); row.append(el('time', undefined, entry.when), el('p', undefined, entry.text)); body.appendChild(row);
     }
     for (const entry of archives) {
       const row = el('div', 'project-event'); row.append(el('time', undefined, projectDate(entry.updated_at)), el('p', undefined, entry.content)); body.appendChild(row);
     }
-    if (!saved.length && !archives.length && !log.length) body.appendChild(el('p', 'muted', 'No earlier sessions recorded.'));
+    if (!log.length && !archives.length) body.appendChild(el('p', 'muted', 'No log entries recorded.'));
     details.appendChild(body); section.appendChild(details); return section;
+  }
+
+  function confirmProjectRestore(project, row) {
+    openGuardDialog('Restore the version from ' + projectDate(row.updated_at) + '?', 'restore-dialog', (body) => renderRestoreBody(body, project, row));
+  }
+
+  function projectSummaryBox(label, status, next) {
+    const box = el('div'); box.appendChild(el('small', undefined, label));
+    box.append(el('b', undefined, 'Current summary'), document.createTextNode(status || 'No current status yet.'), el('b', undefined, 'Next actions'), document.createTextNode(next || 'No next action recorded.'));
+    return box;
+  }
+
+  function renderRestoreBody(body, project, row) {
+    body.replaceChildren();
+    const old = projectSections(row.content);
+    body.appendChild(el('p', 'muted', 'NorthKeep saves this version as the newest one. Your current version stays in history. The log is not changed.'));
+    const compare = el('div', 'review-compare');
+    compare.append(projectSummaryBox('Current version', project.status, project.next_actions), projectSummaryBox('Version from ' + new Date(row.updated_at).toLocaleDateString([], { month:'short', day:'numeric' }), old['Current Status'], old['Next Actions']));
+    body.appendChild(compare);
+    if (project.shared) body.appendChild(el('p', 'shared-note', (project.title || project.project) + ' is shared. Your AI apps see the restored version after this Mac next sends to Cloud Connect.'));
+    const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);
+    const actions = el('div', 'row'); actions.style.justifyContent = 'flex-end';
+    const cancel = el('button', 'btn', 'Cancel'); cancel.type = 'button'; cancel.dataset.autofocus = ''; cancel.addEventListener('click', closeGuardDialog);
+    const restore = el('button', 'btn primary', 'Restore this version'); restore.type = 'button';
+    restore.addEventListener('click', async () => {
+      restore.disabled = true; err.textContent = '';
+      try {
+        await api('/api/projects/' + encodeURIComponent(project.project) + '/restore', { method:'POST', json:{ revision: row.id, expected_revision: project.revision } });
+        closeGuardDialog();
+        await loadProject(project.project);
+        projectAnnounce('Restored the version from ' + projectDate(row.updated_at) + '. It is now the current version, and the one it replaced is in Saved versions.');
+      } catch (ex) {
+        if (ex.message === 'locked') return;
+        if (ex.status === 409 && ex.code === 'stale_project') { renderRestoreRefused(body, project, ex.current); return; }
+        err.textContent = ex.message; restore.disabled = false;
+      }
+    });
+    actions.append(cancel, restore); body.appendChild(actions);
+  }
+
+  function renderRestoreRefused(body, project, latest) {
+    body.replaceChildren();
+    const notice = el('div', 'project-notice'); notice.setAttribute('role', 'alert');
+    const writer = latest && latest.last_writer && latest.last_writer.host;
+    const when = latest && latest.updated_at ? projectDate(latest.updated_at) : '';
+    notice.append(el('strong', undefined, 'Project changed after it was read. Nothing was restored.'), el('br'),
+      document.createTextNode((writer ? writer + ' saved a new version' : 'A new version was saved') + (when ? ' at ' + when : '') + ' while this list was open. Reload the list to see it, then choose again.'));
+    body.appendChild(notice);
+    const actions = el('div', 'row'); actions.style.justifyContent = 'flex-end';
+    const close = el('button', 'btn', 'Close'); close.type = 'button'; close.addEventListener('click', closeGuardDialog);
+    const reload = el('button', 'btn primary', 'Reload versions'); reload.type = 'button'; reload.dataset.autofocus = '';
+    reload.addEventListener('click', async () => {
+      closeGuardDialog();
+      await loadProject(project.project);
+      const history = $('projectHistory');
+      if (history) { history.open = true; const summary = history.querySelector('summary'); if (summary) summary.focus(); }
+    });
+    actions.append(close, reload); body.appendChild(actions);
+    reload.focus();
+  }
+
+  function projectAnnounce(text, bad) {
+    const node = $('projectAnnounce'); node.classList.toggle('bad', Boolean(bad)); node.textContent = text;
+  }
+
+  // --- ADR 0063 D1: the conflict view. Nothing changes until Keep mine or Take theirs.
+  function openProjectFromList(slug) {
+    if (projectDecisions.has(slug)) pendingDecisionSlug = slug;
+    loadProject(slug);
+  }
+
+  function reviewProjectDecision(slug) {
+    pendingDecisionSlug = slug;
+    if ($('view-projects').hidden) showTop('projects'); else loadProjects(slug);
+  }
+
+  function noteProjectDecisions(conflicts) {
+    projectDecisions = new Map();
+    for (const c of Array.isArray(conflicts) ? conflicts : []) projectDecisions.set(c.project, (projectDecisions.get(c.project) || 0) + 1);
+    projectDecisionsLoaded = true;
+    if (!$('view-projects').hidden && projectIndex.length) {
+      renderProjectChoices();
+      if (currentProject) renderProjectDetail(currentProject);
+    }
+  }
+
+  // Asks Cloud Connect only when this Mac already has an account there (it shares
+  // something or has paired), the same rule Sync now follows. Quiet on failure.
+  async function refreshProjectDecisions() {
+    projectDecisionsLoaded = true;
+    if (!status.unlocked) return;
+    try {
+      const share = await api('/api/share/status');
+      if (!share.configured || !share.unlocked || (!(share.shared_scopes || []).length && !share.paired)) return;
+      const data = await api('/api/share/conflicts');
+      noteProjectDecisions(data.conflicts);
+    } catch { /* the list still works without the pills */ }
+  }
+
+  function projectDecisionNotice(slug) {
+    const count = projectDecisions.get(slug) || 0;
+    const notice = el('div', 'project-notice');
+    notice.append(el('strong', undefined, 'Needs your decision.'), document.createTextNode(' ' + (count === 1 ? 'A connected app saved a version of this project that was not applied.' : count + ' versions from connected apps were not applied.') + ' Nothing changes until you choose.'), el('br'));
+    const review = el('button', 'btn', 'Review'); review.type = 'button';
+    review.addEventListener('click', () => openProjectDecision(slug));
+    notice.appendChild(review); return notice;
+  }
+
+  function decisionReason(c) {
+    if (c.reason === 'legacy') return 'A connected app wrote this before NorthKeep recorded which version it started from.';
+    if (c.reason === 'several_heads') return 'This project has more than one current version on this Mac, so NorthKeep cannot tell which one the cloud version replaces.';
+    if (c.reason === 'stale') return 'A connected app edited this from an older version, and Cloud Connect already has a newer one.';
+    return 'A connected app edited this from a version you have since changed.';
+  }
+
+  function shortDay(value) {
+    const date = new Date(value || '');
+    return Number.isNaN(date.getTime()) ? '' : date.toLocaleDateString([], { month:'short', day:'numeric' });
+  }
+
+  function decisionDates(c) {
+    const parts = [];
+    if (c.base_updated_at) parts.push('It started from your version of ' + shortDay(c.base_updated_at) + '.');
+    if (c.local_updated_at) parts.push('You saved ' + shortDay(c.local_updated_at) + '.');
+    return parts.join(' ');
+  }
+
+  // Splits a project document into its sections. A level-1 heading is the title.
+  function projectSections(text) {
+    const parts = {}; let name = '';
+    for (const line of String(text || '').split('\n')) {
+      const heading = /^(#{1,2})\s+(.*)$/.exec(line);
+      if (heading) { name = heading[1] === '#' ? '#title' : heading[2].trim(); parts[name] = parts[name] || []; if (heading[1] === '#') parts[name].push(heading[2].trim()); continue; }
+      (parts[name] = parts[name] || []).push(line);
+    }
+    const out = {}; for (const key of Object.keys(parts)) out[key] = parts[key].join('\n').trim(); return out;
+  }
+
+  const PROJECT_COMPARE_GROUPS = [['Title', ['#title']], ['Current summary', ['Current Status']], ['Next actions', ['Next Actions']], ['Decisions and open questions', ['Decisions', 'Open Questions']], ['Log', ['Log']], ['What and why', ['What & Why']], ['Files', ['Files']]];
+
+  function compareProjectTexts(mine, theirs) {
+    const a = projectSections(mine), b = projectSections(theirs);
+    const groups = PROJECT_COMPARE_GROUPS.map((group) => group.slice());
+    const known = new Set(groups.flatMap((group) => group[1]));
+    for (const key of [...Object.keys(a), ...Object.keys(b)]) if (!known.has(key)) { known.add(key); groups.push([key === '' ? 'Other text' : key, [key]]); }
+    return groups.map(([label, keys]) => {
+      const join = (sections) => keys.map((key) => sections[key]).filter(Boolean).join('\n');
+      const left = join(a), right = join(b);
+      return { label, mine: left, theirs: right, same: left === right };
+    }).filter((group) => group.mine || group.theirs);
+  }
+
+  // Lines, each split into sentences, marked when the other version lacks them.
+  function diffUnits(text, other) {
+    const split = (value) => String(value || '').split('\n').map((line) => line.split(/(?<=[^\d\s][.!?])\s+(?=\S)/));
+    const key = (unit) => unit.trim().replace(/\s+/g, ' ');
+    const theirs = new Set(split(other).flat().map(key).filter(Boolean));
+    return split(text).map((line) => line.map((unit) => ({ text: unit, only: key(unit) !== '' && !theirs.has(key(unit)) })));
+  }
+
+  function compareCell(text, other, who) {
+    const cell = el('div', 'cmp-cell diff'); cell.appendChild(el('span', 'who', who));
+    if (!text) { cell.appendChild(el('span', 'muted', 'Not in this version.')); return cell; }
+    diffUnits(text, other).forEach((line, i) => {
+      if (i) cell.appendChild(document.createTextNode('\n'));
+      line.forEach((unit, j) => {
+        if (j) cell.appendChild(document.createTextNode(' '));
+        cell.appendChild(unit.only ? el('mark', undefined, unit.text) : document.createTextNode(unit.text));
+      });
+    });
+    return cell;
+  }
+
+  async function openProjectDecision(slug) {
+    const root = $('projectDecision');
+    root.replaceChildren(el('p', 'muted', 'Loading the cloud version…'));
+    let data;
+    try { data = await api('/api/share/conflicts'); }
+    catch (ex) { if (ex.message !== 'locked') root.replaceChildren(el('p', 'err', ex.message)); return; }
+    if (currentProjectSlug !== slug) return;
+    noteProjectDecisions(data.conflicts);
+    const rows = (data.conflicts || []).filter((c) => c.project === slug);
+    if (!rows.length) { root.replaceChildren(); projectAnnounce('Nothing from a connected app is waiting for this project.'); return; }
+    renderProjectDecision(slug, rows, (data.local || {})[slug] || null);
+  }
+
+  function renderProjectDecision(slug, rows, local) {
+    const c = rows[0], root = $('projectDecision');
+    const name = (currentProject && currentProject.title) || slug;
+    const panel = el('section', 'project-operation');
+    const head = el('div', 'project-operation-head'); const copy = el('div');
+    const title = el('h3', undefined, 'Choose which version to keep'); title.tabIndex = -1;
+    copy.append(title, el('p', 'muted', decisionReason(c).replace(/^A connected app edited this/, 'A connected app edited ' + name) + ' Nothing changes until you choose.'));
+    head.append(copy, projectPill('Needs your decision', 'decide')); panel.appendChild(head);
+    if (rows.length > 1) panel.appendChild(el('p', 'project-notice', rows.length + ' cloud versions are waiting for this project. This is the first one. The next appears after you choose.'));
+    if (c.in_history) panel.appendChild(el('p', 'project-notice', 'This cloud version is already in your history.'));
+    panel.appendChild(el('p', 'cmp-legend muted', 'Sections that differ are outlined. Highlighted lines appear in only one version.'));
+    const cmp = el('div', 'cmp');
+    const mineHead = el('div', 'cmp-head'); mineHead.appendChild(el('h4', undefined, 'Your version'));
+    const writer = local && local.writer && local.writer.host;
+    mineHead.appendChild(el('p', 'project-writer', !local ? 'This Mac has more than one current version of this project.' : 'On this Mac. ' + (writer ? 'Last written by ' + writer + ', ' : 'Saved ') + projectDate(local.updated_at)));
+    const cloudHead = el('div', 'cmp-head cloud'); cloudHead.appendChild(el('h4', undefined, 'Cloud version'));
+    cloudHead.appendChild(el('p', 'project-writer', c.base_revision === null ? 'Written in a connected app. NorthKeep did not record which version it started from.'
+      : c.base_revision === 'new' ? 'Created in a connected app.'
+      : 'Written in a connected app.' + (c.base_updated_at ? ' Started from your version of ' + shortDay(c.base_updated_at) + '.' : '')));
+    cmp.append(mineHead, cloudHead);
+    for (const group of compareProjectTexts(local ? local.content : '', c.content)) {
+      const sec = el('div', 'cmp-sec', group.label);
+      if (!group.same) sec.appendChild(el('span', 'tag diff', 'Different'));
+      cmp.appendChild(sec);
+      if (group.same) {
+        const count = group.mine.split('\n').filter((line) => line.trim()).length;
+        cmp.appendChild(el('p', 'cmp-same muted', 'Same in both versions.' + (count > 1 ? ' ' + count + ' items.' : '')));
+      } else {
+        cmp.append(compareCell(group.mine, group.theirs, 'Your version'), compareCell(group.theirs, group.mine, 'Cloud version'));
+      }
+    }
+    panel.appendChild(cmp);
+    const err = el('div'); err.setAttribute('role', 'alert'); panel.appendChild(err);
+    const choices = el('div', 'choices');
+    const keepBox = el('div', 'choice'); const keep = el('button', 'btn', 'Keep mine'); keep.type = 'button';
+    const keepText = el('p', undefined, 'Your version stays as it is. The cloud version is saved as a memory in ' + slug + ', titled ');
+    keepText.append(el('strong', undefined, 'Cloud version not kept, ' + new Date().toISOString().slice(0, 10)), document.createTextNode('. Your AI apps can still read it.'));
+    keepBox.append(keep, keepText);
+    const takeBox = el('div', 'choice'); const take = el('button', 'btn', 'Take theirs'); take.type = 'button';
+    take.disabled = !local || c.reason === 'several_heads';
+    takeBox.append(take, el('p', undefined, take.disabled ? 'Not available while this Mac has more than one current version.' : 'The cloud version becomes the current one. Your version stays in history, and you can restore it from Saved versions.'));
+    const cancelCol = el('div', 'cancel-col'); const cancel = el('button', 'btn', 'Cancel'); cancel.type = 'button';
+    cancel.addEventListener('click', () => { root.replaceChildren(); const back = $('projectDetail').querySelector('.project-notice .btn'); if (back) back.focus(); });
+    cancelCol.append(cancel, el('small', undefined, 'This stays in Needs your decision.'));
+    choices.append(keepBox, takeBox, cancelCol); panel.appendChild(choices);
+    const resolve = async (choice, button) => {
+      for (const b of [keep, take, cancel]) b.disabled = true;
+      err.replaceChildren();
+      try {
+        const result = await api('/api/share/resolve', { method:'POST', json:{ project: slug, choice, server_id: c.server_id, ...(choice === 'take-theirs' ? { expected_revision: local.revision } : {}) } });
+        root.replaceChildren();
+        await refreshProjectDecisions();
+        await loadProject(slug);
+        const done = choice === 'keep-mine' ? 'Kept your version. The cloud version is saved as a memory in ' + slug + '.' : 'The cloud version is now current. Your earlier version is in Saved versions.';
+        projectAnnounce(done + (result.push_error ? ' Saved on this Mac, but Cloud Connect was not updated: ' + result.push_error : ''), Boolean(result.push_error));
+      } catch (ex) {
+        if (ex.message === 'locked') return;
+        cancel.disabled = false; keep.disabled = false; take.disabled = !local || c.reason === 'several_heads';
+        const notice = el('div', 'project-notice danger');
+        if (ex.status === 409 && ex.code === 'stale_project') {
+          notice.append(el('strong', undefined, 'This project changed after you opened this view. Nothing was changed.'), document.createTextNode(' Reload to compare against the newest version, then choose again.'), el('br'));
+          const reload = el('button', 'btn', 'Reload'); reload.type = 'button'; reload.addEventListener('click', () => { pendingDecisionSlug = slug; loadProject(slug); });
+          notice.appendChild(reload);
+        } else {
+          notice.append(el('strong', undefined, 'Nothing was changed.'), document.createTextNode(' ' + ex.message));
+        }
+        err.appendChild(notice); button.focus();
+      }
+    };
+    keep.addEventListener('click', () => resolve('keep-mine', keep));
+    take.addEventListener('click', () => resolve('take-theirs', take));
+    root.replaceChildren(panel);
+    panel.scrollIntoView({ behavior:'smooth', block:'start' });
+    cancel.focus();
   }
 
   function openProjectAction(action, trigger) {
@@ -2599,7 +3000,12 @@
     const button = el('button', 'btn', label); button.type = 'button'; button.addEventListener('click', closeProjectOperation); return button;
   }
 
-  $('projectSelect').addEventListener('change', () => loadProject($('projectSelect').value));
+  $('projectSelect').addEventListener('change', () => openProjectFromList($('projectSelect').value));
+  $('projectDecision').addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    const cancel = Array.from($('projectDecision').querySelectorAll('.cancel-col .btn'))[0];
+    if (cancel && !cancel.disabled) { event.preventDefault(); cancel.click(); }
+  });
   $('projectLive').addEventListener('keydown', (event) => { if (event.key === 'Escape') { event.preventDefault(); closeProjectOperation(); } });
   $('addMemoryToggle').addEventListener('click', () => {
     const expanded = $('addMemoryToggle').getAttribute('aria-expanded') === 'true';
@@ -5321,6 +5727,74 @@
       await loadSyncStatus();
     }
   });
+  // ADR 0063 D6: a pull that would remove or bring back anything on this Mac
+  // answers 409 with a report. It installs only after Confirm, and only the
+  // exact server copy the report described.
+  function pullReportGroups(report) {
+    const onlyHere = new Map();
+    for (const item of report.only_here || []) { const list = onlyHere.get(item.scope) || []; list.push(item.first_line); onlyHere.set(item.scope, list); }
+    const restored = new Map();
+    for (const item of report.restored_deletes || []) restored.set(item.scope, (restored.get(item.scope) || 0) + 1);
+    return { onlyHere, restored, projects: report.projects || [], marks: report.scope_marks || [] };
+  }
+
+  function openPullReport(data, notice) {
+    openGuardDialog('Review this pull', 'pull-dialog', (body) => renderPullReport(body, data, notice));
+  }
+
+  function renderPullReport(body, data, notice) {
+    body.replaceChildren();
+    const groups = pullReportGroups(data.report || {});
+    if (notice) { const n = el('div', 'project-notice'); n.setAttribute('role', 'alert'); n.textContent = notice; body.appendChild(n); }
+    body.appendChild(el('p', 'lead muted', 'Your sync server has a copy of your vault from another device. Pulling it replaces the vault on this Mac. Nothing has changed yet.'));
+    const removeCount = (data.report.only_here || []).length + groups.projects.length;
+    if (removeCount) {
+      const group = planGroup('Will be removed from this Mac', removeCount);
+      group.appendChild(el('p', 'plan-note muted', 'These are on this Mac and not in the copy on your sync server.'));
+      for (const slug of groups.projects) group.appendChild(planItem('Project: ' + slug, 'Its current version is only on this Mac.'));
+      for (const [scope, lines] of groups.onlyHere) {
+        for (const line of lines.slice(0, 20)) group.appendChild(planItem(scopeLabel(scope), line, true));
+        if (lines.length > 20) group.appendChild(planItem('And ' + (lines.length - 20) + ' more in ' + scopeLabel(scope)));
+      }
+      body.appendChild(group);
+    }
+    if (groups.restored.size) {
+      const group = planGroup('Deleted here, would come back', (data.report.restored_deletes || []).length, 'decide');
+      group.appendChild(el('p', 'plan-note muted', 'You deleted these memories on this Mac. The pull would bring them back. Their text is not shown because this Mac no longer has it.'));
+      for (const [scope, n] of groups.restored) group.appendChild(planItem(n + (n === 1 ? ' memory in ' : ' memories in ') + scopeLabel(scope)));
+      body.appendChild(group);
+    }
+    for (const mark of groups.marks) {
+      body.appendChild(el('p', 'plan-held muted', scopeLabel(mark.scope) + (mark.shared_here ? ' is shared on this Mac and private in the other copy.' : ' is private on this Mac and shared in the other copy.') + ' This is for your information; it is not counted as a removal.'));
+    }
+    body.appendChild(el('p', 'shared-note', 'This Mac\'s current vault is kept as ' + (data.backup_file || 'a backup file') + ' in your NorthKeep folder, so anything removed can be recovered from it.'));
+    const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);
+    const foot = el('div', 'plan-foot'); foot.appendChild(el('p', 'muted', 'Confirm pulls exactly the copy described here. If the server changes first, you see a new report.'));
+    const actions = el('div', 'row');
+    const cancel = el('button', 'btn', 'Cancel'); cancel.type = 'button'; cancel.dataset.autofocus = '';
+    cancel.addEventListener('click', () => { closeGuardDialog(); $('syncResult').textContent = 'Nothing was pulled.'; });
+    const confirm = el('button', 'btn primary', 'Confirm pull'); confirm.type = 'button';
+    confirm.addEventListener('click', async () => {
+      confirm.disabled = true; cancel.disabled = true; err.textContent = '';
+      try {
+        const r = await api('/api/sync/pull', { method: 'POST', json: { confirm: true, version: data.version, sha256: data.sha256 } });
+        closeGuardDialog();
+        $('syncResult').textContent = r.ok ? 'Pulled: this Mac now has version ' + r.version + '. The previous vault is kept as ' + (data.backup_file || 'a backup file') + '.' : 'Pull did not complete.';
+        await loadSyncStatus();
+      } catch (e) {
+        if (e.message === 'locked') return;
+        if (e.status === 409 && e.data && e.data.report) {
+          renderPullReport(body, e.data, 'Your sync server changed while you were reviewing. Nothing was pulled. This is the new report.');
+          const again = body.querySelector('[data-autofocus]'); if (again) again.focus();
+          return;
+        }
+        err.textContent = e.code === 'local_changed' ? 'This Mac saved a change while you were reviewing, so nothing was pulled. Pull again to see a new report.' : e.message;
+        cancel.disabled = false; confirm.disabled = e.code === 'local_changed';
+      }
+    });
+    actions.append(cancel, confirm); foot.appendChild(actions); body.appendChild(foot);
+  }
+
   $('syncPullBtn').addEventListener('click', async () => {
     const out = $('syncResult');
     out.hidden = false; out.textContent = 'Pulling…';
@@ -5336,7 +5810,10 @@
       }
     } catch (e) {
       // api() already called showUnlock() on a 423.
-      if (e.status === 402) {
+      if (e.status === 409 && e.data && e.data.report) {
+        out.textContent = 'Nothing was pulled yet. Review what the pull would change on this Mac.';
+        openPullReport(e.data, e.code === 'remote_changed' ? 'Your sync server changed while you were reviewing. Nothing was pulled. This is the new report.' : '');
+      } else if (e.status === 402) {
         out.textContent = 'A $10/month subscription is required. Subscribe below, then Pull.';
         await loadSyncBilling();
       } else {
@@ -5810,11 +6287,19 @@
       : 'No send to Cloud Connect from this Mac is on record yet.';
     // ADR 0063 D5: whether Cloud Connect updates on its own right now, and why not.
     const auto = s.auto_push;
-    $('shareAutoPushLine').textContent = !hasServer || !auto ? ''
-      : auto.enabled && (auto.phase === 'idle' || auto.phase === 'pending' || auto.phase === 'pushing') && auto.reason !== 'locked'
-        ? 'Cloud Connect updates on its own a few seconds after this Mac syncs with your other devices.'
-        : (auto.message || 'Cloud Connect updates only when you use Sync now.');
+    $('shareAutoPush').checked = Boolean(auto && auto.enabled);
+    $('shareAutoPush').disabled = !hasServer || !auto;
+    $('shareAutoPushLine').textContent = !hasServer ? 'Set a connector server first.' : auto ? autoPushSentence(auto) : '';
     renderShareScopes(s);
+  }
+
+  // The engine's own messages name CLI commands in two places; the app says what to do here instead.
+  function autoPushSentence(auto) {
+    if (auto.enabled && (auto.phase === 'idle' || auto.phase === 'pending' || auto.phase === 'pushing') && auto.reason !== 'locked')
+      return 'On. Cloud Connect updates on its own a few seconds after this Mac syncs with your other devices.';
+    if (auto.reason === 'stale_push') return 'Another device pushed a newer copy to Cloud Connect, so automatic updates are paused. Let this Mac finish syncing, then use Sync now.';
+    if (auto.reason === 'reencrypt') return 'Cloud Connect cannot read this account\'s shared data. Use Sync now to send it again.';
+    return auto.message || 'Cloud Connect updates only when you use Sync now.';
   }
 
   function renderShareScopes(s) {
@@ -6068,35 +6553,213 @@
     sharePairTimer = setInterval(tick, 1000);
   }
 
-  $('shareSyncBtn').addEventListener('click', async () => {
+  // --- ADR 0063 dialogs (Sync now preview, restore, pull report): one overlay
+  // that traps Tab, closes on Escape, and returns focus to what opened it.
+  let guardLastFocus = null;
+  function openGuardDialog(title, className, build) {
+    const overlay = $('guardDialogOverlay');
+    if (overlay.hidden) guardLastFocus = document.activeElement;
+    $('guardDialog').className = 'dialog review-dialog guard-dialog ' + (className || '');
+    $('guardDialogTitle').textContent = title;
+    build($('guardDialogBody'));
+    overlay.hidden = false;
+    const target = $('guardDialogBody').querySelector('[data-autofocus]') || $('guardDialogBody').querySelector('button');
+    if (target) target.focus();
+  }
+  function closeGuardDialog() {
+    $('guardDialogOverlay').hidden = true;
+    $('guardDialogBody').replaceChildren();
+    if (guardLastFocus && guardLastFocus.isConnected) guardLastFocus.focus();
+    guardLastFocus = null;
+  }
+  $('guardDialogOverlay').addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); closeGuardDialog(); return; }
+    if (e.key !== 'Tab') return;
+    const focusable = Array.from($('guardDialogOverlay').querySelectorAll('button:not([disabled]),input:not([disabled]),select,textarea')).filter((n) => !n.hidden && n.getClientRects().length > 0);
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (!$('guardDialogOverlay').contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+
+  function planGroup(title, count, className) {
+    const group = el('div', 'plan-group' + (className ? ' ' + className : ''));
+    const head = el('h3', undefined, title); head.appendChild(el('span', 'count', String(count))); group.appendChild(head);
+    return group;
+  }
+  function planItem(title, detail, quote) {
+    const item = el('div', 'plan-item'); const copy = el('div'); copy.appendChild(el('strong', undefined, title));
+    if (detail) copy.appendChild(el('p', quote ? 'plan-quote' : undefined, detail));
+    item.appendChild(copy); return item;
+  }
+  function planPick(title, quote, detail, checked) {
+    const item = el('label', 'plan-item pick'); const box = el('input'); box.type = 'checkbox'; box.checked = checked;
+    const copy = el('div'); copy.appendChild(el('strong', undefined, title));
+    if (quote) copy.appendChild(el('p', 'plan-quote', quote));
+    if (detail) copy.appendChild(el('p', undefined, detail));
+    item.append(box, copy); return { item, box };
+  }
+  function scopeLabel(scope) { return String(scope || '').replace(/^project:/, ''); }
+
+  // How many changes Apply makes: every addition, plus the checked updates and removals.
+  function syncApplyCount(plan, approve) {
+    return (plan.additions ? plan.additions.count : 0) + (plan.new_projects || []).length + approve.server_ids.length + approve.forget_ids.length;
+  }
+
+  function openSyncPreview(plan) {
+    openGuardDialog('Review this sync', 'sync-dialog', (body) => {
+      body.replaceChildren();
+      body.appendChild(el('p', 'lead muted', 'Your AI apps made changes since this Mac last synced. Nothing on this Mac has changed yet.'));
+      const byScope = Object.entries((plan.additions && plan.additions.by_scope) || {});
+      const addCount = (plan.additions ? plan.additions.count : 0) + (plan.new_projects || []).length;
+      if (addCount) {
+        const group = planGroup('Will add', addCount);
+        for (const [scope, n] of byScope) group.appendChild(planItem(n + (n === 1 ? ' new memory in ' : ' new memories in ') + scopeLabel(scope)));
+        for (const slug of plan.new_projects || []) group.appendChild(planItem('New project: ' + slug, 'A connected app created it. It arrives marked Shared, and later edits to it are pushed.'));
+        body.appendChild(group);
+      }
+      const updates = [], removes = [];
+      if ((plan.replacements || []).length) {
+        const group = planGroup('Will update', plan.replacements.length);
+        group.appendChild(el('p', 'plan-note muted', 'Uncheck any you want to leave as they are. An unchecked one asks again next time.'));
+        for (const r of plan.replacements) {
+          const pick = planPick(r.project, '', 'A connected app updated it from your current version' + (r.local_updated_at ? ', saved ' + projectDate(r.local_updated_at) : '') + '. Your current version stays in history.', true);
+          updates.push({ id: r.server_id, box: pick.box }); group.appendChild(pick.item);
+        }
+        body.appendChild(group);
+      }
+      if ((plan.conflicts || []).length) {
+        const group = planGroup('Needs your decision', plan.conflicts.length, 'decide');
+        group.appendChild(el('p', 'plan-note muted', 'Apply leaves these alone. They wait here until you choose.'));
+        for (const c of plan.conflicts) {
+          const item = planItem(c.project, [decisionReason(c), decisionDates(c)].filter(Boolean).join(' '));
+          const review = el('button', 'btn', 'Review'); review.type = 'button'; review.setAttribute('aria-label', 'Review ' + c.project);
+          review.addEventListener('click', () => { closeGuardDialog(); reviewProjectDecision(c.project); });
+          item.appendChild(review); group.appendChild(item);
+        }
+        body.appendChild(group);
+      }
+      if ((plan.forgets || []).length) {
+        const group = planGroup('Will remove', plan.forgets.length);
+        group.appendChild(el('p', 'plan-note muted', 'Forgotten in your AI apps. They leave current memories on this Mac. Uncheck any you want to keep. An unchecked one asks again next time.'));
+        for (const f of plan.forgets) {
+          const pick = planPick(scopeLabel(f.scope), f.first_line, '', true);
+          removes.push({ id: f.entry_id, box: pick.box }); group.appendChild(pick.item);
+        }
+        body.appendChild(group);
+      }
+      for (const message of plan.held_messages || []) body.appendChild(el('p', 'plan-held muted', message));
+      const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);
+      const foot = el('div', 'plan-foot'); foot.appendChild(el('p', 'muted', 'Anything that arrives after this preview waits for the next Sync now.'));
+      const actions = el('div', 'row');
+      const cancel = el('button', 'btn', 'Cancel'); cancel.type = 'button'; cancel.dataset.autofocus = '';
+      cancel.addEventListener('click', () => { closeGuardDialog(); $('shareSyncResult').textContent = 'Nothing changed. Sync now again when you are ready.'; });
+      const apply = el('button', 'btn primary'); apply.type = 'button';
+      const approve = () => ({ server_ids: updates.filter((u) => u.box.checked).map((u) => u.id), forget_ids: removes.filter((r) => r.box.checked).map((r) => r.id) });
+      const label = () => { const n = syncApplyCount(plan, approve()); apply.textContent = 'Apply ' + n + (n === 1 ? ' change' : ' changes'); };
+      for (const pick of [...updates, ...removes]) pick.box.addEventListener('change', label);
+      label();
+      apply.addEventListener('click', async () => {
+        apply.disabled = true; cancel.disabled = true; err.textContent = '';
+        const done = await applyShareSync(approve(), err);
+        if (done) closeGuardDialog(); else { apply.disabled = false; cancel.disabled = false; }
+      });
+      actions.append(cancel, apply); foot.appendChild(actions); body.appendChild(foot);
+    });
+  }
+
+  function shareSyncMessages(r) {
+    const lines = [];
+    const changed = [];
+    if (r.added) changed.push('added ' + plural(r.added, 'new item', 'new items'));
+    if (r.replaced) changed.push('updated ' + plural(r.replaced, 'project', 'projects'));
+    if (r.forgotten) changed.push('removed ' + plural(r.forgotten, 'memory', 'memories'));
+    lines.push((changed.length ? 'Done. ' + changed.join(', ').replace(/^./, (c) => c.toUpperCase()) + '.' : 'Done. Nothing new from your AI apps.') +
+      (r.push_error ? '' : ' Sent ' + plural(r.pushed || 0, 'memory', 'memories') + ' to Cloud Connect.'));
+    const waiting = ((r.needs_review && r.needs_review.replacements) || []).length + ((r.needs_review && r.needs_review.forgets) || []).length;
+    if (waiting) lines.push(plural(waiting, 'change you left unchecked waits', 'changes you left unchecked wait') + ' for the next Sync now.');
+    if (r.push_error) lines.push('Saved on this Mac, but Cloud Connect was not updated: ' + r.push_error);
+    for (const m of r.held_messages || []) lines.push(m);
+    for (const s of r.newly_shared || []) lines.push('"' + s + '" came from a connected app and is now marked Shared. Later edits to it are pushed; unshare it above to stop.');
+    return lines;
+  }
+
+  function showShareSyncResult(r) {
+    const out = $('shareSyncResult');
+    out.hidden = false;
+    out.replaceChildren(document.createTextNode(shareSyncMessages(r).join('\n')));
+    const conflicts = r.conflicts || [];
+    if (conflicts.length) {
+      out.appendChild(document.createTextNode('\n' + plural(conflicts.length, 'project needs', 'projects need') + ' your decision. Nothing in ' + (conflicts.length === 1 ? 'it' : 'them') + ' changed.'));
+      const row = el('div', 'row'); row.style.marginTop = '8px';
+      for (const slug of new Set(conflicts.map((c) => c.project))) {
+        const review = el('button', 'btn', 'Review ' + slug); review.type = 'button';
+        review.addEventListener('click', () => reviewProjectDecision(slug));
+        row.appendChild(review);
+      }
+      out.appendChild(row);
+    }
+  }
+
+  async function applyShareSync(approve, errNode) {
+    try {
+      const r = await api('/api/share/sync', { method: 'POST', json: { dry_run: false, approve } });
+      noteProjectDecisions(r.conflicts);
+      showShareSyncResult(r);
+      return true;
+    } catch (e) {
+      const text = e.message === 'locked' ? 'Your vault is locked. Unlock it, then Sync now again.' : e.message;
+      if (errNode) errNode.textContent = text; else { $('shareSyncResult').hidden = true; $('shareSyncErr').textContent = text; }
+      return false;
+    } finally {
+      await loadSharing();
+    }
+  }
+
+  // Sync now (ADR 0063 D3): preview first. A sync that only adds applies at
+  // once; one that would update a project or remove a memory opens the preview.
+  async function runShareSync() {
     const out = $('shareSyncResult'), err = $('shareSyncErr');
     err.textContent = '';
-    out.hidden = false; out.textContent = 'Syncing…';
+    out.hidden = false; out.textContent = 'Checking what your AI apps changed…';
     $('shareSyncBtn').disabled = true;
+    let plan;
     try {
-      // ADR 0063: until the preview screen exists, Sync now applies additions
-      // only (an empty approval). Replacements, forgets and conflicts are left
-      // pending and named below for review on the command line.
-      const r = await api('/api/share/sync', { method: 'POST', json: { dry_run: false, approve: {} } });
-      var text = 'Done. Pulled back ' + r.added + ' new, ' +
-        r.deduped + ' already present. Re-pushed ' + r.pushed + ' memories to the connector server.';
-      (r.review_messages || []).forEach(function (m) { text += '\n' + m; });
-      if (r.push_error) text += '\nSaved on this Mac, but Cloud Connect was not updated: ' + r.push_error;
-      // Held rows are the whole point of a sync that pulled nothing: a connected
-      // app wrote to a project this device keeps private.
-      (r.held_messages || []).forEach(function (m) { text += '\n' + m; });
-      (r.newly_shared || []).forEach(function (s) {
-        text += '\n"' + s + '" came from a connected app and is now marked Shared. Later edits to it are pushed; unshare it above to stop.';
-      });
-      out.style.whiteSpace = 'pre-line';
-      out.textContent = text;
+      plan = await api('/api/share/sync', { method: 'POST', json: {} });
     } catch (e) {
       out.hidden = true;
-      err.textContent = e.message === 'locked'
-        ? 'Your vault is locked. Unlock it, then Sync now again.' : e.message;
-    } finally {
+      err.textContent = e.message === 'locked' ? 'Your vault is locked. Unlock it, then Sync now again.' : e.message;
       $('shareSyncBtn').disabled = false;
-      await loadSharing();
+      return;
+    }
+    noteProjectDecisions(plan.conflicts);
+    if (plan.needs_confirmation) {
+      out.textContent = 'Review the changes. Nothing has changed yet.';
+      $('shareSyncBtn').disabled = false;
+      openSyncPreview(plan);
+      return;
+    }
+    out.textContent = 'Syncing…';
+    await applyShareSync({ server_ids: [], forget_ids: [] });
+    $('shareSyncBtn').disabled = false;
+  }
+
+  $('shareSyncBtn').addEventListener('click', () => runShareSync());
+
+  // ADR 0063 D5: the automatic-push switch. The status line says why it is or is not pushing.
+  $('shareAutoPush').addEventListener('change', async () => {
+    const box = $('shareAutoPush'), wanted = box.checked;
+    box.disabled = true; $('shareSyncErr').textContent = '';
+    try {
+      const auto = await api('/api/share/auto-push', { method: 'POST', json: { enabled: wanted } });
+      box.checked = Boolean(auto.enabled);
+      $('shareAutoPushLine').textContent = autoPushSentence(auto);
+    } catch (e) {
+      box.checked = !wanted;
+      if (e.message !== 'locked') $('shareSyncErr').textContent = e.message;
+    } finally {
+      box.disabled = false;
     }
   });
 
