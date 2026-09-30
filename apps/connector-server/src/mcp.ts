@@ -29,7 +29,7 @@
  * (counts + disclosed ids, never text — mirrors packages/mcp-server/src/log.ts).
  */
 
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import {
   PROJECT_DOC_CAP_MESSAGE,
@@ -48,7 +48,8 @@ import {
   serializeProjectDoc,
 } from './project-doc.js';
 import { z } from 'zod';
-import type { ConnectorStorage, SharedEntry } from './storage.js';
+import { BASE_NEW, type ConnectorStorage, type SharedEntry } from './storage.js';
+import { projectScopeView, staleProjectRowIds } from './project-head.js';
 import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
 import { HOSTED_SECTION_TEXT_RULES, firstProjectTextError } from './project-text.js';
 import { TOMBSTONE_USER_MESSAGE } from './tombstones.js';
@@ -97,23 +98,13 @@ function snippetOf(content: string): string {
   return flat.length > SEARCH_SNIPPET_MAX ? `${flat.slice(0, SEARCH_SNIPPET_MAX - 1)}…` : flat;
 }
 
-/**
- * Pick the live project document from already-decrypted rows in one scope.
- * Pending working-type first; else newest createdAt, then highest entryId.
- */
-function selectProjectWorkingDoc(rows: SharedEntry[]): SharedEntry | null {
-  const working = rows.filter((e) => e.type === 'working');
-  const pending = working.filter((e) => e.pending === true);
-  const pool = pending.length > 0 ? pending : working;
-  if (pool.length === 0) return null;
-  let best = pool[0]!;
-  for (let i = 1; i < pool.length; i++) {
-    const e = pool[i]!;
-    if (e.createdAt > best.createdAt || (e.createdAt === best.createdAt && e.entryId > best.entryId)) {
-      best = e;
-    }
-  }
-  return best;
+const SEVERAL_HEADS_MSG =
+  'Project has multiple current documents. Nothing was saved. Ask the user to open NorthKeep and push again (Sync now).';
+const REVISION_MISSING_MSG = 'Nothing was saved: call project_get first and pass its revision as expected_revision.';
+
+/** Shown instead of "no project" when the only cloud versions are waiting for the user (ADR 0063 D1). */
+function waitingForReviewMessage(project: string): string {
+  return `Nothing was saved: a cloud version of project "${project}" is waiting for the user to review it in NorthKeep. Ask them to resolve it there, then call project_get.`;
 }
 
 function statusFirstLine(content: string): string {
@@ -199,6 +190,17 @@ export function createMcpServer(
     return decrypted.filter((e): e is SharedEntry => e !== null);
   }
 
+  /**
+   * What the memory tools (retrieve, list, search) show: visibleEntries minus
+   * stale pending project documents (ADR 0063 D2), which only a device may
+   * resolve, so an app never reads or cites a version the Mac has replaced.
+   */
+  async function memoryEntries(): Promise<SharedEntry[]> {
+    const all = await visibleEntries();
+    const stale = staleProjectRowIds(all);
+    return all.filter((e) => !stale.has(e.entryId));
+  }
+
   /** Content-free failure audit + the re-encrypt guidance, for a row that will not open. */
   async function reencryptResult(tool: string): Promise<{ content: Array<{ type: 'text'; text: string }>; isError: true }> {
     await storage.appendAudit({
@@ -225,7 +227,7 @@ export function createMcpServer(
       const terms = tokenize(query ?? '');
       let all: SharedEntry[];
       try {
-        all = await visibleEntries();
+        all = await memoryEntries();
       } catch (err) {
         if (err instanceof ConnectorCryptoError) return reencryptResult('memory_retrieve');
         throw err;
@@ -265,7 +267,7 @@ export function createMcpServer(
     async () => {
       let all: SharedEntry[];
       try {
-        all = (await visibleEntries()).slice(0, MAX_RESULTS);
+        all = (await memoryEntries()).slice(0, MAX_RESULTS);
       } catch (err) {
         if (err instanceof ConnectorCryptoError) return reencryptResult('memory_list');
         throw err;
@@ -334,6 +336,19 @@ export function createMcpServer(
         };
       }
       const targetScope = (scope ?? '').trim();
+      // ADR 0063 (recheck R-S1): a working row here would be a project document
+      // with no recorded base. The document changes only through project_update.
+      if (memType === 'working' && parseProjectSlug(targetScope) !== null) {
+        await auditFail();
+        return {
+          content: [
+            {
+              type: 'text',
+              text: `Nothing was saved: the project document in "${targetScope}" changes only through project_update. Call project_get, then project_update with its revision. To keep a note in this project, use another memory type, such as episodic.`,
+            },
+          ],
+        };
+      }
       // Unshare is the revoke: a connected app must not write into a scope the
       // user revoked, even when a stale push left a non-pending row behind.
       if ((await tombstonedScopes()).has(targetScope)) {
@@ -374,15 +389,10 @@ export function createMcpServer(
       const entryId = `conn_${randomUUID().replace(/-/g, '')}`;
       // ADR 0020: the row lands as ciphertext — the {type, content} envelope
       // encrypted under this request's DEK; the stored type column is ''.
-      await storage.putEntry(accountHash, {
-        entryId,
-        scope: targetScope,
-        type: '',
-        content: await encryptRow({ accountHash, type: memType, content: body }, dek),
-        entryHash: '',
-        origin: 'connector',
-        pending: true,
-        createdAt: new Date().toISOString(),
+      await storage.writeConnectorRows(accountHash, targetScope, {
+        expectedSeq: null,
+        rows: [{ entryId, content: await encryptRow({ accountHash, type: memType, content: body }, dek), baseRevision: null }],
+        replacedId: null,
       });
       await storage.appendAudit({
         ts: new Date().toISOString(),
@@ -452,7 +462,7 @@ export function createMcpServer(
       const terms = tokenize(query ?? '');
       let all: SharedEntry[];
       try {
-        all = await visibleEntries();
+        all = await memoryEntries();
       } catch (err) {
         if (err instanceof ConnectorCryptoError) return reencryptResult('search');
         throw err;
@@ -505,6 +515,11 @@ export function createMcpServer(
       let row: SharedEntry | null;
       try {
         row = stored ? await decryptEntry(stored) : null;
+        // A stale pending project document is not-found here too (ADR 0063 D2).
+        if (row && row.pending === true && row.type === 'working' && parseProjectSlug(row.scope) !== null) {
+          const scopeRows = (await visibleEntries()).filter((e) => e.scope === row!.scope);
+          if (staleProjectRowIds(scopeRows).has(row.entryId)) row = null;
+        }
       } catch (err) {
         if (err instanceof ConnectorCryptoError) return reencryptResult('fetch');
         throw err;
@@ -535,11 +550,50 @@ export function createMcpServer(
     },
   );
 
-  // ---- project tools (M14 / ADR 0040) -----------------------------------
-  // Same three tools as local MCP. Cloud cannot create a project: update
-  // requires a decryptable working base document. One pending row per
-  // project scope, overwritten in place. Slug-exact validation; never a
-  // prefix-only project: check.
+  // ---- project tools (M14 / ADR 0040, ordering and revisions ADR 0063) ------
+  // Same tools as local MCP. The live document is chosen by projectScopeView
+  // (D2). Every update is a new row bound to the revision the caller read, and
+  // the write is one compare-and-swap on the scope counter. Slug-exact
+  // validation; never a prefix-only project: check.
+
+  /** Audit one refused project call and return the refusal. */
+  async function refuseProject(
+    tool: string,
+    text: string,
+    structuredContent?: Record<string, unknown>,
+  ) {
+    await storage.appendAudit({
+      ts: new Date().toISOString(),
+      accountHash,
+      tool,
+      params: {},
+      ok: false,
+      resultCount: 0,
+      resultIds: [],
+    });
+    return {
+      content: [{ type: 'text' as const, text }],
+      isError: true as const,
+      ...(structuredContent ? { structuredContent } : {}),
+    };
+  }
+
+  /** The stale_project refusal, carrying the current document and revision when there is one. */
+  async function staleProject(tool: string, project: string, scope: string) {
+    const view = projectScopeView((await visibleEntries()).filter((e) => e.scope === scope));
+    if (view.head.kind !== 'head') {
+      return refuseProject(tool, 'Project changed after it was read. Nothing was saved. Call project_get again.', {
+        code: 'stale_project',
+        project,
+      });
+    }
+    const current = view.head.row;
+    return refuseProject(
+      tool,
+      `Project changed after it was read. Nothing was saved. The current document follows; its revision is ${current.entryId}.\n\n${current.content}`,
+      { code: 'stale_project', project, revision: current.entryId, document: current.content },
+    );
+  }
 
   server.registerTool(
     'project_list',
@@ -547,8 +601,8 @@ export function createMcpServer(
       title: 'List shared projects',
       description:
         "List the user's shared projects. Each row is a project slug plus the first line of Current " +
-        'Status. This list is the project index; there is no separate index memory. Only scopes the ' +
-        'user has shared are visible.',
+        'Status and the revision to pass to project_update. This list is the project index; there is ' +
+        'no separate index memory. Only scopes the user has shared are visible.',
       inputSchema: {},
     },
     async () => {
@@ -566,17 +620,28 @@ export function createMcpServer(
         group.push(e);
         byScope.set(e.scope, group);
       }
-      const docs: SharedEntry[] = [];
-      for (const group of byScope.values()) {
-        const picked = selectProjectWorkingDoc(group);
-        if (picked) docs.push(picked);
+      const projects: Array<Record<string, unknown>> = [];
+      const disclosed: string[] = [];
+      for (const scope of [...byScope.keys()].sort((a, b) => a.localeCompare(b))) {
+        const slug = parseProjectSlug(scope)!;
+        const view = projectScopeView(byScope.get(scope)!);
+        if (view.head.kind === 'head') {
+          const row = view.head.row;
+          disclosed.push(row.entryId);
+          projects.push({ project: slug, scope, status: statusFirstLine(row.content), id: row.entryId, revision: row.entryId });
+        } else if (view.head.kind === 'several') {
+          projects.push({ project: slug, scope, status: '', id: null, revision: null, conflict: 'Project has multiple current documents.' });
+        } else if (view.stale.size > 0) {
+          projects.push({
+            project: slug,
+            scope,
+            status: '',
+            id: null,
+            revision: null,
+            conflict: 'A cloud version is waiting for the user to review it in NorthKeep.',
+          });
+        }
       }
-      docs.sort((a, b) => a.scope.localeCompare(b.scope));
-      const projects = docs.flatMap((e) => {
-        const slug = parseProjectSlug(e.scope);
-        if (slug === null) return [];
-        return [{ project: slug, scope: e.scope, status: statusFirstLine(e.content), id: e.entryId }];
-      });
       await storage.appendAudit({
         ts: new Date().toISOString(),
         accountHash,
@@ -584,7 +649,7 @@ export function createMcpServer(
         params: {},
         ok: true,
         resultCount: projects.length,
-        resultIds: docs.map((e) => e.entryId),
+        resultIds: disclosed,
       });
       return { content: [{ type: 'text', text: JSON.stringify({ projects }, null, 2) }] };
     },
@@ -596,7 +661,8 @@ export function createMcpServer(
       title: 'Read a shared project',
       description:
         'Read the live project document when the user names a project. Call this at session start so ' +
-        'you pick up Current Status, Next Actions, and the Log. The ' +
+        'you pick up Current Status, Next Actions, and the Log. The result ends with the revision; pass ' +
+        'it as expected_revision to project_update. The ' +
         'live document keeps only its newest Log entries; pass history: true to also get the archive ' +
         'memories holding older entries, newest first.',
       inputSchema: {
@@ -605,24 +671,9 @@ export function createMcpServer(
       },
     },
     async ({ project, history }) => {
-      const auditFail = async (): Promise<void> => {
-        await storage.appendAudit({
-          ts: new Date().toISOString(),
-          accountHash,
-          tool: 'project_get',
-          params: {},
-          ok: false,
-          resultCount: 0,
-          resultIds: [],
-        });
-      };
       // Slug-exact: reject before any storage read. A prefix-only project: scope is not a project.
       if (!PROJECT_SLUG_PATTERN.test(project ?? '')) {
-        await auditFail();
-        return {
-          content: [{ type: 'text', text: `Invalid project slug "${project ?? ''}".` }],
-          isError: true,
-        };
+        return refuseProject('project_get', `Invalid project slug "${project ?? ''}".`);
       }
       let all: SharedEntry[];
       try {
@@ -632,18 +683,22 @@ export function createMcpServer(
         throw err;
       }
       const scope = projectScope(project);
-      const picked = selectProjectWorkingDoc(all.filter((e) => e.scope === scope));
-      if (!picked) {
-        await auditFail();
-        return {
-          content: [{ type: 'text', text: `No live project document for "${project}".` }],
-          isError: true,
-        };
+      const inScope = all.filter((e) => e.scope === scope);
+      const view = projectScopeView(inScope);
+      if (view.head.kind === 'several') return refuseProject('project_get', SEVERAL_HEADS_MSG);
+      if (view.head.kind === 'none') {
+        return refuseProject(
+          'project_get',
+          view.stale.size > 0
+            ? `No live project document for "${project}": a cloud version is waiting for the user to review it in NorthKeep.`
+            : `No live project document for "${project}".`,
+        );
       }
+      const picked = view.head.row;
       const archives = history
-        ? all
-            .filter((e) => e.scope === scope && e.type === 'episodic' && isProjectLogArchive(e.content))
-            .sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+        ? inScope
+            .filter((e) => e.type === 'episodic' && isProjectLogArchive(e.content))
+            .sort((a, b) => (b.writeSeq ?? 0) - (a.writeSeq ?? 0) || (a.entryId < b.entryId ? 1 : a.entryId > b.entryId ? -1 : 0))
         : [];
       await storage.appendAudit({
         ts: new Date().toISOString(),
@@ -654,17 +709,27 @@ export function createMcpServer(
         resultCount: 1 + archives.length,
         resultIds: [picked.entryId, ...archives.map((a) => a.entryId)],
       });
-      const text = archives.length === 0
+      const body = archives.length === 0
         ? picked.content
         : `${picked.content}\n\n---\n\n${archives.map((a) => a.content).join('\n\n---\n\n')}`;
-      return { content: [{ type: 'text', text }] };
+      return {
+        content: [
+          {
+            type: 'text',
+            text: `${body}\n\nRevision: ${picked.entryId} (pass it as expected_revision to project_update)`,
+          },
+        ],
+        structuredContent: { project, revision: picked.entryId },
+      };
     },
   );
 
   // ---- project_create (ADR 0050) ----------------------------------------
   // Decision 3, in order, nothing stored unless every check passes: slug before
   // any storage read, then the unconditional tombstone check, then "no working
-  // document in this scope", then the cap, then the document size.
+  // document in this scope", then the cap, then the document size. ADR 0063:
+  // the row's base is BASE_NEW and the insert is a compare-and-swap on the
+  // counter read before the rows, so two concurrent creates cannot both land.
   server.registerTool(
     'project_create',
     {
@@ -673,7 +738,7 @@ export function createMcpServer(
         'Create a project with project_create only when the user asks for one; never create one to ' +
         'hold notes that belong in an existing project or in a memory. Give What & Why and the ' +
         'Current Status; Log and Decisions start empty. The project becomes Shared with this app ' +
-        'when it lands in the user\u2019s vault, so everything later written into it is visible here. ' +
+        'when it lands in the user’s vault, so everything later written into it is visible here. ' +
         'Use project_update to change a project that already exists.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
@@ -683,21 +748,7 @@ export function createMcpServer(
       },
     },
     async ({ project, what_why, status, next_actions }) => {
-      const auditFail = async (): Promise<void> => {
-        await storage.appendAudit({
-          ts: new Date().toISOString(),
-          accountHash,
-          tool: 'project_create',
-          params: {},
-          ok: false,
-          resultCount: 0,
-          resultIds: [],
-        });
-      };
-      const refuse = async (text: string) => {
-        await auditFail();
-        return { content: [{ type: 'text' as const, text }], isError: true as const };
-      };
+      const refuse = (text: string) => refuseProject('project_create', text);
       if (!PROJECT_SLUG_PATTERN.test(project ?? '')) {
         return refuse(`Invalid project slug "${project ?? ''}".`);
       }
@@ -714,23 +765,30 @@ export function createMcpServer(
       const scope = projectScope(project);
       if ((await tombstonedScopes()).has(scope)) return refuse(TOMBSTONE_USER_MESSAGE);
 
+      const seq = await storage.readScopeSeq(accountHash, scope);
       // Every stored row, including pending ones and rows with a queued forget:
       // visibleEntries() hides a forget-queued row, which would read as empty.
       const existing = await storage.listEntries(accountHash);
       const inScope = existing.filter((e) => e.scope === scope);
-      let hasWorkingDoc: boolean;
+      let decrypted: SharedEntry[];
       try {
-        const types = await Promise.all(
+        decrypted = await Promise.all(
           inScope.map(async (e) =>
-            isEncryptedRow(e.content) ? (await decryptRow(e.content, accountHash, dek)).type : e.type,
+            isEncryptedRow(e.content) ? { ...e, type: (await decryptRow(e.content, accountHash, dek)).type } : e,
           ),
         );
-        hasWorkingDoc = types.includes('working');
       } catch (err) {
         if (err instanceof ConnectorCryptoError) return reencryptResult('project_create');
         throw err;
       }
-      if (hasWorkingDoc) return refuse('Project already exists; use project_update.');
+      if (decrypted.some((e) => e.type === 'working')) {
+        const view = projectScopeView(decrypted);
+        return refuse(
+          view.head.kind === 'none' && view.stale.size > 0
+            ? waitingForReviewMessage(project)
+            : 'Project already exists; use project_update.',
+        );
+      }
 
       if (existing.length + 1 > MAX_SHARED_ENTRIES) {
         return refuse(
@@ -750,19 +808,15 @@ export function createMcpServer(
       } catch (err) {
         return refuse(err instanceof Error ? err.message : 'Nothing was saved: the document could not be built.');
       }
-      // Deterministic per scope so two concurrent creates collapse into one row
-      // on the (account, entry id) upsert, which no lock could do on Neon.
-      const entryId = `conn_create_${createHash('sha256').update(scope).digest('hex').slice(0, 32)}`;
-      await storage.putEntry(accountHash, {
-        entryId,
-        scope,
-        type: '',
-        content: await encryptRow({ accountHash, type: 'working', content: markdown }, dek),
-        entryHash: '',
-        origin: 'connector',
-        pending: true,
-        createdAt: new Date().toISOString(),
+      const entryId = `conn_${randomUUID().replace(/-/g, '')}`;
+      const written = await storage.writeConnectorRows(accountHash, scope, {
+        expectedSeq: seq,
+        rows: [{ entryId, content: await encryptRow({ accountHash, type: 'working', content: markdown }, dek), baseRevision: BASE_NEW }],
+        replacedId: null,
       });
+      if (written === null) {
+        return refuse(`Nothing was saved: project "${project}" changed while it was being created. Call project_get, then retry.`);
+      }
       await storage.appendAudit({
         ts: new Date().toISOString(),
         accountHash,
@@ -774,8 +828,12 @@ export function createMcpServer(
       });
       return {
         content: [
-          { type: 'text', text: `Created project "${project}". It will sync into the vault. (id: ${entryId})` },
+          {
+            type: 'text',
+            text: `Created project "${project}". It will sync into the vault. (id: ${entryId}) Revision: ${entryId}.`,
+          },
         ],
+        structuredContent: { project, revision: entryId },
       };
     },
   );
@@ -785,7 +843,9 @@ export function createMcpServer(
     {
       title: 'Update a shared project',
       description:
-        'Update a shared project document. Call this when a working session ends, with the new ' +
+        'Update a shared project document. Call project_get first and pass the revision it returned as ' +
+        'expected_revision; if the project changed since, nothing is saved and the current document ' +
+        'comes back. Call this when a working session ends, with the new ' +
         'Current Status, Next Actions, and a log entry describing what was done. Optional What & Why ' +
         'replacement and a dated decision. Updates merge into the existing sections; they do not ' +
         'replace the whole document. The live document keeps only its newest Log entries; older ones ' +
@@ -795,6 +855,10 @@ export function createMcpServer(
         'use project_create for a new project.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
+        expected_revision: z
+          .string()
+          .optional()
+          .describe('Required. The revision project_get returned for this project.'),
         what_why: z.string().min(1).max(16384).optional().describe(`Replacement What & Why section. ${HOSTED_SECTION_TEXT_RULES}`),
         status: z.string().min(1).max(16384).optional().describe(`Replacement Current Status section. ${HOSTED_SECTION_TEXT_RULES}`),
         next_actions: z.string().max(16384).optional().describe(`Replacement Next Actions section; empty clears it. ${HOSTED_SECTION_TEXT_RULES}`),
@@ -812,24 +876,10 @@ export function createMcpServer(
           .describe(`New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD. ${HOSTED_SECTION_TEXT_RULES}`),
       },
     },
-    async ({ project, what_why, status, next_actions, log_entry, decision }) => {
-      const auditFail = async (): Promise<void> => {
-        await storage.appendAudit({
-          ts: new Date().toISOString(),
-          accountHash,
-          tool: 'project_update',
-          params: {},
-          ok: false,
-          resultCount: 0,
-          resultIds: [],
-        });
-      };
+    async ({ project, expected_revision, what_why, status, next_actions, log_entry, decision }) => {
+      const refuse = (text: string) => refuseProject('project_update', text);
       if (!PROJECT_SLUG_PATTERN.test(project ?? '')) {
-        await auditFail();
-        return {
-          content: [{ type: 'text', text: `Invalid project slug "${project ?? ''}".` }],
-          isError: true,
-        };
+        return refuse(`Invalid project slug "${project ?? ''}".`);
       }
       if (
         what_why === undefined &&
@@ -838,16 +888,7 @@ export function createMcpServer(
         log_entry === undefined &&
         decision === undefined
       ) {
-        await auditFail();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: 'Nothing was saved: provide at least one of what_why, status, next_actions, log_entry, or decision.',
-            },
-          ],
-          isError: true,
-        };
+        return refuse('Nothing was saved: provide at least one of what_why, status, next_actions, log_entry, or decision.');
       }
       const updateTextError = firstProjectTextError([
         ['what_why', what_why, false],
@@ -856,17 +897,14 @@ export function createMcpServer(
         ['log_entry', log_entry, false],
         ['decision', decision, false],
       ]);
-      if (updateTextError !== null) {
-        await auditFail();
-        return { content: [{ type: 'text', text: updateTextError }], isError: true };
-      }
+      if (updateTextError !== null) return refuse(updateTextError);
       const scope = projectScope(project);
       // The revoke wins over a write that raced it, whatever the enforcement
       // flag says (ADR 0050 Decision 3). Only a re-share from NorthKeep reopens.
-      if ((await tombstonedScopes()).has(scope)) {
-        await auditFail();
-        return { content: [{ type: 'text', text: TOMBSTONE_USER_MESSAGE }], isError: true };
-      }
+      if ((await tombstonedScopes()).has(scope)) return refuse(TOMBSTONE_USER_MESSAGE);
+      if (expected_revision === undefined || expected_revision.trim() === '') return refuse(REVISION_MISSING_MSG);
+      // ADR 0063 D2: the counter is read before the rows the decision rests on.
+      const seq = await storage.readScopeSeq(accountHash, scope);
       let all: SharedEntry[];
       try {
         all = await visibleEntries();
@@ -874,23 +912,21 @@ export function createMcpServer(
         if (err instanceof ConnectorCryptoError) return reencryptResult('project_update');
         throw err;
       }
-      const base = selectProjectWorkingDoc(all.filter((e) => e.scope === scope));
-      if (!base) {
-        await auditFail();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Nothing was saved: no live project document for "${project}". Use project_create to start one, or ask the user to share the project from NorthKeep.`,
-            },
-          ],
-          isError: true,
-        };
+      const view = projectScopeView(all.filter((e) => e.scope === scope));
+      if (view.head.kind === 'several') return refuse(SEVERAL_HEADS_MSG);
+      if (view.head.kind === 'none') {
+        return refuse(
+          view.stale.size > 0
+            ? waitingForReviewMessage(project)
+            : `Nothing was saved: no live project document for "${project}". Use project_create to start one, or ask the user to share the project from NorthKeep.`,
+        );
       }
+      const head = view.head.row;
+      if (expected_revision.trim() !== head.entryId) return staleProject('project_update', project, scope);
       let markdown: string;
       let archivedEntries: string[] = [];
       try {
-        const merged = mergeProjectDoc(parseProjectDoc(base.content), toProjectUpdate({
+        const merged = mergeProjectDoc(parseProjectDoc(head.content), toProjectUpdate({
           what_why,
           status,
           next_actions,
@@ -904,57 +940,36 @@ export function createMcpServer(
         assertProjectDocSize(markdown);
         archivedEntries = rolled.archived;
       } catch (err) {
-        await auditFail();
         const text = err instanceof Error && err.message === PROJECT_DOC_CAP_MESSAGE
           ? PROJECT_DOC_CAP_MESSAGE
           : err instanceof Error
             ? err.message
             : 'Nothing was saved: the merge failed.';
-        return { content: [{ type: 'text', text }], isError: true };
+        return refuse(text);
       }
-      const overwrite = base.pending === true;
+      // A pending head is replaced (its row deleted by id in the same
+      // statement); a pushed head stays and the new row is based on it.
+      const replacedId = head.pending === true ? head.entryId : null;
+      const baseRevision = head.pending === true ? head.baseRevision! : head.entryId;
       const existing = await storage.listEntries(accountHash);
-      const rowsNeeded = (overwrite ? 0 : 1) + (archivedEntries.length > 0 ? 1 : 0);
+      const rowsNeeded = (replacedId ? 0 : 1) + (archivedEntries.length > 0 ? 1 : 0);
       if (rowsNeeded > 0 && existing.length + rowsNeeded > MAX_SHARED_ENTRIES) {
-        await auditFail();
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `Nothing was saved: this account is at the shared-memory cap (${MAX_SHARED_ENTRIES}). Ask the user to remove some shared memories in NorthKeep first.`,
-            },
-          ],
-          isError: true,
-        };
+        return refuse(
+          `Nothing was saved: this account is at the shared-memory cap (${MAX_SHARED_ENTRIES}). Ask the user to remove some shared memories in NorthKeep first.`,
+        );
       }
-      const entryId = overwrite ? base.entryId : `conn_${randomUUID().replace(/-/g, '')}`;
-      await storage.putEntry(accountHash, {
-        entryId,
-        scope,
-        type: '',
-        content: await encryptRow({ accountHash, type: 'working', content: markdown }, dek),
-        entryHash: '',
-        origin: 'connector',
-        pending: true,
-        createdAt: new Date().toISOString(),
-      });
-      let archiveId: string | null = null;
-      if (archivedEntries.length > 0) {
-        archiveId = `conn_${randomUUID().replace(/-/g, '')}`;
-        await storage.putEntry(accountHash, {
+      const entryId = `conn_${randomUUID().replace(/-/g, '')}`;
+      const rows = [{ entryId, content: await encryptRow({ accountHash, type: 'working', content: markdown }, dek), baseRevision }];
+      const archiveId = archivedEntries.length > 0 ? `conn_${randomUUID().replace(/-/g, '')}` : null;
+      if (archiveId) {
+        rows.push({
           entryId: archiveId,
-          scope,
-          type: '',
-          content: await encryptRow(
-            { accountHash, type: 'episodic', content: formatLogArchive(project, archivedEntries) },
-            dek,
-          ),
-          entryHash: '',
-          origin: 'connector',
-          pending: true,
-          createdAt: new Date().toISOString(),
+          content: await encryptRow({ accountHash, type: 'episodic', content: formatLogArchive(project, archivedEntries) }, dek),
+          baseRevision,
         });
       }
+      const written = await storage.writeConnectorRows(accountHash, scope, { expectedSeq: seq, rows, replacedId });
+      if (written === null) return staleProject('project_update', project, scope);
       await storage.appendAudit({
         ts: new Date().toISOString(),
         accountHash,
@@ -971,9 +986,10 @@ export function createMcpServer(
         content: [
           {
             type: 'text',
-            text: `Updated project "${project}". It will sync into the vault. (id: ${entryId})${rolledNote}`,
+            text: `Updated project "${project}". It will sync into the vault. (id: ${entryId}) Revision: ${entryId}.${rolledNote}`,
           },
         ],
+        structuredContent: { project, revision: entryId },
       };
     },
   );
