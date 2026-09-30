@@ -265,7 +265,7 @@ describe('ADR 0063 D5: automatic push to Cloud Connect', () => {
     expect(pushedToConnector()).toHaveLength(1);
   });
 
-  it('makes no network call when nothing is shared, or when nothing changed since the last push', async () => {
+  it('makes no network call when nothing is shared', async () => {
     await setup();
     withVaultAt(homeA, (v) => {
       v.setScopeShared('work', false);
@@ -276,17 +276,90 @@ describe('ADR 0063 D5: automatic push to Cloud Connect', () => {
     stops.push(() => cap.stop());
     expect((await cap.runOnce()).reason).toBe('nothing_shared');
     expect(conn.requests()).toEqual([]);
+  });
 
-    withVaultAt(homeA, (v) => {
-      v.setScopeShared('work', true);
+  it('nothing changed on an in-sync device: reads the manifest once and pushes nothing', async () => {
+    await setup();
+    const cap = new ConnectorAutoPush({ vaultPath: vaultPath(homeA), getMasterKey: () => keyFor(homeA), loadDeviceSecret: () => Buffer.from(deviceSecret), allowAnyVault: true });
+    stops.push(() => cap.stop());
+    await cap.runOnce();
+    expect(pushedToConnector()).toHaveLength(1);
+    const before = conn.requests().length;
+    const status = await cap.runOnce();
+    expect([status.phase, status.reason]).toEqual(['idle', null]);
+    expect(conn.requests().slice(before)).toEqual(['GET /client/manifest']);
+    expect(pushedToConnector()).toHaveLength(1);
+  });
+
+  it('nothing changed on a device with no vault sync: no network call', async () => {
+    await setup({ vaultSync: false });
+    const cap = new ConnectorAutoPush({ vaultPath: vaultPath(homeA), getMasterKey: () => keyFor(homeA), loadDeviceSecret: () => Buffer.from(deviceSecret), allowAnyVault: true });
+    stops.push(() => cap.stop());
+    await cap.runOnce();
+    expect(pushedToConnector()).toHaveLength(1);
+    const before = conn.requests().length;
+    await cap.runOnce();
+    expect(conn.requests()).toHaveLength(before);
+  });
+
+  it('P1: another device acked and then forgot a cloud memory; the in-sync Mac, with no write of its own, removes it from Cloud Connect', async () => {
+    await setup();
+    const cap = new ConnectorAutoPush({ vaultPath: vaultPath(homeA), getMasterKey: () => keyFor(homeA), loadDeviceSecret: () => Buffer.from(deviceSecret), allowAnyVault: true });
+    stops.push(() => cap.stop());
+    await cap.runOnce();
+    const fingerprint = connectorPushFingerprint();
+    conn.cloudRemember('work', 'y: deleted on the phone');
+
+    // The phone: additions only, ack, vault push; then forget, vault push. It never pushes to Cloud Connect.
+    configureSync(homeB);
+    process.env.NORTHKEEP_HOME = homeB;
+    expect((await pullVault({ vaultPath: vaultPath(homeB), deviceSecret })).ok).toBe(true);
+    const added = await withVaultAsync(homeB, (v) => applyDownSync({ server: conn.url(), deviceSecret, vault: v, additiveOnly: true }));
+    expect(added.added).toBe(1);
+    expect((await pushVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeB) })).ok).toBe(true);
+    withVaultAt(homeB, (v) => {
+      v.forget(v.list({ scope: 'work' }).find((e) => e.content.startsWith('y:'))!.id);
       v.save();
     });
+    expect((await pushVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeB) })).ok).toBe(true);
+
+    process.env.NORTHKEEP_HOME = homeA;
+    expect((await pullVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+    expect(connectorPushFingerprint()).toBe(fingerprint);
+    const status = await cap.runOnce();
+    expect([status.phase, status.reason]).toEqual(['idle', null]);
+    expect(conn.rows().filter((r) => r.scope === 'work').map((r) => r.content)).toEqual(['shared seed']);
+    expect(pushedToConnector().at(-1)!.vault).toEqual({ server: vaultServerHash(sync.url()), version: 3 });
+
+    const pushes = pushedToConnector().length;
+    await cap.runOnce();
+    expect(pushedToConnector()).toHaveLength(pushes);
+  });
+
+  it('a row acked on the connector with no hash is pushed once, then the engine settles', async () => {
+    await setup();
+    const cap = new ConnectorAutoPush({ vaultPath: vaultPath(homeA), getMasterKey: () => keyFor(homeA), loadDeviceSecret: () => Buffer.from(deviceSecret), allowAnyVault: true });
+    stops.push(() => cap.stop());
+    await cap.runOnce();
+    conn.cloudRemember('work', 'from the app');
+    await withVaultAsync(homeA, (v) => applyDownSync({ server: conn.url(), deviceSecret, vault: v }));
     expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
     await cap.runOnce();
-    const afterPush = conn.requests().length;
-    expect(pushedToConnector()).toHaveLength(1);
+    expect(pushedToConnector()).toHaveLength(2);
     await cap.runOnce();
-    expect(conn.requests()).toHaveLength(afterPush);
+    await cap.runOnce();
+    expect(pushedToConnector()).toHaveLength(2);
+  });
+
+  it('an undelivered cloud write on the connector is not a difference to push', async () => {
+    await setup();
+    const cap = new ConnectorAutoPush({ vaultPath: vaultPath(homeA), getMasterKey: () => keyFor(homeA), loadDeviceSecret: () => Buffer.from(deviceSecret), allowAnyVault: true });
+    stops.push(() => cap.stop());
+    await cap.runOnce();
+    conn.cloudRemember('work', 'still pending');
+    await cap.runOnce();
+    await cap.runOnce();
+    expect(pushedToConnector()).toHaveLength(1);
   });
 
   it('R-428b: a down-sync apply and ack never update the fingerprint; only an accepted push does', async () => {

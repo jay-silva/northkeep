@@ -5,7 +5,7 @@ import { loadSyncConfig } from './config.js';
 import { ConnectorStalePushError, ConnectorTombstoneError, fetchEntitlement, getConnectorManifest } from './connector-client.js';
 import { deriveSyncCreds } from './creds.js';
 import { connectorAutoPushEnabled, connectorLastPushedAt, connectorPushFingerprint, loadConnectorConfig } from './connector-config.js';
-import { pushSnapshot, snapshotSharedScopes, vaultServerHash, type SharedSnapshot } from './connector-push.js';
+import { connectorHoldsSnapshot, pushSnapshot, snapshotSharedScopes, vaultServerHash, type SharedSnapshot } from './connector-push.js';
 
 /**
  * ConnectorAutoPush (ADR 0063 D5). Keeps Cloud Connect's copy of the shared
@@ -14,7 +14,8 @@ import { pushSnapshot, snapshotSharedScopes, vaultServerHash, type SharedSnapsho
  * finds this device exactly in sync, and sends that sync-server version so
  * the connector can refuse an older copy (HTTP 428). It pushes only, never
  * down-syncs, never marks a scope, sends only scopes already Shared, and
- * pushes only when the shared entries changed since the last accepted push.
+ * pushes only when the shared entries differ from the last accepted push or
+ * from what the connector holds (its content-free manifest).
  * A device with no vault sync is the only copy of its vault, so it pushes on
  * a debounced save and sends no version.
  */
@@ -243,20 +244,23 @@ export class ConnectorAutoPush {
       return;
     }
     try {
-      // Local checks first: a device with nothing shared, or nothing changed,
-      // makes no network call at all (asking the connector anything would
-      // create an account there, or answer 402).
+      // Local checks first: a device with nothing shared makes no network call
+      // at all (asking the connector anything would create an account there,
+      // or answer 402). An unchanged fingerprint means a push was accepted, so
+      // the account exists.
       const gate = await this.snapshot(key);
       if (gate.scopes.length === 0) {
         this.set('idle', 'nothing_shared');
         return;
       }
-      if (gate.fingerprint === connectorPushFingerprint()) {
+      const sync = loadSyncConfig();
+      // With no vault sync no other device changes this vault, so the last
+      // accepted push is still what Cloud Connect should hold.
+      if (sync === null && gate.fingerprint === connectorPushFingerprint()) {
         this.set('idle', null);
         return;
       }
       const deviceSecret = (this.opts.loadDeviceSecret ?? coreLoadDeviceSecret)();
-      const sync = loadSyncConfig();
       let vaultStamp: { server: string; version: number } | undefined;
       if (sync !== null) {
         const auto = this.opts.autoSyncStatus?.() ?? null;
@@ -287,7 +291,10 @@ export class ConnectorAutoPush {
         this.set('idle', 'nothing_shared');
         return;
       }
-      if (snapshot.fingerprint === connectorPushFingerprint()) {
+      // Compared with what the connector holds, not only with this device's
+      // last push: another device's ack or a pulled vault version can change
+      // either side without this device writing anything.
+      if (snapshot.fingerprint === connectorPushFingerprint() && connectorHoldsSnapshot(snapshot, manifest.entries)) {
         this.set('idle', null);
         return;
       }

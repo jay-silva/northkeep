@@ -64,6 +64,8 @@ export interface ManifestEntry {
   entry_id: string;
   entry_hash: string;
   scope: string;
+  /** A cloud write not yet delivered to a device (ADR 0063 D5). A push never removes it, so it is not part of what a push must match. */
+  pending?: boolean;
 }
 
 export interface PushSharedResult {

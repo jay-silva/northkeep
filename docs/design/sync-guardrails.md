@@ -347,10 +347,11 @@ one click would have recovered each of the five.
 (`packages/sync/src/auto.ts:135`) pushes shared scopes to the connector. It
 runs only when this device's vault is known to be current:
 
-- **Trigger.** It runs after `AutoSync` reports a successful vault push (the
-  `pushed` event, `auto.ts:542`), and on `wake()` when `syncState` returns
-  `in-sync`. At both points the local file equals the server's blob, so this
-  device holds the newest vault. It does not run on a bare local save.
+- **Trigger.** It runs when `AutoSync` reports that the local file equals
+  the server's blob: after a vault push (`pushed`), after a pull (`pulled`),
+  and when a wake or a write finds this device already in sync (`in-sync`).
+  At each point this device holds the newest vault. With vault sync
+  configured it does not run on a bare local save.
 - **Precondition.** `syncState` must be exactly `in-sync`. `ahead` is not
   enough: two devices each `ahead` of the same version are diverged, and
   neither can tell. When the state is `behind`, `diverged`, a D6 refusal is
@@ -360,9 +361,15 @@ runs only when this device's vault is known to be current:
   is off, so Cloud Connect updates only when you push.").
 - **Change test.** It computes a fingerprint over the `(entry_id, entry_hash)`
   of every live entry in the shared scopes, plus the shared-scope list, and
-  calls `pushSharedScopes` only when it differs from the one recorded at the
-  last accepted push. That fingerprint goes into `connector.json` next to
-  `last_pushed_at` (`packages/sync/src/connector-config.ts:86-90`).
+  records it in `connector.json` at each accepted push. It pushes when the
+  fingerprint differs from that record, or when the connector's content-free
+  manifest (`GET /client/manifest`: entry id, entry hash and scope, less the
+  undelivered cloud writes a push keeps) differs from this device's shared
+  entries. The second test catches a change this device did not make: a
+  memory another device accepted from the cloud and later deleted, or any
+  vault version pulled from a device that does not push. A device with no
+  vault sync skips the manifest read when its fingerprint is unchanged, since
+  no other device changes its vault.
 - It pushes only. It never down-syncs, never marks a scope, and runs only
   while the vault is unlocked. A 402, 409, 412 or 428 pauses it the way
   `AutoSync` pauses (`auto.ts:27-39`), and the Cloud screen says so.
@@ -433,8 +440,9 @@ within seconds of a vault push that included a write into a shared scope. The
 share consent already describes a continuing copy: "Memories in '<scope>' will
 be copied to NorthKeep's connector server", which "can always see ... when they
 change" (`shareCmd.ts:96-100`). Under invariant #2 the connector learns the
-edit cadence of shared scopes more finely, the vault sync version number, and a
-16-hex hash of the sync server URL. None is content.
+edit cadence of shared scopes more finely, the vault sync version number, a
+16-hex hash of the sync server URL, and when this device wakes or pulls (one
+manifest read each, added in the fix round). None is content.
 
 **Toggle** (founder decision, 2026-09-30). On by default, with a Cloud screen
 switch "Keep Cloud Connect up to date automatically".
@@ -1135,3 +1143,48 @@ these differences, forced by the built code:
   more (R-S1 is refused).
 - The sync server is this repo's `apps/sync-server` on its in-memory store;
   the connector is this repo's on PGlite. `all` runs the sequence unattended.
+
+### Fix round (build review, 2026-09-30)
+
+The build review (`NorthKeep/Reviews/adr-0063/build-review.md`, CLEARED WITH
+WOUNDS) found one flesh wound and several notes. Each fix is below.
+
+**P1: automatic push compares with what the connector holds.**
+- The fault: the engine pushed only when its shared-entry fingerprint
+  differed from its own last accepted push. The phone no longer pushes to
+  Cloud Connect, so a memory the phone accepted from the cloud (an ack, which
+  changes the connector without a push) and later deleted stayed served after
+  the Mac pulled that vault and was exactly in sync.
+- The fix: once the in-sync checks and the tombstone flag pass, the engine
+  also compares its snapshot with the manifest it already reads, and pushes
+  when they differ. The comparison is a set of `scope, entry_id, entry_hash`
+  over the local shared scopes; the connector's rows outside those scopes
+  are not compared (an unshare deletes them).
+- Connector, read-only: `GET /client/manifest` entries gain `pending:
+  boolean`, true for an undelivered cloud write. A push never removes such a
+  row, so the client leaves it out of the comparison; without the flag every
+  wake with a waiting cloud write would push again. It is row state, not
+  content-derived, and `/client/pending` already exposes the same rows. No
+  other field or route changed.
+- Every pause condition is unchanged and checked before the manifest read:
+  exactly in sync, the AutoSync status, a pull waiting for review, the switch,
+  the tombstone flag, and 402, 409, 412 and 428.
+- Cost: an in-sync device now reads the manifest on every trigger whose
+  fingerprint is unchanged (a wake, a pull, a push of private changes). A
+  device with no vault sync still makes no call when its fingerprint is
+  unchanged, and a device with nothing shared still makes none at all.
+- A row acked on the connector carries `entry_hash ''`, so the first run
+  after an ack pushes once and stores the vault hash; later runs match.
+  Tests pin that it settles.
+- One edge this makes more reachable: if the Mac runs between another
+  device's ack and that device's vault push, its push removes the acked row
+  from Cloud Connect until the Mac pulls the vault that holds it, when the
+  next run pushes it back. No content is lost (the other device holds it).
+  The fingerprint-only engine had the same window whenever the Mac wrote to
+  that scope.
+- Evidence: `packages/sync/test/adr0063-autopush.test.ts` (P1 on the fake
+  connector, the acked-row settle, a pending row is no difference, one
+  manifest read and no push when nothing changed, no call with no vault
+  sync) and `apps/connector-server/test/adr0063-autopush.test.ts` (the build
+  review's P1 attack, inverted, on both stores, plus the settle after the
+  Mac's own ack). Without the engine change the P1 cases fail.

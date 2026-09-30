@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import type { MemoryEntry, Vault } from '@northkeep/core';
 import { loadSyncConfig } from './config.js';
 import { isAutoSyncVault, pushVault, syncState, type PushResult } from './client.js';
-import { pushSharedScopes, type PushSharedResult, type VaultStamp } from './connector-client.js';
+import { pushSharedScopes, type ManifestEntry, type PushSharedResult, type VaultStamp } from './connector-client.js';
 import { markConnectorPushed } from './connector-config.js';
 
 /**
@@ -99,6 +99,21 @@ export function snapshotSharedScopes(vault: Vault): SharedSnapshot {
       sharedScopeRows: () => rows,
     } as Pick<Vault, 'list' | 'sharedScopeRows'>,
   };
+}
+
+/**
+ * Whether Cloud Connect already holds exactly this snapshot: the same entry
+ * ids and hashes in each shared scope, ignoring undelivered cloud writes,
+ * which a push keeps. A push is what makes the two equal, so a difference is
+ * something to send even when this device wrote nothing: another device's
+ * ack, or a vault version pulled from a device that does not push (D5).
+ */
+export function connectorHoldsSnapshot(snapshot: SharedSnapshot, held: ManifestEntry[]): boolean {
+  const key = (scope: string, id: string, hash: string) => `${scope}\n${id}\n${hash}`;
+  const shared = new Set(snapshot.scopes);
+  const want = new Set(snapshot.scopes.flatMap((scope) => snapshot.source.list({ scope }).map((e) => key(scope, e.id, e.entry_hash))));
+  const have = held.filter((e) => e.pending !== true && shared.has(e.scope)).map((e) => key(e.scope, e.entry_id, e.entry_hash));
+  return have.length === want.size && have.every((k) => want.has(k));
 }
 
 /** Push a snapshot; on acceptance record the time and fingerprint. */

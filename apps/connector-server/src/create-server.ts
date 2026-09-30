@@ -24,7 +24,7 @@
  *                                 memory_retrieve/list/remember/forget + search/fetch
  *                                 + project_list/get/create/update)
  *     GET    /mcp                (405 — stateless, no server-initiated stream)
- *     GET    /client/manifest    (Bearer connector_token -> [{entry_id,entry_hash,scope}])
+ *     GET    /client/manifest    (Bearer connector_token -> [{entry_id,entry_hash,scope,pending}])
  *     PUT    /client/entries     (Bearer; "make these scopes match" batch push)
  *     DELETE /client/scope/:scope (Bearer; unshare -> delete rows + tombstone)
  *     GET    /client/pending     (Bearer; connector-born rows to down-sync; ?v=2 adds ADR 0063 fields)
@@ -619,8 +619,10 @@ export function createConnectorServer(
   // Bearer connector_token -> sha256 -> account_hash (upsert), exactly like
   // /pair/start. The desktop pushes ONLY the scopes the user marked Shared.
 
-  // GET /client/manifest -> [{ entry_id, entry_hash, scope }] so the client can
-  // diff. Content-free (no `content`, no `type`), still account-scoped.
+  // GET /client/manifest -> [{ entry_id, entry_hash, scope, pending }] so the
+  // client can diff. Content-free (no `content`, no `type`), still
+  // account-scoped. `pending` (ADR 0063 D5) marks an undelivered cloud write,
+  // which a push never removes, so automatic push can compare the rest.
   app.get('/client/manifest', asyncRoute(async (req: Request, res: Response) => {
     const accountHash = bearerAccount(req);
     if (!accountHash) {
@@ -635,7 +637,7 @@ export function createConnectorServer(
     await storage.upsertAccount(accountHash);
     const entries = await storage.listEntries(accountHash);
     res.status(200).json({
-      entries: entries.map((e) => ({ entry_id: e.entryId, entry_hash: e.entryHash ?? '', scope: e.scope })),
+      entries: entries.map((e) => ({ entry_id: e.entryId, entry_hash: e.entryHash ?? '', scope: e.scope, pending: e.pending === true })),
       // ADR 0063 D5: automatic push stays paused unless unshares are enforced.
       tombstone_enforce: tombstoneEnforce(),
     });

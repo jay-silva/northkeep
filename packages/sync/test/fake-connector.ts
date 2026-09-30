@@ -14,6 +14,8 @@ export interface FakeRow {
   scope: string;
   type: string;
   content: string;
+  /** The pushed vault entry_hash; '' for a cloud write, kept through an ack, as on the real connector. */
+  entry_hash?: string;
   pending: boolean;
   /** A vault id, 'new', or null for a legacy row. */
   base_revision: string | null;
@@ -171,9 +173,9 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
         for (const scope of scopes) {
           const seq = bump(scope);
           for (const r of inScope(scope)) if (!r.pending) rows.delete(r.entry_id);
-          for (const e of (body.entries as Array<{ entry_id: string; scope: string; type: string; content: string }>) ?? []) {
+          for (const e of (body.entries as Array<{ entry_id: string; entry_hash?: string; scope: string; type: string; content: string }>) ?? []) {
             if (e.scope !== scope) continue;
-            rows.set(e.entry_id, { entry_id: e.entry_id, scope, type: e.type, content: e.content, pending: false, base_revision: null, write_seq: seq });
+            rows.set(e.entry_id, { entry_id: e.entry_id, entry_hash: e.entry_hash ?? '', scope, type: e.type, content: e.content, pending: false, base_revision: null, write_seq: seq });
           }
         }
         log(200);
@@ -191,7 +193,7 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
       }
       if (req.method === 'GET' && url.pathname === '/client/manifest') {
         send(200, {
-          entries: [...rows.values()].filter((r) => !r.pending).map((r) => ({ entry_id: r.entry_id, entry_hash: '', scope: r.scope })),
+          entries: [...rows.values()].map((r) => ({ entry_id: r.entry_id, entry_hash: r.entry_hash ?? '', scope: r.scope, pending: r.pending })),
           tombstone_enforce: enforce,
         });
         return;
