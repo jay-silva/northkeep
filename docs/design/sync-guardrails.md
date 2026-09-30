@@ -1205,7 +1205,9 @@ WOUNDS) found one flesh wound and several notes. Each fix is below.
   manifest read and no push when nothing changed, no call with no vault
   sync) and `apps/connector-server/test/adr0063-autopush.test.ts` (the build
   review's P1 attack, inverted, on both stores, plus the settle after the
-  Mac's own ack). Without the engine change the P1 cases fail.
+  Mac's own ack, and a waiting cloud project update: two engine runs change
+  no row, and after a later push the update is still a fast-forward, not
+  stale). Without the engine change the P1 cases fail.
 
 **Note: `readScopeSeq` under a concurrent first creation.** On real Postgres
 at READ COMMITTED, the request whose `INSERT ... ON CONFLICT DO NOTHING`

@@ -4,11 +4,14 @@ import os from 'node:os';
 import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { KDF_INTERACTIVE, Vault, deriveMasterKey } from '@northkeep/core';
+import { emptyProjectDoc, mergeProjectDoc, serializeProjectDoc } from '@northkeep/core/project-doc';
 import {
   applyDownSync,
   ConnectorAutoPush,
   deriveConnectorToken,
   deriveSyncCreds,
+  fetchPending,
+  planDownSync,
   pullVault,
   pushVault,
   setConnectorServer,
@@ -152,6 +155,66 @@ for (const kind of ['memory', 'pglite'] as const) {
       await engine.runOnce();
       await engine.runOnce();
       expect((await storage.listEntries(account)).map((e) => `${e.entryId} ${e.writeSeq}`).sort()).toEqual(settled);
+    });
+
+    it('a waiting cloud project update is no difference to push, and a later push leaves it a fast-forward', async () => {
+      const deviceSecret = Buffer.alloc(32, 5);
+      const sync2 = fakeServer();
+      await new Promise<void>((r) => sync2.server.listen(0, '127.0.0.1', r));
+      const home = path.join(root, 'mac-pending');
+      fs.mkdirSync(home);
+      process.env.NORTHKEEP_HOME = home;
+      const vp = path.join(home, 'vault.nkv');
+      const key = () => {
+        const hd = Vault.readHeader(vp);
+        return deriveMasterKey(passphrase, deviceSecret, hd.salt, hd.kdf);
+      };
+      const v = Vault.create({ path: vp, passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
+      v.remember({ content: 'w: shared note', type: 'semantic', scope: 'work' });
+      v.remember({ content: serializeProjectDoc(mergeProjectDoc(emptyProjectDoc(), { whatWhy: 'Pending.', status: 'R1.', logEntry: 'seed' })), type: 'working', scope: 'project:p' });
+      v.setScopeShared('work', true);
+      v.setScopeShared('project:p', true);
+      v.save();
+      v.close();
+      setSyncServer(sync2.url(), deriveSyncCreds(deviceSecret).accountId);
+      setConnectorServer(base);
+      expect((await pushVault({ vaultPath: vp, deviceSecret, masterKey: key() })).ok).toBe(true);
+      const engine = new ConnectorAutoPush({
+        vaultPath: vp,
+        getMasterKey: () => key(),
+        loadDeviceSecret: () => Buffer.from(deviceSecret),
+        allowAnyVault: true,
+        entitlement: async () => undefined,
+      });
+      await engine.runOnce();
+      const account = tokenHash(deriveConnectorToken(deviceSecret));
+      const seqs = async () => (await storage.listEntries(account)).map((e) => `${e.entryId} ${e.writeSeq}`).sort();
+
+      const app = await connectMcpApp(base, await startPairing({ server: base, deviceSecret }));
+      const got = (await app('project_get', { project: 'p' })).text;
+      const r1 = /Revision: (\S+) \(pass it/.exec(got)![1]!;
+      expect((await app('project_update', { project: 'p', expected_revision: r1, status: 'CLOUD FF.' })).isError).toBe(false);
+      const waiting = await seqs();
+      await engine.runOnce();
+      await engine.runOnce();
+      expect(await seqs()).toEqual(waiting);
+
+      const w = Vault.openWithKey(vp, key());
+      w.remember({ content: 'w2: a later Mac write', type: 'semantic', scope: 'work' });
+      w.save();
+      w.close();
+      expect((await pushVault({ vaultPath: vp, deviceSecret, masterKey: key() })).ok).toBe(true);
+      await engine.runOnce();
+      expect(await seqs()).not.toEqual(waiting);
+      const m = Vault.openWithKey(vp, key());
+      try {
+        const plan = planDownSync({ vault: m, pending: await fetchPending({ server: base, deviceSecret }) });
+        expect(plan.conflicts).toEqual([]);
+        expect(plan.replacements.map((r) => r.project)).toEqual(['p']);
+      } finally {
+        m.close();
+        await new Promise((r) => sync2.server.close(r));
+      }
     });
   });
 }
