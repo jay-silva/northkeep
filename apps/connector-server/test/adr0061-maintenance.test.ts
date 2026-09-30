@@ -136,8 +136,8 @@ describe('ADR 0061 claim 25: explicit flags only', () => {
         },
         async () => {
           const { base, close } = await startServer(() => createConnectorServer(store, { maintenanceLog: (l) => lines.push(l) }));
-          await fetch(`${base}/`);
-          await fetch(`${base}/`);
+          await fetch(`${base}/.well-known/oauth-protected-resource`);
+          await fetch(`${base}/.well-known/oauth-protected-resource`);
           await close();
         },
       );
@@ -153,7 +153,7 @@ describe('ADR 0061 claim 25: explicit flags only', () => {
         },
         async () => {
           const { base, close } = await startServer(() => createConnectorServer(store, { maintenanceLog: (l) => ran.push(l) }));
-          await Promise.all([fetch(`${base}/`), fetch(`${base}/`)]);
+          await Promise.all([fetch(`${base}/.well-known/oauth-protected-resource`), fetch(`${base}/.well-known/oauth-protected-resource`)]);
           await close();
         },
       );

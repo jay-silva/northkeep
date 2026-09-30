@@ -11,6 +11,7 @@ import {
   loadSyncConfig,
   markConnectorPaired,
   pushSharedScopes,
+  markConnectorPushed,
   setConnectorServer,
   startPairing,
   tokenHash,
@@ -110,7 +111,9 @@ export async function shareAddCmd(
     vault.setScopeShared(scope, true);
     vault.save();
     try {
-      return await pushSharedScopes({ server: cfg.server, deviceSecret, scopes: vault.sharedScopes(), vault, entitlement });
+      const pushed = await pushSharedScopes({ server: cfg.server, deviceSecret, scopes: vault.sharedScopes(), vault, entitlement });
+      markConnectorPushed();
+      return pushed;
     } catch (err) {
       // Same rollback rule as the GUI and the phone (review F5/F1): a scope the
       // server never accepted must not stay marked — the mark would sync to
@@ -137,11 +140,13 @@ export async function sharePushCmd(withVault: WithVault, fail: (m: string) => ne
   const cfg = requireConfig(fail);
   const deviceSecret = deviceSecretOrFail(fail);
   const entitlement = await maybeEntitlement(deviceSecret);
-  const result = await withVault((vault) => {
+  const result = await withVault(async (vault) => {
     foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
     const scopes = vault.sharedScopes();
     if (scopes.length === 0) return null;
-    return pushSharedScopes({ server: cfg.server, deviceSecret, scopes, vault, entitlement });
+    const pushed = await pushSharedScopes({ server: cfg.server, deviceSecret, scopes, vault, entitlement });
+    markConnectorPushed();
+    return pushed;
   });
   if (result === null) {
     console.log('No scopes are shared yet. Run: northkeep share add <scope>');
@@ -187,6 +192,7 @@ export async function shareSyncCmd(withVault: WithVault, fail: (m: string) => ne
     // Re-push so each newly down-synced row is rehashed server-side under its
     // vault id with pending cleared, and any forgotten row is reconciled away.
     const push = await pushSharedScopes({ server: cfg.server, deviceSecret, scopes, vault, entitlement });
+    markConnectorPushed();
     return { down, push, newlyShared };
   });
   if (result === null) {

@@ -6,11 +6,13 @@ import { KDF_INTERACTIVE, Vault, generateDeviceSecret } from '@northkeep/core';
 import {
   assertConnectorUrl,
   connectorConfigPath,
+  connectorLastPushedAt,
   connectorPairedAt,
   connectorPaired,
   foldSidecarScopesIntoVault,
   loadConnectorConfig,
   markConnectorPaired,
+  markConnectorPushed,
   saveConnectorConfig,
   setConnectorServer,
 } from '../src/connector-config.js';
@@ -301,5 +303,26 @@ describe('paired_at marker (ADR 0050)', () => {
     );
     expect(connectorPairedAt()).toBeNull();
     expect(loadConnectorConfig()).toEqual({ server: 'https://a.example.com' });
+  });
+});
+
+describe('last_pushed_at marker', () => {
+  it('records a push, keeps it across pairing and the same server, and clears it for a new server', () => {
+    setConnectorServer('https://a.example.com');
+    expect(connectorLastPushedAt()).toBeNull();
+    markConnectorPushed(new Date('2026-09-30T14:00:00.000Z'));
+    expect(connectorLastPushedAt()).toBe('2026-09-30T14:00:00.000Z');
+    markConnectorPaired(new Date('2026-09-30T15:00:00.000Z'));
+    setConnectorServer('https://a.example.com/');
+    expect(connectorLastPushedAt()).toBe('2026-09-30T14:00:00.000Z');
+    expect(fs.statSync(connectorConfigPath()).mode & 0o777).toBe(0o600);
+    setConnectorServer('https://b.example.com');
+    expect(connectorLastPushedAt()).toBeNull();
+  });
+
+  it('writes nothing when no connector server is configured', () => {
+    markConnectorPushed(new Date('2026-09-30T14:00:00.000Z'));
+    expect(fs.existsSync(connectorConfigPath())).toBe(false);
+    expect(connectorLastPushedAt()).toBeNull();
   });
 });

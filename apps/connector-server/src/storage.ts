@@ -82,7 +82,48 @@ export interface SharedEntry {
    * push reconcile-delete. Cleared (false) once the client acks it. Absent ⇒ false.
    */
   pending?: boolean;
+  /**
+   * ADR 0063: on a pending project document, the pushed head this cloud edit
+   * started from (a vault entry id), or BASE_NEW for a document created on the
+   * connector. Absent means legacy: written before ADR 0063, base unknown.
+   */
+  baseRevision?: string;
+  /** ADR 0063: the scope counter at the write that last touched this row. Rows written before it read 0. */
+  writeSeq?: number;
   createdAt: string;
+}
+
+/** The base_revision of a document created on the connector, where no base exists (ADR 0063). */
+export const BASE_NEW = 'new';
+
+/** One connector-born row for writeConnectorRows: ciphertext only, always origin 'connector' and pending. */
+export interface ConnectorRowInsert {
+  entryId: string;
+  content: string;
+  /** A vault entry id, BASE_NEW, or null for a row that is not a project document. */
+  baseRevision: string | null;
+}
+
+/**
+ * What a push claims about the vault it was taken from (ADR 0063 D5). `server`
+ * is the first 16 hex of sha256(sync server URL), `version` the sync-server
+ * version the device is in sync at. Both null for a client that sends no vault.
+ */
+export interface VaultOrderClaim {
+  server: string | null;
+  version: number | null;
+  reset: boolean;
+}
+
+/** The claim an old client makes: none. Refused once any device recorded a pair. */
+export const NO_VAULT_CLAIM: VaultOrderClaim = { server: null, version: null, reset: false };
+
+/** A push older than the last one this account accepted (ADR 0063 D5, HTTP 428). */
+export class StalePushError extends Error {
+  constructor() {
+    super('stale_push');
+    this.name = 'StalePushError';
+  }
 }
 
 /** A content-free record that a scope was unshared (ADR 0019 retention/deletion). */
@@ -207,19 +248,27 @@ export interface ConnectorStorage {
    * provided ones (a forgotten/removed vault entry disappears server-side). A
    * scope in `scopes` with no entries in the payload is cleared entirely. Callers
    * must guarantee every entry.scope ∈ scopes (the server route validates this).
+   *
+   * ADR 0063: the push first applies `claim` to the account's vault order and
+   * throws StalePushError, changing nothing, when the claim is older. Every
+   * pushed scope's counter goes up once and every upserted row carries it.
    */
-  replaceScopes(accountHash: string, scopes: string[], entries: SharedEntry[]): Promise<void>;
+  replaceScopes(accountHash: string, scopes: string[], entries: SharedEntry[], claim?: VaultOrderClaim): Promise<void>;
   /**
    * ADR 0038 addendum: check tombstones, replaceScopes, and conditionally
    * delete tombstones whose unshared_at <= the accepted shared_at, atomically.
-   * Throws TombstoneConflictError when any pushed scope is blocked.
+   * Throws TombstoneConflictError when any pushed scope is blocked, checked
+   * before the vault order, then StalePushError as replaceScopes does.
    */
   replaceScopesAcceptingReshare(
     accountHash: string,
     scopes: string[],
     entries: SharedEntry[],
     sharedAt: Record<string, string | undefined>,
+    claim?: VaultOrderClaim,
   ): Promise<void>;
+  /** The vault order the account last accepted (ADR 0063 D5). */
+  getVaultOrder(accountHash: string): Promise<{ server: string | null; version: number | null }>;
   /**
    * Unshare: delete every row in `scope` for this account and upsert a
    * content-free tombstone (one row per account+scope, latest unshared_at).
@@ -243,8 +292,28 @@ export interface ConnectorStorage {
   // --- write-back down-sync (C3) ---
   /** A single row by id, or null. memory_forget reads this to decide cancel-vs-enqueue. */
   getEntry(accountHash: string, entryId: string): Promise<SharedEntry | null>;
-  /** Delete one row outright — cancel-before-delivery of a still-pending connector row. */
-  deleteEntry(accountHash: string, entryId: string): Promise<void>;
+  /**
+   * ADR 0063: the scope's write counter, creating it at 0 if absent. A cloud
+   * write reads this BEFORE it reads the rows it decides on.
+   */
+  readScopeSeq(accountHash: string, scope: string): Promise<number>;
+  /**
+   * ADR 0063 D2: insert connector-born rows and delete the one pending row they
+   * replace, in one statement that first moves the scope counter. With
+   * `expectedSeq` set the move is a compare-and-swap: when the counter is no
+   * longer `expectedSeq`, nothing is written and the result is null. With null
+   * it always moves. Returns the counter value the rows carry.
+   */
+  writeConnectorRows(
+    accountHash: string,
+    scope: string,
+    write: { expectedSeq: number | null; rows: ConnectorRowInsert[]; replacedId: string | null },
+  ): Promise<number | null>;
+  /**
+   * ADR 0063: delete exactly these rows, and only while they are still
+   * pending, moving each touched scope's counter. Returns how many went.
+   */
+  discardPending(accountHash: string, entryIds: string[]): Promise<number>;
   /** Connector-born rows not yet delivered to the client (origin='connector' AND pending). */
   listPendingEntries(accountHash: string): Promise<SharedEntry[]>;
   /**
@@ -257,10 +326,11 @@ export interface ConnectorStorage {
   /**
    * Ack a delivered connector row: remap its server id → the client's local
    * entry id and clear `pending`. Collision-safe (drops any pre-existing row
-   * already under the local id first). No-op if the server id no longer exists.
+   * already under the local id first). No-op if the server id no longer exists,
+   * including the drop. The renamed row carries a new scope counter value.
    */
   ackEntry(accountHash: string, serverId: string, localEntryId: string): Promise<void>;
-  /** Apply an acked forget: delete BOTH the pending_forgets row and the shared_entries row. */
+  /** Apply an acked forget: delete BOTH the pending_forgets row and the shared_entries row, moving its scope counter. */
   applyForget(accountHash: string, entryId: string): Promise<void>;
 
   // --- audit ---
@@ -312,7 +382,35 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
   private tombstones = new Map<string, ScopeTombstone[]>();
   /** accountHash -> set of entry ids queued to be forgotten by the client (C3). */
   private pendingForgets = new Map<string, Set<string>>();
+  /** `${accountHash}\0${scope}` -> write counter (ADR 0063). NUL never reaches storage, so the key is unambiguous. */
+  private scopeSeq = new Map<string, number>();
+  /** accountHash -> the vault order last accepted (ADR 0063 D5). */
+  private vaultOrder = new Map<string, { server: string | null; version: number | null }>();
   private audit: ConnectorAuditEntry[] = [];
+
+  private seqKey(accountHash: string, scope: string): string {
+    return `${accountHash}\u0000${scope}`;
+  }
+
+  /** Move a scope's counter up by one, creating it, and return the new value. */
+  private bumpSeq(accountHash: string, scope: string): number {
+    const key = this.seqKey(accountHash, scope);
+    const next = (this.scopeSeq.get(key) ?? 0) + 1;
+    this.scopeSeq.set(key, next);
+    return next;
+  }
+
+  /** The Neon guard statement, synchronously: record the claim if it is not older, else refuse. */
+  private acceptVaultClaim(accountHash: string, claim: VaultOrderClaim): boolean {
+    const cur = this.vaultOrder.get(accountHash) ?? { server: null, version: null };
+    const accepted =
+      claim.reset ||
+      (claim.server === null
+        ? cur.server === null
+        : cur.server === null || cur.server !== claim.server || (cur.version ?? 0) <= (claim.version ?? 0));
+    if (accepted) this.vaultOrder.set(accountHash, { server: claim.server, version: claim.version });
+    return accepted;
+  }
 
   async upsertAccount(accountHash: string): Promise<void> {
     if (!this.accounts.has(accountHash)) this.accounts.set(accountHash, null);
@@ -448,7 +546,7 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
       byId = new Map();
       this.entries.set(accountHash, byId);
     }
-    byId.set(entry.entryId, { ...entry });
+    byId.set(entry.entryId, { ...entry, writeSeq: entry.writeSeq ?? 0 });
   }
 
   async listEntries(accountHash: string): Promise<SharedEntry[]> {
@@ -456,17 +554,26 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
     return byId ? [...byId.values()].map((e) => ({ ...e })) : [];
   }
 
-  async replaceScopes(accountHash: string, scopes: string[], entries: SharedEntry[]): Promise<void> {
+  async replaceScopes(
+    accountHash: string,
+    scopes: string[],
+    entries: SharedEntry[],
+    claim: VaultOrderClaim = NO_VAULT_CLAIM,
+  ): Promise<void> {
+    if (!this.acceptVaultClaim(accountHash, claim)) throw new StalePushError();
     let byId = this.entries.get(accountHash);
     if (!byId) {
       byId = new Map();
       this.entries.set(accountHash, byId);
     }
+    const seqByScope = new Map<string, number>();
+    for (const s of new Set(scopes)) seqByScope.set(s, this.bumpSeq(accountHash, s));
     // Upsert everything provided, tracking which ids should survive per scope.
     const keepByScope = new Map<string, Set<string>>();
     for (const s of scopes) keepByScope.set(s, new Set());
     for (const e of entries) {
-      byId.set(e.entryId, { ...e });
+      const { baseRevision: _base, ...pushed } = e;
+      byId.set(e.entryId, { ...pushed, origin: 'vault', pending: false, writeSeq: seqByScope.get(e.scope) ?? 0 });
       keepByScope.get(e.scope)?.add(e.entryId);
     }
     // Delete any pre-existing row in a pushed scope that the payload omitted —
@@ -500,6 +607,9 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
         }
       }
     }
+    // Moves an existing counter only: a lapsed account's unshare of an unknown
+    // name must not create rows (the ADR 0061 caps).
+    if (this.scopeSeq.has(this.seqKey(accountHash, scope))) this.bumpSeq(accountHash, scope);
     const list = this.tombstones.get(accountHash) ?? [];
     const now = new Date().toISOString();
     const existing = list.find((t) => t.scope === scope);
@@ -525,11 +635,12 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
     scopes: string[],
     entries: SharedEntry[],
     sharedAt: Record<string, string | undefined>,
+    claim: VaultOrderClaim = NO_VAULT_CLAIM,
   ): Promise<void> {
     const tombs = await this.listTombstones(accountHash);
     const conflicts = findTombstoneConflicts(tombs, scopes, sharedAt);
     if (conflicts.length > 0) throw new TombstoneConflictError(conflicts);
-    await this.replaceScopes(accountHash, scopes, entries);
+    await this.replaceScopes(accountHash, scopes, entries, claim);
     const list = this.tombstones.get(accountHash) ?? [];
     this.tombstones.set(
       accountHash,
@@ -550,8 +661,62 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
     return e ? { ...e } : null;
   }
 
-  async deleteEntry(accountHash: string, entryId: string): Promise<void> {
-    this.entries.get(accountHash)?.delete(entryId);
+  async getVaultOrder(accountHash: string): Promise<{ server: string | null; version: number | null }> {
+    return { ...(this.vaultOrder.get(accountHash) ?? { server: null, version: null }) };
+  }
+
+  async readScopeSeq(accountHash: string, scope: string): Promise<number> {
+    const key = this.seqKey(accountHash, scope);
+    if (!this.scopeSeq.has(key)) this.scopeSeq.set(key, 0);
+    return this.scopeSeq.get(key)!;
+  }
+
+  async writeConnectorRows(
+    accountHash: string,
+    scope: string,
+    write: { expectedSeq: number | null; rows: ConnectorRowInsert[]; replacedId: string | null },
+  ): Promise<number | null> {
+    // No await between the compare and the writes: this is the in-memory
+    // twin of the single Neon statement.
+    const key = this.seqKey(accountHash, scope);
+    if (write.expectedSeq !== null && (this.scopeSeq.get(key) ?? null) !== write.expectedSeq) return null;
+    const seq = this.bumpSeq(accountHash, scope);
+    let byId = this.entries.get(accountHash);
+    if (!byId) {
+      byId = new Map();
+      this.entries.set(accountHash, byId);
+    }
+    const now = new Date().toISOString();
+    for (const r of write.rows) {
+      byId.set(r.entryId, {
+        entryId: r.entryId,
+        scope,
+        type: '',
+        content: r.content,
+        entryHash: '',
+        origin: 'connector',
+        pending: true,
+        ...(r.baseRevision === null ? {} : { baseRevision: r.baseRevision }),
+        writeSeq: seq,
+        createdAt: now,
+      });
+    }
+    if (write.replacedId !== null && write.rows.length > 0 && byId.get(write.replacedId)?.pending === true) {
+      byId.delete(write.replacedId);
+    }
+    return seq;
+  }
+
+  async discardPending(accountHash: string, entryIds: string[]): Promise<number> {
+    const byId = this.entries.get(accountHash);
+    if (!byId) return 0;
+    const doomed = [...new Set(entryIds)].flatMap((id) => {
+      const e = byId.get(id);
+      return e?.pending === true ? [e] : [];
+    });
+    for (const scope of new Set(doomed.map((e) => e.scope))) this.bumpSeq(accountHash, scope);
+    for (const e of doomed) byId.delete(e.entryId);
+    return doomed.length;
   }
 
   async listPendingEntries(accountHash: string): Promise<SharedEntry[]> {
@@ -585,13 +750,16 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
     const byId = this.entries.get(accountHash);
     const row = byId?.get(serverId);
     if (!byId || !row) return;
+    const writeSeq = this.bumpSeq(accountHash, row.scope);
     byId.delete(serverId);
     // Collision-safe: overwrite any row already under the local id (the dedupe path).
-    byId.set(localEntryId, { ...row, entryId: localEntryId, pending: false });
+    byId.set(localEntryId, { ...row, entryId: localEntryId, pending: false, writeSeq });
   }
 
   async applyForget(accountHash: string, entryId: string): Promise<void> {
     this.pendingForgets.get(accountHash)?.delete(entryId);
+    const row = this.entries.get(accountHash)?.get(entryId);
+    if (row) this.bumpSeq(accountHash, row.scope);
     this.entries.get(accountHash)?.delete(entryId);
   }
 
@@ -651,6 +819,8 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
       entries: [...this.entries.entries()].map(([a, m]) => [a, [...m.entries()]]),
       tombstones: [...this.tombstones.entries()],
       pendingForgets: [...this.pendingForgets.entries()].map(([a, s]) => [a, [...s]]),
+      scopeSeq: [...this.scopeSeq.entries()],
+      vaultOrder: [...this.vaultOrder.entries()],
       audit: this.audit,
     });
   }

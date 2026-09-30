@@ -201,6 +201,14 @@ async function mcpCall(
   };
 }
 
+/** ADR 0063: every hosted project_update names the revision it read. */
+async function revisionOf(token: string, project: string): Promise<string> {
+  const got = await mcpCall(token, 'project_get', { project });
+  const rev = /Revision: (\S+)/.exec(got.text)?.[1];
+  expect(rev).toBeTruthy();
+  return rev!;
+}
+
 async function pushEntries(
   scopes: string[],
   entries: Array<{ entry_id: string; scope: string; type: string; content: string }>,
@@ -333,10 +341,16 @@ describe('M14 connector project tools (step 4)', () => {
     expect(dumped).not.toContain(STATUS_PHRASE);
   });
 
-  it('updates in place, refuses create, and keeps ciphertext at rest', async () => {
+  it('each update is a new revision replacing the pending one, and keeps ciphertext at rest', async () => {
     const token = await connectAiApp();
+    const unbound = await mcpCall(token, 'project_update', { project: 'northkeep', status: STATUS_PHRASE });
+    expect(unbound).toEqual({
+      text: 'Nothing was saved: call project_get first and pass its revision as expected_revision.',
+      isError: true,
+    });
     const first = await mcpCall(token, 'project_update', {
       project: 'northkeep',
+      expected_revision: await revisionOf(token, 'northkeep'),
       status: STATUS_PHRASE,
       log_entry: LOG_PHRASE,
     });
@@ -361,17 +375,20 @@ describe('M14 connector project tools (step 4)', () => {
     expect(doc?.content).toContain(LOG_PHRASE);
     expect(doc?.content).toContain('Shared project handoff.');
 
+    expect(await revisionOf(token, 'northkeep')).toBe(firstId);
     const second = await mcpCall(token, 'project_update', {
       project: 'northkeep',
+      expected_revision: firstId,
       status: 'Second status.',
       log_entry: 'Second log.',
     });
     expect(second.isError).toBe(false);
     const secondId = /id: (conn_[0-9a-f]+)/.exec(second.text)?.[1];
-    expect(secondId).toBe(firstId);
-    expect((await storage.listPendingEntries(account)).filter((e) => e.scope === 'project:northkeep')).toHaveLength(1);
+    expect(secondId).toBeTruthy();
+    expect(secondId).not.toBe(firstId);
+    expect((await storage.listPendingEntries(account)).filter((e) => e.scope === 'project:northkeep').map((e) => e.entryId)).toEqual([secondId]);
 
-    const after = (await decryptedPendingEntries(storage, account, connToken)).find((e) => e.entryId === firstId);
+    const after = (await decryptedPendingEntries(storage, account, connToken)).find((e) => e.entryId === secondId);
     const parsed = parseProjectDoc(after!.content);
     expect(getProjectSection(parsed, 'Current Status')).toBe('Second status.');
     expect(getProjectSection(parsed, 'Log')).toContain('Second log.');
@@ -388,7 +405,7 @@ describe('M14 connector project tools (step 4)', () => {
     const token = await connectAiApp();
     const before = (await storage.listPendingEntries(account)).length;
 
-    const neverShared = await mcpCall(token, 'project_update', { project: 'never-shared', status: 'nope' });
+    const neverShared = await mcpCall(token, 'project_update', { project: 'never-shared', expected_revision: 'none', status: 'nope' });
     expect(neverShared.isError).toBe(true);
     expect(neverShared.text).toMatch(/no live project document/);
 
@@ -398,6 +415,7 @@ describe('M14 connector project tools (step 4)', () => {
 
     const over = await mcpCall(token, 'project_update', {
       project: 'northkeep',
+      expected_revision: await revisionOf(token, 'northkeep'),
       status: 'z'.repeat(PROJECT_DOC_MAX_CHARS),
     });
     expect(over.isError).toBe(true);
@@ -410,7 +428,7 @@ describe('M14 connector project tools (step 4)', () => {
       content: 'Not a working project doc.',
       createdAt: new Date().toISOString(),
     });
-    const noWorking = await mcpCall(token, 'project_update', { project: 'semantic-only', status: 'nope' });
+    const noWorking = await mcpCall(token, 'project_update', { project: 'semantic-only', expected_revision: 'none', status: 'nope' });
     expect(noWorking.isError).toBe(true);
     expect(noWorking.text).toMatch(/no live project document/);
 
@@ -420,9 +438,17 @@ describe('M14 connector project tools (step 4)', () => {
 
   it('project_update accepts an empty next_actions and clears the section, matching local', async () => {
     const token = await connectAiApp();
-    const set = await mcpCall(token, 'project_update', { project: 'northkeep', next_actions: 'Do the thing.' });
+    const set = await mcpCall(token, 'project_update', {
+      project: 'northkeep',
+      expected_revision: await revisionOf(token, 'northkeep'),
+      next_actions: 'Do the thing.',
+    });
     expect(set.isError).toBe(false);
-    const cleared = await mcpCall(token, 'project_update', { project: 'northkeep', next_actions: '' });
+    const cleared = await mcpCall(token, 'project_update', {
+      project: 'northkeep',
+      expected_revision: await revisionOf(token, 'northkeep'),
+      next_actions: '',
+    });
     expect(cleared.isError).toBe(false);
     const got = await mcpCall(token, 'project_get', { project: 'northkeep' });
     expect(getProjectSection(parseProjectDoc(got.text), 'Next Actions')).toBe('');
@@ -439,7 +465,7 @@ describe('M14 connector project tools (step 4)', () => {
       content: `## Current Status\n\nRolling.\n\n## Log\n\n${lines.join('\n')}`,
       createdAt: new Date().toISOString(),
     });
-    const res = await mcpCall(token, 'project_update', { project: 'roll', log_entry: 'session 41 newest' });
+    const res = await mcpCall(token, 'project_update', { project: 'roll', expected_revision: 'roll-live', log_entry: 'session 41 newest' });
     expect(res.isError).toBeFalsy();
     expect(res.text).toMatch(/Archived \d+ older log entries to conn_/);
     const pending = await storage.listPendingEntries(account);
@@ -472,7 +498,11 @@ describe('M14 connector project tools (step 4)', () => {
 
   it('unshare deletes a not-yet-delivered project update', async () => {
     const token = await connectAiApp();
-    await mcpCall(token, 'project_update', { project: 'northkeep', status: 'About to unshare.' });
+    await mcpCall(token, 'project_update', {
+      project: 'northkeep',
+      expected_revision: await revisionOf(token, 'northkeep'),
+      status: 'About to unshare.',
+    });
     expect((await storage.listPendingEntries(account)).some((e) => e.scope === 'project:northkeep')).toBe(true);
 
     const res = await fetch(`${base}/client/scope/${encodeURIComponent('project:northkeep')}`, {
@@ -486,7 +516,7 @@ describe('M14 connector project tools (step 4)', () => {
 });
 
 describe('M14 desktop fold (step 5)', () => {
-  it('supersedes the local live working doc; old-client remember-fold leaves the prior doc live', async () => {
+  it('an old client never receives the cloud document (ADR 0063 v1 gate); ?v=2 gets it with its base; old-client remember-fold leaves the prior doc live', async () => {
     await seedEncryptedEntry(storage, account, connToken, {
       entryId: 'fold-base',
       scope: 'project:foldme',
@@ -503,24 +533,33 @@ describe('M14 desktop fold (step 5)', () => {
     const token = await connectAiApp();
     const updated = await mcpCall(token, 'project_update', {
       project: 'foldme',
+      expected_revision: 'fold-base',
       status: 'Cloud wrote this.',
       log_entry: 'Fold acceptance.',
     });
     expect(updated.isError).toBe(false);
 
+    // The 0.22.x downSyncConnector sends no ?v=2 and would write this over
+    // the local head without a base check, so the connector withholds it.
     const down = await withVault((v) => downSyncConnector({ server: base, deviceSecret, vault: v }));
-    expect(down.added).toBeGreaterThanOrEqual(1);
-
+    expect(down.added).toBe(0);
     await withVault((v) => {
       const live = v.list({ scope: 'project:foldme', type: 'working' });
       expect(live).toHaveLength(1);
-      expect(live[0]!.content).toContain('Cloud wrote this.');
-      expect(live[0]!.content).toContain('Fold acceptance.');
-      const all = v.list({ scope: 'project:foldme', type: 'working', includeSuperseded: true });
-      expect(all.length).toBeGreaterThanOrEqual(2);
-      expect(all.some((e) => e.content.includes('Local live.') && e.superseded_at !== null)).toBe(true);
+      expect(live[0]!.content).toContain('Local live.');
       expect(v.verifyChain().ok).toBe(true);
     });
+    const cloudRow = (await storage.listPendingEntries(account)).find((e) => e.scope === 'project:foldme')!;
+    expect(cloudRow.baseRevision).toBe('fold-base');
+
+    const v2 = (await fetch(`${base}/client/pending?v=2`, { headers: { authorization: `Bearer ${connToken}` } }).then((r) =>
+      r.json(),
+    )) as { entries: Array<{ server_id: string; scope: string; type: string; content: string; base_revision?: string; stale: boolean }> };
+    const delivered = v2.entries.filter((e) => e.scope === 'project:foldme');
+    expect(delivered.map((e) => ({ id: e.server_id, type: e.type, base: e.base_revision, stale: e.stale }))).toEqual([
+      { id: cloudRow.entryId, type: 'working', base: 'fold-base', stale: false },
+    ]);
+    expect(delivered[0]!.content).toContain('Cloud wrote this.');
 
     // Old-client residual: remember-fold, newest-wins shows the folded doc,
     // prior document remains live.

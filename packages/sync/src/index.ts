@@ -42,6 +42,8 @@ export {
   connectorConfigPath,
   connectorPairedAt,
   connectorPaired,
+  connectorLastPushedAt,
+  markConnectorPushed,
   foldSidecarScopesIntoVault,
   markConnectorPaired,
   loadConnectorConfig,

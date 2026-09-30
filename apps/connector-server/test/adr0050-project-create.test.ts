@@ -152,9 +152,12 @@ async function rowsIn(scope: string) {
   return (await storage.listEntries(account)).filter((e) => e.scope === scope);
 }
 
-/** The deterministic create id the tool derives from the scope (Decision 3.4). */
-function createIdFor(scope: string): string {
-  return `conn_create_${crypto.createHash('sha256').update(scope).digest('hex').slice(0, 32)}`;
+/** The id a successful create reports. ADR 0063 replaced the deterministic id with a compare-and-swap. */
+function createdId(text: string): string {
+  const m = /^Created project "[a-z0-9-]+"\. It will sync into the vault\. \(id: (conn_[0-9a-f]{32})\) Revision: (conn_[0-9a-f]{32})\.$/.exec(text);
+  expect(m?.[1]).toBeTruthy();
+  expect(m?.[2]).toBe(m?.[1]);
+  return m![1]!;
 }
 
 beforeAll(async () => {
@@ -212,14 +215,14 @@ describe('ADR 0050 hosted project_create', () => {
       next_actions: NEXT,
     });
     expect(res.isError).toBeFalsy();
-    const id = createIdFor('project:fresh');
-    expect(res.text).toBe(`Created project "fresh". It will sync into the vault. (id: ${id})`);
+    const id = createdId(res.text);
 
     const rows = await rowsIn('project:fresh');
     expect(rows).toHaveLength(1);
     expect(rows[0]!.entryId).toBe(id);
     expect(rows[0]!.origin).toBe('connector');
     expect(rows[0]!.pending).toBe(true);
+    expect(rows[0]!.baseRevision).toBe('new');
     expect(rows[0]!.type).toBe('');
     expect(rows[0]!.content.startsWith('nkc1:')).toBe(true);
     for (const phrase of [WHY, STATUS, NEXT]) expect(storage.dumpState()).not.toContain(phrase);
@@ -234,9 +237,12 @@ describe('ADR 0050 hosted project_create', () => {
     const got = await mcpCall(token, 'project_get', { project: 'fresh' });
     expect(got.isError).toBeFalsy();
     expect(got.text).toContain(STATUS);
-    const updated = await mcpCall(token, 'project_update', { project: 'fresh', status: 'Moved on.' });
+    const updated = await mcpCall(token, 'project_update', { project: 'fresh', expected_revision: id, status: 'Moved on.' });
     expect(updated.isError).toBeFalsy();
-    expect(await rowsIn('project:fresh')).toHaveLength(1);
+    const after = await rowsIn('project:fresh');
+    expect(after).toHaveLength(1);
+    expect(after[0]!.entryId).not.toBe(id);
+    expect(after[0]!.baseRevision).toBe('new');
   });
 
   it('refuses a bad slug, a duplicate document, and an over-cap document; nothing is stored', async () => {
@@ -310,24 +316,27 @@ describe('ADR 0050 hosted project_create', () => {
     expect(res.isError).toBeFalsy();
     const rows = await rowsIn('project:archives-only');
     expect(rows).toHaveLength(2);
-    expect(rows.some((r) => r.entryId === createIdFor('project:archives-only'))).toBe(true);
+    expect(rows.some((r) => r.entryId === createdId(res.text))).toBe(true);
   });
 
-  it('two concurrent creates collapse into one row under the deterministic id', async () => {
+  it('two concurrent creates: the scope counter lets exactly one land', async () => {
     const token = await connectAiApp();
     const results = await Promise.all([
       mcpCall(token, 'project_create', { project: 'racy', what_why: 'first', status: 'first' }),
       mcpCall(token, 'project_create', { project: 'racy', what_why: 'second', status: 'second' }),
     ]);
-    // In-memory these serialized in practice, so the deterministic id is what
-    // the claim rests on: whichever way they land there is one row under it,
-    // and the only refusal allowed is the duplicate one.
+    // ADR 0063: the insert is a compare-and-swap on the counter read before
+    // the rows, so the loser either sees the winner's row or loses the swap.
     const rows = await rowsIn('project:racy');
     expect(rows).toHaveLength(1);
-    expect(rows[0]!.entryId).toBe(createIdFor('project:racy'));
-    for (const r of results) {
-      if (r.isError) expect(r.text).toBe('Project already exists; use project_update.');
-      else expect(r.text).toContain(createIdFor('project:racy'));
+    const winners = results.filter((r) => !r.isError);
+    expect(winners).toHaveLength(1);
+    expect(rows[0]!.entryId).toBe(createdId(winners[0]!.text));
+    for (const r of results.filter((x) => x.isError)) {
+      expect([
+        'Project already exists; use project_update.',
+        'Nothing was saved: project "racy" changed while it was being created. Call project_get, then retry.',
+      ]).toContain(r.text);
     }
   });
 
@@ -600,8 +609,8 @@ describe('ADR 0050 hosted text validation', () => {
     expect(omitted.isError).toBeFalsy();
 
     const rows = await decryptedEntries(storage, account, connToken);
-    const withEmpty = rows.find((e) => e.entryId === createIdFor('project:emptynext'))!;
-    const withOmitted = rows.find((e) => e.entryId === createIdFor('project:omittednext'))!;
+    const withEmpty = rows.find((e) => e.entryId === createdId(empty.text))!;
+    const withOmitted = rows.find((e) => e.entryId === createdId(omitted.text))!;
     expect(withEmpty.content).toBe(withOmitted.content);
     expect(getProjectSection(parseProjectDoc(withEmpty.content), 'Next Actions')).toBe('');
   });

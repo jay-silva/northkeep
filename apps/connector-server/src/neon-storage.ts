@@ -3,6 +3,10 @@ import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/share
 import {
   MAX_NEW_TOMBSTONE_SCOPE_BYTES,
   MAX_TOMBSTONES_PER_ACCOUNT,
+  NO_VAULT_CLAIM,
+  StalePushError,
+  type ConnectorRowInsert,
+  type VaultOrderClaim,
   type ConnectorAuditEntry,
   type ConnectorStorage,
   type OAuthGcResult,
@@ -128,6 +132,19 @@ ON scope_tombstones (account_hash, scope)`,
   `ALTER TABLE pairing_codes ADD COLUMN IF NOT EXISTS dek_wrap text`,
   `ALTER TABLE oauth_codes ADD COLUMN IF NOT EXISTS dek_wrap text`,
   `ALTER TABLE oauth_tokens ADD COLUMN IF NOT EXISTS dek_wrap text`,
+  // ADR 0063 sync guardrails. All plaintext metadata, never content. Existing
+  // rows get base_revision NULL (legacy, never backfilled) and write_seq 0; a
+  // constant default is a catalog-only change on Postgres 11+, no rewrite.
+  `ALTER TABLE shared_entries ADD COLUMN IF NOT EXISTS base_revision text`,
+  `ALTER TABLE shared_entries ADD COLUMN IF NOT EXISTS write_seq bigint NOT NULL DEFAULT 0`,
+  `CREATE TABLE IF NOT EXISTS scope_seq (
+  account_hash text NOT NULL,
+  scope        text NOT NULL,
+  seq          bigint NOT NULL DEFAULT 0,
+  PRIMARY KEY (account_hash, scope)
+)`,
+  `ALTER TABLE connector_accounts ADD COLUMN IF NOT EXISTS vault_server text`,
+  `ALTER TABLE connector_accounts ADD COLUMN IF NOT EXISTS vault_version bigint`,
 ];
 
 /** Human-readable schema (for self-hosters running psql by hand). */
@@ -373,11 +390,12 @@ export class NeonConnectorStorage implements ConnectorStorage {
   async putEntry(accountHash: string, entry: SharedEntry): Promise<void> {
     await this.ensureSchema();
     await this.sql`
-      INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, entry_hash, origin, pending, created_at)
-      VALUES (${accountHash}, ${entry.entryId}, ${entry.scope}, ${entry.type}, ${entry.content}, ${entry.entryHash ?? ''}, ${entry.origin ?? 'vault'}, ${entry.pending ?? false}, ${entry.createdAt})
+      INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, entry_hash, origin, pending, base_revision, write_seq, created_at)
+      VALUES (${accountHash}, ${entry.entryId}, ${entry.scope}, ${entry.type}, ${entry.content}, ${entry.entryHash ?? ''}, ${entry.origin ?? 'vault'}, ${entry.pending ?? false}, ${entry.baseRevision ?? null}, ${entry.writeSeq ?? 0}, ${entry.createdAt})
       ON CONFLICT (account_hash, entry_id) DO UPDATE SET
         scope = EXCLUDED.scope, type = EXCLUDED.type, content = EXCLUDED.content,
         entry_hash = EXCLUDED.entry_hash, origin = EXCLUDED.origin, pending = EXCLUDED.pending,
+        base_revision = EXCLUDED.base_revision, write_seq = EXCLUDED.write_seq,
         created_at = EXCLUDED.created_at
     `;
   }
@@ -385,51 +403,20 @@ export class NeonConnectorStorage implements ConnectorStorage {
   async listEntries(accountHash: string): Promise<SharedEntry[]> {
     await this.ensureSchema();
     const rows = (await this.sql`
-      SELECT entry_id, scope, type, content, entry_hash, origin, pending, created_at
+      SELECT entry_id, scope, type, content, entry_hash, origin, pending, base_revision, write_seq, created_at
       FROM shared_entries WHERE account_hash = ${accountHash}
     `) as unknown as Array<SharedEntrySqlRow>;
     return rows.map(mapSharedEntryRow);
   }
 
-  async replaceScopes(accountHash: string, scopes: string[], entries: SharedEntry[]): Promise<void> {
+  async replaceScopes(
+    accountHash: string,
+    scopes: string[],
+    entries: SharedEntry[],
+    claim: VaultOrderClaim = NO_VAULT_CLAIM,
+  ): Promise<void> {
     await this.ensureSchema();
-    // One non-interactive transaction: N upserts + one delete-reconcile per
-    // scope. Each element is a single statement (ADR 0010); the neon driver
-    // submits them together atomically so a mid-push failure leaves no partial
-    // "make-scopes-match" state.
-    const statements = [];
-    for (const e of entries) {
-      statements.push(this.sql`
-        INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, entry_hash)
-        VALUES (${accountHash}, ${e.entryId}, ${e.scope}, ${e.type}, ${e.content}, ${e.entryHash ?? ''})
-        ON CONFLICT (account_hash, entry_id) DO UPDATE SET
-          scope = EXCLUDED.scope, type = EXCLUDED.type, content = EXCLUDED.content,
-          entry_hash = EXCLUDED.entry_hash
-      `);
-    }
-    // The reconcile-delete NEVER touches an undelivered connector-born row
-    // (origin='connector' AND pending): a push racing ahead of the down-sync must
-    // not destroy a memory the AI created that the user hasn't pulled yet (C3
-    // critical fix). The `NOT (origin='connector' AND pending)` guard shields it.
-    for (const scope of scopes) {
-      const ids = entries.filter((e) => e.scope === scope).map((e) => e.entryId);
-      if (ids.length === 0) {
-        // Emptied scope: clear it entirely (an unconditional NOT-IN of nothing
-        // would be invalid SQL — guard it).
-        statements.push(this.sql`
-          DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND scope = ${scope}
-            AND NOT (origin = 'connector' AND pending = true)
-        `);
-      } else {
-        // `<> ALL(array)` is the array-safe NOT IN (no empty-list edge case).
-        statements.push(this.sql`
-          DELETE FROM shared_entries
-          WHERE account_hash = ${accountHash} AND scope = ${scope} AND entry_id <> ALL(${ids})
-            AND NOT (origin = 'connector' AND pending = true)
-        `);
-      }
-    }
-    if (statements.length > 0) await this.sql.transaction(statements);
+    await this.runPush(this.pushStatements(accountHash, scopes, entries, claim, null));
   }
 
   async replaceScopesAcceptingReshare(
@@ -437,66 +424,16 @@ export class NeonConnectorStorage implements ConnectorStorage {
     scopes: string[],
     entries: SharedEntry[],
     sharedAt: Record<string, string | undefined>,
+    claim: VaultOrderClaim = NO_VAULT_CLAIM,
   ): Promise<void> {
     await this.ensureSchema();
     const tombs = await this.listTombstones(accountHash);
     const conflicts = findTombstoneConflicts(tombs, scopes, sharedAt);
     if (conflicts.length > 0) throw new TombstoneConflictError(conflicts);
-
-    const sharedAtJson = JSON.stringify(
-      Object.fromEntries(Object.entries(sharedAt).filter((e): e is [string, string] => typeof e[1] === 'string')),
-    );
-    const statements = [];
-    // Re-check inside the transaction (planner N5). 1/0 aborts the whole
-    // batch if a concurrent unshare landed a blocking tombstone.
-    statements.push(this.sql`
-      SELECT 1 / CASE WHEN EXISTS (
-        SELECT 1 FROM scope_tombstones t
-        WHERE t.account_hash = ${accountHash}
-          AND t.scope = ANY(${scopes})
-          AND (
-            NOT (${sharedAtJson}::jsonb ? t.scope)
-            OR ((${sharedAtJson}::jsonb ->> t.scope)::timestamptz) <= t.unshared_at
-          )
-      ) THEN 0 ELSE 1 END
-    `);
-    for (const e of entries) {
-      statements.push(this.sql`
-        INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, entry_hash)
-        VALUES (${accountHash}, ${e.entryId}, ${e.scope}, ${e.type}, ${e.content}, ${e.entryHash ?? ''})
-        ON CONFLICT (account_hash, entry_id) DO UPDATE SET
-          scope = EXCLUDED.scope, type = EXCLUDED.type, content = EXCLUDED.content,
-          entry_hash = EXCLUDED.entry_hash
-      `);
-    }
-    for (const scope of scopes) {
-      const ids = entries.filter((e) => e.scope === scope).map((e) => e.entryId);
-      if (ids.length === 0) {
-        statements.push(this.sql`
-          DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND scope = ${scope}
-            AND NOT (origin = 'connector' AND pending = true)
-        `);
-      } else {
-        statements.push(this.sql`
-          DELETE FROM shared_entries
-          WHERE account_hash = ${accountHash} AND scope = ${scope} AND entry_id <> ALL(${ids})
-            AND NOT (origin = 'connector' AND pending = true)
-        `);
-      }
-    }
-    for (const scope of scopes) {
-      const accepted = sharedAt[scope];
-      if (accepted === undefined) continue;
-      statements.push(this.sql`
-        DELETE FROM scope_tombstones
-        WHERE account_hash = ${accountHash}
-          AND scope = ${scope}
-          AND unshared_at <= ${accepted}::timestamptz
-      `);
-    }
     try {
-      await this.sql.transaction(statements);
+      await this.runPush(this.pushStatements(accountHash, scopes, entries, claim, sharedAt));
     } catch (err) {
+      if (err instanceof StalePushError) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       if (/division by zero|tombstone/i.test(msg)) {
         const again = findTombstoneConflicts(await this.listTombstones(accountHash), scopes, sharedAt);
@@ -504,6 +441,151 @@ export class NeonConnectorStorage implements ConnectorStorage {
       }
       throw err;
     }
+  }
+
+  /**
+   * ADR 0063 transactions that move scope_seq: pinned to READ COMMITTED, the
+   * level the concurrency proof ran under, so a blocked writer re-checks the
+   * locked row instead of failing to serialize. The driver sends no isolation
+   * header unless one is given.
+   */
+  private orderedTransaction(statements: Parameters<NeonConnectorStorage['sql']['transaction']>[0]) {
+    return this.sql.transaction(statements, { isolationLevel: 'ReadCommitted' });
+  }
+
+  /** Run a push transaction; its first statement is the vault-order guard, and an empty guard result is a stale push. */
+  private async runPush(statements: ReturnType<NeonConnectorStorage['pushStatements']>): Promise<void> {
+    const results = (await this.orderedTransaction(statements)) as unknown as unknown[][];
+    if ((results[0] ?? []).length === 0) throw new StalePushError();
+  }
+
+  /**
+   * One push as a non-interactive transaction (ADR 0010: one statement per
+   * element). The first element is the ADR 0063 D5 guard: it records the claim
+   * only when it is not older, taking the account row's lock. Every later
+   * element runs only while the account row still holds this push's pair, so a
+   * refused push writes nothing. With `sharedAt` set it is the ADR 0038
+   * accepting push: the tombstone re-check and the tombstone clear join in.
+   */
+  private pushStatements(
+    accountHash: string,
+    scopes: string[],
+    entries: SharedEntry[],
+    claim: VaultOrderClaim,
+    sharedAt: Record<string, string | undefined> | null,
+  ) {
+    const srv = claim.server;
+    const ver = claim.version;
+    const statements = [
+      this.sql`
+        INSERT INTO connector_accounts (account_hash, vault_server, vault_version)
+        VALUES (${accountHash}, ${srv}::text, ${ver}::bigint)
+        ON CONFLICT (account_hash) DO UPDATE
+          SET vault_server = EXCLUDED.vault_server, vault_version = EXCLUDED.vault_version
+          WHERE ${claim.reset}::boolean
+             OR (EXCLUDED.vault_server IS NULL AND connector_accounts.vault_server IS NULL)
+             OR (EXCLUDED.vault_server IS NOT NULL AND (
+                   connector_accounts.vault_server IS NULL
+                   OR connector_accounts.vault_server <> EXCLUDED.vault_server
+                   OR connector_accounts.vault_version <= EXCLUDED.vault_version))
+        RETURNING 1 AS accepted
+      `,
+    ];
+    if (sharedAt !== null) {
+      const sharedAtJson = JSON.stringify(
+        Object.fromEntries(Object.entries(sharedAt).filter((e): e is [string, string] => typeof e[1] === 'string')),
+      );
+      // Re-check inside the transaction (planner N5). 1/0 aborts the whole
+      // batch if a concurrent unshare landed a blocking tombstone.
+      statements.push(this.sql`
+        SELECT 1 / CASE WHEN EXISTS (
+          SELECT 1 FROM connector_accounts
+          WHERE account_hash = ${accountHash}
+            AND vault_server IS NOT DISTINCT FROM ${srv}::text AND vault_version IS NOT DISTINCT FROM ${ver}::bigint
+        ) AND EXISTS (
+          SELECT 1 FROM scope_tombstones t
+          WHERE t.account_hash = ${accountHash}
+            AND t.scope = ANY(${scopes})
+            AND (
+              NOT (${sharedAtJson}::jsonb ? t.scope)
+              OR ((${sharedAtJson}::jsonb ->> t.scope)::timestamptz) <= t.unshared_at
+            )
+        ) THEN 0 ELSE 1 END
+      `);
+    }
+    for (const scope of new Set(scopes)) {
+      statements.push(this.sql`
+        INSERT INTO scope_seq (account_hash, scope, seq)
+        SELECT ${accountHash}, ${scope}, 1
+        WHERE EXISTS (
+          SELECT 1 FROM connector_accounts
+          WHERE account_hash = ${accountHash}
+            AND vault_server IS NOT DISTINCT FROM ${srv}::text AND vault_version IS NOT DISTINCT FROM ${ver}::bigint)
+        ON CONFLICT (account_hash, scope) DO UPDATE SET seq = scope_seq.seq + 1
+      `);
+    }
+    for (const e of entries) {
+      statements.push(this.sql`
+        INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, entry_hash, origin, pending, base_revision, write_seq)
+        SELECT ${accountHash}, ${e.entryId}, ${e.scope}, ${e.type}, ${e.content}, ${e.entryHash ?? ''}, 'vault', false, NULL, q.seq
+        FROM scope_seq q
+        WHERE q.account_hash = ${accountHash} AND q.scope = ${e.scope}
+          AND EXISTS (
+            SELECT 1 FROM connector_accounts
+            WHERE account_hash = ${accountHash}
+              AND vault_server IS NOT DISTINCT FROM ${srv}::text AND vault_version IS NOT DISTINCT FROM ${ver}::bigint)
+        ON CONFLICT (account_hash, entry_id) DO UPDATE SET
+          scope = EXCLUDED.scope, type = EXCLUDED.type, content = EXCLUDED.content,
+          entry_hash = EXCLUDED.entry_hash, origin = EXCLUDED.origin, pending = EXCLUDED.pending,
+          base_revision = EXCLUDED.base_revision, write_seq = EXCLUDED.write_seq
+      `);
+    }
+    // The reconcile-delete NEVER touches an undelivered connector-born row
+    // (origin='connector' AND pending): a push racing ahead of the down-sync must
+    // not destroy a memory the AI created that the user hasn't pulled yet (C3
+    // critical fix). `<> ALL(array)` is the array-safe NOT IN; an empty array
+    // clears the scope.
+    for (const scope of scopes) {
+      const ids = entries.filter((e) => e.scope === scope).map((e) => e.entryId);
+      statements.push(this.sql`
+        DELETE FROM shared_entries
+        WHERE account_hash = ${accountHash} AND scope = ${scope} AND entry_id <> ALL(${ids}::text[])
+          AND NOT (origin = 'connector' AND pending = true)
+          AND EXISTS (
+            SELECT 1 FROM connector_accounts
+            WHERE account_hash = ${accountHash}
+              AND vault_server IS NOT DISTINCT FROM ${srv}::text AND vault_version IS NOT DISTINCT FROM ${ver}::bigint)
+      `);
+    }
+    if (sharedAt !== null) {
+      for (const scope of scopes) {
+        const accepted = sharedAt[scope];
+        if (accepted === undefined) continue;
+        statements.push(this.sql`
+          DELETE FROM scope_tombstones
+          WHERE account_hash = ${accountHash}
+            AND scope = ${scope}
+            AND unshared_at <= ${accepted}::timestamptz
+            AND EXISTS (
+              SELECT 1 FROM connector_accounts
+              WHERE account_hash = ${accountHash}
+                AND vault_server IS NOT DISTINCT FROM ${srv}::text AND vault_version IS NOT DISTINCT FROM ${ver}::bigint)
+        `);
+      }
+    }
+    return statements;
+  }
+
+  async getVaultOrder(accountHash: string): Promise<{ server: string | null; version: number | null }> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      SELECT vault_server, vault_version FROM connector_accounts WHERE account_hash = ${accountHash}
+    `) as unknown as Array<{ vault_server: string | null; vault_version: string | number | null }>;
+    const r = rows[0];
+    return {
+      server: r?.vault_server ?? null,
+      version: r?.vault_version === null || r?.vault_version === undefined ? null : Number(r.vault_version),
+    };
   }
 
   async deleteScope(accountHash: string, scope: string): Promise<number> {
@@ -521,6 +603,8 @@ export class NeonConnectorStorage implements ConnectorStorage {
     const rows = (await this.sql`
       WITH d AS (
         DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND scope = ${scope} RETURNING 1
+      ), b AS (
+        UPDATE scope_seq SET seq = seq + 1 WHERE account_hash = ${accountHash} AND scope = ${scope} RETURNING 1
       ), t AS (
         INSERT INTO scope_tombstones (account_hash, scope, unshared_at)
         SELECT ${accountHash}, ${scope}, now()
@@ -554,21 +638,100 @@ export class NeonConnectorStorage implements ConnectorStorage {
   async getEntry(accountHash: string, entryId: string): Promise<SharedEntry | null> {
     await this.ensureSchema();
     const rows = (await this.sql`
-      SELECT entry_id, scope, type, content, entry_hash, origin, pending, created_at
+      SELECT entry_id, scope, type, content, entry_hash, origin, pending, base_revision, write_seq, created_at
       FROM shared_entries WHERE account_hash = ${accountHash} AND entry_id = ${entryId}
     `) as unknown as Array<SharedEntrySqlRow>;
     return rows[0] ? mapSharedEntryRow(rows[0]) : null;
   }
 
-  async deleteEntry(accountHash: string, entryId: string): Promise<void> {
+  async readScopeSeq(accountHash: string, scope: string): Promise<number> {
     await this.ensureSchema();
-    await this.sql`DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND entry_id = ${entryId}`;
+    // The CTE's insert is invisible to the outer read in the same statement,
+    // hence the UNION: exactly one branch returns the row.
+    const rows = (await this.sql`
+      WITH ins AS (
+        INSERT INTO scope_seq (account_hash, scope, seq) VALUES (${accountHash}, ${scope}, 0)
+        ON CONFLICT (account_hash, scope) DO NOTHING
+        RETURNING seq
+      )
+      SELECT seq FROM ins
+      UNION ALL
+      SELECT seq FROM scope_seq WHERE account_hash = ${accountHash} AND scope = ${scope}
+    `) as unknown as Array<{ seq: string | number }>;
+    return Number(rows[0]!.seq);
+  }
+
+  async writeConnectorRows(
+    accountHash: string,
+    scope: string,
+    write: { expectedSeq: number | null; rows: ConnectorRowInsert[]; replacedId: string | null },
+  ): Promise<number | null> {
+    await this.ensureSchema();
+    const ids = write.rows.map((r) => r.entryId);
+    const contents = write.rows.map((r) => r.content);
+    const bases = write.rows.map((r) => r.baseRevision);
+    // ADR 0063 D2: one statement, serialized on the scope_seq row. The delete
+    // names one id, never a predicate, so a held stale row is never removed.
+    const rows = (write.expectedSeq !== null
+      ? await this.sql`
+          WITH cas AS (
+            UPDATE scope_seq SET seq = seq + 1
+            WHERE account_hash = ${accountHash} AND scope = ${scope} AND seq = ${write.expectedSeq}::bigint
+            RETURNING seq),
+          ins AS (
+            INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, entry_hash, origin, pending, base_revision, write_seq)
+            SELECT ${accountHash}, x.entry_id, ${scope}, '', x.content, '', 'connector', true, x.base, cas.seq
+            FROM cas, unnest(${ids}::text[], ${contents}::text[], ${bases}::text[]) AS x(entry_id, content, base)
+            RETURNING entry_id),
+          del AS (
+            DELETE FROM shared_entries
+            WHERE account_hash = ${accountHash} AND entry_id = ${write.replacedId}::text AND pending
+              AND EXISTS (SELECT 1 FROM ins))
+          SELECT seq FROM cas`
+      : await this.sql`
+          WITH cas AS (
+            INSERT INTO scope_seq (account_hash, scope, seq) VALUES (${accountHash}, ${scope}, 1)
+            ON CONFLICT (account_hash, scope) DO UPDATE SET seq = scope_seq.seq + 1
+            RETURNING seq),
+          ins AS (
+            INSERT INTO shared_entries (account_hash, entry_id, scope, type, content, entry_hash, origin, pending, base_revision, write_seq)
+            SELECT ${accountHash}, x.entry_id, ${scope}, '', x.content, '', 'connector', true, x.base, cas.seq
+            FROM cas, unnest(${ids}::text[], ${contents}::text[], ${bases}::text[]) AS x(entry_id, content, base)
+            RETURNING entry_id),
+          del AS (
+            DELETE FROM shared_entries
+            WHERE account_hash = ${accountHash} AND entry_id = ${write.replacedId}::text AND pending
+              AND EXISTS (SELECT 1 FROM ins))
+          SELECT seq FROM cas`) as unknown as Array<{ seq: string | number }>;
+    return rows[0] ? Number(rows[0].seq) : null;
+  }
+
+  async discardPending(accountHash: string, entryIds: string[]): Promise<number> {
+    await this.ensureSchema();
+    const ids = [...new Set(entryIds)];
+    if (ids.length === 0) return 0;
+    const results = (await this.orderedTransaction([
+      this.sql`
+        INSERT INTO scope_seq (account_hash, scope, seq)
+        SELECT DISTINCT account_hash, scope, 1 FROM shared_entries
+        WHERE account_hash = ${accountHash} AND entry_id = ANY(${ids}::text[]) AND pending
+        ON CONFLICT (account_hash, scope) DO UPDATE SET seq = scope_seq.seq + 1
+      `,
+      this.sql`
+        WITH d AS (
+          DELETE FROM shared_entries
+          WHERE account_hash = ${accountHash} AND entry_id = ANY(${ids}::text[]) AND pending
+          RETURNING 1
+        ) SELECT count(*)::int AS n FROM d
+      `,
+    ])) as unknown as Array<Array<{ n?: string | number }>>;
+    return Number(results[1]?.[0]?.n ?? 0);
   }
 
   async listPendingEntries(accountHash: string): Promise<SharedEntry[]> {
     await this.ensureSchema();
     const rows = (await this.sql`
-      SELECT entry_id, scope, type, content, entry_hash, origin, pending, created_at
+      SELECT entry_id, scope, type, content, entry_hash, origin, pending, base_revision, write_seq, created_at
       FROM shared_entries WHERE account_hash = ${accountHash} AND origin = 'connector' AND pending = true
     `) as unknown as Array<SharedEntrySqlRow>;
     return rows.map(mapSharedEntryRow);
@@ -598,10 +761,24 @@ export class NeonConnectorStorage implements ConnectorStorage {
     // against the server id onto the vault-local id, so a forget that raced in
     // between the client's fetch and this ack still tombstones the delivered
     // vault entry (never orphaned). Each element is one statement, all atomic.
-    await this.sql.transaction([
-      this.sql`DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND entry_id = ${localEntryId}`,
+    // ADR 0063: the drop happens only when the server row still exists (an ack
+    // of a row replaced meanwhile must not delete the pushed head), and the
+    // renamed row carries a new scope counter value.
+    await this.orderedTransaction([
       this.sql`
-        UPDATE shared_entries SET entry_id = ${localEntryId}, pending = false
+        INSERT INTO scope_seq (account_hash, scope, seq)
+        SELECT account_hash, scope, 1 FROM shared_entries
+        WHERE account_hash = ${accountHash} AND entry_id = ${serverId}
+        ON CONFLICT (account_hash, scope) DO UPDATE SET seq = scope_seq.seq + 1
+      `,
+      this.sql`
+        DELETE FROM shared_entries
+        WHERE account_hash = ${accountHash} AND entry_id = ${localEntryId} AND entry_id <> ${serverId}
+          AND EXISTS (SELECT 1 FROM shared_entries s WHERE s.account_hash = ${accountHash} AND s.entry_id = ${serverId})
+      `,
+      this.sql`
+        UPDATE shared_entries SET entry_id = ${localEntryId}, pending = false,
+          write_seq = (SELECT q.seq FROM scope_seq q WHERE q.account_hash = ${accountHash} AND q.scope = shared_entries.scope)
         WHERE account_hash = ${accountHash} AND entry_id = ${serverId}
       `,
       this.sql`
@@ -616,7 +793,13 @@ export class NeonConnectorStorage implements ConnectorStorage {
 
   async applyForget(accountHash: string, entryId: string): Promise<void> {
     await this.ensureSchema();
-    await this.sql.transaction([
+    await this.orderedTransaction([
+      this.sql`
+        INSERT INTO scope_seq (account_hash, scope, seq)
+        SELECT account_hash, scope, 1 FROM shared_entries
+        WHERE account_hash = ${accountHash} AND entry_id = ${entryId}
+        ON CONFLICT (account_hash, scope) DO UPDATE SET seq = scope_seq.seq + 1
+      `,
       this.sql`DELETE FROM pending_forgets WHERE account_hash = ${accountHash} AND entry_id = ${entryId}`,
       this.sql`DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND entry_id = ${entryId}`,
     ]);
@@ -666,6 +849,9 @@ interface SharedEntrySqlRow {
   entry_hash: string;
   origin: string;
   pending: boolean;
+  base_revision: string | null;
+  /** int8: a string over Neon's HTTP driver. */
+  write_seq: string | number;
   created_at: string;
 }
 
@@ -678,6 +864,8 @@ function mapSharedEntryRow(r: SharedEntrySqlRow): SharedEntry {
     entryHash: r.entry_hash ?? '',
     origin: r.origin === 'connector' ? 'connector' : 'vault',
     pending: r.pending === true,
+    ...(r.base_revision === null || r.base_revision === undefined ? {} : { baseRevision: r.base_revision }),
+    writeSeq: Number(r.write_seq ?? 0),
     createdAt: new Date(r.created_at).toISOString(),
   };
 }
