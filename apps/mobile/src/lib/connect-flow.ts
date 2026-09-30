@@ -453,6 +453,9 @@ export function connectorSyncSummary(
     held_scopes?: readonly string[];
     skipped?: number;
     newlyShared?: readonly string[];
+    /** ADR 0063: replacements and removals the phone leaves for the Mac. */
+    deferred?: number;
+    conflicts?: readonly unknown[];
   },
   opts?: { pushedBack?: boolean },
 ): string {
@@ -478,6 +481,14 @@ export function connectorSyncSummary(
   // one, and what sharing it would do.
   for (const scope of r.newlyShared ?? []) parts.push(newlySharedMessage(scope));
   for (const scope of r.held_scopes ?? []) parts.push(holdMessage(heldSlug(scope)));
+  const forMac = (r.deferred ?? 0) + (r.conflicts?.length ?? 0);
+  if (forMac > 0) {
+    parts.push(
+      forMac === 1
+        ? '1 change from your AI apps would replace or remove something here. Review on your Mac.'
+        : `${forMac} changes from your AI apps would replace or remove something here. Review on your Mac.`,
+    );
+  }
   if ((r.skipped ?? 0) > 0) {
     parts.push(
       r.skipped === 1

@@ -70,7 +70,7 @@ describe('classifySyncError: subscription-required (HTTP 402)', () => {
 
   it('catches the connector client 402 shapes (Phase B: plain Errors, no error name)', () => {
     // pushSharedScopes / startPairing / unshareScope fall through to the
-    // generic "HTTP 402" message; downSyncConnector has its own wording with
+    // generic "HTTP 402" message; applyDownSync has its own wording with
     // NO "HTTP 402" token in it. Both must classify as subscription-required.
     for (const msg of [
       'Connector server returned HTTP 402 on push.',
