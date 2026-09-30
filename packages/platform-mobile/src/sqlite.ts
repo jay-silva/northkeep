@@ -114,7 +114,8 @@ function labelNative<T>(name: string, fn: () => T): T {
 export function mobileSqliteDriver(): SqliteDriver {
   return {
     createEmpty(): SqliteDb {
-      return new ExpoSqliteDb(labelNative('openDatabaseSync', () => openDatabaseSync(':memory:')));
+      // expo-sqlite caches connections by path, so ':memory:' alone can hand back a vault that is still open.
+      return new ExpoSqliteDb(labelNative('openDatabaseSync', () => openDatabaseSync(':memory:', { useNewConnection: true })));
     },
     openFromImage(bytes: Uint8Array): SqliteDb {
       // Hand the native module a plain Uint8Array (not the Buffer polyfill).
