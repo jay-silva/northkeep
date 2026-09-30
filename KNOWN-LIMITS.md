@@ -215,13 +215,21 @@ every milestone; if a limit is removed, say when and how.*
   Vercel; spoofable if you self-host directly on the internet, which
   KNOWN-LIMITS already advises against for open servers). It's a first line
   against an abusive account or a webhook flood, not a metered quota.
-- **A manual Pull replaces the local vault.** Unpushed local edits are moved
-  to `vault.nkv.bak` (recoverable), not merged. The automatic paths (below)
-  never pull over local edits; only the Pull button and `northkeep sync pull`
-  can, and the status line first says the vault differs from the server's
-  newer copy (the CLI says instead, when this machine has no recorded baseline, that
-  the server changed and this vault may have). Push before you pull by hand
-  on a machine you've edited.
+- **A manual Pull replaces the local vault, after it says what would drop
+  out (ADR 0063 D6).** It first lists what is only on this device, projects
+  whose current version is only here, and memories you deleted here that the
+  pull would bring back, and asks before replacing anything
+  (`northkeep sync pull --yes` skips the question; the app's Pull answers with
+  that report and a pointer to the command until its review screen ships). It
+  then installs exactly the copy it reported on, and refuses if the server
+  moved or this vault changed in between. Nothing is merged: what drops out
+  stays recoverable in `vault.nkv.bak`. Push before you pull by hand on a
+  machine you've edited.
+- **The automatic pull refuses a copy that would remove or undo anything on
+  this device.** This happens when another device, such as the phone's
+  last-writer-wins recovery, replaced the server's copy with one that lacks
+  this device's work. The app and the MCP server say so and leave the choice
+  to a manual pull. Merging the two copies is not built.
 - **HTTPS only.** The client refuses a non-https sync server (except loopback
   for testing) so your token and blob never cross the network unprotected.
 
@@ -961,6 +969,11 @@ every milestone; if a limit is removed, say when and how.*
   with history from before this rule or for a different keep count; the
   desktop has it at `POST /api/projects/compact`, a button follows an
   approved mock.
+- **Restore works only for the versions compaction kept (ADR 0063 D4).**
+  `northkeep projects restore <slug> <version>` makes an earlier version the
+  current document again, and refuses a version whose text was blanked. The
+  desktop has it at `POST /api/projects/<slug>/restore`; the Restore button
+  follows an approved mock.
 - **The whole-vault sync cap is 4 MB and cannot be raised on the hosted
   server as deployed.** Vercel refuses request bodies over 4.5 MB before
   the sync server runs (probed 2026-09-21). A larger vault needs a
@@ -1236,13 +1249,47 @@ every milestone; if a limit is removed, say when and how.*
 
 ## Connector for shared scopes, ADR 0019 + ADR 0020 (current)
 
-- **Cloud Connect's copy updates only when you push.** Shared scopes reach
-  the connector server when you share a scope, click Sync now under Connect,
-  Cloud, or run `northkeep share sync` or `northkeep share push`. Automatic
-  device sync does not push to the connector. A memory or project an AI app
-  saves on this Mac in a shared scope is invisible to your cloud apps until
-  the next push. The Cloud screen shows when this Mac last pushed (recorded
-  from 0.22.4 on; earlier pushes are not on record).
+- **Cloud Connect's copy updates automatically only while this Mac is in
+  sync with your other devices (ADR 0063 D5).** After automatic sync pushes
+  the vault, or when it finds this Mac exactly in sync, changes in shared
+  scopes are pushed to the connector within seconds. While this Mac is behind
+  or has changes your other devices lack, while a pull waits for your review,
+  or while automatic sync is off, Cloud Connect updates only when you push,
+  and the Cloud screen says why. The switch is per device and on by default
+  (`northkeep share auto on|off`). A manual push (share, Sync now,
+  `northkeep share sync` or `northkeep share push`) sends the vault to your
+  sync server first when this Mac is ahead, and refuses while it is behind.
+  The Cloud screen shows when this Mac last pushed (recorded from 0.22.4 on;
+  earlier pushes are not on record).
+- **Automatic push to a self-hosted connector needs
+  `CONNECTOR_TOMBSTONE_ENFORCE=1`.** Without it the connector does not refuse
+  pushes to a scope unshared elsewhere, so automatic push stays off and says
+  so; pushing by hand still works.
+- **While your devices use different sync servers, Cloud Connect may show
+  the copy from whichever device pushed last.** The connector orders pushes
+  by sync-server version, and versions from two servers do not compare.
+- **A cloud project update is applied on a device only when that device's
+  document is still the one the update started from (ADR 0063 D1).**
+  Otherwise it waits as a conflict you resolve: view both, take the cloud
+  version (yours stays in history), or keep yours (the cloud text is saved
+  as a memory in the project, titled "Cloud version not kept"). A cloud
+  update that does not record which copy it started from always waits for
+  you. That covers every one written before this release, and a working-type
+  memory an app saves into a project. `northkeep share conflicts` and
+  `northkeep share resolve` do this today; the app's conflict view is not
+  built yet.
+- **Sync now asks before it replaces a project or forgets a memory (ADR 0063
+  D3).** `northkeep share sync` lists both and asks; `--yes` skips the
+  question, and with no terminal it changes nothing. Until the app's preview
+  screen ships, the app's Sync now applies only new memories and new projects
+  and names the rest for review on the command line.
+- **The phone applies only new memories and new projects from your cloud
+  apps.** Replacements and deletions wait for your Mac, and the phone never
+  confirms a deletion to the connector, so your Mac still sees it.
+- **Deleting a shared project also deletes it from Cloud Connect.** The
+  scope is unshared on the connector first, including any cloud write not
+  yet delivered, so a cloud copy cannot come back later without a question.
+  If that delete fails, nothing is deleted on this device either.
 - **This is the one place your shared memory is decrypted on our server.** Sync
   stays ciphertext-only and keyless. A scope you mark Shared is copied to
   NorthKeep's connector server, where it is stored encrypted at rest: the database

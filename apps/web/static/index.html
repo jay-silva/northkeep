@@ -1173,8 +1173,7 @@
         AI apps back into this vault, then re-push so the server matches. Pushes only your shared scopes. Once this
         Mac is paired it also brings in a new project an AI app created: that project is marked Shared,
         and later edits to it are pushed.</p>
-      <p style="margin:0 0 10px;font-size:13px"><strong>Cloud Connect does not update on its own.</strong> After an AI app
-        on this Mac saves a memory or a project in a shared scope, your cloud apps see the change only after Sync now.</p>
+      <p style="margin:0 0 10px;font-size:13px" id="shareAutoPushLine"></p>
       <p class="muted" id="shareLastPushed" style="margin:0 0 10px;font-size:13px"></p>
       <div class="row"><button class="btn" id="shareSyncBtn">Sync now</button></div>
       <p class="muted" id="shareSyncResult" hidden style="margin:10px 0 0;font-size:13px"></p>
@@ -5809,6 +5808,12 @@
     $('shareLastPushed').textContent = !hasServer ? ''
       : last && !isNaN(last) ? 'Last sent to Cloud Connect from this Mac: ' + last.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) + '.'
       : 'No send to Cloud Connect from this Mac is on record yet.';
+    // ADR 0063 D5: whether Cloud Connect updates on its own right now, and why not.
+    const auto = s.auto_push;
+    $('shareAutoPushLine').textContent = !hasServer || !auto ? ''
+      : auto.enabled && (auto.phase === 'idle' || auto.phase === 'pending' || auto.phase === 'pushing') && auto.reason !== 'locked'
+        ? 'Cloud Connect updates on its own a few seconds after this Mac syncs with your other devices.'
+        : (auto.message || 'Cloud Connect updates only when you use Sync now.');
     renderShareScopes(s);
   }
 
