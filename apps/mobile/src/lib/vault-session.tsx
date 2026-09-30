@@ -30,7 +30,7 @@ import {
   unshareScope,
   type DownSyncResult,
 } from '@northkeep/sync';
-import { DEFAULT_CONNECTOR_SERVER_URL, allowlistHashFromToken } from './connect-flow';
+import { DEFAULT_CONNECTOR_SERVER_URL, allowlistHashFromToken, phoneVaultStamp } from './connect-flow';
 import { DEMO_PASSPHRASE, demoSeed } from './demo-vault';
 import { deleteIfExists, demoVaultPath, recoverVaultFileIfMissing, vaultPath, vaultSidecarPaths } from './paths';
 import {
@@ -236,9 +236,10 @@ export interface VaultSession {
    */
   connectorScopeStore: { load(): Promise<string[]>; save(scopes: string[]): Promise<void> };
   /**
-   * Pull app-written memories/forgets into the open vault (write-back
-   * down-sync), refresh the entry list, and run the normal push-after-save so
-   * the vault change reaches the SYNC server too.
+   * Apply app-written additions to the open vault (ADR 0063 D1: never a
+   * replace or a forget), refresh the entry list, and run the normal
+   * push-after-save so the vault change reaches the SYNC server. It never
+   * pushes to Cloud Connect.
    */
   connectorDownSync(): Promise<DownSyncResult>;
   /** POST /pair/start: the 8-char single-use code for the AI app's consent page. */
@@ -1248,12 +1249,40 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
 
   const connectorPushScopes = useCallback(
     async (scopes: string[]): Promise<{ pushed: number }> => {
-      const vault = vaultRef.current;
-      if (!vault) throw new Error('Unlock the vault before sharing.');
+      if (!vaultRef.current) throw new Error('Unlock the vault before sharing.');
       const { secret, server } = await connectorContext();
       try {
+        // ADR 0063 D5: stamp the push with the sync-server copy this phone holds, or refuse.
+        const syncServerUrl = await loadSyncServerUrl();
+        const status = syncServerUrl
+          ? await fetchRemoteStatus({ serverUrl: syncServerUrl, deviceSecretHex: secret.toString('hex') })
+          : null;
+        // The file hash and the entries are read under one gate hold, so the
+        // stamp names exactly the vault the entries come from.
+        const { vaultStamp, snapshot } = await vaultGate.run(async () => {
+          const open = vaultRef.current;
+          if (!open) throw new Error('Unlock the vault before sharing.');
+          const localSha = syncServerUrl ? await hashVaultFile(vaultPath()) : null;
+          const stamp = phoneVaultStamp({ syncServerUrl, status, localSha });
+          const byScope = new Map(scopes.map((scope) => [scope, open.list({ scope })]));
+          const rows = open.sharedScopeRows();
+          return {
+            vaultStamp: stamp,
+            snapshot: {
+              list: (filter?: { scope?: string }) => byScope.get(filter?.scope ?? '') ?? [],
+              sharedScopeRows: () => rows,
+            },
+          };
+        });
         const entitlement = await maybeConnectorEntitlement(secret);
-        const result = await pushSharedScopes({ server, deviceSecret: secret, scopes, vault, entitlement });
+        const result = await pushSharedScopes({
+          server,
+          deviceSecret: secret,
+          scopes,
+          vault: snapshot as Pick<Vault, 'list' | 'sharedScopeRows'>,
+          entitlement,
+          ...(vaultStamp ? { vaultStamp } : {}),
+        });
         return { pushed: result.pushed };
       } finally {
         memzero(secret);

@@ -78,22 +78,23 @@ describe('applySyncOutcome', () => {
 
   it('re-reads the shared list after a sync so a newly marked project shows as Shared', async () => {
     const v = view(['project:hosted-thing']);
-    await applySyncOutcome({ kind: 'synced', ...counts, pushed: 1, newlyShared: ['project:hosted-thing'] }, v.view);
+    await applySyncOutcome({ kind: 'synced', ...counts, newlyShared: ['project:hosted-thing'] }, v.view);
     expect(v.state.shared).toEqual(['project:hosted-thing']);
     expect(v.state.result).toContain(newlySharedMessage('project:hosted-thing'));
   });
 
-  it('re-reads after a partial sync and after a skipped push too', async () => {
-    const a = view(['x']);
-    await applySyncOutcome(
-      { kind: 'partially-synced', ...counts, newlyShared: [], pushFailure: { kind: 'network', message: 'offline', retryable: true } as never },
-      a.view,
-    );
-    expect(a.state.shared).toEqual(['x']);
-    expect(a.state.error?.message).toContain('offline');
-    const b = view([]);
-    await applySyncOutcome({ kind: 'synced-no-push', reason: 'nothing-shared', ...counts }, b.view);
-    expect(b.state.shared).toEqual([]);
+  it('shows a failed sync as an error and leaves the list alone', async () => {
+    const v = view(['should-not-load']);
+    await applySyncOutcome({ kind: 'failed', errorKind: 'network', message: 'offline' }, v.view);
+    expect(v.state.shared).toBeNull();
+    expect(v.state.error?.message).toBe('offline');
+  });
+
+  it('the Sync button never wires a Cloud Connect push (ADR 0063 D1)', () => {
+    const run = find((n): n is ts.CallExpression => ts.isCallExpression(n) && n.expression.getText() === 'runConnectorSyncNow');
+    expect(run).toHaveLength(1);
+    const ports = run[0]!.arguments[0] as ts.ObjectLiteralExpression;
+    expect(ports.properties.map((p) => p.name?.getText()).sort()).toEqual(['downSync', 'paired', 'store']);
   });
 
   it('does not touch the list when the sync never reached the server', async () => {

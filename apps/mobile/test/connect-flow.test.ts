@@ -2,7 +2,14 @@ import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { holdMessage, LAPSED_UNSHARE_HINT, UNSHARE_FAILED_MESSAGE, UNSHARE_LOCAL_SAVE_FAILED_MESSAGE } from '@northkeep/sync';
+import {
+  ConnectorStalePushError,
+  holdMessage,
+  LAPSED_UNSHARE_HINT,
+  UNSHARE_FAILED_MESSAGE,
+  UNSHARE_LOCAL_SAVE_FAILED_MESSAGE,
+  vaultServerHash,
+} from '@northkeep/sync';
 import {
   CONNECTOR_NETWORK_MESSAGE,
   CONNECTOR_PRIVATE_BETA_MESSAGE,
@@ -11,20 +18,22 @@ import {
   DEFAULT_CONNECTOR_SERVER_URL,
   NOTHING_SHARED_MESSAGE,
   PAIRING_CODE_TTL_SECONDS,
-  SYNC_PUSH_FAILED_FOLLOWUP,
-  SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE,
-  SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE,
+  PHONE_NOT_IN_SYNC_MESSAGE,
+  PHONE_STALE_PUSH_MESSAGE,
+  PhoneNotInSyncError,
   canSyncNow,
   classifyConnectorError,
   connectorSyncSummary,
   formatPairingCountdown,
   mcpUrlFor,
   newlySharedMessage,
+  phoneVaultStamp,
   runConnectorSyncNow,
   runShareScope,
   runUnshareScope,
   scopeRows,
   shareIdFromConnectorToken,
+  vaultServerHashForPhone,
   type SharedScopeStore,
   unshareFailureText,
 } from '../src/lib/connect-flow.js';
@@ -44,7 +53,8 @@ import {
  *  - share ROLLS BACK the local mark when the push fails (no phantom Shared
  *    badge), and unshare KEEPS the mark when the server delete fails (the
  *    server really still holds the copies);
- *  - sync-now runs down-sync BEFORE the write-back push (desktop order);
+ *  - sync-now never pushes to Cloud Connect (ADR 0063 D1), and a share
+ *    push is stamped with the sync-server copy the phone holds, or refused;
  *  - every user-facing string is steering-clean and em-dash-free.
  */
 
@@ -322,129 +332,34 @@ describe('runConnectorSyncNow', () => {
       downSync: async () => {
         throw new Error('must not be called');
       },
-      pushScopes: async () => {
-        throw new Error('must not be called');
-      },
     });
     expect(outcome).toEqual({ kind: 'nothing-shared', message: NOTHING_SHARED_MESSAGE });
   });
 
-  it('down-syncs BEFORE the write-back push, and reports the counts', async () => {
+  it('down-syncs and reports the counts, with no port left that could push (ADR 0063 D1)', async () => {
     const { store } = memStore(['conversations']);
-    const calls: string[] = [];
-    const outcome = await runConnectorSyncNow({
+    const ports = {
       store,
       paired: async () => false,
-      downSync: async () => {
-        calls.push('down');
-        return { added: 3, forgotten: 1, deduped: 2, held: 0, held_scopes: [] };
-      },
-      pushScopes: async (scopes) => {
-        calls.push(`push:${scopes.join(',')}`);
-        return { pushed: 9 };
-      },
-    });
-    expect(calls).toEqual(['down', 'push:conversations']);
+      downSync: async () => ({ added: 3, forgotten: 0, deduped: 2, held: 0, held_scopes: [] }),
+    };
+    const outcome = await runConnectorSyncNow(ports);
+    expect(Object.keys(ports).sort()).toEqual(['downSync', 'paired', 'store']);
     expect(outcome).toEqual({
       kind: 'synced',
       added: 3,
-      forgotten: 1,
+      forgotten: 0,
       deduped: 2,
       held: 0,
       held_scopes: [],
-      pushed: 9,
       newlyShared: [],
     });
-  });
-
-  it('pushes the FRESH scope list when the store changed during the slow down-sync', async () => {
-    // The unshare/sync-now race (revocation honesty): 'private-stuff' is
-    // unshared while the down-sync runs. The write-back push must carry the
-    // fresh post-unshare list, never the stale one loaded before the
-    // down-sync, or the revoked scope's plaintext would be re-uploaded.
-    const { store } = memStore(['conversations', 'private-stuff']);
-    const pushedWith: string[][] = [];
-    const outcome = await runConnectorSyncNow({
-      store,
-      paired: async () => false,
-      downSync: async () => {
-        await store.save(['conversations']); // unshare completed mid-sync
-        return { added: 1, forgotten: 0, deduped: 0, held: 0, held_scopes: [] };
-      },
-      pushScopes: async (scopes) => {
-        pushedWith.push(scopes);
-        return { pushed: 2 };
-      },
-    });
-    expect(pushedWith).toEqual([['conversations']]);
-    expect(outcome).toEqual({
-      kind: 'synced',
-      added: 1,
-      forgotten: 0,
-      deduped: 0,
-      held: 0,
-      held_scopes: [],
-      pushed: 2,
-      newlyShared: [],
-    });
-  });
-
-  it('skips the push entirely when every scope was unshared mid-sync, and says so', async () => {
-    const { store } = memStore(['conversations']);
-    const outcome = await runConnectorSyncNow({
-      store,
-      paired: async () => false,
-      downSync: async () => {
-        await store.save([]); // the last share was revoked while syncing
-        return { added: 2, forgotten: 0, deduped: 1, held: 0, held_scopes: [] };
-      },
-      pushScopes: async () => {
-        throw new Error('push must not be called with nothing shared');
-      },
-    });
-    expect(outcome).toEqual({
-      kind: 'synced-no-push',
-      reason: 'unshared-mid-sync',
-      added: 2,
-      forgotten: 0,
-      deduped: 1,
-      held: 0,
-      held_scopes: [],
-    });
-  });
-
-  it('reports a partial sync when the down-sync landed but the write-back push failed', async () => {
-    const { store } = memStore(['conversations']);
-    const outcome = await runConnectorSyncNow({
-      store,
-      paired: async () => false,
-      downSync: async () => ({ added: 3, forgotten: 1, deduped: 0, held: 0, held_scopes: [] }),
-      pushScopes: async () => {
-        throw new TypeError('Network request failed');
-      },
-    });
-    // The successful half (memories in the vault) must not be hidden behind
-    // the push error: both halves come back, separately.
-    expect(outcome.kind).toBe('partially-synced');
-    if (outcome.kind === 'partially-synced') {
-      expect(outcome.added).toBe(3);
-      expect(outcome.forgotten).toBe(1);
-      expect(outcome.deduped).toBe(0);
-      expect(outcome.pushFailure).toEqual({
-        kind: 'failed',
-        errorKind: 'network',
-        message: CONNECTOR_NETWORK_MESSAGE,
-      });
-    }
   });
 
   // --- ADR 0050 Decision 5: a paired phone folds from an empty shared list ---
 
-  it('folds and pushes the newly marked scope when paired with nothing shared', async () => {
-    // A project created in a connected app arrives only through the fold, which
-    // marks its scope; the push that follows must carry that fresh list.
+  it('reports the scope the fold marked Shared when paired with nothing shared', async () => {
     const { store } = memStore([]);
-    const pushedWith: string[][] = [];
     const outcome = await runConnectorSyncNow({
       store,
       paired: async () => true,
@@ -452,14 +367,8 @@ describe('runConnectorSyncNow', () => {
         await store.save(['project:hosted-thing']); // the fold marked it
         return { added: 1, forgotten: 0, deduped: 0, held: 0, held_scopes: [] };
       },
-      pushScopes: async (scopes) => {
-        pushedWith.push(scopes);
-        return { pushed: 1 };
-      },
     });
-    expect(pushedWith).toEqual([['project:hosted-thing']]);
-    expect(outcome).toMatchObject({ kind: 'synced', added: 1, pushed: 1, newlyShared: ['project:hosted-thing'] });
-    // The screen's summary tells the user the project is now Shared and that edits push.
+    expect(outcome).toMatchObject({ kind: 'synced', added: 1, newlyShared: ['project:hosted-thing'] });
     expect(connectorSyncSummary(outcome as never)).toContain(newlySharedMessage('project:hosted-thing'));
     expect(newlySharedMessage('project:hosted-thing')).toMatch(/now marked Shared\. Later edits to it are pushed/);
   });
@@ -472,46 +381,31 @@ describe('runConnectorSyncNow', () => {
       downSync: async () => {
         throw new Error('must not be called');
       },
-      pushScopes: async () => {
-        throw new Error('must not be called');
-      },
     });
     expect(outcome).toEqual({ kind: 'nothing-shared', message: NOTHING_SHARED_MESSAGE });
   });
 
-  it('reports a held project and says the push was skipped because nothing is shared', async () => {
+  it('reports a held project by its slug', async () => {
     const { store } = memStore([]);
     const outcome = await runConnectorSyncNow({
       store,
       paired: async () => true,
-      downSync: async () => ({
-        added: 0,
-        forgotten: 0,
-        deduped: 0,
-        held: 1,
-        held_scopes: ['project:held-one'],
-      }),
-      pushScopes: async () => {
-        throw new Error('push must not be called with nothing shared');
-      },
+      downSync: async () => ({ added: 0, forgotten: 0, deduped: 0, held: 1, held_scopes: ['project:held-one'] }),
     });
     expect(outcome).toEqual({
-      kind: 'synced-no-push',
-      reason: 'nothing-shared',
+      kind: 'synced',
       added: 0,
       forgotten: 0,
       deduped: 0,
       held: 1,
       held_scopes: ['project:held-one'],
+      newlyShared: [],
     });
-    if (outcome.kind === 'synced-no-push') {
-      const summary = connectorSyncSummary(outcome, { pushedBack: false });
-      expect(summary).toContain(holdMessage('held-one'));
-      // The slug, not the scope: "project project:held-one" would be the bug.
-      expect(summary).not.toContain('project:project:');
-      expect(summary).not.toContain('—');
-      expect(SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE).not.toContain('—');
-    }
+    const summary = connectorSyncSummary(outcome as never);
+    expect(summary).toContain(holdMessage('held-one'));
+    // The slug, not the scope: "project project:held-one" would be the bug.
+    expect(summary).not.toContain('project:project:');
+    expectSteeringClean(summary);
   });
 
   it('classifies the down-sync 402 (which has no "HTTP 402" token) neutrally', async () => {
@@ -522,13 +416,71 @@ describe('runConnectorSyncNow', () => {
       downSync: async () => {
         throw new Error('The connector server requires an active subscription (402) to down-sync.');
       },
-      pushScopes: async () => ({ pushed: 0 }),
     });
     expect(outcome.kind).toBe('failed');
     if (outcome.kind === 'failed') {
       expect(outcome.errorKind).toBe('subscription-required');
       expectSteeringClean(outcome.message);
     }
+  });
+});
+
+describe('phoneVaultStamp (ADR 0063 D5 on the phone)', () => {
+  const SERVER = 'https://sync.example.test';
+  const status = { version: 7, sha256: 'a'.repeat(64) };
+
+  it('hashes the sync server URL exactly as the desktop does, for the stored and the unnormalized form', () => {
+    // The desktop hashes sync.json's URL, which setSyncServer stores as URL.toString() without the trailing slash.
+    expect(vaultServerHashForPhone('https://sync.example.test')).toBe(vaultServerHash('https://sync.example.test'));
+    expect(vaultServerHashForPhone('https://sync.example.test/')).toBe(vaultServerHash('https://sync.example.test'));
+    expect(vaultServerHashForPhone('HTTPS://Sync.Example.Test')).toBe(vaultServerHash('https://sync.example.test'));
+    expect(vaultServerHashForPhone('http://127.0.0.1:4321')).toBe(vaultServerHash('http://127.0.0.1:4321'));
+    expect(vaultServerHashForPhone(SERVER)).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('stamps the server version when the phone holds exactly the server bytes', () => {
+    expect(phoneVaultStamp({ syncServerUrl: SERVER, status, localSha: status.sha256 })).toEqual({
+      server: vaultServerHash(SERVER),
+      version: 7,
+    });
+  });
+
+  it('sends no stamp with no sync server, like a desktop with no vault sync', () => {
+    expect(phoneVaultStamp({ syncServerUrl: null, status: null, localSha: null })).toBeUndefined();
+  });
+
+  it('refuses when the phone holds other bytes, or the server has no vault yet', () => {
+    for (const input of [
+      { syncServerUrl: SERVER, status, localSha: 'b'.repeat(64) },
+      { syncServerUrl: SERVER, status: null, localSha: 'b'.repeat(64) },
+      { syncServerUrl: SERVER, status, localSha: null },
+    ]) {
+      expect(() => phoneVaultStamp(input)).toThrow(PhoneNotInSyncError);
+    }
+  });
+
+  it('a refused share rolls its mark back and says why on the phone', async () => {
+    const { store, get } = memStore([]);
+    const outcome = await runShareScope(
+      {
+        store,
+        pushScopes: async () => {
+          throw new PhoneNotInSyncError();
+        },
+      },
+      'work',
+    );
+    expect(outcome).toEqual({ kind: 'failed', errorKind: 'other', message: PHONE_NOT_IN_SYNC_MESSAGE });
+    expect(get()).toEqual([]);
+  });
+
+  it('a 428 says what the phone can do, never the Mac command', () => {
+    expect(classifyConnectorError(new ConnectorStalePushError(9))).toEqual({
+      kind: 'failed',
+      errorKind: 'other',
+      message: PHONE_STALE_PUSH_MESSAGE,
+    });
+    expect(PHONE_STALE_PUSH_MESSAGE).not.toContain('northkeep');
   });
 });
 
@@ -551,11 +503,10 @@ describe('canSyncNow (the Sync button gate, ADR 0050)', () => {
         downSynced += 1;
         return { added: 0, forgotten: 0, deduped: 0, held: 0, held_scopes: [], skipped: 0 } as never;
       },
-      pushScopes: async () => ({ pushed: 0 }) as never,
       paired: async () => true,
     });
     expect(downSynced).toBe(1);
-    expect(outcome.kind).toBe('synced-no-push');
+    expect(outcome.kind).toBe('synced');
   });
 });
 
@@ -607,7 +558,7 @@ describe('classifyConnectorError', () => {
 
 describe('connectorSyncSummary', () => {
   it('says what waits for the Mac (ADR 0063: the phone applies additions only)', () => {
-    expect(connectorSyncSummary({ added: 0, forgotten: 0, deduped: 0, deferred: 1, conflicts: [] }, { pushedBack: false })).toBe(
+    expect(connectorSyncSummary({ added: 0, forgotten: 0, deduped: 0, deferred: 1, conflicts: [] })).toBe(
       'No new memories from your AI apps. 1 change from your AI apps would replace or remove something here. Review on your Mac.',
     );
     expect(connectorSyncSummary({ added: 0, forgotten: 0, deduped: 0, deferred: 1, conflicts: [{}] })).toContain('2 changes from your AI apps');
@@ -623,9 +574,7 @@ describe('connectorSyncSummary', () => {
   });
 
   it('reads naturally for the common cases', () => {
-    expect(connectorSyncSummary({ added: 0, forgotten: 0, deduped: 0 })).toBe(
-      'No new memories from your AI apps. Your shared scopes were pushed back so the server matches your vault.',
-    );
+    expect(connectorSyncSummary({ added: 0, forgotten: 0, deduped: 0 })).toBe('No new memories from your AI apps.');
     expect(connectorSyncSummary({ added: 1, forgotten: 0, deduped: 0 })).toContain(
       '1 new memory from your AI apps came into your vault.',
     );
@@ -635,16 +584,8 @@ describe('connectorSyncSummary', () => {
     expect(full).toContain('3 were already in your vault.');
   });
 
-  it('omits the "pushed back" sentence when the push did not happen', () => {
-    // partially-synced and synced-no-push outcomes: claiming the scopes were
-    // pushed back would be a lie, so the closing sentence must disappear.
-    const withoutPush = connectorSyncSummary({ added: 2, forgotten: 0, deduped: 0 }, { pushedBack: false });
-    expect(withoutPush).toBe('2 new memories from your AI apps came into your vault.');
-    expect(withoutPush).not.toContain('pushed back');
-    // Default stays unchanged (explicit true too).
-    expect(connectorSyncSummary({ added: 2, forgotten: 0, deduped: 0 }, { pushedBack: true })).toContain(
-      'pushed back',
-    );
+  it('never claims the phone pushed anything back (ADR 0063 D1)', () => {
+    expect(connectorSyncSummary({ added: 2, forgotten: 0, deduped: 0 })).toBe('2 new memories from your AI apps came into your vault.');
   });
 });
 
@@ -684,8 +625,8 @@ describe('the user-facing copy stays steering-clean and em-dash-free', () => {
       CONNECTOR_NETWORK_MESSAGE,
       CONNECTOR_PRIVATE_BETA_MESSAGE,
       NOTHING_SHARED_MESSAGE,
-      SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE,
-      SYNC_PUSH_FAILED_FOLLOWUP,
+      PHONE_NOT_IN_SYNC_MESSAGE,
+      PHONE_STALE_PUSH_MESSAGE,
       JOURNAL_SEED_MEMORY.content,
       JOURNAL_PATTERN_SCHEDULED_TASK,
       JOURNAL_PATTERN_STANDING_INSTRUCTION,

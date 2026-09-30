@@ -26,9 +26,11 @@ import { Button, ErrorNote, FieldLabel, colors, type } from '../../src/ui';
  * mutual-exclusion lock (`connectorBusy`). That single lock is invariant-#1
  * safety, not cosmetics -- independent busy flags once let an unshare complete
  * while a sync-now was mid-flight, and the sync's write-back push re-uploaded the
- * just-revoked scope's plaintext. Keeping all three in one component keeps the
- * one lock intact (popping a screen does not abort an in-flight push). All state
- * transitions live in the pure, tested src/lib/connect-flow.ts.
+ * just-revoked scope's plaintext. Sync now no longer pushes (ADR 0063 D1), but a
+ * share push racing an unshare is the same hazard. Keeping all three in one
+ * component keeps the one lock intact (popping a screen does not abort an
+ * in-flight push). All state transitions live in the pure, tested
+ * src/lib/connect-flow.ts.
  *
  * Entry: /sharing/scopes, or /sharing/scopes?share=<scope> from the journal
  * guide, which preselects that scope's confirmation on entry.
@@ -42,11 +44,8 @@ export default function ManageScopes() {
 
   const [pendingShare, setPendingShare] = useState<string | null>(null);
   const [pendingUnshare, setPendingUnshare] = useState<string | null>(null);
-  // ONE mutual exclusion across share / unshare / sync-now. Independent busy
-  // flags allowed an unshare to complete while a sync-now was mid-flight, and
-  // the sync's write-back push would re-upload the just-revoked scope's
-  // plaintext (connect-flow's fresh re-load before the push is the second,
-  // belt-and-braces layer of the same fix).
+  // ONE mutual exclusion across share / unshare / sync-now, so a share push
+  // can never re-upload a scope an unshare is revoking (see the file header).
   const [connectorBusy, setConnectorBusy] = useState<'share' | 'unshare' | 'sync' | null>(null);
   const [scopeError, setScopeError] = useState<ConnectorFailure | null>(null);
   const [scopeNotice, setScopeNotice] = useState<string | null>(null);
@@ -129,7 +128,6 @@ export default function ManageScopes() {
       const outcome = await runConnectorSyncNow({
         store,
         downSync: () => session.connectorDownSync(),
-        pushScopes: (scopes) => session.connectorPushScopes(scopes),
         paired: async () => (await loadConnectorPairedAt()) !== null,
       });
       setConnectorBusy(null);
@@ -260,10 +258,11 @@ export default function ManageScopes() {
 
       <FieldLabel>Sync app-written memories</FieldLabel>
       <Text style={styles.footnote}>
-        Pull memories you created (or forgot) inside your AI apps back into this vault, then
-        re-push so the server matches. Pushes only your shared scopes. Once this phone is paired
-        it also brings in a new project an AI app created: that project is marked Shared, and later
-        edits to it are pushed.
+        Bring memories you created inside your AI apps into this vault. This phone adds new
+        memories and new projects only. Replacements and deletions wait for your Mac, which also
+        keeps the connector's copy up to date. Once this phone is paired it also brings in a new
+        project an AI app created: that project is marked Shared, and later edits to it are pushed
+        from your Mac.
       </Text>
       {!paired ? (
         <Text style={styles.footnote}>

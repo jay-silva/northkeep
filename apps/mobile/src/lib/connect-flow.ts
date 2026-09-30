@@ -26,10 +26,12 @@
 import { sha256 } from '@noble/hashes/sha2.js';
 import { bytesToHex, utf8ToBytes } from '@noble/hashes/utils.js';
 import {
+  ConnectorStalePushError,
   holdMessage,
   LAPSED_UNSHARE_HINT,
   UNSHARE_FAILED_MESSAGE,
   UNSHARE_LOCAL_SAVE_FAILED_MESSAGE,
+  type VaultStamp,
 } from '@northkeep/sync';
 import { classifySyncError, type SyncErrorKind } from './sync-errors';
 
@@ -54,27 +56,50 @@ export const CONNECTOR_NETWORK_MESSAGE =
 /** Sync-now refusal when nothing is shared (mirrors desktop /api/share/sync). */
 export const NOTHING_SHARED_MESSAGE = 'No scopes are shared yet. Share a scope first.';
 
-/**
- * Sync-now landed memories but every scope was unshared while it ran, so the
- * write-back push was skipped on purpose (re-pushing would re-upload plaintext
- * the user just revoked). Honest, plain, no em dashes.
- */
-export const SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE =
-  'Nothing was pushed back: every scope was unshared while the sync ran.';
+/** Share add refused: this phone's vault file is not the copy the sync server holds (ADR 0063 D5). */
+export const PHONE_NOT_IN_SYNC_MESSAGE =
+  'This phone is not in sync with your other devices yet, so Cloud Connect was not updated. Let sync finish, then share again.';
+
+/** HTTP 428 on the phone: the connector holds a copy from a newer vault version. */
+export const PHONE_STALE_PUSH_MESSAGE =
+  'Another device pushed a newer copy to Cloud Connect. Let this phone finish syncing, then share again.';
+
+/** Nothing was sent: this phone may not hold the newest vault. */
+export class PhoneNotInSyncError extends Error {
+  constructor() {
+    super(PHONE_NOT_IN_SYNC_MESSAGE);
+    this.name = 'PhoneNotInSyncError';
+  }
+}
 
 /**
- * The same skip on a paired phone that had nothing shared to begin with (ADR
- * 0050): saying a scope was unshared mid-sync would be untrue there.
+ * The push's `vault.server`: the first 16 hex of sha256 over the sync server
+ * URL, normalized as the desktop's setSyncServer stores it. It must equal the
+ * desktop's vaultServerHash for the same server, or the connector reads every
+ * phone push as a different sync server and replaces the recorded order.
  */
-export const SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE =
-  'Nothing was pushed back: no scope is shared yet.';
+export function vaultServerHashForPhone(syncServerUrl: string): string {
+  const normalized = new URL(syncServerUrl).toString().replace(/\/$/, '');
+  return bytesToHex(sha256(utf8ToBytes(normalized))).slice(0, 16);
+}
 
 /**
- * Shown with the push failure after a partially successful sync-now: the
- * down-synced memories are already saved locally, only the re-push failed.
+ * The stamp for a phone push (ADR 0063 D5). No sync server: no stamp, as on a
+ * desktop with no vault sync. Otherwise the phone must hold exactly the bytes
+ * the sync server reports. The phone never pushes its vault from here,
+ * because its last-writer-wins push could displace a newer Mac vault.
  */
-export const SYNC_PUSH_FAILED_FOLLOWUP =
-  'The new memories are safe in your vault, but pushing your shared scopes back failed. Run sync again to retry the push.';
+export function phoneVaultStamp(input: {
+  syncServerUrl: string | null;
+  status: { version: number; sha256: string } | null;
+  localSha: string | null;
+}): VaultStamp | undefined {
+  if (input.syncServerUrl === null) return undefined;
+  if (input.status === null || input.localSha === null || input.status.sha256 !== input.localSha) {
+    throw new PhoneNotInSyncError();
+  }
+  return { server: vaultServerHashForPhone(input.syncServerUrl), version: input.status.version };
+}
 
 /** Connector-path 403: same private-beta state as sync, with the right noun. */
 export const CONNECTOR_PRIVATE_BETA_MESSAGE =
@@ -167,6 +192,9 @@ export interface ConnectorFailure {
  * of the sync-flavored default; everything else passes through classified.
  */
 export function classifyConnectorError(err: unknown): ConnectorFailure {
+  // The shared 428 text names Mac commands; the phone says what it can do.
+  if (err instanceof ConnectorStalePushError) return { kind: 'failed', errorKind: 'other', message: PHONE_STALE_PUSH_MESSAGE };
+  if (err instanceof PhoneNotInSyncError) return { kind: 'failed', errorKind: 'other', message: err.message };
   const friendly = classifySyncError(err);
   if (friendly.kind === 'subscription-required') {
     return {
@@ -201,8 +229,9 @@ export interface ShareScopePorts {
   /**
    * Push the REAL plaintext entries of ALL listed shared scopes ("make these
    * scopes match exactly"). Wired to VaultSession.connectorPushScopes, which
-   * calls @northkeep/sync pushSharedScopes with the open vault, the device
-   * secret, and the best-effort entitlement. Throws on any refusal.
+   * calls @northkeep/sync pushSharedScopes with a snapshot of the open vault,
+   * the device secret, the best-effort entitlement and the phoneVaultStamp.
+   * Throws on any refusal, including PhoneNotInSyncError before any request.
    */
   pushScopes(scopes: string[]): Promise<{ pushed: number }>;
 }
@@ -299,44 +328,18 @@ export interface ConnectorDownSyncCounts {
 }
 
 export type ConnectorSyncOutcome =
-  | ({ kind: 'synced'; pushed: number; newlyShared: string[] } & ConnectorDownSyncCounts)
-  | ({
-      /**
-       * The down-sync landed, but every scope was unshared while it ran, so the
-       * write-back push was skipped (pushing the stale list would re-upload
-       * plaintext the user just revoked). The screen reports the skip honestly.
-       */
-      kind: 'synced-no-push';
-      /**
-       * Why the push was skipped: the user revoked every scope while the sync
-       * ran, or nothing was shared in the first place (a paired phone folding
-       * for a hosted project it then held).
-       */
-      reason: 'unshared-mid-sync' | 'nothing-shared';
-    } & ConnectorDownSyncCounts)
-  | ({
-      /**
-       * The down-sync landed its memories in the vault, then the write-back
-       * push failed. Split outcome so the screen can say BOTH halves: the
-       * memories arrived AND the re-push failed (suggest running sync again).
-       */
-      kind: 'partially-synced';
-      newlyShared: string[];
-      pushFailure: ConnectorFailure;
-    } & ConnectorDownSyncCounts)
+  | ({ kind: 'synced'; newlyShared: string[] } & ConnectorDownSyncCounts)
   | { kind: 'nothing-shared'; message: string }
   | ConnectorFailure;
 
 export interface ConnectorSyncPorts {
   store: SharedScopeStore;
   /**
-   * Pull app-written memories/forgets into the OPEN vault and apply them
+   * Pull app-written memories into the OPEN vault and apply the additions
    * (wired to VaultSession.connectorDownSync, which also refreshes the entry
    * list and runs the normal push-after-save so the vault change syncs).
    */
   downSync(): Promise<ConnectorDownSyncCounts>;
-  /** The write-back re-push so the server's rows match the just-updated vault. */
-  pushScopes(scopes: string[]): Promise<{ pushed: number }>;
   /**
    * Whether this phone has started a pairing (ADR 0050 Decision 5). An
    * unpaired phone has no account on that server and must not create one.
@@ -345,15 +348,10 @@ export interface ConnectorSyncPorts {
 }
 
 /**
- * "Sync app-written memories", mirroring desktop /api/share/sync: down-sync
- * the connector-born memories into the vault, then re-push every shared scope
- * so each new row is rehashed server-side under its vault id.
- *
- * The write-back push RE-LOADS the store immediately before pushing, and
- * pushes only the scopes still marked shared at that moment. The down-sync is
- * slow, and an unshare that completes while it runs must not have its scope's
- * plaintext re-uploaded by a push of the stale pre-sync list. If the fresh
- * list is empty, the push is skipped entirely and reported honestly.
+ * "Sync app-written memories": apply the connector's additions to the vault.
+ * The phone never pushes to Cloud Connect afterwards (ADR 0063 D1): the vault
+ * change reaches the sync server, and a Mac that is in sync updates Cloud
+ * Connect. Each acked row already carries its vault id.
  */
 export async function runConnectorSyncNow(ports: ConnectorSyncPorts): Promise<ConnectorSyncOutcome> {
   const scopes = await ports.store.load();
@@ -366,24 +364,9 @@ export async function runConnectorSyncNow(ports: ConnectorSyncPorts): Promise<Co
   } catch (err) {
     return classifyConnectorError(err);
   }
-  // Fresh list, not the one loaded before the slow down-sync: only scopes the
-  // user STILL shares may be pushed (revocation honesty; see the doc above).
-  // The fold can also have ADDED a scope here, and that one is pushed.
-  const fresh = await ports.store.load();
   // Scopes the fold marked Shared in this run (ADR 0050): the screen says so.
-  const newlyShared = fresh.filter((s) => !scopes.includes(s));
-  if (fresh.length === 0) {
-    const reason = scopes.length === 0 ? 'nothing-shared' : 'unshared-mid-sync';
-    return { kind: 'synced-no-push', reason, ...down };
-  }
-  try {
-    const { pushed } = await ports.pushScopes(fresh);
-    return { kind: 'synced', ...down, pushed, newlyShared };
-  } catch (err) {
-    // The memories already landed in the vault; only the re-push failed. Keep
-    // both halves visible instead of hiding the successful down-sync.
-    return { kind: 'partially-synced', ...down, newlyShared, pushFailure: classifyConnectorError(err) };
-  }
+  const newlyShared = (await ports.store.load()).filter((s) => !scopes.includes(s));
+  return { kind: 'synced', ...down, newlyShared };
 }
 
 /**
@@ -409,25 +392,9 @@ export interface SyncOutcomeView {
  * marked a newly arrived project Shared (ADR 0050).
  */
 export async function applySyncOutcome(outcome: ConnectorSyncOutcome, view: SyncOutcomeView): Promise<void> {
-  if (outcome.kind === 'synced' || outcome.kind === 'synced-no-push' || outcome.kind === 'partially-synced') {
-    view.setSharedScopes(await view.reloadShared());
-  }
   if (outcome.kind === 'synced') {
+    view.setSharedScopes(await view.reloadShared());
     view.setSyncResult(connectorSyncSummary(outcome));
-  } else if (outcome.kind === 'synced-no-push') {
-    // Which of the two reasons the push was skipped matters to the user.
-    const skipped =
-      outcome.reason === 'nothing-shared'
-        ? SYNC_PUSH_SKIPPED_NOTHING_SHARED_MESSAGE
-        : SYNC_PUSH_SKIPPED_ALL_UNSHARED_MESSAGE;
-    view.setSyncResult(`${connectorSyncSummary(outcome, { pushedBack: false })} ${skipped}`);
-  } else if (outcome.kind === 'partially-synced') {
-    // Both halves stay visible: the memories arrived AND the re-push failed.
-    view.setSyncResult(connectorSyncSummary(outcome, { pushedBack: false }));
-    view.setSyncError({
-      ...outcome.pushFailure,
-      message: `${outcome.pushFailure.message} ${SYNC_PUSH_FAILED_FOLLOWUP}`,
-    });
   } else if (outcome.kind === 'nothing-shared') {
     view.setSyncResult(outcome.message);
   } else {
@@ -440,11 +407,7 @@ export function newlySharedMessage(scope: string): string {
   return `"${scope}" came from a connected app and is now marked Shared. Later edits to it are pushed; unshare it to stop.`;
 }
 
-/**
- * Human summary of a completed sync-now, shown under the button. Pass
- * `pushedBack: false` for the partially-synced and synced-no-push outcomes,
- * where the closing "pushed back" sentence would be a lie.
- */
+/** Human summary of a completed sync-now, shown under the button. */
 export function connectorSyncSummary(
   r: {
     added: number;
@@ -457,7 +420,6 @@ export function connectorSyncSummary(
     deferred?: number;
     conflicts?: readonly unknown[];
   },
-  opts?: { pushedBack?: boolean },
 ): string {
   const memories = (n: number) => (n === 1 ? '1 new memory' : `${n} new memories`);
   const parts: string[] = [];
@@ -473,9 +435,6 @@ export function connectorSyncSummary(
     parts.push(
       r.deduped === 1 ? '1 was already in your vault.' : `${r.deduped} were already in your vault.`,
     );
-  }
-  if (opts?.pushedBack !== false) {
-    parts.push('Your shared scopes were pushed back so the server matches your vault.');
   }
   // A held project is the whole point of a sync that landed nothing: say which
   // one, and what sharing it would do.
