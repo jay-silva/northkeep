@@ -15,7 +15,7 @@ if [ -n "${NORTHKEEP_HOME:-}" ] && [ "$NORTHKEEP_HOME" != "$L/home" ]; then
   echo "Refusing: NORTHKEEP_HOME is $NORTHKEEP_HOME. This script only uses $L/home."; exit 2
 fi
 export NORTHKEEP_HOME=$L/home NORTHKEEP_PASSPHRASE='adr 0063 acceptance passphrase' NORTHKEEP_NO_KEYCHAIN=1
-unset NORTHKEEP_SCOPES NORTHKEEP_MASTER_KEY NORTHKEEP_CLAUDE_RULES_DIR NORTHKEEP_ASSUME_YES
+unset NORTHKEEP_SCOPES NORTHKEEP_MASTER_KEY NORTHKEEP_ASSUME_YES
 nk() { node "$CLI" "$@"; }
 nkb() { NORTHKEEP_HOME=$L/home-b node "$CLI" "$@"; }
 cloud() { node "$ROOT/scripts/adr-0063-cloud.mjs" "$L" "$@"; }
@@ -53,8 +53,10 @@ step_setup() {
 step_1() {
   echo "A connected app edits the project, then this Mac saves a newer version (the 2026-09-30 incident):"
   cloud update demo "CLOUD: written by a connected app."
-  nk projects update demo --status "R2: saved on this Mac after the cloud edit." 2>&1 | tail -1
+  nk projects update demo --status "R2: saved on this Mac after the cloud edit." 2>&1 | sed 's/^/  /'
   head_rev > $L/r2.txt
+  echo "  $(cloud get demo)"
+
   check "$(has "$(head_status)" 'R2: saved on this Mac')" "this Mac's head is R2 ($(cat $L/r2.txt))"
   echo; echo "Next: node packages/cli/dist/index.js share sync"
   echo "Expect a conflict for demo that is not applied, and no question, because nothing would be replaced."

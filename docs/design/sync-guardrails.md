@@ -1125,7 +1125,8 @@ these differences, forced by the built code:
 - The conflict in step 1 reads "Cloud Connect already has a newer copy than
   the one this cloud version started from" rather than `moved`: the CLI's
   automatic push after the local save sends R2 to the connector (D5), so the
-  row is stale by the time `share sync` runs.
+  row is stale by the time `share sync` runs. Step 1 shows it: the save
+  prints "Cloud Connect updated" and the cloud app then reads R2.
 - `share sync` asks nothing there, because a conflict alone is never applied
   (client D3 note); there is no "answer n".
 - Step 5 makes its row legacy through a loopback-only side door in
