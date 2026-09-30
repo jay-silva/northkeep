@@ -72,6 +72,8 @@ export function describeEvent(event: AutoSyncEvent): string {
       return 'northkeep MCP server synced: in sync';
     case 'diverged':
       return "northkeep MCP server sync: this vault differs from the server's newer copy; pull, then push, from the app or CLI";
+    case 'pull-refused':
+      return 'northkeep MCP server sync: the server copy would remove or undo something on this device, so it was not pulled; review it with "northkeep sync pull"';
     case 'error':
       return `northkeep MCP server sync failed: ${event.message}`;
     case 'paused':

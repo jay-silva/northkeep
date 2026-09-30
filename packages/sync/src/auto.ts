@@ -7,8 +7,10 @@ import {
   isAutoSyncVault,
   LocalChangedError,
   pullVault,
+  PullWouldDropError,
   pushVault,
   resolveVaultLink,
+  type PullDropReport,
   SubscriptionRequiredError,
   syncState,
   type SyncState,
@@ -59,6 +61,8 @@ export interface AutoSyncStatus {
   lastPull: { version: number; backupPath: string; at: string } | null;
   /** A write is waiting to be pushed (pending, or mid-upload with the debounce drained). */
   pushPending: boolean;
+  /** ADR 0063 D6: the last automatic pull refused because it would drop this report; null otherwise. */
+  pullRefusal: PullDropReport | null;
 }
 
 export type AutoSyncEvent =
@@ -67,6 +71,8 @@ export type AutoSyncEvent =
   | { type: 'pulled'; version: number; backupPath: string }
   | { type: 'in-sync' }
   | { type: 'diverged' }
+  /** ADR 0063 D6: the automatic pull would have removed or undone something here, so it did not run. */
+  | { type: 'pull-refused'; report: PullDropReport }
   | { type: 'error'; message: string }
   | { type: 'paused'; reason: 'subscription' | 'private' };
 
@@ -155,6 +161,7 @@ export class AutoSync {
   private failures = 0;
   private nextRetryAt: number | null = null;
   private pausedReason: 'subscription' | 'private' | null = null;
+  private pullRefusal: PullDropReport | null = null;
 
   /** A write happened that has not been pushed yet. */
   private pushPending = false;
@@ -298,6 +305,7 @@ export class AutoSync {
       pausedReason: this.pausedReason,
       lastPull: this.lastPull,
       pushPending: this.pushPending,
+      pullRefusal: this.pullRefusal,
     };
   }
 
@@ -477,8 +485,15 @@ export class AutoSync {
               masterKey: key,
               expectLocalSha: s.localSha ?? undefined,
               keepCopyAt: backupPath,
+              // ADR 0063 D6, load-bearing: the phone's last-writer-wins re-push
+              // leaves this Mac "behind" a copy without its work.
+              refuseDrops: true,
             });
           } catch (err) {
+            if (err instanceof PullWouldDropError) {
+              this.reportPullRefused(err);
+              return;
+            }
             if (!(err instanceof LocalChangedError)) throw err;
             // Someone wrote while we downloaded. Decide again from the new bytes.
             const again = await syncState({ vaultPath: this.vaultPath, deviceSecret });
@@ -580,6 +595,7 @@ export class AutoSync {
 
   private settle(state: SyncState): void {
     this.state = state;
+    this.pullRefusal = null;
     this.message = null;
     this.failures = 0;
     this.clearRetry();
@@ -589,6 +605,7 @@ export class AutoSync {
 
   private reportState(state: SyncState): void {
     this.state = state;
+    this.pullRefusal = null;
     this.failures = 0;
     this.clearRetry();
     if (state === 'diverged') {
@@ -599,6 +616,17 @@ export class AutoSync {
       this.phase = this.pushPending ? 'pending' : 'idle';
       this.message = null;
     }
+  }
+
+  /** Surfaced like diverged: a human decides, and nothing retries on a timer. */
+  private reportPullRefused(err: PullWouldDropError): void {
+    this.state = 'behind';
+    this.failures = 0;
+    this.clearRetry();
+    this.phase = 'error';
+    this.message = err.message;
+    this.pullRefusal = err.report;
+    this.onEvent({ type: 'pull-refused', report: err.report });
   }
 
   private fail(err: unknown, retry: () => Promise<void>): void {

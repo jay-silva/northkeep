@@ -21,6 +21,14 @@ export {
 } from './config.js';
 export {
   MAX_BLOB_BYTES,
+  computeDropReport,
+  confirmPull,
+  previewPull,
+  pullWouldDrop,
+  PullWouldDropError,
+  RemoteChangedError,
+  type PullDropReport,
+  type PullPreview,
   pullVault,
   pushVault,
   syncState,

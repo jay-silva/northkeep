@@ -7,6 +7,7 @@ import {
   VaultSyncGenerationError,
   defaultVaultPath,
   FileLockTimeoutError,
+  parseProjectSlug,
   withFileLock,
 } from '@northkeep/core';
 import { deriveSyncCreds } from './creds.js';
@@ -356,22 +357,265 @@ export async function pushVault(options: {
   }, options.syncLockWaitMs);
 }
 
+/** One item a pull would take off this device or undo (ADR 0063 D6). */
+export interface PullDropReport {
+  /** Live here, and the id does not exist in the pulled vault at all. */
+  only_here: Array<{ scope: string; first_line: string }>;
+  /** Forgotten here and live in the pulled vault: the pull would bring it back. No text: this device no longer has it. */
+  restored_deletes: Array<{ scope: string }>;
+  /** Projects whose local head is absent from the pulled vault, by name. */
+  projects: string[];
+  /** Shared here and not there, or the reverse. Information only, never part of the drop set. */
+  scope_marks: Array<{ scope: string; shared_here: boolean; shared_there: boolean }>;
+}
+
+/** True when the pull would remove or undo something this device has. */
+export function pullWouldDrop(report: PullDropReport): boolean {
+  return report.only_here.length > 0 || report.restored_deletes.length > 0 || report.projects.length > 0;
+}
+
+/**
+ * The automatic pull refused because the server copy lacks something this
+ * device has (D6). Load-bearing for the phone's last-writer-wins re-push.
+ */
+export class PullWouldDropError extends Error {
+  readonly report: PullDropReport;
+  constructor(report: PullDropReport) {
+    const count = report.only_here.length + report.restored_deletes.length;
+    super(
+      `The copy on your sync server would remove or undo ${count} item${count === 1 ? '' : 's'} on this device, ` +
+        'so it was not pulled automatically. Review what would change with: northkeep sync pull',
+    );
+    this.name = 'PullWouldDropError';
+    this.report = report;
+  }
+}
+
+/** The server moved after the dry pass the user reviewed; nothing was installed (D6). */
+export class RemoteChangedError extends Error {
+  constructor() {
+    super('The copy on your sync server changed after you reviewed it, so nothing was installed. Review the new report and try again.');
+    this.name = 'RemoteChangedError';
+  }
+}
+
+function firstLine(text: string): string {
+  const line = text.split('\n').find((l) => l.trim().length > 0) ?? '';
+  return line.length > 120 ? `${line.slice(0, 117)}...` : line;
+}
+
+/**
+ * D6's drop set, from two open vaults. "Live there" is the pulled vault's
+ * default list (not forgotten, not superseded), so a revision compaction
+ * blanked here is not reported as a delete the pull would undo.
+ */
+export function computeDropReport(local: Vault, pulled: Vault): PullDropReport {
+  const everywhere = new Set(pulled.list({ includeForgotten: true, includeSuperseded: true }).map((e) => e.id));
+  const liveThere = new Set(pulled.list().map((e) => e.id));
+  const report: PullDropReport = { only_here: [], restored_deletes: [], projects: [], scope_marks: [] };
+  const projects = new Set<string>();
+  for (const e of local.list()) {
+    if (everywhere.has(e.id)) continue;
+    report.only_here.push({ scope: e.scope, first_line: firstLine(e.content) });
+    const project = parseProjectSlug(e.scope);
+    if (project !== null && e.type === 'working') projects.add(project);
+  }
+  for (const e of local.list({ includeForgotten: true })) {
+    if (e.forgotten_at !== null && liveThere.has(e.id)) report.restored_deletes.push({ scope: e.scope });
+  }
+  report.projects = [...projects].sort();
+  const here = new Set(local.sharedScopes());
+  const there = new Set(pulled.sharedScopes());
+  for (const scope of [...new Set([...here, ...there])].sort()) {
+    if (here.has(scope) !== there.has(scope)) report.scope_marks.push({ scope, shared_here: here.has(scope), shared_there: there.has(scope) });
+  }
+  return report;
+}
+
+/** Where a manual dry pass keeps the bytes it reported on, and what the server sent with them. */
+function holdPaths(vaultPath: string): { blob: string; meta: string } {
+  const target = resolveVaultLink(vaultPath);
+  return { blob: `${target}.pulled.hold`, meta: `${target}.pulled.hold.json` };
+}
+
+function discardHold(vaultPath: string): void {
+  const hold = holdPaths(vaultPath);
+  fs.rmSync(hold.blob, { force: true });
+  fs.rmSync(hold.meta, { force: true });
+}
+
+function checkDownload(pulled: { blob: Buffer; sha256: string }): void {
+  if (!isVaultBlob(pulled.blob)) {
+    throw new Error('Downloaded blob is not a NorthKeep vault (corrupt download or wrong server).');
+  }
+  // Transport integrity only: the server supplies this sha, so it catches a
+  // truncated/corrupted download, NOT a malicious server (which can serve a
+  // blob + matching sha). The real defense against a hostile blob is the
+  // open-verify below; the sha is a cheap early-out for honest corruption.
+  if (pulled.sha256 && sha256Hex(pulled.blob) !== pulled.sha256.toLowerCase()) {
+    throw new Error('Downloaded vault failed its integrity check (corrupt download). Nothing was changed.');
+  }
+}
+
+/**
+ * Verify, and (when a local vault exists) prove a downloaded blob opens with
+ * our key, then swap it in under the vault lock, keeping the old file as
+ * `.nkv.bak`. `refuseDrops` makes the swap refuse with PullWouldDropError
+ * when the drop set of exactly these bytes is non-empty (automatic pulls).
+ */
+async function installBlob(options: {
+  vaultPath: string;
+  config: SyncConfig;
+  pulled: { blob: Buffer; version: number; sha256: string };
+  masterKey?: Buffer;
+  expectLocalSha?: string;
+  keepCopyAt?: string;
+  refuseDrops?: boolean;
+}): Promise<PullResult> {
+  const { pulled, config } = options;
+  checkDownload(pulled);
+
+  return withFileLock(options.vaultPath, () => {
+    // Everything the swap writes goes beside the REAL file, so a symlinked
+    // vault keeps its link (see resolveVaultLink).
+    const targetPath = resolveVaultLink(options.vaultPath);
+    const tmpPath = `${targetPath}.pulled.tmp`;
+    fs.writeFileSync(tmpPath, pulled.blob, { mode: 0o600 });
+    const localExists = fs.existsSync(options.vaultPath);
+    // The generation sealed in the bytes that end up on disk, recorded in
+    // sync.json below. On the localExists path it is read from the temp
+    // file AFTER the open-verify (which may migrate it), and that same file
+    // is renamed into place, so it is the installed generation exactly.
+    let installedGeneration: number | null = null;
+    try {
+      if (localExists) {
+        if (options.expectLocalSha !== undefined) {
+          const nowSha = sha256Hex(fs.readFileSync(options.vaultPath));
+          if (nowSha !== options.expectLocalSha) throw new LocalChangedError();
+        }
+        if (!options.masterKey) {
+          throw new Error(
+            'A local vault exists but no key was provided to verify the pulled vault before replacing it.',
+          );
+        }
+        // Prove the pulled blob opens with our key BEFORE replacing the good vault.
+        // Opening a 0.3 pull migrates the temp file and seeds generation 0; that
+        // 0 is the compare value. Opening local to read generation does not increment.
+        let pulledGen: number;
+        let report: PullDropReport | null = null;
+        try {
+          const pulledVault = Vault.openWithKey(tmpPath, Buffer.from(options.masterKey));
+          try {
+            pulledGen = pulledVault.getSyncGeneration();
+            if (options.refuseDrops) {
+              const local = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey));
+              try {
+                report = computeDropReport(local, pulledVault);
+              } finally {
+                local.close();
+              }
+            }
+          } finally {
+            pulledVault.close();
+          }
+        } catch (err) {
+          if (err instanceof VaultAuthError) {
+            throw new Error(
+              'The pulled vault does not open with your key, so your local vault was not replaced. ' +
+                '(Wrong device secret or passphrase, a different account, or a bad download.)',
+            );
+          }
+          if (err instanceof VaultSyncGenerationError) {
+            throw new Error('The pulled vault has an invalid sync generation. Local vault was not changed.');
+          }
+          throw err;
+        }
+        if (report !== null && pullWouldDrop(report)) throw new PullWouldDropError(report);
+        installedGeneration = pulledGen;
+        // The replay check compares the incoming blob against the
+        // generation of what THIS MACHINE LAST SYNCED, not against the
+        // local file's own stamp. That is the question the check exists to
+        // answer ("is the server handing me back something older than the
+        // copy I already had from it?"), and the local stamp is the wrong
+        // yardstick: a machine that stamped a push which never landed sits
+        // above every honest blob out there, so comparing to it refused
+        // the very pull that would have unwedged it (ADR 0044 fourth
+        // review). What this gives up: a `lastGeneration` of null reads as
+        // 0 and accepts anything. That is a config written before the
+        // field existed, or a machine whose only sync so far was the very
+        // first pull on an empty home, which carries no key to read the
+        // installed generation with. Either way the next push, or the next
+        // pull once a local vault exists to verify against, records a real
+        // baseline and the check bites from then on.
+        const lastSyncedGeneration = (loadSyncConfig() ?? config).lastGeneration ?? 0;
+        if (pulledGen < lastSyncedGeneration) {
+          throw new Error(
+            'The pulled vault is older than the copy this machine last synced (sync generation). Local vault was not changed.',
+          );
+        }
+        if (options.keepCopyAt) fs.copyFileSync(options.vaultPath, options.keepCopyAt);
+        fs.copyFileSync(options.vaultPath, `${targetPath}.bak`);
+      }
+      fs.renameSync(tmpPath, targetPath);
+      if (installedGeneration === null && options.masterKey) {
+        // Fresh machine: nothing was verified above, so read the generation
+        // back off the installed file. Without a key we cannot, and the
+        // baseline stays null (see the replay check).
+        try {
+          const installed = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey));
+          try {
+            installedGeneration = installed.getSyncGeneration();
+          } finally {
+            installed.close();
+          }
+        } catch {
+          // The vault is already installed and this read is only a baseline;
+          // a key that does not open it leaves the baseline unknown rather
+          // than failing a pull that has already succeeded.
+          installedGeneration = null;
+        }
+      }
+    } finally {
+      if (fs.existsSync(tmpPath)) fs.rmSync(tmpPath, { force: true });
+      // openWithKey above may migrate, and migrate() calls save(), whose
+      // writeAtomic leaves a rolling backup beside the TEMP file. Nothing else
+      // ever cleans that path up.
+      if (fs.existsSync(`${tmpPath}.bak`)) fs.rmSync(`${tmpPath}.bak`, { force: true });
+    }
+
+    saveSyncConfig({
+      ...(loadSyncConfig() ?? config),
+      lastVersion: pulled.version,
+      lastSyncedAt: new Date().toISOString(),
+      // Hash the file AS IT NOW SITS ON DISK, not `pulled.blob` and not
+      // `pulled.sha256`. Two things make the downloaded bytes the wrong answer:
+      // the sha comes from the x-sha256 HEADER and is '' when a server omits it,
+      // and the open-verify above can MIGRATE the vault (migrate() → save()
+      // re-encrypts with a fresh nonce), so the renamed file may legitimately
+      // differ from what came over the wire. Either way a stale baseline makes
+      // the next syncState() read "edited since sync" and report diverged where
+      // behind is correct. Reading it back is authoritative and costs one read.
+      lastSha: sha256Hex(fs.readFileSync(options.vaultPath)),
+      lastGeneration: installedGeneration,
+    });
+    return { ok: true, version: pulled.version, wroteVault: true };
+  });
+}
+
 /**
  * Pull the server's vault and install it locally. CRITICAL SAFETY (ADR 0009):
  * a pull must never destroy a good local vault. The downloaded blob is
  * verified structurally + by transport hash, written to a temp file, and, if
  * a local vault already exists, proven to OPEN with the caller's master key
- * before it is swapped in (the old vault is kept as `.nkv.bak`). A corrupt
- * download or a malicious server serving garbage is thus rejected without
- * touching the existing vault. On a fresh machine (no local vault) there is
- * nothing to protect, so the verified blob is written directly.
+ * before it is swapped in (the old vault is kept as `.nkv.bak`). On a fresh
+ * machine (no local vault) there is nothing to protect, so the verified blob
+ * is written directly.
  *
  * The download runs with no vault lock; verification and the swap run under
  * it. `expectLocalSha` lets an automatic pull insist the local file still
- * hashes to what it decided on: if a write landed meanwhile the pull throws
- * LocalChangedError and replaces nothing. `keepCopyAt` writes a copy of the
- * displaced vault, under the lock, only on the success path, so a rejected
- * download can never clobber it.
+ * hashes to what it decided on. `refuseDrops` (every automatic pull, ADR 0063
+ * D6) refuses a swap whose drop set is non-empty. A manual pull over an
+ * existing vault goes through previewPull and confirmPull instead.
  */
 export async function pullVault(options: {
   vaultPath: string;
@@ -382,139 +626,121 @@ export async function pullVault(options: {
   expectLocalSha?: string;
   /** Where to keep the displaced local vault, written only when the swap happens. */
   keepCopyAt?: string;
+  /** Refuse with PullWouldDropError when the pull would remove or undo anything here. */
+  refuseDrops?: boolean;
 }): Promise<PullResult> {
   const config = requireConfig();
   const { token } = deriveSyncCreds(options.deviceSecret);
   return withSyncLock(options.vaultPath, async () => {
     const pulled = await pullBlob(config.serverUrl, token);
     if (pulled === null) return { ok: false, reason: 'no-remote' };
+    return installBlob({ ...options, config, pulled });
+  });
+}
 
-    if (!isVaultBlob(pulled.blob)) {
-      throw new Error('Downloaded blob is not a NorthKeep vault (corrupt download or wrong server).');
-    }
-    // Transport integrity only: the server supplies this sha, so it catches a
-    // truncated/corrupted download, NOT a malicious server (which can serve a
-    // blob + matching sha). The real defense against a hostile blob is the
-    // open-verify below; the sha is a cheap early-out for honest corruption.
-    if (pulled.sha256 && sha256Hex(pulled.blob) !== pulled.sha256.toLowerCase()) {
-      throw new Error('Downloaded vault failed its integrity check (corrupt download). Nothing was changed.');
-    }
+export type PullPreview =
+  | { ok: true; version: number; sha256: string; report: PullDropReport; wouldDrop: boolean }
+  | { ok: false; reason: 'no-remote' };
 
+/**
+ * D6 dry pass for a manual pull over an existing vault: download, verify, open
+ * with the key, compute the drop set, and keep the downloaded bytes (mode
+ * 0600) with the server's `x-version` and `x-sha256` and the local file's
+ * sha. Installs nothing; confirmPull installs exactly these bytes.
+ */
+export async function previewPull(options: { vaultPath: string; deviceSecret: Buffer; masterKey: Buffer }): Promise<PullPreview> {
+  const config = requireConfig();
+  const { token } = deriveSyncCreds(options.deviceSecret);
+  return withSyncLock(options.vaultPath, async () => {
+    const pulled = await pullBlob(config.serverUrl, token);
+    if (pulled === null) return { ok: false, reason: 'no-remote' };
+    checkDownload(pulled);
     return withFileLock(options.vaultPath, () => {
-      // Everything the swap writes goes beside the REAL file, so a symlinked
-      // vault keeps its link (see resolveVaultLink).
-      const targetPath = resolveVaultLink(options.vaultPath);
-      const tmpPath = `${targetPath}.pulled.tmp`;
-      fs.writeFileSync(tmpPath, pulled.blob, { mode: 0o600 });
-      const localExists = fs.existsSync(options.vaultPath);
-      // The generation sealed in the bytes that end up on disk, recorded in
-      // sync.json below. On the localExists path it is read from the temp
-      // file AFTER the open-verify (which may migrate it), and that same file
-      // is renamed into place, so it is the installed generation exactly.
-      let installedGeneration: number | null = null;
+      const hold = holdPaths(options.vaultPath);
+      const scratch = `${hold.blob}.open`;
+      fs.writeFileSync(scratch, pulled.blob, { mode: 0o600 });
+      let report: PullDropReport;
       try {
-        if (localExists) {
-          if (options.expectLocalSha !== undefined) {
-            const nowSha = sha256Hex(fs.readFileSync(options.vaultPath));
-            if (nowSha !== options.expectLocalSha) throw new LocalChangedError();
-          }
-          if (!options.masterKey) {
-            throw new Error(
-              'A local vault exists but no key was provided to verify the pulled vault before replacing it.',
-            );
-          }
-          // Prove the pulled blob opens with our key BEFORE replacing the good vault.
-          // Opening a 0.3 pull migrates the temp file and seeds generation 0; that
-          // 0 is the compare value. Opening local to read generation does not increment.
-          let pulledGen: number;
+        const pulledVault = Vault.openWithKey(scratch, Buffer.from(options.masterKey));
+        try {
+          const local = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey));
           try {
-            const pulledVault = Vault.openWithKey(tmpPath, Buffer.from(options.masterKey));
-            try {
-              pulledGen = pulledVault.getSyncGeneration();
-            } finally {
-              pulledVault.close();
-            }
-          } catch (err) {
-            if (err instanceof VaultAuthError) {
-              throw new Error(
-                'The pulled vault does not open with your key, so your local vault was not replaced. ' +
-                  '(Wrong device secret or passphrase, a different account, or a bad download.)',
-              );
-            }
-            if (err instanceof VaultSyncGenerationError) {
-              throw new Error('The pulled vault has an invalid sync generation. Local vault was not changed.');
-            }
-            throw err;
+            report = computeDropReport(local, pulledVault);
+          } finally {
+            local.close();
           }
-          installedGeneration = pulledGen;
-          // The replay check compares the incoming blob against the
-          // generation of what THIS MACHINE LAST SYNCED, not against the
-          // local file's own stamp. That is the question the check exists to
-          // answer ("is the server handing me back something older than the
-          // copy I already had from it?"), and the local stamp is the wrong
-          // yardstick: a machine that stamped a push which never landed sits
-          // above every honest blob out there, so comparing to it refused
-          // the very pull that would have unwedged it (ADR 0044 fourth
-          // review). What this gives up: a `lastGeneration` of null reads as
-          // 0 and accepts anything. That is a config written before the
-          // field existed, or a machine whose only sync so far was the very
-          // first pull on an empty home, which carries no key to read the
-          // installed generation with. Either way the next push, or the next
-          // pull once a local vault exists to verify against, records a real
-          // baseline and the check bites from then on.
-          const lastSyncedGeneration = (loadSyncConfig() ?? config).lastGeneration ?? 0;
-          if (pulledGen < lastSyncedGeneration) {
-            throw new Error(
-              'The pulled vault is older than the copy this machine last synced (sync generation). Local vault was not changed.',
-            );
-          }
-          if (options.keepCopyAt) fs.copyFileSync(options.vaultPath, options.keepCopyAt);
-          fs.copyFileSync(options.vaultPath, `${targetPath}.bak`);
+        } finally {
+          pulledVault.close();
         }
-        fs.renameSync(tmpPath, targetPath);
-        if (installedGeneration === null && options.masterKey) {
-          // Fresh machine: nothing was verified above, so read the generation
-          // back off the installed file. Without a key we cannot, and the
-          // baseline stays null (see the replay check).
-          try {
-            const installed = Vault.openWithKey(options.vaultPath, Buffer.from(options.masterKey));
-            try {
-              installedGeneration = installed.getSyncGeneration();
-            } finally {
-              installed.close();
-            }
-          } catch {
-            // The vault is already installed and this read is only a baseline;
-            // a key that does not open it leaves the baseline unknown rather
-            // than failing a pull that has already succeeded.
-            installedGeneration = null;
-          }
+      } catch (err) {
+        if (err instanceof VaultAuthError) {
+          throw new Error('The pulled vault does not open with your key, so nothing was changed.');
         }
+        throw err;
       } finally {
-        if (fs.existsSync(tmpPath)) fs.rmSync(tmpPath, { force: true });
-        // openWithKey above may migrate, and migrate() calls save(), whose
-        // writeAtomic leaves a rolling backup beside the TEMP file. Nothing else
-        // ever cleans that path up.
-        if (fs.existsSync(`${tmpPath}.bak`)) fs.rmSync(`${tmpPath}.bak`, { force: true });
+        fs.rmSync(scratch, { force: true });
+        fs.rmSync(`${scratch}.bak`, { force: true });
       }
-
-      saveSyncConfig({
-        ...(loadSyncConfig() ?? config),
-        lastVersion: pulled.version,
-        lastSyncedAt: new Date().toISOString(),
-        // Hash the file AS IT NOW SITS ON DISK, not `pulled.blob` and not
-        // `pulled.sha256`. Two things make the downloaded bytes the wrong answer:
-        // the sha comes from the x-sha256 HEADER and is '' when a server omits it,
-        // and the open-verify above can MIGRATE the vault (migrate() → save()
-        // re-encrypts with a fresh nonce), so the renamed file may legitimately
-        // differ from what came over the wire. Either way a stale baseline makes
-        // the next syncState() read "edited since sync" and report diverged where
-        // behind is correct. Reading it back is authoritative and costs one read.
-        lastSha: sha256Hex(fs.readFileSync(options.vaultPath)),
-        lastGeneration: installedGeneration,
-      });
-      return { ok: true, version: pulled.version, wroteVault: true };
+      // The held file is the downloaded bytes, never the opened copy (which may have migrated).
+      const sha256 = sha256Hex(pulled.blob);
+      fs.writeFileSync(hold.blob, pulled.blob, { mode: 0o600 });
+      const localSha = sha256Hex(fs.readFileSync(options.vaultPath));
+      fs.writeFileSync(hold.meta, `${JSON.stringify({ version: pulled.version, sha256, local_sha: localSha })}\n`, { mode: 0o600 });
+      return { ok: true, version: pulled.version, sha256, report, wouldDrop: pullWouldDrop(report) };
     });
+  });
+}
+
+/**
+ * D6 confirm: re-check the server's status against the dry pass the user
+ * reviewed, then install the held bytes (not a new download) through the same
+ * checks as any pull. A moved server refuses with RemoteChangedError and
+ * discards the hold; a local write since the dry pass refuses with
+ * LocalChangedError. `sync.json` records the dry-pass version.
+ */
+export async function confirmPull(options: {
+  vaultPath: string;
+  deviceSecret: Buffer;
+  masterKey: Buffer;
+  /** The dry pass's version and sha256, as the user saw them. */
+  version: number;
+  sha256: string;
+}): Promise<PullResult> {
+  const config = requireConfig();
+  const { token } = deriveSyncCreds(options.deviceSecret);
+  return withSyncLock(options.vaultPath, async () => {
+    const hold = holdPaths(options.vaultPath);
+    let meta: { version?: unknown; sha256?: unknown; local_sha?: unknown };
+    let blob: Buffer;
+    try {
+      meta = JSON.parse(fs.readFileSync(hold.meta, 'utf8')) as typeof meta;
+      blob = fs.readFileSync(hold.blob);
+    } catch {
+      throw new RemoteChangedError();
+    }
+    const sha = options.sha256.toLowerCase();
+    if (meta.version !== options.version || meta.sha256 !== sha || typeof meta.local_sha !== 'string' || sha256Hex(blob) !== sha) {
+      discardHold(options.vaultPath);
+      throw new RemoteChangedError();
+    }
+    const remote = await remoteStatus(config.serverUrl, token);
+    const remoteSha = typeof remote?.sha256 === 'string' ? remote.sha256.toLowerCase() : '';
+    // A server that reports no sha (older or third-party) is pinned by version alone.
+    if (remote === null || remote.version !== options.version || (remoteSha !== '' && remoteSha !== sha)) {
+      discardHold(options.vaultPath);
+      throw new RemoteChangedError();
+    }
+    try {
+      return await installBlob({
+        vaultPath: options.vaultPath,
+        config,
+        pulled: { blob, version: options.version, sha256: sha },
+        masterKey: options.masterKey,
+        expectLocalSha: meta.local_sha,
+      });
+    } finally {
+      discardHold(options.vaultPath);
+    }
   });
 }
 
