@@ -1211,3 +1211,20 @@ document here still arrives as an addition. Take theirs recreates the
 project on request; keep mine saves the cloud text as a memory and discards
 the row. Evidence: `apps/connector-server/test/adr0063-rs2.test.ts` (A7 on
 both stores, the phone plan, take theirs, and the fresh-scope addition).
+
+**Note: the phone's share add pushed the vault first.** `runShareScope`
+saved the mark through the scope store, whose save runs the phone's
+push-after-save (with its last-writer-wins recovery on 409), and only then
+compared the file sha with the sync server. So the phone could replace a
+newer Mac vault and stamp its own copy as the newest, contrary to the
+integration note above. The order is now: read the stamp first (a live
+`/api/status` sha equal to the vault file's, else "This phone is not in sync
+with your other devices yet, so nothing was shared. Let sync finish, then
+share again." with nothing saved or sent); save the mark on the phone only;
+push to Cloud Connect with that stamp; then run the normal push-after-save
+for the mark. A refused Cloud Connect push rolls the mark back through the
+store as before. The stamp names the version the phone held before its mark;
+the entries it sends are that version's, since a mark changes no entry.
+Evidence: `apps/mobile/test/connect-flow.test.ts` (refusal writes and sends
+nothing; the step order and the stamp sent), mobile tsc, and
+`npx expo export --platform ios`.

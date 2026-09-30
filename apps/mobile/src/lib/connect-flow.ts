@@ -58,7 +58,7 @@ export const NOTHING_SHARED_MESSAGE = 'No scopes are shared yet. Share a scope f
 
 /** Share add refused: this phone's vault file is not the copy the sync server holds (ADR 0063 D5). */
 export const PHONE_NOT_IN_SYNC_MESSAGE =
-  'This phone is not in sync with your other devices yet, so Cloud Connect was not updated. Let sync finish, then share again.';
+  'This phone is not in sync with your other devices yet, so nothing was shared. Let sync finish, then share again.';
 
 /** HTTP 428 on the phone: the connector holds a copy from a newer vault version. */
 export const PHONE_STALE_PUSH_MESSAGE =
@@ -225,30 +225,50 @@ export type ShareScopeOutcome =
   | ConnectorFailure;
 
 export interface ShareScopePorts {
+  /** load() reads the marks; save() is the rollback: it saves the marks and pushes the vault as every edit does. */
   store: SharedScopeStore;
   /**
-   * Push the REAL plaintext entries of ALL listed shared scopes ("make these
-   * scopes match exactly"). Wired to VaultSession.connectorPushScopes, which
-   * calls @northkeep/sync pushSharedScopes with a snapshot of the open vault,
-   * the device secret, the best-effort entitlement and the phoneVaultStamp.
-   * Throws on any refusal, including PhoneNotInSyncError before any request.
+   * The phoneVaultStamp, read before anything is written. Throws
+   * PhoneNotInSyncError when the phone does not hold exactly the sync
+   * server's copy, so nothing is saved and nothing is sent.
    */
-  pushScopes(scopes: string[]): Promise<{ pushed: number }>;
+  stamp(): Promise<VaultStamp | undefined>;
+  /** Save the marks on this phone only. The vault is pushed after Cloud Connect accepts. */
+  markLocal(scopes: string[]): Promise<void>;
+  /**
+   * Push the REAL plaintext entries of ALL listed shared scopes ("make these
+   * scopes match exactly") with the stamp read before the mark. Wired to
+   * VaultSession.connectorPushScopes (@northkeep/sync pushSharedScopes over a
+   * snapshot of the open vault, the device secret and the entitlement).
+   */
+  pushScopes(scopes: string[], stamp: VaultStamp | undefined): Promise<{ pushed: number }>;
+  /** Carry the mark to the sync server: the normal push after a save. */
+  syncVault(): Promise<void>;
 }
 
 /**
- * Share one scope, AFTER the screen's loud confirmation: persist the mark,
- * push every shared scope (the server reconciles the full list), and roll the
- * mark back if the push did not land, so local state never claims a share the
+ * Share one scope, AFTER the screen's loud confirmation (ADR 0063 D5). The
+ * phone must already hold exactly the sync server's copy: it never pushes its
+ * vault first, because its last-writer-wins push could displace a newer Mac
+ * vault and then be stamped as the newest. In sync, it marks the scope, pushes
+ * every shared scope stamped with that copy's version, then pushes the vault.
+ * A refused push rolls the mark back, so local state never claims a share the
  * server never accepted.
  */
 export async function runShareScope(ports: ShareScopePorts, scope: string): Promise<ShareScopeOutcome> {
   const before = await ports.store.load();
   const wasShared = before.includes(scope);
   const next = [...new Set([...before, scope])].sort();
-  await ports.store.save(next);
+  let stamp: VaultStamp | undefined;
   try {
-    const { pushed } = await ports.pushScopes(next);
+    stamp = await ports.stamp();
+  } catch (err) {
+    return classifyConnectorError(err);
+  }
+  await ports.markLocal(next);
+  try {
+    const { pushed } = await ports.pushScopes(next, stamp);
+    await ports.syncVault();
     return { kind: 'shared', scope, pushed };
   } catch (err) {
     // Rollback: the server never accepted it. Remove ONLY this call's own

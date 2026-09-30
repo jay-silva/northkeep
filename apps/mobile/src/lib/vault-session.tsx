@@ -29,6 +29,7 @@ import {
   startPairing,
   unshareScope,
   type DownSyncResult,
+  type VaultStamp,
 } from '@northkeep/sync';
 import { DEFAULT_CONNECTOR_SERVER_URL, allowlistHashFromToken, phoneVaultStamp } from './connect-flow';
 import { DEMO_PASSPHRASE, demoSeed } from './demo-vault';
@@ -223,8 +224,16 @@ export interface VaultSession {
    * shared-scope LIST lives in the vault's scopes table (ADR 0038) and is
    * reached through connectorScopeStore below.
    */
-  /** "Make these scopes match exactly": PUT the real plaintext entries of every listed scope. */
-  connectorPushScopes(scopes: string[]): Promise<{ pushed: number }>;
+  /**
+   * ADR 0063 D5: the stamp for a share push, read before any write. Throws
+   * PhoneNotInSyncError unless this phone's vault file is exactly the copy a
+   * live sync-server status reports; undefined with no sync server.
+   */
+  connectorShareStamp(): Promise<VaultStamp | undefined>;
+  /** "Make these scopes match exactly": PUT the real plaintext entries of every listed scope, with the stamp read first. */
+  connectorPushScopes(scopes: string[], stamp: VaultStamp | undefined): Promise<{ pushed: number }>;
+  /** The normal push after a save, for the share mark once Cloud Connect accepted it. */
+  connectorSyncVault(): Promise<void>;
   /** Server-side DELETE of one scope's rows. */
   connectorUnshareScope(scope: string): Promise<{ deleted: number }>;
   /**
@@ -232,9 +241,11 @@ export interface VaultSession {
    * vault.sharedScopes() (after a one-time fold-in of the pre-0038 SecureStore
    * list), save() diffs the marks, saves the vault, and runs push-after-save so
    * the change syncs to every other device. load() is [] while locked (screens
-   * redirect anyway); save() throws while locked.
+   * redirect anyway); save() throws while locked. saveLocal() saves the
+   * marks without the push, for a share that pushes the vault only after
+   * Cloud Connect accepted it.
    */
-  connectorScopeStore: { load(): Promise<string[]>; save(scopes: string[]): Promise<void> };
+  connectorScopeStore: { load(): Promise<string[]>; save(scopes: string[]): Promise<void>; saveLocal(scopes: string[]): Promise<void> };
   /**
    * Apply app-written additions to the open vault (ADR 0063 D1: never a
    * replace or a forget), refresh the entry list, and run the normal
@@ -1247,31 +1258,33 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     }
   }, []);
 
+  const connectorShareStamp = useCallback(async (): Promise<VaultStamp | undefined> => {
+    if (!vaultRef.current) throw new Error('Unlock the vault before sharing.');
+    const syncServerUrl = await loadSyncServerUrl();
+    if (!syncServerUrl) return phoneVaultStamp({ syncServerUrl: null, status: null, localSha: null });
+    const { secret } = await connectorContext();
+    try {
+      const status = await fetchRemoteStatus({ serverUrl: syncServerUrl, deviceSecretHex: secret.toString('hex') });
+      const localSha = await vaultGate.run(() => hashVaultFile(vaultPath()));
+      return phoneVaultStamp({ syncServerUrl, status, localSha });
+    } finally {
+      memzero(secret);
+    }
+  }, [connectorContext]);
+
   const connectorPushScopes = useCallback(
-    async (scopes: string[]): Promise<{ pushed: number }> => {
+    async (scopes: string[], vaultStamp: VaultStamp | undefined): Promise<{ pushed: number }> => {
       if (!vaultRef.current) throw new Error('Unlock the vault before sharing.');
       const { secret, server } = await connectorContext();
       try {
-        // ADR 0063 D5: stamp the push with the sync-server copy this phone holds, or refuse.
-        const syncServerUrl = await loadSyncServerUrl();
-        const status = syncServerUrl
-          ? await fetchRemoteStatus({ serverUrl: syncServerUrl, deviceSecretHex: secret.toString('hex') })
-          : null;
-        // The file hash and the entries are read under one gate hold, so the
-        // stamp names exactly the vault the entries come from.
-        const { vaultStamp, snapshot } = await vaultGate.run(async () => {
+        const snapshot = await vaultGate.run(async () => {
           const open = vaultRef.current;
           if (!open) throw new Error('Unlock the vault before sharing.');
-          const localSha = syncServerUrl ? await hashVaultFile(vaultPath()) : null;
-          const stamp = phoneVaultStamp({ syncServerUrl, status, localSha });
           const byScope = new Map(scopes.map((scope) => [scope, open.list({ scope })]));
           const rows = open.sharedScopeRows();
           return {
-            vaultStamp: stamp,
-            snapshot: {
-              list: (filter?: { scope?: string }) => byScope.get(filter?.scope ?? '') ?? [],
-              sharedScopeRows: () => rows,
-            },
+            list: (filter?: { scope?: string }) => byScope.get(filter?.scope ?? '') ?? [],
+            sharedScopeRows: () => rows,
           };
         });
         const entitlement = await maybeConnectorEntitlement(secret);
@@ -1302,6 +1315,20 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     },
     [connectorContext],
   );
+
+  const saveMarks = useCallback(async (scopes: string[]): Promise<void> => {
+    // Under the vault gate; the handle is read inside (see addMemory).
+    await vaultGate.run(async () => {
+      const vault = vaultRef.current;
+      if (!vault) throw new Error('Unlock the vault before changing sharing.');
+      await saveLocalDirty(true); // under the gate, before the save (see addMemory)
+      const want = new Set(scopes);
+      const have = new Set(vault.sharedScopes());
+      for (const scope of want) if (!have.has(scope)) vault.setScopeShared(scope, true);
+      for (const scope of have) if (!want.has(scope)) vault.setScopeShared(scope, false);
+      vault.save();
+    });
+  }, []);
 
   const connectorScopeStore = useMemo(
     () => ({
@@ -1360,24 +1387,15 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         const open = vaultRef.current;
         return open ? open.sharedScopes() : [];
       },
+      saveLocal: saveMarks,
       save: async (scopes: string[]): Promise<void> => {
-        // Under the vault gate; the handle is read inside (see addMemory).
-        await vaultGate.run(async () => {
-          const vault = vaultRef.current;
-          if (!vault) throw new Error('Unlock the vault before changing sharing.');
-          await saveLocalDirty(true); // under the gate, before the save (see addMemory)
-          const want = new Set(scopes);
-          const have = new Set(vault.sharedScopes());
-          for (const scope of want) if (!have.has(scope)) vault.setScopeShared(scope, true);
-          for (const scope of have) if (!want.has(scope)) vault.setScopeShared(scope, false);
-          vault.save();
-        });
+        await saveMarks(scopes);
         // Same save-then-push every vault mutation runs: this is what carries
         // the mark (or unmark) to the sync server and on to the other devices.
         await pushAfterSave();
       },
     }),
-    [pushAfterSave],
+    [pushAfterSave, saveMarks],
   );
 
   const connectorDownSync = useCallback(async (): Promise<DownSyncResult> => {
@@ -1484,7 +1502,9 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       retrieve,
       signOutWipe,
       getMemory,
+      connectorShareStamp,
       connectorPushScopes,
+      connectorSyncVault: pushAfterSave,
       connectorUnshareScope,
       connectorScopeStore,
       connectorDownSync,
@@ -1518,7 +1538,9 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       retrieve,
       signOutWipe,
       getMemory,
+      connectorShareStamp,
       connectorPushScopes,
+      pushAfterSave,
       connectorUnshareScope,
       connectorScopeStore,
       connectorDownSync,

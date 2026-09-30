@@ -80,7 +80,13 @@ export default function ManageScopes() {
     setScopeNotice(null);
     void (async () => {
       const outcome = await runShareScope(
-        { store, pushScopes: (scopes) => session.connectorPushScopes(scopes) },
+        {
+          store,
+          stamp: () => session.connectorShareStamp(),
+          markLocal: (scopes) => session.connectorScopeStore.saveLocal(scopes),
+          pushScopes: (scopes, stamp) => session.connectorPushScopes(scopes, stamp),
+          syncVault: () => session.connectorSyncVault(),
+        },
         scope,
       );
       setConnectorBusy(null);

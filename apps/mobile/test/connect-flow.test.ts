@@ -34,6 +34,7 @@ import {
   scopeRows,
   shareIdFromConnectorToken,
   vaultServerHashForPhone,
+  type ShareScopePorts,
   type SharedScopeStore,
   unshareFailureText,
 } from '../src/lib/connect-flow.js';
@@ -70,6 +71,31 @@ function memStore(initial: string[] = []) {
     },
   };
   return { store, saves, get: () => [...scopes] };
+}
+
+/** runShareScope's ports over a memStore: in sync with no stamp, the mark saved locally, each step logged in order. */
+function sharePorts(
+  store: SharedScopeStore,
+  over: Partial<ShareScopePorts> = {},
+): { ports: ShareScopePorts; steps: string[] } {
+  const steps: string[] = [];
+  const ports: ShareScopePorts = {
+    store,
+    stamp: async () => {
+      steps.push('stamp');
+      return undefined;
+    },
+    markLocal: async (scopes) => {
+      steps.push('mark');
+      await store.save(scopes);
+    },
+    pushScopes: async () => ({ pushed: 0 }),
+    syncVault: async () => {
+      steps.push('vault push');
+    },
+    ...over,
+  };
+  return { ports, steps };
 }
 
 /** Things that must never reach a mobile user (App Store steering + the em-dash rule). */
@@ -137,13 +163,12 @@ describe('runShareScope', () => {
     const { store, get } = memStore(['work']);
     const pushedWith: string[][] = [];
     const outcome = await runShareScope(
-      {
-        store,
-        pushScopes: async (scopes) => {
-          pushedWith.push(scopes);
-          return { pushed: 7 };
-        },
-      },
+      sharePorts(store, {
+          pushScopes: async (scopes) => {
+            pushedWith.push(scopes);
+            return { pushed: 7 };
+          },
+      }).ports,
       'conversations',
     );
     expect(outcome).toEqual({ kind: 'shared', scope: 'conversations', pushed: 7 });
@@ -155,12 +180,11 @@ describe('runShareScope', () => {
   it('rolls the mark back when the push fails, and classifies the 402 neutrally', async () => {
     const { store, saves, get } = memStore(['work']);
     const outcome = await runShareScope(
-      {
-        store,
-        pushScopes: async () => {
-          throw new Error('Connector server returned HTTP 402 on push.');
-        },
-      },
+      sharePorts(store, {
+          pushScopes: async () => {
+            throw new Error('Connector server returned HTTP 402 on push.');
+          },
+      }).ports,
       'conversations',
     );
     expect(outcome.kind).toBe('failed');
@@ -185,12 +209,11 @@ describe('runShareScope', () => {
   it('never rolls back a scope that was already shared before the call', async () => {
     const { store, get } = memStore(['conversations', 'work']);
     const outcome = await runShareScope(
-      {
-        store,
-        pushScopes: async () => {
-          throw new Error('Connector server returned HTTP 500 on push.');
-        },
-      },
+      sharePorts(store, {
+          pushScopes: async () => {
+            throw new Error('Connector server returned HTTP 500 on push.');
+          },
+      }).ports,
       'work', // already in the store
     );
     expect(outcome.kind).toBe('failed');
@@ -200,16 +223,15 @@ describe('runShareScope', () => {
   it('rollback removes only its OWN scope, keeping a concurrent writer\'s mark', async () => {
     const { store, get } = memStore(['work']);
     const outcome = await runShareScope(
-      {
-        store,
-        pushScopes: async () => {
-          // While the push is in flight, a concurrent writer marks another
-          // scope. The rollback must not blind-overwrite with the stale
-          // pre-push snapshot and erase it.
-          await store.save(['concurrent', 'conversations', 'work']);
-          throw new Error('Connector server returned HTTP 500 on push.');
-        },
-      },
+      sharePorts(store, {
+          pushScopes: async () => {
+            // While the push is in flight, a concurrent writer marks another
+            // scope. The rollback must not blind-overwrite with the stale
+            // pre-push snapshot and erase it.
+            await store.save(['concurrent', 'conversations', 'work']);
+            throw new Error('Connector server returned HTTP 500 on push.');
+          },
+      }).ports,
       'conversations',
     );
     expect(outcome.kind).toBe('failed');
@@ -221,12 +243,11 @@ describe('runShareScope', () => {
   it('maps a transport failure to the connector-flavored network copy', async () => {
     const { store, get } = memStore([]);
     const outcome = await runShareScope(
-      {
-        store,
-        pushScopes: async () => {
-          throw new TypeError('Network request failed');
-        },
-      },
+      sharePorts(store, {
+          pushScopes: async () => {
+            throw new TypeError('Network request failed');
+          },
+      }).ports,
       'work',
     );
     expect(outcome).toEqual({ kind: 'failed', errorKind: 'network', message: CONNECTOR_NETWORK_MESSAGE });
@@ -459,15 +480,54 @@ describe('phoneVaultStamp (ADR 0063 D5 on the phone)', () => {
     }
   });
 
+  it('a phone that is not in sync refuses before writing anything: no mark, no Cloud Connect push, no vault push', async () => {
+    const { store, saves } = memStore(['work']);
+    let pushes = 0;
+    const { ports, steps } = sharePorts(store, {
+      stamp: async () => phoneVaultStamp({ syncServerUrl: SERVER, status, localSha: 'b'.repeat(64) }),
+      pushScopes: async () => {
+        pushes += 1;
+        return { pushed: 1 };
+      },
+    });
+    const outcome = await runShareScope(ports, 'conversations');
+    expect(outcome).toEqual({ kind: 'failed', errorKind: 'other', message: PHONE_NOT_IN_SYNC_MESSAGE });
+    expect(PHONE_NOT_IN_SYNC_MESSAGE).toBe(
+      'This phone is not in sync with your other devices yet, so nothing was shared. Let sync finish, then share again.',
+    );
+    expect(saves).toEqual([]);
+    expect(pushes).toBe(0);
+    expect(steps).toEqual([]);
+  });
+
+  it('in sync: stamps before the mark, pushes with that stamp, and pushes the vault only after Cloud Connect accepted', async () => {
+    const { store } = memStore([]);
+    const stamped = phoneVaultStamp({ syncServerUrl: SERVER, status, localSha: status.sha256 });
+    let sent: unknown = null;
+    const { ports, steps } = sharePorts(store, {
+      stamp: async () => {
+        steps.push('stamp');
+        return stamped;
+      },
+      pushScopes: async (_scopes, stamp) => {
+        steps.push('cloud push');
+        sent = stamp;
+        return { pushed: 2 };
+      },
+    });
+    expect(await runShareScope(ports, 'work')).toEqual({ kind: 'shared', scope: 'work', pushed: 2 });
+    expect(steps).toEqual(['stamp', 'mark', 'cloud push', 'vault push']);
+    expect(sent).toEqual({ server: vaultServerHashForPhone(SERVER), version: status.version });
+  });
+
   it('a refused share rolls its mark back and says why on the phone', async () => {
     const { store, get } = memStore([]);
     const outcome = await runShareScope(
-      {
-        store,
-        pushScopes: async () => {
-          throw new PhoneNotInSyncError();
-        },
-      },
+      sharePorts(store, {
+          pushScopes: async () => {
+            throw new PhoneNotInSyncError();
+          },
+      }).ports,
       'work',
     );
     expect(outcome).toEqual({ kind: 'failed', errorKind: 'other', message: PHONE_NOT_IN_SYNC_MESSAGE });
