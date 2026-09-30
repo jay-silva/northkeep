@@ -339,7 +339,8 @@ held (D1).
 
 **Failure prevented.** Recovering a rolled-back project took hand work from
 history and the sync server. The superseded Mac head sits one revision back, so
-one click would have recovered each of the five.
+one restore would have recovered each of the five (a CLI command or API call
+today; the app's Restore button is not built yet).
 
 ### D5. Push shared scopes automatically, only from a device that is in sync
 
@@ -757,6 +758,19 @@ script is written.
     id was retired.
   - The recheck asked Jay whether the fix round's new mechanisms call for a
     fresh first review instead of a recheck. Not answered on record.
+- 2026-09-30, build review of `g63/integrate` at `ff2f832`, CLEARED WITH
+  WOUNDS: `~/Claude/Projects/NorthKeep/Reviews/adr-0063/build-review.md`
+  (attacks in `build-attacks/`). Closed in the fix round (Build notes, "Fix
+  round"):
+  - FLESH WOUND P1 (a memory deleted on the phone stayed on Cloud Connect
+    after the Mac was in sync): automatic push compares with the connector's
+    manifest.
+  - Notes: `readScopeSeq` race, the phone's vault-first share push, R-S2
+    through a forgotten document, the acceptance script's step 1, and the
+    claims it found false or ahead of the build.
+  - Not changed: the `memory_forget` route around `stale_project` and the
+    sticky 428 pause on a benign two-host race (both read, not executed);
+    they stay as the review recorded them.
 
 ## Build notes
 
@@ -1232,3 +1246,24 @@ the entries it sends are that version's, since a mark changes no entry.
 Evidence: `apps/mobile/test/connect-flow.test.ts` (refusal writes and sends
 nothing; the step order and the stamp sent), mobile tsc, and
 `npx expo export --platform ios`.
+
+**Claims corrected (build review Findings and Notes).**
+- KNOWN-LIMITS "Cloud Connect follows the newest vault version ... pushes
+  that copy": true after the P1 fix; it now says "with automatic updates on"
+  and "even if it changed nothing itself". The D5 bullet names pulls and
+  changes made on other devices.
+- ADR 0044 amendment: "after a successful push, a pull, or a wake that finds
+  the device in sync, Cloud Connect is updated when its copy differs".
+- D5 trigger and change test in this design: rewritten to the built
+  triggers (`pushed`, `pulled`, `in-sync`) and the manifest comparison.
+- Old clients (KNOWN-LIMITS and the ADR): locked out only once a newer
+  device with vault sync pushes; a device with no vault sync records no
+  version. "0.22.x" is now "0.22.3 and earlier", which stays true if the
+  next release is a 0.22 patch.
+- ADR "Recovery takes one click": restore exists from the CLI and the API;
+  the app's button is not built.
+- ADR D5: names the push on save by a device with no vault sync and the
+  "whenever Cloud Connect's copy differs" rule; "What leaves the machine"
+  adds when devices wake or pull.
+- "recorded from 0.22.4 on": the next release's number is not known here,
+  so KNOWN-LIMITS says "from the next release".

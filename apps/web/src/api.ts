@@ -956,7 +956,7 @@ async function dispatch(
       // A paired device may sync with nothing shared: that sync is how a project
       // created in a connected app first arrives (ADR 0050 Decision 5).
       paired: connectorPaired(),
-      // When this Mac last pushed its shared scopes (null before 0.22.4 or never).
+      // When this Mac last pushed its shared scopes (null if never, or only before the release that records it).
       last_pushed_at: connectorLastPushedAt(),
       // ADR 0063 D5: the automatic-push switch and why it is or is not pushing.
       auto_push: session.connectorAutoPush.status(),

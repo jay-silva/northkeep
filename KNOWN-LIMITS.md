@@ -919,12 +919,14 @@ every milestone; if a limit is removed, say when and how.*
   counts as paired. A phone paired before 0.22.0 does not: while it shares
   nothing, it does not fetch app-created projects until you pair it again.
 - **Clients from before ADR 0063 receive no cloud project updates, and
-  cannot push to Cloud Connect once a newer client has.** Desktop and CLI
-  0.22.x and phone build 28 and earlier still receive new memories from
-  your cloud apps, but the connector withholds every cloud project document
-  from them, because they would write it over the local one unchecked. Once
-  a newer device pushes, their pushes are refused (HTTP 428) until they
-  upgrade.
+  cannot push to Cloud Connect once a newer device with vault sync has.**
+  Desktop and CLI 0.22.3 and earlier and phone build 28 and earlier still
+  receive new memories from your cloud apps, but the connector withholds
+  every cloud project document from them, because they would write it over
+  the local one unchecked. Once a newer device with vault sync configured
+  pushes, their pushes are refused (HTTP 428) until they upgrade. A newer
+  device with no vault sync records no version, so its pushes do not lock
+  them out.
 - **A hosted `project_update` must name the revision it read (ADR 0063
   D2).** Hosted `project_get` returns the document with its revision.
   `project_update` without `expected_revision`, or with one that is no
@@ -1256,16 +1258,18 @@ every milestone; if a limit is removed, say when and how.*
 
 - **Cloud Connect's copy updates automatically only while this Mac is in
   sync with your other devices (ADR 0063 D5).** After automatic sync pushes
-  the vault, or when it finds this Mac exactly in sync, changes in shared
-  scopes are pushed to the connector within seconds. While this Mac is behind
+  or pulls the vault, or finds this Mac exactly in sync, the Mac compares its
+  shared scopes with Cloud Connect's list of entries and pushes within
+  seconds when they differ, including a change another device made, such as
+  a memory deleted on the phone. While this Mac is behind
   or has changes your other devices lack, while a pull waits for your review,
   or while automatic sync is off, Cloud Connect updates only when you push,
   and the Cloud screen says why. The switch is per device and on by default
   (`northkeep share auto on|off`). A manual push (share, Sync now,
   `northkeep share sync` or `northkeep share push`) sends the vault to your
   sync server first when this Mac is ahead, and refuses while it is behind.
-  The Cloud screen shows when this Mac last pushed (recorded from 0.22.4 on;
-  earlier pushes are not on record).
+  The Cloud screen shows when this Mac last pushed (recorded from the next
+  release on; earlier pushes are not on record).
 - **Automatic push to a self-hosted connector needs
   `CONNECTOR_TOMBSTONE_ENFORCE=1`.** Without it the connector does not refuse
   pushes to a scope unshared elsewhere, so automatic push stays off and says
@@ -1282,7 +1286,8 @@ every milestone; if a limit is removed, say when and how.*
 - **Cloud Connect follows the newest vault version, not the newest
   content.** When the phone's last-writer-wins recovery, or an older vault
   file you restored, becomes the newest copy on your sync server, a Mac that
-  syncs to it is in sync and pushes that copy to Cloud Connect. The Mac that
+  syncs to it is in sync and, with automatic updates on, pushes that copy to
+  Cloud Connect even if it changed nothing itself. The Mac that
   lost work refuses the automatic pull and shows what would drop (M5).
 - **While your devices use different sync servers, Cloud Connect may show
   the copy from whichever device pushed last.** The connector orders pushes
