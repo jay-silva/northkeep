@@ -6,7 +6,7 @@ import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { KDF_INTERACTIVE, Vault, generateDeviceSecret, getProjectView } from '@northkeep/core';
 import { emptyProjectDoc, mergeProjectDoc, serializeProjectDoc } from '@northkeep/core/project-doc';
-import { applyDownSync, deriveConnectorToken, pushSharedScopes, startPairing, STALE_PUSH_MESSAGE, tokenHash } from '@northkeep/sync';
+import { applyDownSync, deriveConnectorToken, pushSharedScopes, resolveConflict, startPairing, STALE_PUSH_MESSAGE, tokenHash } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage, type ConnectorStorage, type SharedEntry } from '../src/storage.js';
 import { NeonConnectorStorage } from '../src/neon-storage.js';
@@ -219,6 +219,38 @@ for (const kind of ['memory', 'pglite'] as const) {
       expect(got.text).toContain('CLOUD FF TWO.');
       const byId = Object.fromEntries((await w.rows()).map((e) => [e.entryId, { pending: e.pending === true, seq: e.writeSeq }]));
       expect(byId).toEqual({ [r1]: { pending: false, seq: 1 }, 'H2-local-id': { pending: false, seq: 4 } });
+    });
+
+    it('both halves: the real client applies a fast-forward only on approval, then keep mine settles a moved row once, across a retry', async () => {
+      const w = await world();
+      const conn = { server: base, deviceSecret: w.deviceSecret, vault: w.vault };
+      const r1 = w.head().revision;
+      const ff = (await w.mcp('project_update', { project: 'a', expected_revision: r1, status: 'CLOUD FORWARD.' })).structured!.revision as string;
+
+      const unapproved = await applyDownSync(conn);
+      expect({ replaced: unapproved.replaced, review: unapproved.needs_review.replacements.map((r) => r.server_id) }).toEqual({ replaced: 0, review: [ff] });
+      expect(w.head().revision).toBe(r1);
+
+      const approved = await applyDownSync({ ...conn, approve: { server_ids: [ff] } });
+      expect(approved.replaced).toBe(1);
+      const h2 = w.head().revision;
+      expect(w.head().content).toContain('CLOUD FORWARD.');
+      expect((await w.mcp('project_get', { project: 'a' })).structured).toEqual({ project: 'a', revision: h2 });
+
+      const moved = (await w.mcp('project_update', { project: 'a', expected_revision: h2, status: 'CLOUD AGAIN.' })).structured!.revision as string;
+      w.vault.editMemory(h2, { content: doc('LOCAL AFTER FORWARD.') });
+      w.vault.save();
+      const held = await applyDownSync(conn);
+      expect(held.conflicts.map((c) => ({ id: c.server_id, reason: c.reason }))).toEqual([{ id: moved, reason: 'moved' }]);
+
+      const first = await resolveConflict({ ...conn, project: 'a', choice: 'keep-mine' });
+      expect(first.server_ids).toEqual([moved]);
+      expect(w.head().content).toContain('LOCAL AFTER FORWARD.');
+      expect((await w.rows()).filter((e) => e.pending)).toEqual([]);
+      const kept = () => w.vault.list({ scope: 'project:a', type: 'episodic' }).filter((e) => e.content.includes('CLOUD AGAIN.'));
+      expect(kept().map((e) => e.id)).toEqual(first.memory_ids);
+      await expect(resolveConflict({ ...conn, project: 'a', choice: 'keep-mine' })).rejects.toThrow('No cloud version is waiting for project a.');
+      expect(kept()).toHaveLength(1);
     });
 
     it('two updates with the same expected_revision fired together: exactly one lands and a held stale row survives both', async () => {
