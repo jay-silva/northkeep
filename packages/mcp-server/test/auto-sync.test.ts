@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { defaultVaultPath } from '@northkeep/core';
-import { createStandaloneAutoSync, describeEvent, flushBounded, OTHER_VAULT_NOTICE } from '../src/auto-sync.js';
+import { createStandaloneAutoSync, describeConnectorEvent, describeEvent, flushBounded, OTHER_VAULT_NOTICE } from '../src/auto-sync.js';
 
 /**
  * ADR 0044 in the standalone stdio server: shutdown gives a pending push a
@@ -180,5 +180,22 @@ describe('createStandaloneAutoSync', () => {
     } finally {
       sync.dispose();
     }
+  });
+
+  it('runs a Cloud Connect engine beside the sync engine (ADR 0063 D5) and stops both', () => {
+    const sync = createStandaloneAutoSync(defaultVaultPath(), () => {});
+    expect(sync.connector.status().reason).toBe('not_configured');
+    sync.dispose();
+  });
+});
+
+describe('describeConnectorEvent (ADR 0063 D5)', () => {
+  it('names scopes by count and never content', () => {
+    expect(describeConnectorEvent({ type: 'pushed', scopes: ['work', 'project:a'], vault_version: 4 })).toBe(
+      'northkeep MCP server updated Cloud Connect (2 shared scopes)',
+    );
+    expect(describeConnectorEvent({ type: 'paused', reason: 'behind', message: 'This Mac is behind your other devices.' })).toBe(
+      'northkeep MCP server paused Cloud Connect updates: This Mac is behind your other devices.',
+    );
   });
 });
