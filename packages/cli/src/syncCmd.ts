@@ -3,10 +3,13 @@ import { Vault, deriveMasterKey, loadDeviceSecret, memzero } from '@northkeep/co
 import { resolveMasterKey } from '@northkeep/mcp-server';
 import {
   checkoutUrl,
+  confirmPull,
   deriveSyncCreds,
   loadSyncConfig,
   portalUrl,
+  previewPull,
   pullVault,
+  type PullDropReport,
   pushVault,
   setSyncServer,
   subscriptionStatus,
@@ -81,15 +84,46 @@ export async function syncPush(vaultPath: string, fail: (m: string) => never): P
   }
 }
 
-export async function syncPull(vaultPath: string, fail: (m: string) => never): Promise<void> {
+/** D6: the manual report, in plain words. `vault.nkv.bak` keeps what drops out. */
+export function describeDropReport(report: PullDropReport): string[] {
+  const lines: string[] = [];
+  if (report.only_here.length > 0) {
+    lines.push(`  ${report.only_here.length} ${report.only_here.length === 1 ? 'item is' : 'items are'} only on this device and would be removed:`);
+    for (const item of report.only_here) lines.push(`    ${item.scope}: "${item.first_line}"`);
+  }
+  if (report.projects.length > 0) lines.push(`  Projects whose current version is only on this device: ${report.projects.join(', ')}`);
+  if (report.restored_deletes.length > 0) {
+    const scopes = [...new Set(report.restored_deletes.map((d) => d.scope))].join(', ');
+    lines.push(`  ${report.restored_deletes.length} ${report.restored_deletes.length === 1 ? 'memory' : 'memories'} you deleted here would come back (${scopes})`);
+  }
+  for (const m of report.scope_marks) {
+    lines.push(`  For your information: '${m.scope}' is ${m.shared_here ? 'shared' : 'private'} here and ${m.shared_there ? 'shared' : 'private'} in the copy being pulled.`);
+  }
+  return lines;
+}
+
+export async function syncPull(
+  vaultPath: string,
+  options: { yes?: boolean },
+  fail: (m: string) => never,
+  ask: (question: string) => Promise<string | null>,
+): Promise<void> {
   const deviceSecret = deviceSecretOrFail(fail);
   if (!loadSyncConfig()) fail('Sync is not configured. Run: northkeep sync config --server <url>');
   const localExists = fs.existsSync(vaultPath);
 
-  // Protect an existing local vault: prove the pulled blob opens with our key
-  // BEFORE it replaces the local file. A fresh machine has nothing to protect.
-  let masterKey: Buffer | undefined;
-  if (localExists) {
+  try {
+    if (!localExists) {
+      // A fresh machine has nothing to protect or report.
+      const result = await pullVault({ vaultPath, deviceSecret });
+      if (!result.ok) fail('Nothing to pull: no vault has been pushed to this sync server yet.');
+      console.log(`✓ Pulled version ${result.version}. Your vault is up to date.`);
+      console.log('  Open it with your passphrase: northkeep list');
+      return;
+    }
+    // Protect an existing local vault: prove the pulled blob opens with our key
+    // BEFORE it replaces the local file, and report what it would drop (D6).
+    let masterKey: Buffer;
     const resolved = resolveMasterKey(vaultPath);
     if (resolved) {
       masterKey = resolved.key;
@@ -98,21 +132,32 @@ export async function syncPull(vaultPath: string, fail: (m: string) => never): P
       const header = Vault.readHeader(vaultPath);
       masterKey = deriveMasterKey(passphrase, deviceSecret, header.salt, header.kdf);
     }
-  }
-  try {
-    const result = await pullVault({ vaultPath, deviceSecret, masterKey });
-    if (!result.ok) {
-      fail('Nothing to pull: no vault has been pushed to this sync server yet.');
-    }
-    console.log(`✓ Pulled version ${result.version}. Your vault is up to date.`);
-    if (!localExists) {
-      console.log('  Open it with your passphrase: northkeep list');
+    try {
+      const preview = await previewPull({ vaultPath, deviceSecret, masterKey });
+      if (!preview.ok) fail('Nothing to pull: no vault has been pushed to this sync server yet.');
+      const described = describeDropReport(preview.report);
+      if (preview.wouldDrop) {
+        console.log(`The copy on your sync server (version ${preview.version}) would change this device:`);
+        for (const line of described) console.log(line);
+        console.log('  Your current vault is kept as vault.nkv.bak, where anything removed stays recoverable.');
+        const assumeYes = options.yes === true || process.env.NORTHKEEP_ASSUME_YES === '1';
+        if (!assumeYes) {
+          const answer = await ask('Replace this vault with the server copy? [y/N] ');
+          if (answer === null) fail('This pull would remove or undo something on this device, and there is no terminal to ask on. Nothing was changed. Run again with --yes to pull anyway.');
+          if (!/^y(es)?$/i.test(answer.trim())) fail('Cancelled. Nothing was changed.');
+        }
+      } else {
+        for (const line of described) console.log(line);
+      }
+      const result = await confirmPull({ vaultPath, deviceSecret, masterKey, version: preview.version, sha256: preview.sha256 });
+      if (!result.ok) fail('Nothing to pull: no vault has been pushed to this sync server yet.');
+      console.log(`✓ Pulled version ${result.version}. Your vault is up to date.`);
+    } finally {
+      memzero(masterKey);
     }
   } catch (err) {
     if (err instanceof SubscriptionRequiredError) fail(SUBSCRIBE_HINT);
     throw err;
-  } finally {
-    if (masterKey) memzero(masterKey);
   }
 }
 

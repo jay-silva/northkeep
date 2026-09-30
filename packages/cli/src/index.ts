@@ -59,21 +59,28 @@ import {
 } from './syncCmd.js';
 import {
   shareAddCmd,
+  shareAutoCmd,
   shareCodeCmd,
+  shareConflictsCmd,
   shareIdCmd,
   sharePushCmd,
   shareRemoveCmd,
+  shareResolveCmd,
   shareServerCmd,
   shareStatusCmd,
   shareSyncCmd,
+  type ShareDeps,
   type WithVault,
 } from './shareCmd.js';
+import { loadConnectorConfig, unshareScope } from '@northkeep/sync';
 import {
   projectsCompactCmd,
   projectsDeleteCmd,
   projectsExportCmd,
   projectsImportCmd,
   projectsBoardCmd,
+  projectsHistoryCmd,
+  projectsRestoreCmd,
   projectsUpdateCmd,
   promptOnceRunner,
   type ExportCmdOptions,
@@ -867,9 +874,10 @@ sync
 
 sync
   .command('pull')
-  .description('Download the vault from the sync server (verified before it replaces your local copy)')
-  .action(async () => {
-    await syncPull(vaultPathOpt(), fail);
+  .description('Download the vault from the sync server; shows what would be removed or brought back and asks first')
+  .option('--yes', 'pull without asking even when this device would lose something (it stays in vault.nkv.bak)')
+  .action(async (options: { yes?: boolean }) => {
+    await syncPull(vaultPathOpt(), options, fail, askOnTerminal);
   });
 
 sync
@@ -927,6 +935,25 @@ projects
   .option('--log <text>', 'add a dated Log entry')
   .action(async (slug: string, options: { title?: string; whatWhy?: string; status?: string; nextActions?: string; openQuestions?: string; decision?: string; log?: string }) => {
     await projectsUpdateCmd(slug, options, withVault, fail);
+  });
+
+projects
+  .command('history')
+  .description('List the earlier versions of a project document that can be restored')
+  .argument('<slug>', 'project slug')
+  .action(async (slug: string) => {
+    await projectsHistoryCmd(slug, withVault, fail);
+  });
+
+projects
+  .command('restore')
+  .description('Make an earlier version of a project document the current one again (a preview unless --yes)')
+  .argument('<slug>', 'project slug')
+  .argument('<revision>', 'the version id from "northkeep projects history"')
+  .option('--yes', 'actually restore; without it this is a preview')
+  .option('--expected-revision <id>', 'refuse unless this is still the current version')
+  .action(async (slug: string, revision: string, options: { yes?: boolean; expectedRevision?: string }) => {
+    await projectsRestoreCmd(slug, revision, options, withVault, fail);
   });
 
 projects
@@ -996,7 +1023,7 @@ projects
     const once: WithVault = async (fn) => (await deps.vaultRunner())(fn);
     try {
       const { saved } = await trackSaves(vaultPath, () =>
-        projectsDeleteCmd(slug, { yes }, { withVault: once, fail, ask: async (q) => (process.stdin.isTTY ? promptLine(q) : null) }),
+        projectsDeleteCmd(slug, { yes }, { withVault: once, fail, ask: askOnTerminal, unshare: unshareOnConnector }),
       );
       // ADR 0044: a command that saved pushes once, when its key came without a prompt.
       await autoPushAfterWrite({ vaultPath, masterKey: opened()?.keyForPush ?? null, saved });
@@ -1040,7 +1067,7 @@ share
   .description('Mark a scope Shared (stored encrypted on the connector, no key in its database to read it), then push it; private scopes are never shared')
   .option('--yes', 'skip the confirmation prompt (scripting)')
   .action(async (scope: string, options: { yes?: boolean }) => {
-    await shareAddCmd(scope, options, withVault, fail);
+    await withShareDeps((deps) => shareAddCmd(scope, options, deps, fail));
   });
 
 share
@@ -1066,9 +1093,10 @@ share
 
 share
   .command('push')
-  .description('Re-push your shared scopes to the connector server (after adding memories)')
-  .action(async () => {
-    await sharePushCmd(withVault, fail);
+  .description('Re-push your shared scopes to the connector server (syncs the vault first when this device is ahead)')
+  .option('--reset-order', 'tell Cloud Connect to take this device as the newest copy (after your sync server was reset)')
+  .action(async (options: { resetOrder?: boolean }) => {
+    await withShareDeps((deps) => sharePushCmd(options, deps, fail));
   });
 
 share
@@ -1080,9 +1108,37 @@ share
 
 share
   .command('sync')
-  .description('Pull memories your AI apps created (and forgot) back into your vault, then re-push')
-  .action(async () => {
-    await shareSyncCmd(withVault, fail);
+  .description('Show what your AI apps changed, ask before replacing or forgetting anything, apply it, then re-push')
+  .option('--yes', 'apply replacements and forgets without asking (scripting)')
+  .action(async (options: { yes?: boolean }) => {
+    await withShareDeps((deps) => shareSyncCmd(options, deps, fail));
+  });
+
+share
+  .command('conflicts')
+  .description('List cloud project versions that were not applied because this device changed too')
+  .option('--show <slug>', "show this device's version and the cloud version side by side")
+  .action(async (options: { show?: string }) => {
+    await withShareDeps((deps) => shareConflictsCmd(options, deps, fail));
+  });
+
+share
+  .command('resolve')
+  .description('Settle a conflict: take the cloud version, or keep this one (the cloud text is saved as a memory)')
+  .argument('<slug>', 'project slug')
+  .option('--take-theirs', 'make the cloud version current; this version stays in history')
+  .option('--keep-mine', 'keep this version; save the cloud text as a memory in the project')
+  .option('--id <server-id>', 'which cloud version, when several are waiting')
+  .action(async (slug: string, options: { takeTheirs?: boolean; keepMine?: boolean; id?: string }) => {
+    await withShareDeps((deps) => shareResolveCmd(slug, options, deps, fail));
+  });
+
+share
+  .command('auto')
+  .description('Turn automatic updates to Cloud Connect on or off on this device, or show the setting')
+  .argument('[setting]', 'on or off')
+  .action((setting: string | undefined) => {
+    shareAutoCmd(setting, fail);
   });
 
 const connectGroup = program
@@ -1280,6 +1336,41 @@ interface RememberOptions {
 
 function vaultPathOpt(): string {
   return program.opts<{ vault: string }>().vault;
+}
+
+/** A y/N question on a terminal; null when stdin is not one, so callers refuse rather than guess. */
+async function askOnTerminal(question: string): Promise<string | null> {
+  return process.stdin.isTTY ? promptLine(question) : null;
+}
+
+/** R-S2: delete a shared project's scope from the connector before the local delete. */
+async function unshareOnConnector(scope: string): Promise<void> {
+  const cfg = loadConnectorConfig();
+  // A scope marked shared with no server configured here has nothing this device can reach.
+  if (cfg === null) return;
+  await unshareScope({ server: cfg.server, deviceSecret: loadDeviceSecret(), scope });
+}
+
+/**
+ * Share commands open the vault more than once (preview, apply, push) and
+ * may need the key for the vault push, so the key is resolved once, with at
+ * most one passphrase prompt, and zeroed at the end.
+ */
+async function withShareDeps(fn: (deps: ShareDeps) => Promise<void>): Promise<void> {
+  const vaultPath = vaultPathOpt();
+  const held: { opened: Awaited<ReturnType<typeof promptOnceRunner>> | null } = { opened: null };
+  const open = async () => (held.opened ??= await promptOnceRunner(vaultPath, getPassphrase));
+  try {
+    await fn({
+      vaultPath,
+      withVault: async (inner) => (await open()).runner(inner),
+      masterKey: async () => (await open()).key(),
+      ask: askOnTerminal,
+    });
+  } finally {
+    held.opened?.dispose();
+    held.opened?.keyForPush?.fill(0);
+  }
 }
 
 function parseConfidence(raw: string): number {

@@ -51,6 +51,9 @@ export {
   connectorPairedAt,
   connectorPaired,
   connectorLastPushedAt,
+  connectorAutoPushEnabled,
+  connectorPushFingerprint,
+  setConnectorAutoPush,
   markConnectorPushed,
   foldSidecarScopesIntoVault,
   markConnectorPaired,
@@ -107,6 +110,7 @@ export {
   type ConnectorAutoPushStatus,
 } from './connector-auto.js';
 export {
+  assertDeviceCanPush,
   ConnectorPushBlockedError,
   manualConnectorPush,
   manualVaultStamp,

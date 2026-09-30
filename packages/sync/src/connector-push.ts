@@ -36,6 +36,19 @@ export class ConnectorPushBlockedError extends Error {
 }
 
 /**
+ * Refuse before a down-sync or resolve writes anything when the push that
+ * must follow it would be refused: a local write on a device that is behind
+ * would only make it diverged. No vault sync configured: nothing to check.
+ */
+export async function assertDeviceCanPush(opts: { vaultPath: string; deviceSecret: Buffer }): Promise<void> {
+  if (loadSyncConfig() === null) return;
+  if (!isAutoSyncVault(opts.vaultPath)) throw new ConnectorPushBlockedError('other-vault');
+  const s = await syncState(opts);
+  if (s.state === 'behind') throw new ConnectorPushBlockedError('behind');
+  if (s.state === 'diverged') throw new ConnectorPushBlockedError('diverged');
+}
+
+/**
  * The stamp for a manual push (Sync now, share add, share push or sync).
  * In sync: the server's version. Ahead: push the vault first and use the
  * version the sync server returns. Behind or diverged: refuse. No vault sync:

@@ -62,6 +62,8 @@ describe('ADR 0061 CLI copy', () => {
   });
 
   it('a 402 on push carries the unshare sentence', async () => {
-    await expect(sharePushCmd(withVault, fail)).rejects.toThrow(LAPSED_UNSHARE_HINT);
+    await expect(
+      sharePushCmd({}, { withVault, vaultPath: path.join(home, 'vault.nkv'), masterKey: async () => Buffer.alloc(0), ask: async () => null }, fail),
+    ).rejects.toThrow(LAPSED_UNSHARE_HINT);
   });
 });

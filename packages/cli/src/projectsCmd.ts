@@ -12,6 +12,8 @@ import {
   memzero,
   PROJECT_SECTION_HEADINGS,
   ProjectHandoffError,
+  getProjectRevision,
+  getProjectView,
   projectScope,
   summarizeMirror,
   withFileLock,
@@ -19,6 +21,7 @@ import {
   type ImportFilePlan,
   type ProjectBoard,
   type ProjectCompactionResult,
+  type ProjectView,
   PROJECT_IMPORT_PUSH_MAX_BYTES,
   PROJECT_IMPORT_ROW_MAX_BYTES,
 } from '@northkeep/core';
@@ -172,6 +175,11 @@ export interface DeleteDeps {
   fail: (m: string) => never;
   /** Asks one question; null when there is no terminal to ask on. */
   ask: (question: string) => Promise<string | null>;
+  /**
+   * Deletes a shared project's scope from Cloud Connect before the local
+   * delete (ADR 0063 recheck R-S2). Throws when the server delete failed.
+   */
+  unshare: (scope: string) => Promise<void>;
   out?: (line: string) => void;
 }
 
@@ -179,6 +187,11 @@ export interface DeleteDeps {
  * `northkeep projects delete`: forget every live entry in a project's scope,
  * archives and overflow included, so a slug left with archives only can be
  * imported again. Asks first, outside the vault lock, unless --yes.
+ *
+ * A shared project is deleted from Cloud Connect first and unmarked in the
+ * same save as the local delete, so a cloud copy (a pending app write
+ * included) cannot come back later without a prompt (ADR 0063 recheck R-S2).
+ * If the server delete fails, nothing is deleted anywhere.
  */
 export async function projectsDeleteCmd(slug: string, options: { yes?: boolean }, deps: DeleteDeps): Promise<void> {
   const out = deps.out ?? ((line: string) => console.log(line));
@@ -188,20 +201,29 @@ export async function projectsDeleteCmd(slug: string, options: { yes?: boolean }
   } catch {
     deps.fail('Project slug is invalid: use lowercase letters, digits and hyphens.');
   }
-  const live = await deps.withVault((vault) => vault.list({ scope, includeSuperseded: true }).length);
-  if (live === 0) deps.fail(`Project ${slug} has no entries in this vault; nothing was deleted.`);
+  const found = await deps.withVault((vault) => ({ live: vault.list({ scope, includeSuperseded: true }).length, shared: vault.sharedScopes().includes(scope) }));
+  if (found.live === 0) deps.fail(`Project ${slug} has no entries in this vault; nothing was deleted.`);
   if (options.yes !== true) {
     const answer = await deps.ask(
-      `This forgets ${entries(live)} in project ${slug}: its document, log archives and any other notes in its scope. ` +
+      `This forgets ${entries(found.live)} in project ${slug}: its document, log archives and any other notes in its scope. ` +
+        (found.shared ? 'It is shared, so it is also deleted from Cloud Connect. ' : '') +
         'Their text cannot be recovered. Continue? [y/N] ',
     );
     if (answer === null) deps.fail('No terminal to confirm on. Add --yes to delete without asking.');
     if (!/^y(es)?$/i.test(answer.trim())) deps.fail('Cancelled. Nothing was deleted.');
   }
+  if (found.shared) {
+    try {
+      await deps.unshare(scope);
+    } catch (err) {
+      deps.fail(`Could not delete project ${slug} from Cloud Connect, so nothing was deleted. Try again. (${err instanceof Error ? err.message : String(err)})`);
+    }
+  }
   type Outcome = { error: string } | { error?: undefined; count: number };
   const outcome: Outcome = await deps.withVault((vault): Outcome => {
     try {
       const count = vault.deleteProject(slug);
+      if (vault.sharedScopes().includes(scope)) vault.setScopeShared(scope, false);
       vault.save();
       return { count };
     } catch (err) {
@@ -213,7 +235,76 @@ export async function projectsDeleteCmd(slug: string, options: { yes?: boolean }
   });
   if (outcome.error !== undefined) deps.fail(outcome.error);
   out(`✓ Deleted project ${slug}: forgot ${entries(outcome.count)}.`);
+  if (found.shared) out('  It was also deleted from Cloud Connect and is no longer shared.');
   out('  Note: the previous vault state remains in vault.nkv.bak until the next write.');
+}
+
+/** `northkeep projects history <slug>` (ADR 0063 D4): the versions a restore can bring back. */
+export async function projectsHistoryCmd(slug: string, withVault: WithVault, fail: (m: string) => never, out: (line: string) => void = (line) => console.log(line)): Promise<void> {
+  type Outcome = { error: string } | { error?: undefined; view: ProjectView; blanked: number };
+  const outcome: Outcome = await withVault((vault): Outcome => {
+    try {
+      const view = getProjectView(vault, slug, undefined, { history: true });
+      const blanked = vault.list({ scope: view.scope, type: 'working', includeSuperseded: true, includeForgotten: true }).filter((e) => e.forgotten_at !== null).length;
+      return { view, blanked };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+  if (outcome.error !== undefined) fail(outcome.error);
+  const { view, blanked } = outcome;
+  out(`Project ${slug}, current version ${view.revision} (${view.updated_at}).`);
+  if (view.history.length === 0) {
+    out('No earlier versions.');
+  } else {
+    out('Earlier versions, newest first:');
+    for (const h of view.history) out(`  ${h.id}  ${h.updated_at}  ${h.content.length} characters`);
+    out(`Restore one: northkeep projects restore ${slug} <version id> --yes`);
+  }
+  if (blanked > 0) out(`${blanked} older ${blanked === 1 ? 'version was' : 'versions were'} cleared to save space and cannot be restored.`);
+}
+
+/**
+ * `northkeep projects restore <slug> <revision> [--yes]` (ADR 0063 D4): write
+ * an earlier version's exact text back as the new current version. A preview
+ * unless --yes. `expectedRevision` pins the current version the user saw.
+ */
+export async function projectsRestoreCmd(
+  slug: string,
+  revision: string,
+  options: { yes?: boolean; expectedRevision?: string },
+  withVault: WithVault,
+  fail: (m: string) => never,
+  out: (line: string) => void = (line) => console.log(line),
+): Promise<void> {
+  type Outcome = { error: string } | { error?: undefined; preview: boolean; from: string; revision: string };
+  const outcome: Outcome = await withVault((vault): Outcome => {
+    try {
+      const current = getProjectView(vault, slug);
+      if (options.yes !== true) {
+        getProjectRevision(vault, slug, revision);
+        if (revision === current.revision) return { error: 'That version is already the current document.' };
+        return { preview: true, from: revision, revision: current.revision };
+      }
+      const view = vault.restoreProjectRevision({
+        project: slug,
+        revision,
+        expected_revision: options.expectedRevision ?? current.revision,
+        writer: { host: 'northkeep-cli', session_id: crypto.randomUUID() },
+      });
+      vault.save();
+      return { preview: false, from: revision, revision: view.revision };
+    } catch (err) {
+      return { error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+  if (outcome.error !== undefined) fail(outcome.error);
+  if (outcome.preview) {
+    out(`This would make version ${outcome.from} the current document of ${slug}. The current version (${outcome.revision}) stays in history.`);
+    out('Preview only: nothing changed. Add --yes to restore.');
+    return;
+  }
+  out(`✓ Restored project ${slug} to version ${outcome.from}. The new current version is ${outcome.revision}.`);
 }
 
 // ---- the local mirror (ADR 0053 M-A1) ------------------------------------------------------
@@ -593,7 +684,7 @@ export async function projectsImportCmd(
 export async function promptOnceRunner(
   vaultPath: string,
   getPassphrase: (prompt: string) => Promise<string>,
-): Promise<{ runner: VaultRunner; keyForPush: Buffer | null; dispose: () => void }> {
+): Promise<{ runner: VaultRunner; keyForPush: Buffer | null; key: () => Buffer; dispose: () => void }> {
   const resolved = resolveMasterKey(vaultPath);
   let key: Buffer;
   if (resolved !== null) {
@@ -631,7 +722,7 @@ export async function promptOnceRunner(
         vault.close();
       }
     });
-  return { runner, keyForPush: resolved !== null ? Buffer.from(key) : null, dispose: () => memzero(key) };
+  return { runner, keyForPush: resolved !== null ? Buffer.from(key) : null, key: () => Buffer.from(key), dispose: () => memzero(key) };
 }
 
 /**
