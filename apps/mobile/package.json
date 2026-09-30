@@ -12,6 +12,13 @@
     "typecheck": "tsc --noEmit",
     "eas-build-post-install": "pnpm -r build"
   },
+  "expo": {
+    "install": {
+      "exclude": [
+        "typescript"
+      ]
+    }
+  },
   "dependencies": {
     "@expo/dom-webview": "~57.0.1",
     "@expo/vector-icons": "^15.1.1",
