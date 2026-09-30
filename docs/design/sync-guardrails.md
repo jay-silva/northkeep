@@ -701,7 +701,7 @@ local sync server. It refuses any other home. One step per call:
 
 ```
 bash scripts/adr-0063-acceptance.sh setup     # temp vault, local connector, share project:demo, push
-bash scripts/adr-0063-acceptance.sh 1         # a cloud update, then a local save: the incident
+bash scripts/adr-0063-acceptance.sh 1         # a cloud update, then a local save not yet sent: the incident
 node packages/cli/dist/index.js share sync    # expect: "1 conflict: demo" and the plan; answer n
 bash scripts/adr-0063-acceptance.sh 2         # prints the local head: still the local save
 node packages/cli/dist/index.js share resolve demo --take-theirs
@@ -1130,11 +1130,15 @@ paths against the real connector on both stores.
 
 **Acceptance.** `scripts/adr-0063-acceptance.sh` follows section 9 with
 these differences, forced by the built code:
-- The conflict in step 1 reads "Cloud Connect already has a newer copy than
-  the one this cloud version started from" rather than `moved`: the CLI's
-  automatic push after the local save sends R2 to the connector (D5), so the
-  row is stale by the time `share sync` runs. Step 1 shows it: the save
-  prints "Cloud Connect updated" and the cloud app then reads R2.
+- Step 1 replays the incident's shape: it turns automatic updates off
+  (`share auto off`) before the local save, so R2 is not sent to Cloud
+  Connect. It checks that the cloud app still reads the cloud edit and that
+  `share conflicts` holds the row as `moved` ("this Mac changed it after the
+  cloud version was written"), then turns automatic updates back on.
+  `share sync` then shows the same `moved` conflict, applies nothing, and
+  re-pushes R2, so step 2's `share conflicts` shows the row as stale. (Fix
+  round; before it, step 1's automatic push sent R2 at once and the incident
+  shape was never shown.)
 - `share sync` asks nothing there, because a conflict alone is never applied
   (client D3 note); there is no "answer n".
 - Step 5 makes its row legacy through a loopback-only side door in

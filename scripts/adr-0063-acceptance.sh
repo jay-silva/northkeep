@@ -51,13 +51,20 @@ step_setup() {
 }
 
 step_1() {
-  echo "A connected app edits the project, then this Mac saves a newer version (the 2026-09-30 incident):"
+  echo "A connected app edits the project, then this Mac saves a newer version it has not yet sent to"
+  echo "Cloud Connect (the 2026-09-30 incident). Automatic updates are off for this step, so the save stays here:"
+  nk share auto off | sed 's/^/  /'
   cloud update demo "CLOUD: written by a connected app."
   nk projects update demo --status "R2: saved on this Mac after the cloud edit." 2>&1 | sed 's/^/  /'
   head_rev > $L/r2.txt
-  echo "  $(cloud get demo)"
-
+  served=$(cloud get demo)
+  echo "  $served"
+  conflicts=$(nk share conflicts 2>&1)
+  echo "$conflicts" | sed 's/^/  /'
   check "$(has "$(head_status)" 'R2: saved on this Mac')" "this Mac's head is R2 ($(cat $L/r2.txt))"
+  check "$(has "$served" 'CLOUD: written by a connected app.')" "Cloud Connect still serves the cloud edit: R2 was not sent"
+  check "$(has "$conflicts" 'this Mac changed it after the cloud version was written')" "the cloud edit is held because this Mac changed the project after it"
+  nk share auto on | sed 's/^/  /'
   echo; echo "Next: node packages/cli/dist/index.js share sync"
   echo "Expect a conflict for demo that is not applied, and no question, because nothing would be replaced."
 }
