@@ -1,6 +1,7 @@
 # Sync guardrails (design for ADR 0063)
 
-Status: proposed, not built. Review: pending (see "Adversarial review" below).
+Status: proposed, not built. Revised 2026-09-30 after the first adversarial
+review (NOT CLEARED); recheck pending. See "Review history" at the end.
 Rules: `~/Claude/Claude Context/RULES.md`, Version 2026-09-29.2.
 Base: branch `adr-0063/sync-guardrails` at `7a7780f` ("Connect: show when this
 Mac last pushed to Cloud Connect"). Every file:line below is at `7a7780f`; the
@@ -39,13 +40,31 @@ days; three were genuinely newer from the cloud. The chain:
 
 The root cause is a missing fact, not a missing check. A cloud write does not
 record which document it started from, so no surface can tell a fast-forward
-from a rollback. D1 and D2 add that fact. D3, D4 and D6 make the remaining
-replace paths visible and reversible. D5 shrinks the window in which the two
-copies drift.
+from a rollback. D1 and D2 add that fact for every write from now on. A row
+written before this ADR carries no such fact, and nothing on the connector can
+recover it (section 6), so such a row is always the user's decision. D3, D4
+and D6 make the remaining replace paths visible and reversible. D5 shrinks the
+window in which the two copies drift.
 
 ## 2. The data shape
 
-One new field, `base_revision`, on a pending connector row.
+Two new plaintext columns on `shared_entries` and one new table. No other
+source of ordering exists: `created_at` is not read by any rule in this ADR.
+
+**`base_revision`** on a pending connector row, with three distinct values:
+
+| Value | Meaning | Written by |
+|---|---|---|
+| a vault entry id | the pushed head this chain of cloud edits started from | hosted `project_update` |
+| the literal `new` | created on the connector, no base exists | hosted `project_create` (`mcp.ts:753-765`) |
+| SQL `NULL` / JSON absent | **legacy**: written by a connector that predates this ADR | nothing; only old rows have it |
+
+The sentinel keeps "created on the connector" apart from "legacy". Adding the
+column with `ADD COLUMN IF NOT EXISTS base_revision text` gives every existing
+row `NULL`, so legacy is exactly the set of rows nobody wrote a base for.
+Vault entry ids are UUIDs, so `new` can never collide with one. The in-memory
+`SharedEntry` (`storage.ts:65-86`) carries the same three states as
+`string | 'new' | undefined`.
 
 - A **revision** is the entry id of a live project head. Locally that is
   `getProjectView(...).revision`, the id of the single live working entry
@@ -55,17 +74,34 @@ One new field, `base_revision`, on a pending connector row.
 - A pending row born on the connector gets a fresh `conn_<uuid>` id
   (`mcp.ts:930`). After the desktop applies it, `ackEntry` renames the row to
   the new local head id and clears `pending` (`storage.ts:576-591`). So the two
-  id spaces meet exactly at ack, and `base_revision` always names a vault id.
-- `base_revision` is the pushed head the chain of cloud edits started from.
-  `null` means "created on the connector" (ADR 0050 `project_create`,
-  `mcp.ts:753-765`). Absent means "written by a connector that predates this
-  ADR".
-- Storage: a plaintext `base_revision text` column on `shared_entries`, added
-  with one idempotent `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` array entry
-  (`neon-storage.ts:30-90`, ADR 0010 single-statement rule), and the same
-  optional field on `SharedEntry` (`storage.ts:65-86`). Entry ids are already
-  visible to the connector under invariant #2, so this discloses nothing new.
-- `/client/pending` returns it per entry (`create-server.ts:829-849`).
+  id spaces meet exactly at ack, and a non-sentinel `base_revision` always
+  names a vault id.
+
+**`write_seq bigint`** on every row: the value of the scope's counter at the
+write that last touched the row. It orders rows. It replaces the `createdAt`
+tie-break in `selectProjectWorkingDoc` (`mcp.ts:100-117`), because the two
+stores stamp `createdAt` differently: Neon `putEntry` overwrites it on every
+upsert (`neon-storage.ts:373-382`), a push keeps Neon's first-insert time
+(`neon-storage.ts:400-406`), and the in-memory store re-stamps on every push
+(`create-server.ts:679`, `storage.ts:469`). The first review showed the two
+stores choosing different heads after an ack (A3).
+
+**`scope_seq (account_hash, scope, seq bigint)`**: one counter per scope that
+only goes up. Every connector write that touches a scope increments it in the
+same statement or transaction: a push (once per pushed scope), a cloud write,
+an ack, a discard, and the drain of a forget. It never goes down, including
+when a push empties a scope, so a compare-and-swap on it cannot be fooled by
+rows reappearing (an ABA). The in-memory store keeps the same counter in a
+`Map`, so both stores give identical answers; the storage tests run both.
+
+- Storage: three idempotent single statements in the schema array
+  (`neon-storage.ts:30-90`, ADR 0010): two `ALTER TABLE ... ADD COLUMN IF NOT
+  EXISTS` and one `CREATE TABLE IF NOT EXISTS scope_seq`. Entry ids and scope
+  names are already visible to the connector under invariant #2. The counter
+  discloses how many writes a scope has had, which the audit log already
+  records.
+- `/client/pending?v=2` returns `base_revision` (id, `new`, or absent) and a
+  `stale` flag per entry (D2) (`create-server.ts:829-849`).
 
 ## 3. Decisions
 
@@ -74,13 +110,27 @@ One new field, `base_revision`, on a pending connector row.
 **Rule.** For each pending `working` row in a project scope, with `H` the local
 head from `getProjectView` (not the last item of `list()`):
 
-| Row's base | Local state | Action |
+| Row | Local state | Action |
 |---|---|---|
-| string equal to `H.id` | one live head | apply with the guarded project write (below), ack |
-| `null` | no live working entry | create (today's path, and the ADR 0050 fold for an empty unshared scope) |
-| any | content identical to `H.content` | ack against `H.id` as a dedupe |
-| anything else, including absent | | **conflict**: not applied, not acked |
-| any | `getProjectView` throws `project_conflict` (several live docs, the old-client shadow case) | conflict |
+| any | content identical to `H.content` | ack against `H.id` as a dedupe (no vault write) |
+| `stale: true` | any | **conflict** |
+| base absent (legacy) | any | **conflict**, always |
+| base equal to `H.id`, not stale | one live head | apply with the guarded project write (below), ack |
+| base `new`, not stale | no live working entry | create (today's path) |
+| anything else | | **conflict**: not applied, not acked |
+| any | `getProjectView` throws `project_conflict` (several live docs) | conflict |
+
+Rows are matched top to bottom. The dedupe row writes nothing to the vault, so
+it is safe for a legacy row too: acking renames the connector row to a head the
+device already has.
+
+**Legacy rows are never applied automatically.** No client, desktop, CLI or
+phone, applies a row with no recorded base. It is held for the user with the
+three actions below, including when the scope has no local document at all
+(which today would take the create path). The ADR 0050 fold for an empty
+unshared scope (`connector-client.ts:346`) also requires base `new`; a legacy
+row there is held. No path infers a base from a timestamp, an id, or the
+order rows arrive in: the only bases are the ones a post-ADR connector wrote.
 
 The apply is a revision-bound write: supersede `H` only if it is still the live
 head, the same guard `updateProject` uses (`vault.ts:919`, `:936`), so a local
@@ -97,66 +147,120 @@ the connector, exactly like a held unshared scope (`connector-client.ts:351-352`
 Nothing new is stored on the device: every down-sync re-derives the conflict set
 from `/client/pending`, which makes the step idempotent across crashes and
 devices. `DownSyncResult` gains
-`conflicts: { scope, server_id, base_revision, local_revision }[]`.
+`conflicts: { scope, server_id, base_revision, local_revision, reason }[]`,
+where `reason` is `moved`, `stale`, `legacy` or `several_heads`.
 
 **Resolving.** The Mac app shows a conflict on the project page and on the Cloud
 screen with three actions. The CLI gets `northkeep share conflicts [--show
 <slug>]` and `northkeep share resolve <slug> --take-theirs|--keep-mine`.
 
-- *View both*: the local head and the cloud text side by side (read only).
+- *View both*: the local head and the cloud text side by side (read only). When
+  the cloud text equals a superseded local revision (the crash-after-save case,
+  first review A6), it says "This cloud version is already in your history".
 - *Take theirs*: a revision-bound write of the cloud text over the head the user
   was shown, then ack. Refuses `stale_project` if the head moved. The local
   document stays in history.
-- *Keep mine*: a new `POST /client/discard { server_ids }` deletes the pending
-  row (`storage.deleteEntry` already exists, `storage.ts:246`), then a push.
-  Whether the cloud text is dropped or saved first is a question for Jay
-  (section 8).
+- *Keep mine* (founder decision, 2026-09-30): first save the cloud text as an
+  `episodic` memory in the project scope, titled "Cloud version not kept,
+  <date>", with `metadata.connector.discarded = <server_id>`. Then save the
+  vault, then `POST /client/discard { server_ids }`, which deletes exactly
+  those pending rows by id and bumps `scope_seq`, then push. It is a non-working
+  memory on purpose: a second working entry would make `getProjectView` throw
+  `project_conflict`. A retry after a crash finds the memory by its
+  `discarded` metadata and does not write a second one. The memory reaches the
+  cloud apps with the next push, because the scope is shared.
 
-**Phone.** `apps/mobile/src/lib/vault-session.tsx:1374` calls the same
-`downSyncConnector`, so D1 applies there with no phone code. The phone has no
-project tools (KNOWN-LIMITS, M14 section), so it holds conflicts and says
-"Resolve on your Mac". It never re-pushes to the connector after a down-sync
-(`vault-session.tsx:1381` pushes only to the sync server), which this ADR keeps.
+**Phone** (founder decision, 2026-09-30). The phone applies only additions
+until it has its own preview screen. `apps/mobile/src/lib/vault-session.tsx:1374`
+calls `downSyncConnector`; it passes a new `additiveOnly: true`. With it:
+new memories and base-`new` projects with no local document apply; every
+fast-forward, replace and conflict is held with "Review on your Mac"; and
+connector forgets are neither applied nor acked. Today every forget is acked
+regardless (`connector-client.ts:396-406`), which would drain the queue, so the
+phone must skip the ack or the Mac never sees the forget. The phone has no
+project tools (KNOWN-LIMITS, M14 section) and never re-pushes to the connector
+after a down-sync (`vault-session.tsx:1381` pushes only to the sync server),
+which this ADR keeps. This needs a phone build.
 
 **Failure prevented.** The incident: a document written against an old base
-replacing a newer local head.
+replacing a newer local head, including rows written before this ADR (first
+review A2).
 
 ### D2. The connector serves the newest document and refuses stale writes
 
 **Ordering rule, per project scope.** Let `P` be the pushed head: the
-non-pending `working` row (after a push there is one; if several, today's
-tie-break). A pending working row `c` is **current** when
-`c.base_revision === P.entryId`, or when `P` does not exist and
-`c.base_revision === null`. Then:
+non-pending `working` row with the highest `write_seq`. A push stamps every row
+it upserts in a scope with that scope's new counter value, and an ack stamps
+the renamed row with a new value, so after an ack the acked row outranks the
+old pushed row on both stores. Two non-pending working rows with the same
+`write_seq` came from one push of a vault with several live heads; hosted
+`project_get` then refuses with `project_conflict`, the local wording, rather
+than pick one.
+
+A pending working row `c` is **current** when `c.base_revision === P.entryId`,
+or when `P` does not exist and `c.base_revision === 'new'`. Then:
 
 1. If a current pending row exists, it is the head.
 2. Otherwise `P` is the head.
-3. A pending row that is not current is **stale**. It is never served by
-   `project_get` or `project_list`, and never used as a merge base. It is still
-   delivered on `/client/pending`, where D1 holds it as a conflict.
+3. A pending row that is not current is **stale**, and so is every legacy row.
+   It is never served by `project_get` or `project_list`, and never used as a
+   merge base. It is still delivered on `/client/pending?v=2` with
+   `stale: true`, so every device holds it, including a phone that is behind on
+   vault sync and whose own head still equals the stale row's base (first
+   review note).
 
-Time plays no part. `createdAt` cannot order these rows: the in-memory store
-re-stamps it on every push (`create-server.ts:679`, `storage.ts:469`), while
-Neon keeps the first-insert time because the upsert omits `created_at`
-(`neon-storage.ts:400-406`). A time rule would pass tests and differ in
-production.
+No rule reads `created_at`. `selectProjectWorkingDoc` loses its `createdAt`
+comparison.
 
 **Revisions on the hosted tools.** Today hosted `project_get` returns bare
 Markdown (`mcp.ts:657-660`) and hosted `project_update` takes no
-`expected_revision` (schema at `mcp.ts:796-813`). Hosted `project_get` adds the head's
-revision (in `structuredContent` and one trailing line of text).
-`project_update` accepts `expected_revision`. When it is present and not the
-head's id, the call refuses with `stale_project` wording that matches the local
-tool ("Project changed after it was read.") and returns the current document.
-Whether it is required is a question for Jay (section 8).
+`expected_revision` (schema at `mcp.ts:796-813`). Hosted `project_get` adds the
+head's revision (in `structuredContent` and one trailing line of text).
+`project_update` **requires** `expected_revision` (founder decision,
+2026-09-30), as the local tools do (`vault.ts:907`). Missing, it refuses with
+"Nothing was saved: call project_get first and pass its revision as
+expected_revision." Not the head's id, it refuses with the local
+`stale_project` wording ("Project changed after it was read.") and returns the
+current document and revision.
 
-**Every cloud write gets a new revision.** Today an update over a pending head
-rewrites the same row id (`mcp.ts:915`, `:930`), so two sessions that both read
-it would share one revision and `expected_revision` could not tell them apart.
-Instead each update writes a new `conn_<uuid>` row that carries the prior
-row's `base_revision` forward, and deletes the prior pending working row. On
-Neon both statements go in one `sql.transaction` (the pattern at
-`neon-storage.ts:432`). An update over `P` writes `base_revision = P.entryId`.
+**Every cloud write gets a new revision, atomically.** Today an update over a
+pending head rewrites the same row id (`mcp.ts:915`, `:930`), so two sessions
+that both read it would share one revision. Instead each update writes a new
+`conn_<uuid>` row and deletes exactly the one pending row it replaced. The new
+row's `base_revision` is `P.entryId` for an update over `P`, and the replaced
+row's base for an update over a current pending row.
+
+The refusal must hold under concurrency, and Neon's `sql.transaction` is
+non-interactive, so the check lives in SQL, over plaintext columns only (the
+`type` column is `''` for encrypted rows). The tool first ensures the scope's counter row
+exists (`INSERT ... ON CONFLICT DO NOTHING`), reads it as `S` before it reads
+the rows, checks `expected_revision` in code for the early
+refusal, then runs one statement with data-modifying CTEs:
+
+```sql
+WITH cas AS (
+  UPDATE scope_seq SET seq = seq + 1
+  WHERE account_hash = $a AND scope = $s AND seq = $S
+  RETURNING seq),
+ins AS (
+  INSERT INTO shared_entries (..., base_revision, write_seq)
+  SELECT ..., $base, cas.seq FROM cas
+  RETURNING entry_id),
+del AS (
+  DELETE FROM shared_entries
+  WHERE account_hash = $a AND entry_id = $replaced_id AND pending
+    AND EXISTS (SELECT 1 FROM ins))
+SELECT entry_id FROM ins
+```
+
+An empty result is `stale_project`. The swap serializes on the counter row, so
+two updates with the same `expected_revision` cannot both succeed: the second
+finds `seq` moved and inserts nothing. The delete names one id, never a
+predicate, so held stale rows are never removed by a write. An update over `P`
+has no `$replaced_id` and the `del` step deletes nothing. The archive row of
+ADR 0045 joins the same statement as a second guarded insert. The in-memory
+store does the same compare-and-swap synchronously.
+
 An ack for a row that was replaced in the meantime finds no row and does
 nothing (`storage.ts:587`). The replacement then fails D1's base check on the
 next sync and is held. That is the safe outcome for a race of seconds.
@@ -164,10 +268,11 @@ next sync and is held. That is the safe outcome for a race of seconds.
 **Residual.** `memory_list`, `memory_retrieve`, `search` and `fetch` list rows,
 not a head, so they still show a stale pending working row next to the pushed
 one. Hiding it there too is cheap. Fold it into the build or state it in
-KNOWN-LIMITS; the review decides.
+KNOWN-LIMITS; the recheck decides.
 
 **Failure prevented.** Cloud bots reading, and building on, a document the Mac
-has already replaced (incident step 3).
+has already replaced (incident step 3), and two cloud sessions overwriting each
+other.
 
 ### D3. Sync now previews destructive changes and applies only on confirm
 
@@ -175,9 +280,10 @@ has already replaced (incident step 3).
 write) and `applyDownSync(plan, approved)`. The plan lists added memories
 (counts by scope), project documents that would be replaced (fast-forwards
 under D1, by project name), memories that would be forgotten (count, scope and
-the first line of each), conflicts (by name), held scopes (ADR 0050), and
-projects that would arrive from an app. A plan with any replace or forget needs
-confirmation. A purely additive plan applies without a prompt, as today.
+the first line of each), conflicts (by name and reason), held scopes (ADR
+0050), and projects that would arrive from an app. A plan with any replace or
+forget needs confirmation. A purely additive plan applies without a prompt, as
+today.
 
 `applyDownSync` fetches `/client/pending` again and applies only rows whose
 `server_id` (and forgets whose `entry_id`) the user approved. Anything new since
@@ -192,8 +298,7 @@ the preview stays pending for the next sync.
   or `NORTHKEEP_ASSUME_YES=1` skips the prompt, the same as `projects delete`
   (`packages/cli/src/index.ts:992-999`). With no TTY and no `--yes` it applies
   nothing and exits non-zero.
-- Phone: until a preview screen exists, the phone applies only the additive part
-  and leaves replaces and forgets pending with "Review on your Mac" (section 8).
+- Phone: additive-only (D1, founder decision).
 
 `GET /client/pending` is not free of side effects. It deletes pending rows in
 tombstoned scopes (`create-server.ts:810-813`), and it can create the account
@@ -230,66 +335,174 @@ held (D1).
 history and the sync server. The superseded Mac head sits one revision back, so
 one click would have recovered each of the five.
 
-### D5. Push shared scopes automatically after a local write
+### D5. Push shared scopes automatically, only from a device that is in sync
 
 **Rule.** A `ConnectorAutoPush` engine beside `AutoSync`
-(`packages/sync/src/auto.ts:135`) hooks the same `onVaultSave` signal
-(`packages/core/src/vault.ts:161`; the host wiring in
-`packages/mcp-server/src/auto-sync.ts:36-45` and the GUI and CLI engines). It
-debounces, with the ADR 0044 5 s trailing edge and its max-wait cap
-(`auto.ts:123`, `:333-337`). On save it computes a fingerprint over the
-`(entry_id, entry_hash)` of every live entry in the shared scopes. It calls
-`pushSharedScopes` only when the fingerprint differs from the one recorded at
-the last accepted push. That fingerprint goes into `connector.json` next to
-`last_pushed_at` (`packages/sync/src/connector-config.ts:86-90`). It pushes
-only. It never down-syncs, never marks a scope, and runs only while the vault is
-unlocked. A 402, 409 or 412 pauses it the way `AutoSync` pauses
-(`auto.ts:27-39`), and the Cloud screen says so.
+(`packages/sync/src/auto.ts:135`) pushes shared scopes to the connector. It
+runs only when this device's vault is known to be current:
+
+- **Trigger.** It runs after `AutoSync` reports a successful vault push (the
+  `pushed` event, `auto.ts:542`), and on `wake()` when `syncState` returns
+  `in-sync`. At both points the local file equals the server's blob, so this
+  device holds the newest vault. It does not run on a bare local save.
+- **Precondition.** `syncState` must be exactly `in-sync`. `ahead` is not
+  enough: two devices each `ahead` of the same version are diverged, and
+  neither can tell. When the state is `behind`, `diverged`, a D6 refusal is
+  waiting for the user, or `AutoSync` is off, paused or in error, the engine
+  pauses and the Cloud screen says why ("This Mac is behind your other
+  devices. Cloud Connect will update after it catches up." / "Automatic sync
+  is off, so Cloud Connect updates only when you push.").
+- **Change test.** It computes a fingerprint over the `(entry_id, entry_hash)`
+  of every live entry in the shared scopes, plus the shared-scope list, and
+  calls `pushSharedScopes` only when it differs from the one recorded at the
+  last accepted push. That fingerprint goes into `connector.json` next to
+  `last_pushed_at` (`packages/sync/src/connector-config.ts:86-90`).
+- It pushes only. It never down-syncs, never marks a scope, and runs only
+  while the vault is unlocked. A 402, 409, 412 or 428 pauses it the way
+  `AutoSync` pauses (`auto.ts:27-39`), and the Cloud screen says so.
+
+A device with no vault sync configured (`no-config`) is the only copy of its
+vault, so it pushes on the debounced save, as the first draft said, but sends
+no vault version (below).
 
 Hosts: the GUI server, the standalone MCP server, and the CLI (flushed on exit,
 like `packages/cli/src/autoPush.ts`). The phone is out of this ADR.
+
+**The connector refuses a push older than the last one it accepted.** A check
+on the device alone leaves a window (a phone last-writer-wins re-push can land
+between `syncState` and the push), and the first review showed the connector
+accepting an older snapshot over a newer one (A4). So every push carries the
+vault it was taken from:
+
+- The body gains `vault: { server: <first 16 hex of sha256(sync server URL)>,
+  version: <the sync-server version this device is in-sync at> }`. The
+  sync-server version is the one sequence every device shares: the sync server
+  serializes it with its compare-and-swap on `X-Base-Version`
+  (`apps/sync-server/src/handler.ts:125-143`).
+- `connector_accounts` gains `vault_server text` and `vault_version bigint`.
+  Both push paths at `create-server.ts:709-722` (the accepting path and the
+  fallback `replaceScopes`) start their transaction with one guarded statement
+  that sets the pair only when the server matches and the version is not
+  lower, and every later statement of the push is guarded on that row now
+  holding this push's pair. Equal versions pass: an in-sync device re-pushing
+  the same vault is idempotent. A lower version, or a missing `vault` once one
+  is recorded, is refused with **HTTP 428** and `{ code: 'stale_push',
+  vault_version }`. The client checks for 428 before anything else and says
+  "Another device pushed a newer copy to Cloud Connect. Sync this Mac first."
+  428 is new, so it cannot be mistaken for the 409 re-encrypt error or the 412
+  tombstone.
+- Reset path. A different `server` value replaces the stored pair: pointing
+  vault sync at a new server is a deliberate configuration change. A version
+  that restarts on the same server (a deleted and recreated sync account)
+  needs `northkeep share push --reset-order`, which sends `reset: true` from a
+  manual push only and replaces the pair. The 428 message names the command.
+- Old clients (0.22.x, build 28) send no `vault`, so after the first new-client
+  push their manual pushes get 428 until they upgrade. That is the point: an
+  old client is exactly the device that cannot tell whether it is behind.
+
+Manual pushes (Sync now, `share push|sync`) send the same body. Sync now pushes
+the vault first, so it is in sync when it reaches the connector.
+
+**Tombstone enforcement is required.** D5's 412 path exists only when the
+connector runs with `CONNECTOR_TOMBSTONE_ENFORCE` on (`tombstones.ts:20-23`,
+default off). With it off, a push racing an unshare re-uploads the unshared
+scope (first review A5). So `GET /client/manifest` gains
+`tombstone_enforce: boolean`, and the engine stays paused with "Cloud Connect
+is not refusing pushes to unshared scopes, so automatic push is off" when it is
+false. A self-hosted connector without the flag therefore gets manual pushes
+only. A 412 from a deliberate unshare on this device clears the scope from the
+fingerprint and does not pause the engine.
 
 **Invariant #1 analysis.** What leaves the machine does not change. The
 recipient and the scopes are the same, and so is the content: only content in
 scopes the user individually marked Shared goes, under clause (b). **When** it
 leaves changes. Today it leaves on a deliberate action. After D5 it leaves
-within seconds of any write into a shared scope. The share consent already
-describes a continuing copy: "Memories in '<scope>' will be copied to
-NorthKeep's connector server", which "can always see ... when they change"
-(`shareCmd.ts:96-100`). So D5 brings the behavior into line with what the user
-consented to. Under invariant #2 the connector learns the edit cadence of
-shared scopes more finely (timestamps are already visible to it).
+within seconds of a vault push that included a write into a shared scope. The
+share consent already describes a continuing copy: "Memories in '<scope>' will
+be copied to NorthKeep's connector server", which "can always see ... when they
+change" (`shareCmd.ts:96-100`). Under invariant #2 the connector learns the
+edit cadence of shared scopes more finely, the vault sync version number, and a
+16-hex hash of the sync server URL. None is content.
 
-**Toggle.** Recommend **on by default**, with a Cloud screen switch "Keep Cloud
-Connect up to date automatically". Why: the consent text already promises it; a
-stale connector is what made the incident possible; and the switch covers the
-user who wants to review before each push. This is a default only Jay can set
-(section 8).
+**Toggle** (founder decision, 2026-09-30). On by default, with a Cloud screen
+switch "Keep Cloud Connect up to date automatically".
 
 **Failure prevented.** The multi-day drift window in which every cloud write
-lands on an old base.
+lands on an old base, without letting a behind or diverged device replace the
+connector's newer copy.
 
-### D6. A manual pull reports what would drop out, and asks
+### D6. Every pull reports what would drop out; the manual one asks
 
-**Rule.** `pullVault` already opens the downloaded vault with the key before the
-swap (`client.ts:431`). A dry pass (`pullVault({ dryRun: true })`) downloads,
-verifies and opens it, then compares:
-- entries live on this device whose id does not exist at all in the pulled vault
-  ("only on this device"), with counts by scope and the first line of each;
-- projects whose local head id is absent from the pulled vault (a local version
-  that would drop out of the live vault), by name.
+**The drop set.** Computed from the pulled vault after it opens with the key.
+An item is in the drop set when it is on this device and the pulled vault
+would take it away or undo it:
+
+- entries live here whose id does not exist in the pulled vault ("only on this
+  device"), with counts by scope and the first line of each;
+- **entries forgotten here that are live in the pulled vault** ("you deleted
+  this here; the pull would bring it back"), by scope, with no content shown
+  because this device no longer has it. `forget()` blanks the row under the
+  same id (`vault.ts:493-520`), which is why an id comparison alone misses it
+  (first review L2);
+- entries superseded here whose replacement is absent there (the replacement
+  is already in the first bullet; the report names the project or memory once);
+- projects whose local head id is absent from the pulled vault, by name;
+- scopes marked shared here and not there, and the reverse.
+
+**Automatic pull.** `pullVault` computes the drop set itself, on `tmpPath`,
+after the open-verify and under the file lock (`client.ts:403-455`), so it
+checks exactly the bytes it would install. A non-empty drop set refuses the
+swap with `PullWouldDropError(report)`, and `AutoSync` surfaces it the way it
+surfaces `diverged` (`auto.ts:461-480`). This check is **load-bearing**, not
+defense in depth, because of the phone:
+
+- The phone runs a last-writer-wins policy on vault sync
+  (`apps/mobile/src/lib/sync-flow.ts:12-29`). On a 409 it downloads the
+  server's vault, keeps it as the phone's `.bak`, and re-pushes its own vault
+  over it with the new base version. The server then holds the phone's vault
+  without the Mac's work.
+- The Mac's next `wake()` sees its file unchanged since its last sync and the
+  server ahead, so `syncState` says `behind` and today it pulls automatically.
+  The first review drove the phone's real `runSyncAfterSave` and showed the
+  Mac's pushed work leaving its live vault (L1), and a forgotten shared memory
+  coming back live (L2).
+- With D6 the Mac refuses that pull, shows the report, and D5 stays paused
+  until the user resolves it. What remains is a choice between two devices'
+  work, which this ADR accepts (merge is out of scope).
+
+The build must not drop or weaken this check. The acceptance runs L1 and L2 as
+regressions.
+
+**Manual pull, pinned on both sides.** A dry pass downloads, verifies and
+opens the blob, computes the drop set, and keeps three things: the downloaded
+bytes (in `vault.nkv.pulled.hold`, mode 0600), the `x-version` and `x-sha256`
+the server sent with them (`client.ts:95-111`, `handler.ts:110-123`), and the
+local file's sha. On confirm:
+
+1. It asks `/api/status` again. If the version or sha differs from the dry
+   pass, the server moved: it refuses with `RemoteChangedError`, discards the
+   held bytes, and runs the dry pass again to show a new report.
+2. Otherwise it installs **the held bytes**, not a new download, through the
+   same checks as today (transport sha, open-verify, generation replay,
+   `expectLocalSha` under the lock, `client.ts:417-455`). A local write since
+   the dry pass refuses with `LocalChangedError`.
+3. `sync.json` records the dry-pass version as the synced version.
+
+So the vault installed is byte for byte the one the report described. The
+sync server has no conditional GET today, and none is needed: if the server
+moves after step 1, this device holds exactly what the user confirmed and is
+simply `behind`, and the next automatic pull runs the D6 check again (first
+review L3).
 
 No prompt runs while the sync or file lock is held (`client.ts:388`, `:403`).
-After confirmation the real pull runs with the `expectLocalSha` measured in the
-dry pass (`client.ts:417-419`), so a write in between refuses with
-`LocalChangedError` rather than being lost. An empty drop set pulls without a
-prompt. The automatic fast-forward pull asserts an empty drop set and refuses
-otherwise (defense in depth, `auto.ts:24-27`).
+An empty drop set pulls without a prompt, because nothing on this device is
+lost or undone.
 
 **Surfaces.** `northkeep sync pull` prompts, or takes `--yes`. `POST
 /api/sync/pull` (`apps/web/src/api.ts:821-830`) returns the report with 409
-unless `confirm: true`. The Mac dialog needs a mock. It names
-`vault.nkv.bak` as where the dropped items stay recoverable.
+unless `confirm: true` and the dry pass's `version` and `sha256` are sent back.
+The Mac dialog needs a mock. It names `vault.nkv.bak` as where the dropped
+items stay recoverable.
 
 **Merge stays out of scope.** The vault is a hash chain checked by
 `verifyChain`. Re-appending local-only memories onto the pulled vault is
@@ -299,52 +512,66 @@ whole vaults. Report first; a "re-apply dropped memories" command can follow in
 its own ADR once the report shows how often it happens (**unverified** how
 often).
 
-**Failure prevented.** A diverged pull silently discarding this device's newer
-work.
+**Failure prevented.** A pull, manual or automatic, silently discarding this
+device's newer work or undoing its deletes.
 
 ## 4. KNOWN-LIMITS changes (ship under the review gate)
 
 - Replace "Stale-base last-writer-wins per section" (M14 section) with the D2
-  rule. A hosted update with a stale `expected_revision` is refused. Without
-  one, the write merges into the connector's head, and the device holds it as a
-  conflict if the device moved.
+  rule: a hosted `project_update` without the current `expected_revision` is
+  refused.
 - Add: "A cloud project update is applied on a device only when that device's
   document is still the one the cloud update started from; otherwise it waits
-  as a conflict you resolve." Add the phone line: "The phone holds conflicts;
-  resolve them on the Mac."
+  as a conflict you resolve. Cloud updates written before version <x> always
+  wait for you."
+- Add the phone line: "The phone applies only new memories and new projects
+  from your cloud apps. Replacements and deletions wait for your Mac."
 - Replace "Cloud Connect's copy updates only when you push" (added in
-  `7a7780f`) with the D5 behavior and the switch.
+  `7a7780f`) with the D5 behavior, the switch, and "only while this Mac is in
+  sync with your other devices".
+- Add: "Automatic push to a self-hosted connector needs
+  `CONNECTOR_TOMBSTONE_ENFORCE=1`."
 - Replace "A manual Pull replaces the local vault" with the D6 report and
-  confirmation. Keep the `.bak` sentence.
+  confirmation, including restored deletes. Keep the `.bak` sentence.
 - Add: restore works only for the newest five revisions (ADR 0051).
-- Add: old clients (before this ADR) receive no cloud project updates until they
-  upgrade (rollout gate, section 6).
+- Add: old clients (before this ADR) receive no cloud project updates and
+  cannot push to Cloud Connect once a newer client has, until they upgrade.
 - The D2 residual on the generic tools, if it is not fixed in the build.
 
 ## 5. Tests
 
-Real Postgres for every storage change (RULES Engineering #3). The in-memory
-store and Neon already disagree on `created_at`.
+Real Postgres for every storage change (RULES Engineering #3). Every storage
+test runs twice, on `InMemoryConnectorStorage` and on `NeonConnectorStorage`
+over PGlite, and asserts the same literals on both, because the section 9
+acceptance uses the in-memory store.
 
 - **Incident replay (regression).** Temp `NORTHKEEP_HOME`,
   `NORTHKEEP_NO_KEYCHAIN=1`, and an in-process connector
-  (`createConnectorServer` with `InMemoryConnectorStorage`, as in
-  `packages/sync/test/connector-fold.test.ts`), then the same against Postgres.
+  (`createConnectorServer`, as in `packages/sync/test/connector-fold.test.ts`).
   Share `project:a` and push revision R1. A cloud `project_update` produces a
   pending row with base R1. Save locally to R2 without pushing. Run the
-  down-sync. Assert these literals: the head is still R2 with R2's text, one
-  conflict names `project:a` with base R1 and local R2, and the row is still
+  down-sync. Assert: the head is still R2 with R2's text, one conflict names
+  `project:a` with base R1, local R2, reason `moved`, and the row is still
   pending. Then take theirs: the head's text is the cloud text and R2 is in
-  history. A second copy uses keep mine: the head is R2 and the server has no
-  pending row.
+  history. A second copy uses keep mine: the head is R2, one episodic memory in
+  `project:a` holds the cloud text, and the server has no pending row. A keep
+  mine retried after a simulated crash leaves exactly one such memory.
 - **Fast-forward still works.** Same setup without the local save: applied,
   acked, and the row renamed to the new head id.
-- **Legacy row.** A pending row with no `base_revision` is held. A v1 client
-  (no base support declared) receives no project working rows.
-- **D2 ordering.** Push R2 after a pending row based on R1: `project_get` returns
-  R2 with its revision. `project_update` with `expected_revision=R1` refuses
-  `stale_project` and returns R2. Two successive updates get distinct revisions,
-  and the second carries the first's base.
+- **Legacy rows (first review A2 replay).** Seed rows with `base_revision`
+  NULL directly in storage, in the A2 shape (first written against P0,
+  overwritten after a push of P). Assert every client holds them with reason
+  `legacy`: with the device at P, at P0, and with no local document. A v1
+  client (no `?v=2`) receives no project working rows.
+- **D2 ordering.** Push R2 after a pending row based on R1: `project_get`
+  returns R2 with its revision, and the R1 row is delivered with
+  `stale: true`. `project_update` with no `expected_revision` refuses.
+  `expected_revision=R1` refuses `stale_project` and returns R2. Two successive
+  updates get distinct revisions, and the second carries the first's base. An
+  ack with no re-push leaves both stores naming the acked row as `P` (A3).
+- **D2 concurrency.** Two `project_update` calls with the same
+  `expected_revision`, fired together against PGlite: exactly one succeeds and
+  one pending working row exists. A held stale row survives both.
 - **D3.** A preview writes nothing: the vault file hash is unchanged (the
   `adr-0054-acceptance.sh` step 4 pattern). A row that arrives between preview
   and apply stays pending. Non-TTY without `--yes` exits non-zero and changes
@@ -352,79 +579,91 @@ store and Neon already disagree on `created_at`.
 - **D4.** Restore of the newest superseded revision gives head text equal to it.
   Stale `expected_revision` refuses. A blanked revision refuses with the plain
   message.
-- **D5.** A write in a shared scope pushes once after the debounce. A write in a
-  private scope pushes nothing (fingerprint unchanged). Nothing runs while
-  locked, and a 412 pauses the engine.
+- **D5.** After a vault push, a write in a shared scope pushes once. A write in
+  a private scope pushes nothing. `behind`, `diverged` and `ahead` push nothing
+  and pause with the stated reason. Nothing runs while locked. A push of an
+  older vault version gets 428 and the connector still serves the newer
+  document (A4 replay). `tombstone_enforce: false` keeps the engine paused.
 - **D6.** Diverge two temp vaults. The dry pull lists the local-only memory and
-  project by name. A write between the dry pass and confirm refuses with
-  `LocalChangedError`. The automatic pull refuses a non-empty drop set.
+  project by name. A local forget of a memory live on the server appears in
+  the drop set (L2 replay), and the automatic pull refuses it. The phone's
+  real `runSyncAfterSave` re-push followed by the Mac's `wake()` leaves the
+  Mac's work live (L1 replay). A server push between the dry pass and confirm
+  refuses with `RemoteChangedError` (L3 replay). A local write in between
+  refuses with `LocalChangedError`.
 
 ## 6. Rollout and migration
 
 Pushing `main` deploys the connector (production). Each step needs Jay's yes.
 
-1. **Connector first.** It adds the column, records `base_revision` on every
-   new cloud write, applies the D2 ordering, and adds `expected_revision` and
-   `/client/discard`. `/client/pending` withholds pending `working` rows in
+1. **Connector first.** It adds the columns and table, records
+   `base_revision` and `write_seq` on every new write, applies the D2 ordering
+   and the atomic write, requires `expected_revision`, adds `/client/discard`,
+   the `?v=2` fields, the 428 stale-push check and the manifest's
+   `tombstone_enforce`. `/client/pending` withholds pending `working` rows in
    project scopes from clients that do not send `?v=2`. Today's clients
    (0.22.x desktop and CLI, every phone build in the field) apply those rows
    blind (`connector-client.ts:366-374`). This gate is the only protection they
    get, because phones update only through EAS builds Jay approves.
-2. **Backfill existing pending rows once.** For a legacy pending working row in
-   a scope with exactly one pushed working row `P`, set `base_revision =
-   P.entryId` only if `P` existed before the row (Neon `created_at` is the first
-   push, so it can be compared). Otherwise leave it absent, which D1 holds as a
-   conflict. The backfill is safe even when the guess is wrong. D1 still
-   compares against the device's own head, so a guessed base only fast-forwards
-   when the device has not moved since `P`, which means the cloud write really
-   is newer. Whether any pending rows remain on the founder's account after the
-   2026-09-30 Sync now (which acked what it applied) is **unverified**. A
-   read-only count before the deploy settles it.
-3. **Desktop and CLI release** with D1, D3, D4, D5 and D6, sending `?v=2`.
-4. **Phone build** with D1 and the additive-only down-sync, batched with other
-   mobile work.
+2. **No backfill.** Existing pending rows keep `base_revision` NULL and are
+   held as legacy conflicts forever, until the user resolves each one. The
+   first draft proposed guessing a base from `created_at`. The first review
+   reproduced that guess turning a legacy row into a silent rollback on the
+   real Neon SQL (A2): a row's `created_at` is its last in-place overwrite
+   (`neon-storage.ts:381`, `mcp.ts:915-925`), and nothing records when it was
+   first written. Before the deploy, a read-only count of pending working rows
+   on the founder's account says how many conflicts to expect (**unverified**
+   today).
+3. **Verify tombstone enforcement, read-only.** After the deploy, one
+   authenticated `GET /client/manifest` from the founder's CLI
+   (`northkeep share status`, which prints the new field) must show
+   `tombstone_enforce: true`. Also `vercel env ls production` for the
+   connector project must list `CONNECTOR_TOMBSTONE_ENFORCE` (names only; do
+   not pull values). If either fails, D5 stays paused by design and the step
+   is to set the variable, which is its own Tier 2 yes.
+4. **Desktop and CLI release** with D1, D3, D4, D5 and D6, sending `?v=2` and
+   the push `vault` field.
+5. **Phone build** with D1's additive-only down-sync and `?v=2`, batched with
+   other mobile work.
 
 ## 7. Review scope
 
 The whole ADR is under the review gate:
-- **Who decides / what wins**: D1, D2 and D3 change which document wins and
+- **Who decides / what wins**: D1, D2, D3 and D6 change which document wins and
   when the human decides.
 - **Egress timing**: D5.
 - **Published claims**: the KNOWN-LIMITS edits.
 
-The adversarial review should attack, against code:
-- **D1**: the id-space seam at ack (rename, replaced rows, a crash between save
-  and ack), the dedupe narrowing, and the multiple-live-head case.
-- **D2**: the atomic replace-and-delete on Neon, and concurrent updates from two
-  apps.
-- **D3**: the approve-by-server-id rule against rows that change between
-  preview and apply.
-- **D5**: the fingerprint against scope marks arriving through vault sync, an
-  unshare racing a debounced push (the 412 tombstone path,
-  `connector-client.ts:186-192`), and the lock.
-- **D6**: the window between the dry pass and the swap.
+The recheck should attack, against code:
+- **D1**: legacy rows on every path, including the ADR 0050 fold and the phone.
+- **D2**: the CTE under concurrency on PGlite, and `write_seq` agreement across
+  stores after acks, discards and emptied-scope pushes.
+- **D5**: the 428 guard on both push paths, the reset path, and a phone
+  last-writer-wins landing between `syncState` and the push.
+- **D6**: forgets, supersedes and scope marks in the drop set, and the pinned
+  confirm against a moving server.
 
-Run the incident replay as an executed attack, not a reading.
+## 8. Founder decisions (2026-09-30)
 
-## 8. Open questions for Jay
-
-1. Should hosted `project_update` **require** `expected_revision`, as the local
-   tools do (`vault.ts:907`)? Required stops two cloud sessions overwriting each
-   other, but every cloud bot that does not send it gets refused until its
-   instructions change. Optional still gets D1's protection on the device.
-2. **Keep mine**: delete the cloud version, or save it first as a memory in the
-   project scope (visible to your cloud apps)?
-3. **Auto-push default**: on, with a switch (recommended), or off?
-4. **Phone** until its preview screen exists: additive-only (recommended), or
-   hold every down-sync on the phone?
+1. Hosted `project_update` **requires** `expected_revision` (D2). Cloud bots
+   that do not send it are refused until their instructions change.
+2. **Keep mine** saves the cloud version as a memory in the project scope,
+   visible to cloud apps, before removing it (D1).
+3. **Automatic push** is on by default, with a switch (D5).
+4. The **phone** applies only additions, never replacing a project or
+   forgetting a memory, until it has a preview screen (D1, D3).
+5. The three new screens (Sync now preview, conflict resolution with restore,
+   pull report) each get a mock Jay approves before build (RULES Engineering
+   #2).
 
 ## 9. Acceptance (Jay, from the CLI; built with the feature)
 
 A script in the `scripts/adr-0054-acceptance.sh` pattern,
 `scripts/adr-0063-acceptance.sh`, run from the repository root after
 `pnpm -r build`. It uses `NORTHKEEP_HOME=/tmp/nk-0063-acceptance/home`,
-`NORTHKEEP_NO_KEYCHAIN=1` and a local in-memory connector on a loopback port,
-and it refuses any other home. One step per call:
+`NORTHKEEP_NO_KEYCHAIN=1`, a local connector on a loopback port backed by
+PGlite (so the storage rules are Neon's SQL, not the in-memory store), and a
+local sync server. It refuses any other home. One step per call:
 
 ```
 bash scripts/adr-0063-acceptance.sh setup     # temp vault, local connector, share project:demo, push
@@ -435,7 +674,8 @@ node packages/cli/dist/index.js share resolve demo --take-theirs
 bash scripts/adr-0063-acceptance.sh 3         # head is the cloud text; history holds the local save
 node packages/cli/dist/index.js projects restore demo <revision from step 3> --yes
 bash scripts/adr-0063-acceptance.sh 4         # head is the local save again; stale restore refused
-bash scripts/adr-0063-acceptance.sh 5         # diverged pull: the report names what drops out
+bash scripts/adr-0063-acceptance.sh 5         # a legacy row (no base) is held, never applied
+bash scripts/adr-0063-acceptance.sh 6         # diverged pull: the report names a dropped memory and a restored delete
 bash scripts/adr-0063-acceptance.sh cleanup
 ```
 
@@ -443,7 +683,26 @@ The `share` and `projects` commands above need the same environment the script
 exports, so the script prints them with it. The exact wording is fixed when the
 script is written.
 
-## Adversarial review
+## Review history
 
-Not yet run. Findings go here, dated, with the binding amendments applied to the
-body above.
+- 2026-09-30, first review, NOT CLEARED:
+  `~/Claude/Projects/NorthKeep/Reviews/adr-0063/first-review.md` (attacks in
+  `attacks/`). This revision closes:
+  - KILL SHOT A2 (backfill): rollout step 2 removed; legacy rows always held
+    (D1, section 6 step 2); `base_revision` gets a `new` sentinel so legacy
+    stays distinct (section 2).
+  - FLESH WOUND L2 (forgets): the drop set counts local forgets the pull would
+    resurrect, and scope marks (D6).
+  - FLESH WOUND L3 (confirm window): the manual pull installs the held
+    dry-pass bytes after re-checking the server version and sha (D6).
+  - FLESH WOUND A4 + D5 (regressed push): auto-push only when `in-sync`,
+    chained after the vault push, and the connector refuses an older vault
+    version with 428 (D5).
+  - Notes: `created_at` removed from every rule, `write_seq` and `scope_seq`
+    added (A3, section 2, D2); the `expected_revision` check is one SQL
+    statement (D2); the delete names only the replaced row (D2); stale rows
+    are flagged in `?v=2` (D2); the automatic-pull check is load-bearing for
+    the phone's last-writer-wins (D6); D5 needs tombstone enforcement,
+    verified read-only at rollout (D5, section 6 step 3); crash-after-save
+    wording (D1).
+  - Founder decisions recorded (section 8).
