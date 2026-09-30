@@ -6069,9 +6069,13 @@
     out.hidden = false; out.textContent = 'Syncing…';
     $('shareSyncBtn').disabled = true;
     try {
-      const r = await api('/api/share/sync', { method: 'POST' });
-      var text = 'Done. Pulled back ' + r.added + ' new, ' + r.forgotten + ' forgotten, ' +
+      // ADR 0063: until the preview screen exists, Sync now applies additions
+      // only (an empty approval). Replacements, forgets and conflicts are left
+      // pending and named below for review on the command line.
+      const r = await api('/api/share/sync', { method: 'POST', json: { dry_run: false, approve: {} } });
+      var text = 'Done. Pulled back ' + r.added + ' new, ' +
         r.deduped + ' already present. Re-pushed ' + r.pushed + ' memories to the connector server.';
+      (r.review_messages || []).forEach(function (m) { text += '\n' + m; });
       // Held rows are the whole point of a sync that pulled nothing: a connected
       // app wrote to a project this device keeps private.
       (r.held_messages || []).forEach(function (m) { text += '\n' + m; });

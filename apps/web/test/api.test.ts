@@ -451,8 +451,9 @@ function stubConnector(entries: Array<{ server_id: string; scope: string; type: 
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push(url);
-    if (url.endsWith('/client/pending')) {
-      return new Response(JSON.stringify({ entries, forgets: [] }), { status: 200 });
+    if (url.endsWith('/client/pending?v=2')) {
+      // Post-ADR 0063 hosted creates carry base "new".
+      return new Response(JSON.stringify({ entries: entries.map((e) => ({ ...e, base_revision: 'new', stale: false })), forgets: [] }), { status: 200 });
     }
     if (url.endsWith('/client/ack')) return new Response(JSON.stringify({ ok: true }), { status: 200 });
     if (url.endsWith('/client/entries')) {
@@ -517,7 +518,7 @@ describe('POST /api/share/sync and /api/share/pair (ADR 0050 Decision 5)', () =>
         content: projectMarkdown('Started in the app.'),
       },
     ]);
-    const res = await call('POST', '/api/share/sync');
+    const res = await call('POST', '/api/share/sync', { dry_run: false });
     expect(res.status).toBe(200);
     const body = res.body as { added: number; held: number; scopes: string[] };
     expect(body.added).toBe(1);
@@ -542,7 +543,7 @@ describe('POST /api/share/sync and /api/share/pair (ADR 0050 Decision 5)', () =>
         content: projectMarkdown('From the app.'),
       },
     ]);
-    const res = await call('POST', '/api/share/sync');
+    const res = await call('POST', '/api/share/sync', { dry_run: false });
     expect(res.status).toBe(200);
     const body = res.body as { held: number; held_scopes: string[]; held_messages: string[]; pushed: number };
     expect(body.held).toBe(1);
@@ -559,7 +560,7 @@ describe('POST /api/share/sync and /api/share/pair (ADR 0050 Decision 5)', () =>
       vault.save();
     });
     stubConnector([{ server_id: 'conn_bad', scope: 'work', type: 'Working', content: 'Not a stored type.' }]);
-    const res = await call('POST', '/api/share/sync');
+    const res = await call('POST', '/api/share/sync', { dry_run: false });
     expect(res.status).toBe(200);
     expect((res.body as { skipped: number }).skipped).toBe(1);
   });
@@ -580,7 +581,7 @@ describe('POST /api/share/sync and /api/share/pair (ADR 0050 Decision 5)', () =>
     const { puts } = stubConnector([
       { server_id: 'conn_create_legacy', scope: 'project:legacy-proj', type: 'working', content: projectMarkdown('From 0.21.') },
     ]);
-    const res = await call('POST', '/api/share/sync');
+    const res = await call('POST', '/api/share/sync', { dry_run: false });
     expect(res.status).toBe(200);
     expect((res.body as { scopes: string[] }).scopes).toContain('project:legacy-proj');
     expect(puts).toHaveLength(1);

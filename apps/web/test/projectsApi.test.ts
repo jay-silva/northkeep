@@ -48,9 +48,9 @@ describe('project edit and delete routes (owner requests 2026-09-13)', () => {
   });
   it('deletes a project and reports the count; a missing project is 404', async () => {
     let saves = 0;
-    const vault = { deleteProject: (project: string) => { if (project === 'gone') throw new ProjectHandoffError('not_found', 'Project was not found.'); return 3; }, save: () => { saves++; } };
+    const vault = { deleteProject: (project: string) => { if (project === 'gone') throw new ProjectHandoffError('not_found', 'Project was not found.'); return 3; }, save: () => { saves++; }, sharedScopes: () => [] };
     const ok = await handleProjectsApi(sessionFor(vault), 'DELETE', '/api/projects/sample', Buffer.alloc(0));
-    expect(ok?.status).toBe(200); expect(ok?.body).toEqual({ project: 'sample', forgotten: 3 }); expect(saves).toBe(1);
+    expect(ok?.status).toBe(200); expect(ok?.body).toEqual({ project: 'sample', forgotten: 3, unshared: false }); expect(saves).toBe(1);
     const missing = await handleProjectsApi(sessionFor(vault), 'DELETE', '/api/projects/gone', Buffer.alloc(0));
     expect(missing?.status).toBe(404); expect(saves).toBe(1);
     expect((await handleProjectsApi(sessionFor(vault), 'DELETE', '/api/projects/sample/checkpoint', Buffer.alloc(0)))?.status).toBe(405);

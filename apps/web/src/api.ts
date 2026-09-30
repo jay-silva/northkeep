@@ -13,16 +13,21 @@ import {
   loadDeviceSecret,
   memzero,
   northkeepHome,
+  ProjectHandoffError,
   type MemoryEntry,
   type MemoryType,
 } from '@northkeep/core';
 import {
   checkoutUrl,
+  confirmPull,
   deriveSyncCreds,
+  LocalChangedError,
   loadSyncConfig,
   portalUrl,
-  pullVault,
+  previewPull,
   pushVault,
+  RemoteChangedError,
+  type PullPreview,
   setSyncServer,
   subscriptionStatus,
   SubscriptionRequiredError,
@@ -33,15 +38,24 @@ import {
   // secret inside them and is never returned to the page.
   foldSidecarScopesIntoVault,
   connectorPaired,
-  downSyncConnector,
+  applyDownSync,
+  assertDeviceCanPush,
+  ConnectorPushBlockedError,
+  ConnectorStalePushError,
   fetchEntitlement,
+  fetchPending,
   holdMessage,
   loadConnectorConfig,
+  manualConnectorPush,
   markConnectorPaired,
+  planDownSync,
+  planNeedsConfirmation,
+  resolveConflict,
+  setConnectorAutoPush,
   ConnectorTombstoneError,
-  pushSharedScopes,
-  markConnectorPushed,
   connectorLastPushedAt,
+  type DownSyncPlan,
+  type PushSharedResult,
   setConnectorServer,
   startPairing,
   unshareScope,
@@ -360,6 +374,9 @@ export async function handleApi(
     if (err instanceof SubscriptionRequiredError)
       return bad(402, 'A $10/month subscription is required to sync on this server.');
     if (err instanceof ConnectorTombstoneError) return bad(412, err.message);
+    // ADR 0063 D5: Cloud Connect holds a newer copy, or this Mac must sync first. Nothing was sent.
+    if (err instanceof ConnectorStalePushError) return { status: 428, body: { error: err.message, code: 'stale_push', reset_route: '/api/share/push' } };
+    if (err instanceof ConnectorPushBlockedError) return { status: 409, body: { error: err.message, code: 'sync_first' } };
     if (route.startsWith('/api/review/') && err instanceof Error) {
       // In particular, EIO after the vault save is uncertain, not a malformed request.
       // The client must keep its operation ID for an idempotent retry.
@@ -818,18 +835,45 @@ async function dispatch(
     }
   }
 
+  // ADR 0063 D6: a pull reports what it would remove or undo on this device.
+  // Nothing to lose: it installs straight away. Otherwise 409 with the report,
+  // and it installs only on { confirm: true, version, sha256 } naming the dry
+  // pass the user saw, re-checked against the server, installing the held bytes.
   if (method === 'POST' && route === '/api/sync/pull') {
     const deviceSecret = deviceSecretOrError();
     if (!loadSyncConfig()) return bad(400, 'Sync is not configured.');
     // A local vault always exists here → the pulled blob must open with the
     // held key before it can replace it, so the session must be unlocked.
     if (!session.isUnlocked()) return bad(423, 'Unlock the vault before pulling (needed to verify the download).');
+    const input = parseJson<{ confirm?: unknown; version?: unknown; sha256?: unknown }>(body);
     const masterKey = Buffer.from(session.keyHex(), 'hex');
+    const vaultPath = session.vaultPath;
+    const review = (preview: Extract<PullPreview, { ok: true }>, code: string, message: string): ApiResponse => ({
+      status: 409,
+      body: { error: message, code, version: preview.version, sha256: preview.sha256, report: preview.report, review_command: 'northkeep sync pull' },
+    });
     try {
-      const result = await session.autoSync.runManual(() =>
-        pullVault({ vaultPath: session.vaultPath, deviceSecret, masterKey }),
-      );
-      return ok(result);
+      return await session.autoSync.runManual(async () => {
+        if (input.confirm === true) {
+          if (typeof input.version !== 'number' || typeof input.sha256 !== 'string') return bad(400, 'confirm needs the version and sha256 of the report you reviewed.');
+          try {
+            return ok(await confirmPull({ vaultPath, deviceSecret, masterKey, version: input.version, sha256: input.sha256 }));
+          } catch (err) {
+            if (err instanceof LocalChangedError) return { status: 409, body: { error: err.message, code: 'local_changed' } };
+            if (!(err instanceof RemoteChangedError)) throw err;
+            const again = await previewPull({ vaultPath, deviceSecret, masterKey });
+            if (!again.ok) return ok(again);
+            return review(again, 'remote_changed', err.message);
+          }
+        }
+        const preview = await previewPull({ vaultPath, deviceSecret, masterKey });
+        if (!preview.ok) return ok(preview);
+        if (preview.wouldDrop) {
+          const count = preview.report.only_here.length + preview.report.restored_deletes.length;
+          return review(preview, 'pull_would_drop', `This pull would remove or bring back ${count} item${count === 1 ? '' : 's'} on this Mac. Review it with: northkeep sync pull`);
+        }
+        return ok(await confirmPull({ vaultPath, deviceSecret, masterKey, version: preview.version, sha256: preview.sha256 }));
+      });
     } finally {
       memzero(masterKey);
     }
@@ -914,6 +958,8 @@ async function dispatch(
       paired: connectorPaired(),
       // When this Mac last pushed its shared scopes (null before 0.22.4 or never).
       last_pushed_at: connectorLastPushedAt(),
+      // ADR 0063 D5: the automatic-push switch and why it is or is not pushing.
+      auto_push: session.connectorAutoPush.status(),
       // The URL the user pastes into Claude/ChatGPT to add the connector (the MCP
       // mount is /mcp on the connector server — apps/connector-server).
       mcp_url: config ? mcpUrl(config.server) : null,
@@ -934,6 +980,8 @@ async function dispatch(
 
   // Mark a scope Shared and push its live entries. The GUI shows the loud
   // confirmation BEFORE calling this; reaching here means the user confirmed.
+  // ADR 0063 D5: a device behind its other devices is refused before the mark,
+  // and the push sends the vault to the sync server first when this Mac is ahead.
   if (method === 'POST' && route === '/api/share/add') {
     const { scope } = parseJson<{ scope?: string }>(body);
     const targetScope = typeof scope === 'string' ? scope.trim() : '';
@@ -941,33 +989,32 @@ async function dispatch(
     const config = loadConnectorConfig();
     if (!config) return bad(400, 'Set a connector server first.');
     const deviceSecret = deviceSecretOrError();
+    if (!session.isUnlocked()) throw new LockedError();
+    await assertDeviceCanPush({ vaultPath: session.vaultPath, deviceSecret });
     const entitlement = await maybeEntitlement(deviceSecret);
+    const wasShared = await session.withVault((vault) => {
+      foldSidecarScopesIntoVault(vault);
+      const was = vault.sharedScopes().includes(targetScope);
+      vault.setScopeShared(targetScope, true);
+      vault.save();
+      return was;
+    });
     try {
-      const result = await session.withVault(async (vault) => {
-        foldSidecarScopesIntoVault(vault);
-        const wasShared = vault.sharedScopes().includes(targetScope);
-        vault.setScopeShared(targetScope, true);
-        vault.save();
-        try {
-          const pushed = await pushSharedScopes({ server: config.server, deviceSecret, scopes: vault.sharedScopes(), vault, entitlement });
-          markConnectorPushed();
-          return pushed;
-        } catch (err) {
-          // The push did not land (offline, over the sharing caps, or the
-          // billing gate refused). Roll the mark back — unless it was already
-          // shared before this call — so a scope the server never accepted
-          // can't wear a phantom SHARED badge.
-          if (!wasShared) {
-            vault.setScopeShared(targetScope, false);
-            vault.save();
-          }
-          throw err;
-        }
-      });
-      return ok({ shared: targetScope, pushed: result.pushed, scopes: result.scopes });
+      const result = await manualPush(session, config.server, deviceSecret, entitlement);
+      return ok({ shared: targetScope, pushed: result?.pushed ?? 0, scopes: result?.scopes ?? [] });
     } catch (err) {
-      if (err instanceof LockedError) throw err; // → 423, prompts unlock
+      // The push did not land (offline, over the sharing caps, the billing gate
+      // refused, or Cloud Connect holds a newer copy). Roll the mark back,
+      // unless it was already shared before this call, so a scope the server
+      // never accepted can't wear a phantom SHARED badge.
+      if (!wasShared) {
+        await session.withVault((vault) => {
+          vault.setScopeShared(targetScope, false);
+          vault.save();
+        });
+      }
       if (err instanceof ConnectorTombstoneError) return bad(412, err.message);
+      if (err instanceof ConnectorStalePushError || err instanceof ConnectorPushBlockedError) throw err;
       const msg = err instanceof Error ? err.message : String(err);
       if (/HTTP 402/.test(msg)) {
         return bad(402, `The connector server requires an active subscription to share. ${LAPSED_UNSHARE_HINT}`);
@@ -1022,52 +1069,156 @@ async function dispatch(
     return ok({ code, mcp_url: mcpUrl(config.server), expires_in_seconds: 600 });
   }
 
-  // Sync now (write-back): pull the memories/forgets the user made INSIDE their
-  // AI apps back into the vault, then re-push so the server matches. One vault
-  // open handles both, so the re-push reflects the just-applied down-sync.
+  // Sync now (ADR 0063 D3). Preview by default: what the connected apps
+  // changed, with no vault write. { dry_run: false, approve } applies the
+  // additions plus only the replacements (server_ids) and forgets (forget_ids)
+  // the user approved, then pushes. Conflicts are never applied here.
   if (method === 'POST' && route === '/api/share/sync') {
+    const config = loadConnectorConfig();
+    if (!config) return bad(400, 'Set a connector server first.');
+    const input = parseJson<{ dry_run?: unknown; approve?: { server_ids?: unknown; forget_ids?: unknown } }>(body);
+    if (input.dry_run !== undefined && typeof input.dry_run !== 'boolean') return bad(400, 'dry_run must be true or false.');
+    const approve = {
+      server_ids: stringList(input.approve?.server_ids),
+      forget_ids: stringList(input.approve?.forget_ids),
+    };
+    if (approve.server_ids === null || approve.forget_ids === null) return bad(400, 'approve.server_ids and approve.forget_ids must be lists of ids.');
+    const deviceSecret = deviceSecretOrError();
+    const before = await session.withVault((vault) => {
+      foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
+      return vault.sharedScopes();
+    });
+    // ADR 0050 Decision 5: a hosted project arrives only through the fold,
+    // which marks its scope. A device that never paired makes no call; a
+    // pre-0.22 sidecar counts as paired (see connectorPaired).
+    if (before.length === 0 && !connectorPaired()) return bad(400, 'No scopes are shared yet.');
+    const entitlement = await maybeEntitlement(deviceSecret);
+    const conn = { server: config.server, deviceSecret, ...(entitlement ? { entitlement } : {}) };
+    if (input.dry_run !== false) {
+      const pending = await fetchPending(conn);
+      const plan = await session.withVault((vault) => planDownSync({ vault, pending }));
+      return ok(describePlanForPage(plan));
+    }
+    await assertDeviceCanPush({ vaultPath: session.vaultPath, deviceSecret });
+    const down = await session.withVault((vault) => applyDownSync({ ...conn, vault, approve: { server_ids: approve.server_ids!, forget_ids: approve.forget_ids! } }));
+    const after = await session.withVault((vault) => vault.sharedScopes());
+    const push = await manualPush(session, config.server, deviceSecret, entitlement);
+    const review = down.needs_review.replacements.length + down.needs_review.forgets.length;
+    const reviewParts: string[] = [];
+    if (review > 0) reviewParts.push(`${review} change${review === 1 ? '' : 's'} need${review === 1 ? 's' : ''} your review before ${review === 1 ? 'it is' : 'they are'} applied. Run: northkeep share sync`);
+    for (const c of down.conflicts) reviewParts.push(`Project ${c.project} has a cloud version that was not applied. Run: northkeep share conflicts --show ${c.project}`);
+    return ok({
+      added: down.added,
+      replaced: down.replaced,
+      forgotten: down.forgotten,
+      deduped: down.deduped,
+      discarded: down.discarded,
+      held: down.held,
+      held_scopes: down.held_scopes,
+      held_messages: down.held_scopes.map((s) => holdMessage(heldSlug(s))),
+      skipped: down.skipped,
+      conflicts: down.conflicts.map(({ content: _content, ...c }) => c),
+      needs_review: down.needs_review,
+      review_messages: reviewParts,
+      pushed: push?.pushed ?? 0,
+      scopes: push?.scopes ?? [],
+      // Scopes the fold marked Shared in this run (ADR 0050): the GUI says so.
+      newly_shared: after.filter((s) => !before.includes(s)),
+    });
+  }
+
+  // ADR 0063 D1: the cloud versions held as conflicts, with both texts, for the conflict view.
+  if (method === 'GET' && route === '/api/share/conflicts') {
     const config = loadConnectorConfig();
     if (!config) return bad(400, 'Set a connector server first.');
     const deviceSecret = deviceSecretOrError();
     const entitlement = await maybeEntitlement(deviceSecret);
-    const result = await session.withVault(async (vault) => {
-      foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
-      // ADR 0050 Decision 5: a hosted project arrives only through the fold,
-      // which marks its scope. A device that never paired makes no call; a
-      // pre-0.22 sidecar counts as paired (see connectorPaired).
-      if (vault.sharedScopes().length === 0 && !connectorPaired()) return null;
-      const before = new Set(vault.sharedScopes());
-      const down = await downSyncConnector({ server: config.server, deviceSecret, vault, entitlement });
-      // Re-read after the slow down-sync so a scope unshared mid-sync (on this
-      // device or arriving via vault sync) is never re-pushed, and a scope the
-      // fold just marked is.
-      const scopes = vault.sharedScopes();
-      const newlyShared = scopes.filter((s) => !before.has(s));
-      if (scopes.length === 0) return { down, push: null, newlyShared };
-      const push = await pushSharedScopes({
-        server: config.server,
-        deviceSecret,
-        scopes,
-        vault,
-        entitlement,
-      });
-      markConnectorPushed();
-      return { down, push, newlyShared };
-    });
-    if (result === null) return bad(400, 'No scopes are shared yet.');
-    return ok({
-      added: result.down.added,
-      forgotten: result.down.forgotten,
-      deduped: result.down.deduped,
-      held: result.down.held,
-      held_scopes: result.down.held_scopes,
-      held_messages: result.down.held_scopes.map((s) => holdMessage(heldSlug(s))),
-      skipped: result.down.skipped,
-      pushed: result.push?.pushed ?? 0,
-      scopes: result.push?.scopes ?? [],
-      // Scopes the fold marked Shared in this run (ADR 0050): the GUI says so.
-      newly_shared: result.newlyShared,
-    });
+    const pending = await fetchPending({ server: config.server, deviceSecret, ...(entitlement ? { entitlement } : {}) });
+    return ok(await session.withVault((vault) => {
+      const conflicts = planDownSync({ vault, pending }).conflicts;
+      const local: Record<string, { revision: string; content: string } | null> = {};
+      const history = new Map<string, string[]>();
+      for (const c of conflicts) {
+        if (c.project in local) continue;
+        const rows = vault.list({ scope: c.scope, type: 'working', includeSuperseded: true });
+        const heads = rows.filter((r) => r.superseded_at === null);
+        local[c.project] = heads.length === 1 ? { revision: heads[0]!.id, content: heads[0]!.content } : null;
+        history.set(c.project, rows.filter((r) => r.superseded_at !== null).map((r) => r.content));
+      }
+      return {
+        conflicts: conflicts.map((c) => ({ ...c, in_history: history.get(c.project)?.includes(c.content) ?? false })),
+        local,
+      };
+    }));
+  }
+
+  // ADR 0063 D1: take theirs (revision-bound) or keep mine (cloud text saved as a memory first), then push.
+  if (method === 'POST' && route === '/api/share/resolve') {
+    const config = loadConnectorConfig();
+    if (!config) return bad(400, 'Set a connector server first.');
+    const input = parseJson<{ project?: unknown; choice?: unknown; server_id?: unknown; expected_revision?: unknown }>(body);
+    if (typeof input.project !== 'string' || !/^[a-z0-9-]{1,40}$/.test(input.project)) return bad(400, 'project must be a project name.');
+    if (input.choice !== 'take-theirs' && input.choice !== 'keep-mine') return bad(400, 'choice must be take-theirs or keep-mine.');
+    if (input.server_id !== undefined && typeof input.server_id !== 'string') return bad(400, 'server_id must be a string.');
+    if (input.expected_revision !== undefined && input.expected_revision !== null && typeof input.expected_revision !== 'string') return bad(400, 'expected_revision must be a string.');
+    const deviceSecret = deviceSecretOrError();
+    await assertDeviceCanPush({ vaultPath: session.vaultPath, deviceSecret });
+    const entitlement = await maybeEntitlement(deviceSecret);
+    const project = input.project;
+    const choice = input.choice;
+    let resolved;
+    try {
+      resolved = await session.withVault((vault) =>
+        resolveConflict({
+          server: config.server,
+          deviceSecret,
+          vault,
+          project,
+          choice,
+          ...(entitlement ? { entitlement } : {}),
+          ...(typeof input.server_id === 'string' ? { server_id: input.server_id } : {}),
+          ...(input.expected_revision !== undefined ? { expected_revision: input.expected_revision as string | null } : {}),
+        }),
+      );
+    } catch (err) {
+      if (err instanceof ProjectHandoffError) return { status: 409, body: { error: err.message, code: err.code } };
+      throw err;
+    }
+    try {
+      const push = await manualPush(session, config.server, deviceSecret, entitlement);
+      return ok({ ...resolved, pushed: push?.pushed ?? 0 });
+    } catch (err) {
+      // Resolved here either way; say that Cloud Connect is behind rather than failing the whole request.
+      return ok({ ...resolved, pushed: 0, push_error: err instanceof Error ? err.message : String(err) });
+    }
+  }
+
+  // ADR 0063 D5: a manual push to Cloud Connect. reset_order is the GUI's
+  // version of `northkeep share push --reset-order` (recheck R-428d).
+  if (method === 'POST' && route === '/api/share/push') {
+    const config = loadConnectorConfig();
+    if (!config) return bad(400, 'Set a connector server first.');
+    const input = parseJson<{ reset_order?: unknown }>(body);
+    if (input.reset_order !== undefined && typeof input.reset_order !== 'boolean') return bad(400, 'reset_order must be true or false.');
+    const deviceSecret = deviceSecretOrError();
+    const entitlement = await maybeEntitlement(deviceSecret);
+    const push = await manualPush(session, config.server, deviceSecret, entitlement, input.reset_order === true);
+    if (push === null) return bad(400, 'No scopes are shared yet.');
+    return ok(push);
+  }
+
+  // ADR 0063 D5: the automatic-push switch (device-local) and why it is or is not pushing.
+  if (method === 'GET' && route === '/api/share/auto-push') {
+    return ok(session.connectorAutoPush.status());
+  }
+  if (method === 'POST' && route === '/api/share/auto-push') {
+    const input = parseJson<{ enabled?: unknown }>(body);
+    if (typeof input.enabled !== 'boolean') return bad(400, 'enabled must be true or false.');
+    if (!loadConnectorConfig()) return bad(400, 'Set a connector server first.');
+    setConnectorAutoPush(input.enabled);
+    session.connectorAutoPush.resume();
+    if (input.enabled) await session.connectorAutoPush.wake();
+    return ok(session.connectorAutoPush.status());
   }
 
   // --- MCP servers (M11, ADR 0033). REVIEW surface, not an add surface. ---
@@ -2454,6 +2605,58 @@ function mcpUrl(server: string): string {
 /** The slug holdMessage wants, from the scope the fold reports. */
 function heldSlug(scope: string): string {
   return scope.startsWith('project:') ? scope.slice('project:'.length) : scope;
+}
+
+/** A list of ids from a request body: absent is empty, anything but strings is null. */
+function stringList(value: unknown): string[] | null {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((v) => typeof v !== 'string')) return null;
+  return value as string[];
+}
+
+/** D3's preview in the shape the Sync now screen will render. Conflict text stays behind /api/share/conflicts. */
+function describePlanForPage(plan: DownSyncPlan): Record<string, unknown> {
+  const memories = plan.additions.filter((a) => a.kind === 'memory');
+  const byScope: Record<string, number> = {};
+  for (const a of memories) byScope[a.scope] = (byScope[a.scope] ?? 0) + 1;
+  return {
+    preview: true,
+    needs_confirmation: planNeedsConfirmation(plan),
+    additions: { count: memories.length, by_scope: byScope },
+    new_projects: plan.additions.filter((a) => a.kind === 'project').map((a) => heldSlug(a.scope)),
+    replacements: plan.replacements.map((r) => ({ project: r.project, server_id: r.server_id, local_revision: r.local_revision })),
+    forgets: plan.forgets,
+    conflicts: plan.conflicts.map(({ content: _content, ...c }) => c),
+    held_scopes: plan.held_scopes,
+    held_messages: plan.held_scopes.map((s) => holdMessage(heldSlug(s))),
+    skipped: plan.skipped,
+  };
+}
+
+/**
+ * ADR 0063 D5 manual push from the app: the vault goes to the sync server
+ * first when this Mac is ahead (through the engine, so its own save is not a
+ * new write), and a Mac that is behind or diverged is refused. A manual push
+ * is a user action, so it lifts a paused automatic push.
+ */
+async function manualPush(session: UiSession, server: string, deviceSecret: Buffer, entitlement: string | undefined, reset = false): Promise<PushSharedResult | null> {
+  const masterKey = Buffer.from(session.keyHex(), 'hex');
+  try {
+    const result = await manualConnectorPush({
+      server,
+      deviceSecret,
+      vaultPath: session.vaultPath,
+      masterKey,
+      withVault: (fn) => session.withVault(fn),
+      runVaultPush: (push) => session.autoSync.runManual(push),
+      ...(entitlement ? { entitlement } : {}),
+      ...(reset ? { reset: true } : {}),
+    });
+    session.connectorAutoPush.resume();
+    return result;
+  } finally {
+    memzero(masterKey);
+  }
 }
 
 /**

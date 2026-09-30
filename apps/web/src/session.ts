@@ -6,7 +6,7 @@ import {
   withFileLock,
 } from '@northkeep/core';
 import { resolveMasterKey } from '@northkeep/mcp-server';
-import { AutoSync, type AutoSyncEvent } from '@northkeep/sync';
+import { AutoSync, ConnectorAutoPush, type AutoSyncEvent } from '@northkeep/sync';
 
 /**
  * In-memory UI session: the auth token and (once unlocked) the vault master
@@ -32,6 +32,12 @@ export class UiSession {
    * close); api.ts drives it from the routes.
    */
   readonly autoSync: AutoSync;
+  /**
+   * ADR 0063 D5: keeps Cloud Connect current after AutoSync makes this vault
+   * current (a push, a pull, or a wake that finds it in sync). Same key rule
+   * as AutoSync: a copy while unlocked, null while locked.
+   */
+  readonly connectorAutoPush: ConnectorAutoPush;
   /** Count of fast-forward pulls the engine has completed; routes diff it to say "pulled". */
   private pulls = 0;
 
@@ -39,11 +45,18 @@ export class UiSession {
     this.vaultPath = vaultPath;
     this.token = nodeRandomBytes(32).toString('hex');
     this.sessionId = randomUUID();
+    const getMasterKey = () => (this.isUnlocked() ? Buffer.from(this.heldKey!) : null);
+    this.connectorAutoPush = new ConnectorAutoPush({
+      vaultPath,
+      getMasterKey,
+      autoSyncStatus: () => this.autoSync.status(),
+    });
     this.autoSync = new AutoSync({
       vaultPath,
-      getMasterKey: () => (this.isUnlocked() ? Buffer.from(this.heldKey!) : null),
+      getMasterKey,
       onEvent: (event: AutoSyncEvent) => {
         if (event.type === 'pulled') this.pulls += 1;
+        if (event.type === 'pushed' || event.type === 'pulled' || event.type === 'in-sync') this.connectorAutoPush.onVaultCurrent();
       },
     });
   }
