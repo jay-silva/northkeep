@@ -810,7 +810,7 @@ export function createConnectorServer(
     // Unshare deletes every row in the scope, so a pending row still sitting in
     // a tombstoned one was written after the revoke: withhold it and drain it.
     const purged = pending.filter((e) => tombstonedScopes.has(e.scope));
-    for (const e of purged) await storage.deleteEntry(accountHash, e.entryId);
+    if (purged.length > 0) await storage.discardPending(accountHash, purged.map((e) => e.entryId));
     const live = pending.filter((e) => !tombstonedScopes.has(e.scope));
     // A pending row that already has a queued forget must NEVER be delivered as a
     // fresh entry — otherwise a forgotten-before-delivery memory would land in the
