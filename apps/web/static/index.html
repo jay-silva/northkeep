@@ -2554,7 +2554,7 @@
     body.appendChild(el('div', 'review-meta-title hist-sub', 'Saved versions'));
     for (const row of versions) {
       const item = el('div', 'ver-row' + (row.state === 'cleared' ? ' is-cleared' : ''));
-      const copy = el('p', undefined, row.state === 'current' ? 'Current' : row.mode ? row.mode[0].toUpperCase() + row.mode.slice(1) : 'Saved version');
+      const copy = el('p', undefined, row.mode ? row.mode[0].toUpperCase() + row.mode.slice(1) : 'Saved version');
       if (row.writer && row.writer.host) copy.appendChild(el('small', undefined, 'Written by ' + row.writer.host));
       item.append(el('time', undefined, projectDate(row.updated_at)), copy);
       if (row.state === 'current') item.appendChild(projectPill('Current version', 'ok'));
@@ -2721,11 +2721,14 @@
     const groups = PROJECT_COMPARE_GROUPS.map((group) => group.slice());
     const known = new Set(groups.flatMap((group) => group[1]));
     for (const key of [...Object.keys(a), ...Object.keys(b)]) if (!known.has(key)) { known.add(key); groups.push([key === '' ? 'Other text' : key, [key]]); }
+    // Dated entries read "- 2026-09-30 - Text" in the document; show "Sep 30: Text".
+    const tidy = (text) => text.split('\n').map((line) => line.replace(/^[-*]\s+(\d{4}-\d{2}-\d{2})\s+-\s+/, (_, day) => shortDay(day + 'T12:00:00') + ': ')).join('\n');
+    const quiet = ['Title', 'What and why', 'Files'];
     return groups.map(([label, keys]) => {
-      const join = (sections) => keys.map((key) => sections[key]).filter(Boolean).join('\n');
+      const join = (sections) => tidy(keys.map((key) => sections[key]).filter(Boolean).join('\n'));
       const left = join(a), right = join(b);
       return { label, mine: left, theirs: right, same: left === right };
-    }).filter((group) => group.mine || group.theirs);
+    }).filter((group) => (group.mine || group.theirs) && !(group.same && quiet.includes(group.label)));
   }
 
   // Lines, each split into sentences, marked when the other version lacks them.
@@ -5739,7 +5742,7 @@
   }
 
   function openPullReport(data, notice) {
-    openGuardDialog('Review this pull', 'pull-dialog', (body) => renderPullReport(body, data, notice));
+    openGuardDialog('Review this pull', 'pull-dialog', (body) => renderPullReport(body, data, notice), $('syncPullBtn'));
   }
 
   function renderPullReport(body, data, notice) {
@@ -6297,6 +6300,7 @@
   function autoPushSentence(auto) {
     if (auto.enabled && (auto.phase === 'idle' || auto.phase === 'pending' || auto.phase === 'pushing') && auto.reason !== 'locked')
       return 'On. Cloud Connect updates on its own a few seconds after this Mac syncs with your other devices.';
+    if (auto.reason === 'switched_off') return 'Off. Cloud Connect updates only when you use Sync now.';
     if (auto.reason === 'stale_push') return 'Another device pushed a newer copy to Cloud Connect, so automatic updates are paused. Let this Mac finish syncing, then use Sync now.';
     if (auto.reason === 'reencrypt') return 'Cloud Connect cannot read this account\'s shared data. Use Sync now to send it again.';
     return auto.message || 'Cloud Connect updates only when you use Sync now.';
@@ -6556,9 +6560,10 @@
   // --- ADR 0063 dialogs (Sync now preview, restore, pull report): one overlay
   // that traps Tab, closes on Escape, and returns focus to what opened it.
   let guardLastFocus = null;
-  function openGuardDialog(title, className, build) {
+  // returnTo names the control to refocus when the opener was disabled while it waited.
+  function openGuardDialog(title, className, build, returnTo) {
     const overlay = $('guardDialogOverlay');
-    if (overlay.hidden) guardLastFocus = document.activeElement;
+    if (overlay.hidden) guardLastFocus = returnTo || document.activeElement;
     $('guardDialog').className = 'dialog review-dialog guard-dialog ' + (className || '');
     $('guardDialogTitle').textContent = title;
     build($('guardDialogBody'));
@@ -6666,7 +6671,7 @@
         if (done) closeGuardDialog(); else { apply.disabled = false; cancel.disabled = false; }
       });
       actions.append(cancel, apply); foot.appendChild(actions); body.appendChild(foot);
-    });
+    }, $('shareSyncBtn'));
   }
 
   function shareSyncMessages(r) {

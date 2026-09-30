@@ -365,3 +365,41 @@ describe('Projects backup mirror line (ADR 0053 Decision 7)', () => {
     expect(load.indexOf('showProjectsMirror(null);')).toBeLessThan(load.indexOf("await api('/api/projects')"));
   });
 });
+
+describe('Conflict view comparison (ADR 0063 D1)', () => {
+  const load = () => {
+    const context = vm.createContext({});
+    vm.runInContext(`${functionSource('shortDay')}\n${functionSource('projectSections')}\nconst PROJECT_COMPARE_GROUPS = ${script.match(/const PROJECT_COMPARE_GROUPS = (\[[^\n]*\]);/)![1]};\n${functionSource('compareProjectTexts')}\n${functionSource('diffUnits')}`, context);
+    return context as unknown as { compareProjectTexts: (a: string, b: string) => Array<{ label: string; same: boolean; mine: string; theirs: string }>; diffUnits: (a: string, b: string) => Array<Array<{ text: string; only: boolean }>> };
+  };
+  const mine = '# home-budget\n\n## What & Why\n\nBudget.\n\n## Current Status\n\nDraft is in the sheet. Renewal came in at $1,840, up 6%.\n\n## Next Actions\n\n1. Update utilities.\n2. Move the increase into the plan.\n\n## Decisions\n\n- 2026-09-30 - Keep groceries as one line.\n\n## Log\n\n- 2026-09-29 - Entered the renewal figure.\n';
+  const theirs = mine.replace('Renewal came in at $1,840, up 6%.', 'Waiting on the renewal quote.').replace('2. Move the increase into the plan.', '2. Call the agent.').replace('- 2026-09-29 - Entered the renewal figure.', '- 2026-09-27 - Drafted questions.');
+
+  it('groups sections the way the page names them, hiding quiet ones that match', () => {
+    const groups = load().compareProjectTexts(mine, theirs);
+    expect(groups.map((g) => [g.label, g.same])).toEqual([['Current summary', false], ['Next actions', false], ['Decisions and open questions', true], ['Log', false]]);
+    expect(groups[3]!.mine).toMatch(/^Sep 29: Entered the renewal figure\.$/);
+  });
+
+  it('marks only the sentences one version lacks, and never splits a numbered line', () => {
+    const units = load().diffUnits('Draft is in the sheet. Renewal came in at $1,840, up 6%.\n1. Update utilities.', 'Draft is in the sheet. Waiting on the renewal quote.\n1. Update utilities.');
+    expect(JSON.parse(JSON.stringify(units))).toEqual([
+      [{ text: 'Draft is in the sheet.', only: false }, { text: 'Renewal came in at $1,840, up 6%.', only: true }],
+      [{ text: '1. Update utilities.', only: false }],
+    ]);
+  });
+});
+
+describe('Automatic push status line (ADR 0063 D5)', () => {
+  const sentence = (auto: Record<string, unknown>) => {
+    const context = vm.createContext({});
+    vm.runInContext(functionSource('autoPushSentence'), context);
+    return vm.runInContext(`autoPushSentence(${JSON.stringify(auto)})`, context) as string;
+  };
+  it('says when it is on, and names Sync now instead of a CLI command when it is not', () => {
+    expect(sentence({ enabled: true, phase: 'idle', reason: null })).toBe('On. Cloud Connect updates on its own a few seconds after this Mac syncs with your other devices.');
+    expect(sentence({ enabled: false, phase: 'off', reason: 'switched_off', message: 'x' })).toBe('Off. Cloud Connect updates only when you use Sync now.');
+    expect(sentence({ enabled: true, phase: 'paused', reason: 'stale_push', message: 'run: northkeep share push --reset-order' })).not.toContain('northkeep');
+    expect(sentence({ enabled: true, phase: 'paused', reason: 'behind', message: 'This Mac is behind your other devices.' })).toBe('This Mac is behind your other devices.');
+  });
+});
