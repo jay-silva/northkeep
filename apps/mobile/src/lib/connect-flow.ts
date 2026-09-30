@@ -266,10 +266,9 @@ export async function runShareScope(ports: ShareScopePorts, scope: string): Prom
     return classifyConnectorError(err);
   }
   await ports.markLocal(next);
+  let pushed: number;
   try {
-    const { pushed } = await ports.pushScopes(next, stamp);
-    await ports.syncVault();
-    return { kind: 'shared', scope, pushed };
+    ({ pushed } = await ports.pushScopes(next, stamp));
   } catch (err) {
     // Rollback: the server never accepted it. Remove ONLY this call's own
     // scope from a FRESH load; a blind save(before) would clobber any mark a
@@ -286,6 +285,14 @@ export async function runShareScope(ports: ShareScopePorts, scope: string): Prom
     }
     return classifyConnectorError(err);
   }
+  // Cloud Connect holds the scope now, so a failed vault push must not undo
+  // the mark; the next save or wake pushes it, and the sync line says why.
+  try {
+    await ports.syncVault();
+  } catch {
+    // Reported through the session's sync state.
+  }
+  return { kind: 'shared', scope, pushed };
 }
 
 export type UnshareScopeOutcome =

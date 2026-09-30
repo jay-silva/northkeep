@@ -520,6 +520,18 @@ describe('phoneVaultStamp (ADR 0063 D5 on the phone)', () => {
     expect(sent).toEqual({ server: vaultServerHashForPhone(SERVER), version: status.version });
   });
 
+  it('a vault push that fails after Cloud Connect accepted keeps the share and its mark', async () => {
+    const { store, get } = memStore([]);
+    const { ports } = sharePorts(store, {
+      pushScopes: async () => ({ pushed: 3 }),
+      syncVault: async () => {
+        throw new Error('No device secret on this phone yet.');
+      },
+    });
+    expect(await runShareScope(ports, 'work')).toEqual({ kind: 'shared', scope: 'work', pushed: 3 });
+    expect(get()).toEqual(['work']);
+  });
+
   it('a refused share rolls its mark back and says why on the phone', async () => {
     const { store, get } = memStore([]);
     const outcome = await runShareScope(

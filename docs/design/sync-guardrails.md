@@ -1241,7 +1241,8 @@ with your other devices yet, so nothing was shared. Let sync finish, then
 share again." with nothing saved or sent); save the mark on the phone only;
 push to Cloud Connect with that stamp; then run the normal push-after-save
 for the mark. A refused Cloud Connect push rolls the mark back through the
-store as before. The stamp names the version the phone held before its mark;
+store as before; a failed vault push afterwards keeps the share and its mark,
+because Cloud Connect already holds the scope (ADR 0038 review F1). The stamp names the version the phone held before its mark;
 the entries it sends are that version's, since a mark changes no entry.
 Evidence: `apps/mobile/test/connect-flow.test.ts` (refusal writes and sends
 nothing; the step order and the stamp sent), mobile tsc, and
