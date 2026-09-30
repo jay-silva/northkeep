@@ -150,7 +150,7 @@ export default function RootLayout() {
 
 const styles = StyleSheet.create({
   cover: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: colors.bg,
     alignItems: 'center',
     justifyContent: 'center',

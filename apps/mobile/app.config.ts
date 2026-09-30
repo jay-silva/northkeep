@@ -17,7 +17,7 @@ const config: ExpoConfig = {
   version: '0.22.3',
   // Brand app icon (master 1024x1024 from brand/northkeep-icon-1024.png). Expo
   // generates every platform size from this at build; the top-level `icon` is
-  // what iOS uses (no separate ios.icon needed on SDK 55). RGB, no alpha, so the
+  // what iOS uses (no separate ios.icon needed on SDK 57). RGB, no alpha, so the
   // App Store's "no transparency in the marketing icon" rule is satisfied.
   icon: './assets/icon.png',
   // The app owns the northkeep:// scheme so link QR codes can ALSO deep-link
@@ -30,7 +30,7 @@ const config: ExpoConfig = {
   // native surfaces (Alert, keyboard, Switch track, status-bar background) match
   // the app instead of flipping to a light appearance that never renders here.
   userInterfaceStyle: 'dark',
-  // RN New Architecture (ADR 0017): the default and only mode on SDK 55, so
+  // RN New Architecture (ADR 0017): the default and only mode since SDK 55, so
   // no newArchEnabled flag exists anymore. react-native-quick-crypto (Nitro)
   // and react-native-libsodium both require New Arch, which is satisfied.
   ios: {
@@ -113,7 +113,10 @@ const config: ExpoConfig = {
     // Sets iOS min deployment target + New-Arch flags the native modules below
     // need at prebuild/compile time (react-native-quick-crypto declares this as
     // a peer). No-op for the Metro JS bundle; matters only on the EAS compile.
-    'expo-build-properties',
+    // enableSceneSupport adopts the UIKit scene lifecycle (scene manifest in
+    // Info.plist, startup in Expo's scene delegate). iOS 27 kills an app at
+    // launch without it. SDK 58 templates include it, so drop the flag there.
+    ['expo-build-properties', { ios: { enableSceneSupport: true } }],
     [
       'expo-secure-store',
       {
