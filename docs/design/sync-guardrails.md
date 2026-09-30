@@ -734,3 +734,148 @@ script is written.
     connector's head backward through the ack path; such rows are discarded
     by id instead (D1).
   - Founder decisions recorded (section 8).
+
+## Build notes
+
+### Connector (g63/connector)
+
+Choices made where the text above was silent or ambiguous, and the exact
+wire shapes, so the client build and the reviewers can check against them.
+
+**Wire protocol.**
+- `GET /client/pending?v=2`: each entry is `{ server_id, scope, type,
+  content, stale, base_revision? }`. `base_revision` is omitted, never null,
+  for a legacy row. `stale` is on every entry. It is true only for a pending
+  `working` row in a slug-valid project scope that D2 would not serve,
+  including every legacy one. It is computed from a fresh read after the
+  tombstone read, so a row replaced between the reads comes back stale.
+- Without `?v=2` the shape is unchanged and every pending `working` row in a
+  project scope is withheld, base-`new` creates included. Memories and Log
+  archives still flow to old clients.
+- `base_revision` on rows that are not documents: a `memory_remember` row
+  has none. A Log archive carries the base of the document it rode with; D1
+  ignores it.
+- `POST /client/discard`: body `{ server_ids: string[] }`, answer
+  `{ ok: true, discarded: n }`. It deletes only rows that are still pending;
+  other ids are ignored. Each touched scope's counter moves once. Gate: the
+  connector token's account plus the entitlement, the same as `/client/ack`
+  (RULES Engineering #4). Refusals: 401 no token, 400 not an array of
+  strings or an id with U+0000, 402 lapsed, 413 over 5000 ids. A forget
+  queued against a discarded id is left in place and drains on the next ack.
+- `PUT /client/entries` accepts `vault: { server, version }` and `reset`.
+  `server` must be 16 lowercase hex characters and `version` a whole number
+  of 0 or more; `reset` must be a boolean when present. Anything else is 400
+  and changes nothing.
+- HTTP 428 body: `{ error, code: 'stale_push', vault_version }`, where
+  `vault_version` is the stored version (a number, or null when none).
+- Check order on a push: the tombstone pre-check first (412 when
+  enforcement is on), then the vault guard (428), then the writes. With
+  enforcement off, the plain-replace fallback applies the guard again, so a
+  push that is both older and tombstoned gets 412 with the flag on and 428
+  with it off. Nothing is written in either case.
+- Guard rules. A push with no `vault` is accepted only while no pair is
+  recorded. A push with `vault` is accepted when no pair is recorded, when
+  the server differs (the pair is replaced), or when the version is equal or
+  higher. `reset: true` is always accepted and stores exactly what was sent.
+  With no `vault`, that clears the pair (open point R-428d): old clients then
+  pass again until a device sends a `vault`.
+- `GET /client/manifest` adds `tombstone_enforce: boolean`. The health page
+  adds `Tombstone enforcement: on` or `off` from the parsed flag.
+
+**Hosted tools.**
+- `project_get` text ends with `Revision: <id> (pass it as expected_revision
+  to project_update)`. `structuredContent` is `{ project, revision }`.
+- `project_update` keeps `expected_revision` optional in the schema, so a
+  missing one gets the design's sentence and not the SDK's generic error. It
+  is checked after the slug, empty-update, text-rule and tombstone checks.
+  `stale_project` is an error whose text starts "Project changed after it was
+  read. Nothing was saved. The current document follows; its revision is
+  <id>." followed by the document. Its `structuredContent` is
+  `{ code: 'stale_project', project, revision, document }`. A lost
+  compare-and-swap answers the same way. Success keeps `(id: X)` in the
+  text, adds `Revision: X.`, and returns `{ project, revision }`.
+- `project_create` ids are now `conn_<uuid>`. The deterministic
+  `conn_create_<sha>` id is retired because the compare-and-swap closes the
+  concurrent-create race (recheck R-S3). The loser gets "Project already
+  exists; use project_update." or "Nothing was saved: project "<slug>"
+  changed while it was being created. Call project_get, then retry."
+- Several pushed heads at the top `write_seq`: `project_get` and
+  `project_update` refuse with "Project has multiple current documents.
+  Nothing was saved. Ask the user to open NorthKeep and push again (Sync
+  now)." `project_list` shows the project with `revision: null` and a
+  `conflict` field.
+- Only stale or legacy rows left in a scope (recheck note on contradictory
+  refusals): `project_update` and `project_create` both answer "Nothing was
+  saved: a cloud version of project "<slug>" is waiting for the user to
+  review it in NorthKeep. Ask them to resolve it there, then call
+  project_get." `project_get` and `project_list` say the same in their own
+  words.
+- The D2 residual is fixed in the build, not left to KNOWN-LIMITS.
+  `memory_list`, `memory_retrieve`, `search` and `fetch` hide stale pending
+  project documents.
+- `memory_remember` refuses `type: 'working'` in a slug-valid project scope
+  (recheck R-S1). Other types in a project scope, and `working` in other
+  scopes, are unchanged.
+
+**Storage.**
+- `write_seq` is `bigint NOT NULL DEFAULT 0` (recheck R-W1). Rows from
+  before the deploy read 0 on both stores. A constant default is a
+  catalog-only change on Postgres 11 and later, with no table rewrite.
+  `base_revision` has no default, so legacy rows stay NULL. There is no
+  backfill.
+- Consequence: at deploy, a scope that holds an acked row next to its old
+  pushed row has both at 0. It reads as several heads until the next push.
+  The desktop and CLI re-push after every down-sync. A phone ack made before
+  the deploy leaves the tie in place until the Mac next pushes, which D5 does
+  within seconds of its next vault push.
+- The counter starts at 0 when `readScopeSeq` first creates it.
+- Counter moves: an accepted push (once per pushed scope; a refused push
+  moves nothing), every cloud write (a compare-and-swap for project writes,
+  an unconditional move for `memory_remember`), an ack, a discard, a forget
+  drain, an unshare, and the tombstone purge inside `GET /client/pending`,
+  which now goes through `discardPending`. An unshare moves an existing
+  counter only and never creates one, so a lapsed account cannot use unshare
+  to grow the table past the ADR 0061 caps. `purgeLegacyPlaintext` is
+  exempt: it is flag-gated maintenance over the whole table, and its rows
+  were never served.
+- Every decision that needs a row's type is made per request, after
+  decryption, and never stored. That covers P, `stale`, the v1 withhold and
+  R-S1, because the stored `type` column is `''` for every encrypted row.
+- A push over an existing id now sets `origin 'vault'`, `pending false` and
+  `base_revision NULL` on Neon, matching the in-memory store.
+- Store divergence fixed: the Neon ack deleted the row under the local id
+  even when the server row was already gone, so an ack of a replaced row
+  could delete the pushed head. It is now a no-op on both stores, as D2
+  requires.
+- `GET /` skips the once-per-process ADR 0061 maintenance. The rollout step
+  3 curl therefore touches no storage even if that flag is on.
+
+**Evidence.**
+- `apps/connector-server/test/adr0063-*.test.ts` run every storage and route
+  rule on both stores. The PGlite driver returns int8 as strings, as Neon's
+  HTTP driver does, and one scope is driven past counter value 9.
+- `node apps/connector-server/scripts/adr0063-real-pg.mjs <empty dir>` races
+  the exact captured statements on a throwaway local Postgres. It checks two
+  updates at one counter value, and pushes at vault versions 5 and 6 in both
+  orders.
+- The incident replay, connector half:
+  - The 0.22.x `downSyncConnector` receives nothing, the head stays R2, and
+    the row stays pending.
+  - `?v=2` delivers the row with base R1 and `stale: false`, because R2 was
+    never pushed and the connector cannot see it. Holding it is D1's job on
+    the client.
+  - After R2 is pushed, `project_get` serves R2 and the row is `stale: true`.
+
+**Not done on the connector, for Jay.**
+- Recheck R-S2 (a stale base-`new` create revives after the user deletes
+  the project). A connector-side fix would have to store a flag derived from
+  the pushed rows' encrypted type. That is new content-derived metadata,
+  outside the list in the ADR's "What leaves the machine" section, so it was
+  not built. Suggested client-side fix: when the user deletes a shared
+  project, discard that scope's pending working rows by id through
+  `/client/discard`, after saving each as a "Cloud version not kept" memory.
+- R-428b (equal versions across an ack) and R-428c (devices on different
+  sync servers) behave as the recheck measured them. R-428c still needs its
+  KNOWN-LIMITS line, which is outside this branch.
+- The read-only count of the founder's pending working rows before deploy
+  (section 6 step 2) was not run: no production access here.
