@@ -880,6 +880,16 @@ wire shapes, so the client build and the reviewers can check against them.
     the client.
   - After R2 is pushed, `project_get` serves R2 and the row is `stale: true`.
 
+- The whole replay, both halves: on a throwaway local merge with
+  `g63/client` at `29f5a16` (not committed, not pushed), the client's real
+  `fetchPending`, `planDownSync`, `applyDownSync` and `resolveConflict` ran
+  against `createConnectorServer` on both stores. The row was held as
+  `moved` with base R1 and local R2, and nothing was applied. Take theirs
+  put the cloud text on the head, kept R2 in history and acked. Keep mine
+  kept R2, left one memory with the cloud text and no pending row, and a
+  retry added nothing. A fast-forward applied on approval and the connector
+  then served the new head id. A legacy row was held as `legacy`.
+
 **Not done on the connector, for Jay.**
 - Recheck R-S2 (a stale base-`new` create revives after the user deletes
   the project). A connector-side fix would have to store a flag derived from
