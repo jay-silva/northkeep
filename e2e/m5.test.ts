@@ -143,7 +143,13 @@ describe('M5 acceptance — sync', () => {
     expect(bRemember.stderr).toMatch(/both changed/);
     const status = await fetch(`${serverUrl}/api/status`, { headers: { authorization: `Bearer ${deriveTokenFor(homeA)}` } });
     expect(((await status.json()) as { version: number }).version).toBe(5);
-    const bPull = await cli(homeB, ['sync', 'pull']);
+    // ADR 0063 D6: the manual pull names what it would drop and, with no
+    // terminal to ask on, changes nothing until the user says yes.
+    const bAsk = await cli(homeB, ['sync', 'pull']);
+    expect(bAsk.code).not.toBe(0);
+    expect(bAsk.stdout).toContain('personal: "The user repainted the hull."');
+    expect((await cli(homeB, ['list'])).stdout).toContain('repainted the hull');
+    const bPull = await cli(homeB, ['sync', 'pull', '--yes']);
     expect(bPull.stdout).toContain('Pulled version 5');
     // B's own edit was displaced to .bak by the manual pull (documented limit), not lost.
     expect(fs.existsSync(path.join(homeB, 'vault.nkv.bak'))).toBe(true);
