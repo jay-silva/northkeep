@@ -413,4 +413,32 @@ describe('ADR 0063 tombstone enforcement is visible, read-only', () => {
     }
     expect(lines).toEqual({ unset: 'off false', zero: 'off false', one: 'on true', true: 'on true' });
   });
+
+  it('the health page calls no storage method, even as the first request with maintenance on', async () => {
+    const calls: string[] = [];
+    const inner = new InMemoryConnectorStorage();
+    const spy = new Proxy(inner, {
+      get(target, prop, receiver) {
+        const v = Reflect.get(target, prop, receiver);
+        if (typeof v !== 'function') return v;
+        return (...args: unknown[]) => {
+          calls.push(String(prop));
+          return (v as (...a: unknown[]) => unknown).apply(target, args);
+        };
+      },
+    });
+    const logs: string[] = [];
+    const srv = await startServer(() =>
+      createConnectorServer(spy, { maintenance: { run: true, purge: true, notes: [] }, maintenanceLog: (l) => logs.push(l) }),
+    );
+    try {
+      const res = await fetch(`${srv.base}/`);
+      expect(res.status).toBe(200);
+      expect(calls).toEqual([]);
+      await fetch(`${srv.base}/client/manifest`, { headers: { authorization: 'Bearer manifest-token-0123456789' } });
+      expect(calls).toContain('gcOAuth');
+    } finally {
+      await srv.close();
+    }
+  });
 });

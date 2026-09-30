@@ -259,7 +259,10 @@ export function createConnectorServer(
   // retried on the next request, never surfaced to the caller.
   const maintenanceCfg = opts.maintenance ?? maintenanceConfigFromEnv(process.env);
   let maintenanceDone: Promise<void> | null = null;
-  app.use(async (_req: Request, _res: Response, next: NextFunction) => {
+  app.use(async (req: Request, _res: Response, next: NextFunction) => {
+    // The health page stays storage-free (ADR 0063 rollout step 3 curls it);
+    // maintenance runs on the next real request instead.
+    if (req.method === 'GET' && req.path === '/') return next();
     if (!maintenanceDone) {
       const attempt = runMaintenance(storage, maintenanceCfg, opts.maintenanceLog)
         .then((r) => {
