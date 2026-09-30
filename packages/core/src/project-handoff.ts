@@ -25,6 +25,10 @@ export const PROJECT_HANDOFF_METADATA_KEY = 'northkeep_project_handoff_v1';
 export const PROJECT_PROVENANCE_METADATA_KEY = 'northkeep_provenance_v1';
 /** Reserved key on live project heads: the newest checkpoint and wrap operation ids (ADR 0062). */
 export const PROJECT_OPERATIONS_METADATA_KEY = 'northkeep_operations_v1';
+/** ADR 0063 D4: on a restored head, the revision its text came from. */
+export const PROJECT_RESTORE_METADATA_KEY = 'northkeep_restore_v1';
+/** ADR 0063 D4: compaction (ADR 0051) blanked the text, so there is nothing to restore. */
+export const PROJECT_RESTORE_BLANKED_MESSAGE = 'That version was cleared to save space (NorthKeep keeps the newest five versions of each project), so it cannot be restored.';
 export const PROJECT_OPERATIONS_LIMIT = 16;
 export const PROJECT_REVISION_SUMMARY_LIMIT = 20;
 export const PROJECT_HANDOFF_METADATA_VERSION = 1;
@@ -87,6 +91,8 @@ export interface ProjectCheckpointRequest {
   status:string; completed:string; next_actions:string; decision?:string; open_questions?:string; files?:ProjectFileReference[];
   writer?:ProjectWriter;
 }
+/** ADR 0063: whole-text write of a project head, bound to the head the caller read (null creates). */
+export interface ProjectReplaceRequest { project:string; expected_revision:string|null; content:string; source:string; metadata?:Record<string,unknown>; writer?:ProjectWriter }
 export interface ProjectUpdateRequest {
   project:string; expected_revision:string|null; what_why?:string; status?:string; next_actions?:string;
   decision?:string; log_entry?:string; open_questions?:string; files?:ProjectFileReference[];

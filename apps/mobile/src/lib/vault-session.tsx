@@ -22,8 +22,8 @@ import {
   type ScoredEntry,
 } from '@northkeep/core';
 import {
+  applyDownSync,
   deriveSyncCreds,
-  downSyncConnector,
   fetchEntitlement,
   pushSharedScopes,
   startPairing,
@@ -1357,7 +1357,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     let result: DownSyncResult;
     try {
       const entitlement = await maybeConnectorEntitlement(secret);
-      // DELIBERATE EXCEPTION to "network outside the gate": downSyncConnector
+      // DELIBERATE EXCEPTION to "network outside the gate": applyDownSync
       // lives in @northkeep/sync and interleaves its own HTTP with vault
       // saves, so the two halves cannot be split from here (this change is
       // apps/mobile only). The whole call takes the gate instead. The trade is
@@ -1366,12 +1366,15 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       result = await vaultGate.run(async () => {
         const vault = vaultRef.current;
         if (!vault) throw new Error('Unlock the vault before syncing app-written memories.');
-        // downSyncConnector saves the vault inside this section, so the flag is
+        // applyDownSync saves the vault inside this section, so the flag is
         // set here, before it, like every other mutation (see addMemory).
         await saveLocalDirty(true);
-        // downSyncConnector appends/tombstones on the open vault and save()s it
-        // BEFORE acking, so a failure after save is retried as a no-op (dedupe).
-        return downSyncConnector({ server, deviceSecret: secret, vault, entitlement });
+        // ADR 0063 D1 (founder decision): the phone applies additions only
+        // (new memories, new projects) until it has a preview screen. It never
+        // replaces a project document, never forgets, and never acks a forget,
+        // so the Mac still sees every one. It saves BEFORE acking, so a failure
+        // after the save is retried as a no-op (dedupe).
+        return applyDownSync({ server, deviceSecret: secret, vault, entitlement, additiveOnly: true });
       });
     } finally {
       memzero(secret);
@@ -1379,7 +1382,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     reloadEntries();
     // The vault file changed on disk; run the same push-after-save every
     // mutation runs so the change reaches the SYNC server (loud on failure).
-    if (result.added > 0 || result.forgotten > 0) await pushAfterSave();
+    if (result.added > 0) await pushAfterSave();
     return result;
   }, [connectorContext, maybeConnectorEntitlement, reloadEntries, pushAfterSave]);
 

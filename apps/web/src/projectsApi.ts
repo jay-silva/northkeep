@@ -1,6 +1,7 @@
 /** Projects routes inherit server.ts session-token checks and require an unlocked vault. */
 import fs from 'node:fs';
-import { getProjectView, listProjectViews, northkeepHome, ProjectHandoffError, type ProjectCheckpointRequest, type ProjectUpdateRequest } from '@northkeep/core';
+import { getProjectView, listProjectViews, loadDeviceSecret, northkeepHome, ProjectHandoffError, projectScope, type ProjectCheckpointRequest, type ProjectUpdateRequest } from '@northkeep/core';
+import { loadConnectorConfig, unshareScope } from '@northkeep/sync';
 import { readMirrorSummary } from '@northkeep/mcp-server';
 import type { UiSession } from './session.js';
 
@@ -67,7 +68,7 @@ export async function handleProjectsApi(session: UiSession, method: string, rout
         return reply(500, { error: error instanceof Error ? error.message : 'Compaction failed.', code: 'compaction_failed' });
       }
     }
-    const match = /^\/api\/projects\/([a-z0-9-]{1,40})(?:\/(checkpoint|wrap|update))?$/.exec(route);
+    const match = /^\/api\/projects\/([a-z0-9-]{1,40})(?:\/(checkpoint|wrap|update|restore))?$/.exec(route);
     if (!match) return reply(404, { error: 'Project route not found.', code: 'not_found' });
     const project = match[1]!;
     if (method === 'GET' && !match[2]) {
@@ -76,10 +77,43 @@ export async function handleProjectsApi(session: UiSession, method: string, rout
     if (method === 'DELETE' && !match[2]) {
       // Owner request 2026-09-13: delete a project from the app. Forgets every
       // entry in the project scope (tombstones, chain intact) in one transaction.
+      // ADR 0063 recheck R-S2: a shared project is deleted from Cloud Connect
+      // first and unmarked in the same save, so a cloud copy cannot come back
+      // without a prompt. A failed server delete deletes nothing.
+      const scope = projectScope(project);
+      const shared = await session.withVault(vault => vault.sharedScopes().includes(scope));
+      const connector = loadConnectorConfig();
+      if (shared && connector) {
+        try {
+          await unshareScope({ server: connector.server, deviceSecret: loadDeviceSecret(), scope });
+        } catch {
+          return reply(502, { error: `Could not delete project ${project} from Cloud Connect, so nothing was deleted. Try again.`, code: 'unshare_failed' });
+        }
+      }
       return reply(200, await session.withVault(vault => {
         const forgotten = vault.deleteProject(project);
+        if (vault.sharedScopes().includes(scope)) vault.setScopeShared(scope, false);
         vault.save();
-        return { project, forgotten };
+        return { project, forgotten, unshared: shared };
+      }));
+    }
+    if (method === 'POST' && match[2] === 'restore') {
+      // ADR 0063 D4: write an earlier version's exact text back as the new head,
+      // bound to the head the caller was shown.
+      if (body.length > 4 * 1024) return reply(400, { error: 'Restore request is too large.', code: 'invalid_request' });
+      let input: Record<string, unknown>;
+      try {
+        const parsed: unknown = JSON.parse(body.toString('utf8'));
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+        input = parsed as Record<string, unknown>;
+      } catch { return reply(400, { error: 'A JSON object is required.', code: 'invalid_request' }); }
+      if (Object.keys(input).some(key => !['revision', 'expected_revision'].includes(key))) return reply(400, { error: 'Unexpected restore field.', code: 'invalid_request' });
+      if (typeof input.revision !== 'string' || typeof input.expected_revision !== 'string') return reply(400, { error: 'revision and expected_revision are required.', code: 'invalid_request' });
+      const request = { project, revision: input.revision, expected_revision: input.expected_revision, writer: appWriter(session) };
+      return reply(200, await session.withVault(vault => {
+        const current = vault.restoreProjectRevision(request);
+        vault.save();
+        return current;
       }));
     }
     if (method === 'POST' && match[2] === 'update') {

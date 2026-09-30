@@ -34,6 +34,8 @@ import {
   PROJECT_OPERATIONS_LIMIT,
   PROJECT_OPERATIONS_METADATA_KEY,
   PROJECT_PROVENANCE_METADATA_KEY,
+  PROJECT_RESTORE_BLANKED_MESSAGE,
+  PROJECT_RESTORE_METADATA_KEY,
   ProjectHandoffError,
   applyProjectUpdate,
   getProjectView,
@@ -46,7 +48,9 @@ import {
   type ProjectCheckpointRequest,
   type ProjectCheckpointResult,
   type ProjectHandoffMetadata,
+  type ProjectReplaceRequest,
   type ProjectUpdateRequest,
+  type ProjectWriter,
   type ProjectView,
 } from './project-handoff.js';
 import { emptyProjectDoc, formatLogArchive, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
@@ -601,6 +605,75 @@ export class Vault {
   updateProject(request: ProjectUpdateRequest, allowedScopes?: string[]): ProjectView {
     this.assertOpen();
     return this.writeProject(request, allowedScopes, null).current;
+  }
+
+  /**
+   * ADR 0063: writes whole document text as the new head, bound to the head
+   * the caller read, with the same supersede guard as updateProject. The
+   * connector down-sync and "take theirs" use it for a cloud document, and
+   * restoreProjectRevision for an old revision. `expected_revision: null`
+   * creates, and refuses when a head already exists.
+   */
+  replaceProjectContent(request: ProjectReplaceRequest, allowedScopes?: string[]): ProjectView {
+    this.assertOpen();
+    let scope: string;
+    try { scope = projectScope(request.project); } catch { throw new ProjectHandoffError('invalid_request', 'Project slug is invalid.'); }
+    if (allowedScopes !== undefined && !allowedScopes.includes(scope)) throw new ProjectHandoffError('scope_denied', 'Project scope is outside this connection grant.');
+    if (typeof request.content !== 'string' || request.content.trim().length === 0) throw new ProjectHandoffError('invalid_request', 'Project document must not be empty.');
+    if (request.writer !== undefined) validateProjectWriter(request.writer);
+    this.autoCompaction = null;
+    let auto: AutoCompaction | null = null;
+    this.db.transaction(() => {
+      const heads = this.list({ type: 'working', scope, allowedScopes });
+      if (heads.length > 1) throw new ProjectHandoffError('project_conflict', 'Project has multiple current documents.');
+      const old = heads[0] ?? null;
+      if (old === null && request.expected_revision !== null) throw new ProjectHandoffError('stale_project', 'Project changed after it was read.');
+      if (old !== null && request.expected_revision !== old.id) {
+        let current: ProjectView | undefined;
+        try { current = getProjectView(this, request.project, allowedScopes); } catch { /* report without it */ }
+        throw new ProjectHandoffError('stale_project', 'Project changed after it was read.', current);
+      }
+      const now = new Date().toISOString();
+      const built: Record<string, unknown> = old?.metadata ? (JSON.parse(JSON.stringify(old.metadata)) as Record<string, unknown>) : {};
+      for (const key of [PROJECT_HANDOFF_METADATA_KEY, PROJECT_PROVENANCE_METADATA_KEY, PROJECT_RESTORE_METADATA_KEY, 'connector']) delete built[key];
+      Object.assign(built, request.metadata ?? {});
+      if (request.writer !== undefined) built[PROJECT_PROVENANCE_METADATA_KEY] = projectProvenanceBlock(request.writer, now);
+      const head = this.makeProjectEntry('working', request.content, scope, request.source, Object.keys(built).length === 0 ? null : built, this.getMeta('chain_head'), now);
+      this.prepareEntryInsert().run(this.entryParams(head));
+      if (old) {
+        const changed = this.db.prepare('UPDATE memories SET superseded_at=?, superseded_by=? WHERE id=? AND forgotten_at IS NULL AND superseded_at IS NULL').run(now, head.id, old.id).changes;
+        if (changed !== 1) throw new ProjectHandoffError('stale_project', 'Project changed before the update could be applied.');
+        auto = this.autoCompactScope(scope);
+      }
+      this.setMeta('chain_head', head.entry_hash);
+      // A document the reader cannot parse must not become the head; this rolls the write back.
+      getProjectView(this, request.project, allowedScopes);
+    })();
+    this.finishAutoCompaction(auto);
+    return getProjectView(this, request.project, allowedScopes, { history: true });
+  }
+
+  /**
+   * ADR 0063 D4: writes a superseded revision's exact text back as a new
+   * head. Refuses a stale head, the current head, and a revision whose text
+   * compaction blanked. The Log is not edited, so the restore is exact.
+   */
+  restoreProjectRevision(request: { project: string; revision: string; expected_revision: string; writer?: ProjectWriter }, allowedScopes?: string[]): ProjectView {
+    this.assertOpen();
+    let scope: string;
+    try { scope = projectScope(request.project); } catch { throw new ProjectHandoffError('invalid_request', 'Project slug is invalid.'); }
+    const row = this.list({ scope, type: 'working', includeSuperseded: true, includeForgotten: true, allowedScopes }).find((e) => e.id === request.revision);
+    if (!row) throw new ProjectHandoffError('not_found', 'That version of the project was not found.');
+    if (row.forgotten_at !== null) throw new ProjectHandoffError('not_found', PROJECT_RESTORE_BLANKED_MESSAGE);
+    if (row.superseded_at === null) throw new ProjectHandoffError('invalid_request', 'That version is already the current document.');
+    return this.replaceProjectContent({
+      project: request.project,
+      expected_revision: request.expected_revision,
+      content: row.content,
+      source: 'northkeep:project-restore',
+      metadata: { [PROJECT_RESTORE_METADATA_KEY]: { from_revision: row.id } },
+      ...(request.writer !== undefined ? { writer: request.writer } : {}),
+    }, allowedScopes);
   }
 
   /**

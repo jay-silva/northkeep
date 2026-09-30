@@ -606,6 +606,14 @@ describe('classifyConnectorError', () => {
 });
 
 describe('connectorSyncSummary', () => {
+  it('says what waits for the Mac (ADR 0063: the phone applies additions only)', () => {
+    expect(connectorSyncSummary({ added: 0, forgotten: 0, deduped: 0, deferred: 1, conflicts: [] }, { pushedBack: false })).toBe(
+      'No new memories from your AI apps. 1 change from your AI apps would replace or remove something here. Review on your Mac.',
+    );
+    expect(connectorSyncSummary({ added: 0, forgotten: 0, deduped: 0, deferred: 1, conflicts: [{}] })).toContain('2 changes from your AI apps');
+    expect(connectorSyncSummary({ added: 1, forgotten: 0, deduped: 0, deferred: 0, conflicts: [] })).not.toContain('Review on your Mac');
+  });
+
   it('names skipped rows so a dropped memory is never silent', () => {
     expect(connectorSyncSummary({ added: 0, forgotten: 0, deduped: 0, skipped: 1 })).toContain(
       '1 memory was skipped: its type is not one NorthKeep stores.',

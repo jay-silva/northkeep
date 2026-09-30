@@ -78,19 +78,51 @@ export function markConnectorPaired(now: Date = new Date()): void {
   fs.writeFileSync(target, `${JSON.stringify({ ...raw, paired_at: now.toISOString() }, null, 2)}\n`, { mode: 0o600 });
 }
 
+function readRaw(): Record<string, unknown> | null {
+  try {
+    const raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as unknown;
+    return raw !== null && typeof raw === 'object' && typeof (raw as Record<string, unknown>).server === 'string' ? (raw as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeRaw(raw: Record<string, unknown>): void {
+  fs.writeFileSync(connectorConfigPath(), `${JSON.stringify(raw, null, 2)}\n`, { mode: 0o600 });
+}
+
 /**
  * Record a push of the shared scopes that the connector server accepted, so
- * the GUI can say how old Cloud Connect's copy is. Device-local and not a
- * secret. Best effort: a failed write never fails the push it follows.
+ * the GUI can say how old Cloud Connect's copy is. With a fingerprint (ADR
+ * 0063 D5) it also records what was pushed, so automatic push sends only a
+ * change. Device-local and not a secret. Best effort: a failed write never
+ * fails the push it follows. Only an accepted push may call this.
  */
-export function markConnectorPushed(now: Date = new Date()): void {
+export function markConnectorPushed(now: Date = new Date(), fingerprint?: string): void {
   try {
-    const raw = JSON.parse(fs.readFileSync(connectorConfigPath(), 'utf8')) as Record<string, unknown>;
-    if (raw === null || typeof raw !== 'object' || typeof raw.server !== 'string') return;
-    fs.writeFileSync(connectorConfigPath(), `${JSON.stringify({ ...raw, last_pushed_at: now.toISOString() }, null, 2)}\n`, { mode: 0o600 });
+    const raw = readRaw();
+    if (raw === null) return;
+    writeRaw({ ...raw, last_pushed_at: now.toISOString(), ...(fingerprint !== undefined ? { auto_push_fingerprint: fingerprint } : {}) });
   } catch {
-    // No config, or unwritable: the push itself already succeeded.
+    // Unwritable: the push itself already succeeded.
   }
+}
+
+/** The fingerprint of the shared scopes at the last accepted push, or null (ADR 0063 D5). */
+export function connectorPushFingerprint(): string | null {
+  const value = readRaw()?.auto_push_fingerprint;
+  return typeof value === 'string' ? value : null;
+}
+
+/** ADR 0063 D5 switch, device-local: automatic push is on unless the user turned it off. */
+export function connectorAutoPushEnabled(): boolean {
+  return readRaw()?.auto_push !== false;
+}
+
+export function setConnectorAutoPush(enabled: boolean): void {
+  const raw = readRaw();
+  if (raw === null) throw new Error('Set a connector server first. No connector server is configured on this device.');
+  writeRaw({ ...raw, auto_push: enabled });
 }
 
 /** When this device last pushed its shared scopes to the configured server, or null. */
@@ -221,6 +253,8 @@ export function setConnectorServer(serverUrl: string): ConnectorConfig {
   if (raw.server !== server) {
     next.paired_at = null;
     delete next.last_pushed_at;
+    // A new server holds none of our rows, so the next automatic push must send them.
+    delete next.auto_push_fingerprint;
   }
   const target = connectorConfigPath();
   fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });

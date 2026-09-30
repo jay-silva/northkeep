@@ -1,5 +1,14 @@
 import { loadDeviceSecret, onVaultSave } from '@northkeep/core';
-import { isAutoSyncVault, loadSyncConfig, pushVault, SubscriptionRequiredError, SyncBusyError } from '@northkeep/sync';
+import {
+  ConnectorAutoPush,
+  connectorAutoPushEnabled,
+  isAutoSyncVault,
+  loadConnectorConfig,
+  loadSyncConfig,
+  pushVault,
+  SubscriptionRequiredError,
+  SyncBusyError,
+} from '@northkeep/sync';
 
 /**
  * Push-on-exit for the CLI (ADR 0044). A CLI command is a short-lived
@@ -34,7 +43,11 @@ export const SYNC_LOCK_WAIT_MS = 2_000;
 export async function autoPushAfterWrite(options: AutoPushOptions): Promise<AutoPushOutcome> {
   const log = options.log ?? ((line: string) => console.error(line));
   if (!options.saved) return 'skipped';
-  if (loadSyncConfig() === null) return 'not-configured';
+  if (loadSyncConfig() === null) {
+    // ADR 0063 D5: with no vault sync this device is the only copy, so its save is the trigger.
+    await connectorAfterWrite(options, log);
+    return 'not-configured';
+  }
   if (!isAutoSyncVault(options.vaultPath)) {
     log(OTHER_VAULT_HINT);
     return 'other-vault';
@@ -56,6 +69,7 @@ export async function autoPushAfterWrite(options: AutoPushOptions): Promise<Auto
     });
     if (result.ok) {
       log(`↑ synced (version ${result.version})`);
+      await connectorAfterWrite(options, log);
       return 'pushed';
     }
     log('sync: this machine and the server both changed. Run "northkeep sync pull", then "northkeep sync push".');
@@ -76,6 +90,32 @@ export async function autoPushAfterWrite(options: AutoPushOptions): Promise<Auto
         : `sync: ${message}. Run "northkeep sync push" later.`,
     );
     return 'failed';
+  }
+}
+
+/**
+ * ADR 0063 D5 in a short-lived command: one ConnectorAutoPush run once the
+ * vault is current. It pushes only a changed set of shared entries, and only
+ * when this device is exactly in sync; a paused engine says why in one line.
+ */
+async function connectorAfterWrite(options: AutoPushOptions, log: (line: string) => void): Promise<void> {
+  if (options.masterKey === null || loadConnectorConfig() === null || !connectorAutoPushEnabled()) return;
+  const key = options.masterKey;
+  let pushed = false;
+  const engine = new ConnectorAutoPush({
+    vaultPath: options.vaultPath,
+    getMasterKey: () => Buffer.from(key),
+    ...(options.loadDeviceSecret ? { loadDeviceSecret: options.loadDeviceSecret } : {}),
+    onEvent: (event) => {
+      if (event.type === 'pushed') pushed = true;
+    },
+  });
+  try {
+    const status = await engine.runOnce();
+    if (pushed) log('↑ Cloud Connect updated');
+    else if ((status.phase === 'paused' || status.phase === 'error') && status.message) log(`Cloud Connect: ${status.message}`);
+  } finally {
+    engine.stop();
   }
 }
 

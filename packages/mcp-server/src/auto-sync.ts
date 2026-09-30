@@ -1,5 +1,5 @@
 import { onVaultSave } from '@northkeep/core';
-import { AutoSync, isAutoSyncVault, type AutoSyncEvent, type AutoSyncPhase } from '@northkeep/sync';
+import { AutoSync, ConnectorAutoPush, isAutoSyncVault, type AutoSyncEvent, type AutoSyncPhase, type ConnectorAutoPushEvent } from '@northkeep/sync';
 import { resolveMasterKey } from './key.js';
 
 /**
@@ -16,6 +16,8 @@ import { resolveMasterKey } from './key.js';
 
 export interface StandaloneAutoSync {
   auto: AutoSync;
+  /** ADR 0063 D5: keeps Cloud Connect current once this vault is current. */
+  connector: ConnectorAutoPush;
   /** Detach the save hook. Idempotent. */
   dispose(): void;
 }
@@ -32,28 +34,54 @@ export function createStandaloneAutoSync(
   // launched with --vault then never syncs and says nothing about it (sixth
   // review, hosts). One line, at startup, so the reason is in the log.
   if (!isAutoSyncVault(vaultPath)) log(OTHER_VAULT_NOTICE);
-  const auto = new AutoSync({
+  // resolveMasterKey returns a fresh Buffer per call (documented in key.ts),
+  // so each engine may zero it after each operation.
+  const getMasterKey = () => resolveMasterKey(vaultPath)?.key ?? null;
+  let auto: AutoSync | null = null;
+  const connector = new ConnectorAutoPush({
     vaultPath,
-    // resolveMasterKey returns a fresh Buffer per call (documented in key.ts),
-    // so the engine may zero it after each operation.
-    getMasterKey: () => resolveMasterKey(vaultPath)?.key ?? null,
-    onEvent: (event) => log(describeEvent(event)),
+    getMasterKey,
+    autoSyncStatus: () => auto?.status() ?? null,
+    onEvent: (event) => log(describeConnectorEvent(event)),
+  });
+  auto = new AutoSync({
+    vaultPath,
+    getMasterKey,
+    onEvent: (event) => {
+      log(describeEvent(event));
+      if (event.type === 'pushed' || event.type === 'pulled' || event.type === 'in-sync') connector.onVaultCurrent();
+    },
   });
   const off = onVaultSave((savedPath) => {
-    // The engine guards this too; stated here so this file reads on its own.
+    // The engines guard this too; stated here so this file reads on its own.
     if (savedPath !== vaultPath) return;
-    auto.notifyWrite(savedPath);
+    auto!.notifyWrite(savedPath);
+    connector.notifyWrite(savedPath);
   });
   let disposed = false;
   return {
     auto,
+    connector,
     dispose: () => {
       if (disposed) return;
       disposed = true;
       off();
-      auto.stop();
+      auto!.stop();
+      connector.stop();
     },
   };
+}
+
+/** One stderr line per Cloud Connect event. Scope names only, never content. */
+export function describeConnectorEvent(event: ConnectorAutoPushEvent): string {
+  switch (event.type) {
+    case 'pushed':
+      return `northkeep MCP server updated Cloud Connect (${event.scopes.length} shared scope${event.scopes.length === 1 ? '' : 's'})`;
+    case 'paused':
+      return `northkeep MCP server paused Cloud Connect updates: ${event.message}`;
+    case 'error':
+      return `northkeep MCP server could not update Cloud Connect: ${event.message}`;
+  }
 }
 
 /** Why a paused engine is paused, in the wording the event line already uses. */
@@ -72,6 +100,8 @@ export function describeEvent(event: AutoSyncEvent): string {
       return 'northkeep MCP server synced: in sync';
     case 'diverged':
       return "northkeep MCP server sync: this vault differs from the server's newer copy; pull, then push, from the app or CLI";
+    case 'pull-refused':
+      return 'northkeep MCP server sync: the server copy would remove or undo something on this device, so it was not pulled; review it with "northkeep sync pull"';
     case 'error':
       return `northkeep MCP server sync failed: ${event.message}`;
     case 'paused':

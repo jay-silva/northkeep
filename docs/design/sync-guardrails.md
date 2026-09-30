@@ -1,7 +1,8 @@
 # Sync guardrails (design for ADR 0063)
 
-Status: proposed, not built. Revised 2026-09-30 after the first adversarial
-review (NOT CLEARED); recheck pending. See "Review history" at the end.
+Status: recheck CLEARED 2026-09-30. Built on `g63/connector` and
+`g63/client`, integrated on `g63/integrate` (see "Build notes" at the end).
+Not pushed or deployed. See "Review history" at the end.
 Rules: `~/Claude/Claude Context/RULES.md`, Version 2026-09-29.2.
 Base: branch `adr-0063/sync-guardrails` at `7a7780f` ("Connect: show when this
 Mac last pushed to Cloud Connect"). Every file:line below is at `7a7780f`; the
@@ -903,3 +904,142 @@ wire shapes, so the client build and the reviewers can check against them.
   KNOWN-LIMITS line, which is outside this branch.
 - The read-only count of the founder's pending working rows before deploy
   (section 6 step 2) was not run: no production access here.
+
+### Client (g63/client)
+
+Branch `g63/client` (from `g63/base`, 2026-09-30). Everything here was a
+choice the design left open, or a place where the code differed from the
+design's reading of it. The connector half is on `g63/connector`; the client
+was tested against a protocol fake written from this document
+(`packages/sync/test/fake-connector.ts`), so the merged branches must run the
+same scenarios against the real connector.
+
+**Wire.**
+- `GET /client/pending?v=2`. A `base_revision` that is absent, empty or not a
+  string is legacy (null). `stale` counts only when it is literally `true`.
+- `POST /client/discard { server_ids: string[] }`; the client reads only the
+  status. `POST /client/ack` is unchanged.
+- `PUT /client/entries` adds `vault: { server, version }` (omitted with no
+  vault sync) and `reset: true` (only from `share push --reset-order` or
+  `POST /api/share/push { reset_order: true }`). 428 is read before every
+  other status; `vault_version` in its body is optional.
+- `vault.server` is the first 16 hex of sha256 over the UTF-8 sync server URL
+  exactly as `sync.json` stores it (`setSyncServer` normalizes it with
+  `URL.toString()` and drops a trailing slash), for example
+  `http://127.0.0.1:4321`.
+- `tombstone_enforce` missing from the manifest reads as off, and a failed
+  manifest call is an error: automatic push never assumes the protection.
+
+**D1.**
+- Classification order: identical text first (a current row is acked as a
+  dedupe; a stale or legacy row is discarded), then legacy, stale, several
+  heads, fast-forward, base-`new` create, else `moved`. A legacy row is also
+  stale on the connector; it is labelled `legacy`.
+- Any `getProjectView` error other than `not_found` (several heads, or a head
+  the reader cannot parse) is held as `several_heads`.
+- Fast-forwards, creates and take theirs write through a new core call,
+  `vault.replaceProjectContent` (whole text, bound to the head read, same
+  supersede guard as `updateProject`). A create refuses when a head exists and
+  refuses text the project reader cannot parse; the row is then held as
+  `moved`. The new head carries `metadata.connector.server_id`.
+- Keep mine writes `# Cloud version not kept, YYYY-MM-DD` then a blank line
+  then the cloud text, `metadata.connector.discarded = <server_id>`. With
+  several rows waiting for one project it keeps each; take theirs needs one
+  id (`--id`). Take theirs refuses on `several_heads`. The CLI's take theirs
+  binds to the head the user saw with `--expected-revision` (printed by
+  `share conflicts --show`) and otherwise to the head read under the lock;
+  the API takes `expected_revision`.
+- A forget for an entry not live here changes nothing and is acked on the
+  desktop without asking. The phone never acks a forget.
+- The phone (`additiveOnly`) still runs the ADR 0050 fold for a base-`new`
+  document and acks non-working duplicates; the two identical-text D1 rows
+  are deferred to the Mac.
+
+**D3.**
+- The CLI prompts only for replacements and forgets. A plan with conflicts
+  only applies its additions without a prompt; conflicts never apply. Answering
+  no, or no terminal without `--yes`, applies nothing and exits non-zero.
+- `share sync`, `share add` and `share resolve` refuse before writing when
+  this device is behind or diverged, because the push that must follow would
+  be refused and the write would only diverge the device.
+- The apply still holds the vault lock across its fetch and ack, as the 0.22
+  down-sync did. Manual pushes run in phases: stamp (maybe a vault push) with
+  no vault lock, snapshot under the lock, upload with none.
+- New CLI: `share conflicts [--show <slug>]`, `share resolve <slug>
+  --take-theirs|--keep-mine [--id]`, `share auto [on|off]`.
+
+**D4.** Metadata key `northkeep_restore_v1: { from_revision }`, source
+`northkeep:project-restore`. `replaceProjectContent` drops the inherited
+handoff, provenance, restore and connector blocks and keeps the ADR 0062
+operations ledger. `projects restore` previews unless `--yes`;
+`--expected-revision` pins the head, and defaults to the head read in the same
+lock.
+
+**D5.**
+- Triggers: AutoSync's `pushed`, `pulled` and `in-sync` events, debounced 5 s,
+  and a device with no vault sync on its own save. The engine checks, in
+  order: the switch; a local snapshot (nothing shared, or the fingerprint
+  unchanged, ends the run with no network call, so an unpaired device never
+  creates an account on the connector); the AutoSync status (off, paused,
+  error, diverged, a pending pull review); `syncState` (exactly `in-sync`);
+  the manifest flag; then a second snapshot for the upload, because the first
+  may predate a pull that `syncState` then reports.
+- Every automatic push forwards the sync server's entitlement attestation,
+  as the manual paths do; the hosted billing gate refuses `/client` calls
+  without it.
+- Pauses that wait for the user: 402 (lifts after 10 minutes, like AutoSync),
+  409, 412 (unless a local unshare raced the push) and 428. A manual push,
+  the switch or a server change lifts them. The others are re-checked on
+  every run.
+- Fingerprint: sha256 over the JSON of the sorted shared-scope list, then
+  `\n<id> <entry_hash>` per live entry. Stored as `auto_push_fingerprint` in
+  `connector.json` beside `auto_push` (the switch), cleared on a server
+  change, written only by an accepted push (manual pushes included). A
+  down-sync apply or ack never writes it (recheck R-428b).
+- Hosts: the GUI server and the standalone MCP server fan AutoSync events out
+  to the engine; the CLI runs it once after a command's vault push.
+- A manual push with vault sync configured refuses a non-default `--vault`
+  (recheck Note on the non-default vault). Share-add pushes follow the manual
+  rules.
+- The 428 text names `--reset-order` for a device that is already in sync
+  (recheck R-428d); the app's reset is `POST /api/share/push`.
+
+**D6.**
+- "Live in the pulled vault" means its default list (not forgotten, not
+  superseded), so a revision compaction blanked here is not reported as a
+  delete the pull would undo. Projects are named when their local head is
+  only here.
+- The hold is `<vault>.pulled.hold` plus `<vault>.pulled.hold.json`
+  `{ version, sha256, local_sha }`, both 0600; the sha is of the held bytes.
+  Confirm compares the server's status sha only when the server reports one,
+  else the version alone.
+- An empty drop set installs without asking, through the same confirm path.
+  API 409 codes: `pull_would_drop`, `remote_changed` (with a fresh report),
+  `local_changed`.
+- The automatic refusal is surfaced like `diverged`: AutoSync phase `error`,
+  event `pull-refused`, `status().pullRefusal`, no timed retry.
+
+**Recheck R-S2 (closed).** `projects delete` and `DELETE /api/projects/<slug>`
+delete a shared project's scope on the connector first (which also removes a
+pending cloud write) and unmark it in the same save as the local delete. If
+the server delete fails, nothing is deleted. A scope marked shared with no
+connector configured here is deleted and unmarked locally.
+
+**GUI until the three screens ship.** Sync now sends `{ dry_run: false,
+approve: {} }`: additions only, and the rest is named with the CLI command.
+Pull shows the 409 report's sentence. The Cloud screen's fixed "does not
+update on its own" sentence now reads the engine status. No new screens.
+
+**Open for the merge and the phone build.**
+- `apps/connector-server` tests that import `downSyncConnector`
+  (`c3-connector`, `c3-property`, `m14-projects`) fail on this branch by
+  design: the export is now `applyDownSync`, forgets and replacements need
+  approval, and project rows need a base. With approvals, `c3-connector`
+  passes 7 of 7 against today's connector (run locally, not committed).
+- The phone's Sync now still re-pushes shared scopes after its down-sync
+  (`connect-flow.ts runConnectorSyncNow`), and its share add pushes, both
+  with no vault stamp, so both get 428 once a D5 client has pushed. The
+  design says the phone never re-pushes; it does. Drop the re-push or stamp it
+  in the phone build.
+- The section 9 acceptance script needs the PGlite connector from
+  `g63/connector`; it is written after the merge.

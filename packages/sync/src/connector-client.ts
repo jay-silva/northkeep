@@ -1,4 +1,12 @@
-import { isMemoryType, parseProjectSlug, type MemoryType, type Vault } from '@northkeep/core';
+import {
+  ProjectHandoffError,
+  getProjectView,
+  isMemoryType,
+  parseProjectSlug,
+  projectScope,
+  type MemoryType,
+  type Vault,
+} from '@northkeep/core';
 import { deriveConnectorToken } from './creds.js';
 import { assertConnectorUrl } from './connector-config.js';
 import { timeoutSignal } from './abort.js';
@@ -133,6 +141,31 @@ export class ConnectorTombstoneError extends Error {
 }
 
 /**
+ * ADR 0063 D5: which vault-sync copy a push was taken from. `server` is the
+ * first 16 hex of sha256 of the sync server URL; `version` is the sync-server
+ * version this device holds exactly.
+ */
+export interface VaultStamp {
+  server: string;
+  version: number;
+}
+
+/** What every surface says when the connector refuses an older push (HTTP 428 `stale_push`). */
+export const STALE_PUSH_MESSAGE =
+  'Another device pushed a newer copy to Cloud Connect. Sync this Mac first. ' +
+  'If this Mac is already in sync (for example after your sync server was reset), run: northkeep share push --reset-order';
+
+/** HTTP 428: the connector already accepted a push from a newer vault version (D5). */
+export class ConnectorStalePushError extends Error {
+  readonly vaultVersion: number | null;
+  constructor(vaultVersion: number | null) {
+    super(STALE_PUSH_MESSAGE);
+    this.name = 'ConnectorStalePushError';
+    this.vaultVersion = vaultVersion;
+  }
+}
+
+/**
  * "Make these scopes match": read the live (non-forgotten, non-superseded)
  * entries in each shared scope from the OPEN vault and PUT them so the server's
  * rows for those scopes become EXACTLY these. A vault entry the user forgot or
@@ -146,9 +179,14 @@ export async function pushSharedScopes(opts: {
   server: string;
   deviceSecret: Buffer;
   scopes: string[];
-  vault: Vault;
+  /** An open vault, or a snapshot of one taken under the vault lock (ADR 0063 D5). */
+  vault: Pick<Vault, 'list' | 'sharedScopeRows'>;
   /** Optional entitlement attestation forwarded to the connector's billing gate. */
   entitlement?: string;
+  /** ADR 0063 D5: the vault-sync copy this push was taken from. Absent on a device with no vault sync. */
+  vaultStamp?: VaultStamp;
+  /** ADR 0063 D5: replace the connector's recorded vault order (`share push --reset-order`, manual only). */
+  reset?: boolean;
 }): Promise<PushSharedResult> {
   const server = normalizeServer(opts.server);
   const scopes = [...new Set(opts.scopes)];
@@ -172,10 +210,21 @@ export async function pushSharedScopes(opts: {
   const res = await fetch(`${server}/client/entries`, {
     method: 'PUT',
     headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
-    body: JSON.stringify({ scopes, entries, shared_at }),
+    body: JSON.stringify({
+      scopes,
+      entries,
+      shared_at,
+      ...(opts.vaultStamp ? { vault: opts.vaultStamp } : {}),
+      ...(opts.reset === true ? { reset: true } : {}),
+    }),
     redirect: 'error',
     signal: timeoutSignal(TIMEOUT_MS),
   });
+  // First, so a stale push is never read as the 409 re-encrypt or 412 tombstone error.
+  if (res.status === 428) {
+    const body = (await res.json().catch(() => ({}))) as { vault_version?: unknown };
+    throw new ConnectorStalePushError(typeof body.vault_version === 'number' ? body.vault_version : null);
+  }
   if (res.status === 413) {
     throw new Error(
       'The connector server rejected the push: over the sharing caps (too many shared memories, or a memory is too large).',
@@ -213,42 +262,140 @@ export async function unshareScope(opts: {
 }
 
 /** The server's current shared-scope manifest for this account (for diffing/status). */
-export async function getManifest(opts: {
+export async function getManifest(opts: { server: string; deviceSecret: Buffer }): Promise<ManifestEntry[]> {
+  return (await getConnectorManifest(opts)).entries;
+}
+
+/**
+ * The manifest plus whether the connector refuses pushes to unshared scopes
+ * (ADR 0063 D5). An absent flag reads as off: automatic push must not assume
+ * a protection the server did not say it has.
+ */
+export async function getConnectorManifest(opts: {
   server: string;
   deviceSecret: Buffer;
-}): Promise<ManifestEntry[]> {
+  entitlement?: string;
+}): Promise<{ entries: ManifestEntry[]; tombstone_enforce: boolean }> {
   const server = normalizeServer(opts.server);
   const res = await fetch(`${server}/client/manifest`, {
-    headers: authHeaders(opts.deviceSecret),
+    headers: authHeaders(opts.deviceSecret, opts.entitlement),
     redirect: 'error',
     signal: timeoutSignal(TIMEOUT_MS),
   });
   if (!res.ok) throw httpError(res.status, 'manifest');
-  const body = (await res.json()) as { entries?: ManifestEntry[] };
-  return body.entries ?? [];
+  const body = (await res.json()) as { entries?: ManifestEntry[]; tombstone_enforce?: unknown };
+  return { entries: body.entries ?? [], tombstone_enforce: body.tombstone_enforce === true };
 }
 
-/** One connector-born memory awaiting down-sync into the vault. */
-interface PendingEntry {
+/** A pending row's recorded base for a connector-born project document (ADR 0063, section 2). */
+export const BASE_NEW = 'new';
+
+/** One connector-born row awaiting down-sync, as `/client/pending?v=2` delivers it. */
+export interface PendingRow {
   server_id: string;
   scope: string;
   type: string;
   content: string;
+  /** A vault entry id, the literal `new`, or null for a legacy row written with no base. */
+  base_revision: string | null;
+  /** True when the connector no longer serves this row as the head (D2). */
+  stale: boolean;
+}
+
+export interface PendingSnapshot {
+  entries: PendingRow[];
+  /** Entry ids a connected app asked to forget. */
+  forgets: string[];
+}
+
+export type ConflictReason = 'moved' | 'stale' | 'legacy' | 'several_heads';
+
+/** A cloud project document that was not applied because it is not a fast-forward (D1). */
+export interface DownSyncConflict {
+  scope: string;
+  project: string;
+  server_id: string;
+  base_revision: string | null;
+  /** The local head it was checked against; null when there is none or there are several. */
+  local_revision: string | null;
+  reason: ConflictReason;
+  /** The cloud text, for "view both" and "keep mine". */
+  content: string;
+}
+
+export interface PlannedAddition {
+  server_id: string;
+  scope: string;
+  type: MemoryType;
+  content: string;
+  /** `project` creates a project document from a base-`new` row. */
+  kind: 'memory' | 'project';
+}
+
+/** A fast-forward: the cloud document replaces the local head it was written against. */
+export interface PlannedReplacement {
+  server_id: string;
+  scope: string;
+  project: string;
+  content: string;
+  local_revision: string;
+}
+
+export interface PlannedForget {
+  entry_id: string;
+  scope: string;
+  first_line: string;
+}
+
+/**
+ * What a down-sync would do, computed without writing anything (D3). Additions,
+ * dedupes and discards need no confirmation; replacements and forgets do.
+ */
+export interface DownSyncPlan {
+  additions: PlannedAddition[];
+  replacements: PlannedReplacement[];
+  forgets: PlannedForget[];
+  /** Rows whose text is already the live entry: acked against it, no vault write. */
+  dedupes: Array<{ server_id: string; local_entry_id: string }>;
+  /** Stale or legacy rows whose text is already the local head: deleted by id, no vault write. */
+  discards: Array<{ server_id: string; scope: string }>;
+  /** Forgets for entries not live here: acked, nothing to change. */
+  settled_forgets: string[];
+  conflicts: DownSyncConflict[];
+  /** Rows left pending because their unshared project scope is not accepting them (ADR 0050). */
+  held: number;
+  held_scopes: string[];
+  /** Phone only: replacements, forgets and dedupes left for a device with a preview screen. */
+  deferred: number;
+  /** Rows dropped unapplied and unacked because their type is not a memory type. */
+  skipped: number;
+  /** Scopes the ADR 0050 fold marks Shared when its rows are applied. */
+  to_mark: string[];
+}
+
+/** A plan with a replacement or a forget must be confirmed before it is applied (D3). */
+export function planNeedsConfirmation(plan: Pick<DownSyncPlan, 'replacements' | 'forgets'>): boolean {
+  return plan.replacements.length > 0 || plan.forgets.length > 0;
 }
 
 export interface DownSyncResult {
-  /** New vault entries created from connector-born memories. */
+  /** New vault entries created from connector-born rows (memories and new projects). */
   added: number;
-  /** Vault entries tombstoned to satisfy a queued forget. */
+  /** Project documents replaced by an approved fast-forward. */
+  replaced: number;
+  /** Vault entries tombstoned by an approved forget. */
   forgotten: number;
-  /** Connector-born memories skipped because an identical live vault entry existed. */
+  /** Rows acked against an identical live entry. */
   deduped: number;
-  /** Rows left pending because their unshared project scope is not accepting them. */
+  /** Stale or legacy rows deleted because their text was already the local head. */
+  discarded: number;
   held: number;
-  /** The unshared project scopes those rows are for, sorted and unique. */
   held_scopes: string[];
-  /** Rows dropped unapplied and unacked because their type is not a memory type. */
   skipped: number;
+  deferred: number;
+  conflicts: DownSyncConflict[];
+  /** Replacements and forgets that were not approved; they stay pending. */
+  needs_review: { replacements: PlannedReplacement[]; forgets: PlannedForget[] };
 }
 
 /**
@@ -264,160 +411,424 @@ export function holdMessage(slug: string): string {
   );
 }
 
-/**
- * Write-back down-sync (ADR 0019, phase C3): pull the memories the user created
- * INSIDE an AI app (via memory_remember) and the forgets they issued there, apply
- * them to the OPEN vault, then ack the server so it stops re-sending them.
- *
- * Invariants this guarantees: verifyChain() stays true (every write is a normal
- * append/tombstone); no duplicate vault entry per server_id across re-runs (the
- * server only lists still-pending rows, and we dedupe on identical (scope,
- * content)); no resurrection of a forgotten entry (forget is permanent and we
- * ack the forget so the server row is deleted). The CALLER then re-runs
- * pushSharedScopes so each new row is rehashed server-side under its vault id.
- */
-export async function downSyncConnector(opts: {
-  server: string;
-  deviceSecret: Buffer;
-  vault: Vault;
-  /** Optional entitlement attestation forwarded to the connector's billing gate. */
-  entitlement?: string;
-}): Promise<DownSyncResult> {
-  const server = normalizeServer(opts.server);
-  const clientLabel = new URL(server).hostname;
+function asString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
 
-  const pendingRes = await fetch(`${server}/client/pending`, {
+/** Fetch the pending rows (ADR 0063 `?v=2`). Side effects on the server are idempotent and touch no vault. */
+export async function fetchPending(opts: { server: string; deviceSecret: Buffer; entitlement?: string }): Promise<PendingSnapshot> {
+  const server = normalizeServer(opts.server);
+  const res = await fetch(`${server}/client/pending?v=2`, {
     headers: authHeaders(opts.deviceSecret, opts.entitlement),
     redirect: 'error',
     signal: timeoutSignal(TIMEOUT_MS),
   });
-  if (pendingRes.status === 401) throw new Error('The connector server rejected the connector token (401).');
-  if (pendingRes.status === 402) {
+  if (res.status === 401) throw new Error('The connector server rejected the connector token (401).');
+  if (res.status === 402) {
     throw new Error(`The connector server requires an active subscription (402) to down-sync. ${LAPSED_UNSHARE_HINT}`);
   }
-  if (pendingRes.status === 409) throw reencryptError();
-  if (!pendingRes.ok) throw httpError(pendingRes.status, 'pending');
-  const pending = (await pendingRes.json()) as { entries?: PendingEntry[]; forgets?: Array<{ entry_id: string }> };
-  const entries = pending.entries ?? [];
-  const forgets = pending.forgets ?? [];
-
-  const acked: Array<{ server_id: string; local_entry_id: string }> = [];
-  let added = 0;
-  let deduped = 0;
-  let held = 0;
-  let skipped = 0;
-  const heldScopes = new Set<string>();
-
-  // ADR 0050 Decision 4: classify each scope BEFORE any dedupe or apply, because
-  // an unshared project scope must not be reached by the M14 path at all.
-  const groups = new Map<string, PendingEntry[]>();
-  for (const raw of entries) {
-    if (!raw.server_id || !raw.content) continue;
+  if (res.status === 409) throw reencryptError();
+  if (!res.ok) throw httpError(res.status, 'pending');
+  const body = (await res.json()) as { entries?: unknown; forgets?: unknown };
+  const entries: PendingRow[] = [];
+  for (const raw of Array.isArray(body.entries) ? body.entries : []) {
+    if (raw === null || typeof raw !== 'object') continue;
+    const r = raw as Record<string, unknown>;
+    const server_id = asString(r.server_id);
+    const content = asString(r.content);
     // vault.remember trims the scope, so a padded name would take the
-    // non-project path and land inside a private project. The type is left
-    // verbatim: only an exact memory type may be applied.
-    const scope = typeof raw.scope === 'string' ? raw.scope.trim() : '';
-    if (!scope) continue;
-    const e: PendingEntry = { ...raw, scope };
-    const group = groups.get(scope);
-    if (group) group.push(e);
-    else groups.set(scope, [e]);
+    // non-project path and land inside a private project.
+    const scope = asString(r.scope)?.trim() ?? '';
+    if (!server_id || !content || !scope) continue;
+    // Anything but a non-empty string is a legacy row: no base is ever inferred.
+    const base = asString(r.base_revision);
+    entries.push({ server_id, scope, type: asString(r.type) ?? '', content, base_revision: base === '' ? null : base, stale: r.stale === true });
   }
-  const sharedHere = new Set(opts.vault.sharedScopes());
-  const applicable: PendingEntry[] = [];
-  /** Scopes the fold marks Shared once their rows are applied. */
-  const toMark: string[] = [];
+  const forgets: string[] = [];
+  for (const f of Array.isArray(body.forgets) ? body.forgets : []) {
+    const id = f && typeof f === 'object' ? asString((f as Record<string, unknown>).entry_id) : null;
+    if (id) forgets.push(id);
+  }
+  return { entries, forgets };
+}
 
+type LocalHead = { kind: 'none' } | { kind: 'one'; id: string; content: string } | { kind: 'several' };
+
+function localHead(vault: Vault, project: string): LocalHead {
+  try {
+    const view = getProjectView(vault, project);
+    return { kind: 'one', id: view.revision, content: view.content };
+  } catch (err) {
+    if (err instanceof ProjectHandoffError && err.code === 'not_found') return { kind: 'none' };
+    // project_conflict, or a head the reader cannot parse: never apply over it.
+    return { kind: 'several' };
+  }
+}
+
+/**
+ * D1: classify every pending row against the local vault without writing
+ * anything. Rows are re-derived from the server each time, so the plan is
+ * idempotent across crashes and devices.
+ */
+export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; additiveOnly?: boolean }): DownSyncPlan {
+  const { vault, pending } = opts;
+  const additiveOnly = opts.additiveOnly === true;
+  const plan: DownSyncPlan = {
+    additions: [],
+    replacements: [],
+    forgets: [],
+    dedupes: [],
+    discards: [],
+    settled_forgets: [],
+    conflicts: [],
+    held: 0,
+    held_scopes: [],
+    deferred: 0,
+    skipped: 0,
+    to_mark: [],
+  };
+  const groups = new Map<string, PendingRow[]>();
+  for (const row of pending.entries) {
+    const group = groups.get(row.scope);
+    if (group) group.push(row);
+    else groups.set(row.scope, [row]);
+  }
+  const sharedHere = new Set(vault.sharedScopes());
+  const heldScopes = new Set<string>();
+  const applicable: PendingRow[] = [];
+
+  // ADR 0050 Decision 4: an unshared project scope is classified before any
+  // dedupe or apply, so the fold is the only path into it.
   for (const [scope, group] of groups) {
-    const allTyped = group.every((e) => isMemoryType(e.type));
     if (parseProjectSlug(scope) === null || sharedHere.has(scope)) {
-      for (const e of group) {
-        // Fail closed per row: remember() would throw and abort the whole fold,
-        // leaving nothing saved and nothing acked.
-        if (!isMemoryType(e.type)) skipped++;
-        else applicable.push(e);
+      for (const row of group) {
+        if (!isMemoryType(row.type)) plan.skipped++;
+        else applicable.push(row);
       }
       continue;
     }
-    const empty = opts.vault.list({ scope }).length === 0;
-    const workingRows = group.filter((e) => e.type === 'working');
-    // The scope was empty and the app sent exactly one document: nothing private
-    // can ride along on the push that follows, so the mark discloses nothing.
-    if (allTyped && empty && workingRows.length === 1) {
+    const empty = vault.list({ scope }).length === 0;
+    const working = group.filter((r) => r.type === 'working');
+    const foldable = group.every((r) => isMemoryType(r.type)) && empty && working.length === 1
+      && working[0]!.base_revision === BASE_NEW && !working[0]!.stale;
+    if (foldable) {
       applicable.push(...group);
-      toMark.push(scope);
+      plan.to_mark.push(scope);
       continue;
     }
-    held += group.length;
+    plan.held += group.length;
     heldScopes.add(scope);
   }
 
-  for (const e of applicable) {
-    // Dedupe against LIVE (non-forgotten, non-superseded) entries in the scope so
-    // a re-run never creates a second copy of the same connector memory.
-    const dup = opts.vault.list({ scope: e.scope }).find((v) => v.content === e.content);
-    if (dup) {
-      acked.push({ server_id: e.server_id, local_entry_id: dup.id });
-      deduped++;
+  const heads = new Map<string, LocalHead>();
+  for (const row of applicable) {
+    const project = parseProjectSlug(row.scope);
+    if (project === null || row.type !== 'working') {
+      const dup = vault.list({ scope: row.scope }).find((v) => v.content === row.content);
+      if (dup) plan.dedupes.push({ server_id: row.server_id, local_entry_id: dup.id });
+      else plan.additions.push({ server_id: row.server_id, scope: row.scope, type: row.type as MemoryType, content: row.content, kind: 'memory' });
       continue;
     }
-    // M14: a pending working doc in a slug-valid project scope supersedes the
-    // local live working document. Prefix-only project: scopes are not projects.
-    if (parseProjectSlug(e.scope) !== null && e.type === 'working') {
-      const liveWorking = opts.vault.list({ scope: e.scope, type: 'working' });
-      const live = liveWorking.length === 0 ? undefined : liveWorking[liveWorking.length - 1];
-      if (live) {
-        const edited = opts.vault.editMemory(live.id, { content: e.content });
-        acked.push({ server_id: e.server_id, local_entry_id: edited.id });
-        added++;
-        continue;
-      }
+    let head = heads.get(project);
+    if (head === undefined) {
+      head = localHead(vault, project);
+      heads.set(project, head);
     }
-    const created = opts.vault.remember({
-      content: e.content,
-      type: e.type as MemoryType,
-      scope: e.scope,
-      source: `connector:${clientLabel}`,
-      metadata: { connector: { server_id: e.server_id } },
-    });
-    acked.push({ server_id: e.server_id, local_entry_id: created.id });
+    const legacy = row.base_revision === null;
+    const conflict = (reason: ConflictReason) =>
+      plan.conflicts.push({
+        scope: row.scope,
+        project,
+        server_id: row.server_id,
+        base_revision: row.base_revision,
+        local_revision: head.kind === 'one' ? head.id : null,
+        reason,
+        content: row.content,
+      });
+    if (head.kind === 'one' && row.content === head.content) {
+      if (additiveOnly) {
+        plan.deferred++;
+      } else if (!row.stale && !legacy) {
+        plan.dedupes.push({ server_id: row.server_id, local_entry_id: head.id });
+      } else {
+        // An ack would rename the row to a head that may be behind the
+        // connector's and move its head backward (D1), so delete it by id.
+        plan.discards.push({ server_id: row.server_id, scope: row.scope });
+      }
+      continue;
+    }
+    // Every legacy row is also stale on the connector; legacy is the more useful label.
+    if (legacy) {
+      conflict('legacy');
+      continue;
+    }
+    if (row.stale) {
+      conflict('stale');
+      continue;
+    }
+    if (head.kind === 'several') {
+      conflict('several_heads');
+      continue;
+    }
+    if (head.kind === 'one' && row.base_revision === head.id) {
+      if (additiveOnly) plan.deferred++;
+      else plan.replacements.push({ server_id: row.server_id, scope: row.scope, project, content: row.content, local_revision: head.id });
+      continue;
+    }
+    if (head.kind === 'none' && row.base_revision === BASE_NEW) {
+      plan.additions.push({ server_id: row.server_id, scope: row.scope, type: 'working', content: row.content, kind: 'project' });
+      continue;
+    }
+    conflict('moved');
+  }
+
+  const live = new Map(vault.list().map((e) => [e.id, e]));
+  for (const id of pending.forgets) {
+    const entry = live.get(id);
+    if (entry === undefined) {
+      // Nothing to change here. The phone never acks a forget, so the Mac still sees it.
+      if (additiveOnly) plan.deferred++;
+      else plan.settled_forgets.push(id);
+    } else if (additiveOnly) {
+      plan.deferred++;
+    } else {
+      plan.forgets.push({ entry_id: id, scope: entry.scope, first_line: firstLine(entry.content) });
+    }
+  }
+  plan.held_scopes = [...heldScopes].sort();
+  return plan;
+}
+
+function firstLine(text: string): string {
+  const line = text.split('\n').find((l) => l.trim().length > 0) ?? '';
+  return line.length > 120 ? `${line.slice(0, 117)}...` : line;
+}
+
+async function postJson(opts: { server: string; deviceSecret: Buffer; entitlement?: string }, route: string, body: unknown, op: string): Promise<void> {
+  const res = await fetch(`${normalizeServer(opts.server)}${route}`, {
+    method: 'POST',
+    headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+    redirect: 'error',
+    signal: timeoutSignal(TIMEOUT_MS),
+  });
+  if (!res.ok) throw httpError(res.status, op);
+}
+
+/** Delete exactly these pending rows by id (ADR 0063 `/client/discard`). */
+export async function discardPending(opts: { server: string; deviceSecret: Buffer; entitlement?: string; server_ids: string[] }): Promise<void> {
+  if (opts.server_ids.length === 0) return;
+  await postJson(opts, '/client/discard', { server_ids: opts.server_ids }, 'discard');
+}
+
+/**
+ * D3 apply: fetch the pending rows again, re-plan, and apply the additions
+ * plus only the replacements (by server_id) and forgets (by entry_id) the user
+ * approved. Anything new since the preview stays pending. Saves before any
+ * ack or discard, so a failure after the save is retried as a no-op. The
+ * caller pushes afterwards.
+ */
+export async function applyDownSync(opts: {
+  server: string;
+  deviceSecret: Buffer;
+  vault: Vault;
+  entitlement?: string;
+  approve?: { server_ids?: string[]; forget_ids?: string[] };
+  /** The phone (ADR 0063 D1): additions only, never a replace, a forget or a forget ack. */
+  additiveOnly?: boolean;
+}): Promise<DownSyncResult> {
+  const clientLabel = new URL(normalizeServer(opts.server)).hostname;
+  const pending = await fetchPending(opts);
+  const plan = planDownSync({ vault: opts.vault, pending, additiveOnly: opts.additiveOnly === true });
+  const approvedRows = new Set(opts.additiveOnly ? [] : (opts.approve?.server_ids ?? []));
+  const approvedForgets = new Set(opts.additiveOnly ? [] : (opts.approve?.forget_ids ?? []));
+  const acked: Array<{ server_id: string; local_entry_id: string }> = [...plan.dedupes];
+  const conflicts = [...plan.conflicts];
+  let wrote = false;
+  let added = 0;
+  let replaced = 0;
+  let forgotten = 0;
+
+  for (const a of plan.additions) {
+    const metadata = { connector: { server_id: a.server_id } };
+    if (a.kind === 'project') {
+      const project = parseProjectSlug(a.scope)!;
+      try {
+        const view = opts.vault.replaceProjectContent({ project, expected_revision: null, content: a.content, source: `connector:${clientLabel}`, metadata });
+        acked.push({ server_id: a.server_id, local_entry_id: view.revision });
+        added++;
+        wrote = true;
+      } catch (err) {
+        if (!(err instanceof ProjectHandoffError)) throw err;
+        conflicts.push({ scope: a.scope, project, server_id: a.server_id, base_revision: BASE_NEW, local_revision: null, reason: 'moved', content: a.content });
+      }
+      continue;
+    }
+    const created = opts.vault.remember({ content: a.content, type: a.type, scope: a.scope, source: `connector:${clientLabel}`, metadata });
+    acked.push({ server_id: a.server_id, local_entry_id: created.id });
     added++;
+    wrote = true;
+  }
+
+  const unapprovedReplacements: PlannedReplacement[] = [];
+  for (const r of plan.replacements) {
+    if (!approvedRows.has(r.server_id)) {
+      unapprovedReplacements.push(r);
+      continue;
+    }
+    try {
+      const view = opts.vault.replaceProjectContent({
+        project: r.project,
+        expected_revision: r.local_revision,
+        content: r.content,
+        source: `connector:${clientLabel}`,
+        metadata: { connector: { server_id: r.server_id } },
+      });
+      acked.push({ server_id: r.server_id, local_entry_id: view.revision });
+      replaced++;
+      wrote = true;
+    } catch (err) {
+      if (!(err instanceof ProjectHandoffError)) throw err;
+      // A local save landed between the plan and the write: hold, never overwrite.
+      conflicts.push({ scope: r.scope, project: r.project, server_id: r.server_id, base_revision: r.local_revision, local_revision: null, reason: 'moved', content: r.content });
+    }
   }
 
   // The mark rides the same save that precedes the ack. Marking after the ack
   // would leave a crash window whose residual never heals (ADR 0050).
-  for (const scope of toMark) opts.vault.setScopeShared(scope, true);
-
-  // Apply forgets: tombstone the vault entry if it is still live. Every forget is
-  // acked regardless so the server drains its queue and deletes the row (no
-  // resurrection on a later push).
-  let forgotten = 0;
-  const forgetIds: string[] = [];
-  for (const f of forgets) {
-    const id = f.entry_id;
-    if (!id) continue;
-    forgetIds.push(id);
-    const live = opts.vault.list().find((v) => v.id === id);
-    if (live) {
-      opts.vault.forget(id);
-      forgotten++;
-    }
+  for (const scope of plan.to_mark) {
+    opts.vault.setScopeShared(scope, true);
+    wrote = true;
   }
 
-  // Persist BEFORE acking: if the ack (or process) fails after save, the server
-  // simply re-sends and the dedupe/forget-idempotence make the retry a no-op.
-  opts.vault.save();
+  const ackedForgets = [...plan.settled_forgets];
+  const unapprovedForgets: PlannedForget[] = [];
+  for (const f of plan.forgets) {
+    if (!approvedForgets.has(f.entry_id)) {
+      unapprovedForgets.push(f);
+      continue;
+    }
+    opts.vault.forget(f.entry_id);
+    ackedForgets.push(f.entry_id);
+    forgotten++;
+    wrote = true;
+  }
 
-  const ackRes = await fetch(`${server}/client/ack`, {
-    method: 'POST',
-    headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
-    body: JSON.stringify({ acked, forgets: forgetIds }),
-    redirect: 'error',
-    signal: timeoutSignal(TIMEOUT_MS),
-  });
-  if (!ackRes.ok) throw httpError(ackRes.status, 'ack');
+  if (wrote) opts.vault.save();
+  await discardPending({ ...opts, server_ids: plan.discards.map((d) => d.server_id) });
+  if (acked.length > 0 || ackedForgets.length > 0) {
+    await postJson(opts, '/client/ack', { acked, forgets: ackedForgets }, 'ack');
+  }
 
-  return { added, forgotten, deduped, held, held_scopes: [...heldScopes].sort(), skipped };
+  return {
+    added,
+    replaced,
+    forgotten,
+    deduped: plan.dedupes.length,
+    discarded: plan.discards.length,
+    held: plan.held,
+    held_scopes: plan.held_scopes,
+    skipped: plan.skipped,
+    deferred: plan.deferred,
+    conflicts,
+    needs_review: { replacements: unapprovedReplacements, forgets: unapprovedForgets },
+  };
+}
+
+/** The first line of the memory "keep mine" saves (founder decision, 2026-09-30). */
+export function keptCloudVersionTitle(now: Date): string {
+  return `Cloud version not kept, ${now.toISOString().slice(0, 10)}`;
+}
+
+export type ConflictChoice = 'take-theirs' | 'keep-mine';
+
+export interface ResolveResult {
+  choice: ConflictChoice;
+  /** The rows resolved. */
+  server_ids: string[];
+  /** Take theirs: the new local head. */
+  revision: string | null;
+  /** Keep mine: the memories holding the cloud text. */
+  memory_ids: string[];
+}
+
+/**
+ * Resolve the conflicts D1 held for one project. Take theirs writes the cloud
+ * text over the head the user was shown (refusing if it moved), saves, acks.
+ * Keep mine saves the cloud text as an episodic memory first, saves, then
+ * deletes the rows by id; a retry finds the memory by its metadata. The caller
+ * pushes afterwards.
+ */
+export async function resolveConflict(opts: {
+  server: string;
+  deviceSecret: Buffer;
+  vault: Vault;
+  entitlement?: string;
+  project: string;
+  choice: ConflictChoice;
+  /** One row, when several cloud versions wait for this project. */
+  server_id?: string;
+  /** The local head the user was shown. Defaults to the current head. */
+  expected_revision?: string | null;
+  now?: Date;
+}): Promise<ResolveResult> {
+  const scope = projectScope(opts.project);
+  const clientLabel = new URL(normalizeServer(opts.server)).hostname;
+  const plan = planDownSync({ vault: opts.vault, pending: await fetchPending(opts) });
+  const waiting = plan.conflicts.filter((c) => c.scope === scope && (opts.server_id === undefined || c.server_id === opts.server_id));
+  if (waiting.length === 0) throw new Error(`No cloud version is waiting for project ${opts.project}.`);
+
+  if (opts.choice === 'take-theirs') {
+    if (waiting.length > 1) {
+      throw new Error(`${waiting.length} cloud versions are waiting for project ${opts.project}. Pick one by its id.`);
+    }
+    const row = waiting[0]!;
+    if (row.reason === 'several_heads') {
+      throw new Error(`Project ${opts.project} has more than one current document on this device. Fix that first, then try again.`);
+    }
+    const head = localHead(opts.vault, opts.project);
+    const expected = opts.expected_revision !== undefined ? opts.expected_revision : head.kind === 'one' ? head.id : null;
+    const view = opts.vault.replaceProjectContent({
+      project: opts.project,
+      expected_revision: expected,
+      content: row.content,
+      source: `connector:${clientLabel}`,
+      metadata: { connector: { server_id: row.server_id } },
+    });
+    opts.vault.save();
+    await postJson(opts, '/client/ack', { acked: [{ server_id: row.server_id, local_entry_id: view.revision }], forgets: [] }, 'ack');
+    return { choice: 'take-theirs', server_ids: [row.server_id], revision: view.revision, memory_ids: [] };
+  }
+
+  const now = opts.now ?? new Date();
+  const existing = new Map<string, string>();
+  for (const e of opts.vault.list({ scope })) {
+    const discarded = (e.metadata?.connector as { discarded?: unknown } | undefined)?.discarded;
+    if (typeof discarded === 'string') existing.set(discarded, e.id);
+  }
+  const memoryIds: string[] = [];
+  let wrote = false;
+  for (const row of waiting) {
+    const kept = existing.get(row.server_id);
+    if (kept !== undefined) {
+      memoryIds.push(kept);
+      continue;
+    }
+    // Non-working on purpose: a second working entry would make the project unreadable.
+    const memory = opts.vault.remember({
+      content: `# ${keptCloudVersionTitle(now)}\n\n${row.content}`,
+      type: 'episodic',
+      scope,
+      source: `connector:${clientLabel}`,
+      metadata: { connector: { discarded: row.server_id } },
+    });
+    memoryIds.push(memory.id);
+    wrote = true;
+  }
+  if (wrote) opts.vault.save();
+  const serverIds = waiting.map((c) => c.server_id);
+  await discardPending({ ...opts, server_ids: serverIds });
+  return { choice: 'keep-mine', server_ids: serverIds, revision: null, memory_ids: memoryIds };
 }
 
 /**

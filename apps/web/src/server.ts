@@ -41,7 +41,10 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Runn
   const session = new UiSession(vaultPath);
   // ADR 0044: every save in this process (GUI routes, Converse, review apply,
   // import) schedules a debounced push through the session's engine.
-  const unsubscribeSaveHook = onVaultSave((savedPath) => session.autoSync.notifyWrite(savedPath));
+  const unsubscribeSaveHook = onVaultSave((savedPath) => {
+    session.autoSync.notifyWrite(savedPath);
+    session.connectorAutoPush.notifyWrite(savedPath);
+  });
   const staticDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'static');
   const indexHtml = fs.readFileSync(path.join(staticDir, 'index.html'));
 
@@ -147,6 +150,7 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Runn
         new Promise<void>((r) => setTimeout(r, 10_000).unref()), // long enough for an upload in flight to record itself
       ]);
       session.autoSync.stop();
+      session.connectorAutoPush.stop();
       unsubscribeSaveHook();
       await new Promise<void>((resolve) => {
         session.lock();

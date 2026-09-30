@@ -105,7 +105,7 @@ function messageOf(err: unknown): string {
  * The CONNECTOR client (@northkeep/sync connector-client.ts, Phase B Cloud
  * Connect) throws plain Errors, not SubscriptionRequiredError. Most of its 402s
  * read "Connector server returned HTTP 402 on <op>." (caught by the HTTP 402
- * form), but downSyncConnector's is "The connector server requires an active
+ * form), but applyDownSync's is "The connector server requires an active
  * subscription (402) to down-sync." with no "HTTP 402" token, so the
  * "requires an active subscription" shape is matched explicitly.
  */

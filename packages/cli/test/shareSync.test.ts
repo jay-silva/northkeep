@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KDF_INTERACTIVE, Vault, generateDeviceSecret, type Vault as VaultType } from '@northkeep/core';
 import { emptyProjectDoc, mergeProjectDoc, serializeProjectDoc } from '@northkeep/core/project-doc';
 import { holdMessage, markConnectorPaired, setConnectorServer } from '@northkeep/sync';
-import { shareSyncCmd, type WithVault } from '../src/shareCmd.js';
+import { shareSyncCmd, type ShareDeps } from '../src/shareCmd.js';
 
 /**
  * ADR 0050 Decision 5 on the CLI: a project created in a connected app arrives
@@ -55,9 +55,16 @@ function makeVault(): VaultType {
   });
 }
 
-/** One vault, opened once, handed to the command the way index.ts does. */
-function withVaultOf(vault: VaultType): WithVault {
-  return async (fn) => fn(vault);
+/** One vault, opened once, handed to the command the way index.ts does. No vault sync, so no key is asked for. */
+function depsOf(vault: VaultType): ShareDeps {
+  return {
+    withVault: async (fn) => fn(vault),
+    vaultPath: path.join(home, 'vault.nkv'),
+    masterKey: async () => {
+      throw new Error('no key expected without vault sync');
+    },
+    ask: async () => null,
+  };
 }
 
 /** Records every request and answers the three connector routes the sync touches. */
@@ -70,8 +77,9 @@ function stubConnector(entries: Array<{ server_id: string; scope: string; type: 
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push(url);
-    if (url.endsWith('/client/pending')) {
-      return new Response(JSON.stringify({ entries, forgets: [] }), { status: 200 });
+    if (url.endsWith('/client/pending?v=2')) {
+      // Post-ADR 0063 hosted creates carry base "new".
+      return new Response(JSON.stringify({ entries: entries.map((e) => ({ ...e, base_revision: 'new', stale: false })), forgets: [] }), { status: 200 });
     }
     if (url.endsWith('/client/ack')) return new Response(JSON.stringify({ ok: true }), { status: 200 });
     if (url.endsWith('/client/entries')) {
@@ -91,7 +99,7 @@ describe('shareSyncCmd (ADR 0050 Decision 5)', () => {
   it('makes no network call with nothing shared and no pairing on this device', async () => {
     const vault = makeVault();
     const { calls } = stubConnector([]);
-    await shareSyncCmd(withVaultOf(vault), failHard);
+    await shareSyncCmd({}, depsOf(vault), failHard);
     expect(calls).toEqual([]);
     expect(lines).toEqual(['No scopes are shared yet. Run: northkeep share add <scope>']);
     vault.close();
@@ -108,8 +116,8 @@ describe('shareSyncCmd (ADR 0050 Decision 5)', () => {
         content: projectMarkdown('Started in the app.'),
       },
     ]);
-    await shareSyncCmd(withVaultOf(vault), failHard);
-    expect(calls.some((u) => u.endsWith('/client/pending'))).toBe(true);
+    await shareSyncCmd({}, depsOf(vault), failHard);
+    expect(calls.some((u) => u.endsWith('/client/pending?v=2'))).toBe(true);
     // The fold marked the scope, and this same run pushed it: the old code read
     // the shared list once, before the fold, and pushed nothing.
     expect(vault.sharedScopes()).toContain('project:hosted-thing');
@@ -129,7 +137,7 @@ describe('shareSyncCmd (ADR 0050 Decision 5)', () => {
     const { puts } = stubConnector([
       { server_id: 'conn_create_legacy', scope: 'project:legacy-proj', type: 'working', content: projectMarkdown('From 0.21.') },
     ]);
-    await shareSyncCmd(withVaultOf(vault), failHard);
+    await shareSyncCmd({}, depsOf(vault), failHard);
     expect(vault.sharedScopes()).toContain('project:legacy-proj');
     expect(puts).toHaveLength(1);
     vault.close();
@@ -141,7 +149,7 @@ describe('shareSyncCmd (ADR 0050 Decision 5)', () => {
     vault.setScopeShared('work', true);
     vault.save();
     stubConnector([{ server_id: 'conn_bad', scope: 'work', type: 'Working', content: 'Not a stored type.' }]);
-    await shareSyncCmd(withVaultOf(vault), failHard);
+    await shareSyncCmd({}, depsOf(vault), failHard);
     expect(lines.some((l) => l.includes('1 skipped'))).toBe(true);
     expect(lines.some((l) => l.includes('Skipped memories had a type NorthKeep does not store'))).toBe(true);
     vault.close();
@@ -161,7 +169,7 @@ describe('shareSyncCmd (ADR 0050 Decision 5)', () => {
         content: projectMarkdown('From the app.'),
       },
     ]);
-    await shareSyncCmd(withVaultOf(vault), failHard);
+    await shareSyncCmd({}, depsOf(vault), failHard);
     expect(vault.sharedScopes()).not.toContain('project:held-one');
     expect(lines.some((l) => l.includes('1 held'))).toBe(true);
     expect(lines.some((l) => l.includes(holdMessage('held-one')))).toBe(true);

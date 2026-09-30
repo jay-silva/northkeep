@@ -495,7 +495,7 @@ describe('northkeep projects delete', () => {
     out = [];
     err = [];
     const asked: string[] = [];
-    await projectsDeleteCmd(slug, { yes }, { withVault: runner, fail, out: (l) => out.push(l), ask: async (q) => (asked.push(q), answer) }).catch((e: unknown) => {
+    await projectsDeleteCmd(slug, { yes }, { withVault: runner, fail, out: (l) => out.push(l), ask: async (q) => (asked.push(q), answer), unshare: async () => {} }).catch((e: unknown) => {
       if (!(e instanceof Failed)) throw e;
     });
     allPlain.push(...out, ...err, ...asked);
