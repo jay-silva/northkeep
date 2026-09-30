@@ -222,3 +222,26 @@ for (const kind of ['memory', 'pglite'] as const) {
     });
   });
 }
+
+describe('ADR 0063 readScopeSeq under a concurrent first creation (Neon SQL on PGlite)', () => {
+  it('reads the counter the other session created when its own insert returned no row', async () => {
+    const real = pgliteAsNeon(new PGlite(), { numbersAsStrings: true });
+    let lost = 0;
+    // The race on real Postgres: the insert conflicts with a row committed
+    // after this statement's snapshot, so the statement returns nothing.
+    // Here the insert runs and its answer is dropped, which is that result.
+    const racing = ((strings: TemplateStringsArray, ...values: unknown[]) => {
+      const q = real(strings, ...values);
+      if (lost === 0 && typeof strings !== 'string' && strings.join('').includes('WITH ins AS')) {
+        lost += 1;
+        return Promise.resolve(q).then(() => []);
+      }
+      return q;
+    }) as unknown as typeof real;
+    Object.assign(racing, real);
+    const store = new NeonConnectorStorage('postgres://unused', racing);
+    await store.ensureSchema();
+    expect(await store.readScopeSeq(A, S)).toBe(0);
+    expect(lost).toBe(1);
+  });
+});

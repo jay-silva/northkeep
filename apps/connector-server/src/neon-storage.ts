@@ -658,7 +658,15 @@ export class NeonConnectorStorage implements ConnectorStorage {
       UNION ALL
       SELECT seq FROM scope_seq WHERE account_hash = ${accountHash} AND scope = ${scope}
     `) as unknown as Array<{ seq: string | number }>;
-    return Number(rows[0]!.seq);
+    if (rows[0]) return Number(rows[0].seq);
+    // A concurrent first creation: the losing insert waited for the winner's
+    // commit, but the UNION's read used the statement's older snapshot. A new
+    // statement sees the committed row.
+    const again = (await this.sql`
+      SELECT seq FROM scope_seq WHERE account_hash = ${accountHash} AND scope = ${scope}
+    `) as unknown as Array<{ seq: string | number }>;
+    if (!again[0]) throw new Error('scope counter missing after creation');
+    return Number(again[0].seq);
   }
 
   async writeConnectorRows(

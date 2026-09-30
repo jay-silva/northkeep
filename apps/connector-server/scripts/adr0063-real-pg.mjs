@@ -8,7 +8,9 @@
  *   1. two cloud updates at the same counter value: exactly one lands and the
  *      held stale row survives;
  *   2. two pushes with vault versions 5 and 6, in both orders: the older one
- *      writes nothing.
+ *      writes nothing;
+ *   3. two first reads of a scope's counter at once: the one whose insert
+ *      loses still gets the counter (its follow-up read sees the commit).
  * Needs initdb, pg_ctl and psql on PATH and a built dist (pnpm -r build).
  * Usage: node apps/connector-server/scripts/adr0063-real-pg.mjs <empty-dir>
  * It never reads DATABASE_URL and never connects anywhere but its own cluster.
@@ -63,6 +65,17 @@ async function capture(fn) {
   const r = recorder();
   await fn(new NeonConnectorStorage('postgres://unused', r.sql));
   return r.log.at(-1).map(inline);
+}
+
+/** Every statement a call sends, in order, including one after an error. */
+async function captureAll(fn) {
+  const r = recorder();
+  try {
+    await fn(new NeonConnectorStorage('postgres://unused', r.sql));
+  } catch {
+    // The recorder answers every read with no rows; only the statements matter.
+  }
+  return r.log.flat().map(inline);
 }
 
 // ---- the throwaway cluster ---------------------------------------------
@@ -156,6 +169,17 @@ try {
     check(`${pathName} v${first} then v${second}: the second push blocked on the account row`, b.ms >= 1000, `${b.ms}ms`);
     check(`${pathName} v${first} then v${second}: the counter moved only for accepted pushes`, gseq === expectSeq, gseq);
   }
+
+  // ---- 3. readScopeSeq when two requests create a counter at once ---------
+  const [readFirst, readAgain] = await captureAll((st) => st.readScopeSeq('r', 'project:new'));
+  check('readScopeSeq sends a follow-up read when the insert returns no row', typeof readAgain === 'string' && /^\s*SELECT seq FROM scope_seq/.test(readAgain));
+  const winner = session(`BEGIN;\n${readFirst};\nSELECT pg_sleep(2);\nCOMMIT;\n`);
+  await sleep(500);
+  const loser = await session(`${readFirst};\n\\echo after-insert\n${readAgain};\n`);
+  const won = await winner;
+  check('readScopeSeq: the first session creates the counter at 0', won.out.trim() === '0', JSON.stringify(won.out.trim()));
+  check('readScopeSeq: the losing insert returns no row, then the follow-up read returns 0',
+    loser.out.trim() === 'after-insert\n0' && loser.ms >= 1000, `${JSON.stringify(loser.out.trim())} after ${loser.ms}ms`);
 } finally {
   execFileSync('pg_ctl', ['-D', data, '-m', 'fast', 'stop'], { stdio: 'ignore', env: pgEnv });
 }

@@ -1188,3 +1188,14 @@ WOUNDS) found one flesh wound and several notes. Each fix is below.
   sync) and `apps/connector-server/test/adr0063-autopush.test.ts` (the build
   review's P1 attack, inverted, on both stores, plus the settle after the
   Mac's own ack). Without the engine change the P1 cases fail.
+
+**Note: `readScopeSeq` under a concurrent first creation.** On real Postgres
+at READ COMMITTED, the request whose `INSERT ... ON CONFLICT DO NOTHING`
+lost got no row, because the statement's `UNION` read used a snapshot from
+before the winner's commit, and `rows[0]!` threw (it failed safe: the cloud
+write errored and nothing was saved). `readScopeSeq` now sends a plain
+`SELECT` when the first statement returns no row; that new statement sees
+the committed counter. `readScopeSeq` is only ever called on its own, never
+inside a batched transaction. Evidence: `adr0063-real-pg.mjs` check 3 races
+the exact two statements (the losing session prints no row, then 0), and a
+PGlite test in `adr0063-storage.test.ts` drives the fallback.
