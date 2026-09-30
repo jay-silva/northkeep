@@ -36,7 +36,7 @@ function recorder() {
     let text = strings[0];
     for (let i = 0; i < values.length; i++) text += `$${i + 1}${strings[i + 1]}`;
     const item = { text, values };
-    return { ...item, then: (ok) => { log.push([item]); return Promise.resolve(ok([{ seq: 1, accepted: 1 }])); } };
+    return { ...item, then: (ok) => { log.push([item]); return Promise.resolve(ok([])); } };
   };
   q.transaction = async (items) => {
     log.push(items.map(({ text, values }) => ({ text, values })));
@@ -128,7 +128,15 @@ try {
 
   // ---- 2. the D5 vault-order guard, both orders --------------------------
   const entry = (id) => ({ entryId: id, scope: 'project:g', type: '', content: `nkc1:${id}`, entryHash: '', createdAt: new Date().toISOString() });
-  const pushSql = (id, version) => capture((st) => st.replaceScopes('g', ['project:g'], [entry(id)], { server: 's'.repeat(16), version, reset: false }));
+  // Both push paths: the route tries the accepting path first and falls back
+  // to the plain replace when enforcement is off.
+  const claimFor = (version) => ({ server: 's'.repeat(16), version, reset: false });
+  const paths = {
+    replaceScopes: (id, version) => capture((st) => st.replaceScopes('g', ['project:g'], [entry(id)], claimFor(version))),
+    replaceScopesAcceptingReshare: (id, version) =>
+      capture((st) => st.replaceScopesAcceptingReshare('g', ['project:g'], [entry(id)], {}, claimFor(version))),
+  };
+  for (const [pathName, pushSql] of Object.entries(paths))
   for (const [first, second] of [[5, 6], [6, 5]]) {
     psql(`DELETE FROM shared_entries WHERE account_hash = 'g'; DELETE FROM scope_seq WHERE account_hash = 'g';
       DELETE FROM connector_accounts WHERE account_hash = 'g';
@@ -143,10 +151,10 @@ try {
     const rowsNow = psql(`SELECT string_agg(entry_id, ',') FROM shared_entries WHERE account_hash = 'g';`).trim();
     const gseq = psql(`SELECT seq FROM scope_seq WHERE account_hash = 'g';`).trim();
     const expectSeq = first === 5 ? '2' : '1';
-    check(`guard v${first} then v${second}: the pair ends at 6`, pair === '6', pair);
-    check(`guard v${first} then v${second}: only H6 is stored`, rowsNow === 'H6', rowsNow);
-    check(`guard v${first} then v${second}: the second push blocked on the account row`, b.ms >= 1000, `${b.ms}ms`);
-    check(`guard v${first} then v${second}: the counter moved only for accepted pushes`, gseq === expectSeq, gseq);
+    check(`${pathName} v${first} then v${second}: the pair ends at 6`, pair === '6', pair);
+    check(`${pathName} v${first} then v${second}: only H6 is stored`, rowsNow === 'H6', rowsNow);
+    check(`${pathName} v${first} then v${second}: the second push blocked on the account row`, b.ms >= 1000, `${b.ms}ms`);
+    check(`${pathName} v${first} then v${second}: the counter moved only for accepted pushes`, gseq === expectSeq, gseq);
   }
 } finally {
   execFileSync('pg_ctl', ['-D', data, '-m', 'fast', 'stop'], { stdio: 'ignore', env: pgEnv });

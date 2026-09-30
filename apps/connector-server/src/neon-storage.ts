@@ -443,9 +443,19 @@ export class NeonConnectorStorage implements ConnectorStorage {
     }
   }
 
+  /**
+   * ADR 0063 transactions that move scope_seq: pinned to READ COMMITTED, the
+   * level the concurrency proof ran under, so a blocked writer re-checks the
+   * locked row instead of failing to serialize. The driver sends no isolation
+   * header unless one is given.
+   */
+  private orderedTransaction(statements: Parameters<NeonConnectorStorage['sql']['transaction']>[0]) {
+    return this.sql.transaction(statements, { isolationLevel: 'ReadCommitted' });
+  }
+
   /** Run a push transaction; its first statement is the vault-order guard, and an empty guard result is a stale push. */
   private async runPush(statements: ReturnType<NeonConnectorStorage['pushStatements']>): Promise<void> {
-    const results = (await this.sql.transaction(statements)) as unknown as unknown[][];
+    const results = (await this.orderedTransaction(statements)) as unknown as unknown[][];
     if ((results[0] ?? []).length === 0) throw new StalePushError();
   }
 
@@ -700,7 +710,7 @@ export class NeonConnectorStorage implements ConnectorStorage {
     await this.ensureSchema();
     const ids = [...new Set(entryIds)];
     if (ids.length === 0) return 0;
-    const results = (await this.sql.transaction([
+    const results = (await this.orderedTransaction([
       this.sql`
         INSERT INTO scope_seq (account_hash, scope, seq)
         SELECT DISTINCT account_hash, scope, 1 FROM shared_entries
@@ -754,7 +764,7 @@ export class NeonConnectorStorage implements ConnectorStorage {
     // ADR 0063: the drop happens only when the server row still exists (an ack
     // of a row replaced meanwhile must not delete the pushed head), and the
     // renamed row carries a new scope counter value.
-    await this.sql.transaction([
+    await this.orderedTransaction([
       this.sql`
         INSERT INTO scope_seq (account_hash, scope, seq)
         SELECT account_hash, scope, 1 FROM shared_entries
@@ -783,7 +793,7 @@ export class NeonConnectorStorage implements ConnectorStorage {
 
   async applyForget(accountHash: string, entryId: string): Promise<void> {
     await this.ensureSchema();
-    await this.sql.transaction([
+    await this.orderedTransaction([
       this.sql`
         INSERT INTO scope_seq (account_hash, scope, seq)
         SELECT account_hash, scope, 1 FROM shared_entries

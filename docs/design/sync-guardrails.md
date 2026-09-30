@@ -826,8 +826,10 @@ wire shapes, so the client build and the reviewers can check against them.
 - Consequence: at deploy, a scope that holds an acked row next to its old
   pushed row has both at 0. It reads as several heads until the next push.
   The desktop and CLI re-push after every down-sync. A phone ack made before
-  the deploy leaves the tie in place until the Mac next pushes, which D5 does
-  within seconds of its next vault push.
+  the deploy leaves the tie in place until the Mac next pushes. The connector
+  ships before any client with D5, so until the desktop release that push is
+  a manual Sync now from 0.22.x. The guard accepts it while no pair is
+  recorded.
 - The counter starts at 0 when `readScopeSeq` first creates it.
 - Counter moves: an accepted push (once per pushed scope; a refused push
   moves nothing), every cloud write (a compare-and-swap for project writes,
@@ -841,6 +843,15 @@ wire shapes, so the client build and the reviewers can check against them.
 - Every decision that needs a row's type is made per request, after
   decryption, and never stored. That covers P, `stale`, the v1 withhold and
   R-S1, because the stored `type` column is `''` for every encrypted row.
+- Driver shape, read from `@neondatabase/serverless` 0.10.4 (types and
+  source): with the default options `transaction()` resolves to one row
+  array per statement, which `runPush` and `discardPending` read. int8
+  comes back as a string, so every counter goes through `Number()`. The
+  driver sends no isolation header unless asked, so the transactions that
+  move the counter pin `isolationLevel: 'ReadCommitted'`, the level the
+  real-Postgres proof ran under. The single-statement compare-and-swap runs
+  at the database default, Postgres's READ COMMITTED (not checked against
+  the live Neon project).
 - A push over an existing id now sets `origin 'vault'`, `pending false` and
   `base_revision NULL` on Neon, matching the in-memory store.
 - Store divergence fixed: the Neon ack deleted the row under the local id
@@ -848,7 +859,9 @@ wire shapes, so the client build and the reviewers can check against them.
   could delete the pushed head. It is now a no-op on both stores, as D2
   requires.
 - `GET /` skips the once-per-process ADR 0061 maintenance. The rollout step
-  3 curl therefore touches no storage even if that flag is on.
+  3 curl therefore touches no storage even if that flag is on. ADR 0061
+  Decision 3 still says the step runs "at the first request of each server
+  process"; it now runs at the first request other than the health page.
 
 **Evidence.**
 - `apps/connector-server/test/adr0063-*.test.ts` run every storage and route
@@ -857,7 +870,8 @@ wire shapes, so the client build and the reviewers can check against them.
 - `node apps/connector-server/scripts/adr0063-real-pg.mjs <empty dir>` races
   the exact captured statements on a throwaway local Postgres. It checks two
   updates at one counter value, and pushes at vault versions 5 and 6 in both
-  orders.
+  orders on both push paths (the accepting path the route tries first, and
+  the plain replace it falls back to).
 - The incident replay, connector half:
   - The 0.22.x `downSyncConnector` receives nothing, the head stays R2, and
     the row stays pending.
