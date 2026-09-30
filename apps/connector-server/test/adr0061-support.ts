@@ -176,3 +176,34 @@ export async function postForm(
   }
   return { status: res.status, json, headers: res.headers };
 }
+
+/** An AI app connected with a pairing code: calls one hosted MCP tool, returning its text and whether it was an error. */
+export async function connectMcpApp(
+  base: string,
+  pairingCode: string,
+): Promise<(name: string, args: Record<string, unknown>) => Promise<{ text: string; isError: boolean }>> {
+  const reg = await registerClient(base, { confidential: false });
+  const { verifier, challenge } = pkce();
+  const resource = `${base}/mcp`;
+  const consent = await fetch(`${base}/consent`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    redirect: 'manual',
+    body: form({ client_id: reg.client_id, redirect_uri: REDIRECT_URI, code_challenge: challenge, state: 's', scope: 'mcp', resource, pairing_code: pairingCode }),
+  });
+  const code = new URL(consent.headers.get('location')!).searchParams.get('code')!;
+  const tok = await postForm(base, '/token', form({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, client_id: reg.client_id, code_verifier: verifier, resource }));
+  return async (name, args) => {
+    const resp = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', Authorization: `Bearer ${tok.json.access_token}` },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+    });
+    const raw = await resp.text();
+    const line = (resp.headers.get('content-type') || '').includes('text/event-stream')
+      ? raw.split('\n').find((l) => l.startsWith('data:'))?.slice(5).trim()
+      : raw;
+    const call = line ? JSON.parse(line) : null;
+    return { text: (call?.result?.content?.[0]?.text ?? call?.error?.message ?? '') as string, isError: call?.result?.isError === true };
+  };
+}

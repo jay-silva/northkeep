@@ -310,7 +310,8 @@ export interface PendingSnapshot {
   forgets: string[];
 }
 
-export type ConflictReason = 'moved' | 'stale' | 'legacy' | 'several_heads';
+/** `deleted_here`: a cloud-created project whose document was deleted on this device (recheck R-S2). */
+export type ConflictReason = 'moved' | 'stale' | 'legacy' | 'several_heads' | 'deleted_here';
 
 /** A cloud project document that was not applied because it is not a fast-forward (D1). */
 export interface DownSyncConflict {
@@ -467,6 +468,10 @@ function localHead(vault: Vault, project: string): LocalHead {
   }
 }
 
+function hasDeletedDocument(vault: Vault, scope: string): boolean {
+  return vault.list({ scope, type: 'working', includeForgotten: true, includeSuperseded: true }).some((e) => e.forgotten_at !== null);
+}
+
 /**
  * D1: classify every pending row against the local vault without writing
  * anything. Rows are re-derived from the server each time, so the plan is
@@ -578,6 +583,12 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
       continue;
     }
     if (head.kind === 'none' && row.base_revision === BASE_NEW) {
+      // A document deleted here stops being the connector's head once pushed,
+      // so a held cloud create reads as current again; never bring it back unasked.
+      if (hasDeletedDocument(vault, row.scope)) {
+        conflict('deleted_here');
+        continue;
+      }
       plan.additions.push({ server_id: row.server_id, scope: row.scope, type: 'working', content: row.content, kind: 'project' });
       continue;
     }

@@ -1,5 +1,4 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -21,7 +20,7 @@ import {
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage, type ConnectorStorage } from '../src/storage.js';
 import { NeonConnectorStorage } from '../src/neon-storage.js';
-import { pgliteAsNeon, startServer, TEST_PEPPER_B64, withEnv, REDIRECT_URI } from './adr0061-support.js';
+import { connectMcpApp, pgliteAsNeon, startServer, TEST_PEPPER_B64, withEnv } from './adr0061-support.js';
 import { fakeServer } from '../../../packages/sync/test/fake-sync-server.js';
 
 /**
@@ -34,50 +33,6 @@ import { fakeServer } from '../../../packages/sync/test/fake-sync-server.js';
  */
 
 const passphrase = 'adr0063 autopush passphrase';
-
-async function readRpc(resp: Response): Promise<any> {
-  const text = await resp.text();
-  if ((resp.headers.get('content-type') || '').includes('text/event-stream')) {
-    const line = text.split('\n').find((l) => l.startsWith('data:'));
-    return line ? JSON.parse(line.slice(5).trim()) : null;
-  }
-  return JSON.parse(text);
-}
-
-async function connectApp(base: string, deviceSecret: Buffer) {
-  const pairingCode = await startPairing({ server: base, deviceSecret });
-  const reg = await fetch(`${base}/register`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      client_name: 'p1', redirect_uris: [REDIRECT_URI], grant_types: ['authorization_code', 'refresh_token'],
-      response_types: ['code'], token_endpoint_auth_method: 'none', scope: 'mcp',
-    }),
-  }).then((r) => r.json());
-  const verifier = crypto.randomBytes(32).toString('base64url');
-  const challenge = crypto.createHash('sha256').update(verifier).digest().toString('base64url');
-  const resource = `${base}/mcp`;
-  const consent = await fetch(`${base}/consent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    redirect: 'manual',
-    body: new URLSearchParams({ client_id: reg.client_id, redirect_uri: REDIRECT_URI, code_challenge: challenge, state: 's', scope: 'mcp', resource, pairing_code: pairingCode }).toString(),
-  });
-  const code = new URL(consent.headers.get('location')!).searchParams.get('code')!;
-  const tok = await fetch(`${base}/token`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: new URLSearchParams({ grant_type: 'authorization_code', code, redirect_uri: REDIRECT_URI, client_id: reg.client_id, code_verifier: verifier, resource }),
-  }).then((r) => r.json());
-  return async (name: string, args: Record<string, unknown>): Promise<string> => {
-    const call = await readRpc(await fetch(`${base}/mcp`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream', Authorization: `Bearer ${tok.access_token}` },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
-    }));
-    return (call?.result?.content?.[0]?.text ?? call?.error?.message ?? '') as string;
-  };
-}
 
 for (const kind of ['memory', 'pglite'] as const) {
   describe(`ADR 0063 D5 automatic push, real connector (${kind})`, () => {
@@ -146,7 +101,8 @@ for (const kind of ['memory', 'pglite'] as const) {
       const workRows = async () => (await storage.listEntries(account)).filter((e) => e.scope === 'work').length;
       expect(await workRows()).toBe(1);
 
-      const mcp = await connectApp(base, deviceSecret);
+      const app = await connectMcpApp(base, await startPairing({ server: base, deviceSecret }));
+      const mcp = async (name: string, args: Record<string, unknown>) => (await app(name, args)).text;
       expect(await mcp('memory_remember', { content: 'y: SECRET the user later deletes', type: 'semantic', scope: 'work' })).not.toBe('');
 
       at(homeB);

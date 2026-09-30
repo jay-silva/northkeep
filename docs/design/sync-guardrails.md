@@ -1199,3 +1199,15 @@ the committed counter. `readScopeSeq` is only ever called on its own, never
 inside a batched transaction. Evidence: `adr0063-real-pg.mjs` check 3 races
 the exact two statements (the losing session prints no row, then 0), and a
 PGlite test in `adr0063-storage.test.ts` drives the fallback.
+
+**Note: R-S2 through forgetting the document (A7).** Forgetting a shared
+project's document and pushing leaves the connector with no pushed head, so
+a cloud create held as `stale` read as current again and the plan offered it
+as an unprompted addition. D1 now holds a base-`new` cloud create as the
+conflict `deleted_here` when this device has no project head but holds a
+forgotten document in that scope. The phone goes through the same
+classifier, so it holds it too. A cloud project in a scope that never held a
+document here still arrives as an addition. Take theirs recreates the
+project on request; keep mine saves the cloud text as a memory and discards
+the row. Evidence: `apps/connector-server/test/adr0063-rs2.test.ts` (A7 on
+both stores, the phone plan, take theirs, and the fresh-scope addition).

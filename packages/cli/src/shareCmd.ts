@@ -218,6 +218,7 @@ const REASONS: Record<ConflictReason, string> = {
   stale: 'Cloud Connect already has a newer copy than the one this cloud version started from',
   legacy: 'the cloud version does not say which copy it started from',
   several_heads: 'this project has more than one current document on this Mac',
+  deleted_here: 'this project was deleted on this Mac, and the cloud version would bring it back',
 };
 
 function conflictLine(c: DownSyncConflict): string {

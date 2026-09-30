@@ -1314,7 +1314,10 @@ every milestone; if a limit is removed, say when and how.*
 - **Deleting a shared project also deletes it from Cloud Connect.** The
   scope is unshared on the connector first, including any cloud write not
   yet delivered, so a cloud copy cannot come back later without a question.
-  If that delete fails, nothing is deleted on this device either.
+  If that delete fails, nothing is deleted on this device either. Deleting
+  only the project's document (`northkeep forget`, or deleting it in the app)
+  leaves the scope shared; a project a cloud app created there then waits as
+  a conflict ("deleted on this Mac") instead of coming back on its own.
 - **This is the one place your shared memory is decrypted on our server.** Sync
   stays ciphertext-only and keyless. A scope you mark Shared is copied to
   NorthKeep's connector server, where it is stored encrypted at rest: the database
