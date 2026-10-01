@@ -15,8 +15,6 @@ jobs:
       # single test ran — CI was silently red from 2026-07-19. 11.9.0 matches
       # local dev. Node 24 matches dev and the bundled desktop sidecar (24.14).
       - uses: pnpm/action-setup@v4
-        with:
-          version: 11.9.0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
