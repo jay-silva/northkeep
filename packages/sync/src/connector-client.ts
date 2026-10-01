@@ -518,6 +518,26 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
     const working = group.filter((r) => r.type === 'working');
     const foldable = group.every((r) => isMemoryType(r.type)) && empty && working.length === 1
       && working[0]!.base_revision === BASE_NEW && !working[0]!.stale;
+    if (foldable && hasDeletedDocument(vault, scope)) {
+      // A create into a project deleted here is a question, not a fold: the
+      // scope is marked Shared only when the user takes the cloud version.
+      const create = working[0]!;
+      plan.conflicts.push({
+        scope,
+        project: parseProjectSlug(scope)!,
+        server_id: create.server_id,
+        base_revision: create.base_revision,
+        local_revision: null,
+        reason: 'deleted_here',
+        content: create.content,
+      });
+      const rest = group.length - 1;
+      if (rest > 0) {
+        plan.held += rest;
+        heldScopes.add(scope);
+      }
+      continue;
+    }
     if (foldable) {
       applicable.push(...group);
       plan.to_mark.push(scope);
@@ -662,13 +682,18 @@ export async function applyDownSync(opts: {
   let replaced = 0;
   let forgotten = 0;
 
-  for (const a of plan.additions) {
+  // Creates first, so a fold scope whose create is not applied takes none of its rows and is not marked.
+  const toMark = new Set(plan.to_mark);
+  const createdScopes = new Set<string>();
+  const additions = [...plan.additions].sort((x, y) => Number(y.kind === 'project') - Number(x.kind === 'project'));
+  for (const a of additions) {
     const metadata = { connector: { server_id: a.server_id } };
     if (a.kind === 'project') {
       const project = parseProjectSlug(a.scope)!;
       try {
         const view = opts.vault.replaceProjectContent({ project, expected_revision: null, content: a.content, source: `connector:${clientLabel}`, metadata });
         acked.push({ server_id: a.server_id, local_entry_id: view.revision });
+        createdScopes.add(a.scope);
         added++;
         wrote = true;
       } catch (err) {
@@ -677,6 +702,7 @@ export async function applyDownSync(opts: {
       }
       continue;
     }
+    if (toMark.has(a.scope) && !createdScopes.has(a.scope)) continue;
     const created = opts.vault.remember({ content: a.content, type: a.type, scope: a.scope, source: `connector:${clientLabel}`, metadata });
     acked.push({ server_id: a.server_id, local_entry_id: created.id });
     added++;
@@ -710,6 +736,7 @@ export async function applyDownSync(opts: {
   // The mark rides the same save that precedes the ack. Marking after the ack
   // would leave a crash window whose residual never heals (ADR 0050).
   for (const scope of plan.to_mark) {
+    if (!createdScopes.has(scope)) continue;
     opts.vault.setScopeShared(scope, true);
     wrote = true;
   }
@@ -808,6 +835,9 @@ export async function resolveConflict(opts: {
       source: `connector:${clientLabel}`,
       metadata: { connector: { server_id: row.server_id } },
     });
+    // A deleted_here create in a private scope is the ADR 0050 fold the user just
+    // approved: the mark rides the save that holds the applied create.
+    if (row.reason === 'deleted_here' && !opts.vault.sharedScopes().includes(scope)) opts.vault.setScopeShared(scope, true);
     opts.vault.save();
     await postJson(opts, '/client/ack', { acked: [{ server_id: row.server_id, local_entry_id: view.revision }], forgets: [] }, 'ack');
     return { choice: 'take-theirs', server_ids: [row.server_id], revision: view.revision, memory_ids: [] };
