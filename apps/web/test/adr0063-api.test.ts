@@ -16,6 +16,7 @@ import { fakeServer } from '../../../packages/sync/test/fake-sync-server.js';
  */
 
 const passphrase = 'web 0063 passphrase';
+const SESSION = '6f1d2c3b-4a5e-4f60-8a7b-9c0d1e2f3a4b';
 const deviceSecret = Buffer.alloc(32, 5);
 const prevHome = process.env.NORTHKEEP_HOME;
 let dir: string;
@@ -75,7 +76,8 @@ describe('POST /api/share/sync (D3)', () => {
     expect(res.status).toBe(200);
     expect(res.body.preview).toBe(true);
     expect(res.body.needs_confirmation).toBe(true);
-    expect(res.body.replacements).toEqual([{ project: 'demo', server_id: forward, local_revision: expect.any(String) }]);
+    const head = await view('demo');
+    expect(res.body.replacements).toEqual([{ project: 'demo', server_id: forward, local_revision: head.revision, local_updated_at: head.updated_at }]);
     expect(fs.readFileSync(vaultPath).equals(before)).toBe(true);
   });
 
@@ -120,6 +122,56 @@ describe('conflicts and resolve (D1)', () => {
     expect(res.status).toBe(200);
     expect((await view('demo')).status).toBe('Cloud on R1.');
     expect(pendingIds()).toEqual([]);
+  });
+});
+
+describe('what the three screens read (ADR 0063 GUI)', () => {
+  it('dates a conflict: when the local head was saved and when the version it started from was', async () => {
+    const r1 = await sharedProject('demo', 'R1.');
+    fake.cloudUpdate('project:demo', cloud('Cloud on R1.'));
+    const r2 = await session.withVault((v) => {
+      v.updateProject({ project: 'demo', expected_revision: r1, status: 'R2.', writer: { host: 'claude-code', host_version: '1.0', session_id: SESSION } });
+      v.save();
+      return getProjectView(v, 'demo', undefined, { history: true });
+    });
+    const saved = new Map(r2.history.map((h) => [h.id, h.updated_at]));
+
+    const list = await call('GET', '/api/share/conflicts');
+    const [conflict] = list.body.conflicts as Array<Record<string, unknown>>;
+    expect(conflict!.base_updated_at).toBe(saved.get(r1));
+    expect((list.body.local as Record<string, unknown>).demo).toEqual({
+      revision: r2.revision, content: r2.content, updated_at: r2.updated_at, writer: { host: 'claude-code', host_version: '1.0' },
+    });
+
+    const preview = await call('POST', '/api/share/sync');
+    const [planned] = preview.body.conflicts as Array<Record<string, unknown>>;
+    expect([planned!.base_updated_at, planned!.local_updated_at]).toEqual([saved.get(r1), r2.updated_at]);
+    expect(planned).not.toHaveProperty('content');
+  });
+
+  it('asks Cloud Connect for nothing when this Mac shares nothing and never paired', async () => {
+    const before = fake.requests().length;
+    const list = await call('GET', '/api/share/conflicts');
+    expect(list).toEqual({ status: 200, body: { conflicts: [], local: {} } });
+    expect(fake.requests().length).toBe(before);
+  });
+
+  it('lists the saved versions compaction cleared, newest first, with their writer and no text', async () => {
+    let revision: string | null = null;
+    const made: string[] = [];
+    await session.withVault((v) => {
+      for (let i = 1; i <= 8; i += 1) {
+        revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Version ${i}.`, writer: { host: 'claude-code', host_version: null, session_id: SESSION } }).revision;
+        made.push(revision);
+      }
+      v.save();
+    });
+    const res = await call('GET', '/api/projects/demo');
+    expect(res.status).toBe(200);
+    const cleared = res.body.cleared_revisions as Array<Record<string, unknown>>;
+    expect(cleared.map((c) => c.id)).toEqual([made[1], made[0]]);
+    expect(cleared[0]).toEqual({ id: made[1], updated_at: expect.any(String), writer: { host: 'claude-code', host_version: null } });
+    expect((res.body.revisions as Array<{ id: string }>).map((r) => r.id)).toEqual([made[6], made[5], made[4], made[3], made[2]]);
   });
 });
 
@@ -214,6 +266,7 @@ describe('POST /api/sync/pull (D6)', () => {
     const first = await call('POST', '/api/sync/pull');
     expect([first.status, first.body.code]).toEqual([409, 'pull_would_drop']);
     expect((first.body.report as { only_here: unknown[] }).only_here).toEqual([{ scope: 'personal', first_line: 'only on this Mac' }]);
+    expect(first.body.backup_file).toBe('vault.nkv.bak');
 
     const wrong = await call('POST', '/api/sync/pull', { confirm: true, version: first.body.version, sha256: '0'.repeat(64) });
     expect([wrong.status, wrong.body.code]).toEqual([409, 'remote_changed']);

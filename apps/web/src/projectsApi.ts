@@ -1,6 +1,6 @@
 /** Projects routes inherit server.ts session-token checks and require an unlocked vault. */
 import fs from 'node:fs';
-import { getProjectView, listProjectViews, loadDeviceSecret, northkeepHome, ProjectHandoffError, projectScope, type ProjectCheckpointRequest, type ProjectUpdateRequest } from '@northkeep/core';
+import { getProjectView, listProjectViews, loadDeviceSecret, northkeepHome, PROJECT_REVISION_SUMMARY_LIMIT, ProjectHandoffError, projectScope, readProjectProvenance, type ProjectCheckpointRequest, type ProjectUpdateRequest, type Vault } from '@northkeep/core';
 import { loadConnectorConfig, unshareScope } from '@northkeep/sync';
 import { readMirrorSummary } from '@northkeep/mcp-server';
 import type { UiSession } from './session.js';
@@ -23,6 +23,22 @@ function fileBytes(vaultPath: string): number | null {
 /** ADR 0053 Decision 7: the backup line, or null. A status must never cost the project list. */
 function mirrorSummary(vault: Parameters<typeof readMirrorSummary>[0]): string | null {
   try { return readMirrorSummary(vault, undefined, northkeepHome()); } catch { return null; }
+}
+
+/**
+ * ADR 0063 D4: saved versions whose text compaction blanked (ADR 0051). The
+ * project view leaves them out; the page lists them as versions that cannot be
+ * restored, with the writer that compaction keeps.
+ */
+function clearedRevisions(vault: Vault, project: string): Array<{ id: string; updated_at: string; writer: { host: string; host_version: string | null } | null }> {
+  return vault.list({ scope: projectScope(project), type: 'working', includeSuperseded: true, includeForgotten: true })
+    .filter(row => row.forgotten_at !== null && row.superseded_at !== null)
+    .reverse()
+    .slice(0, PROJECT_REVISION_SUMMARY_LIMIT)
+    .map(row => {
+      const writer = readProjectProvenance(row);
+      return { id: row.id, updated_at: row.created_at, writer: writer ? { host: writer.host, host_version: writer.host_version } : null };
+    });
 }
 
 export async function handleProjectsApi(session: UiSession, method: string, route: string, body: Buffer): Promise<Response | null> {
@@ -72,7 +88,7 @@ export async function handleProjectsApi(session: UiSession, method: string, rout
     if (!match) return reply(404, { error: 'Project route not found.', code: 'not_found' });
     const project = match[1]!;
     if (method === 'GET' && !match[2]) {
-      return reply(200, await session.withVault(vault => getProjectView(vault, project, undefined, { history: true })));
+      return reply(200, await session.withVault(vault => ({ ...getProjectView(vault, project, undefined, { history: true }), cleared_revisions: clearedRevisions(vault, project) })));
     }
     if (method === 'DELETE' && !match[2]) {
       // Owner request 2026-09-13: delete a project from the app. Forgets every

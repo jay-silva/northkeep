@@ -97,22 +97,84 @@ describe('Sharing: Sync now button (ADR 0050 Decision 5)', () => {
     expect($('shareSyncBtn').disabled).toBe(false);
   });
 
-  it('tells the user when a sync marked a newly arrived project Shared', async () => {
-    const binding = script.match(/\$\('shareSyncBtn'\)\.addEventListener\('click',[\s\S]*?\n {2}\}\);/)?.[0] ?? '';
-    expect(binding).not.toBe('');
+  it('tells the user when a sync marked a newly arrived project Shared', () => {
+    const context = vm.createContext({});
+    vm.runInContext(`${functionSource('plural')}\n${functionSource('shareSyncMessages')}`, context);
+    const lines = vm.runInContext(`shareSyncMessages({ added: 1, forgotten: 0, deduped: 0, pushed: 1, held_messages: [], newly_shared: ['project:hosted-thing'] })`, context) as string[];
+    expect(lines).toEqual([
+      'Done. Added 1 new item. Sent 1 memory to Cloud Connect.',
+      '"project:hosted-thing" came from a connected app and is now marked Shared. Later edits to it are pushed; unshare it above to stop.',
+    ]);
+  });
+});
+
+describe('Sync now preview (ADR 0063 D3)', () => {
+  function syncRun(preview: Record<string, unknown>) {
+    const calls: Array<{ route: string; json: unknown }> = [];
+    const opened: unknown[] = [];
     const nodes = new Map<string, Record<string, unknown>>();
-    let listener: (() => Promise<void>) | undefined;
     const $ = (id: string) => {
-      if (!nodes.has(id)) {
-        nodes.set(id, { textContent: '', hidden: true, disabled: false, style: {},
-          addEventListener: (_: string, fn: () => Promise<void>) => { listener = fn; } });
-      }
+      if (!nodes.has(id)) nodes.set(id, { textContent: '', hidden: true, disabled: false, style: {}, replaceChildren() {}, appendChild() {} });
       return nodes.get(id)!;
     };
-    const api = async () => ({ added: 1, forgotten: 0, deduped: 0, pushed: 1, held_messages: [], newly_shared: ['project:hosted-thing'] });
-    const context = vm.createContext({ $, api });
-    vm.runInContext(`const loadSharing = async () => {}; ${binding}`, context);
-    await listener!();
-    expect($('shareSyncResult').textContent).toContain('"project:hosted-thing" came from a connected app and is now marked Shared. Later edits to it are pushed');
+    const api = async (route: string, opts: { json?: Record<string, unknown> } = {}) => {
+      calls.push({ route, json: opts.json });
+      if (opts.json && opts.json.dry_run === false) return { added: 0, replaced: 0, forgotten: 0, pushed: 0, conflicts: [] };
+      return preview;
+    };
+    const context = vm.createContext({ $, api, calls, opened, document: { createTextNode: (t: string) => t } });
+    vm.runInContext(`
+      const loadSharing = async () => {};
+      const noteProjectDecisions = () => {};
+      const openSyncPreview = (plan) => opened.push(plan);
+      const el = () => ({ style: {}, appendChild() {}, addEventListener() {} });
+      ${functionSource('plural')}
+      ${functionSource('shareSyncMessages')}
+      ${functionSource('showShareSyncResult')}
+      ${functionSource('applyShareSync')}
+      ${functionSource('runShareSync')}
+      this.run = runShareSync;
+    `, context);
+    return { run: (context as { run: () => Promise<void> }).run, calls, opened };
+  }
+
+  it('applies a purely additive sync straight away with an empty approval', async () => {
+    const { run, calls, opened } = syncRun({ preview: true, needs_confirmation: false, additions: { count: 2, by_scope: { notes: 2 } }, conflicts: [] });
+    await run();
+    expect(opened).toEqual([]);
+    expect(calls).toEqual([
+      { route: '/api/share/sync', json: {} },
+      { route: '/api/share/sync', json: { dry_run: false, approve: { server_ids: [], forget_ids: [] } } },
+    ]);
+  });
+
+  it('opens the preview and changes nothing when a sync would update a project or remove a memory', async () => {
+    const plan = { preview: true, needs_confirmation: true, additions: { count: 0, by_scope: {} }, replacements: [{ project: 'demo', server_id: 's1' }], conflicts: [] };
+    const { run, calls, opened } = syncRun(plan);
+    await run();
+    expect(calls).toEqual([{ route: '/api/share/sync', json: {} }]);
+    expect(opened).toEqual([plan]);
+  });
+
+  it('counts every addition plus only the checked updates and removals', () => {
+    const context = vm.createContext({});
+    vm.runInContext(functionSource('syncApplyCount'), context);
+    const count = vm.runInContext(`syncApplyCount({ additions: { count: 3 }, new_projects: ['trail-maps'] }, { server_ids: ['s1'], forget_ids: ['e1', 'e2'] })`, context);
+    expect(count).toBe(7);
+  });
+
+  it('sends the approval the dialog built, and never the CLI review text', () => {
+    expect(functionSource('openSyncPreview')).toContain("server_ids: updates.filter((u) => u.box.checked).map((u) => u.id), forget_ids: removes.filter((r) => r.box.checked).map((r) => r.id)");
+    expect(script).not.toContain('r.review_messages');
+    expect(functionSource('openSyncPreview')).toContain("cancel.dataset.autofocus = ''");
+  });
+});
+
+describe('Automatic pull refusal line (ADR 0063 D6)', () => {
+  it('points at the Pull button instead of the CLI', () => {
+    const context = vm.createContext({});
+    vm.runInContext(functionSource('pullRefusalSentence'), context);
+    const line = vm.runInContext(`pullRefusalSentence('The copy on your sync server would remove or undo 2 items on this device, so it was not pulled automatically. Review what would change with: northkeep sync pull')`, context);
+    expect(line).toBe('The copy on your sync server would remove or undo 2 items on this device, so it was not pulled automatically. Use Pull to review what would change on this Mac.');
   });
 });
