@@ -440,10 +440,13 @@ leaves changes. Today it leaves on a deliberate action. After D5 it leaves
 within seconds of a vault push that included a write into a shared scope. The
 share consent already describes a continuing copy: "Memories in '<scope>' will
 be copied to NorthKeep's connector server", which "can always see ... when they
-change" (`shareCmd.ts:96-100`). Under invariant #2 the connector learns the
-edit cadence of shared scopes more finely, the vault sync version number, a
-16-hex hash of the sync server URL, and when this device wakes or pulls (one
-manifest read each, added in the fix round). None is content.
+change" (`shareCmd.ts:96-100`). Under invariant #2 the connector learns when
+devices wake or pull and when any vault push happens: a manifest read follows
+even a push that touched only private scopes. It also learns the vault sync
+version number and a 16-hex hash of the sync server URL. The Mac app reads
+the connector's pending list once per session when the Projects page opens,
+and only when this Mac shares something or has paired. No content is sent by
+these reads.
 
 **Toggle** (founder decision, 2026-09-30). On by default, with a Cloud screen
 switch "Keep Cloud Connect up to date automatically".
@@ -1065,10 +1068,17 @@ pending cloud write) and unmark it in the same save as the local delete. If
 the server delete fails, nothing is deleted. A scope marked shared with no
 connector configured here is deleted and unmarked locally.
 
-**GUI until the three screens ship.** Sync now sends `{ dry_run: false,
-approve: {} }`: additions only, and the rest is named with the CLI command.
-Pull shows the 409 report's sentence. The Cloud screen's fixed "does not
-update on its own" sentence now reads the engine status. No new screens.
+**GUI (the three screens, built on g63/screens and merged at integration).**
+Sync now runs a dry run first. When the plan has a replacement or a forget it
+opens "Review this sync" with a checkbox per item, and Apply sends exactly
+the ticked ids as `approve`; otherwise it applies the additions directly. A
+project with a waiting cloud version shows a "Needs your decision" pill and
+notice, and Review opens "Choose which version to keep" (Keep mine, Take
+theirs, Cancel focused). The project page splits history into Saved versions,
+each with "Restore this version" (confirm first; a moved head is refused
+with Reload versions), and Log. Pull opens "Review this pull" with the D6
+report and Confirm pull, which installs exactly the reported version. The
+Cloud screen has the automatic push switch and reads the engine status.
 
 **Open for the merge and the phone build (all closed at integration).**
 - The `apps/connector-server` suites that imported `downSyncConnector`
@@ -1270,3 +1280,50 @@ nothing; the step order and the stamp sent), mobile tsc, and
   adds when devices wake or pull.
 - "recorded from 0.22.4 on": the next release's number is not known here,
   so KNOWN-LIMITS says "from the next release".
+
+### Fix round 3 (build recheck, 2026-10-01)
+
+The build recheck (`NorthKeep/Reviews/adr-0063/build-recheck.md`, NOT
+CLEARED) found the ADR over its length limit, one flesh wound (DH3) and one
+scar (M3). Each fix is below.
+
+**DH3: a held `deleted_here` create never marks the scope Shared.**
+- The fault (6fda905): for a private project deleted here and then created
+  again by a connected app, the ADR 0050 fold put the scope in `to_mark`,
+  then D1 held its only row as `deleted_here`. `applyDownSync` marked every
+  `to_mark` scope, on the phone too, so the scope was Shared with nothing
+  added, keep mine left it Shared, and a later local note there was pushed
+  and served.
+- The fix: the fold classifies a base-`new` create into a scope with a
+  forgotten document as `deleted_here` before it marks anything, and holds
+  the scope's other rows. `applyDownSync` applies creates first and marks a
+  `to_mark` scope only when its create was applied; a fold scope whose
+  create was not applied takes none of its rows. Keep mine leaves the scope
+  private. Take theirs on a `deleted_here` create in a private scope marks
+  it Shared in the save that holds the applied create, which is what the
+  fold would have done.
+- Evidence: `apps/connector-server/test/adr0063-dh3.test.ts`, both stores:
+  the plan marks nothing, the down-sync and keep mine leave the scope
+  private, and the connected app does not read a later private note (the
+  test prints it); take theirs applies and marks, and the mark survives a
+  reopen; the phone's additive-only down-sync adds nothing and marks
+  nothing. All six cases fail without the fix.
+
+**M3** is now a KNOWN-LIMITS line: a Mac that wakes between another
+device's ack of a cloud memory and that device's vault push drops the
+memory from Cloud Connect briefly; it returns after that vault push and the
+Mac's next pull.
+
+**ADR trim and "What leaves the machine".** The ADR now says the connector
+learns when any vault push happens, not only wakes and pulls, and names the
+Mac app's once-per-session pending read (Invariant #1 analysis above has the
+same wording). To stay under 500 words the ADR dropped the incident's line
+references (section 1), the single-statement detail of the
+`expected_revision` check (D2), the "before removing it" order of keep mine
+(section 8, item 2) and the review verdict trail (Review history and Build
+notes here). No decision was dropped.
+
+**Docs the screens made outdated.** KNOWN-LIMITS lines for Pull, Restore,
+the conflict view and the Sync now preview, the GUI paragraph in Client
+above, and the ADR's restore consequence now describe the built screens.
+The compaction button line stays: that button is still not built.

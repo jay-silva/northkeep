@@ -219,8 +219,8 @@ every milestone; if a limit is removed, say when and how.*
   out (ADR 0063 D6).** It first lists what is only on this device, projects
   whose current version is only here, and memories you deleted here that the
   pull would bring back, and asks before replacing anything
-  (`northkeep sync pull --yes` skips the question; the app's Pull answers with
-  that report and a pointer to the command until its review screen ships). It
+  (`northkeep sync pull --yes` skips the question; the app's Pull opens the
+  same report in a "Review this pull" dialog with Confirm pull and Cancel). It
   then installs exactly the copy it reported on, and refuses if the server
   moved or this vault changed in between. Nothing is merged: what drops out
   stays recoverable in `vault.nkv.bak`. Push before you pull by hand on a
@@ -979,8 +979,9 @@ every milestone; if a limit is removed, say when and how.*
 - **Restore works only for the versions compaction kept (ADR 0063 D4).**
   `northkeep projects restore <slug> <version>` makes an earlier version the
   current document again, and refuses a version whose text was blanked. The
-  desktop has it at `POST /api/projects/<slug>/restore`; the Restore button
-  follows an approved mock.
+  desktop has it at `POST /api/projects/<slug>/restore` and as "Restore this
+  version" under Saved versions on the project page, which asks first and
+  restores nothing if the project changed after the list was loaded.
 - **The whole-vault sync cap is 4 MB and cannot be raised on the hosted
   server as deployed.** Vercel refuses request bodies over 4.5 MB before
   the sync server runs (probed 2026-09-21). A larger vault needs a
@@ -1289,6 +1290,10 @@ every milestone; if a limit is removed, say when and how.*
   syncs to it is in sync and, with automatic updates on, pushes that copy to
   Cloud Connect even if it changed nothing itself. The Mac that
   lost work refuses the automatic pull and shows what would drop (M5).
+- **If this Mac wakes between another device accepting a cloud memory and
+  that device's vault push landing, Cloud Connect drops that memory
+  briefly.** It returns after the other device's vault push and this Mac's
+  next pull. No content is lost.
 - **While your devices use different sync servers, Cloud Connect may show
   the copy from whichever device pushed last.** The connector orders pushes
   by sync-server version, and versions from two servers do not compare.
@@ -1300,13 +1305,15 @@ every milestone; if a limit is removed, say when and how.*
   update that does not record which copy it started from always waits for
   you. That covers every one written before this release, and a working-type
   memory an app saves into a project. `northkeep share conflicts` and
-  `northkeep share resolve` do this today; the app's conflict view is not
-  built yet.
+  `northkeep share resolve` do this from the command line; in the app, a
+  project with a waiting cloud version shows "Needs your decision", and
+  Review opens "Choose which version to keep" (Keep mine, Take theirs).
 - **Sync now asks before it replaces a project or forgets a memory (ADR 0063
   D3).** `northkeep share sync` lists both and asks; `--yes` skips the
-  question, and with no terminal it changes nothing. Until the app's preview
-  screen ships, the app's Sync now applies only new memories and new projects
-  and names the rest for review on the command line.
+  question, and with no terminal it changes nothing. The app's Sync now
+  previews first; when a sync would update a project or remove a memory it
+  opens "Review this sync", where you tick the changes to apply and nothing
+  else changes.
 - **From the first phone build after build 28, the phone applies only new
   memories and new projects from your cloud apps.** Replacements and
   deletions wait for your Mac, and the phone never confirms a deletion to the
