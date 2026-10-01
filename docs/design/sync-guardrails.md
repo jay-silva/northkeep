@@ -687,8 +687,10 @@ The recheck should attack, against code:
 
 1. Hosted `project_update` **requires** `expected_revision` (D2). Cloud bots
    that do not send it are refused until their instructions change.
-2. **Keep mine** saves the cloud version as a memory in the project scope,
-   visible to cloud apps, before removing it (D1).
+2. **Keep mine** saves the cloud version as a memory in the project scope
+   before removing it (D1). In a shared scope cloud apps can read that memory;
+   in a private scope (a project deleted here, held as `deleted_here`) it stays
+   on this device and the scope stays private.
 3. **Automatic push** is on by default, with a switch (D5).
 4. The **phone** applies only additions, never replacing a project or
    forgetting a memory, until it has a preview screen (D1, D3).
