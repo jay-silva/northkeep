@@ -5775,7 +5775,7 @@
     for (const mark of groups.marks) {
       body.appendChild(el('p', 'plan-held muted', scopeLabel(mark.scope) + (mark.shared_here ? ' is shared on this Mac and private in the other copy.' : ' is private on this Mac and shared in the other copy.') + ' This is for your information; it is not counted as a removal.'));
     }
-    body.appendChild(el('p', 'shared-note', 'This Mac\'s current vault is kept as ' + (data.backup_file || 'a backup file') + ' in your NorthKeep folder, so anything removed can be recovered from it.'));
+    body.appendChild(el('p', 'shared-note', 'This Mac\'s current vault is kept as ' + (data.backup_file || 'a backup file') + ' next to the vault file, but only until the next save overwrites it. Copy that file first if you may need anything removed.'));
     const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);
     const foot = el('div', 'plan-foot'); foot.appendChild(el('p', 'muted', 'Confirm pulls exactly the copy described here. If the server changes first, you see a new report.'));
     const actions = el('div', 'row');

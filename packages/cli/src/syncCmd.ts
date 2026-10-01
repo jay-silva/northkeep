@@ -139,7 +139,7 @@ export async function syncPull(
       if (preview.wouldDrop) {
         console.log(`The copy on your sync server (version ${preview.version}) would change this device:`);
         for (const line of described) console.log(line);
-        console.log('  Your current vault is kept as vault.nkv.bak, where anything removed stays recoverable.');
+        console.log('  Your current vault is kept as vault.nkv.bak next to the vault file until the next save overwrites it; copy it first if you may need anything removed.');
         const assumeYes = options.yes === true || process.env.NORTHKEEP_ASSUME_YES === '1';
         if (!assumeYes) {
           const answer = await ask('Replace this vault with the server copy? [y/N] ');

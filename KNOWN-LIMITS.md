@@ -222,9 +222,16 @@ every milestone; if a limit is removed, say when and how.*
   (`northkeep sync pull --yes` skips the question; the app's Pull opens the
   same report in a "Review this pull" dialog with Confirm pull and Cancel). It
   then installs exactly the copy it reported on, and refuses if the server
-  moved or this vault changed in between. Nothing is merged: what drops out
-  stays recoverable in `vault.nkv.bak`. Push before you pull by hand on a
-  machine you've edited.
+  moved or this vault changed in between. Nothing is merged. What drops out
+  is in `vault.nkv.bak` next to the vault file only until the next save
+  overwrites it, so copy that file first if you need to recover anything.
+  Push before you pull by hand on a machine you've edited.
+- **The app cannot resolve a held conflict for a project you deleted here.**
+  If a connected app re-creates a project you deleted on this Mac, Sync now
+  lists it under "Needs your decision", but its Review button cannot open the
+  project because it no longer exists here, and the prompt repeats on every
+  Sync now. Resolve it with `northkeep share conflicts` and
+  `northkeep share resolve`. Nothing is lost or shared while it waits.
 - **The automatic pull refuses a copy that would remove or undo anything on
   this device.** This happens when another device, such as the phone's
   last-writer-wins recovery, replaced the server's copy with one that lacks

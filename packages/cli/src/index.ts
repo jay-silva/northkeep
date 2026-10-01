@@ -875,7 +875,7 @@ sync
 sync
   .command('pull')
   .description('Download the vault from the sync server; shows what would be removed or brought back and asks first')
-  .option('--yes', 'pull without asking even when this device would lose something (it stays in vault.nkv.bak)')
+  .option('--yes', 'pull without asking even when this device would lose something (it stays in vault.nkv.bak only until the next save)')
   .action(async (options: { yes?: boolean }) => {
     await syncPull(vaultPathOpt(), options, fail, askOnTerminal);
   });

@@ -14,7 +14,7 @@ const config: ExpoConfig = {
   // Expo account that owns the EAS project + the app slug (Jay is logged in as
   // this). Required so `eas init`/`eas build` resolve the right account.
   owner: 'j_silva',
-  version: '0.22.3',
+  version: '0.22.4',
   // Brand app icon (master 1024x1024 from brand/northkeep-icon-1024.png). Expo
   // generates every platform size from this at build; the top-level `icon` is
   // what iOS uses (no separate ios.icon needed on SDK 57). RGB, no alpha, so the
