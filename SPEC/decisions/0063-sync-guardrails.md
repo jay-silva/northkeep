@@ -26,7 +26,7 @@ On 2026-09-30 one Sync now rolled five projects back 7 to 9 days. Down-sync wrot
 - Automatic merge: guesswork where data was just lost.
 
 ## What leaves the machine
-Content and recipient are unchanged; D5 sends it seconds after a vault push or pull. The connector learns when devices wake or pull and when any vault push happens (a manifest read follows even pushes that touched only private scopes), plus a base id per cloud write, the vault sync version and a sync-server hash. The Mac app reads the connector's pending list once per session when the Projects page opens, only when this Mac shares something or has paired. These reads send no content.
+Content and recipient are unchanged; D5 sends it seconds after a vault push or pull. The connector learns edit cadence, when devices wake or pull, and when any vault push happens (a manifest read follows even pushes that touched only private scopes), plus a base id per cloud write, the vault sync version and a sync-server hash. The Mac app reads the connector's pending list once per session when the Projects page opens, only when this Mac shares something or has paired. These reads send no content.
 
 ## Links
 Design: docs/design/sync-guardrails.md · Review: NorthKeep/Reviews/adr-0063 · Extends: ADRs 0044, 0050, 0051

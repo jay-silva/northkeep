@@ -1312,8 +1312,9 @@ every milestone; if a limit is removed, say when and how.*
   D3).** `northkeep share sync` lists both and asks; `--yes` skips the
   question, and with no terminal it changes nothing. The app's Sync now
   previews first; when a sync would update a project or remove a memory it
-  opens "Review this sync", where you tick the changes to apply and nothing
-  else changes.
+  opens "Review this sync", where you tick the changes to apply; new
+  memories and new projects apply either way, and unticked changes keep
+  waiting.
 - **From the first phone build after build 28, the phone applies only new
   memories and new projects from your cloud apps.** Replacements and
   deletions wait for your Mac, and the phone never confirms a deletion to the

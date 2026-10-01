@@ -440,13 +440,15 @@ leaves changes. Today it leaves on a deliberate action. After D5 it leaves
 within seconds of a vault push that included a write into a shared scope. The
 share consent already describes a continuing copy: "Memories in '<scope>' will
 be copied to NorthKeep's connector server", which "can always see ... when they
-change" (`shareCmd.ts:96-100`). Under invariant #2 the connector learns when
-devices wake or pull and when any vault push happens: a manifest read follows
-even a push that touched only private scopes. It also learns the vault sync
-version number and a 16-hex hash of the sync server URL. The Mac app reads
-the connector's pending list once per session when the Projects page opens,
-and only when this Mac shares something or has paired. No content is sent by
-these reads.
+change" (`shareCmd.ts:96-100`). Under invariant #2 the connector learns the
+edit cadence of shared scopes more finely, when devices wake or pull, and
+when any vault push happens: a manifest read follows even a push that touched
+only private scopes. It also learns the vault sync version number and a
+16-hex hash of the sync server URL. The Mac app reads the connector's pending
+list once per session when the Projects page opens, and only when this Mac
+shares something or has paired. An unlock starts a session; Review, Keep
+mine, Take theirs and Sync now read the list again, each on a click. No
+content is sent by these reads.
 
 **Toggle** (founder decision, 2026-09-30). On by default, with a Cloud screen
 switch "Keep Cloud Connect up to date automatically".
