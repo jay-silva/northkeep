@@ -42,6 +42,20 @@ describe('Projects through the actual gated HTTP server', () => {
     expect(result.data.projects[0].project).toBe('trail-journal');
     expect((await request('/api/projects/trail-journal')).data.revision).toBe(revision);
   });
+  it('serves the Portfolio home and its next action without reading detail or changing the vault', async () => {
+    const before = fs.readFileSync(vaultPath);
+    const page = await (await fetch(origin)).text();
+    expect(page).toContain('<section id="view-projects">');
+    expect(page).toContain('<section id="view-memories" hidden>');
+    expect(page).toContain('id="projectSearch"');
+    const overview = await request('/api/projects');
+    expect(overview.status).toBe(200);
+    expect(overview.data.projects).toHaveLength(1);
+    expect(overview.data.projects[0]).toMatchObject({ project:'trail-journal',status:'Three walks logged.',next_actions:'Revise the offline label.',shared:false,draft:false,conflict:false,revision });
+    expect(overview.data.projects[0]).not.toHaveProperty('content');
+    expect(overview.data.projects[0]).not.toHaveProperty('history');
+    expect(fs.readFileSync(vaultPath)).toEqual(before);
+  });
   it('refuses wrong-vault and malformed updates without a disk write', async () => {
     const bytes = fs.readFileSync(vaultPath);
     const body = { vault_id: randomUUID(), operation_id: randomUUID(), expected_revision: revision, status: 'Ready.', completed: 'Checked.', next_actions: '' };

@@ -378,13 +378,13 @@ describe('navigation UI', () => {
     expect(functionSource('loadReviewCollections')).toContain('if (requestId !== reviewCollectionLoadSequence || !status.unlocked) return []');
   });
 
-  it('finishes onboarding on Memories through the normal navigation function', async () => {
+  it('finishes onboarding on Projects through the normal navigation function', async () => {
     const showTop = vi.fn();
     const context = vm.createContext({ hideSetup: vi.fn(), refreshStatus: vi.fn(async () => undefined), showTop });
     vm.runInContext(`${functionSource('finishSetup')}; this.finishSetup = finishSetup`, context);
     await context.finishSetup();
     expect(showTop).toHaveBeenCalledOnce();
-    expect(showTop).toHaveBeenCalledWith('memories');
+    expect(showTop).toHaveBeenCalledWith('projects');
   });
 
   it('retains the provider manager as a separate Settings model surface', () => {

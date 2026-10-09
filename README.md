@@ -26,13 +26,13 @@ NorthKeep works two ways:
 
 ## Local workspace
 
-Memories groups your vault by collection. Projects brings together current status, next actions, decisions, questions and file references, with Resume, Checkpoint and Wrap up. Local project saves check for newer changes before writing and retain saved versions. File references do not open or verify their targets. Review handles memory curation; Connect groups assistant setup.
+Projects opens first, with a searchable portfolio of current status and next actions. Sort by recent saves or name, and filter projects that need attention or are drafts. Memories groups your vault by collection. A project brings together current status, next actions, decisions, questions and file references, with Resume, Checkpoint and Wrap up. Local project saves check for newer changes before writing and retain saved versions. File references do not open or verify their targets. Review handles memory curation; Connect groups assistant setup.
 
-The Projects implementation is local and owner accepted. Its handoff checks cover one local vault; the hosted connector's project tools do not have these revision checks.
+Local project saves and the hosted connector's project updates check the revision they started from. The Portfolio home is awaiting owner acceptance. On the phone, attention currently covers conflicting local documents; cloud versions waiting for a decision are reviewed on the Mac.
 
 ## Install
 
-**Updating to the Memories and Projects workspace:** fully quit NorthKeep and every locally connected AI app before installing, then reopen them and verify the new project tools before continuing work. An app left running can retain the previous project writer. Follow the [upgrade steps](docs/update-memory-projects.md). The replacement installer is not yet published; the current download remains 0.21.0.
+**Updating to the Memories and Projects workspace:** fully quit NorthKeep and every locally connected AI app before installing, then reopen them and verify the new project tools before continuing work. An app left running can retain the previous project writer. Follow the [upgrade steps](docs/update-memory-projects.md). The current download is 0.22.4.
 
 **The Mac app (recommended).** Download the signed, notarized DMG, drag
 NorthKeep to Applications, and open it, a native window wraps the whole thing,
