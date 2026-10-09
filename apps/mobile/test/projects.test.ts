@@ -84,18 +84,18 @@ describe('projects data mapping', () => {
     expect(rows[0]!.statusLine).toBe('Beta just started.');
   });
 
-  it('puts a project with two current documents last, with a plain note', () => {
+  it('puts a project with two current documents first, with a plain note', () => {
     writeProject('alpha', 'One');
     writeProject('alpha', 'Two');
     writeProject('beta', 'Fine');
     const rows = projectRows(entries());
     expect(rows.map((r) => [r.slug, r.statusLine, r.updatedAt, r.notes])).toEqual([
-      ['beta', 'Fine', rows[0]!.updatedAt, []],
-      ['alpha', 'Status unavailable', null, ['Has more than one current document. Open it on your Mac to fix.']],
+      ['alpha', 'More than one version is saved', null, ['Open NorthKeep on your Mac to choose which version to keep.']],
+      ['beta', 'Fine', rows[1]!.updatedAt, []],
     ]);
     expect(projectDetail(entries(), 'alpha')).toEqual({
       ok: false,
-      message: 'This project has more than one current document. Open it on your Mac to fix it.',
+      message: 'More than one version of this project is saved. Open NorthKeep on your Mac to choose which one to keep.',
     });
   });
 
@@ -116,9 +116,10 @@ describe('projects data mapping', () => {
     expect(filterProjectRows(rows, 'chart', 'all', 'recent').map(r => r.slug)).toEqual(['alpha']);
     expect(filterProjectRows(rows, '', 'draft', 'recent').map(r => r.slug)).toEqual(['alpha']);
     expect(filterProjectRows(rows, '', 'attention', 'recent').map(r => r.slug)).toEqual(['conflict']);
-    expect(filterProjectRows(rows, '', 'all', 'name').map(r => r.slug)).toEqual(['alpha', 'conflict', 'zebra']);
+    expect(filterProjectRows(rows, '', 'all', 'name').map(r => r.slug)).toEqual(['conflict', 'alpha', 'zebra']);
+    expect(filterProjectRows(rows, '', 'all', 'recent')[0]!.slug).toBe('conflict');
     expect(rows.find(r => r.slug === 'alpha')?.nextAction).toBe('First action');
-    expect(rows.find(r => r.slug === 'conflict')?.nextAction).toBe('Next action unavailable');
+    expect(rows.find(r => r.slug === 'conflict')?.nextAction).toBe('Choose a version first');
   });
 
   it('refuses a list filter it does not understand', () => {

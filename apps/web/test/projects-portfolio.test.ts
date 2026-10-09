@@ -34,16 +34,16 @@ function harness(api: (route: string, options?: {json?: Record<string,unknown>})
     const nodes=new Map();const $=id=>{if(!nodes.has(id))nodes.set(id,makeNode());return nodes.get(id)};
     const el=(tag,cls,text)=>makeNode(text);const document={createElementNS:()=>makeNode()};
     const status={unlocked:true};let projectLoadSequence=0,projectActionSequence=0,projectDecisionSequence=0;
-    let projectIndex=[],currentProjectSlug='',currentProject=null,projectReview=null,projectReturnFocus=null;
+    let projectIndex=[],currentProjectSlug='',currentProject=null,projectReview=null,projectReturnFocus=null,projectFocusDetail=false;
     let projectNavigation={mode:'home'},projectQuery='',projectSort='recent',projectFilter='all';
     let projectDecisions=new Map(),projectDecisionsLoaded=true,pendingDecisionSlug='';const projectPendingOperations=new Map();
     const closeGuardDialog=()=>{};const projectAnnounce=()=>{};const projectFocusPanel=()=>{};const projectCloseButton=label=>el('button','btn',label);const renderProjectReceipt=()=>{projectReview=null};const renderProjectConflict=()=>{};
     const showProjectsMirror=()=>{};const renderProjectDetail=project=>$('projectDetail').replaceChildren(makeNode(project.status));const openProjectDecision=()=>{};
-    ${['projectLines','projectDate','projectName','projectPill','filteredProjects','invalidateProjectView','showProjectsHome','renderProjectsEmpty','renderProjectChoices','loadProject','loadProjects','openProjectFromList','noteProjectDecisions','refreshProjectDecisions','clearProjectsSensitive','updateProjectOverview','projectWriteViewCurrent','projectWriteCurrent','saveProjectDraft','renderProjectCorrection','projectOperation','projectField'].map(source).join('\n')}
+    ${['projectLines','projectDate','projectName','projectPill','projectNeedsAttention','filteredProjects','invalidateProjectView','showProjectsHome','renderProjectsEmpty','renderProjectChoices','loadProject','loadProjects','openProjectFromList','noteProjectDecisions','refreshProjectDecisions','clearProjectsSensitive','updateProjectOverview','projectWriteViewCurrent','projectWriteCurrent','saveProjectDraft','renderProjectCorrection','projectOperation','projectField'].map(source).join('\n')}
     this.draft=()=>{projectReview={mode:'checkpoint',slug:currentProjectSlug,vault_id:'vault',expected_revision:currentProject.revision,status:'Changed',completed:'Saved',next_actions:'New action',open_questions:'',decision:''}};
     this.save=()=>saveProjectDraft(makeNode(),makeNode());
     this.edit=()=>{renderProjectCorrection(currentProject);const panel=$('projectLive').children[0];panel.children[1].children[1].children[1].value='Changed';return panel.children[3].children[1].click()};
-    this.load=loadProjects;this.open=loadProject;this.back=showProjectsHome;this.clear=clearProjectsSensitive;this.nodes=nodes;this.refresh=refreshProjectDecisions;
+    this.load=loadProjects;this.open=loadProject;this.openFromList=openProjectFromList;this.back=showProjectsHome;this.clear=clearProjectsSensitive;this.nodes=nodes;this.refresh=refreshProjectDecisions;
     this.lock=()=>{status.unlocked=false;clearProjectsSensitive()};this.leave=()=>{$('view-projects').hidden=true;invalidateProjectView()};
     this.filter=(query,filter='all',sort='recent')=>{projectQuery=query;projectFilter=filter;projectSort=sort;renderProjectChoices()};
     this.state=()=>({navigation:projectNavigation,query:projectQuery,filter:projectFilter,sort:projectSort,index:projectIndex,decisions:[...projectDecisions]});
@@ -65,13 +65,32 @@ describe('Projects Portfolio navigation', () => {
     await app.load();
     expect(calls.filter(route => route.startsWith('/api/projects'))).toEqual(['/api/projects']);
     expect(app.state().navigation).toEqual({mode:'home'});
-    expect(app.slugs()).toEqual(['zebra','alpha','conflict']);
+    expect(app.slugs()).toEqual(['conflict','zebra','alpha']);
     app.filter('compass');expect(app.slugs()).toEqual(['zebra']);
     app.filter('later paragraph');expect(app.slugs()).toEqual(['zebra']);
     app.filter('', 'draft');expect(app.slugs()).toEqual(['alpha']);
     app.needs('zebra');app.filter('', 'attention');expect(app.slugs()).toEqual(['zebra','conflict']);
     expect(app.nodes.get('projectsAttentionCount').textContent).toBe('2');
-    app.filter('', 'all', 'name');expect(app.slugs()).toEqual(['alpha','conflict','zebra']);
+    app.filter('', 'all', 'name');expect(app.slugs()).toEqual(['conflict','zebra','alpha']);
+  });
+
+  it('puts projects that need a choice first under both sorts', async () => {
+    const app=harness(async()=>({projects:rows}));
+    await app.load();
+    expect(app.slugs()).toEqual(['conflict','zebra','alpha']);
+    app.filter('', 'all', 'name');expect(app.slugs()).toEqual(['conflict','alpha','zebra']);
+    app.needs('zebra');expect(app.slugs()).toEqual(['conflict','zebra','alpha']);
+    app.filter('', 'all', 'recent');expect(app.slugs()).toEqual(['zebra','conflict','alpha']);
+  });
+
+  it('moves focus to the project title only when opened from the list', async () => {
+    const app=harness(async route=>route==='/api/projects'?{projects:rows}:{...rows[0],revision:'old'});
+    await app.load();
+    await app.open('zebra');
+    expect(app.nodes.get('projectDetailHeading')?.focused).toBeFalsy();
+    app.back(false);
+    await app.openFromList('zebra');
+    expect(app.nodes.get('projectDetailHeading').focused).toBe(true);
   });
 
   it('preserves search and filters on Back and ignores a detail arriving after Back', async () => {
@@ -92,7 +111,7 @@ describe('Projects Portfolio navigation', () => {
     const app=harness(async route=>route==='/api/projects'?{projects:rows}:route.endsWith('/checkpoint')?{current:saved,replayed:false}:{...rows[0],revision:'old'});
     await app.load();await app.open('zebra');app.draft();await app.save();app.back(false);
     expect(app.state().index.find((project:{project:string})=>project.project==='zebra')).toMatchObject({status:saved.status,next_actions:saved.next_actions,updated_at:saved.updated_at,revision:saved.revision,last_writer_host:'northkeep-app'});
-    expect(app.slugs()[0]).toBe('zebra');
+    expect(app.slugs()).toEqual(['conflict','zebra','alpha']);
   });
 
   it('keeps the portfolio open when an edit finishes after Back, and refreshes its saved state', async () => {

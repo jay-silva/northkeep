@@ -26,9 +26,9 @@ NorthKeep works two ways:
 
 ## Local workspace
 
-Projects opens first, with a searchable portfolio of current status and next actions. Sort by recent saves or name, and filter projects that need attention or are drafts. Memories groups your vault by collection. A project brings together current status, next actions, decisions, questions and file references, with Resume, Checkpoint and Wrap up. Local project saves check for newer changes before writing and retain saved versions. File references do not open or verify their targets. Review handles memory curation; Connect groups assistant setup.
+Projects opens first, with a searchable portfolio of current status and next actions. Sort by recent saves or name, and filter projects that need attention or are drafts. Projects that need you to choose between saved versions are listed first under either sort. Memories groups your vault by collection. A project brings together current status, next actions, decisions, questions and file references, with Resume, Checkpoint and Wrap up. Local project saves check for newer changes before writing and retain saved versions. File references do not open or verify their targets. Review handles memory curation; Connect groups assistant setup.
 
-Local project saves and the hosted connector's project updates check the revision they started from. The Portfolio home is awaiting owner acceptance. On the phone, attention currently covers conflicting local documents; cloud versions waiting for a decision are reviewed on the Mac.
+Local project saves and the hosted connector's project updates check the revision they started from. On the phone, attention currently covers conflicting local documents; cloud versions waiting for a decision are reviewed on the Mac.
 
 ## Install
 
