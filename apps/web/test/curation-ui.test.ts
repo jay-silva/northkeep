@@ -7,7 +7,7 @@ const html = fs.readFileSync(path.resolve(path.dirname(fileURLToPath(import.meta
 
 describe('memory curation UI', () => {
   it('exposes the approved task navigation while keeping legacy chat inert', () => {
-    expect(html).toMatch(/<button data-view="memories" class="active">[\s\S]*?Memories[\s\S]*?<\/button>/);
+    expect(html).toMatch(/<button data-view="memories">[\s\S]*?Memories[\s\S]*?<\/button>/);
     expect(html).toMatch(/<button data-view="curation">[\s\S]*?Review[\s\S]*?<\/button>/);
     expect(html).not.toContain('data-view="collections"');
     expect(html).not.toContain('data-view="converse"');

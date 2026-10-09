@@ -30,13 +30,16 @@ describe('Projects handoff UI', () => {
   });
 
   it('adds Projects to the established task navigation and responsive workspace', () => {
-    expect(html).toMatch(/<button data-view="projects">[\s\S]*?<svg[\s\S]*?Projects<\/button>/);
-    expect(html).toContain('<section id="view-projects" hidden>');
+    expect(html).toMatch(/<button data-view="projects" class="active">[\s\S]*?<svg[\s\S]*?Projects<\/button>/);
+    expect(html).toContain('<section id="view-projects">');
+    expect(html).toContain('<section id="view-memories" hidden>');
+    expect(html.indexOf('data-view="projects"')).toBeLessThan(html.indexOf('data-view="memories"'));
+    expect(html).toContain('id="projectSearch"');
+    expect(html).toContain('id="projectsBack"');
     expect(html).toContain("'memories', 'projects', 'curation'");
     expect(html).toContain("else if (v === 'projects') { loadProjects(); renderContractOffer(); }");
-    expect(html).toContain('.projects-workspace { display:grid; grid-template-columns:260px minmax(0,1fr);');
     expect(html).toContain('.projects-workspace { display:block; min-height:0; }');
-    expect(html).toContain('.projects-mobile-select { display:block; }');
+    expect(html).toContain('#view-projects [hidden] { display:none !important; }');
     expect(html).toContain('#view-projects .project-detail-head h2');
     expect(html).toContain('font:500 27px/1.15 var(--serif)');
   });
@@ -79,7 +82,7 @@ describe('Projects handoff UI', () => {
     vm.runInContext(`
       let projectReview={mode:'checkpoint',slug:'trail-journal',vault_id:'vault',expected_revision:'original-revision',status:'Exact status',completed:'Exact completed',next_actions:'',open_questions:'  Keep leading space?\\n- Keep this marker',decision:''};
       const projectPendingOperations=new Map(); let projectActionSequence=0; const status={unlocked:false}; const currentProjectSlug='trail-journal';
-      const $=()=>({hidden:true}); const renderProjectChoices=()=>{}; const renderProjectDetail=()=>{}; const renderProjectReceipt=()=>{}; const renderProjectConflict=()=>{};
+      const $=()=>({hidden:true}); const renderProjectChoices=()=>{}; const renderProjectDetail=()=>{}; const renderProjectReceipt=()=>{}; const renderProjectConflict=()=>{}; const projectWriteCurrent=async()=>false;
       ${functionSource('saveProjectDraft')}
       this.run=()=>saveProjectDraft({disabled:false},{textContent:''});
     `, context);
@@ -118,7 +121,8 @@ describe('Projects handoff UI', () => {
   it('uses readable names and truthful project state', () => {
     expect(projects).toContain('function projectName(slug)');
     expect(projects).toContain("projectName(item.project)");
-    expect(projects).toContain("item.conflict ? 'Needs attention' : 'Project'");
+    expect(projects).toContain("decide ? 'Needs your decision' : 'Needs attention'");
+    expect(projects).not.toContain("'In progress'");
     expect(projects).toContain("project.files.some((file) => file.access === 'unavailable')");
     expect(projects).toContain("unavailable ? 'Needs attention' : 'Ready to resume'");
     expect(projects).toContain("'Updated ' + projectDate(project.updated_at)");
@@ -217,7 +221,12 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
   it('badges draft rows only, and shows the last writer host when one is recorded', () => {
     const setup = `
       const lists = { projectList: el('div'), projectSelect: el('select'), projectsSummaryMeta: { textContent: '' } };
-      const $ = (id) => lists[id];
+      const $ = (id) => lists[id] || (lists[id] = Object.assign(el('div'), { querySelectorAll: () => [] }));
+      const document = { createElementNS: () => el('svg') };
+      const projectQuery = '', projectFilter = 'all', projectSort = 'recent';
+      ${functionSource('projectDate')}
+      ${functionSource('projectLines')}
+      ${functionSource('filteredProjects')}
       const currentProjectSlug = '';
       const loadProject = () => {};
       const openProjectFromList = () => {};
@@ -238,7 +247,7 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
     expect(plainRow).not.toContain('last:');
     expect(draftRow).not.toContain('Needs your decision');
     expect(plainRow).toContain('Needs your decision');
-    expect(meta).toBe('2 projects · 1 needs your decision');
+    expect(meta).toBe('2 projects');
   });
 
   const historySetup = `

@@ -4,7 +4,6 @@ import { Redirect } from 'expo-router';
 import { useVaultSession } from '../src/lib/vault-session';
 import { colors } from '../src/ui';
 
-/** Route dispatcher: onboarding for a fresh install, unlock when linked, memories when open. */
 export default function Index() {
   const { status } = useVaultSession();
   if (status === 'loading') {
@@ -16,5 +15,5 @@ export default function Index() {
   }
   if (status === 'unlinked') return <Redirect href="/onboarding" />;
   if (status === 'locked') return <Redirect href="/unlock" />;
-  return <Redirect href="/memories" />;
+  return <Redirect href="/projects" />;
 }

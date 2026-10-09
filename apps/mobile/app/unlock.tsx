@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -34,27 +34,26 @@ export default function Unlock() {
   const [busy, setBusy] = useState(false);
   const biometricTriedRef = useRef(false);
 
+  const tryBiometrics = useCallback(async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const ok = await session.unlockWithBiometrics();
+      if (ok) router.replace('/projects');
+    } catch (err) {
+      setError(describe(err));
+    } finally {
+      setBusy(false);
+    }
+  }, [session.unlockWithBiometrics]);
+
   // Offer the biometric path immediately when a cached key exists.
   useEffect(() => {
     if (session.biometricCacheEnabled && !biometricTriedRef.current) {
       biometricTriedRef.current = true;
       void tryBiometrics();
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.biometricCacheEnabled]);
-
-  async function tryBiometrics() {
-    setError(null);
-    setBusy(true);
-    try {
-      const ok = await session.unlockWithBiometrics();
-      if (ok) router.replace('/memories');
-    } catch (err) {
-      setError(describe(err));
-    } finally {
-      setBusy(false);
-    }
-  }
+  }, [session.biometricCacheEnabled, tryBiometrics]);
 
   async function onUnlock() {
     setError(null);
@@ -62,7 +61,7 @@ export default function Unlock() {
     try {
       await session.unlockWithPassphrase(passphrase, { enableBiometricCache: enableBiometrics });
       setPassphrase('');
-      router.replace('/memories');
+      router.replace('/projects');
     } catch (err) {
       setError(describe(err));
     } finally {

@@ -18,8 +18,8 @@ type Tab = {
  * so the "which routes show the bar" check and the tabs stay in lock-step.
  */
 const TABS: Tab[] = [
-  { route: '/memories', label: 'Memories', icon: 'albums-outline', activeIcon: 'albums' },
   { route: '/projects', label: 'Projects', icon: 'folder-open-outline', activeIcon: 'folder-open' },
+  { route: '/memories', label: 'Memories', icon: 'albums-outline', activeIcon: 'albums' },
   { route: '/settings', label: 'Settings', icon: 'settings-outline', activeIcon: 'settings' },
 ];
 
@@ -75,6 +75,6 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     paddingTop: 9,
   },
-  tab: { flex: 1, alignItems: 'center', gap: 3 },
+  tab: { flex: 1, alignItems: 'center', gap: 3, minHeight: 44 },
   label: { ...type.caption, fontWeight: '600' },
 });

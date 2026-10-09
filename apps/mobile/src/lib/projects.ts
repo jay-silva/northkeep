@@ -2,7 +2,7 @@ import {
   ProjectHandoffError,
   boardStatusLine,
   getProjectView,
-  listProjectViews,
+  listProjectOverview,
   splitLogEntries,
   type ListFilter,
   type MemoryEntry,
@@ -10,13 +10,7 @@ import {
   type ProjectVaultReader,
 } from '@northkeep/core';
 
-/**
- * Read-only project data for the Projects tab. Everything is derived from the
- * session's live entries, the same array the Memories tab shows, so the phone
- * reads nothing it could not already read. Core's own listProjectViews and
- * getProjectView do the parsing, so the phone and the Mac agree on what a
- * project document says.
- */
+/** The phone derives its overview from already-loaded live entries; it never reads connector state to draw a badge. */
 
 const HANDLED_FILTER_KEYS = new Set(['type', 'scope', 'allowedScopes', 'includeSuperseded', 'includeForgotten']);
 
@@ -55,11 +49,15 @@ export interface ProjectRow {
   appName: string | null;
   /** Extra plain-language notes: draft, imported, conflicting copies. */
   notes: string[];
+  nextAction: string;
+  searchText: string;
+  conflict: boolean;
+  draft: boolean;
 }
 
 /** Every project on this phone, newest update first; conflicting projects last. */
 export function projectRows(entries: readonly MemoryEntry[]): ProjectRow[] {
-  const rows = listProjectViews(entriesReader(entries)).map((p): ProjectRow => {
+  const rows = listProjectOverview(entriesReader(entries)).map((p): ProjectRow => {
     const notes: string[] = [];
     if (p.conflict) notes.push('Has more than one current document. Open it on your Mac to fix.');
     if (p.draft) notes.push('Draft, not yet confirmed');
@@ -72,6 +70,10 @@ export function projectRows(entries: readonly MemoryEntry[]): ProjectRow[] {
       updatedAt: p.updated_at,
       appName: p.last_writer_host,
       notes,
+      nextAction: p.conflict ? 'Next action unavailable' : textBlocks(p.next_actions ?? '').find(block => block.text.trim())?.text ?? 'No next action recorded',
+      searchText: [p.project, p.title, p.status, p.next_actions].filter(Boolean).join(' ').toLocaleLowerCase(),
+      conflict: p.conflict,
+      draft: p.draft,
     };
   });
   return rows.sort((a, b) => {
@@ -80,6 +82,17 @@ export function projectRows(entries: readonly MemoryEntry[]): ProjectRow[] {
     if (b.updatedAt === null) return -1;
     return a.updatedAt < b.updatedAt ? 1 : -1;
   });
+}
+
+export function filterProjectRows(rows: readonly ProjectRow[], query: string, filter: 'all' | 'attention' | 'draft', sort: 'recent' | 'name'): ProjectRow[] {
+  return rows.filter(row => row.searchText.includes(query.trim().toLocaleLowerCase()) &&
+    (filter === 'all' || (filter === 'attention' ? row.conflict : row.draft))).sort((a, b) => {
+      if (sort === 'name') return a.name.localeCompare(b.name) || a.slug.localeCompare(b.slug);
+      if (a.updatedAt === b.updatedAt) return a.slug.localeCompare(b.slug);
+      if (a.updatedAt === null) return 1;
+      if (b.updatedAt === null) return -1;
+      return a.updatedAt < b.updatedAt ? 1 : -1;
+    });
 }
 
 /** A section body split for display: bullet lines become items, other text stays a paragraph. */
