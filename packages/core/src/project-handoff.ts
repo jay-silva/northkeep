@@ -86,6 +86,8 @@ export interface ProjectView {
 /** `imported`: the current head was written by `projects import`, so `updated_at` is the import time, not the work's (ADR 0054). */
 export interface ProjectSummary { project:string; scope:string; title:string|null; status:string|null; revision:string|null; updated_at:string|null; conflict:boolean; last_writer_host:string|null; draft:boolean; imported:boolean }
 
+export type ProjectOverview = ProjectSummary & { next_actions: string | null };
+
 export interface ProjectCheckpointRequest {
   vault_id:string; project:string; mode:ProjectHandoffMode; operation_id:string; expected_revision:string;
   status:string; completed:string; next_actions:string; decision?:string; open_questions?:string; files?:ProjectFileReference[];
@@ -318,7 +320,22 @@ export function getProjectRevision(vault:ProjectVaultReader,project:string,revis
   const mode=projectReceiptMode(row);
   return {id:row.id,updated_at:row.created_at,content:row.content,...(mode?{mode}:{})};
 }
+export function listProjectOverview(vault:ProjectVaultReader,allowedScopes?:string[]):ProjectOverview[]{
+  const groups=new Map<string,MemoryEntry[]>();
+  for(const entry of vault.list({type:'working',allowedScopes})){
+    const project=parseProjectSlug(entry.scope);
+    if(project){const heads=groups.get(project)||[];heads.push(entry);groups.set(project,heads);}
+  }
+  return [...groups].sort(([a],[b])=>a.localeCompare(b)).map(([project,heads])=>{
+    const scope=projectScope(project);
+    if(heads.length!==1)return {project,scope,title:null,status:null,next_actions:null,revision:null,updated_at:null,conflict:true,last_writer_host:null,draft:false,imported:false};
+    const head=heads[0]!;
+    const doc=parseProjectDoc(head.content);
+    return {project,scope,title:getProjectTitle(doc),status:getProjectSection(doc,'Current Status')||null,next_actions:getProjectSection(doc,'Next Actions')||null,revision:head.id,updated_at:head.created_at,conflict:false,last_writer_host:readProjectProvenance(head)?.host??null,draft:isProjectDraft(doc),imported:head.source===PROJECT_IMPORT_SOURCE};
+  });
+}
+
 export function listProjectViews(vault:ProjectVaultReader,allowedScopes?:string[]):ProjectSummary[]{
-  const groups=new Map<string,MemoryEntry[]>(); for(const e of vault.list({type:'working',allowedScopes})){const p=parseProjectSlug(e.scope);if(p){const a=groups.get(p)||[];a.push(e);groups.set(p,a);}}
-  return [...groups].sort(([a],[b])=>a.localeCompare(b)).map(([project,heads])=>heads.length!==1?{project,scope:projectScope(project),title:null,status:null,revision:null,updated_at:null,conflict:true,last_writer_host:null,draft:false,imported:false}:(()=>{const head=heads[0]!;const doc=parseProjectDoc(head.content);return {project,scope:projectScope(project),title:getProjectTitle(doc),status:getProjectSection(doc,'Current Status')||null,revision:head.id,updated_at:head.created_at,conflict:false,last_writer_host:readProjectProvenance(head)?.host??null,draft:isProjectDraft(doc),imported:head.source===PROJECT_IMPORT_SOURCE};})());
+  return listProjectOverview(vault,allowedScopes).map(({project,scope,title,status,revision,updated_at,conflict,last_writer_host,draft,imported})=>
+    ({project,scope,title,status,revision,updated_at,conflict,last_writer_host,draft,imported}));
 }

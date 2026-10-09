@@ -172,11 +172,27 @@ describe('project list mirror line (ADR 0053 Decision 7)', () => {
   });
 
   it('is null when no mirror is configured', async () => {
-    const vault = { getVaultId: () => 'synthetic', list: () => [] };
+    const vault = { getVaultId: () => 'synthetic', list: () => [], sharedScopes: () => [] };
     const session = { isUnlocked: () => true, withVault: async (fn: (v: typeof vault) => unknown) => fn(vault) } as never;
     const response = await handleProjectsApi(session, 'GET', '/api/projects', Buffer.alloc(0));
     expect(response?.status).toBe(200);
     expect(response?.body).toMatchObject({ vault_id: 'synthetic', projects: [], mirror: null });
+  });
+
+  it('adds actions and known sharing to the local overview while excluding full documents', async () => {
+    const vaultPath = path.join(root, 'portfolio.nkv');
+    const vault = Vault.create({ path:vaultPath,passphrase:'synthetic portfolio',deviceSecret:generateDeviceSecret(),kdf:KDF_INTERACTIVE });
+    vault.updateProject({project:'alpha',expected_revision:null,status:'Ready',next_actions:'- Read the chart'});
+    const common = listProjectViews(vault);
+    const session = {isUnlocked:()=>true,withVault:async(fn:(v:Vault)=>unknown)=>fn(vault)} as never;
+    try {
+      const response = await handleProjectsApi(session,'GET','/api/projects',Buffer.alloc(0));
+      expect(response?.status).toBe(200);
+      const projects=(response?.body as {projects:Record<string,unknown>[]}).projects;
+      expect(projects[0]).toMatchObject({...common[0],next_actions:'- Read the chart',shared:false});
+      expect(projects[0]).not.toHaveProperty('content');expect(projects[0]).not.toHaveProperty('history');
+      expect(common[0]).not.toHaveProperty('next_actions');expect(common[0]).not.toHaveProperty('shared');
+    } finally {vault.close()}
   });
 
   it('carries the summary line once a mirror is configured, with no path in it', async () => {

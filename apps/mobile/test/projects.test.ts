@@ -10,7 +10,7 @@ import {
   generateDeviceSecret,
   listProjectViews,
 } from '@northkeep/core';
-import { entriesReader, projectDetail, projectRows, textBlocks, updatedLabel } from '../src/lib/projects.js';
+import { entriesReader, filterProjectRows, projectDetail, projectRows, textBlocks, updatedLabel } from '../src/lib/projects.js';
 import { DEMO_PASSPHRASE, demoSeed } from '../src/lib/demo-vault.js';
 
 /**
@@ -72,7 +72,7 @@ describe('projects data mapping', () => {
     const rows = projectRows(entries());
     // beta was written last, so its created_at is newest.
     expect(rows.map((r) => r.slug)).toEqual(['beta', 'alpha']);
-    expect(rows[1]).toEqual({
+    expect(rows[1]).toMatchObject({
       slug: 'alpha',
       name: 'alpha',
       statusLine: 'Alpha is going fine.',
@@ -104,6 +104,21 @@ describe('projects data mapping', () => {
     writeProject('beta', 'B');
     vault.remember({ content: 'x', type: 'semantic', scope: 'work' });
     expect(listProjectViews(entriesReader(entries()))).toEqual(listProjectViews(vault));
+  });
+
+  it('searches full saved status and actions, filters verified local states, and sorts by name', () => {
+    writeProject('zebra', 'First line.\nHidden search phrase.');
+    const content = applyProjectUpdate('', { project: 'alpha', expected_revision: null, title: 'Alpine', status: 'Ready', next_actions: '- First action\n- Find the chart', draft: true }).content;
+    vault.remember({ type: 'working', scope: 'project:alpha', content });
+    writeProject('conflict', 'One'); writeProject('conflict', 'Two');
+    const rows = projectRows(entries());
+    expect(filterProjectRows(rows, 'hidden search', 'all', 'recent').map(r => r.slug)).toEqual(['zebra']);
+    expect(filterProjectRows(rows, 'chart', 'all', 'recent').map(r => r.slug)).toEqual(['alpha']);
+    expect(filterProjectRows(rows, '', 'draft', 'recent').map(r => r.slug)).toEqual(['alpha']);
+    expect(filterProjectRows(rows, '', 'attention', 'recent').map(r => r.slug)).toEqual(['conflict']);
+    expect(filterProjectRows(rows, '', 'all', 'name').map(r => r.slug)).toEqual(['alpha', 'conflict', 'zebra']);
+    expect(rows.find(r => r.slug === 'alpha')?.nextAction).toBe('First action');
+    expect(rows.find(r => r.slug === 'conflict')?.nextAction).toBe('Next action unavailable');
   });
 
   it('refuses a list filter it does not understand', () => {
@@ -212,7 +227,7 @@ describe('demo project', () => {
       vault.close();
 
       const rows = projectRows(entries);
-      expect(rows).toEqual([
+      expect(rows).toMatchObject([
         {
           slug: 'lantern-demo',
           name: 'Lantern (demo project)',

@@ -1,6 +1,6 @@
 /** Projects routes inherit server.ts session-token checks and require an unlocked vault. */
 import fs from 'node:fs';
-import { getProjectView, listProjectViews, loadDeviceSecret, northkeepHome, PROJECT_REVISION_SUMMARY_LIMIT, ProjectHandoffError, projectScope, readProjectProvenance, type ProjectCheckpointRequest, type ProjectUpdateRequest, type Vault } from '@northkeep/core';
+import { getProjectView, listProjectOverview, loadDeviceSecret, northkeepHome, PROJECT_REVISION_SUMMARY_LIMIT, ProjectHandoffError, projectScope, readProjectProvenance, type ProjectCheckpointRequest, type ProjectUpdateRequest, type Vault } from '@northkeep/core';
 import { loadConnectorConfig, unshareScope } from '@northkeep/sync';
 import { readMirrorSummary } from '@northkeep/mcp-server';
 import type { UiSession } from './session.js';
@@ -46,7 +46,10 @@ export async function handleProjectsApi(session: UiSession, method: string, rout
   try {
     if (!session.isUnlocked()) return reply(423, { error: 'Vault is locked.', code: 'locked' });
     if (method === 'GET' && route === '/api/projects') {
-      return reply(200, await session.withVault(vault => ({ vault_id: vault.getVaultId(), projects: listProjectViews(vault), mirror: mirrorSummary(vault) })));
+      return reply(200, await session.withVault(vault => {
+        const shared = new Set(vault.sharedScopes());
+        return { vault_id: vault.getVaultId(), projects: listProjectOverview(vault).map(project => ({ ...project, shared: shared.has(project.scope) })), mirror: mirrorSummary(vault) };
+      }));
     }
     if (route === '/api/projects/compact') {
       // ADR 0051 Decision 2. Preview by default: the caller asks for a real run
