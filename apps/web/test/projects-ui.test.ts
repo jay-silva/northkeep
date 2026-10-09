@@ -124,7 +124,7 @@ describe('Projects handoff UI', () => {
     expect(projects).toContain("decide ? 'Needs your decision' : 'Needs attention'");
     expect(projects).not.toContain("'In progress'");
     expect(projects).toContain("project.files.some((file) => file.access === 'unavailable')");
-    expect(projects).toContain("unavailable ? 'Needs attention' : 'Ready to resume'");
+    expect(projects).toContain("unavailable ? 'File missing' : 'Ready to resume'");
     expect(projects).toContain("'Updated ' + projectDate(project.updated_at)");
     expect(projects).not.toContain("' · revision ' + String(project.revision");
   });
@@ -226,6 +226,7 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
       const projectQuery = '', projectFilter = 'all', projectSort = 'recent';
       ${functionSource('projectDate')}
       ${functionSource('projectLines')}
+      ${functionSource('projectNeedsAttention')}
       ${functionSource('filteredProjects')}
       const currentProjectSlug = '';
       const loadProject = () => {};
@@ -240,7 +241,8 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
       ${functionSource('renderProjectChoices')}`;
     const { rows, meta } = run(setup, 'renderProjectChoices(); return { rows: lists.projectList.children, meta: lists.projectsSummaryMeta.textContent };') as { rows: { children: unknown[] }[]; meta: string };
     expect(rows).toHaveLength(2);
-    const draftRow = textOf(rows[0]!), plainRow = textOf(rows[1]!);
+    const [plainRow, draftRow] = rows.map(row => textOf(row));
+    expect(plainRow).toContain('Trail Journal');
     expect(draftRow).toContain('Draft');
     expect(draftRow).toContain('last: claude-code');
     expect(plainRow).not.toContain('Draft');
@@ -248,6 +250,40 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
     expect(draftRow).not.toContain('Needs your decision');
     expect(plainRow).toContain('Needs your decision');
     expect(meta).toBe('2 projects');
+  });
+
+  it('badges only shared rows and shows a version conflict as a choice, not a missing value', () => {
+    const setup = `
+      const lists = { projectList: el('div'), projectSelect: el('select'), projectsSummaryMeta: { textContent: '' } };
+      const $ = (id) => lists[id] || (lists[id] = Object.assign(el('div'), { querySelectorAll: () => [] }));
+      const document = { createElementNS: () => el('svg') };
+      const projectQuery = '', projectFilter = 'all', projectSort = 'recent';
+      ${functionSource('projectDate')}
+      ${functionSource('projectLines')}
+      ${functionSource('projectNeedsAttention')}
+      ${functionSource('filteredProjects')}
+      const currentProjectSlug = '';
+      const openProjectFromList = () => {};
+      const projectDecisions = new Map();
+      ${functionSource('projectName')}
+      ${functionSource('projectPill')}
+      const projectIndex = [
+        { project: 'private-one', title: 'Private One', status: 'Ready', updated_at: '2026-09-02', conflict: false, draft: false, shared: false },
+        { project: 'shared-one', title: 'Shared One', status: 'Ready', updated_at: '2026-09-01', conflict: false, draft: false, shared: true },
+        { project: 'paper-atlas', title: null, status: null, next_actions: null, updated_at: null, conflict: true, draft: false, shared: false },
+      ];
+      ${functionSource('renderProjectChoices')}`;
+    const { rows, notice } = run(setup, 'renderProjectChoices(); return { rows: lists.projectList.children, notice: lists.projectsAttention };') as { rows: { children: unknown[] }[]; notice: { children: unknown[] } };
+    const [conflict, privateRow, sharedRow] = rows.map(row => textOf(row));
+    expect(conflict).toContain('Paper Atlas');
+    expect(conflict).toContain('More than one version is saved. Open it to choose one.');
+    expect(conflict).toContain('Choose a version first');
+    expect(conflict).not.toMatch(/unavailable/i);
+    expect(privateRow).toContain('Private One');
+    expect(privateRow.split('\n')).not.toContain('Private');
+    expect(privateRow).not.toContain('Shared with connected apps');
+    expect(sharedRow).toContain('Shared with connected apps');
+    expect(textOf(notice)).toBe('1 project needs you to choose a version\nMore than one version of it is saved. Open it to pick the one to keep.\nShow it');
   });
 
   const historySetup = `

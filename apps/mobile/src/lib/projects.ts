@@ -55,44 +55,43 @@ export interface ProjectRow {
   draft: boolean;
 }
 
-/** Every project on this phone, newest update first; conflicting projects last. */
+/** Conflicting projects first, since they need a choice; then newest update or name. */
+function compareRows(a: ProjectRow, b: ProjectRow, sort: 'recent' | 'name'): number {
+  if (a.conflict !== b.conflict) return a.conflict ? -1 : 1;
+  if (sort === 'name') return a.name.localeCompare(b.name) || a.slug.localeCompare(b.slug);
+  if (a.updatedAt === b.updatedAt) return a.slug.localeCompare(b.slug);
+  if (a.updatedAt === null) return 1;
+  if (b.updatedAt === null) return -1;
+  return a.updatedAt < b.updatedAt ? 1 : -1;
+}
+
+/** Every project on this phone: conflicting projects first, then newest update first. */
 export function projectRows(entries: readonly MemoryEntry[]): ProjectRow[] {
   const rows = listProjectOverview(entriesReader(entries)).map((p): ProjectRow => {
     const notes: string[] = [];
-    if (p.conflict) notes.push('Has more than one current document. Open it on your Mac to fix.');
+    if (p.conflict) notes.push('Open NorthKeep on your Mac to choose which version to keep.');
     if (p.draft) notes.push('Draft, not yet confirmed');
     if (p.imported) notes.push('Imported; the date is when it was imported');
     const line = p.status === null ? '' : boardStatusLine(p.status);
     return {
       slug: p.project,
       name: p.title ?? p.project,
-      statusLine: line.length > 0 ? line : p.conflict ? 'Status unavailable' : 'No status yet',
+      statusLine: line.length > 0 ? line : p.conflict ? 'More than one version is saved' : 'No status yet',
       updatedAt: p.updated_at,
       appName: p.last_writer_host,
       notes,
-      nextAction: p.conflict ? 'Next action unavailable' : textBlocks(p.next_actions ?? '').find(block => block.text.trim())?.text ?? 'No next action recorded',
+      nextAction: p.conflict ? 'Choose a version first' : textBlocks(p.next_actions ?? '').find(block => block.text.trim())?.text ?? 'No next action recorded',
       searchText: [p.project, p.title, p.status, p.next_actions].filter(Boolean).join(' ').toLocaleLowerCase(),
       conflict: p.conflict,
       draft: p.draft,
     };
   });
-  return rows.sort((a, b) => {
-    if (a.updatedAt === b.updatedAt) return a.slug.localeCompare(b.slug);
-    if (a.updatedAt === null) return 1;
-    if (b.updatedAt === null) return -1;
-    return a.updatedAt < b.updatedAt ? 1 : -1;
-  });
+  return rows.sort((a, b) => compareRows(a, b, 'recent'));
 }
 
 export function filterProjectRows(rows: readonly ProjectRow[], query: string, filter: 'all' | 'attention' | 'draft', sort: 'recent' | 'name'): ProjectRow[] {
   return rows.filter(row => row.searchText.includes(query.trim().toLocaleLowerCase()) &&
-    (filter === 'all' || (filter === 'attention' ? row.conflict : row.draft))).sort((a, b) => {
-      if (sort === 'name') return a.name.localeCompare(b.name) || a.slug.localeCompare(b.slug);
-      if (a.updatedAt === b.updatedAt) return a.slug.localeCompare(b.slug);
-      if (a.updatedAt === null) return 1;
-      if (b.updatedAt === null) return -1;
-      return a.updatedAt < b.updatedAt ? 1 : -1;
-    });
+    (filter === 'all' || (filter === 'attention' ? row.conflict : row.draft))).sort((a, b) => compareRows(a, b, sort));
 }
 
 /** A section body split for display: bullet lines become items, other text stays a paragraph. */
@@ -173,7 +172,7 @@ export function projectDetail(entries: readonly MemoryEntry[], slug: string): Pr
     };
   } catch (err) {
     if (err instanceof ProjectHandoffError && err.code === 'project_conflict') {
-      return { ok: false, message: 'This project has more than one current document. Open it on your Mac to fix it.' };
+      return { ok: false, message: 'More than one version of this project is saved. Open NorthKeep on your Mac to choose which one to keep.' };
     }
     if (err instanceof ProjectHandoffError && err.code === 'invalid_request') {
       return { ok: false, message: 'This project document cannot be read here. Open it on your Mac to fix it.' };

@@ -111,7 +111,9 @@
     nav::-webkit-scrollbar { display:none; }
     nav button { width: auto; flex:none; }
     nav button svg { display:none; }
-    #mainNav { flex-wrap:wrap; }
+    /* One scrollable strip; wrap only to give open Connect children their own line. */
+    #mainNav { flex-wrap:nowrap; }
+    #mainNav:has(#connectNavChildren:not([hidden])) { flex-wrap:wrap; }
     #connectNavChildren { order:5; width:100%; display:flex; border-top:1px solid var(--line); padding-top:4px; }
     #connectNavChildren[hidden] { display:none; }
     .nav-label { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
@@ -715,7 +717,7 @@
   .contract-offer.done h3 { font-size:19px; margin-bottom:2px; }
   .contract-offer.done p { margin:0; color:var(--muted); font-size:14px; }
   .contract-offer .kept { margin-top:6px; overflow-wrap:anywhere; }
-  #projectsHeading:focus, #connectHeading:focus { outline:none; }
+  #projectsHeading:focus, #connectHeading:focus, #projectDetailHeading:focus, .project-empty h3:focus { outline:none; }
   .contract-offer .kept:empty { margin:0; }
   .contract-offer.done .contract-offer-actions { min-width:0; }
   @media (max-width: 860px) {
@@ -776,7 +778,7 @@
     .projects-toolbar { gap:8px; margin-top:18px; }
     .projects-toolbar input { flex-basis:100%; max-width:none; }
     .projects-sort { margin-left:0; }
-    .project-choice { grid-template-columns:minmax(0,1fr); gap:13px; padding:22px 0; }
+    .project-choice { grid-template-columns:minmax(0,1fr); gap:10px; padding:18px 0; }
     .project-row-updated { grid-column:auto; display:flex; flex-wrap:wrap; gap:5px 12px; }
     .project-choice .project-writer { margin-top:0; }
     .project-choice strong { font-size:18px; }
@@ -2348,7 +2350,7 @@
   let projectIndex = [], currentProjectSlug = '', currentProject = null;
   let projectNavigation = { mode:'home' }, projectQuery = '', projectSort = 'recent', projectFilter = 'all';
   let projectDecisionSequence = 0;
-  let projectReview = null, projectReturnFocus = null;
+  let projectReview = null, projectReturnFocus = null, projectFocusDetail = false;
   const projectPendingOperations = new Map();
   // ADR 0063 D1: cloud versions waiting for a decision, by project, from the last
   // conflicts read, preview, or sync. pendingDecisionSlug opens the conflict view
@@ -2478,12 +2480,17 @@
     if (!projectDecisionsLoaded) refreshProjectDecisions();
   }
 
+  function projectNeedsAttention(item) { return Boolean(item.conflict) || projectDecisions.has(item.project); }
+
   function filteredProjects() {
     const query = projectQuery.trim().toLocaleLowerCase();
     return projectIndex.filter(item =>
       [item.title, item.project, item.status, item.next_actions].filter(Boolean).join(' ').toLocaleLowerCase().includes(query) &&
-      (projectFilter === 'all' || (projectFilter === 'attention' ? item.conflict || projectDecisions.has(item.project) : item.draft)))
+      (projectFilter === 'all' || (projectFilter === 'attention' ? projectNeedsAttention(item) : item.draft)))
       .sort((a,b) => {
+        // The banner points at these rows, so they lead under either sort.
+        const attention = Number(projectNeedsAttention(b)) - Number(projectNeedsAttention(a));
+        if (attention) return attention;
         if (projectSort === 'name') return (a.title || projectName(a.project)).localeCompare(b.title || projectName(b.project)) || a.project.localeCompare(b.project);
         if (a.updated_at === b.updated_at) return a.project.localeCompare(b.project);
         if (!a.updated_at) return 1; if (!b.updated_at) return -1;
@@ -2494,7 +2501,7 @@
   function showProjectsHome(focus = true) {
     invalidateProjectView();
     projectNavigation = { mode:'home' }; currentProjectSlug = ''; currentProject = null; pendingDecisionSlug = '';
-    projectReturnFocus = null;
+    projectReturnFocus = null; projectFocusDetail = false;
     $('projectDetail').replaceChildren();
     $('projectsHome').hidden = false; $('projectsWorkspace').hidden = true;
     renderProjectChoices();
@@ -2521,7 +2528,7 @@
   function renderProjectChoices() {
     const list = $('projectList'), select = $('projectSelect');
     list.replaceChildren(); select.replaceChildren();
-    const attention = projectIndex.filter(item => item.conflict || projectDecisions.has(item.project)).length;
+    const attention = projectIndex.filter(projectNeedsAttention).length;
     const drafts = projectIndex.filter(item => item.draft).length;
     const rows = filteredProjects();
     $('projectsAllCount').textContent = String(projectIndex.length);
@@ -2530,8 +2537,9 @@
     $('projectsSummaryMeta').textContent = rows.length + (rows.length === 1 ? ' project' : ' projects') + (rows.length !== projectIndex.length ? ' of ' + projectIndex.length : '');
     const notice = $('projectsAttention'); notice.replaceChildren(); notice.hidden = attention === 0;
     if (attention) {
-      notice.append(el('strong', undefined, attention + (attention === 1 ? ' project needs attention' : ' projects need attention')), el('p', undefined, 'Review the saved records that need a decision.'));
-      const review = el('button', 'btn', 'Show projects'); review.type = 'button';
+      notice.append(el('strong', undefined, attention === 1 ? '1 project needs you to choose a version' : attention + ' projects need you to choose a version'),
+        el('p', undefined, attention === 1 ? 'More than one version of it is saved. Open it to pick the one to keep.' : 'More than one version of each is saved. Open each one to pick the version to keep.'));
+      const review = el('button', 'btn', attention === 1 ? 'Show it' : 'Show them'); review.type = 'button';
       review.addEventListener('click', () => { projectFilter = 'attention'; projectQuery = ''; $('projectSearch').value = ''; renderProjectChoices(); });
       notice.appendChild(review);
     }
@@ -2542,19 +2550,20 @@
       button.setAttribute('aria-current', String(item.project === currentProjectSlug));
       const summary = el('span', 'project-row-summary');
       const name = item.title || projectName(item.project);
-      const secondary = item.conflict ? 'Multiple current documents need attention.' : (projectLines(item.status)[0] || 'No current status yet.');
+      const secondary = item.conflict ? 'More than one version is saved. Open it to choose one.' : (projectLines(item.status)[0] || 'No current status yet.');
       const secondaryNode = el('small', undefined, secondary); secondaryNode.title = item.status || secondary;
       const heading = el('span', 'project-row-heading'); heading.appendChild(el('strong', undefined, name));
       summary.append(heading, secondaryNode);
       const badges = el('span', 'row');
       if (decide || item.conflict) badges.appendChild(projectPill(decide ? 'Needs your decision' : 'Needs attention', 'decide'));
       if (item.draft) badges.appendChild(projectPill('Draft', 'draft'));
-      if (typeof item.shared === 'boolean') badges.appendChild(projectPill(item.shared ? 'Shared with connected apps' : 'Private'));
-      summary.appendChild(badges);
+      // Private is the default, so only the exception earns a badge.
+      if (item.shared === true) badges.appendChild(projectPill('Shared with connected apps'));
+      if (badges.children.length) summary.appendChild(badges);
       const next = el('span', 'project-row-next');
-      next.append(el('small', undefined, 'Next action'), el('span', undefined, item.conflict ? 'Next action unavailable' : (projectLines(item.next_actions)[0] || 'No next action recorded')));
+      next.append(el('small', undefined, 'Next action'), el('span', undefined, item.conflict ? 'Choose a version first' : (projectLines(item.next_actions)[0] || 'No next action recorded')));
       const updated = el('span', 'project-row-updated');
-      updated.append(el('span', undefined, item.updated_at ? projectDate(item.updated_at) : 'Date unavailable'));
+      if (item.updated_at) updated.append(el('span', undefined, projectDate(item.updated_at)));
       if (item.last_writer_host) updated.appendChild(el('small', 'project-writer', 'last: ' + item.last_writer_host));
       if (item.imported) updated.appendChild(el('small', undefined, 'Imported on this date'));
       const arrow = el('span', 'project-row-arrow'); arrow.setAttribute('aria-hidden', 'true');
@@ -2592,14 +2601,16 @@
       const data = await api('/api/projects/' + encodeURIComponent(slug));
       if (requestId !== projectLoadSequence || !status.unlocked || $('view-projects').hidden || currentProjectSlug !== slug) return;
       updateProjectOverview(data, changedHead); currentProject = data; renderProjectChoices(); renderProjectDetail(data);
+      if (projectFocusDetail) { projectFocusDetail = false; $('projectDetailHeading').focus(); }
       if (pendingDecisionSlug === slug) { pendingDecisionSlug = ''; openProjectDecision(slug); }
     } catch (ex) {
       if (requestId !== projectLoadSequence || ex.message === 'locked') return;
       currentProject = null;
       const box = el('div', 'project-empty');
-      box.append(el('h3', undefined, ex.status === 409 ? 'This project needs attention.' : 'Project unavailable.'),
-        el('p', ex.status === 409 ? 'project-notice danger' : 'err', ex.message));
+      const failure = el('h3', undefined, ex.status === 409 ? 'This project needs attention.' : 'Project unavailable.'); failure.tabIndex = -1;
+      box.append(failure, el('p', ex.status === 409 ? 'project-notice danger' : 'err', ex.message));
       $('projectDetail').replaceChildren(box);
+      if (projectFocusDetail) { projectFocusDetail = false; failure.focus(); }
     }
   }
 
@@ -2607,7 +2618,9 @@
     const root = $('projectDetail'); root.replaceChildren();
     const head = el('div', 'project-detail-head');
     const unavailable = Array.isArray(project.files) && project.files.some((file) => file.access === 'unavailable');
-    const title = el('div'); const state = el('div', 'row'); state.append(projectPill(unavailable ? 'Needs attention' : 'Ready to resume', unavailable ? 'locked' : 'ok'), el('span', 'project-revision', 'Updated ' + projectDate(project.updated_at))); title.append(el('h2', undefined, project.title || projectName(project.project)), state);
+    const title = el('div'); const state = el('div', 'row'); state.append(projectPill(unavailable ? 'File missing' : 'Ready to resume', unavailable ? 'locked' : 'ok'), el('span', 'project-revision', 'Updated ' + projectDate(project.updated_at)));
+    const heading = el('h2', undefined, project.title || projectName(project.project)); heading.tabIndex = -1; heading.id = 'projectDetailHeading';
+    title.append(heading, state);
     const writerLine = projectWriterLine(project); if (writerLine) title.appendChild(writerLine);
     const actions = el('div', 'project-actions');
     for (const [action, label, primary] of [['edit','Edit',false],['delete','Delete',false],['checkpoint','Checkpoint',false],['wrap','Wrap up',false],['resume','Resume',true]]) {
@@ -2778,7 +2791,8 @@
   // --- ADR 0063 D1: the conflict view. Nothing changes until Keep mine or Take theirs.
   function openProjectFromList(slug) {
     if (projectDecisions.has(slug)) pendingDecisionSlug = slug;
-    loadProject(slug);
+    projectFocusDetail = true;
+    return loadProject(slug);
   }
 
   function reviewProjectDecision(slug) {

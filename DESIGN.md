@@ -125,13 +125,13 @@ The palette is warm and low-chroma, with evergreen as the sole affirmative accen
 - **Warm Canvas / Paper Surface:** Establish the page and elevated reading planes.
 - **Charcoal Ink / Quiet Taupe:** Carry primary and supporting copy.
 - **Parchment Line / Oat Chip:** Separate regions through borders and tonal layering.
-- **Curation Muted:** Replaces the general light-theme muted tone inside `#view-memories`, `#view-curation` and `#curationDialogOverlay`; it is a scoped readability correction, not a global palette change.
+- **Curation Muted:** Replaces the general light-theme muted tone inside `#view-memories`, `#view-curation`, `#curationDialogOverlay`, `#view-projects` and `#guardDialogOverlay`; it is a scoped readability correction, not a global palette change.
 
 ### Named Rules
 
 **The One Accent Rule.** Evergreen signals action or state; do not add competing decorative accents.
 
-**The Scoped Contrast Rule.** Use the stronger light muted tone in Memories, curation and its dialog, as verified in the preview parity pass.
+**The Scoped Contrast Rule.** Use the stronger light muted tone in Memories, curation and its dialog, Projects, and the sync guard dialog, as verified in the preview parity pass and the 2026-10-09 Portfolio audit.
 
 ## Typography
 
