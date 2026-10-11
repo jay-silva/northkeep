@@ -1161,9 +1161,12 @@ every milestone; if a limit is removed, say when and how.*
 
 ## Desktop app / distribution (M7d), current
 
-- **Apple Silicon (arm64) only for now.** The signed DMG bundles an arm64
-  Node runtime; Intel Macs aren't built yet (ADR 0012 targets aarch64 first).
-  Running from source still works on any platform.
+- **The signed app is Apple Silicon (arm64) only.** The signed DMG bundles an
+  arm64 Node runtime; Intel Macs aren't built yet (ADR 0012 targets aarch64
+  first). An unsigned Linux x64 AppImage and `.deb` can be built (ADR 0064).
+  They are not a public release, they are not signed, and opening links from
+  the window is still macOS-only. Running from source still works on any
+  platform.
 - **No auto-update; updates are manual.** There is a **manual** "Check for
   updates" button (Settings → About, ADR 0017): it runs only when you click it,
   does a single version lookup against the public GitHub releases API, sends no
@@ -1210,11 +1213,18 @@ every milestone; if a limit is removed, say when and how.*
 
 ## M1 (MCP server)
 
-- **Unlocked = your Mac login is the wall.** After `northkeep unlock`, the
-  vault key sits in your macOS Keychain and anything running in your
-  logged-in session (including any MCP client you configure) can open the
-  vault. Same trust level as saved browser passwords. `northkeep lock`
-  revokes it.
+- **Unlocked = your login session is the wall.** After `northkeep unlock`,
+  the derived vault key sits in the macOS Keychain, or on Linux in the
+  Secret Service when that daemon is running. Anything in your logged-in
+  session (including any MCP client you configure) can open the vault. Same
+  trust level as saved browser passwords. If Linux has no Secret Service,
+  the key is a file only your account can read, `~/.northkeep/master.key`
+  (mode 0600), and NorthKeep warns: anyone who can read your files can open
+  the vault. `northkeep lock` removes the key from whichever store held it.
+  The device secret is a separate file, `~/.northkeep/device.secret`, also
+  mode 0600, and it is not encrypted. That is the ADR 0001 design, not the
+  unlock store. Provider API keys and remote-server OAuth tokens are still
+  not written to files on Linux.
 - **Chat recall and the hosted connector use keyword matching.** Converse's
   per-turn memory recall and the connector's `memory_retrieve` rank by word
   overlap, recency, and type priority, and will miss synonyms ("car" won't

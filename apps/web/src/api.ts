@@ -111,9 +111,11 @@ import {
   disconnect,
   installContract,
   isCodexDetected,
+  describeMasterKeyStore,
   keychainAvailable,
   keychainDeleteMasterKey,
   keychainSetMasterKey,
+  masterKeyStoreAvailable,
   appendCallLog,
   readCallLog,
   uninstallContract,
@@ -438,6 +440,7 @@ async function dispatch(
       ollama_available: ollama,
       extract_model: EXTRACT_MODEL,
       keychain_available: keychainAvailable(),
+      key_store: describeMasterKeyStore(),
       env_grant: session.hasEnvGrant(),
       // Running inside the Tauri desktop shell? The web UI needs to know so it
       // opens external links via /api/open (WKWebView can't open a real new
@@ -584,13 +587,18 @@ async function dispatch(
     const { passphrase, remember } = parseJson<{ passphrase?: string; remember?: boolean }>(body);
     if (!passphrase) return bad(400, 'Passphrase required.');
     await session.unlock(passphrase);
-    if (remember === true && keychainAvailable()) {
+    const store = describeMasterKeyStore();
+    if (remember === true && store.backend !== 'none') {
       keychainSetMasterKey(session.keyHex());
     }
     // Unlock is a wake (ADR 0044). Not awaited: the dialog must close at once,
     // and the page asks /api/sync/wake for the outcome anyway.
     session.autoSync.wake().catch(() => {});
-    return ok({ unlocked: true });
+    return ok({
+      unlocked: true,
+      key_backend: store.backend,
+      key_warning: remember === true ? store.warning : null,
+    });
   }
 
   if (method === 'POST' && route === '/api/lock') {
@@ -599,7 +607,7 @@ async function dispatch(
     searchEmbedder.clear(); // vectors derive from plaintext; nothing outlives the unlocked session
     searchWarmerFor(session).reset();
     let keychainCleared = false;
-    if (forgetKeychain === true && keychainAvailable()) {
+    if (forgetKeychain === true && masterKeyStoreAvailable()) {
       keychainCleared = keychainDeleteMasterKey() === 'removed';
     }
     // Report the TRUE post-lock state, not a hardcoded value. An env-var grant

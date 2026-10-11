@@ -1,0 +1,71 @@
+name: Desktop Linux
+
+# Unsigned AppImage and deb (ADR 0064). Ubuntu 22.04 so the bundles link
+# glibc 2.35 and still run on newer distributions. Does not sign or notarize
+# the macOS app. Not a public release: artifacts stay on the workflow run.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'apps/desktop/**'
+      - 'apps/web/**'
+      - 'packages/**'
+      - 'scripts/desktop-bundle/**'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - 'package.json'
+      - '.github/workflows/desktop-linux.yml'
+
+jobs:
+  bundle:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Tauri Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            build-essential \
+            curl \
+            wget \
+            file \
+            libxdo-dev \
+            libssl-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            libfuse2 \
+            gnupg \
+            pkg-config \
+            python3
+
+      - run: pnpm install --frozen-lockfile
+
+      - name: Build unsigned AppImage and deb
+        env:
+          NORTHKEEP_REQUIRE_GPG: "1"
+        run: scripts/desktop-bundle/build.sh --bundles appimage,deb
+
+      - name: Upload AppImage
+        uses: actions/upload-artifact@v4
+        with:
+          name: northkeep-linux-appimage
+          path: apps/desktop/src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+
+      - name: Upload deb
+        uses: actions/upload-artifact@v4
+        with:
+          name: northkeep-linux-deb
+          path: apps/desktop/src-tauri/target/release/bundle/deb/*.deb
+          if-no-files-found: error

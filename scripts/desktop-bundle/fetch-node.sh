@@ -20,14 +20,20 @@ CACHE_DIR="$REPO_ROOT/apps/desktop/.node-cache"
 BIN_DIR="$REPO_ROOT/apps/desktop/src-tauri/binaries"
 
 # Map this machine to Node's dist name and Rust's target triple.
-# aarch64-apple-darwin only for the first release (ADR 0012, Decision 3).
+# macOS arm64 (ADR 0012) and Linux x64 (ADR 0064). The staged filename must
+# carry the triple Tauri expects for externalBin.
 case "$(uname -s)-$(uname -m)" in
   Darwin-arm64)
     NODE_PLATFORM="darwin-arm64"
     TARGET_TRIPLE="aarch64-apple-darwin"
     ;;
+  Linux-x86_64)
+    NODE_PLATFORM="linux-x64"
+    TARGET_TRIPLE="x86_64-unknown-linux-gnu"
+    ;;
   *)
-    echo "fetch-node: unsupported build host $(uname -s)/$(uname -m) — ADR 0012 targets aarch64-apple-darwin only" >&2
+    echo "fetch-node: unsupported build host $(uname -s)/$(uname -m)" >&2
+    echo "  Supported: Darwin/arm64 and Linux/x86_64." >&2
     exit 1
     ;;
 esac
@@ -60,7 +66,18 @@ fi
 # 1. SHA-256: the tarball matches the published checksum on every run (cached or
 #    not). Catches corruption and naive tampering — but not a SHASUMS file that
 #    was itself swapped for a matching bad pair.
-grep " ${TARBALL}\$" "$SHASUMS" | shasum -a 256 -c - >/dev/null
+expected_line="$(grep " ${TARBALL}\$" "$SHASUMS" || true)"
+if [ -z "$expected_line" ]; then
+  echo "fetch-node: FATAL: ${TARBALL} is not listed in ${SHASUMS}" >&2
+  exit 1
+fi
+# Node's line is "HASH  FILE" (two spaces). sha256sum is coreutils; shasum is
+# the macOS tool. Either check fails the build on a mismatch.
+if command -v sha256sum >/dev/null 2>&1; then
+  printf '%s\n' "$expected_line" | sha256sum -c - >/dev/null
+else
+  printf '%s\n' "$expected_line" | shasum -a 256 -c - >/dev/null
+fi
 echo "fetch-node: SHA-256 verified against SHASUMS256.txt"
 
 # 2. GPG: SHASUMS256.txt is signed by a Node.js release key. This closes the gap
@@ -98,11 +115,19 @@ fi
 if ! command -v gpg >/dev/null 2>&1; then
   if [ "$REQUIRE_GPG" = "1" ]; then
     echo "fetch-node: FATAL — this is a release build but gpg is not installed." >&2
-    echo "  Install it so the Node signature can be verified: brew install gnupg" >&2
+    if [ "$(uname -s)" = "Darwin" ]; then
+      echo "  Install it so the Node signature can be verified: brew install gnupg" >&2
+    else
+      echo "  Install it so the Node signature can be verified: apt install gnupg" >&2
+    fi
     exit 1
   fi
   echo "fetch-node: WARNING — gpg not installed; relying on SHA-256 ONLY (no signature check)." >&2
-  echo "  For a distributable build run: brew install gnupg   (then rebuild)." >&2
+  if [ "$(uname -s)" = "Darwin" ]; then
+    echo "  For a distributable build run: brew install gnupg   (then rebuild)." >&2
+  else
+    echo "  For a distributable build run: apt install gnupg   (then rebuild)." >&2
+  fi
 else
   if [ ! -f "$SHASUMS.sig" ]; then
     curl -fsSL -o "$SHASUMS.sig.tmp" "$BASE_URL/SHASUMS256.txt.sig"

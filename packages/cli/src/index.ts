@@ -22,9 +22,10 @@ import { nodePlatform } from '@northkeep/platform-node';
 import {
   auditAsCsv,
   auditAsJson,
-  keychainAvailable,
+  describeMasterKeyStore,
   keychainDeleteMasterKey,
   keychainSetMasterKey,
+  masterKeyStoreAvailable,
   readCallLog,
   resolveMasterKey,
   startServer,
@@ -153,10 +154,10 @@ program
 
 program
   .command('unlock')
-  .description('Grant background access (Claude Desktop / MCP) by parking the vault key in the macOS Keychain')
+  .description('Grant background access by parking the derived vault key in the macOS Keychain or the Linux secret store')
   .action(async () => {
-    if (!keychainAvailable()) {
-      fail('Keychain unlock requires macOS. Use the NORTHKEEP_PASSPHRASE environment variable instead.');
+    if (!masterKeyStoreAvailable()) {
+      fail('Background unlock needs the macOS Keychain or, on Linux, the Secret Service or a private key file. Use the NORTHKEEP_PASSPHRASE environment variable instead.');
     }
     const vaultPath = vaultPathOpt();
     const passphrase = await getPassphrase('Passphrase: ');
@@ -173,19 +174,41 @@ program
     } finally {
       key.fill(0);
     }
-    console.log('✓ Vault unlocked for background access via your macOS Keychain.');
-    console.log('  Claude Desktop (and this CLI) can now open the vault without a passphrase.');
-    console.log('  Anyone using your logged-in Mac session has the same access, the same');
-    console.log('  trust level as your saved browser passwords.');
+    const store = describeMasterKeyStore();
+    switch (store.backend) {
+      case 'macos-keychain':
+        console.log('✓ Vault unlocked for background access via your macOS Keychain.');
+        console.log('  Claude Desktop (and this CLI) can now open the vault without a passphrase.');
+        console.log('  Anyone using your logged-in Mac session has the same access, the same');
+        console.log('  trust level as your saved browser passwords.');
+        break;
+      case 'secret-service':
+        console.log('✓ Vault unlocked for background access via the Secret Service.');
+        console.log('  Apps on this machine can now open the vault without a passphrase.');
+        console.log('  Anyone using your logged-in session has the same access, the same');
+        console.log('  trust level as your saved browser passwords.');
+        break;
+      case 'file':
+        console.log('✓ Vault unlocked for background access.');
+        console.warn(`⚠  ${store.warning ?? 'The vault key is stored in a private file.'}`);
+        break;
+      case 'none':
+        fail('No vault key store is available.');
+        break;
+      default: {
+        const unexpected: never = store.backend;
+        fail(`No vault key store is available (${String(unexpected)}).`);
+      }
+    }
     console.log('  Revoke anytime: northkeep lock');
   });
 
 program
   .command('lock')
-  .description('Revoke background access (remove the vault key from the Keychain)')
+  .description('Revoke background access (remove the stored vault key)')
   .action(() => {
-    if (!keychainAvailable()) {
-      fail('Keychain is only used on macOS; nothing to lock.');
+    if (!masterKeyStoreAvailable()) {
+      fail('No vault key store is in use on this system; nothing to lock.');
     }
     const outcome = keychainDeleteMasterKey();
     console.log(

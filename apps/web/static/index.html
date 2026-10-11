@@ -794,6 +794,7 @@
   <span id="syncPill" class="pill" hidden></span>
   <span id="ollamaPill" class="pill" hidden>local AI off</span>
   <span id="envPill" class="pill locked" hidden title="An environment variable keeps this vault open; the Lock button can't revoke it.">env override</span>
+  <span id="keyFilePill" class="pill locked" hidden>No keyring</span>
   <div class="grow"></div>
   <div class="header-actions"><button class="btn" id="exportBtn">Export</button><button class="btn" id="lockBtn" hidden>Lock</button></div>
 </header>
@@ -1419,7 +1420,8 @@
     <p>Your memories are encrypted on this Mac. Enter your passphrase to open them.</p>
     <div class="err" id="unlockErr"></div>
     <input type="password" id="passphrase" placeholder="Passphrase" autofocus>
-    <label class="check" id="rememberRow"><input type="checkbox" id="remember"> Keep unlocked on this Mac (Keychain)</label>
+    <label class="check" id="rememberRow"><input type="checkbox" id="remember"> <span id="rememberLabel">Keep unlocked on this Mac (Keychain)</span></label>
+    <p class="muted" id="rememberWarn" hidden style="margin:8px 0 0;font-size:13px"></p>
     <button class="btn primary" id="unlockBtn" style="width:100%">Unlock</button>
   </div>
 </div>
@@ -2056,7 +2058,7 @@
     $('envPill').hidden = !status.env_grant;
     updateSyncPill(status.sync_auto);
     $('lockBtn').hidden = !status.unlocked;
-    $('rememberRow').hidden = !status.keychain_available;
+    applyKeyStore(status.key_store, status.keychain_available);
     // No vault on disk → first-run wizard. Vault but locked → unlock dialog.
     if (noVault) showSetup();
     else if (!status.unlocked) showUnlock();
@@ -2278,9 +2280,39 @@
         'Could not unlock. Check your passphrase.';
     } finally { $('unlockBtn').disabled = false; }
   }
+  function applyKeyStore(store, keychainAvailable) {
+    const backend = store && store.backend ? store.backend : (keychainAvailable ? 'macos-keychain' : 'none');
+    $('rememberRow').hidden = backend === 'none';
+    const warn = $('rememberWarn');
+    if (backend === 'file') {
+      $('rememberLabel').textContent = 'Keep unlocked on this computer (private file)';
+      warn.hidden = !store.warning;
+      warn.textContent = store.warning || '';
+    } else if (backend === 'secret-service') {
+      $('rememberLabel').textContent = 'Keep unlocked on this computer (Secret Service)';
+      warn.hidden = true;
+      warn.textContent = '';
+    } else if (backend === 'macos-keychain') {
+      $('rememberLabel').textContent = 'Keep unlocked on this Mac (Keychain)';
+      warn.hidden = true;
+      warn.textContent = '';
+    } else {
+      warn.hidden = true;
+      warn.textContent = '';
+    }
+    const pill = $('keyFilePill');
+    if (pill) {
+      pill.hidden = backend !== 'file';
+      pill.title = backend === 'file' && store && store.warning ? store.warning : '';
+    }
+  }
   $('lockBtn').addEventListener('click', async () => {
-    const clear = status.keychain_available &&
-      confirm('Also remove the key from your Keychain?\nOK = full lock (passphrase needed everywhere)\nCancel = lock this window only');
+    const store = status.key_store;
+    const backend = store && store.backend ? store.backend : (status.keychain_available ? 'macos-keychain' : 'none');
+    let prompt = 'Also remove the key from your Keychain?\nOK = full lock (passphrase needed everywhere)\nCancel = lock this window only';
+    if (backend === 'file') prompt = 'Also delete the private key file?\nOK = full lock (passphrase needed everywhere)\nCancel = lock this window only';
+    else if (backend === 'secret-service') prompt = 'Also remove the key from the Secret Service?\nOK = full lock (passphrase needed everywhere)\nCancel = lock this window only';
+    const clear = backend !== 'none' && confirm(prompt);
     const r = await api('/api/lock', { method: 'POST', json: { forgetKeychain: clear } });
     if (r.envGrant) {
       alert('Locked. Note: an environment variable (NORTHKEEP_PASSPHRASE or ' +

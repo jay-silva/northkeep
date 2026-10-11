@@ -40,9 +40,10 @@ fn server_command(_app: &tauri::App) -> Command {
 
 /// Release: the bundled sidecar on the bundled server tree.
 ///
-/// The sidecar is a sibling of this executable (Contents/MacOS/) because
-/// that is where tauri's externalBin puts it; the server tree lives under
-/// the resource dir (Contents/Resources/server/). No `--jitless`: verified
+/// The sidecar is a sibling of this executable because that is where
+/// tauri's externalBin puts it (Contents/MacOS on macOS, usr/bin in the
+/// Linux bundles). The server tree lives under the resource dir. No
+/// `--jitless`: verified
 /// 2026-07-11 that it disables WebAssembly and thereby Node's fetch()
 /// (undici), silently breaking the Ollama probe — see ADR 0012.
 #[cfg(not(debug_assertions))]
