@@ -171,6 +171,7 @@ import {
   setDefaultEndpoint,
   getDefaultEndpoint,
 } from '@northkeep/converse';
+import { devicePhrase } from './device-phrase.js';
 import { LockedError, type UiSession } from './session.js';
 import { handleCurationApi } from './curationApi.js';
 import { handleProjectsApi } from './projectsApi.js';
@@ -446,6 +447,10 @@ async function dispatch(
       // opens external links via /api/open (WKWebView can't open a real new
       // browser tab); in plain-browser mode it keeps native target=_blank.
       desktop: process.env.NORTHKEEP_DESKTOP === '1',
+      // Where the vault lives, for the welcome and unlock dialogs. The page
+      // must not say "this Mac" on Linux or Windows.
+      platform: process.platform,
+      device_phrase: devicePhrase(process.platform),
       version: APP_VERSION,
       // ADR 0044: the automatic sync engine's view, so the header pill can say
       // "Synced 2 min ago" or "Sync failed" without a second request.

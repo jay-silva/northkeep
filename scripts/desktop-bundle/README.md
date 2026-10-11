@@ -66,6 +66,35 @@ GitHub Actions (Ubuntu 22.04) builds them on pull requests that touch the
 desktop app, the server it bundles, or this pipeline, and on manual dispatch.
 The workflow uploads both files as artifacts.
 
+### Linux runtime libraries
+
+The `.deb` `Depends` line, and an AppImage on a machine that does not already
+have them, needs:
+
+- `libegl1`
+- `libwebkit2gtk-4.1-0`
+- `libgtk-3-0`
+- `librsvg2-2`
+
+`tauri.linux.bundle.conf.json` lists `libegl1` and `librsvg2-2`. Tauri's
+bundler always appends `libwebkit2gtk-4.1-0` and `libgtk-3-0`, so the
+package control file names all four once.
+
+```sh
+sudo apt-get install -y libegl1 libwebkit2gtk-4.1-0 libgtk-3-0 librsvg2-2
+```
+
+Those are runtime packages. Building still needs the `-dev` packages listed
+in `.github/workflows/desktop-linux.yml`.
+
+### Where the vault is written
+
+The desktop shell forwards `NORTHKEEP_HOME` to the bundled server. When that
+variable is set, `vault.nkv`, `device.secret`, and `master.key` are written
+only under that directory. Launch itself writes none of them, so the directory
+stays empty until you create a vault. Parking the key (`master.key`) happens
+later, when you keep the vault unlocked and the Secret Service is not available.
+
 ## (b) Signed + notarized release build
 
 One-time Apple setup is in ADR 0012 ("What Jay must provide"). Then export —

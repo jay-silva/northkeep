@@ -102,14 +102,47 @@ fn report_server_death(code: Option<i32>) {
     }
 }
 
+/// Copied onto the sidecar when set on this process. The child inherits
+/// the rest of the environment too; these are applied again so the vault
+/// directory and the key-store switches cannot be dropped by a later edit
+/// that clears the map. Launch writes none of them: vault.nkv,
+/// device.secret, and master.key appear only when a vault is created or
+/// the key is parked.
+const SIDECAR_FORWARDED: &[&str] = &[
+    "NORTHKEEP_HOME",
+    "NORTHKEEP_PASSPHRASE",
+    "NORTHKEEP_MASTER_KEY",
+    "NORTHKEEP_NO_KEYCHAIN",
+    "NORTHKEEP_SECRET_BACKEND",
+];
+
+fn sidecar_env(lookup: impl Fn(&str) -> Option<String>) -> Vec<(String, String)> {
+    let mut vars = vec![("NORTHKEEP_DESKTOP".to_string(), "1".to_string())];
+    for key in SIDECAR_FORWARDED {
+        if let Some(value) = lookup(key) {
+            vars.push(((*key).to_string(), value));
+        }
+    }
+    vars
+}
+
+fn apply_sidecar_env(cmd: &mut Command) {
+    for (key, value) in sidecar_env(|key| std::env::var(key).ok()) {
+        cmd.env(key, value);
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .setup(|app| {
-            let mut child = server_command(app)
-                // Tell the server it is running inside the desktop shell, so the
-                // web UI opens external links via /api/open (WKWebView won't open
-                // target=_blank in a new browser) instead of a dead new-tab.
-                .env("NORTHKEEP_DESKTOP", "1")
+            let mut cmd = server_command(app);
+            // Tell the server it is running inside the desktop shell, so the
+            // web UI opens external links via /api/open (WKWebView won't open
+            // target=_blank in a new browser) instead of a dead new-tab.
+            // NORTHKEEP_HOME, when set, is the directory for vault.nkv,
+            // device.secret, and master.key.
+            apply_sidecar_env(&mut cmd);
+            let mut child = cmd
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .spawn()
@@ -194,4 +227,37 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sidecar_env;
+
+    #[test]
+    fn sidecar_forwards_northkeep_home_when_set() {
+        let vars = sidecar_env(|key| {
+            if key == "NORTHKEEP_HOME" {
+                Some("/var/tmp/nk-explicit".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(
+            vars.iter()
+                .find(|(key, _)| key == "NORTHKEEP_HOME")
+                .map(|(_, value)| value.as_str()),
+            Some("/var/tmp/nk-explicit"),
+        );
+        assert!(vars
+            .iter()
+            .any(|(key, value)| key == "NORTHKEEP_DESKTOP" && value == "1"));
+        assert!(!vars.iter().any(|(key, _)| key == "NORTHKEEP_PASSPHRASE"));
+    }
+
+    #[test]
+    fn sidecar_does_not_invent_a_home() {
+        let vars = sidecar_env(|_| None);
+        assert!(!vars.iter().any(|(key, _)| key == "NORTHKEEP_HOME"));
+        assert_eq!(vars, vec![("NORTHKEEP_DESKTOP".to_string(), "1".to_string())]);
+    }
 }

@@ -11,6 +11,14 @@
     ],
     "externalBin": ["binaries/northkeep-server"],
     "resources": { "server-tree/": "server/" },
-    "category": "Productivity"
+    "category": "Productivity",
+    "linux": {
+      "deb": {
+        "depends": [
+          "libegl1",
+          "librsvg2-2"
+        ]
+      }
+    }
   }
 }

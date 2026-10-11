@@ -1417,7 +1417,7 @@
 <div class="overlay" id="unlockOverlay" hidden>
   <div class="dialog">
     <h2>Unlock your vault</h2>
-    <p>Your memories are encrypted on this Mac. Enter your passphrase to open them.</p>
+    <p id="unlockLead">Your memories are encrypted on this computer. Enter your passphrase to open them.</p>
     <div class="err" id="unlockErr"></div>
     <input type="password" id="passphrase" placeholder="Passphrase" autofocus>
     <label class="check" id="rememberRow"><input type="checkbox" id="remember"> <span id="rememberLabel">Keep unlocked on this Mac (Keychain)</span></label>
@@ -1430,7 +1430,7 @@
   <div class="dialog" style="width:440px">
     <div id="setupStepCreate">
       <h2>Welcome to NorthKeep</h2>
-      <p>Your AI memories will live in an encrypted vault on this Mac.
+      <p id="setupLead">Your AI memories will live in an encrypted vault on this computer.
         Choose a passphrase to protect it.</p>
       <p>Your vault opens with two secrets: your passphrase plus a device key
         file NorthKeep creates; losing either loses the vault, by design.</p>
@@ -2049,6 +2049,7 @@
   let status = { unlocked: false };
   async function refreshStatus() {
     status = await api('/api/status');
+    applyDevicePhrase(status.device_phrase);
     const noVault = status.vault_exists === false;
     $('countPill').textContent = status.unlocked ? (status.memory_total ?? status.total) + ' memories'
       : (noVault ? 'welcome' : 'locked');
@@ -2279,6 +2280,11 @@
       $('unlockErr').textContent = e.message === 'locked' ? '' :
         'Could not unlock. Check your passphrase.';
     } finally { $('unlockBtn').disabled = false; }
+  }
+  function applyDevicePhrase(phrase) {
+    const place = phrase || 'this computer';
+    $('unlockLead').textContent = 'Your memories are encrypted on ' + place + '. Enter your passphrase to open them.';
+    $('setupLead').textContent = 'Your AI memories will live in an encrypted vault on ' + place + '. Choose a passphrase to protect it.';
   }
   function applyKeyStore(store, keychainAvailable) {
     const backend = store && store.backend ? store.backend : (keychainAvailable ? 'macos-keychain' : 'none');
