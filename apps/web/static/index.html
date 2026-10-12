@@ -3437,7 +3437,7 @@
             <details class="memory-actions">
               <summary>More</summary>
               <div class="memory-action-buttons">
-                <button class="btn" data-rescope="${esc(m.id)}" data-scope="${esc(m.scope)}">Move scope</button>
+                <button class="btn" data-rescope="${esc(m.id)}" data-scope="${esc(m.scope)}" data-type="${esc(m.type)}">Move scope</button>
                 <button class="btn danger" data-forget="${esc(m.id)}">Forget</button>
               </div>
               <span class="muted">Confidence ${esc(m.confidence)} · ${esc(m.created_at.slice(0, 10))} · ${esc(m.id.slice(0, 8))}${m.relevance !== undefined ? ' · Relevance ' + esc(m.relevance) : ''}</span>
@@ -3565,7 +3565,7 @@
   $('memList').addEventListener('click', async (e) => {
     const d = e.target.dataset || {};
     if (d.edit) { openEdit(d.edit, e.target); return; }
-    if (d.rescope) { openRescope(d.rescope, d.scope, e.target); return; }
+    if (d.rescope) { openRescope(d.rescope, d.scope, e.target, d.type); return; }
     const id = d.forget;
     if (!id) return;
     if (!confirm('Forget this memory?\nIts content is removed from the vault; the deletion itself stays on the record. ' +
@@ -3620,7 +3620,7 @@
   // chain stays valid. The editor mirrors the add-a-memory scope picker: known
   // scopes + a "+ new scope…" sentinel. Built with createElement/textContent so
   // a scope name can never inject markup.
-  function openRescope(id, current, btn) {
+  function openRescope(id, current, btn, type) {
     const card = document.getElementById('mem-' + id);
     if (!card || card.querySelector('.rescope-editor')) return;
     btn.disabled = true;
@@ -3633,7 +3633,13 @@
     sel.value = options.includes(current) ? current : NEW_SCOPE;
     const txt = el('input'); txt.type = 'text'; txt.placeholder = 'new scope name';
     txt.hidden = sel.value !== NEW_SCOPE; txt.style.maxWidth = '200px';
-    sel.addEventListener('change', () => { txt.hidden = sel.value !== NEW_SCOPE; if (!txt.hidden) txt.focus(); });
+    sel.addEventListener('change', () => {
+      txt.hidden = sel.value !== NEW_SCOPE;
+      if (!txt.hidden) txt.focus();
+      const warning = projectWorkingMemoryWarning(type, sel.value === NEW_SCOPE ? txt.value : sel.value);
+      if (warning) err.textContent = warning;
+      else if (err.textContent === PROJECT_WORKING_MEMORY_MESSAGE) err.textContent = '';
+    });
     const save = el('button', 'btn', 'Save'); save.style.cssText = 'font-size:12px;padding:5px 12px;border-radius:8px';
     const cancel = el('button', 'btn', 'Cancel'); cancel.style.cssText = 'font-size:12px;padding:5px 12px;border-radius:8px';
     const err = el('span', 'muted');
@@ -3643,6 +3649,8 @@
       const scope = (sel.value === NEW_SCOPE ? txt.value.trim() : sel.value);
       if (!scope) { err.textContent = 'Name the scope, or pick an existing one.'; return; }
       if (scope === current) { close(); return; }
+      const warning = projectWorkingMemoryWarning(type, scope);
+      if (warning) { err.textContent = warning; return; }
       save.disabled = true; err.textContent = '';
       try {
         await api('/api/memories/rescope', { method: 'POST', json: { id, scope } });
@@ -3660,20 +3668,39 @@
   // --- add a memory (GUI-created, explicit scope). '+' isn't in the scope
   // charset, so NEW_SCOPE can never collide with a real scope value.
   const NEW_SCOPE = '+new';
+  const PROJECT_WORKING_MEMORY_MESSAGE = 'A working memory in a project collection is the project document. Saving another one makes that project show as a conflict with no title. Change the project from Projects, or save this memory as a different type.';
+  function projectWorkingMemoryWarning(type, scope) {
+    if (type !== 'working') return '';
+    const value = String(scope || '').trim();
+    if (!value.startsWith('project:')) return '';
+    const slug = value.slice('project:'.length);
+    if (!/^[a-z0-9-]{1,40}$/.test(slug)) return '';
+    return PROJECT_WORKING_MEMORY_MESSAGE;
+  }
+  function refreshProjectWorkingWarning() {
+    const type = $('addMemType').value;
+    let scope = $('addMemScope').value;
+    if (scope === NEW_SCOPE) scope = $('addMemNewScope').value;
+    const warning = projectWorkingMemoryWarning(type, scope);
+    if (warning) $('addMemErr').textContent = warning;
+    else if ($('addMemErr').textContent === PROJECT_WORKING_MEMORY_MESSAGE) $('addMemErr').textContent = '';
+  }
   for (const t of TYPES) {
     const o = el('option', undefined, MEMORY_TYPE_LABELS[t].label);
     o.value = t;
     $('addMemType').appendChild(o);
   }
   function updateTypeHelp() { $('addMemTypeHelp').textContent = MEMORY_TYPE_LABELS[$('addMemType').value]?.help || ''; }
-  $('addMemType').addEventListener('change', updateTypeHelp);
+  $('addMemType').addEventListener('change', () => { updateTypeHelp(); refreshProjectWorkingWarning(); });
   updateTypeHelp();
   $('addMemScope').addEventListener('change', () => {
     addScopeTouched = true;
     const isNew = $('addMemScope').value === NEW_SCOPE;
     $('addMemNewScope').hidden = !isNew;
     if (isNew) $('addMemNewScope').focus();
+    refreshProjectWorkingWarning();
   });
+  $('addMemNewScope').addEventListener('input', refreshProjectWorkingWarning);
   $('addMemBtn').addEventListener('click', async () => {
     $('addMemErr').textContent = '';
     $('addMemOk').textContent = '';
@@ -3685,6 +3712,8 @@
       scope = $('addMemNewScope').value.trim();
       if (!scope) { $('addMemErr').textContent = 'Name the new scope, or pick an existing one.'; return; }
     }
+    const warning = projectWorkingMemoryWarning(type, scope);
+    if (warning) { $('addMemErr').textContent = warning; return; }
     $('addMemBtn').disabled = true;
     try {
       await api('/api/memories', { method: 'POST', json: { content, type, scope } });
@@ -3872,10 +3901,15 @@
     document.querySelectorAll('#candList input').forEach((c) => { c.checked = false; }));
   $('commitBtn').addEventListener('click', async () => {
     const approved = [...document.querySelectorAll('#candList input:checked')].map((c) => Number(c.dataset.i));
+    const importScope = $('importScope').value;
+    if (approved.some((index) => projectWorkingMemoryWarning(candidates[index] && candidates[index].type, importScope))) {
+      alert(PROJECT_WORKING_MEMORY_MESSAGE);
+      return;
+    }
     $('commitBtn').disabled = true;
     try {
       const r = await api('/api/import/' + job + '/commit', {
-        method: 'POST', json: { approved, scope: $('importScope').value } });
+        method: 'POST', json: { approved, scope: importScope } });
       $('importReview').hidden = true;
       $('importProgress').hidden = false;
       $('importStatus').textContent = '✓ Imported ' + r.imported + ' memories.';

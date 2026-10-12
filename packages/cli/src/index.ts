@@ -14,6 +14,7 @@ import {
   memzero,
   devicePhrase,
   northkeepHome,
+  projectWorkingMemoryMessage,
   ollamaStartCommand,
   setPlatform,
   withFileLock,
@@ -226,7 +227,7 @@ program
 
 program
   .command('remember')
-  .description('Store a memory in the vault')
+  .description('Store a memory in the vault. A working memory cannot be saved into a project scope; that row is the project document.')
   .argument('<content>', 'the memory, in natural language')
   .requiredOption('--type <type>', `memory type: ${MEMORY_TYPES.join(' | ')}`)
   .option('--scope <scope>', 'scope tag (personal, work, client:x, ...)', 'personal')
@@ -234,6 +235,8 @@ program
   .option('--source-model <model>', 'model that produced this memory, if any')
   .option('--confidence <n>', 'confidence 0.0–1.0', parseConfidence, 1.0)
   .action(async (content: string, options: RememberOptions) => {
+    const projectWorking = projectWorkingMemoryMessage(options.type, options.scope);
+    if (projectWorking !== null) fail(projectWorking);
     await withVault(async (vault) => {
       const entry = vault.remember({
         content,

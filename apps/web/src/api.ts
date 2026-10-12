@@ -14,6 +14,9 @@ import {
   memzero,
   northkeepHome,
   ProjectHandoffError,
+  ProjectWorkingMemoryError,
+  projectWorkingMemoryMessage,
+  PROJECT_WORKING_MEMORY_MESSAGE,
   readProjectProvenance,
   type MemoryEntry,
   type MemoryType,
@@ -375,6 +378,7 @@ export async function handleApi(
     return await dispatch(session, method, route, query, body);
   } catch (err) {
     if (err instanceof LockedError) return bad(423, 'Vault is locked.');
+    if (err instanceof ProjectWorkingMemoryError) return bad(400, err.message);
     if (err instanceof VaultAuthError) return bad(401, err.message);
     if (err instanceof SubscriptionRequiredError)
       return bad(402, 'A $10/month subscription is required to sync on this server.');
@@ -671,6 +675,8 @@ async function dispatch(
     }
     const targetScope = (scope ?? 'personal').trim() || 'personal';
     if (!/^[a-z0-9:_.-]{1,64}$/i.test(targetScope)) return bad(400, 'Invalid scope.');
+    const projectWorking = projectWorkingMemoryMessage(type, targetScope);
+    if (projectWorking !== null) return bad(400, projectWorking);
     return ok(
       await session.withVault((vault) => {
         const entry = vault.remember({
@@ -2076,6 +2082,9 @@ async function dispatch(
       const chosen = approved
         .filter((i): i is number => Number.isInteger(i) && i >= 0 && i < job.candidates.length)
         .map((i) => job.candidates[i]!);
+      if (chosen.some((candidate) => projectWorkingMemoryMessage(candidate.type, targetScope) !== null)) {
+        return bad(400, PROJECT_WORKING_MEMORY_MESSAGE);
+      }
       const written = await session.withVault((vault) => {
         for (const candidate of chosen) {
           vault.remember({

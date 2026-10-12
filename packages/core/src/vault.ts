@@ -53,7 +53,7 @@ import {
   type ProjectWriter,
   type ProjectView,
 } from './project-handoff.js';
-import { emptyProjectDoc, formatLogArchive, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
+import { assertNotNewProjectWorkingMemory, emptyProjectDoc, formatLogArchive, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
 import { importPlanProblem, projectInUseMessage, type ImportFilePlan } from './project-import.js';
 import type { SqliteDb } from './sqlite-driver.js';
 import { SCHEMA_DDL } from './schema.js';
@@ -437,6 +437,9 @@ export class Vault {
 
   remember(input: RememberInput): MemoryEntry {
     this.assertOpen();
+    // A new working memory in a project scope is refused at the doors a person
+    // or an app uses. This method stays open so a project document, and the
+    // fixtures that plant one, can still be written here.
     if (!input.content || input.content.trim().length === 0) {
       throw new Error('Memory content must not be empty.');
     }
@@ -550,6 +553,7 @@ export class Vault {
     }
     const old = this.resolveEditable(idOrPrefix, allowedScopes);
     if (old.scope === scope) return old; // already there — nothing to do
+    assertNotNewProjectWorkingMemory(old, { type: old.type, scope });
     return this.supersedeEntry(old, { scope });
   }
 
@@ -598,6 +602,10 @@ export class Vault {
       (changes.scope !== undefined && changes.scope !== old.scope) ||
       (changes.type !== undefined && changes.type !== old.type);
     if (!wouldChange) return old; // nothing actually differs
+    assertNotNewProjectWorkingMemory(old, {
+      type: changes.type ?? old.type,
+      scope: changes.scope ?? old.scope,
+    });
     return this.supersedeEntry(old, changes);
   }
 
