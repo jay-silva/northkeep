@@ -1,9 +1,12 @@
 #!/usr/bin/env bash
-# Build the distributable NorthKeep desktop app (.app + DMG) — ADR 0012.
+# Build the distributable NorthKeep desktop app — ADR 0012 (macOS) and
+# ADR 0064 (unsigned Linux AppImage + deb).
 #
 # Usage:
-#   scripts/desktop-bundle/build.sh              # .app + .dmg
-#   scripts/desktop-bundle/build.sh --bundles app  # .app only (faster smoke)
+#   scripts/desktop-bundle/build.sh                 # macOS: .app + .dmg
+#                                                   # Linux: AppImage + .deb
+#   scripts/desktop-bundle/build.sh --bundles app   # macOS .app only
+#   scripts/desktop-bundle/build.sh --bundles appimage,deb
 #
 # Unsigned local build: run with no signing env vars set.
 # Signed + notarized release: export APPLE_SIGNING_IDENTITY, APPLE_ID,
@@ -11,9 +14,11 @@
 # Credentials are read from the environment only; never hardcoded, never
 # echoed.
 #
-# Bundling config lives in apps/desktop/src-tauri/tauri.bundle.conf.json and
-# is merged in via --config, so plain `pnpm tauri dev` / `pnpm tauri build`
-# stay usable without the sidecar staged.
+# Bundling config is merged in via --config, so plain `pnpm tauri dev` /
+# `pnpm tauri build` stay usable without the sidecar staged. macOS uses
+# tauri.bundle.conf.json. Linux uses tauri.linux.bundle.conf.json, which is
+# NOT named tauri.linux.conf.json: Tauri auto-merges that name into every
+# Linux invocation, including `tauri dev`.
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -69,20 +74,32 @@ if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
     echo "    NOTE: no notarization credentials in env — the DMG will be signed but NOT notarized"
   fi
 else
-  echo "    APPLE_SIGNING_IDENTITY not set — building UNSIGNED (local test only)"
+  if [ "$(uname -s)" = "Linux" ]; then
+    echo "    building UNSIGNED Linux bundles (AppImage and deb; not a public release)"
+  else
+    echo "    APPLE_SIGNING_IDENTITY not set — building UNSIGNED (local test only)"
+  fi
 fi
 
 # Invoke the Tauri CLI binary directly (not `pnpm tauri`): pnpm's
 # run-wrapper adds a deps-status check that can try to purge/reinstall
 # node_modules mid-build when it runs without a TTY.
 cd "$REPO_ROOT/apps/desktop"
-./node_modules/.bin/tauri build --config src-tauri/tauri.bundle.conf.json "$@"
+case "$(uname -s)" in
+  Darwin) BUNDLE_CONFIG="src-tauri/tauri.bundle.conf.json" ;;
+  Linux) BUNDLE_CONFIG="src-tauri/tauri.linux.bundle.conf.json" ;;
+  *)
+    echo "build: unsupported OS $(uname -s)" >&2
+    exit 1
+    ;;
+esac
+./node_modules/.bin/tauri build --config "$BUNDLE_CONFIG" "$@"
 
 # Staple the notarization tickets (verified 2026-07-11: Tauri notarizes the
 # .app but staples NEITHER the .app nor the DMG). Stapling embeds the ticket
 # so Gatekeeper accepts the app OFFLINE; without it, a downloader with no
 # network at launch is blocked. Only runs when we actually signed+notarized.
-if [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && { [ -n "${APPLE_PASSWORD:-}" ] || [ -n "${APPLE_API_KEY:-}" ]; }; then
+if [ "$(uname -s)" = "Darwin" ] && [ -n "${APPLE_SIGNING_IDENTITY:-}" ] && { [ -n "${APPLE_PASSWORD:-}" ] || [ -n "${APPLE_API_KEY:-}" ]; }; then
   # The .app is always NorthKeep.app (no version in the name), so head -1 is fine.
   APP_OUT="$(ls -d "$REPO_ROOT/apps/desktop/src-tauri/target/release/bundle/macos/"*.app 2>/dev/null | head -1)"
 
@@ -162,5 +179,11 @@ fi
 
 echo
 echo "Artifacts:"
-ls -d "$REPO_ROOT/apps/desktop/src-tauri/target/release/bundle/macos/"*.app 2>/dev/null || true
-ls "$REPO_ROOT/apps/desktop/src-tauri/target/release/bundle/dmg/"*.dmg 2>/dev/null || true
+BUNDLE_ROOT="$REPO_ROOT/apps/desktop/src-tauri/target/release/bundle"
+if [ "$(uname -s)" = "Linux" ]; then
+  ls "$BUNDLE_ROOT/appimage/"*.AppImage 2>/dev/null || true
+  ls "$BUNDLE_ROOT/deb/"*.deb 2>/dev/null || true
+else
+  ls -d "$BUNDLE_ROOT/macos/"*.app 2>/dev/null || true
+  ls "$BUNDLE_ROOT/dmg/"*.dmg 2>/dev/null || true
+fi

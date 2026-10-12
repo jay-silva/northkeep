@@ -8,6 +8,7 @@ import {
   KDF_INTERACTIVE,
   Vault,
   generateDeviceSecret,
+  ollamaStartCommand,
   type MemoryEntry,
 } from '@northkeep/core';
 import {
@@ -853,7 +854,7 @@ describe('hasOllamaModel + resolveReviewModel', () => {
     try {
       await expect(resolveReviewModel()).rejects.toThrow(/qwen2.5:14b/);
       await expect(resolveReviewModel()).rejects.toThrow(/qwen2.5:7b/);
-      await expect(resolveReviewModel()).rejects.toThrow(/brew services start ollama/);
+      await expect(resolveReviewModel()).rejects.toThrow(ollamaStartCommand(process.platform));
     } finally {
       await neither.close();
     }

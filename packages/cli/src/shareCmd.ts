@@ -1,4 +1,4 @@
-import { loadDeviceSecret, projectScope, type Vault } from '@northkeep/core';
+import { devicePhrase, loadDeviceSecret, projectScope, type Vault } from '@northkeep/core';
 import {
   applyDownSync,
   assertDeviceCanPush,
@@ -213,12 +213,14 @@ function heldSlug(scope: string): string {
   return scope.startsWith('project:') ? scope.slice('project:'.length) : scope;
 }
 
+const here = devicePhrase(process.platform);
+const Here = here.charAt(0).toUpperCase() + here.slice(1);
 const REASONS: Record<ConflictReason, string> = {
-  moved: 'this Mac changed it after the cloud version was written',
+  moved: `${here} changed it after the cloud version was written`,
   stale: 'Cloud Connect already has a newer copy than the one this cloud version started from',
   legacy: 'the cloud version does not say which copy it started from',
-  several_heads: 'this project has more than one current document on this Mac',
-  deleted_here: 'this project was deleted on this Mac, and the cloud version would bring it back',
+  several_heads: `this project has more than one current document on ${here}`,
+  deleted_here: `this project was deleted on ${here}, and the cloud version would bring it back`,
 };
 
 function conflictLine(c: DownSyncConflict): string {
@@ -364,7 +366,7 @@ export async function shareConflictsCmd(options: { show?: string }, deps: ShareD
     console.log('  See both versions: northkeep share conflicts --show <project>');
     return;
   }
-  console.log(report.local ? `This Mac's version (revision ${report.local.id}):` : 'This Mac has no current version of this project.');
+  console.log(report.local ? `${Here}'s version (revision ${report.local.id}):` : `${Here} has no current version of this project.`);
   if (report.local) console.log(report.local.content);
   for (const c of report.conflicts) {
     console.log(`Cloud version (id ${c.server_id}; ${REASONS[c.reason]}):`);
@@ -372,7 +374,7 @@ export async function shareConflictsCmd(options: { show?: string }, deps: ShareD
     if (report.history.includes(c.content)) console.log('This cloud version is already in your history.');
   }
   console.log(
-    `Keep one: northkeep share resolve ${options.show} --keep-mine, or --take-theirs${report.local ? ` --expected-revision ${report.local.id}` : ''} (refused if this Mac's version changes first)`,
+    `Keep one: northkeep share resolve ${options.show} --keep-mine, or --take-theirs${report.local ? ` --expected-revision ${report.local.id}` : ''} (refused if ${here}'s version changes first)`,
   );
 }
 
@@ -421,7 +423,7 @@ export async function shareResolveCmd(
     console.log(`✓ Project ${slug} now has the cloud version. Your previous version is in its history (northkeep projects history ${slug}).`);
   } else {
     console.log(
-      `✓ Kept this Mac's version of ${slug}. The cloud version was saved as a memory in project:${slug} titled "Cloud version not kept, ${now.toISOString().slice(0, 10)}".`,
+      `✓ Kept ${here}'s version of ${slug}. The cloud version was saved as a memory in project:${slug} titled "Cloud version not kept, ${now.toISOString().slice(0, 10)}".`,
     );
   }
   try {

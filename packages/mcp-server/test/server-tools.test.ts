@@ -724,6 +724,33 @@ describe('owner requests 2026-09-13: project title and search by meaning', () =>
     expect(bad.isError).toBeTruthy();
   });
 
+  it('refuses a working memory in a project scope and keeps the project title', async () => {
+    const mcp = await connect();
+    const created = await mcp.callTool({ name: 'project_update', arguments: {
+      project: 'lantern', expected_revision: null, title: 'Lantern Gazette', status: 'Printing.', next_actions: '',
+    } });
+    expect(created.isError, toolText(created)).toBeFalsy();
+    const refused = await mcp.callTool({ name: 'memory_remember', arguments: {
+      content: 'A second working note about the press.', type: 'working', scope: 'project:lantern',
+    } });
+    expect(refused.isError).toBe(true);
+    expect(toolText(refused)).toContain('conflict with no title');
+    const detail = await mcp.callTool({ name: 'memory_remember', arguments: {
+      content: 'The notice ran on page two.', type: 'episodic', scope: 'project:lantern',
+    } });
+    expect(detail.isError, toolText(detail)).toBeFalsy();
+    const stored = JSON.parse(toolText(detail)) as { stored: { id: string } };
+    const retyped = await mcp.callTool({ name: 'memory_edit', arguments: { id: stored.stored.id, type: 'working' } });
+    expect(retyped.isError).toBe(true);
+    expect(toolText(retyped)).toContain('conflict with no title');
+    const listed = JSON.parse(toolText(await mcp.callTool({ name: 'project_list', arguments: {} }))) as {
+      projects: Array<{ project: string; title: string | null; conflict: boolean }>;
+    };
+    expect(listed.projects).toEqual([
+      expect.objectContaining({ project: 'lantern', title: 'Lantern Gazette', conflict: false }),
+    ]);
+  });
+
   it('memory_retrieve says keyword when the embedder is unreachable and semantic when it answers', async () => {
     const mcp = await connect();
     await mcp.callTool({ name: 'memory_remember', arguments: { content: 'The user has a small dog named Albus.', type: 'semantic', scope: 'personal' } });

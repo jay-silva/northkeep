@@ -4,10 +4,15 @@ import { startServer } from './server.js';
 export { createServer, startServer, grantedScopes } from './server.js';
 export { auditAsCsv, auditAsJson } from './audit.js';
 export {
+  describeMasterKeyStore,
   keychainAvailable,
   keychainDeleteMasterKey,
   keychainGetMasterKey,
   keychainSetMasterKey,
+  masterKeyFilePath,
+  masterKeyStoreAvailable,
+  type MasterKeyBackend,
+  type MasterKeyStoreDescription,
 } from './keychain.js';
 export { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 export {

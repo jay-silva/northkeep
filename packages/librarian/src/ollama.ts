@@ -6,7 +6,7 @@
  * non-default ports, but any non-loopback host is refused outright — there
  * is deliberately no override.
  */
-import type { Embedder } from '@northkeep/core';
+import { ollamaStartHint, devicePhrase, type Embedder } from '@northkeep/core';
 
 const DEFAULT_URL = 'http://127.0.0.1:11434';
 export const EXTRACT_MODEL = process.env.NORTHKEEP_EXTRACT_MODEL ?? 'llama3.2:3b';
@@ -240,7 +240,7 @@ export async function hasOllamaModel(tag: string): Promise<boolean> {
 }
 
 const REVIEW_REFUSE_REMEDY =
-  'Start Ollama with: brew services start ollama. Then pull a review model: ollama pull qwen2.5:14b';
+  'Start Ollama with: ' + ollamaStartHint(process.platform) + '. Then pull a review model: ollama pull qwen2.5:14b';
 
 /**
  * Pick the local review-pass model. If NORTHKEEP_REVIEW_MODEL is set, that
@@ -259,7 +259,7 @@ export async function resolveReviewModel(): Promise<string> {
   if (override !== undefined && override.length > 0) {
     if (!(await hasOllamaModel(override))) {
       throw new Error(
-        `Review model "${override}" is not available on this Mac. Pull it with: ollama pull ${override}. ${REVIEW_REFUSE_REMEDY}`,
+        `Review model "${override}" is not available on ${devicePhrase(process.platform)}. Pull it with: ollama pull ${override}. ${REVIEW_REFUSE_REMEDY}`,
       );
     }
     return override;

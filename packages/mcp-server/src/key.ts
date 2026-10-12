@@ -1,5 +1,5 @@
 import { Vault, deriveMasterKey, loadDeviceSecret } from '@northkeep/core';
-import { keychainAvailable, keychainGetMasterKey } from './keychain.js';
+import { keychainGetMasterKey, masterKeyStoreAvailable } from './keychain.js';
 
 export type KeySource = 'env-key' | 'keychain' | 'env-passphrase';
 
@@ -13,7 +13,8 @@ export interface ResolvedKey {
  * Resolves the vault master key for background (no-terminal) use, in order:
  *   1. NORTHKEEP_MASTER_KEY env (hex) — tests/CI
  *   2. NORTHKEEP_PASSPHRASE env — derives via Argon2id (slow path)
- *   3. macOS Keychain — populated by `northkeep unlock`
+ *   3. The platform key store — macOS Keychain, or on Linux the Secret
+ *      Service (or the private file fallback). Populated by `northkeep unlock`.
  * Explicit input (env) outranks the ambient Keychain: a caller who set a
  * passphrase means THAT passphrase, even when a different vault's key sits
  * in the Keychain. Returns null when locked. Callers get a FRESH Buffer each
@@ -32,7 +33,7 @@ export function resolveMasterKey(vaultPath: string): ResolvedKey | null {
       source: 'env-passphrase',
     };
   }
-  if (keychainAvailable()) {
+  if (masterKeyStoreAvailable()) {
     const fromKeychain = keychainGetMasterKey();
     if (fromKeychain) return { key: fromKeychain, source: 'keychain' };
   }

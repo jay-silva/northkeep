@@ -232,6 +232,7 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
       const loadProject = () => {};
       const openProjectFromList = () => {};
       const projectDecisions = new Map([['trail-journal', 1]]);
+      ${functionSource('keepTypedValue')}
       ${functionSource('projectName')}
       ${functionSource('projectPill')}
       const projectIndex = [
@@ -265,6 +266,7 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
       const currentProjectSlug = '';
       const openProjectFromList = () => {};
       const projectDecisions = new Map();
+      ${functionSource('keepTypedValue')}
       ${functionSource('projectName')}
       ${functionSource('projectPill')}
       const projectIndex = [
@@ -438,7 +440,7 @@ describe('Conflict view comparison (ADR 0063 D1)', () => {
 describe('Automatic push status line (ADR 0063 D5)', () => {
   const sentence = (auto: Record<string, unknown>) => {
     const context = vm.createContext({});
-    vm.runInContext(functionSource('autoPushSentence'), context);
+    vm.runInContext(`let status = { device_phrase: 'this Mac' };\n${functionSource('devicePlace')}\n${functionSource('autoPushSentence')}`, context);
     return vm.runInContext(`autoPushSentence(${JSON.stringify(auto)})`, context) as string;
   };
   it('says when it is on, and names Sync now instead of a CLI command when it is not', () => {

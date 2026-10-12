@@ -1,4 +1,4 @@
-import { loadDeviceSecret as coreLoadDeviceSecret, memzero, Vault, withFileLock } from '@northkeep/core';
+import { devicePhrase, loadDeviceSecret as coreLoadDeviceSecret, memzero, Vault, withFileLock } from '@northkeep/core';
 import { PAUSE_RETRY_MS, type AutoSyncClock, type AutoSyncStatus } from './auto.js';
 import { isAutoSyncVault, syncState } from './client.js';
 import { loadSyncConfig } from './config.js';
@@ -55,6 +55,9 @@ export type ConnectorAutoPushEvent =
   | { type: 'paused'; reason: ConnectorAutoPushReason; message: string }
   | { type: 'error'; message: string };
 
+const here = devicePhrase(process.platform);
+const Here = here.charAt(0).toUpperCase() + here.slice(1);
+
 /** What the Cloud screen and the CLI say for each reason. */
 export const CONNECTOR_AUTO_PUSH_MESSAGES: Record<ConnectorAutoPushReason, string> = {
   switched_off: 'Automatic updates are off, so Cloud Connect updates only when you push.',
@@ -64,17 +67,17 @@ export const CONNECTOR_AUTO_PUSH_MESSAGES: Record<ConnectorAutoPushReason, strin
   locked: 'The vault is locked. Cloud Connect updates after you unlock it.',
   auto_sync_off: 'Automatic sync is off, so Cloud Connect updates only when you push.',
   auto_sync_error: 'Automatic sync hit a problem, so Cloud Connect waits until sync works again.',
-  behind: 'This Mac is behind your other devices. Cloud Connect will update after it catches up.',
-  diverged: 'This Mac and your other devices both have changes. Cloud Connect will update after you sync this Mac.',
-  ahead: 'Cloud Connect will update after this Mac finishes syncing.',
+  behind: `${Here} is behind your other devices. Cloud Connect will update after it catches up.`,
+  diverged: `${Here} and your other devices both have changes. Cloud Connect will update after you sync ${here}.`,
+  ahead: `Cloud Connect will update after ${here} finishes syncing.`,
   pull_refused: 'A pull from your other devices is waiting for your review, so Cloud Connect waits too.',
   tombstone_off: 'Cloud Connect is not refusing pushes to unshared scopes, so automatic push is off. You can still push by hand.',
   subscription: 'Cloud Connect needs an active subscription, so automatic updates are paused.',
   reencrypt: 'Cloud Connect cannot read this account\'s shared data. Run "northkeep share push" to re-encrypt it.',
   tombstone: 'Cloud Connect refused a scope you unshared elsewhere. Re-share it deliberately if you want it back.',
   stale_push:
-    'Another device pushed a newer copy to Cloud Connect, so automatic updates are paused. Sync this Mac, then push by hand. ' +
-    'If this Mac is already in sync (for example after your sync server was reset), run: northkeep share push --reset-order',
+    `Another device pushed a newer copy to Cloud Connect, so automatic updates are paused. Sync ${here}, then push by hand. ` +
+    `If ${here} is already in sync (for example after your sync server was reset), run: northkeep share push --reset-order`,
   error: 'Cloud Connect could not be updated. It will try again after the next change.',
 };
 

@@ -40,9 +40,10 @@ fn server_command(_app: &tauri::App) -> Command {
 
 /// Release: the bundled sidecar on the bundled server tree.
 ///
-/// The sidecar is a sibling of this executable (Contents/MacOS/) because
-/// that is where tauri's externalBin puts it; the server tree lives under
-/// the resource dir (Contents/Resources/server/). No `--jitless`: verified
+/// The sidecar is a sibling of this executable because that is where
+/// tauri's externalBin puts it (Contents/MacOS on macOS, usr/bin in the
+/// Linux bundles). The server tree lives under the resource dir. No
+/// `--jitless`: verified
 /// 2026-07-11 that it disables WebAssembly and thereby Node's fetch()
 /// (undici), silently breaking the Ollama probe — see ADR 0012.
 #[cfg(not(debug_assertions))]
@@ -101,14 +102,102 @@ fn report_server_death(code: Option<i32>) {
     }
 }
 
+/// Copied onto the sidecar when set on this process. The child inherits
+/// the rest of the environment too; these are applied again so the vault
+/// directory and the key-store switches cannot be dropped by a later edit
+/// that clears the map. Launch writes none of them: vault.nkv,
+/// device.secret, and master.key appear only when a vault is created or
+/// the key is parked.
+const SIDECAR_FORWARDED: &[&str] = &[
+    "NORTHKEEP_HOME",
+    "NORTHKEEP_PASSPHRASE",
+    "NORTHKEEP_MASTER_KEY",
+    "NORTHKEEP_NO_KEYCHAIN",
+    "NORTHKEEP_SECRET_BACKEND",
+];
+
+fn sidecar_env(lookup: impl Fn(&str) -> Option<String>) -> Vec<(String, String)> {
+    let mut vars = vec![("NORTHKEEP_DESKTOP".to_string(), "1".to_string())];
+    for key in SIDECAR_FORWARDED {
+        if let Some(value) = lookup(key) {
+            vars.push(((*key).to_string(), value));
+        }
+    }
+    vars
+}
+
+fn apply_sidecar_env(cmd: &mut Command) {
+    for (key, value) in sidecar_env(|key| std::env::var(key).ok()) {
+        cmd.env(key, value);
+    }
+}
+
+#[cfg(any(target_os = "linux", test))]
+/// Environment for an AppImage, before GTK or GLib starts.
+///
+/// The bundled GLib still searches the host GIO module directory, so the
+/// WebKit network process loads the host's libgiolibproxy and libdconfsettings.
+/// Those are built against the host libcurl and fail with an nghttp2 symbol
+/// error when the AppImage's libnghttp2 is already loaded. `GIO_MODULE_DIR`
+/// replaces that search path.
+///
+/// The same bundle cannot use the host ibus module. With `GTK_IM_MODULE=ibus`
+/// the input method commits one character and drops the rest. `xim` is the
+/// module shipped inside the AppImage. `NORTHKEEP_GTK_IM_MODULE` overrides it
+/// for someone who needs a different input method.
+fn linux_appimage_env(
+    appdir: Option<&str>,
+    im_override: Option<&str>,
+    dir_exists: impl Fn(&str) -> bool,
+) -> Vec<(&'static str, String)> {
+    let Some(appdir) = appdir.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+    let multiarch = format!("{appdir}/usr/lib/x86_64-linux-gnu/gio/modules");
+    let plain = format!("{appdir}/usr/lib/gio/modules");
+    let modules = if dir_exists(&multiarch) {
+        multiarch
+    } else if dir_exists(&plain) {
+        plain
+    } else {
+        // Still replace the host search path when the bundle has no modules.
+        multiarch
+    };
+    let im = im_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("xim");
+    vec![
+        ("GIO_MODULE_DIR", modules),
+        ("GTK_IM_MODULE", im.to_string()),
+    ]
+}
+
+fn apply_linux_bundle_env() {
+    #[cfg(target_os = "linux")]
+    {
+        let appdir = std::env::var("APPDIR").ok();
+        let im_override = std::env::var("NORTHKEEP_GTK_IM_MODULE").ok();
+        for (key, value) in linux_appimage_env(appdir.as_deref(), im_override.as_deref(), |path| {
+            std::path::Path::new(path).is_dir()
+        }) {
+            std::env::set_var(key, value);
+        }
+    }
+}
+
 fn main() {
+    apply_linux_bundle_env();
     tauri::Builder::default()
         .setup(|app| {
-            let mut child = server_command(app)
-                // Tell the server it is running inside the desktop shell, so the
-                // web UI opens external links via /api/open (WKWebView won't open
-                // target=_blank in a new browser) instead of a dead new-tab.
-                .env("NORTHKEEP_DESKTOP", "1")
+            let mut cmd = server_command(app);
+            // Tell the server it is running inside the desktop shell, so the
+            // web UI opens external links via /api/open (WKWebView won't open
+            // target=_blank in a new browser) instead of a dead new-tab.
+            // NORTHKEEP_HOME, when set, is the directory for vault.nkv,
+            // device.secret, and master.key.
+            apply_sidecar_env(&mut cmd);
+            let mut child = cmd
                 .stdout(Stdio::piped())
                 .stderr(Stdio::inherit())
                 .spawn()
@@ -193,4 +282,63 @@ fn main() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{linux_appimage_env, sidecar_env};
+
+    #[test]
+    fn sidecar_forwards_northkeep_home_when_set() {
+        let vars = sidecar_env(|key| {
+            if key == "NORTHKEEP_HOME" {
+                Some("/var/tmp/nk-explicit".to_string())
+            } else {
+                None
+            }
+        });
+        assert_eq!(
+            vars.iter()
+                .find(|(key, _)| key == "NORTHKEEP_HOME")
+                .map(|(_, value)| value.as_str()),
+            Some("/var/tmp/nk-explicit"),
+        );
+        assert!(vars
+            .iter()
+            .any(|(key, value)| key == "NORTHKEEP_DESKTOP" && value == "1"));
+        assert!(!vars.iter().any(|(key, _)| key == "NORTHKEEP_PASSPHRASE"));
+    }
+
+    #[test]
+    fn sidecar_does_not_invent_a_home() {
+        let vars = sidecar_env(|_| None);
+        assert!(!vars.iter().any(|(key, _)| key == "NORTHKEEP_HOME"));
+        assert_eq!(vars, vec![("NORTHKEEP_DESKTOP".to_string(), "1".to_string())]);
+    }
+
+    #[test]
+    fn appimage_isolates_gio_modules_and_input_method() {
+        let absent = |_: &str| false;
+        assert!(linux_appimage_env(None, None, absent).is_empty());
+        assert!(linux_appimage_env(Some("  "), None, absent).is_empty());
+        let vars = linux_appimage_env(Some("/app"), None, absent);
+        assert_eq!(
+            vars.iter().find(|(key, _)| *key == "GIO_MODULE_DIR").map(|(_, value)| value.as_str()),
+            Some("/app/usr/lib/x86_64-linux-gnu/gio/modules"),
+        );
+        assert_eq!(
+            vars.iter().find(|(key, _)| *key == "GTK_IM_MODULE").map(|(_, value)| value.as_str()),
+            Some("xim"),
+        );
+        let bundled = |path: &str| path.ends_with("/usr/lib/gio/modules");
+        let vars = linux_appimage_env(Some("/app"), Some("ibus"), bundled);
+        assert_eq!(
+            vars.iter().find(|(key, _)| *key == "GIO_MODULE_DIR").map(|(_, value)| value.as_str()),
+            Some("/app/usr/lib/gio/modules"),
+        );
+        assert_eq!(
+            vars.iter().find(|(key, _)| *key == "GTK_IM_MODULE").map(|(_, value)| value.as_str()),
+            Some("ibus"),
+        );
+    }
 }

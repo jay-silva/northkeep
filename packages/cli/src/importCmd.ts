@@ -7,7 +7,7 @@ import {
   type MemoryCandidate,
 } from '@northkeep/importers';
 import { EXTRACT_MODEL, dedupeCandidates, runImport } from '@northkeep/librarian';
-import type { MemoryEntry, Vault } from '@northkeep/core';
+import { ollamaStartHint, type MemoryEntry, type Vault } from '@northkeep/core';
 import { promptLine } from './prompt.js';
 
 export interface ImportCmdOptions {
@@ -86,7 +86,7 @@ export async function prepareImport(
     console.log('⚠  DEGRADED EXTRACTION: Ollama (local AI) is not available.');
     console.log(`   Using conservative pattern matching instead of ${EXTRACT_MODEL}.`);
     console.log('   Results will be rougher and less complete. To fix:');
-    console.log('   brew install ollama && brew services start ollama && ollama pull llama3.2:3b');
+    console.log('   ' + ollamaStartHint(process.platform) + ' && ollama pull llama3.2:3b');
     console.log('');
   }
 

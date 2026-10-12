@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { KDF_INTERACTIVE, Vault, deriveMasterKey, generateDeviceSecret, getProjectView } from '@northkeep/core';
+import { KDF_INTERACTIVE, Vault, deriveMasterKey, devicePhrase, generateDeviceSecret, getProjectView } from '@northkeep/core';
 import { deriveSyncCreds, foldSidecarScopesIntoVault, pullVault, pushSharedScopes, pushVault, setConnectorServer, setSyncServer } from '@northkeep/sync';
 import { shareConflictsCmd, sharePushCmd, shareResolveCmd, shareSyncCmd, type ShareDeps } from '../src/shareCmd.js';
 import { projectsDeleteCmd, projectsHistoryCmd, projectsRestoreCmd } from '../src/projectsCmd.js';
@@ -116,7 +116,7 @@ describe('share sync (D3)', () => {
     vault.save();
     await shareSyncCmd({}, deps(null), fail);
     expect(getProjectView(vault, 'demo').status).toBe('R2 local.');
-    expect(lines.some((l) => l.includes('Conflict, not applied: demo: this Mac changed it after the cloud version was written'))).toBe(true);
+    expect(lines.some((l) => l.includes('Conflict, not applied: demo: ' + devicePhrase(process.platform) + ' changed it after the cloud version was written'))).toBe(true);
 
     lines = [];
     await shareConflictsCmd({ show: 'demo' }, deps(), fail);

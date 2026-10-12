@@ -72,6 +72,8 @@ const calls: string[] = [];
 let wroteUnderGate: boolean | null = null;
 
 vi.mock('@northkeep/core', () => ({
+  devicePhrase: (platform: string) =>
+    platform === 'darwin' ? 'this Mac' : platform === 'linux' ? 'this Linux computer' : platform === 'win32' ? 'this Windows PC' : 'this computer',
   getPlatform: () => ({
     storage: {
       exists: (path: string) => files.has(path),

@@ -22,6 +22,7 @@ import {
   isValidProjectSlug,
   listProjectViews,
   northkeepHome,
+  projectWorkingMemoryMessage,
   projectScope,
   setPlatform,
   withFileLock,
@@ -610,7 +611,11 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         "Save a durable fact, preference, event, or procedure to the user's memory vault. " +
         'Store single, self-contained statements (one fact per call). Types: episodic (things ' +
         'that happened), semantic (durable facts), procedural (how the user likes things done), ' +
-        'working (current context, ages out), identity (stable profile).',
+        'working (current context, ages out), identity (stable profile). ' +
+        'Do not use type working in a project scope (project:<slug>). That row is the project ' +
+        'document, and a second one makes the project show as a conflict with no title. Change ' +
+        'the project with project_create or project_update. Detail in a project scope belongs in ' +
+        'episodic, semantic, or procedural memories.',
       inputSchema: {
         content: z
           .string()
@@ -640,6 +645,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
               `This connection is not granted the "${targetScope}" scope (granted: ${granted.join(', ')}).`,
             );
           }
+          const storedScope = targetScope.trim() || 'personal';
+          const projectWorking = projectWorkingMemoryMessage(type, storedScope);
+          if (projectWorking !== null) throw new Error(projectWorking);
           const entry = vault.remember({
             content,
             type: type as MemoryType,
@@ -716,7 +724,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       description:
         'Correct or update an existing memory instead of storing a near-duplicate. Pass the id from ' +
         'memory_retrieve or memory_list. Optional new content and/or type. This tool cannot change a ' +
-        "memory's scope; moving a memory between scopes stays in the NorthKeep app and CLI.",
+        "memory's scope; moving a memory between scopes stays in the NorthKeep app and CLI. " +
+        'Changing a memory to type working inside a project scope is refused: that row is the project document.',
       inputSchema: {
         id: idSchema.describe('The id of the memory to edit'),
         content: z

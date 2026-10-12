@@ -78,9 +78,13 @@ change to key handling requires an adversarial review session before merge.
 AI apps reach the vault through the MCP server, which Claude Desktop runs in
 the background with no terminal. Access is an explicit grant: `northkeep
 unlock` derives the master key once (passphrase + device secret) and parks it
-in the macOS Keychain behind the user's Mac login; `northkeep lock` revokes
-it. The passphrase is never stored. Plainly: **while unlocked, the vault is
-as protected as your saved browser passwords — your Mac login is the wall.**
+in the macOS Keychain, or on Linux in the Secret Service (ADR 0064). `northkeep
+lock` revokes it. The passphrase is never stored. If Linux has no Secret
+Service, the derived key is written to `~/.northkeep/master.key` at mode 0600
+and NorthKeep says so. That file is not encrypted. Plainly: **while unlocked,
+the vault is as protected as your saved passwords. Your login session is the
+wall, and the file fallback is only as strong as the permissions on your
+files.**
 
 Every MCP call opens the vault fresh under a file lock and closes it before
 returning, and appends a content-free line to `~/.northkeep/mcp-calls.log`

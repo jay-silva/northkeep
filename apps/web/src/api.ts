@@ -14,6 +14,9 @@ import {
   memzero,
   northkeepHome,
   ProjectHandoffError,
+  ProjectWorkingMemoryError,
+  projectWorkingMemoryMessage,
+  PROJECT_WORKING_MEMORY_MESSAGE,
   readProjectProvenance,
   type MemoryEntry,
   type MemoryType,
@@ -111,9 +114,11 @@ import {
   disconnect,
   installContract,
   isCodexDetected,
+  describeMasterKeyStore,
   keychainAvailable,
   keychainDeleteMasterKey,
   keychainSetMasterKey,
+  masterKeyStoreAvailable,
   appendCallLog,
   readCallLog,
   uninstallContract,
@@ -169,6 +174,8 @@ import {
   setDefaultEndpoint,
   getDefaultEndpoint,
 } from '@northkeep/converse';
+import { devicePhrase } from './device-phrase.js';
+import { hostStatus, localModelLabel } from './host-copy.js';
 import { LockedError, type UiSession } from './session.js';
 import { handleCurationApi } from './curationApi.js';
 import { handleProjectsApi } from './projectsApi.js';
@@ -371,6 +378,7 @@ export async function handleApi(
     return await dispatch(session, method, route, query, body);
   } catch (err) {
     if (err instanceof LockedError) return bad(423, 'Vault is locked.');
+    if (err instanceof ProjectWorkingMemoryError) return bad(400, err.message);
     if (err instanceof VaultAuthError) return bad(401, err.message);
     if (err instanceof SubscriptionRequiredError)
       return bad(402, 'A $10/month subscription is required to sync on this server.');
@@ -438,11 +446,17 @@ async function dispatch(
       ollama_available: ollama,
       extract_model: EXTRACT_MODEL,
       keychain_available: keychainAvailable(),
+      key_store: describeMasterKeyStore(),
       env_grant: session.hasEnvGrant(),
       // Running inside the Tauri desktop shell? The web UI needs to know so it
       // opens external links via /api/open (WKWebView can't open a real new
       // browser tab); in plain-browser mode it keeps native target=_blank.
       desktop: process.env.NORTHKEEP_DESKTOP === '1',
+      // Where the vault lives, for the welcome and unlock dialogs. The page
+      // must not say "this Mac" on Linux or Windows.
+      platform: process.platform,
+      device_phrase: devicePhrase(process.platform),
+      ...hostStatus(process.platform),
       version: APP_VERSION,
       // ADR 0044: the automatic sync engine's view, so the header pill can say
       // "Synced 2 min ago" or "Sync failed" without a second request.
@@ -584,13 +598,18 @@ async function dispatch(
     const { passphrase, remember } = parseJson<{ passphrase?: string; remember?: boolean }>(body);
     if (!passphrase) return bad(400, 'Passphrase required.');
     await session.unlock(passphrase);
-    if (remember === true && keychainAvailable()) {
+    const store = describeMasterKeyStore();
+    if (remember === true && store.backend !== 'none') {
       keychainSetMasterKey(session.keyHex());
     }
     // Unlock is a wake (ADR 0044). Not awaited: the dialog must close at once,
     // and the page asks /api/sync/wake for the outcome anyway.
     session.autoSync.wake().catch(() => {});
-    return ok({ unlocked: true });
+    return ok({
+      unlocked: true,
+      key_backend: store.backend,
+      key_warning: remember === true ? store.warning : null,
+    });
   }
 
   if (method === 'POST' && route === '/api/lock') {
@@ -599,7 +618,7 @@ async function dispatch(
     searchEmbedder.clear(); // vectors derive from plaintext; nothing outlives the unlocked session
     searchWarmerFor(session).reset();
     let keychainCleared = false;
-    if (forgetKeychain === true && keychainAvailable()) {
+    if (forgetKeychain === true && masterKeyStoreAvailable()) {
       keychainCleared = keychainDeleteMasterKey() === 'removed';
     }
     // Report the TRUE post-lock state, not a hardcoded value. An env-var grant
@@ -656,6 +675,8 @@ async function dispatch(
     }
     const targetScope = (scope ?? 'personal').trim() || 'personal';
     if (!/^[a-z0-9:_.-]{1,64}$/i.test(targetScope)) return bad(400, 'Invalid scope.');
+    const projectWorking = projectWorkingMemoryMessage(type, targetScope);
+    if (projectWorking !== null) return bad(400, projectWorking);
     return ok(
       await session.withVault((vault) => {
         const entry = vault.remember({
@@ -871,7 +892,7 @@ async function dispatch(
         if (!preview.ok) return ok(preview);
         if (preview.wouldDrop) {
           const count = preview.report.only_here.length + preview.report.restored_deletes.length;
-          return review(preview, 'pull_would_drop', `This pull would remove or bring back ${count} item${count === 1 ? '' : 's'} on this Mac. Review it with: northkeep sync pull`);
+          return review(preview, 'pull_would_drop', `This pull would remove or bring back ${count} item${count === 1 ? '' : 's'} on ${devicePhrase(process.platform)}. Review it with: northkeep sync pull`);
         }
         return ok(await confirmPull({ vaultPath, deviceSecret, masterKey, version: preview.version, sha256: preview.sha256 }));
       });
@@ -1329,7 +1350,7 @@ async function dispatch(
       const entry = getMcpCatalogEntry(catalogId);
       if (entry === undefined) return bad(404, `No such catalog entry: ${catalogId}`);
       if (!entry.available) {
-        return bad(400, entry.unavailableReason ?? 'That server is not available on this Mac.');
+        return bad(400, entry.unavailableReason ?? 'That server is not available on ' + devicePhrase(process.platform) + '.');
       }
       try {
         const server = addServer({
@@ -1367,7 +1388,7 @@ async function dispatch(
       return bad(
         400,
         'From the app, a server has to live under ~/.northkeep/mcp-servers (the place for this), ' +
-          'Homebrew, /usr/local, or the NorthKeep installation. If you installed it with npm, ' +
+          '/usr/local, /opt/homebrew, or the NorthKeep installation. If you installed it with npm, ' +
           'link it into the first one: ln -s "$(readlink -f "$(which <the-server-command>)")" ' +
           '~/.northkeep/mcp-servers/<name>. Or add it from a terminal, where there is no ' +
           'restriction: northkeep mcp add',
@@ -1743,7 +1764,7 @@ async function dispatch(
           );
           if (!already) {
             addEndpoint({
-              label: 'This Mac: ' + model,
+              label: localModelLabel(process.platform, model),
               baseUrl: 'http://127.0.0.1:11434',
               model,
               kind: 'openai-compatible',
@@ -2061,6 +2082,9 @@ async function dispatch(
       const chosen = approved
         .filter((i): i is number => Number.isInteger(i) && i >= 0 && i < job.candidates.length)
         .map((i) => job.candidates[i]!);
+      if (chosen.some((candidate) => projectWorkingMemoryMessage(candidate.type, targetScope) !== null)) {
+        return bad(400, PROJECT_WORKING_MEMORY_MESSAGE);
+      }
       const written = await session.withVault((vault) => {
         for (const candidate of chosen) {
           vault.remember({

@@ -36,7 +36,7 @@ describe('memory curation UI', () => {
   it('guards stale suggestion responses and clears sensitive curation state on lock', () => {
     expect(html).toContain('const requestId=++curationRequestSequence');
     expect(html).toContain("if(requestId!==curationRequestSequence||scope!==$('curationScope').value||instruction!==$('curationInstruction').value.trim())return");
-    expect(html).toContain('function showUnlock() { clearCurationSensitive();');
+    expect(html).toContain("function showUnlock() {\n    if (!$('setupOverlay').hidden) return;\n    clearCurationSensitive();");
     expect(html).toContain("$('curationDialogBody').replaceChildren()");
     expect(html).toContain('curationPendingOperations.clear()');
   });

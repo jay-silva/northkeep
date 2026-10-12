@@ -5,7 +5,8 @@
 # production node_modules into a self-contained folder the bundled Node
 # sidecar can run as `node dist/server.js`. Output:
 #   apps/desktop/src-tauri/server-tree/   (gitignored)
-# which tauri.bundle.conf.json maps into NorthKeep.app/Contents/Resources/.
+# which the bundle config maps into the app resources (macOS Resources/,
+# Linux /usr/lib/<id>/).
 #
 # Uses `pnpm deploy` with node-linker=hoisted so the tree is REAL FILES
 # (npm-style flat layout, no pnpm symlink store) — required because the
@@ -71,12 +72,20 @@ pnpm --dir "$REPO_ROOT" --filter @northkeep/web deploy --prod \
 #    on the 0.19.0 build, pnpm 11 hoisted deploy).
 find "$STAGE" -type d -name '.bin' -prune -exec rm -rf {} +
 # 2. Foreign-platform prebuilds — for ANY package that ships a prebuilds/ dir
-#    (sodium-native, and its bare-* transitive deps). We ship arm64 macOS only;
-#    every other platform's binary is dead weight that ALSO fails notarization
-#    (unsigned, wrong-arch Mach-O). Keep darwin-arm64 only. Verified 2026-07-11:
-#    the first signed build was rejected for exactly these files.
+#    (sodium-native, and its bare-* transitive deps). Keep only this host's
+#    prebuild. On macOS every other platform's binary also fails notarization
+#    (unsigned, wrong-arch Mach-O). Verified 2026-07-11: the first signed build
+#    was rejected for exactly these files.
+case "$(uname -s)-$(uname -m)" in
+  Darwin-arm64) KEEP_PREBUILD="darwin-arm64" ;;
+  Linux-x86_64) KEEP_PREBUILD="linux-x64" ;;
+  *)
+    echo "stage-server: unsupported build host $(uname -s)/$(uname -m)" >&2
+    exit 1
+    ;;
+esac
 while IFS= read -r -d '' pbdir; do
-  find "$pbdir" -mindepth 1 -maxdepth 1 -type d ! -name "darwin-arm64" -exec rm -rf {} +
+  find "$pbdir" -mindepth 1 -maxdepth 1 -type d ! -name "$KEEP_PREBUILD" -exec rm -rf {} +
 done < <(find "$STAGE/node_modules" -type d -name prebuilds -print0)
 # 3. Bare-runtime binaries. sodium-native ships BOTH a .node (Node.js) and a
 #    .bare (the Bare runtime) per platform; bare-inspect/bare-type are
@@ -94,7 +103,7 @@ for f in \
   "dist/static/index.html" \
   "node_modules/@northkeep/core/dist/index.js" \
   "node_modules/better-sqlite3/build/Release/better_sqlite3.node" \
-  "node_modules/sodium-native/prebuilds/darwin-arm64/sodium-native.node" \
+  "node_modules/sodium-native/prebuilds/${KEEP_PREBUILD}/sodium-native.node" \
 ; do
   if [ ! -f "$STAGE/$f" ]; then
     echo "stage-server: MISSING $f" >&2
@@ -110,20 +119,33 @@ if [ -n "$links" ]; then
   fail=1
 fi
 
-# No unsignable/foreign Mach-O may survive: anything that isn't a signable
-# arm64 .node addon (presign signs those) would fail notarization only AFTER a
-# multi-minute upload. General scan (catches .bare, foreign .node, stray
-# .dylib/.so, plain executables, and non-arm64 slices) — supersedes the old
-# class-specific check. Look only at native-binary-shaped files so we don't
-# `file` every .js. The node SIDECAR lives outside $STAGE, so every Mach-O in
-# here must be an arm64 .node.
+# No foreign native binary may survive. On macOS anything that isn't a
+# signable arm64 .node addon (presign signs those) would fail notarization
+# only AFTER a multi-minute upload. On Linux the same scan keeps ELF x86-64
+# .node addons and rejects Mach-O or the wrong architecture. The node SIDECAR
+# lives outside $STAGE.
 stray=""
 while IFS= read -r -d '' f; do
   info="$(file -b "$f" 2>/dev/null)"
-  [[ "$info" == *Mach-O* ]] || continue
-  if [[ "$f" != *.node ]] || [[ "$info" != *arm64* ]]; then
-    stray+="  ${f#"$STAGE/"}  [$info]"$'\n'
-  fi
+  case "$KEEP_PREBUILD" in
+    darwin-arm64)
+      [[ "$info" == *Mach-O* ]] || continue
+      if [[ "$f" != *.node ]] || [[ "$info" != *arm64* ]]; then
+        stray+="  ${f#"$STAGE/"}  [$info]"$'\n'
+      fi
+      ;;
+    linux-x64)
+      if [[ "$info" == *ELF* || "$info" == *Mach-O* ]]; then
+        if [[ "$f" != *.node ]] || [[ "$info" != *x86-64* ]]; then
+          stray+="  ${f#"$STAGE/"}  [$info]"$'\n'
+        fi
+      fi
+      ;;
+    *)
+      echo "stage-server: no native check for $KEEP_PREBUILD" >&2
+      exit 1
+      ;;
+  esac
 done < <(find "$STAGE" -type f \( -name "*.node" -o -name "*.bare" -o -name "*.dylib" -o -name "*.so" -o -perm -u+x \) -print0)
 if [ -n "$stray" ]; then
   echo "stage-server: unsignable/foreign Mach-O survived pruning (notarization would reject):" >&2
@@ -135,7 +157,11 @@ fi
 [ "$fail" -eq 0 ] || exit 1
 
 echo "stage-server: staged $(du -sh "$STAGE" | cut -f1)  ($(find "$STAGE" -name '*.node' | wc -l | tr -d ' ') native addon(s))"
+case "$KEEP_PREBUILD" in
+  darwin-arm64) SIDECAR_NAME="northkeep-server-aarch64-apple-darwin" ;;
+  linux-x64) SIDECAR_NAME="northkeep-server-x86_64-unknown-linux-gnu" ;;
+esac
 echo "stage-server: smoke-test it with:"
 echo "  NORTHKEEP_HOME=\$(mktemp -d) NORTHKEEP_NO_KEYCHAIN=1 \\"
-echo "    apps/desktop/src-tauri/binaries/northkeep-server-aarch64-apple-darwin \\"
+echo "    apps/desktop/src-tauri/binaries/${SIDECAR_NAME} \\"
 echo "    $STAGE/dist/server.js"
