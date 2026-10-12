@@ -8,7 +8,7 @@ import {
   PROJECT_WORKING_MEMORY_MESSAGE,
   ProjectWorkingMemoryError,
   projectWorkingMemoryMessage,
-} from '../src/project-doc.js';
+} from '../src/project-working-memory.js';
 import { Vault } from '../src/vault.js';
 
 const PASS = 'synthetic project working memory passphrase';

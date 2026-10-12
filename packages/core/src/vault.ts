@@ -53,7 +53,8 @@ import {
   type ProjectWriter,
   type ProjectView,
 } from './project-handoff.js';
-import { assertNotNewProjectWorkingMemory, emptyProjectDoc, formatLogArchive, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
+import { emptyProjectDoc, formatLogArchive, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
+import { assertNotNewProjectWorkingMemory } from './project-working-memory.js';
 import { importPlanProblem, projectInUseMessage, type ImportFilePlan } from './project-import.js';
 import type { SqliteDb } from './sqlite-driver.js';
 import { SCHEMA_DDL } from './schema.js';

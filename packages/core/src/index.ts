@@ -69,10 +69,6 @@ export {
   mergeProjectDoc,
   parseProjectDoc,
   parseProjectSlug,
-  PROJECT_WORKING_MEMORY_MESSAGE,
-  ProjectWorkingMemoryError,
-  projectWorkingMemoryMessage,
-  assertNotNewProjectWorkingMemory,
   projectScope,
   projectSectionKind,
   serializeProjectDoc,
@@ -81,4 +77,10 @@ export {
   type ProjectDocUpdate,
   type ProjectSectionHeading,
 } from './project-doc.js';
+export {
+  PROJECT_WORKING_MEMORY_MESSAGE,
+  ProjectWorkingMemoryError,
+  assertNotNewProjectWorkingMemory,
+  projectWorkingMemoryMessage,
+} from './project-working-memory.js';
 export { readNerReply, type NerReplyEntity } from './ner-reply.js';
