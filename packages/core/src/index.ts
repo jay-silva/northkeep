@@ -38,6 +38,7 @@ export {
 export { deriveMasterKey, memzero } from './crypto.js';
 export { withFileLock, FileLockTimeoutError, type FileLockOptions } from './lock.js';
 export * from './platform.js';
+export * from './host-phrase.js';
 export { getPlatform, setPlatform, type Platform } from './platform-context.js';
 export type { CryptoProvider } from './crypto-provider.js';
 export type { SqliteDb, SqliteDriver, SqliteStatement } from './sqlite-driver.js';

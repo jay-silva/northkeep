@@ -635,7 +635,7 @@ every milestone; if a limit is removed, say when and how.*
   **catalog** is a single click, because the command comes from NorthKeep's own
   template and never from the request. Adding one **by path** requires your vault
   passphrase and the program must live under `~/.northkeep/mcp-servers`,
-  Homebrew, `/usr/local`, or the NorthKeep installation. **npm's global prefix
+  `/usr/local`, `/opt/homebrew`, or the NorthKeep installation. **npm's global prefix
   is often none of those** (`~/.local` is common when npm is configured to avoid
   sudo), so a globally installed MCP server usually needs a symlink into
   `~/.northkeep/mcp-servers` before the app will accept it; the refusal message

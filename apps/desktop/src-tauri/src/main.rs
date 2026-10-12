@@ -132,7 +132,62 @@ fn apply_sidecar_env(cmd: &mut Command) {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
+/// Environment for an AppImage, before GTK or GLib starts.
+///
+/// The bundled GLib still searches the host GIO module directory, so the
+/// WebKit network process loads the host's libgiolibproxy and libdconfsettings.
+/// Those are built against the host libcurl and fail with an nghttp2 symbol
+/// error when the AppImage's libnghttp2 is already loaded. `GIO_MODULE_DIR`
+/// replaces that search path.
+///
+/// The same bundle cannot use the host ibus module. With `GTK_IM_MODULE=ibus`
+/// the input method commits one character and drops the rest. `xim` is the
+/// module shipped inside the AppImage. `NORTHKEEP_GTK_IM_MODULE` overrides it
+/// for someone who needs a different input method.
+fn linux_appimage_env(
+    appdir: Option<&str>,
+    im_override: Option<&str>,
+    dir_exists: impl Fn(&str) -> bool,
+) -> Vec<(&'static str, String)> {
+    let Some(appdir) = appdir.map(str::trim).filter(|value| !value.is_empty()) else {
+        return Vec::new();
+    };
+    let multiarch = format!("{appdir}/usr/lib/x86_64-linux-gnu/gio/modules");
+    let plain = format!("{appdir}/usr/lib/gio/modules");
+    let modules = if dir_exists(&multiarch) {
+        multiarch
+    } else if dir_exists(&plain) {
+        plain
+    } else {
+        // Still replace the host search path when the bundle has no modules.
+        multiarch
+    };
+    let im = im_override
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("xim");
+    vec![
+        ("GIO_MODULE_DIR", modules),
+        ("GTK_IM_MODULE", im.to_string()),
+    ]
+}
+
+fn apply_linux_bundle_env() {
+    #[cfg(target_os = "linux")]
+    {
+        let appdir = std::env::var("APPDIR").ok();
+        let im_override = std::env::var("NORTHKEEP_GTK_IM_MODULE").ok();
+        for (key, value) in linux_appimage_env(appdir.as_deref(), im_override.as_deref(), |path| {
+            std::path::Path::new(path).is_dir()
+        }) {
+            std::env::set_var(key, value);
+        }
+    }
+}
+
 fn main() {
+    apply_linux_bundle_env();
     tauri::Builder::default()
         .setup(|app| {
             let mut cmd = server_command(app);
@@ -231,7 +286,7 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::sidecar_env;
+    use super::{linux_appimage_env, sidecar_env};
 
     #[test]
     fn sidecar_forwards_northkeep_home_when_set() {
@@ -259,5 +314,31 @@ mod tests {
         let vars = sidecar_env(|_| None);
         assert!(!vars.iter().any(|(key, _)| key == "NORTHKEEP_HOME"));
         assert_eq!(vars, vec![("NORTHKEEP_DESKTOP".to_string(), "1".to_string())]);
+    }
+
+    #[test]
+    fn appimage_isolates_gio_modules_and_input_method() {
+        let absent = |_: &str| false;
+        assert!(linux_appimage_env(None, None, absent).is_empty());
+        assert!(linux_appimage_env(Some("  "), None, absent).is_empty());
+        let vars = linux_appimage_env(Some("/app"), None, absent);
+        assert_eq!(
+            vars.iter().find(|(key, _)| *key == "GIO_MODULE_DIR").map(|(_, value)| value.as_str()),
+            Some("/app/usr/lib/x86_64-linux-gnu/gio/modules"),
+        );
+        assert_eq!(
+            vars.iter().find(|(key, _)| *key == "GTK_IM_MODULE").map(|(_, value)| value.as_str()),
+            Some("xim"),
+        );
+        let bundled = |path: &str| path.ends_with("/usr/lib/gio/modules");
+        let vars = linux_appimage_env(Some("/app"), Some("ibus"), bundled);
+        assert_eq!(
+            vars.iter().find(|(key, _)| *key == "GIO_MODULE_DIR").map(|(_, value)| value.as_str()),
+            Some("/app/usr/lib/gio/modules"),
+        );
+        assert_eq!(
+            vars.iter().find(|(key, _)| *key == "GTK_IM_MODULE").map(|(_, value)| value.as_str()),
+            Some("ibus"),
+        );
     }
 }

@@ -12,7 +12,9 @@ import {
   ensureDeviceSecret,
   loadDeviceSecret,
   memzero,
+  devicePhrase,
   northkeepHome,
+  ollamaStartCommand,
   setPlatform,
   withFileLock,
   type MemoryEntry,
@@ -414,7 +416,7 @@ program
       console.error('Warning: the local name model is unavailable. Tier 3 ran its built-in date and name lists only; names outside those lists were NOT masked.');
     } else if (result.tier2Degraded) {
       console.error('Warning: Tier 2 unavailable (no Ollama). Names were NOT pseudonymized, only Tier 1 identifiers masked.');
-      console.error('   Start Ollama for name pseudonymization: brew services start ollama');
+      console.error('   Start Ollama for name pseudonymization: ' + ollamaStartCommand(process.platform));
     }
     process.stdout.write(result.redacted + (result.redacted.endsWith('\n') ? '' : '\n'));
     if (options.map) {
@@ -533,7 +535,9 @@ program
 
 const providers = program
   .command('providers')
-  .description('Manage model endpoints for "northkeep converse" (base URL + model + optional Keychain key)');
+  .description(process.platform === 'darwin'
+    ? 'Manage model endpoints for "northkeep converse" (base URL + model + optional Keychain key)'
+    : 'Manage model endpoints for "northkeep converse" (base URL + model)');
 
 providers
   .command('list', { isDefault: true })
@@ -558,7 +562,9 @@ providers
 
 providers
   .command('add')
-  .description('Add an endpoint. Any OpenAI-compatible runtime or API works; keys go to the macOS Keychain.')
+  .description(process.platform === 'darwin'
+    ? 'Add an endpoint. Any OpenAI-compatible runtime or API works; keys go to the macOS Keychain.'
+    : 'Add an endpoint. Any OpenAI-compatible runtime or API works. API keys are not saved on this computer.')
   .requiredOption('--label <label>', 'a name you will recognize')
   .requiredOption('--base-url <url>', 'e.g. http://127.0.0.1:11434 or https://api.deepseek.com')
   .option('--model <model>', 'model id; omit to list what the endpoint offers')
@@ -599,7 +605,9 @@ providers
 
 providers
   .command('remove')
-  .description('Remove an endpoint (and its Keychain key, if any)')
+  .description(process.platform === 'darwin'
+    ? 'Remove an endpoint (and its Keychain key, if any)'
+    : 'Remove an endpoint')
   .argument('<id>', 'endpoint id from "northkeep providers list"')
   .action((id: string) => {
     if (!removeEndpoint(id)) fail(`No endpoint "${id}".`);
@@ -834,14 +842,16 @@ models
 
 models
   .command('add')
-  .description('Guided setup: pick a provider, paste a key (stored in your Keychain), pick a model')
+  .description(process.platform === 'darwin'
+    ? 'Guided setup: pick a provider, paste a key (stored in your Keychain), pick a model'
+    : 'Guided setup: pick a provider, paste a key (API keys are not saved on this computer), pick a model')
   .action(async () => {
     await modelsAdd();
   });
 
 models
   .command('install')
-  .description('Install a local model on this Mac (hardware-matched by default), via Ollama')
+  .description('Install a local model on ' + devicePhrase(process.platform) + ' (hardware-matched by default), via Ollama')
   .argument('[tag]', 'Ollama model tag, e.g. llama3.2:3b (omit to use the recommended one)')
   .action(async (tag: string | undefined) => {
     await modelsInstall(tag);
@@ -1152,7 +1162,7 @@ share
   .option('--take-theirs', 'make the cloud version current; this version stays in history')
   .option('--keep-mine', 'keep this version; save the cloud text as a memory in the project')
   .option('--id <server-id>', 'which cloud version, when several are waiting')
-  .option('--expected-revision <id>', "with --take-theirs: refuse unless this Mac's version is still this one (from share conflicts --show)")
+  .option('--expected-revision <id>', 'with --take-theirs: refuse unless ' + devicePhrase(process.platform) + "'s version is still this one (from share conflicts --show)")
   .action(async (slug: string, options: { takeTheirs?: boolean; keepMine?: boolean; id?: string; expectedRevision?: string }) => {
     await withShareDeps((deps) => shareResolveCmd(slug, options, deps, fail));
   });
@@ -1342,7 +1352,7 @@ program
   .action(async (options: { open: boolean }) => {
     const { startUiServer } = await import('@northkeep/web');
     const server = await startUiServer({ vaultPath: vaultPathOpt() });
-    console.log(`NorthKeep is running (this Mac only): ${server.url}`);
+    console.log(`NorthKeep is running (${devicePhrase(process.platform)} only): ${server.url}`);
     console.log('Press Ctrl-C to quit.');
     if (options.open) {
       const { execFile } = await import('node:child_process');

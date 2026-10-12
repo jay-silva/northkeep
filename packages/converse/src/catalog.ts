@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { northkeepHome } from '@northkeep/core';
+import { northkeepHome, yourDevicePhrase } from '@northkeep/core';
 import type { TaskKind } from './route.js';
 
 /**
@@ -148,7 +148,7 @@ export function loadCatalog(): CatalogEntry[] {
 export function costLabel(tier: CostTier): { symbol: string; range: string } {
   switch (tier) {
     case 'free-local':
-      return { symbol: 'Free', range: 'runs on your Mac' };
+      return { symbol: 'Free', range: 'runs on ' + yourDevicePhrase(process.platform) };
     case 'low':
       return { symbol: '$', range: '~$0.15–0.60 / 1M tokens (approx)' };
     case 'medium':

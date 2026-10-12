@@ -172,6 +172,7 @@ import {
   getDefaultEndpoint,
 } from '@northkeep/converse';
 import { devicePhrase } from './device-phrase.js';
+import { hostStatus, localModelLabel } from './host-copy.js';
 import { LockedError, type UiSession } from './session.js';
 import { handleCurationApi } from './curationApi.js';
 import { handleProjectsApi } from './projectsApi.js';
@@ -451,6 +452,7 @@ async function dispatch(
       // must not say "this Mac" on Linux or Windows.
       platform: process.platform,
       device_phrase: devicePhrase(process.platform),
+      ...hostStatus(process.platform),
       version: APP_VERSION,
       // ADR 0044: the automatic sync engine's view, so the header pill can say
       // "Synced 2 min ago" or "Sync failed" without a second request.
@@ -884,7 +886,7 @@ async function dispatch(
         if (!preview.ok) return ok(preview);
         if (preview.wouldDrop) {
           const count = preview.report.only_here.length + preview.report.restored_deletes.length;
-          return review(preview, 'pull_would_drop', `This pull would remove or bring back ${count} item${count === 1 ? '' : 's'} on this Mac. Review it with: northkeep sync pull`);
+          return review(preview, 'pull_would_drop', `This pull would remove or bring back ${count} item${count === 1 ? '' : 's'} on ${devicePhrase(process.platform)}. Review it with: northkeep sync pull`);
         }
         return ok(await confirmPull({ vaultPath, deviceSecret, masterKey, version: preview.version, sha256: preview.sha256 }));
       });
@@ -1342,7 +1344,7 @@ async function dispatch(
       const entry = getMcpCatalogEntry(catalogId);
       if (entry === undefined) return bad(404, `No such catalog entry: ${catalogId}`);
       if (!entry.available) {
-        return bad(400, entry.unavailableReason ?? 'That server is not available on this Mac.');
+        return bad(400, entry.unavailableReason ?? 'That server is not available on ' + devicePhrase(process.platform) + '.');
       }
       try {
         const server = addServer({
@@ -1380,7 +1382,7 @@ async function dispatch(
       return bad(
         400,
         'From the app, a server has to live under ~/.northkeep/mcp-servers (the place for this), ' +
-          'Homebrew, /usr/local, or the NorthKeep installation. If you installed it with npm, ' +
+          '/usr/local, /opt/homebrew, or the NorthKeep installation. If you installed it with npm, ' +
           'link it into the first one: ln -s "$(readlink -f "$(which <the-server-command>)")" ' +
           '~/.northkeep/mcp-servers/<name>. Or add it from a terminal, where there is no ' +
           'restriction: northkeep mcp add',
@@ -1756,7 +1758,7 @@ async function dispatch(
           );
           if (!already) {
             addEndpoint({
-              label: 'This Mac: ' + model,
+              label: localModelLabel(process.platform, model),
               baseUrl: 'http://127.0.0.1:11434',
               model,
               kind: 'openai-compatible',

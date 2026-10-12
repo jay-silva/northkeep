@@ -36,6 +36,7 @@ async function syncButtonAfterLoad(status: Record<string, unknown>): Promise<boo
     const api = async () => status;
     const el = () => ({});
     const renderShareScopes = () => {};
+    ${functionSource('devicePlace')}
     ${functionSource('loadSharing')}
     this.load = loadSharing;
   `, context);
@@ -87,6 +88,8 @@ describe('Sharing: Sync now button (ADR 0050 Decision 5)', () => {
       const el = () => ({});
       const renderShareScopes = () => {};
       const startPairCountdown = () => {};
+      let status = {};
+      ${functionSource('devicePlace')}
       ${functionSource('loadSharing')}
       ${binding}
       this.load = loadSharing;
@@ -173,7 +176,7 @@ describe('Sync now preview (ADR 0063 D3)', () => {
 describe('Automatic pull refusal line (ADR 0063 D6)', () => {
   it('points at the Pull button instead of the CLI', () => {
     const context = vm.createContext({});
-    vm.runInContext(functionSource('pullRefusalSentence'), context);
+    vm.runInContext(`let status = { device_phrase: 'this Mac' };\n${functionSource('devicePlace')}\n${functionSource('pullRefusalSentence')}`, context);
     const line = vm.runInContext(`pullRefusalSentence('The copy on your sync server would remove or undo 2 items on this device, so it was not pulled automatically. Review what would change with: northkeep sync pull')`, context);
     expect(line).toBe('The copy on your sync server would remove or undo 2 items on this device, so it was not pulled automatically. Use Pull to review what would change on this Mac.');
   });

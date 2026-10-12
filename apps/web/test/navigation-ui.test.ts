@@ -82,6 +82,7 @@ describe('navigation UI', () => {
       const api=()=>oldResponse;
       const oldResponse=this.oldResponse;
       let localSearchBusy=false; const showLocalSearchState=()=>{};
+      ${functionSource('keepTypedValue')}
       ${functionSource('loadMemories')}
       this.start=loadMemories;
       this.advance=()=>{ filterScope='second'; memoryLoadSequence+=1; };
@@ -108,6 +109,7 @@ describe('navigation UI', () => {
       const api=()=>this.oldResponse;
       const clearTimeout=()=>{}; const stopLocalSearchView=()=>{}; const setTimeout=(fn)=>{this.scheduled=fn;return 1;};
       let localSearchBusy=false; const showLocalSearchState=()=>{};
+      ${functionSource('keepTypedValue')}
       ${functionSource('loadMemories')}
       ${binding}
       this.start=loadMemories;
@@ -198,6 +200,7 @@ describe('navigation UI', () => {
       const esc=(text)=>String(text); const memoryPrivacyLabel=()=>''; const renderMemorySearchStatus=async()=>{}; const showLocalSearchState=()=>{};
       const api=async()=>({memories:[{id:'m1',type:'semantic',scope:'personal',content:'Office is on Main Street',source:'cli',confidence:1,created_at:'2026-09-28T00:00:00Z'}]});
       ${memoryTypeTable()}
+      ${functionSource('keepTypedValue')}
       ${functionSource('loadMemories')}
       this.load=loadMemories; this.nodes=nodes;
     `, context);

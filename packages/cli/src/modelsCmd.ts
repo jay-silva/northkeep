@@ -1,4 +1,5 @@
 import readline from 'node:readline';
+import { devicePhrase, ollamaInstallCommand, ollamaStartCommand, yourDevicePhrase } from '@northkeep/core';
 import { c, DIM, RESET } from './ui.js';
 import {
   addEndpoint,
@@ -149,7 +150,8 @@ export async function modelsAdd(): Promise<void> {
       apiKey,
     });
     console.log(
-      `\n${c.green('✓')} Connected ${c.bold(endpoint.label)} ${c.dim(`(${endpoint.id})`)}: key stored in your Keychain.`,
+      `\n${c.green('✓')} Connected ${c.bold(endpoint.label)} ${c.dim(`(${endpoint.id})`)}` +
+      (process.platform === 'darwin' ? ': key stored in your Keychain.' : '. API keys are not saved on this computer.'),
     );
 
     const isFirst = listEndpoints().length === 1;
@@ -201,7 +203,7 @@ export async function modelsInstall(tag: string | undefined): Promise<void> {
   const hw = detectHardware();
   const rec = recommendLocalModel(hw);
   console.log(
-    `${c.muted('This Mac')}  ${hw.chip} · ${hw.totalRamGB} GB · ${hw.arch}`,
+    `${c.muted(devicePhrase(process.platform).charAt(0).toUpperCase() + devicePhrase(process.platform).slice(1))}  ${hw.chip} · ${hw.totalRamGB} GB · ${hw.arch}`,
   );
 
   let model = tag?.trim();
@@ -222,10 +224,12 @@ export async function modelsInstall(tag: string | undefined): Promise<void> {
 
   const state = await ollamaState();
   if (state === 'not-installed') {
-    console.log(`\n${c.yellow('Ollama isn\'t installed')}. It is the free local engine that runs models on your Mac.`);
+    console.log(`\n${c.yellow('Ollama isn\'t installed')}. It is the free local engine that runs models on ${yourDevicePhrase(process.platform)}.`);
     console.log('  Install it, then re-run this command:');
     console.log(`    ${c.pine('https://ollama.com/download')}`);
-    console.log(`    ${c.bold('brew install ollama && brew services start ollama')}`);
+    const install = ollamaInstallCommand(process.platform);
+    const start = ollamaStartCommand(process.platform);
+    if (install) console.log(`    ${c.bold(install + ' && ' + start)}`);
     return;
   }
 
@@ -240,12 +244,12 @@ export async function modelsInstall(tag: string | undefined): Promise<void> {
   process.stdout.write('\n');
 
   const endpoint = addEndpoint({
-    label: `This Mac: ${model}`,
+    label: `${devicePhrase(process.platform).charAt(0).toUpperCase() + devicePhrase(process.platform).slice(1)}: ${model}`,
     baseUrl: 'http://127.0.0.1:11434',
     model,
     kind: 'openai-compatible',
   });
   console.log(`${c.green('✓')} Installed and connected ${c.bold(endpoint.label)} ${c.dim(`(${endpoint.id})`)}.`);
-  console.log(c.muted('  Runs entirely on your Mac; nothing leaves your machine.'));
+  console.log(c.muted('  Runs entirely on ' + yourDevicePhrase(process.platform) + '; nothing leaves your machine.'));
   console.log(`\nTry it:  ${c.bold('northkeep chat')}`);
 }

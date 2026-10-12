@@ -44,6 +44,7 @@
     }
     .pill.ok { background: #22382c; }
     .pill.locked { background: #3a241d; }
+    .pill.info { background: var(--chip); color: var(--ink); }
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
@@ -57,6 +58,7 @@
   .pill { font-size: 12px; font-weight: 600; padding: 5px 11px; border-radius: 999px; background: var(--chip); color: var(--muted); }
   .pill.ok { background: #e6efe8; color: var(--ok); }
   .pill.locked { background: #f6e4dd; color: var(--danger); }
+  .pill.info { background: var(--chip); color: var(--ink); }
   .pill.draft { background: var(--warn-bg); color: var(--warn-ink); }
   /* Left rail + content. `--header-h` is measured at runtime (the header grows
      when a pill appears), so the sticky rail always starts flush under it. */
@@ -794,7 +796,7 @@
   <span id="syncPill" class="pill" hidden></span>
   <span id="ollamaPill" class="pill" hidden>local AI off</span>
   <span id="envPill" class="pill locked" hidden title="An environment variable keeps this vault open; the Lock button can't revoke it.">env override</span>
-  <span id="keyFilePill" class="pill locked" hidden>No keyring</span>
+  <span id="keyFilePill" class="pill info" hidden>Key file</span>
   <div class="grow"></div>
   <div class="header-actions"><button class="btn" id="exportBtn">Export</button><button class="btn" id="lockBtn" hidden>Lock</button></div>
 </header>
@@ -824,7 +826,7 @@
 <main>
   <div id="degradedBanner" class="banner" hidden>
     <strong>Local AI is not running.</strong> Imports will use rough pattern-matching instead of
-    the on-device model. Fix: <code>brew services start ollama</code>
+    the on-device model. Fix: <code id="ollamaFix">ollama serve</code><span id="ollamaFixAlt" hidden> or <code id="ollamaFixAltCmd">ollama serve</code></span>
   </div>
   <section id="view-converse" hidden inert aria-hidden="true">
     <div class="modeswitch" id="convModeSwitch">
@@ -862,7 +864,7 @@
         </div>
         <h3 class="sect">Local models</h3>
         <div class="card" id="localCard">
-          <div id="localBody" class="muted">Checking this Mac…</div>
+          <div id="localBody" class="muted">Checking <span data-place>this computer</span>…</div>
           <div id="localPullWrap" hidden style="margin-top:10px">
             <p id="localPullStatus" class="muted" style="margin:0 0 6px"></p>
             <progress id="localPullBar" max="100" value="0"></progress>
@@ -874,7 +876,7 @@
           <summary style="cursor:pointer;font-weight:600;color:var(--muted)">Add any endpoint by hand</summary>
           <p class="muted" style="margin:8px 0 12px;font-size:13px">Point NorthKeep at any OpenAI-compatible runtime or hosted API.</p>
           <div class="row" style="margin-bottom:8px">
-            <input type="text" id="epLabel" placeholder="Label (e.g. This Mac: Ollama)" style="flex:0 1 240px;min-width:160px">
+            <input type="text" id="epLabel" placeholder="Label (e.g. This computer: Ollama)" style="flex:0 1 240px;min-width:160px">
             <input type="text" id="epBase" placeholder="Base URL (e.g. http://localhost:11434/v1)">
           </div>
           <div class="row" style="margin-bottom:8px">
@@ -886,7 +888,7 @@
           <div class="row" style="margin-bottom:4px">
             <input type="password" id="epKey" placeholder="API key (optional)" style="flex:1;min-width:200px">
           </div>
-          <p class="muted" style="margin:0 0 10px;font-size:13px">Stored in the macOS Keychain; never written to files.</p>
+          <p class="muted" id="epKeyNote" data-key-note style="margin:0 0 10px;font-size:13px">API keys are not saved on this computer. NorthKeep does not write them to files.</p>
           <div class="err" id="epErr"></div>
           <div class="row"><button class="btn primary" id="epAdd">Add endpoint</button></div>
         </details>
@@ -942,7 +944,7 @@
       <h3 class="sect" style="margin-top:0">Scrub text before you paste it into another AI</h3>
       <p class="muted">Use this when you're about to paste something into an AI <em>outside</em> NorthKeep
         (the ChatGPT or Claude website, a colleague's tool). Paste your text below and NorthKeep masks
-        the sensitive parts here on this Mac, so you can safely copy the result. When you talk to a model
+        the sensitive parts here on <span data-place>this computer</span>, so you can safely copy the result. When you talk to a model
         in Converse this happens automatically, so you only need this mode for text you're pasting
         somewhere else yourself.</p>
       <ul class="muted" style="margin:0 0 12px 18px;font-size:14px;line-height:1.6">
@@ -1011,7 +1013,7 @@
     <div id="projectsHome">
       <div id="projectsAttention" class="project-notice" hidden></div>
       <div class="projects-toolbar">
-        <input id="projectSearch" type="search" aria-label="Search projects" placeholder="Search projects">
+        <input id="projectSearch" type="text" aria-label="Search projects" placeholder="Search projects" autocomplete="off">
         <div id="projectFilters" class="projects-filters" aria-label="Project filters">
           <button type="button" data-filter="all" aria-pressed="true">All projects <span id="projectsAllCount">0</span></button>
           <button type="button" data-filter="attention" aria-pressed="false">Needs attention <span id="projectsAttentionCount">0</span></button>
@@ -1137,8 +1139,8 @@
   </section>
   <section id="view-mcp" hidden>
     <div class="page-head settings-intro"><div><h2>Tools</h2><p class="muted">Manage the tools NorthKeep can offer during supported workflows.</p></div></div>
-    <p class="muted">MCP servers that Converse, the legacy chat in the terminal, can use as tools. The Mac app has no chat, so it does not call them itself. Nothing here is reachable by a model.
-      A server is either a program on this Mac or a service you sign in to. Naming a program
+    <p class="muted">MCP servers that Converse, the legacy chat in the terminal, can use as tools. The desktop app has no chat, so it does not call them itself. Nothing here is reachable by a model.
+      A server is either a program on <span data-place>this computer</span> or a service you sign in to. Naming a program
       yourself needs your passphrase, and so does signing in to a remote service, so knowing this
       window's address is never enough. A server you add offers nothing until you review what it
       advertises and approve it.</p>
@@ -1148,7 +1150,7 @@
       <details style="margin-top:12px">
         <summary style="cursor:pointer;color:var(--accent)">Add one by path (advanced)</summary>
         <p class="muted" style="margin:10px 0">Naming a program to run needs your passphrase, and
-          from the app it has to live under <code>~/.northkeep/mcp-servers</code>, Homebrew, or the
+          from the app it has to live under <code>~/.northkeep/mcp-servers</code>, <code>/usr/local</code>, <code>/opt/homebrew</code>, or the
           NorthKeep installation. Anywhere else, add it from a terminal.</p>
         <div class="row" style="gap:8px;flex-wrap:wrap">
           <input type="text" id="mcpCustomId" placeholder="short id (a-z, 0-9, -)" style="flex:1;min-width:150px">
@@ -1163,7 +1165,7 @@
       <details style="margin-top:12px">
         <summary style="cursor:pointer;color:var(--accent)">Add a remote server (https, sign-in required)</summary>
         <p class="muted" style="margin:10px 0">A remote server runs on someone else's machine, so
-          the arguments of a call you approve leave this Mac. It always gets the Tier-1 redaction
+          the arguments of a call you approve leave <span data-place>this computer</span>. It always gets the Tier-1 redaction
           floor and can never be marked trusted. In a chat pinned to <strong>Private only</strong>,
           its tools are refused outright.</p>
         <p class="muted" style="margin:10px 0">There is no one-click path to an official server, for
@@ -1221,7 +1223,7 @@
       </div>
       <p class="muted" id="syncResult" role="status" aria-live="polite" hidden style="margin:10px 0 0;font-size:13px"></p>
       <p class="muted" style="margin:10px 0 0;font-size:13px">NorthKeep now syncs on its own: it pushes a few
-        seconds after every change and pulls when you open or return to the app, only when this Mac has
+        seconds after every change and pulls when you open or return to the app, only when <span data-place>this computer</span> has
         nothing unsynced. The buttons stay for when you want to force it.</p>
     </div>
     <p class="muted" style="font-size:13px">A second machine needs the same
@@ -1229,7 +1231,7 @@
       over, set the same sync server, then Pull.</p>
   </section>
   <section id="view-connect" hidden>
-    <div class="page-head"><div><h2 id="connectHeading" tabindex="-1">Desktop</h2><p class="muted">Bring your memory to the AI apps you use on this Mac.</p></div></div>
+    <div class="page-head"><div><h2 id="connectHeading" tabindex="-1">Desktop</h2><p class="muted">Bring your memory to the AI apps you use on <span data-place>this computer</span>.</p></div></div>
     <p class="muted">Give the AI apps you already use (Claude Desktop, Claude Code, ChatGPT, and Cursor)
       access to your NorthKeep memory, on your existing subscription. One click registers the memory
       server that ships inside NorthKeep; no terminal, no config files to edit by hand.</p>
@@ -1251,8 +1253,8 @@
       (Claude, ChatGPT, and others) by copying them to NorthKeep's connector server.
       Everything is private by default. You share one scope at a time, on purpose; the one exception, a new project an AI app creates, is described below.</p>
     <div class="banner" style="margin:16px 0 22px">
-      <strong>Sharing is different from Sync. What you share leaves this Mac, and the apps you connect read it in full.</strong>
-      <div style="margin-top:6px">There it is stored encrypted, and NorthKeep holds no key in the database to read it: the key is rebuilt for each request from your app's own credential plus a secret held in our server. This is not end-to-end encryption, the server briefly decrypts in memory to answer each request, and the AI app you connect reads the result. The server can still see each shared scope's name, how many memories it holds, and when they change. Only shared scopes ever leave this Mac, and a scope becomes shared when you turn it on here, with one exception: a new project one of your AI apps creates, which this Mac does not have yet, is marked Shared when it arrives, and later edits to it are pushed. What an app writes into one of your private projects is held until you share it. You can unshare anytime, which deletes it from the server.</div>
+      <strong>Sharing is different from Sync. What you share leaves <span data-place>this computer</span>, and the apps you connect read it in full.</strong>
+      <div style="margin-top:6px">There it is stored encrypted, and NorthKeep holds no key in the database to read it: the key is rebuilt for each request from your app's own credential plus a secret held in our server. This is not end-to-end encryption, the server briefly decrypts in memory to answer each request, and the AI app you connect reads the result. The server can still see each shared scope's name, how many memories it holds, and when they change. Only shared scopes ever leave <span data-place>this computer</span>, and a scope becomes shared when you turn it on here, with one exception: a new project one of your AI apps creates, which <span data-place>this computer</span> does not have yet, is marked Shared when it arrives, and later edits to it are pushed. What an app writes into one of your private projects is held until you share it. You can unshare anytime, which deletes it from the server.</div>
     </div>
     <h3 class="sect">Connector server</h3>
     <div class="card">
@@ -1267,7 +1269,7 @@
     <div class="card">
       <p class="muted" style="margin:0 0 12px;font-size:13px">Every scope is <strong>private</strong> until
         you turn Share on, and turning it on shows a confirmation first. The one exception:
-        a new project one of your AI apps creates, which this Mac does not have yet, is marked Shared when it arrives, and later edits to it are pushed. What an app writes into one of your private projects is held until you share it. A shared scope wears a
+        a new project one of your AI apps creates, which <span data-place>this computer</span> does not have yet, is marked Shared when it arrives, and later edits to it are pushed. What an app writes into one of your private projects is held until you share it. A shared scope wears a
         <span class="badge shared" style="vertical-align:middle">SHARED</span> badge here.</p>
       <div id="shareScopeList"><p class="muted">Loading…</p></div>
       <div class="err" id="shareScopeErr"></div>
@@ -1314,8 +1316,7 @@
     <h3 class="sect">Sync now</h3>
     <div class="card">
       <p class="muted" style="margin:0 0 10px;font-size:13px">Pull memories you created (or forgot) inside your
-        AI apps back into this vault, then re-push so the server matches. Pushes only your shared scopes. Once this
-        Mac is paired it also brings in a new project an AI app created: that project is marked Shared,
+        AI apps back into this vault, then re-push so the server matches. Pushes only your shared scopes. Once <span data-place>this computer</span> is paired it also brings in a new project an AI app created: that project is marked Shared,
         and later edits to it are pushed.</p>
       <label class="switch-row" for="shareAutoPush"><span><strong>Keep Cloud Connect up to date automatically</strong><small id="shareAutoPushLine" role="status" aria-live="polite"></small></span><input type="checkbox" role="switch" id="shareAutoPush"></label>
       <p class="muted" id="shareLastPushed" style="margin:0 0 10px;font-size:13px"></p>
@@ -1331,7 +1332,7 @@
     <button class="btn primary" id="checkUpdateBtn">Check for updates</button>
     <p id="updateResult" style="margin-top:12px;font-size:14px"></p>
     <p class="muted" style="font-size:12px;margin-top:14px">This checks the public release page only when you click the button. Nothing about you or your vault is sent, and updates are never downloaded or installed automatically.</p>
-    <div class="support-row"><p><strong>Support NorthKeep</strong><span class="muted">Everything on your Mac is free. If NorthKeep helps you, you can leave a tip.</span></p><a class="btn-link" href="https://northkeep.ai/support" target="_blank" rel="noopener noreferrer">Open support page<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M17 14v5H5V7h5"/></svg><span class="sr-only"> (opens in your browser)</span></a></div>
+    <div class="support-row"><p><strong>Support NorthKeep</strong><span class="muted">Everything on <span data-place="your">your computer</span> is free. If NorthKeep helps you, you can leave a tip.</span></p><a class="btn-link" href="https://northkeep.ai/support" target="_blank" rel="noopener noreferrer">Open support page<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 5h5v5M19 5l-8 8M17 14v5H5V7h5"/></svg><span class="sr-only"> (opens in your browser)</span></a></div>
   </section>
 </main>
 </div>
@@ -1342,9 +1343,9 @@
       <div id="shareConfirmLead" style="font-weight:600"></div>
     </div>
     <ul style="margin:0 0 16px;padding-left:18px;font-size:14px;color:var(--ink);line-height:1.65">
-      <li><strong>What leaves your Mac:</strong> the memories in this scope, as plain readable text.</li>
+      <li><strong>What leaves <span data-place="your">your computer</span>:</strong> the memories in this scope, as plain readable text.</li>
       <li><strong>How the server stores them:</strong> encrypted. The database holds only ciphertext and no key that can read it; it is decrypted only in memory to answer your app's request. <strong>What the server can still see:</strong> this scope's name, how many memories, and when they change.</li>
-      <li><strong>What stays private:</strong> every scope you have not shared stays on this Mac. The one exception is a new project an AI app creates, which is marked Shared when it arrives.</li>
+      <li><strong>What stays private:</strong> every scope you have not shared stays on <span data-place>this computer</span>. The one exception is a new project an AI app creates, which is marked Shared when it arrives.</li>
       <li><strong>You can undo this:</strong> Unshare deletes these memories from the connector server.</li>
     </ul>
     <div class="err" id="shareConfirmErr"></div>
@@ -1404,7 +1405,7 @@
     </div>
     <ul style="margin:0 0 16px;padding-left:18px;font-size:14px;color:var(--ink);line-height:1.65">
       <li><strong>What happens:</strong> these memories are deleted from the connector server, so connected AI apps can no longer read them.</li>
-      <li><strong>Your vault keeps them:</strong> the memories stay on this Mac, untouched.</li>
+      <li><strong>Your vault keeps them:</strong> the memories stay on <span data-place>this computer</span>, untouched.</li>
       <li><strong>One limit:</strong> this cannot recall a copy an app already retrieved.</li>
     </ul>
     <div class="err" id="unshareConfirmErr"></div>
@@ -1419,8 +1420,8 @@
     <h2>Unlock your vault</h2>
     <p id="unlockLead">Your memories are encrypted on this computer. Enter your passphrase to open them.</p>
     <div class="err" id="unlockErr"></div>
-    <input type="password" id="passphrase" placeholder="Passphrase" autofocus>
-    <label class="check" id="rememberRow"><input type="checkbox" id="remember"> <span id="rememberLabel">Keep unlocked on this Mac (Keychain)</span></label>
+    <input type="password" id="passphrase" placeholder="Passphrase">
+    <label class="check" id="rememberRow"><input type="checkbox" id="remember"> <span id="rememberLabel">Keep unlocked on this computer</span></label>
     <p class="muted" id="rememberWarn" hidden style="margin:8px 0 0;font-size:13px"></p>
     <button class="btn primary" id="unlockBtn" style="width:100%">Unlock</button>
   </div>
@@ -1452,14 +1453,14 @@
     </div>
     <div id="setupStepAi" hidden>
       <h2>Add your first AI</h2>
-      <p id="setupAiLine">Checking for a local AI on this Mac…</p>
+      <p id="setupAiLine">Checking for a local AI on <span data-place>this computer</span>…</p>
       <div class="err" id="setupAiErr"></div>
       <div id="setupOllamaBox" hidden>
         <select id="setupOllamaModel" style="width:100%;margin-bottom:12px"></select>
         <button class="btn primary" id="setupOllamaAdd" style="width:100%;margin-bottom:8px">Use this model</button>
       </div>
       <div id="setupManualBox" hidden>
-        <input type="text" id="setupEpLabel" placeholder="Label (e.g. This Mac: Ollama)">
+        <input type="text" id="setupEpLabel" placeholder="Label (e.g. This computer: Ollama)">
         <input type="text" id="setupEpBase" placeholder="Base URL (e.g. http://localhost:11434/v1)">
         <input type="text" id="setupEpModel" placeholder="Model (e.g. llama3.2:3b)">
         <button class="btn primary" id="setupManualAdd" style="width:100%;margin-bottom:8px">Add endpoint</button>
@@ -1470,9 +1471,9 @@
       <h2>You're all set</h2>
       <p>Here's where everything lives:</p>
       <ul style="margin:0 0 16px 18px;line-height:1.9;font-size:14px;color:var(--muted)">
-        <li><strong>Memories</strong>: everything NorthKeep knows about you, on this Mac. Browse, search, edit, or add.</li>
+        <li><strong>Memories</strong>: everything NorthKeep knows about you, on <span data-place>this computer</span>. Browse, search, edit, or add.</li>
         <li><strong>Models</strong>: manage the local or cloud models available for detailed memory review under Settings.</li>
-        <li><strong>Connect</strong>: <strong>Desktop</strong> plugs your memory into the AI apps on this Mac in one click; <strong>Cloud</strong> copies chosen scopes to NorthKeep's connector server so the AI apps you use on the web can read them.</li>
+        <li><strong>Connect</strong>: <strong>Desktop</strong> plugs your memory into the AI apps on <span data-place>this computer</span> in one click; <strong>Cloud</strong> copies chosen scopes to NorthKeep's connector server so the AI apps you use on the web can read them.</li>
         <li><strong>Settings</strong>: import your history from ChatGPT or Claude, review activity, and set up sync across devices.</li>
       </ul>
       <button class="btn primary" id="setupDone" style="width:100%">Start using NorthKeep</button>
@@ -1485,7 +1486,7 @@
   <div class="dialog" style="width:480px">
     <div id="cwStepProvider">
       <h2>Connect a model</h2>
-      <p>Pick a provider. NorthKeep walks you through getting a key and choosing a model; your key goes straight to the Keychain.</p>
+      <p>Pick a provider. NorthKeep walks you through getting a key and choosing a model. <span id="cwProviderKeyNote" data-key-note>API keys are not saved on this computer. NorthKeep does not write them to files.</span></p>
       <div class="err" id="cwErr"></div>
       <div id="cwProviderCards"></div>
       <button class="btn" id="cwCancel" style="width:100%;margin-top:6px">Cancel</button>
@@ -1509,7 +1510,7 @@
       <div class="muted" id="cwKeyWarn" style="font-size:13px;min-height:16px;margin-bottom:8px"></div>
       <label class="muted" style="font-size:13px;display:block;margin-bottom:6px">Model</label>
       <select id="cwModelSel" style="width:100%;margin-bottom:12px"></select>
-      <p class="muted" style="font-size:13px;margin:0 0 14px">Your key goes straight to the macOS Keychain; never written to files or shown again.</p>
+      <p class="muted" id="cwKeyNote" data-key-note style="font-size:13px;margin:0 0 14px">API keys are not saved on this computer. NorthKeep does not write them to files.</p>
       <div class="row">
         <button class="btn" id="cwPasteBack">Back</button>
         <div class="grow"></div>
@@ -1607,7 +1608,7 @@
       // Say what it can see BEFORE the button, not after.
       row.appendChild(el('div', 'muted', e.caution));
       if (!e.available) {
-        row.appendChild(el('div', 'danger', e.unavailable_reason || e.unavailableReason || 'Not available on this Mac.'));
+        row.appendChild(el('div', 'danger', e.unavailable_reason || e.unavailableReason || 'Not available on ' + devicePlace() + '.'));
       } else if (byId.has(e.id)) {
         const existing = byId.get(e.id);
         const samePath =
@@ -1743,7 +1744,7 @@
         s.transport === 'http' ? s.url : (s.command + ' ' + (s.args || []).join(' '))));
       if (s.transport === 'http') {
         card.appendChild(el('div', 'muted',
-          'Remote: the arguments of a call you approve leave this Mac, after the Tier-1 floor. '
+          'Remote: the arguments of a call you approve leave ' + devicePlace() + ', after the Tier-1 floor. '
           + 'Refused entirely in a chat pinned to Private only.'));
       }
       card.appendChild(el('div', 'muted',
@@ -1764,7 +1765,7 @@
           form.appendChild(el('p', '',
             'Right now, when a chat saves a memory here, emails, phone numbers and similar details are masked before it is saved. '
             + 'Trusting this vault saves them exactly as you wrote them. What is sent to AI providers is still masked at the tier you choose. '
-            + 'Confirm only if this is your own NorthKeep vault on this Mac. This program will be trusted:'));
+            + 'Confirm only if this is your own NorthKeep vault on ' + devicePlace() + '. This program will be trusted:'));
           form.appendChild(el('p', 'muted', s.command + ' ' + (s.args || []).join(' ')));
           const go = el('button', 'btn primary', 'Yes, I trust this vault');
           go.style.cssText = 'min-height:44px';
@@ -2166,19 +2167,57 @@
     try { const c = await api('/api/connect'); setConnectPill(c.targets); }
     catch { /* locked or transient — leave the pill as-is */ }
   }
-  function showUnlock() { clearCurationSensitive(); clearMemorySensitive(); clearDetailedReviewSensitive(); clearProjectsSensitive(); $('unlockOverlay').hidden = false; $('passphrase').focus(); }
+  function focusDialogField(overlay, field) {
+    if (!overlay || overlay.hidden) return;
+    const active = document.activeElement;
+    if (active && active !== document.body && overlay.contains(active)) return;
+    if (field && typeof field.focus === 'function') field.focus();
+  }
+  function keepTypedValue(field, mutate) {
+    if (!field) { mutate(); return; }
+    const typed = field.value;
+    const start = field.selectionStart;
+    const end = field.selectionEnd;
+    mutate();
+    if (field.value !== typed) {
+      field.value = typed;
+      if (typeof start === 'number' && typeof field.setSelectionRange === 'function') {
+        field.setSelectionRange(start, end);
+      }
+    }
+  }
+  function devicePlace() {
+    return (status && status.device_phrase) || 'this computer';
+  }
+  function DevicePlace() {
+    const place = devicePlace();
+    return place.charAt(0).toUpperCase() + place.slice(1);
+  }
+  function yourPlace() {
+    return devicePlace().replace(/^this /, 'your ');
+  }
+  function YourPlace() {
+    const place = yourPlace();
+    return place.charAt(0).toUpperCase() + place.slice(1);
+  }
+  function showUnlock() {
+    if (!$('setupOverlay').hidden) return;
+    clearCurationSensitive(); clearMemorySensitive(); clearDetailedReviewSensitive(); clearProjectsSensitive();
+    $('unlockOverlay').hidden = false;
+    focusDialogField($('unlockOverlay'), $('passphrase'));
+  }
   function hideUnlock() { $('unlockOverlay').hidden = true; }
 
   // --- first-run setup wizard (M7d): create vault → back up the device key
   // → add the first AI endpoint → land on Converse. Everything dynamic is
   // rendered with el()/textContent only.
-  function showSetup() { hideUnlock(); $('setupOverlay').hidden = false; $('setupPass').focus(); }
+  function showSetup() { hideUnlock(); $('setupOverlay').hidden = false; focusDialogField($('setupOverlay'), $('setupPass')); }
   function hideSetup() { $('setupOverlay').hidden = true; }
   function setupStep(id) {
     ['setupStepCreate', 'setupStepBackup', 'setupStepAi', 'setupStepTour'].forEach((s) => { $(s).hidden = s !== id; });
   }
   $('setupCreateBtn').addEventListener('click', doSetupCreate);
-  $('setupPass2').addEventListener('keydown', (e) => { if (e.key === 'Enter') doSetupCreate(); });
+  $('setupPass2').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) doSetupCreate(); });
   async function doSetupCreate() {
     const pass = $('setupPass').value;
     $('setupErr').textContent = '';
@@ -2212,7 +2251,7 @@
       const r = await api('/api/models?base=' + encodeURIComponent(OLLAMA_BASE));
       const pick = pickChatModel(r.models || []);
       if (pick) {
-        $('setupAiLine').textContent = 'Found Ollama on this Mac. Pick a model; it runs here, so your chat never goes to a cloud model:';
+        $('setupAiLine').textContent = 'Found Ollama on ' + devicePlace() + '. Pick a model; it runs here, so your chat never goes to a cloud model:';
         const sel = $('setupOllamaModel');
         sel.textContent = '';
         for (const m of (r.models || []).filter((x) => !/embed/i.test(x))) {
@@ -2234,7 +2273,7 @@
     $('setupOllamaAdd').disabled = true;
     try {
       await api('/api/providers', { method: 'POST', json: {
-        label: 'This Mac: Ollama', base_url: OLLAMA_BASE, model: $('setupOllamaModel').value } });
+        label: (status && status.ollama_label) || (DevicePlace() + ': Ollama'), base_url: OLLAMA_BASE, model: $('setupOllamaModel').value } });
       setupStep('setupStepTour');
     } catch (e) {
       if (e.message !== 'locked') $('setupAiErr').textContent = e.message;
@@ -2265,7 +2304,7 @@
     showTop('projects');
   }
   $('unlockBtn').addEventListener('click', doUnlock);
-  $('passphrase').addEventListener('keydown', (e) => { if (e.key === 'Enter') doUnlock(); });
+  $('passphrase').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) doUnlock(); });
   async function doUnlock() {
     $('unlockErr').textContent = '';
     $('unlockBtn').disabled = true;
@@ -2285,6 +2324,35 @@
     const place = phrase || 'this computer';
     $('unlockLead').textContent = 'Your memories are encrypted on ' + place + '. Enter your passphrase to open them.';
     $('setupLead').textContent = 'Your AI memories will live in an encrypted vault on ' + place + '. Choose a passphrase to protect it.';
+    const titled = place.charAt(0).toUpperCase() + place.slice(1);
+    const yours = place.replace(/^this /, 'your ');
+    const yoursTitled = yours.charAt(0).toUpperCase() + yours.slice(1);
+    document.querySelectorAll('[data-place]').forEach((node) => {
+      const kind = node.getAttribute('data-place') || '';
+      node.textContent = kind === 'title' ? titled
+        : kind === 'your' ? yours
+        : kind === 'Your' ? yoursTitled
+        : kind === 'poss' ? place + "'s"
+        : kind === 'Poss' ? titled + "'s"
+        : place;
+    });
+    const start = (status && status.ollama_start) || 'ollama serve';
+    const alt = status && status.ollama_alt;
+    const fix = $('ollamaFix');
+    if (fix) fix.textContent = start;
+    const altWrap = $('ollamaFixAlt');
+    if (altWrap) {
+      altWrap.hidden = !alt;
+      const cmd = $('ollamaFixAltCmd');
+      if (cmd && alt) cmd.textContent = alt;
+    }
+    const label = (status && status.ollama_label) || (titled + ': Ollama');
+    for (const id of ['epLabel', 'setupEpLabel']) {
+      const input = $(id);
+      if (input) input.placeholder = 'Label (e.g. ' + label + ')';
+    }
+    const note = (status && status.provider_key_note) || 'API keys are not saved on this computer. NorthKeep does not write them to files.';
+    document.querySelectorAll('[data-key-note]').forEach((node) => { node.textContent = note; });
   }
   function applyKeyStore(store, keychainAvailable) {
     const backend = store && store.backend ? store.backend : (keychainAvailable ? 'macos-keychain' : 'none');
@@ -2299,7 +2367,7 @@
       warn.hidden = true;
       warn.textContent = '';
     } else if (backend === 'macos-keychain') {
-      $('rememberLabel').textContent = 'Keep unlocked on this Mac (Keychain)';
+      $('rememberLabel').textContent = 'Keep unlocked on ' + devicePlace() + ' (Keychain)';
       warn.hidden = true;
       warn.textContent = '';
     } else {
@@ -2308,8 +2376,21 @@
     }
     const pill = $('keyFilePill');
     if (pill) {
-      pill.hidden = backend !== 'file';
-      pill.title = backend === 'file' && store && store.warning ? store.warning : '';
+      if (backend === 'file') {
+        pill.hidden = false;
+        pill.className = 'pill info';
+        pill.textContent = 'Key file';
+        pill.title = store && store.warning ? store.warning : 'The vault key is kept in a private file on this computer.';
+      } else if (backend === 'none') {
+        pill.hidden = false;
+        pill.className = 'pill locked';
+        pill.textContent = 'No key store';
+        pill.title = 'No keyring is available, and the private key file is turned off, so NorthKeep cannot keep the vault unlocked.';
+      } else {
+        pill.hidden = true;
+        pill.textContent = '';
+        pill.title = '';
+      }
     }
   }
   $('lockBtn').addEventListener('click', async () => {
@@ -2386,7 +2467,7 @@
   // descriptive only: this surface never opens or verifies them.
   let projectLoadSequence = 0, projectActionSequence = 0;
   let projectIndex = [], currentProjectSlug = '', currentProject = null;
-  let projectNavigation = { mode:'home' }, projectQuery = '', projectSort = 'recent', projectFilter = 'all';
+  let projectNavigation = { mode:'home' }, projectQuery = '', projectSort = 'recent', projectFilter = 'all', projectSearchFrame = 0;
   let projectDecisionSequence = 0;
   let projectReview = null, projectReturnFocus = null, projectFocusDetail = false;
   const projectPendingOperations = new Map();
@@ -2564,6 +2645,7 @@
   }
 
   function renderProjectChoices() {
+    keepTypedValue($('projectSearch'), () => {
     const list = $('projectList'), select = $('projectSelect');
     list.replaceChildren(); select.replaceChildren();
     const attention = projectIndex.filter(projectNeedsAttention).length;
@@ -2623,6 +2705,7 @@
       list.appendChild(empty);
     }
     if (currentProjectSlug) select.value = currentProjectSlug;
+    });
   }
 
   function renderProjectsEmpty() { showProjectsHome(false); }
@@ -2777,7 +2860,7 @@
     const compare = el('div', 'review-compare');
     compare.append(projectSummaryBox('Current version', project.status, project.next_actions), projectSummaryBox('Version from ' + new Date(row.updated_at).toLocaleDateString([], { month:'short', day:'numeric' }), old['Current Status'], old['Next Actions']));
     body.appendChild(compare);
-    if (project.shared) body.appendChild(el('p', 'shared-note', (project.title || project.project) + ' is shared. Your AI apps see the restored version after this Mac next sends to Cloud Connect.'));
+    if (project.shared) body.appendChild(el('p', 'shared-note', (project.title || project.project) + ' is shared. Your AI apps see the restored version after ' + devicePlace() + ' next sends to Cloud Connect.'));
     const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);
     const actions = el('div', 'row'); actions.style.justifyContent = 'flex-end';
     const cancel = el('button', 'btn', 'Cancel'); cancel.type = 'button'; cancel.dataset.autofocus = ''; cancel.addEventListener('click', closeGuardDialog);
@@ -2875,7 +2958,7 @@
 
   function decisionReason(c) {
     if (c.reason === 'legacy') return 'A connected app wrote this before NorthKeep recorded which version it started from.';
-    if (c.reason === 'several_heads') return 'This project has more than one current version on this Mac, so NorthKeep cannot tell which one the cloud version replaces.';
+    if (c.reason === 'several_heads') return 'This project has more than one current version on ' + devicePlace() + ', so NorthKeep cannot tell which one the cloud version replaces.';
     if (c.reason === 'stale') return 'A connected app edited this from an older version, and Cloud Connect already has a newer one.';
     return 'A connected app edited this from a version you have since changed.';
   }
@@ -2968,7 +3051,7 @@
     const cmp = el('div', 'cmp');
     const mineHead = el('div', 'cmp-head'); mineHead.appendChild(el('h4', undefined, 'Your version'));
     const writer = local && local.writer && local.writer.host;
-    mineHead.appendChild(el('p', 'project-writer', !local ? 'This Mac has more than one current version of this project.' : 'On this Mac. ' + (writer ? 'Last written by ' + writer + ', ' : 'Saved ') + projectDate(local.updated_at)));
+    mineHead.appendChild(el('p', 'project-writer', !local ? DevicePlace() + ' has more than one current version of this project.' : 'On ' + devicePlace() + '. ' + (writer ? 'Last written by ' + writer + ', ' : 'Saved ') + projectDate(local.updated_at)));
     const cloudHead = el('div', 'cmp-head cloud'); cloudHead.appendChild(el('h4', undefined, 'Cloud version'));
     cloudHead.appendChild(el('p', 'project-writer', c.base_revision === null ? 'Written in a connected app. NorthKeep did not record which version it started from.'
       : c.base_revision === 'new' ? 'Created in a connected app.'
@@ -2994,7 +3077,7 @@
     keepBox.append(keep, keepText);
     const takeBox = el('div', 'choice'); const take = el('button', 'btn', 'Take theirs'); take.type = 'button';
     take.disabled = !local || c.reason === 'several_heads';
-    takeBox.append(take, el('p', undefined, take.disabled ? 'Not available while this Mac has more than one current version.' : 'The cloud version becomes the current one. Your version stays in history, and you can restore it from Saved versions.'));
+    takeBox.append(take, el('p', undefined, take.disabled ? 'Not available while ' + devicePlace() + ' has more than one current version.' : 'The cloud version becomes the current one. Your version stays in history, and you can restore it from Saved versions.'));
     const cancelCol = el('div', 'cancel-col'); const cancel = el('button', 'btn', 'Cancel'); cancel.type = 'button';
     cancel.addEventListener('click', () => { root.replaceChildren(); const back = $('projectDetail').querySelector('.project-notice .btn'); if (back) back.focus(); });
     cancelCol.append(cancel, el('small', undefined, 'This stays in Needs your decision.'));
@@ -3012,7 +3095,7 @@
         await loadProject(slug, choice === 'take-theirs');
         if (currentProjectSlug !== slug || !status.unlocked || $('view-projects').hidden) return;
         const done = choice === 'keep-mine' ? 'Kept your version. The cloud version is saved as a memory in ' + slug + '.' : 'The cloud version is now current. Your earlier version is in Saved versions.';
-        projectAnnounce(done + (result.push_error ? ' Saved on this Mac, but Cloud Connect was not updated: ' + result.push_error : ''), Boolean(result.push_error));
+        projectAnnounce(done + (result.push_error ? ' Saved on ' + devicePlace() + ', but Cloud Connect was not updated: ' + result.push_error : ''), Boolean(result.push_error));
       } catch (ex) {
         if (ex.message === 'locked' || !projectWriteViewCurrent(slug, requestId)) return;
         cancel.disabled = false; keep.disabled = false; take.disabled = !local || c.reason === 'several_heads';
@@ -3200,7 +3283,11 @@
   }
 
   $('projectsBack').addEventListener('click', () => showProjectsHome());
-  $('projectSearch').addEventListener('input', () => { projectQuery = $('projectSearch').value; renderProjectChoices(); });
+  $('projectSearch').addEventListener('input', () => {
+    projectQuery = $('projectSearch').value;
+    cancelAnimationFrame(projectSearchFrame);
+    projectSearchFrame = requestAnimationFrame(() => renderProjectChoices());
+  });
   $('projectSort').addEventListener('change', () => { projectSort = $('projectSort').value; renderProjectChoices(); });
   $('projectFilters').addEventListener('click', event => { const button = event.target.closest('button[data-filter]'); if (button) { projectFilter = button.dataset.filter; renderProjectChoices(); } });
   $('projectSelect').addEventListener('change', () => openProjectFromList($('projectSelect').value));
@@ -3329,7 +3416,7 @@
       const newest = peers.reduce((a, b) => (a.created_at > b.created_at ? a : b));
       return newest.id === m.id;
     };
-    $('memList').innerHTML = (memories.length === 0
+    keepTypedValue($('addMemContent'), () => { keepTypedValue($('q'), () => { $('memList').innerHTML = (memories.length === 0
       ? '<p class="muted">No memories match.</p>'
       : memories.map((m) => `
         <div class="card" id="mem-${esc(m.id)}">
@@ -3365,6 +3452,7 @@
       const contentDiv = card.querySelector('.content');
       if (contentDiv) renderMarkdown(contentDiv, m.content);
     }
+    }); });
   }
   let localSearchEpoch = 0, localSearchBusy = false, localSearchPoll = null;
   let localSearchJob = null, localSearchDeadline = 0;
@@ -3410,7 +3498,7 @@
         showLocalSearchState('Downloading the search model', 'Keyword search is still available.');
         void pollSearchModel(localSearchJob, epoch);
       } else if (info.runtime !== 'running') {
-        showLocalSearchState('Search by meaning is off', 'Keyword search still works. Start Ollama to search by meaning on this Mac.', info.can_start ? 'start' : '', 'Start local search');
+        showLocalSearchState('Search by meaning is off', 'Keyword search still works. Start Ollama to search by meaning on ' + devicePlace() + '.', info.can_start ? 'start' : '', 'Start local search');
         $('localSearchInstall').hidden = false;
       } else if (info.embedding_model !== 'installed') {
         showLocalSearchState('Download the search model', 'Ollama is running. Download the search model to enable search by meaning.', info.can_start ? 'pull' : '', 'Download search model');
@@ -3743,7 +3831,7 @@
     const p = await api('/api/import/' + job + '/progress');
     if (p.status === 'extracting') {
       $('importStatus').textContent =
-        `Extracting memories on this Mac… ${p.done}/${p.total} conversations` +
+        `Extracting memories on ${devicePlace()}… ${p.done}/${p.total} conversations` +
         (p.degraded ? ' (rough mode: local AI off)' : '');
       $('importBar').max = p.total || 1;
       $('importBar').value = p.done;
@@ -4718,7 +4806,7 @@
   // 4-case switch — so the static page can render a $/$$ hint without shipping
   // the catalog. Keep in sync with catalog.ts if the ranges ever change.
   const COST_LABEL = {
-    'free-local': { symbol: 'Free', range: 'runs on your Mac' },
+    'free-local': { symbol: 'Free', range: 'runs on ' + yourPlace() },
     low: { symbol: '$', range: '~$0.15–0.60 / 1M tokens (approx)' },
     medium: { symbol: '$$', range: '~$1–5 / 1M tokens (approx)' },
     high: { symbol: '$$$', range: '~$5–15+ / 1M tokens (approx)' },
@@ -4809,13 +4897,13 @@
       // both halves, because the pin is exactly the setting someone chooses
       // when they are relying on the promise.
       hint.innerHTML =
-        '🔒 <span><strong>Private only is on.</strong> Only local models on your Mac will read this chat; ' +
+        '🔒 <span><strong>Private only is on.</strong> Only local models on ' + yourPlace() + ' will read this chat; ' +
         'nothing is sent to a cloud model. Web tools are separate: if you turn Tools on, a search or fetch ' +
-        'still leaves your Mac. It asks you first, unless you have already granted that site ' +
+        'still leaves ' + yourPlace() + '. It asks you first, unless you have already granted that site ' +
         '&quot;always&quot;: a standing grant runs with no prompt, even here. For a chat where nothing at ' +
         'all leaves, keep Tools off.</span>';
     } else {
-      hint.innerHTML = '<span>Turn on <strong>Private only</strong> to pin this chat to local models on your Mac, so nothing is ever sent to a cloud model. It is off, so a connected cloud model may be used (after on-device redaction).</span>';
+      hint.innerHTML = '<span>Turn on <strong>Private only</strong> to pin this chat to local models on ' + yourPlace() + ', so nothing is ever sent to a cloud model. It is off, so a connected cloud model may be used (after on-device redaction).</span>';
     }
   }
 
@@ -5197,8 +5285,11 @@
     stopOllamaDetect();
     const body = $('localBody');
     body.textContent = '';
+    const install = status && status.ollama_install;
+    const start = (status && status.ollama_start) || 'ollama serve';
+    const alt = status && status.ollama_alt;
     if (r.state === 'not-installed') {
-      body.appendChild(el('strong', '', 'Install Ollama to run models privately on this Mac'));
+      body.appendChild(el('strong', '', 'Install Ollama to run models privately on ' + devicePlace()));
       body.appendChild(el('p', 'muted', 'Ollama is a free, open-source runtime for local AI. It powers private Converse and Tier 2 redaction, and nothing you run through it leaves your machine.'));
       const ol = el('ol', 'muted'); ol.style.cssText = 'margin:2px 0 12px 18px;font-size:14px;line-height:1.9';
       const li1 = el('li'); li1.appendChild(document.createTextNode('Install it: '));
@@ -5206,13 +5297,17 @@
       link.href = 'https://ollama.com/download'; link.target = '_blank'; link.rel = 'noopener noreferrer';
       link.style.cssText = 'text-decoration:none;font-size:12px;padding:2px 10px';
       li1.appendChild(link);
-      li1.appendChild(document.createTextNode('  or  '));
-      li1.appendChild(el('code', '', 'brew install ollama'));
-      const copy = el('button', 'btn', 'Copy'); copy.style.cssText = 'font-size:12px;padding:2px 8px;margin-left:6px';
-      copy.addEventListener('click', () => { navigator.clipboard.writeText('brew install ollama'); copy.textContent = 'Copied ✓'; });
-      li1.appendChild(copy);
+      if (install) {
+        li1.appendChild(document.createTextNode('  or  '));
+        li1.appendChild(el('code', '', install));
+        const copy = el('button', 'btn', 'Copy'); copy.style.cssText = 'font-size:12px;padding:2px 8px;margin-left:6px';
+        copy.addEventListener('click', () => { navigator.clipboard.writeText(install); copy.textContent = 'Copied ✓'; });
+        li1.appendChild(copy);
+      }
       ol.appendChild(li1);
-      ol.appendChild(el('li', '', 'Open the Ollama app once so it starts running in the background.'));
+      ol.appendChild(el('li', '', install
+        ? 'Open Ollama once so it keeps running in the background.'
+        : 'Start it with ' + start + (alt ? ' or ' + alt : '') + ', then leave it running.'));
       body.appendChild(ol);
       const waiting = el('p', 'muted', '○ Waiting for Ollama… this panel updates on its own once it is running, then offers a 1-click model download.');
       waiting.style.fontSize = '13px';
@@ -5221,9 +5316,9 @@
       return;
     }
     const hw = r.hardware || {}, rec = r.recommended || {};
-    body.appendChild(el('strong', '', 'Run a model privately on this Mac'));
+    body.appendChild(el('strong', '', 'Run a model privately on ' + devicePlace()));
     body.appendChild(el('p', 'muted',
-      'Your Mac (' + (hw.chip || 'this Mac') + ', ' + (hw.totalRamGB ?? '?') + ' GB) can run ' +
+      YourPlace() + ' (' + (hw.chip || devicePlace()) + ', ' + (hw.totalRamGB ?? '?') + ' GB) can run ' +
       rec.label + ' (~' + rec.sizeGB + ' GB). Nothing leaves your machine.'));
     const btn = el('button', 'btn primary', 'Install ' + rec.label);
     btn.addEventListener('click', () => startLocalPull(rec.tag, btn));
@@ -5392,7 +5487,7 @@
     const host = ev.endpoint_host || 'the model';
     if (reds.length) {
       const title = el('p', '', '🛡 ' + reds.length + (reds.length === 1 ? ' thing was' : ' things were') +
-        ' masked on your Mac before anything went to ' + host + ':');
+        ' masked on ' + yourPlace() + ' before anything went to ' + host + ':');
       title.style.cssText = 'margin:0 0 10px;font-weight:600';
       head.appendChild(title);
       for (const r of reds) {
@@ -5499,7 +5594,7 @@
 
   $('convSend').addEventListener('click', sendTurn);
   $('convInput').addEventListener('keydown', (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendTurn(); }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); sendTurn(); }
   });
 
   // --- chat file attachment: extracted locally (no network), then redacted
@@ -5849,7 +5944,7 @@
       // so the local work is recoverable either way.
       // Never assert that this Mac changed: a torn or unknown baseline looks
       // the same as an edit (seventh and eighth reviews). Say what is known.
-      case 'diverged': return "⚠ This Mac's vault differs from the server's newer copy. Pull first (your current vault is kept as a .bak), then Push.";
+      case 'diverged': return "⚠ " + DevicePlace() + "'s" + " vault differs from the server's newer copy. Pull first (your current vault is kept as a .bak), then Push.";
       case 'no-remote': return 'Nothing uploaded yet. Push to start.';
       case 'no-local': return 'No local vault; Pull to download version ' + s.remoteVersion + '.';
       case 'no-config': return 'Set a sync server above to start.';
@@ -5858,7 +5953,7 @@
   }
   // ADR 0063 D6: the engine's refusal names the CLI; here the Pull button opens the review.
   function pullRefusalSentence(message) {
-    return String(message).replace(/Review what would change with: northkeep sync pull\.?$/, 'Use Pull to review what would change on this Mac.');
+    return String(message).replace(/Review what would change with: northkeep sync pull\.?$/, 'Use Pull to review what would change on ' + devicePlace() + '.');
   }
 
   async function loadSyncStatus() {
@@ -5954,12 +6049,12 @@
     body.replaceChildren();
     const groups = pullReportGroups(data.report || {});
     if (notice) { const n = el('div', 'project-notice'); n.setAttribute('role', 'alert'); n.textContent = notice; body.appendChild(n); }
-    body.appendChild(el('p', 'lead muted', 'Your sync server has a copy of your vault from another device. Pulling it replaces the vault on this Mac. Nothing has changed yet.'));
+    body.appendChild(el('p', 'lead muted', 'Your sync server has a copy of your vault from another device. Pulling it replaces the vault on ' + devicePlace() + '. Nothing has changed yet.'));
     const removeCount = (data.report.only_here || []).length + groups.projects.length;
     if (removeCount) {
-      const group = planGroup('Will be removed from this Mac', removeCount);
-      group.appendChild(el('p', 'plan-note muted', 'These are on this Mac and not in the copy on your sync server.'));
-      for (const slug of groups.projects) group.appendChild(planItem('Project: ' + slug, 'Its current version is only on this Mac.'));
+      const group = planGroup('Will be removed from ' + devicePlace(), removeCount);
+      group.appendChild(el('p', 'plan-note muted', 'These are on ' + devicePlace() + ' and not in the copy on your sync server.'));
+      for (const slug of groups.projects) group.appendChild(planItem('Project: ' + slug, 'Its current version is only on ' + devicePlace() + '.'));
       for (const [scope, lines] of groups.onlyHere) {
         for (const line of lines.slice(0, 20)) group.appendChild(planItem(scopeLabel(scope), line, true));
         if (lines.length > 20) group.appendChild(planItem('And ' + (lines.length - 20) + ' more in ' + scopeLabel(scope)));
@@ -5968,14 +6063,14 @@
     }
     if (groups.restored.size) {
       const group = planGroup('Deleted here, would come back', (data.report.restored_deletes || []).length, 'decide');
-      group.appendChild(el('p', 'plan-note muted', 'You deleted these memories on this Mac. The pull would bring them back. Their text is not shown because this Mac no longer has it.'));
+      group.appendChild(el('p', 'plan-note muted', 'You deleted these memories on ' + devicePlace() + '. The pull would bring them back. Their text is not shown because ' + devicePlace() + ' no longer has it.'));
       for (const [scope, n] of groups.restored) group.appendChild(planItem(n + (n === 1 ? ' memory in ' : ' memories in ') + scopeLabel(scope)));
       body.appendChild(group);
     }
     for (const mark of groups.marks) {
-      body.appendChild(el('p', 'plan-held muted', scopeLabel(mark.scope) + (mark.shared_here ? ' is shared on this Mac and private in the other copy.' : ' is private on this Mac and shared in the other copy.') + ' This is for your information; it is not counted as a removal.'));
+      body.appendChild(el('p', 'plan-held muted', scopeLabel(mark.scope) + (mark.shared_here ? ' is shared on ' + devicePlace() + ' and private in the other copy.' : ' is private on ' + devicePlace() + ' and shared in the other copy.') + ' This is for your information; it is not counted as a removal.'));
     }
-    body.appendChild(el('p', 'shared-note', 'This Mac\'s current vault is kept as ' + (data.backup_file || 'a backup file') + ' next to the vault file, but only until the next save overwrites it. Copy that file first if you may need anything removed.'));
+    body.appendChild(el('p', 'shared-note', DevicePlace() + "'s" + ' current vault is kept as ' + (data.backup_file || 'a backup file') + ' next to the vault file, but only until the next save overwrites it. Copy that file first if you may need anything removed.'));
     const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);
     const foot = el('div', 'plan-foot'); foot.appendChild(el('p', 'muted', 'Confirm pulls exactly the copy described here. If the server changes first, you see a new report.'));
     const actions = el('div', 'row');
@@ -5987,7 +6082,7 @@
       try {
         const r = await api('/api/sync/pull', { method: 'POST', json: { confirm: true, version: data.version, sha256: data.sha256 } });
         closeGuardDialog();
-        $('syncResult').textContent = r.ok ? 'Pulled: this Mac now has version ' + r.version + '. The previous vault is kept as ' + (data.backup_file || 'a backup file') + '.' : 'Pull did not complete.';
+        $('syncResult').textContent = r.ok ? 'Pulled: ' + devicePlace() + ' now has version ' + r.version + '. The previous vault is kept as ' + (data.backup_file || 'a backup file') + '.' : 'Pull did not complete.';
         await loadSyncStatus();
       } catch (e) {
         if (e.message === 'locked') return;
@@ -5996,7 +6091,7 @@
           const again = body.querySelector('[data-autofocus]'); if (again) again.focus();
           return;
         }
-        err.textContent = e.code === 'local_changed' ? 'This Mac saved a change while you were reviewing, so nothing was pulled. Pull again to see a new report.' : e.message;
+        err.textContent = e.code === 'local_changed' ? DevicePlace() + ' saved a change while you were reviewing, so nothing was pulled. Pull again to see a new report.' : e.message;
         cancel.disabled = false; confirm.disabled = e.code === 'local_changed';
       }
     });
@@ -6019,7 +6114,7 @@
     } catch (e) {
       // api() already called showUnlock() on a 423.
       if (e.status === 409 && e.data && e.data.report) {
-        out.textContent = 'Nothing was pulled yet. Review what the pull would change on this Mac.';
+        out.textContent = 'Nothing was pulled yet. Review what the pull would change on ' + devicePlace() + '.';
         openPullReport(e.data, e.code === 'remote_changed' ? 'Your sync server changed while you were reviewing. Nothing was pulled. This is the new report.' : '');
       } else if (e.status === 402) {
         out.textContent = 'A $10/month subscription is required. Subscribe below, then Pull.';
@@ -6491,8 +6586,8 @@
     $('shareSyncBtn').disabled = !hasServer || ((s.shared_scopes || []).length === 0 && !s.paired);
     const last = s.last_pushed_at ? new Date(s.last_pushed_at) : null;
     $('shareLastPushed').textContent = !hasServer ? ''
-      : last && !isNaN(last) ? 'Last sent to Cloud Connect from this Mac: ' + last.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) + '.'
-      : 'No send to Cloud Connect from this Mac is on record yet.';
+      : last && !isNaN(last) ? 'Last sent to Cloud Connect from ' + devicePlace() + ': ' + last.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) + '.'
+      : 'No send to Cloud Connect from ' + devicePlace() + ' is on record yet.';
     // ADR 0063 D5: whether Cloud Connect updates on its own right now, and why not.
     const auto = s.auto_push;
     $('shareAutoPush').checked = Boolean(auto && auto.enabled);
@@ -6504,9 +6599,9 @@
   // The engine's own messages name CLI commands in two places; the app says what to do here instead.
   function autoPushSentence(auto) {
     if (auto.enabled && (auto.phase === 'idle' || auto.phase === 'pending' || auto.phase === 'pushing') && auto.reason !== 'locked')
-      return 'On. Cloud Connect updates on its own a few seconds after this Mac syncs with your other devices.';
+      return 'On. Cloud Connect updates on its own a few seconds after ' + devicePlace() + ' syncs with your other devices.';
     if (auto.reason === 'switched_off') return 'Off. Cloud Connect updates only when you use Sync now.';
-    if (auto.reason === 'stale_push') return 'Another device pushed a newer copy to Cloud Connect, so automatic updates are paused. Let this Mac finish syncing, then use Sync now.';
+    if (auto.reason === 'stale_push') return 'Another device pushed a newer copy to Cloud Connect, so automatic updates are paused. Let ' + devicePlace() + ' finish syncing, then use Sync now.';
     if (auto.reason === 'reencrypt') return 'Cloud Connect cannot read this account\'s shared data. Use Sync now to send it again.';
     return auto.message || 'Cloud Connect updates only when you use Sync now.';
   }
@@ -6570,7 +6665,7 @@
     $('shareConfirmTitle').textContent = "Share the '" + scope + "' scope?";
     const n = count === undefined ? 'the memories' : (count + (count === 1 ? ' memory' : ' memories'));
     $('shareConfirmLead').textContent =
-      'You are about to copy ' + n + " in the '" + scope + "' scope off this Mac to " +
+      'You are about to copy ' + n + " in the '" + scope + "' scope off " + devicePlace() + " to " +
       "NorthKeep's connector server, where the AI apps you connect can read them. " +
       'Sharing applies to this scope on every device that syncs this vault, and so does unsharing.';
     $('shareConfirmErr').textContent = '';
@@ -6820,7 +6915,7 @@
   function openSyncPreview(plan) {
     openGuardDialog('Review this sync', 'sync-dialog', (body) => {
       body.replaceChildren();
-      body.appendChild(el('p', 'lead muted', 'Your AI apps made changes since this Mac last synced. Nothing on this Mac has changed yet.'));
+      body.appendChild(el('p', 'lead muted', 'Your AI apps made changes since ' + devicePlace() + ' last synced. Nothing on ' + devicePlace() + ' has changed yet.'));
       const byScope = Object.entries((plan.additions && plan.additions.by_scope) || {});
       const addCount = (plan.additions ? plan.additions.count : 0) + (plan.new_projects || []).length;
       if (addCount) {
@@ -6852,7 +6947,7 @@
       }
       if ((plan.forgets || []).length) {
         const group = planGroup('Will remove', plan.forgets.length);
-        group.appendChild(el('p', 'plan-note muted', 'Forgotten in your AI apps. They leave current memories on this Mac. Uncheck any you want to keep. An unchecked one asks again next time.'));
+        group.appendChild(el('p', 'plan-note muted', 'Forgotten in your AI apps. They leave current memories on ' + devicePlace() + '. Uncheck any you want to keep. An unchecked one asks again next time.'));
         for (const f of plan.forgets) {
           const pick = planPick(scopeLabel(f.scope), f.first_line, '', true);
           removes.push({ id: f.entry_id, box: pick.box }); group.appendChild(pick.item);
@@ -6889,7 +6984,7 @@
       (r.push_error ? '' : ' Sent ' + plural(r.pushed || 0, 'memory', 'memories') + ' to Cloud Connect.'));
     const waiting = ((r.needs_review && r.needs_review.replacements) || []).length + ((r.needs_review && r.needs_review.forgets) || []).length;
     if (waiting) lines.push(plural(waiting, 'change you left unchecked waits', 'changes you left unchecked wait') + ' for the next Sync now.');
-    if (r.push_error) lines.push('Saved on this Mac, but Cloud Connect was not updated: ' + r.push_error);
+    if (r.push_error) lines.push('Saved on ' + devicePlace() + ', but Cloud Connect was not updated: ' + r.push_error);
     for (const m of r.held_messages || []) lines.push(m);
     for (const s of r.newly_shared || []) lines.push('"' + s + '" came from a connected app and is now marked Shared. Later edits to it are pushed; unshare it above to stop.');
     return lines;

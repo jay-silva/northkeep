@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { yourDevicePhrase } from '@northkeep/core';
 import { costLabel, type CostTier } from '../src/catalog.js';
 import { suggestBetterModel } from '../src/route.js';
 import type { EndpointConfig } from '../src/settings.js';
@@ -25,7 +26,7 @@ describe('costLabel', () => {
   });
 
   it('free-local reads as on-device; paid tiers escalate and are labelled approx', () => {
-    expect(costLabel('free-local')).toEqual({ symbol: 'Free', range: 'runs on your Mac' });
+    expect(costLabel('free-local')).toEqual({ symbol: 'Free', range: 'runs on ' + yourDevicePhrase(process.platform) });
     expect(costLabel('low').symbol).toBe('$');
     expect(costLabel('medium').symbol).toBe('$$');
     expect(costLabel('high').symbol).toBe('$$$');

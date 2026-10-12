@@ -72,6 +72,7 @@ function harness(options: HarnessOptions) {
   vm.runInContext(`
     const $=(id)=>nodes.get(id);
     let status={unlocked:true};
+    ${functionSource('devicePlace')}
     let searchTimer=null, memoryLoadSequence=0;
     let localSearchEpoch=0, localSearchBusy=false, localSearchPoll=null;
     let localSearchJob=null, localSearchDeadline=0;
