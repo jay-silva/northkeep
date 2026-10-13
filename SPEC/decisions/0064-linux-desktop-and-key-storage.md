@@ -30,6 +30,18 @@ Jay chose opt-in only on 2026-10-13 after a review of PR #9 found the file fallb
 
 Checked the code, not this prose. Attacks live in `packages/mcp-server/test/keychain-linux.test.ts` and `apps/web/test/linux-key-store.test.ts`: umask 0 still leaves mode 0600 and directory 0700; a symlink is not followed and is replaced rather than written through; a group-readable file is tightened before use; a malformed key never creates a file; `secret-tool` argv and `/proc/pid/cmdline` omit the key; a missing daemon does not wait on a hung `secret-tool`; `NORTHKEEP_NO_KEYCHAIN=1` and an unknown backend store nothing; the unlock response and the warning omit the key. Outcome: those checks passed. Fixed before that run: if `rename` throws, the temp file is removed so it cannot keep the key.
 
+### Review of Decision 3 (2026-10-13)
+
+A separate Claude session attacked the built `keychain.js` with fake `secret-tool`, `gdbus` and `security` on PATH and a simulated darwin. First verdict: NOT CLEARED. What it found, and what was done:
+
+- With `NORTHKEEP_SECRET_BACKEND=file` at lock time, lock skipped the keyring and left an earlier keyring copy (confirmed). Fixed: lock checks the keyring whatever the override says.
+- `secret-tool lookup` exits 1 for "no item" and also for a locked keyring, and a long-running app reused a cached probe, so lock could report "not unlocked" over a live copy. Fixed: lock re-probes, runs `clear` every time, and treats only a successful `clear` as gone.
+- `secret-tool` missing from this process's PATH while the keyring is on the bus reported "not unlocked". Fixed: reports `keyring-unreachable`.
+- macOS lock left a `master.key` an earlier build could have written. Fixed: lock deletes it.
+- Accepted: an unknown `NORTHKEEP_SECRET_BACKEND` hides the app's full-lock prompt (the CLI still clears it). `NORTHKEEP_NO_KEYCHAIN=1` makes lock a no-op, as before. After an opt-in file unlock, lock exits 1 if the keyring cannot be checked, which fails safe.
+
+Found nothing: a file written without opt-in (CLI, `/api/unlock`, `resolveMasterKey`), a symlinked `master.key`, a stale file beside a running keyring, a macOS file write, a macOS regression against the parent commit. Each fix has a test in `keychain-linux.test.ts`.
+
 ## What leaves the machine
 
 Nothing new at runtime. The build downloads Node from nodejs.org, the same build-time fetch ADR 0012 already does.

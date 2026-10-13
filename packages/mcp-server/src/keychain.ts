@@ -139,13 +139,18 @@ export function keychainGetMasterKey(): Buffer | null {
  */
 export function keychainDeleteMasterKey(): MasterKeyDeleteOutcome {
   if (!masterKeyLockApplies()) return 'not-found';
-  if (process.platform === 'darwin') return deleteMacos();
+  if (process.platform === 'darwin') {
+    const outcome = deleteMacos();
+    // An earlier build honored NORTHKEEP_SECRET_BACKEND=file on macOS.
+    return removeFileStore() ? 'removed' : outcome;
+  }
   const fileRemoved = removeFileStore();
-  const forced = forcedLinuxBackend();
+  // A long-running app must not trust a keyring answer from before.
+  secretToolProbed = undefined;
+  secretServiceProbed = undefined;
   let keyring: MasterKeyDeleteOutcome;
-  if (forced === 'file') keyring = 'not-found';
-  else if (forced === 'secret-service' || secretServiceReachable()) keyring = deleteSecretService();
-  else if (secretToolInstalled()) keyring = 'keyring-unreachable';
+  if (forcedLinuxBackend() === 'secret-service' || secretServiceReachable()) keyring = deleteSecretService();
+  else if (secretToolInstalled() || probeSecretService()) keyring = 'keyring-unreachable';
   else keyring = 'not-found';
   if (keyring === 'keyring-unreachable') return keyring;
   return fileRemoved ? 'removed' : keyring;
@@ -302,22 +307,22 @@ function getSecretService(): Buffer | null {
   }
 }
 
+/**
+ * `secret-tool lookup` exits 1 both for "no item" and for a locked or failing
+ * keyring, so it only decides what to report. `clear` runs every time, and
+ * only its success counts as the key being gone.
+ */
 function deleteSecretService(): 'removed' | 'not-found' {
-  let status: number | null = null;
+  let found = false;
   try {
     const hex = execFileSync('secret-tool', ['lookup', 'service', SERVICE, 'account', ACCOUNT], {
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
       timeout: 30_000,
     }).trim();
-    if (!KEY_RE.test(hex)) return 'not-found';
-  } catch (err) {
-    status = (err as { status?: number }).status ?? null;
-    // secret-tool lookup exits 1 when no item matches.
-    if (status === 1) return 'not-found';
-    throw new Error(
-      'Could not access the Secret Service to remove the key. The vault may still be unlocked. Try again.',
-    );
+    found = KEY_RE.test(hex);
+  } catch {
+    found = false;
   }
   try {
     execFileSync('secret-tool', ['clear', 'service', SERVICE, 'account', ACCOUNT], {
@@ -329,7 +334,7 @@ function deleteSecretService(): 'removed' | 'not-found' {
       'Could not access the Secret Service to remove the key. The vault may still be unlocked. Try again.',
     );
   }
-  return 'removed';
+  return found ? 'removed' : 'not-found';
 }
 
 function setFile(masterKeyHex: string): void {

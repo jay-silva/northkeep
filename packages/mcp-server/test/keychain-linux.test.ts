@@ -407,3 +407,76 @@ describe('macOS ignores the Linux backend override', () => {
     fs.rmSync(bin, { recursive: true, force: true });
   });
 });
+
+describe('lock checks the keyring however the store was chosen', () => {
+  let bin: string;
+  let store: string;
+  let up: string;
+
+  beforeEach(() => {
+    bin = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-every-'));
+    store = path.join(bin, 'item');
+    up = path.join(bin, 'up');
+    fs.writeFileSync(
+      path.join(bin, 'secret-tool'),
+      `#!/bin/sh
+case "$1" in --version) exit 0;; store) cat > "${store}";; lookup) [ -f "${store}" ] && cat "${store}" || exit 1;; clear) rm -f "${store}";; esac
+`,
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(bin, 'gdbus'),
+      `#!/bin/sh\nif [ -f "${up}" ]; then echo "(true,)"; else echo "(false,)"; fi\n`,
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(up, '');
+    process.env.PATH = `${bin}${path.delimiter}/usr/bin:/bin`;
+    resetMasterKeyStoreProbe();
+  });
+
+  afterEach(() => {
+    fs.rmSync(bin, { recursive: true, force: true });
+  });
+
+  it('clears the keyring copy when NORTHKEEP_SECRET_BACKEND=file at lock time', () => {
+    if (process.platform !== 'linux') return;
+    keychainSetMasterKey(KEY);
+    process.env.NORTHKEEP_SECRET_BACKEND = 'file';
+    expect(keychainDeleteMasterKey()).toBe('removed');
+    expect(fs.existsSync(store)).toBe(false);
+  });
+
+  it('does not trust a cached keyring answer from before the lock', () => {
+    if (process.platform !== 'linux') return;
+    keychainSetMasterKey(KEY);
+    fs.rmSync(up);
+    expect(keychainDeleteMasterKey()).toBe('keyring-unreachable');
+  });
+
+  it('runs clear even when lookup fails, and fails loudly if clear fails', () => {
+    if (process.platform !== 'linux') return;
+    fs.writeFileSync(store, KEY);
+    fs.writeFileSync(
+      path.join(bin, 'secret-tool'),
+      `#!/bin/sh
+case "$1" in --version) exit 0;; lookup) exit 1;; clear) rm -f "${store}";; esac
+`,
+      { mode: 0o755 },
+    );
+    expect(keychainDeleteMasterKey()).toBe('not-found');
+    expect(fs.existsSync(store)).toBe(false);
+    fs.writeFileSync(path.join(bin, 'secret-tool'), '#!/bin/sh\ncase "$1" in --version) exit 0;; *) exit 1;; esac\n', {
+      mode: 0o755,
+    });
+    expect(() => keychainDeleteMasterKey()).toThrow(/Secret Service/);
+  });
+
+  it('reports an unreachable keyring when secret-tool is missing but the keyring is on the bus', () => {
+    if (process.platform !== 'linux') return;
+    fs.rmSync(path.join(bin, 'secret-tool'));
+    fs.rmSync(up);
+    fs.writeFileSync(path.join(bin, 'gdbus'), '#!/bin/sh\necho "(true,)"\n', { mode: 0o755 });
+    expect(keychainDeleteMasterKey()).toBe('keyring-unreachable');
+  });
+});
+
