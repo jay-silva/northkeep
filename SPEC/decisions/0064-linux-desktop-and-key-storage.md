@@ -42,6 +42,8 @@ A separate Claude session attacked the built `keychain.js` with fake `secret-too
 
 Found nothing: a file written without opt-in (CLI, `/api/unlock`, `resolveMasterKey`), a symlinked `master.key`, a stale file beside a running keyring, a macOS file write, a macOS regression against the parent commit. Each fix has a test in `keychain-linux.test.ts`.
 
+Second pass on b457a12: CLEARED. Each finding above was re-run and now removes the key or fails loudly. Left open, low: with neither `secret-tool` nor `gdbus` on PATH, lock cannot see a keyring copy. A lock that cleared a locked keyring's item still says "Vault was not unlocked". Not yet checked against a real `secret-tool`: that `clear` exits 0 when nothing matches. If it does not, every lock with nothing stored throws, which is safe but noisy.
+
 ## What leaves the machine
 
 Nothing new at runtime. The build downloads Node from nodejs.org, the same build-time fetch ADR 0012 already does.
