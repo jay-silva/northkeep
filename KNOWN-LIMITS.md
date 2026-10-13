@@ -1218,9 +1218,15 @@ every milestone; if a limit is removed, say when and how.*
   Secret Service when that daemon is running. Anything in your logged-in
   session (including any MCP client you configure) can open the vault. Same
   trust level as saved browser passwords. If Linux has no Secret Service,
-  the key is a file only your account can read, `~/.northkeep/master.key`
-  (mode 0600), and NorthKeep warns: anyone who can read your files can open
-  the vault. `northkeep lock` removes the key from whichever store held it.
+  background unlock is off unless you run `northkeep unlock --allow-key-file`
+  (the app's "Keep unlocked" box does not offer it). Then the key is a file
+  only your account can read, `~/.northkeep/master.key` (mode 0600), and
+  NorthKeep warns: anyone who can read your files can open the vault.
+  `northkeep lock` removes the file and the Secret Service copy. If the
+  keyring is not running at lock time, NorthKeep cannot check it, so lock
+  says so and exits with an error instead of reporting a clean lock.
+  `NORTHKEEP_SECRET_BACKEND` is read on Linux only; macOS always uses the
+  Keychain.
   The device secret is a separate file, `~/.northkeep/device.secret`, also
   mode 0600, and it is not encrypted. That is the ADR 0001 design, not the
   unlock store. Provider API keys and remote-server OAuth tokens are still

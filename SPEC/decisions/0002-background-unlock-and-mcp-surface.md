@@ -37,7 +37,7 @@ the CLI both use it when present.
 logged-in Mac session can read the vault — the same trust level as saved
 browser passwords. Stated in the `unlock` output, the security model, and
 KNOWN-LIMITS.md. Linux vault-key storage is ADR 0064 (Secret Service, or a
-mode-0600 file when that daemon is absent). Windows remains an env-var
+mode-0600 file only after `--allow-key-file` when that daemon is absent). Windows remains an env-var
 fallback. Provider API keys and OAuth tokens are unchanged by 0064.
 
 ## Decision 2: Per-call open under a file lock (no resident vault)

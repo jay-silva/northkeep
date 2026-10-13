@@ -10,8 +10,11 @@ export {
   keychainGetMasterKey,
   keychainSetMasterKey,
   masterKeyFilePath,
+  masterKeyLockApplies,
   masterKeyStoreAvailable,
+  resetMasterKeyStoreProbe,
   type MasterKeyBackend,
+  type MasterKeyDeleteOutcome,
   type MasterKeyStoreDescription,
 } from './keychain.js';
 export { LOCKED_MESSAGE, resolveMasterKey } from './key.js';

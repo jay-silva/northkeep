@@ -1,7 +1,7 @@
 # ADR 0064 — Unsigned Linux bundles and where the vault key sits
 
 - **Date:** 2026-10-11
-- **Status:** Accepted for an unsigned build. Not a public release.
+- **Status:** Accepted for an unsigned build. Not a public release. Decision 2 amended 2026-10-13 (Decision 3).
 - **Deciders:** Jay (approved the unsigned Linux build)
 
 ## Context
@@ -17,6 +17,14 @@ On Linux before this change, `keychain.ts` stored nothing. `keychainAvailable()`
 ## Decision 2: Where the vault key goes on Linux
 
 Prefer the Secret Service via `secret-tool`. The key is the process stdin, never an argument. The store is used only when `secret-tool` runs and the session bus already owns `org.freedesktop.secrets`, so a missing daemon cannot sit on a prompt. If that service is absent, write `master.key` in the existing NorthKeep home (the same directory as the device secret), mode 0600, directory mode 0700, and warn. The file is not encrypted. Wrapping it would need another key, which is the problem being solved, and hand-rolled crypto is forbidden. `northkeep lock` deletes the Secret Service item and the file. `NORTHKEEP_NO_KEYCHAIN=1` disables every store. macOS Keychain behavior is unchanged. Provider API keys and OAuth tokens stay off disk on Linux.
+
+## Decision 3 (2026-10-13): the key file is opt-in, lock checks every store, macOS ignores the override
+
+Jay chose opt-in only on 2026-10-13 after a review of PR #9 found the file fallback turned on by itself. This replaces the automatic file write in Decision 2.
+
+- With no Secret Service, background unlock is off. `northkeep unlock --allow-key-file` writes `master.key`; the app's "Keep unlocked" box never does. `NORTHKEEP_SECRET_BACKEND=file` remains the Linux test and power-user switch. A file that exists keeps being read, because only an opt-in wrote it, and `lock` deletes it.
+- `northkeep lock` on Linux deletes the file and the Secret Service item whichever store this process would pick. Before this, a lock run while the keyring was down chose the file store, said "not unlocked", and left the keyring copy readable once the keyring came back (reproduced). When `secret-tool` is installed but the keyring is not on the bus, lock now reports `keyring-unreachable` and exits 1.
+- `NORTHKEEP_SECRET_BACKEND` is read on Linux only. On macOS it had sent the key to a plain file (reproduced), contradicting "macOS Keychain behavior is unchanged."
 
 ## Review
 

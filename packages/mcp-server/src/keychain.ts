@@ -8,9 +8,11 @@ import { northkeepHome } from '@northkeep/core';
  * (ADR 0002, Linux in ADR 0064). The passphrase is never stored.
  *
  * macOS writes through `security -i` (commands on stdin) so the key never
- * appears on a command line. Linux prefers the Secret Service (`secret-tool`,
- * secret on stdin) and, only when that daemon is absent, a mode-0600 file in
- * the existing NorthKeep home. NORTHKEEP_NO_KEYCHAIN=1 disables every store.
+ * appears on a command line. Linux uses the Secret Service (`secret-tool`,
+ * secret on stdin). A mode-0600 file in the NorthKeep home is used only after
+ * the person opts in (`northkeep unlock --allow-key-file`, or
+ * NORTHKEEP_SECRET_BACKEND=file on Linux). NORTHKEEP_NO_KEYCHAIN=1 disables
+ * every store.
  */
 const SERVICE = 'northkeep-vault';
 const ACCOUNT = 'master-key';
@@ -21,15 +23,27 @@ export type MasterKeyBackend = 'macos-keychain' | 'secret-service' | 'file' | 'n
 export interface MasterKeyStoreDescription {
   available: boolean;
   backend: MasterKeyBackend;
-  /** Set only for the file fallback. Never contains the key. */
+  /** Set only for the file store. Never contains the key. */
   warning: string | null;
+  /** Linux with no keyring: `northkeep unlock --allow-key-file` would write the file. */
+  file_opt_in: boolean;
 }
 
+/** `keyring-unreachable`: the keyring could not be checked, so a key may still be in it. */
+export type MasterKeyDeleteOutcome = 'removed' | 'not-found' | 'keyring-unreachable';
+
+export interface SetMasterKeyOptions {
+  /** The person asked for the unencrypted file when no keyring is running. */
+  allowFile?: boolean;
+}
+
+let secretToolProbed: boolean | undefined;
 let secretServiceProbed: boolean | undefined;
 let fileWarningEmitted = false;
 
 /** Tests change PATH or the backend env between cases. */
 export function resetMasterKeyStoreProbe(): void {
+  secretToolProbed = undefined;
   secretServiceProbed = undefined;
   fileWarningEmitted = false;
 }
@@ -47,6 +61,12 @@ export function masterKeyStoreAvailable(): boolean {
   return resolveBackend() !== 'none';
 }
 
+/** Whether a lock should try to remove a stored key on this system. */
+export function masterKeyLockApplies(): boolean {
+  if (process.env.NORTHKEEP_NO_KEYCHAIN === '1') return false;
+  return process.platform === 'darwin' || process.platform === 'linux';
+}
+
 export function describeMasterKeyStore(): MasterKeyStoreDescription {
   const backend = resolveBackend();
   return {
@@ -54,16 +74,18 @@ export function describeMasterKeyStore(): MasterKeyStoreDescription {
     backend,
     warning:
       backend === 'file'
-        ? `The Secret Service is not available, so keeping the vault unlocked writes the key to a file only your account can read (${masterKeyFilePath()}). ` +
+        ? `The vault key is kept in a file only your account can read (${masterKeyFilePath()}). ` +
           'That file is not encrypted. Anyone who can read your files can open the vault. ' +
           'Install and unlock a Secret Service keyring (gnome-keyring or equivalent), then run "northkeep unlock" again to move the key there.'
         : null,
+    file_opt_in: backend === 'none' && fileOptInPossible(),
   };
 }
 
-export function keychainSetMasterKey(masterKeyHex: string): void {
+export function keychainSetMasterKey(masterKeyHex: string, options: SetMasterKeyOptions = {}): void {
   if (!KEY_RE.test(masterKeyHex)) throw new Error('Malformed master key.');
-  const backend = resolveBackend();
+  let backend = resolveBackend();
+  if (backend === 'none' && options.allowFile === true && fileOptInPossible()) backend = 'file';
   switch (backend) {
     case 'macos-keychain':
       setMacos(masterKeyHex);
@@ -77,7 +99,11 @@ export function keychainSetMasterKey(masterKeyHex: string): void {
       warnFileBackend();
       return;
     case 'none':
-      throw new Error('No vault key store is available on this system.');
+      throw new Error(
+        fileOptInPossible()
+          ? 'No keyring is running, so the vault key was not stored. To keep it in an unencrypted private file instead, run: northkeep unlock --allow-key-file'
+          : 'No vault key store is available on this system.',
+      );
     default: {
       const unexpected: never = backend;
       throw new Error(`Unhandled vault key store: ${String(unexpected)}`);
@@ -106,44 +132,75 @@ export function keychainGetMasterKey(): Buffer | null {
   }
 }
 
-export function keychainDeleteMasterKey(): 'removed' | 'not-found' {
-  const backend = resolveBackend();
-  switch (backend) {
-    case 'macos-keychain':
-      return deleteMacos();
-    case 'secret-service': {
-      const outcome = deleteSecretService();
-      // A lock must not leave the weaker file copy behind.
-      return removeFileStore() ? 'removed' : outcome;
-    }
-    case 'file':
-      return removeFileStore() ? 'removed' : 'not-found';
-    case 'none':
-      return 'not-found';
-    default: {
-      const unexpected: never = backend;
-      throw new Error(`Unhandled vault key store: ${String(unexpected)}`);
-    }
-  }
+/**
+ * Linux removes the key from every store, whichever one this process would
+ * pick, so a lock run while the keyring is down cannot report success while
+ * an earlier unlock's key is still in it.
+ */
+export function keychainDeleteMasterKey(): MasterKeyDeleteOutcome {
+  if (!masterKeyLockApplies()) return 'not-found';
+  if (process.platform === 'darwin') return deleteMacos();
+  const fileRemoved = removeFileStore();
+  const forced = forcedLinuxBackend();
+  let keyring: MasterKeyDeleteOutcome;
+  if (forced === 'file') keyring = 'not-found';
+  else if (forced === 'secret-service' || secretServiceReachable()) keyring = deleteSecretService();
+  else if (secretToolInstalled()) keyring = 'keyring-unreachable';
+  else keyring = 'not-found';
+  if (keyring === 'keyring-unreachable') return keyring;
+  return fileRemoved ? 'removed' : keyring;
+}
+
+/** NORTHKEEP_SECRET_BACKEND applies on Linux only; macOS always uses the Keychain. */
+function forcedLinuxBackend(): MasterKeyBackend | null {
+  if (process.platform !== 'linux') return null;
+  const forced = process.env.NORTHKEEP_SECRET_BACKEND;
+  if (forced === undefined || forced.length === 0) return null;
+  if (forced === 'file' || forced === 'secret-service') return forced;
+  return 'none';
 }
 
 function resolveBackend(): MasterKeyBackend {
   if (process.env.NORTHKEEP_NO_KEYCHAIN === '1') return 'none';
-  const forced = process.env.NORTHKEEP_SECRET_BACKEND;
-  if (forced !== undefined && forced.length > 0) {
-    if (forced === 'file') return 'file';
-    if (forced === 'secret-service') return 'secret-service';
-    if (forced === 'macos-keychain' && process.platform === 'darwin') return 'macos-keychain';
-    return 'none';
-  }
   if (process.platform === 'darwin') return 'macos-keychain';
-  if (process.platform === 'linux') return secretServiceReachable() ? 'secret-service' : 'file';
-  return 'none';
+  if (process.platform !== 'linux') return 'none';
+  const forced = forcedLinuxBackend();
+  if (forced !== null) return forced;
+  if (secretServiceReachable()) return 'secret-service';
+  // A file that exists was written after an opt-in; keep reading it.
+  return fileStoreExists() ? 'file' : 'none';
+}
+
+function fileOptInPossible(): boolean {
+  return (
+    process.platform === 'linux' &&
+    process.env.NORTHKEEP_NO_KEYCHAIN !== '1' &&
+    forcedLinuxBackend() === null
+  );
+}
+
+function fileStoreExists(): boolean {
+  try {
+    return fs.lstatSync(masterKeyFilePath()).isFile();
+  } catch {
+    return false;
+  }
+}
+
+function secretToolInstalled(): boolean {
+  if (secretToolProbed !== undefined) return secretToolProbed;
+  try {
+    execFileSync('secret-tool', ['--version'], { stdio: 'ignore', timeout: 2000 });
+    secretToolProbed = true;
+  } catch {
+    secretToolProbed = false;
+  }
+  return secretToolProbed;
 }
 
 function secretServiceReachable(): boolean {
   if (secretServiceProbed !== undefined) return secretServiceProbed;
-  secretServiceProbed = probeSecretService();
+  secretServiceProbed = secretToolInstalled() && probeSecretService();
   return secretServiceProbed;
 }
 
@@ -152,11 +209,6 @@ function secretServiceReachable(): boolean {
  * a GUI prompt. The session bus must already own the Secret Service name.
  */
 function probeSecretService(): boolean {
-  try {
-    execFileSync('secret-tool', ['--version'], { stdio: 'ignore', timeout: 2000 });
-  } catch {
-    return false;
-  }
   try {
     const out = execFileSync(
       'gdbus',

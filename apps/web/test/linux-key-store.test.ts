@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { KDF_INTERACTIVE, Vault, ensureDeviceSecret } from '@northkeep/core';
-import { masterKeyFilePath } from '@northkeep/mcp-server';
+import { masterKeyFilePath, resetMasterKeyStoreProbe } from '@northkeep/mcp-server';
 import { handleApi } from '../src/api.js';
 import { UiSession } from '../src/session.js';
 
@@ -63,6 +63,39 @@ describe('POST /api/unlock remember on the file store', () => {
     expect(body).not.toContain(stored);
     expect(body).not.toContain(passphrase);
     expect(body).toContain('file');
-    expect(body).toContain('Secret Service is not available');
+    expect(body).toContain('not encrypted');
+  });
+
+  it('does not write the key file from the app without the explicit Linux opt-in', async () => {
+    if (process.platform !== 'linux') return;
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-unlock-nofile-'));
+    process.env.NORTHKEEP_HOME = dir;
+    delete process.env.NORTHKEEP_SECRET_BACKEND;
+    delete process.env.NORTHKEEP_NO_KEYCHAIN;
+    delete process.env.NORTHKEEP_PASSPHRASE;
+    delete process.env.NORTHKEEP_MASTER_KEY;
+    const prevPath = process.env.PATH;
+    process.env.PATH = '/usr/bin:/bin';
+    resetMasterKeyStoreProbe();
+    try {
+      const passphrase = 'correct horse battery';
+      const { secret } = ensureDeviceSecret();
+      const vaultPath = path.join(dir, 'vault.nkv');
+      Vault.create({ path: vaultPath, passphrase, deviceSecret: secret, kdf: KDF_INTERACTIVE }).close();
+      const res = await handleApi(
+        new UiSession(vaultPath),
+        'POST',
+        '/api/unlock',
+        new URLSearchParams(),
+        Buffer.from(JSON.stringify({ passphrase, remember: true })),
+      );
+      expect(res.status).toBe(200);
+      expect(fs.existsSync(masterKeyFilePath())).toBe(false);
+      expect(JSON.stringify(res.body)).toContain('"key_backend":"none"');
+    } finally {
+      process.env.PATH = prevPath;
+      resetMasterKeyStoreProbe();
+    }
   });
 });
+

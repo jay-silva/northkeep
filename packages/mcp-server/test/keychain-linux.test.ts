@@ -129,7 +129,7 @@ describe('linux file fallback', () => {
     const spy = vi.spyOn(console, 'warn').mockImplementation(() => {});
     keychainSetMasterKey(KEY);
     const text = spy.mock.calls.map((call) => call.join(' ')).join('\n');
-    expect(text).toContain('Secret Service is not available');
+    expect(text).toContain('not encrypted');
     expect(text).toContain(masterKeyFilePath());
     expect(text).not.toContain(KEY);
     expect(describeMasterKeyStore().warning).not.toContain(KEY);
@@ -220,14 +220,46 @@ exit 1
 });
 
 describe('store selection', () => {
-  it('uses the file fallback on Linux when secret-tool is absent', () => {
+  it('writes no file on Linux without a keyring unless the person opts in', () => {
     process.env.PATH = '/usr/bin:/bin';
     resetMasterKeyStoreProbe();
     if (process.platform !== 'linux') return;
-    const described = describeMasterKeyStore();
-    expect(described.backend).toBe('file');
-    expect(described.warning).toContain('Secret Service is not available');
-    expect(masterKeyStoreAvailable()).toBe(true);
+    const before = describeMasterKeyStore();
+    expect(before.backend).toBe('none');
+    expect(before.file_opt_in).toBe(true);
+    expect(masterKeyStoreAvailable()).toBe(false);
+    expect(() => keychainSetMasterKey(KEY)).toThrow(/--allow-key-file/);
+    expect(fs.existsSync(masterKeyFilePath())).toBe(false);
+
+    keychainSetMasterKey(KEY, { allowFile: true });
+    expect(mode(masterKeyFilePath())).toBe(0o600);
+    const after = describeMasterKeyStore();
+    expect(after.backend).toBe('file');
+    expect(after.file_opt_in).toBe(false);
+    expect(after.warning).toContain('not encrypted');
+    expect(keychainGetMasterKey()?.toString('hex')).toBe(KEY);
+    expect(keychainDeleteMasterKey()).toBe('removed');
+    expect(describeMasterKeyStore().backend).toBe('none');
+  });
+
+  it('ignores allowFile when a keyring is running', () => {
+    if (process.platform !== 'linux') return;
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-ring-'));
+    const store = path.join(bin, 'item');
+    fs.writeFileSync(
+      path.join(bin, 'secret-tool'),
+      `#!/bin/sh
+case "$1" in --version) exit 0;; store) cat > "${store}";; lookup) [ -f "${store}" ] && cat "${store}" || exit 1;; clear) rm -f "${store}";; esac
+`,
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(path.join(bin, 'gdbus'), '#!/bin/sh\necho "(true,)"\n', { mode: 0o755 });
+    process.env.PATH = `${bin}${path.delimiter}/usr/bin:/bin`;
+    resetMasterKeyStoreProbe();
+    keychainSetMasterKey(KEY, { allowFile: true });
+    expect(fs.existsSync(masterKeyFilePath())).toBe(false);
+    expect(fs.readFileSync(store, 'utf8')).toBe(KEY);
+    fs.rmSync(bin, { recursive: true, force: true });
   });
 
   it('disables every store when NORTHKEEP_NO_KEYCHAIN=1', () => {
@@ -261,7 +293,7 @@ describe('secret-tool probe does not hang', () => {
     const started = Date.now();
     const described = describeMasterKeyStore();
     expect(Date.now() - started).toBeLessThan(10_000);
-    if (process.platform === 'linux') expect(described.backend).toBe('file');
+    if (process.platform === 'linux') expect(described.backend).toBe('none');
     fs.rmSync(bin, { recursive: true, force: true });
   });
 });
@@ -292,6 +324,86 @@ exit 0
     const cmdline = fs.readFileSync(seen, 'utf8');
     expect(cmdline).not.toContain(KEY);
     delete process.env.SEEN;
+    fs.rmSync(bin, { recursive: true, force: true });
+  });
+});
+
+describe('lock while the keyring is down', () => {
+  let bin: string;
+  let store: string;
+  let up: string;
+
+  beforeEach(() => {
+    bin = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-down-'));
+    store = path.join(bin, 'item');
+    up = path.join(bin, 'up');
+    fs.writeFileSync(
+      path.join(bin, 'secret-tool'),
+      `#!/bin/sh
+case "$1" in --version) exit 0;; store) cat > "${store}";; lookup) [ -f "${store}" ] && cat "${store}" || exit 1;; clear) rm -f "${store}";; esac
+`,
+      { mode: 0o755 },
+    );
+    fs.writeFileSync(
+      path.join(bin, 'gdbus'),
+      `#!/bin/sh\nif [ -f "${up}" ]; then echo "(true,)"; else echo "(false,)"; fi\n`,
+      { mode: 0o755 },
+    );
+    process.env.PATH = `${bin}${path.delimiter}/usr/bin:/bin`;
+  });
+
+  afterEach(() => {
+    fs.rmSync(bin, { recursive: true, force: true });
+  });
+
+  it('never reports a clean lock while an earlier keyring copy may remain', () => {
+    if (process.platform !== 'linux') return;
+    fs.writeFileSync(up, '');
+    resetMasterKeyStoreProbe();
+    keychainSetMasterKey(KEY);
+    expect(fs.readFileSync(store, 'utf8')).toBe(KEY);
+
+    fs.rmSync(up);
+    resetMasterKeyStoreProbe();
+    expect(keychainDeleteMasterKey()).toBe('keyring-unreachable');
+
+    fs.writeFileSync(up, '');
+    resetMasterKeyStoreProbe();
+    expect(keychainDeleteMasterKey()).toBe('removed');
+    expect(fs.existsSync(store)).toBe(false);
+    expect(keychainGetMasterKey()).toBeNull();
+  });
+
+  it('still removes an opted-in key file when the keyring cannot be checked', () => {
+    if (process.platform !== 'linux') return;
+    resetMasterKeyStoreProbe();
+    keychainSetMasterKey(KEY, { allowFile: true });
+    expect(keychainDeleteMasterKey()).toBe('keyring-unreachable');
+    expect(fs.existsSync(masterKeyFilePath())).toBe(false);
+  });
+});
+
+describe('macOS ignores the Linux backend override', () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', realPlatform);
+  });
+
+  it('never writes a key file on macOS, whatever NORTHKEEP_SECRET_BACKEND says', () => {
+    const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-mac-'));
+    const log = path.join(bin, 'log');
+    fs.writeFileSync(path.join(bin, 'security'), `#!/bin/sh\ncat >> "${log}"\n`, { mode: 0o755 });
+    process.env.PATH = `${bin}${path.delimiter}/usr/bin:/bin`;
+    Object.defineProperty(process, 'platform', { value: 'darwin' });
+    for (const forced of ['file', 'secret-service']) {
+      process.env.NORTHKEEP_SECRET_BACKEND = forced;
+      resetMasterKeyStoreProbe();
+      expect(describeMasterKeyStore().backend).toBe('macos-keychain');
+      keychainSetMasterKey(KEY);
+      expect(fs.existsSync(masterKeyFilePath())).toBe(false);
+    }
+    expect(fs.readFileSync(log, 'utf8')).toContain('add-generic-password');
     fs.rmSync(bin, { recursive: true, force: true });
   });
 });
