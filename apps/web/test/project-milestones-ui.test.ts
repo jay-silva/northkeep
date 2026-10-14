@@ -129,3 +129,61 @@ describe('Milestones block (ADR 0065 Decision 5, desktop)', () => {
     ]);
   });
 });
+
+describe('guard dialog focus while a save is in flight (K2 review W3)', () => {
+  interface El { id: string; hidden?: boolean; inert?: boolean; disabled?: boolean; className?: string; textContent?: string; focused?: number; isConnected?: boolean; focus: () => void; getClientRects: () => unknown[] }
+  function setup() {
+    const doc = { activeElement: null as unknown, body: { id: 'body' } };
+    const node = (id: string, extra: Record<string, unknown> = {}): El => {
+      const n = { id, focused: 0, isConnected: true, getClientRects: () => [1], focus: () => { n.focused! += 1; doc.activeElement = n; }, ...extra } as El;
+      return n;
+    };
+    const header = node('header', { inert: false }), shell = node('shell', { inert: false });
+    const yes = node('yes'), notYet = node('notYet'), opener = node('opener'), unlockField = node('passphrase');
+    const inside = new Set<unknown>([yes, notYet]);
+    const overlay = node('guardDialogOverlay', { hidden: true, contains: (n: unknown) => inside.has(n), querySelectorAll: () => [notYet, yes].filter((b) => !b.disabled), addEventListener: () => {} });
+    const body = node('guardDialogBody', { querySelector: (sel: string) => (sel === '[data-autofocus]' ? notYet : yes), replaceChildren: () => {} });
+    const ids: Record<string, El> = { guardDialogOverlay: overlay, guardDialogBody: body, guardDialog: node('guardDialog'), guardDialogTitle: node('guardDialogTitle') };
+    const listeners: Record<string, (e: unknown) => void> = {};
+    Object.assign(doc, { querySelector: (sel: string) => (sel === 'header' ? header : sel === '.shell' ? shell : null), addEventListener: (k: string, fn: (e: unknown) => void) => { listeners[k] = fn; } });
+    const context = vm.createContext({ $: (id: string) => ids[id], document: doc, Array });
+    const lets = script.slice(script.indexOf('let guardLastFocus'), script.indexOf('\n', script.indexOf('let guardInertBefore')));
+    vm.runInContext([lets, functionSource('openGuardDialog'), functionSource('closeGuardDialog'), functionSource('guardDialogKeydown'), 'this.open = openGuardDialog; this.keydown = guardDialogKeydown;'].join('\n'), context);
+    const key = (k: string, shiftKey = false) => { let prevented = false; (context.keydown as (e: unknown) => void)({ key: k, shiftKey, preventDefault: () => { prevented = true; } }); return prevented; };
+    return { doc, header, shell, yes, notYet, opener, unlockField, overlay, open: () => (context.open as (...a: unknown[]) => void)('Mark M3 passed?', '', () => {}, opener), key };
+  }
+
+  it('makes the page behind inert while open and restores it on close', () => {
+    expect(script).toContain("document.addEventListener('keydown', guardDialogKeydown)");
+    const t = setup();
+    t.open();
+    expect([t.header.inert, t.shell.inert, t.overlay.hidden]).toEqual([true, true, false]);
+    expect(t.key('Escape')).toBe(true);
+    expect([t.header.inert, t.shell.inert, t.overlay.hidden]).toEqual([false, false, true]);
+    expect(t.doc.activeElement).toBe(t.opener);
+  });
+
+  it('keeps Tab and Escape working after the focused button is disabled and focus falls to the page', () => {
+    const t = setup();
+    t.open();
+    t.yes.focus(); t.yes.disabled = true; t.doc.activeElement = t.doc.body;
+    expect(t.key('Tab')).toBe(true);
+    expect(t.doc.activeElement).toBe(t.notYet);
+    t.doc.activeElement = null;
+    expect(t.key('Escape')).toBe(true);
+    expect(t.overlay.hidden).toBe(true);
+  });
+
+  it('leaves keys alone when another dialog has focus or the guard dialog is closed, and keeps an earlier inert page inert', () => {
+    const t = setup();
+    expect(t.key('Escape')).toBe(false);
+    t.shell.inert = true;
+    t.open();
+    t.doc.activeElement = t.unlockField;
+    expect(t.key('Escape')).toBe(false);
+    expect(t.overlay.hidden).toBe(false);
+    t.doc.activeElement = t.notYet;
+    t.key('Escape');
+    expect([t.header.inert, t.shell.inert]).toEqual([false, true]);
+  });
+});
