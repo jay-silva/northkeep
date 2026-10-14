@@ -117,6 +117,26 @@ describe('project_create and project_update', () => {
     expect(update.json.error.message).toBe('Line 1 has a checkbox or a pass stamp. Send open milestones only, like "M3 Title | test: how the user checks it"; NorthKeep records passes itself.');
   });
 
+  it('project_update creating a project follows the project_create milestone rule', async () => {
+    const mcp = await connect();
+    const missing = await call(mcp, 'project_update', { project: 'atk3', expected_revision: null, what_why: 'x', status: 'y' });
+    expect(missing.isError).toBe(true);
+    expect(missing.json.error).toEqual({ code: 'invalid_request', message: 'milestones is required. Propose the milestones to the user and create the project after they agree; if there is no plan yet, send "M1 Agree the milestones | test: the user approves the plan".' });
+    const draftWith = await call(mcp, 'project_update', { project: 'atk3', expected_revision: null, what_why: 'x', status: 'y', draft: true, milestones: PLAN });
+    expect(draftWith.json.error.message).toBe('A draft project takes no milestones. Create it without milestones, then agree the plan with the user and add it with project_update.');
+    const v = openVault();
+    try { expect(v.list({ scope: 'project:atk3' })).toEqual([]); } finally { v.close(); }
+
+    const draft = await call(mcp, 'project_update', { project: 'drafty', expected_revision: null, what_why: 'x', status: 'y', draft: true });
+    expect(draft.isError, draft.text).toBe(false);
+    expect(draft.json.milestones).toEqual({ kind: 'absent' });
+    const planned = await call(mcp, 'project_update', { project: 'atk3', expected_revision: null, what_why: 'x', status: 'y', milestones: PLAN });
+    expect(planned.isError, planned.text).toBe(false);
+    expect(planned.json.milestones.items.map((m: { id: string }) => m.id)).toEqual(['M1', 'M2']);
+    const later = await call(mcp, 'project_update', { project: 'atk3', expected_revision: planned.json.revision, status: 'z' });
+    expect(later.isError, later.text).toBe(false);
+  });
+
   it('project_update replaces the open part and keeps a pass byte for byte', async () => {
     const mcp = await connect();
     await create(mcp);
