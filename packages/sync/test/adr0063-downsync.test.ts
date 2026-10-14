@@ -48,7 +48,7 @@ describe('ADR 0063 incident replay (D1)', () => {
     expect(getProjectView(vault, 'a').revision).toBe(r2);
     expect(getProjectView(vault, 'a').status).toBe('R2 local, newer.');
     expect(result.conflicts.map(({ content: _c, ...c }) => c)).toEqual([
-      { scope: 'project:a', project: 'a', server_id: cloudId, base_revision: r1, local_revision: r2, reason: 'moved' },
+      { scope: 'project:a', project: 'a', server_id: cloudId, base_revision: r1, local_revision: r2, reason: 'moved', pass_changes: [], shares_scope: false },
     ]);
     expect(result.replaced).toBe(0);
     expect(pendingIds()).toEqual([cloudId]);
