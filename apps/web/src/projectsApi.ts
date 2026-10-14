@@ -1,9 +1,11 @@
 /** Projects routes inherit server.ts session-token checks and require an unlocked vault. */
 import fs from 'node:fs';
-import { getProjectView, listProjectOverview, loadDeviceSecret, northkeepHome, PROJECT_REVISION_SUMMARY_LIMIT, ProjectHandoffError, projectScope, readProjectProvenance, type ProjectCheckpointRequest, type ProjectUpdateRequest, type Vault } from '@northkeep/core';
+import { getProjectView, listProjectOverview, loadDeviceSecret, MilestoneError, northkeepHome, PROJECT_REVISION_SUMMARY_LIMIT, ProjectHandoffError, projectScope, readProjectProvenance, type ProjectCheckpointRequest, type ProjectUpdateRequest, type ProjectView, type Vault } from '@northkeep/core';
+import { confirmPassInDocument } from '@northkeep/core/project-milestones-owner';
 import { loadConnectorConfig, unshareScope } from '@northkeep/sync';
 import { readMirrorSummary } from '@northkeep/mcp-server';
 import type { UiSession } from './session.js';
+import { milestoneRepairText, milestonesFromContentUntilK1, passesUndoneByRestore, previewMilestoneRepair } from './project-milestones-view.js';
 
 /** Attribution for a save made from this app (ADR 0052 Decision 1). The host
  * name is fixed and the session id comes from the process, never the request:
@@ -39,6 +41,80 @@ function clearedRevisions(vault: Vault, project: string): Array<{ id: string; up
       const writer = readProjectProvenance(row);
       return { id: row.id, updated_at: row.created_at, writer: writer ? { host: writer.host, host_version: writer.host_version } : null };
     });
+}
+
+/** ADR 0065 K2: what the project page needs to show and guard milestones. */
+function milestoneFields(view: ProjectView) {
+  const milestones = milestonesFromContentUntilK1(view);
+  const undoes: Record<string, ReturnType<typeof passesUndoneByRestore>> = {};
+  for (const revision of view.history) if (revision.content) undoes[revision.id] = passesUndoneByRestore(view.content, revision.content);
+  return { milestones, restore_undoes: undoes, ...(milestones.kind === 'malformed' ? { milestone_repair_text: milestoneRepairText(view.content) } : {}) };
+}
+
+function jsonObject(body: Buffer, limit: number, what: string): { input: Record<string, unknown> } | { refused: Response } {
+  if (body.length > limit) return { refused: reply(400, { error: `${what} is too large.`, code: 'invalid_request' }) };
+  try {
+    const parsed: unknown = JSON.parse(body.toString('utf8'));
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error();
+    return { input: parsed as Record<string, unknown> };
+  } catch { return { refused: reply(400, { error: 'A JSON object is required.', code: 'invalid_request' }) }; }
+}
+
+/** The page's read must still be the head, so a stale page writes nothing. */
+function headAsRead(vault: Vault, project: string, expected: string): ProjectView {
+  const view = getProjectView(vault, project);
+  if (view.revision !== expected) throw new ProjectHandoffError('stale_project', 'Project changed after it was read.', view);
+  return view;
+}
+
+/**
+ * ADR 0065 Decision 3: Mark passed and Confirm stamp (you) through
+ * confirmPass; repair replaces a malformed section once Jay has seen every
+ * line it would record as passed. Both are owner writes bound to the read.
+ */
+async function handleMilestoneWrite(session: UiSession, method: string, project: string, action: 'confirm' | 'repair', body: Buffer): Promise<Response> {
+  if (method !== 'POST') return reply(405, { error: 'Method not allowed.', code: 'invalid_request' });
+  const parsed = jsonObject(body, 16 * 1024, 'Milestone request');
+  if ('refused' in parsed) return parsed.refused;
+  const input = parsed.input;
+  const allowed = action === 'confirm' ? ['id', 'expected_revision'] : ['body', 'expected_revision', 'check', 'accept_passes'];
+  if (Object.keys(input).some(key => !allowed.includes(key))) return reply(400, { error: 'Unexpected milestone field.', code: 'invalid_request' });
+  if (typeof input.expected_revision !== 'string') return reply(400, { error: 'expected_revision is required.', code: 'invalid_request' });
+  const expected = input.expected_revision;
+  const source = action === 'confirm' ? 'northkeep:milestone-confirm' : 'northkeep:milestone-repair';
+  if (action === 'confirm') {
+    if (typeof input.id !== 'string') return reply(400, { error: 'id is required.', code: 'invalid_request' });
+    const id = input.id;
+    return reply(200, await session.withVault(vault => {
+      const view = headAsRead(vault, project, expected);
+      const { content, passed } = confirmPassInDocument(view.content, id, new Date().toISOString());
+      // K1 REBASE: pass { actor: 'owner' } here.
+      const current = vault.replaceProjectContent({ project, expected_revision: view.revision, content, source, writer: appWriter(session) });
+      vault.save();
+      return { passed: { id: passed.id, title: passed.title, on: passed.on, by: passed.by }, current: { ...current, ...milestoneFields(current) } };
+    }));
+  }
+  if (typeof input.body !== 'string') return reply(400, { error: 'body is required.', code: 'invalid_request' });
+  if (input.check !== undefined && typeof input.check !== 'boolean') return reply(400, { error: 'check must be true or false.', code: 'invalid_request' });
+  const accepted = input.accept_passes;
+  if (accepted !== undefined && (!Array.isArray(accepted) || accepted.some(id => typeof id !== 'string'))) return reply(400, { error: 'accept_passes must be a list of milestone ids.', code: 'invalid_request' });
+  const text = input.body;
+  return reply(200, await session.withVault(vault => {
+    const view = headAsRead(vault, project, expected);
+    if (milestonesFromContentUntilK1(view).kind !== 'malformed') throw new MilestoneError('The Milestones section can be read, so there is nothing to repair. Reload the project.');
+    const preview = previewMilestoneRepair(view.content, text);
+    if (!preview.ok) throw new MilestoneError(preview.reason);
+    const passes = preview.passes;
+    if (input.check !== false) return { check: true, plan: preview.plan, passes };
+    // Jay must have seen exactly the passes this text records, so a stamp typed in by someone else is not saved unseen.
+    if (accepted === undefined || accepted.length !== passes.length || passes.some((pass, i) => accepted[i] !== pass.id)) {
+      throw new MilestoneError('Check the milestones again before saving: the lines that count as passed are not the ones you reviewed.');
+    }
+    // K1 REBASE: pass { actor: 'owner' } here.
+    const current = vault.replaceProjectContent({ project, expected_revision: view.revision, content: preview.content, source, writer: appWriter(session) });
+    vault.save();
+    return { check: false, passes, current: { ...current, ...milestoneFields(current) } };
+  }));
 }
 
 export async function handleProjectsApi(session: UiSession, method: string, route: string, body: Buffer): Promise<Response | null> {
@@ -87,11 +163,16 @@ export async function handleProjectsApi(session: UiSession, method: string, rout
         return reply(500, { error: error instanceof Error ? error.message : 'Compaction failed.', code: 'compaction_failed' });
       }
     }
+    const milestoneRoute = /^\/api\/projects\/([a-z0-9-]{1,40})\/milestones\/(confirm|repair)$/.exec(route);
+    if (milestoneRoute) return await handleMilestoneWrite(session, method, milestoneRoute[1]!, milestoneRoute[2] as 'confirm' | 'repair', body);
     const match = /^\/api\/projects\/([a-z0-9-]{1,40})(?:\/(checkpoint|wrap|update|restore))?$/.exec(route);
     if (!match) return reply(404, { error: 'Project route not found.', code: 'not_found' });
     const project = match[1]!;
     if (method === 'GET' && !match[2]) {
-      return reply(200, await session.withVault(vault => ({ ...getProjectView(vault, project, undefined, { history: true }), cleared_revisions: clearedRevisions(vault, project) })));
+      return reply(200, await session.withVault(vault => {
+        const view = getProjectView(vault, project, undefined, { history: true });
+        return { ...view, ...milestoneFields(view), cleared_revisions: clearedRevisions(vault, project) };
+      }));
     }
     if (method === 'DELETE' && !match[2]) {
       // Owner request 2026-09-13: delete a project from the app. Forgets every
@@ -181,6 +262,7 @@ export async function handleProjectsApi(session: UiSession, method: string, rout
       const status = error.code === 'invalid_request' ? 400 : error.code === 'not_found' ? 404 : error.code === 'scope_denied' ? 403 : 409;
       return reply(status, { error: error.message, code: error.code, ...(error.current ? { current: error.current } : {}) });
     }
+    if (error instanceof MilestoneError) return reply(409, { error: error.message, code: 'milestone_refused' });
     if (error instanceof Error && error.name === 'LockedError') return reply(423, { error: 'Vault is locked.', code: 'locked' });
     return reply(500, { error: 'The save could not be confirmed. Retry the same update to check its result.', code: 'save_uncertain' });
   }
