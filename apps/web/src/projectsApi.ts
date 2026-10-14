@@ -5,7 +5,7 @@ import { confirmPassInDocument } from '@northkeep/core/project-milestones-owner'
 import { loadConnectorConfig, unshareScope } from '@northkeep/sync';
 import { readMirrorSummary } from '@northkeep/mcp-server';
 import type { UiSession } from './session.js';
-import { milestoneRepairText, milestonesFromContentUntilK1, passesUndoneByRestore, previewMilestoneRepair } from './project-milestones-view.js';
+import { milestoneRepairText, passesUndoneByRestore, previewMilestoneRepair } from './project-milestones-view.js';
 
 /** Attribution for a save made from this app (ADR 0052 Decision 1). The host
  * name is fixed and the session id comes from the process, never the request:
@@ -45,7 +45,7 @@ function clearedRevisions(vault: Vault, project: string): Array<{ id: string; up
 
 /** ADR 0065 K2: what the project page needs to show and guard milestones. */
 function milestoneFields(view: ProjectView) {
-  const milestones = milestonesFromContentUntilK1(view);
+  const milestones = view.milestones;
   const undoes: Record<string, ReturnType<typeof passesUndoneByRestore>> = {};
   for (const revision of view.history) if (revision.content) undoes[revision.id] = passesUndoneByRestore(view.content, revision.content);
   return { milestones, restore_undoes: undoes, ...(milestones.kind === 'malformed' ? { milestone_repair_text: milestoneRepairText(view.content) } : {}) };
@@ -88,8 +88,7 @@ async function handleMilestoneWrite(session: UiSession, method: string, project:
     return reply(200, await session.withVault(vault => {
       const view = headAsRead(vault, project, expected);
       const { content, passed } = confirmPassInDocument(view.content, id, new Date().toISOString());
-      // K1 REBASE: pass { actor: 'owner' } here.
-      const current = vault.replaceProjectContent({ project, expected_revision: view.revision, content, source, writer: appWriter(session) });
+      const current = vault.replaceProjectContent({ project, expected_revision: view.revision, content, source, writer: appWriter(session) }, { actor: 'owner' });
       vault.save();
       return { passed: { id: passed.id, title: passed.title, on: passed.on, by: passed.by }, current: { ...current, ...milestoneFields(current) } };
     }));
@@ -101,7 +100,7 @@ async function handleMilestoneWrite(session: UiSession, method: string, project:
   const text = input.body;
   return reply(200, await session.withVault(vault => {
     const view = headAsRead(vault, project, expected);
-    if (milestonesFromContentUntilK1(view).kind !== 'malformed') throw new MilestoneError('The Milestones section can be read, so there is nothing to repair. Reload the project.');
+    if (view.milestones.kind !== 'malformed') throw new MilestoneError('The Milestones section can be read, so there is nothing to repair. Reload the project.');
     const preview = previewMilestoneRepair(view.content, text);
     if (!preview.ok) throw new MilestoneError(preview.reason);
     const passes = preview.passes;
@@ -110,8 +109,7 @@ async function handleMilestoneWrite(session: UiSession, method: string, project:
     if (accepted === undefined || accepted.length !== passes.length || passes.some((pass, i) => accepted[i] !== pass.id)) {
       throw new MilestoneError('Check the milestones again before saving: the lines that count as passed are not the ones you reviewed.');
     }
-    // K1 REBASE: pass { actor: 'owner' } here.
-    const current = vault.replaceProjectContent({ project, expected_revision: view.revision, content: preview.content, source, writer: appWriter(session) });
+    const current = vault.replaceProjectContent({ project, expected_revision: view.revision, content: preview.content, source, writer: appWriter(session) }, { actor: 'owner' });
     vault.save();
     return { check: false, passes, current: { ...current, ...milestoneFields(current) } };
   }));

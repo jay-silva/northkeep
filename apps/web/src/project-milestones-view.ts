@@ -14,21 +14,12 @@ import {
   serializeProjectDoc,
   type MilestonePlan,
   type PassedMilestone,
-  type ProjectView,
 } from '@northkeep/core';
 
 /** One pass as the page names it. */
 export interface PassNote { id: string; title: string; on: string; by: 'you' | 'agent' }
 
 const note = (item: PassedMilestone): PassNote => ({ id: item.id, title: item.title, on: item.on, by: item.by });
-
-/**
- * DELETE AT K1 REBASE: K1 adds `ProjectView.milestones`. Until then the plan
- * is parsed from the document text here, the one place this package does it.
- */
-export function milestonesFromContentUntilK1(view: Pick<ProjectView, 'content'>): MilestonePlan {
-  return parseMilestones(view.content);
-}
 
 /**
  * The passes restoring `older` over `current` would undo: each passed line in

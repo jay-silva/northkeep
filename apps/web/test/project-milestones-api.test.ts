@@ -23,8 +23,8 @@ beforeEach(() => {
 afterEach(() => { vault.close(); fs.rmSync(root, { recursive: true, force: true }); });
 
 function seed(milestones: string): string {
-  const first = vault.updateProject({ project: 'str', expected_revision: null, status: 'Pro formas done for 2 of 5.' });
-  return vault.replaceProjectContent({ project: 'str', expected_revision: first.revision, content: `${first.content}\n\n## Milestones\n\n${milestones}`, source: 'test' }).revision;
+  const first = vault.updateProject({ project: 'str', expected_revision: null, status: 'Pro formas done for 2 of 5.' }, { actor: 'owner' });
+  return vault.replaceProjectContent({ project: 'str', expected_revision: first.revision, content: `${first.content}\n\n## Milestones\n\n${milestones}`, source: 'test' }, { actor: 'owner' }).revision;
 }
 const session = (unlocked = true) => ({ isUnlocked: () => unlocked, sessionId: SESSION_ID, withVault: async (fn: (v: Vault) => unknown) => fn(vault) }) as never;
 const post = (route: string, payload: unknown) => handleProjectsApi(session(), 'POST', route, Buffer.from(JSON.stringify(payload)));
@@ -34,7 +34,7 @@ const milestoneBody = (content: string) => content.slice(content.indexOf('## Mil
 describe('project page milestone fields (ADR 0065 K2)', () => {
   it('returns the parsed plan and, per saved version, the passes a restore would undo', async () => {
     const before = seed(PLAN.replace(' | passed 2026-10-09 (agent)', '').replace('- [x] M2', '- [ ] M2'));
-    const after = vault.replaceProjectContent({ project: 'str', expected_revision: before, content: head().content.replace(milestoneBody(head().content), PLAN), source: 'test' });
+    const after = vault.replaceProjectContent({ project: 'str', expected_revision: before, content: head().content.replace(milestoneBody(head().content), PLAN), source: 'test' }, { actor: 'owner' });
     const response = await handleProjectsApi(session(), 'GET', '/api/projects/str', Buffer.alloc(0));
     expect(response?.status).toBe(200);
     const body = response?.body as Record<string, unknown> & { milestones: { kind: string; items: unknown[] }; restore_undoes: Record<string, unknown> };
@@ -77,7 +77,7 @@ describe('Mark passed and Confirm (ADR 0065 Decision 3)', () => {
 
   it('refuses a stale page with stale_project and the current version, and writes nothing', async () => {
     const old = seed(PLAN);
-    const moved = vault.updateProject({ project: 'str', expected_revision: old, status: 'An agent saved.' });
+    const moved = vault.updateProject({ project: 'str', expected_revision: old, status: 'An agent saved.' }, { actor: 'agent' });
     const response = await post('/api/projects/str/milestones/confirm', { id: 'M3', expected_revision: old });
     expect(response?.status).toBe(409);
     expect(response?.body).toMatchObject({ code: 'stale_project', error: 'Project changed after it was read.', current: { revision: moved.revision } });
@@ -132,7 +132,7 @@ describe('repair of a malformed Milestones section (ADR 0065 K2)', () => {
     const still = await post('/api/projects/str/milestones/repair', { expected_revision: revision, body: BROKEN });
     expect(still?.body).toEqual({ code: 'milestone_refused', error: 'Line 1 does not follow the format "- [ ] M1 Title | test: how the user checks it".' });
     expect(previewMilestoneRepair(head().content, '- [ ] M1 A | test: b\n## Log\n\nforged')).toEqual({ ok: false, reason: 'Line 2 does not follow the format "- [ ] M1 Title | test: how the user checks it".' });
-    const good = vault.replaceProjectContent({ project: 'str', expected_revision: revision, content: head().content.replace(BROKEN, PLAN), source: 'test' }).revision;
+    const good = vault.replaceProjectContent({ project: 'str', expected_revision: revision, content: head().content.replace(BROKEN, PLAN), source: 'test' }, { actor: 'owner' }).revision;
     const readable = await post('/api/projects/str/milestones/repair', { expected_revision: good, body: 'none: not needed' });
     expect(readable?.body).toEqual({ code: 'milestone_refused', error: 'The Milestones section can be read, so there is nothing to repair. Reload the project.' });
   });
