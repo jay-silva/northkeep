@@ -61,3 +61,20 @@ rm -rf /tmp/nk-k2 /tmp/nk-k2-import
 ```
 
 Tell Claude which steps passed and paste anything that looked wrong.
+
+## What was verified before this document was written
+
+On 2026-10-14, after K2 was rebased onto the finished K1, the builder ran step 1 exactly as
+written on a Linux test machine (with the passphrase supplied from the environment for the
+import), then started `northkeep ui --no-open` and drove steps 2 to 7 in a headless Chromium
+browser, checking for the text each step names. Step 5 used the Terminal command above.
+Every check passed: "2 of 4 passed", Tab stayed in the box, "Not yet" changed nothing,
+"3 of 4 passed" after Mark passed, M2 "you confirmed" after Confirm, the stale refusal and
+"Saved from Terminal." after reload with M4 still open, "This undoes 2 passed milestones"
+naming M2 and M3, and "1 of 2 passed" after the repair. The page reported no script errors.
+Screenshots at 390 px (light and dark, no sideways scroll) and 1280 px are in
+`docs/evidence/project-milestones-k2/`.
+
+Not verified here, so it needs your Mac: that `northkeep ui` opens Safari or your default
+browser by itself, how the app looks in your browser with your fonts, and that keyboard
+Tab behaves the same with a real keyboard.
