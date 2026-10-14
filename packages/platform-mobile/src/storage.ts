@@ -44,7 +44,13 @@ export function mobileVaultStorage(): VaultStorage {
       const file = new File(path);
       if (!file.exists) throw new Error(`No file at ${path}`);
       // bytesSync (NOT bytes(), which is async) — the seam contract is synchronous.
-      const bytes = file.bytesSync();
+      // Name the failing step, as writeAtomic does: native errors arrive as opaque one-liners.
+      let bytes: Uint8Array;
+      try {
+        bytes = file.bytesSync();
+      } catch (err) {
+        throw new Error(`readBytes[bytesSync] at ${path}: ${err instanceof Error ? err.message : String(err)}`);
+      }
       return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     },
 
