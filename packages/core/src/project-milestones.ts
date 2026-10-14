@@ -347,33 +347,58 @@ function headingText(line: string): string | null {
   return match === null ? null : (match[1] ?? '');
 }
 
-/** Lines outside the one real Milestones section, counted, so an addition can be told from a line already there. */
+/** A setext underline. The line above it reads as a heading to a person, whatever Markdown makes of it. */
+const SETEXT_UNDERLINE = /^ {0,3}[=-]+\s*$/;
+const MILESTONE_ID_SKELETON = /(?<![\p{L}\p{N}])m ?0*[1-9][0-9]{0,2}(?!\p{N})/u;
+
+/**
+ * Lines outside the one real Milestones section, counted, so an addition can be
+ * told from a line already there. A setext heading counts as one more entry,
+ * its text and underline joined by a newline, which no single line can hold.
+ */
 function linesOutsideSection(document: string): Map<string, number> {
   const lines = document.replace(/\r\n/g, '\n').split('\n');
   const bodies = milestoneSectionBodies(document);
   const inside = new Map<string, number>();
   if (bodies.length === 1) for (const line of bodies[0]!.replace(/\r\n/g, '\n').split('\n')) inside.set(line, (inside.get(line) ?? 0) + 1);
-  const outside = new Map<string, number>();
+  const kept: string[] = [];
   for (const line of lines) {
     const skip = inside.get(line) ?? 0;
     if (skip > 0) { inside.set(line, skip - 1); continue; }
-    outside.set(line, (outside.get(line) ?? 0) + 1);
+    kept.push(line);
   }
+  const outside = new Map<string, number>();
+  const count = (key: string) => outside.set(key, (outside.get(key) ?? 0) + 1);
+  kept.forEach((line, i) => {
+    count(line);
+    const next = kept[i + 1];
+    if (next !== undefined && line.trim() !== '' && SETEXT_UNDERLINE.test(next)) count(`${line}\n${next}`);
+  });
   return outside;
 }
 
-/** Review wound W3: no stamped line outside the section, and no heading that only looks like Milestones. */
+const HEADING_REFUSAL = 'A heading named like Milestones can only be "## Milestones". Use that exact heading for the plan.';
+
+/** Review wound W3 and K4 review F1: no stamped or checkbox milestone line outside the section, and no heading that only looks like Milestones. */
 function assertNothingMilestoneLikeAdded(before: string | null, after: string): void {
   const was = before === null ? new Map<string, number>() : linesOutsideSection(before);
   const added = (line: string, count: number) => count > (was.get(line) ?? 0);
   for (const [line, count] of linesOutsideSection(after)) {
     if (!added(line, count)) continue;
+    if (line.includes('\n')) {
+      if (milestoneSkeleton(line.slice(0, line.indexOf('\n'))).trim() === 'milestones') throw new MilestoneError(HEADING_REFUSAL);
+      continue;
+    }
     const heading = headingText(line);
     if (heading !== null && line !== `## ${MILESTONES_HEADING}` && milestoneSkeleton(heading).trim() === 'milestones') {
-      throw new MilestoneError('A heading named like Milestones can only be "## Milestones". Use that exact heading for the plan.');
+      throw new MilestoneError(HEADING_REFUSAL);
     }
     if (carriesPassStamp(line)) {
       throw new MilestoneError('Only the Milestones section can hold a passed milestone line. An AI app cannot add one anywhere else.');
+    }
+    const skeleton = milestoneSkeleton(line);
+    if (CHECKBOX.test(skeleton) && MILESTONE_ID_SKELETON.test(skeleton)) {
+      throw new MilestoneError('Only the Milestones section can hold a milestone line with a checkbox. An AI app cannot add one anywhere else.');
     }
   }
 }
