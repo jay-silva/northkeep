@@ -24,4 +24,4 @@ The hosted connector refused project creation (ADR 0040 Decision 5); Jay asked f
 The original has no egress section. After the no-dialog mark, the app's rows and everything later written into the scope are pushed, as for any shared scope; under multi-device lag that can include another device's private memories. Reviews report no attack moved private local content off the machine or undid a revoke with enforcement on.
 
 ## Links
-Amends: ADRs 0038, 0040, 0042 · Amended by: ADR 0063 · Full record: docs/design/adr-0050-hosted-project-creation.md
+Amends: ADRs 0038, 0040, 0042 · Amended by: ADRs 0063, 0065 · Full record: docs/design/adr-0050-hosted-project-creation.md
