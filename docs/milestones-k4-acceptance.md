@@ -26,7 +26,7 @@ Nothing here touches your vault. The tests use throwaway folders and a stand-in 
    - Cloud Connect refuses to create a project without milestones, and refuses any milestone sent as already passed.
    - Cloud Connect keeps every passed milestone exactly as it was, and refuses an AI app's attempt to change or remove one.
    - Cloud Connect refuses to forget a project document.
-   - Cloud Connect refuses a heading that looks like Milestones, or a checkbox line with a milestone number, anywhere outside the real Milestones section.
+   - Cloud Connect refuses a heading that looks like Milestones, or a checkbox line with an `M<n>` id, anywhere outside the real Milestones section.
    - When a cloud version would add, change or remove a pass, your Mac holds it as "needs your decision" instead of applying it, and says which passes would change.
    - A new project from a connected app that arrives already showing a pass is held and stays private until you choose.
 

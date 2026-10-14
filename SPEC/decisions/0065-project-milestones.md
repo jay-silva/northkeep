@@ -1,6 +1,6 @@
 # ADR 0065: Project milestones: agents record the plan, only Jay confirms a pass
 
-Status: Accepted 2026-10-13 (K0) · Review: CLEARED WITH WOUNDS on second recheck, wounds fixed; K1 code review 2026-10-14 CLEARED WITH WOUNDS, wounds fixed (see the design doc)
+Status: Accepted 2026-10-13 (K0) · Reviews (design doc): design review CLEARED WITH WOUNDS; K1 code review CLEARED WITH WOUNDS; K2 review CLEARED WITH WOUNDS; K4 review CLEARED WITH WOUNDS, with F1 narrowing the claim; final recheck CLEARED WITH WOUNDS, wounds fixed. Every wound is fixed.
 
 ## Context
 Jay wants each project's milestone plan recorded at kickoff and visible on Mac and phone. A milestone passes only when Jay runs its test and says so.
