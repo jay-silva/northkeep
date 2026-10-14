@@ -110,6 +110,7 @@ import {
   reviewShow,
 } from './reviewCmd.js';
 import { runLauncher } from './launcher.js';
+import { projectsMilestonesCmd, projectsPassCmd } from './milestonesCmd.js';
 
 // Register the Node platform adapters (crypto/sqlite/storage) exactly once,
 // before any vault or crypto operation runs (ADR 0018 platform seam).
@@ -999,6 +1000,35 @@ projects
   .option('--json', 'print the board as JSON')
   .action(async (options: { staleDays?: string; json?: boolean }) => {
     await projectsBoardCmd(options, withVault, fail);
+  });
+
+projects
+  .command('milestones')
+  .description("Show a project's milestones and their acceptance tests (read only)")
+  .argument('<slug>', 'project slug')
+  .action(async (slug: string) => {
+    await projectsMilestonesCmd(slug, withVault, fail);
+  });
+
+projects
+  .command('pass')
+  .description('Confirm that a milestone passed its acceptance test. You type yes in a terminal; there is no flag that skips it')
+  .argument('<slug>', 'project slug')
+  .argument('<id>', 'the milestone id, such as M2, from "northkeep projects milestones"')
+  .action(async (slug: string, id: string) => {
+    // One key for the read and the write, so the passphrase is asked once.
+    const { deps, opened } = mirrorDeps();
+    const vaultPath = vaultPathOpt();
+    const once: WithVault = async (fn) => (await deps.vaultRunner())(fn);
+    try {
+      const { saved } = await trackSaves(vaultPath, () =>
+        projectsPassCmd(slug, id, { withVault: once, fail, isTTY: () => process.stdin.isTTY === true, ask: promptLine }),
+      );
+      await autoPushAfterWrite({ vaultPath, masterKey: opened()?.keyForPush ?? null, saved });
+    } finally {
+      opened()?.dispose();
+      opened()?.keyForPush?.fill(0);
+    }
   });
 
 /** launchd needs the real script, not the npm bin symlink. */
