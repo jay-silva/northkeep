@@ -53,6 +53,7 @@ const CONFUSABLES: Record<string, string> = {
   'а': 'a', 'ɑ': 'a', 'α': 'a', 'е': 'e', 'ε': 'e', 'о': 'o', 'ο': 'o', 'σ': 'o', 'у': 'y', 'γ': 'y', 'ү': 'y',
   'υ': 'u', 'ս': 'u', 'ц': 'u', 'п': 'n', 'ո': 'n', 'η': 'n', 'т': 't', 'τ': 't', 'ɡ': 'g', 'ց': 'g', 'р': 'p', 'ρ': 'p',
   'ѕ': 's', 'ꜱ': 's', 'с': 'c', 'х': 'x', 'χ': 'x', '×': 'x', 'і': 'i', 'ι': 'i', 'ј': 'j', 'ԁ': 'd', 'һ': 'h',
+  'М': 'm', 'м': 'm', 'Μ': 'm', 'μ': 'm',
   '⟨': '(', '〈': '(', '‹': '(', '«': '(', '【': '(', '〔': '(', '「': '(', '『': '(', '❨': '(', '❪': '(',
   '⟩': ')', '〉': ')', '›': ')', '»': ')', '】': ')', '〕': ')', '」': ')', '』': ')', '❩': ')', '❫': ')',
 };
@@ -61,7 +62,7 @@ export function milestoneSkeleton(text: string): string {
   const folded = text.normalize('NFKD').replace(/[\p{M}\p{Cf}]/gu, '').normalize('NFKC').toLowerCase();
   return [...folded].map((ch) => CONFUSABLES[ch] ?? ch).join('').replace(/\s+/g, ' ');
 }
-const CHECKBOX = /\[\s*[^\]\sa-wyz0-9]?\s*\]|[☐☑☒✅✓✔✗✘❎🗹🗸]/u;
+const CHECKBOX = /\[\s*[^\]\sa-wyz0-9]?\s*\]|[☐☑☒✅✓✔✗✘❎🗹🗸√✕✖]/u;
 const AUTHOR_STAMP = /[([{<]\s*(?:you|agent)\s*[)\]}>]/;
 const PASSED_DATE = /\bpass(?:ed)?\b[^0-9a-z]{0,5}\d{4}[^0-9a-z]\d{1,2}[^0-9a-z]\d{1,2}/;
 /** A checkbox or a pass stamp inside milestone text would read as a pass to a person (review wound W2). */
@@ -69,10 +70,10 @@ export function looksLikePass(text: string): boolean {
   const skeleton = milestoneSkeleton(text);
   return CHECKBOX.test(skeleton) || AUTHOR_STAMP.test(skeleton) || PASSED_DATE.test(skeleton);
 }
-/** A line that reads as a passed milestone: an id with a stamp or a pass date. */
-function looksLikePassedMilestone(line: string): boolean {
+/** A line carrying an author stamp or a pass date. No id is required: a reader takes such a line as a pass whatever it is numbered (K1 review finding A). */
+function carriesPassStamp(line: string): boolean {
   const skeleton = milestoneSkeleton(line);
-  return /\bm[1-9][0-9]{0,2}\b/.test(skeleton) && (AUTHOR_STAMP.test(skeleton) || PASSED_DATE.test(skeleton));
+  return AUTHOR_STAMP.test(skeleton) || PASSED_DATE.test(skeleton);
 }
 const LONGEST_STAMP = ' | passed 0000-00-00 (agent)';
 
@@ -371,7 +372,7 @@ function assertNothingMilestoneLikeAdded(before: string | null, after: string): 
     if (heading !== null && line !== `## ${MILESTONES_HEADING}` && milestoneSkeleton(heading).trim() === 'milestones') {
       throw new MilestoneError('A heading named like Milestones can only be "## Milestones". Use that exact heading for the plan.');
     }
-    if (looksLikePassedMilestone(line)) {
+    if (carriesPassStamp(line)) {
       throw new MilestoneError('Only the Milestones section can hold a passed milestone line. An AI app cannot add one anywhere else.');
     }
   }
