@@ -46,11 +46,13 @@ Back in the app, without reloading, click **Mark passed** on M4, then **Yes, it 
 
 ## 6. Restore warning
 
-Open **Session history**, then **Restore this version** on the oldest version. The box says "This undoes 2 passed milestones" and names M2 and M3. Click **Cancel**.
+Open **Session history**, then **Restore this version** on the oldest version. The box says "This restore changes your milestones." Under "Changes 1 passed milestone" it names M2: now passed today, you confirmed, and after the restore passed Oct 5, agent says you confirmed. Under "Undoes 1 passed milestone" it names M3. Click **Cancel**.
 
 ## 7. Repair
 
 Open **K2 repair project**. The block says NorthKeep cannot read the section. Click **Repair milestones**. The M1 line is highlighted as "Says passed". Change `(You)` to `(you)` and click **Check milestones**. It lists M1 as counting as passed. Click **Save repair**: the block reads "1 of 2 passed".
+
+Now open **Session history** and click **Restore this version** on the older version. The box says it undoes M1 Kickoff and that NorthKeep cannot read the Milestones section in that version. Click **Cancel**.
 
 ## 8. Clean up
 
@@ -74,6 +76,13 @@ Every check passed: "2 of 4 passed", Tab stayed in the box, "Not yet" changed no
 naming M2 and M3, and "1 of 2 passed" after the repair. The page reported no script errors.
 Screenshots at 390 px (light and dark, no sideways scroll) and 1280 px are in
 `docs/evidence/project-milestones-k2/`.
+
+After the K2 code review fixes, on 2026-10-14, steps 1 to 7 were run again the same way on a
+fresh temporary `NORTHKEEP_HOME`, with the new step 6 and step 7 text. Every check passed. The
+run also held a Mark passed save open and pressed Tab five times (focus stayed in the box) and
+Escape (the box closed and the page worked again), and sent a repair save with a changed M1
+line straight to the app server (refused). `restore-warning-1280.png` was retaken and
+`restore-adds-1280.png` added.
 
 Not verified here, so it needs your Mac: that `northkeep ui` opens Safari or your default
 browser by itself, how the app looks in your browser with your fonts, and that keyboard
