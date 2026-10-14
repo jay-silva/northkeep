@@ -46,12 +46,24 @@ import {
   parseProjectSlug,
   projectScope,
   serializeProjectDoc,
+  type ProjectDoc,
 } from './project-doc.js';
 import { z } from 'zod';
 import { BASE_NEW, type ConnectorStorage, type SharedEntry } from './storage.js';
 import { projectScopeView, staleProjectRowIds } from './project-head.js';
 import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
-import { HOSTED_SECTION_TEXT_RULES, firstProjectTextError } from './project-text.js';
+import { HOSTED_SECTION_TEXT_RULES, firstProjectTextError, isProjectStatusDone } from './project-text.js';
+import {
+  MILESTONES_HEADING,
+  MILESTONE_MAX_ITEMS,
+  MilestoneError,
+  assertAgentWriteKeepsPasses,
+  formatMilestones,
+  parseMilestoneProposals,
+  parseMilestones,
+  replacePlan,
+  type MilestonePlanInput,
+} from './project-milestones.js';
 import { TOMBSTONE_USER_MESSAGE } from './tombstones.js';
 
 const MAX_RESULTS = 20;
@@ -107,6 +119,57 @@ function waitingForReviewMessage(project: string): string {
   return `Nothing was saved: a cloud version of project "${project}" is waiting for the user to review it in NorthKeep. Ask them to resolve it there, then call project_get.`;
 }
 
+/** ADR 0065 Decision 4, layer 2: the same standing instruction the local server sends. */
+export const MILESTONE_INSTRUCTION =
+  'When the user asks to create a project, propose its milestones and create it only after the user agrees to them. ' +
+  'Report a milestone passed only when the user says its acceptance test passed. ' +
+  'Never mark a milestone passed on your own judgment.';
+
+/** ADR 0065 Decision 4, layer 3. The connector has no sessions, so project_get repeats it while the plan is absent. */
+export const NO_MILESTONES_NOTE =
+  'This project has no milestones. Ask the user whether they want to set them; do not invent them.';
+
+const MILESTONES_FORMAT =
+  'One milestone per line, as "M1 Title | test: how the user checks it" (the id is optional; NorthKeep numbers ' +
+  `new ones), up to ${MILESTONE_MAX_ITEMS} lines; a title of up to 80 characters and a test of up to 120, without "|". ` +
+  'Or one line "none: <reason>" when the project has no plan on purpose. Send open milestones only: a checkbox or a ' +
+  '"passed" stamp is refused, and milestones that already passed are kept as they are.';
+
+const MILESTONES_REQUIRED_MSG =
+  'Nothing was saved: milestones is required. Propose the milestones to the user and create the project after they agree; ' +
+  'if there is no plan yet, send "M1 Agree the milestones | test: the user approves the plan".';
+
+/** Agent milestone text as the module's input, or the refusal text. */
+function milestonesInput(text: string): MilestonePlanInput | string {
+  try {
+    return parseMilestoneProposals(text);
+  } catch (err) {
+    if (err instanceof MilestoneError) return `Nothing was saved: ${err.message}`;
+    throw err;
+  }
+}
+
+/**
+ * Writes the plan into the document as core's project writer does: only a
+ * level-2 Milestones section holds the plan (K1 review wound W4), else a new
+ * one goes right after Current Status.
+ */
+function setMilestonesSection(doc: ProjectDoc, body: string): void {
+  const isTitle = (i: number): boolean => i === 0 && doc.sections[0]!.level === 1;
+  const found = doc.sections.find((s, i) => s.title === MILESTONES_HEADING && s.level === 2 && !isTitle(i));
+  if (found) {
+    found.body = body;
+    return;
+  }
+  const status = doc.sections.findIndex((s, i) => s.title === 'Current Status' && !isTitle(i));
+  doc.sections.splice(status === -1 ? doc.sections.length : status + 1, 0, { level: 2, title: MILESTONES_HEADING, body });
+}
+
+/** Replaces the open part of the plan through the copied module; throws MilestoneError. */
+function applyMilestones(doc: ProjectDoc, input: MilestonePlanInput): void {
+  setMilestonesSection(doc, formatMilestones(replacePlan(parseMilestones(serializeProjectDoc(doc)), input)));
+}
+
 function statusFirstLine(content: string): string {
   return firstNonEmptyLine(getProjectSection(parseProjectDoc(content), 'Current Status'));
 }
@@ -153,7 +216,7 @@ export function createMcpServer(
 ): McpServer {
   const server = new McpServer(
     { name: 'northkeep-connector', version: '0.1.0' },
-    { capabilities: { tools: {} } },
+    { capabilities: { tools: {} }, instructions: MILESTONE_INSTRUCTION },
   );
 
   /**
@@ -422,12 +485,29 @@ export function createMcpServer(
     {
       title: 'Forget a shared memory',
       description:
-        'Forget a shared memory by its id. Use the id shown by memory_remember or memory_list. The memory is hidden immediately and, on the next sync, tombstoned in the user’s vault; it never comes back.',
+        'Forget a shared memory by its id. Use the id shown by memory_remember or memory_list. The memory is hidden immediately and, on the next sync, tombstoned in the user’s vault; it never comes back. ' +
+        'A project document cannot be forgotten here; the user removes a project in NorthKeep.',
       inputSchema: { id: z.string().describe('The id of the memory to forget') },
     },
     async ({ id }) => {
       const entryId = (id ?? '').trim();
       const row = entryId ? await storage.getEntry(accountHash, entryId) : null;
+      // ADR 0065 Decision 3: forgetting the document would let project_create rebuild it without its passed milestones.
+      if (row && parseProjectSlug(row.scope) !== null) {
+        let type: string;
+        try {
+          type = isEncryptedRow(row.content) ? (await decryptRow(row.content, accountHash, dek)).type : row.type;
+        } catch (err) {
+          if (err instanceof ConnectorCryptoError) return reencryptResult('memory_forget');
+          throw err;
+        }
+        if (type === 'working') {
+          return refuseProject(
+            'memory_forget',
+            `Nothing was forgotten: this is the project document of "${row.scope}". An AI app cannot forget a project. The user can remove it in the NorthKeep app.`,
+          );
+        }
+      }
       if (row) await storage.enqueueForget(accountHash, entryId);
       await storage.appendAudit({
         ts: new Date().toISOString(),
@@ -664,7 +744,8 @@ export function createMcpServer(
         'you pick up Current Status, Next Actions, and the Log. The result ends with the revision; pass ' +
         'it as expected_revision to project_update. The ' +
         'live document keeps only its newest Log entries; pass history: true to also get the archive ' +
-        'memories holding older entries, newest first.',
+        'memories holding older entries, newest first. When the project has no milestones, the result says so; ' +
+        'ask the user whether they want to set them, and do not invent them.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
         history: z.boolean().optional().describe('Also return the Log archives for this project (older entries), newest first'),
@@ -712,11 +793,13 @@ export function createMcpServer(
       const body = archives.length === 0
         ? picked.content
         : `${picked.content}\n\n---\n\n${archives.map((a) => a.content).join('\n\n---\n\n')}`;
+      const noPlan = parseMilestones(picked.content).kind === 'absent' && !isProjectStatusDone(getProjectSection(parseProjectDoc(picked.content), 'Current Status'));
+      const note = noPlan ? `\n\n${NO_MILESTONES_NOTE}` : '';
       return {
         content: [
           {
             type: 'text',
-            text: `${body}\n\nRevision: ${picked.entryId} (pass it as expected_revision to project_update)`,
+            text: `${body}${note}\n\nRevision: ${picked.entryId} (pass it as expected_revision to project_update)`,
           },
         ],
         structuredContent: { project, revision: picked.entryId },
@@ -739,19 +822,25 @@ export function createMcpServer(
         'hold notes that belong in an existing project or in a memory. Give What & Why and the ' +
         'Current Status; Log and Decisions start empty. The project becomes Shared with this app ' +
         'when it lands in the user’s vault, so everything later written into it is visible here. ' +
-        'Use project_update to change a project that already exists.',
+        'Use project_update to change a project that already exists. milestones is required: propose the ' +
+        'milestones to the user and create the project only after they agree. If there is no plan yet, send ' +
+        'one line, "M1 Agree the milestones | test: the user approves the plan".',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
         what_why: z.string().min(1).max(16384).describe(`What this project is and why it exists. ${HOSTED_SECTION_TEXT_RULES}`),
         status: z.string().min(1).max(16384).describe(`Where the project stands right now. ${HOSTED_SECTION_TEXT_RULES}`),
         next_actions: z.string().max(16384).optional().describe(`The next concrete actions. ${HOSTED_SECTION_TEXT_RULES}`),
+        milestones: z.string().max(8192).optional().describe(`Required: the plan the user agreed to. ${MILESTONES_FORMAT}`),
       },
     },
-    async ({ project, what_why, status, next_actions }) => {
+    async ({ project, what_why, status, next_actions, milestones }) => {
       const refuse = (text: string) => refuseProject('project_create', text);
       if (!PROJECT_SLUG_PATTERN.test(project ?? '')) {
         return refuse(`Invalid project slug "${project ?? ''}".`);
       }
+      if (milestones === undefined) return refuse(MILESTONES_REQUIRED_MSG);
+      const plan = milestonesInput(milestones);
+      if (typeof plan === 'string') return refuse(plan);
       // Core's rule, before any storage read: text the vault would refuse must
       // never land as the first document in a scope.
       const textError = firstProjectTextError([
@@ -797,15 +886,17 @@ export function createMcpServer(
       }
       let markdown: string;
       try {
-        markdown = serializeProjectDoc(
-          mergeProjectDoc(emptyProjectDoc(), {
-            whatWhy: what_why,
-            status,
-            nextActions,
-          }),
-        );
+        const doc = mergeProjectDoc(emptyProjectDoc(), {
+          whatWhy: what_why,
+          status,
+          nextActions,
+        });
+        applyMilestones(doc, plan);
+        markdown = serializeProjectDoc(doc);
         assertProjectDocSize(markdown);
+        assertAgentWriteKeepsPasses(null, markdown);
       } catch (err) {
+        if (err instanceof MilestoneError) return refuse(`Nothing was saved: ${err.message}`);
         return refuse(err instanceof Error ? err.message : 'Nothing was saved: the document could not be built.');
       }
       const entryId = `conn_${randomUUID().replace(/-/g, '')}`;
@@ -852,7 +943,8 @@ export function createMcpServer(
         'roll into an archive memory in the project scope (the result says so), so a log entry is ' +
         'never refused for size. Only hand-written sections over 16384 characters are refused. ' +
         'NorthKeep never truncates. This tool only updates a project that already has a live document; ' +
-        'use project_create for a new project.',
+        'use project_create for a new project. milestones replaces the milestones still to do; passed ' +
+        'milestones are kept as they are, and a change to one is refused.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         expected_revision: z
@@ -874,9 +966,10 @@ export function createMcpServer(
           .max(4096)
           .optional()
           .describe(`New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD. ${HOSTED_SECTION_TEXT_RULES}`),
+        milestones: z.string().max(8192).optional().describe(`Replacement plan: the milestones still to do. ${MILESTONES_FORMAT}`),
       },
     },
-    async ({ project, expected_revision, what_why, status, next_actions, log_entry, decision }) => {
+    async ({ project, expected_revision, what_why, status, next_actions, log_entry, decision, milestones }) => {
       const refuse = (text: string) => refuseProject('project_update', text);
       if (!PROJECT_SLUG_PATTERN.test(project ?? '')) {
         return refuse(`Invalid project slug "${project ?? ''}".`);
@@ -886,10 +979,13 @@ export function createMcpServer(
         status === undefined &&
         next_actions === undefined &&
         log_entry === undefined &&
-        decision === undefined
+        decision === undefined &&
+        milestones === undefined
       ) {
-        return refuse('Nothing was saved: provide at least one of what_why, status, next_actions, log_entry, or decision.');
+        return refuse('Nothing was saved: provide at least one of what_why, status, next_actions, log_entry, decision, or milestones.');
       }
+      const plan = milestones === undefined ? undefined : milestonesInput(milestones);
+      if (typeof plan === 'string') return refuse(plan);
       const updateTextError = firstProjectTextError([
         ['what_why', what_why, false],
         ['status', status, false],
@@ -933,13 +1029,17 @@ export function createMcpServer(
           log_entry,
           decision,
         }));
+        if (plan !== undefined) applyMilestones(merged, plan);
         // ADR 0045: roll the oldest Log entries into an archive memory rather
         // than refuse; only hand-written sections can still be too long.
         const rolled = rollProjectLog(merged);
         markdown = serializeProjectDoc(rolled.doc);
         assertProjectDocSize(markdown);
+        // ADR 0065 Decision 2: no hosted write adds, changes or removes a pass.
+        assertAgentWriteKeepsPasses(head.content, markdown);
         archivedEntries = rolled.archived;
       } catch (err) {
+        if (err instanceof MilestoneError) return refuse(`Nothing was saved: ${err.message}`);
         const text = err instanceof Error && err.message === PROJECT_DOC_CAP_MESSAGE
           ? PROJECT_DOC_CAP_MESSAGE
           : err instanceof Error

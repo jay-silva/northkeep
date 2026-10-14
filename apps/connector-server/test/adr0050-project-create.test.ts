@@ -15,6 +15,9 @@ import { InMemoryConnectorStorage } from '../src/storage.js';
 import { TOMBSTONE_USER_MESSAGE } from '../src/tombstones.js';
 import { decryptedEntries, seedEncryptedEntry } from './helpers.js';
 
+/** ADR 0065: hosted project_create requires the plan the user agreed. */
+const AGREED_PLAN = 'M1 Agree the milestones | test: the user approves the plan';
+
 /**
  * ADR 0050 claims that live in the connector: hosted project_create behind
  * fail-closed preconditions, memory_remember writability on the pending flag,
@@ -208,7 +211,7 @@ describe('ADR 0050 hosted project_create', () => {
     const WHY = 'ADR0050-WHY-CANARY';
     const STATUS = 'ADR0050-STATUS-CANARY';
     const NEXT = 'ADR0050-NEXT-CANARY';
-    const res = await mcpCall(token, 'project_create', {
+    const res = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN,
       project: 'fresh',
       what_why: WHY,
       status: STATUS,
@@ -248,7 +251,7 @@ describe('ADR 0050 hosted project_create', () => {
   it('refuses a bad slug, a duplicate document, and an over-cap document; nothing is stored', async () => {
     const token = await connectAiApp();
 
-    const bad = await mcpCall(token, 'project_create', {
+    const bad = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN,
       project: 'Not_A_Slug',
       what_why: 'why',
       status: 'status',
@@ -256,7 +259,7 @@ describe('ADR 0050 hosted project_create', () => {
     expect(bad.isError).toBe(true);
     expect((await storage.listEntries(account)).some((e) => e.scope.includes('Not_A_Slug'))).toBe(false);
 
-    const dup = await mcpCall(token, 'project_create', {
+    const dup = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN,
       project: 'fresh',
       what_why: 'second attempt',
       status: 'second attempt',
@@ -265,7 +268,7 @@ describe('ADR 0050 hosted project_create', () => {
     expect(dup.text).toBe('Project already exists; use project_update.');
     expect(await rowsIn('project:fresh')).toHaveLength(1);
 
-    const over = await mcpCall(token, 'project_create', {
+    const over = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN,
       project: 'toobig',
       what_why: 'why',
       status: 'z'.repeat(PROJECT_DOC_MAX_CHARS),
@@ -284,10 +287,10 @@ describe('ADR 0050 hosted project_create', () => {
       content: '## Current Status\n\nStill here.\n',
       createdAt: new Date().toISOString(),
     });
-    const forgot = await mcpCall(token, 'memory_forget', { id: 'forgotten-doc' });
-    expect(forgot.isError).toBeFalsy();
+    // ADR 0065: memory_forget now refuses a project document, so this is a forget queued before K4.
+    await storage.enqueueForget(account, 'forgotten-doc');
     // visibleEntries() hides it, so only a listEntries check can see it.
-    const res = await mcpCall(token, 'project_create', {
+    const res = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN,
       project: 'forgotten',
       what_why: 'why',
       status: 'status',
@@ -308,7 +311,7 @@ describe('ADR 0050 hosted project_create', () => {
       pending: true,
       createdAt: new Date().toISOString(),
     });
-    const res = await mcpCall(token, 'project_create', {
+    const res = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN,
       project: 'archives-only',
       what_why: 'Recovering the slug.',
       status: 'Document rebuilt.',
@@ -322,8 +325,8 @@ describe('ADR 0050 hosted project_create', () => {
   it('two concurrent creates: the scope counter lets exactly one land', async () => {
     const token = await connectAiApp();
     const results = await Promise.all([
-      mcpCall(token, 'project_create', { project: 'racy', what_why: 'first', status: 'first' }),
-      mcpCall(token, 'project_create', { project: 'racy', what_why: 'second', status: 'second' }),
+      mcpCall(token, 'project_create', { milestones: AGREED_PLAN, project: 'racy', what_why: 'first', status: 'first' }),
+      mcpCall(token, 'project_create', { milestones: AGREED_PLAN, project: 'racy', what_why: 'second', status: 'second' }),
     ]);
     // ADR 0063: the insert is a compare-and-swap on the counter read before
     // the rows, so the loser either sees the winner's row or loses the swap.
@@ -342,7 +345,7 @@ describe('ADR 0050 hosted project_create', () => {
 
   it('unshare deletes a not-yet-delivered create', async () => {
     const token = await connectAiApp();
-    const made = await mcpCall(token, 'project_create', {
+    const made = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN,
       project: 'shortlived',
       what_why: 'why',
       status: 'status',
@@ -365,7 +368,7 @@ describe('ADR 0050 hosted project_create', () => {
     const tombs = await storage.listTombstones(account);
     expect(tombs.some((t) => t.scope === 'project:shortlived')).toBe(true);
 
-    const res = await mcpCall(token, 'project_create', {
+    const res = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN,
       project: 'shortlived',
       what_why: 'sneaking back in',
       status: 'sneaking back in',
@@ -380,7 +383,7 @@ describe('ADR 0050 hosted project_create', () => {
 describe('ADR 0050 memory_remember writability', () => {
   it('refuses a scope whose only rows are pending, without calling it unshared', async () => {
     const token = await connectAiApp();
-    const made = await mcpCall(token, 'project_create', {
+    const made = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN,
       project: 'pendingonly',
       what_why: 'why',
       status: 'status',
@@ -537,7 +540,7 @@ describe('ADR 0050 hosted text validation', () => {
       const token = await appToken();
       const slug = `bad${badCreates.findIndex(([l]) => l === label)}`;
       const auditBefore = storage.auditRows().length;
-      const res = await mcpCall(token, 'project_create', { project: slug, ...fields });
+      const res = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN, project: slug, ...fields });
       expect(res.isError).toBe(true);
       expect(res.text).toBe(message);
       expect(await rowsIn(`project:${slug}`)).toHaveLength(0);
@@ -594,14 +597,14 @@ describe('ADR 0050 hosted text validation', () => {
 
   it('project_create accepts an empty next_actions and treats it as omitted', async () => {
     const token = await appToken();
-    const empty = await mcpCall(token, 'project_create', {
+    const empty = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN,
       project: 'emptynext',
       what_why: 'Why it exists.',
       status: 'Just started.',
       next_actions: '',
     });
     expect(empty.isError).toBeFalsy();
-    const omitted = await mcpCall(token, 'project_create', {
+    const omitted = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN,
       project: 'omittednext',
       what_why: 'Why it exists.',
       status: 'Just started.',

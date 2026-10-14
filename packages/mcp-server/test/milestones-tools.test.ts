@@ -313,6 +313,9 @@ describe('source rules', () => {
     .filter((e) => e.isFile() && /\.(ts|js|mjs)$/.test(e.name))
     .map((e) => fs.readFileSync(path.join(e.parentPath, e.name), 'utf8'));
 
+  /** Block and line comments removed; a // inside a string literal is rare enough here not to matter. */
+  const withoutComments = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`])\/\/.*$/gm, '$1');
+
   it('every vault write in server.ts says it is for an agent', () => {
     const source = fs.readFileSync(path.join(here, '../src/server.ts'), 'utf8');
     const calls = [...source.matchAll(/vault\.(editMemory|forget|updateProject|checkpointProject|replaceProjectContent)\(([^;]*?)\);/gs)];
@@ -324,7 +327,8 @@ describe('source rules', () => {
   it('neither the MCP server nor the connector imports the owner milestone entry point', () => {
     const roots = [path.join(here, '../src'), path.join(here, '../../../apps/connector-server/src')];
     for (const root of roots) {
-      for (const text of read(root)) expect(text).not.toMatch(/project-milestones-owner|confirmPass/);
+      // Code only: the connector's byte-identical copy of the module names confirmPass in a doc comment (K4).
+      for (const text of read(root)) expect(withoutComments(text)).not.toMatch(/project-milestones-owner|confirmPass/);
     }
   });
 });

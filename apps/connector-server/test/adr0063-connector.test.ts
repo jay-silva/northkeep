@@ -13,6 +13,9 @@ import { NeonConnectorStorage } from '../src/neon-storage.js';
 import { pgliteAsNeon, startServer, TEST_PEPPER_B64, withEnv, REDIRECT_URI } from './adr0061-support.js';
 import { plantWorkingRow } from '../../../packages/core/test/support/plant-working-row.js';
 
+/** ADR 0065: hosted project_create requires the plan the user agreed. */
+const AGREED_PLAN = 'M1 Agree the milestones | test: the user approves the plan';
+
 /**
  * ADR 0063 on the connector, end to end over HTTP, on the in-memory store and
  * on the real Neon SQL over PGlite (numbers returned as strings, as Neon's HTTP
@@ -299,7 +302,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       expect(get.text).toBe('No live project document for "b": a cloud version is waiting for the user to review it in NorthKeep.');
       const waiting = 'Nothing was saved: a cloud version of project "b" is waiting for the user to review it in NorthKeep. Ask them to resolve it there, then call project_get.';
       expect((await w.mcp('project_update', { project: 'b', expected_revision: x, status: 'no' })).text).toBe(waiting);
-      expect((await w.mcp('project_create', { project: 'b', what_why: 'w', status: 's' })).text).toBe(waiting);
+      expect((await w.mcp('project_create', { milestones: AGREED_PLAN, project: 'b', what_why: 'w', status: 's' })).text).toBe(waiting);
       expect(JSON.parse((await w.mcp('project_list', {})).text)).toEqual({
         projects: [{ project: 'b', scope: 'project:b', status: '', id: null, revision: null, conflict: 'A cloud version is waiting for the user to review it in NorthKeep.' }],
       });
@@ -336,7 +339,7 @@ for (const kind of ['memory', 'pglite'] as const) {
 
     it('a cloud create is base new: withheld from v1, current on ?v=2, stale once the device pushes its own document', async () => {
       const w = await world('a');
-      const c = await w.mcp('project_create', { project: 'fresh', what_why: 'Cloud made it.', status: 'CLOUD CREATE.' });
+      const c = await w.mcp('project_create', { milestones: AGREED_PLAN, project: 'fresh', what_why: 'Cloud made it.', status: 'CLOUD CREATE.' });
       const id = c.structured!.revision as string;
       expect((await w.pending(false)).entries.filter((e) => e.scope === 'project:fresh')).toEqual([]);
       expect((await w.pending(true)).entries.filter((e) => e.scope === 'project:fresh').map((e) => ({ id: e.server_id, base: e.base_revision, stale: e.stale }))).toEqual([
