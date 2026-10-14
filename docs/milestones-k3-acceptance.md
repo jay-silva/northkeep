@@ -1,7 +1,7 @@
 # ADR 0065 (K3) acceptance: milestones on the phone
 
 The phone shows each project's milestones. It never changes them. This branch is built on
-finished K1 (e749593).
+K2 (the Mac app), which is built on finished K1 (4fe0c29).
 
 ## Step 1: the automatic checks
 
@@ -84,6 +84,11 @@ On 2026-10-14, after rebasing onto K1, the builder ran these on a Linux test mac
   `Passed Oct 14 · you confirmed`, M2 current with `Test: seeds in the ground`, M3 title only.
   After step 5: list `2 of 3 · M3 First harvest`, M2 `Passed Oct 14 · agent says you
   confirmed`. Clean-up deleted the project's 3 entries.
+
+On 2026-10-14, after K3 was rebased onto K2, the builder ran step 1 and steps 3 to 5 and
+clean-up again the same way, on a fresh throwaway vault under `/tmp`. Step 1: 7 passed, and the
+whole phone test set passed (324 tests). Every list and page result above matched, and
+clean-up again deleted 3 entries.
 
 Not run, and needing you: step 2 (the TestFlight build is billed and needs your Apple
 account); step 3's live Claude Code session (the test client stood in for it); and step 4 on
