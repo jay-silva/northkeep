@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { KDF_INTERACTIVE, MEMORY_TYPES, Vault, generateDeviceSecret } from '@northkeep/core';
-import { DEMO_PASSPHRASE, demoSeed } from '../src/lib/demo-vault.js';
+import { DEMO_PASSPHRASE, demoSeed, seedDemoVault } from '../src/lib/demo-vault.js';
 
 /**
  * The demo seed (M6-2b) is data that gets fed straight into core's
@@ -41,7 +41,7 @@ describe('demo vault seed', () => {
       deviceSecret: Buffer.from(secret),
       kdf: KDF_INTERACTIVE,
     });
-    for (const memory of demoSeed()) vault.remember(memory);
+    seedDemoVault(vault);
     vault.save();
     vault.close();
 

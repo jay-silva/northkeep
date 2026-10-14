@@ -26,7 +26,7 @@ const repeated = remember(brief.content);
 const third = remember(brief.content);
 const morning = remember('Hold the sample workshop in the morning.', 'planning');
 const afternoon = remember('Hold the sample workshop in the afternoon.', 'planning');
-vault.remember({ type: 'working', scope: 'project:sample', content: 'Synthetic project document; excluded from memory review.', source: 'synthetic-preview' });
+vault.updateProject({ project: 'sample', expected_revision: null, status: 'Synthetic project document; excluded from memory review.' }, { actor: 'owner' });
 const sources = [brief, exception, repeated, third, morning, afternoon];
 const quote = (entry) => ({ entry_id: entry.id, quote: entry.content });
 const proposals = [

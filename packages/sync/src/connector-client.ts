@@ -693,7 +693,8 @@ export async function applyDownSync(opts: {
     if (a.kind === 'project') {
       const project = parseProjectSlug(a.scope)!;
       try {
-        const view = opts.vault.replaceProjectContent({ project, expected_revision: null, content: a.content, source: `connector:${clientLabel}`, metadata });
+        // An AI app wrote this row (ADR 0065): the agent write rule runs, and a refusal is held below as a conflict.
+        const view = opts.vault.replaceProjectContent({ project, expected_revision: null, content: a.content, source: `connector:${clientLabel}`, metadata }, { actor: 'agent' });
         acked.push({ server_id: a.server_id, local_entry_id: view.revision });
         createdScopes.add(a.scope);
         added++;
@@ -724,7 +725,7 @@ export async function applyDownSync(opts: {
         content: r.content,
         source: `connector:${clientLabel}`,
         metadata: { connector: { server_id: r.server_id } },
-      });
+      }, { actor: 'agent' });
       acked.push({ server_id: r.server_id, local_entry_id: view.revision });
       replaced++;
       wrote = true;
@@ -750,7 +751,8 @@ export async function applyDownSync(opts: {
       unapprovedForgets.push(f);
       continue;
     }
-    opts.vault.forget(f.entry_id);
+    // The user approved this forget in the review; cloud forgets still apply until K4 (ADR 0065 Decision 3).
+    opts.vault.forget(f.entry_id, { actor: 'owner' });
     ackedForgets.push(f.entry_id);
     forgotten++;
     wrote = true;
@@ -836,7 +838,7 @@ export async function resolveConflict(opts: {
       content: row.content,
       source: `connector:${clientLabel}`,
       metadata: { connector: { server_id: row.server_id } },
-    });
+    }, { actor: 'owner' });
     // A deleted_here create in a private scope is the ADR 0050 fold the user just
     // approved: the mark rides the save that holds the applied create.
     if (row.reason === 'deleted_here' && !opts.vault.sharedScopes().includes(scope)) opts.vault.setScopeShared(scope, true);

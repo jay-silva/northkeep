@@ -182,7 +182,7 @@ describe('project list mirror line (ADR 0053 Decision 7)', () => {
   it('adds actions and known sharing to the local overview while excluding full documents', async () => {
     const vaultPath = path.join(root, 'portfolio.nkv');
     const vault = Vault.create({ path:vaultPath,passphrase:'synthetic portfolio',deviceSecret:generateDeviceSecret(),kdf:KDF_INTERACTIVE });
-    vault.updateProject({project:'alpha',expected_revision:null,status:'Ready',next_actions:'- Read the chart'});
+    vault.updateProject({project:'alpha',expected_revision:null,status:'Ready',next_actions:'- Read the chart'}, { actor: 'owner' });
     const common = listProjectViews(vault);
     const session = {isUnlocked:()=>true,withVault:async(fn:(v:Vault)=>unknown)=>fn(vault)} as never;
     try {
@@ -205,7 +205,7 @@ describe('project list mirror line (ADR 0053 Decision 7)', () => {
       const v = Vault.openWithKey(vaultPath, Buffer.from(key));
       try { return await fn(v); } finally { v.close(); }
     });
-    await runner((v) => { v.updateProject({ project: 'alpha', expected_revision: null, status: 'Starting.' }); v.save(); });
+    await runner((v) => { v.updateProject({ project: 'alpha', expected_revision: null, status: 'Starting.' }, { actor: 'owner' }); v.save(); });
     const repo = path.join(root, 'mirror'); const gitHome = path.join(root, 'githome');
     fs.mkdirSync(repo); fs.mkdirSync(gitHome); fs.writeFileSync(path.join(gitHome, 'empty.gitconfig'), '');
     for (const args of [['init', '-q', '-b', 'main'], ['config', 'user.name', 'Tester'], ['config', 'user.email', 'tester@example.invalid']]) {
@@ -213,7 +213,7 @@ describe('project list mirror line (ADR 0053 Decision 7)', () => {
     }
     await exportProjects({ home, vaultPath, withVault: runner, by: 'cli', repo });
     await runner((v) => {
-      v.updateProject({ project: 'alpha', expected_revision: listProjectViews(v)[0]!.revision!, status: 'Changed.' });
+      v.updateProject({ project: 'alpha', expected_revision: listProjectViews(v)[0]!.revision!, status: 'Changed.' }, { actor: 'owner' });
       v.save();
     });
     const session = { isUnlocked: () => true, withVault: runner } as never;

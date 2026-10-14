@@ -10,6 +10,7 @@ import {
   projectWorkingMemoryMessage,
 } from '../src/project-working-memory.js';
 import { Vault } from '../src/vault.js';
+import { plantWorkingRow } from './support/plant-working-row.js';
 
 const PASS = 'synthetic project working memory passphrase';
 let directory: string;
@@ -48,25 +49,25 @@ describe('a working memory in a project scope', () => {
       title: 'Lantern Gazette',
       status: 'Printing.',
       next_actions: '- [ ] Fold',
-    });
+    }, { actor: 'owner' });
     const note = vault.remember({
       content: 'This week I am on the pear festival.',
       type: 'working',
       scope: 'personal',
     });
     expect(() => vault.rescope(note.id, 'project:lantern')).toThrow(ProjectWorkingMemoryError);
-    expect(() => vault.editMemory(note.id, { scope: 'project:lantern' })).toThrow(ProjectWorkingMemoryError);
+    expect(() => vault.editMemory(note.id, { scope: 'project:lantern' }, { actor: 'owner' })).toThrow(ProjectWorkingMemoryError);
 
     const detail = vault.remember({
       content: 'The notice ran on page two.',
       type: 'episodic',
       scope: 'project:lantern',
     });
-    expect(() => vault.editMemory(detail.id, { type: 'working' })).toThrow(ProjectWorkingMemoryError);
+    expect(() => vault.editMemory(detail.id, { type: 'working' }, { actor: 'owner' })).toThrow(ProjectWorkingMemoryError);
 
     const edited = vault.editMemory(created.revision, {
       content: '# Lantern Gazette\n\n## Current Status\n\nStill printing.',
-    });
+    }, { actor: 'owner' });
     expect(edited.type).toBe('working');
     expect(edited.scope).toBe('project:lantern');
     expect(listProjectOverview(vault)).toEqual([
@@ -79,9 +80,12 @@ describe('a working memory in a project scope', () => {
       expect.objectContaining({ project: 'orchard', title: 'Lantern Gazette', conflict: false }),
     ]);
 
-    // Fixtures plant a project document with remember(). That path stays open,
-    // and a second working row is what makes the project a title-less conflict.
-    vault.remember({ content: 'A second head.', type: 'working', scope: 'project:orchard' });
+    // ADR 0065: remember() is no longer a way in, for a second head or a first one.
+    expect(() => vault.remember({ content: 'A second head.', type: 'working', scope: 'project:orchard' })).toThrow(ProjectWorkingMemoryError);
+    expect(() => vault.remember({ content: '## Current Status\n\nNew.', type: 'working', scope: ' project:fresh ' })).toThrow(ProjectWorkingMemoryError);
+    expect(vault.remember({ content: 'Odd scope.', type: 'working', scope: 'project:Not_A_Slug' }).type).toBe('working');
+    // A second working row, from an older build or another device, is what makes the project a title-less conflict.
+    plantWorkingRow(vault, { content: 'A second head.', type: 'working', scope: 'project:orchard' });
     expect(listProjectOverview(vault)).toEqual([
       expect.objectContaining({ project: 'orchard', title: null, conflict: true }),
     ]);

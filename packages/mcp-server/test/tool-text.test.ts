@@ -27,7 +27,7 @@ describe('ADR 0060 D8: project_update tells the truth about size', () => {
     h = createHarness();
     const mcp = await h.connect();
     const created = JSON.parse(text(await mcp.callTool({
-      name: 'project_create', arguments: { project: 'big', what_why: 'w'.repeat(14000), status: 'ok' },
+      name: 'project_create', arguments: { project: 'big', what_why: 'w'.repeat(14000), status: 'ok', milestones: 'M1 Agree the milestones | test: the user approves the plan' },
     }))) as { revision: string };
     const r = await mcp.callTool({
       name: 'project_update', arguments: { project: 'big', expected_revision: created.revision, log_entry: 'x'.repeat(4000) },

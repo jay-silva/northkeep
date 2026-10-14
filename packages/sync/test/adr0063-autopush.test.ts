@@ -216,7 +216,7 @@ describe('ADR 0063 D5: automatic push to Cloud Connect', () => {
   it('A4 replay: an older vault version gets 428, the connector keeps the newer document, and the engine pauses until the user acts', async () => {
     await setup();
     withVaultAt(homeA, (v) => {
-      v.updateProject({ project: 'a', expected_revision: null, status: 'R2 newer.' });
+      v.updateProject({ project: 'a', expected_revision: null, status: 'R2 newer.' }, { actor: 'owner' });
       v.setScopeShared('project:a', true);
       v.save();
     });
@@ -318,7 +318,7 @@ describe('ADR 0063 D5: automatic push to Cloud Connect', () => {
     expect(added.added).toBe(1);
     expect((await pushVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeB) })).ok).toBe(true);
     withVaultAt(homeB, (v) => {
-      v.forget(v.list({ scope: 'work' }).find((e) => e.content.startsWith('y:'))!.id);
+      v.forget(v.list({ scope: 'work' }).find((e) => e.content.startsWith('y:'))!.id, { actor: 'owner' });
       v.save();
     });
     expect((await pushVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeB) })).ok).toBe(true);

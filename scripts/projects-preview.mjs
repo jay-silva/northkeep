@@ -19,7 +19,7 @@ const vault = Vault.create({ path: vaultPath, passphrase, deviceSecret: secret, 
 for (const project of [
   { project: 'trail-journal', status: 'The capture flow works in the field. Three walks are logged; the last pass exposed a confusing offline label.', next_actions: 'Rename the offline state, then repeat the airplane-mode walk.', decision: 'Keep capture available without a connection.', open_questions: 'Should queued entries show their eventual sync destination?', files: [{ type: 'local_path', label: 'Walk test notes.md', locator: 'Documents/Trail Journal/Walk test notes.md', access: 'unverified' }] },
   { project: 'field-notes', status: 'The interview guide and synthesis draft are complete. The supporting audio index was saved from another device.', next_actions: 'Recover or replace the missing audio index before citing the final theme count.', decision: 'Keep direct observations separate from interpretation.', open_questions: 'Can the next assistant verify the unavailable audio index?', files: [{ type: 'local_path', label: 'Audio index.csv', locator: 'Desktop/Field Notes/Audio index.csv', access: 'unavailable' }] },
-]) vault.updateProject({ expected_revision: null, what_why: 'Synthetic project for interface acceptance.', log_entry: 'Created a disposable project for acceptance checks.', ...project });
+]) vault.updateProject({ expected_revision: null, what_why: 'Synthetic project for interface acceptance.', log_entry: 'Created a disposable project for acceptance checks.', ...project }, { actor: 'owner' });
 vault.save(); vault.close(); secret.fill(0);
 const app = await startUiServer({ vaultPath });
 const entry = createServer((_req, res) => { res.writeHead(302, { Location: app.url, 'Cache-Control': 'no-store' }); res.end(); });

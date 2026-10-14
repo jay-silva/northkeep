@@ -24,6 +24,7 @@ import {
   PROJECT_STANDING_INSTRUCTION,
 } from '../src/project-recipe.js';
 import { createServer } from '../src/server.js';
+import { plantWorkingRow } from '../../core/test/support/plant-working-row.js';
 
 const PASSPHRASE = 'm13 server-tools passphrase';
 
@@ -191,9 +192,9 @@ describe('memory_edit', () => {
     const ids = (() => {
       const vault = openVault();
       const live = vault.remember({ content: 'v1', type: 'semantic', scope: 'personal' });
-      const replacement = vault.editMemory(live.id, { content: 'v2' });
+      const replacement = vault.editMemory(live.id, { content: 'v2' }, { actor: 'owner' });
       const doomed = vault.remember({ content: 'forget me', type: 'semantic', scope: 'personal' });
-      vault.forget(doomed.id);
+      vault.forget(doomed.id, { actor: 'owner' });
       vault.save();
       vault.close();
       return { superseded: live.id, forgotten: doomed.id, live: replacement.id };
@@ -362,12 +363,12 @@ describe('project tools', () => {
   it('reports duplicate live working docs as a conflict', async () => {
     (() => {
       const vault = openVault();
-      vault.remember({
+      plantWorkingRow(vault, {
         content: '## Current Status\n\nOlder duplicate.\n',
         type: 'working',
         scope: 'project:dup',
       });
-      vault.remember({
+      plantWorkingRow(vault, {
         content: '## Current Status\n\nNewest wins.\n',
         type: 'working',
         scope: 'project:dup',
@@ -391,7 +392,7 @@ describe('project tools', () => {
   it('denies project_get and project_update outside the grant', async () => {
     (() => {
       const vault = openVault();
-      vault.remember({
+      plantWorkingRow(vault, {
         content: '## Current Status\n\nSecret project.\n',
         type: 'working',
         scope: 'project:secret',
@@ -449,7 +450,7 @@ describe('project tools', () => {
     });
     await mcp.callTool({
       name: 'project_create',
-      arguments: { project: 'auditnew', what_why: 'UNIQUE-CREATE-WHY', status: 'UNIQUE-CREATE-STATUS' },
+      arguments: { milestones: 'M1 Agree the milestones | test: the user approves the plan', project: 'auditnew', what_why: 'UNIQUE-CREATE-WHY', status: 'UNIQUE-CREATE-STATUS' },
     });
     await mcp.callTool({ name: 'project_get', arguments: { project: 'auditme' } });
     await mcp.callTool({ name: 'project_list', arguments: {} });
@@ -556,6 +557,7 @@ describe('project_create (ADR 0050 Decision 1, local)', () => {
       name: 'project_create',
       arguments: {
         project: 'adr-0050',
+        milestones: 'M1 Agree the milestones | test: the user approves the plan',
         title: 'Hosted project creation',
         what_why: 'Prove a connected app can start a project.',
         status: 'Tool written.',
@@ -591,13 +593,13 @@ describe('project_create (ADR 0050 Decision 1, local)', () => {
     const mcp = await connect();
     const first = await mcp.callTool({
       name: 'project_create',
-      arguments: { project: 'taken', what_why: 'First writer.', status: 'Held.' },
+      arguments: { milestones: 'M1 Agree the milestones | test: the user approves the plan', project: 'taken', what_why: 'First writer.', status: 'Held.' },
     });
     expect(first.isError).toBeFalsy();
 
     const second = await mcp.callTool({
       name: 'project_create',
-      arguments: { project: 'taken', what_why: 'Second writer.', status: 'Should not land.' },
+      arguments: { milestones: 'M1 Agree the milestones | test: the user approves the plan', project: 'taken', what_why: 'Second writer.', status: 'Should not land.' },
     });
     expect(second.isError).toBe(true);
     const error = (JSON.parse(toolText(second)) as { error: { code: string; message: string; current?: unknown } }).error;
@@ -625,7 +627,7 @@ describe('project_create (ADR 0050 Decision 1, local)', () => {
     const mcp = await connect();
     const denied = await mcp.callTool({
       name: 'project_create',
-      arguments: { project: 'ungranted', what_why: 'Out of grant.', status: 'Out of grant.' },
+      arguments: { milestones: 'M1 Agree the milestones | test: the user approves the plan', project: 'ungranted', what_why: 'Out of grant.', status: 'Out of grant.' },
     });
     expect(denied.isError).toBe(true);
     expect(toolText(denied)).toMatch(/outside this connection grant/);
@@ -639,7 +641,7 @@ describe('project_create (ADR 0050 Decision 1, local)', () => {
     const mcp = await connect();
     const refused = await mcp.callTool({
       name: 'project_create',
-      arguments: { project: 'masked', what_why: 'Masked text cannot round-trip.', status: 'Refused.' },
+      arguments: { milestones: 'M1 Agree the milestones | test: the user approves the plan', project: 'masked', what_why: 'Masked text cannot round-trip.', status: 'Refused.' },
     });
     expect(refused.isError).toBe(true);
     expect(JSON.parse(toolText(refused)).error.code).toBe('invalid_request');
@@ -654,7 +656,7 @@ describe('project_create (ADR 0050 Decision 1, local)', () => {
     // first; either way nothing reaches the vault.
     const refused = await mcp.callTool({
       name: 'project_create',
-      arguments: { project: 'Not A Slug', what_why: 'Bad slug.', status: 'Bad slug.' },
+      arguments: { milestones: 'M1 Agree the milestones | test: the user approves the plan', project: 'Not A Slug', what_why: 'Bad slug.', status: 'Bad slug.' },
     });
     expect(refused.isError).toBe(true);
     expect(toolText(refused)).toMatch(/slug/i);
@@ -1021,7 +1023,7 @@ describe('project provenance (ADR 0052 Decision 1, 3 and 4)', () => {
   async function createProject(mcp: Client, project: string, args: Record<string, unknown> = {}) {
     return JSON.parse(toolText(await mcp.callTool({
       name: 'project_create',
-      arguments: { project, what_why: 'Provenance fixture.', status: 'Started.', ...args },
+      arguments: { project, what_why: 'Provenance fixture.', status: 'Started.', ...(args.draft === true ? {} : { milestones: 'M1 Agree the milestones | test: the user approves the plan' }), ...args },
     }))) as { revision: string; vault_id: string; draft: boolean; last_writer: { host: string } | null };
   }
 
@@ -1103,7 +1105,7 @@ describe('project provenance (ADR 0052 Decision 1, 3 and 4)', () => {
 
     const again = await mcp.callTool({
       name: 'project_create',
-      arguments: { project: 'drafted', what_why: 'Second try.', status: 'Second try.' },
+      arguments: { milestones: 'M1 Agree the milestones | test: the user approves the plan', project: 'drafted', what_why: 'Second try.', status: 'Second try.' },
     });
     expect(again.isError).toBe(true);
     expect((JSON.parse(toolText(again)) as { error: { code: string } }).error.code).toBe('stale_project');
@@ -1133,7 +1135,7 @@ describe('project provenance (ADR 0052 Decision 1, 3 and 4)', () => {
 
     // Compaction blanks a superseded revision; the row survives, the text does not.
     const vault = openVault();
-    vault.forget(created.revision);
+    vault.forget(created.revision, { actor: 'owner' });
     vault.save();
     vault.close();
     const compacted = await mcp.callTool({

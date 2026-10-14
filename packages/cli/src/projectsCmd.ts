@@ -10,7 +10,7 @@ import {
   listProjectViews,
   loadDeviceSecret,
   memzero,
-  PROJECT_SECTION_HEADINGS,
+  PROJECT_OWNED_SECTIONS,
   ProjectHandoffError,
   getProjectRevision,
   getProjectView,
@@ -155,7 +155,7 @@ export async function projectsUpdateCmd(
         expected_revision: current?.revision ?? null,
         ...fields,
         writer: { host: 'northkeep-cli', session_id: crypto.randomUUID() },
-      });
+      }, { actor: 'owner' });
       vault.save();
       return { created: current === undefined, revision: view.revision };
     } catch (err) {
@@ -591,7 +591,7 @@ async function scheduleCmd(value: string, options: ExportCmdOptions, deps: Mirro
 
 // ---- import (ADR 0053 Decision 10) ---------------------------------------------------------
 
-const KNOWN_SECTIONS = new Set<string>([...PROJECT_SECTION_HEADINGS, 'Open Questions', 'Files']);
+const KNOWN_SECTIONS = new Set<string>(PROJECT_OWNED_SECTIONS);
 
 /** The summary for the file's own line, then one indented line per list, so long lists stay readable. */
 function planLines(p: ImportFilePlan): { summary: string; details: string[] } {

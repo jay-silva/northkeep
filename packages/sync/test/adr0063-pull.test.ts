@@ -184,7 +184,7 @@ describe('ADR 0063 D6: the automatic pull refuses a non-empty drop set', () => {
     await pushA();
     await asHome(homeB, async () => expect((await pullVault({ vaultPath: vaultPath(homeB), deviceSecret, masterKey: keyFor(homeB) })).ok).toBe(true));
     withVaultAt(homeA, (v) => {
-      v.forget(v.list({ scope: 'work' })[0]!.id);
+      v.forget(v.list({ scope: 'work' })[0]!.id, { actor: 'owner' });
       v.save();
     });
     await pushA();
@@ -224,7 +224,7 @@ describe('ADR 0063 D6: the manual pull reports, then installs exactly what it re
     });
     write(homeA, 'M: local-only, unpushed');
     withVaultAt(homeA, (v) => {
-      v.updateProject({ project: 'demo', expected_revision: null, status: 'Only on this Mac.' });
+      v.updateProject({ project: 'demo', expected_revision: null, status: 'Only on this Mac.' }, { actor: 'owner' });
       v.save();
     });
   }

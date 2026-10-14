@@ -30,7 +30,7 @@ const conn = () => ({ server: fake.url(), deviceSecret, vault });
 const cloudText = (status: string) => `## What & Why\nDemo.\n\n## Current Status\n${status}\n`;
 
 async function sharedProject(slug: string, status: string): Promise<string> {
-  const r = vault.updateProject({ project: slug, expected_revision: null, what_why: 'Demo.', status }).revision;
+  const r = vault.updateProject({ project: slug, expected_revision: null, what_why: 'Demo.', status }, { actor: 'owner' }).revision;
   vault.setScopeShared(`project:${slug}`, true);
   vault.save();
   await pushSharedScopes({ ...conn(), scopes: vault.sharedScopes() });
@@ -42,7 +42,7 @@ describe('ADR 0063 incident replay (D1)', () => {
   it('holds a cloud update written against R1 when the Mac is at R2, then take theirs applies it over R2', async () => {
     const r1 = await sharedProject('a', 'R1 local.');
     const cloudId = fake.cloudUpdate('project:a', cloudText('Cloud edit on R1.'));
-    const r2 = vault.updateProject({ project: 'a', expected_revision: r1, status: 'R2 local, newer.' }).revision;
+    const r2 = vault.updateProject({ project: 'a', expected_revision: r1, status: 'R2 local, newer.' }, { actor: 'owner' }).revision;
 
     const result = await applyDownSync(conn());
     expect(getProjectView(vault, 'a').revision).toBe(r2);
@@ -64,7 +64,7 @@ describe('ADR 0063 incident replay (D1)', () => {
   it('keep mine saves the cloud text as one episodic memory, keeps R2, and deletes the pending row; a retry after a crash writes no second memory', async () => {
     const r1 = await sharedProject('a', 'R1 local.');
     fake.cloudUpdate('project:a', cloudText('Cloud edit on R1.'));
-    const r2 = vault.updateProject({ project: 'a', expected_revision: r1, status: 'R2 local, newer.' }).revision;
+    const r2 = vault.updateProject({ project: 'a', expected_revision: r1, status: 'R2 local, newer.' }, { actor: 'owner' }).revision;
 
     fake.failNext('/client/discard', 500);
     await expect(resolveConflict({ ...conn(), project: 'a', choice: 'keep-mine', now: new Date('2026-09-30T12:00:00Z') })).rejects.toThrow('HTTP 500');
@@ -81,8 +81,8 @@ describe('ADR 0063 incident replay (D1)', () => {
   it('take theirs refuses when the head moved after the user looked', async () => {
     const r1 = await sharedProject('a', 'R1 local.');
     fake.cloudUpdate('project:a', cloudText('Cloud.'));
-    const r2 = vault.updateProject({ project: 'a', expected_revision: r1, status: 'R2.' }).revision;
-    vault.updateProject({ project: 'a', expected_revision: r2, status: 'R3.' });
+    const r2 = vault.updateProject({ project: 'a', expected_revision: r1, status: 'R2.' }, { actor: 'owner' }).revision;
+    vault.updateProject({ project: 'a', expected_revision: r2, status: 'R3.' }, { actor: 'owner' });
     await expect(resolveConflict({ ...conn(), project: 'a', choice: 'take-theirs', expected_revision: r2 })).rejects.toThrow('Project changed after it was read.');
     expect(getProjectView(vault, 'a').status).toBe('R3.');
   });
@@ -147,7 +147,7 @@ describe('ADR 0063 fast-forward and D3 approval', () => {
 describe('ADR 0063 legacy and stale rows (first review A2 replay)', () => {
   it('holds a legacy row as a conflict with the device at P and with no local document', async () => {
     const p0 = await sharedProject('a', 'P0.');
-    const p = vault.updateProject({ project: 'a', expected_revision: p0, status: 'P.' }).revision;
+    const p = vault.updateProject({ project: 'a', expected_revision: p0, status: 'P.' }, { actor: 'owner' }).revision;
     vault.save();
     const legacy = fake.seedLegacy('project:a', cloudText('Legacy cloud text.'));
     const atP = await applyDownSync(conn());
@@ -192,7 +192,7 @@ describe('ADR 0063 legacy and stale rows (first review A2 replay)', () => {
 
   it('acks a current row whose text equals the local head as a dedupe, without a vault write', async () => {
     const r1 = await sharedProject('a', 'Start.');
-    const r2 = vault.updateProject({ project: 'a', expected_revision: r1, status: 'Both wrote this.' }).revision;
+    const r2 = vault.updateProject({ project: 'a', expected_revision: r1, status: 'Both wrote this.' }, { actor: 'owner' }).revision;
     vault.save();
     fake.cloudUpdate('project:a', getProjectView(vault, 'a').content);
     const before = fs.readFileSync(path.join(home, 'vault.nkv'));

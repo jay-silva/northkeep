@@ -54,6 +54,7 @@ const PROJECTS = [
     what_why: 'A fictional evening paper in the made-up town of Lantern Hill. Mara Quill is not a real person, and the paper has no subscribers.',
     status: 'The Thursday edition is laid out. The pear-festival brief is still a draft of a festival that does not exist.',
     next_actions: 'Invent a caption for the glass-orchard photograph.',
+    milestones: 'M1 Lay out the Thursday edition | test: every page has a story\nM2 Write the festival brief | test: the brief reads as fiction',
   },
   {
     project: 'glass-orchard',
@@ -61,6 +62,7 @@ const PROJECTS = [
     what_why: 'A made-up orchard that grows glass pears for the Lantern Hill fair. The varieties are not real cultivars and have no grower.',
     status: 'Three fictional varieties are named. The clear-pear tasting note is not written yet.',
     next_actions: 'Write the tasting note for the clear-pear, and keep it fictional.',
+    milestones: 'M1 Name three varieties | test: each has a made-up name\nM2 Write the tasting notes | test: one note per variety',
   },
   {
     project: 'river-post',
@@ -68,6 +70,7 @@ const PROJECTS = [
     what_why: 'A fictional ferry notice board for the invented crossing opposite Lantern Hill. The times are not a real schedule.',
     status: 'The Saturday crossing times are written down. They belong to the story, not to a river.',
     next_actions: 'Add a line that the fog bell is only a story.',
+    milestones: 'none: a short fictional notice board with no plan',
   },
 ];
 

@@ -52,6 +52,7 @@ async function hosts() {
   const code = await connectAs('claude-code', '0.24.0');
   const created = (await call(code, 'project_create', {
     project: 'acceptance', what_why: 'Proving ADR 0052 on a disposable project.', status: 'Started.',
+    milestones: 'M1 Agree the milestones | test: the user approves the plan',
   })).json;
   const wrapped = (await call(code, 'project_wrap', {
     vault_id: created.vault_id, project: 'acceptance', operation_id: uuid('a'),
@@ -168,7 +169,7 @@ async function payload() {
   // JSON escaping doubles a quote, so a quote-heavy document is the ASCII worst case.
   const quoted = (await call(code, 'project_create', {
     project: 'acceptance-quotes', what_why: 'A document at the cap made of quote characters.',
-    status: 'Filled to the cap.',
+    status: 'Filled to the cap.', milestones: 'M1 Agree the milestones | test: the user approves the plan',
   })).json;
   const quotedAtCap = await fillToCap(code, 'acceptance-quotes', quoted.revision, '"');
   console.log('step 4 quote-heavy ASCII document at the cap:', quotedAtCap.content.length, 'characters,',
@@ -182,7 +183,7 @@ async function payload() {
   // The cap counts characters; the target counts bytes. Reported, not claimed.
   const cjk = (await call(code, 'project_create', {
     project: 'acceptance-cjk', what_why: 'A document at the cap made of three-byte characters.',
-    status: 'Filled to the cap.',
+    status: 'Filled to the cap.', milestones: 'M1 Agree the milestones | test: the user approves the plan',
   })).json;
   const cjkAtCap = await fillToCap(code, 'acceptance-cjk', cjk.revision, CJK_FILLER);
   console.log('step 4 CJK document at the cap:', cjkAtCap.content.length, 'characters,',
@@ -207,7 +208,7 @@ async function injected() {
   const ghost = await connectAs(nasty, '1.0');
   const attempt = await ghost.callTool({
     name: 'project_create',
-    arguments: { project: 'injected', what_why: 'A handshake name carrying U+0085.', status: 'Probing.' },
+    arguments: { project: 'injected', what_why: 'A handshake name carrying U+0085.', status: 'Probing.', milestones: 'M1 Agree the milestones | test: the user approves the plan' },
   });
   if (attempt.isError) {
     console.log('step 4b create refused:', JSON.parse(attempt.content[0].text).error.code,
@@ -228,6 +229,7 @@ async function injected() {
       '| creating it from a clean host so there is a block to read');
     await call(reader, 'project_create', {
       project: 'injected', what_why: 'Read back after the refused write.', status: 'Written by a clean host.',
+      milestones: 'M1 Agree the milestones | test: the user approves the plan',
     });
   }
   const block = (await call(reader, 'project_get', { project: 'injected' })).json.last_writer;
@@ -256,7 +258,7 @@ async function draft() {
   })).json;
   console.log('step 5 after the wrap, draft:', wrapped.current.draft, '| first line:', wrapped.current.content.split('\n')[0]);
   const again = await code.callTool({
-    name: 'project_create', arguments: { project: 'bootstrapped', what_why: 'Second try.', status: 'Second try.' },
+    name: 'project_create', arguments: { project: 'bootstrapped', what_why: 'Second try.', status: 'Second try.', milestones: 'M1 Agree the milestones | test: the user approves the plan' },
   });
   console.log('step 5 second create refused:', again.isError, '|', JSON.parse(again.content[0].text).error.code);
   await code.close();

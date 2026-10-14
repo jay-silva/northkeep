@@ -127,7 +127,7 @@ describe('Vault.importProject (the write)',()=>{
     expect(missing).toEqual([]);
     expect(scopeContents(v,'sample').filter((c)=>c.startsWith(PROJECT_IMPORT_OVERFLOW_HEADING))).toHaveLength(1);
     expect(v.verifyChain().ok).toBe(true);
-    v.updateProject({project:'sample',expected_revision:view.revision,status:'Imported and edited.'});
+    v.updateProject({project:'sample',expected_revision:view.revision,status:'Imported and edited.'}, { actor: 'owner' });
     v.close();
   });
 
@@ -164,7 +164,7 @@ describe('Vault.importProject (the write)',()=>{
   });
 
   it('refuses a slug that already has a live document, with zero mutation',()=>{
-    const v=vault();v.updateProject({project:'sample',expected_revision:null,what_why:'Existing.',status:'Here.'});
+    const v=vault();v.updateProject({project:'sample',expected_revision:null,what_why:'Existing.',status:'Here.'}, { actor: 'owner' });
     const before=v.export().memories;const p=planImport([{name:'sample.md',text:commandRepoFile()}]).projects[0]!;
     expect(()=>v.importProject(p)).toThrowError(expect.objectContaining({code:'stale_project',message:'Project sample already has entries in this vault. Remove them with `northkeep projects delete sample` first, then import again.'}));
     expect(v.export().memories).toEqual(before);expect(v.verifyChain().ok).toBe(true);
@@ -179,7 +179,7 @@ describe('Vault.importProject (the write)',()=>{
     expect(projectScopeInUse(v,'sample')).toBe(false);
     v.importProject(p);expect(projectScopeInUse(v,'sample')).toBe(true);
     const working=v.list({scope:'project:sample',type:'working'});expect(working).toHaveLength(1);
-    v.forget(working[0]!.id);
+    v.forget(working[0]!.id, { actor: 'owner' });
     expect(projectScopeInUse(v,'sample')).toBe(true);
     const before=v.export().memories;
     expect(()=>v.importProject(p)).toThrowError(expect.objectContaining({code:'stale_project',message:'Project sample already has entries in this vault. Remove them with `northkeep projects delete sample` first, then import again.'}));
@@ -195,9 +195,9 @@ describe('Vault.importProject (the write)',()=>{
 
   it('round-trips NorthKeep\'s own rendered mirror: document identical, log reattached, index skipped, no header stored',()=>{
     const a=vault('a.nkv');
-    let cur=a.updateProject({project:'demo',expected_revision:null,title:'Demo',what_why:'Why.',status:'Starting.',log_entry:'Created.',draft:true,writer:CODE});
-    for(let i=0;i<14;i+=1)cur=a.updateProject({project:'demo',expected_revision:cur.revision,log_entry:`Entry ${i} ${'z'.repeat(1500)}`});
-    a.updateProject({project:'plain',expected_revision:null,what_why:'P.',status:'Plain.'});
+    let cur=a.updateProject({project:'demo',expected_revision:null,title:'Demo',what_why:'Why.',status:'Starting.',log_entry:'Created.',draft:true,writer:CODE}, { actor: 'owner' });
+    for(let i=0;i<14;i+=1)cur=a.updateProject({project:'demo',expected_revision:cur.revision,log_entry:`Entry ${i} ${'z'.repeat(1500)}`}, { actor: 'owner' });
+    a.updateProject({project:'plain',expected_revision:null,what_why:'P.',status:'Plain.'}, { actor: 'owner' });
     const original=getProjectView(a,'demo',undefined,{history:true});
     expect(original.archives.length).toBeGreaterThan(0);expect(splitLogEntries(original.log).length).toBeLessThanOrEqual(10);
     const files=renderMirror(a).map((f)=>({name:path.basename(f.path),text:new TextDecoder().decode(f.bytes)}));

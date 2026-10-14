@@ -134,7 +134,7 @@ export function applyReviewAction(
     if (typeof content !== 'string' || !content.trim() || content.length > 20_000) throw new Error('Replacement content must be 1 to 20,000 characters.');
     if (content === beforeAll.get(target)?.content) throw new Error('Replacement content must change the selected memory.');
     before.push(beforeAll.get(target)!);
-    const next = vault.editMemory(target, { content });
+    const next = vault.editMemory(target, { content }, { actor: 'owner' });
     after.push(currentById(vault).get(target)!, next);
     proposal.status = 'accepted';
   } else {
@@ -148,7 +148,7 @@ export function applyReviewAction(
     }
     assertSources(report, vault, req.survivor_id ? [req.entry_id, req.survivor_id] : [req.entry_id]);
     before.push(beforeAll.get(req.entry_id)!);
-    vault.forget(req.entry_id);
+    vault.forget(req.entry_id, { actor: 'owner' });
     after.push(currentById(vault).get(req.entry_id)!);
     const decisions = proposal.member_decisions ?? {};
     decisions[req.entry_id] = 'forgotten';
@@ -215,7 +215,7 @@ export function restoreReviewOperation(
     const current = live.get(head.id);
     if (!current || !same(current, head) || current.forgotten_at) throw new Error(CHANGED);
     before.push(current);
-    const restored = vault.editMemory(head.id, { content: original.content, scope: original.scope, type: original.type });
+    const restored = vault.editMemory(head.id, { content: original.content, scope: original.scope, type: original.type }, { actor: 'owner' });
     after.push(currentById(vault).get(head.id)!, restored);
   } else {
     const forgotten = source.after[0];

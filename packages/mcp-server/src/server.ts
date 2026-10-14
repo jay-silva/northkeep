@@ -6,6 +6,8 @@ import {
   BOARD_DEFAULT_STALE_DAYS,
   BOARD_MAX_STALE_DAYS,
   MEMORY_TYPES,
+  MILESTONE_MAX_ITEMS,
+  MilestoneError,
   PROJECT_FILE_ACCESS,
   PROJECT_FILE_CONTEXT_MAX_CHARS,
   PROJECT_FILE_LABEL_MAX_CHARS,
@@ -19,15 +21,18 @@ import {
   defaultVaultPath,
   getProjectRevision,
   getProjectView,
+  isProjectDone,
   isValidProjectSlug,
   listProjectViews,
   northkeepHome,
+  parseMilestoneProposals,
   projectWorkingMemoryMessage,
   projectScope,
   setPlatform,
   withFileLock,
   type MemoryEntry,
   type MemoryType,
+  type MilestonePlanInput,
   type ProjectCheckpointRequest,
   type ProjectFileReference,
   type ProjectUpdateRequest,
@@ -48,6 +53,7 @@ import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
 import { appendCallLog, readCallLogStrict, type CallLogEntry } from './log.js';
 import { tameOneLine } from './text-safe.js';
+import { MILESTONE_INSTRUCTION, NO_MILESTONES_NOTE } from './project-recipe.js';
 import { readMirrorSummary } from './project-export-run.js';
 import { collectBoard } from './project-board-run.js';
 import type { OpenSession } from './open-sessions.js';
@@ -179,6 +185,23 @@ function normalizeSectionText(value: string | undefined, field: string, allowEmp
   }
   return normalized;
 }
+
+/** Agent milestone text as core's input; a refusal names the line, as a project refusal. */
+function milestonesInput(text: string | undefined): MilestonePlanInput | undefined {
+  if (text === undefined) return undefined;
+  try {
+    return parseMilestoneProposals(text);
+  } catch (error) {
+    if (error instanceof MilestoneError) throw new ProjectHandoffError('invalid_request', error.message);
+    throw error;
+  }
+}
+
+const MILESTONES_FORMAT =
+  'One milestone per line, as "M1 Title | test: how the user checks it" (the id is optional; NorthKeep numbers ' +
+  `new ones), up to ${MILESTONE_MAX_ITEMS} lines; a title of up to 80 characters and a test of up to 120, without "|". ` +
+  'Or one line "none: <reason>" when the project has no plan on purpose. Send open milestones only: a checkbox or a ' +
+  '"passed" stamp is refused, and milestones that already passed are kept as they are.';
 
 interface ToolOk {
   [key: string]: unknown;
@@ -523,7 +546,9 @@ function writerFor(ctx: ConnContext): ProjectWriter {
 }
 
 export function createServer(vaultPath: string = defaultVaultPath()): McpServer {
-  const server = new McpServer({ name: 'northkeep', version: '0.5.0' });
+  const server = new McpServer({ name: 'northkeep', version: '0.5.0' }, { instructions: MILESTONE_INSTRUCTION });
+  // One server per session here, so this is "once per project per session" (ADR 0065 Decision 4).
+  const notedNoMilestones = new Set<string>();
   const ctx: ConnContext = {
     provider: 'unknown',
     host: 'unknown',
@@ -700,14 +725,15 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
       title: 'Forget a memory',
       description:
         'Permanently remove the content of one memory from the vault, by id (from ' +
-        'memory_retrieve or memory_list). Only call this when the user asks you to forget something.',
+        'memory_retrieve or memory_list). Only call this when the user asks you to forget something. ' +
+        'A project document cannot be forgotten here; the user deletes a project in the NorthKeep app.',
       inputSchema: {
         id: idSchema.describe('The id of the memory to forget'),
       },
     },
     async ({ id }) =>
       run(ctx, 'memory_forget', { id }, vaultPath, { kind: 'write', mask: 'memory' }, (vault, granted) => {
-        const tombstone = vault.forget(id, granted); // enforces scope: unseeable = unforgettable
+        const tombstone = vault.forget(id, { actor: 'agent' }, granted); // enforces scope: unseeable = unforgettable
         vault.save();
         return {
           payload: { forgotten: { id: tombstone.id, forgotten_at: tombstone.forgotten_at } },
@@ -725,7 +751,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'Correct or update an existing memory instead of storing a near-duplicate. Pass the id from ' +
         'memory_retrieve or memory_list. Optional new content and/or type. This tool cannot change a ' +
         "memory's scope; moving a memory between scopes stays in the NorthKeep app and CLI. " +
-        'Changing a memory to type working inside a project scope is refused: that row is the project document.',
+        'Changing a memory to type working inside a project scope is refused: that row is the project document. ' +
+        "A project document's type cannot be changed, and an edit that changes, moves or adds a passed milestone is refused.",
       inputSchema: {
         id: idSchema.describe('The id of the memory to edit'),
         content: z
@@ -756,7 +783,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           const patch: { content?: string; type?: MemoryType } = {};
           if (content !== undefined) patch.content = content;
           if (type !== undefined) patch.type = type as MemoryType;
-          const edited = vault.editMemory(id, patch, granted);
+          const edited = vault.editMemory(id, patch, { actor: 'agent' }, granted);
           vault.save();
           return {
             payload: { edited: publicEntry(edited) },
@@ -909,7 +936,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'full document text. The text of prior revisions and archives is not included either: pass ' +
         'history: true for all of it, or project_get with one revision id for one of them. When the user ' +
         'keeps a local git backup of their projects, mirror_status is one line saying when that backup was ' +
-        'last updated and how many projects changed since, so a stale backup is visible.',
+        'last updated and how many projects changed since, so a stale backup is visible. milestones is the parsed ' +
+        'plan; when the project has none, milestones_note asks you to check with the user, once per session.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
         history: z
@@ -938,9 +966,12 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         } catch {
           open = null;
         }
+        const noPlan = view.milestones.kind === 'absent' && !isProjectDone(view.status) && !notedNoMilestones.has(project);
+        if (noPlan) notedNoMilestones.add(project);
         return {
           payload: {
             ...receivingProjectView(view),
+            ...(noPlan ? { milestones_note: NO_MILESTONES_NOTE } : {}),
             ...(open === null
               ? { open_sessions_note: OPEN_SESSIONS_UNREADABLE_NOTE }
               : {
@@ -995,9 +1026,10 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           .optional()
           .describe('Only false is meaningful on a project that already exists: it clears the draft line. Passing true is refused; a draft can only be marked when the project is created.'),
         files: projectFilesSchema,
+        milestones: z.string().max(8192).optional().describe(`Replacement plan: the milestones still to do. ${MILESTONES_FORMAT}`),
       },
     },
-    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, draft, files }) =>
+    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, draft, files, milestones }) =>
       run(
         ctx,
         'project_update',
@@ -1009,7 +1041,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             (status?.length ?? 0) +
             (next_actions?.length ?? 0) +
             (log_entry?.length ?? 0) +
-            (decision?.length ?? 0),
+            (decision?.length ?? 0) +
+            (milestones?.length ?? 0),
         },
         vaultPath,
         { kind: 'write', mask: 'project' },
@@ -1027,7 +1060,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             decision === undefined &&
             open_questions === undefined &&
             draft === undefined &&
-            files === undefined
+            files === undefined &&
+            milestones === undefined
           ) {
             throw new Error(
               'Provide at least one project field to update.',
@@ -1045,8 +1079,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             open_questions: normalizeSectionText(open_questions, 'open_questions', true),
             files: files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
             ...(draft !== undefined ? { draft } : {}),
+            ...(milestones !== undefined ? { milestones: milestonesInput(milestones) } : {}),
           };
-          const current = vault.updateProject(request, granted);
+          const current = vault.updateProject(request, { actor: 'agent' }, granted);
           vault.save();
           return {
             payload: {
@@ -1068,7 +1103,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'Create a project only when the user asks for one; never to hold notes that belong in an existing ' +
         'project or in a memory. What & Why and Current Status are required: a project with neither is not ' +
         'a project. Log and Decisions start empty, because the first log entry belongs to the first session ' +
-        'that does work. Use project_update to change a project that already exists.',
+        'that does work. Use project_update to change a project that already exists. milestones is required unless ' +
+        'draft is true: propose the milestones to the user and create the project only after they agree. If there is ' +
+        'no plan yet, send one line, "M1 Agree the milestones | test: the user approves the plan".',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
         title: z.string().max(120).optional().describe('Display title shown in the app (single line, up to 120 characters).'),
@@ -1078,17 +1115,18 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         draft: z
           .boolean()
           .optional()
-          .describe('Mark the document a draft: it opens with a line saying it was bootstrapped by this host on this date and is unverified. Use it when you built the document from a codebase rather than from the user. project_wrap clears the line.'),
+          .describe('Mark the document a draft: it opens with a line saying it was bootstrapped by this host on this date and is unverified. Use it when you built the document from a codebase rather than from the user. project_wrap clears the line. A draft takes no milestones.'),
+        milestones: z.string().max(8192).optional().describe(`Required unless draft is true, and refused with draft: the plan the user agreed to. ${MILESTONES_FORMAT}`),
       },
     },
-    async ({ project, title, what_why, status, next_actions, draft }) =>
+    async ({ project, title, what_why, status, next_actions, draft, milestones }) =>
       run(
         ctx,
         'project_create',
         {
           scope: `project:${project}`,
           content_chars:
-            (title?.length ?? 0) + what_why.length + status.length + (next_actions?.length ?? 0),
+            (title?.length ?? 0) + what_why.length + status.length + (next_actions?.length ?? 0) + (milestones?.length ?? 0),
         },
         vaultPath,
         { kind: 'write', mask: 'project' },
@@ -1099,16 +1137,23 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           }
           const scope = projectScope(project);
           assertProjectGranted(scope, granted);
+          if (draft === true && milestones !== undefined) {
+            throw new ProjectHandoffError('invalid_request', 'A draft project takes no milestones. Create it without milestones, then agree the plan with the user and add it with project_update.');
+          }
+          if (draft !== true && milestones === undefined) {
+            throw new ProjectHandoffError('invalid_request', 'milestones is required. Propose the milestones to the user and create the project after they agree; if there is no plan yet, send "M1 Agree the milestones | test: the user approves the plan".');
+          }
           const request: ProjectUpdateRequest = {
             project, expected_revision: null, title,
             what_why: normalizeSectionText(what_why, 'what_why', false),
             status: normalizeSectionText(status, 'status', false),
             next_actions: normalizeSectionText(next_actions, 'next_actions', true),
             writer: writerFor(ctx), ...(draft !== undefined ? { draft } : {}),
+            ...(milestones !== undefined ? { milestones: milestonesInput(milestones) } : {}),
           };
           let current;
           try {
-            current = vault.updateProject(request, granted);
+            current = vault.updateProject(request, { actor: 'agent' }, granted);
           } catch (error) {
             // Core reads an existing head as a stale revision. A create says so in its
             // own words, and carries no current view, so a refusal returns no document.
@@ -1141,6 +1186,10 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     decision: z.string().min(1).max(4096).optional().describe(`New Decisions entry (appended), without a date. ${SECTION_TEXT_RULES}`),
     open_questions: z.string().max(16384).optional().describe(`Replacement Open Questions section; empty clears it. ${SECTION_TEXT_RULES}`),
     files: projectFilesSchema,
+    milestone_passed: z.string().regex(/^M[1-9][0-9]{0,2}$/, 'a milestone id such as M3').optional().describe(
+      'The id of the current milestone (the first one not yet passed), only when the user has said its acceptance ' +
+      'test passed. It is recorded as passed by an AI app, with today\'s date, until the user confirms it. Any other id is refused.',
+    ),
   };
   const HANDOFF_DESCRIPTION = {
     checkpoint:
@@ -1178,7 +1227,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         open_questions: normalizeSectionText(args.open_questions, 'open_questions', true),
         files: args.files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
       };
-      const result = vault.checkpointProject(request, granted);
+      const result = vault.checkpointProject(request, { actor: 'agent' }, granted);
       if (!result.replayed) vault.save();
       return {
         payload: result, result_id: result.receipt.result_revision,

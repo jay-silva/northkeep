@@ -20,7 +20,6 @@ import {
   PROJECT_DOC_MAX_CHARS,
   PROJECT_LOG_ARCHIVE_HEADING,
   PROJECT_LOG_KEEP_ENTRIES,
-  PROJECT_SECTION_HEADINGS,
   isValidProjectSlug,
   parseProjectDoc,
   serializeProjectDoc,
@@ -29,13 +28,14 @@ import {
   type ProjectDocSection,
 } from './project-doc.js';
 import { MIRROR_ARCHIVE_SECTION_PREFIX, parseMirrorHeader, splitLogArchive } from './project-export.js';
+import { PROJECT_OWNED_SECTIONS } from './project-handoff.js';
 
 export const PROJECT_IMPORT_OVERFLOW_HEADING = '## Import overflow';
 /** Left in place of a section body that import moved to the overflow memories. */
 export const PROJECT_IMPORT_OVERFLOW_POINTER = 'Moved whole to the Import overflow memories in this project scope: too long for the live document.';
 
 /** Sections getProjectView reads by name; a duplicate of any of them makes the project unreadable. */
-const OWNED_HEADINGS = [...PROJECT_SECTION_HEADINGS, 'Open Questions', 'Files'] as const;
+const OWNED_HEADINGS = PROJECT_OWNED_SECTIONS;
 const HEADING_MAP: Record<string, string> = { 'Open Questions / Risks': 'Open Questions' };
 
 export interface ImportSectionMapping { from: string; to: string; chars: number }

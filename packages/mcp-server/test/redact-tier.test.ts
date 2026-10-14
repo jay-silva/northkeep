@@ -27,7 +27,7 @@ function seedProject(slug = 'care'): void {
     project: slug, expected_revision: null, what_why: 'Care for Zyler Okonkwo.',
     status: 'Waiting on zyler@example.com.', next_actions: '- 2026-10-03 oncology follow-up for Zyler Okonkwo at 508-555-0142',
     writer: { host: 'test', host_version: null, session_id: '11111111-1111-4111-8111-111111111111' },
-  });
+  }, { actor: 'owner' });
   vault.save();
   vault.close();
 }
@@ -162,7 +162,7 @@ describe('ADR 0060 D4: return tiers over MCP', () => {
     const types = { '1': 'episodic', '2': 'procedural', '3': 'semantic' } as const;
     for (const tier of ['1', '2', '3'] as const) {
       process.env.NORTHKEEP_REDACT_TIER = tier;
-      const create = await call('project_create', { project: `p${tier}`, what_why: 'w', status: 's' });
+      const create = await call('project_create', { project: `p${tier}`, what_why: 'w', status: 's', milestones: 'M1 Agree the milestones | test: the user approves the plan' });
       expect(create.isError, tier).toBe(true);
       expect(JSON.parse(text(create)), tier).toEqual({ error: { code: 'invalid_request', message: contentWriteRefusal(Number(tier) as 1 | 2 | 3) } });
       const edit = await call('memory_edit', { id, content: 'Person-1 moved.' });
@@ -237,7 +237,7 @@ describe('ADR 0060 code review round 1 (MCP)', () => {
   it('acceptance step 5: the write refusal keeps its own words when the name model is down', async () => {
     h = createHarness({ ner: 'offline' });
     process.env.NORTHKEEP_REDACT_TIER = '2';
-    const create = await call('project_create', { project: 'demo', what_why: 'w', status: 's' });
+    const create = await call('project_create', { project: 'demo', what_why: 'w', status: 's', milestones: 'M1 Agree the milestones | test: the user approves the plan' });
     expect(JSON.parse(text(create))).toEqual({ error: { code: 'invalid_request', message: contentWriteRefusal(2) } });
     const remember = await call('memory_remember', { content: 'Person-3 moved', type: 'semantic' });
     expect(text(remember)).toBe(contentWriteRefusal(2));

@@ -68,7 +68,7 @@ async function write(fn: (v: Vault) => void): Promise<void> {
 async function setStatus(slug: string, status: string): Promise<void> {
   await write((v) => {
     const rev = listProjectViews(v).find((s) => s.project === slug)!.revision!;
-    v.updateProject({ project: slug, expected_revision: rev, status });
+    v.updateProject({ project: slug, expected_revision: rev, status }, { actor: 'owner' });
   });
 }
 
@@ -135,8 +135,8 @@ beforeEach(async () => {
   const header = Vault.readHeader(vaultPath);
   keyHex = deriveMasterKey(PASS, deviceSecret, header.salt, header.kdf).toString('hex');
   await write((v) => {
-    v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why demo.', status: 'Starting.', log_entry: 'Created.' });
-    v.updateProject({ project: 'other', expected_revision: null, what_why: 'Why other.', status: 'Fine.' });
+    v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why demo.', status: 'Starting.', log_entry: 'Created.' }, { actor: 'owner' });
+    v.updateProject({ project: 'other', expected_revision: null, what_why: 'Why other.', status: 'Fine.' }, { actor: 'owner' });
   });
   repo = initRepo('mirror');
 });

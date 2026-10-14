@@ -226,7 +226,7 @@ describe('forget (tombstones)', () => {
     const target = vault.remember({ content: 'sensitive thing', type: 'episodic' });
     vault.remember({ content: 'also keep', type: 'working' });
 
-    const tombstone = vault.forget(target.id.slice(0, 8)); // unique prefix works
+    const tombstone = vault.forget(target.id.slice(0, 8), { actor: 'owner' }); // unique prefix works
     expect(tombstone.id).toBe(target.id);
     expect(tombstone.content).toBe('');
     expect(tombstone.forgotten_at).not.toBeNull();
@@ -246,13 +246,13 @@ describe('forget (tombstones)', () => {
   it('errors on unknown id and ambiguous prefix', () => {
     const vault = createVault();
     vault.remember({ content: 'a', type: 'semantic' });
-    expect(() => vault.forget('ffffffff')).toThrow(/No memory found/);
-    expect(() => vault.forget('')).toThrow(/at least 4 characters/);
-    expect(() => vault.forget('ab')).toThrow(/at least 4 characters/);
+    expect(() => vault.forget('ffffffff', { actor: 'owner' })).toThrow(/No memory found/);
+    expect(() => vault.forget('', { actor: 'owner' })).toThrow(/at least 4 characters/);
+    expect(() => vault.forget('ab', { actor: 'owner' })).toThrow(/at least 4 characters/);
     // LIKE metacharacters must not act as wildcards (%%%%%%%% would match
     // any entry and irreversibly forget it).
-    expect(() => vault.forget('%%%%%%%%')).toThrow(/hex characters/);
-    expect(() => vault.forget('a__a1111')).toThrow(/hex characters/);
+    expect(() => vault.forget('%%%%%%%%', { actor: 'owner' })).toThrow(/hex characters/);
+    expect(() => vault.forget('a__a1111', { actor: 'owner' })).toThrow(/hex characters/);
     expect(vault.list()).toHaveLength(1); // nothing was forgotten by the attempts
     vault.close();
   });
@@ -354,7 +354,7 @@ describe('editMemory (edit content/type/scope by supersession)', () => {
     vault.remember({ content: 'keep this', type: 'semantic' });
     const target = vault.remember({ content: 'takes coffee with milk', type: 'semantic' });
 
-    const edited = vault.editMemory(target.id.slice(0, 8), { content: 'takes coffee black' });
+    const edited = vault.editMemory(target.id.slice(0, 8), { content: 'takes coffee black' }, { actor: 'owner' });
     expect(edited.id).not.toBe(target.id); // append-only: a NEW entry
     expect(edited.content).toBe('takes coffee black');
     expect(edited.type).toBe('semantic'); // unchanged fields carry over
@@ -374,7 +374,7 @@ describe('editMemory (edit content/type/scope by supersession)', () => {
   it('can change content, type, and scope together', () => {
     const vault = createVault();
     const t = vault.remember({ content: 'draft note', type: 'working', scope: 'personal' });
-    const e = vault.editMemory(t.id, { content: 'final note', type: 'semantic', scope: 'work' });
+    const e = vault.editMemory(t.id, { content: 'final note', type: 'semantic', scope: 'work' }, { actor: 'owner' });
     expect(e.content).toBe('final note');
     expect(e.type).toBe('semantic');
     expect(e.scope).toBe('work');
@@ -388,7 +388,7 @@ describe('editMemory (edit content/type/scope by supersession)', () => {
     const t = (() => {
       const vault = createVault();
       const m = vault.remember({ content: 'original text', type: 'semantic' });
-      vault.editMemory(m.id, { content: 'revised text' });
+      vault.editMemory(m.id, { content: 'revised text' }, { actor: 'owner' });
       vault.save();
       vault.close();
       return m;
@@ -404,7 +404,7 @@ describe('editMemory (edit content/type/scope by supersession)', () => {
   it('is a no-op when nothing actually differs', () => {
     const vault = createVault();
     const t = vault.remember({ content: 'same', type: 'semantic', scope: 'work' });
-    const same = vault.editMemory(t.id, { content: 'same', scope: 'work' });
+    const same = vault.editMemory(t.id, { content: 'same', scope: 'work' }, { actor: 'owner' });
     expect(same.id).toBe(t.id);
     expect(vault.list({ includeSuperseded: true })).toHaveLength(1);
     vault.close();
@@ -413,12 +413,12 @@ describe('editMemory (edit content/type/scope by supersession)', () => {
   it('validates the patch, content, type, and id', () => {
     const vault = createVault();
     const t = vault.remember({ content: 'a', type: 'semantic' });
-    expect(() => vault.editMemory(t.id, {})).toThrow(/at least one of/);
-    expect(() => vault.editMemory(t.id, { content: '   ' })).toThrow(/must not be empty/);
-    expect(() => vault.editMemory(t.id, { type: 'bogus' as never })).toThrow(/Invalid memory type/);
-    expect(() => vault.editMemory('ffffffff', { content: 'x' })).toThrow(/No memory found/);
-    expect(() => vault.editMemory('ab', { content: 'x' })).toThrow(/at least 4 characters/);
-    expect(() => vault.editMemory('%%%%%%%%', { content: 'x' })).toThrow(/hex characters/);
+    expect(() => vault.editMemory(t.id, {}, { actor: 'owner' })).toThrow(/at least one of/);
+    expect(() => vault.editMemory(t.id, { content: '   ' }, { actor: 'owner' })).toThrow(/must not be empty/);
+    expect(() => vault.editMemory(t.id, { type: 'bogus' as never }, { actor: 'owner' })).toThrow(/Invalid memory type/);
+    expect(() => vault.editMemory('ffffffff', { content: 'x' }, { actor: 'owner' })).toThrow(/No memory found/);
+    expect(() => vault.editMemory('ab', { content: 'x' }, { actor: 'owner' })).toThrow(/at least 4 characters/);
+    expect(() => vault.editMemory('%%%%%%%%', { content: 'x' }, { actor: 'owner' })).toThrow(/hex characters/);
     expect(vault.list({ includeSuperseded: true })).toHaveLength(1); // nothing changed
     vault.close();
   });
@@ -426,11 +426,11 @@ describe('editMemory (edit content/type/scope by supersession)', () => {
   it('a scoped connection cannot edit into an ungranted scope or touch unseen entries', () => {
     const vault = createVault();
     const w = vault.remember({ content: 'work thing', type: 'semantic', scope: 'work' });
-    expect(() => vault.editMemory(w.id, { scope: 'personal' }, ['work'])).toThrow(/outside this connection's grant/);
+    expect(() => vault.editMemory(w.id, { scope: 'personal' }, { actor: 'owner' }, ['work'])).toThrow(/outside this connection's grant/);
     const p = vault.remember({ content: 'private', type: 'semantic', scope: 'personal' });
-    expect(() => vault.editMemory(p.id, { content: 'x' }, ['work'])).toThrow(/No memory found/);
+    expect(() => vault.editMemory(p.id, { content: 'x' }, { actor: 'owner' }, ['work'])).toThrow(/No memory found/);
     // In-grant content edit is fine.
-    const e = vault.editMemory(w.id, { content: 'work thing v2' }, ['work']);
+    const e = vault.editMemory(w.id, { content: 'work thing v2' }, { actor: 'owner' }, ['work']);
     expect(e.content).toBe('work thing v2');
     vault.close();
   });
@@ -457,7 +457,7 @@ describe('retrieve (keyword ranking)', () => {
     const vault = createVault();
     const entry = vault.remember({ content: 'secret rental details', type: 'semantic' });
     expect(vault.retrieve('rental')).toHaveLength(1);
-    vault.forget(entry.id);
+    vault.forget(entry.id, { actor: 'owner' });
     expect(vault.retrieve('rental')).toHaveLength(0);
     vault.close();
   });
@@ -497,13 +497,13 @@ describe('scope enforcement (capability allowlist)', () => {
   it('forget refuses (as not-found) an entry outside the grant', () => {
     const vault = seeded();
     const henderson = vault.list({ scope: 'client:henderson' })[0]!;
-    expect(() => vault.forget(henderson.id, ['personal'])).toThrow(/No memory found/);
+    expect(() => vault.forget(henderson.id, { actor: 'owner' }, ['personal'])).toThrow(/No memory found/);
     // Still there — the denial did not delete it.
     expect(vault.list({ scope: 'client:henderson' })).toHaveLength(1);
     // An empty grant can forget nothing.
-    expect(() => vault.forget(henderson.id, [])).toThrow(/No memory found/);
+    expect(() => vault.forget(henderson.id, { actor: 'owner' }, [])).toThrow(/No memory found/);
     // With the right grant it works.
-    expect(vault.forget(henderson.id, ['client:henderson']).forgotten_at).not.toBeNull();
+    expect(vault.forget(henderson.id, { actor: 'owner' }, ['client:henderson']).forgotten_at).not.toBeNull();
     vault.close();
   });
 

@@ -27,6 +27,7 @@ import {
   summarizeMirror,
 } from '../src/project-export.js';
 import { Vault } from '../src/vault.js';
+import { plantWorkingRow } from './support/plant-working-row.js';
 
 const VAULT='0f1e2d3c-4b5a-4968-8776-655443322110';
 const REV='aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
@@ -164,9 +165,9 @@ describe('renderMirror against a vault',()=>{
 
   it('renders every project byte-identically twice, with its log parts and INDEX.md last',()=>{
     const v=open();
-    let cur=v.updateProject({project:'demo',expected_revision:null,what_why:'Why.',status:'Starting.',log_entry:'Created.',writer:CODE});
-    for(let i=0;i<14;i+=1)cur=v.updateProject({project:'demo',expected_revision:cur.revision,log_entry:`Entry ${i} ${'z'.repeat(1500)}`,writer:CODE});
-    v.updateProject({project:'beta',expected_revision:null,what_why:'B.',status:'Draft.',draft:true});
+    let cur=v.updateProject({project:'demo',expected_revision:null,what_why:'Why.',status:'Starting.',log_entry:'Created.',writer:CODE}, { actor: 'owner' });
+    for(let i=0;i<14;i+=1)cur=v.updateProject({project:'demo',expected_revision:cur.revision,log_entry:`Entry ${i} ${'z'.repeat(1500)}`,writer:CODE}, { actor: 'owner' });
+    v.updateProject({project:'beta',expected_revision:null,what_why:'B.',status:'Draft.',draft:true}, { actor: 'owner' });
     const first=renderMirror(v);const second=renderMirror(v);
     expect(first.map((f)=>f.path)).toEqual(['projects/beta.md','projects/demo.md','projects/demo.log.1.md','INDEX.md']);
     expect(second.map((f)=>Buffer.from(f.bytes).toString('hex'))).toEqual(first.map((f)=>Buffer.from(f.bytes).toString('hex')));
@@ -179,9 +180,9 @@ describe('renderMirror against a vault',()=>{
 
   it('gives a conflicted project an INDEX row and no file',()=>{
     const v=open();
-    v.updateProject({project:'demo',expected_revision:null,what_why:'Why.',status:'Fine.'});
-    v.remember({type:'working',scope:'project:split',content:'## Current Status\n\nOne.'});
-    v.remember({type:'working',scope:'project:split',content:'## Current Status\n\nTwo.'});
+    v.updateProject({project:'demo',expected_revision:null,what_why:'Why.',status:'Fine.'}, { actor: 'owner' });
+    plantWorkingRow(v, {type:'working',scope:'project:split',content:'## Current Status\n\nOne.'});
+    plantWorkingRow(v, {type:'working',scope:'project:split',content:'## Current Status\n\nTwo.'});
     const files=renderMirror(v);
     expect(files.map((f)=>f.path)).toEqual(['projects/demo.md','INDEX.md']);
     expect(text(files[1]!.bytes)).toContain('| split | conflict | two live documents, not exported |  |  |');

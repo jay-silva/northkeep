@@ -11,6 +11,7 @@ import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage, type ConnectorStorage, type SharedEntry } from '../src/storage.js';
 import { NeonConnectorStorage } from '../src/neon-storage.js';
 import { pgliteAsNeon, startServer, TEST_PEPPER_B64, withEnv, REDIRECT_URI } from './adr0061-support.js';
+import { plantWorkingRow } from '../../../packages/core/test/support/plant-working-row.js';
 
 /**
  * ADR 0063 on the connector, end to end over HTTP, on the in-memory store and
@@ -76,7 +77,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       const account = tokenHash(connToken);
       const vaultPath = path.join(tmpRoot, `${kind}-${n}.nkv`);
       const vault = Vault.create({ path: vaultPath, passphrase: 'guardrails pass', deviceSecret, kdf: KDF_INTERACTIVE });
-      vault.remember({ content: doc('R1 status.'), type: 'working', scope: `project:${slug}` });
+      plantWorkingRow(vault, { content: doc('R1 status.'), type: 'working', scope: `project:${slug}` });
       vault.setScopeShared(`project:${slug}`, true);
       vault.save();
 
@@ -151,7 +152,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       const cloudId = up.structured!.revision as string;
 
       // The Mac saves R2 and does not push.
-      w.vault.editMemory(r1, { content: doc('R2 LOCAL SAVE.') });
+      w.vault.editMemory(r1, { content: doc('R2 LOCAL SAVE.') }, { actor: 'owner' });
       w.vault.save();
       const r2 = w.head().revision;
 
@@ -238,7 +239,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       expect((await w.mcp('project_get', { project: 'a' })).structured).toEqual({ project: 'a', revision: h2 });
 
       const moved = (await w.mcp('project_update', { project: 'a', expected_revision: h2, status: 'CLOUD AGAIN.' })).structured!.revision as string;
-      w.vault.editMemory(h2, { content: doc('LOCAL AFTER FORWARD.') });
+      w.vault.editMemory(h2, { content: doc('LOCAL AFTER FORWARD.') }, { actor: 'owner' });
       w.vault.save();
       const held = await applyDownSync(conn);
       expect(held.conflicts.map((c) => ({ id: c.server_id, reason: c.reason }))).toEqual([{ id: moved, reason: 'moved' }]);
@@ -257,7 +258,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       const w = await world();
       const r1 = w.head().revision;
       await w.mcp('project_update', { project: 'a', expected_revision: r1, status: 'HELD.' });
-      w.vault.editMemory(r1, { content: doc('R2.') });
+      w.vault.editMemory(r1, { content: doc('R2.') }, { actor: 'owner' });
       w.vault.save();
       await w.push();
       const r2 = w.head().revision;
@@ -310,7 +311,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       const up = await w.mcp('project_update', { project: 'a', expected_revision: r1, status: 'SAME TEXT.' });
       const x = up.structured!.revision as string;
       const cloudText = (await w.pending(true)).entries.find((e) => e.server_id === x)!.content;
-      w.vault.editMemory(r1, { content: cloudText });
+      w.vault.editMemory(r1, { content: cloudText }, { actor: 'owner' });
       w.vault.save();
       await w.push();
       const h = w.head().revision;
@@ -341,7 +342,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       expect((await w.pending(true)).entries.filter((e) => e.scope === 'project:fresh').map((e) => ({ id: e.server_id, base: e.base_revision, stale: e.stale }))).toEqual([
         { id, base: 'new', stale: false },
       ]);
-      w.vault.remember({ content: doc('LOCAL FRESH.'), type: 'working', scope: 'project:fresh' });
+      plantWorkingRow(w.vault, { content: doc('LOCAL FRESH.'), type: 'working', scope: 'project:fresh' });
       w.vault.setScopeShared('project:fresh', true);
       w.vault.save();
       await w.push();

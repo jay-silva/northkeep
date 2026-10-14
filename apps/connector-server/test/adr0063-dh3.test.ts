@@ -9,6 +9,7 @@ import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage, type ConnectorStorage } from '../src/storage.js';
 import { NeonConnectorStorage } from '../src/neon-storage.js';
 import { connectMcpApp, pgliteAsNeon, startServer, TEST_PEPPER_B64, withEnv } from './adr0061-support.js';
+import { plantWorkingRow } from '../../../packages/core/test/support/plant-working-row.js';
 
 /**
  * Build recheck DH3, on both stores. A private project deleted here and then
@@ -49,7 +50,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       const vault = Vault.create({ path: path.join(tmpRoot, `${name}-${kind}.nkv`), passphrase: 'dh3 pass', deviceSecret, kdf: KDF_INTERACTIVE });
       vault.remember({ content: 'work seed', type: 'semantic', scope: 'work' });
       vault.setScopeShared('work', true);
-      vault.remember({ content: '# old private n\n\nold', type: 'working', scope: 'project:n' });
+      plantWorkingRow(vault, { content: '# old private n\n\nold', type: 'working', scope: 'project:n' });
       vault.save();
       await pushSharedScopes({ server: base, deviceSecret, scopes: vault.sharedScopes(), vault });
       vault.deleteProject('n');

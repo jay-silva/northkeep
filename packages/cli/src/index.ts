@@ -257,7 +257,7 @@ program
   .argument('<id>', 'memory id from "northkeep list"')
   .action(async (id: string) => {
     await withVault(async (vault) => {
-      const tombstone = vault.forget(id);
+      const tombstone = vault.forget(id, { actor: 'owner' });
       vault.save();
       console.log(`✓ Forgot ${tombstone.id} (content removed; deletion recorded ${tombstone.forgotten_at})`);
       console.log('  Note: the previous vault state remains in vault.nkv.bak until the next write.');
@@ -292,7 +292,7 @@ program
       if (options.content !== undefined) patch.content = options.content;
       if (options.scope !== undefined) patch.scope = options.scope;
       if (options.type !== undefined) patch.type = options.type as MemoryType; // validated in editMemory
-      const edited = vault.editMemory(id, patch);
+      const edited = vault.editMemory(id, patch, { actor: 'owner' });
       vault.save();
       console.log(`✓ Edited → [${edited.type} / ${edited.scope}] ${edited.id}`);
       console.log('  The previous version is kept as history (superseded), so the chain stays intact.');

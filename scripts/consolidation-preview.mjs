@@ -51,7 +51,7 @@ const vault = Vault.create({ path: vaultPath, passphrase, deviceSecret: secret, 
 for (const content of ['Keep summaries concise.', 'Use bullets for action items.', 'For technical reviews, include reasoning and examples.']) {
   vault.remember({ content, type: 'semantic', scope: 'writing', source: 'synthetic-preview' });
 }
-vault.remember({ content: 'Synthetic project document. Excluded from consolidation.', type: 'working', scope: 'project:sample' });
+vault.updateProject({ project: 'sample', expected_revision: null, status: 'Synthetic project document. Excluded from consolidation.' }, { actor: 'owner' });
 for (const [type, contents] of [
   ['procedural', ['Start drafting with an outline.', 'Review the outline before writing paragraphs.']],
   ['identity', ['I write short fiction.', 'I also write essays.']],

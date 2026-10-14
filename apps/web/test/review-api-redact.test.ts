@@ -235,7 +235,7 @@ describe('ADR 0060 D2: the cloud review masks before it sends', () => {
 describe('ADR 0060 code review F2 through the web route', () => {
   it('A-W2: a name the model finds in only one memory is masked in every memory sent', async () => {
     await session.withVault((vault) => {
-      for (const e of vault.list()) vault.forget(e.id);
+      for (const e of vault.list()) vault.forget(e.id, { actor: 'owner' });
       vault.remember({ content: 'Zyler Okonkwo called about the lease renewal.', type: 'semantic', scope: 'visit:2026-10-03' });
       vault.remember({ content: 'Met Zyler Okonkwo at the clinic on Tuesday.', type: 'semantic', scope: 'visit:2026-10-03' });
       vault.save();

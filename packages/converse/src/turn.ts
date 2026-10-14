@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import type { MemoryEntry, RememberInput, RetrieveOptions, ScoredEntry, ListFilter } from '@northkeep/core';
+import { projectWorkingMemoryMessage, type MemoryEntry, type RememberInput, type RetrieveOptions, type ScoredEntry, type ListFilter } from '@northkeep/core';
 import type { ImportedConversation } from '@northkeep/importers';
 import { dedupeCandidates, extractFromConversation, type OllamaClient } from '@northkeep/librarian';
 import { applyTier1, redact, restore, type PseudonymMap, type Replacement } from '@northkeep/redact';
@@ -608,8 +608,10 @@ export async function distillExchange(args: {
   // secret is dropped — the vault stores facts about the user, not their
   // secrets. `applyTier1` is synchronous and pure; a non-empty replacement
   // set means the candidate carried a secret.
+  // A working row in a project scope would be a second project document; the
+  // vault refuses it (ADR 0065), so it is dropped here rather than failing the turn.
   const secretFree = extraction.candidates.filter(
-    (c) => applyTier1(c.content).replacements.length === 0,
+    (c) => applyTier1(c.content).replacements.length === 0 && projectWorkingMemoryMessage(c.type, args.memoryScope) === null,
   );
   const existing = await args.vault.list({ allowedScopes: args.allowedScopes });
   const { unique } = dedupeCandidates(secretFree, existing);

@@ -6,6 +6,7 @@ import { KDF_INTERACTIVE, generateDeviceSecret } from '../src/crypto.js';
 import { PROJECT_PROVENANCE_METADATA_KEY, readProjectProvenance } from '../src/project-handoff.js';
 import type { MemoryEntry } from '../src/types.js';
 import { Vault } from '../src/vault.js';
+import { plantWorkingRow } from './support/plant-working-row.js';
 
 const PASS = 'synthetic project compaction passphrase';
 let directory: string, vaultPath: string, secret: Buffer;
@@ -23,9 +24,9 @@ function vault(): Vault {
 
 /** Seeds a project and revises it `revisions` times, each body `size` characters. */
 function seedProject(v: Vault, project: string, revisions: number, size = 64): string {
-  let revision = v.updateProject({ project, expected_revision: null, what_why: 'Why.', status: 'x'.repeat(size), next_actions: '- [ ] Begin' }).revision;
+  let revision = v.updateProject({ project, expected_revision: null, what_why: 'Why.', status: 'x'.repeat(size), next_actions: '- [ ] Begin' }, { actor: 'owner' }).revision;
   for (let i = 0; i < revisions; i += 1) {
-    revision = v.updateProject({ project, expected_revision: revision, status: `${i} `.padEnd(size, 'y') }).revision;
+    revision = v.updateProject({ project, expected_revision: revision, status: `${i} `.padEnd(size, 'y') }, { actor: 'owner' }).revision;
   }
   return revision;
 }
@@ -74,13 +75,13 @@ describe('compactProjectHistory', () => {
       vault_id: v.getVaultId(), project: 'demo', mode: 'checkpoint',
       operation_id: '11111111-1111-4111-8111-111111111111', expected_revision: revision,
       status: 'Ready.', completed: 'Built the core.', next_actions: 'Next.',
-    }).receipt;
-    revision = v.updateProject({ project: 'demo', expected_revision: receipt.result_revision, status: 'Later.' }).revision;
+    }, { actor: 'owner' }).receipt;
+    revision = v.updateProject({ project: 'demo', expected_revision: receipt.result_revision, status: 'Later.' }, { actor: 'owner' }).revision;
     const first = v.compactProjectHistory({ keep: 1 });
     expect(first.projects[0]!.kept).toBe(2); // the kept result, plus the base its receipt names
     expect(liveRevisions(v, 'demo')).toEqual(expect.arrayContaining([receipt.base_revision, receipt.result_revision]));
 
-    for (let i = 0; i < 10; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Later ${i}.` }).revision;
+    for (let i = 0; i < 10; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Later ${i}.` }, { actor: 'owner' }).revision;
     const second = v.compactProjectHistory({ keep: 1 });
     expect(second.projects[0]!.kept).toBe(1); // the receipt sits on a blanked row now, so it keeps nothing
     const survivors = liveRevisions(v, 'demo');
@@ -96,7 +97,7 @@ describe('compactProjectHistory', () => {
     const note = v.remember({ type: 'episodic', scope: 'project:demo', content: 'A note in the project scope.' });
     const personal = v.remember({ type: 'semantic', scope: 'personal', content: 'Unrelated memory.' });
     const oldest = liveRevisions(v, 'demo')[0]!;
-    v.forget(oldest);
+    v.forget(oldest, { actor: 'owner' });
     const before = v.export().memories.filter((m) => m.id !== oldest);
 
     const result = v.compactProjectHistory({ keep: 2 });
@@ -130,8 +131,8 @@ describe('compactProjectHistory', () => {
   it('exports the blanked revisions as forgotten and reopens clean', () => {
     const v = vault();
     const body = 'z'.repeat(10 * 1024);
-    let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: body, next_actions: 'Go' }).revision;
-    for (let i = 0; i < 20; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `${i} ${body}` }).revision;
+    let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: body, next_actions: 'Go' }, { actor: 'owner' }).revision;
+    for (let i = 0; i < 20; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `${i} ${body}` }, { actor: 'owner' }).revision;
 
     const result = v.compactProjectHistory({ keep: 1 });
     expect(result.blanked).toBe(4);
@@ -189,11 +190,11 @@ function survivingRevisions(v: Vault, scope: string): string[] {
 describe('automatic compaction (ADR 0051 Decision 4)', () => {
   it('leaves five superseded revisions with content after twenty updates, and forgets the rest', () => {
     const v = vault();
-    let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: 'Go' }).revision;
+    let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: 'Go' }, { actor: 'owner' }).revision;
     const superseded: string[] = [];
     for (let i = 0; i < 20; i += 1) {
       superseded.push(revision);
-      revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Revision ${i}.` }).revision;
+      revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Revision ${i}.` }, { actor: 'owner' }).revision;
     }
     expect(survivingRevisions(v, 'project:demo')).toEqual(superseded.slice(-5));
     const rows = v.list({ scope: 'project:demo', includeSuperseded: true, includeForgotten: true })
@@ -215,7 +216,7 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
         vault_id: v.getVaultId(), project: 'demo', mode: i % 2 ? 'wrap' : 'checkpoint',
         operation_id: `33333333-3333-4333-8333-${String(i).padStart(12, '0')}`, expected_revision: revision,
         status: `Status ${i}.`, completed: `Did ${i}.`, next_actions: `Next ${i}.`,
-      }).receipt.result_revision;
+      }, { actor: 'owner' }).receipt.result_revision;
     }
     // The newest five, plus the base the fifth one's receipt names (a memory
     // edit copies a receipt forward, which can add one more). Before the fix
@@ -238,14 +239,14 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
         status: `Status ${i}.`, completed: `Did ${i}.`, next_actions: `Next ${i}.`,
       };
       requests.push(request);
-      revision = v.checkpointProject(request).receipt.result_revision;
+      revision = v.checkpointProject(request, { actor: 'owner' }).receipt.result_revision;
     }
     const head = () => v.list({ scope: 'project:demo' }).filter((e) => e.type === 'working').map((e) => e.id);
     const before = head();
     const outcomes: string[] = [];
     for (const request of requests) {
       try {
-        outcomes.push(v.checkpointProject(request).replayed ? 'replayed' : 'written');
+        outcomes.push(v.checkpointProject(request, { actor: 'owner' }).replayed ? 'replayed' : 'written');
       } catch (error) {
         outcomes.push((error as { code?: string }).code ?? 'error');
       }
@@ -267,19 +268,19 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
     };
     request.vault_id = v.getVaultId();
     request.expected_revision = seedProject(v, 'demo', 3);
-    const receipt = v.checkpointProject(request).receipt;
+    const receipt = v.checkpointProject(request, { actor: 'owner' }).receipt;
     let revision = receipt.result_revision;
-    for (let i = 0; i < 2; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Soon ${i}.` }).revision;
-    const recent = v.checkpointProject(request);
+    for (let i = 0; i < 2; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Soon ${i}.` }, { actor: 'owner' }).revision;
+    const recent = v.checkpointProject(request, { actor: 'owner' });
     expect(recent.replayed).toBe(true);
     expect(recent.receipt).toEqual(receipt);
 
-    for (let i = 0; i < 20; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Later ${i}.` }).revision;
+    for (let i = 0; i < 20; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Later ${i}.` }, { actor: 'owner' }).revision;
     const surviving = survivingRevisions(v, 'project:demo');
     expect(surviving).toHaveLength(5);
     expect(surviving).not.toContain(receipt.result_revision);
     const head = v.list({ scope: 'project:demo' }).filter((e) => e.type === 'working').map((e) => e.id);
-    expect(() => v.checkpointProject(request)).toThrow(expect.objectContaining({ code: 'stale_project' }));
+    expect(() => v.checkpointProject(request, { actor: 'owner' })).toThrow(expect.objectContaining({ code: 'stale_project' }));
     expect(v.list({ scope: 'project:demo' }).filter((e) => e.type === 'working').map((e) => e.id)).toEqual(head);
     expect(v.verifyChain().ok).toBe(true);
     v.close();
@@ -289,7 +290,7 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
     const v = vault();
     const note = v.remember({ type: 'working', scope: 'personal', content: 'Draft 0.' });
     let id = note.id;
-    for (let i = 0; i < 20; i += 1) id = v.editMemory(id, { content: `Draft ${i + 1}.` }).id;
+    for (let i = 0; i < 20; i += 1) id = v.editMemory(id, { content: `Draft ${i + 1}.` }, { actor: 'owner' }).id;
     const rows = v.list({ scope: 'personal', includeSuperseded: true, includeForgotten: true });
     expect(rows.filter((e) => e.forgotten_at !== null)).toHaveLength(0);
     expect(rows.filter((e) => e.superseded_at !== null && e.content.length > 0)).toHaveLength(20);
@@ -300,9 +301,9 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
 
   it('compacts a project document superseded through editMemory, the path the fold uses', () => {
     const v = vault();
-    const head = v.remember({ type: 'working', scope: 'project:demo', content: '## Current Status\n\nFolded 0.' });
+    const head = plantWorkingRow(v, { type: 'working', scope: 'project:demo', content: '## Current Status\n\nFolded 0.' });
     let id = head.id;
-    for (let i = 0; i < 20; i += 1) id = v.editMemory(id, { content: `## Current Status\n\nFolded ${i + 1}.` }).id;
+    for (let i = 0; i < 20; i += 1) id = v.editMemory(id, { content: `## Current Status\n\nFolded ${i + 1}.` }, { actor: 'owner' }).id;
     expect(survivingRevisions(v, 'project:demo')).toHaveLength(5);
     expect(v.lastAutoCompaction()).toEqual({ project: 'demo', blanked: 1, bytes_freed: expect.any(Number) });
     expect(v.verifyChain().ok).toBe(true);
@@ -311,16 +312,16 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
 
   it('reports the last automatic compaction and clears it on a write that blanked nothing', () => {
     const v = vault();
-    let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: 'Go' }).revision;
-    for (let i = 0; i < 5; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Revision ${i}.` }).revision;
+    let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: 'Go' }, { actor: 'owner' }).revision;
+    for (let i = 0; i < 5; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Revision ${i}.` }, { actor: 'owner' }).revision;
     expect(v.lastAutoCompaction()).toBeNull(); // five superseded revisions, nothing past the keep
 
-    revision = v.updateProject({ project: 'demo', expected_revision: revision, status: 'Sixth.' }).revision;
+    revision = v.updateProject({ project: 'demo', expected_revision: revision, status: 'Sixth.' }, { actor: 'owner' }).revision;
     const report = v.lastAutoCompaction();
     expect(report).toEqual({ project: 'demo', blanked: 1, bytes_freed: expect.any(Number) });
     expect(report!.bytes_freed).toBeGreaterThan(0);
 
-    v.updateProject({ project: 'other', expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: 'Go' });
+    v.updateProject({ project: 'other', expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: 'Go' }, { actor: 'owner' });
     expect(v.lastAutoCompaction()).toBeNull(); // a creation supersedes nothing
     v.close();
   });
@@ -336,7 +337,7 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
     const internals = v as unknown as { setMeta: (key: string, value: string) => void };
     const original = internals.setMeta.bind(internals);
     internals.setMeta = (key, value) => { throw new Error(`injected failure at ${key}=${value.slice(0, 8)}`); };
-    expect(() => v.updateProject({ project: 'demo', expected_revision: revision, status: 'Doomed.' })).toThrow(/injected failure/);
+    expect(() => v.updateProject({ project: 'demo', expected_revision: revision, status: 'Doomed.' }, { actor: 'owner' })).toThrow(/injected failure/);
     internals.setMeta = original;
 
     expect(survivingRevisions(v, 'project:demo')).toEqual(before);
@@ -350,8 +351,8 @@ describe('automatic compaction (ADR 0051 Decision 4)', () => {
     const sizeAfter = (updates: number, name: string): number => {
       const file = path.join(directory, `${name}.nkv`);
       const v = Vault.create({ path: file, passphrase: PASS, deviceSecret: secret, kdf: KDF_INTERACTIVE });
-      let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: body, next_actions: 'Go' }).revision;
-      for (let i = 0; i < updates; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `${i} ${body}` }).revision;
+      let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: body, next_actions: 'Go' }, { actor: 'owner' }).revision;
+      for (let i = 0; i < updates; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `${i} ${body}` }, { actor: 'owner' }).revision;
       expect(v.verifyChain().ok).toBe(true);
       v.save();
       v.close();
@@ -376,9 +377,9 @@ describe('compaction keeps the writer block (ADR 0051 addendum, ADR 0052)', () =
     return rows(v).filter((e) => e.forgotten_at !== null);
   }
   function seedWithWriter(v: Vault, revisions: number, size = 64): string {
-    let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'x'.repeat(size), next_actions: '- [ ] Begin', writer: WRITER }).revision;
+    let revision = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'x'.repeat(size), next_actions: '- [ ] Begin', writer: WRITER }, { actor: 'owner' }).revision;
     for (let i = 0; i < revisions; i += 1) {
-      revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `${i} `.padEnd(size, 'y'), writer: WRITER }).revision;
+      revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `${i} `.padEnd(size, 'y'), writer: WRITER }, { actor: 'owner' }).revision;
     }
     return revision;
   }
@@ -435,7 +436,7 @@ describe('compaction keeps the writer block (ADR 0051 addendum, ADR 0052)', () =
     const planted = { ...oldest.metadata, leftover: { note: 'should not survive' } };
     db.prepare('UPDATE memories SET metadata = ? WHERE id = ?').run(JSON.stringify(planted), oldest.id);
     // One more write pushes that row past the automatic keep of five.
-    revision = v.updateProject({ project: 'demo', expected_revision: revision, status: 'One more.', writer: WRITER }).revision;
+    revision = v.updateProject({ project: 'demo', expected_revision: revision, status: 'One more.', writer: WRITER }, { actor: 'owner' }).revision;
     const after = rows(v).find((e) => e.id === oldest.id)!;
     expect(after.forgotten_at).not.toBeNull();
     expect(Object.keys(after.metadata!)).toEqual([PROJECT_PROVENANCE_METADATA_KEY]);
@@ -519,15 +520,15 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     return v.list({ includeSuperseded: true, includeForgotten: true }).find((e) => e.id === id)!.forgotten_at !== null;
   }
   function updates(v: Vault, project: string, count: number): void {
-    for (let i = 0; i < count; i += 1) v.updateProject({ project, expected_revision: head(v, project).id, status: `Newer status ${i}.` });
+    for (let i = 0; i < count; i += 1) v.updateProject({ project, expected_revision: head(v, project).id, status: `Newer status ${i}.` }, { actor: 'owner' });
   }
   function create(v: Vault, project: string): string {
-    return v.updateProject({ project, expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: '- [ ] Begin' }).revision;
+    return v.updateProject({ project, expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: '- [ ] Begin' }, { actor: 'owner' }).revision;
   }
   /** Checkpoint X on a fresh project, then twelve updates, which blank X's revision. */
   function compactedCheckpoint(v: Vault, project = 'demo') {
     const x = request(v, project, X, create(v, project));
-    const result = v.checkpointProject(x).receipt.result_revision;
+    const result = v.checkpointProject(x, { actor: 'owner' }).receipt.result_revision;
     updates(v, project, 12);
     expect(isBlanked(v, result)).toBe(true);
     return x;
@@ -537,7 +538,7 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     const v = vault();
     compactedCheckpoint(v);
     const before = head(v, 'demo').id;
-    expect(attempt(() => v.checkpointProject(request(v, 'demo', X, before)))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(attempt(() => v.checkpointProject(request(v, 'demo', X, before), { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
     expect(head(v, 'demo').id).toBe(before);
     expect(didCount(v, 'demo', 'Did X.')).toBe(1);
     expect(v.verifyChain().ok).toBe(true);
@@ -548,26 +549,26 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     const v = vault();
     const x = compactedCheckpoint(v);
     const before = head(v, 'demo').id;
-    expect(attempt(() => v.checkpointProject(x))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
+    expect(attempt(() => v.checkpointProject(x, { actor: 'owner' }))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
     expect(head(v, 'demo').id).toBe(before);
 
     const base = create(v, 'base');
     const xBase = request(v, 'base', X.replace('a', 'b'), base);
-    const xResult = v.checkpointProject(xBase).receipt.result_revision;
-    const zResult = v.checkpointProject(request(v, 'base', Z, xResult, 'Did Z.')).receipt.result_revision;
-    v.updateProject({ project: 'base', expected_revision: zResult, status: 'One update.' });
+    const xResult = v.checkpointProject(xBase, { actor: 'owner' }).receipt.result_revision;
+    const zResult = v.checkpointProject(request(v, 'base', Z, xResult, 'Did Z.'), { actor: 'owner' }).receipt.result_revision;
+    v.updateProject({ project: 'base', expected_revision: zResult, status: 'One update.' }, { actor: 'owner' });
     expect(v.compactProjectHistory({ project: 'base', keep: 1 }).blanked).toBe(1);
     expect(isBlanked(v, base)).toBe(true);
     expect(isBlanked(v, xResult)).toBe(false);
-    expect(attempt(() => v.checkpointProject(xBase))).toEqual({ code: 'stale_project', message: BASE_COMPACTED, current: true });
+    expect(attempt(() => v.checkpointProject(xBase, { actor: 'owner' }))).toEqual({ code: 'stale_project', message: BASE_COMPACTED, current: true });
     v.close();
   });
 
   it('T3: a verbatim retry of the newest save still replays its receipt', () => {
     const v = vault();
     const x = request(v, 'demo', X, create(v, 'demo'));
-    const receipt = v.checkpointProject(x).receipt;
-    const replay = v.checkpointProject(x);
+    const receipt = v.checkpointProject(x, { actor: 'owner' }).receipt;
+    const replay = v.checkpointProject(x, { actor: 'owner' });
     expect(replay.replayed).toBe(true);
     expect(replay.receipt).toEqual(receipt);
     v.close();
@@ -576,15 +577,15 @@ describe('operation ids survive compaction (ADR 0062)', () => {
   it('T4a: the carry-forward route with a ledger answers stale for a verbatim retry and a conflict for a changed request, also once the copy is blanked', () => {
     const v = vault();
     const x = request(v, 'demo', X, create(v, 'demo'));
-    const xResult = v.checkpointProject(x).receipt.result_revision;
-    const edited = v.editMemory(xResult, { content: `${head(v, 'demo').content}\nEdited by hand.` }).id;
-    v.checkpointProject(request(v, 'demo', Z, edited, 'Did Z.'));
+    const xResult = v.checkpointProject(x, { actor: 'owner' }).receipt.result_revision;
+    const edited = v.editMemory(xResult, { content: `${head(v, 'demo').content}\nEdited by hand.` }, { actor: 'owner' }).id;
+    v.checkpointProject(request(v, 'demo', Z, edited, 'Did Z.'), { actor: 'owner' });
     updates(v, 'demo', 5);
     expect(isBlanked(v, xResult)).toBe(true);
     expect(isBlanked(v, edited)).toBe(false);
     const before = head(v, 'demo').id;
-    expect(attempt(() => v.checkpointProject(x))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
-    expect(attempt(() => v.checkpointProject(request(v, 'demo', X, before)))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(attempt(() => v.checkpointProject(x, { actor: 'owner' }))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
+    expect(attempt(() => v.checkpointProject(request(v, 'demo', X, before), { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
     expect(ledgerIds(head(v, 'demo'))).toEqual([X, Z]);
     expect(head(v, 'demo').id).toBe(before);
     expect(didCount(v, 'demo', 'Did X.')).toBe(1);
@@ -592,8 +593,8 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     updates(v, 'demo', 1);
     expect(isBlanked(v, edited)).toBe(true);
     const later = head(v, 'demo').id;
-    expect(attempt(() => v.checkpointProject(x))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
-    expect(attempt(() => v.checkpointProject(request(v, 'demo', X, later)))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(attempt(() => v.checkpointProject(x, { actor: 'owner' }))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
+    expect(attempt(() => v.checkpointProject(request(v, 'demo', X, later), { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
     expect(head(v, 'demo').id).toBe(later);
     expect(didCount(v, 'demo', 'Did X.')).toBe(1);
     v.close();
@@ -619,8 +620,8 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     const all = v.list({ includeSuperseded: true, includeForgotten: true });
     expect(all.filter((e) => ledgerIds(e).includes(spec.x_request.operation_id))).toEqual([]);
     const before = head(v, project).id;
-    expect(attempt(() => v.checkpointProject(spec.x_request))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
-    expect(attempt(() => v.checkpointProject({ ...spec.x_request, expected_revision: before }))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(attempt(() => v.checkpointProject(spec.x_request, { actor: 'owner' }))).toEqual({ code: 'stale_project', message: COMPACTED, current: true });
+    expect(attempt(() => v.checkpointProject({ ...spec.x_request, expected_revision: before }, { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
     expect(head(v, project).id).toBe(before);
     expect(didCount(v, project, 'Did X.')).toBe(1);
     v.close();
@@ -638,19 +639,19 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     const UNPROVEN = 'Operation receipt metadata exists without its original result.';
 
     const elsewhere = plantCopy('project:other', (receipt) => receipt);
-    expect(attempt(() => elsewhere.v.checkpointProject(elsewhere.spec.x_request))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
+    expect(attempt(() => elsewhere.v.checkpointProject(elsewhere.spec.x_request, { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
     elsewhere.v.close();
 
     const liveOriginal = plantCopy('project:carry', (receipt, v) => ({ ...receipt, result_id: head(v, 'carry').id }));
-    expect(attempt(() => liveOriginal.v.checkpointProject(liveOriginal.spec.x_request))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
+    expect(attempt(() => liveOriginal.v.checkpointProject(liveOriginal.spec.x_request, { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
     liveOriginal.v.close();
 
     const otherScope = plantCopy('project:carry', (receipt, v) => {
       const stray = v.remember({ content: 'Stray.', type: 'episodic', scope: 'personal', source: 'test' }).id;
-      v.forget(stray);
+      v.forget(stray, { actor: 'owner' });
       return { ...receipt, result_id: stray };
     });
-    expect(attempt(() => otherScope.v.checkpointProject(otherScope.spec.x_request))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
+    expect(attempt(() => otherScope.v.checkpointProject(otherScope.spec.x_request, { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: UNPROVEN, current: false });
     otherScope.v.close();
   });
 
@@ -658,11 +659,11 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     const v = vault();
     const aBase = create(v, 'a');
     const bHead = create(v, 'b');
-    const xResult = v.checkpointProject(request(v, 'a', X, aBase)).receipt.result_revision;
-    expect(attempt(() => v.checkpointProject(request(v, 'b', X, bHead)))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    const xResult = v.checkpointProject(request(v, 'a', X, aBase), { actor: 'owner' }).receipt.result_revision;
+    expect(attempt(() => v.checkpointProject(request(v, 'b', X, bHead), { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
     updates(v, 'a', 12);
     expect(isBlanked(v, xResult)).toBe(true);
-    expect(attempt(() => v.checkpointProject(request(v, 'b', X, bHead)))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(attempt(() => v.checkpointProject(request(v, 'b', X, bHead), { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
     expect(head(v, 'b').id).toBe(bHead);
     v.close();
   });
@@ -672,7 +673,7 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     const x = compactedCheckpoint(v, 'a');
     v.rescope(head(v, 'a').id, 'project:b');
     expect(ledgerIds(head(v, 'b'))).toEqual([X]);
-    expect(attempt(() => v.checkpointProject(x))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(attempt(() => v.checkpointProject(x, { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
     v.close();
   });
 
@@ -694,17 +695,17 @@ describe('operation ids survive compaction (ADR 0062)', () => {
       if (r < 0.5) {
         const id = `0062cccc-0000-4000-8000-${String(i).padStart(12, '0')}`;
         const mode = r < 0.25 ? 'checkpoint' : 'wrap';
-        const { receipt } = v.checkpointProject({ ...request(v, 'demo', id, current.id, `Did ${i}.`), mode });
+        const { receipt } = v.checkpointProject({ ...request(v, 'demo', id, current.id, `Did ${i}.`), mode }, { actor: 'owner' });
         saved.push(id);
         kinds.add(mode);
         const written = head(v, 'demo');
         const ledger = written.metadata![LEDGER] as Array<Record<string, unknown>>;
         expect(ledger.at(-1)).toEqual({ operation_id: id, request_fingerprint: receipt.request_fingerprint, saved_at: written.created_at });
       } else if (r < 0.8) {
-        v.updateProject({ project: 'demo', expected_revision: current.id, status: `Update ${i}.` });
+        v.updateProject({ project: 'demo', expected_revision: current.id, status: `Update ${i}.` }, { actor: 'owner' });
         kinds.add('update');
       } else {
-        v.editMemory(current.id, { content: `${current.content}\nEdit ${i}.` });
+        v.editMemory(current.id, { content: `${current.content}\nEdit ${i}.` }, { actor: 'owner' });
         kinds.add('edit');
       }
       expect(ledgerIds(head(v, 'demo'))).toEqual(saved.slice(-16));
@@ -721,24 +722,24 @@ describe('operation ids survive compaction (ADR 0062)', () => {
   it('T8: a malformed record carrying the id refuses, other malformed shapes are ignored and dropped', () => {
     const v = vault();
     const plant = (project: string, ledger: unknown) =>
-      v.remember({ content: DOC, type: 'working', scope: `project:${project}`, source: 'test', metadata: { [LEDGER]: ledger } }).id;
+      plantWorkingRow(v, { content: DOC, type: 'working', scope: `project:${project}`, source: 'test', metadata: { [LEDGER]: ledger } }).id;
     const now = new Date().toISOString();
     const ids = (n: number) => `0062dddd-0000-4000-8000-${String(n).padStart(12, '0')}`;
 
     const extraKey = plant('m6', [{ operation_id: ids(11), request_fingerprint: 'a'.repeat(64), saved_at: now, note: 'extra' }]);
-    expect(attempt(() => v.checkpointProject(request(v, 'm6', ids(11), extraKey)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
+    expect(attempt(() => v.checkpointProject(request(v, 'm6', ids(11), extraKey), { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
     const badTime = plant('m7', [{ operation_id: ids(12), request_fingerprint: 'a'.repeat(64), saved_at: 'not a time' }]);
-    expect(attempt(() => v.checkpointProject(request(v, 'm7', ids(12), badTime)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
+    expect(attempt(() => v.checkpointProject(request(v, 'm7', ids(12), badTime), { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
 
     const shortFingerprint = plant('m1', [{ operation_id: ids(1), request_fingerprint: '0123456789', saved_at: now }]);
-    expect(attempt(() => v.checkpointProject(request(v, 'm1', ids(1), shortFingerprint)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
+    expect(attempt(() => v.checkpointProject(request(v, 'm1', ids(1), shortFingerprint), { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
     expect(head(v, 'm1').id).toBe(shortFingerprint);
 
     const both = plant('m0', [ids(10), { operation_id: ids(10), request_fingerprint: 'a'.repeat(64), saved_at: now }]);
-    expect(attempt(() => v.checkpointProject(request(v, 'm0', ids(10), both)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
+    expect(attempt(() => v.checkpointProject(request(v, 'm0', ids(10), both), { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
 
     const bareString = plant('m2', [ids(2)]);
-    expect(attempt(() => v.checkpointProject(request(v, 'm2', ids(2), bareString)))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
+    expect(attempt(() => v.checkpointProject(request(v, 'm2', ids(2), bareString), { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: MALFORMED, current: false });
     expect(head(v, 'm2').id).toBe(bareString);
 
     const accepted: Array<[string, unknown, string]> = [
@@ -748,15 +749,15 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     ];
     for (const [project, ledger, id] of accepted) {
       const planted = plant(project, ledger);
-      expect(attempt(() => v.checkpointProject(request(v, project, id, planted)))).toBe('written');
+      expect(attempt(() => v.checkpointProject(request(v, project, id, planted), { actor: 'owner' }))).toBe('written');
       expect(ledgerIds(head(v, project))).toEqual([id]);
     }
 
     // A malformed record guards its id only until the next checkpoint drops it (Decision 2).
     const other = ids(6);
-    expect(attempt(() => v.checkpointProject(request(v, 'm2', other, bareString)))).toBe('written');
+    expect(attempt(() => v.checkpointProject(request(v, 'm2', other, bareString), { actor: 'owner' }))).toBe('written');
     expect(ledgerIds(head(v, 'm2'))).toEqual([other]);
-    expect(attempt(() => v.checkpointProject(request(v, 'm2', ids(2), head(v, 'm2').id)))).toBe('written');
+    expect(attempt(() => v.checkpointProject(request(v, 'm2', ids(2), head(v, 'm2').id), { actor: 'owner' }))).toBe('written');
     expect(v.verifyChain().ok).toBe(true);
     v.close();
   });
@@ -766,21 +767,21 @@ describe('operation ids survive compaction (ADR 0062)', () => {
     compactedCheckpoint(v, 'a');
     const bHead = create(v, 'b');
     const xb = request(v, 'b', X, bHead);
-    expect(attempt(() => v.checkpointProject(xb, ['project:b']))).toBe('written');
+    expect(attempt(() => v.checkpointProject(xb, { actor: 'owner' }, ['project:b']))).toBe('written');
     expect(didCount(v, 'b', 'Did X.')).toBe(1);
 
     // Hits on both projects, one of them the request's own with its fingerprint, still refuse.
     updates(v, 'b', 12);
-    expect(attempt(() => v.checkpointProject(xb))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
+    expect(attempt(() => v.checkpointProject(xb, { actor: 'owner' }))).toEqual({ code: 'operation_conflict', message: DIFFERENT, current: false });
     v.close();
   });
 
   it('T10: a head changed to another type leaves the lookup, so a recreated project writes the id (Residual 3)', () => {
     const v = vault();
     compactedCheckpoint(v, 'a');
-    v.editMemory(head(v, 'a').id, { type: 'semantic' });
+    v.editMemory(head(v, 'a').id, { type: 'semantic' }, { actor: 'owner' });
     const recreated = create(v, 'a');
-    expect(attempt(() => v.checkpointProject(request(v, 'a', X, recreated)))).toBe('written');
+    expect(attempt(() => v.checkpointProject(request(v, 'a', X, recreated), { actor: 'owner' }))).toBe('written');
     expect(didCount(v, 'a', 'Did X.')).toBe(1);
     v.close();
   });

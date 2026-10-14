@@ -67,7 +67,7 @@ afterEach(async () => {
 });
 
 async function sharedProject(slug: string, status: string): Promise<string> {
-  const r = vault.updateProject({ project: slug, expected_revision: null, what_why: 'Demo.', status }).revision;
+  const r = vault.updateProject({ project: slug, expected_revision: null, what_why: 'Demo.', status }, { actor: 'owner' }).revision;
   vault.setScopeShared(`project:${slug}`, true);
   vault.save();
   await pushSharedScopes({ server: fake.url(), deviceSecret, scopes: vault.sharedScopes(), vault });
@@ -112,7 +112,7 @@ describe('share sync (D3)', () => {
   it('a conflict is shown and never applied; resolve --take-theirs and --keep-mine settle it', async () => {
     const r1 = await sharedProject('demo', 'R1.');
     fake.cloudUpdate('project:demo', cloud('Cloud on R1.'));
-    vault.updateProject({ project: 'demo', expected_revision: r1, status: 'R2 local.' });
+    vault.updateProject({ project: 'demo', expected_revision: r1, status: 'R2 local.' }, { actor: 'owner' });
     vault.save();
     await shareSyncCmd({}, deps(null), fail);
     expect(getProjectView(vault, 'demo').status).toBe('R2 local.');
@@ -133,7 +133,7 @@ describe('share sync (D3)', () => {
     const r3 = getProjectView(vault, 'demo').revision;
     await pushSharedScopes({ server: fake.url(), deviceSecret, scopes: vault.sharedScopes(), vault });
     fake.cloudUpdate('project:demo', cloud('Cloud on R3.'));
-    vault.updateProject({ project: 'demo', expected_revision: r3, status: 'R4 local.' });
+    vault.updateProject({ project: 'demo', expected_revision: r3, status: 'R4 local.' }, { actor: 'owner' });
     vault.save();
     await expect(shareResolveCmd('demo', { takeTheirs: true, expectedRevision: r3 }, deps(), fail)).rejects.toThrow('Project changed after it was read.');
     expect(getProjectView(vault, 'demo').status).toBe('R4 local.');
@@ -148,8 +148,8 @@ describe('share sync (D3)', () => {
 
 describe('projects history and restore (D4)', () => {
   it('lists versions, previews a restore, restores with --yes, and refuses a stale expected version', async () => {
-    const r1 = vault.updateProject({ project: 'demo', expected_revision: null, status: 'Good.' }).revision;
-    const r2 = vault.updateProject({ project: 'demo', expected_revision: r1, status: 'Rolled back.' }).revision;
+    const r1 = vault.updateProject({ project: 'demo', expected_revision: null, status: 'Good.' }, { actor: 'owner' }).revision;
+    const r2 = vault.updateProject({ project: 'demo', expected_revision: r1, status: 'Rolled back.' }, { actor: 'owner' }).revision;
     vault.save();
     await projectsHistoryCmd('demo', withVault, fail);
     expect(lines.some((l) => l.startsWith(`  ${r1}`))).toBe(true);
@@ -167,7 +167,7 @@ describe('projects history and restore (D4)', () => {
 
 describe('projects delete unshares a shared project first (recheck R-S2)', () => {
   it('deletes the scope on the connector, so a stale cloud create cannot come back on the next sync', async () => {
-    vault.updateProject({ project: 'n', expected_revision: null, status: 'Mine.' });
+    vault.updateProject({ project: 'n', expected_revision: null, status: 'Mine.' }, { actor: 'owner' });
     vault.save();
     fake.cloudCreate('project:n', cloud('Made in an app.'));
     vault.setScopeShared('project:n', true);

@@ -8,6 +8,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { callLogPath, type Vault } from '@northkeep/core';
+import { plantWorkingRow } from '../../core/test/support/plant-working-row.js';
 
 export const BOARD_WIRE_CEILING = 131072;
 export const SATURATING_HEALTHY = 55;
@@ -51,17 +52,17 @@ export function seedSaturatingBoard(v: Vault, variant: BoardFixtureVariant = 'wi
     v.updateProject({
       project: slug, expected_revision: null, what_why: 'Why this project exists.',
       status: fill(i, 130, '', variant), next_actions: nextActions, draft: true, writer: WRITER,
-    });
+    }, { actor: 'owner' });
   }
   for (let i = 0; i < SATURATING_BROKEN; i += 1) {
     const slug = wideSlug('b', i);
     broken.push(slug);
     const scope = `project:${slug}`;
     if (i % 2 === 0) {
-      v.remember({ content: '## Current Status\n\nOne.', type: 'working', scope });
-      v.remember({ content: '## Current Status\n\nTwo.', type: 'working', scope });
+      plantWorkingRow(v, { content: '## Current Status\n\nOne.', type: 'working', scope });
+      plantWorkingRow(v, { content: '## Current Status\n\nTwo.', type: 'working', scope });
     } else {
-      v.remember({ content: '## Current Status\n\nOne.\n\n## Current Status\n\nTwo.', type: 'working', scope });
+      plantWorkingRow(v, { content: '## Current Status\n\nOne.\n\n## Current Status\n\nTwo.', type: 'working', scope });
     }
   }
   const lines: string[] = [];

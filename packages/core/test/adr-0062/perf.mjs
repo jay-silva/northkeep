@@ -30,12 +30,15 @@ const options = (C, name) => ({ path: path.join(home, `${name}.nkv`), passphrase
 let counter = 0;
 const nextId = () => `0062ffff-0000-4000-8000-${(++counter).toString(16).padStart(12, '0')}`;
 
+// This core needs the actor; v0.22.0 reads a second argument as allowedScopes.
+const actor = (C) => (C === NEW ? { actor: 'owner' } : undefined);
+
 function build(C, name) {
   const v = C.Vault.create(options(C, name));
   for (let p = 0; p < PROJECTS; p += 1) {
-    let revision = v.updateProject({ project: `p${p}`, expected_revision: null, what_why: 'W.', status: 'S.', next_actions: '- [ ] N' }).revision;
+    let revision = v.updateProject({ project: `p${p}`, expected_revision: null, what_why: 'W.', status: 'S.', next_actions: '- [ ] N' }, actor(C)).revision;
     for (let i = 0; i < CHECKPOINTS; i += 1) {
-      revision = v.checkpointProject({ vault_id: v.getVaultId(), project: `p${p}`, mode: 'checkpoint', operation_id: nextId(), expected_revision: revision, status: `S${i}.`, completed: `C${i}.`, next_actions: 'N.' }).receipt.result_revision;
+      revision = v.checkpointProject({ vault_id: v.getVaultId(), project: `p${p}`, mode: 'checkpoint', operation_id: nextId(), expected_revision: revision, status: `S${i}.`, completed: `C${i}.`, next_actions: 'N.' }, actor(C)).receipt.result_revision;
     }
   }
   for (let i = 0; i < MEMS; i += 1) v.remember({ content: `memory ${i} ${'q'.repeat(200)}`, type: 'semantic', scope: 'personal', source: 'test' });
@@ -63,7 +66,7 @@ const full = carriers.every((e) => e.metadata[KEY].length === 16);
 function timed(C, v, project) {
   const request = { vault_id: v.getVaultId(), project, mode: 'checkpoint', operation_id: nextId(), expected_revision: C.getProjectView(v, project).revision, status: 'S.', completed: 'D.', next_actions: 'N.' };
   const start = performance.now();
-  v.checkpointProject(request);
+  v.checkpointProject(request, actor(C));
   return performance.now() - start;
 }
 const t = { trunk: [], head: [] };
