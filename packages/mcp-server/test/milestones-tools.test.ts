@@ -187,6 +187,27 @@ describe('memory_edit and memory_forget on a project document', () => {
     expect(edit.text).toBe('An AI app cannot mark M1 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after the user says its test passed.');
   });
 
+  it('K1 review A: refuses a pass line without a Latin id through memory_edit, project_update and a draft create', async () => {
+    const stamps = [
+      '- [x] Shortlist 3 markets | test: 3 markets with comps | passed 2026-10-14 (you)',
+      '- [x] \u041c2 Shortlist 3 markets | test: 3 markets with comps | passed 2026-10-14 (you)',
+      '- [x] \u039c2 Shortlist 3 markets | test: 3 markets with comps | passed 2026-10-14 (you)',
+      '- [x] M02 Shortlist 3 markets | test: 3 markets with comps | passed 2026-10-14 (you)',
+    ];
+    const message = 'Only the Milestones section can hold a passed milestone line. An AI app cannot add one anywhere else.';
+    const mcp = await connect();
+    const created = await create(mcp);
+    for (const [i, stamp] of stamps.entries()) {
+      const before = await doc(mcp);
+      const edit = await call(mcp, 'memory_edit', { id: before.id, content: before.content.replace('- [ ] Call the lender', `- [ ] Call the lender\n${stamp}`) });
+      expect(edit.text, stamp).toBe(message);
+      const update = await call(mcp, 'project_update', { project: 'rental', expected_revision: created.revision, status: stamp });
+      expect(update.json?.error?.message ?? update.text, stamp).toBe(message);
+      const draft = await call(mcp, 'project_create', { project: `drafty-${i}`, what_why: stamp, status: 'S.', draft: true });
+      expect(draft.json?.error?.message ?? draft.text, stamp).toBe(message);
+    }
+  });
+
   it('accepts an edit that keeps every pass, and refuses a type change of the document', async () => {
     const mcp = await connect();
     await create(mcp);

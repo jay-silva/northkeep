@@ -3,6 +3,7 @@ import {
   MilestoneError,
   assertAgentWriteKeepsPasses,
   formatMilestones,
+  milestoneSkeleton,
   parseMilestoneProposals,
   parseMilestoneSection,
   parseMilestones,
@@ -317,6 +318,32 @@ describe('adversarial review of efa93d4 (wounds W1, W2, W3, W5)', () => {
     const legacy = `${doc(null)}\n\n### Milestones\n\n${stamp}`;
     expect(() => assertAgentWriteKeepsPasses(legacy, legacy.replace('Shortlisting.', 'Underwriting.'))).not.toThrow();
     expect(() => assertAgentWriteKeepsPasses(before, before.replace('## Log', '## Log\n\n- [x] Merged the PR'))).not.toThrow();
+  });
+
+  it('K1 review A: refuses a stamped or pass-dated line added outside the section, with or without a Latin id', () => {
+    const empty = doc(null);
+    const message = 'Only the Milestones section can hold a passed milestone line. An AI app cannot add one anywhere else.';
+    for (const line of [
+      '- [x] Shortlist 3 markets | test: 3 markets with comps | passed 2026-10-14 (you)',
+      '- [x] \u041c2 Shortlist 3 markets | test: 3 markets with comps | passed 2026-10-14 (you)',
+      '- [x] \u039c2 Shortlist 3 markets | test: 3 markets with comps | passed 2026-10-14 (you)',
+      '- [x] M02 Shortlist 3 markets | test: 3 markets with comps | passed 2026-10-14 (you)',
+      '- \u221a Shortlist 3 markets (you)',
+      'Shortlist done, passed 2026-10-14',
+    ]) {
+      expect(refusal(() => assertAgentWriteKeepsPasses(empty, empty.replace('## Log', `## Log\n\n${line}`))), line).toBe(message);
+      expect(refusal(() => assertAgentWriteKeepsPasses(null, empty.replace('A first rental.', line))), line).toBe(message);
+    }
+    const legacy = empty.replace('## Log', '## Log\n\n- [x] Shortlist 3 markets | passed 2026-10-14 (you)');
+    expect(() => assertAgentWriteKeepsPasses(legacy, legacy.replace('Shortlisting.', 'Underwriting.'))).not.toThrow();
+    expect(() => assertAgentWriteKeepsPasses(empty, empty.replace('## Log', '## Log\n\n- [x] Merged the PR\n- \u221a Called the lender'))).not.toThrow();
+  });
+
+  it('K1 review A: Cyrillic and Greek M read as M, and a square-root tick reads as a checkbox', () => {
+    for (const text of ['done \u221a', '\u041c2 passed 2026-10-14', '\u039c2 (you)']) {
+      expect(refusal(() => parseMilestoneProposals(`M3 Underwrite | test: ${text}`)), text).toMatch(/^Line 1 has a checkbox or a pass stamp\./);
+    }
+    expect(milestoneSkeleton('\u041c\u043c\u039c\u03bc')).toBe('mmmm');
   });
 
   it('W5: passed lines keep their order', () => {
