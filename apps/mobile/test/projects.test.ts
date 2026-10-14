@@ -172,6 +172,7 @@ describe('projects data mapping', () => {
       log: ['2026-09-05 - Newer entry.', '2026-09-01 - Older entry.'],
       files: [{ type: 'url', label: 'Spec', locator: 'https://example.com/spec', access: 'unverified' }],
       filesText: null,
+      milestones: { kind: 'absent' },
     });
   });
 

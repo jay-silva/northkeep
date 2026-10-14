@@ -3,9 +3,13 @@ import {
   boardStatusLine,
   getProjectView,
   listProjectOverview,
+  parseMilestones,
   splitLogEntries,
+  summarizeMilestones,
   type ListFilter,
   type MemoryEntry,
+  type MilestonePlan,
+  type MilestoneSummary,
   type ProjectFileReference,
   type ProjectVaultReader,
 } from '@northkeep/core';
@@ -38,6 +42,22 @@ export function entriesReader(entries: readonly MemoryEntry[]): ProjectVaultRead
   };
 }
 
+/**
+ * DELETE AT K1 REBASE: K1 adds ProjectOverview.milestones and ProjectView.milestones.
+ * Until then the plan is parsed from the head row's text, found by revision id.
+ */
+function milestonePlanBeforeK1(entries: readonly MemoryEntry[], revision: string | null): MilestonePlan {
+  const head = revision === null ? undefined : entries.find((e) => e.id === revision);
+  return head ? parseMilestones(head.content) : { kind: 'absent' };
+}
+
+/** "2 of 6 · M3 Underwrite top 5 listings" for a list row; null summary means no readable plan. */
+export function progressLine(summary: MilestoneSummary | null): string {
+  if (summary === null) return 'No plan yet';
+  const where = summary.current ? `${summary.current.id} ${summary.current.title}` : 'All passed';
+  return `${summary.passed} of ${summary.total} · ${where}`;
+}
+
 export interface ProjectRow {
   slug: string;
   name: string;
@@ -53,6 +73,10 @@ export interface ProjectRow {
   searchText: string;
   conflict: boolean;
   draft: boolean;
+  /** Milestone progress, or null when there is no readable plan. Always null for a conflict. */
+  milestones: MilestoneSummary | null;
+  /** The progress line under the status, or null for a conflict, whose note already says what to do. */
+  progress: string | null;
 }
 
 /** Conflicting projects first, since they need a choice; then newest update or name. */
@@ -73,6 +97,7 @@ export function projectRows(entries: readonly MemoryEntry[]): ProjectRow[] {
     if (p.draft) notes.push('Draft, not yet confirmed');
     if (p.imported) notes.push('Imported; the date is when it was imported');
     const line = p.status === null ? '' : boardStatusLine(p.status);
+    const milestones = summarizeMilestones(milestonePlanBeforeK1(entries, p.revision));
     return {
       slug: p.project,
       name: p.title ?? p.project,
@@ -84,6 +109,8 @@ export function projectRows(entries: readonly MemoryEntry[]): ProjectRow[] {
       searchText: [p.project, p.title, p.status, p.next_actions].filter(Boolean).join(' ').toLocaleLowerCase(),
       conflict: p.conflict,
       draft: p.draft,
+      milestones,
+      progress: p.conflict ? null : progressLine(milestones),
     };
   });
   return rows.sort((a, b) => compareRows(a, b, 'recent'));
@@ -124,6 +151,68 @@ export function textBlocks(body: string): TextBlock[] {
   return blocks;
 }
 
+/** How one milestone line is drawn: a solid check, an outlined check, the current dot, or an empty dot. */
+export type MilestoneMark = 'you' | 'agent' | 'current' | 'open';
+
+export interface MilestoneLine {
+  id: string;
+  title: string;
+  mark: MilestoneMark;
+  /** The pass line for a passed milestone, the test for the current one, otherwise null. */
+  sub: string | null;
+  /** What a screen reader says for the whole line. */
+  label: string;
+}
+
+/** The phone's read-only view of a plan. The phone never writes milestones (ADR 0065 Decision 3). */
+export type MilestonesView =
+  | { kind: 'absent' }
+  | { kind: 'none'; reason: string }
+  | { kind: 'unreadable' }
+  | { kind: 'plan'; passed: number; total: number; nowOn: string | null; lines: MilestoneLine[] };
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** "Passed Sep 28 · you confirmed". The year shows only when it is not this year. */
+export function passedLine(on: string, by: 'you' | 'agent', thisYear: number): string {
+  const [year, month, day] = on.split('-').map(Number) as [number, number, number];
+  const date = `${MONTHS[month - 1]} ${day}${year === thisYear ? '' : `, ${year}`}`;
+  return `Passed ${date} · ${by === 'you' ? 'you confirmed' : 'agent says you confirmed'}`;
+}
+
+export function milestonesView(plan: MilestonePlan, thisYear: number): MilestonesView {
+  switch (plan.kind) {
+    case 'absent':
+      return { kind: 'absent' };
+    case 'none':
+      return { kind: 'none', reason: plan.reason };
+    case 'malformed':
+      return { kind: 'unreadable' };
+    case 'plan': {
+      let currentSeen = false;
+      const lines = plan.items.map((item): MilestoneLine => {
+        const name = `${item.id} ${item.title}`;
+        if (item.state === 'passed') {
+          const sub = passedLine(item.on, item.by, thisYear);
+          return { id: item.id, title: item.title, mark: item.by, sub, label: `${name}. ${sub.replace(' · ', ', ')}.` };
+        }
+        if (!currentSeen) {
+          currentSeen = true;
+          return { id: item.id, title: item.title, mark: 'current', sub: `Test: ${item.test}`, label: `${name}. Current milestone. Test: ${item.test}.` };
+        }
+        return { id: item.id, title: item.title, mark: 'open', sub: null, label: `${name}. Not started.` };
+      });
+      const passed = lines.filter((l) => l.mark === 'you' || l.mark === 'agent').length;
+      const current = lines.find((l) => l.mark === 'current');
+      return { kind: 'plan', passed, total: lines.length, nowOn: current ? current.id : null, lines };
+    }
+    default: {
+      const unreachable: never = plan;
+      return unreachable;
+    }
+  }
+}
+
 export interface ProjectDetail {
   slug: string;
   name: string;
@@ -140,6 +229,7 @@ export interface ProjectDetail {
   files: ProjectFileReference[];
   /** The raw Files section when it is not NorthKeep's structured block. */
   filesText: string | null;
+  milestones: MilestonesView;
 }
 
 export type ProjectDetailResult = { ok: true; detail: ProjectDetail } | { ok: false; message: string };
@@ -149,7 +239,7 @@ function logLine(entry: string): string {
   return entry.replace(/^- /, '');
 }
 
-export function projectDetail(entries: readonly MemoryEntry[], slug: string): ProjectDetailResult {
+export function projectDetail(entries: readonly MemoryEntry[], slug: string, today: Date = new Date()): ProjectDetailResult {
   try {
     const view = getProjectView(entriesReader(entries), slug);
     return {
@@ -168,6 +258,7 @@ export function projectDetail(entries: readonly MemoryEntry[], slug: string): Pr
         log: splitLogEntries(view.log).map(logLine),
         files: view.files ?? [],
         filesText: view.files === null && view.files_text.trim().length > 0 ? view.files_text : null,
+        milestones: milestonesView(milestonePlanBeforeK1(entries, view.revision), today.getFullYear()),
       },
     };
   } catch (err) {
