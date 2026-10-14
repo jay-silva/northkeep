@@ -1,65 +1,29 @@
 # ADR 0046: Trustworthy memory review
 
-Status: implemented, verified, and accepted locally by the owner on 2026-09-10; release pending. Screen designs approved by the owner. Extends 0043 and 0015. This is the first curation milestone; local project coordination is implemented separately in ADR 0048.
+Status: Accepted locally by the owner 2026-09-10; first ships in release 0.22.0 (corrected 2026-09-24) · Review: GPT-5.6 Sol pre-implementation, "proceed only with" its requirements; final source review accepted
 
-**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** "release pending" is stale. This work is merged on main after v0.21.0 and ships for the first time in release 0.22.0. The owner's local acceptance on 2026-09-10 is recorded in `docs/curation-acceptance.md:3`.
+## Context
+The first curation milestone, extending ADRs 0043 and 0015. Review must not write on model confidence, mutate the wrong report, or lose a save to a crash.
 
-## Boundaries
+## Decision
+- D1: Reuse the token-authenticated, unlocked local web session; new routes need the memory-edit gate. No new provider, dependency, credential, sharing change, crypto or schema. Model text and source memories are untrusted and rendered as text.
+- D2: Collection selection is validated server-side; project scopes stay excluded. Selections hold immutable snapshots and vault identity; cloud consent fingerprints bind those entries, endpoint and model. Cloud review stays per-run opt-in, never a local fallback.
+- D3: Exact-duplicate equality keeps all text except optional CRLF-to-LF; scope and type take part. Semantic packs are bounded, include exact-group representatives, and report skips in coverage.
+- D4: Replacements must cite their own target from the selected snapshot; ambiguity yields a question, not a forced replacement. The user may edit and sees the result first; apply makes no model call.
+- D5: Version 2 reports carry `report_id`, `vault_id`, snapshots and receipts, stored by hashed vault path. Actions name report id and proposal fingerprint; writes add an `operation_id` and request fingerprint. Report state changes under the vault lock, one job per vault.
+- D6: The local report file (mode 0600, never a memory or connector payload) is a write-ahead record: prepared receipt, then vault save, then committed. Interrupted operations reconcile under the lock by full entry identity; mixed states refuse, never discarded or reapplied.
+- D7: History shows full before/after text. Restore adds a superseding revision only if the recorded result is still the live head; a removed duplicate returns as a new memory with recovery provenance.
+- D8 (since c1954f2, owner request 2026-09-13): a duplicate group has "Remove all": one confirmation listing every member, one receipt per removal, each restorable. `survivor_id` is optional but must name another group member when given. There is still no bulk accept or apply across proposals.
 
-Reuse the token-authenticated, unlocked local web session. New review collection/history/action routes require the same gate as existing memory edits. No new provider, dependency, credentials, sharing change, crypto primitive or database schema is planned. Review-model text and source memories remain untrusted data and are rendered as text.
+## Consequences
+- Limits: local receipts keep plaintext source text after a forget; they are not exported or synced, and the report is not tamper-proof against software on the unlocked machine. A small Ollama probe does not establish general model accuracy, and UI checks are not accessibility certification.
 
-## Review input and quality
+## Rejected
+- Checks by quoted substring or counts alone: equal counts can hide changed content.
+- Inferring success from matching text; whole-vault restore.
 
-Explicit collection selection is validated on the server against actual scopes; project scopes remain excluded. A selection contains full immutable entry snapshots and a vault identity. API consent fingerprints bind those entries and the exact destination configuration, so equal counts cannot disguise changed content. Existing cloud review remains per-run opt-in and never a local fallback.
+## What leaves the machine
+The original has no egress section. It states no new provider, credential or sharing change; existing cloud review stays per-run opt-in, its consent bound to exact entries, endpoint and model. Reports and receipts stay local, never synced, exported or sent to the connector.
 
-Deterministic duplicate equality preserves punctuation, symbols, case and internal whitespace; at most line-ending canonicalization is permitted. Scope and memory type participate in grouping. Semantic packs include a representative of exact groups so repeated old facts remain comparable to newer facts. Pack sizes are bounded; a single oversized entry is skipped and counted. Embedding failures, invalid output and skipped entries appear in coverage. Model confidence is not permission to write.
-
-Replacement proposals must cite their own target, and all referenced entries must belong to the selected snapshot. Ambiguous disagreements can produce a question without a forced replacement. The user may edit a replacement or answer in their own words; it is shown before being applied. No new call to a model occurs during apply.
-
-## Report identity and actions
-
-Version 2 reports carry a UUID report_id, vault_id, selected snapshots, scope selection, coverage and operation receipts. Store them by vault path (hashed local filename); never serve a report associated with another vault. Old reports remain inspectable but cannot use new mutation paths without a fresh pass. Starting a new review cannot let an old UI mutate the new report: every action names its report_id and proposal fingerprint. Scope/type/content/revision checks use full snapshots, not a quoted substring alone.
-
-Load/check/update report state while holding the same vault lock used by UI mutations. Permit one active review job per vault in the local process; completion rechecks its job ownership. Concurrent read-only/model jobs never hold a vault handle. Applying a write uses an operation_id and exact request fingerprint; retries with altered parameters fail.
-
-## Recoverable saves
-
-Use the existing local private report file as a write-ahead operation record. It already contains source and proposal text; it remains local, mode 0600, never a vault memory or a connector payload. Create the intended in-memory mutation, record a prepared receipt containing affected before/after IDs and snapshots to disk BEFORE saving the encrypted vault, then save the vault, then mark the receipt committed. An interrupted prepared operation is reconciled under the vault lock: exact after-revisions present means commit the receipt; original revisions still intact and no new after-revisions means no save occurred. Retain that receipt as aborted and restore the previous proposal decision. An exact retry can prepare it again, while a browser that lost its retry ID can start a new action without being stranded. Any mixed/diverged state refuses and requires inspection; it is never silently discarded. Never reapply a saved mutation to repair a report file. Atomic report writes use unique temporary paths and fsync. Failures remain visible.
-
-After/retry reconciliation uses full entry identity and content, including type, scope and lineage. Receipts are local workflow state and are not portable history; original memory versions remain in the vault export. A new review cannot discard a prepared operation: reconcile first or refuse. Never infer success solely from matching text.
-
-## History and restoration
-
-Expose retained local changes across review runs with complete before/after text. Restore an accepted edit with a new superseding revision only if its recorded result is still the live head. Do not restore an entire vault or alter historical rows. For an explicitly removed duplicate, a restore creates a new memory from the retained before-snapshot, with recovery provenance; the forgotten row remains forgotten. Refuse after a later incompatible change. Restoration itself is an idempotent prepared/committed operation and keeps history. At least one duplicate member must remain live; the UI names the retained member and explicitly confirms the one removed member. No bulk write action.
-
-**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** since c1954f2 (owner request 2026-09-13) a duplicate group has a "Remove all" action. After one confirmation that lists every member, it forgets each member in turn, one prepared/committed receipt per removal, with no survivor (apps/web/static/index.html:3618-3621). `survivor_id` is now optional on a forget, and when present it must still name another member of the group (packages/librarian/src/reviewSession.ts:143-146). Each removal stays restorable from change history (e2e/curation.test.ts:174). "At least one duplicate member must remain live" and "No bulk write action" no longer hold for duplicate groups; there is still no bulk accept or apply across proposals.
-
-## Validation
-
-Use only isolated synthetic vaults/configuration. Test semantic-sign collisions, unrelated-target citations, snapshot staleness, vault/report mismatch, concurrent actions, changed retries, interrupted saves before and after vault persistence, recovery after restart, duplicate survivor enforcement, selection enforcement, changed consent with equal counts, and restoration after later edits. Run a synthetic real local-model pass; separately state model-quality limits. Desktop and 390px UI verification follows the approved mocks. No production data or paid provider calls are required.
-
-## Pre-implementation review
-
-GPT-5.6 Sol reviewed the existing review, API and vault implementations against this delta before implementation. Verdict: proceed only with the following requirements incorporated. These are design conditions, not claims that the implementation already enforces them.
-
-- Equality and semantic packs respect scope and type; preserve all text except optional CRLF-to-LF conversion. Include exact-group representatives in semantic comparison. Report oversized/skipped entries and invalid batches.
-- Replacement targets must be explicitly quoted and listed in the selected sources. Add question proposals rather than forcing a resolution. Edited content is nonempty and length-bounded, included verbatim in the operation fingerprint.
-- Explicit scope selection and provider consent bind full immutable entry snapshots, vault identity, endpoint configuration and model.
-- All report reads and mutations, including keep/reject/report serving/job completion/recovery, run under the vault lock. Completed jobs verify ownership. Mutations require full proposal ID, report UUID, proposal fingerprint and operation UUID. Old prefix mutation paths cannot bypass those checks.
-- Duplicate removal names and checks a surviving live member. Restoration and apply both use prepared/committed receipts; original and resulting revision identities are verified. Fsync unique temporary reports and their containing directory. New runs cannot replace an unreconciled prepared operation.
-- Version 2 report parsing validates all persisted fields before use. Source text never supplies an action. Show complete before/after content for restoration and removal; do not claim the local report is tamper-proof against software with access to the unlocked machine.
-- A narrow `getVaultId()` accessor reads existing encrypted vault metadata without exporting content. Proposal fingerprints include target identity and all sources; operation fingerprints additionally include the exact user-edited text and removal/restore parameters.
-
-Review author inspected code read-only, with no vault or service access.
-
-## Implementation verification
-
-The lead reviewed and integrated bounded GPT-5.6 Sol work in an isolated worktree without production environment files. Final independent source review accepted the implementation after correcting consent scope display and rejecting duplicate collection selections. Earlier review findings hardened bounded packing, target evidence, report parsing, recovery, and dialog behavior.
-
-- TypeScript builds passed for core, librarian, local web and CLI.
-- Full regression: 114 files passed, 1,484 tests passed, one skipped. Separate real HTTP/session curation suite: five tests passed. Temporary loopback servers required sandbox permission; the restricted run was not counted as passing.
-- Crash tests inject a report-write failure after vault persistence for apply and restore, reopen, and verify reconciliation without duplicate revisions. Unsaved prepared receipts abort recoverably. Nonwrite decisions are idempotent and unresolved does not permanently suppress a proposal.
-- Parent rendered desktop and 390px layouts and exercised exact wording save, before/after history, restoration, collection counts, search and narrow layout. Final narrow confirmation check verified Escape and focus return. Independent UI review was source-only, not a second rendered inspection. The style detector lacked optional parsers and is not comprehensive accessibility certification.
-- A real local Ollama synthetic probe selected seven entries, fully compared five and marked two incomplete. It found the planted exact duplicate and schedule contradiction, preserved the decimal distinction, and dropped an unsupported-target finding. Review changed neither the synthetic memories nor their vault file. This small probe does not establish general model accuracy.
-
-All new review routes require the existing session token and unlocked vault. No cloud provider call, production vault write, deployment, new dependency, or crypto change was performed. Legacy reports have a read-only library parser; the new UI requires a fresh version-2 review rather than automatically importing them. Plaintext local receipts retain source text after forgetting and are not exported or synced. Owner acceptance instructions are in `docs/curation-acceptance.md`.
+## Links
+Extends: ADRs 0043, 0015 · Related: ADR 0048 · Acceptance: docs/curation-acceptance.md · Full record: docs/design/adr-0046-trustworthy-memory-review.md
