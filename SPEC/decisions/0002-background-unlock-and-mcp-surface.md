@@ -15,7 +15,7 @@ Claude Desktop launches the MCP server silently, with no terminal to prompt for 
 ## Consequences
 - Easier: the AI client can use the vault without a prompt; per-call cost is milliseconds with a pre-derived key.
 - Harder (trust statement): while unlocked, anyone with the user's logged-in Mac session can read the vault, the same trust level as saved browser passwords. Stated in `unlock` output, the security model and KNOWN-LIMITS.md.
-- Limits: Linux vault-key storage is ADR 0064 (Secret Service, or a mode-0600 file when that daemon is absent). Windows remains an env-var fallback. Provider API keys and OAuth tokens are unchanged by 0064. Schema-rejected calls do not reach the call log (audit completeness lands with M4).
+- Limits: Linux vault-key storage is ADR 0064 (Secret Service, or a mode-0600 file only after `--allow-key-file` when that daemon is absent). Windows remains an env-var fallback. Provider API keys and OAuth tokens are unchanged by 0064. Schema-rejected calls do not reach the call log (audit completeness lands with M4).
 
 ## Rejected
 - Passphrase in the Claude Desktop config env block: plaintext passphrase in a JSON file on disk.

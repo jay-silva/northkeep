@@ -118,7 +118,7 @@ import {
   keychainAvailable,
   keychainDeleteMasterKey,
   keychainSetMasterKey,
-  masterKeyStoreAvailable,
+  masterKeyLockApplies,
   appendCallLog,
   readCallLog,
   uninstallContract,
@@ -618,12 +618,15 @@ async function dispatch(
     searchEmbedder.clear(); // vectors derive from plaintext; nothing outlives the unlocked session
     searchWarmerFor(session).reset();
     let keychainCleared = false;
-    if (forgetKeychain === true && masterKeyStoreAvailable()) {
-      keychainCleared = keychainDeleteMasterKey() === 'removed';
+    let keyringUnreachable = false;
+    if (forgetKeychain === true && masterKeyLockApplies()) {
+      const outcome = keychainDeleteMasterKey();
+      keychainCleared = outcome === 'removed';
+      keyringUnreachable = outcome === 'keyring-unreachable';
     }
     // Report the TRUE post-lock state, not a hardcoded value. An env-var grant
     // the in-app lock cannot revoke keeps the vault open — say so.
-    return ok({ unlocked: session.isUnlocked(), keychainCleared, envGrant: session.hasEnvGrant() });
+    return ok({ unlocked: session.isUnlocked(), keychainCleared, keyringUnreachable, envGrant: session.hasEnvGrant() });
   }
 
   if (method === 'GET' && route === '/api/memories') {

@@ -80,8 +80,10 @@ the background with no terminal. Access is an explicit grant: `northkeep
 unlock` derives the master key once (passphrase + device secret) and parks it
 in the macOS Keychain, or on Linux in the Secret Service (ADR 0064). `northkeep
 lock` revokes it. The passphrase is never stored. If Linux has no Secret
-Service, the derived key is written to `~/.northkeep/master.key` at mode 0600
-and NorthKeep says so. That file is not encrypted. Plainly: **while unlocked,
+Service, background unlock is off unless the user runs `northkeep unlock
+--allow-key-file`; only then is the derived key written to
+`~/.northkeep/master.key` at mode 0600, and NorthKeep says so. That file is not
+encrypted. Plainly: **while unlocked,
 the vault is as protected as your saved passwords. Your login session is the
 wall, and the file fallback is only as strong as the permissions on your
 files.**

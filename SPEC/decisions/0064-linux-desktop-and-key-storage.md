@@ -1,27 +1,26 @@
-# ADR 0064 — Unsigned Linux bundles and where the vault key sits
+# ADR 0064: Unsigned Linux bundles and where the vault key sits
 
-- **Date:** 2026-10-11
-- **Status:** Accepted for an unsigned build. Not a public release.
-- **Deciders:** Jay (approved the unsigned Linux build)
+Status: Accepted 2026-10-11 for an unsigned build, not a public release. D2 amended by D3 on 2026-10-13 · Review: code review passed; D3 review NOT CLEARED, then CLEARED on b457a12 (full record)
 
 ## Context
+The signed desktop app is an Apple Silicon DMG (ADR 0012). Linux needs an AppImage, a deb, a linux-x64 Node sidecar, and a place for the derived vault key. Before this, Linux stored no key, so unlock refused. The device secret is a separate unencrypted 0600 file (ADR 0001).
 
-The signed desktop app is an Apple Silicon DMG (ADR 0012). A Linux build needs an AppImage, a deb, a linux-x64 Node sidecar, and a place for the derived vault key.
+## Decision
+- D1: `build.sh` on Linux uses `tauri.linux.bundle.conf.json` (AppImage and deb). `fetch-node.sh` checks Node's SHA-256 on every run, and GPG when `NORTHKEEP_REQUIRE_GPG=1`, which the Linux workflow sets. CI is Ubuntu 22.04 (glibc 2.35). Artifacts are unsigned workflow uploads, not a GitHub release.
+- D2: Prefer the Secret Service via `secret-tool`, with the key on stdin, used only when the session bus already owns `org.freedesktop.secrets`. `NORTHKEEP_NO_KEYCHAIN=1` disables every store. macOS Keychain behavior is unchanged. Provider API keys and OAuth tokens stay off disk on Linux.
+- D3 (Jay, 2026-10-13, replaces D2's automatic file write): with no Secret Service, background unlock is off. Only `northkeep unlock --allow-key-file` writes `master.key` (mode 0600, directory 0700, not encrypted, because wrapping it would need another key). The app's "Keep unlocked" box never does. `NORTHKEEP_SECRET_BACKEND=file` is the Linux test and power-user switch, read on Linux only. `northkeep lock` deletes the file and the keyring item whichever store it would pick, and reports `keyring-unreachable` (exit 1) when it cannot check the keyring.
 
-On Linux before this change, `keychain.ts` stored nothing. `keychainAvailable()` is Darwin-only, so unlock refused and the derived key was not on disk. The device secret is a different file (ADR 0001): hex at `~/.northkeep/device.secret`, mode 0600, not encrypted, not logged. Provider API keys and OAuth tokens are also not written on Linux (ADR 0035 has no file fallback for tokens).
+## Consequences
+- Easier: Linux users with a keyring get background unlock. Without one, nothing lands on disk unless they opt in.
+- Harder: an opt-in key file is readable by anyone with the user's Linux session.
+- Limits (from the D3 review): with neither `secret-tool` nor `gdbus` on PATH, lock cannot see a keyring copy. An unknown `NORTHKEEP_SECRET_BACKEND` hides the app's full-lock prompt (the CLI still clears it). Not yet checked against a real `secret-tool`: that `clear` exits 0 when nothing matches.
 
-## Decision 1: Linux bundles, unsigned
-
-`build.sh` on Linux passes `tauri.linux.bundle.conf.json` (targets `appimage` and `deb`, same sidecar and server tree). The file is not named `tauri.linux.conf.json`, because Tauri auto-merges that name into every Linux command, including dev. macOS keeps `tauri.bundle.conf.json` (`app` and `dmg`) and its signing path. `fetch-node.sh` downloads Node's `linux-x64` tarball, checks SHA-256 against `SHASUMS256.txt` on every run, and stages `northkeep-server-x86_64-unknown-linux-gnu`. GPG over that SHASUMS file stays required when `NORTHKEEP_REQUIRE_GPG=1`. The Linux workflow sets that. CI is Ubuntu 22.04 so the bundles link glibc 2.35. Artifacts are unsigned workflow uploads. They are not a GitHub release.
-
-## Decision 2: Where the vault key goes on Linux
-
-Prefer the Secret Service via `secret-tool`. The key is the process stdin, never an argument. The store is used only when `secret-tool` runs and the session bus already owns `org.freedesktop.secrets`, so a missing daemon cannot sit on a prompt. If that service is absent, write `master.key` in the existing NorthKeep home (the same directory as the device secret), mode 0600, directory mode 0700, and warn. The file is not encrypted. Wrapping it would need another key, which is the problem being solved, and hand-rolled crypto is forbidden. `northkeep lock` deletes the Secret Service item and the file. `NORTHKEEP_NO_KEYCHAIN=1` disables every store. macOS Keychain behavior is unchanged. Provider API keys and OAuth tokens stay off disk on Linux.
-
-## Review
-
-Checked the code, not this prose. Attacks live in `packages/mcp-server/test/keychain-linux.test.ts` and `apps/web/test/linux-key-store.test.ts`: umask 0 still leaves mode 0600 and directory 0700; a symlink is not followed and is replaced rather than written through; a group-readable file is tightened before use; a malformed key never creates a file; `secret-tool` argv and `/proc/pid/cmdline` omit the key; a missing daemon does not wait on a hung `secret-tool`; `NORTHKEEP_NO_KEYCHAIN=1` and an unknown backend store nothing; the unlock response and the warning omit the key. Outcome: those checks passed. Fixed before that run: if `rename` throws, the temp file is removed so it cannot keep the key.
+## Rejected
+- Encrypting the key file: needs another key, which is the problem being solved, and hand-rolled crypto is forbidden.
+- Automatic file fallback: a review of PR #9 found it turned on by itself.
 
 ## What leaves the machine
-
 Nothing new at runtime. The build downloads Node from nodejs.org, the same build-time fetch ADR 0012 already does.
+
+## Links
+Full record: docs/design/adr-0064-linux-desktop-and-key-storage.md · Tests: `packages/mcp-server/test/keychain-linux.test.ts`, `apps/web/test/linux-key-store.test.ts`
