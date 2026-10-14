@@ -20,8 +20,10 @@ export function devicePhrase(platform: NodeJS.Platform): string {
     case 'netbsd':
       return 'this computer';
     default: {
+      // The phone has no Node platform (process.platform is undefined); returning it crashed launch.
       const unexpected: never = platform;
-      return unexpected;
+      void unexpected;
+      return 'this device';
     }
   }
 }
@@ -50,7 +52,8 @@ export function ollamaStartCommand(platform: NodeJS.Platform): string {
       return 'ollama serve';
     default: {
       const unexpected: never = platform;
-      return unexpected;
+      void unexpected;
+      return 'ollama serve';
     }
   }
 }
