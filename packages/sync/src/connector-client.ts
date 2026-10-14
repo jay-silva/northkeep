@@ -3,7 +3,9 @@ import {
   devicePhrase,
   getProjectView,
   isMemoryType,
+  parseMilestones,
   parseProjectSlug,
+  passedMilestones,
   projectScope,
   type MemoryType,
   type Vault,
@@ -358,6 +360,8 @@ export interface PlannedForget {
   entry_id: string;
   scope: string;
   first_line: string;
+  /** A project-scope working row only: its passed milestones, like `M1 Define the buy box`. */
+  passed?: string[];
 }
 
 /**
@@ -646,7 +650,11 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
     } else if (additiveOnly) {
       plan.deferred++;
     } else {
-      plan.forgets.push({ entry_id: id, scope: entry.scope, first_line: firstLine(entry.content) });
+      const forget: PlannedForget = { entry_id: id, scope: entry.scope, first_line: firstLine(entry.content) };
+      if (entry.type === 'working' && parseProjectSlug(entry.scope) !== null) {
+        forget.passed = passedMilestones(parseMilestones(entry.content)).map((m) => `${m.id} ${m.title}`);
+      }
+      plan.forgets.push(forget);
     }
   }
   plan.held_scopes = [...heldScopes].sort();

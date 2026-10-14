@@ -6995,7 +6995,8 @@
         const group = planGroup('Will remove', plan.forgets.length);
         group.appendChild(el('p', 'plan-note muted', 'Forgotten in your AI apps. They leave current memories on ' + devicePlace() + '. Uncheck any you want to keep. An unchecked one asks again next time.'));
         for (const f of plan.forgets) {
-          const pick = planPick(scopeLabel(f.scope), f.first_line, '', true);
+          const passed = (f.passed || []).length ? 'Passed milestones it removes: ' + f.passed.join(', ') : '';
+          const pick = planPick(scopeLabel(f.scope), f.first_line, passed, true);
           removes.push({ id: f.entry_id, box: pick.box }); group.appendChild(pick.item);
         }
         body.appendChild(group);

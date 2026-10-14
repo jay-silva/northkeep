@@ -251,7 +251,10 @@ export function describePlan(plan: DownSyncPlan): string[] {
   }
   if (plan.forgets.length > 0) {
     lines.push(`  ${plural(plan.forgets.length, 'memory', 'memories')} would be forgotten:`);
-    for (const f of plan.forgets) lines.push(`    ${f.scope}: "${f.first_line}"`);
+    for (const f of plan.forgets) {
+      lines.push(`    ${f.scope}: "${f.first_line}"`);
+      if (f.passed && f.passed.length > 0) lines.push(`      Passed milestones it removes: ${f.passed.join(', ')}`);
+    }
   }
   if (plan.conflicts.length > 0) {
     lines.push(`  ${plural(plan.conflicts.length, 'conflict', 'conflicts')}, not applied (see "northkeep share conflicts"):`);
