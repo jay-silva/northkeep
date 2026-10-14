@@ -102,8 +102,11 @@ declare module 'expo-file-system' {
     write(content: Uint8Array | string): void;
     writeBytes(bytes: Uint8Array): void;
     create(options?: { intermediates?: boolean; overwrite?: boolean }): void;
-    copy(destination: File): void;
-    move(destination: File): void;
+    /** Async since SDK 57: a sync caller must use copySync/moveSync (this said void, so nothing flagged it). */
+    copy(destination: File): Promise<void>;
+    copySync(destination: File): void;
+    move(destination: File): Promise<void>;
+    moveSync(destination: File): void;
     delete(): void;
   }
   export class Directory {

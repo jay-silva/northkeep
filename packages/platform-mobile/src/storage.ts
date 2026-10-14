@@ -11,7 +11,7 @@ import type { VaultStorage } from '@northkeep/core';
  * flagged for the invariant-#3 adversarial review):
  *   1. expo's File API exposes no fsync, so the explicit fd-fsync +
  *      directory-fsync the Node adapter performs is not available.
- *   2. expo's move() cannot overwrite an existing destination, so there is no
+ *   2. expo's moveSync() cannot overwrite an existing destination, so there is no
  *      atomic rename. The sequence below writes .tmp, copies the live vault to
  *      .bak, deletes the target, then moves .tmp into place. A crash in the
  *      narrow window between the delete and the move leaves NO file at `path` —
@@ -85,12 +85,13 @@ export function mobileVaultStorage(): VaultStorage {
 
       if (step('target.exists', () => target.exists)) {
         if (step('bak.exists', () => bak.exists)) step('bak.delete', () => bak.delete());
-        step('target.copy(bak)', () => target.copy(bak));
+        // copySync/moveSync: since SDK 57 copy() and move() return a Promise, and the next read raced the unfinished move.
+        step('target.copySync(bak)', () => target.copySync(bak));
         // File.move does not overwrite; the .bak taken above covers the window
         // between this delete and the move completing.
         step('target.delete', () => target.delete());
       }
-      step('tmp.move(target)', () => tmp.move(target));
+      step('tmp.moveSync(target)', () => tmp.moveSync(target));
     },
   };
 }

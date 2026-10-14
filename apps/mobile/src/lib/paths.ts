@@ -120,12 +120,12 @@ export function recoverVaultFileIfMissing(): 'tmp' | 'bak' | null {
   try {
     const tmp = new File(`${target.uri}.tmp`);
     if (tmp.exists) {
-      tmp.move(target);
+      tmp.moveSync(target); // move() is async since SDK 57; the caller opens the file next
       return 'tmp';
     }
     const bak = new File(`${target.uri}.bak`);
     if (bak.exists) {
-      bak.copy(target); // keep .bak in place as a second copy until the next save
+      bak.copySync(target); // keep .bak in place as a second copy until the next save
       return 'bak';
     }
   } catch {
