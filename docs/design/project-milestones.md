@@ -108,7 +108,7 @@ A duplicate `## Milestones` therefore cannot be written by NorthKeep. A document
 | Hosted `memory_forget` of a project document (K4) | Nothing | Always refused at the connector, the same as local |
 | Down-sync on the Mac (`packages/sync/src/connector-client.ts`) | Fast-forwards that keep the passes | See the paragraph below |
 | Desktop app Mark passed and Confirm | `confirmPass`, with `expected_revision` | Stale page refuses with `stale_project` |
-| Desktop app restore of an earlier revision (`apps/web/src/projectsApi.ts:119`) | Owner action. It may undo a pass. The confirm names each pass it would undo. | |
+| Desktop app restore of an earlier revision (`apps/web/src/projectsApi.ts:198`) | Owner action. It may add, change or undo a pass. The confirm names each pass it would add, change or undo. | |
 | Desktop raw edit and CLI `projects set` | Owner actions, unchanged | |
 | CLI `northkeep projects pass <slug> <id>` | `confirmPass` after a typed `yes` | stdin not a TTY. No `--yes` flag and no environment-variable bypass, unlike `getPassphrase` (`packages/cli/src/prompt.ts`) |
 | Phone milestone view | Display only | Every milestone write. The phone's existing memory screen can edit or forget any row, including a project document. Those are owner actions and pass `'owner'`. |
@@ -323,3 +323,13 @@ This was the fourth round of pattern fixes for one premise: W1 and W3 in the cor
 - **Structural fix, in K1.** A line followed by a `=` or `-` underline now counts as a heading, so an added setext heading that folds to Milestones is refused like the ATX lookalikes. An added line outside the section with a checkbox shape and a milestone id is refused too, which covers the bare `- [x] M2` and the `✅ M2` lines. No general prose matching was added: the Log entry above is still accepted.
 - **Claim narrowed instead of chasing phrasings.** The record is what NorthKeep enforces, so the claim now says an AI app cannot *record* a milestone as confirmed by you, names the views that show that record, and a new limit says prose elsewhere can still claim a pass.
 - **Forgets name their passes.** The K1 forget residual now has `planDownSync` list the passed milestones of each project document a cloud forget would remove, and `share sync` and the Mac app's Sync now review print them.
+
+### K2 code review, 2026-10-14: CLEARED WITH WOUNDS
+
+A separate Claude agent reviewed the K2 desktop code against this ADR, running each attack against the app server.
+
+- **W1.** The repair save checked only the milestone ids Jay reviewed, so a save with the same id but a different pass line (another title, a 1999 date) was written as a `(you)` pass. The check step now returns each pass's exact line, the page sends those lines back, and the route refuses unless they match the lines being saved. Test 9e0b868, fix fe9097c.
+- **W2.** The restore warning named only passes a restore would undo, not passes it would add or change, so restoring a version with a `(you)` pass over one where that milestone was open gave no warning. The project read now returns, per saved version, the passes a restore would add, change and undo, and whether that version's section is unreadable. The dialog lists each group in plain words. Test e4ede61, fix 335769b and 14f689d.
+- **W3.** While a save was in flight, the disabled button dropped focus to the page body, Tab reached the page behind, and Escape stopped working. The page behind is now inert while the dialog is open, and the Tab and Escape handler listens on the document. Test 1df2a75, fix dc7ed2c.
+
+What held: Mark passed and Confirm stamp `(you)` only through `confirmPass` bound to the revision read, a stale page writes nothing, and repair refuses a readable section and a heading inside the text.
