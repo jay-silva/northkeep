@@ -84,6 +84,10 @@ Escape (the box closed and the page worked again), and sent a repair save with a
 line straight to the app server (refused). `restore-warning-1280.png` was retaken and
 `restore-adds-1280.png` added.
 
+On 2026-10-14, after K2 was rebased again onto the final K1 (4fe0c29), steps 1 to 7 were run
+once more the same way on a fresh temporary `NORTHKEEP_HOME`, with the same checks. All 22
+checks passed and the page reported no script errors. The screenshots were not retaken.
+
 Not verified here, so it needs your Mac: that `northkeep ui` opens Safari or your default
 browser by itself, how the app looks in your browser with your fonts, and that keyboard
 Tab behaves the same with a real keyboard.
