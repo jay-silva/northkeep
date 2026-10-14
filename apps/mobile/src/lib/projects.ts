@@ -3,9 +3,7 @@ import {
   boardStatusLine,
   getProjectView,
   listProjectOverview,
-  parseMilestones,
   splitLogEntries,
-  summarizeMilestones,
   type ListFilter,
   type MemoryEntry,
   type MilestonePlan,
@@ -40,15 +38,6 @@ export function entriesReader(entries: readonly MemoryEntry[]): ProjectVaultRead
     getVaultId: () => '',
     sharedScopes: () => [],
   };
-}
-
-/**
- * DELETE AT K1 REBASE: K1 adds ProjectOverview.milestones and ProjectView.milestones.
- * Until then the plan is parsed from the head row's text, found by revision id.
- */
-function milestonePlanBeforeK1(entries: readonly MemoryEntry[], revision: string | null): MilestonePlan {
-  const head = revision === null ? undefined : entries.find((e) => e.id === revision);
-  return head ? parseMilestones(head.content) : { kind: 'absent' };
 }
 
 /** "2 of 6 · M3 Underwrite top 5 listings" for a list row; null summary means no readable plan. */
@@ -97,7 +86,6 @@ export function projectRows(entries: readonly MemoryEntry[]): ProjectRow[] {
     if (p.draft) notes.push('Draft, not yet confirmed');
     if (p.imported) notes.push('Imported; the date is when it was imported');
     const line = p.status === null ? '' : boardStatusLine(p.status);
-    const milestones = summarizeMilestones(milestonePlanBeforeK1(entries, p.revision));
     return {
       slug: p.project,
       name: p.title ?? p.project,
@@ -109,8 +97,8 @@ export function projectRows(entries: readonly MemoryEntry[]): ProjectRow[] {
       searchText: [p.project, p.title, p.status, p.next_actions].filter(Boolean).join(' ').toLocaleLowerCase(),
       conflict: p.conflict,
       draft: p.draft,
-      milestones,
-      progress: p.conflict ? null : progressLine(milestones),
+      milestones: p.milestones,
+      progress: p.conflict ? null : progressLine(p.milestones),
     };
   });
   return rows.sort((a, b) => compareRows(a, b, 'recent'));
@@ -258,7 +246,7 @@ export function projectDetail(entries: readonly MemoryEntry[], slug: string, tod
         log: splitLogEntries(view.log).map(logLine),
         files: view.files ?? [],
         filesText: view.files === null && view.files_text.trim().length > 0 ? view.files_text : null,
-        milestones: milestonesView(milestonePlanBeforeK1(entries, view.revision), today.getFullYear()),
+        milestones: milestonesView(view.milestones, today.getFullYear()),
       },
     };
   } catch (err) {

@@ -5,6 +5,7 @@ import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { KDF_INTERACTIVE, Vault, applyProjectUpdate, generateDeviceSecret } from '@northkeep/core';
 import { filterProjectRows, passedLine, progressLine, projectDetail, projectRows } from '../src/lib/projects.js';
+import { plantWorkingRow } from '../../../packages/core/test/support/plant-working-row.js';
 
 /** ADR 0065 Decision 5, phone: list progress and a read-only milestone list, from a real vault. */
 
@@ -34,7 +35,8 @@ describe('phone milestones', () => {
   function writeProject(slug: string, milestones: string | null) {
     const base = applyProjectUpdate('', { project: slug, expected_revision: null, what_why: 'Why', status: `Status of ${slug}.` }).content;
     const content = milestones === null ? base : `${base}\n\n## Milestones\n\n${milestones}\n`;
-    vault.remember({ content, type: 'working', scope: `project:${slug}`, source: 'test' });
+    // Planted as a synced row: vault.remember refuses to create a project document (ADR 0065).
+    plantWorkingRow(vault, { content, type: 'working', scope: `project:${slug}`, source: 'test' });
   }
 
   it('shows progress and the current milestone on each list row', () => {
