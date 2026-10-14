@@ -28,10 +28,7 @@ Use claude.ai with the NorthKeep connector, on a test project you can delete aft
 
 Tell Claude which steps passed. If step 1 did not propose milestones, that is not a K4 failure: claude.ai does not show NorthKeep's standing instructions to its model, and KNOWN-LIMITS will say so.
 
-## Needs you
+## Result
 
-Claude ran all of Part 1 in a cloud container; it passed. None of Part 2 was run: it needs the
-deployed connector and your claude.ai account. Step 1 is the only check of whether claude.ai
-shows NorthKeep's instruction to its model, and KNOWN-LIMITS keeps claude.ai under "Not
-verified" until you report it. Full record:
+Jay ran Part 2 on 2026-10-14. Steps 1 to 4 all passed. Full record:
 [verification record](evidence/project-milestones-k4/verification.md).
