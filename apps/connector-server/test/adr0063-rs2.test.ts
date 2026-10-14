@@ -12,6 +12,9 @@ import { NeonConnectorStorage } from '../src/neon-storage.js';
 import { connectMcpApp, pgliteAsNeon, startServer, TEST_PEPPER_B64, withEnv } from './adr0061-support.js';
 import { plantWorkingRow } from '../../../packages/core/test/support/plant-working-row.js';
 
+/** ADR 0065: hosted project_create requires the plan the user agreed. */
+const AGREED_PLAN = 'M1 Agree the milestones | test: the user approves the plan';
+
 /**
  * Recheck R-S2 through forgetting the document (build review A7), on both
  * stores. A cloud create held as stale must not come back unasked after the
@@ -56,7 +59,7 @@ for (const kind of ['memory', 'pglite'] as const) {
         vault.save();
         await pushSharedScopes({ server: base, deviceSecret, scopes: vault.sharedScopes(), vault });
         const mcp = await connectMcpApp(base, await startPairing({ server: base, deviceSecret }));
-        expect((await mcp('project_create', { project: 'n', what_why: 'CLOUD CREATED n.', status: 'cloud' })).isError).toBe(false);
+        expect((await mcp('project_create', { milestones: AGREED_PLAN, project: 'n', what_why: 'CLOUD CREATED n.', status: 'cloud' })).isError).toBe(false);
 
         vault.setScopeShared('project:n', true);
         vault.save();
@@ -92,7 +95,7 @@ for (const kind of ['memory', 'pglite'] as const) {
         vault.save();
         await pushSharedScopes({ server: base, deviceSecret, scopes: vault.sharedScopes(), vault });
         const mcp = await connectMcpApp(base, await startPairing({ server: base, deviceSecret }));
-        expect((await mcp('project_create', { project: 'fresh', what_why: 'CLOUD FRESH.', status: 'cloud' })).isError).toBe(false);
+        expect((await mcp('project_create', { milestones: AGREED_PLAN, project: 'fresh', what_why: 'CLOUD FRESH.', status: 'cloud' })).isError).toBe(false);
         const plan = planDownSync({ vault, pending: await fetchPending({ server: base, deviceSecret }) });
         expect(plan.conflicts).toEqual([]);
         expect(plan.additions.map((a) => [a.scope, a.kind])).toEqual([['project:fresh', 'project']]);

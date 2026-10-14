@@ -11,6 +11,9 @@ import { NeonConnectorStorage } from '../src/neon-storage.js';
 import { connectMcpApp, pgliteAsNeon, startServer, TEST_PEPPER_B64, withEnv } from './adr0061-support.js';
 import { plantWorkingRow } from '../../../packages/core/test/support/plant-working-row.js';
 
+/** ADR 0065: hosted project_create requires the plan the user agreed. */
+const AGREED_PLAN = 'M1 Agree the milestones | test: the user approves the plan';
+
 /**
  * Build recheck DH3, on both stores. A private project deleted here and then
  * created again by a connected app is held as deleted_here. Holding it must
@@ -56,7 +59,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       vault.deleteProject('n');
       vault.save();
       const mcp = await connectMcpApp(base, await startPairing({ server: base, deviceSecret }));
-      expect((await mcp('project_create', { project: 'n', what_why: 'CLOUD n.', status: 'new' })).isError).toBe(false);
+      expect((await mcp('project_create', { milestones: AGREED_PLAN, project: 'n', what_why: 'CLOUD n.', status: 'new' })).isError).toBe(false);
       return { deviceSecret, vault, mcp };
     }
 

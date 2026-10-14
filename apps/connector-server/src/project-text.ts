@@ -47,3 +47,16 @@ export function firstProjectTextError(
 export const HOSTED_SECTION_TEXT_RULES =
   'Markdown without headings: a line starting with # and a space is refused. ' +
   'It must not start or end with a line break, and CRLF line endings are refused.';
+
+/**
+ * The hosted mirror of core's isProjectDone (ADR 0054): the first line of
+ * Current Status that is not empty once invisible characters are removed
+ * begins with Done, Complete or Completed.
+ */
+export function isProjectStatusDone(status: string): boolean {
+  for (const raw of status.split(/\r\n|[\r\n\u0085\u2028\u2029]/)) {
+    const line = raw.replace(/[\p{Cc}\p{Cf}\u2028\u2029]/gu, '').replace(/\s+/g, ' ').trim();
+    if (line.length > 0) return /^(?:done|complete|completed)(?:$|[.:!])/i.test(line);
+  }
+  return false;
+}
