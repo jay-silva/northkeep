@@ -111,6 +111,8 @@ describe('Milestones block (ADR 0065 Decision 5, desktop)', () => {
       'M2 Draft the outline: now passed Oct 14, you confirmed. After the restore: passed Oct 5, agent says you confirmed',
       'M3 Write the draft, passed Oct 14, you confirmed',
     ]);
+    const downgrade = run({ adds: [], changes: [{ from: mine, to: said }], undoes: [], unreadable: false })!;
+    expect(all(downgrade, (n) => n.tag === 'p').map(textOf)).toEqual(['Changes 1 passed milestone:']);
     const broken = run({ adds: [], changes: [], undoes: [you, said], unreadable: true })!;
     expect(all(broken, (n) => n.tag === 'p').map(textOf)).toEqual([
       'Undoes 2 passed milestones:',

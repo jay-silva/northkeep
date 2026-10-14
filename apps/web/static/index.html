@@ -3087,7 +3087,7 @@
     group('Changes ' + count(edits.length, 'passed milestone', 'passed milestones') + ':', edits.map((edit) => edit.from.id + ' ' + edit.from.title + ': now ' + restorePassText(edit.from) + '. After the restore: ' + restorePassText(edit.to)));
     group('Undoes ' + count(undoes.length, 'passed milestone', 'passed milestones') + ':', undoes.map((pass) => pass.id + ' ' + pass.title + ', ' + restorePassText(pass)));
     if (changes.unreadable) warn.appendChild(el('p', undefined, 'NorthKeep cannot read the Milestones section in this version. After the restore, you need to repair it before AI apps can change it.'));
-    if (adds.length || edits.length) warn.appendChild(el('p', undefined, 'Restore only if each milestone it marks passed really passed.'));
+    if (adds.length || edits.some((edit) => edit.to.by === 'you')) warn.appendChild(el('p', undefined, 'Restore only if each milestone it marks passed really passed.'));
     return warn;
   }
 
