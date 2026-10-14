@@ -1,132 +1,28 @@
-# ADR 0045 — Project documents roll their Log into archive memories
+# ADR 0045: Project documents roll their Log into archive memories
 
-- **Date:** 2026-09-04
-- **Status:** Accepted by Jay ("go", 2026-09-04). Implemented in the same
-  session.
-- **Deciders:** Jay (product owner), Claude Code
-- **Extends:** ADR 0039 (projects as vault memories), ADR 0040 (connector
-  project tools)
-- **Does not touch:** vault schema, sync, crypto, the redaction harness. An
-  archive is an ordinary memory with a scope and a type that already exist.
+Status: Accepted by Jay ("go", 2026-09-04), implemented the same session · Review: no adversarial review recorded · Corrected 2026-09-24 (0.22.0 doc-vs-code pass)
 
 ## Context
+A project document is one `working` memory per `project:<slug>` scope, capped at 16,384 characters to stay cheap at session start. Its Log only grows; on 2026-09-04 it filled, and `project_update` refused every entry until a human pruned it.
 
-A project document is one `working` memory per `project:<slug>` scope,
-capped at 16,384 characters so that `project_get` stays cheap to load at
-every session start. Three of its sections are replaced on each update and
-stay small. The Log only grows: every session prepends an entry, and a busy
-day of long entries filled the NorthKeep document in one day (2026-09-04),
-after which `project_update` refused every further log entry until a human
-pruned by hand. Raising the cap moves the wall and makes every session
-start heavier. The document should stay an index; the history should live
-where history lives, in memories.
-
-## Decision 1: The live document keeps only its newest Log entries
-
-`project_update` merges as before, then rolls. While the document fits, it
-is untouched. When it would exceed the cap, the newest ten entries stay in
-the Log; if the document still does not fit, fewer stay, down to one. Only
-when even that does not fit is the update refused, and then the hand-written
-sections are the problem and the message says so. Decisions never roll.
-
-## Decision 2: Rolled entries become an archive memory in the same scope
-
-The rolled entries are written, oldest first, as one `episodic` memory in
-the project's own scope, with the first line `## Log archive: <slug>` and a
-one-line note of when it was rolled. It is an ordinary memory: it syncs,
-exports, shares with the scope, and is found by search and retrieval. One
-archive per roll; a roll happens once every ten or so sessions on a busy
-project. Nothing is summarized or dropped by the tool. Summarizing an old
-archive is a job for the review pass (ADR 0043), on request, never here.
-
-**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the review pass
-excludes every project scope (packages/librarian/src/review.ts:70-72,
-apps/web/src/curationApi.ts:99), so no shipped tool summarizes an archive.
-The Mac Memories search also leaves project scopes out (`exclude_projects`,
-apps/web/src/api.ts:564, ADR 0049); an archive is found through
-`memory_retrieve`, `memory_list` or `project_get` with `history: true`,
-not through the app's Memories search.
-
-## Decision 3: `project_get` returns the index by default and history on request
-
-`project_get` gains an optional `history` flag. Off, it returns the live
-document as today. On, it also returns the scope's archive memories, newest
-first. The session contract keeps calling it without the flag at session
-start.
-
-**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the session
-contract now calls `project_resume` at session start, not `project_get`
-(packages/mcp-server/src/project-recipe.ts:18-19, ADR 0048 and ADR 0052).
-Without `history`, resume returns only an archive count and dates
-(`archive_summary`, packages/core/src/project-handoff.ts:234); with
-`history: true` it returns up to 20 archives. `project_get` behaves as this
-Decision says.
-
-## Decision 4: The tool asks for short entries
-
-The `log_entry` description asks for a few hundred characters and says that
-detail belongs in its own episodic memory in the project scope. The tool
-reports when it rolled and where the archive went, so an agent that just
-lost visibility of an entry knows how to get it back.
-
-**Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** only the hosted
-connector's `project_update` reports the roll ("Archived N older log entries
-to <id>", apps/connector-server/src/mcp.ts:967-968). Since the ADR 0048
-rewrite (caa8646) the local `project_update` returns the project view, which
-carries an archive count (`archive_summary`) but no roll count and no
-archive id (packages/core/src/vault.ts:597-600; confirmed by a probe that
-rolled a temp vault's Log). Local `project_checkpoint` and `project_wrap`
-receipts name the archive in `archive_ids` (vault.ts:900). Acceptance step 2
-below holds for the hosted connector only.
-
-## Where it lives
-
-The parsing, rolling and archive formatting are pure functions in the
-shared project document module (`packages/core/src/project-doc.ts`, with
-the byte-identical copy the connector keeps). Both MCP hosts, the local
-server and the hosted connector, call them, so Claude Code, Claude Desktop,
-Cursor and Claude.ai all see one behaviour. The connector writes the archive
-as a pending shared entry the way `memory_remember` does, and the fold brings
-it into the vault.
-
-## Acceptance test (Jay)
-
-From Claude Code with the NorthKeep project scope granted:
-
-1. Ask for the NorthKeep project with history: the reply carries the live
-   document and, once a roll has happened, its archives.
-2. Append log entries until the document would pass the cap: the tool
-   answers with "archived N entries to <id>" instead of refusing, and the
-   live document's Log shows only the newest ten.
-3. Search the project scope for a phrase from an archived entry: it is
-   found.
+## Decision
+- D1: `project_update` merges, then rolls. If the document would exceed the cap, the newest ten Log entries stay, fewer down to one if needed. If one still does not fit, the update is refused and the message blames the hand-written sections. Decisions never roll.
+- D2: Rolled entries are written, oldest first, as one `episodic` memory in the project's scope, first line `## Log archive: <slug>` plus a rolled-when note. It syncs, exports, shares with the scope; it is found by `memory_retrieve`, `memory_list` or `project_get` with `history: true`. The tool never summarizes or drops. Current state: the review pass (ADR 0043) excludes project scopes, so no shipped tool summarizes an archive, and the Mac Memories search excludes project scopes (ADR 0049).
+- D3: `project_get` gains an optional `history` flag that adds the scope's archives, newest first. Current state: sessions start with `project_resume` (ADRs 0048, 0052), which without `history` returns only an archive count and dates (`archive_summary`), and with `history: true` up to 20 archives.
+- D4: The `log_entry` description asks for a few hundred characters, with detail in its own episodic memory. Current state: only the hosted connector's `project_update` reports the roll ("Archived N older log entries to <id>"). The local `project_update` returns an archive count but no roll count or archive id; local `project_checkpoint` and `project_wrap` name the archive in `archive_ids`.
+- D5: Rolling is pure functions in `packages/core/src/project-doc.ts` and a byte-identical connector copy, called by both MCP hosts. The connector writes the archive as a pending shared entry.
+- D6 (2026-09-19): every row in a slug-valid project scope gets the connector's 64 KiB push cap, not only the working document. `memory_remember` into a project scope stays capped at 8 KiB by the tool. Amends ADR 0040 Decision 6, after archives over 8 KiB made every share sync since 2026-09-11 fail with a 413.
 
 ## Consequences
+- Committed to: `mergeProjectDoc` no longer enforces size; hosts roll, then assert. KNOWN-LIMITS carries the roll rule and "one archive per roll".
+- Limits: the Command Repo became a read-only archive on 2026-09-23; project documents and their archives are the record.
 
-- `mergeProjectDoc` no longer enforces size; hosts roll, then assert.
-- KNOWN-LIMITS gains the roll rule and the "one archive per roll" note.
-- The Command Repo file `projects/<name>.md` is unaffected; it keeps the
-  full log by hand, as before.
-  **Correction 2026-09-24 (release 0.22.0 doc-vs-code pass):** the Command
-  Repo became a read-only archive on 2026-09-23 (owner decision, recorded in
-  the NorthKeep project instructions) and no longer keeps project logs;
-  NorthKeep's project documents and their archives are the record.
+## Rejected
+- Raising the cap: moves the wall; heavier session starts.
+- Summarizing or dropping in the tool: history lives whole in memories.
 
-## Addendum 2026-09-19: archives and the connector push cap
+## What leaves the machine
+The original has no egress section. It says it does not touch vault schema, sync, crypto or redaction, and that an archive is an ordinary memory that syncs and shares with its scope.
 
-Two archives rolled from `project:northkeep` on 2026-09-11 and 2026-09-16
-were 10947 and 8270 bytes. The connector's push route capped every
-non-document row at 8192 bytes (ADR 0040 Decision 6), so every share
-sync since 2026-09-11 was refused with a 413 at the re-push step, after
-the down-sync had already applied. The desktop showed only the generic
-"over the sharing caps" line. This contradicted Decision 1's promise that
-a log entry is never refused for size: the live document was fine, the
-archive it produced was not.
-
-Decision: every row in a slug-valid project scope gets the 64 KiB cap,
-not only the working document. Archives are project content, the scope
-is bounded by the same roll that creates them, and `memory_remember` into
-a project scope is separately capped at 8 KiB by the tool itself. ADR
-0040 Decision 6 is amended accordingly. Found during the ADR 0050 hosted
-acceptance; fixed the same day with a route test that pushes a 9 KiB
-archive (accepted) and a 64 KiB + 1 archive (refused).
+## Links
+Extends: ADRs 0039, 0040 · Amends: ADR 0040 Decision 6 · Full record: docs/design/adr-0045-project-log-rolling.md

@@ -2385,7 +2385,9 @@
         pill.hidden = false;
         pill.className = 'pill locked';
         pill.textContent = 'No key store';
-        pill.title = 'No keyring is available, and the private key file is turned off, so NorthKeep cannot keep the vault unlocked.';
+        pill.title = store && store.file_opt_in
+          ? 'No keyring is running, so NorthKeep cannot keep the vault unlocked. Start your keyring, or run northkeep unlock --allow-key-file to use an unencrypted private file.'
+          : 'No keyring is available, so NorthKeep cannot keep the vault unlocked.';
       } else {
         pill.hidden = true;
         pill.textContent = '';
@@ -2399,8 +2401,13 @@
     let prompt = 'Also remove the key from your Keychain?\nOK = full lock (passphrase needed everywhere)\nCancel = lock this window only';
     if (backend === 'file') prompt = 'Also delete the private key file?\nOK = full lock (passphrase needed everywhere)\nCancel = lock this window only';
     else if (backend === 'secret-service') prompt = 'Also remove the key from the Secret Service?\nOK = full lock (passphrase needed everywhere)\nCancel = lock this window only';
-    const clear = backend !== 'none' && confirm(prompt);
+    else if (store && store.file_opt_in) prompt = 'Also remove any saved vault key?\nOK = full lock (passphrase needed everywhere)\nCancel = lock this window only';
+    const clear = (backend !== 'none' || Boolean(store && store.file_opt_in)) && confirm(prompt);
     const r = await api('/api/lock', { method: 'POST', json: { forgetKeychain: clear } });
+    if (r.keyringUnreachable) {
+      alert('Locked this window, but the keyring is not running, so NorthKeep could not check it. ' +
+        'If you unlocked while it was running, the vault key is still there. Start the keyring, then lock again.');
+    }
     if (r.envGrant) {
       alert('Locked. Note: an environment variable (NORTHKEEP_PASSPHRASE or ' +
         'NORTHKEEP_MASTER_KEY) is set; it will re-open the vault if you restart NorthKeep. ' +

@@ -1,102 +1,29 @@
 # ADR 0030: web_search (Brave) and the tool-spend budget
 
-- **Date:** 2026-07-24
-- **Status:** Accepted
-- **Deciders:** Jay (product owner), Claude Code
-- **Parent:** ADR 0028 (web egress tools), ADR 0029 (harness security model)
+Status: Accepted 2026-07-24 · Review: none recorded · Deciders: Jay (product owner), Claude Code
 
 ## Context
+M10d adds a second egress tool, `web_search`, over the Brave Search API, and a budget that bounds what tool use costs. Unlike `web_fetch`, it carries a credential (the Brave token) to a fixed trusted host. Both sit behind the M10c gate and screens; this ADR records only what differs.
 
-M10d adds the second egress tool, `web_search`, over the Brave Search API,
-and the budget engine that bounds what tool use can cost. Two things are new
-versus web_fetch: the call carries a CREDENTIAL (the Brave subscription
-token) to a fixed trusted host, and a costed tool needs a spend guard. Both
-sit behind the M10c gate and screens; this ADR records only what differs.
-
-## Decision 1: credential on the one hardened client, not a second client
-
-web_search reuses net.ts (invariant #7: one egress code path, one SSRF
-story). net.ts's "no credential path by construction" is preserved for the
-web_fetch case and relaxed for exactly one, auditable seam:
-
-- A purpose-named option (`authToken` bound to an `authorizedHost`), NOT a
-  generic `headers` map. A generic map would downgrade the guarantee to "no
-  credentials unless a caller passes some," which every future caller must
-  remember to avoid; a single named seam is greppable and hard to misuse.
-- The token is attached ONLY while the request host equals `authorizedHost`.
-- On the credentialed path, a redirect is REFUSED, not followed with the
-  header stripped: a fixed trusted API that 302s is a signal, not something
-  to chase. (web_fetch keeps its 5-hop manual redirect; the credentialed
-  search path does not redirect at all.)
-- web_fetch NEVER sets `authToken` — the model-chosen-URL path stays
-  credential-free, exactly as before.
-
-The token is injected inside the client only. It MUST NOT appear in the
-tool's `egress()` URL, in `argsPlain`, in the gate prompt, in the exfil
-screen input, or in the audit hash. The query rides in the URL; the token
-rides in the header; they never mix.
-
-## Decision 2: web_search screens for SECRETS only, not identity/memory
-
-The M10c exfil screens exist because a hijacked model can paraphrase vault
-content into a URL bound for an ATTACKER-chosen host (the web_fetch threat).
-A search query goes to api.search.brave.com — a trusted third party the
-attacker does not control — so the paraphrase-exfiltration rationale does not
-transfer. Therefore, for a tool whose egress is a fixed trusted API
-(`egressTrust: 'trusted-api'`):
-
-- The catastrophic-secret hard-block still runs (SSN/card/IBAN/API-key): we
-  do not want those in Brave's query logs even by accident, and the Tier-1
-  egress floor already masks literal PII toward bounded egress as a second
-  layer.
-- Identity and memory (and warn-class secret) flags are DROPPED. "Search for
-  my doctor Carol Mansfield" is the feature, and warning on every such query
-  is exactly the permission fatigue ADR 0029 calls a security failure. The
-  real downstream risk — a poisoned result URL the model then FETCHES — is
-  caught at the web_fetch stage (its own SSRF guard, gate, and fence),
-  regardless of how the URL was found.
-
-With identity/memory screening off, grants for web_search are safe: the one
-protection that must survive a grant — the secret hard-block — runs before
-the gate regardless, so a silently granted search still cannot ship an SSN.
-web_fetch is unchanged (`egressTrust: 'model-chosen'`, all classes screened).
-
-## Decision 3: results are fenced untrusted data
-
-Brave results are SEO-influenceable (a hostile page can rank for a term), so
-the result list (title, url, description per hit) is fenced as external
-content exactly like a fetched page (ADR 0028 decision 5) before the model
-sees it. The model reading a result is not the model trusting it.
-
-## Decision 4: the budget — a persisted daily call cap
-
-Brave's free tier is 2,000 queries/month at 1 query/second ($0); paid tiers
-bill per query. The genuinely uncovered risk is CUMULATIVE spend/quota across
-many conversations — a single conversation is loosely bounded by the agent
-loop's step limit (MAX_STEPS = 10), so a per-conversation dollar cap is
-nearly redundant with it. (Precisely: MAX_STEPS bounds model round TRIPS, not
-tool calls; one step may carry several calls, so the per-conversation cap below
-is what actually bounds a costed tool within a conversation. A free tool has no
-per-conversation call bound at all, only the step limit.) The budget is therefore a PERSISTED daily
-call-count per costed tool (`~/.northkeep/budget.json`, same 0600 tolerant-
-loader idiom as the grants file), plus a small per-conversation cap as a
-fast local bound.
-
-Enforcement lives in runTask, BEFORE a costed tool executes: if the day's
-count for that tool has reached the cap, the call is denied with a structured
-`{error: 'budget_exceeded'}` result the model sees, loud in the transcript
-and audit (invariant #6 — never a silent stop). Free tools (no
-`costPerCallUsd`) never touch the budget. The cap is configurable and
-inspectable (`northkeep tools budget`). A count, not a dollar estimate, is
-the honest unit for the free tier and still bounds spend on a paid tier; a
-true dollar ledger is future work noted in KNOWN-LIMITS.
+## Decision
+- D1: `web_search` reuses the one hardened client, net.ts, via a purpose-named `authToken` bound to an `authorizedHost`, not a generic `headers` map. The token is attached only while the host equals `authorizedHost`, and any redirect on that path is refused. `web_fetch` never sets `authToken` and keeps its 5-hop manual redirect. The token never appears in the `egress()` URL, `argsPlain`, the gate prompt, the exfil screen input or the audit hash.
+- D2: For `egressTrust: 'trusted-api'` tools, the catastrophic-secret hard-block (SSN/card/IBAN/API-key) still runs and the Tier-1 egress floor still masks literal PII; identity, memory and warn-class secret flags are dropped. Grants for `web_search` are allowed because the hard-block runs before the gate regardless. `web_fetch` is unchanged (`egressTrust: 'model-chosen'`, all classes screened).
+- D3: Results (title, url, description) are fenced as untrusted external content, as a fetched page is (ADR 0028 decision 5).
+- D4: A persisted daily call count per costed tool in `~/.northkeep/budget.json` (0600, tolerant loader), plus a small per-conversation cap. runTask checks it before a costed tool runs; over the cap the call is denied with `{error: 'budget_exceeded'}`, loud in transcript and audit. Tools without `costPerCallUsd` never touch it. Configurable and inspectable via `northkeep tools budget`.
 
 ## Consequences
+- Easier: web search behind the same gate and screens as fetch; runaway loops bounded daily.
+- Harder: identity and memory content in a query is not warned on; that is the feature.
+- Limits: `MAX_STEPS = 10` bounds round trips, not tool calls, so the per-conversation cap is what bounds a costed tool; a free tool has only the step limit. The budget counts calls, not dollars; a dollar ledger is future work in KNOWN-LIMITS.
 
-- The harness can search the public web behind the same gate and screens as
-  fetch, with the subscription token confined to a single named seam and one
-  host.
-- Runaway or hostile tool loops are bounded in cost by a persisted daily cap,
-  not just the per-conversation step limit.
-- web_search's results feed the existing web_fetch path for any follow-up
-  fetch, so no new SSRF surface is introduced by "search then open."
+## Rejected
+- A second HTTP client, or a generic `headers` map: weaker, harder-to-audit credential story.
+- Following redirects with the header stripped: a trusted API that redirects is a signal.
+- Identity/memory screening on search: Brave is not attacker-chosen, and constant warnings are permission fatigue (ADR 0029). A poisoned result URL is caught at `web_fetch`.
+- A per-conversation dollar cap alone: cumulative spend is the uncovered risk.
+
+## What leaves the machine
+The original has no egress section. It states the query rides in the URL to api.search.brave.com after the secret hard-block, with the Tier-1 floor as a second layer, and the token rides in a header attached only for `authorizedHost`. Identity and memory content in a query is not screened. Following a result goes through `web_fetch`.
+
+## Links
+Parent: ADR 0028, ADR 0029 · Full record: docs/design/adr-0030-web-search-and-budget.md

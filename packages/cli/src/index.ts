@@ -28,6 +28,7 @@ import {
   describeMasterKeyStore,
   keychainDeleteMasterKey,
   keychainSetMasterKey,
+  masterKeyLockApplies,
   masterKeyStoreAvailable,
   readCallLog,
   resolveMasterKey,
@@ -159,9 +160,16 @@ program
 program
   .command('unlock')
   .description('Grant background access by parking the derived vault key in the macOS Keychain or the Linux secret store')
-  .action(async () => {
-    if (!masterKeyStoreAvailable()) {
-      fail('Background unlock needs the macOS Keychain or, on Linux, the Secret Service or a private key file. Use the NORTHKEEP_PASSPHRASE environment variable instead.');
+  .option('--allow-key-file', 'Linux with no keyring: keep the key in an unencrypted private file instead')
+  .action(async (options: { allowKeyFile?: boolean }) => {
+    const allowFile = options.allowKeyFile === true;
+    if (!masterKeyStoreAvailable() && !(allowFile && describeMasterKeyStore().file_opt_in)) {
+      fail(
+        describeMasterKeyStore().file_opt_in
+          ? 'No keyring is running, so background unlock is off. Start your keyring (gnome-keyring or KeePassXC) and run "northkeep unlock" again. ' +
+              'Or, to keep the vault key in an unencrypted file only your account can read, run: northkeep unlock --allow-key-file'
+          : 'Background unlock needs the macOS Keychain or, on Linux, the Secret Service. Use the NORTHKEEP_PASSPHRASE environment variable instead.',
+      );
     }
     const vaultPath = vaultPathOpt();
     const passphrase = await getPassphrase('Passphrase: ');
@@ -174,7 +182,7 @@ program
       await withFileLock(vaultPath, () => {
         Vault.openWithKey(vaultPath, Buffer.from(key)).close();
       });
-      keychainSetMasterKey(key.toString('hex'));
+      keychainSetMasterKey(key.toString('hex'), { allowFile });
     } finally {
       key.fill(0);
     }
@@ -211,13 +219,21 @@ program
   .command('lock')
   .description('Revoke background access (remove the stored vault key)')
   .action(() => {
-    if (!masterKeyStoreAvailable()) {
+    if (!masterKeyLockApplies()) {
       fail('No vault key store is in use on this system; nothing to lock.');
     }
     const outcome = keychainDeleteMasterKey();
-    console.log(
-      outcome === 'removed' ? '✓ Vault locked. Background access revoked.' : 'Vault was not unlocked.',
-    );
+    if (outcome === 'keyring-unreachable') {
+      console.error(
+        '⚠  The keyring is not running, so NorthKeep could not check it. If you unlocked while it was running, ' +
+          'the vault key is still there. Start the keyring, then run "northkeep lock" again.',
+      );
+      process.exitCode = 1;
+    } else {
+      console.log(
+        outcome === 'removed' ? '✓ Vault locked. Background access revoked.' : 'Vault was not unlocked.',
+      );
+    }
     if (process.env.NORTHKEEP_MASTER_KEY || process.env.NORTHKEEP_PASSPHRASE) {
       console.log(
         '⚠  NORTHKEEP_MASTER_KEY / NORTHKEEP_PASSPHRASE is set in this environment. ' +
