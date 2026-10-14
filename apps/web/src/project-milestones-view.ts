@@ -21,17 +21,38 @@ export interface PassNote { id: string; title: string; on: string; by: 'you' | '
 
 const note = (item: PassedMilestone): PassNote => ({ id: item.id, title: item.title, on: item.on, by: item.by });
 
+/** What restoring an older version would do to the passed milestones. */
+export interface RestoreMilestoneChanges {
+  adds: PassNote[];
+  changes: { from: PassNote; to: PassNote }[];
+  undoes: PassNote[];
+  /** The older version's Milestones section cannot be read, so it would need repair. */
+  unreadable: boolean;
+}
+
 /**
- * The passes restoring `older` over `current` would undo: each passed line in
- * the current plan that the older text does not hold byte for byte. An older
- * text with an unreadable section undoes every current pass.
+ * Every pass restoring `older` over `current` would add, change or undo,
+ * matched by id. An older text with an unreadable section undoes every
+ * current pass and marks none.
  */
-export function passesUndoneByRestore(current: string, older: string): PassNote[] {
+export function restoreMilestoneChanges(current: string, older: string): RestoreMilestoneChanges {
   const now = passedMilestones(parseMilestones(current));
-  const then = parseMilestones(older);
-  if (then.kind === 'malformed') return now.map(note);
-  const kept = new Set(passedMilestones(then).map(formatMilestone));
-  return now.filter((item) => !kept.has(formatMilestone(item))).map(note);
+  const plan = parseMilestones(older);
+  if (plan.kind === 'malformed') {
+    const same = JSON.stringify(milestoneSectionBodies(current)) === JSON.stringify(milestoneSectionBodies(older));
+    return { adds: [], changes: [], undoes: same ? [] : now.map(note), unreadable: !same };
+  }
+  const then = new Map(passedMilestones(plan).map((item) => [item.id as string, item]));
+  const before = new Set(now.map((item) => item.id as string));
+  const changes: RestoreMilestoneChanges['changes'] = [];
+  const undoes: PassNote[] = [];
+  for (const item of now) {
+    const restored = then.get(item.id);
+    if (!restored) undoes.push(note(item));
+    else if (formatMilestone(restored) !== formatMilestone(item)) changes.push({ from: note(item), to: note(restored) });
+  }
+  const adds = [...then.values()].filter((item) => !before.has(item.id)).map(note);
+  return { adds, changes, undoes, unreadable: false };
 }
 
 /** The text a repair view starts from: every Milestones section body, in order. */

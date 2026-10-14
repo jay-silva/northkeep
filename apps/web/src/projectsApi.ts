@@ -5,7 +5,7 @@ import { confirmPassInDocument } from '@northkeep/core/project-milestones-owner'
 import { loadConnectorConfig, unshareScope } from '@northkeep/sync';
 import { readMirrorSummary } from '@northkeep/mcp-server';
 import type { UiSession } from './session.js';
-import { milestoneRepairText, passesUndoneByRestore, previewMilestoneRepair } from './project-milestones-view.js';
+import { milestoneRepairText, previewMilestoneRepair, restoreMilestoneChanges, type RestoreMilestoneChanges } from './project-milestones-view.js';
 
 /** Attribution for a save made from this app (ADR 0052 Decision 1). The host
  * name is fixed and the session id comes from the process, never the request:
@@ -46,9 +46,9 @@ function clearedRevisions(vault: Vault, project: string): Array<{ id: string; up
 /** ADR 0065 K2: what the project page needs to show and guard milestones. */
 function milestoneFields(view: ProjectView) {
   const milestones = view.milestones;
-  const undoes: Record<string, ReturnType<typeof passesUndoneByRestore>> = {};
-  for (const revision of view.history) if (revision.content) undoes[revision.id] = passesUndoneByRestore(view.content, revision.content);
-  return { milestones, restore_undoes: undoes, ...(milestones.kind === 'malformed' ? { milestone_repair_text: milestoneRepairText(view.content) } : {}) };
+  const restore: Record<string, RestoreMilestoneChanges> = {};
+  for (const revision of view.history) if (revision.content) restore[revision.id] = restoreMilestoneChanges(view.content, revision.content);
+  return { milestones, restore_milestones: restore, ...(milestones.kind === 'malformed' ? { milestone_repair_text: milestoneRepairText(view.content) } : {}) };
 }
 
 function jsonObject(body: Buffer, limit: number, what: string): { input: Record<string, unknown> } | { refused: Response } {

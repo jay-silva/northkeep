@@ -3066,6 +3066,31 @@
     return box;
   }
 
+  function restorePassText(pass) { return 'passed ' + milestoneDay(pass.on) + ', ' + milestoneWho(pass.by); }
+
+  // The server matches passes by id; this names each one a restore would mark, change or undo.
+  function renderRestoreMilestones(changes) {
+    if (!changes) return null;
+    const adds = Array.isArray(changes.adds) ? changes.adds : [], edits = Array.isArray(changes.changes) ? changes.changes : [], undoes = Array.isArray(changes.undoes) ? changes.undoes : [];
+    if (!adds.length && !edits.length && !undoes.length && !changes.unreadable) return null;
+    const warn = el('div', 'project-notice danger'); warn.setAttribute('role', 'status');
+    warn.appendChild(el('strong', undefined, 'This restore changes your milestones.'));
+    const group = (lead, lines) => {
+      if (!lines.length) return;
+      warn.appendChild(el('p', undefined, lead));
+      const list = el('ul', 'ms-undo');
+      for (const line of lines) list.appendChild(el('li', undefined, line));
+      warn.appendChild(list);
+    };
+    const count = (n, one, many) => n === 1 ? '1 ' + one : n + ' ' + many;
+    group('Marks ' + count(adds.length, 'milestone', 'milestones') + ' passed:', adds.map((pass) => pass.id + ' ' + pass.title + ', ' + restorePassText(pass)));
+    group('Changes ' + count(edits.length, 'passed milestone', 'passed milestones') + ':', edits.map((edit) => edit.from.id + ' ' + edit.from.title + ': now ' + restorePassText(edit.from) + '. After the restore: ' + restorePassText(edit.to)));
+    group('Undoes ' + count(undoes.length, 'passed milestone', 'passed milestones') + ':', undoes.map((pass) => pass.id + ' ' + pass.title + ', ' + restorePassText(pass)));
+    if (changes.unreadable) warn.appendChild(el('p', undefined, 'NorthKeep cannot read the Milestones section in this version. After the restore, you need to repair it before AI apps can change it.'));
+    if (adds.length || edits.length) warn.appendChild(el('p', undefined, 'Restore only if each milestone it marks passed really passed.'));
+    return warn;
+  }
+
   function renderRestoreBody(body, project, row) {
     body.replaceChildren();
     const old = projectSections(row.content);
@@ -3073,14 +3098,8 @@
     const compare = el('div', 'review-compare');
     compare.append(projectSummaryBox('Current version', project.status, project.next_actions), projectSummaryBox('Version from ' + new Date(row.updated_at).toLocaleDateString([], { month:'short', day:'numeric' }), old['Current Status'], old['Next Actions']));
     body.appendChild(compare);
-    const undone = project.restore_undoes && Array.isArray(project.restore_undoes[row.id]) ? project.restore_undoes[row.id] : [];
-    if (undone.length) {
-      const warn = el('div', 'project-notice danger'); warn.setAttribute('role', 'status');
-      warn.appendChild(el('strong', undefined, 'This undoes ' + (undone.length === 1 ? 'a passed milestone:' : undone.length + ' passed milestones:')));
-      const list = el('ul', 'ms-undo');
-      for (const pass of undone) list.appendChild(el('li', undefined, pass.id + ' ' + pass.title + ', passed ' + milestoneDay(pass.on) + ', ' + milestoneWho(pass.by)));
-      warn.appendChild(list); body.appendChild(warn);
-    }
+    const milestoneWarning = renderRestoreMilestones(project.restore_milestones && project.restore_milestones[row.id]);
+    if (milestoneWarning) body.appendChild(milestoneWarning);
     if (project.shared) body.appendChild(el('p', 'shared-note', (project.title || project.project) + ' is shared. Your AI apps see the restored version after ' + devicePlace() + ' next sends to Cloud Connect.'));
     const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);
     const actions = el('div', 'row'); actions.style.justifyContent = 'flex-end';
