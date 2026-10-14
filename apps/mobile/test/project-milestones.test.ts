@@ -114,7 +114,7 @@ describe('phone milestones', () => {
 describe('phone stays view-only for milestones', () => {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   it('the project screens and their data module call no vault or milestone write', () => {
-    const files = ['app/projects.tsx', 'app/project/[slug].tsx', 'src/lib/projects.ts'];
+    const files = ['app/projects.tsx', 'app/project/[slug].tsx', 'src/lib/projects.ts', 'src/MilestoneTrack.tsx'];
     const writes = /\b(remember|editMemory|forget|updateProject|checkpointProject|replaceProjectContent|confirmPass|confirmPassInDocument|recordAgentPass|replacePlan|formatMilestones?)\b/;
     for (const file of files) {
       const source = fs.readFileSync(path.join(root, file), 'utf8');
