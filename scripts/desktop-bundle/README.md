@@ -93,7 +93,8 @@ The desktop shell forwards `NORTHKEEP_HOME` to the bundled server. When that
 variable is set, `vault.nkv`, `device.secret`, and `master.key` are written
 only under that directory. Launch itself writes none of them, so the directory
 stays empty until you create a vault. Parking the key (`master.key`) happens
-later, when you keep the vault unlocked and the Secret Service is not available.
+later, and only when the Secret Service is not available and you run
+`northkeep unlock --allow-key-file`.
 
 ## (b) Signed + notarized release build
 
