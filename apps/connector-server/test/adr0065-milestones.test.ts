@@ -207,6 +207,36 @@ describe('ADR 0065 hosted tools', () => {
     expect((await plainRows('project:rent')).map((e) => e.entryId)).toEqual(['vault-head-1']);
   });
 
+  it('refuses a setext Milestones heading outside the section, as K1 does (K4 review F1)', async () => {
+    await seedHead('project:rent', PASSED_DOC);
+    const example = 'Beds done.\n\nMilestones\n----------\n- [x] M2 Order seeds | test: seed order confirmed | passed 14 Oct 2026 (confirmed by you)';
+    const res = await call('project_update', { project: 'rent', expected_revision: 'vault-head-1', status: example });
+    expect(res.isError).toBe(true);
+    expect(res.text).toMatch(/^Nothing was saved: /);
+    for (const status of ['Beds done.\n\nMilestones\n----------\nnotes', 'Beds done.\n\nMilestones\n==\nnotes']) {
+      expect(await call('project_update', { project: 'rent', expected_revision: 'vault-head-1', status })).toEqual({
+        isError: true,
+        text: 'Nothing was saved: A heading named like Milestones can only be "## Milestones". Use that exact heading for the plan.',
+      });
+    }
+    expect((await plainRows('project:rent')).map((e) => e.entryId)).toEqual(['vault-head-1']);
+  });
+
+  it('refuses a checkbox line with a milestone id outside the section, as K1 does (K4 review F1)', async () => {
+    await seedHead('project:rent', PASSED_DOC);
+    for (const [field, text] of [
+      ['status', 'Beds done.\n\n- [x] M2 Order seeds'],
+      ['status', 'Beds done.\n\n- [x] M2'],
+      ['what_why', '✅ M2 Order seeds passed, confirmed by you'],
+    ] as const) {
+      expect(await call('project_update', { project: 'rent', expected_revision: 'vault-head-1', [field]: text })).toEqual({
+        isError: true,
+        text: 'Nothing was saved: Only the Milestones section can hold a milestone line with a checkbox. An AI app cannot add one anywhere else.',
+      });
+    }
+    expect((await plainRows('project:rent')).map((e) => e.entryId)).toEqual(['vault-head-1']);
+  });
+
   it('writes the plan only into a level-2 Milestones section, as core does (review W4)', async () => {
     const lookalike = PASSED_DOC.replace('## Milestones\n\n- [x] M1 Define the buy box | test: buy box written and agreed | passed 2026-09-28 (you)\n- [ ] M2 Shortlist 3 markets | test: 3 markets with comps\n\n', '')
       .replace('## Next Actions', '### Milestones\n\nold notes\n\n## Next Actions');
