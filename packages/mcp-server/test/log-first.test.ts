@@ -29,7 +29,7 @@ describe('ADR 0060 D7: log before acting', () => {
     const remember = await mcp.callTool({ name: 'memory_remember', arguments: { content: 'should not be saved', type: 'semantic' } });
     expect(remember.isError).toBe(true);
     expect(text(remember)).toBe('NorthKeep could not write its call log, so nothing was done.');
-    const update = await mcp.callTool({ name: 'project_update', arguments: { project: 'demo', expected_revision: null, what_why: 'w', status: 's' } });
+    const update = await mcp.callTool({ name: 'project_update', arguments: { project: 'demo', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', what_why: 'w', status: 's' } });
     expect(update.isError).toBe(true);
     expect(fs.readFileSync(h.vaultPath).equals(before)).toBe(true);
   });

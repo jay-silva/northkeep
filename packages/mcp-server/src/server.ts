@@ -987,6 +987,16 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     },
   );
 
+  /** ADR 0065 kickoff layer 1: a new project needs milestones unless it is a draft, and a draft takes none. */
+  function assertCreateMilestoneRule(draft: boolean | undefined, milestones: string | undefined): void {
+    if (draft === true && milestones !== undefined) {
+      throw new ProjectHandoffError('invalid_request', 'A draft project takes no milestones. Create it without milestones, then agree the plan with the user and add it with project_update.');
+    }
+    if (draft !== true && milestones === undefined) {
+      throw new ProjectHandoffError('invalid_request', 'milestones is required. Propose the milestones to the user and create the project after they agree; if there is no plan yet, send "M1 Agree the milestones | test: the user approves the plan".');
+    }
+  }
+
   server.registerTool(
     'project_update',
     {
@@ -1003,7 +1013,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'long new entry on a nearly full document. NorthKeep never truncates.',
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
-        expected_revision: idSchema.nullable().describe('Revision returned by project_get/resume, or null only when creating'),
+        expected_revision: idSchema.nullable().describe('Revision returned by project_get/resume, or null only when creating; creating needs milestones unless draft is true, as in project_create'),
         title: z.string().max(120).optional().describe('Display title shown in the app (single line, up to 120 characters). Empty string removes it and the slug is shown instead.'),
         what_why: z.string().min(1).max(16384).optional().describe(`Replacement What & Why section. ${SECTION_TEXT_RULES}`),
         status: z.string().min(1).max(16384).optional().describe(`Replacement Current Status section. ${SECTION_TEXT_RULES}`),
@@ -1024,7 +1034,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         draft: z
           .boolean()
           .optional()
-          .describe('Only false is meaningful on a project that already exists: it clears the draft line. Passing true is refused; a draft can only be marked when the project is created.'),
+          .describe('On a project that already exists only false is meaningful: it clears the draft line, and true is refused. With expected_revision null, true creates a draft, which takes no milestones.'),
         files: projectFilesSchema,
         milestones: z.string().max(8192).optional().describe(`Replacement plan: the milestones still to do. ${MILESTONES_FORMAT}`),
       },
@@ -1069,6 +1079,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           }
           const scope = projectScope(project);
           assertProjectGranted(scope, granted);
+          // Creating through project_update follows the project_create rule (ADR 0065 kickoff layer 1).
+          if (expected_revision === null) assertCreateMilestoneRule(draft, milestones);
           const request: ProjectUpdateRequest = {
             project, expected_revision, title,
             what_why: normalizeSectionText(what_why, 'what_why', false),
@@ -1137,12 +1149,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           }
           const scope = projectScope(project);
           assertProjectGranted(scope, granted);
-          if (draft === true && milestones !== undefined) {
-            throw new ProjectHandoffError('invalid_request', 'A draft project takes no milestones. Create it without milestones, then agree the plan with the user and add it with project_update.');
-          }
-          if (draft !== true && milestones === undefined) {
-            throw new ProjectHandoffError('invalid_request', 'milestones is required. Propose the milestones to the user and create the project after they agree; if there is no plan yet, send "M1 Agree the milestones | test: the user approves the plan".');
-          }
+          assertCreateMilestoneRule(draft, milestones);
           const request: ProjectUpdateRequest = {
             project, expected_revision: null, title,
             what_why: normalizeSectionText(what_why, 'what_why', false),

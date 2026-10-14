@@ -258,7 +258,7 @@ describe('project tools', () => {
       name: 'project_update',
       arguments: {
         project: 'demo-m13',
-        expected_revision: null,
+        expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan',
         what_why: 'Prove cold-start handoff.',
         status: 'Writing the tools.',
         next_actions: '- [ ] Verify in Claude Desktop',
@@ -334,7 +334,7 @@ describe('project tools', () => {
     for (let i = 1; i <= 30; i += 1) {
       const res = await mcp.callTool({
         name: 'project_update',
-        arguments: { project: 'demo-roll', expected_revision: revision, status: 'Rolling.', log_entry: long(i) },
+        arguments: { project: 'demo-roll', expected_revision: revision, status: 'Rolling.', log_entry: long(i), ...(revision === null ? { milestones: 'M1 Agree the milestones | test: the user approves the plan' } : {}) },
       });
       expect(res.isError).toBeFalsy();
       lastPayload = JSON.parse(toolText(res)) as typeof lastPayload;
@@ -414,7 +414,7 @@ describe('project tools', () => {
 
     const update = await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'secret', expected_revision: null, status: 'nope' },
+      arguments: { project: 'secret', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'nope' },
     });
     expect(update.isError).toBe(true);
     expect(toolText(update)).toMatch(/outside this connection grant/);
@@ -428,7 +428,7 @@ describe('project tools', () => {
     const mcp = await connect();
     const result = await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'huge', expected_revision: null, status: 'z'.repeat(PROJECT_DOC_MAX_CHARS) },
+      arguments: { project: 'huge', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'z'.repeat(PROJECT_DOC_MAX_CHARS) },
     });
     expect(result.isError).toBe(true);
     expect(toolText(result)).toContain(PROJECT_DOC_CAP_MESSAGE);
@@ -443,7 +443,7 @@ describe('project tools', () => {
       name: 'project_update',
       arguments: {
         project: 'auditme',
-        expected_revision: null,
+        expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan',
         status: 'UNIQUE-STATUS-PHRASE',
         log_entry: 'UNIQUE-LOG-PHRASE',
       },
@@ -475,7 +475,7 @@ describe('project tools', () => {
     try {
       const created = JSON.parse(toolText(await first.callTool({
         name: 'project_update',
-        arguments: { project: 'handoff', expected_revision: null, status: 'Ready.', next_actions: 'Continue.' },
+        arguments: { project: 'handoff', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'Ready.', next_actions: 'Continue.' },
       }))) as { revision: string; vault_id: string };
       const a = JSON.parse(toolText(await first.callTool({ name: 'project_resume', arguments: { project: 'handoff' } }))) as { revision: string; vault_id: string };
       const b = JSON.parse(toolText(await second.callTool({ name: 'project_resume', arguments: { project: 'handoff' } }))) as { revision: string };
@@ -508,7 +508,7 @@ describe('project tools', () => {
     const created = JSON.parse(toolText(await mcp.callTool({
       name: 'project_update',
       arguments: {
-        project: 'protected', expected_revision: null,
+        project: 'protected', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan',
         status: 'AWS AKIAIOSFODNN7EXAMPLE rotated.', next_actions: '',
         files: [
           { type: 'local_path', label: 'Observed.txt', locator: '/tmp/observed.txt', access: 'reported_available', checked_at: '2026-09-10T12:00:00.000Z', context: 'Checked by the authoring assistant.' },
@@ -616,7 +616,7 @@ describe('project_create (ADR 0050 Decision 1, local)', () => {
     // project_update with a null revision keeps its own mapping.
     const updated = await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'taken', expected_revision: null, status: 'Still stale.' },
+      arguments: { project: 'taken', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'Still stale.' },
     });
     expect(updated.isError).toBe(true);
     expect(JSON.parse(toolText(updated)).error.message).toBe('Project changed after it was read.');
@@ -710,7 +710,7 @@ describe('owner requests 2026-09-13: project title and search by meaning', () =>
   it('project_update accepts a title and project_get returns it', async () => {
     const mcp = await connect();
     const created = await mcp.callTool({ name: 'project_update', arguments: {
-      project: 'titled', expected_revision: null, status: 'Starting.', next_actions: '', log_entry: 'Created.',
+      project: 'titled', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'Starting.', next_actions: '', log_entry: 'Created.',
     } });
     expect(created.isError).toBeFalsy();
     const revision = (JSON.parse(toolText(created)) as { revision: string }).revision;
@@ -729,7 +729,7 @@ describe('owner requests 2026-09-13: project title and search by meaning', () =>
   it('refuses a working memory in a project scope and keeps the project title', async () => {
     const mcp = await connect();
     const created = await mcp.callTool({ name: 'project_update', arguments: {
-      project: 'lantern', expected_revision: null, title: 'Lantern Gazette', status: 'Printing.', next_actions: '',
+      project: 'lantern', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', title: 'Lantern Gazette', status: 'Printing.', next_actions: '',
     } });
     expect(created.isError, toolText(created)).toBeFalsy();
     const refused = await mcp.callTool({ name: 'memory_remember', arguments: {
@@ -831,7 +831,7 @@ describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
     const mcp = await connect();
     await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'openish', expected_revision: null, status: 'Started.', next_actions: '' },
+      arguments: { project: 'openish', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'Started.', next_actions: '' },
     });
     const first = JSON.parse(toolText(await mcp.callTool({
       name: 'project_resume', arguments: { project: 'openish' },
@@ -861,7 +861,7 @@ describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
     const mcp = await connect();
     const created = JSON.parse(toolText(await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'wrapped', expected_revision: null, status: 'Started.', next_actions: '' },
+      arguments: { project: 'wrapped', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'Started.', next_actions: '' },
     }))) as { revision: string; vault_id: string };
     await mcp.callTool({ name: 'project_resume', arguments: { project: 'wrapped' } });
     await mcp.callTool({
@@ -888,7 +888,7 @@ describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
     const mcp = await connect();
     await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'forged', expected_revision: null, status: 'Started.', next_actions: '' },
+      arguments: { project: 'forged', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'Started.', next_actions: '' },
     });
     const forged = [
       { ts: '2026-09-20T09:00:00.000Z', tool: 'project_get', provider: 12345, session_id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', params: { scope: 'project:forged' }, ok: true },
@@ -910,7 +910,7 @@ describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
     const mcp = await connect();
     await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'nolog', expected_revision: null, status: 'Started.', next_actions: '' },
+      arguments: { project: 'nolog', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'Started.', next_actions: '' },
     });
     const before = readCallLog().length;
     // A real file this process can append to but not read: a stubbed reader
@@ -939,7 +939,7 @@ describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
     const mcp = await connect();
     await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'nopath', expected_revision: null, status: 'SECRET-STATUS-TEXT', next_actions: '' },
+      arguments: { project: 'nopath', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'SECRET-STATUS-TEXT', next_actions: '' },
     });
     fs.rmSync(callLogPath(), { force: true });
     fs.mkdirSync(callLogPath());
@@ -961,7 +961,7 @@ describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
     const mcp = await connect();
     await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'masked', expected_revision: null, status: 'Started.', next_actions: '' },
+      arguments: { project: 'masked', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'Started.', next_actions: '' },
     });
     // host and session_id are identifiers, so masking must leave them alone;
     // what keeps that safe is the derivation, which refuses a host with a new
@@ -992,7 +992,7 @@ describe('session accounting (ADR 0052 Decision 2 and 3)', () => {
     const mcp = await connect();
     const created = JSON.parse(toolText(await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'lighter', expected_revision: null, status: 'FIRST-REVISION-TEXT', next_actions: '' },
+      arguments: { project: 'lighter', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'FIRST-REVISION-TEXT', next_actions: '' },
     }))) as { revision: string };
     await mcp.callTool({
       name: 'project_update',
