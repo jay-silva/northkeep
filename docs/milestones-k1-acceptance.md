@@ -68,4 +68,4 @@ node packages/cli/dist/index.js projects delete k1-garden
 ## What was verified before this document was written
 
 On 2026-10-14 the builder ran steps 1 to 7 on a Linux test machine and got the results
-above (step 7 under a pseudo terminal). Step 8 was not run.
+above (step 7 under a pseudo terminal). Step 8 ran in Claude Code from the command line against a throwaway vault and this build's server: in 3 of 3 fresh sessions it proposed milestones with tests and created the project only after agreement.
