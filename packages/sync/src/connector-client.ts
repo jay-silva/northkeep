@@ -3,7 +3,9 @@ import {
   devicePhrase,
   getProjectView,
   isMemoryType,
+  parseMilestones,
   parseProjectSlug,
+  passedMilestones,
   projectScope,
   type MemoryType,
   type Vault,
@@ -11,6 +13,7 @@ import {
 import { deriveConnectorToken } from './creds.js';
 import { assertConnectorUrl } from './connector-config.js';
 import { timeoutSignal } from './abort.js';
+import { cloudRowKeepsPasses, milestonePassChanges, type MilestonePassChange } from './milestone-changes.js';
 
 /**
  * The hosted-connector client (ADR 0019, phase C2). Pushes the user's REAL vault
@@ -312,8 +315,11 @@ export interface PendingSnapshot {
   forgets: string[];
 }
 
-/** `deleted_here`: a cloud-created project whose document was deleted on this device (recheck R-S2). */
-export type ConflictReason = 'moved' | 'stale' | 'legacy' | 'several_heads' | 'deleted_here';
+/**
+ * `deleted_here`: a cloud-created project whose document was deleted on this device (recheck R-S2).
+ * `milestones_changed`: the cloud version adds, changes or removes a passed milestone (ADR 0065); it wins over every other reason.
+ */
+export type ConflictReason = 'moved' | 'stale' | 'legacy' | 'several_heads' | 'deleted_here' | 'milestones_changed';
 
 /** A cloud project document that was not applied because it is not a fast-forward (D1). */
 export interface DownSyncConflict {
@@ -326,6 +332,10 @@ export interface DownSyncConflict {
   reason: ConflictReason;
   /** The cloud text, for "view both" and "keep mine". */
   content: string;
+  /** Every pass "take theirs" would add, change or remove (ADR 0065), for every reason. Empty with several local heads. */
+  pass_changes: MilestonePassChange[];
+  /** "Take theirs" also marks this private project scope Shared (ADR 0050, reached by the user's choice). */
+  shares_scope: boolean;
 }
 
 export interface PlannedAddition {
@@ -350,6 +360,8 @@ export interface PlannedForget {
   entry_id: string;
   scope: string;
   first_line: string;
+  /** A project-scope working row only: its passed milestones, like `M1 Define the buy box`. */
+  passed?: string[];
 }
 
 /**
@@ -470,6 +482,27 @@ function localHead(vault: Vault, project: string): LocalHead {
   }
 }
 
+/** A held cloud document, with the pass changes the conflict dialog names. */
+function heldConflict(
+  row: { scope: string; server_id: string; base_revision: string | null; content: string },
+  project: string,
+  head: LocalHead,
+  reason: ConflictReason,
+  sharedHere: boolean,
+): DownSyncConflict {
+  return {
+    scope: row.scope,
+    project,
+    server_id: row.server_id,
+    base_revision: row.base_revision,
+    local_revision: head.kind === 'one' ? head.id : null,
+    reason,
+    content: row.content,
+    pass_changes: head.kind === 'several' ? [] : milestonePassChanges(head.kind === 'one' ? head.content : null, row.content),
+    shares_scope: !sharedHere,
+  };
+}
+
 function hasDeletedDocument(vault: Vault, scope: string): boolean {
   return vault.list({ scope, type: 'working', includeForgotten: true, includeSuperseded: true }).some((e) => e.forgotten_at !== null);
 }
@@ -520,19 +553,13 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
     const working = group.filter((r) => r.type === 'working');
     const foldable = group.every((r) => isMemoryType(r.type)) && empty && working.length === 1
       && working[0]!.base_revision === BASE_NEW && !working[0]!.stale;
-    if (foldable && hasDeletedDocument(vault, scope)) {
+    // ADR 0065 amends ADR 0050: a create carrying a passed milestone is held, never marked Shared on arrival.
+    const forgedPass = foldable && !cloudRowKeepsPasses(null, working[0]!.content);
+    if (foldable && (forgedPass || hasDeletedDocument(vault, scope))) {
       // A create into a project deleted here is a question, not a fold: the
       // scope is marked Shared only when the user takes the cloud version.
       const create = working[0]!;
-      plan.conflicts.push({
-        scope,
-        project: parseProjectSlug(scope)!,
-        server_id: create.server_id,
-        base_revision: create.base_revision,
-        local_revision: null,
-        reason: 'deleted_here',
-        content: create.content,
-      });
+      plan.conflicts.push(heldConflict(create, parseProjectSlug(scope)!, { kind: 'none' }, forgedPass ? 'milestones_changed' : 'deleted_here', false));
       const rest = group.length - 1;
       if (rest > 0) {
         plan.held += rest;
@@ -564,16 +591,7 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
       heads.set(project, head);
     }
     const legacy = row.base_revision === null;
-    const conflict = (reason: ConflictReason) =>
-      plan.conflicts.push({
-        scope: row.scope,
-        project,
-        server_id: row.server_id,
-        base_revision: row.base_revision,
-        local_revision: head.kind === 'one' ? head.id : null,
-        reason,
-        content: row.content,
-      });
+    const conflict = (reason: ConflictReason) => plan.conflicts.push(heldConflict(row, project, head, reason, true));
     if (head.kind === 'one' && row.content === head.content) {
       if (additiveOnly) {
         plan.deferred++;
@@ -584,6 +602,11 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
         // connector's and move its head backward (D1), so delete it by id.
         plan.discards.push({ server_id: row.server_id, scope: row.scope });
       }
+      continue;
+    }
+    // ADR 0065: the agent write rule against the local head, ahead of every other reason. A create is checked against no plan.
+    if (head.kind !== 'several' && !cloudRowKeepsPasses(head.kind === 'one' ? head.content : null, row.content)) {
+      conflict('milestones_changed');
       continue;
     }
     // Every legacy row is also stale on the connector; legacy is the more useful label.
@@ -627,7 +650,11 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
     } else if (additiveOnly) {
       plan.deferred++;
     } else {
-      plan.forgets.push({ entry_id: id, scope: entry.scope, first_line: firstLine(entry.content) });
+      const forget: PlannedForget = { entry_id: id, scope: entry.scope, first_line: firstLine(entry.content) };
+      if (entry.type === 'working' && parseProjectSlug(entry.scope) !== null) {
+        forget.passed = passedMilestones(parseMilestones(entry.content)).map((m) => `${m.id} ${m.title}`);
+      }
+      plan.forgets.push(forget);
     }
   }
   plan.held_scopes = [...heldScopes].sort();
@@ -693,14 +720,15 @@ export async function applyDownSync(opts: {
     if (a.kind === 'project') {
       const project = parseProjectSlug(a.scope)!;
       try {
-        const view = opts.vault.replaceProjectContent({ project, expected_revision: null, content: a.content, source: `connector:${clientLabel}`, metadata });
+        // An AI app wrote this row (ADR 0065): the agent write rule runs, and a refusal is held below as a conflict.
+        const view = opts.vault.replaceProjectContent({ project, expected_revision: null, content: a.content, source: `connector:${clientLabel}`, metadata }, { actor: 'agent' });
         acked.push({ server_id: a.server_id, local_entry_id: view.revision });
         createdScopes.add(a.scope);
         added++;
         wrote = true;
       } catch (err) {
         if (!(err instanceof ProjectHandoffError)) throw err;
-        conflicts.push({ scope: a.scope, project, server_id: a.server_id, base_revision: BASE_NEW, local_revision: null, reason: 'moved', content: a.content });
+        conflicts.push(heldConflict({ ...a, base_revision: BASE_NEW }, project, localHead(opts.vault, project), 'moved', !toMark.has(a.scope)));
       }
       continue;
     }
@@ -724,14 +752,14 @@ export async function applyDownSync(opts: {
         content: r.content,
         source: `connector:${clientLabel}`,
         metadata: { connector: { server_id: r.server_id } },
-      });
+      }, { actor: 'agent' });
       acked.push({ server_id: r.server_id, local_entry_id: view.revision });
       replaced++;
       wrote = true;
     } catch (err) {
       if (!(err instanceof ProjectHandoffError)) throw err;
       // A local save landed between the plan and the write: hold, never overwrite.
-      conflicts.push({ scope: r.scope, project: r.project, server_id: r.server_id, base_revision: r.local_revision, local_revision: null, reason: 'moved', content: r.content });
+      conflicts.push({ ...heldConflict({ ...r, base_revision: r.local_revision }, r.project, localHead(opts.vault, r.project), 'moved', true), local_revision: null });
     }
   }
 
@@ -750,7 +778,8 @@ export async function applyDownSync(opts: {
       unapprovedForgets.push(f);
       continue;
     }
-    opts.vault.forget(f.entry_id);
+    // The user approved this forget in the review; cloud forgets still apply until K4 (ADR 0065 Decision 3).
+    opts.vault.forget(f.entry_id, { actor: 'owner' });
     ackedForgets.push(f.entry_id);
     forgotten++;
     wrote = true;
@@ -792,6 +821,8 @@ export interface ResolveResult {
   revision: string | null;
   /** Keep mine: the memories holding the cloud text. */
   memory_ids: string[];
+  /** Take theirs: the passes it added, changed or removed (ADR 0065). Empty for keep mine. */
+  pass_changes: MilestonePassChange[];
 }
 
 /**
@@ -830,19 +861,21 @@ export async function resolveConflict(opts: {
     }
     const head = localHead(opts.vault, opts.project);
     const expected = opts.expected_revision !== undefined ? opts.expected_revision : head.kind === 'one' ? head.id : null;
+    // Take theirs is the owner's choice (ADR 0065 Decision 2); the conflict named every pass it changes.
     const view = opts.vault.replaceProjectContent({
       project: opts.project,
       expected_revision: expected,
       content: row.content,
       source: `connector:${clientLabel}`,
       metadata: { connector: { server_id: row.server_id } },
-    });
-    // A deleted_here create in a private scope is the ADR 0050 fold the user just
-    // approved: the mark rides the save that holds the applied create.
-    if (row.reason === 'deleted_here' && !opts.vault.sharedScopes().includes(scope)) opts.vault.setScopeShared(scope, true);
+    }, { actor: 'owner' });
+    // A held create in a private scope (deleted_here, or milestones_changed per
+    // ADR 0065) is the ADR 0050 fold the user just approved: the mark rides the
+    // save that holds the applied create.
+    if (row.shares_scope && !opts.vault.sharedScopes().includes(scope)) opts.vault.setScopeShared(scope, true);
     opts.vault.save();
     await postJson(opts, '/client/ack', { acked: [{ server_id: row.server_id, local_entry_id: view.revision }], forgets: [] }, 'ack');
-    return { choice: 'take-theirs', server_ids: [row.server_id], revision: view.revision, memory_ids: [] };
+    return { choice: 'take-theirs', server_ids: [row.server_id], revision: view.revision, memory_ids: [], pass_changes: row.pass_changes };
   }
 
   const now = opts.now ?? new Date();
@@ -873,7 +906,7 @@ export async function resolveConflict(opts: {
   if (wrote) opts.vault.save();
   const serverIds = waiting.map((c) => c.server_id);
   await discardPending({ ...opts, server_ids: serverIds });
-  return { choice: 'keep-mine', server_ids: serverIds, revision: null, memory_ids: memoryIds };
+  return { choice: 'keep-mine', server_ids: serverIds, revision: null, memory_ids: memoryIds, pass_changes: [] };
 }
 
 /**

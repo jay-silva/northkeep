@@ -18,7 +18,7 @@ interface Saved { replayed: boolean; receipt: { result_revision: string }; curre
 async function setup(): Promise<Client> {
   h = createHarness();
   const mcp = await h.connect();
-  const created = await mcp.callTool({ name: 'project_create', arguments: { project: 'rules', what_why: 'Rules test.', status: 'Start.' } });
+  const created = await mcp.callTool({ name: 'project_create', arguments: { project: 'rules', what_why: 'Rules test.', status: 'Start.', milestones: 'M1 Agree the milestones | test: the user approves the plan' } });
   expect(created.isError).toBeFalsy();
   return mcp;
 }

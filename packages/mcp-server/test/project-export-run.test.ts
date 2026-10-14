@@ -32,6 +32,7 @@ import {
   type VerifyResult,
 } from '../src/project-export-run.js';
 import { ctxFor, fx, initRepo, makeLab, type Lab } from './git-fixture.js';
+import { plantWorkingRow } from '../../core/test/support/plant-working-row.js';
 
 const MCP_DIR = path.resolve(__dirname, '..');
 const RUN_DIST = path.join(MCP_DIR, 'dist', 'project-export-run.js');
@@ -83,9 +84,9 @@ function revision(v: Vault, slug: string): string {
 
 async function seed(): Promise<void> {
   await write((v) => {
-    let cur = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'Starting.', log_entry: 'Created.', writer: CODE });
-    for (let i = 0; i < 12; i++) cur = v.updateProject({ project: 'demo', expected_revision: cur.revision, log_entry: `Entry ${i} ${'z'.repeat(1500)}`, writer: CODE });
-    v.updateProject({ project: 'other', expected_revision: null, what_why: 'Other.', status: 'Fine.' });
+    let cur = v.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'Starting.', log_entry: 'Created.', writer: CODE }, { actor: 'owner' });
+    for (let i = 0; i < 12; i++) cur = v.updateProject({ project: 'demo', expected_revision: cur.revision, log_entry: `Entry ${i} ${'z'.repeat(1500)}`, writer: CODE }, { actor: 'owner' });
+    v.updateProject({ project: 'other', expected_revision: null, what_why: 'Other.', status: 'Fine.' }, { actor: 'owner' });
   });
 }
 
@@ -203,7 +204,7 @@ describe('exportProjects end to end', () => {
   it('a vault update makes exactly one commit touching only that project and the INDEX', async () => {
     await seed();
     await exportOnce({ repo });
-    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Moved on.', writer: CODE }));
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Moved on.', writer: CODE }, { actor: 'owner' }));
     expect((await verifyReadOnly()).entries).toContainEqual({ path: 'projects/other.md', status: 'stale' });
     const res = await exportOnce();
     expect(res.status).toBe('committed');
@@ -222,7 +223,7 @@ describe('exportProjects end to end', () => {
     const v1 = await verifyReadOnly();
     expect(statusOf(v1)['projects/demo.md']).toBe('hand edit');
     expect(v1.ok).toBe(false);
-    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Still going.' }));
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Still going.' }, { actor: 'owner' }));
     const res = await exportOnce();
     expect(res.refused).toContainEqual({ path: 'projects/demo.md', reason: 'hand edit' });
     expect(res.written).toContain('projects/other.md');
@@ -277,7 +278,7 @@ describe('exportProjects end to end', () => {
     expect(s['projects/other.md']).toBe('missing');
     expect(s['projects/zzz.md']).toBe('extra');
     fs.rmSync(path.join(repo, 'projects', 'zzz.md'));
-    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Second.' }));
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Second.' }, { actor: 'owner' }));
     await exportOnce();
     fx(lab, repo, ['reset', '-q', '--soft', 'HEAD~1']);
     s = statusOf(await verifyReadOnly());
@@ -285,8 +286,8 @@ describe('exportProjects end to end', () => {
     await exportOnce();
 
     await write((v) => {
-      v.remember({ type: 'working', scope: 'project:broken', content: '## Current Status\n\nOne.\n\n## Current Status\n\nTwo.' });
-      v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Broken neighbour.' });
+      plantWorkingRow(v, { type: 'working', scope: 'project:broken', content: '## Current Status\n\nOne.\n\n## Current Status\n\nTwo.' });
+      v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Broken neighbour.' }, { actor: 'owner' });
     });
     const res = await exportOnce();
     expect(res.refused).toContainEqual({ path: 'projects/broken.md', reason: 'render failed' });
@@ -336,7 +337,7 @@ describe('exportProjects end to end', () => {
     const demo = path.join(repo, 'projects', 'demo.md');
     fs.chmodSync(demo, 0o000);
     try {
-      await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Past the bad file.' }));
+      await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Past the bad file.' }, { actor: 'owner' }));
       const res = await exportProjects({ home: lab.home, vaultPath: lab.vaultPath, withVault: runner, by: 'schedule' });
       expect(res.refused).toContainEqual({ path: 'projects/demo.md', reason: 'unreadable' });
       expect(res.written).toContain('projects/other.md');
@@ -389,7 +390,7 @@ describe('exportProjects end to end', () => {
     fs.mkdirSync(outside);
     fs.renameSync(path.join(repo, 'projects'), path.join(lab.root, 'moved'));
     fs.symlinkSync(outside, path.join(repo, 'projects'));
-    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Now.' }));
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Now.' }, { actor: 'owner' }));
     const res = await exportOnce();
     expect(res.refused.map((r) => r.path)).toEqual(expect.arrayContaining(['projects/demo.md', 'projects/other.md']));
     expect(fs.readdirSync(outside)).toEqual([]);
@@ -438,7 +439,7 @@ describe('exportProjects end to end', () => {
     fx(lab, lab.root, ['init', '-q', '--bare', bare]);
     await exportOnce({ repo });
     fx(lab, repo, ['remote', 'add', 'origin', bare]);
-    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Again.' }));
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Again.' }, { actor: 'owner' }));
     const verbs = new Set<string>();
     setGitSpawnObserver((v) => verbs.add(v));
     expect((await exportOnce()).status).toBe('committed');
@@ -590,7 +591,7 @@ catch (e) { console.log(e.code); }`], {
       });
       other = r.stdout.trim();
     });
-    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'During the race.' }));
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'During the race.' }, { actor: 'owner' }));
     const res = await exportOnce();
     setGitSpawnObserver(null);
     expect(fired).toBe(true);
@@ -615,7 +616,7 @@ catch (e) { console.log(e.code); }`], {
     await seed();
     await exportOnce({ repo });
     const head = fx(lab, repo, ['rev-parse', 'HEAD']);
-    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Lock stolen.' }));
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Lock stolen.' }, { actor: 'owner' }));
     const fired = stealLockOn('commit-tree');
     const err = await exportOnce().catch((e: unknown) => e);
     setGitSpawnObserver(null);
@@ -632,7 +633,7 @@ catch (e) { console.log(e.code); }`], {
     const head = fx(lab, repo, ['rev-parse', 'HEAD']);
     await write((v) => {
       v.deleteProject('demo');
-      v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Lock lost early.' });
+      v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Lock lost early.' }, { actor: 'owner' });
     });
     const fired = stealLockOn('hash-object', '-w');
     const err = await exportOnce().catch((e: unknown) => e);
@@ -664,7 +665,7 @@ describe('a killed lock stealer never wedges exports (recheck flesh wound)', () 
   const deadToken = () => `${JSON.stringify({ pid: deadPid(), started_at: new Date().toISOString(), nonce: '0000deaddead0000' })}\n`;
 
   async function changeAndExport(status: string): Promise<ExportRunResult> {
-    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status }));
+    await write((v) => v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status }, { actor: 'owner' }));
     return exportOnce();
   }
 
@@ -797,8 +798,8 @@ describe('readMirrorSummary', () => {
     expect(await runner((v) => readMirrorSummary(v, undefined, lab.home))).toBeNull();
     await exportOnce({ repo });
     await write((v) => {
-      v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Changed.' });
-      v.updateProject({ project: 'demo', expected_revision: revision(v, 'demo'), status: 'Changed too.' });
+      v.updateProject({ project: 'other', expected_revision: revision(v, 'other'), status: 'Changed.' }, { actor: 'owner' });
+      v.updateProject({ project: 'demo', expected_revision: revision(v, 'demo'), status: 'Changed too.' }, { actor: 'owner' });
     });
     setGitSpawnObserver(() => {
       throw new Error('readMirrorSummary ran git');

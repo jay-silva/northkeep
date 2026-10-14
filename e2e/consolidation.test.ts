@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensureDeviceSecret, KDF_INTERACTIVE, Vault, type MemoryEntry } from '@northkeep/core';
 import { startUiServer, type RunningUiServer } from '../apps/web/dist/server.js';
+import { plantWorkingRow } from '../packages/core/test/support/plant-working-row.js';
 
 const passphrase = 'synthetic-consolidation-http-only';
 let dir: string, vaultPath: string, secret: Buffer, server: RunningUiServer, origin: string, token: string;
@@ -35,7 +36,7 @@ beforeAll(async () => {
   ];
   vault.remember({ content: 'Shared synthetic fact.', type: 'semantic', scope: 'shared' });
   vault.setScopeShared('shared', true);
-  vault.remember({ content: 'Synthetic project document.', type: 'working', scope: 'project:sample' });
+  plantWorkingRow(vault, { content: 'Synthetic project document.', type: 'working', scope: 'project:sample' });
   vaultId = vault.getVaultId();
   vault.save(); vault.close();
   server = await startUiServer({ vaultPath });

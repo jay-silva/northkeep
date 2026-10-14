@@ -41,6 +41,19 @@ export const PROJECT_BOOTSTRAP_INSTRUCTION =
   'or secret files. Then call project_create with draft: true. Keep the whole document under 6,000 ' +
   'characters; detail goes into episodic memories in the project scope, one per source you read.';
 
+/**
+ * ADR 0065 Decision 4, pinned verbatim: the local server's instructions and
+ * the contract sentence. Whether a host shows it to its model is up to the host.
+ */
+export const MILESTONE_INSTRUCTION =
+  'When the user asks to create a project, propose its milestones and create it only after the user agrees to them. ' +
+  'Report a milestone passed only when the user says its acceptance test passed. ' +
+  'Never mark a milestone passed on your own judgment.';
+
+/** ADR 0065 Decision 4: project_resume's note while a project has no plan, at most once per project per session. */
+export const NO_MILESTONES_NOTE =
+  'This project has no milestones. Ask the user whether they want to set them; do not invent them.';
+
 /** Honesty note shown next to the standing instruction. */
 export const PROJECT_HONESTY_NOTE =
   'this instruction is advisory. A session that ends abruptly wrote nothing. ' +

@@ -9,6 +9,7 @@ import {
   serializeProjectDoc,
 } from '@northkeep/core/project-doc';
 import { applyDownSync, holdMessage, pushSharedScopes } from '../src/connector-client.js';
+import { plantWorkingRow } from '../../core/test/support/plant-working-row.js';
 
 let home = '';
 const priorHome = process.env.NORTHKEEP_HOME;
@@ -73,7 +74,7 @@ describe('applyDownSync project fold (M14)', () => {
   it('supersedes the newest live working doc in a slug-valid project scope', async () => {
     const vault = makeVault();
     const local = projectMarkdown('Local status.');
-    const head = vault.remember({ content: local, type: 'working', scope: 'project:northkeep' });
+    const head = plantWorkingRow(vault, { content: local, type: 'working', scope: 'project:northkeep' });
     // ADR 0050 holds hosted rows for an UNSHARED project scope, so the M14
     // supersede path is only reachable in a scope the user shared.
     vault.setScopeShared('project:northkeep', true);
@@ -103,7 +104,7 @@ describe('applyDownSync project fold (M14)', () => {
 
   it('bounds project history: twenty folds leave five superseded revisions with content', async () => {
     const vault = makeVault();
-    let head = vault.remember({ content: projectMarkdown('Fold 0.'), type: 'working', scope: 'project:northkeep' }).id;
+    let head = plantWorkingRow(vault, { content: projectMarkdown('Fold 0.'), type: 'working', scope: 'project:northkeep' }).id;
     vault.setScopeShared('project:northkeep', true);
     for (let i = 1; i <= 20; i += 1) {
       stubPending([
@@ -122,7 +123,7 @@ describe('applyDownSync project fold (M14)', () => {
   it('dedupes identical content without a second write', async () => {
     const vault = makeVault();
     const same = projectMarkdown('Already here.');
-    const head = vault.remember({ content: same, type: 'working', scope: 'project:northkeep' });
+    const head = plantWorkingRow(vault, { content: same, type: 'working', scope: 'project:northkeep' });
     vault.setScopeShared('project:northkeep', true);
     stubPending([
       { server_id: 'conn_dup', scope: 'project:northkeep', type: 'working', content: same, base_revision: head.id },
@@ -160,7 +161,7 @@ describe('applyDownSync project fold (M14)', () => {
 
   it('does not treat a prefix-only project: scope as a project fold', async () => {
     const vault = makeVault();
-    vault.remember({
+    plantWorkingRow(vault, {
       content: projectMarkdown('Local underscore scope.'),
       type: 'working',
       scope: 'project:foo_bar',
@@ -368,7 +369,7 @@ describe('applyDownSync hosted create fold (ADR 0050 Decision 4)', () => {
 
   it('holds a scope the user emptied by unsharing while it still holds entries', async () => {
     const vault = makeVault();
-    vault.remember({ content: projectMarkdown('Local doc.'), type: 'working', scope: 'project:unshared' });
+    plantWorkingRow(vault, { content: projectMarkdown('Local doc.'), type: 'working', scope: 'project:unshared' });
     vault.setScopeShared('project:unshared', true);
     vault.setScopeShared('project:unshared', false);
     const stub = stubServer({
@@ -420,7 +421,7 @@ describe('applyDownSync hosted create fold (ADR 0050 Decision 4)', () => {
 
   it('leaves an already-shared scope on the M14 path with its shared_at intact', async () => {
     const vault = makeVault();
-    const head = vault.remember({ content: projectMarkdown('Local status.'), type: 'working', scope: 'project:shared' });
+    const head = plantWorkingRow(vault, { content: projectMarkdown('Local status.'), type: 'working', scope: 'project:shared' });
     vault.setScopeShared('project:shared', true);
     const before = vault.sharedScopeRows().find((r) => r.scope === 'project:shared')!.shared_at;
     const stub = stubServer({
@@ -519,7 +520,7 @@ describe('applyDownSync scope and type normalisation (ADR 0050 fix round)', () =
     'holds a padded scope %j instead of landing a second document in a private project',
     async (paddedScope) => {
       const vault = makeVault();
-      vault.remember({ content: projectMarkdown('Local doc.'), type: 'working', scope: 'project:plan' });
+      plantWorkingRow(vault, { content: projectMarkdown('Local doc.'), type: 'working', scope: 'project:plan' });
       const stub = stubServer({
         entries: [{ server_id: 'conn_pad', scope: paddedScope, type: 'working', content: projectMarkdown('App doc.') }],
       });

@@ -117,8 +117,8 @@ A duplicate `## Milestones` therefore cannot be written by NorthKeep. A document
 
 - **Before any row applies.** `planDownSync` runs the agent write rule against the local head. That includes `to_mark`, which is computed in the first pass today (`connector-client.ts:545`); the check moves ahead of it.
 - **When a row fails.** It becomes a conflict with the new reason `milestones_changed`, whatever older reason (stale, moved, legacy) it would also have. A create has no local head, so it is compared against an `absent` plan, and a cloud create carrying a passed line is held.
-- **"Take theirs."** Resolving the conflict is an owner action, and both choices stay available. The dialog names every pass that "take theirs" would add, change or remove. That list appears for every conflict reason, not only `milestones_changed`, because an older reason can also carry a pass change. Choosing "take theirs" on a held create marks the scope Shared, and the dialog says so before Jay chooses. That is the ADR 0050 outcome, reached by Jay's explicit choice instead of on arrival. This narrows ADR 0050's exception and invariant 1's wording by one condition: a create carrying a passed line is not marked Shared on arrival.
-- **Cloud forgets of project documents queued before K4.** These still apply as they do today. The claims are not published for the cloud until K4, and this residual is listed in KNOWN-LIMITS with them.
+- **"Take theirs."** Resolving the conflict is an owner action, and both choices stay available. When this device has one current version, the conflict views name every pass that "take theirs" would add, change or remove; with more than one, no list is shown and "take theirs" is refused. That list appears for every conflict reason, not only `milestones_changed`, because an older reason can also carry a pass change. Choosing "take theirs" on a held create marks the scope Shared, and the dialog says so before Jay chooses. That is the ADR 0050 outcome, reached by Jay's explicit choice instead of on arrival. This narrows ADR 0050's exception and invariant 1's wording by one condition: a create carrying a passed line is not marked Shared on arrival.
+- **Cloud forgets of project documents queued before K4.** These still apply once Jay approves them in the sync review, which names the passed milestones each would remove. The claims are not published for the cloud until K4, and this residual is listed in KNOWN-LIMITS with them.
 
 **Gaps closed.** Three paths an agent could use today close in K1.
 
@@ -134,7 +134,7 @@ A duplicate `## Milestones` therefore cannot be written by NorthKeep. A document
 
 There are four layers. Only the first is enforced.
 
-1. **The MCP `project_create` tools require `milestones` unless `draft: true`, and refuse it when `draft: true`.** The rule lives in the MCP tool layer, not in core. `northkeep projects set` (`packages/cli/src/projectsCmd.ts:153`), import and the desktop keep working. An agent that has no plan yet sends one line, `M1 Agree the milestones | test: Jay approves the plan`. This makes sure a plan exists. It cannot make sure the plan is good.
+1. **The MCP `project_create` tools, and `project_update` when it creates a project (`expected_revision: null`), require `milestones` unless `draft: true`, and refuse it when `draft: true`.** The rule lives in the MCP tool layer, not in core. `northkeep projects set` (`packages/cli/src/projectsCmd.ts:153`), import and the desktop keep working. An agent that has no plan yet sends one line, `M1 Agree the milestones | test: Jay approves the plan`. This makes sure a plan exists. It cannot make sure the plan is good.
 2. **Server instructions.** Both servers pass `instructions` to `McpServer` (local `server.ts:526`, hosted `apps/connector-server/src/mcp.ts:154`). Neither sets one today, and SDK 1.29.0 supports it. The pinned text:
    > When the user asks to create a project, propose its milestones and create it only after the user agrees to them. Report a milestone passed only when the user says its acceptance test passed. Never mark a milestone passed on your own judgment.
    This fits the contract's "create a project only when the user asks" (`packages/mcp-server/src/contract.ts:79`). Acceptance checks, host by host, whether the host shows this text to the model. KNOWN-LIMITS lists the hosts that were not verified.
@@ -158,9 +158,10 @@ Nothing new leaves the machine. Milestones live inside the project document and 
 
 These go into KNOWN-LIMITS when the code that makes them true ships. Each holds only on devices running a K1 or later build. Vault sync replaces the whole file (`packages/sync/src/client.ts`), so a second Mac on an older build can still write without these checks, and its changes arrive here.
 
-- From K1: "Through NorthKeep's own tools on your Mac, an AI app cannot mark a milestone as confirmed by you, and cannot change or remove a milestone that has passed."
-- From K4, replacing the line above: "Through NorthKeep's own tools, on your Mac or through the Cloud connector, an AI app cannot mark a milestone as confirmed by you, and cannot change or remove a milestone that has passed. A cloud change that would touch a passed milestone waits for your decision, and NorthKeep applies it only if you choose to."
-- "An AI app that can run commands on your Mac, as Claude Code can, is not limited by this. While your vault is unlocked, a program on your Mac can change milestones through the NorthKeep command line, by importing a project, by starting the NorthKeep app server and calling it, or with your passphrase. The confirm command refuses to run without a terminal, which stops the simplest case and nothing more."
+- From K1: "Through NorthKeep's own tools on your Mac, an AI app cannot record a milestone as confirmed by you, and cannot change or remove a milestone that has passed. NorthKeep's milestone view, `northkeep projects milestones`, shows that record." Once the K2 and K3 views ship, the last sentence becomes: "NorthKeep's milestone views (the Mac app, the phone, and `northkeep projects milestones`) show that record."
+- From K4, replacing the line above: "Through NorthKeep's own tools, on your Mac or through the Cloud connector, an AI app cannot record a milestone as confirmed by you, and cannot change or remove a milestone that has passed. A cloud change that would touch a passed milestone waits for your decision, and NorthKeep applies it only if you choose to. NorthKeep's milestone views (the Mac app, the phone, and `northkeep projects milestones`) show that record."
+- From K1: "Elsewhere in a project's text, an AI app can still write words that claim a milestone passed or was confirmed. NorthKeep refuses the common shapes of a forged milestone line, but it cannot catch every phrasing, so trust the milestone views, not the prose."
+- "An AI app that can run commands on your Mac, as Claude Code can, is not limited by this. While your vault is unlocked, a program on your Mac can change milestones through the NorthKeep command line, by importing a project, by starting the NorthKeep app server and calling it, or with your passphrase. `northkeep projects pass` checks only that it runs in a terminal, and a program can fake one with a pseudo-terminal tool such as `script` or `expect`: for example `echo yes | script -qec "northkeep projects pass rental M1" /dev/null` confirms M1 with no person typing. The check stops a plain pipe and nothing more."
 - "Whether an AI app shows NorthKeep's standing instructions to its model is up to that app. Verified: <hosts>. Not verified: <hosts>."
 
 ## Build plan
@@ -175,7 +176,8 @@ Each milestone ends with a test Jay runs. The next starts only after he says it 
     - the `memory_edit` and `memory_forget` guards;
     - the no-plan note and local server instructions;
     - the contract sentence;
-    - CLI `milestones` and `pass`.
+    - CLI `milestones` and `pass`;
+    - the Mac-side `milestones_changed` down-sync conflict, with its CLI and desktop text. This moved here from K4 after the K1 code review: K1's write rule refuses a cloud row the old down-sync still filed as an addition, so the row was held with no way to resolve it.
   - Acceptance uses copy-paste commands that need no agent. Each of these is refused: a passed line sent through `project_update`; a `memory_edit` that adds, ticks or removes a passed line, including the two-step malformed route, moving a passed line into another section, and renaming the heading; a `memory_edit` type change; a `memory_forget` of a project document; and `pass` when stdin is not a TTY. An agent write that makes the Milestones section malformed is refused. A converse turn scoped to a project cannot create a working row. A checkpoint on a project with checked tasks in Next Actions still saves. `projects set` still creates a project, and a title of "Files" is refused. Then one live Claude Code session proposes milestones without being asked.
 - **K2. Desktop.** The Milestones block, Mark passed, Confirm, the restore warning, and a repair view for a malformed section that highlights any stamped line. A stale page refuses with `stale_project`.
 - **K3. Phone.** List progress and the detail section. Jay runs or approves the TestFlight build.
@@ -184,7 +186,7 @@ Each milestone ends with a test Jay runs. The next starts only after he says it 
     - the connector fields, server instructions and `project_get` note;
     - the copied module with its identity test;
     - the cap message in `project-doc.ts`;
-    - the `milestones_changed` down-sync conflict, with the dialog text;
+    - the connector-side refusals (the Mac-side `milestones_changed` conflict moved to K1);
     - the doc-versus-code pass.
   - Merging to main deploys, so Jay merges.
 
@@ -294,3 +296,30 @@ A separate Claude agent rechecked the third draft. It used Claude models only an
 - Every other citation.
 
 **No further round before build.** The fixes above tighten the rule and do not add a new mechanism. The K1 code gets its own adversarial review against this ADR before Jay's acceptance test, as the review gate requires for the published claims.
+
+### K1 code review, 2026-10-14: CLEARED WITH WOUNDS
+
+Separate Claude agents reviewed the K1 code against this ADR: one the milestone module, two the vault, MCP, CLI and sync wiring.
+
+**Core module, fixed in d7e6bd3.**
+- **W1.** An open line an agent added could carry forged stamp text in its title or test. Now refused.
+- **W2.** Lookalike letters and compatibility forms (`(уou)`, `［x］`, full-width digits) slipped past the stamp test. The test now folds them.
+- **W3.** A stamped line under a lookalike heading (`### Milestones`, `## milestones`) sat outside the section and was accepted. Such headings and stamped lines added outside the section are refused.
+- **W4.** `owned()` and `setSection` matched Milestones at any heading level. Level 2 only (fixed in ae4253a).
+- **W5.** Passed lines could be reordered. Their order is now fixed.
+
+**Integration.**
+- **A. W3 bypass.** The outside-the-section check needed a Latin `M1` style id, so a stamped line with no id, a Cyrillic or Greek M, or `M02` was accepted through `memory_edit`, `project_update` and a draft `project_create`. Fixed in 19d4799 (test cae6996): any added line outside the section with an author stamp or a pass date is refused.
+- **B. Stuck held rows.** A cloud create with a `(you)` line, and an approved fast-forward adding a pass, were held as "moved" but planned as additions, so take theirs and keep mine both failed with "No cloud version is waiting". Take theirs, which runs as the owner, could also write a cloud-forged `(you)` stamp behind that generic reason. Fixed in 59ea107 (test 676e81f) by moving the K4 down-sync conflict here.
+- **C. Claims.** KNOWN-LIMITS did not name the pseudo-terminal bypass of `projects pass`, and described the held rows as "moved". Fixed in 0b9c327.
+- **Minor.** `√` did not count as a checkbox. Fixed in 19d4799.
+
+### K4 review F1, 2026-10-14: claim narrowed
+
+The K4 adversarial review found that an agent could add, outside the real Milestones section, text a person reads as a confirmed pass, while NorthKeep's parsed record stayed correct. Accepted examples: a setext `Milestones` heading over a `- [x] M2 ... | passed 14 Oct 2026 (confirmed by you)` line in `project_update` status; a bare `- [x] M2` under that heading; `✅ M2 Order seeds passed, confirmed by you` in What & Why; a Log entry ending "passed on 14 October 2026, confirmed by you." The same finding applies to K1's local tools.
+
+This was the fourth round of pattern fixes for one premise: W1 and W3 in the core review, finding A, and now F1. Text-shape blocking cannot catch every phrasing, and each round only moved the edge.
+
+- **Structural fix, in K1.** A line followed by a `=` or `-` underline now counts as a heading, so an added setext heading that folds to Milestones is refused like the ATX lookalikes. An added line outside the section with a checkbox shape and a milestone id is refused too, which covers the bare `- [x] M2` and the `✅ M2` lines. No general prose matching was added: the Log entry above is still accepted.
+- **Claim narrowed instead of chasing phrasings.** The record is what NorthKeep enforces, so the claim now says an AI app cannot *record* a milestone as confirmed by you, names the views that show that record, and a new limit says prose elsewhere can still claim a pass.
+- **Forgets name their passes.** The K1 forget residual now has `planDownSync` list the passed milestones of each project document a cloud forget would remove, and `share sync` and the Mac app's Sync now review print them.

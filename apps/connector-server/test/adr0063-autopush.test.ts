@@ -25,6 +25,7 @@ import { InMemoryConnectorStorage, type ConnectorStorage } from '../src/storage.
 import { NeonConnectorStorage } from '../src/neon-storage.js';
 import { connectMcpApp, pgliteAsNeon, startServer, TEST_PEPPER_B64, withEnv } from './adr0061-support.js';
 import { fakeServer } from '../../../packages/sync/test/fake-sync-server.js';
+import { plantWorkingRow } from '../../../packages/core/test/support/plant-working-row.js';
 
 /**
  * ADR 0063 D5 against the real connector on both stores and the repo's fake
@@ -118,7 +119,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       expect(down.added).toBe(1);
       expect((await pushVault({ vaultPath: vp(homeB), deviceSecret, masterKey: key(homeB) })).ok).toBe(true);
       b = open(homeB);
-      b.forget(yId);
+      b.forget(yId, { actor: 'owner' });
       b.save();
       b.close();
       expect((await pushVault({ vaultPath: vp(homeB), deviceSecret, masterKey: key(homeB) })).ok).toBe(true);
@@ -171,7 +172,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       };
       const v = Vault.create({ path: vp, passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
       v.remember({ content: 'w: shared note', type: 'semantic', scope: 'work' });
-      v.remember({ content: serializeProjectDoc(mergeProjectDoc(emptyProjectDoc(), { whatWhy: 'Pending.', status: 'R1.', logEntry: 'seed' })), type: 'working', scope: 'project:p' });
+      plantWorkingRow(v, { content: serializeProjectDoc(mergeProjectDoc(emptyProjectDoc(), { whatWhy: 'Pending.', status: 'R1.', logEntry: 'seed' })), type: 'working', scope: 'project:p' });
       v.setScopeShared('work', true);
       v.setScopeShared('project:p', true);
       v.save();

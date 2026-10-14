@@ -179,7 +179,7 @@ describe('review job snapshot and concurrency boundaries', () => {
       await waitForRun();
       await session.withVault((vault) => {
         if (mutation === 'added') vault.remember({ content: 'Added synthetic fact.', type: 'semantic', scope: 'personal' });
-        else vault.editMemory(vault.list()[0]!.id, { content: 'Changed synthetic fact.' });
+        else vault.editMemory(vault.list()[0]!.id, { content: 'Changed synthetic fact.' }, { actor: 'owner' });
         vault.save();
       });
       reviewMock.finish();
@@ -205,7 +205,7 @@ describe('review job snapshot and concurrency boundaries', () => {
       expect(preflight.status).toBe(200);
       if (mutation === 'content') {
         await session.withVault((vault) => {
-          vault.editMemory(vault.list()[0]!.id, { content: 'Consent changed synthetic fact.' });
+          vault.editMemory(vault.list()[0]!.id, { content: 'Consent changed synthetic fact.' }, { actor: 'owner' });
           vault.save();
         });
       } else {

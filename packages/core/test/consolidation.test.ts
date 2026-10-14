@@ -201,7 +201,7 @@ describe('guided consolidation core', () => {
     const sources = seed(vault);
     const consolidated = vault.consolidateMemories({ vault_id: vault.getVaultId(), operation_id: OP1, sources, content: 'Combined.' });
     const restored = vault.restoreConsolidation({ vault_id: vault.getVaultId(), operation_id: OP2, result_id: consolidated.result.id, expected_result: consolidated.result });
-    vault.forget(restored.restored_entries[0]!.id);
+    vault.forget(restored.restored_entries[0]!.id, { actor: 'owner' });
     const history = vault.consolidationHistory();
     expect(history).toHaveLength(1);
     expect(history[0]!.can_restore).toBe(false);
@@ -214,8 +214,8 @@ describe('guided consolidation core', () => {
     const firstSources = seed(vault);
     const first = vault.consolidateMemories({ vault_id: vault.getVaultId(), operation_id: OP1, sources: firstSources, content: 'First group.' });
     const restored = vault.restoreConsolidation({ vault_id: vault.getVaultId(), operation_id: OP2, result_id: first.result.id, expected_result: first.result });
-    vault.editMemory(restored.restored_entries[0]!.id, { content: 'Legitimate later edit.' });
-    vault.forget(firstSources[1]!.id);
+    vault.editMemory(restored.restored_entries[0]!.id, { content: 'Legitimate later edit.' }, { actor: 'owner' });
+    vault.forget(firstSources[1]!.id, { actor: 'owner' });
     const secondSources = seed(vault, { scope: 'work' });
     vault.consolidateMemories({ vault_id: vault.getVaultId(), operation_id: '33333333-3333-4333-8333-333333333333', sources: secondSources, content: 'Second group.' });
     const history = vault.consolidationHistory();

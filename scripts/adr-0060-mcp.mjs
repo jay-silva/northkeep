@@ -95,7 +95,7 @@ try {
     if (action === 'list') {
       result = await client.callTool({ name: 'memory_list', arguments: rest[0] ? { scope: rest[0] } : {} });
     } else if (action === 'update') {
-      result = await client.callTool({ name: 'project_create', arguments: { project: rest[0], what_why: 'Acceptance project.', status: 'Created by the acceptance client.' } });
+      result = await client.callTool({ name: 'project_create', arguments: { project: rest[0], what_why: 'Acceptance project.', status: 'Created by the acceptance client.', milestones: 'M1 Agree the milestones | test: the user approves the plan' } });
     } else if (action === 'remember') {
       result = await client.callTool({ name: 'memory_remember', arguments: { content: rest[0], type: 'semantic' } });
     } else if (action === 'describe') {

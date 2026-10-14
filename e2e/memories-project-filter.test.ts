@@ -4,6 +4,7 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensureDeviceSecret, KDF_INTERACTIVE, Vault } from '@northkeep/core';
 import { startUiServer, type RunningUiServer } from '../apps/web/dist/server.js';
+import { plantWorkingRow } from '../packages/core/test/support/plant-working-row.js';
 
 const passphrase = 'synthetic project filter http passphrase';
 const previousHome = process.env.NORTHKEEP_HOME;
@@ -30,7 +31,7 @@ beforeAll(async () => {
   const { secret } = ensureDeviceSecret();
   const vault = Vault.create({ path: vaultPath, passphrase, deviceSecret: secret, kdf: KDF_INTERACTIVE });
   vault.remember({ content: 'ordinary dog memory', type: 'semantic', scope: 'personal' });
-  vault.remember({ content: 'project dog record', type: 'working', scope: 'project:alpha' });
+  plantWorkingRow(vault, { content: 'project dog record', type: 'working', scope: 'project:alpha' });
   vault.save();
   vault.close();
   secret.fill(0);

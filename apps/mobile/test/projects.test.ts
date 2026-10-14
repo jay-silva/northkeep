@@ -11,7 +11,8 @@ import {
   listProjectViews,
 } from '@northkeep/core';
 import { entriesReader, filterProjectRows, projectDetail, projectRows, textBlocks, updatedLabel } from '../src/lib/projects.js';
-import { DEMO_PASSPHRASE, demoSeed } from '../src/lib/demo-vault.js';
+import { DEMO_PASSPHRASE, seedDemoVault } from '../src/lib/demo-vault.js';
+import { plantWorkingRow } from '../../../packages/core/test/support/plant-working-row.js';
 
 /**
  * The Projects tab's data mapping, driven through a real Vault the way the
@@ -59,13 +60,13 @@ describe('projects data mapping', () => {
     // created_at has millisecond resolution; step past it so "newest" is unambiguous.
     const start = Date.now();
     while (Date.now() <= start + 1) { /* wait */ }
-    return vault.remember({ content, type: 'working', scope: `project:${slug}`, source: 'test', ...extra });
+    return plantWorkingRow(vault, { content, type: 'working', scope: `project:${slug}`, source: 'test', ...extra });
   }
 
   it('lists projects newest first, with status line, app name, and nothing else from the vault', () => {
     vault.remember({ content: 'A plain memory', type: 'semantic', scope: 'personal' });
     vault.remember({ content: 'Not a project doc', type: 'episodic', scope: 'project:alpha' });
-    vault.remember({ content: '## Current Status\n\nbad slug', type: 'working', scope: 'project:Bad_Slug' });
+    plantWorkingRow(vault, { content: '## Current Status\n\nbad slug', type: 'working', scope: 'project:Bad_Slug' });
     writeProject('alpha', 'Alpha is going fine.\nSecond line.', { metadata: provenance('Claude') });
     writeProject('beta', 'Beta just started.');
 
@@ -109,7 +110,7 @@ describe('projects data mapping', () => {
   it('searches full saved status and actions, filters verified local states, and sorts by name', () => {
     writeProject('zebra', 'First line.\nHidden search phrase.');
     const content = applyProjectUpdate('', { project: 'alpha', expected_revision: null, title: 'Alpine', status: 'Ready', next_actions: '- First action\n- Find the chart', draft: true }).content;
-    vault.remember({ type: 'working', scope: 'project:alpha', content });
+    plantWorkingRow(vault, { type: 'working', scope: 'project:alpha', content });
     writeProject('conflict', 'One'); writeProject('conflict', 'Two');
     const rows = projectRows(entries());
     expect(filterProjectRows(rows, 'hidden search', 'all', 'recent').map(r => r.slug)).toEqual(['zebra']);
@@ -148,7 +149,7 @@ describe('projects data mapping', () => {
       { project: 'alpha', expected_revision: 'x', log_entry: 'Newer entry.' },
       new Date('2026-09-05T00:00:00.000Z'),
     ).content;
-    vault.remember({ content, type: 'working', scope: 'project:alpha', metadata: provenance('Claude') });
+    plantWorkingRow(vault, { content, type: 'working', scope: 'project:alpha', metadata: provenance('Claude') });
 
     const result = projectDetail(entries(), 'alpha');
     expect(result.ok).toBe(true);
@@ -181,7 +182,7 @@ describe('projects data mapping', () => {
   });
 
   it('tells the user to fix a document with duplicate sections on the Mac', () => {
-    vault.remember({
+    plantWorkingRow(vault, {
       content: '## Current Status\n\nA\n\n## Current Status\n\nB',
       type: 'working',
       scope: 'project:dup',
@@ -223,7 +224,7 @@ describe('demo project', () => {
         deviceSecret: Buffer.from(generateDeviceSecret()),
         kdf: KDF_INTERACTIVE,
       });
-      for (const memory of demoSeed()) vault.remember(memory);
+      seedDemoVault(vault);
       const entries = vault.list().reverse();
       vault.close();
 

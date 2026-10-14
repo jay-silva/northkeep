@@ -111,6 +111,7 @@ import {
   reviewShow,
 } from './reviewCmd.js';
 import { runLauncher } from './launcher.js';
+import { projectsMilestonesCmd, projectsPassCmd } from './milestonesCmd.js';
 
 // Register the Node platform adapters (crypto/sqlite/storage) exactly once,
 // before any vault or crypto operation runs (ADR 0018 platform seam).
@@ -273,7 +274,7 @@ program
   .argument('<id>', 'memory id from "northkeep list"')
   .action(async (id: string) => {
     await withVault(async (vault) => {
-      const tombstone = vault.forget(id);
+      const tombstone = vault.forget(id, { actor: 'owner' });
       vault.save();
       console.log(`✓ Forgot ${tombstone.id} (content removed; deletion recorded ${tombstone.forgotten_at})`);
       console.log('  Note: the previous vault state remains in vault.nkv.bak until the next write.');
@@ -308,7 +309,7 @@ program
       if (options.content !== undefined) patch.content = options.content;
       if (options.scope !== undefined) patch.scope = options.scope;
       if (options.type !== undefined) patch.type = options.type as MemoryType; // validated in editMemory
-      const edited = vault.editMemory(id, patch);
+      const edited = vault.editMemory(id, patch, { actor: 'owner' });
       vault.save();
       console.log(`✓ Edited → [${edited.type} / ${edited.scope}] ${edited.id}`);
       console.log('  The previous version is kept as history (superseded), so the chain stays intact.');
@@ -1015,6 +1016,35 @@ projects
   .option('--json', 'print the board as JSON')
   .action(async (options: { staleDays?: string; json?: boolean }) => {
     await projectsBoardCmd(options, withVault, fail);
+  });
+
+projects
+  .command('milestones')
+  .description("Show a project's milestones and their acceptance tests (read only)")
+  .argument('<slug>', 'project slug')
+  .action(async (slug: string) => {
+    await projectsMilestonesCmd(slug, withVault, fail);
+  });
+
+projects
+  .command('pass')
+  .description('Confirm that a milestone passed its acceptance test. You type yes in a terminal; there is no flag that skips it')
+  .argument('<slug>', 'project slug')
+  .argument('<id>', 'the milestone id, such as M2, from "northkeep projects milestones"')
+  .action(async (slug: string, id: string) => {
+    // One key for the read and the write, so the passphrase is asked once.
+    const { deps, opened } = mirrorDeps();
+    const vaultPath = vaultPathOpt();
+    const once: WithVault = async (fn) => (await deps.vaultRunner())(fn);
+    try {
+      const { saved } = await trackSaves(vaultPath, () =>
+        projectsPassCmd(slug, id, { withVault: once, fail, isTTY: () => process.stdin.isTTY === true, ask: promptLine }),
+      );
+      await autoPushAfterWrite({ vaultPath, masterKey: opened()?.keyForPush ?? null, saved });
+    } finally {
+      opened()?.dispose();
+      opened()?.keyForPush?.fill(0);
+    }
   });
 
 /** launchd needs the real script, not the npm bin symlink. */

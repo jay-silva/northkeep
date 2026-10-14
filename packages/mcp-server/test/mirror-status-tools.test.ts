@@ -58,8 +58,8 @@ function revision(v: Vault, slug: string): string {
 
 async function seed(): Promise<void> {
   await runner((v) => {
-    v.updateProject({ project: 'alpha', expected_revision: null, what_why: 'Alpha.', status: 'Starting.' });
-    v.updateProject({ project: 'beta', expected_revision: null, what_why: 'Beta.', status: 'Starting.' });
+    v.updateProject({ project: 'alpha', expected_revision: null, what_why: 'Alpha.', status: 'Starting.' }, { actor: 'owner' });
+    v.updateProject({ project: 'beta', expected_revision: null, what_why: 'Beta.', status: 'Starting.' }, { actor: 'owner' });
     v.save();
   });
 }
@@ -74,8 +74,8 @@ async function exportThenChangeBoth(): Promise<number> {
   await exportProjects({ home: lab.home, vaultPath: lab.vaultPath, withVault: runner, by: 'cli', repo });
   setGitSpawnObserver(null);
   await runner((v) => {
-    v.updateProject({ project: 'alpha', expected_revision: revision(v, 'alpha'), status: 'Changed.' });
-    v.updateProject({ project: 'beta', expected_revision: revision(v, 'beta'), status: 'Changed.' });
+    v.updateProject({ project: 'alpha', expected_revision: revision(v, 'alpha'), status: 'Changed.' }, { actor: 'owner' });
+    v.updateProject({ project: 'beta', expected_revision: revision(v, 'beta'), status: 'Changed.' }, { actor: 'owner' });
     v.save();
   });
   return spawns;

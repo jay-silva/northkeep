@@ -16,6 +16,11 @@
       "types": "./dist/project-doc.d.ts",
       "import": "./dist/project-doc.js",
       "default": "./dist/project-doc.js"
+    },
+    "./project-milestones-owner": {
+      "types": "./dist/project-milestones-owner.d.ts",
+      "import": "./dist/project-milestones-owner.js",
+      "default": "./dist/project-milestones-owner.js"
     }
   },
   "scripts": {

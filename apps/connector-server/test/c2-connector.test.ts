@@ -296,7 +296,7 @@ describe('C2 client push + share marking', () => {
 
     // Forget the new memory in the vault and re-push: the server row must vanish.
     withVault((vault) => {
-      vault.forget(newId);
+      vault.forget(newId, { actor: 'owner' });
       vault.save();
     });
     await withVault((vault) => pushSharedScopes({ server: base, deviceSecret, scopes: ['work'], vault }));

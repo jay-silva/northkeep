@@ -711,7 +711,7 @@ async function dispatch(
     if (!id || !/^[0-9a-f-]{8,36}$/i.test(id)) return bad(400, 'A memory id is required.');
     return ok(
       await session.withVault((vault) => {
-        const tombstone = vault.forget(id);
+        const tombstone = vault.forget(id, { actor: 'owner' });
         vault.save();
         return { forgotten: tombstone.id, forgotten_at: tombstone.forgotten_at };
       }),
@@ -770,7 +770,7 @@ async function dispatch(
     }
     return ok(
       await session.withVault((vault) => {
-        const edited = vault.editMemory(id, patch);
+        const edited = vault.editMemory(id, patch, { actor: 'owner' });
         vault.save();
         return { memory: publicEntry(edited) };
       }),
@@ -1813,7 +1813,7 @@ async function dispatch(
         const forgotten: string[] = [];
         for (const id of ids) {
           try {
-            forgotten.push(vault.forget(id).id);
+            forgotten.push(vault.forget(id, { actor: 'owner' }).id);
           } catch {
             // already forgotten or unknown — undo is best-effort per id
           }

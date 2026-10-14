@@ -32,7 +32,7 @@ import {
   type VaultStamp,
 } from '@northkeep/sync';
 import { DEFAULT_CONNECTOR_SERVER_URL, allowlistHashFromToken, phoneVaultStamp } from './connect-flow';
-import { DEMO_PASSPHRASE, demoSeed } from './demo-vault';
+import { DEMO_PASSPHRASE, seedDemoVault } from './demo-vault';
 import { deleteIfExists, demoVaultPath, recoverVaultFileIfMissing, vaultPath, vaultSidecarPaths } from './paths';
 import {
   biometricUnlockEnabled,
@@ -522,7 +522,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     } finally {
       memzero(secret);
     }
-    for (const memory of demoSeed()) vault.remember(memory);
+    seedDemoVault(vault);
     vault.save();
     // Drop any prior session state (there should be none coming from onboarding).
     closeSession();
@@ -1195,7 +1195,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         await saveLocalDirty(true); // under the gate, before the save (see addMemory)
         // editMemory supersedes by appending a new entry (append-only; the
         // chain stays valid, ADR 0015). No-op patches return the original.
-        const edited = vault.editMemory(id, patch);
+        const edited = vault.editMemory(id, patch, { actor: 'owner' });
         vault.save();
         return edited;
       });
@@ -1215,7 +1215,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         await saveLocalDirty(true); // under the gate, before the save (see addMemory)
         // forget tombstones in place (content blanked, row + hashes kept so the
         // chain and the "forgotten on this date" fact both survive).
-        const forgotten = vault.forget(id);
+        const forgotten = vault.forget(id, { actor: 'owner' });
         vault.save();
         return forgotten;
       });

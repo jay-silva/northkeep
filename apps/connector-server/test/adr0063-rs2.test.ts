@@ -10,6 +10,7 @@ import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage, type ConnectorStorage } from '../src/storage.js';
 import { NeonConnectorStorage } from '../src/neon-storage.js';
 import { connectMcpApp, pgliteAsNeon, startServer, TEST_PEPPER_B64, withEnv } from './adr0061-support.js';
+import { plantWorkingRow } from '../../../packages/core/test/support/plant-working-row.js';
 
 /**
  * Recheck R-S2 through forgetting the document (build review A7), on both
@@ -51,7 +52,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       try {
         vault.remember({ content: 'work seed', type: 'semantic', scope: 'work' });
         vault.setScopeShared('work', true);
-        const mine = vault.remember({ content: doc('MAC OWN n.'), type: 'working', scope: 'project:n' });
+        const mine = plantWorkingRow(vault, { content: doc('MAC OWN n.'), type: 'working', scope: 'project:n' });
         vault.save();
         await pushSharedScopes({ server: base, deviceSecret, scopes: vault.sharedScopes(), vault });
         const mcp = await connectMcpApp(base, await startPairing({ server: base, deviceSecret }));
@@ -62,7 +63,7 @@ for (const kind of ['memory', 'pglite'] as const) {
         await pushSharedScopes({ server: base, deviceSecret, scopes: vault.sharedScopes(), vault });
         expect(planDownSync({ vault, pending: await fetchPending({ server: base, deviceSecret }) }).conflicts.map((c) => c.reason)).toEqual(['stale']);
 
-        vault.forget(mine.id);
+        vault.forget(mine.id, { actor: 'owner' });
         vault.save();
         await pushSharedScopes({ server: base, deviceSecret, scopes: vault.sharedScopes(), vault });
         const pending = await fetchPending({ server: base, deviceSecret });

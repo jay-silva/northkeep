@@ -17,6 +17,25 @@ import {
   type ProjectDoc,
 } from './project-doc.js';
 import type { MemoryEntry } from './types.js';
+import {
+  MILESTONES_HEADING,
+  MilestoneError,
+  formatMilestones,
+  parseMilestones,
+  recordAgentPass,
+  replacePlan,
+  summarizeMilestones,
+  type MilestonePlan,
+  type MilestonePlanInput,
+  type MilestoneSummary,
+  type PassedMilestone,
+} from './project-milestones.js';
+
+/**
+ * Every section a reader takes by name; a duplicate of any of them makes the
+ * project unreadable, and none of them can be the project title.
+ */
+export const PROJECT_OWNED_SECTIONS = [...PROJECT_SECTION_HEADINGS, 'Open Questions', 'Files', MILESTONES_HEADING] as const;
 
 /** Row source of a head written by `northkeep projects import` (vault.ts importProject). */
 export const PROJECT_IMPORT_SOURCE = 'northkeep:project-import';
@@ -82,16 +101,19 @@ export interface ProjectView {
   archive_summary: ProjectArchiveSummary;
   last_writer: ProjectProvenance | null;
   draft: boolean;
+  milestones: MilestonePlan;
 }
 /** `imported`: the current head was written by `projects import`, so `updated_at` is the import time, not the work's (ADR 0054). */
 export interface ProjectSummary { project:string; scope:string; title:string|null; status:string|null; revision:string|null; updated_at:string|null; conflict:boolean; last_writer_host:string|null; draft:boolean; imported:boolean }
 
-export type ProjectOverview = ProjectSummary & { next_actions: string | null };
+export type ProjectOverview = ProjectSummary & { next_actions: string | null; milestones: MilestoneSummary | null };
 
 export interface ProjectCheckpointRequest {
   vault_id:string; project:string; mode:ProjectHandoffMode; operation_id:string; expected_revision:string;
   status:string; completed:string; next_actions:string; decision?:string; open_questions?:string; files?:ProjectFileReference[];
   writer?:ProjectWriter;
+  /** ADR 0065: report the current milestone passed; stamped (agent). */
+  milestone_passed?:string;
 }
 /** ADR 0063: whole-text write of a project head, bound to the head the caller read (null creates). */
 export interface ProjectReplaceRequest { project:string; expected_revision:string|null; content:string; source:string; metadata?:Record<string,unknown>; writer?:ProjectWriter }
@@ -103,6 +125,10 @@ export interface ProjectUpdateRequest {
   writer?:ProjectWriter;
   /** True only on creation; false removes the draft line from an existing document. */
   draft?:boolean;
+  /** ADR 0065: the open part of the plan, through replacePlan. */
+  milestones?:MilestonePlanInput;
+  /** ADR 0065: the current milestone passed, stamped (agent) with the save date. */
+  milestone_passed?:string;
 }
 export interface ProjectHandoffReceipt {
   operation_id:string; project:string; mode:ProjectHandoffMode; base_revision:string; result_revision:string;
@@ -117,6 +143,21 @@ export interface ProjectHandoffMetadata {
 
 /** One remembered checkpoint or wrap save; `saved_at` equals the head's created_at (ADR 0062 Decision 1). */
 export interface ProjectOperationRecord { operation_id:string; request_fingerprint:string; saved_at:string }
+
+/**
+ * Who a vault write is for (ADR 0065 Decision 2). The vault cannot tell an AI
+ * app from the user, so every caller says which it is; the agent write rule
+ * runs only for 'agent'. There is no default on purpose.
+ */
+export type WriteActor = 'agent' | 'owner';
+export interface WriteActorOptions { actor: WriteActor }
+export function writeActor(options:WriteActorOptions):WriteActor {
+  const actor=(options as Partial<WriteActorOptions>|undefined)?.actor;
+  if(actor!=='agent'&&actor!=='owner')throw new Error("A vault write must say whether it is for an AI app ('agent') or the user ('owner').");
+  return actor;
+}
+export const PROJECT_DOCUMENT_FORGET_MESSAGE='This memory is a project document. An AI app cannot forget it; the user can delete the project in the NorthKeep app or with northkeep projects delete.';
+export const PROJECT_DOCUMENT_RETYPE_MESSAGE='This memory is a project document, so an AI app cannot change its type or move it. Change the project with project_update.';
 
 export class ProjectHandoffError extends Error {
   constructor(public readonly code:ProjectHandoffErrorCode, message:string, public readonly current?:ProjectView) { super(message); this.name='ProjectHandoffError'; }
@@ -174,10 +215,26 @@ export function validateProjectFileReferences(files:ProjectFileReference[]):Proj
   });
 }
 
+/** The level-1 title is never a section, so a project titled like one cannot be read or written as it. */
+const isTitle=(doc:ProjectDoc,index:number):boolean=>index===0&&doc.sections[0]!.level===1;
+/** Milestones is level 2 only, as in project-milestones.ts, so both read the same section (review wound W4). */
+function sectionsNamed(doc:ProjectDoc,title:string){ return doc.sections.filter((s,i)=>s.title===title&&!isTitle(doc,i)&&(title!==MILESTONES_HEADING||s.level===2)); }
 function owned(doc:ProjectDoc,title:string):string {
-  const matches=doc.sections.filter((s)=>s.title===title); if(matches.length>1) fail(`Project document has duplicate ${title} sections.`); return matches[0]?.body??'';
+  const matches=sectionsNamed(doc,title); if(matches.length>1) fail(`Project document has duplicate ${title} sections.`); return matches[0]?.body??'';
 }
-function setSection(doc:ProjectDoc,title:string,body:string):void { const found=doc.sections.find((s)=>s.title===title); if(found) found.body=body; else doc.sections.push({level:2,title,body}); }
+function setSection(doc:ProjectDoc,title:string,body:string):void { const found=sectionsNamed(doc,title)[0]; if(found) found.body=body; else doc.sections.push({level:2,title,body}); }
+/** Only a level-2 heading holds the plan; a new section goes right after Current Status. */
+function setMilestonesSection(doc:ProjectDoc,body:string):void {
+  const found=sectionsNamed(doc,MILESTONES_HEADING)[0];
+  if(found){found.body=body;return;}
+  const status=doc.sections.findIndex((s,i)=>s.title==='Current Status'&&!isTitle(doc,i));
+  doc.sections.splice(status===-1?doc.sections.length:status+1,0,{level:2,title:MILESTONES_HEADING,body});
+}
+/** Why a project document cannot be read, or null. Every write checks its result with this before commit. */
+export function projectDocProblem(content:string):string|null {
+  try{const doc=parseProjectDoc(content);for(const h of PROJECT_OWNED_SECTIONS)owned(doc,h);return null;}
+  catch(error){if(error instanceof ProjectHandoffError)return error.message;throw error;}
+}
 const FILES_FENCE='```northkeep-files-json';
 export function parseProjectFiles(text:string):ProjectFileReference[]|null {
   if (!text.startsWith(FILES_FENCE+'\n') || !text.endsWith('\n```')) return null;
@@ -218,8 +275,11 @@ export function readProjectProvenance(entry:MemoryEntry):ProjectProvenance|null{
   return {version:1,host:m.host,host_version:m.host_version as string|null,model:null,session_id:m.session_id,recorded_at:m.recorded_at};
 }
 
-export function applyProjectUpdate(content:string, request:ProjectUpdateRequest, now=new Date()):{content:string;archives:string[]} {
-  const doc=parseProjectDoc(content); for(const h of ['What & Why','Current Status','Next Actions','Decisions','Log','Open Questions','Files']) owned(doc,h);
+function milestoneStep<T>(step:()=>T):T { try{return step();}catch(error){if(error instanceof MilestoneError)fail(error.message);throw error;} }
+
+/** `passed` is the (agent) line this update stamped, for the agent write rule. */
+export function applyProjectUpdate(content:string, request:ProjectUpdateRequest, now=new Date()):{content:string;archives:string[];passed?:PassedMilestone} {
+  const doc=parseProjectDoc(content); for(const h of PROJECT_OWNED_SECTIONS) owned(doc,h);
   const replacements:[string,string,string|undefined,boolean][]=[['What & Why','what_why',request.what_why,false],['Current Status','status',request.status,false],['Next Actions','next_actions',request.next_actions,true],['Open Questions','open_questions',request.open_questions,true]];
   for(const [heading,field,value,empty] of replacements) if(value!==undefined){assertProjectText(value,field,empty);setSection(doc,heading,value);}
   if(request.title!==undefined)setProjectTitle(doc,request.title);
@@ -227,13 +287,19 @@ export function applyProjectUpdate(content:string, request:ProjectUpdateRequest,
   if(request.decision!==undefined){assertProjectText(request.decision,'decision',false);const old=owned(doc,'Decisions');setSection(doc,'Decisions',`${old}${old?'\n':''}- ${date} - ${request.decision}`);}
   if(request.log_entry!==undefined){assertProjectText(request.log_entry,'log_entry',false);const old=owned(doc,'Log');setSection(doc,'Log',`- ${date} - ${request.log_entry}${old?'\n'+old:''}`);}
   if(request.files!==undefined)setSection(doc,'Files',formatProjectFiles(request.files));
+  let plan=parseMilestones(serializeProjectDoc(doc)); let passed:PassedMilestone|undefined;
+  if(request.milestones!==undefined){const replaced=milestoneStep(()=>replacePlan(plan,request.milestones!));setMilestonesSection(doc,formatMilestones(replaced));plan=replaced;}
+  if(request.milestone_passed!==undefined){
+    if(typeof request.milestone_passed!=='string')fail('milestone_passed must be a milestone id such as M3.');
+    const recorded=milestoneStep(()=>recordAgentPass(plan,request.milestone_passed!,now.toISOString()));setMilestonesSection(doc,formatMilestones(recorded.plan));passed=recorded.passed;
+  }
   if(request.draft!==undefined){
     if(typeof request.draft!=='boolean')fail('draft must be a boolean.');
     if(request.draft&&request.expected_revision!==null)fail('draft can only be set when a project is created.');
     const host=request.writer!==undefined?validateProjectWriter(request.writer).host:'unknown host';
     setProjectDraft(doc,request.draft,formatProjectDraftLine(host,now));
   }
-  const rolled=rollProjectLog(doc); const result=serializeProjectDoc(rolled.doc); if (result.length > PROJECT_DOC_MAX_CHARS) fail(PROJECT_DOC_CAP_MESSAGE); return {content:result,archives:rolled.archived};
+  const rolled=rollProjectLog(doc); const result=serializeProjectDoc(rolled.doc); if (result.length > PROJECT_DOC_MAX_CHARS) fail(PROJECT_DOC_CAP_MESSAGE); return {content:result,archives:rolled.archived,...(passed?{passed}:{})};
 }
 
 export function readProjectHandoffMetadata(entry:MemoryEntry):ProjectHandoffMetadata|null {
@@ -278,7 +344,7 @@ function setProjectTitle(doc:ProjectDoc, title:string):void {
   const value=title.trim();
   if(value.length>PROJECT_TITLE_MAX_CHARS)fail(`Project title is too long (${PROJECT_TITLE_MAX_CHARS} characters max).`);
   if(/[\r\n]/.test(value))fail('Project title must be a single line.');
-  if((PROJECT_SECTION_HEADINGS as readonly string[]).includes(value)||value==='Log archive')fail('Project title cannot be the name of a document section.');
+  if((PROJECT_OWNED_SECTIONS as readonly string[]).includes(value)||value==='Log archive')fail('Project title cannot be the name of a document section.');
   const first=doc.sections[0]; const hasTitle=first!==undefined&&first.level===1;
   if(value.length===0){ if(hasTitle){ if(first.body.length>0){doc.preamble=[doc.preamble,first.body].filter((s)=>s.length>0).join('\n\n');} doc.sections.shift(); } return; }
   if(hasTitle){first.title=value;return;}
@@ -289,7 +355,7 @@ export function getProjectView(vault:ProjectVaultReader, project:string, allowed
   const scope=projectScope(project); if(allowedScopes!==undefined&&!allowedScopes.includes(scope))throw new ProjectHandoffError('scope_denied','Project scope is outside this connection grant.');
   const all=vault.list({scope,includeSuperseded:true,allowedScopes}); const live=all.filter((e)=>e.type==='working'&&!e.forgotten_at&&!e.superseded_at);
   if(live.length===0)throw new ProjectHandoffError('not_found','Project was not found.'); if(live.length>1)throw new ProjectHandoffError('project_conflict','Project has multiple current documents.');
-  const head=live[0]!; const doc=parseProjectDoc(head.content); for(const h of ['What & Why','Current Status','Next Actions','Decisions','Log','Open Questions','Files'])owned(doc,h);
+  const head=live[0]!; const doc=parseProjectDoc(head.content); for(const h of PROJECT_OWNED_SECTIONS)owned(doc,h);
   const fileText=owned(doc,'Files'); const entries=all.filter((e)=>!e.forgotten_at);
   const priors=entries.filter((e)=>e.type==='working'&&e.superseded_at).reverse();
   const archiveRows=entries.filter((e)=>e.type==='episodic'&&e.content.startsWith(PROJECT_LOG_ARCHIVE_HEADING)).reverse();
@@ -298,7 +364,7 @@ export function getProjectView(vault:ProjectVaultReader, project:string, allowed
   const revisions=priors.slice(0,PROJECT_REVISION_SUMMARY_LIMIT).map((e)=>projectRevisionSummary(e));
   const stamps=archiveRows.map((e)=>e.created_at);
   const archive_summary={count:archiveRows.length,oldest:stamps.length?stamps[stamps.length-1]!:null,newest:stamps.length?stamps[0]!:null};
-  return {vault_id:vault.getVaultId(),project,scope,shared:vault.sharedScopes().includes(scope),revision:head.id,updated_at:head.created_at,content:head.content,title:getProjectTitle(doc),what_why:owned(doc,'What & Why'),status:owned(doc,'Current Status'),next_actions:owned(doc,'Next Actions'),decisions:owned(doc,'Decisions'),open_questions:owned(doc,'Open Questions'),files:parseProjectFiles(fileText),files_text:fileText,log:owned(doc,'Log'),history,archives,revisions,archive_summary,last_writer:readProjectProvenance(head),draft:isProjectDraft(doc)};
+  return {vault_id:vault.getVaultId(),project,scope,shared:vault.sharedScopes().includes(scope),revision:head.id,updated_at:head.created_at,content:head.content,title:getProjectTitle(doc),what_why:owned(doc,'What & Why'),status:owned(doc,'Current Status'),next_actions:owned(doc,'Next Actions'),decisions:owned(doc,'Decisions'),open_questions:owned(doc,'Open Questions'),files:parseProjectFiles(fileText),files_text:fileText,log:owned(doc,'Log'),history,archives,revisions,archive_summary,last_writer:readProjectProvenance(head),draft:isProjectDraft(doc),milestones:parseMilestones(head.content)};
 }
 
 function projectRevisionSummary(entry:MemoryEntry):ProjectRevisionSummary{
@@ -328,10 +394,10 @@ export function listProjectOverview(vault:ProjectVaultReader,allowedScopes?:stri
   }
   return [...groups].sort(([a],[b])=>a.localeCompare(b)).map(([project,heads])=>{
     const scope=projectScope(project);
-    if(heads.length!==1)return {project,scope,title:null,status:null,next_actions:null,revision:null,updated_at:null,conflict:true,last_writer_host:null,draft:false,imported:false};
+    if(heads.length!==1)return {project,scope,title:null,status:null,next_actions:null,revision:null,updated_at:null,conflict:true,last_writer_host:null,draft:false,imported:false,milestones:null};
     const head=heads[0]!;
     const doc=parseProjectDoc(head.content);
-    return {project,scope,title:getProjectTitle(doc),status:getProjectSection(doc,'Current Status')||null,next_actions:getProjectSection(doc,'Next Actions')||null,revision:head.id,updated_at:head.created_at,conflict:false,last_writer_host:readProjectProvenance(head)?.host??null,draft:isProjectDraft(doc),imported:head.source===PROJECT_IMPORT_SOURCE};
+    return {project,scope,title:getProjectTitle(doc),status:getProjectSection(doc,'Current Status')||null,next_actions:getProjectSection(doc,'Next Actions')||null,revision:head.id,updated_at:head.created_at,conflict:false,last_writer_host:readProjectProvenance(head)?.host??null,draft:isProjectDraft(doc),imported:head.source===PROJECT_IMPORT_SOURCE,milestones:summarizeMilestones(parseMilestones(head.content))};
   });
 }
 

@@ -24,6 +24,7 @@ import {
 import { getProjectView, listProjectViews, type ProjectSummary } from '../src/project-handoff.js';
 import { planImport } from '../src/project-import.js';
 import { Vault } from '../src/vault.js';
+import { plantWorkingRow } from './support/plant-working-row.js';
 
 const NOW = new Date('2026-09-23T12:00:00.000Z');
 
@@ -246,9 +247,9 @@ describe('imported on a real vault', () => {
       expect(s).toMatchObject({ project: 'aged', imported: true });
       const board = buildBoard({ summaries: [s!], views: new Map([['aged', getProjectView(v, 'aged')]]), now: new Date(), staleDays: 14, openSessions: new Map() });
       expect(board.stale.rows).toEqual([{ project: 'aged', last_activity: old, activity_source: 'last log entry', status: 'Quiet.' }]);
-      v.updateProject({ project: 'aged', expected_revision: s!.revision, status: 'Moving again.' });
+      v.updateProject({ project: 'aged', expected_revision: s!.revision, status: 'Moving again.' }, { actor: 'owner' });
       expect(listProjectViews(v)[0]).toMatchObject({ imported: false });
-      v.remember({ content: 'x', type: 'working', scope: 'project:aged' });
+      plantWorkingRow(v, { content: 'x', type: 'working', scope: 'project:aged' });
       expect(listProjectViews(v)[0]).toMatchObject({ conflict: true, imported: false });
     } finally { v.close(); }
   });

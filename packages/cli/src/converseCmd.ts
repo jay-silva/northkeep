@@ -422,7 +422,7 @@ export async function runConverse(options: ConverseCmdOptions, withVault: WithVa
       await withVault((v) => {
         for (const id of ids) {
           try {
-            v.forget(id);
+            v.forget(id, { actor: 'owner' });
           } catch {
             // already forgotten — undo is best-effort per id
           }

@@ -21,6 +21,7 @@ import { applyDownSync, deriveConnectorToken, pushSharedScopes, startPairing, to
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
 import { decryptedEntries, decryptedPendingEntries, seedEncryptedEntry } from './helpers.js';
+import { plantWorkingRow } from '../../../packages/core/test/support/plant-working-row.js';
 
 /**
  * M14 — connector project tools + project-scope push cap + desktop fold
@@ -227,7 +228,7 @@ beforeAll(async () => {
   tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-m14-'));
   vaultPath = path.join(tmpDir, 'vault.nkv');
   const vault = Vault.create({ path: vaultPath, passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
-  vault.remember({ content: sampleDoc('Initial status.'), type: 'working', scope: 'project:northkeep' });
+  plantWorkingRow(vault, { content: sampleDoc('Initial status.'), type: 'working', scope: 'project:northkeep' });
   vault.remember({ content: 'Ordinary work note.', type: 'semantic', scope: 'work' });
   vault.setScopeShared('project:northkeep', true);
   vault.setScopeShared('work', true);
@@ -525,7 +526,7 @@ describe('M14 desktop fold (step 5)', () => {
       createdAt: new Date().toISOString(),
     });
     await withVault((v) => {
-      v.remember({ content: sampleDoc('Local live.'), type: 'working', scope: 'project:foldme' });
+      plantWorkingRow(v, { content: sampleDoc('Local live.'), type: 'working', scope: 'project:foldme' });
       v.setScopeShared('project:foldme', true);
       v.save();
     });
@@ -574,9 +575,9 @@ describe('M14 desktop fold (step 5)', () => {
     // prior document remains live.
     await withVault((v) => {
       const prior = sampleDoc('Prior local remains.');
-      v.remember({ content: prior, type: 'working', scope: 'project:oldclient' });
+      plantWorkingRow(v, { content: prior, type: 'working', scope: 'project:oldclient' });
       const folded = sampleDoc('Old-client folded.');
-      v.remember({ content: folded, type: 'working', scope: 'project:oldclient' });
+      plantWorkingRow(v, { content: folded, type: 'working', scope: 'project:oldclient' });
       v.save();
       const live = v.list({ scope: 'project:oldclient', type: 'working' });
       expect(live).toHaveLength(2);

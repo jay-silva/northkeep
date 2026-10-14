@@ -154,7 +154,7 @@ export async function handleProjectsApi(session: UiSession, method: string, rout
       }
       const request = { ...input, project, writer: appWriter(session) } as unknown as ProjectUpdateRequest;
       return reply(200, await session.withVault(vault => {
-        const current = vault.updateProject(request);
+        const current = vault.updateProject(request, { actor: 'owner' });
         vault.save();
         return current;
       }));
@@ -172,7 +172,7 @@ export async function handleProjectsApi(session: UiSession, method: string, rout
     if (Object.keys(input).some(key => !allowed.includes(key))) return reply(400, { error: 'Unexpected project update field.', code: 'invalid_request' });
     const request = { ...input, project, mode: match[2], writer: appWriter(session) } as unknown as ProjectCheckpointRequest;
     return reply(200, await session.withVault(vault => {
-      const result = vault.checkpointProject(request);
+      const result = vault.checkpointProject(request, { actor: 'owner' });
       if (!result.replayed) vault.save();
       return result;
     }));

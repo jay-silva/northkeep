@@ -17,6 +17,7 @@ vi.mock('@northkeep/librarian', async (importOriginal) => {
 
 import { handleApi } from '../src/api.js';
 import { UiSession } from '../src/session.js';
+import { plantWorkingRow } from '../../../packages/core/test/support/plant-working-row.js';
 
 const passphrase = 'synthetic memories filter passphrase';
 let testHome: string;
@@ -61,7 +62,7 @@ async function seed(projectCount: number, includePersonal = true) {
   await session.withVault((vault) => {
     if (includePersonal) vault.remember({ content: 'dog belongs in ordinary memory', type: 'semantic', scope: 'personal' });
     for (let index = 0; index < projectCount; index += 1) {
-      vault.remember({ content: `dog project record ${index}`, type: 'working', scope: `project:p${index}` });
+      plantWorkingRow(vault, { content: `dog project record ${index}`, type: 'working', scope: `project:p${index}` });
     }
     vault.save();
   });

@@ -2964,6 +2964,7 @@
   }
 
   function decisionReason(c) {
+    if (c.reason === 'milestones_changed') return 'A connected app saved a version that changes which milestones have passed. Only you can decide that.';
     if (c.reason === 'legacy') return 'A connected app wrote this before NorthKeep recorded which version it started from.';
     if (c.reason === 'several_heads') return 'This project has more than one current version on ' + devicePlace() + ', so NorthKeep cannot tell which one the cloud version replaces.';
     if (c.reason === 'stale') return 'A connected app edited this from an older version, and Cloud Connect already has a newer one.';
@@ -3054,6 +3055,17 @@
     head.append(copy, projectPill('Needs your decision', 'decide')); panel.appendChild(head);
     if (rows.length > 1) panel.appendChild(el('p', 'project-notice', rows.length + ' cloud versions are waiting for this project. This is the first one. The next appears after you choose.'));
     if (c.in_history) panel.appendChild(el('p', 'project-notice', 'This cloud version is already in your history.'));
+    // ADR 0065: name every pass Take theirs would add, change or remove, for every reason.
+    const passChanges = Array.isArray(c.pass_changes) ? c.pass_changes : [];
+    if (passChanges.length || c.shares_scope) {
+      const note = el('div', 'project-notice');
+      if (passChanges.length) {
+        note.appendChild(el('strong', undefined, 'Milestone changes if you take theirs'));
+        const list = el('ul'); for (const p of passChanges) list.appendChild(el('li', undefined, p.text)); note.appendChild(list);
+      }
+      if (c.shares_scope) note.appendChild(el('p', undefined, 'Taking theirs also marks this project Shared, so your connected AI apps can read everything in it.'));
+      panel.appendChild(note);
+    }
     panel.appendChild(el('p', 'cmp-legend muted', 'Sections that differ are outlined. Highlighted lines appear in only one version.'));
     const cmp = el('div', 'cmp');
     const mineHead = el('div', 'cmp-head'); mineHead.appendChild(el('h4', undefined, 'Your version'));
@@ -6990,7 +7002,8 @@
         const group = planGroup('Will remove', plan.forgets.length);
         group.appendChild(el('p', 'plan-note muted', 'Forgotten in your AI apps. They leave current memories on ' + devicePlace() + '. Uncheck any you want to keep. An unchecked one asks again next time.'));
         for (const f of plan.forgets) {
-          const pick = planPick(scopeLabel(f.scope), f.first_line, '', true);
+          const passed = (f.passed || []).length ? 'Passed milestones it removes: ' + f.passed.join(', ') : '';
+          const pick = planPick(scopeLabel(f.scope), f.first_line, passed, true);
           removes.push({ id: f.entry_id, box: pick.box }); group.appendChild(pick.item);
         }
         body.appendChild(group);

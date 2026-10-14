@@ -6,6 +6,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { ensureDeviceSecret, KDF_INTERACTIVE, Vault } from '@northkeep/core';
 import { assembleReviewReport, proposalFingerprint, saveReviewReport, type ReviewProposal } from '../packages/librarian/dist/index.js';
 import { startUiServer, type RunningUiServer } from '../apps/web/dist/server.js';
+import { plantWorkingRow } from '../packages/core/test/support/plant-working-row.js';
 
 const passphrase = 'synthetic-curation-e2e-only';
 let dataDir: string;
@@ -43,7 +44,7 @@ beforeAll(async () => {
   const vault = Vault.create({ path: vaultPath, passphrase, deviceSecret, kdf: KDF_INTERACTIVE });
   const original = vault.remember({ type: 'semantic', scope: 'writing', content: 'Keep summaries short.', source: 'synthetic-test' });
   const supporting = vault.remember({ type: 'semantic', scope: 'writing', content: 'For technical reviews include reasoning.', source: 'synthetic-test' });
-  vault.remember({ type: 'working', scope: 'project:sample', content: 'Synthetic project document.', source: 'synthetic-test' });
+  plantWorkingRow(vault, { type: 'working', scope: 'project:sample', content: 'Synthetic project document.', source: 'synthetic-test' });
   vault.save();
   proposal = {
     id: 'aabbccdd', kind: 'stale', entry_ids: [original.id, supporting.id],

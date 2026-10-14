@@ -37,8 +37,8 @@ beforeEach(() => {
   directory = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-cli-compact-'));
   vaultPath = path.join(directory, 'vault.nkv');
   const vault = Vault.create({ path: vaultPath, passphrase: PASS, deviceSecret, kdf: KDF_INTERACTIVE });
-  let revision = vault.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: 'Go' }).revision;
-  for (let i = 0; i < 9; i += 1) revision = vault.updateProject({ project: 'demo', expected_revision: revision, status: `Step ${i}.` }).revision;
+  let revision = vault.updateProject({ project: 'demo', expected_revision: null, what_why: 'Why.', status: 'Start.', next_actions: 'Go' }, { actor: 'owner' }).revision;
+  for (let i = 0; i < 9; i += 1) revision = vault.updateProject({ project: 'demo', expected_revision: revision, status: `Step ${i}.` }, { actor: 'owner' }).revision;
   vault.save();
   vault.close();
   lines = [];

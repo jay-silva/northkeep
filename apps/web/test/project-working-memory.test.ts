@@ -61,7 +61,7 @@ describe('POST /api/memories into a project scope', () => {
         title: 'Lantern Gazette',
         status: 'Printing.',
         next_actions: '- [ ] Fold',
-      });
+      }, { actor: 'owner' });
       revision = created.revision;
       noteId = vault.remember({
         content: 'This week I am on the pear festival.',

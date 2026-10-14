@@ -36,9 +36,13 @@ import {
   PROJECT_PROVENANCE_METADATA_KEY,
   PROJECT_RESTORE_BLANKED_MESSAGE,
   PROJECT_RESTORE_METADATA_KEY,
+  PROJECT_DOCUMENT_FORGET_MESSAGE,
+  PROJECT_DOCUMENT_RETYPE_MESSAGE,
   ProjectHandoffError,
   applyProjectUpdate,
   getProjectView,
+  projectDocProblem,
+  writeActor,
   projectProvenanceBlock,
   projectTextProblem,
   readProjectHandoffMetadata,
@@ -52,7 +56,10 @@ import {
   type ProjectUpdateRequest,
   type ProjectWriter,
   type ProjectView,
+  type WriteActor,
+  type WriteActorOptions,
 } from './project-handoff.js';
+import { MilestoneError, assertAgentWriteKeepsPasses } from './project-milestones.js';
 import { emptyProjectDoc, formatLogArchive, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
 import { assertNotNewProjectWorkingMemory } from './project-working-memory.js';
 import { importPlanProblem, projectInUseMessage, type ImportFilePlan } from './project-import.js';
@@ -438,9 +445,8 @@ export class Vault {
 
   remember(input: RememberInput): MemoryEntry {
     this.assertOpen();
-    // A new working memory in a project scope is refused at the doors a person
-    // or an app uses. This method stays open so a project document, and the
-    // fixtures that plant one, can still be written here.
+    // Projects are created only by the project writes, which check the document (ADR 0065).
+    assertNotNewProjectWorkingMemory(null, { type: input.type, scope: input.scope?.trim() || 'personal' });
     if (!input.content || input.content.trim().length === 0) {
       throw new Error('Memory content must not be empty.');
     }
@@ -498,8 +504,9 @@ export class Vault {
    * and the deletion itself is visible ("an entry in this scope was forgotten
    * on this date"). Accepts a full id or an unambiguous prefix.
    */
-  forget(idOrPrefix: string, allowedScopes?: string[]): MemoryEntry {
+  forget(idOrPrefix: string, options: WriteActorOptions, allowedScopes?: string[]): MemoryEntry {
     this.assertOpen();
+    const actor = writeActor(options);
     const prefix = idOrPrefix.trim();
     if (prefix.length < 4) {
       throw new Error('Provide at least 4 characters of the memory id.');
@@ -525,6 +532,7 @@ export class Vault {
       throw new Error(`Id prefix "${prefix}" matches ${matches.length} memories. Be more specific.`);
     }
     const row = matches[0]!;
+    if (actor === 'agent' && isLiveProjectDocument(row)) throw new Error(PROJECT_DOCUMENT_FORGET_MESSAGE);
     const forgottenAt = new Date().toISOString();
     this.db
       .prepare("UPDATE memories SET content = '', metadata = NULL, forgotten_at = ? WHERE id = ?")
@@ -569,9 +577,11 @@ export class Vault {
   editMemory(
     idOrPrefix: string,
     patch: { content?: string; scope?: string; type?: MemoryType },
+    options: WriteActorOptions,
     allowedScopes?: string[],
   ): MemoryEntry {
     this.assertOpen();
+    const actor = writeActor(options);
     const changes: { content?: string; scope?: string; type?: MemoryType } = {};
     if (patch.content !== undefined) {
       if (patch.content.trim().length === 0) throw new Error('Memory content must not be empty.');
@@ -603,17 +613,26 @@ export class Vault {
       (changes.scope !== undefined && changes.scope !== old.scope) ||
       (changes.type !== undefined && changes.type !== old.type);
     if (!wouldChange) return old; // nothing actually differs
-    assertNotNewProjectWorkingMemory(old, {
-      type: changes.type ?? old.type,
-      scope: changes.scope ?? old.scope,
-    });
-    return this.supersedeEntry(old, changes);
+    const after = { type: changes.type ?? old.type, scope: changes.scope ?? old.scope, content: changes.content ?? old.content };
+    const wasDocument = isLiveProjectDocument(old);
+    if (actor === 'agent' && wasDocument && (after.type !== old.type || after.scope !== old.scope)) {
+      throw new Error(PROJECT_DOCUMENT_RETYPE_MESSAGE);
+    }
+    assertNotNewProjectWorkingMemory(old, after);
+    return this.db.transaction(() => {
+      if (isLiveProjectDocument({ ...after, superseded_at: null, forgotten_at: null })) {
+        const problem = projectDocProblem(after.content);
+        if (problem !== null) throw new Error(`${problem} Nothing was saved.`);
+        if (actor === 'agent') assertAgentWriteKeepsPasses(wasDocument ? old.content : null, after.content);
+      }
+      return this.supersedeEntry(old, changes);
+    })();
   }
 
   /** Atomic revision-bound project update used by the legacy local project tool. */
-  updateProject(request: ProjectUpdateRequest, allowedScopes?: string[]): ProjectView {
+  updateProject(request: ProjectUpdateRequest, options: WriteActorOptions, allowedScopes?: string[]): ProjectView {
     this.assertOpen();
-    return this.writeProject(request, allowedScopes, null).current;
+    return this.writeProject(request, writeActor(options), allowedScopes, null).current;
   }
 
   /**
@@ -623,8 +642,9 @@ export class Vault {
    * restoreProjectRevision for an old revision. `expected_revision: null`
    * creates, and refuses when a head already exists.
    */
-  replaceProjectContent(request: ProjectReplaceRequest, allowedScopes?: string[]): ProjectView {
+  replaceProjectContent(request: ProjectReplaceRequest, options: WriteActorOptions, allowedScopes?: string[]): ProjectView {
     this.assertOpen();
+    const actor = writeActor(options);
     let scope: string;
     try { scope = projectScope(request.project); } catch { throw new ProjectHandoffError('invalid_request', 'Project slug is invalid.'); }
     if (allowedScopes !== undefined && !allowedScopes.includes(scope)) throw new ProjectHandoffError('scope_denied', 'Project scope is outside this connection grant.');
@@ -642,6 +662,9 @@ export class Vault {
         try { current = getProjectView(this, request.project, allowedScopes); } catch { /* report without it */ }
         throw new ProjectHandoffError('stale_project', 'Project changed after it was read.', current);
       }
+      const problem = projectDocProblem(request.content);
+      if (problem !== null) throw new ProjectHandoffError('invalid_request', problem);
+      if (actor === 'agent') agentRule(() => assertAgentWriteKeepsPasses(old?.content ?? null, request.content));
       const now = new Date().toISOString();
       const built: Record<string, unknown> = old?.metadata ? (JSON.parse(JSON.stringify(old.metadata)) as Record<string, unknown>) : {};
       for (const key of [PROJECT_HANDOFF_METADATA_KEY, PROJECT_PROVENANCE_METADATA_KEY, PROJECT_RESTORE_METADATA_KEY, 'connector']) delete built[key];
@@ -675,6 +698,7 @@ export class Vault {
     if (!row) throw new ProjectHandoffError('not_found', 'That version of the project was not found.');
     if (row.forgotten_at !== null) throw new ProjectHandoffError('not_found', PROJECT_RESTORE_BLANKED_MESSAGE);
     if (row.superseded_at === null) throw new ProjectHandoffError('invalid_request', 'That version is already the current document.');
+    // Restore is the user's action on the desktop or in the CLI; it may undo a pass (ADR 0065 Decision 3).
     return this.replaceProjectContent({
       project: request.project,
       expected_revision: request.expected_revision,
@@ -682,7 +706,7 @@ export class Vault {
       source: 'northkeep:project-restore',
       metadata: { [PROJECT_RESTORE_METADATA_KEY]: { from_revision: row.id } },
       ...(request.writer !== undefined ? { writer: request.writer } : {}),
-    }, allowedScopes);
+    }, { actor: 'owner' }, allowedScopes);
   }
 
   /**
@@ -748,7 +772,7 @@ export class Vault {
       if (!entries.some((e) => !e.forgotten_at)) throw new ProjectHandoffError('not_found', 'Project was not found.');
       for (const entry of entries) {
         if (entry.forgotten_at) continue;
-        this.forget(entry.id, allowedScopes);
+        this.forget(entry.id, { actor: 'owner' }, allowedScopes);
         count += 1;
       }
     })();
@@ -914,8 +938,9 @@ export class Vault {
   }
 
   /** Atomic, idempotent checkpoint/wrap mutation. The caller persists with one save(). */
-  checkpointProject(request: ProjectCheckpointRequest, allowedScopes?: string[]): ProjectCheckpointResult {
+  checkpointProject(request: ProjectCheckpointRequest, options: WriteActorOptions, allowedScopes?: string[]): ProjectCheckpointResult {
     this.assertOpen();
+    const actor = writeActor(options);
     let scope:string;try{scope=projectScope(request.project);}catch{throw new ProjectHandoffError('invalid_request','Project slug is invalid.');}
     if(allowedScopes!==undefined&&!allowedScopes.includes(scope))throw new ProjectHandoffError('scope_denied','Project scope is outside this connection grant.');
     if (request.vault_id !== this.getVaultId()) throw new ProjectHandoffError('invalid_request', 'Vault id does not match this vault.');
@@ -932,10 +957,11 @@ export class Vault {
       ...(request.decision !== undefined ? { decision: request.decision } : {}),
       ...(request.open_questions !== undefined ? { open_questions: request.open_questions } : {}),
       ...(request.files !== undefined ? { files: request.files } : {}),
+      ...(request.milestone_passed !== undefined ? { milestone_passed: request.milestone_passed } : {}),
     };
     const fingerprint = blake2bHex(exactCanonicalJson(logical), this.platform.crypto);
     // draft:false is derived from the mode, so replay rebuilds the same content.
-    const update:ProjectUpdateRequest={project:request.project,expected_revision:request.expected_revision,status:request.status,next_actions:request.next_actions,log_entry:`${request.mode==='checkpoint'?'Checkpoint':'Wrap up'}: ${request.completed}`,...(request.decision!==undefined?{decision:request.decision}:{}),...(request.open_questions!==undefined?{open_questions:request.open_questions}:{}),...(request.files!==undefined?{files:request.files}:{}),...(request.mode==='wrap'?{draft:false}:{}),...(request.writer!==undefined?{writer:request.writer}:{})};
+    const update:ProjectUpdateRequest={project:request.project,expected_revision:request.expected_revision,status:request.status,next_actions:request.next_actions,log_entry:`${request.mode==='checkpoint'?'Checkpoint':'Wrap up'}: ${request.completed}`,...(request.decision!==undefined?{decision:request.decision}:{}),...(request.open_questions!==undefined?{open_questions:request.open_questions}:{}),...(request.files!==undefined?{files:request.files}:{}),...(request.mode==='wrap'?{draft:false}:{}),...(request.writer!==undefined?{writer:request.writer}:{}),...(request.milestone_passed!==undefined?{milestone_passed:request.milestone_passed}:{})};
     const matches: Array<{entry:MemoryEntry;meta:ProjectHandoffMetadata}> = []; const copied:Array<{entry:MemoryEntry;raw:Record<string,unknown>}>=[];
     const ledgerHits:Array<{scope:string;fingerprint:string}>=[]; let malformedLedger=false;
     for (const entry of this.list({ includeForgotten:true, includeSuperseded:true, allowedScopes })) {
@@ -980,15 +1006,15 @@ export class Vault {
       if(copied.every(({raw})=>raw.request_fingerprint===fingerprint))appliedAndCompacted();
       throw new ProjectHandoffError('operation_conflict','Operation id was already used for a different project request.');
     }
-    return this.writeProject(update,allowedScopes,{operation_id:request.operation_id,mode:request.mode,fingerprint});
+    return this.writeProject(update,actor,allowedScopes,{operation_id:request.operation_id,mode:request.mode,fingerprint});
   }
 
-  private writeProject(request:ProjectUpdateRequest,allowedScopes:string[]|undefined,handoff:{operation_id:string;mode:'checkpoint'|'wrap';fingerprint:string}|null):ProjectCheckpointResult {
+  private writeProject(request:ProjectUpdateRequest,actor:WriteActor,allowedScopes:string[]|undefined,handoff:{operation_id:string;mode:'checkpoint'|'wrap';fingerprint:string}|null):ProjectCheckpointResult {
     let scope:string;try{scope=projectScope(request.project);}catch{throw new ProjectHandoffError('invalid_request','Project slug is invalid.');}
     if(allowedScopes!==undefined&&!allowedScopes.includes(scope))throw new ProjectHandoffError('scope_denied','Project scope is outside this connection grant.');
     if(!Object.hasOwn(request,'expected_revision')||(request.expected_revision!==null&&(typeof request.expected_revision!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.expected_revision))))throw new ProjectHandoffError('invalid_request','expected_revision must be an exact revision UUID or null for creation.');
     if(request.writer!==undefined)validateProjectWriter(request.writer);
-    const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','files','title','draft'] as const;
+    const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','files','title','draft','milestones','milestone_passed'] as const;
     if(!updateKeys.some((key)=>request[key]!==undefined))throw new ProjectHandoffError('invalid_request','Project update has no changes.');
     let receipt!:ProjectCheckpointResult['receipt'];
     let auto:AutoCompaction|null=null;
@@ -1000,7 +1026,11 @@ export class Vault {
       if(!old&&request.expected_revision!==null)throw new ProjectHandoffError('not_found','Project was not found.');
       if(old&&request.expected_revision!==old.id){let current:ProjectView|undefined;try{current=getProjectView(this,request.project,allowedScopes);}catch{}throw new ProjectHandoffError('stale_project','Project changed after it was read.',current);}
       if(!old&&request.expected_revision!==null)throw new ProjectHandoffError('stale_project','Project revision is stale.');
-      const base=old?.content??serializeProjectDoc(emptyProjectDoc()); const merged=applyProjectUpdate(base,request); const now=new Date().toISOString();
+      // One clock for the text and the row, so a replay from saved_at rebuilds the same bytes.
+      const now=new Date().toISOString();
+      const base=old?.content??serializeProjectDoc(emptyProjectDoc()); const merged=applyProjectUpdate(base,request,new Date(now));
+      const problem=projectDocProblem(merged.content); if(problem!==null)throw new ProjectHandoffError('invalid_request',problem);
+      if(actor==='agent')agentRule(()=>assertAgentWriteKeepsPasses(old?.content??null,merged.content,merged.passed));
       const insert=this.prepareEntryInsert(); const archiveIds:string[]=[]; let chain=this.getMeta('chain_head');
       if(merged.archives.length){const archive=this.makeProjectEntry('episodic',formatLogArchive(request.project,merged.archives,new Date(now)),scope,'northkeep:project-log-archive',null,chain,now);insert.run(this.entryParams(archive));chain=archive.entry_hash;archiveIds.push(archive.id);}
       const resultId=uuidv4(this.platform.crypto);
@@ -2066,6 +2096,21 @@ export function computeEntryHash(entry: MemoryEntry, provider?: CryptoProvider):
  * randomUUID so vault.ts carries no Node dependency (the ids are random; there is
  * no byte-exact contract to preserve, only the v4 shape).
  */
+/** The live project document: the one working row in a valid project scope. */
+function isLiveProjectDocument(row: { type: string; scope: string; superseded_at: string | null; forgotten_at: string | null }): boolean {
+  return row.type === 'working' && parseProjectSlug(row.scope) !== null && row.superseded_at === null && row.forgotten_at === null;
+}
+
+/** The agent write rule refuses as a project refusal, so callers see invalid_request. */
+function agentRule(check: () => void): void {
+  try {
+    check();
+  } catch (error) {
+    if (error instanceof MilestoneError) throw new ProjectHandoffError('invalid_request', error.message);
+    throw error;
+  }
+}
+
 function uuidv4(provider: CryptoProvider): string {
   const b = provider.randomBytes(16);
   b[6] = (b[6]! & 0x0f) | 0x40; // version 4

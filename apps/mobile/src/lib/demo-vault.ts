@@ -3,6 +3,7 @@ import {
   applyProjectUpdate,
   projectScope,
   type RememberInput,
+  type Vault,
 } from '@northkeep/core';
 
 /**
@@ -99,6 +100,23 @@ const demoProject = (): RememberInput => ({
  */
 export function demoSeed(): RememberInput[] {
   return [demoProject(), ...DEMO_MEMORIES];
+}
+
+/**
+ * Writes the seed into a new vault. The project goes through the project
+ * writer, the only door that creates a project document (ADR 0065).
+ */
+export function seedDemoVault(vault: Pick<Vault, 'remember' | 'replaceProjectContent'>): void {
+  for (const memory of demoSeed()) {
+    if (memory.type === 'working' && memory.scope === projectScope(DEMO_PROJECT_SLUG)) {
+      vault.replaceProjectContent(
+        { project: DEMO_PROJECT_SLUG, expected_revision: null, content: memory.content, source: 'demo', ...(memory.metadata ? { metadata: memory.metadata } : {}) },
+        { actor: 'owner' },
+      );
+    } else {
+      vault.remember(memory);
+    }
+  }
 }
 
 /** Newest-looking last, so list().reverse() surfaces a sensible order. */

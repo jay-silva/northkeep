@@ -22,7 +22,7 @@ beforeAll(async () => {
   process.env.NORTHKEEP_HOME = dir; process.env.NORTHKEEP_NO_KEYCHAIN = '1';
   secret = ensureDeviceSecret().secret; vaultPath = path.join(dir, 'sample.nkv');
   const vault = Vault.create({ path: vaultPath, passphrase, deviceSecret: secret, kdf: KDF_INTERACTIVE });
-  const view = vault.updateProject({ project: 'trail-journal', expected_revision: null, status: 'Three walks logged.', next_actions: 'Revise the offline label.', what_why: 'Keep synthetic field notes.' });
+  const view = vault.updateProject({ project: 'trail-journal', expected_revision: null, status: 'Three walks logged.', next_actions: 'Revise the offline label.', what_why: 'Keep synthetic field notes.' }, { actor: 'owner' });
   revision = view.revision; vaultId = vault.getVaultId(); vault.save(); vault.close();
   server = await startUiServer({ vaultPath }); const url = new URL(server.url); origin = url.origin; token = url.searchParams.get('token')!;
 });

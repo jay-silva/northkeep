@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { atomicWrite, backupOnce } from './fs-safe.js';
-import { PROJECT_BOOTSTRAP_INSTRUCTION, PROJECT_STANDING_INSTRUCTION } from './project-recipe.js';
+import { MILESTONE_INSTRUCTION, PROJECT_BOOTSTRAP_INSTRUCTION, PROJECT_STANDING_INSTRUCTION } from './project-recipe.js';
 
 /**
  * M16 contract installer (ADR 0042). Writes the standing project instruction
@@ -66,7 +66,7 @@ export const CONTRACT_GRACEFUL_DEGRADATION =
 
 /**
  * Canonical contract. Composed from PROJECT_STANDING_INSTRUCTION plus the
- * anti-spam, no-false-pass, no-secrets, when-to-create, and P6 lines, then the
+ * anti-spam, no-false-pass, no-secrets, when-to-create, milestone (ADR 0065) and P6 lines, then the
  * bootstrap recipe as a second paragraph (ADR 0052 Decision 5).
  * No em dashes.
  */
@@ -77,6 +77,7 @@ export const CONTRACT_TEXT =
   'Do not claim a project was updated unless the project_wrap, project_checkpoint, or project_update call succeeded. ' +
   'Never write secrets, credentials, PHI, or personal identifying information into a project document. ' +
   'Create a project with project_create only when the user asks for one; never create one to hold notes that belong in an existing project or in a memory. ' +
+  MILESTONE_INSTRUCTION + ' ' +
   CONTRACT_GRACEFUL_DEGRADATION +
   '\n\n' +
   PROJECT_BOOTSTRAP_INSTRUCTION;
@@ -117,7 +118,7 @@ function hasOwnershipMarker(text: string): boolean {
   return text.split('\n').some((line) => BEGIN_LINE.test(line));
 }
 
-// SHA-256 of the Claude file, Cursor rule, and Codex block interior renders from v0.19.0 to v0.21.0, v0.22.0, v0.22.1, and the current text; append on every text change.
+// SHA-256 of the Claude file, Cursor rule, and Codex block interior renders from v0.19.0 to v0.21.0, v0.22.0, v0.22.1, the text before ADR 0065, and the current text; append on every text change.
 export const RELEASED_CONTRACT_RENDER_SHA256: ReadonlySet<string> = new Set([
   '38621a9338f127cd5a45ae3746f6d476eabdb85f906ecce7dfed826c85140788',
   '2f876e48527210118f7b004f21241dccc426b5464b9e415b07921b84028381f5',
@@ -131,6 +132,9 @@ export const RELEASED_CONTRACT_RENDER_SHA256: ReadonlySet<string> = new Set([
   '90bdfaebee36e732bfdd1c25846cf282e8ff3ef295ace463f897ef265ff19138',
   'd8a57f08ff3a2ff9d5534c0799c7b9bf586c5eaccb52ff2c24519db90122380e',
   'cd2739f54788421edf228a5657b5ae46bb2d5811c2bd89b4bb491103a51e1df2',
+  '6313037fc39e7fbac0e63e0155ebf029a450945cf6cbf3b2c2f24168527f9ca0',
+  '809767aa277f7d66d55ece9f331e354f12ad3f2362d5cb41f94b674a36db9bc2',
+  '7f0aff57a090925604db53ed895af3cf384f9a9b0176ff398180c1cff7f1da01',
 ]);
 
 function classifyReplaced(existing: string, rendered: string): ReplacedContract {

@@ -31,9 +31,9 @@ function refusal(fn: () => unknown): { code: string; message: string } {
 
 describe('replaceProjectContent (ADR 0063)', () => {
   it('writes the whole text over the head it was given and keeps the old head in history', () => {
-    const r1 = v.updateProject({ project: 'demo', expected_revision: null, status: 'Local one.' }).revision;
+    const r1 = v.updateProject({ project: 'demo', expected_revision: null, status: 'Local one.' }, { actor: 'owner' }).revision;
     const cloud = getProjectView(v, 'demo').content.replace('Local one.', 'Cloud text.');
-    const view = v.replaceProjectContent({ project: 'demo', expected_revision: r1, content: cloud, source: 'connector:test', metadata: { connector: { server_id: 'conn_1' } } });
+    const view = v.replaceProjectContent({ project: 'demo', expected_revision: r1, content: cloud, source: 'connector:test', metadata: { connector: { server_id: 'conn_1' } } }, { actor: 'owner' });
     expect(view.status).toBe('Cloud text.');
     expect(view.history.map((h) => h.id)).toEqual([r1]);
     const head = v.list({ scope: 'project:demo', type: 'working' });
@@ -43,24 +43,24 @@ describe('replaceProjectContent (ADR 0063)', () => {
   });
 
   it('refuses a stale head and changes nothing', () => {
-    const r1 = v.updateProject({ project: 'demo', expected_revision: null, status: 'One.' }).revision;
-    const r2 = v.updateProject({ project: 'demo', expected_revision: r1, status: 'Two.' }).revision;
-    expect(refusal(() => v.replaceProjectContent({ project: 'demo', expected_revision: r1, content: '# Demo\n', source: 'x' }))).toEqual({ code: 'stale_project', message: 'Project changed after it was read.' });
+    const r1 = v.updateProject({ project: 'demo', expected_revision: null, status: 'One.' }, { actor: 'owner' }).revision;
+    const r2 = v.updateProject({ project: 'demo', expected_revision: r1, status: 'Two.' }, { actor: 'owner' }).revision;
+    expect(refusal(() => v.replaceProjectContent({ project: 'demo', expected_revision: r1, content: '# Demo\n', source: 'x' }, { actor: 'owner' }))).toEqual({ code: 'stale_project', message: 'Project changed after it was read.' });
     expect(getProjectView(v, 'demo').revision).toBe(r2);
   });
 
   it('creates with a null expected revision, and refuses null once a head exists', () => {
-    const created = v.replaceProjectContent({ project: 'fresh', expected_revision: null, content: '## Current Status\nFrom the cloud.\n', source: 'connector:test' });
+    const created = v.replaceProjectContent({ project: 'fresh', expected_revision: null, content: '## Current Status\nFrom the cloud.\n', source: 'connector:test' }, { actor: 'owner' });
     expect(created.status).toBe('From the cloud.');
-    expect(refusal(() => v.replaceProjectContent({ project: 'fresh', expected_revision: null, content: '## Current Status\nAgain.\n', source: 'x' })).code).toBe('stale_project');
+    expect(refusal(() => v.replaceProjectContent({ project: 'fresh', expected_revision: null, content: '## Current Status\nAgain.\n', source: 'x' }, { actor: 'owner' })).code).toBe('stale_project');
   });
 });
 
 describe('restoreProjectRevision (ADR 0063 D4)', () => {
   it('restores the newest superseded revision exactly and records where it came from', () => {
-    const r1 = v.updateProject({ project: 'demo', expected_revision: null, status: 'Good week.' }).revision;
+    const r1 = v.updateProject({ project: 'demo', expected_revision: null, status: 'Good week.' }, { actor: 'owner' }).revision;
     const oldText = getProjectView(v, 'demo').content;
-    const r2 = v.updateProject({ project: 'demo', expected_revision: r1, status: 'Rolled back.' }).revision;
+    const r2 = v.updateProject({ project: 'demo', expected_revision: r1, status: 'Rolled back.' }, { actor: 'owner' }).revision;
     const view = v.restoreProjectRevision({ project: 'demo', revision: r1, expected_revision: r2 });
     expect(view.content).toBe(oldText);
     expect(view.status).toBe('Good week.');
@@ -71,22 +71,22 @@ describe('restoreProjectRevision (ADR 0063 D4)', () => {
   });
 
   it('refuses a stale expected revision', () => {
-    const r1 = v.updateProject({ project: 'demo', expected_revision: null, status: 'One.' }).revision;
-    const r2 = v.updateProject({ project: 'demo', expected_revision: r1, status: 'Two.' }).revision;
-    v.updateProject({ project: 'demo', expected_revision: r2, status: 'Three.' });
+    const r1 = v.updateProject({ project: 'demo', expected_revision: null, status: 'One.' }, { actor: 'owner' }).revision;
+    const r2 = v.updateProject({ project: 'demo', expected_revision: r1, status: 'Two.' }, { actor: 'owner' }).revision;
+    v.updateProject({ project: 'demo', expected_revision: r2, status: 'Three.' }, { actor: 'owner' });
     expect(refusal(() => v.restoreProjectRevision({ project: 'demo', revision: r1, expected_revision: r2 })).code).toBe('stale_project');
   });
 
   it('refuses the current head and an unknown id', () => {
-    const r1 = v.updateProject({ project: 'demo', expected_revision: null, status: 'One.' }).revision;
+    const r1 = v.updateProject({ project: 'demo', expected_revision: null, status: 'One.' }, { actor: 'owner' }).revision;
     expect(refusal(() => v.restoreProjectRevision({ project: 'demo', revision: r1, expected_revision: r1 }))).toEqual({ code: 'invalid_request', message: 'That version is already the current document.' });
     expect(refusal(() => v.restoreProjectRevision({ project: 'demo', revision: '00000000-0000-4000-8000-000000000000', expected_revision: r1 })).code).toBe('not_found');
   });
 
   it('refuses a revision compaction blanked, with the plain message', () => {
-    let revision = v.updateProject({ project: 'demo', expected_revision: null, status: 'First.' }).revision;
+    let revision = v.updateProject({ project: 'demo', expected_revision: null, status: 'First.' }, { actor: 'owner' }).revision;
     const first = revision;
-    for (let i = 0; i < 7; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Edit ${i}.` }).revision;
+    for (let i = 0; i < 7; i += 1) revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Edit ${i}.` }, { actor: 'owner' }).revision;
     expect(refusal(() => v.restoreProjectRevision({ project: 'demo', revision: first, expected_revision: revision }))).toEqual({ code: 'not_found', message: PROJECT_RESTORE_BLANKED_MESSAGE });
   });
 });

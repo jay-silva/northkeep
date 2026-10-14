@@ -34,7 +34,7 @@ const view = (slug: string) => session.withVault((v) => getProjectView(v, slug, 
 
 async function sharedProject(slug: string, status: string): Promise<string> {
   return session.withVault(async (v) => {
-    const r = v.updateProject({ project: slug, expected_revision: null, what_why: 'Demo.', status }).revision;
+    const r = v.updateProject({ project: slug, expected_revision: null, what_why: 'Demo.', status }, { actor: 'owner' }).revision;
     v.setScopeShared(`project:${slug}`, true);
     v.save();
     await pushSharedScopes({ server: fake.url(), deviceSecret, scopes: v.sharedScopes(), vault: v });
@@ -107,7 +107,7 @@ describe('conflicts and resolve (D1)', () => {
     const r1 = await sharedProject('demo', 'R1.');
     const cloudId = fake.cloudUpdate('project:demo', cloud('Cloud on R1.'));
     const r2 = await session.withVault((v) => {
-      const r = v.updateProject({ project: 'demo', expected_revision: r1, status: 'R2.' }).revision;
+      const r = v.updateProject({ project: 'demo', expected_revision: r1, status: 'R2.' }, { actor: 'owner' }).revision;
       v.save();
       return r;
     });
@@ -130,7 +130,7 @@ describe('what the three screens read (ADR 0063 GUI)', () => {
     const r1 = await sharedProject('demo', 'R1.');
     fake.cloudUpdate('project:demo', cloud('Cloud on R1.'));
     const r2 = await session.withVault((v) => {
-      v.updateProject({ project: 'demo', expected_revision: r1, status: 'R2.', writer: { host: 'claude-code', host_version: '1.0', session_id: SESSION } });
+      v.updateProject({ project: 'demo', expected_revision: r1, status: 'R2.', writer: { host: 'claude-code', host_version: '1.0', session_id: SESSION } }, { actor: 'owner' });
       v.save();
       return getProjectView(v, 'demo', undefined, { history: true });
     });
@@ -161,7 +161,7 @@ describe('what the three screens read (ADR 0063 GUI)', () => {
     const made: string[] = [];
     await session.withVault((v) => {
       for (let i = 1; i <= 8; i += 1) {
-        revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Version ${i}.`, writer: { host: 'claude-code', host_version: null, session_id: SESSION } }).revision;
+        revision = v.updateProject({ project: 'demo', expected_revision: revision, status: `Version ${i}.`, writer: { host: 'claude-code', host_version: null, session_id: SESSION } }, { actor: 'owner' }).revision;
         made.push(revision);
       }
       v.save();
@@ -178,12 +178,12 @@ describe('what the three screens read (ADR 0063 GUI)', () => {
 describe('POST /api/projects/<slug>/restore (D4)', () => {
   it('restores an earlier version bound to the current head, and refuses a stale one', async () => {
     const r1 = await session.withVault((v) => {
-      const r = v.updateProject({ project: 'demo', expected_revision: null, status: 'Good.' }).revision;
+      const r = v.updateProject({ project: 'demo', expected_revision: null, status: 'Good.' }, { actor: 'owner' }).revision;
       v.save();
       return r;
     });
     const r2 = await session.withVault((v) => {
-      const r = v.updateProject({ project: 'demo', expected_revision: r1, status: 'Bad.' }).revision;
+      const r = v.updateProject({ project: 'demo', expected_revision: r1, status: 'Bad.' }, { actor: 'owner' }).revision;
       v.save();
       return r;
     });

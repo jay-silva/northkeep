@@ -14,13 +14,15 @@ const options = { path: file, passphrase: 'synthetic adr-0062 t7 passphrase', de
 const id = (n) => `0062eeee-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const headOf = (C, v) => v.getEntry(C.getProjectView(v, 'a').revision);
 const ledger = (entry) => JSON.stringify(entry.metadata?.[KEY] ?? null);
-const checkpoint = (v, C, n) => v.checkpointProject({ vault_id: v.getVaultId(), project: 'a', mode: 'checkpoint', operation_id: id(n), expected_revision: C.getProjectView(v, 'a').revision, status: `S${n}.`, completed: `Did ${n}.`, next_actions: `- [ ] N${n}` });
+// This core needs the actor; v0.22.0 reads a second argument as allowedScopes.
+const actor = (C) => (C === NEW ? { actor: 'owner' } : undefined);
+const checkpoint = (v, C, n) => v.checkpointProject({ vault_id: v.getVaultId(), project: 'a', mode: 'checkpoint', operation_id: id(n), expected_revision: C.getProjectView(v, 'a').revision, status: `S${n}.`, completed: `Did ${n}.`, next_actions: `- [ ] N${n}` }, actor(C));
 const forgottenWithKey = (v) => v.list({ includeSuperseded: true, includeForgotten: true }).filter((e) => e.forgotten_at && e.metadata && KEY in e.metadata).length;
 const ok = (label, value) => console.log(`ok  ${label}${value === undefined ? '' : `: ${value}`}`);
 
 {
   const v = NEW.Vault.create(options);
-  v.updateProject({ project: 'a', expected_revision: null, what_why: 'W.', status: 'S.', next_actions: '- [ ] N' });
+  v.updateProject({ project: 'a', expected_revision: null, what_why: 'W.', status: 'S.', next_actions: '- [ ] N' }, actor(NEW));
   for (let n = 0; n < 20; n += 1) checkpoint(v, NEW, n);
   assert.equal(headOf(NEW, v).metadata[KEY].length, 16);
   assert.equal(v.verifyChain().ok, true);

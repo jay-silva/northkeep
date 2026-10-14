@@ -78,6 +78,10 @@ describe('CONTRACT_TEXT', () => {
     expect(CONTRACT_TEXT).toContain(
       'Create a project with project_create only when the user asks for one; never create one to hold notes that belong in an existing project or in a memory.',
     );
+    // ADR 0065 Decision 4: the same text as the local server's instructions.
+    expect(CONTRACT_TEXT).toContain(
+      'When the user asks to create a project, propose its milestones and create it only after the user agrees to them. Report a milestone passed only when the user says its acceptance test passed. Never mark a milestone passed on your own judgment.',
+    );
     expect(CONTRACT_TEXT).not.toContain('On a hosted surface');
     expect(CONTRACT_TEXT).not.toContain('never create a project there');
     expect(CONTRACT_GRACEFUL_DEGRADATION).toBe(
@@ -432,6 +436,18 @@ describe('reinstall over an earlier release', () => {
     expect(createHash('sha256').update(v0221Claude, 'utf8').digest('hex')).toBe(
       '1588b4c4e1c2b6d4978c4a7053b4b81cd2f8a1056f88161e6f14ea63cca8c0c1',
     );
+  });
+
+  it('reports a copy installed before ADR 0065 as stale, not edited, and install replaces it without a backup', () => {
+    const before0065 = fs.readFileSync(new URL('./fixtures/contract-pre-0065-claude.md', import.meta.url), 'utf8');
+    expect(createHash('sha256').update(before0065, 'utf8').digest('hex')).toBe('90bdfaebee36e732bfdd1c25846cf282e8ff3ef295ace463f897ef265ff19138');
+    expect(before0065).not.toContain('propose its milestones');
+    const file = claudeFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, before0065);
+    expect(contractStatus('claude', { path: file })).toEqual({ target: 'claude', path: file, status: 'stale' });
+    expect(installContract('claude', { path: file })).toEqual({ target: 'claude', path: file, replaced: 'earlier-release' });
+    expect(fs.readFileSync(file, 'utf8')).toBe(renderContract('claude'));
   });
 
   it('records every current render, so the next release recognises this one', () => {
