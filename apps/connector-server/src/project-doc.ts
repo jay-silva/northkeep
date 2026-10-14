@@ -20,7 +20,7 @@ export const PROJECT_LOG_KEEP_ENTRIES = 10;
 export const PROJECT_LOG_ARCHIVE_HEADING = '## Log archive';
 
 export const PROJECT_DOC_CAP_MESSAGE =
-  `This project document exceeds ${PROJECT_DOC_MAX_CHARS} characters even after rolling its Log. Shorten What & Why, Current Status, or Next Actions, then try again. NorthKeep will not silently truncate.`;
+  `This project document exceeds ${PROJECT_DOC_MAX_CHARS} characters even after rolling its Log. Shorten What & Why, Current Status, Next Actions, or Milestones, then try again. NorthKeep will not silently truncate.`;
 
 export const PROJECT_SECTION_HEADINGS = [
   'What & Why',

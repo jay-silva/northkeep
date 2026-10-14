@@ -238,7 +238,7 @@ describe('size cap', () => {
     const rolled = rollProjectLog(merged);
     expect(rolled.archived).toEqual([]); // nothing in the Log to roll
     expect(() => assertProjectDocSize(serializeProjectDoc(rolled.doc))).toThrow(PROJECT_DOC_CAP_MESSAGE);
-    expect(PROJECT_DOC_CAP_MESSAGE).toMatch(/Shorten What & Why, Current Status, or Next Actions/);
+    expect(PROJECT_DOC_CAP_MESSAGE).toMatch(/Shorten What & Why, Current Status, Next Actions, or Milestones, then try again\./);
     expect(PROJECT_DOC_CAP_MESSAGE).not.toMatch(/[—–]/);
   });
 
