@@ -270,8 +270,13 @@ export class Vault {
     let file: Buffer;
     try {
       file = platform.storage.readBytes(vaultPath);
-    } catch {
-      throw new Error(`No vault found at ${vaultPath}. Run "northkeep init" first.`);
+    } catch (err) {
+      // Keep the read's own reason: on the phone a failed read of a file that exists was reported as "no vault".
+      const cause = err instanceof Error ? err.message : String(err);
+      if (!platform.storage.exists(vaultPath)) {
+        throw new Error(`No vault found at ${vaultPath}. Run "northkeep init" first.`);
+      }
+      throw new Error(`Could not read the vault file at ${vaultPath}: ${cause}`);
     }
     // Buffer.compare (static) instead of subarray().equals(): on Hermes the
     // Buffer polyfill's subarray returns a plain Uint8Array (no Symbol.species),
