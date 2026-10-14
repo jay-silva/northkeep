@@ -18,7 +18,7 @@ The desktop app only ran on a dev machine, spawning the system `node`. End users
 ## Consequences
 - Easier: non-engineers install by double-click; the signature seals every file on disk.
 - Harder: DMG is 49 MB unsigned (`.app` 174 MB); Node security releases require a NorthKeep re-release; certificates need upkeep; arm64 only; Ollama stays a separate install.
-- Limits: `SHASUMS256.txt` is not GPG-verified (M1), so a nodejs.org dist-server compromise is not stopped. Killing the shell itself (`kill -9`) can orphan the sidecar. The notarytool password is visible in `ps` during `--wait` (L3). Keychain prompt behavior, externalBin notarization (tauri#11992) and DMG stapling awaited the first signed build.
+- Limits: `SHASUMS256.txt` is GPG-verified only on signed builds or with `NORTHKEEP_REQUIRE_GPG=1`. Killing the shell itself (`kill -9`) can orphan the sidecar. The notarytool password reaches argv only in the brief `store-credentials` call. Keychain prompt behavior, externalBin notarization (tauri#11992) and DMG stapling awaited the first signed build.
 
 ## Rejected
 - Node SEA: addons must be written to a temp dir and `dlopen`ed at runtime, a security regression.

@@ -13,7 +13,7 @@ M13's outcome: a project started in one local client resumes cold in another, fr
 - D5: Cloud Connect gets no project tools this milestone; Claude.ai and ChatGPT see a project only if its scope is Shared (connector tools: ADR 0040).
 
 ## Consequences
-- Limits: two machines editing before sync still lose one side (whole-vault last-writer-wins; KNOWN-LIMITS). The convention is advisory: an in-grant type change hides a project from the tools. Out-of-grant edits fail as "No memory found". `working` memories do not age out.
+- Limits: two machines editing before sync still lose one side (whole-vault last-writer-wins; KNOWN-LIMITS). Agents cannot retype a project (ADR 0065); an owner retype hides it. Out-of-grant edits fail as "No memory found". `working` memories do not age out.
 - Not built: Curator, connector project tools, new CLI commands, schema bump.
 
 ## Rejected

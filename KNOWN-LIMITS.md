@@ -919,7 +919,8 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   A project scope with no live entry on that device is marked Shared when
   the app's document arrives, and receives exactly the rows the app wrote.
   This is the one named exception to "sharing is loudly confirmed"; the
-  Shared badge and unshare are the controls.
+  Shared badge and unshare are the controls. A document that arrives with
+  a milestone already passed is held for review instead (ADR 0065).
 - **A scope that already holds anything holds the app's rows.** The rows
   stay pending and are offered on every sync until the user shares the
   scope in NorthKeep. Sharing then lets the app's document replace the
