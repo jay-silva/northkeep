@@ -654,6 +654,30 @@
   .restore-dialog .review-compare small { font:600 11px/1 var(--sans); letter-spacing:.08em; text-transform:uppercase; }
   .restore-dialog .review-compare b { display:block; margin:8px 0 2px; font-size:12px; color:var(--muted); font-weight:600; }
   .restore-dialog .review-compare b:first-of-type { margin-top:0; }
+  /* ADR 0065 K2: the Milestones block. A solid check is a pass you confirmed; an outlined one is a pass an AI app recorded. */
+  .ms-list { margin:0; padding:0; list-style:none; }
+  .ms-row { display:flex; align-items:center; gap:12px; min-height:44px; padding:9px 0; border-top:1px solid var(--line); }
+  .ms-row:first-child { border-top:0; }
+  .ms-dot { flex:none; display:flex; align-items:center; justify-content:center; width:22px; height:22px; border:2px solid var(--line); border-radius:50%; font-size:12px; line-height:1; }
+  .ms-row.done .ms-dot { background:var(--accent); border-color:var(--accent); color:var(--accent-ink); }
+  .ms-row.said .ms-dot { border-color:var(--accent); color:var(--accent); }
+  .ms-row.cur .ms-dot { border-color:var(--accent); }
+  .ms-row.cur .ms-dot::after { content:""; width:8px; height:8px; border-radius:50%; background:var(--accent); }
+  .ms-text { flex:1; min-width:0; overflow-wrap:anywhere; }
+  .ms-text small { display:block; color:var(--muted); font-size:12px; line-height:1.4; }
+  .ms-row.done .ms-text > span, .ms-row.said .ms-text > span { color:var(--muted); }
+  .ms-row .btn { flex:none; }
+  .ms-test { margin:10px 0 14px; padding:12px 14px; border-radius:10px; background:var(--chip); font:500 17px/1.45 var(--serif); overflow-wrap:anywhere; }
+  .ms-undo { margin:12px 0 0; padding-left:20px; }
+  .ms-repair textarea { width:100%; min-height:150px; font:13px/1.5 var(--mono); resize:vertical; }
+  .ms-lines { margin:10px 0 0; padding:0; list-style:none; font:12px/1.5 var(--mono); }
+  .ms-lines li { padding:4px 8px; border-radius:6px; overflow-wrap:anywhere; white-space:pre-wrap; }
+  .ms-lines li.stamped { background:var(--warn-bg); color:var(--warn-ink); box-shadow:inset 3px 0 0 var(--warn-ink); }
+  .ms-lines li.stamped::before { content:"Says passed · "; font:600 11px/1.5 var(--sans); }
+  @media (max-width:600px) {
+    .ms-row { flex-wrap:wrap; }
+    .ms-row .btn { margin-left:34px; }
+  }
   .dialog p.shared-note { display:flex; gap:8px; align-items:flex-start; color:var(--ink); }
   .switch-row { display:flex; align-items:center; justify-content:space-between; gap:16px; min-height:44px; margin:0 0 12px; cursor:pointer; }
   .switch-row strong { display:block; font-size:14px; font-weight:600; }
@@ -2762,6 +2786,7 @@
     const statusBox = el('div'); statusBox.append(el('div', 'review-meta-title', 'Current summary'), el('p', 'project-status-copy', project.status || 'No current status yet.'));
     const next = el('div', 'project-next'); next.append(el('strong', undefined, 'Next actions'), el('span', undefined, project.next_actions || 'No next action recorded.'));
     facts.append(statusBox, next); root.appendChild(facts);
+    root.appendChild(renderProjectMilestones(project));
     const decisions = projectLines(project.decisions), questions = projectLines(project.open_questions);
     const decisionSection = el('section', 'project-section');
     const decisionHead = el('div', 'project-section-head'); decisionHead.append(el('h3', undefined, 'Decisions and open questions'), el('span', 'muted', (decisions.length + questions.length) + ' items'));
@@ -2772,6 +2797,187 @@
     decisionSection.append(decisionHead, items); root.appendChild(decisionSection);
     root.appendChild(renderProjectFiles(project.files));
     root.appendChild(renderProjectHistory(project));
+  }
+
+  // --- ADR 0065 K2: Milestones. The server parses the plan; this only shows it
+  // and sends Mark passed, Confirm and repair, each bound to the revision read.
+  function milestoneDay(on) {
+    const date = new Date(String(on) + 'T12:00:00Z');
+    return Number.isNaN(date.getTime()) ? String(on) : date.toLocaleDateString([], { month:'short', day:'numeric', timeZone:'UTC' });
+  }
+
+  function milestoneWho(by) { return by === 'you' ? 'you confirmed' : 'agent says you confirmed'; }
+
+  function renderProjectMilestones(project) {
+    const section = el('section', 'project-section'); section.id = 'projectMilestones';
+    const plan = project.milestones || { kind:'absent' };
+    const items = plan.kind === 'plan' && Array.isArray(plan.items) ? plan.items : [];
+    const passed = items.filter((item) => item.state === 'passed').length;
+    const head = el('div', 'project-section-head');
+    head.append(el('h3', undefined, 'Milestones'), el('span', 'muted', plan.kind === 'plan' ? passed + ' of ' + items.length + ' passed' : plan.kind === 'none' ? 'No plan on purpose' : plan.kind === 'malformed' ? 'Needs repair' : 'No plan yet'));
+    section.appendChild(head);
+    if (plan.kind === 'none') { section.appendChild(el('p', 'muted', plan.reason)); return section; }
+    if (plan.kind === 'absent') { section.appendChild(el('p', 'muted', 'No plan yet. Ask your AI app to propose milestones for this project.')); return section; }
+    if (plan.kind === 'malformed') {
+      const notice = el('div', 'project-notice danger'); notice.setAttribute('role', 'status');
+      notice.append(el('strong', undefined, 'NorthKeep cannot read this Milestones section.'), el('br'), document.createTextNode(plan.reason + ' AI apps cannot change it until you repair it.'));
+      const repair = el('button', 'btn', 'Repair milestones'); repair.type = 'button';
+      repair.addEventListener('click', (event) => openMilestoneRepair(project, event.currentTarget));
+      notice.append(el('br'), repair); section.appendChild(notice); return section;
+    }
+    const current = items.find((item) => item.state === 'open');
+    const list = el('ol', 'ms-list');
+    for (const item of items) {
+      const kind = item.state === 'passed' ? (item.by === 'you' ? 'done' : 'said') : item === current ? 'cur' : '';
+      const row = el('li', 'ms-row' + (kind ? ' ' + kind : ''));
+      const dot = el('span', 'ms-dot', item.state === 'passed' ? '✓' : ''); dot.setAttribute('aria-hidden', 'true');
+      const text = el('div', 'ms-text'); text.appendChild(el('span', undefined, item.id + ' ' + item.title));
+      if (item.state === 'passed') text.appendChild(el('small', undefined, 'Passed ' + milestoneDay(item.on) + ' · ' + milestoneWho(item.by)));
+      else if (item === current) text.append(el('span', 'sr-only', ', current milestone'), el('small', undefined, 'Test: ' + item.test));
+      else text.appendChild(el('span', 'sr-only', ', not started'));
+      row.append(dot, text);
+      if (kind === 'said' || kind === 'cur') {
+        const button = el('button', 'btn' + (kind === 'cur' ? ' primary' : ''), kind === 'cur' ? 'Mark passed' : 'Confirm'); button.type = 'button';
+        button.setAttribute('aria-label', (kind === 'cur' ? 'Mark ' : 'Confirm ') + item.id + ' passed');
+        button.addEventListener('click', (event) => confirmMilestone(project, item, event.currentTarget));
+        row.appendChild(button);
+      }
+      list.appendChild(row);
+    }
+    section.appendChild(list); return section;
+  }
+
+  function confirmMilestone(project, item, returnTo) {
+    const agent = item.state === 'passed';
+    openGuardDialog((agent ? 'Confirm ' : 'Mark ') + item.id + ' passed?', 'milestone-dialog', (body) => {
+      body.appendChild(el('p', 'lead', agent ? 'An AI app recorded ' + item.id + ' ' + item.title + ' as passed on ' + milestoneDay(item.on) + ', saying you confirmed it. Did you run this test, and did it pass?' : 'Did you run this test, and did it pass?'));
+      body.appendChild(el('blockquote', 'ms-test', item.test));
+      body.appendChild(el('p', 'muted', 'NorthKeep records ' + item.id + ' as passed today, confirmed by you. AI apps cannot change it after that.'));
+      const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);
+      const actions = el('div', 'row'); actions.style.justifyContent = 'flex-end';
+      const cancel = el('button', 'btn', 'Not yet'); cancel.type = 'button'; cancel.dataset.autofocus = ''; cancel.addEventListener('click', closeGuardDialog);
+      const yes = el('button', 'btn primary', agent ? 'Yes, I confirm' : 'Yes, it passed'); yes.type = 'button';
+      yes.addEventListener('click', async () => {
+        const requestId = ++projectActionSequence;
+        yes.disabled = true; err.textContent = '';
+        try {
+          await api('/api/projects/' + encodeURIComponent(project.project) + '/milestones/confirm', { method:'POST', json:{ id:item.id, expected_revision:project.revision } });
+          if (!await projectWriteCurrent(project.project, requestId)) return;
+          closeGuardDialog();
+          await loadProject(project.project, true);
+          if (currentProjectSlug !== project.project || !status.unlocked || $('view-projects').hidden) return;
+          projectAnnounce(item.id + ' ' + item.title + ' passed, confirmed by you.');
+        } catch (ex) {
+          if (ex.message === 'locked' || !projectWriteViewCurrent(project.project, requestId)) return;
+          if (ex.status === 409 && ex.code === 'stale_project') { renderMilestoneRefused(body, project, ex.current, 'Nothing was marked passed.'); return; }
+          err.textContent = ex.message; yes.disabled = false;
+        }
+      });
+      actions.append(cancel, yes); body.appendChild(actions);
+    }, returnTo);
+  }
+
+  // A stale page writes nothing: say who saved, then reload so Jay chooses again on what is there now.
+  function renderMilestoneRefused(body, project, latest, outcome) {
+    body.replaceChildren();
+    const notice = el('div', 'project-notice'); notice.setAttribute('role', 'alert');
+    const writer = latest && latest.last_writer && latest.last_writer.host;
+    const when = latest && latest.updated_at ? projectDate(latest.updated_at) : '';
+    notice.append(el('strong', undefined, 'Project changed after it was read. ' + outcome), el('br'),
+      document.createTextNode((writer ? writer + ' saved a new version' : 'A new version was saved') + (when ? ' at ' + when : '') + ' while this page was open. Reload the project to see it, then choose again.'));
+    body.appendChild(notice);
+    const actions = el('div', 'row'); actions.style.justifyContent = 'flex-end';
+    const close = el('button', 'btn', 'Close'); close.type = 'button'; close.addEventListener('click', closeGuardDialog);
+    const reload = el('button', 'btn primary', 'Reload project'); reload.type = 'button';
+    reload.addEventListener('click', async () => {
+      closeGuardDialog();
+      await loadProject(project.project);
+      const block = $('projectMilestones'); const target = block && block.querySelector('button');
+      if (target) target.focus();
+    });
+    actions.append(close, reload); body.appendChild(actions);
+    reload.focus();
+  }
+
+  // Display only: the server decides what counts as a pass. This flags any line
+  // that reads like one, so a stamp an AI app planted is seen before it is saved.
+  const MILESTONE_STAMP_HINT = /\[[xX]\]|\bpassed\b|\((?:you|agent)\)/i;
+
+  function renderMilestoneLines(list, text) {
+    list.replaceChildren();
+    for (const line of String(text).split('\n')) {
+      if (!line.trim()) continue;
+      list.appendChild(el('li', MILESTONE_STAMP_HINT.test(line) ? 'stamped' : undefined, line));
+    }
+  }
+
+  function openMilestoneRepair(project, returnTo) {
+    openGuardDialog('Repair milestones', 'milestone-dialog ms-repair', (body) => renderMilestoneRepair(body, project, project.milestone_repair_text || ''), returnTo);
+  }
+
+  function renderMilestoneRepair(body, project, text) {
+    body.replaceChildren();
+    const plan = project.milestones || {};
+    body.appendChild(el('p', 'lead', 'NorthKeep cannot read this section: ' + (plan.reason || 'it does not follow the milestone format.')));
+    body.appendChild(el('p', 'muted', 'Each line looks like "- [ ] M1 Title | test: how you check it". A passed line ends with "| passed 2026-09-28 (you)".'));
+    const label = el('label', 'project-field'); label.appendChild(el('span', undefined, 'Milestones text'));
+    const input = el('textarea'); input.value = text; input.spellcheck = false; input.dataset.autofocus = '';
+    label.appendChild(input); body.appendChild(label);
+    body.appendChild(el('p', 'muted', 'Highlighted lines say a milestone passed. An AI app may have written them. Keep a pass only if you ran that test and it passed.'));
+    const lines = el('ul', 'ms-lines'); lines.setAttribute('aria-label', 'Lines in the text'); body.appendChild(lines);
+    renderMilestoneLines(lines, input.value);
+    input.addEventListener('input', () => renderMilestoneLines(lines, input.value));
+    const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);
+    const actions = el('div', 'row'); actions.style.justifyContent = 'flex-end';
+    const cancel = el('button', 'btn', 'Cancel'); cancel.type = 'button'; cancel.addEventListener('click', closeGuardDialog);
+    const check = el('button', 'btn primary', 'Check milestones'); check.type = 'button';
+    check.addEventListener('click', async () => {
+      check.disabled = true; err.textContent = '';
+      try {
+        const result = await api('/api/projects/' + encodeURIComponent(project.project) + '/milestones/repair', { method:'POST', json:{ expected_revision:project.revision, body:input.value } });
+        renderMilestoneRepairReview(body, project, input.value, result.passes || []);
+      } catch (ex) {
+        if (ex.message === 'locked') return;
+        if (ex.status === 409 && ex.code === 'stale_project') { renderMilestoneRefused(body, project, ex.current, 'Nothing was repaired.'); return; }
+        err.textContent = ex.message; check.disabled = false;
+      }
+    });
+    actions.append(cancel, check); body.appendChild(actions);
+    input.focus();
+  }
+
+  function renderMilestoneRepairReview(body, project, text, passes) {
+    body.replaceChildren();
+    body.appendChild(el('p', 'lead', passes.length ? 'After this repair, these milestones count as passed:' : 'After this repair, no milestone counts as passed.'));
+    if (passes.length) {
+      const list = el('ul', 'ms-undo');
+      for (const pass of passes) list.appendChild(el('li', undefined, pass.id + ' ' + pass.title + ', passed ' + milestoneDay(pass.on) + ', ' + milestoneWho(pass.by)));
+      body.appendChild(list);
+      body.appendChild(el('p', 'muted', 'AI apps cannot change these lines after you save. Go back if any of them did not pass.'));
+    }
+    const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);
+    const actions = el('div', 'row'); actions.style.justifyContent = 'flex-end';
+    const back = el('button', 'btn', 'Back to editing'); back.type = 'button'; back.dataset.autofocus = '';
+    back.addEventListener('click', () => renderMilestoneRepair(body, project, text));
+    const save = el('button', 'btn primary', 'Save repair'); save.type = 'button';
+    save.addEventListener('click', async () => {
+      const requestId = ++projectActionSequence;
+      save.disabled = true; err.textContent = '';
+      try {
+        await api('/api/projects/' + encodeURIComponent(project.project) + '/milestones/repair', { method:'POST', json:{ expected_revision:project.revision, body:text, check:false, accept_passes:passes.map((pass) => pass.id) } });
+        if (!await projectWriteCurrent(project.project, requestId)) return;
+        closeGuardDialog();
+        await loadProject(project.project, true);
+        if (currentProjectSlug !== project.project || !status.unlocked || $('view-projects').hidden) return;
+        projectAnnounce('Milestones repaired.');
+      } catch (ex) {
+        if (ex.message === 'locked' || !projectWriteViewCurrent(project.project, requestId)) return;
+        if (ex.status === 409 && ex.code === 'stale_project') { renderMilestoneRefused(body, project, ex.current, 'Nothing was repaired.'); return; }
+        err.textContent = ex.message; save.disabled = false;
+      }
+    });
+    actions.append(back, save); body.appendChild(actions);
+    back.focus();
   }
 
   function renderProjectFiles(files) {
@@ -2867,6 +3073,14 @@
     const compare = el('div', 'review-compare');
     compare.append(projectSummaryBox('Current version', project.status, project.next_actions), projectSummaryBox('Version from ' + new Date(row.updated_at).toLocaleDateString([], { month:'short', day:'numeric' }), old['Current Status'], old['Next Actions']));
     body.appendChild(compare);
+    const undone = project.restore_undoes && Array.isArray(project.restore_undoes[row.id]) ? project.restore_undoes[row.id] : [];
+    if (undone.length) {
+      const warn = el('div', 'project-notice danger'); warn.setAttribute('role', 'status');
+      warn.appendChild(el('strong', undefined, 'This undoes ' + (undone.length === 1 ? 'a passed milestone:' : undone.length + ' passed milestones:')));
+      const list = el('ul', 'ms-undo');
+      for (const pass of undone) list.appendChild(el('li', undefined, pass.id + ' ' + pass.title + ', passed ' + milestoneDay(pass.on) + ', ' + milestoneWho(pass.by)));
+      warn.appendChild(list); body.appendChild(warn);
+    }
     if (project.shared) body.appendChild(el('p', 'shared-note', (project.title || project.project) + ' is shared. Your AI apps see the restored version after ' + devicePlace() + ' next sends to Cloud Connect.'));
     const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);
     const actions = el('div', 'row'); actions.style.justifyContent = 'flex-end';
