@@ -20,12 +20,13 @@ Nothing here touches your vault. The tests use throwaway folders and a stand-in 
    npx vitest run apps/connector-server/test/adr0065-milestones.test.ts packages/sync/test/adr0065-downsync.test.ts packages/cli/test/adr0065-share.test.ts apps/web/test/adr0065-conflict-ui.test.ts
    ```
 
-   Expected last lines: `Test Files  4 passed (4)` and `Tests  26 passed (26)`.
+   Expected last lines: `Test Files  4 passed (4)` and `Tests  30 passed (30)`.
 
    What they prove, in plain words:
    - Cloud Connect refuses to create a project without milestones, and refuses any milestone sent as already passed.
    - Cloud Connect keeps every passed milestone exactly as it was, and refuses an AI app's attempt to change or remove one.
    - Cloud Connect refuses to forget a project document.
+   - Cloud Connect refuses a heading that looks like Milestones, or a checkbox line with a milestone number, anywhere outside the real Milestones section.
    - When a cloud version would add, change or remove a pass, your Mac holds it as "needs your decision" instead of applying it, and says which passes would change.
    - A new project from a connected app that arrives already showing a pass is held and stays private until you choose.
 
@@ -67,11 +68,11 @@ Tell Claude which steps passed. If step 1 did not propose milestones, that is no
 
 ## What was verified before this reached you
 
-Claude ran these in a cloud container on 2026-10-14, on branch `claude/milestones-k4` rebased onto K1 (e749593), with throwaway folders only:
+Claude ran these in a cloud container on 2026-10-14, on branch `claude/milestones-k4` rebased onto K3, which sits on K2 and the final K1 (4fe0c29), with throwaway folders only:
 
 - Part 1 step 1: `pnpm install --frozen-lockfile` and `pnpm build` succeeded.
-- Part 1 step 2: 4 files, 26 tests passed.
+- Part 1 step 2: 4 files, 30 tests passed.
 - Part 1 step 3: 6 tests passed, standalone and inside the full `pnpm test:e2e` (27 files, 161 tests passed).
-- The full `npx vitest run`: 2820 passed, 10 failed. Nine are the known failures that happen only when tests run as root, as they do in the container; eight of them check that a file NorthKeep cannot read is reported, and root can read any file. The tenth needs to look up example.com, which the container cannot. None of them is in code K4 changes.
+- The full `npx vitest run`: 2854 passed, 10 failed. Nine are the known failures that happen only when tests run as root, as they do in the container; eight of them check that a file NorthKeep cannot read is reported, and root can read any file. The tenth needs to look up example.com, which the container cannot. None of them is in code K4 changes.
 
 Not run, because it needs the deployed connector and your claude.ai account: all of Part 2. Step 1 is the only check of whether claude.ai shows NorthKeep's instruction to its model, and KNOWN-LIMITS keeps claude.ai under "Not verified" until you report it.
