@@ -182,6 +182,20 @@ export class ConnectorStalePushError extends Error {
  * happen to have entries — a scope emptied of its last memory must still be sent
  * so the server clears its now-stale rows.
  */
+// Names which cap a 413 hit using fixed text only; the server's own words are never echoed.
+export function capRejection(serverError: string): string {
+  const lead = 'The connector server rejected the push: ';
+  const count = /^Too many shared memories \((\d+)\)/.exec(serverError);
+  if (count) return `${lead}too many shared memories (${count[1]}; the cap is 5,000 per account).`;
+  if (serverError.startsWith('A memory exceeds the per-entry content cap')) {
+    return `${lead}a shared memory is too large (the cap is 8 KB, or 64 KB for a project document).`;
+  }
+  if (/^The push exceeds the [\d.]+ MB total content cap/.test(serverError)) {
+    return `${lead}the shared memories add up to more than the 4 MB total cap.`;
+  }
+  return `${lead}over the sharing caps (too many shared memories, or a memory is too large).`;
+}
+
 export async function pushSharedScopes(opts: {
   server: string;
   deviceSecret: Buffer;
@@ -233,9 +247,8 @@ export async function pushSharedScopes(opts: {
     throw new ConnectorStalePushError(typeof body.vault_version === 'number' ? body.vault_version : null);
   }
   if (res.status === 413) {
-    throw new Error(
-      'The connector server rejected the push: over the sharing caps (too many shared memories, or a memory is too large).',
-    );
+    const body = (await res.json().catch(() => ({}))) as { error?: unknown };
+    throw new Error(capRejection(typeof body.error === 'string' ? body.error : ''));
   }
   if (res.status === 401) throw new Error('The connector server rejected the connector token (401).');
   if (res.status === 409) throw reencryptError();
