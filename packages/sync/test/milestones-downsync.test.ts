@@ -92,14 +92,15 @@ describe('K1 review finding B: rows the K1 rule refuses are resolvable, never st
     const cloudId = fake.cloudUpdate('project:a', forged);
     const held = await applyDownSync({ ...conn(), approve: { server_ids: [cloudId] } });
     expect(held.replaced).toBe(0);
-    expect(held.conflicts.map((c) => ({ id: c.server_id, reason: c.reason, changes: (c as { pass_changes?: Array<{ text: string }> }).pass_changes?.map((p) => p.text) }))).toEqual([{
+    expect(held.conflicts.map((c) => ({ id: c.server_id, reason: c.reason, changes: c.pass_changes.map((p) => p.text) }))).toEqual([{
       id: cloudId,
       reason: 'milestones_changed',
       changes: ['M2 Markets would be marked passed, confirmed by you on 2026-10-09.'],
     }]);
     expect(getProjectView(vault, 'a').revision).toBe(r1);
 
-    await resolveConflict({ ...conn(), project: 'a', choice: 'take-theirs', expected_revision: r1 });
+    const taken = await resolveConflict({ ...conn(), project: 'a', choice: 'take-theirs', expected_revision: r1 });
+    expect(taken.pass_changes.map((p) => [p.id, p.change])).toEqual([['M2', 'added']]);
     expect(getProjectView(vault, 'a').content).toBe(forged);
     expect(pendingIds()).toEqual([]);
     expect((await applyDownSync(conn())).conflicts).toEqual([]);

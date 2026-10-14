@@ -100,6 +100,7 @@ export {
   UNSHARE_LOCAL_SAVE_FAILED_MESSAGE,
   LAPSED_UNSHARE_HINT,
 } from './connector-client.js';
+export { cloudRowKeepsPasses, milestonePassChanges, type MilestonePassChange } from './milestone-changes.js';
 export {
   CONNECTOR_AUTO_PUSH_MESSAGES,
   ConnectorAutoPush,

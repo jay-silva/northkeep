@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { DownSyncConflict } from '@northkeep/sync';
-import { describePlan, takeTheirsWarnings } from '../src/shareCmd.js';
+import { describePlan, takeTheirsWarnings, takenPassChanges } from '../src/shareCmd.js';
 
 const held: DownSyncConflict = {
   scope: 'project:fresh',
@@ -30,5 +30,21 @@ describe('ADR 0065 share conflicts text', () => {
       '  1 conflict, not applied (see "northkeep share conflicts"):',
       '    fresh: the cloud version changes which milestones have passed, and only you can decide that (id conn_1)',
     ]);
+  });
+
+  it('says after take theirs which passes it added, changed or removed (K1 review finding B)', () => {
+    expect(takenPassChanges([
+      { id: 'M1', change: 'added', text: '' },
+      { id: 'M2', change: 'changed', text: '' },
+      { id: 'M3', change: 'removed', text: '' },
+      { id: null, change: 'unreadable', text: '' },
+    ])).toEqual([
+      'Milestone changes that came with the cloud version:',
+      '  M1 is now marked passed.',
+      '  The passed line of M2 changed.',
+      '  M3 is no longer marked passed.',
+      '  The Milestones section was replaced, and NorthKeep could not read which milestones it marks passed.',
+    ]);
+    expect(takenPassChanges([])).toEqual([]);
   });
 });

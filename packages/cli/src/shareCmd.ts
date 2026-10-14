@@ -28,6 +28,7 @@ import {
   type ConnectorConfig,
   type DownSyncConflict,
   type DownSyncPlan,
+  type MilestonePassChange,
   type PushSharedResult,
 } from '@northkeep/sync';
 import { promptLine } from './prompt.js';
@@ -221,6 +222,7 @@ const REASONS: Record<ConflictReason, string> = {
   legacy: 'the cloud version does not say which copy it started from',
   several_heads: `this project has more than one current document on ${here}`,
   deleted_here: `this project was deleted on ${here}, and the cloud version would bring it back`,
+  milestones_changed: 'the cloud version changes which milestones have passed, and only you can decide that',
 };
 
 function conflictLine(c: DownSyncConflict): string {
@@ -311,7 +313,10 @@ export async function shareSyncCmd(options: { yes?: boolean }, deps: ShareDeps, 
   }
   const unshown = down.needs_review.replacements.length + down.needs_review.forgets.length;
   if (unshown > 0) console.log(`  ${plural(unshown, 'change', 'changes')} arrived after the preview and wait for the next sync.`);
-  for (const c of down.conflicts) console.log(`  Conflict, not applied: ${conflictLine(c)}. Resolve it with: northkeep share resolve ${c.project} --take-theirs | --keep-mine`);
+  for (const c of down.conflicts) {
+    console.log(`  Conflict, not applied: ${conflictLine(c)}. Resolve it with: northkeep share resolve ${c.project} --take-theirs | --keep-mine`);
+    for (const line of takeTheirsWarnings(c)) console.log(`    ${line}`);
+  }
   const after = await deps.withVault((vault) => vault.sharedScopes());
   for (const scope of after.filter((s) => !before.includes(s))) {
     console.log(
@@ -330,6 +335,28 @@ export async function shareSyncCmd(options: { yes?: boolean }, deps: ShareDeps, 
     return;
   }
   console.log(`✓ Re-pushed ${push.pushed} memories across ${push.scopes.length} shared scope(s) to ${cfg.server}.`);
+}
+
+/** What --take-theirs would also do (ADR 0065): every pass change, and a Shared mark on a private scope. */
+export function takeTheirsWarnings(c: DownSyncConflict): string[] {
+  const lines = c.pass_changes.length > 0 ? ['Milestone changes if you take the cloud version:', ...c.pass_changes.map((p) => `  ${p.text}`)] : [];
+  if (c.shares_scope) lines.push(`Taking the cloud version also marks project:${c.project} Shared, so your connected AI apps can read everything in it.`);
+  return lines;
+}
+
+/** What --take-theirs did to the milestones, in the past tense, for the resolve receipt (ADR 0065). */
+export function takenPassChanges(changes: MilestonePassChange[]): string[] {
+  if (changes.length === 0) return [];
+  const said = changes.map((p) => {
+    switch (p.change) {
+      case 'added': return `  ${p.id} is now marked passed.`;
+      case 'changed': return `  The passed line of ${p.id} changed.`;
+      case 'removed': return `  ${p.id} is no longer marked passed.`;
+      case 'unreadable': return '  The Milestones section was replaced, and NorthKeep could not read which milestones it marks passed.';
+      default: { const unreachable: never = p.change; return unreachable; }
+    }
+  });
+  return ['Milestone changes that came with the cloud version:', ...said];
 }
 
 /** `northkeep share conflicts [--show <slug>]`: what D1 is holding, and both texts side by side. */
@@ -372,6 +399,7 @@ export async function shareConflictsCmd(options: { show?: string }, deps: ShareD
     console.log(`Cloud version (id ${c.server_id}; ${REASONS[c.reason]}):`);
     console.log(c.content);
     if (report.history.includes(c.content)) console.log('This cloud version is already in your history.');
+    for (const line of takeTheirsWarnings(c)) console.log(line);
   }
   console.log(
     `Keep one: northkeep share resolve ${options.show} --keep-mine, or --take-theirs${report.local ? ` --expected-revision ${report.local.id}` : ''} (refused if ${here}'s version changes first)`,
@@ -421,6 +449,7 @@ export async function shareResolveCmd(
   }
   if (resolved.choice === 'take-theirs') {
     console.log(`✓ Project ${slug} now has the cloud version. Your previous version is in its history (northkeep projects history ${slug}).`);
+    for (const line of takenPassChanges(resolved.pass_changes)) console.log(line);
   } else {
     console.log(
       `✓ Kept ${here}'s version of ${slug}. The cloud version was saved as a memory in project:${slug} titled "Cloud version not kept, ${now.toISOString().slice(0, 10)}".`,
