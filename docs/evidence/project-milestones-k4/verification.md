@@ -1,0 +1,12 @@
+# K4 acceptance: verification record (moved verbatim from docs/milestones-k4-acceptance.md)
+
+## What was verified before this reached you
+
+Claude ran these in a cloud container on 2026-10-14, on branch `claude/milestones-k4` rebased onto K3, which sits on K2 and the final K1 (4fe0c29), with throwaway folders only:
+
+- Part 1 step 1: `pnpm install --frozen-lockfile` and `pnpm build` succeeded.
+- Part 1 step 2: 4 files, 30 tests passed.
+- Part 1 step 3: 6 tests passed, standalone and inside the full `pnpm test:e2e` (27 files, 161 tests passed).
+- The full `npx vitest run`: 2854 passed, 10 failed. Nine are the known failures that happen only when tests run as root, as they do in the container; eight of them check that a file NorthKeep cannot read is reported, and root can read any file. The tenth needs to look up example.com, which the container cannot. None of them is in code K4 changes.
+
+Not run, because it needs the deployed connector and your claude.ai account: all of Part 2. Step 1 is the only check of whether claude.ai shows NorthKeep's instruction to its model, and KNOWN-LIMITS keeps claude.ai under "Not verified" until you report it.
