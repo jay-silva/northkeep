@@ -6,6 +6,7 @@ import { syncAgeLine } from '../src/lib/sync-flow';
 import { useVaultSession } from '../src/lib/vault-session';
 import { MAX_SCALE_DENSE } from '../src/lib/type-scale';
 import { SyncPill, colors, type } from '../src/ui';
+import { MilestoneTrack } from '../src/MilestoneTrack';
 
 /**
  * Projects: read-only list of the project documents in this phone's vault,
@@ -82,12 +83,20 @@ function ProjectCard({ row }: { row: ProjectRow }) {
       style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
       onPress={() => router.push(`/project/${row.slug}`)}
       accessibilityRole="button"
-      accessibilityLabel={`${row.name}. ${row.statusLine}. Next action: ${row.nextAction}. ${updatedLabel(row.updatedAt)}. ${row.notes.join('. ')}`}
+      accessibilityLabel={`${row.name}. ${row.statusLine}. ${row.progress ? `Milestones: ${row.progress}. ` : ''}Next action: ${row.nextAction}. ${updatedLabel(row.updatedAt)}. ${row.notes.join('. ')}`}
     >
       <Text style={styles.name}>{row.name}</Text>
       <Text style={styles.status} numberOfLines={2}>
         {row.statusLine}
       </Text>
+      {row.progress ? (
+        <View style={styles.progress}>
+          {row.milestones ? (
+            <MilestoneTrack compact passed={row.milestones.passed} total={row.milestones.total} hasCurrent={row.milestones.current !== null} />
+          ) : null}
+          <Text style={styles.progressText} numberOfLines={1}>{row.progress}</Text>
+        </View>
+      ) : null}
       <Text style={styles.nextLabel}>Next action</Text>
       <Text style={styles.nextAction} numberOfLines={2}>{row.nextAction}</Text>
       <View style={styles.meta}>
@@ -135,6 +144,8 @@ const styles = StyleSheet.create({
   cardPressed: { opacity: 0.8 },
   name: { ...type.headline, color: colors.text, marginBottom: 4 },
   status: { ...type.body, color: colors.text },
+  progress: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 8 },
+  progressText: { ...type.footnote, color: colors.muted, flexShrink: 1, fontVariant: ['tabular-nums'] },
   meta: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 12, marginTop: 8 },
   metaText: { ...type.caption, color: colors.muted, fontWeight: '400' },
   note: { ...type.footnote, color: colors.warnText, marginTop: 6 },
