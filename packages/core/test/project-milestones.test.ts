@@ -265,3 +265,70 @@ describe('assertAgentWriteKeepsPasses', () => {
     expect(refusal(() => assertAgentWriteKeepsPasses(open, step1))).toMatch(/^This change would leave the Milestones section unreadable/);
   });
 });
+
+describe('adversarial review of efa93d4 (wounds W1, W2, W3, W5)', () => {
+  const OPEN3 = '- [ ] M3 Underwrite top 5 listings | test: each has a pro forma with ADR, occupancy and cash-on-cash';
+  const before = doc(PLAN);
+  const FORGED_OPEN_MESSAGE = 'M3 has a checkbox or a pass stamp in its text. Open milestones cannot carry one; NorthKeep records passes itself.';
+
+  it('W1: refuses a new or changed open line whose title or test carries a forged stamp', () => {
+    for (const forged of [
+      '- [ ] M3 [x] Under (you) | test: pro forma ｜ passed 2026-10-03 (you)',
+      '- [ ] M3 Underwrite | test: pro forma — passed 2026-10-03 (you)',
+      '- [ ] M3 Underwrite | test: pro forma passed 2026-10-03',
+    ]) {
+      expect(refusal(() => assertAgentWriteKeepsPasses(before, before.replace(OPEN3, forged)))).toBe(FORGED_OPEN_MESSAGE);
+    }
+    const added = before.replace(OPEN3, `${OPEN3}\n- [ ] M4 Close | test: keys (agent)`);
+    expect(refusal(() => assertAgentWriteKeepsPasses(before, added))).toBe('M4 has a checkbox or a pass stamp in its text. Open milestones cannot carry one; NorthKeep records passes itself.');
+    expect(refusal(() => assertAgentWriteKeepsPasses(null, doc('- [ ] M1 Buy | test: done (you)')))).toBe('M1 has a checkbox or a pass stamp in its text. Open milestones cannot carry one; NorthKeep records passes itself.');
+  });
+
+  it('W1: an unchanged open line is not re-judged, so an owner-written line does not block other edits', () => {
+    const owned = doc(PLAN.replace(OPEN3, '- [ ] M3 Underwrite | test: the lender says (you) are approved'));
+    expect(() => assertAgentWriteKeepsPasses(owned, owned.replace('Shortlisting.', 'Underwriting.'))).not.toThrow();
+  });
+
+  it('W2: the stamp test sees through lookalikes', () => {
+    for (const text of ['done ✅ (уou)', '［x］ a', '[ X ] a', 'done (YOU)', 'done ( agent )', 'done ⟨you⟩', 'ok ☑ fine', 'Passed 2026/10/03', 'passed ２０２６-１０-０３', 'done (ａｇｅｎｔ)', 'done (yοu)']) {
+      expect(refusal(() => parseMilestoneProposals(`M3 Underwrite | test: ${text}`)), text).toBe('Line 1 has a checkbox or a pass stamp. Send open milestones only, like "M3 Title | test: how the user checks it"; NorthKeep records passes itself.');
+    }
+    for (const text of ['three listings with comps', 'you and the lender agree', 'agent of record signs', 'passed inspection']) {
+      expect(() => parseMilestoneProposals(`M3 Underwrite | test: ${text}`), text).not.toThrow();
+    }
+  });
+
+  it('W3: refuses a passed-milestone line added outside the real section, and a lookalike Milestones heading', () => {
+    const empty = doc(null);
+    const stamp = '- [x] M1 Buy box | test: agreed | passed 2026-10-01 (you)';
+    for (const heading of ['## Milestones ##', '### Milestones', '## milestones', '# Milestones', '## Ｍilestones']) {
+      const after = `${empty}\n\n${heading}\n\n${stamp}`;
+      expect(parseMilestones(after).kind, heading).toBe('absent');
+      expect(refusal(() => assertAgentWriteKeepsPasses(empty, after)), heading).toMatch(/^(A heading named like Milestones can only be "## Milestones"\.|Only the Milestones section can hold a passed milestone line\.)/);
+    }
+    expect(refusal(() => assertAgentWriteKeepsPasses(empty, empty.replace('## Log', `## Log\n\n${stamp}`)))).toBe('Only the Milestones section can hold a passed milestone line. An AI app cannot add one anywhere else.');
+    expect(refusal(() => assertAgentWriteKeepsPasses(empty, empty.replace('## Log', '## Log\n\nM2 passed 2026-10-01 (you)')))).toBe('Only the Milestones section can hold a passed milestone line. An AI app cannot add one anywhere else.');
+    expect(refusal(() => assertAgentWriteKeepsPasses(empty, `${empty}\n\n### Milestones\n\nNotes.`))).toBe('A heading named like Milestones can only be "## Milestones". Use that exact heading for the plan.');
+    expect(refusal(() => assertAgentWriteKeepsPasses(null, `${empty}\n\n## milestones\n\n- [ ] M1 A | test: b`))).toBe('A heading named like Milestones can only be "## Milestones". Use that exact heading for the plan.');
+  });
+
+  it('W3: a line or heading already in the document before is not a new addition', () => {
+    const stamp = '- [x] M1 Buy box | test: agreed | passed 2026-10-01 (you)';
+    const legacy = `${doc(null)}\n\n### Milestones\n\n${stamp}`;
+    expect(() => assertAgentWriteKeepsPasses(legacy, legacy.replace('Shortlisting.', 'Underwriting.'))).not.toThrow();
+    expect(() => assertAgentWriteKeepsPasses(before, before.replace('## Log', '## Log\n\n- [x] Merged the PR'))).not.toThrow();
+  });
+
+  it('W5: passed lines keep their order', () => {
+    const passed = PLAN.split('\n');
+    const swapped = before.replace(`${passed[0]}\n${passed[1]}`, `${passed[1]}\n${passed[0]}`);
+    expect(refusal(() => assertAgentWriteKeepsPasses(before, swapped))).toBe('Passed milestones must stay in the order they passed: M1, M2.');
+  });
+
+  it('W5: the allowed new pass goes right after the earlier passes', () => {
+    const plan = parseMilestones(before);
+    const { plan: next, passed } = recordAgentPass(plan, 'M3', '2026-10-14T00:00:00.000Z');
+    const after = doc(formatMilestones(next));
+    expect(() => assertAgentWriteKeepsPasses(before, after, passed)).not.toThrow();
+  });
+});

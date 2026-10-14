@@ -48,8 +48,32 @@ const ABSENT: MilestonePlan = { kind: 'absent' };
 const UNSAFE_CHARS = /[\p{Cc}\p{Cf}\u2028\u2029]/u;
 const LINE = /^- \[([ x])\] (M[1-9][0-9]{0,2}) ([^|]*) \| test: ([^|]*?)(?: \| passed (\d{4}-\d{2}-\d{2}) \((you|agent)\))?$/;
 const NONE = /^none: (.*)$/;
-/** A checkbox or a pass stamp inside proposed text would read as a pass to a person. */
-const LOOKS_LIKE_PASS = /\[[ xX]?\]|\((?:you|agent)\)|\bpassed\s+\d{4}-\d{2}-\d{2}/i;
+/** Letters from other scripts that render like the Latin letters of "you", "agent" and "passed". */
+const CONFUSABLES: Record<string, string> = {
+  'а': 'a', 'ɑ': 'a', 'α': 'a', 'е': 'e', 'ε': 'e', 'о': 'o', 'ο': 'o', 'σ': 'o', 'у': 'y', 'γ': 'y', 'ү': 'y',
+  'υ': 'u', 'ս': 'u', 'ц': 'u', 'п': 'n', 'ո': 'n', 'η': 'n', 'т': 't', 'τ': 't', 'ɡ': 'g', 'ց': 'g', 'р': 'p', 'ρ': 'p',
+  'ѕ': 's', 'ꜱ': 's', 'с': 'c', 'х': 'x', 'χ': 'x', '×': 'x', 'і': 'i', 'ι': 'i', 'ј': 'j', 'ԁ': 'd', 'һ': 'h',
+  '⟨': '(', '〈': '(', '‹': '(', '«': '(', '【': '(', '〔': '(', '「': '(', '『': '(', '❨': '(', '❪': '(',
+  '⟩': ')', '〉': ')', '›': ')', '»': ')', '】': ')', '〕': ')', '」': ')', '』': ')', '❩': ')', '❫': ')',
+};
+/** The text as a reader sees it: compatibility forms folded, marks and invisible characters dropped, lower case, lookalike letters mapped. */
+export function milestoneSkeleton(text: string): string {
+  const folded = text.normalize('NFKD').replace(/[\p{M}\p{Cf}]/gu, '').normalize('NFKC').toLowerCase();
+  return [...folded].map((ch) => CONFUSABLES[ch] ?? ch).join('').replace(/\s+/g, ' ');
+}
+const CHECKBOX = /\[\s*[^\]\sa-wyz0-9]?\s*\]|[☐☑☒✅✓✔✗✘❎🗹🗸]/u;
+const AUTHOR_STAMP = /[([{<]\s*(?:you|agent)\s*[)\]}>]/;
+const PASSED_DATE = /\bpass(?:ed)?\b[^0-9a-z]{0,5}\d{4}[^0-9a-z]\d{1,2}[^0-9a-z]\d{1,2}/;
+/** A checkbox or a pass stamp inside milestone text would read as a pass to a person (review wound W2). */
+export function looksLikePass(text: string): boolean {
+  const skeleton = milestoneSkeleton(text);
+  return CHECKBOX.test(skeleton) || AUTHOR_STAMP.test(skeleton) || PASSED_DATE.test(skeleton);
+}
+/** A line that reads as a passed milestone: an id with a stamp or a pass date. */
+function looksLikePassedMilestone(line: string): boolean {
+  const skeleton = milestoneSkeleton(line);
+  return /\bm[1-9][0-9]{0,2}\b/.test(skeleton) && (AUTHOR_STAMP.test(skeleton) || PASSED_DATE.test(skeleton));
+}
 const LONGEST_STAMP = ' | passed 0000-00-00 (agent)';
 
 export function asMilestoneId(value: string): MilestoneId | null {
@@ -207,7 +231,7 @@ export function parseMilestoneProposals(text: string): MilestonePlanInput {
   }
   const items = lines.map((line, index): MilestoneProposal => {
     const n = index + 1;
-    if (LOOKS_LIKE_PASS.test(line)) throw new MilestoneError(`Line ${n} has a checkbox or a pass stamp. Send open milestones only, like "M3 Title | test: how the user checks it"; NorthKeep records passes itself.`);
+    if (looksLikePass(line)) throw new MilestoneError(`Line ${n} has a checkbox or a pass stamp. Send open milestones only, like "M3 Title | test: how the user checks it"; NorthKeep records passes itself.`);
     const parts = line.split('|');
     if (parts.length !== 2 || !/^\s*test:/.test(parts[1]!)) throw new MilestoneError(`Line ${n} must look like "M3 Title | test: how the user checks it", with one "|".`);
     const test = parts[1]!.replace(/^\s*test:/, '').trim();
@@ -224,7 +248,7 @@ export function parseMilestoneProposals(text: string): MilestonePlanInput {
 
 function proposalProblem(item: MilestoneProposal, n: number): string | null {
   if (item === null || typeof item !== 'object' || typeof item.title !== 'string' || typeof item.test !== 'string') return `Milestone ${n} needs a title and a test.`;
-  if (LOOKS_LIKE_PASS.test(item.title) || LOOKS_LIKE_PASS.test(item.test)) return `Milestone ${n} has a checkbox or a pass stamp in its text. Send open milestones only; NorthKeep records passes itself.`;
+  if (looksLikePass(item.title) || looksLikePass(item.test)) return `Milestone ${n} has a checkbox or a pass stamp in its text. Send open milestones only; NorthKeep records passes itself.`;
   const problem = textProblem(item.title, 'title', MILESTONE_TITLE_MAX_CHARS) ?? textProblem(item.test, 'test', MILESTONE_TEST_MAX_CHARS);
   return problem === null ? null : `Milestone ${n}: ${problem}`;
 }
@@ -317,6 +341,42 @@ export function recordAgentPass(current: MilestonePlan, id: string, savedAt: str
   }
 }
 
+function headingText(line: string): string | null {
+  const match = /^ {0,3}#{1,6}(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$/.exec(line);
+  return match === null ? null : (match[1] ?? '');
+}
+
+/** Lines outside the one real Milestones section, counted, so an addition can be told from a line already there. */
+function linesOutsideSection(document: string): Map<string, number> {
+  const lines = document.replace(/\r\n/g, '\n').split('\n');
+  const bodies = milestoneSectionBodies(document);
+  const inside = new Map<string, number>();
+  if (bodies.length === 1) for (const line of bodies[0]!.replace(/\r\n/g, '\n').split('\n')) inside.set(line, (inside.get(line) ?? 0) + 1);
+  const outside = new Map<string, number>();
+  for (const line of lines) {
+    const skip = inside.get(line) ?? 0;
+    if (skip > 0) { inside.set(line, skip - 1); continue; }
+    outside.set(line, (outside.get(line) ?? 0) + 1);
+  }
+  return outside;
+}
+
+/** Review wound W3: no stamped line outside the section, and no heading that only looks like Milestones. */
+function assertNothingMilestoneLikeAdded(before: string | null, after: string): void {
+  const was = before === null ? new Map<string, number>() : linesOutsideSection(before);
+  const added = (line: string, count: number) => count > (was.get(line) ?? 0);
+  for (const [line, count] of linesOutsideSection(after)) {
+    if (!added(line, count)) continue;
+    const heading = headingText(line);
+    if (heading !== null && line !== `## ${MILESTONES_HEADING}` && milestoneSkeleton(heading).trim() === 'milestones') {
+      throw new MilestoneError('A heading named like Milestones can only be "## Milestones". Use that exact heading for the plan.');
+    }
+    if (looksLikePassedMilestone(line)) {
+      throw new MilestoneError('Only the Milestones section can hold a passed milestone line. An AI app cannot add one anywhere else.');
+    }
+  }
+}
+
 /**
  * The agent write rule (ADR 0065 Decision 2). Compares the parsed plans of the
  * document before and after an agent write: every passed milestone stays
@@ -325,6 +385,11 @@ export function recordAgentPass(current: MilestonePlan, id: string, savedAt: str
  * byte-identical. `before` is null when the write creates the document.
  */
 export function assertAgentWriteKeepsPasses(before: string | null, after: string, allowedPass?: PassedMilestone): void {
+  assertSectionKeepsPasses(before, after, allowedPass);
+  assertNothingMilestoneLikeAdded(before, after);
+}
+
+function assertSectionKeepsPasses(before: string | null, after: string, allowedPass?: PassedMilestone): void {
   const was = before === null ? ABSENT : parseMilestones(before);
   if (was.kind === 'malformed') {
     const old = milestoneSectionBodies(before!);
@@ -351,6 +416,18 @@ export function assertAgentWriteKeepsPasses(before: string | null, after: string
   for (const item of now.values()) {
     if (allowedPass === undefined || allowedPass.by !== 'agent' || item.id !== allowedPass.id || formatMilestone(item) !== formatMilestone(allowedPass)) {
       throw new MilestoneError(`An AI app cannot mark ${item.id} passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after the user says its test passed.`);
+    }
+  }
+  const order = [...kept.map((item) => item.id), ...now.keys()];
+  if (passedMilestones(is).some((item, i) => item.id !== order[i])) {
+    throw new MilestoneError(`Passed milestones must stay in the order they passed: ${order.join(', ')}.`);
+  }
+  // Review wound W1: an open line an agent adds or changes cannot carry a stamp in its text.
+  const earlier = new Set(was.kind === 'plan' ? was.items.map(formatMilestone) : []);
+  for (const item of is.kind === 'plan' ? is.items : []) {
+    if (item.state !== 'open' || earlier.has(formatMilestone(item))) continue;
+    if (looksLikePass(item.title) || looksLikePass(item.test)) {
+      throw new MilestoneError(`${item.id} has a checkbox or a pass stamp in its text. Open milestones cannot carry one; NorthKeep records passes itself.`);
     }
   }
 }
