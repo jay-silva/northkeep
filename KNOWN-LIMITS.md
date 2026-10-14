@@ -12,6 +12,17 @@ every milestone; if a limit is removed, say when and how.*
 - Local and hosted project tools treat line endings differently. The local MCP server removes line breaks at either end of a section field and converts CRLF to LF before saving; the hosted connector, the web UI and the CLI refuse both and say why.
 - The real Codex to Claude Desktop test used local tools and a disposable MCP client. It did not upgrade installed assistant configuration or certify hosted sync or packaged mobile.
 
+## Project milestones (ADR 0065, K1), current
+
+These claims hold only on devices running a K1 or later build. Vault sync replaces the whole file, so a second Mac on an older build can still write without these checks, and its changes arrive here.
+
+- Through NorthKeep's own tools on your Mac, an AI app cannot mark a milestone as confirmed by you, and cannot change or remove a milestone that has passed.
+- An AI app that can run commands on your Mac, as Claude Code can, is not limited by this. While your vault is unlocked, a program on your Mac can change milestones through the NorthKeep command line, by importing a project, by starting the NorthKeep app server and calling it, or with your passphrase. The confirm command refuses to run without a terminal, which stops the simplest case and nothing more.
+- Whether an AI app shows NorthKeep's standing instructions to its model is up to that app. Verified: none yet. Not verified: all hosts so far.
+- **Not yet for the Cloud connector.** The hosted tools get the milestone rules in K4. Until then a cloud change reaches this Mac only through down-sync, which runs the same rule and holds a change that would add, alter or remove a pass as a conflict (shown with the existing "moved" reason, not a milestone-specific one). Cloud forgets of a project document that you approve in the review still apply, as before.
+- **An AI app's report is its own word.** A pass stamped `(agent)` means an AI app said the user confirmed the test. NorthKeep stamps `(you)` only through `northkeep projects pass` (and, from K2, the desktop app); your own raw edit of the document can also write one.
+- **A broken Milestones section stays broken until you fix it.** An AI app cannot change a section that does not follow the format, and nothing repairs it automatically. The desktop repair view comes in K2; until then, fix it with a raw edit.
+
 ## Project provenance and open sessions (ADR 0052), current
 
 - **The writer is host reported, not verified.** Every project write records
