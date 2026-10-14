@@ -84,7 +84,7 @@ describe('Milestones block (ADR 0065 Decision 5, desktop)', () => {
     expect(confirm).toContain("el('blockquote', 'ms-test', item.test)");
     expect(confirm).toContain("cancel.dataset.autofocus = ''");
     const save = functionSource('renderMilestoneRepairReview');
-    expect(save).toContain('check:false, accept_passes:passes.map((pass) => pass.id)');
+    expect(save).toContain('check:false, accept_passes:passes.map((pass) => pass.line)');
     expect(functionSource('renderRestoreBody')).toContain('project.restore_undoes[row.id]');
   });
 

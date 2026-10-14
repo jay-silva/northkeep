@@ -121,10 +121,26 @@ describe('repair of a malformed Milestones section (ADR 0065 K2)', () => {
     expect(head().revision).toBe(revision);
     const unseen = await post('/api/projects/str/milestones/repair', { expected_revision: revision, body: fixed, check: false, accept_passes: [] });
     expect(unseen?.body).toEqual({ code: 'milestone_refused', error: 'Check the milestones again before saving: the lines that count as passed are not the ones you reviewed.' });
-    const saved = await post('/api/projects/str/milestones/repair', { expected_revision: revision, body: fixed, check: false, accept_passes: ['M1'] });
+    const lines = (check?.body as { passes: { line: string }[] }).passes.map((pass) => pass.line);
+    expect(lines).toEqual(['- [x] M1 Define the buy box | test: buy box written and agreed | passed 2026-09-28 (you)']);
+    const saved = await post('/api/projects/str/milestones/repair', { expected_revision: revision, body: fixed, check: false, accept_passes: lines });
     expect(saved?.status).toBe(200);
     expect(milestoneBody(head().content)).toBe(fixed);
     expect(vault.list({ scope: 'project:str', type: 'working' })[0]!.source).toBe('northkeep:milestone-repair');
+  });
+
+  it('refuses a save whose passed lines differ from the ones reviewed, even with the same ids (K2 review W1)', async () => {
+    const revision = seed(BROKEN);
+    const fixed = BROKEN.replace('(You)', '(you)');
+    const check = await post('/api/projects/str/milestones/repair', { expected_revision: revision, body: fixed });
+    const reviewed = (check?.body as { passes: { line: string }[] }).passes.map((pass) => pass.line);
+    const forged = '- [x] M1 Something else | test: z | passed 1999-01-01 (you)';
+    for (const accept_passes of [['M1'], reviewed]) {
+      const response = await post('/api/projects/str/milestones/repair', { expected_revision: revision, body: forged, check: false, accept_passes });
+      expect(response?.body).toEqual({ code: 'milestone_refused', error: 'Check the milestones again before saving: the lines that count as passed are not the ones you reviewed.' });
+    }
+    expect((await post('/api/projects/str/milestones/repair', { expected_revision: revision, body: fixed, check: false, accept_passes: ['M1'] }))?.status).toBe(409);
+    expect(head().revision).toBe(revision);
   });
 
   it('refuses text that is still malformed, a section that is readable, and a heading inside the text', async () => {
