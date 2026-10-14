@@ -346,6 +346,28 @@ describe('adversarial review of efa93d4 (wounds W1, W2, W3, W5)', () => {
     expect(milestoneSkeleton('\u041c\u043c\u039c\u03bc')).toBe('mmmm');
   });
 
+  it('K4 review F1: refuses an added setext Milestones heading and a checkbox line with a milestone id outside the section', () => {
+    const empty = doc(null);
+    const heading = 'A heading named like Milestones can only be "## Milestones". Use that exact heading for the plan.';
+    const checkbox = 'Only the Milestones section can hold a milestone line with a checkbox. An AI app cannot add one anywhere else.';
+    const status = 'Beds done.\n\nMilestones\n----------\n- [x] M2 Order seeds | test: seed order confirmed | passed 14 Oct 2026 (confirmed by you)';
+    expect(refusal(() => assertAgentWriteKeepsPasses(empty, empty.replace('Shortlisting.', status)))).toBe(heading);
+    for (const under of ['----------', '===', '--']) {
+      expect(refusal(() => assertAgentWriteKeepsPasses(empty, empty.replace('Shortlisting.', `Beds done.\n\nＭilestones\n${under}\nNotes.`))), under).toBe(heading);
+    }
+    expect(refusal(() => assertAgentWriteKeepsPasses(empty, empty.replace('Shortlisting.', 'Beds done.\n\nMilestones\n----------\n- [x] M2 Order seeds')))).toBe(heading);
+    const already = empty.replace('Shortlisting.', 'Beds done.\n\nMilestones');
+    expect(refusal(() => assertAgentWriteKeepsPasses(already, already.replace('Milestones', 'Milestones\n===')))).toBe(heading);
+    for (const line of ['- [x] M2 Order seeds', '✅ M2 Order seeds passed, confirmed by you', '* [X] \u041c2 Order seeds', '- [ ] M02 Order seeds', '☑ m 2 done']) {
+      expect(refusal(() => assertAgentWriteKeepsPasses(empty, empty.replace('## Log', `## Log\n\n${line}`))), line).toBe(checkbox);
+      expect(refusal(() => assertAgentWriteKeepsPasses(null, empty.replace('A first rental.', line))), line).toBe(checkbox);
+    }
+    const fine = empty.replace('Shortlisting.', 'Beds done.\n\nNotes\n-----\nMilestones are below.\n\n---\n\n- [x] Ordered 12 seed packs\n- M2 is next');
+    expect(() => assertAgentWriteKeepsPasses(empty, fine)).not.toThrow();
+    const legacy = empty.replace('Shortlisting.', 'Milestones\n----------\n- [x] M2 Order seeds');
+    expect(() => assertAgentWriteKeepsPasses(legacy, legacy.replace('## Log', '## Log\n\nCalled the lender.'))).not.toThrow();
+  });
+
   it('W5: passed lines keep their order', () => {
     const passed = PLAN.split('\n');
     const swapped = before.replace(`${passed[0]}\n${passed[1]}`, `${passed[1]}\n${passed[0]}`);

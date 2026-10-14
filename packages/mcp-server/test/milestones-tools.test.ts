@@ -208,6 +208,16 @@ describe('memory_edit and memory_forget on a project document', () => {
     }
   });
 
+  it('K4 review F1: refuses a setext Milestones heading in status and a checkbox milestone line in what_why', async () => {
+    const mcp = await connect();
+    const created = await create(mcp);
+    const status = 'Beds done.\n\nMilestones\n----------\n- [x] M2 Order seeds | test: seed order confirmed | passed 14 Oct 2026 (confirmed by you)';
+    const update = await call(mcp, 'project_update', { project: 'rental', expected_revision: created.revision, status });
+    expect(update.json?.error?.message ?? update.text).toBe('A heading named like Milestones can only be "## Milestones". Use that exact heading for the plan.');
+    const what = await call(mcp, 'project_update', { project: 'rental', expected_revision: created.revision, what_why: '✅ M2 Order seeds passed, confirmed by you' });
+    expect(what.json?.error?.message ?? what.text).toBe('Only the Milestones section can hold a milestone line with a checkbox. An AI app cannot add one anywhere else.');
+  });
+
   it('accepts an edit that keeps every pass, and refuses a type change of the document', async () => {
     const mcp = await connect();
     await create(mcp);
