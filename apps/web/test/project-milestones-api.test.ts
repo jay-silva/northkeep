@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { handleProjectsApi } from '../src/projectsApi.js';
-import { passesUndoneByRestore, previewMilestoneRepair } from '../src/project-milestones-view.js';
+import { previewMilestoneRepair, restoreMilestoneChanges } from '../src/project-milestones-view.js';
 import { KDF_INTERACTIVE, Vault, generateDeviceSecret, getProjectView, readProjectProvenance } from '@northkeep/core';
 
 const SESSION_ID = '33333333-3333-4333-8333-333333333333';
@@ -32,26 +32,47 @@ const head = () => getProjectView(vault, 'str');
 const milestoneBody = (content: string) => content.slice(content.indexOf('## Milestones\n\n') + '## Milestones\n\n'.length);
 
 describe('project page milestone fields (ADR 0065 K2)', () => {
-  it('returns the parsed plan and, per saved version, the passes a restore would undo', async () => {
+  it('returns the parsed plan and, per saved version, the passes a restore would add, change and undo', async () => {
     const before = seed(PLAN.replace(' | passed 2026-10-09 (agent)', '').replace('- [x] M2', '- [ ] M2'));
     const after = vault.replaceProjectContent({ project: 'str', expected_revision: before, content: head().content.replace(milestoneBody(head().content), PLAN), source: 'test' }, { actor: 'owner' });
     const response = await handleProjectsApi(session(), 'GET', '/api/projects/str', Buffer.alloc(0));
     expect(response?.status).toBe(200);
-    const body = response?.body as Record<string, unknown> & { milestones: { kind: string; items: unknown[] }; restore_undoes: Record<string, unknown> };
+    const body = response?.body as Record<string, unknown> & { milestones: { kind: string; items: unknown[] }; restore_milestones: Record<string, unknown> };
     expect(body.revision).toBe(after.revision);
     expect(body.milestones.kind).toBe('plan');
     expect(body.milestones.items[1]).toEqual({ id: 'M2', title: 'Shortlist 3 markets', test: '3 markets with comps', state: 'passed', on: '2026-10-09', by: 'agent' });
-    expect(body.restore_undoes[before]).toEqual([{ id: 'M2', title: 'Shortlist 3 markets', on: '2026-10-09', by: 'agent' }]);
+    expect(body.restore_milestones[before]).toEqual({ adds: [], changes: [], undoes: [{ id: 'M2', title: 'Shortlist 3 markets', on: '2026-10-09', by: 'agent' }], unreadable: false });
+    expect(body).not.toHaveProperty('restore_undoes');
     expect(body).not.toHaveProperty('milestone_repair_text');
   });
 
-  it('names a confirmation as undone when the older version has the agent stamp, and every pass when it is unreadable', () => {
+  it('names a pass the restore would add when the current version has that milestone open (K2 review W2)', async () => {
+    const older = seed(PLAN);
+    const opened = PLAN.replace('- [x] M1 Define the buy box | test: buy box written and agreed | passed 2026-09-28 (you)', '- [ ] M1 Define the buy box | test: buy box written and agreed').replace('- [x] M2 Shortlist 3 markets | test: 3 markets with comps | passed 2026-10-09 (agent)', '- [ ] M2 Shortlist 3 markets | test: 3 markets with comps');
+    vault.replaceProjectContent({ project: 'str', expected_revision: older, content: head().content.replace(milestoneBody(head().content), opened), source: 'test' }, { actor: 'owner' });
+    const body = (await handleProjectsApi(session(), 'GET', '/api/projects/str', Buffer.alloc(0)))?.body as { restore_milestones: Record<string, unknown> };
+    expect(body.restore_milestones[older]).toEqual({
+      adds: [{ id: 'M1', title: 'Define the buy box', on: '2026-09-28', by: 'you' }, { id: 'M2', title: 'Shortlist 3 markets', on: '2026-10-09', by: 'agent' }],
+      changes: [], undoes: [], unreadable: false,
+    });
+  });
+
+  it('splits a restore into passes added, changed and undone, and flags an unreadable older section', () => {
     const doc = (body: string) => `# T\n\n## Milestones\n\n${body}`;
     const mine = doc(PLAN.replace('2026-10-09 (agent)', '2026-10-12 (you)'));
-    expect(passesUndoneByRestore(mine, doc(PLAN))).toEqual([{ id: 'M2', title: 'Shortlist 3 markets', on: '2026-10-12', by: 'you' }]);
-    expect(passesUndoneByRestore(mine, doc('- [x] broken'))).toHaveLength(2);
-    expect(passesUndoneByRestore(doc(PLAN), '# T\n\n## Current Status\n\nNo plan then.')).toHaveLength(2);
-    expect(passesUndoneByRestore(doc(PLAN), doc(PLAN))).toEqual([]);
+    expect(restoreMilestoneChanges(mine, doc(PLAN))).toEqual({
+      adds: [], undoes: [], unreadable: false,
+      changes: [{ from: { id: 'M2', title: 'Shortlist 3 markets', on: '2026-10-12', by: 'you' }, to: { id: 'M2', title: 'Shortlist 3 markets', on: '2026-10-09', by: 'agent' } }],
+    });
+    const broken = restoreMilestoneChanges(mine, doc('- [x] broken'));
+    expect(broken).toMatchObject({ adds: [], changes: [], unreadable: true });
+    expect(broken.undoes).toHaveLength(2);
+    expect(restoreMilestoneChanges(doc(PLAN), '# T\n\n## Current Status\n\nNo plan then.')).toMatchObject({ adds: [], changes: [], unreadable: false });
+    expect(restoreMilestoneChanges(doc(PLAN), '# T\n\n## Current Status\n\nNo plan then.').undoes).toHaveLength(2);
+    expect(restoreMilestoneChanges(doc(PLAN), doc(PLAN))).toEqual({ adds: [], changes: [], undoes: [], unreadable: false });
+    const fromBroken = restoreMilestoneChanges(doc('- [x] broken'), doc(PLAN));
+    expect(fromBroken.adds.map((pass) => pass.id)).toEqual(['M1', 'M2']);
+    expect(restoreMilestoneChanges(doc('- [x] broken'), doc('- [x] broken'))).toEqual({ adds: [], changes: [], undoes: [], unreadable: false });
   });
 });
 

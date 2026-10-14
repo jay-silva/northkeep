@@ -85,7 +85,37 @@ describe('Milestones block (ADR 0065 Decision 5, desktop)', () => {
     expect(confirm).toContain("cancel.dataset.autofocus = ''");
     const save = functionSource('renderMilestoneRepairReview');
     expect(save).toContain('check:false, accept_passes:passes.map((pass) => pass.line)');
-    expect(functionSource('renderRestoreBody')).toContain('project.restore_undoes[row.id]');
+    expect(functionSource('renderRestoreBody')).toContain('renderRestoreMilestones(project.restore_milestones && project.restore_milestones[row.id])');
+  });
+
+  it('lists every pass a restore would add, change and undo, in words (K2 review W2)', () => {
+    const dom = fakeDom();
+    const context = vm.createContext({ ...dom, Date, String, Number, Array });
+    vm.runInContext([functionSource('milestoneDay'), functionSource('milestoneWho'), functionSource('restorePassText'), functionSource('renderRestoreMilestones')].join('\n'), context);
+    const run = context.renderRestoreMilestones as (c: unknown) => Node | null;
+    expect(run(undefined)).toBeNull();
+    expect(run({ adds: [], changes: [], undoes: [], unreadable: false })).toBeNull();
+    const you = { id: 'M1', title: 'Agree the plan', on: '2026-10-01', by: 'you' };
+    const said = { id: 'M2', title: 'Draft the outline', on: '2026-10-05', by: 'agent' };
+    const mine = { id: 'M2', title: 'Draft the outline', on: '2026-10-14', by: 'you' };
+    const open = { id: 'M3', title: 'Write the draft', on: '2026-10-14', by: 'you' };
+    const notice = run({ adds: [you], changes: [{ from: mine, to: said }], undoes: [open], unreadable: false })!;
+    expect(notice.attrs.role).toBe('status');
+    expect(all(notice, (n) => n.tag === 'strong').map(textOf)).toEqual(['This restore changes your milestones.']);
+    expect(all(notice, (n) => n.tag === 'p').map(textOf)).toEqual([
+      'Marks 1 milestone passed:', 'Changes 1 passed milestone:', 'Undoes 1 passed milestone:',
+      'Restore only if each milestone it marks passed really passed.',
+    ]);
+    expect(all(notice, (n) => n.tag === 'li').map(textOf)).toEqual([
+      'M1 Agree the plan, passed Oct 1, you confirmed',
+      'M2 Draft the outline: now passed Oct 14, you confirmed. After the restore: passed Oct 5, agent says you confirmed',
+      'M3 Write the draft, passed Oct 14, you confirmed',
+    ]);
+    const broken = run({ adds: [], changes: [], undoes: [you, said], unreadable: true })!;
+    expect(all(broken, (n) => n.tag === 'p').map(textOf)).toEqual([
+      'Undoes 2 passed milestones:',
+      'NorthKeep cannot read the Milestones section in this version. After the restore, you need to repair it before AI apps can change it.',
+    ]);
   });
 
   it('highlights every line that reads like a pass in the repair view', () => {
