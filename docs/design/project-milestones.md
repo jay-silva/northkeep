@@ -175,7 +175,8 @@ Each milestone ends with a test Jay runs. The next starts only after he says it 
     - the `memory_edit` and `memory_forget` guards;
     - the no-plan note and local server instructions;
     - the contract sentence;
-    - CLI `milestones` and `pass`.
+    - CLI `milestones` and `pass`;
+    - the Mac-side `milestones_changed` down-sync conflict, with its CLI and desktop text. This moved here from K4 after the K1 code review: K1's write rule refuses a cloud row the old down-sync still filed as an addition, so the row was held with no way to resolve it.
   - Acceptance uses copy-paste commands that need no agent. Each of these is refused: a passed line sent through `project_update`; a `memory_edit` that adds, ticks or removes a passed line, including the two-step malformed route, moving a passed line into another section, and renaming the heading; a `memory_edit` type change; a `memory_forget` of a project document; and `pass` when stdin is not a TTY. An agent write that makes the Milestones section malformed is refused. A converse turn scoped to a project cannot create a working row. A checkpoint on a project with checked tasks in Next Actions still saves. `projects set` still creates a project, and a title of "Files" is refused. Then one live Claude Code session proposes milestones without being asked.
 - **K2. Desktop.** The Milestones block, Mark passed, Confirm, the restore warning, and a repair view for a malformed section that highlights any stamped line. A stale page refuses with `stale_project`.
 - **K3. Phone.** List progress and the detail section. Jay runs or approves the TestFlight build.
@@ -184,7 +185,7 @@ Each milestone ends with a test Jay runs. The next starts only after he says it 
     - the connector fields, server instructions and `project_get` note;
     - the copied module with its identity test;
     - the cap message in `project-doc.ts`;
-    - the `milestones_changed` down-sync conflict, with the dialog text;
+    - the connector-side refusals (the Mac-side `milestones_changed` conflict moved to K1);
     - the doc-versus-code pass.
   - Merging to main deploys, so Jay merges.
 
@@ -294,3 +295,21 @@ A separate Claude agent rechecked the third draft. It used Claude models only an
 - Every other citation.
 
 **No further round before build.** The fixes above tighten the rule and do not add a new mechanism. The K1 code gets its own adversarial review against this ADR before Jay's acceptance test, as the review gate requires for the published claims.
+
+### K1 code review, 2026-10-14: CLEARED WITH WOUNDS
+
+Separate Claude agents reviewed the K1 code against this ADR: one the milestone module, two the vault, MCP, CLI and sync wiring.
+
+**Core module, fixed in d7e6bd3.**
+- **W1.** An open line an agent added could carry forged stamp text in its title or test. Now refused.
+- **W2.** Lookalike letters and compatibility forms (`(уou)`, `［x］`, full-width digits) slipped past the stamp test. The test now folds them.
+- **W3.** A stamped line under a lookalike heading (`### Milestones`, `## milestones`) sat outside the section and was accepted. Such headings and stamped lines added outside the section are refused.
+- **W4.** `owned()` and `setSection` matched Milestones at any heading level. Level 2 only (fixed in ae4253a).
+- **W5.** Passed lines could be reordered. Their order is now fixed.
+
+**Integration.**
+- **A. W3 bypass.** The outside-the-section check needed a Latin `M1` style id, so a stamped line with no id, a Cyrillic or Greek M, or `M02` was accepted through `memory_edit`, `project_update` and a draft `project_create`. Fixed in 19d4799 (test cae6996): any added line outside the section with an author stamp or a pass date is refused.
+- **B. Stuck held rows.** A cloud create with a `(you)` line, and an approved fast-forward adding a pass, were held as "moved" but planned as additions, so take theirs and keep mine both failed with "No cloud version is waiting". Take theirs, which runs as the owner, could also write a cloud-forged `(you)` stamp behind that generic reason. Fixed in 59ea107 (test 676e81f) by moving the K4 down-sync conflict here.
+- **C. Claims.** KNOWN-LIMITS did not name the pseudo-terminal bypass of `projects pass`, and described the held rows as "moved". Fixed in 0b9c327.
+- **Minor.** `√` did not count as a checkbox. Fixed in 19d4799.
+
