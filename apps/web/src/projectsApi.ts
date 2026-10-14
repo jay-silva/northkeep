@@ -96,7 +96,7 @@ async function handleMilestoneWrite(session: UiSession, method: string, project:
   if (typeof input.body !== 'string') return reply(400, { error: 'body is required.', code: 'invalid_request' });
   if (input.check !== undefined && typeof input.check !== 'boolean') return reply(400, { error: 'check must be true or false.', code: 'invalid_request' });
   const accepted = input.accept_passes;
-  if (accepted !== undefined && (!Array.isArray(accepted) || accepted.some(id => typeof id !== 'string'))) return reply(400, { error: 'accept_passes must be a list of milestone ids.', code: 'invalid_request' });
+  if (accepted !== undefined && (!Array.isArray(accepted) || accepted.some(line => typeof line !== 'string'))) return reply(400, { error: 'accept_passes must be the list of passed lines you reviewed.', code: 'invalid_request' });
   const text = input.body;
   return reply(200, await session.withVault(vault => {
     const view = headAsRead(vault, project, expected);
@@ -105,8 +105,8 @@ async function handleMilestoneWrite(session: UiSession, method: string, project:
     if (!preview.ok) throw new MilestoneError(preview.reason);
     const passes = preview.passes;
     if (input.check !== false) return { check: true, plan: preview.plan, passes };
-    // Jay must have seen exactly the passes this text records, so a stamp typed in by someone else is not saved unseen.
-    if (accepted === undefined || accepted.length !== passes.length || passes.some((pass, i) => accepted[i] !== pass.id)) {
+    // Whole lines, not ids: an id match would let a changed title, date or stamp be saved unseen.
+    if (accepted === undefined || accepted.length !== passes.length || passes.some((pass, i) => accepted[i] !== pass.line)) {
       throw new MilestoneError('Check the milestones again before saving: the lines that count as passed are not the ones you reviewed.');
     }
     const current = vault.replaceProjectContent({ project, expected_revision: view.revision, content: preview.content, source, writer: appWriter(session) }, { actor: 'owner' });

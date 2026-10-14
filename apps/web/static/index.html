@@ -2964,7 +2964,7 @@
       const requestId = ++projectActionSequence;
       save.disabled = true; err.textContent = '';
       try {
-        await api('/api/projects/' + encodeURIComponent(project.project) + '/milestones/repair', { method:'POST', json:{ expected_revision:project.revision, body:text, check:false, accept_passes:passes.map((pass) => pass.id) } });
+        await api('/api/projects/' + encodeURIComponent(project.project) + '/milestones/repair', { method:'POST', json:{ expected_revision:project.revision, body:text, check:false, accept_passes:passes.map((pass) => pass.line) } });
         if (!await projectWriteCurrent(project.project, requestId)) return;
         closeGuardDialog();
         await loadProject(project.project, true);

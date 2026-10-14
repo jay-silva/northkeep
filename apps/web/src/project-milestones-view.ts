@@ -39,8 +39,11 @@ export function milestoneRepairText(document: string): string {
   return milestoneSectionBodies(document).join('\n');
 }
 
+/** A pass a repair would record, with the exact line Jay must have reviewed. */
+export interface RepairPass extends PassNote { line: string }
+
 export type RepairPreview =
-  | { ok: true; plan: Extract<MilestonePlan, { kind: 'plan' | 'none' }>; passes: PassNote[]; content: string }
+  | { ok: true; plan: Extract<MilestonePlan, { kind: 'plan' | 'none' }>; passes: RepairPass[]; content: string }
   | { ok: false; reason: string };
 
 /**
@@ -63,5 +66,5 @@ export function previewMilestoneRepair(document: string, body: string): RepairPr
   if (after.kind !== plan.kind || milestoneSectionBodies(content).length !== 1 || milestoneSectionBodies(content)[0] !== text) {
     return { ok: false, reason: 'The milestones text cannot contain a heading line.' };
   }
-  return { ok: true, plan, passes: passedMilestones(plan).map(note), content };
+  return { ok: true, plan, passes: passedMilestones(plan).map((item) => ({ ...note(item), line: formatMilestone(item) })), content };
 }
