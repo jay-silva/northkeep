@@ -1,6 +1,6 @@
 # Milestones K2 acceptance: the Mac app
 
-Run this after K1 passed. It uses a throwaway vault in `/tmp/nk-k2`; your real vault is not touched.
+Run after K1 passes. It uses a throwaway vault in `/tmp/nk-k2`, not your real vault. Steps 1 to 8 need your Mac. Steps 6 to 8 are in [part 2](milestones-k2-acceptance-part2.md).
 
 ## 1. Build and make a test vault
 
@@ -15,11 +15,11 @@ pnpm northkeep projects import --from /tmp/nk-k2-import --write
 pnpm northkeep ui
 ```
 
-The passphrase is `k2 test only`. Keep this window open.
+Passphrase: `k2 test only`. Keep this window open.
 
 ## 2. The Milestones block
 
-Open **K2 test project**. Between the summary and "Decisions and open questions" you should see:
+Open **K2 test project**. Between the summary and "Decisions and open questions":
 
 - "Milestones" and "2 of 4 passed".
 - M1 with a solid check: "Passed Oct 1 · you confirmed".
@@ -28,66 +28,20 @@ Open **K2 test project**. Between the summary and "Decisions and open questions"
 
 ## 3. Mark passed
 
-Click **Mark passed** on M3. A box asks "Did you run this test, and did it pass?" and shows the test. Tab stays inside the box. Click **Not yet**: nothing changes. Click **Mark passed** again, then **Yes, it passed**. M3 now has a solid check and the count reads "3 of 4 passed".
+Click **Mark passed** on M3. A box shows the test and asks "Did you run this test, and did it pass?" Tab stays inside it. **Not yet** changes nothing. Click **Mark passed** again, then **Yes, it passed**: M3 gets a solid check and "3 of 4 passed".
 
 ## 4. Confirm an agent pass
 
-Click **Confirm** on M2, then **Yes, I confirm**. M2 now has a solid check and "you confirmed".
+Click **Confirm** on M2, then **Yes, I confirm**: M2 gets a solid check and "you confirmed".
 
 ## 5. A stale page writes nothing
 
-Leave the page open. In a second Terminal window:
+Leave the page open. In a second Terminal:
 
 ```bash
 NORTHKEEP_HOME=/tmp/nk-k2 pnpm --dir ~/northkeep northkeep projects update k2-test --status "Saved from Terminal."
 ```
 
-Back in the app, without reloading, click **Mark passed** on M4, then **Yes, it passed**. You should see "Project changed after it was read. Nothing was marked passed." Click **Reload project**: the summary now says "Saved from Terminal." and M4 is still open.
+Without reloading, click **Mark passed** on M4, then **Yes, it passed**. Expect "Project changed after it was read. Nothing was marked passed." Click **Reload project**: the summary says "Saved from Terminal." and M4 is still open.
 
-## 6. Restore warning
-
-Open **Session history**, then **Restore this version** on the oldest version. The box says "This restore changes your milestones." Under "Changes 1 passed milestone" it names M2: now passed today, you confirmed, and after the restore passed Oct 5, agent says you confirmed. Under "Undoes 1 passed milestone" it names M3. Click **Cancel**.
-
-## 7. Repair
-
-Open **K2 repair project**. The block says NorthKeep cannot read the section. Click **Repair milestones**. The M1 line is highlighted as "Says passed". Change `(You)` to `(you)` and click **Check milestones**. It lists M1 as counting as passed. Click **Save repair**: the block reads "1 of 2 passed".
-
-Now open **Session history** and click **Restore this version** on the older version. The box says it undoes M1 Kickoff and that NorthKeep cannot read the Milestones section in that version. Click **Cancel**.
-
-## 8. Clean up
-
-Stop the app with Ctrl+C, then:
-
-```bash
-rm -rf /tmp/nk-k2 /tmp/nk-k2-import
-```
-
-Tell Claude which steps passed and paste anything that looked wrong.
-
-## What was verified before this document was written
-
-On 2026-10-14, after K2 was rebased onto the finished K1, the builder ran step 1 exactly as
-written on a Linux test machine (with the passphrase supplied from the environment for the
-import), then started `northkeep ui --no-open` and drove steps 2 to 7 in a headless Chromium
-browser, checking for the text each step names. Step 5 used the Terminal command above.
-Every check passed: "2 of 4 passed", Tab stayed in the box, "Not yet" changed nothing,
-"3 of 4 passed" after Mark passed, M2 "you confirmed" after Confirm, the stale refusal and
-"Saved from Terminal." after reload with M4 still open, "This undoes 2 passed milestones"
-naming M2 and M3, and "1 of 2 passed" after the repair. The page reported no script errors.
-Screenshots at 390 px (light and dark, no sideways scroll) and 1280 px are in
-`docs/evidence/project-milestones-k2/`.
-
-After the K2 code review fixes, on 2026-10-14, steps 1 to 7 were run again the same way on a
-fresh temporary `NORTHKEEP_HOME`, with the new step 6 and step 7 text. Every check passed. The
-run also held a Mark passed save open and pressed Tab five times (focus stayed in the box) and
-Escape (the box closed and the page worked again), and sent a repair save with a changed M1
-line straight to the app server (refused). `restore-warning-1280.png` was retaken and
-`restore-adds-1280.png` added.
-
-On 2026-10-14, after K2 was rebased again onto the final K1 (4fe0c29), steps 1 to 7 were run
-once more the same way on a fresh temporary `NORTHKEEP_HOME`, with the same checks. All 22
-checks passed and the page reported no script errors. The screenshots were not retaken.
-
-Not verified here, so it needs your Mac: that `northkeep ui` opens Safari or your default
-browser by itself, how the app looks in your browser with your fonts, and that keyboard
-Tab behaves the same with a real keyboard.
+Keep the app open and continue with [part 2](milestones-k2-acceptance-part2.md).
