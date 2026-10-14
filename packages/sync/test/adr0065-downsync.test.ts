@@ -160,3 +160,19 @@ describe('ADR 0065 down-sync: a cloud create carrying a pass is held, not marked
     expect(p.to_mark).toEqual(['project:fresh']);
   });
 });
+
+describe('K4 review F1: a forget names the passes it would remove', () => {
+  it('lists the passed milestones of a project document a connected app forgot, and none for an ordinary memory', async () => {
+    const r1 = await sharedProject('a', doc('Underwriting.', [M1_YOU, M2_AGENT, '- [ ] M3 Underwrite | test: pro formas']));
+    const note = vault.remember({ content: 'A note in the project', type: 'semantic', scope: 'project:a' });
+    vault.save();
+    await pushSharedScopes({ ...conn(), scopes: vault.sharedScopes() });
+    fake.cloudForget(r1);
+    fake.cloudForget(note.id);
+    const p = await plan();
+    expect(p.forgets).toEqual([
+      { entry_id: r1, scope: 'project:a', first_line: '## What & Why', passed: ['M1 Define the buy box', 'M2 Shortlist 3 markets'] },
+      { entry_id: note.id, scope: 'project:a', first_line: 'A note in the project' },
+    ]);
+  });
+});

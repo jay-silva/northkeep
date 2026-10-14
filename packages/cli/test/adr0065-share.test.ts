@@ -32,6 +32,22 @@ describe('ADR 0065 share conflicts text', () => {
     ]);
   });
 
+  it('names the passed milestones a forget would remove (K4 review F1)', () => {
+    const forgets = [
+      { entry_id: 'e1', scope: 'project:rental', first_line: '## What & Why', passed: ['M1 Define the buy box', 'M2 Shortlist 3 markets'] },
+      { entry_id: 'e2', scope: 'project:rental', first_line: '## What & Why', passed: [] },
+      { entry_id: 'e3', scope: 'work', first_line: 'A note' },
+    ];
+    const lines = describePlan({ additions: [], replacements: [], forgets, dedupes: [], discards: [], settled_forgets: [], conflicts: [], held: 0, held_scopes: [], deferred: 0, skipped: 0, to_mark: [] });
+    expect(lines).toEqual([
+      '  3 memories would be forgotten:',
+      '    project:rental: "## What & Why"',
+      '      Passed milestones it removes: M1 Define the buy box, M2 Shortlist 3 markets',
+      '    project:rental: "## What & Why"',
+      '    work: "A note"',
+    ]);
+  });
+
   it('says after take theirs which passes it added, changed or removed (K1 review finding B)', () => {
     expect(takenPassChanges([
       { id: 'M1', change: 'added', text: '' },
