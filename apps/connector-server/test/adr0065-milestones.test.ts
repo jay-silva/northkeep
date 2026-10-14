@@ -192,6 +192,33 @@ describe('ADR 0065 hosted tools', () => {
     }
   });
 
+  it('refuses lookalike stamps and stamped lines outside the section, as K1 does (review W1, W2, W3, finding A)', async () => {
+    await seedHead('project:rent', PASSED_DOC);
+    for (const milestones of ['M3 Underwrite | test: ok (уou)', 'M3 Underwrite ［x］ | test: ok']) {
+      const res = await call('project_update', { project: 'rent', expected_revision: 'vault-head-1', milestones });
+      expect(res.isError).toBe(true);
+      expect(res.text).toContain('checkbox or a pass stamp');
+    }
+    for (const status of ['- [x] M9 Ship | test: ok | passed 2026-10-01 (you)', 'Shipped | passed 2026-10-01 (you)']) {
+      const res = await call('project_update', { project: 'rent', expected_revision: 'vault-head-1', status });
+      expect(res.isError).toBe(true);
+      expect(res.text).toMatch(/^Nothing was saved: /);
+    }
+    expect((await plainRows('project:rent')).map((e) => e.entryId)).toEqual(['vault-head-1']);
+  });
+
+  it('writes the plan only into a level-2 Milestones section, as core does (review W4)', async () => {
+    const lookalike = PASSED_DOC.replace('## Milestones\n\n- [x] M1 Define the buy box | test: buy box written and agreed | passed 2026-09-28 (you)\n- [ ] M2 Shortlist 3 markets | test: 3 markets with comps\n\n', '')
+      .replace('## Next Actions', '### Milestones\n\nold notes\n\n## Next Actions');
+    expect(lookalike).not.toContain('## Milestones\n\n- [');
+    await seedHead('project:look', lookalike);
+    const res = await call('project_update', { project: 'look', expected_revision: 'vault-head-1', milestones: 'M1 Start | test: ok' });
+    expect(res.isError).toBe(false);
+    const doc = newestDoc(await plainRows('project:look'));
+    expect(doc).toContain('## Current Status\n\nUnderwriting.\n\n## Milestones\n\n- [ ] M1 Start | test: ok');
+    expect(doc).toContain('### Milestones\n\nold notes');
+  });
+
   it('memory_forget refuses a project document and forgets other rows in a project scope', async () => {
     await seedHead('project:rent', PASSED_DOC);
     await seedEncryptedEntry(storage, account, connToken, { entryId: 'note-1', scope: 'project:rent', type: 'episodic', content: 'a note', pending: false });

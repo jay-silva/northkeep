@@ -150,16 +150,15 @@ function milestonesInput(text: string): MilestonePlanInput | string {
 }
 
 /**
- * Writes the plan into the document as core's project writer does: an existing
- * Milestones section (any level but the title) becomes the level-2 plan, else a
- * new one goes right after Current Status.
+ * Writes the plan into the document as core's project writer does: only a
+ * level-2 Milestones section holds the plan (K1 review wound W4), else a new
+ * one goes right after Current Status.
  */
 function setMilestonesSection(doc: ProjectDoc, body: string): void {
   const isTitle = (i: number): boolean => i === 0 && doc.sections[0]!.level === 1;
-  const found = doc.sections.find((s, i) => s.title === MILESTONES_HEADING && !isTitle(i));
+  const found = doc.sections.find((s, i) => s.title === MILESTONES_HEADING && s.level === 2 && !isTitle(i));
   if (found) {
     found.body = body;
-    found.level = 2;
     return;
   }
   const status = doc.sections.findIndex((s, i) => s.title === 'Current Status' && !isTitle(i));
