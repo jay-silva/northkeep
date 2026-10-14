@@ -158,8 +158,9 @@ Nothing new leaves the machine. Milestones live inside the project document and 
 
 These go into KNOWN-LIMITS when the code that makes them true ships. Each holds only on devices running a K1 or later build. Vault sync replaces the whole file (`packages/sync/src/client.ts`), so a second Mac on an older build can still write without these checks, and its changes arrive here.
 
-- From K1: "Through NorthKeep's own tools on your Mac, an AI app cannot mark a milestone as confirmed by you, and cannot change or remove a milestone that has passed."
-- From K4, replacing the line above: "Through NorthKeep's own tools, on your Mac or through the Cloud connector, an AI app cannot mark a milestone as confirmed by you, and cannot change or remove a milestone that has passed. A cloud change that would touch a passed milestone waits for your decision, and NorthKeep applies it only if you choose to."
+- From K1: "Through NorthKeep's own tools on your Mac, an AI app cannot record a milestone as confirmed by you, and cannot change or remove a milestone that has passed. NorthKeep's milestone view, `northkeep projects milestones`, shows that record." Once the K2 and K3 views ship, the last sentence becomes: "NorthKeep's milestone views (the Mac app, the phone, and `northkeep projects milestones`) show that record."
+- From K4, replacing the line above: "Through NorthKeep's own tools, on your Mac or through the Cloud connector, an AI app cannot record a milestone as confirmed by you, and cannot change or remove a milestone that has passed. A cloud change that would touch a passed milestone waits for your decision, and NorthKeep applies it only if you choose to. NorthKeep's milestone views (the Mac app, the phone, and `northkeep projects milestones`) show that record."
+- From K1: "Elsewhere in a project's text, an AI app can still write words that claim a milestone passed or was confirmed. NorthKeep refuses the common shapes of a forged milestone line, but it cannot catch every phrasing, so trust the milestone views, not the prose."
 - "An AI app that can run commands on your Mac, as Claude Code can, is not limited by this. While your vault is unlocked, a program on your Mac can change milestones through the NorthKeep command line, by importing a project, by starting the NorthKeep app server and calling it, or with your passphrase. The confirm command refuses to run without a terminal, which stops the simplest case and nothing more."
 - "Whether an AI app shows NorthKeep's standing instructions to its model is up to that app. Verified: <hosts>. Not verified: <hosts>."
 
@@ -313,3 +314,12 @@ Separate Claude agents reviewed the K1 code against this ADR: one the milestone 
 - **C. Claims.** KNOWN-LIMITS did not name the pseudo-terminal bypass of `projects pass`, and described the held rows as "moved". Fixed in 0b9c327.
 - **Minor.** `√` did not count as a checkbox. Fixed in 19d4799.
 
+### K4 review F1, 2026-10-14: claim narrowed
+
+The K4 adversarial review found that an agent could add, outside the real Milestones section, text a person reads as a confirmed pass, while NorthKeep's parsed record stayed correct. Accepted examples: a setext `Milestones` heading over a `- [x] M2 ... | passed 14 Oct 2026 (confirmed by you)` line in `project_update` status; a bare `- [x] M2` under that heading; `✅ M2 Order seeds passed, confirmed by you` in What & Why; a Log entry ending "passed on 14 October 2026, confirmed by you." The same finding applies to K1's local tools.
+
+This was the fourth round of pattern fixes for one premise: W1 and W3 in the core review, finding A, and now F1. Text-shape blocking cannot catch every phrasing, and each round only moved the edge.
+
+- **Structural fix, in K1.** A line followed by a `=` or `-` underline now counts as a heading, so an added setext heading that folds to Milestones is refused like the ATX lookalikes. An added line outside the section with a checkbox shape and a milestone id is refused too, which covers the bare `- [x] M2` and the `✅ M2` lines. No general prose matching was added: the Log entry above is still accepted.
+- **Claim narrowed instead of chasing phrasings.** The record is what NorthKeep enforces, so the claim now says an AI app cannot *record* a milestone as confirmed by you, names the views that show that record, and a new limit says prose elsewhere can still claim a pass.
+- **Forgets name their passes.** The K1 forget residual now has `planDownSync` list the passed milestones of each project document a cloud forget would remove, and `share sync` and the Mac app's Sync now review print them.
