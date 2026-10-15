@@ -1,28 +1,32 @@
 # NorthKeep
 
-**Your AI memory belongs to you.**
+**Your memories and projects, coordinated across your AI apps.**
 
-NorthKeep is a local-first, user-owned memory vault for AI: an encrypted
-SQLite vault on your machine, exposed to the AI apps you already use, with
-tiered on-device PII redaction and client-side-encrypted sync. Every AI you
-use shares one memory of you, and it lives on your computer, not theirs. Set
-it up once, and your memory follows *you* across apps instead of being locked
-inside any one of them.
+NorthKeep is one encrypted vault on your machine, owned by you, that every AI
+app you connect works from. Start a piece of work in Claude, pick it up in
+Codex or Cursor, and the next app picks up where the last one stopped. Under
+the hood it is a local-first SQLite vault served to your AI apps over MCP,
+with tiered on-device PII redaction and client-side-encrypted sync. Your
+memory lives on your computer, not theirs.
 
-NorthKeep works two ways:
+- **Connect.** NorthKeep serves your vault to an app you already pay for
+  (Claude Desktop, Claude Code, Codex, Cursor) over MCP, and an optional
+  connector reaches the cloud apps. You set, per app and per scope, exactly
+  what it may read. It does **not** redact what you type into that app,
+  that's ownership and portability, not a firewall on your keystrokes.
+- **Projects.** Each project keeps its status, next actions, decisions and
+  log in your vault. A short standing instruction asks connected apps such as
+  Claude Code, Codex and Cursor to resume it, checkpoint along the way and
+  wrap it up, so the next app starts from the latest save. The instruction
+  is advisory: a session that ends abruptly keeps only what it last saved.
+  A project can carry milestones, each with an acceptance test: an AI app can
+  propose them and report on them, but only you confirm a pass (ADR 0065;
+  `KNOWN-LIMITS.md` says exactly how far that holds).
+- **Memories.** Import your ChatGPT or Claude history, review what your apps
+  save, and keep one memory of you across all of them.
 
-- **Connect**, NorthKeep serves your vault to an app you already pay for
-  (Claude Desktop, Claude Code, ChatGPT) over MCP. Your memory becomes portable across
-  those apps and you set, per app, exactly what it may read. It does **not**
-  redact what you type into that app, that's ownership and portability, not a
-  firewall on your keystrokes.
-- **Converse**, you talk *through* NorthKeep instead (in the terminal with `northkeep converse` from a source install, or in the iPhone app, in beta), and it masks sensitive data out of your message *before* it leaves the
-  machine, then restores it locally in the reply. This is the real privacy
-  firewall, against a local model (free, and with tools off nothing leaves
-  your network) or a cloud model with your own key.
-
-> **One-line version:** connect NorthKeep to the AI apps you already pay for,
-> or converse through NorthKeep when privacy has to be absolute.
+NorthKeep used to offer a third mode, Converse, its own chat. It is now
+legacy; see [Legacy: Converse](#legacy-converse).
 
 ## Local workspace
 
@@ -32,14 +36,25 @@ Local project saves and the hosted connector's project updates check the revisio
 
 ## Install
 
-**Updating to the Memories and Projects workspace:** fully quit NorthKeep and every locally connected AI app before installing, then reopen them and verify the new project tools before continuing work. An app left running can retain the previous project writer. Follow the [upgrade steps](docs/update-memory-projects.md). The current download is 0.22.4.
+**The Mac app (recommended).** The current release is **0.24.0**: download
+the signed, notarized DMG from the
+[v0.24.0 release](https://github.com/jay-silva/northkeep/releases/tag/v0.24.0),
+drag NorthKeep to Applications, and open it, a native window wraps the whole
+thing, no terminal required. *Apple Silicon only, macOS 13.5 or later.* The
+app does not install the `northkeep` command and has no chat view; the
+terminal commands below come from a source install.
 
-**The Mac app (recommended).** Download the signed, notarized DMG, drag
-NorthKeep to Applications, and open it, a native window wraps the whole thing,
-no terminal required. The app does not install the `northkeep` command and
-no longer has a chat view; chat through NorthKeep (Converse) and the terminal
-commands below come from a source install. *Apple Silicon only for now;
-Intel/Windows/Linux run from source (below).*
+**Updating:** fully quit NorthKeep and every locally connected AI app before
+installing, then reopen them and verify the project tools before continuing
+work. An app left running can retain the previous project writer. Follow the
+[upgrade steps](docs/update-memory-projects.md).
+
+**iPhone.** A beta is with design partners on TestFlight.
+
+**Linux.** Unsigned x64 AppImage and `.deb` builds exist (ADR 0064): CI
+builds them as workflow artifacts, or run `scripts/desktop-bundle/build.sh`
+on Linux. They are not a public release and are not signed. Intel Macs and
+Windows run from source.
 
 **From source (any platform).** Node 20+ and pnpm:
 
@@ -53,7 +68,7 @@ pnpm northkeep ui        # or open the app in your browser (this machine only)
 Every example below runs from a source install as `pnpm northkeep` (or as
 `northkeep`, if you put the built command on your PATH yourself).
 
-## Connect an AI app (Mode 1: portable memory)
+## Connect an AI app
 
 One command wires NorthKeep into the app, no hand-edited JSON:
 
@@ -80,51 +95,7 @@ northkeep log      # what every AI app asked of your vault (never the content)
 Honest boundary: while the vault is unlocked, any app you've connected can read
 it (the Keychain grant, same as saved browser passwords). Lock it, or scope the
 connection down, to limit that. And Connect can't redact what you type into
-someone else's app, for that, use Converse.
-
-## Converse, talk to any model, privately (Mode 2: the firewall)
-
-Converse, available through `northkeep converse` in the terminal (from a
-source install; the Mac app no longer has a chat view), is a chat surface where the privacy runs itself. On every message NorthKeep
-retrieves relevant memory,
-masks identifiers (and, at Tier 2 and up, names) *before* anything leaves the machine, calls the model you picked,
-restores names in the reply locally, distills what's worth keeping into the
-vault (visibly; `:undo` removes them), and writes a content-free audit row.
-
-Getting a model connected is guided, pick a provider, paste a key (it goes
-straight to your macOS Keychain, never a file), and you're set. Cost is shown
-up front:
-
-```bash
-northkeep models add       # guided setup for Anthropic, OpenAI, Gemini, xAI, OpenRouter…
-northkeep models install   # or pull a local model your Mac can run (via Ollama)
-northkeep converse
-```
-
-Point it at **any** OpenAI-compatible endpoint, Ollama, LM Studio, vLLM,
-llama.cpp on a LAN box, a hosted API, or at Claude natively. Every endpoint
-wears an honest badge derived from where it actually is: **private** (loopback
-or your LAN, model traffic never leaves your network) or **bounded** (a cloud host, where
-Tier-1 masking always runs before a chat message or a cloud memory review is sent, each chat reply names the tier that
-ran, and the audit log records it). In chat and in a cloud memory review there is no way to send unredacted
-text to a remote endpoint, not a setting, a code path that doesn't exist; the review masks at the tier you pick on its
-consent panel. In **Auto** mode a concierge routes
-each message to a capable model you've connected, favoring the cheapest; you can pin a
-model, pin a task to a model, or force private-only.
-
-### Tools (optional, off by default)
-
-Converse can also use tools when you turn them on: web search and web fetch,
-plus any MCP server you add, local (a program on your machine, over stdio) or
-remote (an HTTPS service you sign in to, macOS only, tokens live in your
-Keychain and never in a file). Every tool call is approved by you, per call or
-under a grant you create at a live prompt and can revoke, and the arguments
-are screened, then masked before they go to the web, a remote server, or a
-local server you have not marked trusted. Each reply lists the tool calls it
-made, and an MCP call's line shows the masked arguments it sent; a web call
-shows its exact address or search at the approval prompt, which a site you
-allowed from then on skips. A chat pinned private-only refuses remote MCP tools outright.
-`KNOWN-LIMITS.md` states precisely what these tools do and do not send.
+someone else's app.
 
 ## Bring your memory with you
 
@@ -259,6 +230,65 @@ and doesn't pretend to.
   call you allowed, screened and masked before they are sent, and only those
   arguments, never the vault, never the transcript. Private scopes never leave.
 - What it **can't** do is written down too, plainly: `KNOWN-LIMITS.md`.
+  Open questions where our own records disagree, or a claim may be wrong,
+  are tracked in [`docs/OPEN-RISKS.md`](docs/OPEN-RISKS.md) until Jay decides them.
+
+## Legacy: Converse
+
+Converse is NorthKeep's own chat. It still runs from a source install
+(`northkeep converse`) and in the iPhone beta, but it is no longer presented
+as a product mode and nothing new is being added to it. The proposal and its
+reasons are in [ADR 0066](SPEC/decisions/0066-retire-converse-from-the-front-door.md).
+What it does, and what it promises, is unchanged:
+
+- **Converse**, you talk *through* NorthKeep instead (in the terminal with `northkeep converse` from a source install, or in the iPhone app, in beta), and it masks sensitive data out of your message *before* it leaves the
+  machine, then restores it locally in the reply. This is the real privacy
+  firewall, against a local model (free, and with tools off nothing leaves
+  your network) or a cloud model with your own key.
+
+### How Converse works
+
+Converse, available through `northkeep converse` in the terminal (from a
+source install; the Mac app no longer has a chat view), is a chat surface where the privacy runs itself. On every message NorthKeep
+retrieves relevant memory,
+masks identifiers (and, at Tier 2 and up, names) *before* anything leaves the machine, calls the model you picked,
+restores names in the reply locally, distills what's worth keeping into the
+vault (visibly; `:undo` removes them), and writes a content-free audit row.
+
+Getting a model connected is guided, pick a provider, paste a key (it goes
+straight to your macOS Keychain, never a file), and you're set. Cost is shown
+up front:
+
+```bash
+northkeep models add       # guided setup for Anthropic, OpenAI, Gemini, xAI, OpenRouter…
+northkeep models install   # or pull a local model your Mac can run (via Ollama)
+northkeep converse
+```
+
+Point it at **any** OpenAI-compatible endpoint, Ollama, LM Studio, vLLM,
+llama.cpp on a LAN box, a hosted API, or at Claude natively. Every endpoint
+wears an honest badge derived from where it actually is: **private** (loopback
+or your LAN, model traffic never leaves your network) or **bounded** (a cloud host, where
+Tier-1 masking always runs before a chat message or a cloud memory review is sent, each chat reply names the tier that
+ran, and the audit log records it). In chat and in a cloud memory review there is no way to send unredacted
+text to a remote endpoint, not a setting, a code path that doesn't exist; the review masks at the tier you pick on its
+consent panel. In **Auto** mode a concierge routes
+each message to a capable model you've connected, favoring the cheapest; you can pin a
+model, pin a task to a model, or force private-only.
+
+#### Tools (optional, off by default)
+
+Converse can also use tools when you turn them on: web search and web fetch,
+plus any MCP server you add, local (a program on your machine, over stdio) or
+remote (an HTTPS service you sign in to, macOS only, tokens live in your
+Keychain and never in a file). Every tool call is approved by you, per call or
+under a grant you create at a live prompt and can revoke, and the arguments
+are screened, then masked before they go to the web, a remote server, or a
+local server you have not marked trusted. Each reply lists the tool calls it
+made, and an MCP call's line shows the masked arguments it sent; a web call
+shows its exact address or search at the approval prompt, which a site you
+allowed from then on skips. A chat pinned private-only refuses remote MCP tools outright.
+`KNOWN-LIMITS.md` states precisely what these tools do and do not send.
 
 ## Layout
 
@@ -271,8 +301,8 @@ and doesn't pretend to.
 - `packages/importers`, ChatGPT / Claude / paste import
 - `packages/librarian`, extraction, dedupe, and import orchestration (local
   models via Ollama)
-- `packages/converse`, providers, model concierge/routing, catalog, and the
-  agent tools with their permission engine
+- `packages/converse`, legacy Converse: providers, model concierge/routing,
+  catalog, and the agent tools with their permission engine (ADR 0066)
 - `packages/mcp-server`, the MCP server + one-click Connect
 - `packages/sync`, client-side-encrypted sync client
 - `packages/cli`, the `northkeep` command
