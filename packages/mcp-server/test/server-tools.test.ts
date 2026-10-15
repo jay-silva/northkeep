@@ -428,7 +428,7 @@ describe('project tools', () => {
     const mcp = await connect();
     const result = await mcp.callTool({
       name: 'project_update',
-      arguments: { project: 'huge', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', status: 'z'.repeat(PROJECT_DOC_MAX_CHARS) },
+      arguments: { project: 'huge', expected_revision: null, milestones: 'M1 Agree the milestones | test: the user approves the plan', what_why: 'z'.repeat(PROJECT_DOC_MAX_CHARS), status: 'Big.' },
     });
     expect(result.isError).toBe(true);
     expect(toolText(result)).toContain(PROJECT_DOC_CAP_MESSAGE);
@@ -703,7 +703,8 @@ describe('project standing-instruction copy', () => {
       'To bootstrap a project from a codebase, read in this order and stop when the sections are full: ' +
         'README, the newest 30 commits of git log, any CHANGELOG, ADR or docs folder, then package or build ' +
         'files for the stack. Fill What & Why from the README\'s own words. Fill Current Status from the newest ' +
-        'commits and tags, and date every claim "as of <date>". Fill Next Actions from TODOs, open issues and ' +
+        'commits and tags in at most 1,000 characters: one plain opening sentence on where it stands, no commit hashes, ' +
+        'and date every claim "as of <date>". Fill Next Actions from TODOs, open issues and ' +
         'unfinished branches. Fill Decisions from ADRs and commit messages that explain a choice. Anything you ' +
         'inferred rather than read, mark "unverified". Do not run the code, do not fetch URLs, do not read .env ' +
         'or secret files. Then call project_create with draft: true. Keep this first document under 6,000 ' +
@@ -1164,13 +1165,13 @@ describe('project provenance (ADR 0052 Decision 1, 3 and 4)', () => {
       revision = (JSON.parse(toolText(result)) as { revision: string }).revision;
     };
     for (let i = 0; i < 20; i += 1) await update({ log_entry: `Session ${i} did some work on the busy project.` });
-    await update({ status: `PRIOR-REVISION-TEXT ${'status detail. '.repeat(900)}`.slice(0, 12000) });
-    // A long Current Status plus a long Log entry pushes the document past its
+    await update({ what_why: `PRIOR-REVISION-TEXT ${'status detail. '.repeat(900)}`.slice(0, 12000) });
+    // A long What & Why plus a long Log entry pushes the document past its
     // cap, so each of these writes rolls older entries into an archive memory.
     for (let i = 0; i < 3; i += 1) {
       await update({ log_entry: `Long session ${i}. ${'Rolled log detail. '.repeat(210)}`.slice(0, 4000) });
     }
-    await update({ status: 'Trimmed back down.' });
+    await update({ what_why: 'Trimmed back down.' });
 
     const brief = toolText(await mcp.callTool({ name: 'project_resume', arguments: { project: 'busy' } }));
     const parsed = JSON.parse(brief) as {

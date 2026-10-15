@@ -68,6 +68,8 @@ import {
   UNSHARE_FAILED_MESSAGE,
   UNSHARE_LOCAL_SAVE_FAILED_MESSAGE,
   LAPSED_UNSHARE_HINT,
+  ConnectorOversizeError,
+  type OversizeSharedEntry,
 } from '@northkeep/sync';
 import {
   PASTE_PROMPT,
@@ -424,6 +426,7 @@ export async function handleApi(
     // ADR 0063 D5: Cloud Connect holds a newer copy, or this Mac must sync first. Nothing was sent.
     if (err instanceof ConnectorStalePushError) return { status: 428, body: { error: err.message, code: 'stale_push', reset_route: '/api/share/push' } };
     if (err instanceof ConnectorPushBlockedError) return { status: 409, body: { error: err.message, code: 'sync_first' } };
+    if (err instanceof ConnectorOversizeError) return { status: 413, body: { error: err.message, code: 'oversize', oversize: err.entries[0] } };
     if (route.startsWith('/api/review/') && err instanceof Error) {
       // In particular, EIO after the vault save is uncertain, not a malformed request.
       // The client must keep its operation ID for an idempotent retry.
@@ -1197,10 +1200,12 @@ async function dispatch(
     // The apply is saved either way; a failed push must not hide what it did.
     let push: PushSharedResult | null = null;
     let pushError: string | null = null;
+    let pushOversize: OversizeSharedEntry | null = null;
     try {
       push = await manualPush(session, config.server, deviceSecret, entitlement);
     } catch (err) {
       pushError = err instanceof Error ? err.message : String(err);
+      if (err instanceof ConnectorOversizeError) pushOversize = err.entries[0] ?? null;
     }
     const review = down.needs_review.replacements.length + down.needs_review.forgets.length;
     const reviewParts: string[] = [];
@@ -1222,6 +1227,8 @@ async function dispatch(
       pushed: push?.pushed ?? 0,
       scopes: push?.scopes ?? [],
       ...(pushError !== null ? { push_error: pushError } : {}),
+      // ADR 0074 D3: names the memory for Compact it; never its text.
+      ...(pushOversize !== null ? { push_oversize: pushOversize } : {}),
       // Scopes the fold marked Shared in this run (ADR 0050): the GUI says so.
       newly_shared: after.filter((s) => !before.includes(s)),
     });
@@ -1296,7 +1303,8 @@ async function dispatch(
       return ok({ ...resolved, pushed: push?.pushed ?? 0 });
     } catch (err) {
       // Resolved here either way; say that Cloud Connect is behind rather than failing the whole request.
-      return ok({ ...resolved, pushed: 0, push_error: err instanceof Error ? err.message : String(err) });
+      const oversize = err instanceof ConnectorOversizeError ? { push_oversize: err.entries[0] } : {};
+      return ok({ ...resolved, pushed: 0, push_error: err instanceof Error ? err.message : String(err), ...oversize });
     }
   }
 

@@ -2,6 +2,7 @@ export * from './types.js';
 export * from './canonical.js';
 export * from './consolidation.js';
 export * from './project-handoff.js';
+export * from './agent-write-limits.js';
 export * from './project-milestones.js';
 export * from './project-notes.js';
 export * from './project-notes-crypto.js';

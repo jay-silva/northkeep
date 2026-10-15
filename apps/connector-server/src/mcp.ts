@@ -52,7 +52,7 @@ import { z } from 'zod';
 import { BASE_NEW, type ConnectorStorage, type SharedEntry } from './storage.js';
 import { projectScopeView, staleProjectRowIds } from './project-head.js';
 import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
-import { HOSTED_SECTION_TEXT_RULES, firstProjectTextError, isProjectStatusDone } from './project-text.js';
+import { HOSTED_SECTION_TEXT_RULES, firstProjectTextError, isProjectStatusDone, projectStatusTooLongMessage, STATUS_TEXT_RULES } from './project-text.js';
 import {
   MILESTONES_HEADING,
   MILESTONE_MAX_ITEMS,
@@ -427,7 +427,7 @@ export function createMcpServer(
       }
       if (Buffer.byteLength(body, 'utf8') > MAX_REMEMBER_BYTES) {
         await auditFail();
-        return { content: [{ type: 'text', text: `Nothing was saved: the memory exceeds the ${MAX_REMEMBER_BYTES}-byte limit.` }] };
+        return { content: [{ type: 'text', text: `Nothing was saved: the memory exceeds the ${MAX_REMEMBER_BYTES}-byte limit (accented letters and emoji count as more than one byte). Shorten it and keep every fact the user would miss, or split it into separate self-contained memories, then save again.` }] };
       }
       const memType = (type ?? '').trim();
       if (!MEMORY_TYPES.has(memType)) {
@@ -872,7 +872,7 @@ export function createMcpServer(
       inputSchema: {
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
         what_why: z.string().min(1).max(16384).describe(`What this project is and why it exists. ${HOSTED_SECTION_TEXT_RULES}`),
-        status: z.string().min(1).max(16384).describe(`Where the project stands right now. ${HOSTED_SECTION_TEXT_RULES}`),
+        status: z.string().min(1).max(16384).describe(`Where the project stands right now. ${STATUS_TEXT_RULES} ${HOSTED_SECTION_TEXT_RULES}`),
         next_actions: z.string().max(16384).optional().describe(`The next concrete actions. ${HOSTED_SECTION_TEXT_RULES}`),
         milestones: z.string().max(8192).optional().describe(`Required: the plan the user agreed to. ${MILESTONES_FORMAT}`),
       },
@@ -893,6 +893,8 @@ export function createMcpServer(
         ['next_actions', next_actions, true],
       ]);
       if (textError !== null) return refuse(textError);
+      const createStatusLong = projectStatusTooLongMessage(status);
+      if (createStatusLong !== null) return refuse(createStatusLong);
       // An empty next_actions is the local tool's "omitted", not an empty body.
       const nextActions = next_actions === '' ? undefined : next_actions;
       const scope = projectScope(project);
@@ -1001,7 +1003,7 @@ export function createMcpServer(
               'saved and the result says why. Not needed by project_create.',
           ),
         what_why: z.string().min(1).max(16384).optional().describe(`Replacement What & Why section. ${HOSTED_SECTION_TEXT_RULES}`),
-        status: z.string().min(1).max(16384).optional().describe(`Replacement Current Status section. ${HOSTED_SECTION_TEXT_RULES}`),
+        status: z.string().min(1).max(16384).optional().describe(`Replacement Current Status section. ${STATUS_TEXT_RULES} ${HOSTED_SECTION_TEXT_RULES}`),
         next_actions: z.string().max(16384).optional().describe(`Replacement Next Actions section; empty clears it. ${HOSTED_SECTION_TEXT_RULES}`),
         log_entry: z
           .string()
@@ -1043,6 +1045,8 @@ export function createMcpServer(
         ['decision', decision, false],
       ]);
       if (updateTextError !== null) return refuse(updateTextError);
+      const updateStatusLong = projectStatusTooLongMessage(status);
+      if (updateStatusLong !== null) return refuse(updateStatusLong);
       const scope = projectScope(project);
       // The revoke wins over a write that raced it, whatever the enforcement
       // flag says (ADR 0050 Decision 3). Only a re-share from NorthKeep reopens.

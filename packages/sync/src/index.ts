@@ -70,6 +70,7 @@ export {
   ConnectorStalePushError,
   ConnectorOversizeError,
   oversizeSharedEntries,
+  type OversizeSharedEntry,
   ConnectorTombstoneError,
   discardPending,
   fetchEntitlement,

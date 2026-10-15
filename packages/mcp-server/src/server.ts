@@ -50,6 +50,8 @@ import {
   type ProjectFileReference,
   type ProjectUpdateRequest,
   type ProjectWriter,
+  sharedEntryTooLargeMessage,
+  PROJECT_STATUS_AGENT_MAX_CHARS,
 } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import { createCachedEmbedder, createOllamaEmbedder } from '@northkeep/librarian';
@@ -173,6 +175,16 @@ const projectFilesSchema = z.array(z.object({
   'Files this work produced or relied on, so the next session can find them. Replaces the whole earlier Files list, ' +
   'so include earlier files you want to keep; omit files to leave the list unchanged; an empty list clears it.',
 );
+
+// The person reads Current Status and Next Actions; detail for the next session goes here instead.
+const AGENT_DETAIL_RULES =
+  'Detail a later AI session needs and the user does not: branches, commit hashes, file paths, commands, ' +
+  'gotchas. The app folds this section away, so write it for an agent, as dense as you like.';
+
+// The project page shows Current Status as the summary, so its first line must read on its own.
+const STATUS_TEXT_RULES =
+  `At most ${PROJECT_STATUS_AGENT_MAX_CHARS} characters. Start with one short plain sentence saying where the project ` +
+  'stands, with no commit hashes or ids; the user sees that line first. Technical detail goes in agent_detail.';
 
 // What every multi-line section field accepts, stated where hosts read it.
 const SECTION_TEXT_RULES =
@@ -718,7 +730,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'Do not use type working in a project scope (project:<slug>). That row is the project ' +
         'document, and a second one makes the project show as a conflict with no title. Change ' +
         'the project with project_create or project_update. Detail in a project scope belongs in ' +
-        'episodic, semantic, or procedural memories.',
+        'episodic, semantic, or procedural memories. In a scope the user shares with their connected apps, ' +
+        'a memory over 8 KB (64 KB in a project scope), counted in bytes, is refused; shorten or split it.',
       inputSchema: {
         content: z
           .string()
@@ -751,6 +764,10 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           const storedScope = targetScope.trim() || 'personal';
           const projectWorking = projectWorkingMemoryMessage(type, storedScope);
           if (projectWorking !== null) throw new Error(projectWorking);
+          if (vault.sharedScopes().includes(storedScope)) {
+            const tooLarge = sharedEntryTooLargeMessage(storedScope, content);
+            if (tooLarge !== null) throw new Error(tooLarge);
+          }
           const entry = vault.remember({
             content,
             type: type as MemoryType,
@@ -780,12 +797,15 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         type: typeEnum.optional().describe('Filter by memory type'),
         scope: scopeSchema.optional().describe('Filter by scope'),
         limit: z.number().int().min(1).max(100).optional().describe('Max results (default 50)'),
+        id: idSchema.optional().describe('Return only the live memory with exactly this id, if this connection may read its scope'),
       },
     },
-    async ({ type, scope, limit }) =>
-      run(ctx, 'memory_list', { type, scope, limit }, vaultPath, { kind: 'read', mask: 'memory' }, (vault, granted) => {
+    async ({ type, scope, limit, id }) =>
+      run(ctx, 'memory_list', { type, scope, limit, id }, vaultPath, { kind: 'read', mask: 'memory' }, (vault, granted) => {
+        // ADR 0074 D5: exact id over the granted live rows; no prefix match.
         const rows = vault
           .list({ type: type as MemoryType, scope, allowedScopes: granted })
+          .filter((e) => id === undefined || e.id === id)
           .slice(-(limit ?? 50));
         const entries = rows.map(publicEntry);
         return {
@@ -1094,7 +1114,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         expected_revision: idSchema.nullable().describe('Revision returned by project_get/resume, or null only when creating; creating needs milestones unless draft is true, as in project_create'),
         title: z.string().max(120).optional().describe('Display title shown in the app (single line, up to 120 characters). Empty string removes it and the slug is shown instead.'),
         what_why: z.string().min(1).max(16384).optional().describe(`Replacement What & Why section. ${SECTION_TEXT_RULES}`),
-        status: z.string().min(1).max(16384).optional().describe(`Replacement Current Status section. ${SECTION_TEXT_RULES}`),
+        status: z.string().min(1).max(16384).optional().describe(`Replacement Current Status section. ${STATUS_TEXT_RULES} ${SECTION_TEXT_RULES}`),
         next_actions: z.string().max(16384).optional().describe(`Replacement Next Actions section; empty clears it. ${SECTION_TEXT_RULES}`),
         log_entry: z
           .string()
@@ -1109,6 +1129,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           .optional()
           .describe(`New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD. ${SECTION_TEXT_RULES}`),
         open_questions: z.string().max(16384).optional().describe(`Replacement Open Questions section; empty clears it. ${SECTION_TEXT_RULES}`),
+        agent_detail: z.string().max(16384).optional().describe(`Replacement For the Next Agent section; empty clears it. ${AGENT_DETAIL_RULES} ${SECTION_TEXT_RULES}`),
         draft: z
           .boolean()
           .optional()
@@ -1117,7 +1138,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         milestones: z.string().max(8192).optional().describe(`Replacement plan: the milestones still to do. ${MILESTONES_FORMAT}`),
       },
     },
-    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, draft, files, milestones }) =>
+    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, agent_detail, draft, files, milestones }) =>
       run(
         ctx,
         'project_update',
@@ -1147,6 +1168,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             log_entry === undefined &&
             decision === undefined &&
             open_questions === undefined &&
+            agent_detail === undefined &&
             draft === undefined &&
             files === undefined &&
             milestones === undefined
@@ -1167,6 +1189,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             log_entry: normalizeSectionText(log_entry, 'log_entry', false),
             decision: normalizeSectionText(decision, 'decision', false),
             open_questions: normalizeSectionText(open_questions, 'open_questions', true),
+            agent_detail: normalizeSectionText(agent_detail, 'agent_detail', true),
             files: files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
             ...(draft !== undefined ? { draft } : {}),
             ...(milestones !== undefined ? { milestones: milestonesInput(milestones) } : {}),
@@ -1200,7 +1223,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         project: projectSlugSchema.describe('Project slug, e.g. "northkeep" for scope project:northkeep'),
         title: z.string().max(120).optional().describe('Display title shown in the app (single line, up to 120 characters).'),
         what_why: z.string().min(1).max(16384).describe(`What & Why section: what this project is and why it exists. ${SECTION_TEXT_RULES}`),
-        status: z.string().min(1).max(16384).describe(`Current Status section: where the project stands right now. ${SECTION_TEXT_RULES}`),
+        status: z.string().min(1).max(16384).describe(`Current Status section: where the project stands right now. ${STATUS_TEXT_RULES} ${SECTION_TEXT_RULES}`),
         next_actions: z.string().max(16384).optional().describe(`Next Actions section. ${SECTION_TEXT_RULES}`),
         draft: z
           .boolean()
@@ -1265,11 +1288,12 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     project: projectSlugSchema.describe('Project slug, e.g. "northkeep"'),
     operation_id: z.string().uuid().describe('A random version-4 UUID, in lowercase, that you generate for this save; project_resume does not return one. Reuse it only to retry this exact request.'),
     expected_revision: idSchema.describe('The revision this save starts from, taken from the latest resume or save result (project_resume, project_get, or receipt.result_revision from your last checkpoint)'),
-    status: z.string().min(1).max(16384).describe(`Replacement Current Status section. ${SECTION_TEXT_RULES}`),
+    status: z.string().min(1).max(16384).describe(`Replacement Current Status section. ${STATUS_TEXT_RULES} ${SECTION_TEXT_RULES}`),
     completed: z.string().min(1).max(4096).describe(`What was done, a few hundred characters at most; becomes the new Log entry. Do not include a date; the tool prefixes it. ${SECTION_TEXT_RULES}`),
     next_actions: z.string().max(16384).describe(`Replacement Next Actions section; empty clears it. ${SECTION_TEXT_RULES}`),
     decision: z.string().min(1).max(4096).optional().describe(`New Decisions entry (appended), without a date. ${SECTION_TEXT_RULES}`),
     open_questions: z.string().max(16384).optional().describe(`Replacement Open Questions section; empty clears it. ${SECTION_TEXT_RULES}`),
+    agent_detail: z.string().max(16384).optional().describe(`Replacement For the Next Agent section; empty clears it. ${AGENT_DETAIL_RULES} ${SECTION_TEXT_RULES}`),
     files: projectFilesSchema,
     milestone_passed: z.string().regex(/^M[1-9][0-9]{0,2}$/, 'a milestone id such as M3').optional().describe(
       'The id of the current milestone (the first one not yet passed), only when the user has said its acceptance ' +
@@ -1310,6 +1334,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         next_actions: normalizeSectionText(args.next_actions, 'next_actions', true),
         decision: normalizeSectionText(args.decision, 'decision', false),
         open_questions: normalizeSectionText(args.open_questions, 'open_questions', true),
+        agent_detail: normalizeSectionText(args.agent_detail, 'agent_detail', true),
         files: args.files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
       };
       const result = vault.checkpointProject(request, { actor: 'agent' }, granted);
