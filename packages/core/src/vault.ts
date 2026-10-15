@@ -212,6 +212,8 @@ export class Vault {
   readonly path: string;
   private closed = false;
   private autoCompaction: AutoCompaction | null = null;
+  /** ADR 0067 D1: vectors live in RAM for this handle only, never in the image. */
+  private readonly vectors = new Map<string, Float32Array>();
 
   private constructor(
     vaultPath: string,
@@ -423,9 +425,40 @@ export class Vault {
     console.error(`northkeep: migrated vault schema ${from} → ${SCHEMA_VERSION}`);
   }
 
+  /** True while the image still holds the pre-ADR 0067 embeddings table. */
+  hasLegacyEmbeddingsTable(): boolean {
+    this.assertOpen();
+    const row = this.db
+      .prepare("SELECT 1 AS found FROM sqlite_master WHERE type = 'table' AND name = 'embeddings'")
+      .get();
+    return row !== undefined && row !== null;
+  }
+
+  /**
+   * ADR 0067 D2/D3: drops the legacy embeddings table and reclaims free pages so
+   * the synced image carries neither. PRAGMAs are read through prepare(): the
+   * phone driver's pragma() returns nothing.
+   */
+  private compactImage(): void {
+    let vacuum = false;
+    if (this.hasLegacyEmbeddingsTable()) {
+      this.db.exec('DROP TABLE embeddings');
+      vacuum = true;
+    } else {
+      const free = pragmaNumber(this.db, 'freelist_count');
+      const pages = pragmaNumber(this.db, 'page_count');
+      vacuum = pages > 0 && free * 4 > pages;
+    }
+    if (vacuum) this.db.exec('VACUUM');
+  }
+
   /** Serialize → encrypt with a fresh nonce → atomic replace, keeping the previous file as .bak. */
   save(): void {
     this.assertOpen();
+    // Invariant (ADR 0067 D3): core never saves inside a transaction. VACUUM
+    // would throw there on the phone, whose driver cannot report the state.
+    if (this.db.inTransaction === true) throw new Error('Vault.save() was called inside a transaction.');
+    this.compactImage();
     const image = this.platform.sqlite.serialize(this.db);
     const header = Buffer.alloc(HEADER_LENGTH);
     MAGIC.copy(header, 0);
@@ -1662,9 +1695,9 @@ export class Vault {
    * because retrieve() is synchronous and part of the stable surface (converse,
    * existing tests) — embedding requires awaiting the loopback Ollama call.
    *
-   * Embeddings are DISPOSABLE CACHE (invariant #4): computed lazily, stored in
-   * the `embeddings` table, never exported, safe to drop (clearEmbeddingCache)
-   * and regenerate. They never touch any entry hash or the provenance chain.
+   * Embeddings are DISPOSABLE CACHE (invariant #4): computed lazily, held in
+   * this handle's RAM only (ADR 0067), never saved or exported, safe to drop
+   * (clearEmbeddingCache) and regenerate. They never touch any entry hash or the provenance chain.
    */
   async retrieveSemantic(
     query: string,
@@ -1729,7 +1762,6 @@ export class Vault {
       scope: options.scope,
       allowedScopes: options.allowedScopes,
     }).filter((entry) => entry.superseded_at === null);
-    this.ensureEmbeddingsTable();
     const now = Date.now();
     const dim = queryVec.length;
     const scored: ScoredEntry[] = [];
@@ -1762,46 +1794,25 @@ export class Vault {
   }
 
   /**
-   * Drops every cached embedding (the entire disposable cache). Safe at any
-   * time — the next retrieveSemantic() recreates the table and regenerates
-   * vectors on demand. Nothing about the vault's content, hashes, or export
-   * changes.
+   * Drops every cached embedding (the entire disposable cache), including a
+   * legacy pre-ADR 0067 table. Safe at any time: the next retrieveSemantic()
+   * regenerates vectors on demand. Content, hashes and export are unchanged.
    */
   clearEmbeddingCache(): void {
     this.assertOpen();
+    this.vectors.clear();
     this.db.exec('DROP TABLE IF EXISTS embeddings');
   }
 
-  /** Creates the disposable embeddings cache table if it's missing (e.g. an
-   * older vault, or after clearEmbeddingCache). Never part of the durable
-   * schema contract — it's cache. */
-  private ensureEmbeddingsTable(): void {
-    this.db.exec(`CREATE TABLE IF NOT EXISTS embeddings (
-      memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-      model     TEXT NOT NULL,
-      dims      INTEGER NOT NULL,
-      vector    BLOB NOT NULL,
-      PRIMARY KEY (memory_id, model)
-    )`);
-  }
-
-  /** Reads a cached vector for (memory, model), or null on miss / dim mismatch. */
+  /** Cached vector for (memory, model), or null on miss / dim mismatch. */
   private getCachedEmbedding(memoryId: string, model: string, expectedDim: number): Float32Array | null {
-    const row = this.db
-      .prepare('SELECT dims, vector FROM embeddings WHERE memory_id = ? AND model = ?')
-      .get(memoryId, model) as { dims: number; vector: Buffer } | undefined;
-    if (!row || row.dims !== expectedDim) return null;
-    return blobToVector(row.vector);
+    const vec = this.vectors.get(vectorKey(memoryId, model));
+    return vec !== undefined && vec.length === expectedDim ? vec : null;
   }
 
-  /** Caches a vector for (memory, model). Pure cache write — no hash, no chain. */
+  /** Caches a vector for (memory, model) in RAM. No hash, no chain, no disk. */
   private putCachedEmbedding(memoryId: string, model: string, vec: Float32Array): void {
-    this.db
-      .prepare(
-        `INSERT INTO embeddings (memory_id, model, dims, vector) VALUES (?, ?, ?, ?)
-         ON CONFLICT(memory_id, model) DO UPDATE SET dims = excluded.dims, vector = excluded.vector`,
-      )
-      .run(memoryId, model, vec.length, vectorToBlob(vec));
+    this.vectors.set(vectorKey(memoryId, model), vec);
   }
 
   list(filter: ListFilter = {}): MemoryEntry[] {
@@ -2038,6 +2049,7 @@ export class Vault {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.vectors.clear();
     this.db.close();
     memzero(this.key, this.platform.crypto);
   }
@@ -2190,19 +2202,6 @@ export function cosineSimilarity(a: ArrayLike<number>, b: ArrayLike<number>): nu
   return dot / (Math.sqrt(na) * Math.sqrt(nb));
 }
 
-/** Pack a Float32Array as a little-endian BLOB for the cache table. */
-function vectorToBlob(vec: Float32Array): Buffer {
-  return Buffer.from(vec.buffer, vec.byteOffset, vec.byteLength);
-}
-
-/** Unpack a cache BLOB into a Float32Array, copying to guarantee 4-byte
- * alignment (SQLite BLOBs come back as pooled Buffers with arbitrary offsets). */
-function blobToVector(buf: Buffer): Float32Array {
-  const ab = new ArrayBuffer(buf.byteLength);
-  new Uint8Array(ab).set(buf);
-  return new Float32Array(ab);
-}
-
 function errText(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
@@ -2233,4 +2232,15 @@ function tokenize(text: string): Set<string> {
     terms.add(match[0]);
   }
   return terms;
+}
+
+function vectorKey(memoryId: string, model: string): string {
+  return `${model}\u0000${memoryId}`;
+}
+
+/** Reads a numeric PRAGMA as a row: both drivers return rows from prepare().get(). */
+function pragmaNumber(db: SqliteDb, name: string): number {
+  const row = db.prepare(`PRAGMA ${name}`).get() as Record<string, unknown> | undefined | null;
+  const value = row ? Object.values(row)[0] : undefined;
+  return typeof value === 'number' ? value : Number(value ?? 0);
 }
