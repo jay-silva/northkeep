@@ -37,7 +37,7 @@ export const PROJECT_BOOTSTRAP_INSTRUCTION =
   'To bootstrap a project from a codebase, read in this order and stop when the sections are full: ' +
   'README, the newest 30 commits of git log, any CHANGELOG, ADR or docs folder, then package or build ' +
   'files for the stack. Fill What & Why from the README\'s own words. Fill Current Status from the newest ' +
-  'commits and tags in under 1,000 characters: one plain opening sentence on where it stands, no commit hashes, ' +
+  'commits and tags in at most 1,000 characters: one plain opening sentence on where it stands, no commit hashes, ' +
   'and date every claim "as of <date>". Fill Next Actions from TODOs, open issues and ' +
   'unfinished branches. Fill Decisions from ADRs and commit messages that explain a choice. Anything you ' +
   'inferred rather than read, mark "unverified". Do not run the code, do not fetch URLs, do not read .env ' +

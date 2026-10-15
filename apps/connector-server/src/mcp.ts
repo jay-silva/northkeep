@@ -427,7 +427,7 @@ export function createMcpServer(
       }
       if (Buffer.byteLength(body, 'utf8') > MAX_REMEMBER_BYTES) {
         await auditFail();
-        return { content: [{ type: 'text', text: `Nothing was saved: the memory exceeds the ${MAX_REMEMBER_BYTES}-byte limit.` }] };
+        return { content: [{ type: 'text', text: `Nothing was saved: the memory exceeds the ${MAX_REMEMBER_BYTES}-byte limit (accented letters and emoji count as more than one byte). Shorten it and keep every fact the user would miss, or split it into separate self-contained memories, then save again.` }] };
       }
       const memType = (type ?? '').trim();
       if (!MEMORY_TYPES.has(memType)) {

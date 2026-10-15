@@ -138,6 +138,9 @@ export const RELEASED_CONTRACT_RENDER_SHA256: ReadonlySet<string> = new Set([
   '1b3454186fef3be82af0fc05b69cc62ad9eb98b1ea5c02cfe0c1760a40c8538e',
   '64268b0d148f475729233fc2ead4e71ef9f070266d877fc7f45835c2003bc1d1',
   'e0eaa0961cd1195184f4e1de03b11ff099a18e57c7367c8dd00062cbe71c4d0a',
+  'c31a1eeac867dc53eb9c43d62fc2287f4c37913be3290fde7f6d9329a6196646',
+  '1804e5bef85e8211c450a02e148be6a17e802e4443e2c5f1e3820c8de4b11bd8',
+  '92d0d9cbbbd9d2eb0f06647c11596556ab574e61efdaf9903dc282db929f917e',
 ]);
 
 function classifyReplaced(existing: string, rendered: string): ReplacedContract {

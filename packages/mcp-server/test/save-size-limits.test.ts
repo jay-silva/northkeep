@@ -101,6 +101,20 @@ describe('Current Status is short enough to read as a summary', () => {
     }
   });
 
+  it('refuses a raw memory_edit of the project document that lengthens the status', async () => {
+    h = createHarness();
+    const mcp = await h.connect();
+    await attempt(mcp, 'project_create', { project: 'raw', what_why: 'Why.', status: 'Start.', milestones: plan });
+    const vault = h.openVault();
+    const doc = vault.list({ scope: 'project:raw', type: 'working' })[0]!;
+    vault.close();
+    const r = await attempt(mcp, 'memory_edit', { id: doc.id, content: doc.content.replace('Start.', 's'.repeat(5000)) });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('status is 5000 characters');
+    const same = await attempt(mcp, 'memory_edit', { id: doc.id, content: doc.content.replace('Why.', 'Why, edited.') });
+    expect(same.isError).toBe(false);
+  });
+
   it('refuses a long status on update but not an update that leaves status alone', async () => {
     h = createHarness();
     const mcp = await h.connect();

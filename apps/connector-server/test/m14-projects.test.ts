@@ -417,7 +417,7 @@ describe('M14 connector project tools (step 4)', () => {
     const over = await mcpCall(token, 'project_update', {
       project: 'northkeep',
       expected_revision: await revisionOf(token, 'northkeep'),
-      status: 'z'.repeat(PROJECT_DOC_MAX_CHARS),
+      what_why: 'z'.repeat(PROJECT_DOC_MAX_CHARS),
     });
     expect(over.isError).toBe(true);
     expect(over.text).toBe(PROJECT_DOC_CAP_MESSAGE);

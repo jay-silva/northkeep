@@ -60,7 +60,7 @@ import {
   type WriteActorOptions,
 } from './project-handoff.js';
 import { MilestoneError, assertAgentWriteKeepsPasses } from './project-milestones.js';
-import { emptyProjectDoc, formatLogArchive, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
+import { emptyProjectDoc, formatLogArchive, getProjectSection, parseProjectDoc, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
 import { projectStatusTooLongMessage, sharedEntryTooLargeMessage } from './agent-write-limits.js';
 import { assertNotNewProjectWorkingMemory } from './project-working-memory.js';
 import { importPlanProblem, projectInUseMessage, type ImportFilePlan } from './project-import.js';
@@ -668,6 +668,13 @@ export class Vault {
         const problem = projectDocProblem(after.content);
         if (problem !== null) throw new Error(`${problem} Nothing was saved.`);
         if (actor === 'agent') assertAgentWriteKeepsPasses(wasDocument ? old.content : null, after.content);
+        // The same summary limit as project_update, so a raw edit cannot route around it.
+        if (actor === 'agent') {
+          const status = getProjectSection(parseProjectDoc(after.content), 'Current Status') ?? '';
+          const before = wasDocument ? getProjectSection(parseProjectDoc(old.content), 'Current Status') ?? '' : null;
+          const long = status !== before ? projectStatusTooLongMessage(status) : null;
+          if (long !== null) throw new Error(long);
+        }
       }
       return this.supersedeEntry(old, changes);
     })();

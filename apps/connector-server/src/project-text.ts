@@ -50,9 +50,11 @@ export const STATUS_TEXT_RULES =
 
 /** Mirror of core's projectStatusTooLongMessage, word for word. */
 export function projectStatusTooLongMessage(status: string | undefined): string | null {
-  if (status === undefined || status.length <= PROJECT_STATUS_AGENT_MAX_CHARS) return null;
+  if (status === undefined) return null;
+  const chars = [...status].length;
+  if (chars <= PROJECT_STATUS_AGENT_MAX_CHARS) return null;
   return (
-    `Nothing was saved: status is ${status.length} characters, and the limit is ${PROJECT_STATUS_AGENT_MAX_CHARS}. ` +
+    `Nothing was saved: status is ${chars} characters, and the limit is ${PROJECT_STATUS_AGENT_MAX_CHARS}. ` +
     'The user reads it as the project summary. Open with one short plain sentence saying where the project ' +
     'stands, with no commit hashes or ids, keep the rest brief, and move detail into the log entry, ' +
     'decisions, or a memory. Then send the update again.'
