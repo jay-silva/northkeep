@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import Database from 'better-sqlite3';
 import type { SqliteDb, SqliteDriver } from '@northkeep/core';
 
@@ -21,4 +22,29 @@ export function nodeSqliteDriver(): SqliteDriver {
       return (db as unknown as Database.Database).serialize();
     },
   };
+}
+
+/** The on-disk SQLite surface the notes file (ADR 0072) uses. */
+export interface SqliteFile {
+  exec(sql: string): void;
+  prepare(sql: string): {
+    run(...params: unknown[]): { changes: number };
+    get(...params: unknown[]): unknown;
+    all(...params: unknown[]): unknown[];
+  };
+  pragma(sql: string): unknown;
+  close(): void;
+}
+
+/**
+ * Opens (creating if needed) a SQLite file with WAL and a busy timeout, so
+ * several MCP server processes and the CLI can share it. Mode 0600 (SQLite
+ * gives its WAL files the same): the readable columns name projects.
+ */
+export function openSqliteFile(filePath: string, busyTimeoutMs = 5000): SqliteFile {
+  fs.closeSync(fs.openSync(filePath, 'a', 0o600));
+  fs.chmodSync(filePath, 0o600);
+  const db = new Database(filePath, { timeout: busyTimeoutMs });
+  db.pragma('journal_mode = WAL');
+  return db as unknown as SqliteFile;
 }
