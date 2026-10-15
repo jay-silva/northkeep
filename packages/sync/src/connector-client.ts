@@ -1,6 +1,6 @@
 import {
   ProjectHandoffError,
-  devicePhrase,
+  thisDevicePhrase,
   getProjectView,
   isMemoryType,
   parseMilestones,
@@ -157,16 +157,19 @@ export interface VaultStamp {
 }
 
 /** What every surface says when the connector refuses an older push (HTTP 428 `stale_push`). */
-const here = devicePhrase(process.platform);
-export const STALE_PUSH_MESSAGE =
-  `Another device pushed a newer copy to Cloud Connect. Sync ${here} first. ` +
-  `If ${here} is already in sync (for example after your sync server was reset), run: northkeep share push --reset-order`;
+export function stalePushMessage(): string {
+  const here = thisDevicePhrase();
+  return (
+    `Another device pushed a newer copy to Cloud Connect. Sync ${here} first. ` +
+    `If ${here} is already in sync (for example after your sync server was reset), run: northkeep share push --reset-order`
+  );
+}
 
 /** HTTP 428: the connector already accepted a push from a newer vault version (D5). */
 export class ConnectorStalePushError extends Error {
   readonly vaultVersion: number | null;
   constructor(vaultVersion: number | null) {
-    super(STALE_PUSH_MESSAGE);
+    super(stalePushMessage());
     this.name = 'ConnectorStalePushError';
     this.vaultVersion = vaultVersion;
   }

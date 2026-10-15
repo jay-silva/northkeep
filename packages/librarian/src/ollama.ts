@@ -6,7 +6,7 @@
  * non-default ports, but any non-loopback host is refused outright — there
  * is deliberately no override.
  */
-import { ollamaStartHint, devicePhrase, type Embedder } from '@northkeep/core';
+import { hostPlatform, ollamaStartHint, thisDevicePhrase, type Embedder } from '@northkeep/core';
 
 const DEFAULT_URL = 'http://127.0.0.1:11434';
 export const EXTRACT_MODEL = process.env.NORTHKEEP_EXTRACT_MODEL ?? 'llama3.2:3b';
@@ -239,8 +239,10 @@ export async function hasOllamaModel(tag: string): Promise<boolean> {
   }
 }
 
-const REVIEW_REFUSE_REMEDY =
-  'Start Ollama with: ' + ollamaStartHint(process.platform) + '. Then pull a review model: ollama pull qwen2.5:14b';
+// A function, not a constant: the phone bundles this module and has no platform at load.
+function reviewRefuseRemedy(): string {
+  return 'Start Ollama with: ' + ollamaStartHint(hostPlatform()) + '. Then pull a review model: ollama pull qwen2.5:14b';
+}
 
 /**
  * Pick the local review-pass model. If NORTHKEEP_REVIEW_MODEL is set, that
@@ -252,14 +254,14 @@ export async function resolveReviewModel(): Promise<string> {
   const state = await ollamaState();
   if (state === 'not-installed') {
     throw new Error(
-      `Ollama is not running. The memory review pass needs a local model. ${REVIEW_REFUSE_REMEDY}`,
+      `Ollama is not running. The memory review pass needs a local model. ${reviewRefuseRemedy()}`,
     );
   }
   const override = process.env.NORTHKEEP_REVIEW_MODEL;
   if (override !== undefined && override.length > 0) {
     if (!(await hasOllamaModel(override))) {
       throw new Error(
-        `Review model "${override}" is not available on ${devicePhrase(process.platform)}. Pull it with: ollama pull ${override}. ${REVIEW_REFUSE_REMEDY}`,
+        `Review model "${override}" is not available on ${thisDevicePhrase()}. Pull it with: ollama pull ${override}. ${reviewRefuseRemedy()}`,
       );
     }
     return override;
@@ -267,6 +269,6 @@ export async function resolveReviewModel(): Promise<string> {
   if (await hasOllamaModel('qwen2.5:14b')) return 'qwen2.5:14b';
   if (await hasOllamaModel(REVIEW_MODEL_FALLBACK)) return REVIEW_MODEL_FALLBACK;
   throw new Error(
-    `Neither qwen2.5:14b nor qwen2.5:7b is available. ${REVIEW_REFUSE_REMEDY}`,
+    `Neither qwen2.5:14b nor qwen2.5:7b is available. ${reviewRefuseRemedy()}`,
   );
 }

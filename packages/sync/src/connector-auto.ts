@@ -1,4 +1,4 @@
-import { devicePhrase, loadDeviceSecret as coreLoadDeviceSecret, memzero, Vault, withFileLock } from '@northkeep/core';
+import { thisDevicePhrase, loadDeviceSecret as coreLoadDeviceSecret, memzero, Vault, withFileLock } from '@northkeep/core';
 import { PAUSE_RETRY_MS, type AutoSyncClock, type AutoSyncStatus } from './auto.js';
 import { isAutoSyncVault, syncState } from './client.js';
 import { loadSyncConfig } from './config.js';
@@ -55,31 +55,34 @@ export type ConnectorAutoPushEvent =
   | { type: 'paused'; reason: ConnectorAutoPushReason; message: string }
   | { type: 'error'; message: string };
 
-const here = devicePhrase(process.platform);
-const Here = here.charAt(0).toUpperCase() + here.slice(1);
-
-/** What the Cloud screen and the CLI say for each reason. */
-export const CONNECTOR_AUTO_PUSH_MESSAGES: Record<ConnectorAutoPushReason, string> = {
-  switched_off: 'Automatic updates are off, so Cloud Connect updates only when you push.',
-  not_configured: 'No connector server is set up on this device.',
-  other_vault: 'Cloud Connect is updated automatically from your main vault only.',
-  nothing_shared: 'Nothing is shared, so there is nothing to send to Cloud Connect.',
-  locked: 'The vault is locked. Cloud Connect updates after you unlock it.',
-  auto_sync_off: 'Automatic sync is off, so Cloud Connect updates only when you push.',
-  auto_sync_error: 'Automatic sync hit a problem, so Cloud Connect waits until sync works again.',
-  behind: `${Here} is behind your other devices. Cloud Connect will update after it catches up.`,
-  diverged: `${Here} and your other devices both have changes. Cloud Connect will update after you sync ${here}.`,
-  ahead: `Cloud Connect will update after ${here} finishes syncing.`,
-  pull_refused: 'A pull from your other devices is waiting for your review, so Cloud Connect waits too.',
-  tombstone_off: 'Cloud Connect is not refusing pushes to unshared scopes, so automatic push is off. You can still push by hand.',
-  subscription: 'Cloud Connect needs an active subscription, so automatic updates are paused.',
-  reencrypt: 'Cloud Connect cannot read this account\'s shared data. Run "northkeep share push" to re-encrypt it.',
-  tombstone: 'Cloud Connect refused a scope you unshared elsewhere. Re-share it deliberately if you want it back.',
-  stale_push:
-    `Another device pushed a newer copy to Cloud Connect, so automatic updates are paused. Sync ${here}, then push by hand. ` +
-    `If ${here} is already in sync (for example after your sync server was reset), run: northkeep share push --reset-order`,
-  error: 'Cloud Connect could not be updated. It will try again after the next change.',
-};
+/** What the Cloud screen and the CLI say for each reason. Built per call: the phone cannot name its platform at load. */
+export function connectorAutoPushMessage(reason: ConnectorAutoPushReason): string {
+  const here = thisDevicePhrase();
+  const Here = here.charAt(0).toUpperCase() + here.slice(1);
+  switch (reason) {
+    case 'switched_off': return 'Automatic updates are off, so Cloud Connect updates only when you push.';
+    case 'not_configured': return 'No connector server is set up on this device.';
+    case 'other_vault': return 'Cloud Connect is updated automatically from your main vault only.';
+    case 'nothing_shared': return 'Nothing is shared, so there is nothing to send to Cloud Connect.';
+    case 'locked': return 'The vault is locked. Cloud Connect updates after you unlock it.';
+    case 'auto_sync_off': return 'Automatic sync is off, so Cloud Connect updates only when you push.';
+    case 'auto_sync_error': return 'Automatic sync hit a problem, so Cloud Connect waits until sync works again.';
+    case 'behind': return `${Here} is behind your other devices. Cloud Connect will update after it catches up.`;
+    case 'diverged': return `${Here} and your other devices both have changes. Cloud Connect will update after you sync ${here}.`;
+    case 'ahead': return `Cloud Connect will update after ${here} finishes syncing.`;
+    case 'pull_refused': return 'A pull from your other devices is waiting for your review, so Cloud Connect waits too.';
+    case 'tombstone_off': return 'Cloud Connect is not refusing pushes to unshared scopes, so automatic push is off. You can still push by hand.';
+    case 'subscription': return 'Cloud Connect needs an active subscription, so automatic updates are paused.';
+    case 'reencrypt': return 'Cloud Connect cannot read this account\'s shared data. Run "northkeep share push" to re-encrypt it.';
+    case 'tombstone': return 'Cloud Connect refused a scope you unshared elsewhere. Re-share it deliberately if you want it back.';
+    case 'stale_push':
+      return (
+        `Another device pushed a newer copy to Cloud Connect, so automatic updates are paused. Sync ${here}, then push by hand. ` +
+        `If ${here} is already in sync (for example after your sync server was reset), run: northkeep share push --reset-order`
+      );
+    case 'error': return 'Cloud Connect could not be updated. It will try again after the next change.';
+  }
+}
 
 /** Reasons that hold until the user acts (a manual push, the switch, a server change). */
 const STICKY: ReadonlySet<ConnectorAutoPushReason> = new Set(['subscription', 'reencrypt', 'tombstone', 'stale_push']);
@@ -195,7 +198,7 @@ export class ConnectorAutoPush {
       enabled,
       phase: off ? 'off' : this.phase,
       reason: off ?? this.reason,
-      message: off ? CONNECTOR_AUTO_PUSH_MESSAGES[off] : this.message,
+      message: off ? connectorAutoPushMessage(off) : this.message,
       last_pushed_at: connectorLastPushedAt(),
     };
   }
@@ -219,7 +222,7 @@ export class ConnectorAutoPush {
   private set(phase: ConnectorAutoPushPhase, reason: ConnectorAutoPushReason | null, message?: string): void {
     this.phase = phase;
     this.reason = reason;
-    this.message = reason === null ? null : (message ?? CONNECTOR_AUTO_PUSH_MESSAGES[reason]);
+    this.message = reason === null ? null : (message ?? connectorAutoPushMessage(reason));
   }
 
   private pause(reason: ConnectorAutoPushReason, message?: string): void {

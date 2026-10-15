@@ -2,7 +2,8 @@
  * The noun in "an encrypted vault on ___", and the Ollama commands that go
  * with it. macOS stays "this Mac" and Homebrew. Linux and Windows do not.
  */
-export function devicePhrase(platform: NodeJS.Platform): string {
+export function devicePhrase(platform: NodeJS.Platform | undefined): string {
+  if (platform === undefined) return 'this device';
   switch (platform) {
     case 'darwin':
       return 'this Mac';
@@ -20,7 +21,6 @@ export function devicePhrase(platform: NodeJS.Platform): string {
     case 'netbsd':
       return 'this computer';
     default: {
-      // The phone has no Node platform (process.platform is undefined); returning it crashed launch.
       const unexpected: never = platform;
       void unexpected;
       return 'this device';
@@ -28,13 +28,28 @@ export function devicePhrase(platform: NodeJS.Platform): string {
   }
 }
 
+/**
+ * The platform this code runs on, read at call time. Undefined on the phone,
+ * which has no Node platform. Never read it at module load in code the phone
+ * bundles: build 31 crashed on launch that way.
+ */
+export function hostPlatform(): NodeJS.Platform | undefined {
+  return typeof process === 'undefined' ? undefined : process.platform;
+}
+
+/** devicePhrase for the device running this code: "this Mac", or "this device" on the phone. */
+export function thisDevicePhrase(): string {
+  return devicePhrase(hostPlatform());
+}
+
 /** "your Mac", "your Linux computer", and the same for the other platforms. */
-export function yourDevicePhrase(platform: NodeJS.Platform): string {
+export function yourDevicePhrase(platform: NodeJS.Platform | undefined): string {
   return devicePhrase(platform).replace(/^this /, 'your ');
 }
 
 /** The command that starts Ollama on this platform. */
-export function ollamaStartCommand(platform: NodeJS.Platform): string {
+export function ollamaStartCommand(platform: NodeJS.Platform | undefined): string {
+  if (platform === undefined) return 'ollama serve';
   switch (platform) {
     case 'darwin':
       return 'brew services start ollama';
@@ -59,7 +74,7 @@ export function ollamaStartCommand(platform: NodeJS.Platform): string {
 }
 
 /** A second way to start Ollama, when the primary command is not the only one. */
-export function ollamaAltCommand(platform: NodeJS.Platform): string | null {
+export function ollamaAltCommand(platform: NodeJS.Platform | undefined): string | null {
   return platform === 'linux' ? 'ollama serve' : null;
 }
 
@@ -67,12 +82,12 @@ export function ollamaAltCommand(platform: NodeJS.Platform): string | null {
  * A shell install command. Null where the download page is the instruction:
  * Linux should not be told to pipe a Homebrew command.
  */
-export function ollamaInstallCommand(platform: NodeJS.Platform): string | null {
+export function ollamaInstallCommand(platform: NodeJS.Platform | undefined): string | null {
   return platform === 'darwin' ? 'brew install ollama' : null;
 }
 
 /** What a user can paste when Ollama is missing. Includes the alternate on Linux. */
-export function ollamaStartHint(platform: NodeJS.Platform): string {
+export function ollamaStartHint(platform: NodeJS.Platform | undefined): string {
   const start = ollamaStartCommand(platform);
   const alt = ollamaAltCommand(platform);
   const install = ollamaInstallCommand(platform);

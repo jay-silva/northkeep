@@ -81,7 +81,7 @@ export {
   resolveConflict,
   startPairing,
   unshareScope,
-  STALE_PUSH_MESSAGE,
+  stalePushMessage,
   type ConflictChoice,
   type ConflictReason,
   type DownSyncConflict,
@@ -103,7 +103,7 @@ export {
 } from './connector-client.js';
 export { cloudRowKeepsPasses, milestonePassChanges, type MilestonePassChange } from './milestone-changes.js';
 export {
-  CONNECTOR_AUTO_PUSH_MESSAGES,
+  connectorAutoPushMessage,
   ConnectorAutoPush,
   type ConnectorAutoPushEvent,
   type ConnectorAutoPushOptions,

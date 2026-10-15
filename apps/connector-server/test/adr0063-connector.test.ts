@@ -6,7 +6,7 @@ import path from 'node:path';
 import { PGlite } from '@electric-sql/pglite';
 import { KDF_INTERACTIVE, Vault, generateDeviceSecret, getProjectView } from '@northkeep/core';
 import { emptyProjectDoc, mergeProjectDoc, serializeProjectDoc } from '@northkeep/core/project-doc';
-import { applyDownSync, deriveConnectorToken, pushSharedScopes, resolveConflict, startPairing, STALE_PUSH_MESSAGE, tokenHash } from '@northkeep/sync';
+import { applyDownSync, deriveConnectorToken, pushSharedScopes, resolveConflict, stalePushMessage, startPairing, tokenHash } from '@northkeep/sync';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage, type ConnectorStorage, type SharedEntry } from '../src/storage.js';
 import { NeonConnectorStorage } from '../src/neon-storage.js';
@@ -387,7 +387,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       expect((await w.mcp('project_get', { project: 'd' })).text).toContain('R2 NEW.');
       // A push with no vault (an old client, or a device with no vault sync) is refused once a pair is recorded.
       const oldClient = await w.push().then(() => 200, (e: Error) => e.message);
-      expect(oldClient).toBe(STALE_PUSH_MESSAGE);
+      expect(oldClient).toBe(stalePushMessage());
       const equal = await w.rawPush({ scopes: ['project:d'], entries: [entry('R2 NEW.')], vault: { server: S, version: 2 } });
       expect(equal.status).toBe(200);
       const reset = await w.rawPush({ scopes: ['project:d'], entries: [entry('RESTARTED.')], vault: { server: S, version: 1 }, reset: true });

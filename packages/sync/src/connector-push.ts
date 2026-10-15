@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { devicePhrase, type MemoryEntry, type Vault } from '@northkeep/core';
+import { thisDevicePhrase, type MemoryEntry, type Vault } from '@northkeep/core';
 import { loadSyncConfig } from './config.js';
 import { isAutoSyncVault, pushVault, syncState, type PushResult } from './client.js';
 import { pushSharedScopes, type ManifestEntry, type PushSharedResult, type VaultStamp } from './connector-client.js';
@@ -18,20 +18,23 @@ export function vaultServerHash(serverUrl: string): string {
 
 export type PushBlockedReason = 'behind' | 'diverged' | 'other-vault' | 'moved';
 
-const here = devicePhrase(process.platform);
-const Here = here.charAt(0).toUpperCase() + here.slice(1);
-const BLOCKED_MESSAGES: Record<PushBlockedReason, string> = {
-  behind: `${Here} is behind your other devices, so Cloud Connect was not updated. Sync ${here} first (northkeep sync pull), then push again.`,
-  diverged: `${Here} and your other devices both have changes, so Cloud Connect was not updated. Sync ${here} first (northkeep sync pull), then push again.`,
-  'other-vault': 'Cloud Connect is updated from your main vault only, and this command used another vault file.',
-  moved: `Another device synced while ${here} was pushing, so Cloud Connect was not updated. Sync ${here} first, then push again.`,
-};
+/** Built per call: the phone cannot name its platform at module load. */
+function blockedMessage(reason: PushBlockedReason): string {
+  const here = thisDevicePhrase();
+  const Here = here.charAt(0).toUpperCase() + here.slice(1);
+  switch (reason) {
+    case 'behind': return `${Here} is behind your other devices, so Cloud Connect was not updated. Sync ${here} first (northkeep sync pull), then push again.`;
+    case 'diverged': return `${Here} and your other devices both have changes, so Cloud Connect was not updated. Sync ${here} first (northkeep sync pull), then push again.`;
+    case 'other-vault': return 'Cloud Connect is updated from your main vault only, and this command used another vault file.';
+    case 'moved': return `Another device synced while ${here} was pushing, so Cloud Connect was not updated. Sync ${here} first, then push again.`;
+  }
+}
 
 /** A manual push refused because this device may not hold the newest vault (D5). Nothing was sent. */
 export class ConnectorPushBlockedError extends Error {
   readonly reason: PushBlockedReason;
   constructor(reason: PushBlockedReason) {
-    super(BLOCKED_MESSAGES[reason]);
+    super(blockedMessage(reason));
     this.name = 'ConnectorPushBlockedError';
     this.reason = reason;
   }
