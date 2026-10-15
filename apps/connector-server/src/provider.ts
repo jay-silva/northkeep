@@ -45,7 +45,7 @@ import {
   KEK_LABEL_AUTH_CODE,
   KEK_LABEL_TOKEN,
   deriveKek,
-  unwrapDek,
+  unwrapDekRotating,
   wrapDek,
 } from './crypto.js';
 
@@ -122,6 +122,8 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     binder: ClientSecretBinder = new ClientSecretBinder(),
     acceptedResourceUrls?: readonly string[],
     cimd?: CimdLookup,
+    /** The pepper being retired during a rotation; unwraps fall back to it. */
+    private previousKekPepper: Uint8Array | null = null,
   ) {
     this.acceptedResources = new Set(
       (acceptedResourceUrls && acceptedResourceUrls.length > 0 ? acceptedResourceUrls : [mcpResourceUrl]).map((url) =>
@@ -252,7 +254,9 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     // token that could not decrypt.
     let dek: Uint8Array;
     try {
-      dek = await unwrapDek(rec.dekWrap, await deriveKek(KEK_LABEL_AUTH_CODE, authorizationCode, this.kekPepper));
+      ({ dek } = await unwrapDekRotating(
+        rec.dekWrap, KEK_LABEL_AUTH_CODE, authorizationCode, this.kekPepper, this.previousKekPepper,
+      ));
     } catch (err) {
       if (err instanceof ConnectorCryptoError) {
         throw new InvalidGrantError('Invalid or expired authorization code');
@@ -285,7 +289,9 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     // invalid_grant sends the client through a full re-authorization.
     let dek: Uint8Array;
     try {
-      dek = await unwrapDek(rec.dekWrap, await deriveKek(KEK_LABEL_TOKEN, refreshToken, this.kekPepper));
+      ({ dek } = await unwrapDekRotating(
+        rec.dekWrap, KEK_LABEL_TOKEN, refreshToken, this.kekPepper, this.previousKekPepper,
+      ));
     } catch (err) {
       if (err instanceof ConnectorCryptoError) {
         throw new InvalidGrantError('Invalid or expired refresh token');

@@ -162,6 +162,26 @@ export async function unwrapDek(wrap: string, kek: Uint8Array): Promise<Uint8Arr
   }
 }
 
+/**
+ * Unwrap under the current pepper, then, during a pepper rotation, the previous
+ * one. `usedPrevious` tells the caller the wrap is still on the old pepper, so
+ * long-lived state can be re-wrapped under the current one.
+ */
+export async function unwrapDekRotating(
+  wrap: string,
+  label: string,
+  secret: string,
+  pepper: Uint8Array,
+  previousPepper: Uint8Array | null,
+): Promise<{ dek: Uint8Array; usedPrevious: boolean }> {
+  try {
+    return { dek: await unwrapDek(wrap, await deriveKek(label, secret, pepper)), usedPrevious: false };
+  } catch (err) {
+    if (!previousPepper || !(err instanceof ConnectorCryptoError)) throw err;
+    return { dek: await unwrapDek(wrap, await deriveKek(label, secret, previousPepper)), usedPrevious: true };
+  }
+}
+
 /** The plaintext row envelope: what the AEAD protects for each shared entry. */
 export interface RowPlain {
   type: string;

@@ -234,6 +234,14 @@ export class NeonConnectorStorage implements ConnectorStorage {
     return rows[0]?.dek_wrap ?? null;
   }
 
+  async replaceAccountDekWrap(accountHash: string, expectedWrap: string, newWrap: string): Promise<void> {
+    await this.ensureSchema();
+    await this.sql`
+      UPDATE connector_accounts SET dek_wrap = ${newWrap}
+      WHERE account_hash = ${accountHash} AND dek_wrap = ${expectedWrap}
+    `;
+  }
+
   async putPairingCode(codeHash: string, accountHash: string, expiresAt: number, dekWrap: string): Promise<void> {
     await this.ensureSchema();
     await this.sql`

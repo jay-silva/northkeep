@@ -18,7 +18,7 @@ import {
   deriveKek,
   encryptRow,
   generateDek,
-  unwrapDek,
+  unwrapDekRotating,
   wrapDek,
 } from './crypto.js';
 import { generatePairingCode, sha256hex } from './hash.js';
@@ -97,6 +97,7 @@ export async function seedReviewerAccount(
   connectorToken: string,
   pepper: Uint8Array = DEV_KEK_PEPPER,
   now: number = Date.now(),
+  previousPepper: Uint8Array | null = null,
 ): Promise<ReviewerSeedResult> {
   if (connectorToken.trim().length < MIN_TOKEN_LENGTH) {
     throw new Error('The reviewer connector token must be at least 16 characters. Nothing was written.');
@@ -110,7 +111,9 @@ export async function seedReviewerAccount(
   const existingWrap = await storage.getAccountDekWrap(accountHash);
   let dek: Uint8Array;
   if (existingWrap) {
-    dek = await unwrapDek(existingWrap, tokenKek);
+    const opened = await unwrapDekRotating(existingWrap, KEK_LABEL_CONNECTOR_TOKEN, connectorToken, pepper, previousPepper);
+    dek = opened.dek;
+    if (opened.usedPrevious) await storage.replaceAccountDekWrap(accountHash, existingWrap, await wrapDek(dek, tokenKek));
   } else {
     dek = await generateDek();
   }

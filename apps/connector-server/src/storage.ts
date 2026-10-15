@@ -184,6 +184,8 @@ export interface ConnectorStorage {
   ensureAccountDekWrap(accountHash: string, candidateWrap: string): Promise<string>;
   /** The account's DEK wrapped under the connector-token KEK, or null if none yet. */
   getAccountDekWrap(accountHash: string): Promise<string | null>;
+  /** Swap in a re-locked wrap only if the stored one is still `expectedWrap` (pepper rotation). */
+  replaceAccountDekWrap(accountHash: string, expectedWrap: string, newWrap: string): Promise<void>;
 
   // --- pairing codes (single-use, short TTL) ---
   putPairingCode(codeHash: string, accountHash: string, expiresAt: number, dekWrap: string): Promise<void>;
@@ -432,6 +434,10 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
 
   async getAccountDekWrap(accountHash: string): Promise<string | null> {
     return this.accounts.get(accountHash) ?? null;
+  }
+
+  async replaceAccountDekWrap(accountHash: string, expectedWrap: string, newWrap: string): Promise<void> {
+    if (this.accounts.get(accountHash) === expectedWrap) this.accounts.set(accountHash, newWrap);
   }
 
   async setEntitledUntil(accountHash: string, untilMs: number): Promise<void> {
