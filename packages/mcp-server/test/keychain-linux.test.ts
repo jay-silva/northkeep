@@ -16,6 +16,8 @@ import {
 
 const KEY = 'ab'.repeat(32);
 const OTHER = 'cd'.repeat(32);
+// On macOS every store below resolves to the real Keychain, whatever the backend env says.
+const onLinux = process.platform === 'linux';
 
 let home: string;
 let prevHome: string | undefined;
@@ -57,7 +59,7 @@ function mode(filePath: string): number {
   return fs.statSync(filePath).mode & 0o777;
 }
 
-describe('linux file fallback', () => {
+describe.runIf(onLinux)('linux file fallback', () => {
   beforeEach(() => {
     process.env.NORTHKEEP_SECRET_BACKEND = 'file';
   });
@@ -144,7 +146,7 @@ describe('linux file fallback', () => {
   });
 });
 
-describe('secret service', () => {
+describe.runIf(onLinux)('secret service', () => {
   let bin: string;
   let logPath: string;
   let storePath: string;
@@ -219,11 +221,10 @@ exit 1
   });
 });
 
-describe('store selection', () => {
+describe.runIf(onLinux)('store selection', () => {
   it('writes no file on Linux without a keyring unless the person opts in', () => {
     process.env.PATH = '/usr/bin:/bin';
     resetMasterKeyStoreProbe();
-    if (process.platform !== 'linux') return;
     const before = describeMasterKeyStore();
     expect(before.backend).toBe('none');
     expect(before.file_opt_in).toBe(true);
@@ -243,7 +244,6 @@ describe('store selection', () => {
   });
 
   it('ignores allowFile when a keyring is running', () => {
-    if (process.platform !== 'linux') return;
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-ring-'));
     const store = path.join(bin, 'item');
     fs.writeFileSync(
@@ -278,7 +278,7 @@ case "$1" in --version) exit 0;; store) cat > "${store}";; lookup) [ -f "${store
   });
 });
 
-describe('secret-tool probe does not hang', () => {
+describe.runIf(onLinux)('secret-tool probe does not hang', () => {
   it('treats a missing daemon as unavailable within the probe timeout', () => {
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-probe-'));
     fs.writeFileSync(
@@ -298,9 +298,8 @@ describe('secret-tool probe does not hang', () => {
   });
 });
 
-describe('argv of a real spawn stays free of the key', () => {
+describe.runIf(onLinux)('argv of a real spawn stays free of the key', () => {
   it('records secret-tool arguments from the kernel command line', () => {
-    if (process.platform !== 'linux') return;
     const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-ps-'));
     const seen = path.join(bin, 'seen');
     fs.writeFileSync(
@@ -328,7 +327,7 @@ exit 0
   });
 });
 
-describe('lock while the keyring is down', () => {
+describe.runIf(onLinux)('lock while the keyring is down', () => {
   let bin: string;
   let store: string;
   let up: string;
@@ -357,7 +356,6 @@ case "$1" in --version) exit 0;; store) cat > "${store}";; lookup) [ -f "${store
   });
 
   it('never reports a clean lock while an earlier keyring copy may remain', () => {
-    if (process.platform !== 'linux') return;
     fs.writeFileSync(up, '');
     resetMasterKeyStoreProbe();
     keychainSetMasterKey(KEY);
@@ -375,7 +373,6 @@ case "$1" in --version) exit 0;; store) cat > "${store}";; lookup) [ -f "${store
   });
 
   it('still removes an opted-in key file when the keyring cannot be checked', () => {
-    if (process.platform !== 'linux') return;
     resetMasterKeyStoreProbe();
     keychainSetMasterKey(KEY, { allowFile: true });
     expect(keychainDeleteMasterKey()).toBe('keyring-unreachable');
@@ -408,7 +405,7 @@ describe('macOS ignores the Linux backend override', () => {
   });
 });
 
-describe('lock checks the keyring however the store was chosen', () => {
+describe.runIf(onLinux)('lock checks the keyring however the store was chosen', () => {
   let bin: string;
   let store: string;
   let up: string;
@@ -439,7 +436,6 @@ case "$1" in --version) exit 0;; store) cat > "${store}";; lookup) [ -f "${store
   });
 
   it('clears the keyring copy when NORTHKEEP_SECRET_BACKEND=file at lock time', () => {
-    if (process.platform !== 'linux') return;
     keychainSetMasterKey(KEY);
     process.env.NORTHKEEP_SECRET_BACKEND = 'file';
     expect(keychainDeleteMasterKey()).toBe('removed');
@@ -447,14 +443,12 @@ case "$1" in --version) exit 0;; store) cat > "${store}";; lookup) [ -f "${store
   });
 
   it('does not trust a cached keyring answer from before the lock', () => {
-    if (process.platform !== 'linux') return;
     keychainSetMasterKey(KEY);
     fs.rmSync(up);
     expect(keychainDeleteMasterKey()).toBe('keyring-unreachable');
   });
 
   it('runs clear even when lookup fails, and fails loudly if clear fails', () => {
-    if (process.platform !== 'linux') return;
     fs.writeFileSync(store, KEY);
     fs.writeFileSync(
       path.join(bin, 'secret-tool'),
@@ -472,7 +466,6 @@ case "$1" in --version) exit 0;; lookup) exit 1;; clear) rm -f "${store}";; esac
   });
 
   it('reports an unreachable keyring when secret-tool is missing but the keyring is on the bus', () => {
-    if (process.platform !== 'linux') return;
     fs.rmSync(path.join(bin, 'secret-tool'));
     fs.rmSync(up);
     fs.writeFileSync(path.join(bin, 'gdbus'), '#!/bin/sh\necho "(true,)"\n', { mode: 0o755 });
