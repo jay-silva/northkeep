@@ -184,6 +184,14 @@ export interface ConnectorStorage {
   ensureAccountDekWrap(accountHash: string, candidateWrap: string): Promise<string>;
   /** The account's DEK wrapped under the connector-token KEK, or null if none yet. */
   getAccountDekWrap(accountHash: string): Promise<string | null>;
+  /**
+   * Drop everything locked under an account key that no longer opens: its rows,
+   * pairing codes, OAuth codes and tokens, and the wrap itself. Tombstones,
+   * queued forgets and write counters stay. Only acts while the stored wrap is
+   * still `deadWrap`, so a concurrent rebuild is never wiped. Returns the rows
+   * removed, or null when the wrap had already changed.
+   */
+  resetAccountKey(accountHash: string, deadWrap: string): Promise<number | null>;
   /** Swap in a re-locked wrap only if the stored one is still `expectedWrap` (pepper rotation). */
   replaceAccountDekWrap(accountHash: string, expectedWrap: string, newWrap: string): Promise<void>;
 
@@ -434,6 +442,17 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
 
   async getAccountDekWrap(accountHash: string): Promise<string | null> {
     return this.accounts.get(accountHash) ?? null;
+  }
+
+  async resetAccountKey(accountHash: string, deadWrap: string): Promise<number | null> {
+    if (this.accounts.get(accountHash) !== deadWrap) return null;
+    const removed = this.entries.get(accountHash)?.size ?? 0;
+    this.entries.delete(accountHash);
+    for (const [k, row] of this.pairings) if (row.accountHash === accountHash) this.pairings.delete(k);
+    for (const [k, row] of this.codes) if (row.accountHash === accountHash) this.codes.delete(k);
+    for (const [k, row] of this.tokens) if (row.accountHash === accountHash) this.tokens.delete(k);
+    if (this.accounts.has(accountHash)) this.accounts.set(accountHash, null);
+    return removed;
   }
 
   async replaceAccountDekWrap(accountHash: string, expectedWrap: string, newWrap: string): Promise<void> {

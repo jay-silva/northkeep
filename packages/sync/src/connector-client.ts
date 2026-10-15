@@ -115,16 +115,29 @@ function normalizeServer(server: string): string {
 
 /**
  * ADR 0020: HTTP 409 `reencrypt_required` means the server holds rows or key
- * wraps it cannot open for this account (e.g. state restored across a key
- * wipe). The vault is the source of truth: a re-push wipes and re-creates the
- * shared scopes' rows under a fresh key chain. Status-only — never echoes the
- * response body.
+ * wraps it cannot open for this account (e.g. after a retired KEK pepper). A
+ * plain push cannot fix that; only an explicit rebuild push (`rebuild: true`)
+ * makes the server drop the dead key and re-create the rows from the vault,
+ * and only while the operator allows it (ADR 0074). Reads the one `rebuild`
+ * field and never echoes the response body.
  */
-function reencryptError(): Error {
-  return new Error(
-    'The connector server cannot decrypt this account\'s shared data (409). ' +
-      'Re-push your shared scopes (e.g. `northkeep share push`) to re-encrypt them from the vault, then retry.',
-  );
+export class ConnectorReencryptError extends Error {
+  constructor(readonly rebuildAvailable: boolean) {
+    super(
+      rebuildAvailable
+        ? "Cloud Connect can't unlock this account's shared data, so a normal push won't fix it. " +
+            'To rebuild it from this device, run: northkeep share push --rebuild. ' +
+            "That replaces the cloud copy with this device's shared scopes; edits your AI apps made in the cloud that have not reached this device are lost."
+        : "Cloud Connect can't unlock this account's shared data right now. Nothing was changed. " +
+            'If this lasts more than a day, email support@northkeep.ai.',
+    );
+    this.name = 'ConnectorReencryptError';
+  }
+}
+
+async function reencryptError(res: Response): Promise<ConnectorReencryptError> {
+  const body = (await res.json().catch(() => ({}))) as { rebuild?: unknown };
+  return new ConnectorReencryptError(body.rebuild === 'available');
 }
 
 /**
@@ -211,6 +224,8 @@ export async function pushSharedScopes(opts: {
   vaultStamp?: VaultStamp;
   /** ADR 0063 D5: replace the connector's recorded vault order (`share push --reset-order`, manual only). */
   reset?: boolean;
+  /** ADR 0074: let the connector drop an account key that no longer opens and rebuild from this push (manual only). */
+  rebuild?: boolean;
 }): Promise<PushSharedResult> {
   const server = normalizeServer(opts.server);
   const scopes = [...new Set(opts.scopes)];
@@ -240,6 +255,7 @@ export async function pushSharedScopes(opts: {
       shared_at,
       ...(opts.vaultStamp ? { vault: opts.vaultStamp } : {}),
       ...(opts.reset === true ? { reset: true } : {}),
+      ...(opts.rebuild === true ? { rebuild: true } : {}),
     }),
     redirect: 'error',
     signal: timeoutSignal(TIMEOUT_MS),
@@ -254,7 +270,7 @@ export async function pushSharedScopes(opts: {
     throw new Error(capRejection(typeof body.error === 'string' ? body.error : ''));
   }
   if (res.status === 401) throw new Error('The connector server rejected the connector token (401).');
-  if (res.status === 409) throw reencryptError();
+  if (res.status === 409) throw await reencryptError(res);
   if (res.status === 412) {
     const body = (await res.json().catch(() => ({}))) as { scopes?: unknown };
     const named = Array.isArray(body.scopes)
@@ -460,7 +476,7 @@ export async function fetchPending(opts: { server: string; deviceSecret: Buffer;
   if (res.status === 402) {
     throw new Error(`The connector server requires an active subscription (402) to down-sync. ${LAPSED_UNSHARE_HINT}`);
   }
-  if (res.status === 409) throw reencryptError();
+  if (res.status === 409) throw await reencryptError(res);
   if (!res.ok) throw httpError(res.status, 'pending');
   const body = (await res.json()) as { entries?: unknown; forgets?: unknown };
   const entries: PendingRow[] = [];
@@ -943,7 +959,7 @@ export async function startPairing(opts: {
     redirect: 'error',
     signal: timeoutSignal(TIMEOUT_MS),
   });
-  if (res.status === 409) throw reencryptError();
+  if (res.status === 409) throw await reencryptError(res);
   if (!res.ok) throw httpError(res.status, 'pairing');
   const body = (await res.json()) as { pairing_code?: string };
   if (!body.pairing_code) throw new Error('Connector server did not return a pairing code.');
