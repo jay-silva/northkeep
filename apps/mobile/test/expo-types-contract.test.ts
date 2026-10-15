@@ -12,11 +12,18 @@ const appDir = join(__dirname, '..');
 const shimPath = join(appDir, '../../packages/platform-mobile/src/rn-modules.d.ts');
 const MODULES = ['expo-file-system', 'expo-sqlite', 'expo-secure-store'];
 
+interface ShimType {
+  /** The name with `unknown` for each type parameter, e.g. `SQLiteExecuteSyncResult<unknown>`. */
+  ref: string;
+  name: string;
+  members: string[];
+}
+
 interface Shimmed {
   module: string;
   body: string;
-  types: string[];
-  functions: string[];
+  types: ShimType[];
+  /** Exported functions and constants. */
   values: string[];
 }
 
@@ -27,13 +34,15 @@ function readShim(text: string): Shimmed[] {
   for (const stmt of file.statements) {
     if (!ts.isModuleDeclaration(stmt) || !ts.isStringLiteral(stmt.name) || !MODULES.includes(stmt.name.text)) continue;
     const block = stmt.body as ts.ModuleBlock;
-    const entry: Shimmed = { module: stmt.name.text, body: text.slice(block.getStart() + 1, block.getEnd() - 1), types: [], functions: [], values: [] };
+    const entry: Shimmed = { module: stmt.name.text, body: text.slice(block.getStart() + 1, block.getEnd() - 1), types: [], values: [] };
     for (const s of block.statements) {
       if ((ts.isClassDeclaration(s) || ts.isInterfaceDeclaration(s)) && s.name) {
         const args = s.typeParameters ? `<${s.typeParameters.map(() => 'unknown').join(', ')}>` : '';
-        entry.types.push(s.name.text + args);
-      }
-      else if (ts.isFunctionDeclaration(s) && s.name) entry.functions.push(s.name.text);
+        const members = (s.members as ts.NodeArray<ts.ClassElement | ts.TypeElement>)
+          .map((m) => (m.name && ts.isIdentifier(m.name) ? m.name.text : null))
+          .filter((m): m is string => m !== null);
+        entry.types.push({ ref: s.name.text + args, name: s.name.text, members: [...new Set(members)] });
+      } else if (ts.isFunctionDeclaration(s) && s.name) entry.values.push(s.name.text);
       else if (ts.isVariableStatement(s)) {
         for (const d of s.declarationList.declarations) if (ts.isIdentifier(d.name)) entry.values.push(d.name.text);
       }
@@ -44,31 +53,33 @@ function readShim(text: string): Shimmed[] {
 }
 
 /**
- * Every shim member must exist on the real export, and what the real one
- * returns must fit what the shim promises: a real Promise never fits a shim
- * `void`. Parameters are not compared.
+ * One check per shim member, so a failure names it. Each member must exist
+ * on the real export, and what the real one returns must fit what the shim
+ * promises: a real Promise never fits a shim `void`. Parameters are not compared.
  */
 function contractSource(shims: Shimmed[]): string {
   const lines = [
     'type Fits<R, S> = [R] extends [S] ? true : false;',
-    'type Drift<S, R> = { [K in keyof S]-?: K extends keyof R',
-    '  ? S[K] extends (...a: never[]) => infer SR',
-    '    ? R[K] extends (...a: never[]) => infer RR ? (Fits<RR, SR> extends true ? never : K) : K',
-    '    : Fits<R[K], S[K]> extends true ? never : K',
-    '  : K }[keyof S];',
-    'type Clean<D> = [D] extends [never] ? true : { drifted: D };',
+    'type Member<S, R, K extends PropertyKey> = K extends keyof S',
+    '  ? K extends keyof R',
+    '    ? S[K] extends (...a: never[]) => infer SR',
+    '      ? R[K] extends (...a: never[]) => infer RR ? Fits<RR, SR> : false',
+    '      : Fits<R[K], S[K]>',
+    '    : false',
+    '  : false;',
+    'type Check<S, R, K extends PropertyKey, Name extends string> = Member<S, R, K> extends true ? true : { drifted: Name };',
   ];
+  let n = 0;
   shims.forEach((s, i) => {
     lines.unshift(`import type * as Real${i} from '${s.module}';`);
     lines.push(`declare namespace Shim${i} {${s.body}}`);
     for (const t of s.types) {
-      lines.push(`export const ${t.replace(/<.*/, '')}_${i}: Clean<Drift<Shim${i}.${t}, Real${i}.${t}>> = true;`);
-    }
-    for (const f of s.functions) {
-      lines.push(`export const ${f}_${i}: Fits<ReturnType<typeof Real${i}.${f}>, ReturnType<typeof Shim${i}.${f}>> = true;`);
+      for (const m of t.members) {
+        lines.push(`export const c${n++}: Check<Shim${i}.${t.ref}, Real${i}.${t.ref}, '${m}', '${s.module} ${t.name}.${m}'> = true;`);
+      }
     }
     for (const v of s.values) {
-      lines.push(`export const ${v}_${i}: Clean<Drift<{ ${v}: typeof Shim${i}.${v} }, { ${v}: typeof Real${i}.${v} }>> = true;`);
+      lines.push(`export const c${n++}: Check<{ v: typeof Shim${i}.${v} }, { v: typeof Real${i}.${v} }, 'v', '${s.module} ${v}'> = true;`);
     }
   });
   return lines.join('\n');
@@ -103,9 +114,13 @@ describe('hand-written Expo types match the installed Expo packages', () => {
     expect(compile(contractSource(shims))).toEqual([]);
   }, 60_000);
 
-  it('catches a method the shim calls synchronous when Expo made it async', () => {
-    const broken = shims.map((s) => ({ ...s, body: s.body.replace(/move\(destination: File\): Promise<void>;/, 'move(destination: File): void;') }));
+  it('names each member the shim calls synchronous when Expo made it async', () => {
+    // The pre-SDK-57 shim: copy and move declared void.
+    const broken = shims.map((s) => ({ ...s, body: s.body.replace(/(copy|move)\(destination: File\): Promise<void>;/g, '$1(destination: File): void;') }));
     expect(broken.find((s) => s.module === 'expo-file-system')!.body).toContain('move(destination: File): void;');
-    expect(compile(contractSource(broken)).join('\n')).toMatch(/drifted: [^}]*"move"/);
+    const errors = compile(contractSource(broken));
+    expect(errors).toHaveLength(2);
+    expect(errors.join('\n')).toContain('expo-file-system File.copy');
+    expect(errors.join('\n')).toContain('expo-file-system File.move');
   }, 60_000);
 });

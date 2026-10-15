@@ -42,6 +42,9 @@ function phoneImports(): string[] {
   return [...found].sort();
 }
 
+const mcpServerPath = createRequire(join(appDir, '../../packages/converse/package.json')).resolve('@northkeep/mcp-server');
+let mcpShimLoads = 0;
+
 const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
 let platform: NodeJS.Platform | undefined;
 
@@ -55,7 +58,11 @@ function loadLikeThePhone(): void {
     vi.doMock(name, factory);
     vi.doMock(`node:${name}`, factory);
   }
-  vi.doMock('@northkeep/mcp-server', () => requireShim('./shims/mcp-server.js') as object);
+  // Metro swaps the package wherever it is imported; here it must be mocked by the path converse resolves.
+  vi.doMock(mcpServerPath, () => {
+    mcpShimLoads++;
+    return requireShim('./shims/mcp-server.js') as object;
+  });
 }
 
 afterEach(() => {
@@ -64,7 +71,7 @@ afterEach(() => {
     vi.doUnmock(name);
     vi.doUnmock(`node:${name}`);
   }
-  vi.doUnmock('@northkeep/mcp-server');
+  vi.doUnmock(mcpServerPath);
   vi.resetModules();
 });
 
@@ -75,6 +82,7 @@ describe('NorthKeep packages load on the phone', () => {
 
   it('imports every module the phone uses with no platform and only the phone shims', async () => {
     loadLikeThePhone();
+    mcpShimLoads = 0;
     const os = await import('node:os');
     expect(() => os.homedir()).toThrow(/not available on mobile/);
     const failures: string[] = [];
@@ -86,6 +94,7 @@ describe('NorthKeep packages load on the phone', () => {
       }
     }
     expect(failures).toEqual([]);
+    expect(mcpShimLoads).toBeGreaterThan(0);
   });
 
   it('names the device when a message is built, not when the module loads', async () => {
