@@ -11,6 +11,7 @@ import type { AddressInfo } from 'node:net';
 import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
 import { CONNECTOR_TOOL_ANNOTATIONS } from '../src/mcp.js';
+import { clearCimdCache, resolveCimdClient } from '../src/cimd.js';
 import { CANONICAL_CONNECTOR_ORIGIN, LEGACY_CONNECTOR_ORIGIN } from '../src/public-origin.js';
 import { startPairing } from '@northkeep/sync';
 import { connectAiApp, mcpToolCall } from './helpers.js';
@@ -237,6 +238,62 @@ describe('directory readiness', () => {
       expect(blocked.status).toBe(400);
       const body = await blocked.json() as { error?: string };
       expect(body.error).toBe('invalid_client');
+    } finally {
+      if (previous === undefined) delete process.env.PUBLIC_URL;
+      else process.env.PUBLIC_URL = previous;
+      await new Promise<void>((resolve) => srv.close(() => resolve()));
+    }
+  });
+});
+
+describe('Claude signs in with its published client id', () => {
+  const CLAUDE_ID = 'https://claude.ai/oauth/mcp-oauth-client-metadata';
+  const CLAUDE_REDIRECT = 'https://claude.ai/api/mcp/auth_callback';
+  // Copied from CLAUDE_ID on 2026-10-15. Only the network fetch is stubbed; parsing is the real code.
+  const claudeDoc = {
+    client_id: CLAUDE_ID,
+    client_name: 'Claude',
+    client_uri: 'https://claude.ai',
+    redirect_uris: [CLAUDE_REDIRECT],
+    grant_types: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:jwt-bearer'],
+    response_types: ['code'],
+    token_endpoint_auth_method: 'none',
+  };
+
+  it('completes consent, gets a token, calls a tool, and is refused the jwt-bearer grant', async () => {
+    clearCimdCache();
+    const port = await freePort();
+    const previous = process.env.PUBLIC_URL;
+    process.env.PUBLIC_URL = `http://127.0.0.1:${port}`;
+    const base = process.env.PUBLIC_URL;
+    const app = createConnectorServer(new InMemoryConnectorStorage(), {
+      cimd: (clientId) => resolveCimdClient(clientId, {
+        fetch: async (input) => {
+          expect(String(input)).toBe(CLAUDE_ID);
+          return new Response(JSON.stringify(claudeDoc), { status: 200 });
+        },
+        lookupHost: async () => ['160.79.104.10'],
+        now: Date.now,
+      }),
+    });
+    const srv = await listen(app, port);
+    try {
+      const token = await connectAiApp(base, crypto.randomBytes(32), `${base}/mcp`, { clientId: CLAUDE_ID, redirectUri: CLAUDE_REDIRECT });
+      expect(token).not.toBe('');
+      const ok = await mcpToolCall(base, token, 'memory_list', {});
+      expect(ok.isError).toBe(false);
+
+      const jwt = await fetch(`${base}/token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          grant_type: 'urn:ietf:params:oauth:grant-type:jwt-bearer',
+          assertion: 'x.y.z',
+          client_id: CLAUDE_ID,
+        }),
+      });
+      expect(jwt.status).toBe(400);
+      expect(((await jwt.json()) as { error?: string }).error).toBe('unsupported_grant_type');
     } finally {
       if (previous === undefined) delete process.env.PUBLIC_URL;
       else process.env.PUBLIC_URL = previous;

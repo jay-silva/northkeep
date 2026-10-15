@@ -84,6 +84,34 @@ describe('client metadata URL checks', () => {
     expect(calls).toBe(1);
   });
 
+  it('accepts Claude\'s published document and keeps only the grants this server supports', async () => {
+    const claudeId = 'https://claude.ai/oauth/mcp-oauth-client-metadata';
+    // Copied from that URL on 2026-10-15.
+    const claudeDoc = {
+      client_id: claudeId,
+      client_name: 'Claude',
+      client_uri: 'https://claude.ai',
+      redirect_uris: ['https://claude.ai/api/mcp/auth_callback'],
+      grant_types: ['authorization_code', 'refresh_token', 'urn:ietf:params:oauth:grant-type:jwt-bearer'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'none',
+    };
+    const client = await fetchClientMetadataDocument(claudeId, deps({ fetch: async () => jsonResponse(claudeDoc) }));
+    expect(client.client_name).toBe('Claude');
+    expect(client.redirect_uris).toEqual(['https://claude.ai/api/mcp/auth_callback']);
+    expect(client.grant_types).toEqual(['authorization_code', 'refresh_token']);
+  });
+
+  it('refuses a document that cannot use the authorization code grant', async () => {
+    await expect(fetchClientMetadataDocument(CLIENT, deps({
+      fetch: async () => jsonResponse({ ...validDoc, grant_types: ['urn:ietf:params:oauth:grant-type:jwt-bearer'] }),
+    }))).rejects.toThrow(/grant_types/);
+    clearCimdCache();
+    await expect(fetchClientMetadataDocument(CLIENT, deps({
+      fetch: async () => jsonResponse({ ...validDoc, grant_types: ['authorization_code', 7] }),
+    }))).rejects.toThrow(/grant_types/);
+  });
+
   it('refuses a private DNS answer, a mismatch, a secret, a redirect status, and a huge body', async () => {
     await expect(fetchClientMetadataDocument(CLIENT, deps({
       lookupHost: async () => ['127.0.0.1'],
