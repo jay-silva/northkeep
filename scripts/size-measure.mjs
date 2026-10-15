@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Measures how big a .nkv vault gets, with and without the embeddings cache,
- * against the 4 MiB sync cap (MAX_BLOB_BYTES). Throwaway vaults in a temp
+ * against the 4 MB (4,194,304-byte) sync cap (MAX_BLOB_BYTES). Throwaway vaults in a temp
  * directory only; no network, no real vault, no ~/.northkeep.
  *
  *   pnpm build && node scripts/size-measure.mjs            # full run
@@ -60,7 +60,7 @@ function fresh(name) {
   return Vault.create({ path: p, passphrase: PASS, deviceSecret: secret, kdf: KDF_INTERACTIVE });
 }
 const size = (p) => fs.statSync(p).size;
-const mib = (n) => `${(n / MIB).toFixed(2)} MiB`;
+const mib = (n) => `${(n / MIB).toFixed(2)} MB`;
 
 function fill(vault, n) {
   for (let i = 0; i < n; i += 1) {
@@ -115,7 +115,7 @@ const slopeYes = (b.withEmb - a.withEmb) / (b.n - a.n);
 const capNo = Math.floor(a.n + (MAX_BLOB_BYTES - a.without) / slopeNo);
 const capYes = Math.floor(a.n + (MAX_BLOB_BYTES - a.withEmb) / slopeYes);
 console.log(`\nBytes per memory: ${slopeNo.toFixed(0)} without, ${slopeYes.toFixed(0)} with embeddings`);
-console.log(`Estimated count at the 4 MiB cap: ${capNo} without embeddings, ${capYes} with`);
+console.log(`Estimated count at the 4 MB cap: ${capNo} without embeddings, ${capYes} with`);
 if (!quick) {
   // Bisect the first count whose vault, embeddings included, exceeds the cap.
   let lo = rows[0].n; // 500 memories is well under the cap

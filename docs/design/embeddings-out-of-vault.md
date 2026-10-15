@@ -5,12 +5,12 @@
 
 | Memories | Without embeddings | With one model |
 |---|---|---|
-| 500 | 0.37 MiB | 2.36 MiB |
-| 1,000 | 0.70 MiB | 4.68 MiB |
-| 2,000 | 1.37 MiB | 9.34 MiB |
-| 4,000 | 2.71 MiB | 18.63 MiB |
+| 500 | 0.37 MB | 2.36 MB |
+| 1,000 | 0.70 MB | 4.68 MB |
+| 2,000 | 1.37 MB | 9.34 MB |
+| 4,000 | 2.71 MB | 18.63 MB |
 
-First count over 4 MiB: 853 with vectors, about 5,900 without. A project with 200 logged updates reaches 0.25 MiB. Logs, `sync.json`, `.bak` and the device secret live outside the vault file.
+First count over 4 MB: 853 with vectors, about 5,900 without. A project with 200 logged updates reaches 0.25 MB. Logs, `sync.json`, `.bak` and the device secret live outside the vault file.
 
 ## Who reads the vault bytes
 - Sync on desktop and phone hashes and caps the whole file. Every save already changes the bytes (fresh nonce), so dropping the table inside `save()` adds no new divergence case; stripping at push time would.

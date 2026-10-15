@@ -1005,13 +1005,13 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   version" under Saved versions on the project page, which asks first and
   restores nothing if the project changed after the list was loaded.
 - **The whole-vault sync cap is 4 MB and cannot be raised on the hosted
-  server as deployed.** The cap is 4 MiB (4,194,304 bytes). Vercel refuses
+  server as deployed.** The cap is 4 MB (4,194,304 bytes); NorthKeep reports sizes in these binary units, so 1 MB is 1,048,576 bytes. Vercel refuses
   request bodies over 4.5 MB before the sync server runs (probed
   2026-09-21). A larger vault needs a different upload path, which is its
   own decision. Measured (ADR 0067): about 700 bytes per typical memory, so
   roughly 5,900 memories, or 450 to 500 entries of 8,000 characters.
   Embeddings are no longer stored in the vault file. `northkeep sync status`
-  and `sync push` print the size against the cap and warn from 75%
+  and `sync push` print the size against the cap and warn at or over 75%
   (3,145,728 bytes); the desktop's local API reports it in
   `/api/sync/status`, but the Mac app does not show it yet. Compact project history or forget memories
   to stay under it. Forgetting short memories leaves some slack inside the

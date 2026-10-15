@@ -31,14 +31,17 @@ export function vaultSizeReport(bytes: number): VaultSizeReport {
   };
 }
 
+/** One unit everywhere: binary KB and MB (1 MB = 1,048,576 bytes), so the cap reads "4 MB". */
 function formatBytes(bytes: number): string {
-  return bytes < 1024 * 1024 ? `${Math.ceil(bytes / 1024)} KB` : `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024) return `${Math.ceil(bytes / 1024)} KB`;
+  const mb = bytes / 1024 / 1024;
+  return Number.isInteger(mb) ? `${mb} MB` : `${mb.toFixed(1)} MB`;
 }
 
 /** Plain lines for a terminal or an error message; the caller adds its own remedy. */
 export function describeVaultSize(report: VaultSizeReport): string[] {
   const lines = [`Vault size: ${formatBytes(report.bytes)} of the ${formatBytes(report.cap_bytes)} sync limit (${report.percent}%).`];
   if (report.over_cap) lines.push('Over the sync limit: pushes are refused until the vault is smaller.');
-  else if (report.warning) lines.push('Warning: the vault is over 75% of the sync limit.');
+  else if (report.warning) lines.push('Warning: the vault is at or over 75% of the sync limit.');
   return lines;
 }
