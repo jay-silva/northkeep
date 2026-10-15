@@ -40,6 +40,25 @@ export function firstProjectTextError(
   return null;
 }
 
+/** Mirror of core's PROJECT_STATUS_AGENT_MAX_CHARS: Current Status is the project page's summary. */
+export const PROJECT_STATUS_AGENT_MAX_CHARS = 1000;
+
+/** Mirror of the local STATUS_TEXT_RULES in packages/mcp-server/src/server.ts. */
+export const STATUS_TEXT_RULES =
+  `At most ${PROJECT_STATUS_AGENT_MAX_CHARS} characters. Start with one short plain sentence saying where the project ` +
+  'stands, with no commit hashes or ids; the user sees that line first.';
+
+/** Mirror of core's projectStatusTooLongMessage, word for word. */
+export function projectStatusTooLongMessage(status: string | undefined): string | null {
+  if (status === undefined || status.length <= PROJECT_STATUS_AGENT_MAX_CHARS) return null;
+  return (
+    `Nothing was saved: status is ${status.length} characters, and the limit is ${PROJECT_STATUS_AGENT_MAX_CHARS}. ` +
+    'The user reads it as the project summary. Open with one short plain sentence saying where the project ' +
+    'stands, with no commit hashes or ids, keep the rest brief, and move detail into the log entry, ' +
+    'decisions, or a memory. Then send the update again.'
+  );
+}
+
 /**
  * The same rule in the words hosts read in the tool schema. The hosted tools
  * refuse line breaks at either end and CRLF rather than removing them.

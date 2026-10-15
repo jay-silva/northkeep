@@ -7,6 +7,7 @@ import {
   parseProjectSlug,
   passedMilestones,
   projectScope,
+  sharedEntryCapBytes,
   type MemoryType,
   type Vault,
 } from '@northkeep/core';
@@ -199,9 +200,6 @@ export function capRejection(serverError: string): string {
   return `${lead}over the sharing caps (too many shared memories, or a memory is too large).`;
 }
 
-// Mirrors the connector's per-entry caps (apps/connector-server/src/create-server.ts).
-export const SHARED_ENTRY_CAP_BYTES = 8 * 1024;
-export const SHARED_PROJECT_ENTRY_CAP_BYTES = 64 * 1024;
 
 export interface OversizeSharedEntry {
   id: string;
@@ -239,7 +237,7 @@ export class ConnectorOversizeError extends Error {
 export function oversizeSharedEntries(rows: Array<{ id: string; scope: string; content: string; created_at: string }>): OversizeSharedEntry[] {
   const out: OversizeSharedEntry[] = [];
   for (const r of rows) {
-    const cap = parseProjectSlug(r.scope) !== null ? SHARED_PROJECT_ENTRY_CAP_BYTES : SHARED_ENTRY_CAP_BYTES;
+    const cap = sharedEntryCapBytes(r.scope);
     const bytes = Buffer.byteLength(r.content, 'utf8');
     if (bytes > cap) out.push({ id: r.id, scope: r.scope, bytes, cap, created_at: r.created_at });
   }

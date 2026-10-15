@@ -310,8 +310,8 @@ describe('ADR 0050 hosted project_create', () => {
 
     const over = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN,
       project: 'toobig',
-      what_why: 'why',
-      status: 'z'.repeat(PROJECT_DOC_MAX_CHARS),
+      what_why: 'z'.repeat(PROJECT_DOC_MAX_CHARS),
+      status: 'why',
     });
     expect(over.isError).toBe(true);
     expect(over.text).toBe(PROJECT_DOC_CAP_MESSAGE);
@@ -687,5 +687,17 @@ describe('ADR 0050 memory_remember and the tombstone', () => {
     const appended = auditSince(auditBefore).filter((r) => r.tool === 'memory_remember');
     expect(appended).toHaveLength(1);
     expect(appended[0]!.ok).toBe(false);
+  });
+});
+
+describe('hosted Current Status length matches the local rule', () => {
+  it('refuses a project_create status over 1,000 characters and stores nothing', async () => {
+    const token = await connectAiApp();
+    const res = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN, project: 'long-status', what_why: 'w', status: 'x'.repeat(1001) });
+    expect(res.isError).toBe(true);
+    expect(res.text).toContain('status is 1001 characters, and the limit is 1000');
+    expect(await rowsIn('project:long-status')).toHaveLength(0);
+    const ok = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN, project: 'edge-status', what_why: 'w', status: 'x'.repeat(1000) });
+    expect(ok.isError).toBeFalsy();
   });
 });

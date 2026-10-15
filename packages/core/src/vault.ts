@@ -61,6 +61,7 @@ import {
 } from './project-handoff.js';
 import { MilestoneError, assertAgentWriteKeepsPasses } from './project-milestones.js';
 import { emptyProjectDoc, formatLogArchive, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
+import { projectStatusTooLongMessage, sharedEntryTooLargeMessage } from './agent-write-limits.js';
 import { assertNotNewProjectWorkingMemory } from './project-working-memory.js';
 import { importPlanProblem, projectInUseMessage, type ImportFilePlan } from './project-import.js';
 import type { SqliteDb } from './sqlite-driver.js';
@@ -657,6 +658,11 @@ export class Vault {
       throw new Error(PROJECT_DOCUMENT_RETYPE_MESSAGE);
     }
     assertNotNewProjectWorkingMemory(old, after);
+    // An assistant can shorten its own text; an oversize shared row would block every later push.
+    if (actor === 'agent' && changes.content !== undefined && this.sharedScopes().includes(after.scope)) {
+      const tooLarge = sharedEntryTooLargeMessage(after.scope, after.content);
+      if (tooLarge !== null) throw new Error(tooLarge);
+    }
     return this.db.transaction(() => {
       if (isLiveProjectDocument({ ...after, superseded_at: null, forgotten_at: null })) {
         const problem = projectDocProblem(after.content);
@@ -1054,6 +1060,7 @@ export class Vault {
     if(request.writer!==undefined)validateProjectWriter(request.writer);
     const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','files','title','draft','milestones','milestone_passed'] as const;
     if(!updateKeys.some((key)=>request[key]!==undefined))throw new ProjectHandoffError('invalid_request','Project update has no changes.');
+    if(actor==='agent'&&typeof request.status==='string'){const long=projectStatusTooLongMessage(request.status);if(long!==null)throw new ProjectHandoffError('invalid_request',long);}
     let receipt!:ProjectCheckpointResult['receipt'];
     let auto:AutoCompaction|null=null;
     this.autoCompaction=null;

@@ -20,6 +20,8 @@ export const PROJECT_STANDING_INSTRUCTION =
   'When a working session on that project ends, call project_wrap with the vault_id from that resume, ' +
   'the revision from the latest resume or save result as expected_revision, a random version-4 UUID, in ' +
   'lowercase, that you generate as operation_id, the new Current Status, Next Actions, and the completed work. ' +
+  'Start Current Status with one short plain sentence on where the project stands, with no commit hashes or ids, ' +
+  'and keep it under 1,000 characters: it is the summary I read first. ' +
   'Call project_checkpoint the same way part-way through a long session. Use ' +
   'project_update for a correction outside a working session. Use project_list to see what is in flight. ' +
   'The live document keeps only its newest log entries; history is available on request, so pass ' +
@@ -35,7 +37,8 @@ export const PROJECT_BOOTSTRAP_INSTRUCTION =
   'To bootstrap a project from a codebase, read in this order and stop when the sections are full: ' +
   'README, the newest 30 commits of git log, any CHANGELOG, ADR or docs folder, then package or build ' +
   'files for the stack. Fill What & Why from the README\'s own words. Fill Current Status from the newest ' +
-  'commits and tags, and date every claim "as of <date>". Fill Next Actions from TODOs, open issues and ' +
+  'commits and tags in under 1,000 characters: one plain opening sentence on where it stands, no commit hashes, ' +
+  'and date every claim "as of <date>". Fill Next Actions from TODOs, open issues and ' +
   'unfinished branches. Fill Decisions from ADRs and commit messages that explain a choice. Anything you ' +
   'inferred rather than read, mark "unverified". Do not run the code, do not fetch URLs, do not read .env ' +
   'or secret files. Then call project_create with draft: true. Keep this first document under 6,000 ' +
