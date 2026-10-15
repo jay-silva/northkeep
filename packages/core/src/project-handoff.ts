@@ -35,7 +35,9 @@ import {
  * Every section a reader takes by name; a duplicate of any of them makes the
  * project unreadable, and none of them can be the project title.
  */
-export const PROJECT_OWNED_SECTIONS = [...PROJECT_SECTION_HEADINGS, 'Open Questions', 'Files', MILESTONES_HEADING] as const;
+/** Detail for a later AI session; the app folds it away so the summary stays readable. */
+export const AGENT_DETAIL_HEADING = 'For the Next Agent';
+export const PROJECT_OWNED_SECTIONS = [...PROJECT_SECTION_HEADINGS, 'Open Questions', 'Files', MILESTONES_HEADING, AGENT_DETAIL_HEADING] as const;
 
 /** Row source of a head written by `northkeep projects import` (vault.ts importProject). */
 export const PROJECT_IMPORT_SOURCE = 'northkeep:project-import';
@@ -91,6 +93,7 @@ export interface ProjectView {
   next_actions: string;
   decisions: string;
   open_questions: string;
+  agent_detail: string;
   files: ProjectFileReference[] | null;
   files_text: string;
   log: string;
@@ -110,7 +113,7 @@ export type ProjectOverview = ProjectSummary & { next_actions: string | null; mi
 
 export interface ProjectCheckpointRequest {
   vault_id:string; project:string; mode:ProjectHandoffMode; operation_id:string; expected_revision:string;
-  status:string; completed:string; next_actions:string; decision?:string; open_questions?:string; files?:ProjectFileReference[];
+  status:string; completed:string; next_actions:string; decision?:string; open_questions?:string; agent_detail?:string; files?:ProjectFileReference[];
   writer?:ProjectWriter;
   /** ADR 0065: report the current milestone passed; stamped (agent). */
   milestone_passed?:string;
@@ -119,7 +122,7 @@ export interface ProjectCheckpointRequest {
 export interface ProjectReplaceRequest { project:string; expected_revision:string|null; content:string; source:string; metadata?:Record<string,unknown>; writer?:ProjectWriter }
 export interface ProjectUpdateRequest {
   project:string; expected_revision:string|null; what_why?:string; status?:string; next_actions?:string;
-  decision?:string; log_entry?:string; open_questions?:string; files?:ProjectFileReference[];
+  decision?:string; log_entry?:string; open_questions?:string; agent_detail?:string; files?:ProjectFileReference[];
   /** Display title, kept as a level-1 heading at the top of the document. Empty string removes it. */
   title?:string;
   writer?:ProjectWriter;
@@ -280,7 +283,7 @@ function milestoneStep<T>(step:()=>T):T { try{return step();}catch(error){if(err
 /** `passed` is the (agent) line this update stamped, for the agent write rule. */
 export function applyProjectUpdate(content:string, request:ProjectUpdateRequest, now=new Date()):{content:string;archives:string[];passed?:PassedMilestone} {
   const doc=parseProjectDoc(content); for(const h of PROJECT_OWNED_SECTIONS) owned(doc,h);
-  const replacements:[string,string,string|undefined,boolean][]=[['What & Why','what_why',request.what_why,false],['Current Status','status',request.status,false],['Next Actions','next_actions',request.next_actions,true],['Open Questions','open_questions',request.open_questions,true]];
+  const replacements:[string,string,string|undefined,boolean][]=[['What & Why','what_why',request.what_why,false],['Current Status','status',request.status,false],['Next Actions','next_actions',request.next_actions,true],['Open Questions','open_questions',request.open_questions,true],[AGENT_DETAIL_HEADING,'agent_detail',request.agent_detail,true]];
   for(const [heading,field,value,empty] of replacements) if(value!==undefined){assertProjectText(value,field,empty);setSection(doc,heading,value);}
   if(request.title!==undefined)setProjectTitle(doc,request.title);
   const date=now.toISOString().slice(0,10);
@@ -364,7 +367,7 @@ export function getProjectView(vault:ProjectVaultReader, project:string, allowed
   const revisions=priors.slice(0,PROJECT_REVISION_SUMMARY_LIMIT).map((e)=>projectRevisionSummary(e));
   const stamps=archiveRows.map((e)=>e.created_at);
   const archive_summary={count:archiveRows.length,oldest:stamps.length?stamps[stamps.length-1]!:null,newest:stamps.length?stamps[0]!:null};
-  return {vault_id:vault.getVaultId(),project,scope,shared:vault.sharedScopes().includes(scope),revision:head.id,updated_at:head.created_at,content:head.content,title:getProjectTitle(doc),what_why:owned(doc,'What & Why'),status:owned(doc,'Current Status'),next_actions:owned(doc,'Next Actions'),decisions:owned(doc,'Decisions'),open_questions:owned(doc,'Open Questions'),files:parseProjectFiles(fileText),files_text:fileText,log:owned(doc,'Log'),history,archives,revisions,archive_summary,last_writer:readProjectProvenance(head),draft:isProjectDraft(doc),milestones:parseMilestones(head.content)};
+  return {vault_id:vault.getVaultId(),project,scope,shared:vault.sharedScopes().includes(scope),revision:head.id,updated_at:head.created_at,content:head.content,title:getProjectTitle(doc),what_why:owned(doc,'What & Why'),status:owned(doc,'Current Status'),next_actions:owned(doc,'Next Actions'),decisions:owned(doc,'Decisions'),open_questions:owned(doc,'Open Questions'),agent_detail:owned(doc,AGENT_DETAIL_HEADING),files:parseProjectFiles(fileText),files_text:fileText,log:owned(doc,'Log'),history,archives,revisions,archive_summary,last_writer:readProjectProvenance(head),draft:isProjectDraft(doc),milestones:parseMilestones(head.content)};
 }
 
 function projectRevisionSummary(entry:MemoryEntry):ProjectRevisionSummary{

@@ -176,10 +176,15 @@ const projectFilesSchema = z.array(z.object({
   'so include earlier files you want to keep; omit files to leave the list unchanged; an empty list clears it.',
 );
 
+// The person reads Current Status and Next Actions; detail for the next session goes here instead.
+const AGENT_DETAIL_RULES =
+  'Detail a later AI session needs and the user does not: branches, commit hashes, file paths, commands, ' +
+  'gotchas. The app folds this section away, so write it for an agent, as dense as you like.';
+
 // The project page shows Current Status as the summary, so its first line must read on its own.
 const STATUS_TEXT_RULES =
   `At most ${PROJECT_STATUS_AGENT_MAX_CHARS} characters. Start with one short plain sentence saying where the project ` +
-  'stands, with no commit hashes or ids; the user sees that line first.';
+  'stands, with no commit hashes or ids; the user sees that line first. Technical detail goes in agent_detail.';
 
 // What every multi-line section field accepts, stated where hosts read it.
 const SECTION_TEXT_RULES =
@@ -1121,6 +1126,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           .optional()
           .describe(`New Decisions entry (appended). Do not include a date; the tool prefixes YYYY-MM-DD. ${SECTION_TEXT_RULES}`),
         open_questions: z.string().max(16384).optional().describe(`Replacement Open Questions section; empty clears it. ${SECTION_TEXT_RULES}`),
+        agent_detail: z.string().max(16384).optional().describe(`Replacement For the Next Agent section; empty clears it. ${AGENT_DETAIL_RULES} ${SECTION_TEXT_RULES}`),
         draft: z
           .boolean()
           .optional()
@@ -1129,7 +1135,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         milestones: z.string().max(8192).optional().describe(`Replacement plan: the milestones still to do. ${MILESTONES_FORMAT}`),
       },
     },
-    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, draft, files, milestones }) =>
+    async ({ project, expected_revision, title, what_why, status, next_actions, log_entry, decision, open_questions, agent_detail, draft, files, milestones }) =>
       run(
         ctx,
         'project_update',
@@ -1159,6 +1165,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             log_entry === undefined &&
             decision === undefined &&
             open_questions === undefined &&
+            agent_detail === undefined &&
             draft === undefined &&
             files === undefined &&
             milestones === undefined
@@ -1179,6 +1186,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             log_entry: normalizeSectionText(log_entry, 'log_entry', false),
             decision: normalizeSectionText(decision, 'decision', false),
             open_questions: normalizeSectionText(open_questions, 'open_questions', true),
+            agent_detail: normalizeSectionText(agent_detail, 'agent_detail', true),
             files: files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
             ...(draft !== undefined ? { draft } : {}),
             ...(milestones !== undefined ? { milestones: milestonesInput(milestones) } : {}),
@@ -1282,6 +1290,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     next_actions: z.string().max(16384).describe(`Replacement Next Actions section; empty clears it. ${SECTION_TEXT_RULES}`),
     decision: z.string().min(1).max(4096).optional().describe(`New Decisions entry (appended), without a date. ${SECTION_TEXT_RULES}`),
     open_questions: z.string().max(16384).optional().describe(`Replacement Open Questions section; empty clears it. ${SECTION_TEXT_RULES}`),
+    agent_detail: z.string().max(16384).optional().describe(`Replacement For the Next Agent section; empty clears it. ${AGENT_DETAIL_RULES} ${SECTION_TEXT_RULES}`),
     files: projectFilesSchema,
     milestone_passed: z.string().regex(/^M[1-9][0-9]{0,2}$/, 'a milestone id such as M3').optional().describe(
       'The id of the current milestone (the first one not yet passed), only when the user has said its acceptance ' +
@@ -1322,6 +1331,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         next_actions: normalizeSectionText(args.next_actions, 'next_actions', true),
         decision: normalizeSectionText(args.decision, 'decision', false),
         open_questions: normalizeSectionText(args.open_questions, 'open_questions', true),
+        agent_detail: normalizeSectionText(args.agent_detail, 'agent_detail', true),
         files: args.files as ProjectFileReference[] | undefined, writer: writerFor(ctx),
       };
       const result = vault.checkpointProject(request, { actor: 'agent' }, granted);

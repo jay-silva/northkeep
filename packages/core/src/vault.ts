@@ -1007,12 +1007,13 @@ export class Vault {
       next_actions: request.next_actions,
       ...(request.decision !== undefined ? { decision: request.decision } : {}),
       ...(request.open_questions !== undefined ? { open_questions: request.open_questions } : {}),
+      ...(request.agent_detail !== undefined ? { agent_detail: request.agent_detail } : {}),
       ...(request.files !== undefined ? { files: request.files } : {}),
       ...(request.milestone_passed !== undefined ? { milestone_passed: request.milestone_passed } : {}),
     };
     const fingerprint = blake2bHex(exactCanonicalJson(logical), this.platform.crypto);
     // draft:false is derived from the mode, so replay rebuilds the same content.
-    const update:ProjectUpdateRequest={project:request.project,expected_revision:request.expected_revision,status:request.status,next_actions:request.next_actions,log_entry:`${request.mode==='checkpoint'?'Checkpoint':'Wrap up'}: ${request.completed}`,...(request.decision!==undefined?{decision:request.decision}:{}),...(request.open_questions!==undefined?{open_questions:request.open_questions}:{}),...(request.files!==undefined?{files:request.files}:{}),...(request.mode==='wrap'?{draft:false}:{}),...(request.writer!==undefined?{writer:request.writer}:{}),...(request.milestone_passed!==undefined?{milestone_passed:request.milestone_passed}:{})};
+    const update:ProjectUpdateRequest={project:request.project,expected_revision:request.expected_revision,status:request.status,next_actions:request.next_actions,log_entry:`${request.mode==='checkpoint'?'Checkpoint':'Wrap up'}: ${request.completed}`,...(request.decision!==undefined?{decision:request.decision}:{}),...(request.open_questions!==undefined?{open_questions:request.open_questions}:{}),...(request.agent_detail!==undefined?{agent_detail:request.agent_detail}:{}),...(request.files!==undefined?{files:request.files}:{}),...(request.mode==='wrap'?{draft:false}:{}),...(request.writer!==undefined?{writer:request.writer}:{}),...(request.milestone_passed!==undefined?{milestone_passed:request.milestone_passed}:{})};
     const matches: Array<{entry:MemoryEntry;meta:ProjectHandoffMetadata}> = []; const copied:Array<{entry:MemoryEntry;raw:Record<string,unknown>}>=[];
     const ledgerHits:Array<{scope:string;fingerprint:string}>=[]; let malformedLedger=false;
     for (const entry of this.list({ includeForgotten:true, includeSuperseded:true, allowedScopes })) {
@@ -1065,7 +1066,7 @@ export class Vault {
     if(allowedScopes!==undefined&&!allowedScopes.includes(scope))throw new ProjectHandoffError('scope_denied','Project scope is outside this connection grant.');
     if(!Object.hasOwn(request,'expected_revision')||(request.expected_revision!==null&&(typeof request.expected_revision!=='string'||!/^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(request.expected_revision))))throw new ProjectHandoffError('invalid_request','expected_revision must be an exact revision UUID or null for creation.');
     if(request.writer!==undefined)validateProjectWriter(request.writer);
-    const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','files','title','draft','milestones','milestone_passed'] as const;
+    const updateKeys=['what_why','status','next_actions','decision','log_entry','open_questions','agent_detail','files','title','draft','milestones','milestone_passed'] as const;
     if(!updateKeys.some((key)=>request[key]!==undefined))throw new ProjectHandoffError('invalid_request','Project update has no changes.');
     if(actor==='agent'&&typeof request.status==='string'){const long=projectStatusTooLongMessage(request.status);if(long!==null)throw new ProjectHandoffError('invalid_request',long);}
     let receipt!:ProjectCheckpointResult['receipt'];

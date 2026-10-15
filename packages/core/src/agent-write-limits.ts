@@ -40,7 +40,7 @@ export function projectStatusTooLongMessage(status: string): string | null {
   return (
     `Nothing was saved: status is ${chars} characters, and the limit is ${PROJECT_STATUS_AGENT_MAX_CHARS}. ` +
     'The user reads it as the project summary. Open with one short plain sentence saying where the project ' +
-    'stands, with no commit hashes or ids, keep the rest brief, and move detail into the log entry, ' +
-    'decisions, or a memory. Then send the update again.'
+    'stands, with no commit hashes or ids, keep the rest brief, and move technical detail into agent_detail ' +
+    '(For the Next Agent), the log entry, or a memory. Then send the update again.'
   );
 }

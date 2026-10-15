@@ -21,7 +21,8 @@ export const PROJECT_STANDING_INSTRUCTION =
   'the revision from the latest resume or save result as expected_revision, a random version-4 UUID, in ' +
   'lowercase, that you generate as operation_id, the new Current Status, Next Actions, and the completed work. ' +
   'Start Current Status with one short plain sentence on where the project stands, with no commit hashes or ids, ' +
-  'and keep it under 1,000 characters: it is the summary I read first. ' +
+  'and keep it under 1,000 characters: it is the summary I read first. Put branches, hashes, paths and other ' +
+  'detail for the next session in agent_detail, which I do not read. ' +
   'Call project_checkpoint the same way part-way through a long session. Use ' +
   'project_update for a correction outside a working session. Use project_list to see what is in flight. ' +
   'The live document keeps only its newest log entries; history is available on request, so pass ' +

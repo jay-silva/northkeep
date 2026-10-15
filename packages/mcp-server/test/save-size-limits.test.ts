@@ -126,3 +126,26 @@ describe('Current Status is short enough to read as a summary', () => {
     expect(other.isError).toBe(false);
   });
 });
+
+describe('For the Next Agent keeps agent detail out of the summary', () => {
+  const plan = 'M1 Agree the milestones | test: the user approves the plan';
+
+  it('saves agent_detail through update and checkpoint, and resume returns it', async () => {
+    h = createHarness();
+    const mcp = await h.connect();
+    await attempt(mcp, 'project_create', { project: 'split', what_why: 'Why.', status: 'Start.', milestones: plan });
+    let head = JSON.parse(text(await mcp.callTool({ name: 'project_resume', arguments: { project: 'split' } }))) as { revision: string; vault_id: string };
+    const updated = await attempt(mcp, 'project_update', { project: 'split', expected_revision: head.revision, agent_detail: 'Branch claude/x at 53adceb.' });
+    expect(updated.isError).toBe(false);
+    head = JSON.parse(text(await mcp.callTool({ name: 'project_resume', arguments: { project: 'split' } })));
+    const saved = await attempt(mcp, 'project_checkpoint', {
+      vault_id: head.vault_id, project: 'split', operation_id: '00000000-0000-4000-8000-0000000000a1', expected_revision: head.revision,
+      status: 'Halfway there.', completed: 'Did work.', next_actions: '- Finish.', agent_detail: 'Run pnpm test as non-root.',
+    });
+    expect(saved.isError).toBe(false);
+    const view = JSON.parse(text(await mcp.callTool({ name: 'project_get', arguments: { project: 'split' } }))) as { agent_detail: string; status: string; content: string };
+    expect(view.agent_detail).toBe('Run pnpm test as non-root.');
+    expect(view.status).toBe('Halfway there.');
+    expect(view.content).toContain('## For the Next Agent\n\nRun pnpm test as non-root.');
+  });
+});
