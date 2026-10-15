@@ -1,20 +1,18 @@
-# NorthKeep — Claude Code Instructions
+# NorthKeep: instructions for coding agents
 
 ## What this is
-A local-first, user-owned memory vault for AI. Encrypted SQLite vault on the user's
+A local-first, user-owned memory vault for AI: memories and projects,
+coordinated across the user's AI apps. Encrypted SQLite vault on the user's
 machine, exposed to AI apps via MCP, with tiered on-device PII redaction and
 client-side-encrypted sync. The user owns the memory; we never see plaintext,
 except scopes the user explicitly shares to the opt-in connector (invariant #2).
 Read SPEC/memory-schema.md and SPEC/security-model.md before any structural work.
+Current decisions are the ADRs in SPEC/decisions/ (highest number is newest);
+docs/design/ holds the full design records behind those short ADRs.
+KNOWN-LIMITS.md is what the product does not do.
 
-## Founder context
-The founder (Jay) is a compliance professional, not an engineer. Therefore:
-- Explain consequential technical choices in plain language before implementing.
-- Every milestone must end with an acceptance test Jay can run himself from the
-  CLI, copy-paste exact commands.
-- Write an ADR in SPEC/decisions/ for every consequential choice (schema changes,
-  crypto, dependencies with network access, licensing-relevant code). See the
-  review gate below for when an adversarial review is required too.
+Jay, the founder, is a compliance professional, not an engineer. Explain
+consequential technical choices in plain language before implementing.
 
 ## Non-negotiable invariants (violating these is a critical bug)
 1. Plaintext memory content NEVER leaves the machine except (a) to the model
@@ -102,23 +100,41 @@ ADR claim about current behaviour. Prose that was true when written stops being
 true when the next decision lands, and *nothing fails when it does* — no test
 catches this, and it is the most common way this repo has been wrong.
 
-## Stack (decided — do not relitigate)
-TypeScript / Node 20+, pnpm monorepo per 03-BUILD-BLUEPRINT.md structure.
-SQLite (better-sqlite3; sqlite-vec is planned, not shipped — semantic search
-ranks embeddings in-process). @modelcontextprotocol/sdk (stdio first). Ollama for local
-models (llama3.2:3b extraction, nomic-embed-text embeddings), graceful degradation
-without it. sodium-native for crypto. Vitest for tests. Stripe (Phase 3).
+## How work runs here
+- One milestone at a time; say which one the session targets. Each ends with
+  an acceptance test Jay runs himself: copy-paste commands. Run it yourself on
+  throwaway data (a temp vault directory, never Jay's vault) first. Do not
+  start the next milestone until Jay says it passed on his machine.
+- An ADR in SPEC/decisions/ (shape of 0063) for every consequential choice:
+  schema, crypto, dependencies with network access, licensing-relevant code.
+  Add the adversarial review whenever the gate above applies.
+- Docs and ADRs stay under 500 words; long reasoning goes in docs/design/.
+  Update KNOWN-LIMITS.md in the same PR as the behaviour it describes.
+- Tests with every behaviour change. Small commits, imperative messages.
+- Branches and pull requests only. Jay merges; agents never push to main.
+- Prefer boring, popular, audited dependencies, and as few as possible.
 
-## Engineering standards
-- Tests with every feature: unit tests + one e2e scenario per milestone in /e2e.
-- The e2e "leak test" (seeded-secrets corpus through the redaction pipeline,
-  zero Tier-1 misses) runs in CI on every commit once M3 lands.
-- Small commits, imperative messages, tag a release every Friday.
-- Keep KNOWN-LIMITS.md current — honesty about limits is a product feature.
-- Prefer boring, popular, audited dependencies; total dependency count is a
-  metric to minimize, not a convenience.
-
-## Milestones
-Work one milestone at a time per 03-BUILD-BLUEPRINT.md §3 (M0–M5). State which
-milestone the session targets at the start. Do not begin the next milestone
-until Jay confirms the current acceptance test passed on his machine.
+## Ship safely
+- Tests, as CI runs them after `pnpm install --frozen-lockfile && pnpm build`:
+  `pnpm exec vitest run packages/redact/test/leak.test.ts` (the leak gate,
+  zero Tier-1 misses, runs first), then `pnpm test`, then
+  `pnpm exec vitest run --config e2e/vitest.config.ts`. Run them as a
+  non-root user; root ignores file permissions and some tests fail.
+- main is production. A push to main redeploys apps/sync-server and
+  apps/connector-server through Vercel's Git integration (see
+  .github/workflows/hosted-probe.yml), so merging stays with Jay.
+- A release bumps `version` in apps/desktop/src-tauri/tauri.conf.json,
+  `APP_VERSION` in apps/web/src/api.ts, and `buildNumber` (and `version`)
+  in apps/mobile/app.config.ts. Release 0.24.0 (6bebcf3) is the pattern.
+- Mac signing and notarization: scripts/desktop-bundle/README.md. The Apple
+  credentials are environment variables on Jay's machine; none are in the repo.
+- Schema changes are a new sequential step in `migrate()` in
+  packages/core/src/vault.ts; an older build refuses a newer vault. An MCP
+  server keeps the code it started with, and orphaned old servers once broke
+  writes in three apps at once (packages/mcp-server/src/server.ts, around
+  line 1276). Keep its exit-on-close and out-of-date exit working.
+- Stack (decided, do not relitigate): TypeScript, Node 20+ (CI and the
+  desktop sidecar use 24), pnpm workspace, better-sqlite3, sodium-native,
+  @modelcontextprotocol/sdk, Ollama for local models with graceful
+  degradation, Vitest, Tauri desktop, Expo iPhone app, Stripe billing in
+  apps/sync-server.

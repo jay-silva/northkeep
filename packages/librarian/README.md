@@ -1,3 +1,7 @@
 # @northkeep/librarian
 
-Extraction, dedupe, retrieval, budget compression (lands M1-M2). Placeholder — implemented at its milestone per 03-BUILD-BLUEPRINT.md §3.
+Local-model work on memories through a loopback Ollama: extraction of memory
+candidates from imported conversations (with a heuristic fallback), dedupe,
+import orchestration, cached embeddings for search by meaning, and the
+review and consolidation passes, where the model gets bounded data packs,
+no tools and no vault writes.
