@@ -108,7 +108,8 @@ catches this, and it is the most common way this repo has been wrong.
 - An ADR in SPEC/decisions/ (shape of 0063) for every consequential choice:
   schema, crypto, dependencies with network access, licensing-relevant code.
   Add the adversarial review whenever the gate above applies.
-- Docs and ADRs stay under 500 words; long reasoning goes in docs/design/.
+- Docs written for Jay, ADRs included, stay under 500 words (his rule);
+  an ADR's full design record may run longer in docs/design/.
   Update KNOWN-LIMITS.md in the same PR as the behaviour it describes.
 - Tests with every behaviour change. Small commits, imperative messages.
 - Branches and pull requests only. Jay merges; agents never push to main.
@@ -124,8 +125,9 @@ catches this, and it is the most common way this repo has been wrong.
   apps/connector-server through Vercel's Git integration (see
   .github/workflows/hosted-probe.yml), so merging stays with Jay.
 - A release bumps `version` in apps/desktop/src-tauri/tauri.conf.json,
-  `APP_VERSION` in apps/web/src/api.ts, and `buildNumber` (and `version`)
-  in apps/mobile/app.config.ts. Release 0.24.0 (6bebcf3) is the pattern.
+  `APP_VERSION` in apps/web/src/api.ts, and `buildNumber` in
+  apps/mobile/app.config.ts (bump its `version` too; 6bebcf3 left it at
+  0.23.0).
 - Mac signing and notarization: scripts/desktop-bundle/README.md. The Apple
   credentials are environment variables on Jay's machine; none are in the repo.
 - Schema changes are a new sequential step in `migrate()` in
