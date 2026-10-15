@@ -2,6 +2,8 @@
 
 Status: Accepted 2026-07-25 (implemented 2026-07-25); amended 2026-07-25 by ADR 0035 · Review: the property wording was sharpened after review; no verdict is recorded in the original
 
+Superseded in part by ADR 0066 (accepted 2026-10-15): Converse is no longer presented as a product mode.
+
 ## Context
 In M11 only the CLI could add an MCP server, so app-only users could not use MCP. An add route is no real escalation against attackers the design currently stops (local processes can already write `~/.northkeep/mcp.json`; remote callers lack the custom-header token, and the Host check stops DNS rebinding; `net.ts` keeps `web_fetch` off loopback, ADR 0028). The genuine concern: a free-form add would turn a confidentiality failure (an SSRF classifier gap, three found and fixed so far, or a leaked token) into persistent code execution. Adding does not spawn; inspecting does.
 

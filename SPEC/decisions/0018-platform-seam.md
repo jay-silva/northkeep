@@ -27,5 +27,5 @@ The mobile app must run vault, crypto and sync logic on React Native, which has 
 The original has no egress section and names no network path; it states the crypto interface only relocates call sites, with the same primitives and parameters.
 
 ## Links
-Related: ADR 0024 (device linking; the record cites it as 0019), 07-MOBILE-LAUNCH-PLAN.md
+Related: ADR 0024 (device linking; the record cites it as 0019), and the mobile launch plan (kept outside this repo)
 Full record: docs/design/adr-0018-platform-seam.md

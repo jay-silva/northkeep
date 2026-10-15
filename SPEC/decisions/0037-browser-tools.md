@@ -2,6 +2,8 @@
 
 Status: PARKED 2026-07-26 by Jay; not being built, kept as a decision record (drafted 2026-07-25) · Review: adversarial review 2026-07-25 found the engineering claims in Decisions 1, 2 and 5 do not hold; the case for not building the obvious thing stands
 
+Superseded in part by ADR 0066 (accepted 2026-10-15): Converse is no longer presented as a product mode.
+
 ## Context
 ADR 0027 named browser tools alongside filesystem tools. Unlike `web_fetch`, a browser tool can act as the signed-in user, its dangerous acts may carry no revealing argument, and the page is both attacker and authenticated surface. This ADR argues the obvious version should not be built.
 

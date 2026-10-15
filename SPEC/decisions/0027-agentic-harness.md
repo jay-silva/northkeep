@@ -2,6 +2,8 @@
 
 Status: Accepted 2026-07-24 (Jay approved plan and gating) · Review: none in this record; the M10 review amended it 2026-07-25 (the Tier-1 floor applies to tool-bound arguments, not the whole conversation); ADR 0029 owns the security review
 
+Superseded in part by ADR 0066 (accepted 2026-10-15): Converse is no longer presented as a product mode.
+
 ## Context
 Converse (ADR 0007) is a mediated pipeline with one destination: the model the user picked. Tools v1 is web search and web fetch, read-only public-internet egress.
 

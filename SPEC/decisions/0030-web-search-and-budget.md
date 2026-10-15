@@ -2,6 +2,8 @@
 
 Status: Accepted 2026-07-24 · Review: none recorded · Deciders: Jay (product owner), Claude Code
 
+Superseded in part by ADR 0066 (accepted 2026-10-15): Converse is no longer presented as a product mode.
+
 ## Context
 M10d adds a second egress tool, `web_search`, over the Brave Search API, and a budget that bounds what tool use costs. Unlike `web_fetch`, it carries a credential (the Brave token) to a fixed trusted host. Both sit behind the M10c gate and screens; this ADR records only what differs.
 

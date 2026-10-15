@@ -2,6 +2,8 @@
 
 Status: Accepted 2026-07-24 · Superseded in part 2026-07-25 (M10d) by ADR 0030 Decision 1 (opt-in `AuthToken` header path) · Review: none recorded
 
+Superseded in part by ADR 0066 (accepted 2026-10-15): Converse is no longer presented as a product mode.
+
 ## Context
 M10b gives runTask its first tool: a fetch to a model-chosen destination. It must block SSRF, treat fetched content as data not instructions, and redact per invariant #1.
 

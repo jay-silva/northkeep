@@ -2,6 +2,8 @@
 
 Status: Accepted 2026-07-25, implemented by M11 · Review: none recorded · http identity superseded by ADR 0035; GUI add route by ADR 0034; vault-server trust corrected by ADR 0060 (2026-09-24)
 
+Superseded in part by ADR 0066 (accepted 2026-10-15): Converse is no longer presented as a product mode.
+
 ## Context
 M11 makes the harness an MCP client of servers we did not write. Grants keyed on host, our own tool definitions, and a visible destination no longer hold.
 
