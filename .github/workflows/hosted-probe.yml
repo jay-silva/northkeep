@@ -24,6 +24,11 @@ on:
       - 'scripts/probe-hosted.sh'
       - '.github/workflows/hosted-probe.yml'
 
+# Read-only token: the probe only reads and fails the run; GitHub's own
+# failure email is the alert. It opens no issues.
+permissions:
+  contents: read
+
 concurrency:
   group: hosted-probe
   cancel-in-progress: false

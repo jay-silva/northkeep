@@ -16,6 +16,10 @@ on:
       - 'package.json'
       - '.github/workflows/desktop-linux.yml'
 
+# Read-only token: artifacts upload with the runner's own token, not this one.
+permissions:
+  contents: read
+
 jobs:
   bundle:
     runs-on: ubuntu-22.04
