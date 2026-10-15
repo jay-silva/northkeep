@@ -2,6 +2,8 @@
 
 Status: Accepted and implemented 2026-07-25 (M12); invariant #7 OK from Jay ("Build 0035") · Review: rewritten after a 2026-07-25 adversarial review; second pass 2026-07-27, five findings fixed with tests. Acceptance passed 2026-07-27 with four findings.
 
+Superseded in part by ADR 0066 (accepted 2026-10-15): Converse is no longer presented as a product mode.
+
 ## Context
 iOS cannot spawn stdio servers; official servers use HTTP and OAuth. Remote MCP inherits the definition pin, result fence, body-leaf screens and audit, but no egress protection automatically.
 

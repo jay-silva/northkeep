@@ -2,7 +2,7 @@
 
 > Ties together the submission artifacts. Three columns: what is done in the repo,
 > what Jay sets in App Store Connect, and what still blocks a public release.
-> Covers milestone M6-5 of `07-MOBILE-LAUNCH-PLAN.md`. Not legal advice.
+> Covers milestone M6-5 of the mobile launch plan (kept outside this repo). Not legal advice.
 
 App: NorthKeep · Bundle ID: `com.silvapeak.northkeep` · Version 0.22.0 (build 28 planned; app.config.ts is at build 27 until the build is cut)
 Owner: Silva Peak Labs, LLC (d/b/a NorthKeep) · Expo/EAS owner `j_silva`

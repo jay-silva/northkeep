@@ -2,6 +2,8 @@
 
 Status: Accepted 2026-07-24 · Review: no overall verdict recorded; findings from the M10b review (G2) and rounds G1/G3 are folded into D2
 
+Superseded in part by ADR 0066 (accepted 2026-10-15): Converse is no longer presented as a product mode.
+
 ## Context
 M10b asked on every call; permission fatigue is a security failure. Review G2 showed the Tier-1 egress floor matches literal strings, so encoded secrets slip past. M10c adds a narrow-grant engine and screens over decoded arguments.
 

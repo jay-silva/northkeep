@@ -2,6 +2,8 @@
 
 Status: Accepted 2026-07-25 · Review: no verdict recorded; the security properties were written for the G4 review · Deciders: Jay, Claude Code
 
+Superseded in part by ADR 0066 (accepted 2026-10-15): Converse is no longer presented as a product mode.
+
 ## Context
 M10a to M10d ran the tool-using agent loop from the CLI, with a blocking readline approval. M10e brings it to the web GUI, whose converse route is one NDJSON response, yet `requestApproval` must pause mid-stream for a decision the browser sends in a separate request.
 

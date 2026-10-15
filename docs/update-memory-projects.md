@@ -1,12 +1,12 @@
 # Updating to the Memories and Projects workspace
 
-Release preparation: the replacement installer has not been published. Version 0.21.0 remains the public Mac download. These steps must accompany the new installer and its release announcement.
+The Memories and Projects workspace first shipped in 0.22.0; the current Mac release is 0.24.0. Follow these steps when updating from 0.21.0 or earlier. The restart steps apply to every update.
 
 ## Before installing
 
 1. Finish the current work and confirm the saved project state. Keep your normal vault backup.
 2. Quit NorthKeep and every AI app connected to its local server, including Claude Desktop, Codex and Cursor where used. Close terminal-based assistant sessions as well. Use Quit, not just Close Window.
-3. Install the new release only after its version and download have been published. Reopen NorthKeep, unlock your vault, then reopen the connected AI apps.
+3. Install the new release from its published download. Reopen NorthKeep, unlock your vault, then reopen the connected AI apps.
 
 ## Before continuing a project
 
