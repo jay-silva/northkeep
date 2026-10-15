@@ -199,6 +199,19 @@
   .chips button { font-size: 12px; border: 1px solid var(--line); background: var(--panel);
     color: var(--muted); border-radius: 999px; min-height:44px; padding: 7px 13px; cursor: pointer; }
   .chips button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .size-meter { position: relative; height: 8px; border-radius: 999px; background: var(--chip); margin: 10px 0 4px; }
+  .size-meter > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: var(--accent); }
+  .size-meter.warn > i { background: var(--warn-ink); }
+  .size-meter.over > i { background: var(--danger); }
+  .size-meter > b { position: absolute; left: 75%; top: -3px; bottom: -3px; width: 2px; background: var(--muted); }
+  .size-scale { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-bottom: 10px; position: relative; }
+  .size-scale > .mark { position: absolute; left: 75%; transform: translateX(-50%); }
+  .size-num { font-size: 22px; font-weight: 600; }
+  .size-warn { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+  .size-warn.over { border-color: var(--danger-line); }
+  .size-warn strong { display: block; font-size: 14px; margin-bottom: 4px; }
+  .size-warn p { margin: 0 0 6px; }
+  .size-warn ul { margin: 0; padding-left: 18px; }
   .banner { background: var(--warn-bg); color: var(--warn-ink); border: 1px solid var(--warn-line);
     border-radius: 12px; padding: 10px 14px; margin-bottom: 14px; font-size: 14px; }
   .muted { color: var(--muted); overflow-wrap: anywhere; }
@@ -1235,6 +1248,23 @@
           secure checkout; it never touches NorthKeep. We store your subscription status, the
           Stripe customer and subscription IDs, and when the current period ends, linked to your encrypted
           account. Never your card or the contents of your vault.</p>
+      </div>
+    </div>
+    <div id="syncSizeCard" hidden>
+      <h3 class="sect">Vault size</h3>
+      <div class="card">
+        <div><span class="size-num" id="syncSizeNum"></span> <span class="muted" style="font-size:13px">of 4 MB sync limit</span></div>
+        <div class="size-meter" id="syncSizeMeter" role="meter" aria-label="Vault size against the 4 MB sync limit" aria-valuemin="0" aria-valuemax="100"><i id="syncSizeBar"></i><b></b></div>
+        <div class="size-scale" aria-hidden="true"><span>0</span><span class="mark">3 MB warning</span><span>4 MB</span></div>
+        <p class="muted" id="syncSizeOk" style="margin:0;font-size:13px"></p>
+        <div class="size-warn" id="syncSizeWarn" role="status" hidden>
+          <strong id="syncSizeWarnHead"></strong>
+          <p id="syncSizeWarnLine"></p>
+          <ul>
+            <li>Delete memories you no longer need, starting with big imports.</li>
+            <li>Hold off on importing a large ChatGPT or Claude history for now.</li>
+          </ul>
+        </div>
       </div>
     </div>
     <h3 class="sect">Status</h3>
@@ -6242,10 +6272,47 @@
     return String(message).replace(/Review what would change with: northkeep sync pull\.?$/, 'Use Pull to review what would change on ' + devicePlace() + '.');
   }
 
+  // ADR 0067 D4: same units as the CLI (binary MB, so the cap reads "4 MB").
+  function sizeText(bytes) {
+    if (bytes < 1024 * 1024) return Math.ceil(bytes / 1024) + ' KB';
+    const mb = bytes / 1024 / 1024;
+    return Number.isInteger(mb) ? mb + ' MB' : mb.toFixed(1) + ' MB';
+  }
+
+  function renderSyncSize(size) {
+    const card = $('syncSizeCard');
+    if (!size) { card.hidden = true; return; }
+    card.hidden = false;
+    const pct = Math.min(100, size.percent);
+    $('syncSizeNum').textContent = sizeText(size.bytes);
+    $('syncSizeBar').style.width = pct + '%';
+    const meter = $('syncSizeMeter');
+    meter.setAttribute('aria-valuenow', String(pct));
+    meter.setAttribute('aria-valuetext', sizeText(size.bytes) + ' of 4 MB');
+    meter.classList.toggle('warn', size.warning && !size.over_cap);
+    meter.classList.toggle('over', size.over_cap);
+    const warn = $('syncSizeWarn');
+    $('syncSizeOk').hidden = size.warning;
+    warn.hidden = !size.warning;
+    warn.classList.toggle('over', size.over_cap);
+    if (!size.warning) { $('syncSizeOk').textContent = 'Plenty of room. Your vault syncs normally.'; return; }
+    const place = devicePlace();
+    if (size.over_cap) {
+      $('syncSizeWarnHead').textContent = 'Over the sync limit';
+      $('syncSizeWarnLine').textContent = 'Your vault is ' + sizeText(size.bytes) + ' of 4 MB. New changes stay on ' + place +
+        ' and do not reach your other devices until it is smaller. Nothing is lost.';
+    } else {
+      $('syncSizeWarnHead').textContent = 'Getting close to the limit';
+      $('syncSizeWarnLine').textContent = 'Your vault is ' + sizeText(size.bytes) + ' of 4 MB. Sync still works. Once it reaches 4 MB, new changes stay on ' +
+        place + ' and stop reaching your other devices until it is smaller. Nothing is lost.';
+    }
+  }
+
   async function loadSyncStatus() {
     const line = $('syncStatusLine'), serverLine = $('syncServerLine');
     try {
       const s = await api('/api/sync/status');
+      renderSyncSize(s.size);
       if (!s.configured) {
         serverLine.hidden = true;
         line.textContent = 'No sync server set yet. Enter one above to start.';
@@ -6296,6 +6363,7 @@
     syncBusy(true);
     try {
       const r = await api('/api/sync/push', { method: 'POST' });
+      if (r.size) renderSyncSize(r.size);
       if (!r.ok && r.conflict) {
         out.textContent = 'The vault changed on another device. Pull first, then Push.';
       } else if (r.ok) {
