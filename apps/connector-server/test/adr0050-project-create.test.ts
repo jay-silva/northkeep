@@ -227,6 +227,9 @@ describe('ADR 0050 hosted project_create', () => {
     expect(described).not.toMatch(/^Required\./);
     expect(described).toContain('Every save needs it');
     expect(described).toContain('Not needed by project_create');
+    // Earlier checks refuse first with their own message, so the text promises no particular one.
+    expect(described).toContain('the result says why');
+    expect(described).not.toMatch(/says to call project_get/);
     const create = tools.find((t) => t.name === 'project_create')!;
     expect(Object.keys(create.inputSchema.properties)).not.toContain('expected_revision');
 
@@ -237,6 +240,9 @@ describe('ADR 0050 hosted project_create', () => {
       const res = await mcpCall(token, 'project_update', { project: 'rev-text', status: 'unbound', ...missing });
       expect(res).toEqual({ text: 'Nothing was saved: call project_get first and pass its revision as expected_revision.', isError: true });
     }
+    const empty = await mcpCall(token, 'project_update', { project: 'rev-text' });
+    expect(empty.isError).toBe(true);
+    expect(empty.text).toMatch(/^Nothing was saved: provide at least one of/);
     expect(await rowsIn('project:rev-text')).toEqual(before);
   });
 

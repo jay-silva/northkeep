@@ -953,7 +953,7 @@ export function createMcpServer(
           // Optional in the schema only so a missing value gets the plain refusal below, not a validation error.
           .describe(
             'The revision project_get returned for this project. Every save needs it: without it nothing is ' +
-              'saved and the result says to call project_get first. Not needed by project_create.',
+              'saved and the result says why. Not needed by project_create.',
           ),
         what_why: z.string().min(1).max(16384).optional().describe(`Replacement What & Why section. ${HOSTED_SECTION_TEXT_RULES}`),
         status: z.string().min(1).max(16384).optional().describe(`Replacement Current Status section. ${HOSTED_SECTION_TEXT_RULES}`),
