@@ -68,6 +68,8 @@ export {
   applyDownSync,
   BASE_NEW,
   ConnectorStalePushError,
+  ConnectorOversizeError,
+  oversizeSharedEntries,
   ConnectorTombstoneError,
   discardPending,
   fetchEntitlement,

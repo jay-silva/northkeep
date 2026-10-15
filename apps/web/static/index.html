@@ -657,6 +657,7 @@
   .project-announce { margin:0 0 12px; font-size:14px; color:var(--ok); }
   .project-announce:empty { display:none; }
   .project-announce.bad { color:var(--danger); }
+  .project-announce .project-notice { display:block; margin:8px 0 0; }
   .hist-sub { margin:16px 0 2px; }
   .ver-row { display:grid; grid-template-columns:110px minmax(0,1fr) auto; gap:14px; align-items:center; padding:12px 0; border-top:1px solid var(--line); }
   .ver-row time { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
@@ -3436,8 +3437,10 @@
     reload.focus();
   }
 
-  function projectAnnounce(text, bad) {
-    const node = $('projectAnnounce'); node.classList.toggle('bad', Boolean(bad)); node.textContent = text;
+  // A problem gets its own notice under the outcome, so a success never reads as an error.
+  function projectAnnounce(text, bad, problem) {
+    const node = $('projectAnnounce'); node.classList.toggle('bad', Boolean(bad)); node.replaceChildren(text);
+    if (problem) node.appendChild(el('span', 'project-notice danger', problem));
   }
 
   // --- ADR 0063 D1: the conflict view. Nothing changes until Keep mine or Take theirs.
@@ -3615,8 +3618,9 @@
     const err = el('div'); err.setAttribute('role', 'alert'); panel.appendChild(err);
     const choices = el('div', 'choices');
     const keepBox = el('div', 'choice'); const keep = el('button', 'btn', 'Keep mine'); keep.type = 'button';
-    const keepText = el('p', undefined, 'Your version stays as it is. The cloud version is saved as a memory in ' + slug + ', titled ');
-    keepText.append(el('strong', undefined, 'Cloud version not kept, ' + new Date().toISOString().slice(0, 10)), document.createTextNode('. Your AI apps can still read it.'));
+    const keptTitle = 'Cloud version not kept, ' + new Date().toISOString().slice(0, 10);
+    const keepText = el('p', undefined, 'Your version stays as it is. The cloud version is saved as a memory in this project, titled ');
+    keepText.append(el('strong', undefined, keptTitle), document.createTextNode('. Your AI apps can still read it.'));
     keepBox.append(keep, keepText);
     const takeBox = el('div', 'choice'); const take = el('button', 'btn', 'Take theirs'); take.type = 'button';
     take.disabled = !local || c.reason === 'several_heads';
@@ -3637,8 +3641,8 @@
         if (!await projectWriteCurrent(slug, requestId)) return;
         await loadProject(slug, choice === 'take-theirs');
         if (currentProjectSlug !== slug || !status.unlocked || $('view-projects').hidden) return;
-        const done = choice === 'keep-mine' ? 'Kept your version. The cloud version is saved as a memory in ' + slug + '.' : 'The cloud version is now current. Your earlier version is in Saved versions.';
-        projectAnnounce(done + (result.push_error ? ' Saved on ' + devicePlace() + ', but Cloud Connect was not updated: ' + result.push_error : ''), Boolean(result.push_error));
+        const done = choice === 'keep-mine' ? 'Kept your version. The cloud version is saved as a memory in this project, titled "' + keptTitle + '".' : 'The cloud version is now current. Your earlier version is in Saved versions.';
+        projectAnnounce(done, false, result.push_error ? 'Your connected apps did not get this change. ' + result.push_error : '');
       } catch (ex) {
         if (ex.message === 'locked' || !projectWriteViewCurrent(slug, requestId)) return;
         cancel.disabled = false; keep.disabled = false; take.disabled = !local || c.reason === 'several_heads';
