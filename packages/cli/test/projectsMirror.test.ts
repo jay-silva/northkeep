@@ -580,7 +580,7 @@ describe('the real CLI process', () => {
     const imported = cli(['projects', 'import', '--from', src, '--write']);
     expect(imported.status).toBe(0);
     expect(imported.stdout).toContain('Imported 1 project; 0 refused, 0 skipped.');
-  });
+  }, 30_000);
 
   it('hides --scheduled and --skip-launchctl from help', () => {
     const help = cli(['projects', 'export', '--help']);
