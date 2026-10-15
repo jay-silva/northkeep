@@ -8,7 +8,7 @@ import type {
   OAuthTokens,
 } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { sanitizeServerText } from './client.js';
-import { loadCredentials, saveCredentials, tokenStoreAvailable, updateCredentials } from './tokens.js';
+import { loadCredentials, saveCredentials, tokenStoreAvailable, tokenStoreRefusal, updateCredentials } from './tokens.js';
 
 /**
  * OAuth for remote MCP servers (ADR 0035 Decisions 7 and 8).
@@ -368,9 +368,7 @@ export function openInBrowser(url: URL): void {
 
 export function requireTokenStore(): void {
   if (!tokenStoreAvailable()) {
-    throw new OAuthNotAvailableError(
-      'Remote MCP servers need the macOS Keychain to hold their sign-in, and none is available here. NorthKeep will not write OAuth tokens to a file.',
-    );
+    throw new OAuthNotAvailableError(tokenStoreRefusal());
   }
 }
 

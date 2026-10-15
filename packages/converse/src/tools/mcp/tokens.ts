@@ -64,9 +64,12 @@ export interface TokenBackend {
   available(): boolean;
 }
 
+// Each call checks the opt-out itself (ADR 0075): NORTHKEEP_NO_KEYCHAIN=1
+// means no Keychain read, write or delete, whichever caller asks.
 const keychainBackend: TokenBackend = {
   available: () => keychainAvailable(),
   get(id) {
+    if (!keychainAvailable()) return null;
     try {
       const out = execFileSync('security', ['find-generic-password', '-s', SERVICE, '-a', id, '-w'], {
         encoding: 'utf8',
@@ -79,6 +82,7 @@ const keychainBackend: TokenBackend = {
     }
   },
   set(id, value) {
+    if (!keychainAvailable()) throw new Error(tokenStoreRefusal());
     // `security -i` reads the command from stdin, so the token never appears on
     // a command line where `ps` could read it (same pattern as the master key).
     execFileSync('security', ['-i'], {
@@ -87,6 +91,7 @@ const keychainBackend: TokenBackend = {
     });
   },
   delete(id) {
+    if (!keychainAvailable()) return;
     try {
       execFileSync('security', ['delete-generic-password', '-s', SERVICE, '-a', id], {
         stdio: ['ignore', 'ignore', 'ignore'],
@@ -112,6 +117,14 @@ export function tokenStoreAvailable(): boolean {
   return backend.available();
 }
 
+/** Why there is no sign-in store here, naming the opt-out when that is the reason. */
+export function tokenStoreRefusal(): string {
+  if (process.platform === 'darwin' && process.env.NORTHKEEP_NO_KEYCHAIN === '1') {
+    return 'Remote MCP servers keep their sign-in in the macOS Keychain, and NORTHKEEP_NO_KEYCHAIN=1 turns the Keychain off for NorthKeep. Unset it to connect.';
+  }
+  return 'Remote MCP servers need the macOS Keychain to hold their sign-in, and none is available here. NorthKeep will not write OAuth tokens to a file.';
+}
+
 export function loadCredentials(id: string): RemoteCredentials | null {
   const raw = backend.get(id);
   if (raw === null) return null;
@@ -128,9 +141,7 @@ export function loadCredentials(id: string): RemoteCredentials | null {
 
 export function saveCredentials(id: string, credentials: RemoteCredentials): void {
   if (!backend.available()) {
-    throw new Error(
-      'No Keychain is available on this system, and NorthKeep will not write OAuth tokens to a file. Remote MCP servers need macOS.',
-    );
+    throw new Error(tokenStoreRefusal());
   }
   backend.set(id, JSON.stringify(credentials));
 }

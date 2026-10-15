@@ -628,7 +628,9 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
     search query is transient and near-anonymous, a connected account server is
     a standing grant to your mail or your documents.
   - **The sign-in lives in the macOS Keychain, so remote servers are macOS-only.**
-    There is no file fallback, on purpose.
+    There is no file fallback, on purpose. With `NORTHKEEP_NO_KEYCHAIN=1`,
+    NorthKeep neither reads nor writes remote sign-ins, so remote servers show
+    as not connected even when a sign-in is stored (ADR 0075).
   - **Two processes can race a token refresh.** Writes of the stored sign-in are
     serialized inside one process, but the refresh request itself is not
     locked, and the CLI and the GUI refreshing the same grant in the same
