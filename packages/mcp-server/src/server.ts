@@ -797,12 +797,15 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         type: typeEnum.optional().describe('Filter by memory type'),
         scope: scopeSchema.optional().describe('Filter by scope'),
         limit: z.number().int().min(1).max(100).optional().describe('Max results (default 50)'),
+        id: idSchema.optional().describe('Return only the live memory with exactly this id, if this connection may read its scope'),
       },
     },
-    async ({ type, scope, limit }) =>
-      run(ctx, 'memory_list', { type, scope, limit }, vaultPath, { kind: 'read', mask: 'memory' }, (vault, granted) => {
+    async ({ type, scope, limit, id }) =>
+      run(ctx, 'memory_list', { type, scope, limit, id }, vaultPath, { kind: 'read', mask: 'memory' }, (vault, granted) => {
+        // ADR 0074 D5: exact id over the granted live rows; no prefix match.
         const rows = vault
           .list({ type: type as MemoryType, scope, allowedScopes: granted })
+          .filter((e) => id === undefined || e.id === id)
           .slice(-(limit ?? 50));
         const entries = rows.map(publicEntry);
         return {

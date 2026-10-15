@@ -149,3 +149,27 @@ describe('For the Next Agent keeps agent detail out of the summary', () => {
     expect(view.content).toContain('## For the Next Agent\n\nRun pnpm test as non-root.');
   });
 });
+
+describe('memory_list reads one memory by exact id (ADR 0074 D5)', () => {
+  it('returns only that memory, and nothing for a prefix', async () => {
+    h = createHarness();
+    const mcp = await h.connect();
+    const a = JSON.parse((await attempt(mcp, 'memory_remember', { content: 'First.', type: 'semantic', scope: 'conversations' })).text) as { stored: { id: string } };
+    await attempt(mcp, 'memory_remember', { content: 'Second.', type: 'semantic', scope: 'conversations' });
+    const one = JSON.parse((await attempt(mcp, 'memory_list', { id: a.stored.id })).text) as { memories: Array<{ content: string }> };
+    expect(one.memories.map((m) => m.content)).toEqual(['First.']);
+    const prefix = await attempt(mcp, 'memory_list', { id: a.stored.id.slice(0, 8) });
+    expect(prefix.isError || (JSON.parse(prefix.text) as { memories: unknown[] }).memories.length === 0).toBe(true);
+  });
+
+  it('does not reach a memory outside the connection grant', async () => {
+    h = createHarness();
+    const vault = h.openVault();
+    const hidden = vault.remember({ content: 'Private.', type: 'semantic', scope: 'health', source: 'user' });
+    vault.save(); vault.close();
+    process.env.NORTHKEEP_SCOPES = 'conversations';
+    const mcp = await h.connect();
+    const r = await attempt(mcp, 'memory_list', { id: hidden.id });
+    expect(r.text).not.toContain('Private.');
+  });
+});

@@ -3,6 +3,14 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
+## Oversize memories and long summaries (ADR 0074, ADR 0075), current
+
+- Only AI apps are held to the limits. A memory over 8 KB (64 KB in a project scope) can still reach a shared scope from the app, an import, or a consolidation, and then blocks every push until it is shortened.
+- Compact it and Shorten this summary copy a request; NorthKeep makes no model call. The rewrite needs an AI app connected to NorthKeep on this Mac. Claude on the web cannot edit memories, and an app with masking on refuses the edit.
+- The rewrite is the AI app's and can drop a fact. The vault keeps the old text of a memory, but no screen shows it yet. A project's old summary stays in Saved versions for the next five saves only.
+- The 1,000-character summary limit applies to new saves. Existing long summaries stay until someone shortens them.
+- Claude on the web cannot write For the Next Agent yet; it keeps the section when it saves other parts.
+
 ## Notes and claims between AI apps (ADR 0072), current
 
 - Notes are coordination, not memory. They live in a separate encrypted file on this Mac (`notes-<hash>.db` in the NorthKeep folder), never in the vault. They are not synced, exported, shared with the connector, shown on the phone, or included in a vault backup. A user backup such as Time Machine copies the file; project names, times, note and client ids, session ids and the hook's app names in it are readable; note text and claim subjects are not.
