@@ -368,6 +368,39 @@ function bad(status: number, message: string): ApiResponse {
   return { status, body: { error: message } };
 }
 
+// Backup gate for first-run setup. A file beside the vault, not a vault field,
+// so it reads while locked. No file means a vault made before this gate, which
+// counts as confirmed; only the new setup writes false.
+export const SYNC_NEEDS_BACKUP_MESSAGE =
+  'Back up your device key before turning on sync. Finish the backup step in setup, then try again.';
+
+function setupStatePath(): string {
+  return path.join(northkeepHome(), 'setup.json');
+}
+
+export function backupConfirmed(): boolean {
+  let raw: string;
+  try {
+    raw = fs.readFileSync(setupStatePath(), 'utf8');
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT';
+  }
+  try {
+    return (JSON.parse(raw) as { backup_confirmed?: unknown }).backup_confirmed === true;
+  } catch {
+    return false; // a damaged file asks again rather than skipping the backup
+  }
+}
+
+function writeBackupConfirmed(confirmed: boolean): void {
+  const target = setupStatePath();
+  const dir = path.dirname(target);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  const tmp = path.join(dir, `.setup.json.tmp-${process.pid}-${Date.now()}`);
+  fs.writeFileSync(tmp, `${JSON.stringify({ backup_confirmed: confirmed }, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+  fs.renameSync(tmp, target);
+}
+
 export async function handleApi(
   session: UiSession,
   method: string,
@@ -444,6 +477,9 @@ async function dispatch(
       // setup wizard instead of the unlock dialog.
       vault_exists: fs.existsSync(session.vaultPath),
       vault_path: session.vaultPath,
+      // The page reopens setup on the backup step until this is true.
+      backup_confirmed: fs.existsSync(session.vaultPath) && backupConfirmed(),
+      device_secret_path: deviceSecretPath(),
       ollama_available: ollama,
       extract_model: EXTRACT_MODEL,
       keychain_available: keychainAvailable(),
@@ -583,6 +619,9 @@ async function dispatch(
     if (confirm !== undefined && confirm !== passphrase) {
       return bad(400, 'Passphrases do not match.');
     }
+    // Written before the vault, so a crash in between can never leave a new
+    // vault that reads as already backed up.
+    writeBackupConfirmed(false);
     const { secret, created } = ensureDeviceSecret();
     Vault.create({ path: session.vaultPath, passphrase, deviceSecret: secret }).close();
     await session.unlock(passphrase);
@@ -593,6 +632,19 @@ async function dispatch(
       device_secret_path: deviceSecretPath(),
       device_secret_created: created,
     });
+  }
+
+  // The person ticked "I saved a copy somewhere other than this computer".
+  // Unlocked only, so the step after unlock is the only way to reach it.
+  if (method === 'POST' && route === '/api/setup/backup-confirmed') {
+    if (!fs.existsSync(session.vaultPath)) return bad(409, 'There is no vault to back up yet.');
+    if (!session.isUnlocked()) return bad(423, 'Vault is locked.');
+    const { confirmed } = parseJson<{ confirmed?: unknown }>(body);
+    if (confirmed !== true) {
+      return bad(400, 'Tick the box to confirm you saved a copy somewhere other than this computer.');
+    }
+    writeBackupConfirmed(true);
+    return ok({ backup_confirmed: true });
   }
 
   if (method === 'POST' && route === '/api/unlock') {
@@ -829,6 +881,7 @@ async function dispatch(
   if (method === 'POST' && route === '/api/sync/config') {
     const { server_url } = parseJson<{ server_url?: string }>(body);
     if (!server_url?.trim()) return bad(400, 'server_url is required.');
+    if (fs.existsSync(session.vaultPath) && !backupConfirmed()) return bad(409, SYNC_NEEDS_BACKUP_MESSAGE);
     const deviceSecret = deviceSecretOrError();
     const { accountId } = deriveSyncCreds(deviceSecret);
     let config;
