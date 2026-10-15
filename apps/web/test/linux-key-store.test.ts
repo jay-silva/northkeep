@@ -75,7 +75,10 @@ describe.runIf(process.platform === 'linux')('POST /api/unlock remember on the f
     delete process.env.NORTHKEEP_PASSPHRASE;
     delete process.env.NORTHKEEP_MASTER_KEY;
     const prevPath = process.env.PATH;
-    process.env.PATH = '/usr/bin:/bin';
+    // No keyring: tools that fail shadow a real desktop keyring in /usr/bin.
+    const noRing = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-no-ring-'));
+    for (const name of ['secret-tool', 'gdbus']) fs.writeFileSync(path.join(noRing, name), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    process.env.PATH = `${noRing}${path.delimiter}/usr/bin:/bin`;
     resetMasterKeyStoreProbe();
     try {
       const passphrase = 'correct horse battery';
@@ -94,6 +97,7 @@ describe.runIf(process.platform === 'linux')('POST /api/unlock remember on the f
       expect(JSON.stringify(res.body)).toContain('"key_backend":"none"');
     } finally {
       process.env.PATH = prevPath;
+      fs.rmSync(noRing, { recursive: true, force: true });
       resetMasterKeyStoreProbe();
     }
   });

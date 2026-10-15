@@ -223,7 +223,10 @@ exit 1
 
 describe.runIf(onLinux)('store selection', () => {
   it('writes no file on Linux without a keyring unless the person opts in', () => {
-    process.env.PATH = '/usr/bin:/bin';
+    // Tools that fail shadow a real desktop keyring in /usr/bin.
+    const noRing = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-no-ring-'));
+    for (const name of ['secret-tool', 'gdbus']) fs.writeFileSync(path.join(noRing, name), '#!/bin/sh\nexit 1\n', { mode: 0o755 });
+    process.env.PATH = `${noRing}${path.delimiter}/usr/bin:/bin`;
     resetMasterKeyStoreProbe();
     const before = describeMasterKeyStore();
     expect(before.backend).toBe('none');
@@ -241,6 +244,7 @@ describe.runIf(onLinux)('store selection', () => {
     expect(keychainGetMasterKey()?.toString('hex')).toBe(KEY);
     expect(keychainDeleteMasterKey()).toBe('removed');
     expect(describeMasterKeyStore().backend).toBe('none');
+    fs.rmSync(noRing, { recursive: true, force: true });
   });
 
   it('ignores allowFile when a keyring is running', () => {
@@ -466,7 +470,8 @@ case "$1" in --version) exit 0;; lookup) exit 1;; clear) rm -f "${store}";; esac
   });
 
   it('reports an unreachable keyring when secret-tool is missing but the keyring is on the bus', () => {
-    fs.rmSync(path.join(bin, 'secret-tool'));
+    // Missing, not deleted: a real secret-tool in /usr/bin must not answer.
+    fs.writeFileSync(path.join(bin, 'secret-tool'), '#!/bin/sh\nexit 127\n', { mode: 0o755 });
     fs.rmSync(up);
     fs.writeFileSync(path.join(bin, 'gdbus'), '#!/bin/sh\necho "(true,)"\n', { mode: 0o755 });
     expect(keychainDeleteMasterKey()).toBe('keyring-unreachable');

@@ -114,7 +114,7 @@ describe('a killed write heals on the next run', () => {
     const script = `import { writeMirrorFile } from ${JSON.stringify(DIST)};
 writeMirrorFile(${JSON.stringify(target)}, Buffer.from('VERSION 3\\n'));`;
     const r = spawnSync(process.execPath, ['--input-type=module', '-e', script], {
-      env: { PATH: '/usr/bin:/bin', NORTHKEEP_EXPORT_CRASH_WRITE: '1' },
+      env: { PATH: '/usr/bin:/bin', NORTHKEEP_NO_KEYCHAIN: '1', NORTHKEEP_EXPORT_CRASH_WRITE: '1' },
       encoding: 'utf8',
       timeout: 20_000,
     });

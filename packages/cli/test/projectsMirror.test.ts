@@ -523,7 +523,7 @@ describe('northkeep projects delete', () => {
 describe('the real CLI process', () => {
   function cli(args: string[], extraEnv: Record<string, string> = {}): { status: number | null; stdout: string; stderr: string } {
     const r = spawnSync(process.execPath, [CLI_DIST, '--vault', vaultPath, ...args], {
-      env: { PATH: '/usr/bin:/bin', HOME: path.join(root, 'fixturehome'), NORTHKEEP_HOME: home, NORTHKEEP_MASTER_KEY: keyHex, ...extraEnv },
+      env: { PATH: '/usr/bin:/bin', HOME: path.join(root, 'fixturehome'), NORTHKEEP_HOME: home, NORTHKEEP_MASTER_KEY: keyHex, NORTHKEEP_NO_KEYCHAIN: '1', ...extraEnv },
       encoding: 'utf8',
       timeout: 60_000,
     });

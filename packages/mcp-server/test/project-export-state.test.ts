@@ -146,7 +146,7 @@ console.log(JSON.stringify({ held }));`;
       const outs = await Promise.all(
         Array.from({ length: 16 }, () =>
           new Promise<string>((resolve) => {
-            const c = spawn(process.execPath, ['--input-type=module', '-e', child, String(go)], { cwd: MCP_DIR, env: { PATH: '/usr/bin:/bin', NORTHKEEP_HOME: lab.home } });
+            const c = spawn(process.execPath, ['--input-type=module', '-e', child, String(go)], { cwd: MCP_DIR, env: { PATH: '/usr/bin:/bin', NORTHKEEP_HOME: lab.home, NORTHKEEP_NO_KEYCHAIN: '1' } });
             let o = '';
             c.stdout.on('data', (d: Buffer) => (o += d.toString()));
             c.on('close', () => resolve(o.trim()));
