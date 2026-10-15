@@ -1,6 +1,6 @@
 # ADR 0075: Remote MCP sign-ins honor the Keychain opt-out
 
-Status: Proposed · Review: CLEARED WITH WOUNDS, F1 fixed, NorthKeep/Reviews/adr-0075
+Status: Proposed · Review: CLEARED on recheck (F1 fixed), NorthKeep/Reviews/adr-0075
 
 ## Context
 `NORTHKEEP_NO_KEYCHAIN=1` is meant to keep NorthKeep out of the macOS Keychain, and tests and acceptance scripts depend on it. In [tokens.ts](../../packages/converse/src/tools/mcp/tokens.ts), saving a remote server's sign-in refuses when that switch is set, but reading and deleting still run `security`. On 2026-10-15 a test run deleted the real vault key ([PR #43](https://github.com/jay-silva/northkeep/pull/43)), and while closing that class of bug we found this gap.

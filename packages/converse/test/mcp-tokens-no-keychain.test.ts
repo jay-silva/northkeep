@@ -59,6 +59,8 @@ describe('remote sign-ins with NORTHKEEP_NO_KEYCHAIN=1 on macOS', () => {
   });
 
   it('still reads the Keychain once the opt-out is cleared', () => {
+    // Only the logging fake may answer once the opt-out is gone.
+    expect(process.env.PATH?.split(path.delimiter)[0]).toBe(bin);
     delete process.env.NORTHKEEP_NO_KEYCHAIN;
     expect(loadCredentials('gmail')).toBeNull();
     expect(fs.readFileSync(log, 'utf8')).toBe('find-generic-password -s northkeep-mcp-oauth -a gmail -w\n');
