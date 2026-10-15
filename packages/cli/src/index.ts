@@ -30,8 +30,11 @@ import {
   keychainSetMasterKey,
   masterKeyLockApplies,
   masterKeyStoreAvailable,
+  notesOwnerRelease,
+  notesOwnerView,
   readCallLog,
   resolveMasterKey,
+  runNotesHook,
   startServer,
 } from '@northkeep/mcp-server';
 import { redact, restore, type Replacement } from '@northkeep/redact';
@@ -551,6 +554,44 @@ program
           : 'This session has FULL access (you are the vault owner).',
       );
     });
+  });
+
+program
+  .command('notes')
+  .description('Notes and claims between AI apps on this machine: show them, release a stuck claim, or feed a Claude Code hook')
+  .requiredOption('--project <slug>', 'project slug')
+  .option('--release <claim-id>', 'release any claim, such as one whose app is gone')
+  .option('--hook', 'Claude Code hook mode: reads the hook input on stdin, prints context or nothing, never prompts')
+  .option('--host <name>', 'hook mode: the app this hook runs in', 'claude-code')
+  .option('--min-interval <seconds>', 'hook mode: skip if notes were shown this many seconds ago')
+  .action(async (opts: { project: string; release?: string; hook?: boolean; host: string; minInterval?: string }) => {
+    const vaultPath = vaultPathOpt();
+    if (opts.hook) {
+      let stdin = '';
+      try { stdin = fs.readFileSync(0, 'utf8'); } catch { /* no input: print nothing */ }
+      const interval = opts.minInterval === undefined ? undefined : Number(opts.minInterval);
+      const out = runNotesHook({
+        vaultPath, project: opts.project, host: opts.host, stdin,
+        ...(interval !== undefined && Number.isFinite(interval) && interval > 0 ? { minIntervalSeconds: interval } : {}),
+      });
+      if (out) process.stdout.write(`${out}\n`);
+      return;
+    }
+    const resolved = resolveMasterKey(vaultPath);
+    if (resolved === null) {
+      console.error('Notes need background access. Run "northkeep unlock" first.');
+      process.exitCode = 1;
+      return;
+    }
+    try {
+      // Prove the key against the vault before reading the notes file.
+      Vault.openWithKey(vaultPath, Buffer.from(resolved.key)).close();
+      console.log(opts.release
+        ? notesOwnerRelease(vaultPath, opts.project, opts.release, resolved.key)
+        : notesOwnerView(vaultPath, opts.project, resolved.key));
+    } finally {
+      memzero(resolved.key);
+    }
   });
 
 const providers = program
