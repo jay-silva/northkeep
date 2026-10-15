@@ -299,9 +299,8 @@ describe('public site pages', () => {
     expect(security).not.toContain('—');
     expect(support).toContain('mailto:support@northkeep.ai');
     expect(fs.existsSync(path.join(root, 'connector-icon.png'))).toBe(true);
-    const redirects = fs.readFileSync(path.join(root, '_redirects'), 'utf8');
-    expect(redirects).toContain('/docs');
-    expect(redirects).toContain('/security');
+    // Pages already serves docs.html at /docs; a _redirects rule to it loops.
+    expect(fs.existsSync(path.join(root, '_redirects'))).toBe(false);
   });
 });
 
