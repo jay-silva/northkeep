@@ -1,6 +1,6 @@
 # ADR 0067: Embeddings out of the synced vault, and a sync size warning
 
-Status: Proposed 2026-10-15 · Review: two rounds, both CLEARED WITH WOUNDS
+Status: Accepted 2026-10-15 (Jay) · Review: two rounds, both CLEARED WITH WOUNDS
 
 ## Context
 Sync uploads the whole `.nkv` file, capped at 4 MB (4,194,304 bytes). `SCHEMA_DDL` creates an `embeddings` table in every vault. Measured: content costs about 707 bytes per memory (cap near 5,900 memories); stored 768-dimension vectors add about 4,170 (cap at 853). Shipped searches never save, so vectors are discarded today; a save after a search would persist them. Nothing warns until a push fails.
