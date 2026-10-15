@@ -368,9 +368,9 @@ function bad(status: number, message: string): ApiResponse {
   return { status, body: { error: message } };
 }
 
-// Backup gate for first-run setup. A file beside the vault, not a vault field,
-// so it reads while locked. No file means a vault made before this gate, which
-// counts as confirmed; only the new setup writes false.
+// Backup gate for first-run setup (ADR 0070). A file, not a vault field, so the
+// sync-config check works while locked. It names the vault it was written for;
+// no file, or another vault's file, counts as confirmed.
 export const SYNC_NEEDS_BACKUP_MESSAGE =
   'Back up your device key before turning on sync. Finish the backup step in setup, then try again.';
 
@@ -378,26 +378,29 @@ function setupStatePath(): string {
   return path.join(northkeepHome(), 'setup.json');
 }
 
-export function backupConfirmed(): boolean {
+export function backupConfirmed(vaultPath: string): boolean {
   let raw: string;
   try {
     raw = fs.readFileSync(setupStatePath(), 'utf8');
   } catch (err) {
     return (err as NodeJS.ErrnoException).code === 'ENOENT';
   }
+  let state: { backup_confirmed?: unknown; vault_path?: unknown };
   try {
-    return (JSON.parse(raw) as { backup_confirmed?: unknown }).backup_confirmed === true;
+    state = JSON.parse(raw) as typeof state;
   } catch {
     return false; // a damaged file asks again rather than skipping the backup
   }
+  if (typeof state.vault_path === 'string' && path.resolve(state.vault_path) !== path.resolve(vaultPath)) return true;
+  return state.backup_confirmed === true;
 }
 
-function writeBackupConfirmed(confirmed: boolean): void {
+function writeBackupConfirmed(vaultPath: string, confirmed: boolean): void {
   const target = setupStatePath();
   const dir = path.dirname(target);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   const tmp = path.join(dir, `.setup.json.tmp-${process.pid}-${Date.now()}`);
-  fs.writeFileSync(tmp, `${JSON.stringify({ backup_confirmed: confirmed }, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
+  fs.writeFileSync(tmp, `${JSON.stringify({ backup_confirmed: confirmed, vault_path: path.resolve(vaultPath) }, null, 2)}\n`, { mode: 0o600, flag: 'wx' });
   fs.renameSync(tmp, target);
 }
 
@@ -478,7 +481,7 @@ async function dispatch(
       vault_exists: fs.existsSync(session.vaultPath),
       vault_path: session.vaultPath,
       // The page reopens setup on the backup step until this is true.
-      backup_confirmed: fs.existsSync(session.vaultPath) && backupConfirmed(),
+      backup_confirmed: fs.existsSync(session.vaultPath) && backupConfirmed(session.vaultPath),
       device_secret_path: deviceSecretPath(),
       ollama_available: ollama,
       extract_model: EXTRACT_MODEL,
@@ -621,7 +624,7 @@ async function dispatch(
     }
     // Written before the vault, so a crash in between can never leave a new
     // vault that reads as already backed up.
-    writeBackupConfirmed(false);
+    writeBackupConfirmed(session.vaultPath, false);
     const { secret, created } = ensureDeviceSecret();
     Vault.create({ path: session.vaultPath, passphrase, deviceSecret: secret }).close();
     await session.unlock(passphrase);
@@ -643,7 +646,7 @@ async function dispatch(
     if (confirmed !== true) {
       return bad(400, 'Tick the box to confirm you saved a copy somewhere other than this computer.');
     }
-    writeBackupConfirmed(true);
+    writeBackupConfirmed(session.vaultPath, true);
     return ok({ backup_confirmed: true });
   }
 
@@ -881,7 +884,7 @@ async function dispatch(
   if (method === 'POST' && route === '/api/sync/config') {
     const { server_url } = parseJson<{ server_url?: string }>(body);
     if (!server_url?.trim()) return bad(400, 'server_url is required.');
-    if (fs.existsSync(session.vaultPath) && !backupConfirmed()) return bad(409, SYNC_NEEDS_BACKUP_MESSAGE);
+    if (fs.existsSync(session.vaultPath) && !backupConfirmed(session.vaultPath)) return bad(409, SYNC_NEEDS_BACKUP_MESSAGE);
     const deviceSecret = deviceSecretOrError();
     const { accountId } = deriveSyncCreds(deviceSecret);
     let config;

@@ -62,7 +62,7 @@ describe('first-run backup gate', () => {
     const s = session();
     const created = await call(s, 'POST', '/api/setup/create', { passphrase: 'new setup pass', confirm: 'new setup pass' });
     expect(created.status).toBe(200);
-    expect(JSON.parse(fs.readFileSync(flagFile(), 'utf8'))).toEqual({ backup_confirmed: false });
+    expect(JSON.parse(fs.readFileSync(flagFile(), 'utf8'))).toEqual({ backup_confirmed: false, vault_path: path.resolve(defaultVaultPath()) });
 
     const before = (await call(s, 'GET', '/api/status')).body as { backup_confirmed: boolean; device_secret_path: string };
     expect(before.backup_confirmed).toBe(false);
@@ -79,7 +79,7 @@ describe('first-run backup gate', () => {
 
     const locked = await call(session(), 'POST', '/api/setup/backup-confirmed', { confirmed: true });
     expect(locked.status).toBe(423);
-    expect(JSON.parse(fs.readFileSync(flagFile(), 'utf8'))).toEqual({ backup_confirmed: false });
+    expect(JSON.parse(fs.readFileSync(flagFile(), 'utf8'))).toEqual({ backup_confirmed: false, vault_path: path.resolve(defaultVaultPath()) });
 
     const confirmed = await call(s, 'POST', '/api/setup/backup-confirmed', { confirmed: true });
     expect(confirmed.status).toBe(200);
@@ -105,5 +105,13 @@ describe('first-run backup gate', () => {
     const res = await call(session(), 'POST', '/api/setup/backup-confirmed', { confirmed: true });
     expect(res.status).toBe(409);
     expect(fs.existsSync(flagFile())).toBe(false);
+  });
+
+  it('a flag left by setup of a different vault does not gate this one', async () => {
+    Vault.create({ path: defaultVaultPath(), passphrase: 'other vault pass', deviceSecret: ensureDeviceSecret().secret, kdf: KDF_INTERACTIVE }).close();
+    fs.writeFileSync(flagFile(), JSON.stringify({ backup_confirmed: false, vault_path: path.join(home, 'elsewhere', 'vault.nkv') }));
+    const s = session();
+    expect(((await call(s, 'GET', '/api/status')).body as { backup_confirmed: boolean }).backup_confirmed).toBe(true);
+    expect((await call(s, 'POST', '/api/sync/config', { server_url: 'http://127.0.0.1:9' })).status).toBe(200);
   });
 });
