@@ -38,6 +38,10 @@ import {
   deriveMasterKey,
   type CryptoProvider,
   type MemoryEntry,
+  type Platform,
+  type SqliteDb,
+  type SqliteDriver,
+  type SqliteStatement,
 } from '@northkeep/core';
 import { nodeCryptoProvider, nodePlatform } from '@northkeep/platform-node';
 import {
@@ -544,6 +548,135 @@ describe('.nkv vault image (expo-sqlite stand-in: sql.js, Spike 1 replication)',
       expect(rows.map((r) => r[0])).toEqual(rememberedIds);
     },
   );
+});
+
+/**
+ * ADR 0067 on the phone's SQLite semantics: a sql.js driver shaped like the
+ * expo adapter (pragma() returns nothing, no inTransaction) runs the real
+ * Vault.save(), so the DROP + VACUUM + export path is proven off better-sqlite3.
+ */
+function sqlJsDriver(): SqliteDriver {
+  const wrap = (db: SqlJsDatabase): SqliteDb => ({
+    prepare(sql: string): SqliteStatement {
+      const execute = <T>(params: unknown[], collect: (stmt: ReturnType<SqlJsDatabase['prepare']>) => T): T => {
+        const stmt = db.prepare(sql);
+        try {
+          // Same re-keying the expo adapter applies; sql.js takes the object itself.
+          if (isNamedParamsObject(params)) stmt.bind(toExpoBindParams(params)[0] as never);
+          else if (params.length > 0) stmt.bind(params as never);
+          return collect(stmt);
+        } finally {
+          stmt.free();
+        }
+      };
+      return {
+        run: (...params) => execute(params, (stmt) => {
+          stmt.step();
+          return { changes: db.getRowsModified(), lastInsertRowid: 0 };
+        }),
+        get: (...params) => execute(params, (stmt) => (stmt.step() ? stmt.getAsObject() : undefined)),
+        all: (...params) => execute(params, (stmt) => {
+          const rows: unknown[] = [];
+          while (stmt.step()) rows.push(stmt.getAsObject());
+          return rows;
+        }),
+      };
+    },
+    exec: (sql: string) => {
+      db.exec(sql);
+    },
+    pragma: (source: string) => {
+      db.exec(`PRAGMA ${source};`);
+      return undefined;
+    },
+    transaction: <T>(fn: () => T) => () => {
+      db.exec('BEGIN');
+      try {
+        const result = fn();
+        db.exec('COMMIT');
+        return result;
+      } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+      }
+    },
+    close: () => db.close(),
+  });
+  const handles = new WeakMap<SqliteDb, SqlJsDatabase>();
+  const make = (db: SqlJsDatabase): SqliteDb => {
+    const wrapped = wrap(db);
+    handles.set(wrapped, db);
+    return wrapped;
+  };
+  return {
+    createEmpty: () => make(new SQL.Database()),
+    openFromImage: (bytes: Uint8Array) => make(new SQL.Database(new Uint8Array(bytes))),
+    serialize: (db: SqliteDb) => handles.get(db)!.export(),
+  };
+}
+
+describe('ADR 0067 save() on the phone SQLite stand-in (sql.js)', () => {
+  let dir: string;
+  let vaultPath: string;
+  const sqlJsPlatform = (): Platform => ({ ...nodePlatform(), sqlite: sqlJsDriver() });
+  const openWith = (platform: Platform): Vault => Vault.open({ path: vaultPath, passphrase: PASSPHRASE, deviceSecret, platform });
+
+  beforeAll(() => {
+    dir = mkdtempSync(path.join(tmpdir(), 'nk-mobile-vacuum-'));
+  });
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('drops a pre-0067 embeddings table with VACUUM, and the desktop reads the chain and order intact', () => {
+    vaultPath = path.join(dir, 'legacy.nkv');
+    const desktop = Vault.create({ path: vaultPath, passphrase: PASSPHRASE, deviceSecret, kdf: KDF_INTERACTIVE, platform: nodePlatform() });
+    for (let i = 0; i < 80; i += 1) desktop.remember({ content: `phone note ${i} ${'y'.repeat(200)}`, type: 'semantic' });
+    const raw = (desktop as unknown as { db: SqliteDb }).db;
+    raw.exec('CREATE TABLE embeddings (memory_id TEXT NOT NULL, model TEXT NOT NULL, dims INTEGER NOT NULL, vector BLOB NOT NULL, PRIMARY KEY (memory_id, model))');
+    const insert = raw.prepare('INSERT INTO embeddings VALUES (?, ?, ?, ?)');
+    for (const e of desktop.list()) insert.run(e.id, 'nomic-embed-text', 768, Buffer.alloc(3072, 7));
+    const proto = Vault.prototype as unknown as { compactImage: () => void };
+    const real = proto.compactImage;
+    proto.compactImage = () => {};
+    try {
+      desktop.save();
+    } finally {
+      proto.compactImage = real;
+    }
+    desktop.close();
+    const legacySize = readFileSync(vaultPath).length;
+
+    const phone = openWith(sqlJsPlatform());
+    expect(phone.hasLegacyEmbeddingsTable()).toBe(true);
+    const order = phone.list().map((e) => e.id);
+    phone.remember({ content: 'written on the phone', type: 'semantic' });
+    phone.save();
+    phone.close();
+    expect(readFileSync(vaultPath).length).toBeLessThan(legacySize / 2);
+
+    const back = openWith(nodePlatform());
+    expect(back.hasLegacyEmbeddingsTable()).toBe(false);
+    expect(back.verifyChain()).toEqual({ ok: true });
+    expect(back.list().map((e) => e.id)).toEqual([...order, back.list().at(-1)!.id]);
+    expect(back.list().at(-1)!.content).toBe('written on the phone');
+    back.close();
+  });
+
+  it('reads the free-page count through prepare() and reclaims it after forgets', () => {
+    vaultPath = path.join(dir, 'forget.nkv');
+    const v = Vault.create({ path: vaultPath, passphrase: PASSPHRASE, deviceSecret, kdf: KDF_INTERACTIVE, platform: sqlJsPlatform() });
+    for (let i = 0; i < 40; i += 1) v.remember({ content: `long ${i} ${'z'.repeat(6000)}`, type: 'semantic' });
+    v.save();
+    const full = readFileSync(vaultPath).length;
+    for (const e of v.list().slice(0, 30)) v.forget(e.id, { actor: 'owner' });
+    v.save();
+    v.close();
+    expect(readFileSync(vaultPath).length).toBeLessThan(full / 2);
+    const back = openWith(nodePlatform());
+    expect(back.verifyChain()).toEqual({ ok: true });
+    back.close();
+  });
 });
 
 describe('expo-sqlite param translation (pure adapter logic)', () => {
