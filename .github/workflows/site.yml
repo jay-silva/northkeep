@@ -25,4 +25,6 @@ jobs:
           apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           wranglerVersion: '4.127.0'
+          # The repo's pnpm lockfile would make the action pick pnpm, which this runner lacks.
+          packageManager: npm
           command: pages deploy site --project-name northkeep --branch main --commit-hash ${{ github.sha }}
