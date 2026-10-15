@@ -134,3 +134,106 @@ describe('sample copy', () => {
     expect(blob).not.toMatch(/silvapeak|@northkeep\.ai|sk-|ghp_/);
   });
 });
+
+describe('operator reviewer seed route', () => {
+  const secret = crypto.randomBytes(32).toString('base64url');
+
+  async function withServer(
+    env: string | undefined,
+    run: (base: string, storage: InMemoryConnectorStorage) => Promise<void>,
+  ): Promise<void> {
+    const storage = new InMemoryConnectorStorage();
+    const port = await new Promise<number>((resolve) => {
+      const probe = net.createServer();
+      probe.listen(0, '127.0.0.1', () => {
+        const p = (probe.address() as AddressInfo).port;
+        probe.close(() => resolve(p));
+      });
+    });
+    const saved = process.env.NORTHKEEP_REVIEWER_SEED_SECRET;
+    if (env === undefined) delete process.env.NORTHKEEP_REVIEWER_SEED_SECRET;
+    else process.env.NORTHKEEP_REVIEWER_SEED_SECRET = env;
+    process.env.PUBLIC_URL = `http://127.0.0.1:${port}`;
+    const app = createConnectorServer(storage);
+    if (saved === undefined) delete process.env.NORTHKEEP_REVIEWER_SEED_SECRET;
+    else process.env.NORTHKEEP_REVIEWER_SEED_SECRET = saved;
+    const server = await new Promise<Server>((resolve) => {
+      const srv = app.listen(port, '127.0.0.1', () => resolve(srv));
+    });
+    try {
+      await run(`http://127.0.0.1:${port}`, storage);
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }
+
+  const seedCall = (base: string, bearer: string | null, connectorToken: string) =>
+    fetch(`${base}/operator/reviewer-seed`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) },
+      body: JSON.stringify({ connectorToken }),
+    });
+
+  it('does not exist when the secret is unset or shorter than 32 characters', async () => {
+    const token = crypto.randomBytes(24).toString('hex');
+    for (const env of [undefined, '', 'short-secret-under-32-chars']) {
+      await withServer(env, async (base, storage) => {
+        const resp = await seedCall(base, env || secret, token);
+        expect(resp.status).toBe(404);
+        expect(await storage.listEntries(sha256hex(token))).toEqual([]);
+      });
+    }
+  });
+
+  it('refuses a missing or wrong secret and writes nothing', async () => {
+    const token = crypto.randomBytes(24).toString('hex');
+    await withServer(secret, async (base, storage) => {
+      expect((await seedCall(base, null, token)).status).toBe(401);
+      expect((await seedCall(base, `${secret}x`, token)).status).toBe(401);
+      expect(await storage.listEntries(sha256hex(token))).toEqual([]);
+      expect(await storage.getAccountDekWrap(sha256hex(token))).toBeFalsy();
+    });
+  });
+
+  it('seeds with the right secret, and the returned code connects an app to the sample vault', async () => {
+    const token = crypto.randomBytes(24).toString('hex');
+    await withServer(secret, async (base, storage) => {
+      const resp = await seedCall(base, secret, token);
+      expect(resp.status).toBe(201);
+      expect(resp.headers.get('cache-control')).toBe('no-store');
+      const body = (await resp.json()) as { rows_written: number; pairing_code: string; expires_at: string };
+      expect(body.rows_written).toBe(SAMPLE_ROWS.length);
+      expect(body.pairing_code).toMatch(/^[A-Z2-9]{8}$/);
+      expect(Date.parse(body.expires_at) - Date.now()).toBeGreaterThan(6 * 24 * 60 * 60 * 1000);
+      const rows = await storage.listEntries(sha256hex(token));
+      expect(rows.map((r) => r.entryId).sort()).toEqual(SAMPLE_ROWS.map((r) => r.entryId).sort());
+      const access = await connectWithCode(base, body.pairing_code);
+      const projects = await mcpToolCall(base, access, 'project_list', {});
+      expect(projects.text).toContain('lantern-gazette');
+    });
+  });
+
+  it('refuses an account that holds real rows and leaves them alone', async () => {
+    const token = crypto.randomBytes(24).toString('hex');
+    await withServer(secret, async (base, storage) => {
+      await storage.upsertAccount(sha256hex(token));
+      await storage.putEntry(sha256hex(token), {
+        entryId: 'real-user-row',
+        scope: 'work',
+        type: '',
+        content: 'nkc1:not-ours',
+        createdAt: new Date().toISOString(),
+      });
+      const resp = await seedCall(base, secret, token);
+      expect(resp.status).toBe(409);
+      const rows = await storage.listEntries(sha256hex(token));
+      expect(rows.map((r) => r.entryId)).toEqual(['real-user-row']);
+    });
+  });
+
+  it('rejects a short connector token', async () => {
+    await withServer(secret, async (base) => {
+      expect((await seedCall(base, secret, 'too-short')).status).toBe(400);
+    });
+  });
+});

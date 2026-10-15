@@ -10,6 +10,7 @@
  * the repo.
  */
 
+import { timingSafeEqual } from 'node:crypto';
 import {
   DEV_KEK_PEPPER,
   KEK_LABEL_CONNECTOR_TOKEN,
@@ -135,4 +136,21 @@ export async function seedReviewerAccount(
   const pairingExpiresAt = now + PAIRING_TTL_MS;
   await storage.putPairingCode(sha256hex(pairingCode), accountHash, pairingExpiresAt, pairWrap);
   return { accountHash, pairingCode, pairingExpiresAt, rowsWritten: SAMPLE_ROWS.length };
+}
+
+export const REVIEWER_SEED_SECRET_ENV = 'NORTHKEEP_REVIEWER_SEED_SECRET';
+const MIN_SEED_SECRET_LENGTH = 32;
+
+/** The operator secret for POST /operator/reviewer-seed, or null (no route) when unset or too short. */
+export function reviewerSeedSecretFromEnv(env: NodeJS.ProcessEnv = process.env): string | null {
+  const raw = env[REVIEWER_SEED_SECRET_ENV]?.trim() ?? '';
+  return raw.length >= MIN_SEED_SECRET_LENGTH ? raw : null;
+}
+
+/** Constant-time check of an `Authorization: Bearer` header against the operator secret. */
+export function operatorBearerMatches(header: string | string[] | undefined, secret: string): boolean {
+  if (typeof header !== 'string' || !header.startsWith('Bearer ')) return false;
+  const given = Buffer.from(sha256hex(header.slice(7)), 'hex');
+  const expected = Buffer.from(sha256hex(secret), 'hex');
+  return timingSafeEqual(given, expected);
 }
