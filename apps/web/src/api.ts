@@ -34,6 +34,7 @@ import {
   type PullPreview,
   setSyncServer,
   subscriptionStatus,
+  AlreadySubscribedError,
   SubscriptionRequiredError,
   syncAge,
   syncState,
@@ -926,7 +927,10 @@ async function dispatch(
     try {
       const url = await checkoutUrl({ deviceSecret });
       return ok({ url });
-    } catch {
+    } catch (err) {
+      if (err instanceof AlreadySubscribedError) {
+        return bad(409, 'You already have a subscription. Use Manage billing to change or cancel it.');
+      }
       return bad(400, 'This sync server does not offer subscriptions.');
     }
   }

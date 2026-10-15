@@ -4,6 +4,7 @@ import http from 'node:http';
 import { handleSync, MAX_BLOB_BYTES, parseAllowlist, type SyncRequest } from './handler.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
 import {
+  AlreadySubscribedError,
   createCheckout,
   createPortal,
   handleWebhook,
@@ -214,8 +215,13 @@ async function handleBillingRoute(
     return;
   }
   if (method === 'POST' && path === '/api/checkout') {
-    const { url } = await createCheckout(tokenHash, billing.gateway, billing.config);
-    sendJson(200, { url });
+    try {
+      const { url } = await createCheckout(tokenHash, storage, billing.gateway, billing.config);
+      sendJson(200, { url });
+    } catch (err) {
+      if (!(err instanceof AlreadySubscribedError)) throw err;
+      sendJson(409, { error: err.message });
+    }
     return;
   }
   if (method === 'POST' && path === '/api/portal') {

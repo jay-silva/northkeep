@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { handleSync, type SyncRequest } from '../src/handler.js';
 import { InMemoryStorage } from '../src/storage.js';
 import {
+  AlreadySubscribedError,
   billingFromEnv,
   createCheckout,
   handleWebhook,
@@ -151,7 +152,7 @@ describe('handleWebhook', () => {
       status: 'active',
       currentPeriodEnd: nowSec + 3600,
     });
-    const gw = fakeGateway();
+    const gw = fakeGateway({ status: 'past_due', currentPeriodEnd: nowSec + 7200 });
     // Newer Stripe API versions: no top-level current_period_end.
     const event = Buffer.from(
       JSON.stringify({
@@ -189,6 +190,70 @@ describe('handleWebhook', () => {
     const out = await handleWebhook(event, 'good', gw, s);
     expect(out.handled).toBe(true);
     expect(await subscriptionActive(HASH, s, NOW)).toBe(false);
+  });
+
+  it('subscription.updated writes Stripe\'s current state, not a stale payload (review H1)', async () => {
+    const s = new InMemoryStorage();
+    await s.upsertSubscription({
+      tokenHash: HASH,
+      stripeCustomerId: 'cus_9',
+      stripeSubscriptionId: 'sub_9',
+      status: 'active',
+      currentPeriodEnd: nowSec + 3600,
+    });
+    // A late retry of an old event: says incomplete with a period already past.
+    const gw = fakeGateway({ status: 'active', currentPeriodEnd: nowSec + 3600 });
+    const stale = Buffer.from(
+      JSON.stringify({
+        type: 'customer.subscription.updated',
+        object: { id: 'sub_9', status: 'incomplete', current_period_end: nowSec - 3600 },
+      }),
+    );
+    await handleWebhook(stale, 'good', gw, s);
+    expect(await s.getSubscription(HASH)).toMatchObject({ status: 'active', currentPeriodEnd: nowSec + 3600 });
+    expect(await subscriptionActive(HASH, s, NOW)).toBe(true);
+  });
+
+  it('a stale "active" payload cannot reopen an account Stripe has as past_due (review H1)', async () => {
+    const s = new InMemoryStorage();
+    await s.upsertSubscription({
+      tokenHash: HASH,
+      stripeCustomerId: 'cus_9',
+      stripeSubscriptionId: 'sub_9',
+      status: 'past_due',
+      currentPeriodEnd: nowSec + 3600,
+    });
+    const gw = fakeGateway({ status: 'past_due', currentPeriodEnd: nowSec + 3600 });
+    const stale = Buffer.from(
+      JSON.stringify({
+        type: 'customer.subscription.updated',
+        object: { id: 'sub_9', status: 'active', current_period_end: nowSec + 3600 },
+      }),
+    );
+    await handleWebhook(stale, 'good', gw, s);
+    expect(await subscriptionActive(HASH, s, NOW)).toBe(false);
+  });
+
+  it('subscription.updated fails (so Stripe retries) when Stripe cannot be reached, and writes nothing', async () => {
+    const s = new InMemoryStorage();
+    await s.upsertSubscription({
+      tokenHash: HASH,
+      stripeCustomerId: 'cus_9',
+      stripeSubscriptionId: 'sub_9',
+      status: 'active',
+      currentPeriodEnd: nowSec + 3600,
+    });
+    const gw: StripeGateway = {
+      ...fakeGateway(),
+      async retrieveSubscription() {
+        throw new Error('network');
+      },
+    };
+    const event = Buffer.from(
+      JSON.stringify({ type: 'customer.subscription.updated', object: { id: 'sub_9', status: 'canceled' } }),
+    );
+    await expect(handleWebhook(event, 'good', gw, s)).rejects.toThrow();
+    expect(await s.getSubscription(HASH)).toMatchObject({ status: 'active' });
   });
 
   it('rejects a forged event (bad signature)', async () => {
@@ -252,7 +317,55 @@ describe('billingFromEnv — fail closed on partial config (M-1)', () => {
 describe('createCheckout', () => {
   it('passes the token hash as client_reference_id (the account key, not a secret)', async () => {
     const gw = fakeGateway();
-    const { url } = await createCheckout(HASH, gw, { priceId: 'price_1', publicBaseUrl: 'https://x' });
+    const { url } = await createCheckout(HASH, new InMemoryStorage(), gw, { priceId: 'price_1', publicBaseUrl: 'https://x' });
     expect(url).toContain(HASH);
+  });
+
+  const config = { priceId: 'price_1', publicBaseUrl: 'https://x' };
+  function recordingGateway() {
+    const calls: Array<{ customerId?: string }> = [];
+    const gw: StripeGateway = {
+      ...fakeGateway(),
+      async createCheckoutSession(a) {
+        calls.push({ customerId: a.customerId });
+        return { url: 'https://checkout.test/s' };
+      },
+    };
+    return { gw, calls };
+  }
+  async function withRow(status: string): Promise<InMemoryStorage> {
+    const s = new InMemoryStorage();
+    await s.upsertSubscription({
+      tokenHash: HASH,
+      stripeCustomerId: 'cus_9',
+      stripeSubscriptionId: 'sub_9',
+      status,
+      currentPeriodEnd: nowSec + 3600,
+    });
+    return s;
+  }
+
+  it('refuses a second checkout while a subscription is not ended, so nobody pays twice (review H2)', async () => {
+    for (const status of ['active', 'trialing', 'past_due', 'unpaid', 'incomplete', 'paused']) {
+      const { gw, calls } = recordingGateway();
+      await expect(createCheckout(HASH, await withRow(status), gw, config), status).rejects.toBeInstanceOf(
+        AlreadySubscribedError,
+      );
+      expect(calls, status).toHaveLength(0);
+    }
+  });
+
+  it('lets an ended subscription start again on the same Stripe customer', async () => {
+    for (const status of ['canceled', 'incomplete_expired']) {
+      const { gw, calls } = recordingGateway();
+      await createCheckout(HASH, await withRow(status), gw, config);
+      expect(calls, status).toEqual([{ customerId: 'cus_9' }]);
+    }
+  });
+
+  it('a first checkout names no customer, so Stripe creates one', async () => {
+    const { gw, calls } = recordingGateway();
+    await createCheckout(HASH, new InMemoryStorage(), gw, config);
+    expect(calls).toEqual([{ customerId: undefined }]);
   });
 });

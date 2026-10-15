@@ -32,6 +32,8 @@ export interface StripeGateway {
   createCheckoutSession(args: {
     priceId: string;
     clientReferenceId: string;
+    /** The account's existing Stripe customer; absent on a first checkout. */
+    customerId?: string;
     successUrl: string;
     cancelUrl: string;
   }): Promise<{ url: string }>;
@@ -58,15 +60,34 @@ export async function subscriptionActive(
   return live && sub.currentPeriodEnd * 1000 > now;
 }
 
-/** Create a hosted Checkout session for this account; returns the URL to open. */
+/** Stripe statuses after which a subscription never bills again. */
+const ENDED_STATUSES = new Set(['canceled', 'incomplete_expired']);
+
+/** The account already has a subscription that has not ended; manage it in the portal. */
+export class AlreadySubscribedError extends Error {
+  constructor() {
+    super('This account already has a subscription. Manage it in the billing portal.');
+    this.name = 'AlreadySubscribedError';
+  }
+}
+
+/**
+ * Create a hosted Checkout session for this account; returns the URL to open.
+ * A second checkout would leave the first subscription billing with no way to
+ * cancel it from the app, so a not-yet-ended subscription refuses (review H2).
+ */
 export async function createCheckout(
   tokenHash: string,
+  storage: Storage,
   gateway: StripeGateway,
   config: BillingConfig,
 ): Promise<{ url: string }> {
+  const existing = await storage.getSubscription(tokenHash);
+  if (existing && !ENDED_STATUSES.has(existing.status)) throw new AlreadySubscribedError();
   const session = await gateway.createCheckoutSession({
     priceId: config.priceId,
     clientReferenceId: tokenHash,
+    customerId: existing?.stripeCustomerId,
     successUrl: `${config.publicBaseUrl}/billing/success`,
     cancelUrl: `${config.publicBaseUrl}/billing/cancel`,
   });
@@ -126,6 +147,15 @@ export async function handleWebhook(
   if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
     const sub = event.object;
     const subscriptionId = typeof sub.id === 'string' ? sub.id : null;
+    if (!subscriptionId) return { handled: false };
+    // Stripe does not deliver events in order, so a late retry can carry an old
+    // state. Write what Stripe says now; a fetch failure throws, and Stripe
+    // retries the event (review H1). A deletion is final, so its payload is trusted.
+    if (event.type === 'customer.subscription.updated') {
+      const info = await gateway.retrieveSubscription(subscriptionId);
+      await storage.updateSubscriptionByStripeId(subscriptionId, info.status, info.currentPeriodEnd);
+      return { handled: true };
+    }
     const status = typeof sub.status === 'string' ? sub.status : null;
     // The event payload is shaped by the WEBHOOK ENDPOINT's API version — not
     // our SDK pin. Newer Stripe API versions moved current_period_end off the
@@ -211,11 +241,12 @@ export function createStripeGateway(secretKey: string, webhookSecret: string): S
   // a future SDK upgrade must re-verify the period fields.
   const stripe = new Stripe(secretKey, { apiVersion: '2025-02-24.acacia' });
   return {
-    async createCheckoutSession({ priceId, clientReferenceId, successUrl, cancelUrl }) {
+    async createCheckoutSession({ priceId, clientReferenceId, customerId, successUrl, cancelUrl }) {
       const session = await stripe.checkout.sessions.create({
         mode: 'subscription',
         line_items: [{ price: priceId, quantity: 1 }],
         client_reference_id: clientReferenceId,
+        ...(customerId ? { customer: customerId } : {}),
         success_url: successUrl,
         cancel_url: cancelUrl,
       });
