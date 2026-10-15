@@ -2,6 +2,8 @@
 
 Status: Accepted 2026-07-25 · Review: adversarial review during build; findings (emphasis DoS, test-shim gap) fixed, see full record
 
+Superseded in part by ADR 0066 (accepted 2026-10-15): Converse is no longer presented as a product mode.
+
 ## Context
 The GUI rendered replies with one `textContent` assignment. With web search on, replies arrive full of `**bold**`, `### headings` and lists shown as literal marks. Since M10b/M10d a reply can contain text copied from an arbitrary web page via `web_fetch`/`web_search`, and the GUI is a loopback page holding a live session token for an unlocked vault, so parsing reply text as HTML would give a page we never saw a script-injection path into the vault UI. A sanitizer narrows that; it does not remove the parser.
 

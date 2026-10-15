@@ -1,6 +1,6 @@
 # ADR 0066: Retire Converse from the front door, keep its code this quarter
 
-Status: Proposed (awaiting Jay), 2026-10-15 · Review: not yet run. The README edits in the same branch are a published claim and need the review gate before merge.
+Status: Accepted 2026-10-15 (Jay) · Review: claim review of the README and ADR, CLEARED WITH WOUNDS, wounds fixed (evidence u1-u5-claim-review.md)
 
 ## Context
 Converse is NorthKeep's own chat: it masks a message before it leaves and restores details in the reply (ADR 0007, the agent harness in ADRs 0027 to 0037). The site marked it legacy on 2026-09-28 in site commit f486f30, with no ADR. The README still sold it as "Mode 2: the firewall", the CLI home screen lists `converse` first and starts it when you press Enter, and `northkeep connect` ends by pointing at it. Agents read the README, not the site, so they keep extending it. The site's reason is a judgment, not a usage count: NorthKeep has no telemetry.

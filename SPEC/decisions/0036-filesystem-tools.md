@@ -2,6 +2,8 @@
 
 Status: PARKED 2026-07-26 by Jay; not being built, kept as a decision record (drafted 2026-07-25) · Review: Revision 1 "do not implement as written" (2026-07-25); Revision 2 "PASTURE as written" (2026-07-26)
 
+Superseded in part by ADR 0066 (accepted 2026-10-15): Converse is no longer presented as a product mode.
+
 ## Context
 A filesystem tool (named in ADR 0027) is the first whose blast radius is the user's whole machine, and the vault is a file on it: a read tool is an exfiltration primitive aimed at local disk. Jay's bar: "if any chance exists that we are gonna leak the vault its a no go".
 
