@@ -43,6 +43,7 @@ jobs:
         run: pnpm exec vitest run --config e2e/vitest.config.ts
 
       # Release versions agree across apps, README and site; Markdown names
-      # no missing repo files. Separate step so its failure reads as drift.
+      # no missing repo files. Needs no build, so it still runs when tests fail.
       - name: Drift check (versions and doc links)
+        if: ${{ !cancelled() }}
         run: node scripts/check-drift.mjs

@@ -114,6 +114,19 @@ describe('dead file references in Markdown', () => {
     expect(checkLinks(root, { exclude: [] }).problems).toEqual([]);
   });
 
+  it('counts only tracked files in a git checkout, as CI sees them', () => {
+    const root = repo({ 'README.md': 'See [notes](./NOTES.md) and [guide](./GUIDE.md).\n', 'GUIDE.md': '# G\n' });
+    const git = (...args: string[]) =>
+      spawnSync('git', ['-c', 'user.email=t@example.test', '-c', 'user.name=t', ...args], { cwd: root, encoding: 'utf8' });
+    git('init', '-q');
+    git('add', 'README.md', 'GUIDE.md');
+    git('commit', '-q', '-m', 'init');
+    writeFileSync(join(root, 'NOTES.md'), '# untracked\n');
+    expect(checkLinks(root, { exclude: [] }).problems).toEqual([
+      'README.md:1 refers to ./NOTES.md, which does not exist in the repo.',
+    ]);
+  });
+
   it('skips excluded history folders', () => {
     const root = repo({ 'docs/design/old.md': '[gone](./missing.md)\n' });
     expect(checkLinks(root).problems).toEqual([]);

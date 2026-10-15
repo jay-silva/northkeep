@@ -94,10 +94,10 @@ const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'target', '.expo', 'i
 const PATH_EXT = /\.(md|ts|tsx|mts|mjs|cjs|js|json|ya?ml|html|css|toml|rs|sh|py|sql|txt|plist)$/;
 const TOP_DIRS = ['SPEC/', 'docs/', 'packages/', 'apps/', 'scripts/', 'e2e/', 'site/', 'legal/', 'workers/', 'brand/', '.github/'];
 
-/** Paths (relative to root, forward slashes) of every file in the repo. */
+/** Paths (relative to root, forward slashes) of every file in the repo. Tracked files only, so a local untracked file cannot hide a link CI will call dead. */
 export function listRepoFiles(root) {
   try {
-    const out = execFileSync('git', ['ls-files', '-z', '--cached', '--others', '--exclude-standard'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
+    const out = execFileSync('git', ['ls-files', '-z'], { cwd: root, stdio: ['ignore', 'pipe', 'ignore'] }).toString();
     const files = out.split('\0').filter((f) => f && existsSync(join(root, f)));
     if (files.length > 0 && existsSync(join(root, '.git'))) return files;
   } catch {
@@ -183,7 +183,7 @@ function allowlisted(target) {
   return ALLOWLIST.some((a) => a.pattern.test(target));
 }
 
-function resolveRef(root, fromFile, ref, byName) {
+function resolveRef(root, fromFile, ref, byName, known) {
   let target = ref.target.split('#')[0].split('?')[0];
   if (!target) return true; // pure anchor
   if (/^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith('//')) return true; // URL
@@ -196,7 +196,7 @@ function resolveRef(root, fromFile, ref, byName) {
     : [resolve(fromDir, target), ...(ref.kind === 'link' ? [] : [join(root, target)])];
   for (const c of candidates) {
     if (!normalize(c).startsWith(normalize(root))) continue;
-    if (existsSync(c)) return true;
+    if (known.has(relative(root, c).split(sep).join('/').replace(/\/$/, ''))) return true;
   }
   // A bare doc name ("see KNOWN-LIMITS.md") may live in any folder.
   if (ref.kind !== 'link' && !target.includes('/') && byName.has(target)) return true;
@@ -207,6 +207,12 @@ function resolveRef(root, fromFile, ref, byName) {
 export function checkLinks(root, { exclude = DEFAULT_LINK_EXCLUDES } = {}) {
   root = resolve(root);
   const files = listRepoFiles(root);
+  // Every listed file and every folder above one: the paths a reference may name.
+  const known = new Set(['']);
+  for (const f of files) {
+    const parts = f.split('/');
+    for (let i = 1; i <= parts.length; i++) known.add(parts.slice(0, i).join('/'));
+  }
   const byName = new Map();
   for (const f of files) {
     const b = basename(f);
@@ -223,7 +229,7 @@ export function checkLinks(root, { exclude = DEFAULT_LINK_EXCLUDES } = {}) {
       for (const ref of referencesInLine(line)) {
         if (seen.has(ref.target)) continue;
         seen.add(ref.target);
-        if (!resolveRef(root, file, ref, byName)) {
+        if (!resolveRef(root, file, ref, byName, known)) {
           problems.push(`${file}:${i + 1} refers to ${ref.target}, which does not exist in the repo.`);
         }
       }
