@@ -18,6 +18,7 @@ const FETCH_TIMEOUT_MS = 5_000;
 const SUCCESS_TTL_MS = 10 * 60 * 1000;
 const FAILURE_TTL_MS = 15_000;
 const CACHE_MAX = 128;
+const SUPPORTED_GRANTS = ['authorization_code', 'refresh_token'];
 
 export type CimdLookup = (clientId: string) => Promise<OAuthClientInformationFull | undefined>;
 
@@ -145,10 +146,14 @@ function asClient(clientId: string, body: unknown): OAuthClientInformationFull {
   if (doc.token_endpoint_auth_method !== undefined && doc.token_endpoint_auth_method !== 'none') {
     throw new CimdError('Client metadata must use token_endpoint_auth_method none.');
   }
-  const grants = doc.grant_types === undefined ? ['authorization_code', 'refresh_token'] : doc.grant_types;
-  if (!Array.isArray(grants) || grants.some((g) => g !== 'authorization_code' && g !== 'refresh_token')) {
+  // A document may list grants we do not offer (Claude lists jwt-bearer). We keep only ours,
+  // and the token endpoint answers anything else with unsupported_grant_type.
+  const listed = doc.grant_types === undefined ? ['authorization_code', 'refresh_token'] : doc.grant_types;
+  if (!Array.isArray(listed) || listed.length > 16 || listed.some((g) => typeof g !== 'string')) {
     throw new CimdError('grant_types were refused.');
   }
+  const grants = SUPPORTED_GRANTS.filter((g) => listed.includes(g));
+  if (!grants.includes('authorization_code')) throw new CimdError('grant_types were refused.');
   const responses = doc.response_types === undefined ? ['code'] : doc.response_types;
   if (!Array.isArray(responses) || responses.some((g) => g !== 'code')) throw new CimdError('response_types were refused.');
   const name = doc.client_name === undefined ? undefined : doc.client_name;
@@ -159,7 +164,7 @@ function asClient(clientId: string, body: unknown): OAuthClientInformationFull {
     client_id: clientId,
     client_name: name,
     redirect_uris: redirectUris,
-    grant_types: grants as OAuthClientInformationFull['grant_types'],
+    grant_types: grants,
     response_types: ['code'],
     token_endpoint_auth_method: 'none',
   };

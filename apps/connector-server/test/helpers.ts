@@ -95,16 +95,21 @@ export async function decryptedPendingEntries(
  * running connector and return an MCP access token. Tests that drive real tool
  * calls need a real token; there is no shortcut past the OAuth flow.
  */
-export async function connectAiApp(base: string, deviceSecret: Uint8Array, resource = `${base}/mcp`): Promise<string> {
+export async function connectAiApp(
+  base: string,
+  deviceSecret: Uint8Array,
+  resource = `${base}/mcp`,
+  client?: { clientId: string; redirectUri: string },
+): Promise<string> {
   const { startPairing } = await import('@northkeep/sync');
   const crypto = await import('node:crypto');
   const b64url = (b: Buffer): string => b.toString('base64url');
-  const redirectUri = 'http://localhost:9999/callback';
+  const redirectUri = client?.redirectUri ?? 'http://localhost:9999/callback';
   const pairingCode = await startPairing({ server: base, deviceSecret: deviceSecret as never });
   const as = (await fetch(`${base}/.well-known/oauth-authorization-server`).then((r) => r.json())) as {
     registration_endpoint: string;
   };
-  const reg = (await fetch(as.registration_endpoint, {
+  const reg = client ? { client_id: client.clientId } : (await fetch(as.registration_endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
