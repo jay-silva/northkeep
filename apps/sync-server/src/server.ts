@@ -6,6 +6,7 @@ import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-li
 import {
   AlreadySubscribedError,
   createCheckout,
+  WebhookSignatureError,
   createPortal,
   handleWebhook,
   subscriptionActive,
@@ -191,9 +192,10 @@ async function handleBillingRoute(
     try {
       await handleWebhook(body, signature, billing.gateway, storage);
       sendJson(200, { received: true });
-    } catch {
-      // Bad signature or unparseable event — never echo internals.
-      sendJson(400, { error: 'Invalid webhook signature.' });
+    } catch (err) {
+      // Never echo internals. A 500 makes Stripe retry; a forged event gets 400.
+      if (err instanceof WebhookSignatureError) sendJson(400, { error: 'Invalid webhook signature.' });
+      else sendJson(500, { error: 'Webhook processing failed; Stripe will retry.' });
     }
     return;
   }

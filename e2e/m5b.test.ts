@@ -68,17 +68,22 @@ function tokenFor(home: string): string {
 
 const hashOf = (token: string): string => createHash('sha256').update(token, 'utf8').digest('hex');
 
+/** What the fake Stripe reports for a subscription, and the customer each checkout named. */
+let stripeStatus = 'active';
+const checkoutCustomers: Array<string | undefined> = [];
+
 /** A fake Stripe: verifyWebhook accepts the body as the event iff signature==='good'. */
 function fakeGateway() {
   return {
-    async createCheckoutSession(a: { clientReferenceId: string }) {
+    async createCheckoutSession(a: { clientReferenceId: string; customerId?: string }) {
+      checkoutCustomers.push(a.customerId);
       return { url: `https://checkout.stripe.test/session#${a.clientReferenceId}` };
     },
     async createPortalSession(a: { customerId: string }) {
       return { url: `https://billing.stripe.test/portal#${a.customerId}` };
     },
     async retrieveSubscription() {
-      return { status: 'active', currentPeriodEnd: Math.floor(Date.now() / 1000) + 30 * 24 * 3600 };
+      return { status: stripeStatus, currentPeriodEnd: Math.floor(Date.now() / 1000) + 30 * 24 * 3600 };
     },
     verifyWebhook(rawBody: Buffer, signature: string) {
       if (signature !== 'good') throw new Error('bad signature');
@@ -194,6 +199,32 @@ describe('M5b acceptance — Stripe billing gates hosted sync', () => {
     expect(status).toBe(400);
     const push = await cli(homePay, ['sync', 'push']);
     expect(push.code).not.toBe(0);
+  });
+
+  it('after cancelling, subscribe starts a new checkout on the same Stripe customer', async () => {
+    checkoutCustomers.length = 0;
+    const sub = await cli(homePay, ['sync', 'subscribe']);
+    expect(sub.code).toBe(0);
+    expect(sub.stdout).toContain('https://checkout.stripe.test/');
+    expect(checkoutCustomers).toEqual(['cus_pay']);
+  });
+
+  it('a failed payment points to the billing portal instead of opening a second checkout', async () => {
+    stripeStatus = 'past_due';
+    const status = await postWebhook(
+      {
+        type: 'checkout.session.completed',
+        object: { client_reference_id: hashOf(tokenFor(homePay)), customer: 'cus_pay', subscription: 'sub_pay2' },
+      },
+      'good',
+    );
+    expect(status).toBe(200);
+    checkoutCustomers.length = 0;
+    const sub = await cli(homePay, ['sync', 'subscribe']);
+    expect(sub.code).not.toBe(0);
+    expect(sub.stderr + sub.stdout).toMatch(/already has a subscription.*northkeep sync billing/i);
+    expect(checkoutCustomers).toEqual([]);
+    stripeStatus = 'active';
   });
 
   it('an allowlisted account syncs free throughout — never subscribes', async () => {

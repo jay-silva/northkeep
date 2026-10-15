@@ -931,7 +931,7 @@ async function dispatch(
       if (err instanceof AlreadySubscribedError) {
         return bad(409, 'You already have a subscription. Use Manage billing to change or cancel it.');
       }
-      return bad(400, 'This sync server does not offer subscriptions.');
+      return bad(400, err instanceof Error ? err.message : 'Could not start a checkout.');
     }
   }
 

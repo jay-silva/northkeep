@@ -12,7 +12,6 @@ import {
   type PullDropReport,
   pushVault,
   setSyncServer,
-  AlreadySubscribedError,
   subscriptionStatus,
   SubscriptionRequiredError,
   syncAge,
@@ -236,8 +235,7 @@ export async function syncSubscribe(fail: (m: string) => never): Promise<void> {
   try {
     url = await checkoutUrl({ deviceSecret });
   } catch (err) {
-    if (err instanceof AlreadySubscribedError) fail(err.message);
-    fail('This sync server does not offer subscriptions (it may be private or self-hosted).');
+    fail(err instanceof Error ? err.message : 'Could not start a checkout.');
   }
   console.log('Open this link in your browser to subscribe ($10/month, secure Stripe checkout):');
   console.log('');

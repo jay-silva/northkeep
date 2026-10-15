@@ -6432,9 +6432,14 @@
           ? ', renews ' + new Date(s.currentPeriodEnd * 1000).toISOString().slice(0, 10) : '';
         line.textContent = '✓ Active (' + s.status + ')' + until + '.';
         subBtn.hidden = true; mgBtn.hidden = false;
+      } else if (s.status && s.status !== 'none' && !['canceled', 'incomplete_expired', 'incomplete'].includes(s.status)) {
+        // Inactive but not ended (past_due, unpaid, paused): the server refuses a
+        // second checkout, so the fix is in the billing portal.
+        line.textContent = 'Your last payment did not go through. Update your card in Manage billing to keep syncing.';
+        subBtn.hidden = true; mgBtn.hidden = false;
       } else if (s.status && s.status !== 'none') {
-        // Billing on, account inactive/lapsed.
-        line.textContent = 'Your subscription is ' + s.status + '. Resubscribe to keep syncing.';
+        // Ended: start again.
+        line.textContent = 'Your subscription has ended. Subscribe to keep syncing.';
         subBtn.hidden = false; mgBtn.hidden = false;
       } else {
         // Billing on, no subscription yet — prompt to subscribe.

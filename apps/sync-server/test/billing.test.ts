@@ -4,6 +4,8 @@ import { handleSync, type SyncRequest } from '../src/handler.js';
 import { InMemoryStorage } from '../src/storage.js';
 import {
   AlreadySubscribedError,
+  CustomerMissingError,
+  WebhookSignatureError,
   billingFromEnv,
   createCheckout,
   handleWebhook,
@@ -256,11 +258,52 @@ describe('handleWebhook', () => {
     expect(await s.getSubscription(HASH)).toMatchObject({ status: 'active' });
   });
 
+  it('an update that lands after a deletion cannot revive the subscription (review F2)', async () => {
+    const s = new InMemoryStorage();
+    await s.upsertSubscription({
+      tokenHash: HASH,
+      stripeCustomerId: 'cus_9',
+      stripeSubscriptionId: 'sub_9',
+      status: 'active',
+      currentPeriodEnd: nowSec + 3600,
+    });
+    const deleted = Buffer.from(
+      JSON.stringify({ type: 'customer.subscription.deleted', object: { id: 'sub_9', status: 'canceled' } }),
+    );
+    await handleWebhook(deleted, 'good', fakeGateway(), s);
+    // The update's fetch saw the subscription before the cancellation.
+    const late = Buffer.from(
+      JSON.stringify({ type: 'customer.subscription.updated', object: { id: 'sub_9', status: 'active' } }),
+    );
+    await handleWebhook(late, 'good', fakeGateway({ status: 'active', currentPeriodEnd: nowSec + 3600 }), s);
+    expect(await s.getSubscription(HASH)).toMatchObject({ status: 'canceled' });
+    expect(await subscriptionActive(HASH, s, NOW)).toBe(false);
+  });
+
+  it('a late completion for an old, ended subscription does not replace the live one (review F5)', async () => {
+    const s = new InMemoryStorage();
+    await s.upsertSubscription({
+      tokenHash: HASH,
+      stripeCustomerId: 'cus_9',
+      stripeSubscriptionId: 'sub_new',
+      status: 'active',
+      currentPeriodEnd: nowSec + 3600,
+    });
+    const old = Buffer.from(
+      JSON.stringify({
+        type: 'checkout.session.completed',
+        object: { client_reference_id: HASH, customer: 'cus_9', subscription: 'sub_old' },
+      }),
+    );
+    await handleWebhook(old, 'good', fakeGateway({ status: 'canceled', currentPeriodEnd: 0 }), s);
+    expect(await s.getSubscription(HASH)).toMatchObject({ stripeSubscriptionId: 'sub_new', status: 'active' });
+  });
+
   it('rejects a forged event (bad signature)', async () => {
     const s = new InMemoryStorage();
     const gw = fakeGateway();
     const event = Buffer.from(JSON.stringify({ type: 'checkout.session.completed', object: {} }));
-    await expect(handleWebhook(event, 'FORGED', gw, s)).rejects.toThrow();
+    await expect(handleWebhook(event, 'FORGED', gw, s)).rejects.toBeInstanceOf(WebhookSignatureError);
     // Nothing was written.
     expect(await s.getSubscription(HASH)).toBeNull();
   });
@@ -346,7 +389,7 @@ describe('createCheckout', () => {
   }
 
   it('refuses a second checkout while a subscription is not ended, so nobody pays twice (review H2)', async () => {
-    for (const status of ['active', 'trialing', 'past_due', 'unpaid', 'incomplete', 'paused']) {
+    for (const status of ['active', 'trialing', 'past_due', 'unpaid', 'paused']) {
       const { gw, calls } = recordingGateway();
       await expect(createCheckout(HASH, await withRow(status), gw, config), status).rejects.toBeInstanceOf(
         AlreadySubscribedError,
@@ -355,12 +398,27 @@ describe('createCheckout', () => {
     }
   });
 
-  it('lets an ended subscription start again on the same Stripe customer', async () => {
-    for (const status of ['canceled', 'incomplete_expired']) {
+  it('lets an ended or never-paid subscription start again on the same Stripe customer', async () => {
+    for (const status of ['canceled', 'incomplete_expired', 'incomplete']) {
       const { gw, calls } = recordingGateway();
       await createCheckout(HASH, await withRow(status), gw, config);
       expect(calls, status).toEqual([{ customerId: 'cus_9' }]);
     }
+  });
+
+  it('a customer deleted in Stripe does not lock the account out: checkout retries without it', async () => {
+    const calls: Array<string | undefined> = [];
+    const gw: StripeGateway = {
+      ...fakeGateway(),
+      async createCheckoutSession(a) {
+        calls.push(a.customerId);
+        if (a.customerId) throw new CustomerMissingError();
+        return { url: 'https://checkout.test/fresh' };
+      },
+    };
+    const { url } = await createCheckout(HASH, await withRow('canceled'), gw, config);
+    expect(url).toBe('https://checkout.test/fresh');
+    expect(calls).toEqual(['cus_9', undefined]);
   });
 
   it('a first checkout names no customer, so Stripe creates one', async () => {

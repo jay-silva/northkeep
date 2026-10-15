@@ -380,8 +380,13 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   Stripe for the subscription's current state rather than trusting the event.
   If Stripe can't be reached, the event fails and Stripe retries it.
 - **One subscription per account.** Starting a checkout while your subscription
-  has not ended is refused (HTTP 409); change or cancel it in the billing portal
-  instead. A new checkout after a cancellation reuses your Stripe customer.
+  is live or has a failed payment is refused (HTTP 409); fix the card, change
+  or cancel in the billing portal instead. A subscription whose first payment
+  never completed does not block a new checkout. A new checkout after a
+  cancellation reuses your Stripe customer, or makes a new one if that customer
+  was deleted. A cancelled subscription stays cancelled even if an older Stripe
+  event arrives late. Stripe's billing portal must allow cancellation, or an
+  unpaid account has no way out but support.
   Two checkout pages opened *before* either is paid can still both be completed,
   which creates two subscriptions; the account follows the later one, and the
   earlier one must be cancelled by support.
