@@ -3,6 +3,16 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
+## Notes and claims between AI apps (ADR 0072), current
+
+- Notes are coordination, not memory. They live in a separate encrypted file on this Mac (`notes-<hash>.db` in the NorthKeep folder), never in the vault. They are not synced, exported, shared with the connector, shown on the phone, or included in a vault backup. A user backup such as Time Machine copies the file; project names, times, note and client ids, session ids and the hook's app names in it are readable; note text and claim subjects are not.
+- An app sees a note at its next NorthKeep project call, or, in Claude Code, through the optional hook. NorthKeep cannot interrupt an app mid-task. Cursor and Codex hooks are not supported.
+- A claim is exclusive on one Mac only. App names are what each app reports; any local program can post, claim or release as any app, and the owner CLI can release any claim. Release rules prevent mistakes, not attacks.
+- Notes are marked as information, never instructions, and are cut to one line of 280 characters. A model can still be persuaded by what a note says.
+- A Claude Code session that uses both the hook and the NorthKeep tools can see the same note twice.
+- Notes are not redacted. With a redaction tier set the hook prints nothing; tool results mask notes like other project text, but a note is marked seen first, so if Tier 2 fails that session will not see it again.
+- A new vault starts a new notes file, and the old file stays on disk unread. If the key ever changes for the same vault file, the next project call clears the notes file and says so; the hook prints nothing until then.
+
 ## Connector directory hosts (ADR 0071), current
 
 - The connector answers for `https://mcp.northkeep.ai` and for `https://northkeep-connector-server.vercel.app`. Discovery names the host you connected to when that host is one of those, or the configured public URL. A different Host header does not choose the issuer.
