@@ -861,6 +861,15 @@
   .setup-path { font-family:var(--mono); font-size:13px; margin-top:6px; color:var(--ink); overflow-wrap:anywhere; }
   .setup-dialog label.check { align-items:flex-start; color:var(--ink); min-height:44px; margin:4px 0 14px; }
   .setup-dialog label.check input { width:20px; height:20px; margin:2px 0 0; flex:none; accent-color:var(--accent); }
+  .setup-proj { border:1px solid var(--accent); border-radius:12px; padding:14px; margin-bottom:12px; }
+  .setup-proj .kicker { font:600 11px/1.2 var(--sans); text-transform:uppercase; letter-spacing:.1em; color:var(--accent); margin:0 0 6px; }
+  .setup-proj h3 { margin:0 0 6px; font:500 19px/1.25 var(--serif); }
+  .setup-proj p { margin:0 0 10px; font-size:14px; }
+  .setup-proj .small { font-size:12px; margin:8px 0 0; }
+  .setup-loop { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:8px; margin:0 0 12px; }
+  .setup-loop div { background:var(--chip); border-radius:10px; padding:8px 10px; font-size:13px; }
+  .setup-loop b { display:block; font-weight:600; }
+  @media (max-width:420px) { .setup-loop { grid-template-columns:1fr; } }
   .setup-opt { border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
   .setup-opt strong { display:block; }
   .setup-opt p { margin:4px 0 10px; font-size:13px; }
@@ -1605,11 +1614,26 @@
       <label class="check"><input type="checkbox" id="setupBackupCheck"> <span>I saved a copy somewhere other than this computer.</span></label>
       <div class="err" id="setupBackupErr" role="alert"></div>
       <button class="btn primary full" id="setupBackupBtn" disabled>I’ve backed it up, continue</button>
-      <p class="small after">Setup cannot finish, and sync stays off, until you confirm this. There is no skip.</p>
+      <p class="small after">Setup cannot finish, and the app will not set up sync, until you confirm this. There is no skip.</p>
     </div>
     <div id="setupStepExtras" hidden>
       <h2 tabindex="-1">You're all set</h2>
-      <p>Your memory works now. These two extras can wait until you want them.</p>
+      <p>Your memory works now. One more idea worth knowing, then two extras that can wait.</p>
+      <div class="setup-proj">
+        <p class="kicker">Projects</p>
+        <h3>Carry a piece of work between your AI apps</h3>
+        <p id="setupProjLead"></p>
+        <div class="setup-loop">
+          <div><b>Resume</b>The app reads the latest save before it starts.</div>
+          <div><b>Checkpoint</b>It saves progress as it goes.</div>
+          <div><b>Wrap up</b>It records what changed and what's next.</div>
+        </div>
+        <div id="setupProjTry" hidden>
+          <p id="setupProjTryLine"></p>
+          <div class="setup-prompt"><q id="setupProjPrompt">Start a NorthKeep project for what I'm working on this week.</q><button class="btn" id="setupProjCopy" aria-label="Copy the project message">Copy</button></div>
+        </div>
+        <p class="small">An app can propose milestones and report on them. Only you can mark one passed.</p>
+      </div>
       <div class="setup-opt">
         <strong>Detailed memory review</strong>
         <p class="muted">A model can tidy up and merge your memories. Use one on <span data-place>this computer</span>, or connect Claude, OpenAI, Gemini, Grok or OpenRouter with your own key.</p>
@@ -2561,12 +2585,24 @@
     try {
       await api('/api/setup/backup-confirmed', { method: 'POST', json: { confirmed: true } });
       status = { ...status, backup_confirmed: true };
+      renderSetupProjects();
       setupStep('setupStepExtras');
     } catch (e) {
       if (e.message !== 'locked') $('setupBackupErr').textContent = e.message;
       $('setupBackupBtn').disabled = !$('setupBackupCheck').checked;
     }
   });
+
+  // Step 6 projects card: the starter message only makes sense once an app is connected.
+  function renderSetupProjects() {
+    const connected = setupApps.length > 0;
+    $('setupProjLead').textContent = 'A project keeps one piece of work in your vault: where it stands, what\'s next, decisions made and open questions. ' +
+      (connected ? 'Start it in one AI app, and the next app you open picks up from the latest save.'
+        : 'Once you connect an AI app, ask it to start a project, and every app you connect picks up from the latest save.');
+    $('setupProjTry').hidden = !connected;
+    $('setupProjTryLine').textContent = 'Want to try one? Send this to ' + (setupApps.length === 1 ? setupApps[0].label : 'one of your connected apps') + ':';
+  }
+  $('setupProjCopy').addEventListener('click', (e) => copyToClipboard($('setupProjPrompt').textContent, e.currentTarget));
 
   // Step 6: both extras close setup first, so the page behind can take over.
   $('setupModelBtn').addEventListener('click', async () => { await finishSetup(); openConnectWizard(); });

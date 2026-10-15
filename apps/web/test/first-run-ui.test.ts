@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import vm from 'node:vm';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -59,5 +60,56 @@ describe('first-run dialog rules', () => {
     expect(dialog).toContain('aria-modal="true"');
     expect(setupJs).toContain("$('setupOverlay').addEventListener('keydown'");
     expect(setupJs).toContain("if (e.key !== 'Tab') return;");
+  });
+});
+
+describe('first-run projects card', () => {
+  function functionSource(name: string): string {
+    const start = script.indexOf(`function ${name}(`);
+    const brace = script.indexOf('{', start);
+    let depth = 0;
+    for (let i = brace; i < script.length; i += 1) {
+      if (script[i] === '{') depth += 1;
+      if (script[i] === '}' && --depth === 0) return script.slice(start, i + 1);
+    }
+    throw new Error(`Missing function ${name}`);
+  }
+  function render(apps: Array<{ id: string; label: string }>): Record<string, { textContent: string; hidden: boolean }> {
+    const els: Record<string, { textContent: string; hidden: boolean }> = {};
+    const ctx = vm.createContext({ $: (id: string) => (els[id] ??= { textContent: '', hidden: false }), setupApps: apps });
+    vm.runInContext(functionSource('renderSetupProjects') + '; renderSetupProjects();', ctx);
+    return els;
+  }
+
+  it('sits on the last step, above the optional extras', () => {
+    const extras = dialog.slice(dialog.indexOf('id="setupStepExtras"'));
+    expect(extras.indexOf('class="setup-proj"')).toBeGreaterThan(-1);
+    expect(extras.indexOf('class="setup-proj"')).toBeLessThan(extras.indexOf('id="setupModelBtn"'));
+    expect(extras).toContain('Only you can mark one passed.');
+  });
+
+  it('names the one connected app in the starter line', () => {
+    const els = render([{ id: 'claude-desktop', label: 'Claude Desktop' }]);
+    expect(els.setupProjTry.hidden).toBe(false);
+    expect(els.setupProjTryLine.textContent).toBe('Want to try one? Send this to Claude Desktop:');
+    expect(els.setupProjLead.textContent).toContain('the next app you open picks up from the latest save');
+  });
+
+  it('says "one of your connected apps" when there are several', () => {
+    const els = render([{ id: 'a', label: 'Cursor' }, { id: 'b', label: 'Claude Code' }]);
+    expect(els.setupProjTryLine.textContent).toBe('Want to try one? Send this to one of your connected apps:');
+  });
+
+  it('drops the starter message when no app is connected', () => {
+    const els = render([]);
+    expect(els.setupProjTry.hidden).toBe(true);
+    expect(els.setupProjLead.textContent).toContain('Once you connect an AI app, ask it to start a project');
+  });
+});
+
+describe('backup step wording matches what the gate enforces (ADR 0070)', () => {
+  it('does not claim sync stays off', () => {
+    expect(dialog).not.toContain('sync stays off');
+    expect(dialog).toContain('the app will not set up sync');
   });
 });
