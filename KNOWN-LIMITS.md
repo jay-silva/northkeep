@@ -1045,8 +1045,8 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   roughly 5,900 memories, or 450 to 500 entries of 8,000 characters.
   Embeddings are no longer stored in the vault file. `northkeep sync status`
   and `sync push` print the size against the cap and warn at or over 75%
-  (3,145,728 bytes); the desktop's local API reports it in
-  `/api/sync/status`, but the Mac app does not show it yet. Compact project history or forget memories
+  (3,145,728 bytes). The Mac app shows the same size on Settings, Sync, and
+  its header sync button does not turn amber at 75%. Compact project history or forget memories
   to stay under it. Forgetting short memories leaves some slack inside the
   file that is only reclaimed when a save frees enough whole pages.
 - **The 64 KiB push cap applies to every row in a project scope** (the

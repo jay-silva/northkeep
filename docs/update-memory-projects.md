@@ -1,6 +1,6 @@
 # Updating to the Memories and Projects workspace
 
-The Memories and Projects workspace first shipped in 0.22.0; the current Mac release is 0.24.0. Follow these steps when updating from 0.21.0 or earlier. The restart steps apply to every update.
+The Memories and Projects workspace first shipped in 0.22.0; the current Mac release is 0.25.0. Follow these steps when updating from 0.21.0 or earlier. The restart steps apply to every update.
 
 ## Before installing
 
