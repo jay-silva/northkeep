@@ -246,8 +246,8 @@ export async function syncSubscribe(fail: (m: string) => never): Promise<void> {
   let url: string;
   try {
     url = await checkoutUrl({ deviceSecret });
-  } catch {
-    fail('This sync server does not offer subscriptions (it may be private or self-hosted).');
+  } catch (err) {
+    fail(err instanceof Error ? err.message : 'Could not start a checkout.');
   }
   console.log('Open this link in your browser to subscribe ($10/month, secure Stripe checkout):');
   console.log('');

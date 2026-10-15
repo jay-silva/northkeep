@@ -4,7 +4,9 @@ import http from 'node:http';
 import { handleSync, MAX_BLOB_BYTES, parseAllowlist, type SyncRequest } from './handler.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
 import {
+  AlreadySubscribedError,
   createCheckout,
+  WebhookSignatureError,
   createPortal,
   handleWebhook,
   subscriptionActive,
@@ -190,9 +192,10 @@ async function handleBillingRoute(
     try {
       await handleWebhook(body, signature, billing.gateway, storage);
       sendJson(200, { received: true });
-    } catch {
-      // Bad signature or unparseable event — never echo internals.
-      sendJson(400, { error: 'Invalid webhook signature.' });
+    } catch (err) {
+      // Never echo internals. A 500 makes Stripe retry; a forged event gets 400.
+      if (err instanceof WebhookSignatureError) sendJson(400, { error: 'Invalid webhook signature.' });
+      else sendJson(500, { error: 'Webhook processing failed; Stripe will retry.' });
     }
     return;
   }
@@ -214,8 +217,13 @@ async function handleBillingRoute(
     return;
   }
   if (method === 'POST' && path === '/api/checkout') {
-    const { url } = await createCheckout(tokenHash, billing.gateway, billing.config);
-    sendJson(200, { url });
+    try {
+      const { url } = await createCheckout(tokenHash, storage, billing.gateway, billing.config);
+      sendJson(200, { url });
+    } catch (err) {
+      if (!(err instanceof AlreadySubscribedError)) throw err;
+      sendJson(409, { error: err.message });
+    }
     return;
   }
   if (method === 'POST' && path === '/api/portal') {

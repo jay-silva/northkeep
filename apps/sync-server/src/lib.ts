@@ -15,6 +15,9 @@ export {
   type EntitlementClaims,
 } from './entitlement.js';
 export {
+  AlreadySubscribedError,
+  CustomerMissingError,
+  WebhookSignatureError,
   billingFromEnv,
   createStripeGateway,
   createCheckout,

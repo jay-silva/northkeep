@@ -1,5 +1,5 @@
 import Stripe from 'stripe';
-import type { Storage } from './storage.js';
+import { ENDED, type Storage } from './storage.js';
 
 /**
  * Billing (M5b, ADR 0010). A $10/mo Stripe subscription gates the hosted sync
@@ -32,6 +32,8 @@ export interface StripeGateway {
   createCheckoutSession(args: {
     priceId: string;
     clientReferenceId: string;
+    /** The account's existing Stripe customer; absent on a first checkout. */
+    customerId?: string;
     successUrl: string;
     cancelUrl: string;
   }): Promise<{ url: string }>;
@@ -58,19 +60,64 @@ export async function subscriptionActive(
   return live && sub.currentPeriodEnd * 1000 > now;
 }
 
-/** Create a hosted Checkout session for this account; returns the URL to open. */
+
+/**
+ * Statuses that may start a new checkout: ended ones, plus `incomplete` (a first
+ * payment that never completed; Stripe expires it within a day and never bills it).
+ */
+const RESUBSCRIBABLE = new Set([...ENDED, 'incomplete']);
+
+/** Stripe no longer has the stored customer (for example, deleted on request). */
+export class CustomerMissingError extends Error {
+  constructor() {
+    super('The stored Stripe customer no longer exists.');
+    this.name = 'CustomerMissingError';
+  }
+}
+
+/** The webhook's signature did not verify; nothing was read or written. */
+export class WebhookSignatureError extends Error {
+  constructor() {
+    super('Invalid webhook signature.');
+    this.name = 'WebhookSignatureError';
+  }
+}
+
+/** The account already has a subscription that has not ended; manage it in the portal. */
+export class AlreadySubscribedError extends Error {
+  constructor() {
+    super('This account already has a subscription. Manage it in the billing portal.');
+    this.name = 'AlreadySubscribedError';
+  }
+}
+
+/**
+ * Create a hosted Checkout session for this account; returns the URL to open.
+ * A second checkout would leave the first subscription billing with no way to
+ * cancel it from the app, so a not-yet-ended subscription refuses (review H2).
+ */
 export async function createCheckout(
   tokenHash: string,
+  storage: Storage,
   gateway: StripeGateway,
   config: BillingConfig,
 ): Promise<{ url: string }> {
-  const session = await gateway.createCheckoutSession({
+  const existing = await storage.getSubscription(tokenHash);
+  if (existing && !RESUBSCRIBABLE.has(existing.status)) throw new AlreadySubscribedError();
+  const args = {
     priceId: config.priceId,
     clientReferenceId: tokenHash,
     successUrl: `${config.publicBaseUrl}/billing/success`,
     cancelUrl: `${config.publicBaseUrl}/billing/cancel`,
-  });
-  return { url: session.url };
+  };
+  if (!existing) return { url: (await gateway.createCheckoutSession(args)).url };
+  try {
+    return { url: (await gateway.createCheckoutSession({ ...args, customerId: existing.stripeCustomerId })).url };
+  } catch (err) {
+    // A deleted customer must not lock the account out; Stripe makes a new one.
+    if (!(err instanceof CustomerMissingError)) throw err;
+    return { url: (await gateway.createCheckoutSession(args)).url };
+  }
 }
 
 /** Create a billing-portal session (manage/cancel), or null if not subscribed. */
@@ -104,7 +151,12 @@ export async function handleWebhook(
   gateway: StripeGateway,
   storage: Storage,
 ): Promise<{ handled: boolean }> {
-  const event = gateway.verifyWebhook(rawBody, signature); // throws on bad signature
+  let event: WebhookEvent;
+  try {
+    event = gateway.verifyWebhook(rawBody, signature);
+  } catch {
+    throw new WebhookSignatureError();
+  }
 
   if (event.type === 'checkout.session.completed') {
     const s = event.object;
@@ -126,6 +178,15 @@ export async function handleWebhook(
   if (event.type === 'customer.subscription.updated' || event.type === 'customer.subscription.deleted') {
     const sub = event.object;
     const subscriptionId = typeof sub.id === 'string' ? sub.id : null;
+    if (!subscriptionId) return { handled: false };
+    // Stripe does not deliver events in order, so a late retry can carry an old
+    // state. Write what Stripe says now; a fetch failure throws, and Stripe
+    // retries the event (review H1). A deletion is final, so its payload is trusted.
+    if (event.type === 'customer.subscription.updated') {
+      const info = await gateway.retrieveSubscription(subscriptionId);
+      await storage.updateSubscriptionByStripeId(subscriptionId, info.status, info.currentPeriodEnd);
+      return { handled: true };
+    }
     const status = typeof sub.status === 'string' ? sub.status : null;
     // The event payload is shaped by the WEBHOOK ENDPOINT's API version — not
     // our SDK pin. Newer Stripe API versions moved current_period_end off the
@@ -211,13 +272,17 @@ export function createStripeGateway(secretKey: string, webhookSecret: string): S
   // a future SDK upgrade must re-verify the period fields.
   const stripe = new Stripe(secretKey, { apiVersion: '2025-02-24.acacia' });
   return {
-    async createCheckoutSession({ priceId, clientReferenceId, successUrl, cancelUrl }) {
+    async createCheckoutSession({ priceId, clientReferenceId, customerId, successUrl, cancelUrl }) {
       const session = await stripe.checkout.sessions.create({
         mode: 'subscription',
         line_items: [{ price: priceId, quantity: 1 }],
         client_reference_id: clientReferenceId,
+        ...(customerId ? { customer: customerId } : {}),
         success_url: successUrl,
         cancel_url: cancelUrl,
+      }).catch((err: unknown) => {
+        if (isMissing(err, 'customer')) throw new CustomerMissingError();
+        throw err;
       });
       if (!session.url) throw new Error('Stripe did not return a Checkout URL.');
       return { url: session.url };
@@ -230,7 +295,15 @@ export function createStripeGateway(secretKey: string, webhookSecret: string): S
       return { url: session.url };
     },
     async retrieveSubscription(subscriptionId) {
-      const sub = await stripe.subscriptions.retrieve(subscriptionId);
+      let sub: Stripe.Subscription;
+      try {
+        sub = await stripe.subscriptions.retrieve(subscriptionId);
+      } catch (err) {
+        // Gone from Stripe (test data, a switched account): it can never bill,
+        // so record it ended instead of failing the webhook for days.
+        if (isMissing(err)) return { status: 'canceled', currentPeriodEnd: 0 };
+        throw err;
+      }
       // Version-robust: top-level on the pinned version, items.data[] on newer.
       const periodEnd = readPeriodEnd(sub as unknown as Record<string, unknown>) ?? 0;
       return { status: sub.status, currentPeriodEnd: periodEnd };
@@ -240,4 +313,10 @@ export function createStripeGateway(secretKey: string, webhookSecret: string): S
       return { type: event.type, object: event.data.object as unknown as Record<string, unknown> };
     },
   };
+}
+
+/** Stripe's "no such object" error, optionally for one request parameter. */
+function isMissing(err: unknown, param?: string): boolean {
+  const e = err as { code?: unknown; param?: unknown } | null;
+  return !!e && e.code === 'resource_missing' && (param === undefined || e.param === param);
 }

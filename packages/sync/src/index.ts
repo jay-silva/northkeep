@@ -35,6 +35,7 @@ export {
   subscriptionStatus,
   checkoutUrl,
   portalUrl,
+  AlreadySubscribedError,
   SubscriptionRequiredError,
   LocalChangedError,
   SyncBusyError,

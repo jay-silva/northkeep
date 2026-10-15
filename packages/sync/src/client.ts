@@ -36,6 +36,14 @@ export class SubscriptionRequiredError extends Error {
   }
 }
 
+/** The account already has a subscription that has not ended (HTTP 409 on checkout). */
+export class AlreadySubscribedError extends Error {
+  constructor() {
+    super('This account already has a subscription. Manage it: northkeep sync billing');
+    this.name = 'AlreadySubscribedError';
+  }
+}
+
 export interface SubscriptionStatus {
   /** Does this server require (and offer) a subscription at all? A 200 from the
    * subscription endpoint means billing is on; a 404 means it isn't. This is the
@@ -916,6 +924,7 @@ export async function checkoutUrl(options: { deviceSecret: Buffer }): Promise<st
     signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
   });
   if (res.status === 404) throw new Error('This sync server does not offer subscriptions (billing is off).');
+  if (res.status === 409) throw new AlreadySubscribedError();
   if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on checkout.`);
   const b = (await res.json()) as { url?: string };
   if (!b.url) throw new Error('Sync server did not return a checkout URL.');

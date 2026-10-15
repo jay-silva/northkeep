@@ -150,6 +150,7 @@ export class NeonStorage implements Storage {
 
   async upsertSubscription(sub: StoredSubscription): Promise<void> {
     await this.ensureSchema();
+    // A late completion for an old, ended subscription must not replace a live one.
     await this.sql`
       INSERT INTO subscriptions (token_hash, stripe_customer_id, stripe_subscription_id, status, current_period_end, updated_at)
       VALUES (${sub.tokenHash}, ${sub.stripeCustomerId}, ${sub.stripeSubscriptionId}, ${sub.status}, ${sub.currentPeriodEnd}, now())
@@ -159,6 +160,9 @@ export class NeonStorage implements Storage {
         status = EXCLUDED.status,
         current_period_end = EXCLUDED.current_period_end,
         updated_at = now()
+      WHERE subscriptions.stripe_subscription_id = EXCLUDED.stripe_subscription_id
+         OR subscriptions.status IN ('canceled', 'incomplete_expired')
+         OR EXCLUDED.status NOT IN ('canceled', 'incomplete_expired')
     `;
   }
 
@@ -168,10 +172,12 @@ export class NeonStorage implements Storage {
     currentPeriodEnd: number,
   ): Promise<void> {
     await this.ensureSchema();
+    // An ended subscription stays ended: a late update cannot revive it.
     await this.sql`
       UPDATE subscriptions
       SET status = ${status}, current_period_end = ${currentPeriodEnd}, updated_at = now()
       WHERE stripe_subscription_id = ${stripeSubscriptionId}
+        AND status NOT IN ('canceled', 'incomplete_expired')
     `;
   }
 }

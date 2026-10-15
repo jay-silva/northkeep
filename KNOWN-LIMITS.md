@@ -375,6 +375,21 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   delayed, the `current_period_end` time check is the backstop (you keep syncing
   until the paid period ends, then it fails closed). No dunning/retry email flow
   beyond Stripe's defaults.
+- **Subscription changes are read back from Stripe.** Stripe can deliver
+  events out of order, so on every `subscription.updated` event the server asks
+  Stripe for the subscription's current state rather than trusting the event.
+  If Stripe can't be reached, the event fails and Stripe retries it.
+- **One subscription per account.** Starting a checkout while your subscription
+  is live or has a failed payment is refused (HTTP 409); fix the card, change
+  or cancel in the billing portal instead. A subscription whose first payment
+  never completed does not block a new checkout. A new checkout after a
+  cancellation reuses your Stripe customer, or makes a new one if that customer
+  was deleted. A cancelled subscription stays cancelled even if an older Stripe
+  event arrives late. Stripe's billing portal must allow cancellation, or an
+  unpaid account has no way out but support.
+  Two checkout pages opened *before* either is paid can still both be completed,
+  which creates two subscriptions; the account follows the later one, and the
+  earlier one must be cancelled by support.
 
 ## M10b/M10c (agent tools: web_fetch + the security engine), current
 

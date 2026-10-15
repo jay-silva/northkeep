@@ -35,6 +35,9 @@ export interface StoredSubscription {
   currentPeriodEnd: number;
 }
 
+/** Stripe statuses after which a subscription never bills again; final per subscription id. */
+export const ENDED: ReadonlySet<string> = new Set(['canceled', 'incomplete_expired']);
+
 export interface Storage {
   get(tokenHash: string): Promise<StoredBlob | null>;
   /**
@@ -77,6 +80,9 @@ export class InMemoryStorage implements Storage {
   }
 
   async upsertSubscription(sub: StoredSubscription): Promise<void> {
+    const cur = this.subs.get(sub.tokenHash);
+    // A late completion for an old, ended subscription must not replace a live one.
+    if (cur && cur.stripeSubscriptionId !== sub.stripeSubscriptionId && !ENDED.has(cur.status) && ENDED.has(sub.status)) return;
     this.subs.set(sub.tokenHash, { ...sub });
   }
 
@@ -86,7 +92,8 @@ export class InMemoryStorage implements Storage {
     currentPeriodEnd: number,
   ): Promise<void> {
     for (const s of this.subs.values()) {
-      if (s.stripeSubscriptionId === stripeSubscriptionId) {
+      // An ended subscription stays ended: a late update cannot revive it.
+      if (s.stripeSubscriptionId === stripeSubscriptionId && !ENDED.has(s.status)) {
         s.status = status;
         s.currentPeriodEnd = currentPeriodEnd;
       }
