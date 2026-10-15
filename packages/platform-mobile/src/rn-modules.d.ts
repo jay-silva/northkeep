@@ -4,10 +4,10 @@
  * NOT installed at the monorepo root (they cannot run under Node), so tsc needs
  * local declarations — the same pattern as platform-node/src/sodium-native.d.ts.
  *
- * Only the members this package actually uses are declared. If an upstream API
- * differs on device, the compile inside apps/mobile (which installs the real
- * packages) is the second line of defense; ADR 0023 mandates on-device
- * validation before any of this is trusted with a real vault.
+ * Only the members this package actually uses are declared. The Expo modules
+ * here are checked against the real packages apps/mobile installs by
+ * apps/mobile/test/expo-types-contract.test.ts; ADR 0023 still mandates
+ * on-device validation before any of this is trusted with a real vault.
  */
 
 declare module 'react-native-libsodium' {
@@ -100,7 +100,6 @@ declare module 'expo-file-system' {
     bytes(): Promise<Uint8Array>;
     bytesSync(): Uint8Array;
     write(content: Uint8Array | string): void;
-    writeBytes(bytes: Uint8Array): void;
     create(options?: { intermediates?: boolean; overwrite?: boolean }): void;
     /** Async since SDK 57: a sync caller must use copySync/moveSync (this said void, so nothing flagged it). */
     copy(destination: File): Promise<void>;

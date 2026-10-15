@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { devicePhrase } from '@northkeep/core';
+import { thisDevicePhrase } from '@northkeep/core';
 import type { McpServerConfig, McpTrust } from './config.js';
 
 /**
@@ -75,8 +75,10 @@ const ENTRIES: Array<McpCatalogEntry & { resolve: () => { command: string; args:
     // Reading is declared safe; remembering and forgetting are not, so they ask
     // every time and can never be remembered with "always" (ADR 0033 D4).
     safeRead: ['memory_retrieve', 'memory_list'],
-    caution:
-      'This server can read every memory in your vault. It runs on ' + devicePhrase(process.platform) + ' and sends nothing anywhere by itself.',
+    // A getter: converse is bundled on the phone, which has no platform at module load.
+    get caution() {
+      return 'This server can read every memory in your vault. It runs on ' + thisDevicePhrase() + ' and sends nothing anywhere by itself.';
+    },
     // What you ask it to remember is saved exactly, not Tier-1 masked: it is
     // the vault on this machine (ADR 0060 Decision 4, amending ADR 0033 D3).
     trust: 'trusted',
