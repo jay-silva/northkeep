@@ -1,6 +1,6 @@
 # ADR 0068: One handoff loop on both servers
 
-Status: Proposed 2026-10-15, revised; awaiting Jay and re-review · Not built · Review: NOT CLEARED
+Status: Proposed 2026-10-15, awaiting Jay · Not built · Review: NOT CLEARED, re-review CLEARED WITH WOUNDS (8-10 fixed in text)
 
 ## Context
 Local agents get resume, checkpoint and wrap (packages/mcp-server/src/server.ts:927, 1186-1247). Cloud apps get project list, get, create and update (apps/connector-server/src/mcp.ts:679-933), in prose where local returns JSON (mcp.ts:924; server.ts:212). The connector hand-copies two core modules because Vercel loads it as CommonJS (docs/design/adr-0040-connector-project-tools.md:150-160). Agents invent a UUID per save (server.ts:1188).
@@ -23,14 +23,14 @@ Local agents get resume, checkpoint and wrap (packages/mcp-server/src/server.ts:
 7. A test fails if connector code calls `recordAgentPass` (9e1cc0e).
 
 ## Consequences
-- Easier: one contract sentence for every host; one edit per rule.
+- Easier: one contract sentence for all hosts; one edit per rule.
 - Harder: a Neon migration before clients; a person on two web apps each release; apps parsing hosted prose break.
 
 ## Rejected
-Keeping hand copies; remembering issued ids; a ledger inside the document row (a vault push replaces it); a plaintext fingerprint.
+Hand copies; remembering issued ids; a ledger inside the document row (a vault push replaces it); a plaintext fingerprint.
 
 ## What leaves the machine
-D1, D3, D4, D6: nothing new. D2: per save, the connector stores a random operation id and an encrypted record, so it learns save cadence per project. Hosted saves accept `files` locators from cloud apps; local agents see them marked unverified. D5: a shared project's section reaches the connector and every app it is shared with, and, like the whole document, the local git mirror (ADR 0053, plaintext on disk) and any remote push (ADR 0055, draft). A repo path can carry a username; dangers can name infrastructure.
+D1, D3, D4, D6: nothing new. D2: per save, the connector stores a random operation id and an encrypted record, so it learns save cadence per project. Hosted saves accept `files` locators from cloud apps; resume marks them unverified (server.ts:220-232), project_get returns them raw. D5: a shared project's section reaches the connector and every app it is shared with, and, like the whole document, the local git mirror (ADR 0053, plaintext on disk) and any remote push (ADR 0055, draft). Repo paths can carry a username.
 
 ## Links
 Design: docs/design/one-handoff-loop.md · Extends: ADRs 0040, 0050, 0053, 0062, 0063, 0065
