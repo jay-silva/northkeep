@@ -34,23 +34,30 @@ if (!current || path.resolve(current) === realHome) {
 }
 
 
-// No test may touch the owner's real macOS Keychain: the vault key lives there
-// (northkeep-vault / master-key), and a full run once replaced and deleted it.
-// The opt-out is forced, and a `security` that refuses everything goes first on
-// PATH, so a test that clears the opt-out fails loudly instead of reaching it.
+// No test may touch the owner's real key store: on macOS the vault key lives in
+// the Keychain (northkeep-vault / master-key), and a full run once replaced and
+// deleted it. On macOS the opt-out is forced. On both systems, key-store tools
+// that refuse everything go first on PATH, so a test that clears the opt-out or
+// forces a Linux backend fails loudly instead of reaching the real store.
 if (process.platform === 'darwin') {
   process.env.NORTHKEEP_NO_KEYCHAIN = '1';
-  // Setup runs once per test file, often in a reused worker.
-  const first = (process.env.PATH ?? '').split(path.delimiter)[0];
-  if (!first.includes('northkeep-test-bin-')) installRefusingSecurity();
+  installRefusingTools(['security']);
+} else if (process.platform === 'linux') {
+  // A lock probes and clears the Secret Service whatever backend is forced.
+  installRefusingTools(['secret-tool', 'gdbus']);
 }
 
-function installRefusingSecurity(): void {
+function installRefusingTools(names: string[]): void {
+  // Setup runs once per test file, often in a reused worker.
+  const first = (process.env.PATH ?? '').split(path.delimiter)[0];
+  if (first.includes('northkeep-test-bin-')) return;
   const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'northkeep-test-bin-'));
-  fs.writeFileSync(
-    path.join(bin, 'security'),
-    '#!/bin/sh\necho "vitest.setup.ts: tests may not use the real macOS Keychain" >&2\nexit 1\n',
-    { mode: 0o755 },
-  );
+  for (const name of names) {
+    fs.writeFileSync(
+      path.join(bin, name),
+      '#!/bin/sh\necho "vitest.setup.ts: tests may not use the real key store" >&2\nexit 1\n',
+      { mode: 0o755 },
+    );
+  }
   process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ''}`;
 }

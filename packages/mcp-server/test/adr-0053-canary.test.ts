@@ -12,7 +12,7 @@ describe('scripts/adr-0053-canary.sh (M-A1)', () => {
     try {
       const r = spawnSync('/bin/bash', ['scripts/adr-0053-canary.sh'], {
         cwd: REPO_ROOT,
-        env: { PATH: '/usr/bin:/bin', TMPDIR: tmp },
+        env: { PATH: '/usr/bin:/bin', TMPDIR: tmp, NORTHKEEP_NO_KEYCHAIN: '1' },
         encoding: 'utf8',
         timeout: 110_000,
       });
