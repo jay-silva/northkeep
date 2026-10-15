@@ -118,7 +118,7 @@ function hasOwnershipMarker(text: string): boolean {
   return text.split('\n').some((line) => BEGIN_LINE.test(line));
 }
 
-// SHA-256 of the Claude file, Cursor rule, and Codex block interior renders from v0.19.0 to v0.21.0, v0.22.0, v0.22.1, the text before ADR 0065, and the current text; append on every text change.
+// SHA-256 of the Claude file, Cursor rule, and Codex block interior renders from v0.19.0 to v0.21.0, v0.22.0, v0.22.1, the text before ADR 0065, the text before the bootstrap size fix, and the current text; append on every text change.
 export const RELEASED_CONTRACT_RENDER_SHA256: ReadonlySet<string> = new Set([
   '38621a9338f127cd5a45ae3746f6d476eabdb85f906ecce7dfed826c85140788',
   '2f876e48527210118f7b004f21241dccc426b5464b9e415b07921b84028381f5',
@@ -135,6 +135,9 @@ export const RELEASED_CONTRACT_RENDER_SHA256: ReadonlySet<string> = new Set([
   '6313037fc39e7fbac0e63e0155ebf029a450945cf6cbf3b2c2f24168527f9ca0',
   '809767aa277f7d66d55ece9f331e354f12ad3f2362d5cb41f94b674a36db9bc2',
   '7f0aff57a090925604db53ed895af3cf384f9a9b0176ff398180c1cff7f1da01',
+  '1b3454186fef3be82af0fc05b69cc62ad9eb98b1ea5c02cfe0c1760a40c8538e',
+  '64268b0d148f475729233fc2ead4e71ef9f070266d877fc7f45835c2003bc1d1',
+  'e0eaa0961cd1195184f4e1de03b11ff099a18e57c7367c8dd00062cbe71c4d0a',
 ]);
 
 function classifyReplaced(existing: string, rendered: string): ReplacedContract {
