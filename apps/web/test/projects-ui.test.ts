@@ -48,7 +48,7 @@ describe('Projects handoff UI', () => {
     expect(projects).toContain("api('/api/projects')");
     expect(projects).toContain("api('/api/projects/' + encodeURIComponent(slug))");
     expect(projects).toContain("api('/api/projects/' + encodeURIComponent(draft.slug) + '/' + draft.mode");
-    expect(projects).toContain("[['edit','Edit',false],['delete','Delete',false],['checkpoint','Checkpoint',false],['wrap','Wrap up',false],['resume','Resume',true]]");
+    for (const action of ["['resume', 'Resume',", "['checkpoint', 'Checkpoint',", "['wrap', 'Wrap up',", "['edit', 'Edit',", "['delete', 'Delete',"]) expect(projects).toContain(action);
   });
 
   it('binds writes to the vault and exact revision with an idempotency key', () => {

@@ -11,7 +11,7 @@ describe('capRejection', () => {
   it('names the per-memory size cap', () => {
     expect(
       capRejection('A memory exceeds the per-entry content cap (8192 bytes ordinarily, 65536 bytes for a row in a project scope).'),
-    ).toBe('The connector server rejected the push: a shared memory is too large (the cap is 8 KB, or 64 KB for a project document).');
+    ).toBe('The connector server rejected the push: a shared memory is too large (the cap is 8 KB, or 64 KB inside a project).');
   });
 
   it('names the total size cap', () => {

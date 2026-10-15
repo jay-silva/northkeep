@@ -529,7 +529,14 @@
   .project-detail-head { display:flex; justify-content:space-between; align-items:flex-start; gap:18px; margin-bottom:23px; }
   #view-projects .project-detail-head h2 { margin:0 0 6px; font:500 27px/1.15 var(--serif); letter-spacing:-.015em; }
   #view-projects .project-section h3,#view-projects .project-empty h3 { font:500 22px/1.2 var(--serif); }
-  .project-actions { display:flex; justify-content:flex-end; gap:8px; flex-wrap:wrap; }
+  .project-actions { display:grid; gap:8px; flex:0 0 min(380px,45%); }
+  .project-act { display:grid; grid-template-columns:120px minmax(0,1fr); gap:12px; align-items:center; }
+  .project-act .btn { width:100%; }
+  .project-act span { font-size:13px; color:var(--muted); }
+  .project-act.apart { margin-top:6px; padding-top:12px; border-top:1px solid var(--line); }
+  .project-next ul { margin:0 0 4px; padding-left:18px; white-space:normal; }
+  .project-next li { margin:4px 0; }
+  .project-facts .btn.link { min-height:44px; padding:0; border:0; background:none; color:var(--accent); }
   .project-facts { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(220px,.8fr); gap:28px; padding:22px 0; border-top:1px solid var(--line); border-bottom:1px solid var(--line); }
   .project-status-copy { max-width:38ch; margin:0; font:500 22px/1.45 var(--serif); white-space:pre-wrap; overflow-wrap:anywhere; }
   .project-next { padding:17px 18px; border-radius:12px; background:var(--chip); white-space:pre-wrap; overflow-wrap:anywhere; }
@@ -590,7 +597,7 @@
     .curation-summary { align-items:flex-start; flex-wrap:wrap; }
     .projects-pane { padding:0; }
     .project-detail-head,.project-operation-head { display:block; }
-    .project-actions { justify-content:flex-start; margin-top:16px; }
+    .project-actions { margin-top:18px; }
     .project-facts,.project-review-grid,.project-compare { grid-template-columns:1fr; }
     .project-field.wide { grid-column:auto; }
     .project-review-line { grid-template-columns:1fr; gap:2px; }
@@ -599,8 +606,7 @@
     .project-operation { padding:17px; }
   }
   @media (max-width:430px) {
-    .project-actions { display:grid; grid-template-columns:1fr 1fr; width:100%; }
-    .project-actions .primary { grid-column:1/-1; }
+    .project-act { grid-template-columns:112px minmax(0,1fr); }
     .project-receipt { grid-template-columns:1fr; }
   }
   @media (prefers-reduced-motion:reduce) {
@@ -657,6 +663,7 @@
   .project-announce { margin:0 0 12px; font-size:14px; color:var(--ok); }
   .project-announce:empty { display:none; }
   .project-announce.bad { color:var(--danger); }
+  .project-announce .project-notice { display:block; margin:8px 0 0; }
   .hist-sub { margin:16px 0 2px; }
   .ver-row { display:grid; grid-template-columns:110px minmax(0,1fr) auto; gap:14px; align-items:center; padding:12px 0; border-top:1px solid var(--line); }
   .ver-row time { color:var(--muted); font-size:12px; font-variant-numeric:tabular-nums; }
@@ -2851,6 +2858,28 @@
 
   // ADR 0052: the head's recorded writer is host-reported attribution, not
   // verified identity, so the copy says who wrote it and when, nothing more.
+  const projectActionList = () => [
+    ['resume', 'Resume', 'See where things stand. Changes nothing.'],
+    ['checkpoint', 'Checkpoint', 'Save progress partway through.'],
+    ['wrap', 'Wrap up', 'Hand off at the end of a session.'],
+    ['edit', 'Edit', 'Fix the title or summary.'],
+    ['delete', 'Delete', 'Remove this project from ' + devicePlace() + '.'],
+  ];
+
+  // The first sentence, or the first line when there is no sentence end early on.
+  function projectFirstSentence(text) {
+    const first = String(text).trim().split('\n')[0];
+    const end = first.search(/[.!?](\s|$)/);
+    return end >= 0 && end < 240 ? first.slice(0, end + 1) : first.length > 240 ? first.slice(0, 240).replace(/\s+\S*$/, '') + '…' : first;
+  }
+
+  function projectMoreToggle(moreLabel, lessLabel, apply) {
+    const button = el('button', 'btn link', moreLabel); button.type = 'button'; let open = false;
+    button.setAttribute('aria-expanded', 'false');
+    button.addEventListener('click', () => { open = !open; apply(open); button.textContent = open ? lessLabel : moreLabel; button.setAttribute('aria-expanded', String(open)); });
+    return button;
+  }
+
   function projectWriterLine(project) {
     const writer = project && project.last_writer;
     if (!writer || !writer.host) return null;
@@ -3065,17 +3094,31 @@
     const heading = el('h2', undefined, project.title || projectName(project.project)); heading.tabIndex = -1; heading.id = 'projectDetailHeading';
     title.append(heading, state);
     const writerLine = projectWriterLine(project); if (writerLine) title.appendChild(writerLine);
-    const actions = el('div', 'project-actions');
-    for (const [action, label, primary] of [['edit','Edit',false],['delete','Delete',false],['checkpoint','Checkpoint',false],['wrap','Wrap up',false],['resume','Resume',true]]) {
-      const button = el('button', 'btn' + (primary ? ' primary' : '') + (action === 'delete' ? ' danger' : ''), label); button.type = 'button'; button.dataset.projectAction = action;
-      button.addEventListener('click', (event) => openProjectAction(action, event.currentTarget)); actions.appendChild(button);
+    // Owner request 2026-10-15: a list with a plain line beside each button, in the space beside the title.
+    const actions = el('div', 'project-actions'); actions.setAttribute('aria-label', 'Project actions');
+    for (const [action, label, explain] of projectActionList()) {
+      const row = el('div', 'project-act' + (action === 'delete' ? ' apart' : ''));
+      const button = el('button', 'btn' + (action === 'resume' ? ' primary' : '') + (action === 'delete' ? ' danger' : ''), label); button.type = 'button'; button.dataset.projectAction = action;
+      button.addEventListener('click', (event) => openProjectAction(action, event.currentTarget));
+      row.append(button, el('span', undefined, explain)); actions.appendChild(row);
     }
     head.append(title, actions); root.appendChild(head);
     if (projectDecisions.has(project.project)) root.appendChild(projectDecisionNotice(project.project));
     if (project.draft) root.appendChild(projectDraftBanner());
     const facts = el('div', 'project-facts');
-    const statusBox = el('div'); statusBox.append(el('div', 'review-meta-title', 'Current summary'), el('p', 'project-status-copy', project.status || 'No current status yet.'));
-    const next = el('div', 'project-next'); next.append(el('strong', undefined, 'Next actions'), el('span', undefined, project.next_actions || 'No next action recorded.'));
+    const statusBox = el('div'); statusBox.appendChild(el('div', 'review-meta-title', 'Where it stands'));
+    const fullStatus = project.status || 'No current status yet.', shortStatus = projectFirstSentence(fullStatus);
+    const statusCopy = el('p', 'project-status-copy', shortStatus); statusBox.appendChild(statusCopy);
+    if (shortStatus !== fullStatus.trim()) statusBox.appendChild(projectMoreToggle('Read the full summary', 'Show less', (open) => { statusCopy.textContent = open ? fullStatus : shortStatus; }));
+    const next = el('div', 'project-next'); next.appendChild(el('strong', undefined, 'Next'));
+    const steps = projectLines(project.next_actions);
+    if (!steps.length) next.appendChild(el('span', undefined, 'No next action recorded.'));
+    else {
+      const list = el('ul');
+      const show = (count) => list.replaceChildren(...steps.slice(0, count).map((line) => el('li', undefined, line)));
+      show(3); next.appendChild(list);
+      if (steps.length > 3) next.appendChild(projectMoreToggle('Show all ' + steps.length, 'Show fewer', (open) => show(open ? steps.length : 3)));
+    }
     facts.append(statusBox, next); root.appendChild(facts);
     root.appendChild(renderProjectMilestones(project));
     const decisions = projectLines(project.decisions), questions = projectLines(project.open_questions);
@@ -3436,8 +3479,10 @@
     reload.focus();
   }
 
-  function projectAnnounce(text, bad) {
-    const node = $('projectAnnounce'); node.classList.toggle('bad', Boolean(bad)); node.textContent = text;
+  // A problem gets its own notice under the outcome, so a success never reads as an error.
+  function projectAnnounce(text, bad, problem) {
+    const node = $('projectAnnounce'); node.classList.toggle('bad', Boolean(bad)); node.replaceChildren(text);
+    if (problem) node.appendChild(el('span', 'project-notice danger', problem));
   }
 
   // --- ADR 0063 D1: the conflict view. Nothing changes until Keep mine or Take theirs.
@@ -3615,8 +3660,9 @@
     const err = el('div'); err.setAttribute('role', 'alert'); panel.appendChild(err);
     const choices = el('div', 'choices');
     const keepBox = el('div', 'choice'); const keep = el('button', 'btn', 'Keep mine'); keep.type = 'button';
-    const keepText = el('p', undefined, 'Your version stays as it is. The cloud version is saved as a memory in ' + slug + ', titled ');
-    keepText.append(el('strong', undefined, 'Cloud version not kept, ' + new Date().toISOString().slice(0, 10)), document.createTextNode('. Your AI apps can still read it.'));
+    const keptTitle = 'Cloud version not kept, ' + new Date().toISOString().slice(0, 10);
+    const keepText = el('p', undefined, 'Your version stays as it is. The cloud version is saved as a memory in this project, titled ');
+    keepText.append(el('strong', undefined, keptTitle), document.createTextNode('. Your AI apps can still read it.'));
     keepBox.append(keep, keepText);
     const takeBox = el('div', 'choice'); const take = el('button', 'btn', 'Take theirs'); take.type = 'button';
     take.disabled = !local || c.reason === 'several_heads';
@@ -3637,8 +3683,8 @@
         if (!await projectWriteCurrent(slug, requestId)) return;
         await loadProject(slug, choice === 'take-theirs');
         if (currentProjectSlug !== slug || !status.unlocked || $('view-projects').hidden) return;
-        const done = choice === 'keep-mine' ? 'Kept your version. The cloud version is saved as a memory in ' + slug + '.' : 'The cloud version is now current. Your earlier version is in Saved versions.';
-        projectAnnounce(done + (result.push_error ? ' Saved on ' + devicePlace() + ', but Cloud Connect was not updated: ' + result.push_error : ''), Boolean(result.push_error));
+        const done = choice === 'keep-mine' ? 'Kept your version. The cloud version is saved as a memory in this project, titled "' + keptTitle + '".' : 'The cloud version is now current. Your earlier version is in Saved versions.';
+        projectAnnounce(done, false, result.push_error ? 'Your connected apps did not get this change. ' + result.push_error : '');
       } catch (ex) {
         if (ex.message === 'locked' || !projectWriteViewCurrent(slug, requestId)) return;
         cancel.disabled = false; keep.disabled = false; take.disabled = !local || c.reason === 'several_heads';

@@ -191,12 +191,59 @@ export function capRejection(serverError: string): string {
   const count = /^Too many shared memories \((\d+)\)/.exec(serverError);
   if (count) return `${lead}too many shared memories (${count[1]}; the cap is 5,000 per account).`;
   if (serverError.startsWith('A memory exceeds the per-entry content cap')) {
-    return `${lead}a shared memory is too large (the cap is 8 KB, or 64 KB for a project document).`;
+    return `${lead}a shared memory is too large (the cap is 8 KB, or 64 KB inside a project).`;
   }
   if (/^The push exceeds the [\d.]+ MB total content cap/.test(serverError)) {
     return `${lead}the shared memories add up to more than the 4 MB total cap.`;
   }
   return `${lead}over the sharing caps (too many shared memories, or a memory is too large).`;
+}
+
+// Mirrors the connector's per-entry caps (apps/connector-server/src/create-server.ts).
+export const SHARED_ENTRY_CAP_BYTES = 8 * 1024;
+export const SHARED_PROJECT_ENTRY_CAP_BYTES = 64 * 1024;
+
+export interface OversizeSharedEntry {
+  id: string;
+  scope: string;
+  bytes: number;
+  cap: number;
+  created_at: string;
+}
+
+function kb(bytes: number): string {
+  return `${(bytes / 1024).toFixed(1).replace(/\.0$/, '')} KB`;
+}
+
+/**
+ * The connector refuses a whole push over one oversize row, without saying
+ * which. Found here first so the owner is told which memory to fix. Names the
+ * scope, date and size only: never content, since this text reaches logs.
+ */
+export class ConnectorOversizeError extends Error {
+  readonly entries: OversizeSharedEntry[];
+  constructor(entries: OversizeSharedEntry[]) {
+    const first = entries[0]!;
+    const where = parseProjectSlug(first.scope) !== null ? 'inside a project' : 'outside a project';
+    const day = first.created_at.slice(0, 10);
+    const lead = entries.length === 1 ? 'A shared memory' : `${entries.length} shared memories are too large. The first`;
+    super(
+      `${lead} in "${first.scope}", saved ${day}, is ${kb(first.bytes)}. Shared memories ${where} can be at most ${kb(first.cap)}, ` +
+        'so Cloud Connect was sent nothing. Shorten or forget that memory, then try again.',
+    );
+    this.name = 'ConnectorOversizeError';
+    this.entries = entries;
+  }
+}
+
+export function oversizeSharedEntries(rows: Array<{ id: string; scope: string; content: string; created_at: string }>): OversizeSharedEntry[] {
+  const out: OversizeSharedEntry[] = [];
+  for (const r of rows) {
+    const cap = parseProjectSlug(r.scope) !== null ? SHARED_PROJECT_ENTRY_CAP_BYTES : SHARED_ENTRY_CAP_BYTES;
+    const bytes = Buffer.byteLength(r.content, 'utf8');
+    if (bytes > cap) out.push({ id: r.id, scope: r.scope, bytes, cap, created_at: r.created_at });
+  }
+  return out;
 }
 
 export async function pushSharedScopes(opts: {
@@ -215,9 +262,11 @@ export async function pushSharedScopes(opts: {
   const server = normalizeServer(opts.server);
   const scopes = [...new Set(opts.scopes)];
   const entries: PushEntry[] = [];
+  const rows: Array<{ id: string; scope: string; content: string; created_at: string }> = [];
   for (const scope of scopes) {
     // list() excludes forgotten + superseded by default → live entries only.
     for (const e of opts.vault.list({ scope })) {
+      rows.push(e);
       entries.push({
         entry_id: e.id,
         entry_hash: e.entry_hash,
@@ -227,6 +276,8 @@ export async function pushSharedScopes(opts: {
       });
     }
   }
+  const oversize = oversizeSharedEntries(rows);
+  if (oversize.length > 0) throw new ConnectorOversizeError(oversize);
   const shared_at: Record<string, string> = {};
   for (const row of opts.vault.sharedScopeRows()) {
     if (scopes.includes(row.scope) && row.shared_at) shared_at[row.scope] = row.shared_at;
