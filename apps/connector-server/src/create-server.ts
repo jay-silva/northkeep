@@ -76,6 +76,7 @@ import {
   isEncryptedRow,
   parseKekPepper,
   unwrapDek,
+  unwrapDekRotating,
   wrapDek,
 } from './crypto.js';
 
@@ -187,7 +188,7 @@ export function createConnectorServer(
   // code). FAIL CLOSED in production: a real (Neon) database with no configured
   // pepper refuses to start. InMemory storage (dev/test) falls back to the
   // fixed, non-secret DEV pepper so local runs need no config.
-  const kekPepper = resolveKekPepper(storage);
+  const { current: kekPepper, previous: previousKekPepper } = resolveKekPeppers(storage);
 
   // Legacy plaintext passthrough (rows without the nkc1: envelope) is
   // self-host-only: without this explicit opt-in, a non-encrypted row is never
@@ -205,6 +206,7 @@ export function createConnectorServer(
     opts.clientSecretBinder,
     acceptedResources,
     opts.cimd,
+    previousKekPepper,
   );
 
   // ---- billing gate (C3) -------------------------------------------------
@@ -253,10 +255,18 @@ export function createConnectorServer(
   async function resolveAccountDek(accountHash: string, connToken: string): Promise<Uint8Array> {
     const connKek = await deriveKek(KEK_LABEL_CONNECTOR_TOKEN, connToken, kekPepper);
     const existing = await storage.getAccountDekWrap(accountHash);
-    if (existing) return unwrapDek(existing, connKek);
+    if (existing) {
+      const { dek, usedPrevious } = await unwrapDekRotating(
+        existing, KEK_LABEL_CONNECTOR_TOKEN, connToken, kekPepper, previousKekPepper,
+      );
+      // Re-lock under the current pepper so the previous one can be retired.
+      if (usedPrevious) await storage.replaceAccountDekWrap(accountHash, existing, await wrapDek(dek, connKek));
+      return dek;
+    }
     const candidate = await wrapDek(await generateDek(), connKek);
     const winner = await storage.ensureAccountDekWrap(accountHash, candidate);
-    return unwrapDek(winner, connKek);
+    // During a rolling deploy an instance still on the previous pepper may win the race.
+    return (await unwrapDekRotating(winner, KEK_LABEL_CONNECTOR_TOKEN, connToken, kekPepper, previousKekPepper)).dek;
   }
 
   /**
@@ -525,7 +535,7 @@ export function createConnectorServer(
       }
       let seeded;
       try {
-        seeded = await seedReviewerAccount(storage, connectorToken, kekPepper);
+        seeded = await seedReviewerAccount(storage, connectorToken, kekPepper, Date.now(), previousKekPepper);
       } catch (err) {
         if (err instanceof ConnectorCryptoError || (err instanceof Error && err.message.endsWith('Nothing was changed.'))) {
           res.status(409).json({ error: 'This account already holds rows the seed did not write, or a different key. Nothing was changed.' });
@@ -598,7 +608,9 @@ export function createConnectorServer(
     // /pair/start leg wrapped; mintAuthorizationCode re-wraps it for the code.
     let dek: Uint8Array;
     try {
-      dek = await unwrapDek(consumed.dekWrap, await deriveKek(KEK_LABEL_PAIRING_CODE, pairingCode, kekPepper));
+      ({ dek } = await unwrapDekRotating(
+        consumed.dekWrap, KEK_LABEL_PAIRING_CODE, pairingCode, kekPepper, previousKekPepper,
+      ));
     } catch (err) {
       if (err instanceof ConnectorCryptoError) {
         rerenderError('That pairing code could not unlock this account. Generate a fresh one in NorthKeep.');
@@ -667,7 +679,9 @@ export function createConnectorServer(
     let dek: Uint8Array | null = null;
     if (extra?.dekWrap) {
       try {
-        dek = await unwrapDek(extra.dekWrap, await deriveKek(KEK_LABEL_TOKEN, req.auth!.token, kekPepper));
+        ({ dek } = await unwrapDekRotating(
+          extra.dekWrap, KEK_LABEL_TOKEN, req.auth!.token, kekPepper, previousKekPepper,
+        ));
       } catch (err) {
         if (!(err instanceof ConnectorCryptoError)) throw err;
       }
@@ -1202,6 +1216,25 @@ function resolveKekPepper(storage: ConnectorStorage): Uint8Array {
     return configured;
   }
   return configured ?? DEV_KEK_PEPPER;
+}
+
+/**
+ * Pepper rotation: when CONNECTOR_KEK_PEPPER_NEXT is set it becomes the
+ * current pepper and CONNECTOR_KEK_PEPPER the previous one, so an operator
+ * only adds a variable and never has to read the old, unreadable value.
+ * A malformed NEXT refuses to boot, like a malformed current pepper.
+ */
+function resolveKekPeppers(storage: ConnectorStorage): { current: Uint8Array; previous: Uint8Array | null } {
+  const existing = resolveKekPepper(storage);
+  let next: Uint8Array | null;
+  try {
+    next = parseKekPepper(process.env.CONNECTOR_KEK_PEPPER_NEXT);
+  } catch (err) {
+    throw new Error(`CONNECTOR_KEK_PEPPER_NEXT is malformed: ${err instanceof Error ? err.message : 'unreadable'}`);
+  }
+  if (!next) return { current: existing, previous: null };
+  const same = next.length === existing.length && next.every((b, i) => b === existing[i]);
+  return { current: next, previous: same ? null : existing };
 }
 
 /**

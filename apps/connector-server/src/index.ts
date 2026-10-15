@@ -65,6 +65,7 @@ function missingDbStorage(): ConnectorStorage {
     getEntitledUntil: fail,
     ensureAccountDekWrap: fail,
     getAccountDekWrap: fail,
+    replaceAccountDekWrap: fail,
     putPairingCode: fail,
     consumePairingCode: fail,
     getClient: fail,

@@ -1349,6 +1349,18 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   sync server first when this Mac is ahead, and refuses while it is behind.
   The Cloud screen shows when this Mac last pushed (recorded from the next
   release on; earlier pushes are not on record).
+- **Changing the connector's key pepper moves accounts over only as they are
+  used.** With `CONNECTOR_KEK_PEPPER_NEXT` set, the connector opens keys under
+  the new pepper or the old one, and re-locks an account's key under the new
+  one the next time that account's device pushes or an app connects. Keys held
+  for pairing codes and app sign-ins are not re-locked; they expire or are
+  replaced at the next refresh (refresh tokens last up to 30 days). Nothing
+  shows how many accounts are still on the old pepper. Retiring it early
+  makes a device that has not pushed since get "re-push your shared scopes",
+  and an app that has not refreshed must reconnect. Rolling the
+  deployment back to before the rotation strands every account already
+  re-locked. A sensitive Vercel variable cannot be read back, so the new
+  pepper must be saved elsewhere before it is set.
 - **Automatic push to a self-hosted connector needs
   `CONNECTOR_TOMBSTONE_ENFORCE=1`.** Without it the connector does not refuse
   pushes to a scope unshared elsewhere, so automatic push stays off and says
