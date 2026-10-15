@@ -1,6 +1,6 @@
 # ADR 0068: One handoff loop on both servers
 
-Status: Proposed 2026-10-15, awaiting Jay · Not built · Review: NOT CLEARED, re-review CLEARED WITH WOUNDS (8-10 fixed in text)
+Status: Accepted 2026-10-15 (Jay) · Not built · Review: NOT CLEARED, re-review CLEARED WITH WOUNDS (8-10 fixed in text)
 
 ## Context
 Local agents get resume, checkpoint and wrap (packages/mcp-server/src/server.ts:927, 1186-1247). Cloud apps get project list, get, create and update (apps/connector-server/src/mcp.ts:679-933), in prose where local returns JSON (mcp.ts:924; server.ts:212). The connector hand-copies two core modules because Vercel loads it as CommonJS (docs/design/adr-0040-connector-project-tools.md:150-160). Agents invent a UUID per save (server.ts:1188).
