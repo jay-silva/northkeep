@@ -1227,7 +1227,7 @@ async function dispatch(
       pushed: push?.pushed ?? 0,
       scopes: push?.scopes ?? [],
       ...(pushError !== null ? { push_error: pushError } : {}),
-      // ADR 0074 D3: names the memory for Compact it; never its text.
+      // ADR 0076 D3: names the memory for Compact it; never its text.
       ...(pushOversize !== null ? { push_oversize: pushOversize } : {}),
       // Scopes the fold marked Shared in this run (ADR 0050): the GUI says so.
       newly_shared: after.filter((s) => !before.includes(s)),

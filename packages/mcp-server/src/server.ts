@@ -802,7 +802,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     },
     async ({ type, scope, limit, id }) =>
       run(ctx, 'memory_list', { type, scope, limit, id }, vaultPath, { kind: 'read', mask: 'memory' }, (vault, granted) => {
-        // ADR 0074 D5: exact id over the granted live rows; no prefix match.
+        // ADR 0076 D5: exact id over the granted live rows; no prefix match.
         const rows = vault
           .list({ type: type as MemoryType, scope, allowedScopes: granted })
           .filter((e) => id === undefined || e.id === id)
