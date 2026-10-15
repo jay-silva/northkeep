@@ -88,6 +88,14 @@ describe('ADR 0065 copied module', () => {
     const offenders = fs.readdirSync(src).filter((f) => /from\s+['"][^'"]*project-milestones-owner/.test(fs.readFileSync(path.join(src, f), 'utf8')));
     expect(offenders).toEqual([]);
   });
+
+  it('calls recordAgentPass from no hosted path, so no hosted write records a pass (ADR 0068 review 7)', () => {
+    const src = path.join(here, '..', 'src');
+    const callers = fs.readdirSync(src, { recursive: true, encoding: 'utf8' })
+      .filter((f) => f.endsWith('.ts') && path.basename(f) !== 'project-milestones.ts')
+      .filter((f) => /\brecordAgentPass\b/.test(fs.readFileSync(path.join(src, f), 'utf8')));
+    expect(callers).toEqual([]);
+  });
 });
 
 describe('ADR 0065 hosted tools', () => {
