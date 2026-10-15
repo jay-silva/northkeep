@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import { Vault, deriveMasterKey, loadDeviceSecret, memzero } from '@northkeep/core';
 import { resolveMasterKey } from '@northkeep/mcp-server';
 import {
+  describeVaultSize,
+  type VaultSizeReport,
   checkoutUrl,
   confirmPull,
   deriveSyncCreds,
@@ -76,6 +78,7 @@ export async function syncPush(vaultPath: string, fail: (m: string) => never): P
   }
   if (result.ok) {
     console.log(`✓ Pushed. Server is now at version ${result.version}.`);
+    if (result.size) printVaultSize(result.size);
   } else {
     fail(
       `Conflict: the vault changed on another device (server is at version ${result.version}). ` +
@@ -168,7 +171,7 @@ export async function syncStatusCmd(vaultPath: string, fail: (m: string) => neve
     console.log('Sync is not configured. Run: northkeep sync config --server <url>');
     return;
   }
-  const { state, localVersion, remoteVersion, baselineKnown } = await syncState({ vaultPath, deviceSecret });
+  const { state, localVersion, remoteVersion, baselineKnown, size } = await syncState({ vaultPath, deviceSecret });
   console.log(`Server: ${config.serverUrl}`);
   // ADR 0044: staleness is visible even when nothing has failed.
   console.log(`Last synced: ${syncAge(config.lastSyncedAt) ?? 'never'}`);
@@ -213,6 +216,15 @@ export async function syncStatusCmd(vaultPath: string, fail: (m: string) => neve
     'no-config': 'Sync is not configured.',
   };
   console.log(messages[state]);
+  if (size) printVaultSize(size);
+}
+
+/** ADR 0067 D4: size against the sync cap, with the remedy once it matters. */
+export function printVaultSize(size: VaultSizeReport): void {
+  for (const line of describeVaultSize(size)) console.log(line);
+  if (size.warning) {
+    console.log('  To free space: northkeep projects compact --yes, or northkeep forget <id> for memories you no longer need.');
+  }
 }
 
 export async function syncSubscribe(fail: (m: string) => never): Promise<void> {
