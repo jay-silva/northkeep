@@ -7,7 +7,8 @@ import { masterKeyFilePath, resetMasterKeyStoreProbe } from '@northkeep/mcp-serv
 import { handleApi } from '../src/api.js';
 import { UiSession } from '../src/session.js';
 
-describe('POST /api/unlock remember on the file store', () => {
+// On macOS the file backend is ignored, so remember:true would write the real Keychain.
+describe.runIf(process.platform === 'linux')('POST /api/unlock remember on the file store', () => {
   const prev = {
     home: process.env.NORTHKEEP_HOME,
     backend: process.env.NORTHKEEP_SECRET_BACKEND,
@@ -67,7 +68,6 @@ describe('POST /api/unlock remember on the file store', () => {
   });
 
   it('does not write the key file from the app without the explicit Linux opt-in', async () => {
-    if (process.platform !== 'linux') return;
     dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-unlock-nofile-'));
     process.env.NORTHKEEP_HOME = dir;
     delete process.env.NORTHKEEP_SECRET_BACKEND;

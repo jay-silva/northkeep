@@ -38,7 +38,8 @@ describe('device phrase for the welcome and unlock dialogs', () => {
   });
 });
 
-describe('NORTHKEEP_HOME on the desktop server', () => {
+// On macOS the file backend is ignored, so unlock and lock would use the real Keychain.
+describe.runIf(process.platform === 'linux')('NORTHKEEP_HOME on the desktop server', () => {
   const prev = {
     home: process.env.NORTHKEEP_HOME,
     userHome: process.env.HOME,

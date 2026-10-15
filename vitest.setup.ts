@@ -33,3 +33,24 @@ if (!current || path.resolve(current) === realHome) {
   process.env.NORTHKEEP_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'northkeep-test-home-'));
 }
 
+
+// No test may touch the owner's real macOS Keychain: the vault key lives there
+// (northkeep-vault / master-key), and a full run once replaced and deleted it.
+// The opt-out is forced, and a `security` that refuses everything goes first on
+// PATH, so a test that clears the opt-out fails loudly instead of reaching it.
+if (process.platform === 'darwin') {
+  process.env.NORTHKEEP_NO_KEYCHAIN = '1';
+  // Setup runs once per test file, often in a reused worker.
+  const first = (process.env.PATH ?? '').split(path.delimiter)[0];
+  if (!first.includes('northkeep-test-bin-')) installRefusingSecurity();
+}
+
+function installRefusingSecurity(): void {
+  const bin = fs.mkdtempSync(path.join(os.tmpdir(), 'northkeep-test-bin-'));
+  fs.writeFileSync(
+    path.join(bin, 'security'),
+    '#!/bin/sh\necho "vitest.setup.ts: tests may not use the real macOS Keychain" >&2\nexit 1\n',
+    { mode: 0o755 },
+  );
+  process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ''}`;
+}
