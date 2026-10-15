@@ -206,6 +206,40 @@ describe('ADR 0050 hosted project_create', () => {
     expect(update.description).toContain('project_create');
   });
 
+  it('project_update publishes expected_revision as it behaves: needed by every save, not by project_create', async () => {
+    const token = await connectAiApp();
+    const resp = await fetch(`${base}/mcp`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list', params: {} }),
+    });
+    const msg = await readRpc(resp);
+    type Tool = { name: string; inputSchema: { properties: Record<string, { description?: string }>; required?: string[] } };
+    const tools = (msg?.result?.tools || []) as Tool[];
+    const update = tools.find((t) => t.name === 'project_update')!;
+    const described = update.inputSchema.properties.expected_revision!.description!;
+    // Optional in the schema, so the text must not claim the schema rejects it; it says what the tool does.
+    expect(update.inputSchema.required ?? []).not.toContain('expected_revision');
+    expect(described).not.toMatch(/^Required\./);
+    expect(described).toContain('Every save needs it');
+    expect(described).toContain('Not needed by project_create');
+    const create = tools.find((t) => t.name === 'project_create')!;
+    expect(Object.keys(create.inputSchema.properties)).not.toContain('expected_revision');
+
+    const made = await mcpCall(token, 'project_create', { milestones: AGREED_PLAN, project: 'rev-text', what_why: 'w', status: 's' });
+    expect(made.isError).toBeFalsy();
+    const before = await rowsIn('project:rev-text');
+    for (const missing of [{}, { expected_revision: '  ' }]) {
+      const res = await mcpCall(token, 'project_update', { project: 'rev-text', status: 'unbound', ...missing });
+      expect(res).toEqual({ text: 'Nothing was saved: call project_get first and pass its revision as expected_revision.', isError: true });
+    }
+    expect(await rowsIn('project:rev-text')).toEqual(before);
+  });
+
   it('creates one pending working row and stores only ciphertext', async () => {
     const token = await connectAiApp();
     const WHY = 'ADR0050-WHY-CANARY';
