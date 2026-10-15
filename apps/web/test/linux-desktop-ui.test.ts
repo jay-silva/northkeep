@@ -53,8 +53,8 @@ describe('platform wording on the desktop page', () => {
     expect(body).not.toMatch(/this\s+Mac|your\s+Mac|This\s+Mac|brew services|brew install|macOS Keychain|The Mac app/);
     expect(body).toContain('id="ollamaFix">ollama serve');
     expect(body).toContain('id="ollamaFixAlt"');
-    expect(body).toContain('AI apps on <span data-place>this computer</span>');
-    expect(body).toContain('on <span data-place>this computer</span>. Browse, search, edit, or add.');
+    expect(body).toContain('Use one on <span data-place>this computer</span>, or connect Claude');
+    expect(body).toContain('encrypted vault on <span data-place>this computer</span>, and you choose which apps can read it.');
     expect(body).toContain('placeholder="Label (e.g. This computer: Ollama)"');
     const code = stripComments(script);
     expect(code).not.toMatch(/this Mac|your Mac|This Mac|brew services|brew install ollama/);
