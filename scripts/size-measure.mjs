@@ -7,9 +7,9 @@
  *   pnpm build && node scripts/size-measure.mjs            # full run
  *   node scripts/size-measure.mjs --quick                  # smaller sweep
  *
- * Embeddings are written the way the app writes them: retrieveSemantic()
- * fills the table, then a save() persists it. The embedder is a local fake
- * returning deterministic 768-dimension vectors (nomic-embed-text's size).
+ * "With embeddings" rebuilds the pre-ADR 0067 layout: one row per memory in
+ * an embeddings table, 768 float32 values (nomic-embed-text's size), saved
+ * without the 0067 cleanup. The "after 0067" lines run the current code.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -68,14 +68,31 @@ function fill(vault, n) {
   }
 }
 
+const VECTOR_BYTES = Buffer.alloc(DIMS * 4, 7);
+
+/** Saves with a pre-0067 embeddings table filled for every memory, per model. */
+function saveLegacy(v, models = ['nomic-embed-text']) {
+  const db = v.db;
+  db.exec(`CREATE TABLE IF NOT EXISTS embeddings (memory_id TEXT NOT NULL, model TEXT NOT NULL,
+    dims INTEGER NOT NULL, vector BLOB NOT NULL, PRIMARY KEY (memory_id, model))`);
+  const insert = db.prepare('INSERT OR REPLACE INTO embeddings VALUES (?, ?, ?, ?)');
+  for (const model of models) for (const e of v.list()) insert.run(e.id, model, DIMS, VECTOR_BYTES);
+  const real = Vault.prototype.compactImage;
+  Vault.prototype.compactImage = () => {};
+  try {
+    v.save();
+  } finally {
+    Vault.prototype.compactImage = real;
+  }
+}
+
 async function measure(n) {
   seed = 1;
   const v = fresh(`m${n}`);
   fill(v, n);
   v.save();
   const without = size(v.path);
-  await v.retrieveSemantic('coffee meeting', fakeEmbedder, { limit: 8 });
-  v.save();
+  saveLegacy(v);
   const withEmb = size(v.path);
   v.close();
   return { n, without, withEmb };
@@ -125,20 +142,18 @@ if (!quick) {
   await r.retrieveSemantic('coffee meeting', fakeEmbedder, { limit: 8 });
   r.close();
   const after = createHash('sha256').update(fs.readFileSync(p)).digest('hex');
-  console.log(`\nSearch on a fresh handle, then close (CLI, MCP, web pattern): file ${before === after ? 'unchanged' : 'CHANGED'}`);
-  // A write in the same handle after a search persists the whole cache.
+  console.log(`\nAfter 0067, search on a fresh handle, then close: file ${before === after ? 'unchanged' : 'CHANGED'}`);
   const w = Vault.open({ path: p, passphrase: PASS, deviceSecret: secret });
   const s0 = size(p);
   await w.retrieveSemantic('coffee meeting', fakeEmbedder, { limit: 8 });
   w.remember({ content: 'one more', type: 'semantic', source: 'cli' });
   w.save();
-  console.log(`Search then a write on the same handle: ${mib(s0)} -> ${mib(size(p))}`);
-  // Dropping the table without VACUUM does not shrink the file.
-  w.clearEmbeddingCache();
+  console.log(`After 0067, search then a write on the same handle: ${mib(s0)} -> ${mib(size(p))}`);
+  saveLegacy(w);
+  const legacy = size(p);
   w.save();
-  const dropped = size(p);
+  console.log(`A pre-0067 vault with vectors, then one ordinary save: ${mib(legacy)} -> ${mib(size(p))}`);
   w.close();
-  console.log(`clearEmbeddingCache() then save, no VACUUM: ${mib(dropped)}`);
 }
 
 // 3. Other growth: project revisions, forgotten rows, a second embedding model.
@@ -165,7 +180,7 @@ if (!quick) {
   v.save();
   const s1 = size(v.path);
   v.close();
-  console.log(`1,000 memories, forget 500: ${mib(s0)} -> ${mib(s1)} (content blanked and zeroed, free pages kept in the image)`);
+  console.log(`1,000 memories, forget 500: ${mib(s0)} -> ${mib(s1)} (short rows are blanked in place; that slack is not free pages, so D3 leaves it)`);
 }
 {
   // Long imports: entries at the 8,000-character cap the web API allows.
@@ -186,10 +201,8 @@ if (!quick) {
   seed = 1;
   const v = fresh('twomodels');
   fill(v, 1000);
-  await v.retrieveSemantic('coffee', fakeEmbedder);
-  await v.retrieveSemantic('coffee', { ...fakeEmbedder, model: 'mxbai-embed-large' });
-  v.save();
-  console.log(`1,000 memories, two embedding models cached: ${mib(size(v.path))}`);
+  saveLegacy(v, ['nomic-embed-text', 'mxbai-embed-large']);
+  console.log(`1,000 memories, two embedding models in a pre-0067 vault: ${mib(size(v.path))}`);
   v.close();
 }
 console.log('\nOutside the vault file (never synced): mcp-calls.log, sync.json, .bak, device.secret.');

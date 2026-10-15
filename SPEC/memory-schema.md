@@ -131,9 +131,12 @@ export that recorded one).
 
 ## Embeddings (derived cache — normative)
 
-Implementations MAY maintain an embeddings table keyed by
-`(memory_id, embedding_model)`. Embeddings:
+Implementations MAY cache embeddings keyed by `(memory_id, embedding_model)`,
+in memory only (ADR 0067). Embeddings:
 
+- MUST NOT be written into the vault file. A vault written before ADR 0067
+  may contain an `embeddings` table; a conforming implementation drops it on
+  the next save and MUST NOT require it to be present or absent,
 - MUST NOT appear in exports,
 - MUST NOT be required to open, read, migrate, or rebuild a vault,
 - MUST be rebuildable from `content` at any time (e.g. after switching
