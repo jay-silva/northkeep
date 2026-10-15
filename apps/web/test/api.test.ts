@@ -391,6 +391,15 @@ describe('handleApi automatic sync (ADR 0044)', () => {
     expect(auto.age).toBeNull();
   });
 
+  it('GET /api/sync/status reports the vault size before a server is set', async () => {
+    const res = await call('GET', '/api/sync/status');
+    expect(res.status).toBe(200);
+    const body = res.body as { configured: boolean; size: { bytes: number; cap_bytes: number; warning: boolean } };
+    expect(body.configured).toBe(false);
+    expect(body.size.bytes).toBe(fs.statSync(path.join(dir, 'vault.nkv')).size);
+    expect(body.size).toMatchObject({ cap_bytes: 4_194_304, warning: false });
+  });
+
   it('POST /api/sync/wake is 423 while locked (verification needs the key)', async () => {
     setSyncServer(fake.url(), deriveSyncCreds(deviceSecret).accountId);
     // An explicit lock also suppresses an ambient key (Keychain/env) on the dev machine.
