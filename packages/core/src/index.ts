@@ -3,6 +3,8 @@ export * from './canonical.js';
 export * from './consolidation.js';
 export * from './project-handoff.js';
 export * from './project-milestones.js';
+export * from './project-notes.js';
+export * from './project-notes-crypto.js';
 export * from './project-export.js';
 export * from './project-import.js';
 export { tameOneLine } from './text-safe.js';
@@ -18,6 +20,7 @@ export {
   VaultAuthError,
   VaultSchemaError,
   generateDeviceSecret,
+  deriveNotesKey,
   type KdfParams,
 } from './crypto.js';
 export {

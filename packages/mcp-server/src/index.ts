@@ -131,3 +131,5 @@ if (process.argv[1]?.endsWith('mcp-server/dist/index.js')) {
     process.exit(1);
   });
 }
+export { NotesFile, NotesKeyMismatchError, notesFilePath } from './notes-store.js';
+export { notesOwnerRelease, notesOwnerView, runNotesHook, type NotesHookOptions } from './notes-cli.js';

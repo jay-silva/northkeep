@@ -164,6 +164,18 @@ export function decrypt(
   }
 }
 
+const NOTES_KEY_LABEL = Buffer.from('nk-notes-key-v1', 'utf8');
+
+/**
+ * The notes-file key (ADR 0072 D1): keyed BLAKE2b of a fixed label under the
+ * master key. Call it before Vault.openWithKey, which takes and may zero the
+ * buffer. The caller wipes the result with memzero.
+ */
+export function deriveNotesKey(masterKey: Buffer, provider: CryptoProvider = getPlatform().crypto): Buffer {
+  if (masterKey.length !== KEY_BYTES) throw new Error('A notes key needs a 32-byte master key.');
+  return provider.generichash(NOTES_KEY_LABEL, masterKey);
+}
+
 /** BLAKE2b-256 hex digest — the hash-chain primitive. */
 export function blake2bHex(
   input: string | Buffer,
