@@ -2934,7 +2934,7 @@
         } finally { retry.disabled = false; }
       });
       const copied = el('span', 'copied');
-      copied.append(el('strong', undefined, 'Copied.'), document.createTextNode(" Paste it into Claude, or another app connected to NorthKeep on this Mac. When it's done, press Try again. Your vault keeps the current text, though the app can't show old versions of a memory yet."));
+      copied.append(el('strong', undefined, 'Copied.'), document.createTextNode(' Paste it into Claude, or another app connected to NorthKeep on ' + devicePlace() + ". When it's done, press Try again. Your vault keeps the current text, though the app can't show old versions of a memory yet."));
       const actions = el('span', 'row'); actions.append(retry, again);
       box.replaceChildren(copied, el('span', 'copy-request', text), actions, result);
       retry.focus();
