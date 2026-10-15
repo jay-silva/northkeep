@@ -5,6 +5,10 @@ on:
     branches: [main]
   pull_request:
 
+# Nothing here writes to the repo, issues or releases.
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -27,8 +31,19 @@ jobs:
       - name: Leak test (zero Tier-1 misses)
         run: pnpm exec vitest run packages/redact/test/leak.test.ts
 
+      # No other step compiles the iPhone app, so its type errors would
+      # otherwise first show up on a phone.
+      - name: iPhone app typecheck
+        run: pnpm --dir apps/mobile typecheck
+
       - name: Unit tests
         run: pnpm test
 
       - name: End-to-end tests
         run: pnpm exec vitest run --config e2e/vitest.config.ts
+
+      # Release versions agree across apps, README and site; Markdown names
+      # no missing repo files. Needs no build, so it still runs when tests fail.
+      - name: Drift check (versions and doc links)
+        if: ${{ !cancelled() }}
+        run: node scripts/check-drift.mjs
