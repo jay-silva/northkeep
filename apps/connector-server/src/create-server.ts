@@ -61,6 +61,7 @@ import { createMcpServer } from './mcp.js';
 import { renderConsentPage } from './consent.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
 import { sha256hex, generatePairingCode } from './hash.js';
+import { operatorBearerMatches, reviewerSeedSecretFromEnv, seedReviewerAccount } from './reviewer-seed.js';
 import { connectorGateFromEnv, verifyEntitlement, ENTITLEMENT_GRACE_MS } from './entitlement.js';
 import {
   ConnectorCryptoError,
@@ -88,6 +89,9 @@ const IP_LIMIT_MULTIPLIER = 4;
 const CLIENT_AUTH_PATHS = ['/token', '/revoke'];
 const CLIENT_AUTH_LIMIT = 50;
 const CLIENT_AUTH_WINDOW_MS = 15 * 60 * 1000;
+// Operator reviewer seed: a few tries an hour per IP, so the secret cannot be guessed online.
+const REVIEWER_SEED_LIMIT = 5;
+const REVIEWER_SEED_WINDOW_MS = 60 * 60 * 1000;
 /** Paths that must be throttled (before body read / storage / Stripe). */
 const THROTTLED_PREFIXES = ['/mcp', '/pair', '/consent', '/client', '/debug'];
 
@@ -493,6 +497,49 @@ export function createConnectorServer(
       expires_at: new Date(expiresAt).toISOString(),
     });
   }));
+
+  // ---- operator-only reviewer seed: POST /operator/reviewer-seed ----------
+  // Runs the reviewer seed here because only this deployment holds the KEK
+  // pepper. The route exists only while NORTHKEEP_REVIEWER_SEED_SECRET is set;
+  // unset means 404. The seed itself refuses any account holding real rows.
+  const reviewerSeedSecret = reviewerSeedSecretFromEnv(process.env);
+  if (reviewerSeedSecret) {
+    const seedLimiter = createRateLimiter({ limit: REVIEWER_SEED_LIMIT, windowMs: REVIEWER_SEED_WINDOW_MS });
+    app.post('/operator/reviewer-seed', express.json({ limit: '1kb' }), asyncRoute(async (req: Request, res: Response) => {
+      res.set('Cache-Control', 'no-store');
+      const retryAfter = seedLimiter.check(`ip:${ipRateLimitKey(req.ip)}`);
+      if (retryAfter !== null) {
+        res.set('retry-after', String(retryAfter));
+        res.status(429).json({ error: 'Too many requests. Slow down and retry.' });
+        return;
+      }
+      if (!operatorBearerMatches(req.headers['authorization'], reviewerSeedSecret)) {
+        res.status(401).json({ error: 'Missing or wrong operator secret.' });
+        return;
+      }
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      const connectorToken = typeof body.connectorToken === 'string' ? body.connectorToken : '';
+      if (connectorToken.trim().length < 16) {
+        res.status(400).json({ error: 'connectorToken must be at least 16 characters. Nothing was written.' });
+        return;
+      }
+      let seeded;
+      try {
+        seeded = await seedReviewerAccount(storage, connectorToken, kekPepper);
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError || (err instanceof Error && err.message.endsWith('Nothing was changed.'))) {
+          res.status(409).json({ error: 'This account already holds rows the seed did not write, or a different key. Nothing was changed.' });
+          return;
+        }
+        throw err;
+      }
+      res.status(201).json({
+        rows_written: seeded.rowsWritten,
+        pairing_code: seeded.pairingCode,
+        expires_at: new Date(seeded.pairingExpiresAt).toISOString(),
+      });
+    }));
+  }
 
   // ---- consent submission: POST /consent --------------------------------
   // Re-validate the client + redirect_uri (an unregistered redirect_uri here
