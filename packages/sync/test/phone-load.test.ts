@@ -10,7 +10,7 @@ describe('sync modules load on the phone', () => {
       const auto = await import('../src/connector-auto.js');
       await import('../src/connector-push.js');
       await import('../src/connector-client.js');
-      expect(auto.CONNECTOR_AUTO_PUSH_MESSAGES.behind).toMatch(/^This device is behind/);
+      expect(auto.connectorAutoPushMessage('behind')).toMatch(/^This device is behind/);
     } finally {
       Object.defineProperty(process, 'platform', real);
     }

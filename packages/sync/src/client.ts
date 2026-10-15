@@ -11,6 +11,7 @@ import {
   withFileLock,
 } from '@northkeep/core';
 import { deriveSyncCreds } from './creds.js';
+import { MAX_BLOB_BYTES, vaultSizeReport, type VaultSizeReport } from './size.js';
 import { assertSyncUrl, loadSyncConfig, saveSyncConfig, type SyncConfig } from './config.js';
 
 /**
@@ -25,7 +26,7 @@ const NKV_MAGIC = Buffer.from('NKV1', 'ascii');
 const NKV_HEADER_LENGTH = 52;
 const STATUS_TIMEOUT_MS = 15_000;
 const BLOB_TIMEOUT_MS = 120_000;
-export const MAX_BLOB_BYTES = 4 * 1024 * 1024;
+export { MAX_BLOB_BYTES };
 
 /** Thrown when the server requires a subscription (HTTP 402) — surfaces a subscribe prompt. */
 export class SubscriptionRequiredError extends Error {
@@ -59,6 +60,8 @@ export interface PushResult {
   /** On success, the new server version; on conflict, the server's current version. */
   version: number;
   conflict: boolean;
+  /** ADR 0067 D4: the size of the bytes this push sent, against the cap. */
+  size?: VaultSizeReport;
 }
 
 export type PullResult =
@@ -318,6 +321,10 @@ export async function pushVault(options: {
           // holds, and the next pull would read as a replay.
           vault.setSyncGeneration(last + 1);
           vault.save();
+        } else if (vault.hasLegacyEmbeddingsTable()) {
+          // ADR 0067 D2: the stamped, unlanded retry is the one branch that
+          // does not save; save here so the bytes read below are clean.
+          vault.save();
         }
         stampedGeneration = vault.getSyncGeneration();
       } finally {
@@ -334,7 +341,7 @@ export async function pushVault(options: {
     });
     // The upload holds no vault lock: a hung server must not take the vault
     // away from every other process on this machine (review 2026-09-03).
-    const result = await pushBlob(snapshot.config.serverUrl, token, snapshot.blob, snapshot.config.lastVersion);
+    const result = { ...(await pushBlob(snapshot.config.serverUrl, token, snapshot.blob, snapshot.config.lastVersion)), size: vaultSizeReport(snapshot.blob.length) };
     if (result.ok) {
       await withFileLock(options.vaultPath, () => {
         const latest = loadSyncConfig() ?? snapshot.config;
@@ -781,23 +788,27 @@ export async function syncState(options: {
   localSha: string | null;
   /** The server's sha256 as reported by /api/status (lowercased), null when absent. */
   remoteSha: string | null;
+  /** ADR 0067 D4: the local file against the sync cap; null when there is no local file. */
+  size: VaultSizeReport | null;
 }> {
   const config = loadSyncConfig();
   if (!config) {
-    return { state: 'no-config', localVersion: 0, remoteVersion: null, localChanged: false, baselineKnown: true, localSha: null, remoteSha: null };
+    return { state: 'no-config', localVersion: 0, remoteVersion: null, localChanged: false, baselineKnown: true, localSha: null, remoteSha: null, size: null };
   }
   const { token } = deriveSyncCreds(options.deviceSecret);
   const remote = await remoteStatus(config.serverUrl, token);
   const localExists = fs.existsSync(options.vaultPath);
   if (remote === null) {
+    const local = localExists ? fs.readFileSync(options.vaultPath) : null;
     return {
       state: localExists ? 'no-remote' : 'no-config',
       localVersion: config.lastVersion,
       remoteVersion: null,
       localChanged: localExists,
       baselineKnown: config.lastSha !== null,
-      localSha: localExists ? createHash('sha256').update(fs.readFileSync(options.vaultPath)).digest('hex') : null,
+      localSha: local ? createHash('sha256').update(local).digest('hex') : null,
       remoteSha: null,
+      size: local ? vaultSizeReport(local.length) : null,
     };
   }
   if (!localExists) {
@@ -809,6 +820,7 @@ export async function syncState(options: {
       baselineKnown: true,
       localSha: null,
       remoteSha: typeof remote.sha256 === 'string' ? remote.sha256.toLowerCase() : null,
+      size: null,
     };
   }
 
@@ -819,7 +831,9 @@ export async function syncState(options: {
   // ahead/diverged forever and never say in-sync again.
   const remoteShaRaw = typeof remote.sha256 === 'string' ? remote.sha256.toLowerCase() : '';
   const remoteSha = /^[0-9a-f]{64}$/.test(remoteShaRaw) ? remoteShaRaw : null;
-  const localSha = createHash('sha256').update(fs.readFileSync(options.vaultPath)).digest('hex');
+  const localBytes = fs.readFileSync(options.vaultPath);
+  const localSha = createHash('sha256').update(localBytes).digest('hex');
+  const size = vaultSizeReport(localBytes.length);
   const serverAdvanced = remote.version > config.lastVersion;
   // Did WE edit since our own last sync? A config written before lastSha
   // existed cannot prove the file is untouched, so it counts as edited: the
@@ -848,6 +862,7 @@ export async function syncState(options: {
       baselineKnown: config.lastSha !== null,
       localSha,
       remoteSha: null,
+      size,
     };
   }
 
@@ -868,6 +883,7 @@ export async function syncState(options: {
     baselineKnown: config.lastSha !== null,
     localSha,
     remoteSha,
+    size,
   };
 }
 

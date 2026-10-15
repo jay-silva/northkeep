@@ -423,6 +423,12 @@ describe('handleApi automatic sync (ADR 0044)', () => {
     expect(res.status).toBe(200);
     expect((res.body as { ok: boolean; version: number })).toMatchObject({ ok: true, version: 1 });
     expect(session.autoSync.status().phase).toBe('synced');
+    // ADR 0067 D4: push and status carry the size against the 4 MiB cap.
+    const size = (res.body as { size: { bytes: number; cap_bytes: number; percent: number; warning: boolean; over_cap: boolean } }).size;
+    expect(size).toMatchObject({ cap_bytes: 4_194_304, warning: false, over_cap: false });
+    expect(size.bytes).toBeGreaterThan(0);
+    const status = await call('GET', '/api/sync/status');
+    expect((status.body as { state: string; size: unknown })).toMatchObject({ state: 'in-sync', size });
     // A second wake finds nothing to do: still one version on the server.
     await call('POST', '/api/sync/wake');
     expect(fake.version()).toBe(1);

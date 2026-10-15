@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { devicePhrase, ollamaStartCommand, ollamaStartHint, yourDevicePhrase } from '../src/host-phrase.js';
+import { devicePhrase, ollamaStartCommand, ollamaStartHint, thisDevicePhrase, yourDevicePhrase } from '../src/host-phrase.js';
 
 // The phone's JavaScript engine has no Node platform: process.platform is undefined there.
 const phone = undefined as unknown as NodeJS.Platform;
@@ -20,5 +20,17 @@ describe('host phrases off Node', () => {
     expect(devicePhrase('darwin')).toBe('this Mac');
     expect(devicePhrase('linux')).toBe('this Linux computer');
     expect(ollamaStartCommand('darwin')).toBe('brew services start ollama');
+  });
+
+  it('names the running device when called, not when loaded', () => {
+    const real = Object.getOwnPropertyDescriptor(process, 'platform')!;
+    try {
+      Object.defineProperty(process, 'platform', { value: undefined, configurable: true });
+      expect(thisDevicePhrase()).toBe('this device');
+      Object.defineProperty(process, 'platform', { value: 'darwin', configurable: true });
+      expect(thisDevicePhrase()).toBe('this Mac');
+    } finally {
+      Object.defineProperty(process, 'platform', real);
+    }
   });
 });

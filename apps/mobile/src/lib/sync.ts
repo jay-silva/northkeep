@@ -1,7 +1,7 @@
 import { fetch } from 'expo/fetch';
 import * as Crypto from 'expo-crypto';
 import { Vault, VaultAuthError, VaultSyncGenerationError, getPlatform } from '@northkeep/core';
-import { MAX_BLOB_BYTES, SubscriptionRequiredError, deriveSyncCreds } from '@northkeep/sync';
+import { MAX_BLOB_BYTES, SubscriptionRequiredError, deriveSyncCreds, describeVaultSize, vaultSizeReport } from '@northkeep/sync';
 import { createDeadline, type DeadlineScope } from './deadline';
 import { autoPullBakPath, deleteIfExists, pulledTmpPath } from './paths';
 import { loadSyncBaseline, saveLocalDirty, savePendingStampSha, saveSyncBaseline } from './secure-store';
@@ -531,9 +531,7 @@ export async function preparePushMobile(options: {
     const blob = platform.storage.readBytes(options.vaultPath);
     if (!isVaultBlob(blob)) throw new Error('Local vault file is not a NorthKeep vault.');
     if (blob.length > MAX_BLOB_BYTES) {
-      throw new Error(
-        `Vault is ${(blob.length / 1024 / 1024).toFixed(1)} MB, over the ${MAX_BLOB_BYTES / 1024 / 1024} MB sync limit.`,
-      );
+      throw new Error(describeVaultSize(vaultSizeReport(blob.length)).join(' '));
     }
     const sha256 = await sha256Hex(blob);
     // The pending stamp, recorded only while there is no generation baseline

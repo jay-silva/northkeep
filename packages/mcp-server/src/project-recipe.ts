@@ -38,8 +38,9 @@ export const PROJECT_BOOTSTRAP_INSTRUCTION =
   'commits and tags, and date every claim "as of <date>". Fill Next Actions from TODOs, open issues and ' +
   'unfinished branches. Fill Decisions from ADRs and commit messages that explain a choice. Anything you ' +
   'inferred rather than read, mark "unverified". Do not run the code, do not fetch URLs, do not read .env ' +
-  'or secret files. Then call project_create with draft: true. Keep the whole document under 6,000 ' +
-  'characters; detail goes into episodic memories in the project scope, one per source you read.';
+  'or secret files. Then call project_create with draft: true. Keep this first document under 6,000 ' +
+  'characters: saves over 16,384 are refused and only the Log rolls out, so Decisions and status need room ' +
+  'to grow. Detail goes into episodic memories in the project scope, one per source you read.';
 
 /**
  * ADR 0065 Decision 4, pinned verbatim: the local server's instructions and

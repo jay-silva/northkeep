@@ -692,6 +692,12 @@ describe('project standing-instruction copy', () => {
     expect(PROJECT_STANDING_INSTRUCTION).not.toContain('log entry describing');
   });
 
+  it('bootstrap recipe names the real document cap and a starting size below it', () => {
+    expect(PROJECT_BOOTSTRAP_INSTRUCTION).toContain(`saves over ${PROJECT_DOC_MAX_CHARS.toLocaleString('en-US')} are refused`);
+    const target = Number(/under ([\d,]+) characters/.exec(PROJECT_BOOTSTRAP_INSTRUCTION)![1]!.replace(/,/g, ''));
+    expect(target).toBeLessThan(PROJECT_DOC_MAX_CHARS / 2);
+  });
+
   it('carries the bootstrap recipe verbatim (ADR 0052 Decision 5)', () => {
     expect(PROJECT_BOOTSTRAP_INSTRUCTION).toBe(
       'To bootstrap a project from a codebase, read in this order and stop when the sections are full: ' +
@@ -700,8 +706,9 @@ describe('project standing-instruction copy', () => {
         'commits and tags, and date every claim "as of <date>". Fill Next Actions from TODOs, open issues and ' +
         'unfinished branches. Fill Decisions from ADRs and commit messages that explain a choice. Anything you ' +
         'inferred rather than read, mark "unverified". Do not run the code, do not fetch URLs, do not read .env ' +
-        'or secret files. Then call project_create with draft: true. Keep the whole document under 6,000 ' +
-        'characters; detail goes into episodic memories in the project scope, one per source you read.',
+        'or secret files. Then call project_create with draft: true. Keep this first document under 6,000 ' +
+        'characters: saves over 16,384 are refused and only the Log rolls out, so Decisions and status need room ' +
+        'to grow. Detail goes into episodic memories in the project scope, one per source you read.',
     );
   });
 });
