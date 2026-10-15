@@ -1,0 +1,15 @@
+{
+  "name": "northkeep",
+  "displayName": "NorthKeep",
+  "version": "1.0.0",
+  "description": "Read and update the memories and projects you have shared from your NorthKeep vault.",
+  "author": {
+    "name": "Silva Peak Labs",
+    "email": "support@northkeep.ai"
+  },
+  "homepage": "https://northkeep.ai/docs",
+  "repository": "https://github.com/jay-silva/northkeep",
+  "license": "AGPL-3.0",
+  "keywords": ["mcp", "memory", "notes", "northkeep"],
+  "logo": "assets/logo.png"
+}

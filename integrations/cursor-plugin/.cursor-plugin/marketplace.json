@@ -1,0 +1,18 @@
+{
+  "name": "northkeep",
+  "owner": {
+    "name": "Silva Peak Labs",
+    "email": "support@northkeep.ai"
+  },
+  "metadata": {
+    "description": "NorthKeep connector for Cursor.",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "northkeep",
+      "source": ".",
+      "description": "Read and update the memories and projects you have shared from your NorthKeep vault."
+    }
+  ]
+}

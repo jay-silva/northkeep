@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NorthKeep security</title>
+<meta name="description" content="What stays on your machine, what the connector stores, and how to revoke access.">
+<link rel="icon" href="./northkeep-icon.png">
+<style>
+  :root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd;--accent-soft:#e4efe8;--on-accent:#fff;--serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  @media (prefers-color-scheme:dark){:root{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820;--accent-soft:#23302a;--on-accent:#211e17}}
+  :root[data-theme="light"]{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd;--accent-soft:#e4efe8;--on-accent:#fff}
+  :root[data-theme="dark"]{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820;--accent-soft:#23302a;--on-accent:#211e17}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.65;font-size:17px;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent)}
+  .wrap{max-width:760px;margin:0 auto;padding:0 24px}
+  header.nav{border-bottom:1px solid var(--line)}
+  .nav .wrap{display:flex;align-items:center;height:62px;gap:12px;max-width:1160px}
+  .brand{display:flex;align-items:center;gap:10px;min-height:44px;font-family:var(--serif);font-size:20px;font-weight:600;color:var(--ink);text-decoration:none}
+  .brand img{width:30px;height:30px;border-radius:7px}
+  .nav .spacer{flex:1}
+  .nav a.support-pill{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:0 16px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);font-size:14px;font-weight:600;text-decoration:none}
+  .nav a.support-pill svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  main{padding:40px 0 64px}
+  h1{font-family:var(--serif);font-size:clamp(32px,5vw,44px);line-height:1.15;margin:0 0 8px}
+  h2{font-family:var(--serif);font-size:26px;margin:36px 0 8px}
+  .lede{color:var(--muted);font-size:18px}
+  ul{padding-left:22px} li{margin:8px 0}
+  footer{border-top:1px solid var(--line);padding:28px 0;color:var(--muted);font-size:14px}
+  footer .wrap{display:flex;gap:18px;flex-wrap:wrap}
+  footer a{display:inline-flex;align-items:center;min-height:44px}
+</style>
+</head>
+<body>
+<header class="nav"><div class="wrap"><a class="brand" href="./index.html"><img src="./northkeep-icon.png" alt="">NorthKeep</a><span class="spacer"></span><a class="support-pill" href="./support.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>Support NorthKeep</a></div></header>
+<main><div class="wrap">
+<h1>Security</h1>
+<p class="lede">Your vault stays on your devices. The connector is optional, and it only holds scopes you have marked Shared.</p>
+
+<h2>On your machine</h2>
+<ul>
+  <li>The vault file is encrypted. We do not have your passphrase or your device secret, and we cannot reset them.</li>
+  <li>Memories you have not shared never go to the connector.</li>
+  <li>Desktop connections to Claude, Cursor, and ChatGPT on the same Mac talk to the local app. They do not pass through the connector.</li>
+</ul>
+
+<h2>The connector</h2>
+<p>The connector is at <code>https://mcp.northkeep.ai/mcp</code>. The older <code>northkeep-connector-server.vercel.app</code> address is the same service.</p>
+<ul>
+  <li>Shared text is stored as ciphertext. The database does not hold a key that can read it. The key is rebuilt for each request from the credential the app presents and a secret that is not in that database.</li>
+  <li>The service decrypts a row only long enough to answer that request. A compromised running server is not protected against, and the privacy policy says so.</li>
+  <li>The service can see scope names, entry ids, counts, ciphertext sizes, and timestamps. It does not build embeddings from content, and the audit log does not store memory text.</li>
+  <li>An app signs in with OAuth. You approve it by typing a one-time pairing code from NorthKeep. Tokens are stored as hashes.</li>
+  <li>If an app names an https URL as its client id, the connector fetches that document. It allows port 443 only, refuses private and loopback addresses, and does not follow redirects. The address is checked before the connection. A name that changes address in between can still be reached. That limit is also in the project's known-limits notes.</li>
+</ul>
+
+<h2>Revoke</h2>
+<ul>
+  <li>Unshare a scope in <strong>Connect</strong>, then <strong>Cloud</strong>. That deletes the scope's rows on the connector. Your vault keeps its copy.</li>
+  <li>Remove the connector in the AI app so its token stops being sent.</li>
+  <li>Email <a href="mailto:support@northkeep.ai">support@northkeep.ai</a> to ask us to delete the connector account.</li>
+</ul>
+<p>The full policy is at <a href="./privacy.html">northkeep.ai/privacy</a>. Setup steps are on the <a href="./docs.html">connector page</a>.</p>
+</div></main>
+<footer><div class="wrap">
+<a href="./index.html">Home</a><a href="./docs.html">Connector</a><a href="./security.html">Security</a><a href="./privacy.html">Privacy</a><a href="./terms.html">Terms</a><a href="mailto:support@northkeep.ai">Contact</a>
+</div></footer>
+<script>var t=new URLSearchParams(location.search).get('theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);</script>
+</body>
+</html>

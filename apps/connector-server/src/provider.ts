@@ -39,6 +39,7 @@ import type { ConnectorStorage } from './storage.js';
 import { ClientSecretBinder, clientSecretState, scrubForStorage, secretMatchesHash } from './client-secrets.js';
 import { renderConsentPage } from './consent.js';
 import { sha256hex, randomToken } from './hash.js';
+import { resolveCimdClient, type CimdLookup } from './cimd.js';
 import {
   ConnectorCryptoError,
   KEK_LABEL_AUTH_CODE,
@@ -62,14 +63,18 @@ class ConnectorClientsStore implements OAuthRegisteredClientsStore {
   constructor(
     private storage: ConnectorStorage,
     private binder: ClientSecretBinder,
+    private cimd: CimdLookup,
   ) {}
 
   // ADR 0061: a confidential client is presented with a per-process bound
   // value, never the stored hash or sentinel, so nothing in the DB is a secret.
+  // A client_id that is an https URL and is not already registered is resolved
+  // as a Client ID Metadata Document. Stored registrations win, so a URL is
+  // never fetched for a client we already know.
   async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
     const rec = await this.storage.getClientRecord(clientId);
-    if (!rec) return undefined;
-    return this.binder.present(rec.info, rec.clientSecretHash);
+    if (rec) return this.binder.present(rec.info, rec.clientSecretHash);
+    return this.cimd(clientId);
   }
 
   // RFC 7591 DCR. The SDK echoes the returned client (secret included) once;
@@ -101,18 +106,30 @@ class ConnectorClientsStore implements OAuthRegisteredClientsStore {
 
 export class ConnectorOAuthProvider implements OAuthServerProvider {
   private _clientsStore: ConnectorClientsStore;
+  private acceptedResources: Set<string>;
 
   /**
-   * @param mcpResourceUrl canonical RFC 8707 resource id, e.g. https://host/mcp
+   * @param mcpResourceUrl default RFC 8707 resource when a request names none
    * @param kekPepper server-environment pepper mixed into every KEK (ADR 0020)
+   * @param acceptedResourceUrls every /mcp audience this server will honor.
+   *   Defaults to just `mcpResourceUrl`. The directory hosts are added by
+   *   createConnectorServer.
    */
   constructor(
     private storage: ConnectorStorage,
     private mcpResourceUrl: string,
     private kekPepper: Uint8Array,
     binder: ClientSecretBinder = new ClientSecretBinder(),
+    acceptedResourceUrls?: readonly string[],
+    cimd?: CimdLookup,
   ) {
-    this._clientsStore = new ConnectorClientsStore(storage, binder);
+    this.acceptedResources = new Set(
+      (acceptedResourceUrls && acceptedResourceUrls.length > 0 ? acceptedResourceUrls : [mcpResourceUrl]).map((url) =>
+        url.replace(/\/+$/, ''),
+      ),
+    );
+    this.acceptedResources.add(mcpResourceUrl.replace(/\/+$/, ''));
+    this._clientsStore = new ConnectorClientsStore(storage, binder, cimd ?? ((clientId) => resolveCimdClient(clientId)));
   }
 
   get clientsStore(): OAuthRegisteredClientsStore {
@@ -132,9 +149,17 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
    * otherwise 401 real traffic after everything looked green. Still fail-closed
    * against a genuinely different origin/path.
    */
+  /**
+   * The canonical audience if `resourceHref` is one of ours, else null.
+   * Trailing slashes are ignored. A different origin or path is refused.
+   */
+  private canonicalResource(resourceHref: string): string | null {
+    const stripped = resourceHref.replace(/\/+$/, '');
+    return this.acceptedResources.has(stripped) ? stripped : null;
+  }
+
   private matchesAudience(resourceHref: string): boolean {
-    const strip = (s: string): string => s.replace(/\/+$/, '');
-    return strip(resourceHref) === strip(this.mcpResourceUrl);
+    return this.canonicalResource(resourceHref) !== null;
   }
 
   // ---- authorize: RENDER the consent page only ---------------------------
@@ -173,7 +198,8 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     resource: string;
     dek: Uint8Array;
   }): Promise<string> {
-    if (!this.matchesAudience(args.resource)) {
+    const audience = this.canonicalResource(args.resource);
+    if (!audience) {
       throw new InvalidTargetError('Resource does not match this connector (RFC 8707)');
     }
     const code = randomToken();
@@ -183,7 +209,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       accountHash: args.accountHash,
       pkceChallenge: args.codeChallenge,
       redirectUri: args.redirectUri,
-      audience: this.mcpResourceUrl,
+      audience,
       expiresAt: Date.now() + CODE_TTL_MS,
       dekWrap: await wrapDek(args.dek, codeKek),
     });
@@ -215,8 +241,9 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     if (!rec || rec.clientId !== client.client_id) {
       throw new InvalidGrantError('Invalid or expired authorization code');
     }
-    // RFC 8707: if the token request names a resource, it must be our /mcp.
-    if (resource && !this.matchesAudience(resource.href)) {
+    // RFC 8707: if the token request names a resource, it must be the audience
+    // this code was issued for, not merely some other host we also serve.
+    if (resource && this.canonicalResource(resource.href) !== rec.audience.replace(/\/+$/, '')) {
       throw new InvalidTargetError('Resource does not match this connector (RFC 8707)');
     }
     // ADR 0020: unwrap the account DEK with a KEK derived from the presented
@@ -232,7 +259,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       }
       throw err;
     }
-    return this.issueTokenPair(client.client_id, rec.accountHash, dek);
+    return this.issueTokenPair(client.client_id, rec.accountHash, dek, rec.audience);
   }
 
   // ---- refresh token rotation -------------------------------------------
@@ -250,7 +277,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     if (!rec || rec.clientId !== client.client_id) {
       throw new InvalidGrantError('Invalid or expired refresh token');
     }
-    if (resource && !this.matchesAudience(resource.href)) {
+    if (resource && this.canonicalResource(resource.href) !== rec.audience.replace(/\/+$/, '')) {
       throw new InvalidTargetError('Resource does not match this connector (RFC 8707)');
     }
     // Custody: unwrap the DEK with the presented refresh token's KEK, re-wrap
@@ -265,10 +292,10 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       }
       throw err;
     }
-    return this.issueTokenPair(client.client_id, rec.accountHash, dek);
+    return this.issueTokenPair(client.client_id, rec.accountHash, dek, rec.audience);
   }
 
-  private async issueTokenPair(clientId: string, accountHash: string, dek: Uint8Array): Promise<OAuthTokens> {
+  private async issueTokenPair(clientId: string, accountHash: string, dek: Uint8Array, audience: string): Promise<OAuthTokens> {
     const nowSec = Math.floor(Date.now() / 1000);
     const accessToken = randomToken();
     const refreshToken = randomToken();
@@ -276,10 +303,11 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     // derived from that token's plaintext — the DB rows alone unwrap nothing.
     const accessWrap = await wrapDek(dek, await deriveKek(KEK_LABEL_TOKEN, accessToken, this.kekPepper));
     const refreshWrap = await wrapDek(dek, await deriveKek(KEK_LABEL_TOKEN, refreshToken, this.kekPepper));
+    const tokenAudience = this.canonicalResource(audience) ?? audience.replace(/\/+$/, '');
     await this.storage.putToken(sha256hex(accessToken), {
       clientId,
       accountHash,
-      audience: this.mcpResourceUrl,
+      audience: tokenAudience,
       kind: 'access',
       expiresAt: nowSec + ACCESS_TTL_SEC,
       dekWrap: accessWrap,
@@ -287,7 +315,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     await this.storage.putToken(sha256hex(refreshToken), {
       clientId,
       accountHash,
-      audience: this.mcpResourceUrl,
+      audience: tokenAudience,
       kind: 'refresh',
       expiresAt: nowSec + REFRESH_TTL_SEC,
       dekWrap: refreshWrap,

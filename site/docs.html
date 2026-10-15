@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NorthKeep connector</title>
+<meta name="description" content="How to connect an AI app to the memories and projects you have shared from NorthKeep.">
+<link rel="icon" href="./northkeep-icon.png">
+<style>
+  :root{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd;--accent-soft:#e4efe8;--on-accent:#fff;--serif:"Iowan Old Style","Palatino Linotype",Palatino,Georgia,"Times New Roman",serif;--sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}
+  @media (prefers-color-scheme:dark){:root{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820;--accent-soft:#23302a;--on-accent:#211e17}}
+  :root[data-theme="light"]{--bg:#f6f4ef;--panel:#fffdf8;--ink:#24221c;--muted:#6f695c;--line:#e6e0d4;--accent:#2f6a54;--chip:#efeadd;--accent-soft:#e4efe8;--on-accent:#fff}
+  :root[data-theme="dark"]{--bg:#16140f;--panel:#211e17;--ink:#ece7db;--muted:#a39a88;--line:#38332a;--accent:#79b394;--chip:#2b2820;--accent-soft:#23302a;--on-accent:#211e17}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--sans);line-height:1.65;font-size:17px;-webkit-font-smoothing:antialiased}
+  a{color:var(--accent)}
+  .wrap{max-width:800px;margin:0 auto;padding:0 24px}
+  header.nav{border-bottom:1px solid var(--line)}
+  .nav .wrap{display:flex;align-items:center;height:62px;gap:12px;max-width:1160px}
+  .brand{display:flex;align-items:center;gap:10px;min-height:44px;font-family:var(--serif);font-size:20px;font-weight:600;color:var(--ink);text-decoration:none}
+  .brand img{width:30px;height:30px;border-radius:7px}
+  .nav .spacer{flex:1}
+  .nav a.support-pill{display:inline-flex;align-items:center;gap:7px;min-height:44px;padding:0 16px;border-radius:999px;background:var(--accent-soft);color:var(--accent);border:1px solid color-mix(in srgb,var(--accent) 28%,transparent);font-size:14px;font-weight:600;text-decoration:none}
+  .nav a.support-pill svg{width:15px;height:15px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  main{padding:40px 0 64px}
+  h1{font-family:var(--serif);font-size:clamp(32px,5vw,44px);line-height:1.15;margin:0 0 8px}
+  h2{font-family:var(--serif);font-size:26px;margin:36px 0 8px}
+  .lede{color:var(--muted);font-size:18px;margin:0 0 18px}
+  code{background:var(--chip);padding:2px 6px;border-radius:5px;font-size:.92em}
+  table{width:100%;border-collapse:collapse;background:var(--panel);border:1px solid var(--line);border-radius:12px;overflow:hidden;font-size:15px}
+  th,td{text-align:left;padding:12px 14px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:13px;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  tr:last-child td{border-bottom:0}
+  ol,ul{padding-left:22px} li{margin:8px 0}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px 22px;margin:16px 0}
+  footer{border-top:1px solid var(--line);padding:28px 0;color:var(--muted);font-size:14px}
+  footer .wrap{display:flex;gap:18px;flex-wrap:wrap}
+  footer a{display:inline-flex;align-items:center;min-height:44px}
+  .icon-row{display:flex;align-items:center;gap:14px;margin:18px 0}
+  .icon-row img{width:64px;height:64px;border-radius:14px}
+</style>
+</head>
+<body>
+<header class="nav"><div class="wrap"><a class="brand" href="./index.html"><img src="./northkeep-icon.png" alt="">NorthKeep</a><span class="spacer"></span><a class="support-pill" href="./support.html"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20s-7-4.4-7-10a4 4 0 0 1 7-2.6A4 4 0 0 1 19 10c0 5.6-7 10-7 10z"/></svg>Support NorthKeep</a></div></header>
+<main><div class="wrap">
+<div class="icon-row"><img src="./connector-icon.png" alt=""><div><h1>Connect an AI app</h1><p class="lede">The connector lets Claude, Cursor, ChatGPT, and other MCP apps read and update only the scopes you have marked Shared.</p></div></div>
+
+<h2>Server address</h2>
+<p>Use this address when an app asks for a remote MCP server:</p>
+<p><code>https://mcp.northkeep.ai/mcp</code></p>
+<p>The previous address, <code>https://northkeep-connector-server.vercel.app/mcp</code>, keeps working for connections that already use it. Both addresses are the same connector. Sign-in is OAuth. The app opens a NorthKeep page and asks for a one-time pairing code. You do not paste an API key into the app.</p>
+
+<h2>Set it up</h2>
+<ol>
+  <li>In the NorthKeep app, open <strong>Connect</strong>, then <strong>Cloud</strong>. Cloud Connect is part of the Sync + Cloud Connect subscription.</li>
+  <li>Share a scope. NorthKeep shows you what will leave your Mac, and it waits for you to confirm. Private scopes stay on your machine.</li>
+  <li>NorthKeep shows a server address and a one-time pairing code. In the AI app, add the server address above. When the app opens the NorthKeep page, enter the code.</li>
+  <li>Ask the app to look something up from a scope you shared. It can use the tools below. It cannot see the rest of your vault.</li>
+</ol>
+<div class="card">
+  <p>One exception to the confirmation step: if a connected app creates a project in a scope that has no project on your Mac yet, that project arrives already shared, so the app can keep it updated. From then on it is an ordinary shared scope. You can unshare it.</p>
+</div>
+
+<h2>Tools</h2>
+<p>Every tool is limited to the signed-in account. Read-only tools do not change anything. <code>memory_forget</code> hides a memory and removes it from your vault on the next sync. The other write tools add a memory or create or update a project. None of them call the open web.</p>
+<table>
+  <thead><tr><th>Tool</th><th>What it does</th><th>Kind</th></tr></thead>
+  <tbody>
+    <tr><td><code>memory_retrieve</code></td><td>Search shared memories for a query.</td><td>Read-only</td></tr>
+    <tr><td><code>memory_list</code></td><td>List shared memories.</td><td>Read-only</td></tr>
+    <tr><td><code>search</code></td><td>Search shared memories and return short results.</td><td>Read-only</td></tr>
+    <tr><td><code>fetch</code></td><td>Read one shared memory by the id <code>search</code> returned.</td><td>Read-only</td></tr>
+    <tr><td><code>project_list</code></td><td>List shared projects.</td><td>Read-only</td></tr>
+    <tr><td><code>project_get</code></td><td>Read one shared project document.</td><td>Read-only</td></tr>
+    <tr><td><code>memory_remember</code></td><td>Save a new memory into a scope you already share.</td><td>Write</td></tr>
+    <tr><td><code>project_create</code></td><td>Create a project after you agree to its milestones.</td><td>Write</td></tr>
+    <tr><td><code>project_update</code></td><td>Update a project you already have. Passed milestones stay as they are.</td><td>Write</td></tr>
+    <tr><td><code>memory_forget</code></td><td>Forget one shared memory by id. A project document cannot be forgotten this way.</td><td>Destructive</td></tr>
+  </tbody>
+</table>
+
+<h2>What sharing means</h2>
+<p>The default is private. Sharing is per scope, and you can undo it. Shared text is encrypted on the connector. The connector decrypts it only to answer a request from an app you paired. It does not build search embeddings from your text, and it does not keep a content log. Scope names, entry ids, counts, ciphertext sizes, and timestamps are visible to the service.</p>
+<p>An app can write back into a scope you already share. Those writes sync into your vault. A project an app creates in an empty project scope is the exception described above.</p>
+
+<h2>Revoke access</h2>
+<ul>
+  <li><strong>Stop sharing a scope.</strong> In NorthKeep, open <strong>Connect</strong>, then <strong>Cloud</strong>, and unshare the scope. NorthKeep deletes that scope's rows from the connector. Your vault keeps its own copy.</li>
+  <li><strong>Disconnect the app.</strong> Remove NorthKeep in the AI app's connector settings. That drops the app's token. You can also revoke it from the app if it offers that.</li>
+  <li><strong>Ask us to delete the account.</strong> Email <a href="mailto:support@northkeep.ai">support@northkeep.ai</a> and we will delete the shared content and connector records for your account.</li>
+</ul>
+<p>The security notes are on the <a href="./security.html">security page</a>. The privacy policy is at <a href="./privacy.html">northkeep.ai/privacy</a>.</p>
+</div></main>
+<footer><div class="wrap">
+<a href="./index.html">Home</a><a href="./docs.html">Connector</a><a href="./security.html">Security</a><a href="./privacy.html">Privacy</a><a href="./terms.html">Terms</a><a href="mailto:support@northkeep.ai">Contact</a>
+</div></footer>
+<script>var t=new URLSearchParams(location.search).get('theme');if(t==='light'||t==='dark')document.documentElement.setAttribute('data-theme',t);</script>
+</body>
+</html>

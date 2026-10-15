@@ -5,8 +5,10 @@
  * logic lives in `createConnectorServer`; this file wires storage + the port.
  * The importable, side-effect-free API lives in `./lib.js` for tests.
  *
- * Env: PUBLIC_URL (the deployed https origin, e.g. https://connector.northkeep.ai)
- * so OAuth metadata advertises absolute URLs that match the deploy; plus a
+ * Env: PUBLIC_URL (the deployed https origin). Discovery for a request whose
+ * host is https://mcp.northkeep.ai or the legacy vercel.app host advertises
+ * that host; any other host falls back to PUBLIC_URL. Tokens for either
+ * host's /mcp resource keep working. Plus a
  * Postgres URL for the connector's SEPARATE Neon database (ADR 0016).
  *
  * SELF-HOSTERS (ADR 0061): nothing is purged unless you set BOTH

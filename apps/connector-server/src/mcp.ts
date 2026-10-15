@@ -208,6 +208,41 @@ const REENCRYPT_MSG =
  * served (a DB-writer cannot inject a chosen-plaintext memory). Self-host may
  * opt in for pre-encryption rows.
  */
+const READ_ONLY_ANNOTATIONS = {
+  readOnlyHint: true,
+  destructiveHint: false,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
+const WRITE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+} as const;
+
+const DESTRUCTIVE_ANNOTATIONS = {
+  readOnlyHint: false,
+  destructiveHint: true,
+  idempotentHint: true,
+  openWorldHint: false,
+} as const;
+
+/** Hints clients read from tools/list. They do not change what the handlers do. */
+export const CONNECTOR_TOOL_ANNOTATIONS = {
+  fetch: READ_ONLY_ANNOTATIONS,
+  search: READ_ONLY_ANNOTATIONS,
+  memory_list: READ_ONLY_ANNOTATIONS,
+  memory_retrieve: READ_ONLY_ANNOTATIONS,
+  project_list: READ_ONLY_ANNOTATIONS,
+  project_get: READ_ONLY_ANNOTATIONS,
+  memory_forget: DESTRUCTIVE_ANNOTATIONS,
+  memory_remember: WRITE_ANNOTATIONS,
+  project_create: WRITE_ANNOTATIONS,
+  project_update: WRITE_ANNOTATIONS,
+} as const;
+
 export function createMcpServer(
   storage: ConnectorStorage,
   accountHash: string,
@@ -282,6 +317,7 @@ export function createMcpServer(
     'memory_retrieve',
     {
       title: 'Retrieve shared memories',
+      annotations: CONNECTOR_TOOL_ANNOTATIONS.memory_retrieve,
       description:
         'Search the memories the user has explicitly shared with this app and return the ones relevant to a query. Only shared scopes are visible; private memories are never returned.',
       inputSchema: { query: z.string().describe('What to search the shared memory for') },
@@ -323,6 +359,7 @@ export function createMcpServer(
     'memory_list',
     {
       title: 'List shared memories',
+      annotations: CONNECTOR_TOOL_ANNOTATIONS.memory_list,
       description:
         'List all memories the user has explicitly shared with this app. Only shared scopes are visible; private memories are never listed.',
       inputSchema: {},
@@ -362,6 +399,7 @@ export function createMcpServer(
     'memory_remember',
     {
       title: 'Remember a new shared memory',
+      annotations: CONNECTOR_TOOL_ANNOTATIONS.memory_remember,
       description:
         'Save a new memory into one of the scopes the user has already shared with this app. It flows back into the user’s NorthKeep vault. You cannot create a new scope; only add to a scope that is already shared.',
       inputSchema: {
@@ -484,6 +522,7 @@ export function createMcpServer(
     'memory_forget',
     {
       title: 'Forget a shared memory',
+      annotations: CONNECTOR_TOOL_ANNOTATIONS.memory_forget,
       description:
         'Forget a shared memory by its id. Use the id shown by memory_remember or memory_list. The memory is hidden immediately and, on the next sync, tombstoned in the user’s vault; it never comes back. ' +
         'A project document cannot be forgotten here; the user removes a project in NorthKeep.',
@@ -534,6 +573,7 @@ export function createMcpServer(
     'search',
     {
       title: 'Search shared memories',
+      annotations: CONNECTOR_TOOL_ANNOTATIONS.search,
       description:
         'Search the memories the user has explicitly shared with this app and return matching results as {id, title, snippet}. Pass an id to `fetch` to read the full memory. Only shared scopes are visible; private memories are never returned.',
       inputSchema: { query: z.string().describe('What to search the shared memory for') },
@@ -580,6 +620,7 @@ export function createMcpServer(
     'fetch',
     {
       title: 'Fetch a shared memory',
+      annotations: CONNECTOR_TOOL_ANNOTATIONS.fetch,
       description:
         'Fetch the full record for a shared-memory id returned by `search`. Returns {id, title, text, metadata}. Only the authenticated user’s shared memories are reachable; an unknown or not-shared id returns not-found.',
       inputSchema: { id: z.string().describe('The id of a memory returned by search') },
@@ -679,6 +720,7 @@ export function createMcpServer(
     'project_list',
     {
       title: 'List shared projects',
+      annotations: CONNECTOR_TOOL_ANNOTATIONS.project_list,
       description:
         "List the user's shared projects. Each row is a project slug plus the first line of Current " +
         'Status and the revision to pass to project_update. This list is the project index; there is ' +
@@ -739,6 +781,7 @@ export function createMcpServer(
     'project_get',
     {
       title: 'Read a shared project',
+      annotations: CONNECTOR_TOOL_ANNOTATIONS.project_get,
       description:
         'Read the live project document when the user names a project. Call this at session start so ' +
         'you pick up Current Status, Next Actions, and the Log. The result ends with the revision; pass ' +
@@ -817,6 +860,7 @@ export function createMcpServer(
     'project_create',
     {
       title: 'Create a project',
+      annotations: CONNECTOR_TOOL_ANNOTATIONS.project_create,
       description:
         'Create a project with project_create only when the user asks for one; never create one to ' +
         'hold notes that belong in an existing project or in a memory. Give What & Why and the ' +
@@ -933,6 +977,7 @@ export function createMcpServer(
     'project_update',
     {
       title: 'Update a shared project',
+      annotations: CONNECTOR_TOOL_ANNOTATIONS.project_update,
       description:
         'Update a shared project document. Call project_get first and pass the revision it returned as ' +
         'expected_revision; if the project changed since, nothing is saved and the current document ' +
