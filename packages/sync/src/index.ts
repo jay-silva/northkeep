@@ -45,6 +45,7 @@ export {
   type SyncState,
   type SubscriptionStatus,
 } from './client.js';
+export { SIZE_WARNING_BYTES, describeVaultSize, vaultSizeReport, type VaultSizeReport } from './size.js';
 export {
   assertConnectorUrl,
   connectorConfigPath,

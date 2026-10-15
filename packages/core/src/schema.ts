@@ -24,15 +24,8 @@ CREATE TABLE IF NOT EXISTS memories (
 CREATE INDEX IF NOT EXISTS idx_memories_type  ON memories(type);
 CREATE INDEX IF NOT EXISTS idx_memories_scope ON memories(scope);
 
--- DISPOSABLE CACHE (spec invariant): never exported, never required to
--- open, read, migrate, or rebuild a vault. Populated from M1+ via sqlite-vec.
-CREATE TABLE IF NOT EXISTS embeddings (
-  memory_id TEXT NOT NULL REFERENCES memories(id) ON DELETE CASCADE,
-  model     TEXT NOT NULL,
-  dims      INTEGER NOT NULL,
-  vector    BLOB NOT NULL,
-  PRIMARY KEY (memory_id, model)
-);
+-- No embeddings table (ADR 0067): vectors are a RAM-only cache, so the synced
+-- image never carries them. Vaults made before 0067 have one; save() drops it.
 
 CREATE TABLE IF NOT EXISTS vault_meta (
   key   TEXT PRIMARY KEY,

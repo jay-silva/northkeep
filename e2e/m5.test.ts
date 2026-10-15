@@ -75,6 +75,11 @@ describe('M5 acceptance — sync', () => {
     expect(cfg.stdout).toContain('Your sync id:');
     const push = await cli(homeA, ['sync', 'push']);
     expect(push.stdout).toContain('version 1');
+    // ADR 0067 D4: push and status both say how full the vault is.
+    expect(push.stdout).toMatch(/Vault size: \d+ KB of the 4 MB sync limit \(0%\)\./);
+    expect(push.stdout).not.toContain('Warning');
+    const status = await cli(homeA, ['sync', 'status']);
+    expect(status.stdout).toMatch(/Vault size: \d+ KB of the 4 MB sync limit \(0%\)\./);
   });
 
   it('the server stored CIPHERTEXT only — NKV1 blob, no plaintext', async () => {

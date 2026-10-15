@@ -417,6 +417,47 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     expect(s.localChanged).toBe(false);
   });
 
+  it('push and status report the vault size against the cap (ADR 0067 D4)', async () => {
+    process.env.NORTHKEEP_HOME = homeA;
+    createVault(homeA, 'x');
+    setSyncServer(fake.url(), deriveSyncCreds(deviceSecret).accountId);
+    const push = await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
+    const bytes = fs.statSync(vaultPath(homeA)).size;
+    expect(push.size).toEqual({ bytes, cap_bytes: 4 * 1024 * 1024, percent: 0, warning: false, over_cap: false });
+    const s = await syncState({ vaultPath: vaultPath(homeA), deviceSecret });
+    expect(s.size).toEqual(push.size);
+  });
+
+  it('the no-bump retry push saves first, so a pre-0067 embeddings table is never uploaded (ADR 0067 D2)', async () => {
+    process.env.NORTHKEEP_HOME = homeA;
+    createVault(homeA, 'x');
+    setSyncServer(fake.url(), deriveSyncCreds(deviceSecret).accountId);
+    await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
+    // A stamp that never landed, written by a build that still kept the table.
+    const v = Vault.open({ path: vaultPath(homeA), passphrase, deviceSecret });
+    v.setSyncGeneration(v.getSyncGeneration() + 1);
+    const raw = (v as unknown as { db: { exec(sql: string): void } }).db;
+    raw.exec('CREATE TABLE embeddings (memory_id TEXT NOT NULL, model TEXT NOT NULL, dims INTEGER NOT NULL, vector BLOB NOT NULL, PRIMARY KEY (memory_id, model))');
+    raw.exec("INSERT INTO embeddings VALUES ('m', 'nomic-embed-text', 768, zeroblob(3072))");
+    const proto = Vault.prototype as unknown as { compactImage: () => void };
+    const real = proto.compactImage;
+    proto.compactImage = () => {};
+    try {
+      v.save();
+    } finally {
+      proto.compactImage = real;
+    }
+    v.close();
+    const push = await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
+    expect(push.ok).toBe(true);
+    const uploaded = path.join(homeA, 'uploaded.nkv');
+    fs.writeFileSync(uploaded, fake.stored()!);
+    const check = Vault.open({ path: uploaded, passphrase, deviceSecret });
+    expect(check.hasLegacyEmbeddingsTable()).toBe(false);
+    check.close();
+    expect((await syncState({ vaultPath: vaultPath(homeA), deviceSecret })).state).toBe('in-sync');
+  });
+
   /**
    * REGRESSION: "in sync" used to compare config.lastVersion against the
    * server's version, so a vault edited-but-never-pushed still reported
