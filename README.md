@@ -10,7 +10,7 @@ with tiered on-device PII redaction and client-side-encrypted sync. Your
 memory lives on your computer, not theirs.
 
 - **Connect.** NorthKeep serves your vault to an app you already pay for
-  (Claude Desktop, Claude Code, Codex, Cursor) over MCP, and an optional
+  (Claude Desktop, Claude Code, the ChatGPT desktop app or Codex, Cursor) over MCP, and an optional
   connector reaches the cloud apps. You set, per app and per scope, exactly
   what it may read. It does **not** redact what you type into that app,
   that's ownership and portability, not a firewall on your keystrokes.

@@ -3,7 +3,7 @@
 Status: Proposed (awaiting Jay), 2026-10-15 · Review: not yet run. The README edits in the same branch are a published claim and need the review gate before merge.
 
 ## Context
-Converse is NorthKeep's own chat: it masks a message before it leaves and restores details in the reply (ADR 0007, tools in ADRs 0027 to 0037). The site marked it legacy on 2026-09-28 in site commit f486f30, with no ADR. The README still sold it as "Mode 2: the firewall", the CLI home screen lists `converse` first and starts it when you press Enter, and `northkeep connect` ends by pointing at it. Agents read the README, not the site, so they keep extending it. The site's reason is a judgment, not a usage count: NorthKeep has no telemetry.
+Converse is NorthKeep's own chat: it masks a message before it leaves and restores details in the reply (ADR 0007, the agent harness in ADRs 0027 to 0037). The site marked it legacy on 2026-09-28 in site commit f486f30, with no ADR. The README still sold it as "Mode 2: the firewall", the CLI home screen lists `converse` first and starts it when you press Enter, and `northkeep connect` ends by pointing at it. Agents read the README, not the site, so they keep extending it. The site's reason is a judgment, not a usage count: NorthKeep has no telemetry.
 
 The code cannot simply go. `packages/converse/src/turn.ts` holds the order "redact, then call the provider" for every chat turn, tested in `packages/converse/test/`. `apps/web` (`src/api.ts`, `src/converse.ts`) and six files in `apps/mobile/src/lib/` import the package, and the iPhone app ships Converse screens (`apps/mobile/app/converse.tsx`, `converse-audit.tsx`).
 
