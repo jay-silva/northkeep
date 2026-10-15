@@ -36,7 +36,7 @@
  */
 
 import express, { type Request, type Response, type NextFunction } from 'express';
-import { mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
+import { createOAuthMetadata, mcpAuthRouter, getOAuthProtectedResourceMetadataUrl } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import { redirectUriMatches } from '@modelcontextprotocol/sdk/server/auth/handlers/authorize.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
@@ -52,6 +52,8 @@ import {
   TombstoneConflictError,
 } from './tombstones.js';
 import { ConnectorOAuthProvider } from './provider.js';
+import type { CimdLookup } from './cimd.js';
+import { acceptedConnectorOrigins, originOf, resourceForOrigin, selectRequestOrigin } from './public-origin.js';
 import type { ClientSecretBinder } from './client-secrets.js';
 import { maintenanceConfigFromEnv, runMaintenance, type MaintenanceConfig } from './maintenance.js';
 import { ipRateLimitKey } from './ip-key.js';
@@ -156,6 +158,8 @@ export type ConnectorServerOptions = {
   maintenanceLog?: (line: string) => void;
   /** Fix the client-secret binding key (tests simulating two processes). */
   clientSecretBinder?: ClientSecretBinder;
+  /** Override Client ID Metadata Document lookup (tests). Production fetches. */
+  cimd?: CimdLookup;
 };
 
 export function createConnectorServer(
@@ -166,7 +170,12 @@ export function createConnectorServer(
   const issuerUrl = new URL(publicUrl);
   const mcpResourceUrl = `${publicUrl}/mcp`;
   const resourceServerUrl = new URL(mcpResourceUrl);
-  const resourceMetadataUrl = getOAuthProtectedResourceMetadataUrl(resourceServerUrl);
+  const fallbackOrigin = originOf(publicUrl);
+  const acceptedOrigins = acceptedConnectorOrigins(publicUrl, process.env.PUBLIC_URL_ALIASES);
+  const acceptedResources = acceptedOrigins.map((origin) => resourceForOrigin(origin));
+
+  const originFor = (req: Request): string =>
+    selectRequestOrigin({ host: req.get('host'), protocol: req.protocol }, acceptedOrigins, fallbackOrigin);
 
   // ---- KEK pepper (ADR 0020 crypto review) -------------------------------
   // Every KEK folds in a secret held OUTSIDE the database, so no key is
@@ -185,7 +194,14 @@ export function createConnectorServer(
   /** CONNECTOR_TOMBSTONE_ENFORCE, parsed at request time (tests may override). */
   const tombstoneEnforce = (): boolean => opts.tombstoneEnforce ?? isTombstoneEnforceOn();
 
-  const provider = new ConnectorOAuthProvider(storage, mcpResourceUrl, kekPepper, opts.clientSecretBinder);
+  const provider = new ConnectorOAuthProvider(
+    storage,
+    mcpResourceUrl,
+    kekPepper,
+    opts.clientSecretBinder,
+    acceptedResources,
+    opts.cimd,
+  );
 
   // ---- billing gate (C3) -------------------------------------------------
   // Gate OFF (both envs unset) ⇒ every account is allowed (self-host / the
@@ -386,6 +402,41 @@ export function createConnectorServer(
     });
   });
 
+  // Discovery follows the request host when it is an accepted origin, so
+  // mcp.northkeep.ai and the legacy Vercel host each advertise themselves.
+  // These routes are registered before the SDK router, which would otherwise
+  // answer with the single PUBLIC_URL issuer.
+  const authorizationMetadata = (req: Request, res: Response): void => {
+    const origin = originFor(req);
+    const issuer = new URL(origin);
+    const metadata = createOAuthMetadata({
+      provider,
+      issuerUrl: issuer,
+      baseUrl: issuer,
+      scopesSupported: ['mcp'],
+    });
+    res.json({ ...metadata, client_id_metadata_document_supported: true });
+  };
+  const protectedResourceMetadata = (req: Request, res: Response): void => {
+    const origin = originFor(req);
+    const issuer = new URL(origin);
+    const metadata = createOAuthMetadata({
+      provider,
+      issuerUrl: issuer,
+      baseUrl: issuer,
+      scopesSupported: ['mcp'],
+    });
+    res.json({
+      resource: resourceForOrigin(origin),
+      authorization_servers: [metadata.issuer],
+      scopes_supported: ['mcp'],
+      resource_name: 'NorthKeep Connector',
+    });
+  };
+  app.get('/.well-known/oauth-authorization-server', authorizationMetadata);
+  app.get('/.well-known/oauth-protected-resource/mcp', protectedResourceMetadata);
+  app.get('/.well-known/oauth-protected-resource', protectedResourceMetadata);
+
   // ---- SDK OAuth authorization server (mounted at root) ------------------
   // No global body parser before this: each SDK sub-route parses its own body
   // (on /token and /revoke ours ran first; body-parser 2 keeps that req.body).
@@ -399,17 +450,6 @@ export function createConnectorServer(
       scopesSupported: ['mcp'],
     }),
   );
-
-  // Compat: some clients probe the ROOT protected-resource path; the SDK only
-  // serves the /mcp-suffixed one. Advertise both so discovery can't miss.
-  app.get('/.well-known/oauth-protected-resource', (_req, res) => {
-    res.json({
-      resource: mcpResourceUrl,
-      authorization_servers: [issuerUrl.href],
-      scopes_supported: ['mcp'],
-      resource_name: 'NorthKeep Connector',
-    });
-  });
 
   // ---- pairing bridge: POST /pair/start ---------------------------------
   // Bearer connector_token -> account -> single-use pairing code (10-min TTL,
@@ -538,7 +578,10 @@ export function createConnectorServer(
   }));
 
   // ---- MCP endpoint: bearer-protected, stateless streamable HTTP ---------
-  const bearer = requireBearerAuth({ verifier: provider, requiredScopes: ['mcp'], resourceMetadataUrl });
+  const bearer: express.RequestHandler = (req, res, next) => {
+    const metadataUrl = getOAuthProtectedResourceMetadataUrl(new URL(resourceForOrigin(originFor(req))));
+    return requireBearerAuth({ verifier: provider, requiredScopes: ['mcp'], resourceMetadataUrl: metadataUrl })(req, res, next);
+  };
 
   // Minimal CORS so browser-based clients (ChatGPT web, C4) can read the 401
   // challenge and call /mcp. No dependency — set the headers directly.
@@ -1058,6 +1101,7 @@ export function createConnectorServer(
 <title>NorthKeep Connector</title>
 <h1>NorthKeep hosted shareable-scope connector</h1>
 <p>Public origin: <code>${publicUrl}</code></p>
+<p>Also answers for <code>https://mcp.northkeep.ai</code> and <code>https://northkeep-connector-server.vercel.app</code> when the request host is one of those. Any other host is ignored.</p>
 <p>OAuth 2.1 authorization server + MCP resource server. Serves ONLY scopes the user marked Shared.</p>
 <p>Tombstone enforcement: ${tombstoneEnforce() ? 'on' : 'off'}</p>
 <ul>

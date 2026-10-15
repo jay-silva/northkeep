@@ -44,6 +44,7 @@ export function renderConsentPage(p: ConsentParams, opts: { error?: string } = {
 <body style="font-family:system-ui,-apple-system,sans-serif;max-width:30rem;margin:8vh auto;padding:0 1.5rem;color:#24221c;background:#f6f4ef;line-height:1.5">
   <h1 style="font-weight:600;font-size:1.4rem">Connect ${who} to NorthKeep</h1>
   <p style="color:#6b665a">${who} wants to read the memory scopes you have marked <b>Shared</b>. Enter the pairing code from NorthKeep to allow it. It never sees your private scopes.</p>
+  <p style="color:#6b665a">The app address is <code>${esc(p.clientId)}</code>. Check it before you enter a code. The name above comes from the app.</p>
   ${errorBanner}
   <form method="POST" action="/consent">
     ${hidden('client_id', p.clientId)}
@@ -56,7 +57,7 @@ export function renderConsentPage(p: ConsentParams, opts: { error?: string } = {
     <input name="pairing_code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false"
       placeholder="8 characters" required
       style="width:100%;box-sizing:border-box;font-size:1.25rem;letter-spacing:.15em;text-transform:uppercase;padding:.7rem .8rem;border:1px solid #cfc9ba;border-radius:8px;background:#fff">
-    <p style="color:#8a8477;font-size:.85rem;margin-top:.5rem">Get a code with <code>northkeep share code</code> or the Sharing tab. Codes are single-use and expire after 10 minutes.</p>
+    <p style="color:#8a8477;font-size:.85rem;margin-top:.5rem">Get a code with <code>northkeep share code</code> or the Sharing tab. A code from the app is single-use and expires after 10 minutes.</p>
     <button type="submit"
       style="margin-top:1rem;width:100%;font-size:1rem;font-weight:600;padding:.75rem;border:0;border-radius:8px;background:#24221c;color:#f6f4ef;cursor:pointer">Allow access</button>
   </form>

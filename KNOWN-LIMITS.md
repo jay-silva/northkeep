@@ -3,6 +3,14 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
+## Connector directory hosts (ADR 0071), current
+
+- The connector answers for `https://mcp.northkeep.ai` and for `https://northkeep-connector-server.vercel.app`. Discovery names the host you connected to when that host is one of those, or the configured public URL. A different Host header does not choose the issuer.
+- A token keeps working on either host when it was issued for either host's `/mcp` resource. A refresh that names the other host's resource is refused. Send the original resource, or leave it out.
+- Tool annotations (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`) are hints for the AI app. The connector still limits every call to the signed-in account's shared rows.
+- Client ID Metadata Documents: when a client uses an https URL as its client id, the connector fetches that URL. It allows port 443 only, refuses private, loopback, and link-local addresses, and does not follow redirects. The address is checked before the connection, so a name that changes address in between can still be reached. That residual remains. Documents are size-capped and are not stored. A name that contains a control or hidden-direction character is refused. The consent page shows the client id as well as the name, because the name is the app's own words. A redirect target is no broader than dynamic client registration already allowed.
+- The reviewer seed writes only rows whose ids start with `sample-`, and only on the account of the token you pass in the environment. If that account already has any other row, it writes nothing. It never lists or edits another account. The pairing code it creates is single-use, lasts seven days, and is written to a file outside the repo. It is not a normal user's ten-minute code.
+
 ## Local Projects handoffs, current
 
 - **Restart connected AI apps when updating.** An assistant left running across an update can keep the previous local MCP process. Version 0.21.0 uses the same vault schema and can still write projects without revision checks until that process exits. Quit NorthKeep and every connected local AI app before replacing the app, then reopen them and verify the new tools before continuing project work. Closing a window alone is not sufficient. The new guarantees apply to current local connections; the updater does not forcibly retire an old process.
