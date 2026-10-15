@@ -7,7 +7,7 @@ Sync uploads the whole `.nkv` file, capped at 4 MB (4,194,304 bytes). `SCHEMA_DD
 
 ## Decision
 - D1: Vectors are cached in RAM per vault handle; `SCHEMA_DDL` stops creating `embeddings`.
-- D2: No schema bump, so older builds still open the vault. `save()` drops the table and runs `VACUUM`; opening never saves. `pushVault`'s one no-save branch (a stamped, unlanded retry) saves inside the locked step before reading the bytes.
+- D2: No schema bump, so older builds still open the vault. `save()` drops the table and runs `VACUUM`; opening saves only when it migrates an older schema. `pushVault`'s one no-save branch (a stamped, unlanded retry) saves inside the locked step before reading the bytes.
 - D3: `save()` runs `VACUUM` when over a quarter of the image is free pages, read with `prepare('PRAGMA ...').get()`. Invariant: core never calls `save()` inside a transaction; on Node it throws.
 - D4: A `@northkeep/sync` helper reports `{ bytes, cap_bytes, percent, warning, over_cap }`, warning at or over 75% (3,145,728 bytes), in `sync status`, `sync push` and their `/api/sync` JSON. 
 - D5: The phone gets D1 to D3 through core and the D4 words in its push error. Before the phone build ships, a build 34 vault is opened by the new build on a device (write, reopen, push) and the result is recorded here.
