@@ -1561,6 +1561,12 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
 - **No recovery, by design.** Lose the passphrase or the device secret file
   and the vault is gone. There is no back door for you, which means none for
   anyone else either. Back up `~/.northkeep/device.secret`.
+- **The setup backup step takes your word for it.** First-run setup asks you
+  to back up the device key after you connect your first AI app, and will
+  not finish, or turn on sync, until you tick "I saved a copy somewhere other
+  than this computer." NorthKeep cannot see that copy, so it cannot check
+  that the copy exists or still opens the vault. Vaults made before this
+  step existed, or with `northkeep init`, are never asked.
 - **Whole-file rewrite per save.** Every write re-encrypts and rewrites the
   vault file. Irrelevant at personal scale (milliseconds); would need a
   page-level encryption migration if vaults ever exceed available memory
