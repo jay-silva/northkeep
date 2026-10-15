@@ -810,6 +810,48 @@
     .project-choice strong { font-size:18px; }
     .projects-mobile-select { display:none; }
   }
+  /* First-run setup (welcome → passphrase → connect → try → backup → extras). */
+  .setup-dialog { width:min(460px, calc(100vw - 32px)); max-height:calc(100vh - 32px); max-height:calc(100dvh - 32px); overflow-y:auto; }
+  .setup-dialog [hidden] { display:none !important; } /* the flex rows below would otherwise ignore hidden */
+  .setup-dialog h2[tabindex="-1"]:focus { outline:none; } /* focused only so screen readers announce the new step */
+  .setup-progress { display:flex; gap:5px; margin:0 0 16px; }
+  .setup-progress i { flex:1; height:4px; border-radius:999px; background:var(--chip); }
+  .setup-progress i.on { background:var(--accent); }
+  .setup-dialog .full { width:100%; }
+  .setup-dialog input[type=password] { min-height:44px; }
+  .setup-dialog .stack { display:grid; gap:8px; }
+  .setup-dialog .small { font-size:13px; }
+  .setup-dialog p.after { margin:10px 0 0; }
+  .setup-dialog button.btn.link { border:0; background:none; color:var(--muted-strong, var(--muted)); text-decoration:underline; text-underline-offset:4px; min-width:44px; }
+  .setup-or { display:flex; align-items:center; gap:10px; color:var(--muted); font-size:12px; margin:2px 0; }
+  .setup-or::before, .setup-or::after { content:''; flex:1; height:1px; background:var(--line); }
+  .setup-demo-banner { display:flex; gap:10px; align-items:center; background:var(--warn-bg); border:1px solid var(--warn-line); color:var(--warn-ink); border-radius:12px; padding:8px 12px; font-size:13px; margin-bottom:12px; }
+  .setup-demo-mem { padding:10px 0; border-bottom:1px solid var(--line); }
+  .setup-demo-mem:last-of-type { border-bottom:0; }
+  .setup-mem-text { font:500 16px/1.4 var(--serif); }
+  .setup-prov { font:500 12px/1.4 var(--sans); color:var(--muted); margin-top:6px; display:flex; flex-wrap:wrap; gap:6px 14px; }
+  .setup-app-row { display:flex; align-items:center; gap:10px; padding:10px 0; border-top:1px solid var(--line); min-height:44px; }
+  .setup-app-row:first-child { border-top:0; }
+  .setup-app-row .name { flex:1; font-weight:600; }
+  .setup-app-row .sub { display:block; font-size:12px; color:var(--muted); font-weight:400; }
+  .setup-connected-note { background:var(--ok-bg); color:var(--ok); border-radius:10px; padding:8px 12px; font-size:13px; margin:2px 0 6px; }
+  .setup-prompt { display:flex; align-items:center; gap:10px; background:var(--chip); border-radius:12px; padding:8px 8px 8px 14px; margin:6px 0 10px; }
+  .setup-prompt q { flex:1; font:500 16px/1.35 var(--serif); quotes:'\201C' '\201D'; }
+  .setup-prompt .btn { flex:none; }
+  .setup-waiting { display:flex; align-items:center; gap:10px; font-size:13px; color:var(--muted); padding:8px 0; }
+  .setup-dot { width:8px; height:8px; border-radius:50%; background:var(--accent); flex:none; animation:setup-pulse 1.6s ease-in-out infinite; }
+  @keyframes setup-pulse { 0%,100% { box-shadow:0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); } 50% { box-shadow:0 0 0 6px color-mix(in srgb, var(--accent) 10%, transparent); } }
+  @media (prefers-reduced-motion: reduce) { .setup-dot { animation:none; box-shadow:0 0 0 4px color-mix(in srgb, var(--accent) 20%, transparent); } }
+  .setup-memory { border:1px solid var(--line); border-left:3px solid var(--accent); border-radius:10px; padding:12px 14px; margin:4px 0 12px; background:color-mix(in srgb, var(--accent) 6%, var(--panel)); }
+  .setup-memory .setup-mem-text { font-size:18px; }
+  .setup-new-pill { font:600 11px/1 var(--sans); letter-spacing:.06em; color:var(--accent); text-transform:uppercase; }
+  .setup-path { font-family:var(--mono); font-size:13px; margin-top:6px; color:var(--ink); overflow-wrap:anywhere; }
+  .setup-dialog label.check { align-items:flex-start; color:var(--ink); min-height:44px; margin:4px 0 14px; }
+  .setup-dialog label.check input { width:20px; height:20px; margin:2px 0 0; flex:none; accent-color:var(--accent); }
+  .setup-opt { border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; }
+  .setup-opt strong { display:block; }
+  .setup-opt p { margin:4px 0 10px; font-size:13px; }
+  @media (max-width:430px) { .setup-dialog { padding:20px 18px; } }
 </style>
 </head>
 <body>
@@ -1450,57 +1492,106 @@
     <button class="btn primary" id="unlockBtn" style="width:100%">Unlock</button>
   </div>
 </div>
-<!-- First-run setup wizard (M7d): shown when no vault exists on disk yet. -->
+<!-- First-run setup: welcome, passphrase, connect an AI app, try it, back up
+     the device key, then optional extras. Dynamic text via el()/textContent. -->
 <div class="overlay" id="setupOverlay" hidden>
-  <div class="dialog" style="width:440px">
-    <div id="setupStepCreate">
-      <h2>Welcome to NorthKeep</h2>
+  <div class="dialog setup-dialog" role="dialog" aria-modal="true" aria-labelledby="setupTitle">
+    <div class="setup-progress" id="setupProgress" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><i></i></div>
+    <p class="sr-only" id="setupProgressText" aria-live="polite"></p>
+    <div id="setupStepWelcome">
+      <h2 id="setupTitle" tabindex="-1">Welcome to NorthKeep</h2>
+      <p>One memory for every AI app you use. NorthKeep keeps it in an encrypted vault on <span data-place>this computer</span>, and you choose which apps can read it.</p>
+      <p>Setup takes about five minutes. You will connect an AI app and watch it save its first memory.</p>
+      <div class="stack">
+        <button class="btn primary full" id="setupStartBtn">Set up my vault</button>
+        <div class="setup-or">or</div>
+        <button class="btn full" id="setupDemoBtn">Try a demo vault</button>
+      </div>
+      <p class="small after">The demo uses made-up sample memories. No passphrase, and nothing leaves <span data-place>this computer</span>.</p>
+    </div>
+    <!-- The demo is a static preview built into this page: no demo vault is
+         created, so nothing is written to disk and nothing leaves the machine. -->
+    <div id="setupStepDemo" hidden>
+      <div class="setup-demo-banner"><span class="badge bounded">DEMO</span><span>Made-up sample memories. Nothing here is yours.</span></div>
+      <h2 tabindex="-1">A look at a full vault</h2>
+      <p style="margin-bottom:6px">This is what NorthKeep holds after a few weeks of use.</p>
+      <div class="setup-demo-mem"><div class="setup-mem-text">Prefers short, direct answers with the reasoning at the end.</div><div class="setup-prov"><span>personal</span><span>from Claude Desktop</span></div></div>
+      <div class="setup-demo-mem"><div class="setup-mem-text">Kitchen remodel: contractor starts March 3, budget capped at $40,000.</div><div class="setup-prov"><span>home</span><span>from ChatGPT</span></div></div>
+      <div class="setup-demo-mem"><div class="setup-mem-text">Project "Launch site": next step is the pricing page, waiting on copy.</div><div class="setup-prov"><span>project</span><span>from Claude Code</span></div></div>
+      <div class="stack" style="margin-top:14px">
+        <button class="btn primary full" id="setupDemoStart">Start my own vault</button>
+        <button class="btn full" id="setupDemoLeave">Leave the demo</button>
+      </div>
+      <p class="small after">The demo cannot connect AI apps or sync. Nothing in it is saved.</p>
+    </div>
+    <div id="setupStepCreate" hidden>
+      <h2 tabindex="-1">Choose a passphrase</h2>
       <p id="setupLead">Your AI memories will live in an encrypted vault on this computer.
         Choose a passphrase to protect it.</p>
       <p>Your vault opens with two secrets: your passphrase plus a device key
-        file NorthKeep creates; losing either loses the vault, by design.</p>
-      <div class="err" id="setupErr"></div>
-      <input type="password" id="setupPass" placeholder="Choose a passphrase (min 8 characters)">
-      <input type="password" id="setupPass2" placeholder="Confirm passphrase">
-      <button class="btn primary" id="setupCreateBtn" style="width:100%">Create my vault</button>
+        file NorthKeep creates; losing either loses the vault, by design. You will back up the key file in a few minutes.</p>
+      <div class="err" id="setupErr" role="alert"></div>
+      <input type="password" id="setupPass" placeholder="Choose a passphrase (min 8 characters)" aria-label="Passphrase">
+      <input type="password" id="setupPass2" placeholder="Confirm passphrase" aria-label="Confirm passphrase">
+      <button class="btn primary full" id="setupCreateBtn">Create my vault</button>
+    </div>
+    <div id="setupStepConnect" hidden>
+      <h2 tabindex="-1">Give an AI app your memory</h2>
+      <p>Give the AI apps you already use access to your NorthKeep memory, on your existing subscription. One click; no terminal, no config files.</p>
+      <div id="setupApps"></div>
+      <div class="err" id="setupConnectErr" role="alert"></div>
+      <div class="banner small"><strong>Connecting shares your memory. It does not redact your chat.</strong> The app still sends your whole chat to its provider.</div>
+      <button class="btn primary full" id="setupConnectNext" disabled>Continue</button>
+      <p class="small muted" id="setupConnectHint" style="margin:6px 0 0;text-align:center">Connect one app above to continue.</p>
+      <div class="row" style="justify-content:center"><button class="btn link" id="setupNoApp">I don't use any of these yet</button></div>
+    </div>
+    <div id="setupStepNoApp" hidden>
+      <h2 tabindex="-1">No AI app yet? That's fine.</h2>
+      <p>NorthKeep works with Claude Desktop, Claude Code, ChatGPT and Cursor. When you install one, open Connect, then Desktop, and click Connect.</p>
+      <p>You can also add a memory by hand to see how it works.</p>
+      <button class="btn primary full" id="setupNoAppNext">Continue to backup</button>
+    </div>
+    <div id="setupStepTry" hidden>
+      <h2 id="setupTryTitle" tabindex="-1">Try it</h2>
+      <p id="setupTryLead" style="margin-bottom:6px">After it restarts, send these two messages:</p>
+      <div class="setup-prompt"><q id="setupPrompt1">Remember that I prefer short, direct answers.</q><button class="btn" id="setupCopy1" aria-label="Copy the first message">Copy</button></div>
+      <div class="setup-prompt"><q id="setupPrompt2">What do you know about me?</q><button class="btn" id="setupCopy2" aria-label="Copy the second message">Copy</button></div>
+      <div class="setup-waiting" id="setupWaiting" role="status"><span class="setup-dot" aria-hidden="true"></span><span id="setupWaitingText">Waiting for a memory…</span></div>
+      <div id="setupArrived" hidden></div>
+      <button class="btn primary full" id="setupTryNext" hidden>Continue</button>
+      <div class="row" style="justify-content:center"><button class="btn link" id="setupTrySkip" hidden>Skip this</button></div>
     </div>
     <div id="setupStepBackup" hidden>
-      <h2>Vault created: back up your device key</h2>
+      <h2 tabindex="-1">Back up your device key</h2>
+      <p id="setupBackupLead" style="margin-bottom:0">Before you add memories, keep a copy of the key that opens your vault.</p>
       <div class="banner" style="margin:12px 0">
         <strong>Back up this file now:</strong>
-        <div class="content" id="setupSecretPath" style="font-family:var(--mono);font-size:13px;margin-top:6px"></div>
+        <div class="setup-path" id="setupSecretPath"></div>
         <div style="margin-top:6px">Copy it somewhere safe: a password manager or a printed copy.
           Opening this vault needs <strong>both</strong> your passphrase <strong>and</strong> that file.
           Lose either one and the vault is unrecoverable, by design.</div>
       </div>
-      <button class="btn primary" id="setupBackupBtn" style="width:100%">I’ve backed it up, continue</button>
+      <button class="btn full" id="setupCopyPath" style="margin-bottom:12px">Copy file path</button>
+      <label class="check"><input type="checkbox" id="setupBackupCheck"> <span>I saved a copy somewhere other than this computer.</span></label>
+      <div class="err" id="setupBackupErr" role="alert"></div>
+      <button class="btn primary full" id="setupBackupBtn" disabled>I’ve backed it up, continue</button>
+      <p class="small after">Setup cannot finish, and sync stays off, until you confirm this. There is no skip.</p>
     </div>
-    <div id="setupStepAi" hidden>
-      <h2>Add your first AI</h2>
-      <p id="setupAiLine">Checking for a local AI on <span data-place>this computer</span>…</p>
-      <div class="err" id="setupAiErr"></div>
-      <div id="setupOllamaBox" hidden>
-        <select id="setupOllamaModel" style="width:100%;margin-bottom:12px"></select>
-        <button class="btn primary" id="setupOllamaAdd" style="width:100%;margin-bottom:8px">Use this model</button>
+    <div id="setupStepExtras" hidden>
+      <h2 tabindex="-1">You're all set</h2>
+      <p>Your memory works now. These two extras can wait until you want them.</p>
+      <div class="setup-opt">
+        <strong>Detailed memory review</strong>
+        <p class="muted">A model can tidy up and merge your memories. Use one on <span data-place>this computer</span>, or connect Claude, OpenAI, Gemini, Grok or OpenRouter with your own key.</p>
+        <button class="btn" id="setupModelBtn">Connect a model</button>
       </div>
-      <div id="setupManualBox" hidden>
-        <input type="text" id="setupEpLabel" placeholder="Label (e.g. This computer: Ollama)">
-        <input type="text" id="setupEpBase" placeholder="Base URL (e.g. http://localhost:11434/v1)">
-        <input type="text" id="setupEpModel" placeholder="Model (e.g. llama3.2:3b)">
-        <button class="btn primary" id="setupManualAdd" style="width:100%;margin-bottom:8px">Add endpoint</button>
+      <div class="setup-opt">
+        <strong>Your other devices</strong>
+        <p class="muted">Sync your encrypted vault across machines and to your phone. The server only ever stores ciphertext, so it can't read your memories. $10/month.</p>
+        <button class="btn" id="setupSyncBtn">Set up sync</button>
       </div>
-      <button class="btn" id="setupSkip" style="width:100%">Skip: add one later under Settings → Models</button>
-    </div>
-    <div id="setupStepTour" hidden>
-      <h2>You're all set</h2>
-      <p>Here's where everything lives:</p>
-      <ul style="margin:0 0 16px 18px;line-height:1.9;font-size:14px;color:var(--muted)">
-        <li><strong>Memories</strong>: everything NorthKeep knows about you, on <span data-place>this computer</span>. Browse, search, edit, or add.</li>
-        <li><strong>Models</strong>: manage the local or cloud models available for detailed memory review under Settings.</li>
-        <li><strong>Connect</strong>: <strong>Desktop</strong> plugs your memory into the AI apps on <span data-place>this computer</span> in one click; <strong>Cloud</strong> copies chosen scopes to NorthKeep's connector server so the AI apps you use on the web can read them.</li>
-        <li><strong>Settings</strong>: import your history from ChatGPT or Claude, review activity, and set up sync across devices.</li>
-      </ul>
-      <button class="btn primary" id="setupDone" style="width:100%">Start using NorthKeep</button>
+      <button class="btn primary full" id="setupDone">Start using NorthKeep</button>
+      <p class="small after">Both live under Settings later: Models and Sync.</p>
     </div>
   </div>
 </div>
@@ -2088,6 +2179,7 @@
     // No vault on disk → first-run wizard. Vault but locked → unlock dialog.
     if (noVault) showSetup();
     else if (!status.unlocked) showUnlock();
+    else if (status.backup_confirmed === false) { if ($('setupOverlay').hidden) { showSetup('setupStepBackup'); showSetupBackup(); } }
     else { hideUnlock(); loadMemories(); loadReviewPanel(); loadScopes(); if (!$('view-projects').hidden) loadProjects(projectNavigation.mode === 'detail' ? projectNavigation.slug : ''); updateConnectPill(); syncWake('launch'); }
   }
 
@@ -2232,14 +2324,56 @@
   }
   function hideUnlock() { $('unlockOverlay').hidden = true; }
 
-  // --- first-run setup wizard (M7d): create vault → back up the device key
-  // → add the first AI endpoint → land on Converse. Everything dynamic is
-  // rendered with el()/textContent only.
-  function showSetup() { hideUnlock(); $('setupOverlay').hidden = false; focusDialogField($('setupOverlay'), $('setupPass')); }
-  function hideSetup() { $('setupOverlay').hidden = true; }
-  function setupStep(id) {
-    ['setupStepCreate', 'setupStepBackup', 'setupStepAi', 'setupStepTour'].forEach((s) => { $(s).hidden = s !== id; });
+  // --- first-run setup: welcome → passphrase → connect an AI app → try it →
+  // back up the device key → optional model and sync. The backup step is
+  // mandatory: until the server records it, launch reopens setup there.
+  // Everything dynamic is rendered with el()/textContent only.
+  const SETUP_STEPS = ['setupStepWelcome', 'setupStepDemo', 'setupStepCreate', 'setupStepConnect', 'setupStepNoApp', 'setupStepTry', 'setupStepBackup', 'setupStepExtras'];
+  // Position on the six-step bar; side paths (demo, no app) show no bar.
+  const SETUP_PROGRESS = { setupStepWelcome: 1, setupStepCreate: 2, setupStepConnect: 3, setupStepTry: 4, setupStepBackup: 5, setupStepExtras: 6 };
+  let setupApps = [];          // labels connected during this setup, latest first
+  let setupMemoryArrived = false;
+  let setupTryPoll = null, setupSkipTimer = null;
+  function setInert(on) {
+    document.querySelector('header').inert = on;
+    document.querySelector('.shell').inert = on;
   }
+  function showSetup(step) {
+    if (!$('setupOverlay').hidden) return; // never yank someone out of the step they are on
+    hideUnlock();
+    $('setupOverlay').hidden = false;
+    setInert(true);
+    const id = step || 'setupStepWelcome';
+    setupStep(id, true);
+    focusDialogField($('setupOverlay'), setupFocusTarget(id));
+  }
+  function setupFocusTarget(id) { return id === 'setupStepCreate' ? $('setupPass') : $(id).querySelector('h2'); }
+  function hideSetup() { stopSetupTry(); $('setupOverlay').hidden = true; setInert(false); }
+  function setupStep(id, quiet) {
+    if (id !== 'setupStepTry') stopSetupTry();
+    SETUP_STEPS.forEach((s) => { $(s).hidden = s !== id; });
+    const n = SETUP_PROGRESS[id] || 0;
+    $('setupProgress').hidden = !n;
+    Array.from($('setupProgress').children).forEach((bar, i) => bar.classList.toggle('on', i < n));
+    $('setupProgressText').textContent = n ? 'Step ' + n + ' of 6' : '';
+    if (!quiet) setupFocusTarget(id).focus();
+  }
+  // The setup dialog cannot be dismissed, so Tab and Shift+Tab stay inside it.
+  $('setupOverlay').addEventListener('keydown', (e) => {
+    if (e.key !== 'Tab') return;
+    const focusable = Array.from($('setupOverlay').querySelectorAll('button:not([disabled]),input:not([disabled]),select,textarea')).filter((n) => n.getClientRects().length > 0);
+    if (!focusable.length) return;
+    const first = focusable[0], last = focusable[focusable.length - 1];
+    if (!$('setupOverlay').contains(document.activeElement)) { e.preventDefault(); first.focus(); }
+    else if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+    else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+  });
+
+  $('setupStartBtn').addEventListener('click', () => setupStep('setupStepCreate'));
+  $('setupDemoBtn').addEventListener('click', () => setupStep('setupStepDemo'));
+  $('setupDemoStart').addEventListener('click', () => setupStep('setupStepCreate'));
+  $('setupDemoLeave').addEventListener('click', () => setupStep('setupStepWelcome'));
+
   $('setupCreateBtn').addEventListener('click', doSetupCreate);
   $('setupPass2').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) doSetupCreate(); });
   async function doSetupCreate() {
@@ -2252,75 +2386,166 @@
       const r = await api('/api/setup/create', { method: 'POST', json: { passphrase: pass } });
       $('setupPass').value = ''; $('setupPass2').value = '';
       $('setupSecretPath').textContent = r.device_secret_path;
-      setupStep('setupStepBackup');
+      status = { ...status, unlocked: true, vault_exists: true, backup_confirmed: false };
+      setupStep('setupStepConnect');
+      renderSetupApps();
     } catch (e) {
       if (e.message !== 'locked') $('setupErr').textContent = e.message;
     } finally { $('setupCreateBtn').disabled = false; }
   }
-  $('setupBackupBtn').addEventListener('click', () => {
-    setupStep('setupStepAi');
-    setupProbeOllama();
-  });
-  const OLLAMA_BASE = 'http://127.0.0.1:11434';
-  // The leanest chat model: skip embedding models, prefer the smallest
-  // parameter count named in the tag (3b before 8b…), else the first listed.
-  function pickChatModel(models) {
-    const chat = models.filter((m) => !/embed/i.test(m));
-    const size = (m) => { const x = /(\d+(?:\.\d+)?)b/i.exec(m); return x ? Number(x[1]) : Infinity; };
-    return chat.slice().sort((a, b) => size(a) - size(b))[0] || null;
-  }
-  async function setupProbeOllama() {
-    $('setupAiErr').textContent = '';
-    try {
-      const r = await api('/api/models?base=' + encodeURIComponent(OLLAMA_BASE));
-      const pick = pickChatModel(r.models || []);
-      if (pick) {
-        $('setupAiLine').textContent = 'Found Ollama on ' + devicePlace() + '. Pick a model; it runs here, so your chat never goes to a cloud model:';
-        const sel = $('setupOllamaModel');
-        sel.textContent = '';
-        for (const m of (r.models || []).filter((x) => !/embed/i.test(x))) {
-          const o = el('option', '', m); o.value = m; sel.appendChild(o);
-        }
-        sel.value = pick;
-        $('setupOllamaBox').hidden = false;
-        $('setupManualBox').hidden = true;
-        return;
-      }
-    } catch { /* no Ollama — fall through to the manual form */ }
-    $('setupAiLine').textContent = 'No local AI found. Point NorthKeep at any OpenAI-compatible ' +
-      'runtime (Ollama, LM Studio, vLLM) or a hosted API.';
-    $('setupOllamaBox').hidden = true;
-    $('setupManualBox').hidden = false;
-  }
-  $('setupOllamaAdd').addEventListener('click', async () => {
-    $('setupAiErr').textContent = '';
-    $('setupOllamaAdd').disabled = true;
-    try {
-      await api('/api/providers', { method: 'POST', json: {
-        label: (status && status.ollama_label) || (DevicePlace() + ': Ollama'), base_url: OLLAMA_BASE, model: $('setupOllamaModel').value } });
-      setupStep('setupStepTour');
-    } catch (e) {
-      if (e.message !== 'locked') $('setupAiErr').textContent = e.message;
-    } finally { $('setupOllamaAdd').disabled = false; }
-  });
-  $('setupManualAdd').addEventListener('click', async () => {
-    const label = $('setupEpLabel').value.trim();
-    const base_url = $('setupEpBase').value.trim();
-    const model = $('setupEpModel').value.trim();
-    $('setupAiErr').textContent = '';
-    if (!label || !base_url || !model) {
-      $('setupAiErr').textContent = 'Label, base URL, and model are all required.';
+
+  // Step 3 reuses Connect, Desktop's routes. Full access is the default: a new
+  // vault holds only "personal", so a scope picker would offer nothing else.
+  async function renderSetupApps(notes) {
+    notes = notes || {};
+    const box = $('setupApps');
+    let data;
+    try { data = await api('/api/connect'); } catch (e) {
+      if (e.message !== 'locked') $('setupConnectErr').textContent = e.message;
       return;
     }
-    $('setupManualAdd').disabled = true;
+    box.textContent = '';
+    for (const t of data.targets || []) {
+      const row = el('div', 'setup-app-row');
+      const name = el('span', 'name', t.label);
+      if (t.id === 'chatgpt') name.appendChild(el('span', 'sub', 'Desktop app'));
+      row.appendChild(name);
+      if (t.connected) {
+        row.appendChild(el('span', 'badge private', 'CONNECTED'));
+        if (!setupApps.some((a) => a.id === t.id)) setupApps.push({ id: t.id, label: t.label });
+      } else if (!t.available) {
+        row.appendChild(el('span', 'small muted', 'Not installed'));
+      } else {
+        const btn = el('button', 'btn', 'Connect');
+        btn.setAttribute('aria-label', 'Connect ' + t.label);
+        btn.addEventListener('click', async () => {
+          $('setupConnectErr').textContent = '';
+          btn.disabled = true;
+          try {
+            await api('/api/connect/' + t.id, { method: 'POST', json: { scopes: [] } });
+            setupApps = [{ id: t.id, label: t.label }, ...setupApps.filter((a) => a.id !== t.id)];
+            await renderSetupApps({ ...notes, [t.id]: connectRestartLine(t.id) });
+            updateConnectPill();
+          } catch (e) {
+            if (e.message !== 'locked') $('setupConnectErr').textContent = e.message;
+            btn.disabled = false;
+          }
+        });
+        row.appendChild(btn);
+      }
+      box.appendChild(row);
+      if (t.connected) {
+        const access = t.scopes && t.scopes.length ? 'sharing ' + t.scopes.join(', ') : 'full access';
+        box.appendChild(el('div', 'setup-connected-note', '✓ Connected: ' + access + '.' + (notes[t.id] ? ' ' + notes[t.id] : '')));
+      }
+    }
+    const any = setupApps.length > 0;
+    $('setupConnectNext').disabled = !any;
+    $('setupConnectHint').hidden = any;
+  }
+  $('setupConnectNext').addEventListener('click', () => { if (setupApps.length) startSetupTry(); });
+  $('setupNoApp').addEventListener('click', () => setupStep('setupStepNoApp'));
+  $('setupNoAppNext').addEventListener('click', () => showSetupBackup());
+
+  // Step 4: only entries new since the step opened, and written over MCP,
+  // count as the app's first memory, so a hand-added one is never mistaken for it.
+  async function startSetupTry() {
+    const app = setupApps[0];
+    setupMemoryArrived = false;
+    $('setupTryTitle').textContent = 'Try it in ' + app.label;
+    $('setupTryLead').textContent = app.id === 'claude-code'
+      ? 'In a new Claude Code session, send these two messages:'
+      : 'After it restarts, send these two messages:';
+    $('setupWaitingText').textContent = 'Waiting for ' + app.label + ' to save a memory…';
+    $('setupWaiting').hidden = false;
+    $('setupArrived').hidden = true;
+    $('setupArrived').textContent = '';
+    $('setupTryNext').hidden = true;
+    $('setupTrySkip').hidden = true;
+    setupStep('setupStepTry');
+    let seen;
+    try { seen = new Set(((await api('/api/memories')).memories || []).map((m) => m.id)); }
+    catch { seen = null; }
+    if ($('setupStepTry').hidden) return;
+    setupSkipTimer = setTimeout(() => { $('setupTrySkip').hidden = false; }, 30 * 1000);
+    const tick = async () => {
+      if ($('setupStepTry').hidden) return;
+      try {
+        const list = (await api('/api/memories')).memories || [];
+        if (!seen) { seen = new Set(list.map((m) => m.id)); return; }
+        const fresh = list.find((m) => !seen.has(m.id) && m.source === 'mcp');
+        if (fresh && !$('setupStepTry').hidden) showSetupArrival(fresh, app);
+      } catch { /* keep waiting; the Skip link is the way out */ }
+    };
+    setupTryPoll = setInterval(tick, 3000);
+  }
+  function stopSetupTry() {
+    if (setupTryPoll) { clearInterval(setupTryPoll); setupTryPoll = null; }
+    if (setupSkipTimer) { clearTimeout(setupSkipTimer); setupSkipTimer = null; }
+  }
+  function showSetupArrival(m, app) {
+    stopSetupTry();
+    setupMemoryArrived = true;
+    // The entry does not record which app wrote it, so name one only when one is connected.
+    const from = setupApps.length === 1 ? app.label : 'a connected app';
+    const box = $('setupArrived');
+    box.textContent = '';
+    const card = el('div', 'setup-memory');
+    const head = el('div', 'row');
+    head.appendChild(el('span', 'setup-new-pill', 'Just arrived'));
+    card.appendChild(head);
+    card.appendChild(el('div', 'setup-mem-text', m.content));
+    const prov = el('div', 'setup-prov');
+    prov.append(el('span', '', m.scope), el('span', '', 'from ' + from), el('span', '', 'just now'));
+    card.appendChild(prov);
+    box.appendChild(card);
+    box.appendChild(el('p', '', 'That memory is now in your vault, encrypted on ' + devicePlace() + '. Send the second message and ' + app.label + ' will read it back to you. Every app you connect will see it too.'));
+    $('setupWaiting').hidden = true;
+    $('setupTrySkip').hidden = true;
+    box.hidden = false;
+    $('setupTryNext').hidden = false;
+    $('setupTryNext').focus();
+  }
+  $('setupCopy1').addEventListener('click', (e) => copyToClipboard($('setupPrompt1').textContent, e.currentTarget));
+  $('setupCopy2').addEventListener('click', (e) => copyToClipboard($('setupPrompt2').textContent, e.currentTarget));
+  $('setupTryNext').addEventListener('click', () => showSetupBackup());
+  $('setupTrySkip').addEventListener('click', () => showSetupBackup());
+
+  // Step 5, also where setup reopens after a relaunch until it is confirmed.
+  function showSetupBackup() {
+    $('setupBackupLead').textContent = setupMemoryArrived
+      ? 'Your vault now holds its first memory. Before you add more, keep a copy of the key that opens it.'
+      : 'Before you add memories, keep a copy of the key that opens your vault.';
+    if (!$('setupSecretPath').textContent && status.device_secret_path) $('setupSecretPath').textContent = status.device_secret_path;
+    $('setupBackupCheck').checked = false;
+    $('setupBackupBtn').disabled = true;
+    $('setupBackupErr').textContent = '';
+    setupStep('setupStepBackup');
+  }
+  $('setupCopyPath').addEventListener('click', (e) => copyToClipboard($('setupSecretPath').textContent, e.currentTarget));
+  $('setupBackupCheck').addEventListener('change', () => { $('setupBackupBtn').disabled = !$('setupBackupCheck').checked; });
+  $('setupBackupBtn').addEventListener('click', async () => {
+    if (!$('setupBackupCheck').checked) return;
+    $('setupBackupErr').textContent = '';
+    $('setupBackupBtn').disabled = true;
     try {
-      await api('/api/providers', { method: 'POST', json: { label, base_url, model } });
-      setupStep('setupStepTour');
+      await api('/api/setup/backup-confirmed', { method: 'POST', json: { confirmed: true } });
+      status = { ...status, backup_confirmed: true };
+      setupStep('setupStepExtras');
     } catch (e) {
-      if (e.message !== 'locked') $('setupAiErr').textContent = e.message;
-    } finally { $('setupManualAdd').disabled = false; }
+      if (e.message !== 'locked') $('setupBackupErr').textContent = e.message;
+      $('setupBackupBtn').disabled = !$('setupBackupCheck').checked;
+    }
   });
-  $('setupSkip').addEventListener('click', () => { setupStep('setupStepTour'); });
+
+  // Step 6: both extras close setup first, so the page behind can take over.
+  $('setupModelBtn').addEventListener('click', async () => { await finishSetup(); openConnectWizard(); });
+  $('setupSyncBtn').addEventListener('click', async () => {
+    await finishSetup();
+    showTop('settings');
+    const syncTab = document.querySelector('#settingsNav button[data-sub="sync"]');
+    if (syncTab) syncTab.click();
+  });
   $('setupDone').addEventListener('click', () => { finishSetup(); });
   async function finishSetup() {
     hideSetup();
@@ -6742,6 +6967,16 @@
     box.append(main, actions);
   }
 
+  function connectRestartLine(id) {
+    return id === 'claude-desktop'
+      ? 'Restart Claude Desktop to load it.'
+      : id === 'chatgpt'
+      ? 'Restart ChatGPT to load it (it reads MCP config at launch).'
+      : id === 'cursor'
+      ? 'Restart Cursor, or toggle the server in Cursor Settings → MCP.'
+      : 'Open a new Claude Code session to load it.';
+  }
+
   function connectCard(t, scopesInVault, note) {
     const card = el('div', 'card');
     const head = el('div', 'row');
@@ -6801,14 +7036,7 @@
       const scopes = val ? [val] : [];
       try {
         await api('/api/connect/' + t.id, { method: 'POST', json: { scopes } });
-        const restart = t.id === 'claude-desktop'
-          ? 'Restart Claude Desktop to load it.'
-          : t.id === 'chatgpt'
-          ? 'Restart ChatGPT to load it (it reads MCP config at launch).'
-          : t.id === 'cursor'
-          ? 'Restart Cursor, or toggle the server in Cursor Settings → MCP.'
-          : 'Open a new Claude Code session to load it.';
-        await loadConnect({ [t.id]: restart });
+        await loadConnect({ [t.id]: connectRestartLine(t.id) });
       } catch (e) {
         if (e.message !== 'locked') err.textContent = e.message;
         connectBtn.disabled = false;
