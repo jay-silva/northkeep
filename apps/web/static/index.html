@@ -598,6 +598,7 @@
     .curation-summary { align-items:flex-start; flex-wrap:wrap; }
     .projects-pane { padding:0; }
     .project-detail-head,.project-operation-head { display:block; }
+    .project-section-head { flex-wrap:wrap; }
     .project-actions { margin-top:18px; }
     .project-facts,.project-review-grid,.project-compare { grid-template-columns:1fr; }
     .project-field.wide { grid-column:auto; }
@@ -3177,14 +3178,15 @@
     if (statusChars > PROJECT_SUMMARY_MAX) {
       // ADR 0076 D4: the user's assistant rewrites it; NorthKeep only copies the request.
       const shorten = el('button', 'btn link', 'Shorten this summary'); shorten.type = 'button';
-      const offer = el('div', 'shorten-offer');
+      const offer = el('div', 'shorten-offer'); offer.setAttribute('role', 'status');
       offer.appendChild(el('div', 'muted', statusChars.toLocaleString('en-US') + ' characters. Summaries read best under 1,000.'));
       shorten.addEventListener('click', async () => {
         const text = shortenRequest(project.project, statusChars);
         await copyToClipboard(text);
-        const copied = el('span', 'copied'); copied.append(el('strong', undefined, 'Copied.'), document.createTextNode(' Paste it into Claude. Your current summary stays in Saved versions for your next five saves.'));
+        const copied = el('span', 'copied'); copied.tabIndex = -1; copied.append(el('strong', undefined, 'Copied.'), document.createTextNode(' Paste it into Claude. Your current summary stays in Saved versions for your next five saves.'));
         offer.replaceChildren(copied, el('span', 'copy-request', text));
         shorten.remove();
+        copied.focus();
       });
       statusLinks.appendChild(shorten);
       statusBox.append(statusLinks, offer);
