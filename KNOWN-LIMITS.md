@@ -3,7 +3,7 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
-## Oversize memories and long summaries (ADR 0074, ADR 0075), current
+## Oversize memories and long summaries (ADR 0076, ADR 0077), current
 
 - Only AI apps are held to the limits. A memory over 8 KB (64 KB in a project scope) can still reach a shared scope from the app, an import, or a consolidation, and then blocks every push until it is shortened.
 - Compact it and Shorten this summary copy a request; NorthKeep makes no model call. The rewrite needs an AI app connected to NorthKeep on this Mac. Claude on the web cannot edit memories, and an app with masking on refuses the edit.

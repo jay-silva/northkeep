@@ -150,7 +150,7 @@ describe('For the Next Agent keeps agent detail out of the summary', () => {
   });
 });
 
-describe('memory_list reads one memory by exact id (ADR 0074 D5)', () => {
+describe('memory_list reads one memory by exact id (ADR 0076 D5)', () => {
   it('returns only that memory, and nothing for a prefix', async () => {
     h = createHarness();
     const mcp = await h.connect();

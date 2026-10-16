@@ -1,4 +1,4 @@
-# ADR 0074: The user's own assistant compacts oversize memories and summaries
+# ADR 0076: The user's own assistant compacts oversize memories and summaries
 
 Status: Proposed 2026-10-15 · Review: CLEARED WITH WOUNDS (one Claude reviewer against the code; the multi-model step is Cursor-only)
 
@@ -28,7 +28,7 @@ One shared memory over the connector's 8 KB cap blocks every push; the local too
 Nothing new. The assistant already reads these scopes; the request holds an id, scope, date and sizes. NorthKeep makes no model call.
 
 ## Review findings
-Seven findings: one bypass and two counting gaps fixed in code, four claims corrected above. Full record: docs/design/adr-0074-compact-oversize-text.md.
+Seven findings: one bypass and two counting gaps fixed in code, four claims corrected above. Full record: docs/design/adr-0076-compact-oversize-text.md.
 
 ## Links
 PR 45 (names the memory) · Extends ADR 0045 (its addendum sets the 64 KB project cap)

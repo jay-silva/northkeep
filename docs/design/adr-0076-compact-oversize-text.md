@@ -1,4 +1,4 @@
-# ADR 0074 review record
+# ADR 0076 review record
 
 Adversarial review, 2026-10-15, one Claude reviewer against the code (the multi-model step is Cursor-only). Verdict: CLEARED WITH WOUNDS.
 

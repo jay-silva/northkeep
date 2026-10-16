@@ -3,7 +3,7 @@ import path from 'node:path';
 import vm from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
-// ADR 0074: the requests Compact it and Shorten this summary copy name the
+// ADR 0076: the requests Compact it and Shorten this summary copy name the
 // memory or project and its size, and never carry the memory's text.
 const html = fs.readFileSync(path.resolve(import.meta.dirname, '../static/index.html'), 'utf8');
 const script = html.match(/<script>([\s\S]*?)<\/script>/)![1]!;

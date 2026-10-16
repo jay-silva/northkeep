@@ -2887,7 +2887,7 @@
     return button;
   }
 
-  // ADR 0074 D3: what Compact it copies. It names the memory, never its text.
+  // ADR 0076 D3: what Compact it copies. It names the memory, never its text.
   function compactRequest(o) {
     const kb = (b) => (b / 1024).toFixed(1).replace(/\.0$/, '') + ' KB';
     return 'Please compact a NorthKeep memory for me. Memory ' + o.id + ' in "' + o.scope + '", saved ' + String(o.created_at).slice(0, 10) +
@@ -2897,7 +2897,7 @@
       'If NorthKeep refuses the edit because masking is on, stop and tell me.';
   }
 
-  // ADR 0074 D4: what Shorten this summary copies.
+  // ADR 0076 D4: what Shorten this summary copies.
   function shortenRequest(slug, chars) {
     return 'Please shorten the summary of my NorthKeep project "' + slug + '". Its Current Status is ' + chars.toLocaleString('en-US') +
       ' characters; keep it under 1,000. Read it with project_get, then save the shorter version with project_update. Open with one plain ' +
@@ -3175,7 +3175,7 @@
     if (shortStatus !== fullStatus.trim()) statusLinks.appendChild(projectMoreToggle('Read the full summary', 'Show less', (open) => { statusCopy.textContent = open ? fullStatus : shortStatus; }));
     const statusChars = [...String(project.status || '')].length;
     if (statusChars > PROJECT_SUMMARY_MAX) {
-      // ADR 0074 D4: the user's assistant rewrites it; NorthKeep only copies the request.
+      // ADR 0076 D4: the user's assistant rewrites it; NorthKeep only copies the request.
       const shorten = el('button', 'btn link', 'Shorten this summary'); shorten.type = 'button';
       const offer = el('div', 'shorten-offer');
       offer.appendChild(el('div', 'muted', statusChars.toLocaleString('en-US') + ' characters. Summaries read best under 1,000.'));
@@ -3394,7 +3394,7 @@
     back.focus();
   }
 
-  // ADR 0075: detail AI apps leave each other, closed by default so the page stays short.
+  // ADR 0077: detail AI apps leave each other, closed by default so the page stays short.
   function renderProjectAgentDetail(text) {
     const value = typeof text === 'string' ? text.trim() : '';
     if (!value) return null;
