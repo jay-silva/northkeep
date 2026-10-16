@@ -110,7 +110,7 @@ export async function handleCurationApi(
         const current = selectConsolidationEntries(vault.list(), request.scope as string, vault.sharedScopes());
         if (!sameSnapshot(current, snapshot.selected)) throw new StaleError('Memories changed while suggestions were generated.');
       });
-      return response(200, { vault_id: snapshot.vaultId, scope: request.scope, groups: result.groups, coverage: result.coverage, model: result.model });
+      return response(200, { vault_id: snapshot.vaultId, scope: request.scope, groups: result.groups, coverage: result.coverage, summary: result.summary, model: result.model });
     }
 
     if (method === 'GET' && route === '/api/curation/history') {

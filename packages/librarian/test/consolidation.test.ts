@@ -25,7 +25,8 @@ describe('guided consolidation suggestions', () => {
     expect(result.groups[0]!.proposed_content).toContain('technical reviews');
     expect(result.groups[1]!.proposed_content).toBeNull();
     expect(result.groups[1]!.sources.map(source => source.content)).toEqual(entries.slice(3).map(source => source.content));
-    expect(result.coverage).toEqual({ selected: 5, compared: 0, skipped: 0, failed: 5, complete: false });
+    expect(result.coverage).toEqual({ selected: 5, compared: 5, skipped: 0, failed: 1, rejectedGroups: 1, complete: false });
+    expect(result.summary).toBe('2 suggestions; 1 proposed group rejected');
   });
   it('keeps instruction inside a data boundary and accepts only exact evidence for every source', async () => {
     const entries = [entry('one', 'The station has 14 units.'), entry('two', 'There are 14 station units.')];
@@ -39,18 +40,19 @@ describe('guided consolidation suggestions', () => {
     expect(prompt).toContain('BEGIN USER INSTRUCTION DATA');
     expect(prompt).toContain('untrusted data');
     expect(result.groups[0]?.sources).toEqual(entries);
-    expect(result.coverage).toEqual({ selected: 2, compared: 2, skipped: 0, failed: 0, complete: true });
+    expect(result.coverage).toEqual({ selected: 2, compared: 2, skipped: 0, failed: 0, rejectedGroups: 0, complete: true });
+    expect(result.summary).toBe('1 suggestion');
   });
 
-  it('drops ungrounded groups and reports their whole pack as failed', async () => {
+  it('drops an ungrounded group and counts only its members as failed', async () => {
     const entries = [entry('one', '14 units'), entry('two', '15 units')];
     const result = await suggestConsolidations(entries, '', { generateJson: async () => JSON.stringify({ groups: [{
       source_ids: ['one', 'two'], evidence: [{ source_id: 'one', quote: '14 units' }, { source_id: 'two', quote: 'invented' }],
       proposed_content: '14 units', explanation: 'unsafe',
     }] }) });
     expect(result.groups).toEqual([]);
-    expect(result.coverage.complete).toBe(false);
-    expect(result.coverage.failed).toBe(2);
+    expect(result.coverage).toEqual({ selected: 2, compared: 2, skipped: 0, failed: 2, rejectedGroups: 1, complete: false });
+    expect(result.summary).toBe('0 suggestions; 1 proposed group rejected');
   });
 
   it('supports a grounded question with null proposed content', async () => {
@@ -76,6 +78,92 @@ describe('guided consolidation suggestions', () => {
     const result = await suggestConsolidations(entries, '', { generateJson: async (value) => { prompt = value; return '{"groups":[]}'; } });
     expect(prompt).not.toContain('escaped');
     expect(prompt.length).toBeLessThan(26_500);
-    expect(result.coverage).toEqual({ selected: 3, compared: 2, skipped: 1, failed: 0, complete: false });
+    expect(result.coverage).toEqual({ selected: 3, compared: 2, skipped: 1, failed: 0, rejectedGroups: 0, complete: false });
+    expect(result.summary).toBe('0 suggestions; 1 skipped');
+  });
+
+  it('compares a ninth same-type memory by folding it into the previous pack', async () => {
+    const entries = Array.from({ length: 9 }, (_, index) => entry(String(index), `Memory ${index} stays distinct.`));
+    const prompts: string[] = [];
+    const quote = (id: string) => entries[Number(id)]!.content;
+    const valid = (ids: string[]) => ({
+      source_ids: ids,
+      evidence: ids.map((id) => ({ source_id: id, quote: quote(id) })),
+      proposed_content: ids.map(quote).join(' '),
+      explanation: 'Same collection.',
+    });
+    const result = await suggestConsolidations(entries, '', { generateJson: async (prompt) => {
+      prompts.push(prompt);
+      return JSON.stringify({ groups: [
+        valid(['0', '1']),
+        valid(['2', '3']),
+        valid(['4', '5']),
+        { source_ids: ['6', '7'], evidence: [{ source_id: '6', quote: 'missing' }, { source_id: '7', quote: quote('7') }], proposed_content: 'no', explanation: 'bad quote' },
+      ] });
+    } });
+    expect(prompts).toHaveLength(1);
+    const packed = JSON.parse(prompts[0]!.slice(prompts[0]!.indexOf('===BEGIN MEMORY DATA===\n') + '===BEGIN MEMORY DATA===\n'.length, prompts[0]!.indexOf('\n===END MEMORY DATA==='))) as { id: string }[];
+    expect(packed.map((item) => item.id)).toEqual(['0', '1', '2', '3', '4', '5', '6', '7', '8']);
+    expect(result.groups).toHaveLength(3);
+    expect(result.groups.map((group) => group.sources.map((source) => source.id))).toEqual([['0', '1'], ['2', '3'], ['4', '5']]);
+    expect(result.coverage).toEqual({ selected: 9, compared: 9, skipped: 0, failed: 2, rejectedGroups: 1, complete: false });
+    expect(result.summary).toBe('3 suggestions; 1 proposed group rejected');
+  });
+
+  it('keeps valid groups when another group in the same pack fails validation', async () => {
+    const entries = ['one', 'two', 'three', 'four'].map((id) => entry(id, `Fact ${id}.`));
+    const valid = {
+      source_ids: ['one', 'two'],
+      evidence: [{ source_id: 'one', quote: 'Fact one.' }, { source_id: 'two', quote: 'Fact two.' }],
+      proposed_content: 'Fact one. Fact two.',
+      explanation: 'Same fact.',
+    };
+    const invalid = {
+      source_ids: ['three', 'four'],
+      evidence: [{ source_id: 'three', quote: 'not present' }, { source_id: 'four', quote: 'Fact four.' }],
+      proposed_content: 'Invented.',
+      explanation: 'Bad quote.',
+    };
+    const result = await suggestConsolidations(entries, '', { generateJson: async () => JSON.stringify({ groups: [valid, invalid] }) });
+    expect(result.groups).toHaveLength(1);
+    expect(result.groups[0]!.sources.map((source) => source.id)).toEqual(['one', 'two']);
+    expect(result.coverage).toEqual({ selected: 4, compared: 4, skipped: 0, failed: 2, rejectedGroups: 1, complete: false });
+    expect(result.summary).toBe('1 suggestion; 1 proposed group rejected');
+  });
+
+  it('does not fold a single memory into a pack of a different type', async () => {
+    const entries = [entry('a', 'alpha'), entry('b', 'beta'), entry('c', 'gamma', { type: 'episodic' })];
+    const prompts: string[] = [];
+    const result = await suggestConsolidations(entries, '', { generateJson: async (prompt) => { prompts.push(prompt); return '{"groups":[]}'; } });
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('"a"');
+    expect(prompts[0]).toContain('"b"');
+    expect(prompts[0]).not.toContain('"c"');
+    expect(result.coverage).toEqual({ selected: 3, compared: 2, skipped: 1, failed: 0, rejectedGroups: 0, complete: false });
+    expect(result.summary).toBe('0 suggestions; 1 skipped');
+  });
+
+  it('pairs a leftover that does not fit the previous pack instead of skipping it or exceeding the size limit', async () => {
+    const bulky = (id: string) => entry(id, 'x'.repeat(7_000));
+    const entries = ['a', 'b', 'c', 'd'].map(bulky);
+    const prompts: string[] = [];
+    const result = await suggestConsolidations(entries, '', { generateJson: async (prompt) => { prompts.push(prompt); return '{"groups":[]}'; } });
+    const memoryJson = (prompt: string) => prompt.slice(prompt.indexOf('===BEGIN MEMORY DATA===\n') + '===BEGIN MEMORY DATA===\n'.length, prompt.indexOf('\n===END MEMORY DATA==='));
+    const ids = prompts.flatMap((prompt) => (JSON.parse(memoryJson(prompt)) as { id: string }[]).map((item) => item.id));
+    expect(ids.sort()).toEqual(['a', 'b', 'c', 'd']);
+    expect(prompts.length).toBeGreaterThan(1);
+    for (const prompt of prompts) expect(memoryJson(prompt).length).toBeLessThanOrEqual(24_000);
+    expect(result.coverage).toMatchObject({ selected: 4, compared: 4, skipped: 0, failed: 0, rejectedGroups: 0, complete: false });
+    expect(result.summary).toBe('0 suggestions; not every memory was compared with the others');
+  });
+
+  it('counts a pack with no groups payload as not compared', async () => {
+    const entries = [entry('one', 'alpha'), entry('two', 'beta')];
+    const thrown = await suggestConsolidations(entries, '', { generateJson: async () => { throw new Error('down'); } });
+    expect(thrown.coverage).toEqual({ selected: 2, compared: 0, skipped: 0, failed: 2, rejectedGroups: 0, complete: false });
+    expect(thrown.summary).toBe('0 suggestions; 2 could not be compared');
+    const unparsed = await suggestConsolidations(entries, '', { generateJson: async () => 'not json' });
+    expect(unparsed.coverage).toEqual(thrown.coverage);
+    expect(unparsed.summary).toBe(thrown.summary);
   });
 });

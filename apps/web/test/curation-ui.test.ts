@@ -105,7 +105,10 @@ describe('memory curation UI', () => {
   });
 
   it('labels incomplete coverage honestly and binds restore to the exact result', () => {
-    expect(html).toContain("(incomplete?' · Incomplete':'')");
+    expect(html).toContain("const summary=typeof curationSession.summary==='string'?curationSession.summary:''");
+    expect(html).toContain("$('curationCoverage').textContent=summary");
+    expect(html).toContain("$('curationErr').textContent=summary.includes(';')?summary:''");
+    expect(html).not.toContain('skipped and ');
     expect(html).toContain("expected_result:expectedResult");
     expect(html).toContain("ex.status===409?'This result changed after the receipt was loaded.");
     expect(html).toContain("addCurationPreview(body,item.sources||[],item.result&&item.result.content||'')");
