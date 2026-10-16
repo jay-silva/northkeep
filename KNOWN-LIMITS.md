@@ -239,8 +239,8 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   a non-subscribed, non-allowlisted account gets a 402 and can't sync. The
   allowlist (`NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES`) is the free/comp list;
   `northkeep sync id` prints your allowlist hash. A **self-hosted** server sets
-  no Stripe env, so billing is off and only the allowlist gates; the ~4 MB size
-  cap and rate limiting are the only guards on an open (no-allowlist,
+  no Stripe env, so billing is off and only the allowlist gates; the size
+  cap (32 MB by default) and rate limiting are the only guards on an open (no-allowlist,
   no-Stripe) server, so don't expose one publicly.
 - **Rate limiting is per-instance, not a precise global quota.** Every `/api/*`
   request passes two throttles: a per-IP ceiling (4x the account cap: several
@@ -942,7 +942,7 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   roll into archive memories in the project scope (ADR 0045), and
   `project_update` refuses, rather than silently truncating, only when the
   document is still over the cap with just its newest Log entry kept (long
-  hand-written sections, or a long new entry on a nearly full document). The ~4 MB sync cap bounds the
+  hand-written sections, or a long new entry on a nearly full document). The sync cap bounds the
   whole vault, projects included.
 - **`memory_edit` cannot move a memory between scopes.** Deliberate: over
   MCP, a scope change could turn private content into shared content. Rescope
@@ -1047,18 +1047,23 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   desktop has it at `POST /api/projects/<slug>/restore` and as "Restore this
   version" under Saved versions on the project page, which asks first and
   restores nothing if the project changed after the list was loaded.
-- **The whole-vault sync cap is 4 MB and cannot be raised on the hosted
-  server as deployed.** The cap is 4 MB (4,194,304 bytes); NorthKeep reports sizes in these binary units, so 1 MB is 1,048,576 bytes. Vercel refuses
-  request bodies over 4.5 MB before the sync server runs (probed
-  2026-09-21). A larger vault needs a different upload path, which is its
-  own decision. Measured (ADR 0067): about 700 bytes per typical memory, so
-  roughly 5,900 memories, or 450 to 500 entries of 8,000 characters.
-  Embeddings are no longer stored in the vault file. `northkeep sync status`
-  and `sync push` print the size against the cap and warn at or over 75%
-  (3,145,728 bytes). The Mac app shows the same size on Settings, Sync, and
-  its header sync button does not turn amber at 75%. Compact project history or forget memories
-  to stay under it. Forgetting short memories leaves some slack inside the
-  file that is only reclaimed when a save frees enough whole pages.
+- **The whole-vault sync cap is 32 MB (ADR 0078).** NorthKeep reports
+  sizes in binary units, so 1 MB is 1,048,576 bytes. Vercel refuses request
+  bodies over 4.5 MB, so a vault up to 4 MB still syncs in one request and a
+  larger one syncs in parts of 3 MB, which the server installs only when every
+  part has arrived and checks out. The server sets the cap
+  (`NORTHKEEP_SYNC_MAX_BYTES`); each build also has its own 32 MB ceiling and
+  uses the lower of the two. A device on a build from before ADR 0078 cannot
+  pull or push a vault over 4 MB: it shows a sync error (its own size refusal,
+  or "HTTP 409" on pull) and stops syncing until it is updated. Only the
+  updated device explains why: its size card and `sync status` say other
+  devices need the latest NorthKeep. Measured (ADR 0067): about 700 bytes per typical memory, so
+  roughly 47,000 memories. `northkeep sync status` and `sync push` print the
+  size against the cap and warn at or over 75%; the Mac app shows the same on
+  Settings, Sync, and its header sync button does not turn amber at 75%.
+  Compact project history or forget memories to stay under it. Forgetting
+  short memories leaves some slack inside the file that is only reclaimed
+  when a save frees enough whole pages.
 - **The 64 KiB push cap applies to every row in a project scope** (the
   document and its Log archives, since 2026-09-19; before that only the
   document, and an archive over 8 KiB refused the whole push). Ordinary

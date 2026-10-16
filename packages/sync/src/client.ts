@@ -11,7 +11,7 @@ import {
   withFileLock,
 } from '@northkeep/core';
 import { deriveSyncCreds } from './creds.js';
-import { MAX_BLOB_BYTES, vaultSizeReport, type VaultSizeReport } from './size.js';
+import { effectiveCap, MAX_BLOB_BYTES, SINGLE_REQUEST_MAX, vaultSizeReport, type VaultSizeReport } from './size.js';
 import { assertSyncUrl, loadSyncConfig, saveSyncConfig, type SyncConfig } from './config.js';
 
 /**
@@ -61,13 +61,32 @@ export interface RemoteStatus {
   sha256: string;
   size: number;
   updatedAt: string;
+  /** ADR 0078: absent on servers that predate parts sync. */
+  cap_bytes?: number;
+  part_bytes?: number;
+  /** Set when the current version is stored in parts. */
+  upload_id?: string | null;
+  parts?: number;
 }
+
+/** Another device opened a push at the same moment; nothing was stored, and a retry starts over. */
+export class UploadReplacedError extends Error {
+  constructor() {
+    super('Another device started syncing at the same moment. Nothing was changed; sync again.');
+    this.name = 'UploadReplacedError';
+  }
+}
+
+/** Called between parts so the sync lock is never mistaken for an abandoned one (ADR 0078 D4). */
+type Progress = () => void;
 
 export interface PushResult {
   ok: boolean;
   /** On success, the new server version; on conflict, the server's current version. */
   version: number;
   conflict: boolean;
+  /** The server's cap as reported with the push; absent from servers before ADR 0078. */
+  capBytes?: number;
   /** ADR 0067 D4: the size of the bytes this push sent, against the cap. */
   size?: VaultSizeReport;
 }
@@ -107,19 +126,71 @@ async function remoteStatus(serverUrl: string, token: string): Promise<RemoteSta
 async function pullBlob(
   serverUrl: string,
   token: string,
+  progress: Progress = () => {},
 ): Promise<{ blob: Buffer; version: number; sha256: string } | null> {
-  const res = await fetch(`${serverUrl}/api/blob`, {
-    headers: authHeaders(token),
-    redirect: 'error',
-    signal: AbortSignal.timeout(BLOB_TIMEOUT_MS),
-  });
-  if (res.status === 404) return null;
-  if (res.status === 402) throw new SubscriptionRequiredError();
-  if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on pull.`);
-  const blob = Buffer.from(await res.arrayBuffer());
-  const version = Number(res.headers.get('x-version') ?? '0');
-  const sha256 = res.headers.get('x-sha256') ?? '';
-  return { blob, version, sha256 };
+  // A vault in parts names a fixed upload, so every part comes from one
+  // version even if another device pushes mid-download. A part that is no
+  // longer kept (410) restarts from a fresh status, at most three times.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const status = await remoteStatus(serverUrl, token);
+    if (status === null) return null;
+    if (status.upload_id) {
+      const pulled = await pullParts(serverUrl, token, status, progress);
+      if (pulled) return pulled;
+      continue;
+    }
+    const res = await fetch(`${serverUrl}/api/blob`, {
+      headers: authHeaders(token),
+      redirect: 'error',
+      signal: AbortSignal.timeout(BLOB_TIMEOUT_MS),
+    });
+    if (res.status === 404) return null;
+    if (res.status === 402) throw new SubscriptionRequiredError();
+    // 409: the vault moved into parts after our status read.
+    if (res.status === 409) continue;
+    if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on pull.`);
+    const blob = Buffer.from(await res.arrayBuffer());
+    const version = Number(res.headers.get('x-version') ?? '0');
+    const sha256 = res.headers.get('x-sha256') ?? '';
+    return { blob, version, sha256 };
+  }
+  throw new Error('The server copy kept changing during the download. Nothing was changed; sync again.');
+}
+
+/** Null when the upload is no longer kept, so the caller starts over. */
+async function pullParts(
+  serverUrl: string,
+  token: string,
+  status: RemoteStatus,
+  progress: Progress,
+): Promise<{ blob: Buffer; version: number; sha256: string } | null> {
+  const parts = status.parts ?? 0;
+  const id = String(status.upload_id);
+  if (!/^[0-9a-f]{32}$/.test(id) || !Number.isInteger(parts) || parts < 1) {
+    throw new Error('Sync server reported a malformed vault. Nothing was changed.');
+  }
+  // Refuse before downloading anything this build could not hold (ADR 0078 D2).
+  if (!Number.isInteger(status.size) || status.size > MAX_BLOB_BYTES) {
+    throw new Error(`The server copy is over this build's ${MAX_BLOB_BYTES / 1024 / 1024} MB limit. Update NorthKeep to sync it.`);
+  }
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for (let n = 0; n < parts; n++) {
+    const res = await fetch(`${serverUrl}/api/blob/uploads/${id}/parts/${n}`, {
+      headers: authHeaders(token),
+      redirect: 'error',
+      signal: AbortSignal.timeout(BLOB_TIMEOUT_MS),
+    });
+    if (res.status === 410) return null;
+    if (res.status === 402) throw new SubscriptionRequiredError();
+    if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on pull.`);
+    const chunk = Buffer.from(await res.arrayBuffer());
+    total += chunk.length;
+    if (total > status.size) throw new Error('Downloaded vault is larger than the server said. Nothing was changed.');
+    chunks.push(chunk);
+    progress();
+  }
+  return { blob: Buffer.concat(chunks), version: status.version, sha256: status.sha256 ?? '' };
 }
 
 async function pushBlob(
@@ -127,7 +198,9 @@ async function pushBlob(
   token: string,
   blob: Buffer,
   baseVersion: number,
+  progress: Progress = () => {},
 ): Promise<PushResult> {
+  if (blob.length > SINGLE_REQUEST_MAX) return pushParts(serverUrl, token, blob, baseVersion, progress);
   const res = await fetch(`${serverUrl}/api/blob`, {
     method: 'PUT',
     headers: {
@@ -145,8 +218,73 @@ async function pushBlob(
   }
   if (res.status === 402) throw new SubscriptionRequiredError();
   if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on push.`);
-  const body = (await res.json()) as { version: number };
-  return { ok: true, conflict: false, version: body.version };
+  const body = (await res.json()) as { version: number; cap_bytes?: unknown };
+  return { ok: true, conflict: false, version: body.version, capBytes: effectiveCap(body.cap_bytes) };
+}
+
+function overLimit(bytes: number, cap: number): Error {
+  return new Error(`Vault is ${(bytes / 1024 / 1024).toFixed(1)} MB, over the ${cap / 1024 / 1024} MB sync limit.`);
+}
+
+/** ADR 0078 D1: open an upload, send write-once parts, then commit at the base version. */
+async function pushParts(
+  serverUrl: string,
+  token: string,
+  blob: Buffer,
+  baseVersion: number,
+  progress: Progress,
+): Promise<PushResult> {
+  const post = (url: string, body?: string): Promise<Response> =>
+    fetch(url, {
+      method: 'POST',
+      headers: { ...authHeaders(token), 'content-type': 'application/json' },
+      body,
+      redirect: 'error',
+      signal: AbortSignal.timeout(STATUS_TIMEOUT_MS),
+    });
+  const opened = await post(`${serverUrl}/api/blob/uploads`);
+  if (opened.status === 402) throw new SubscriptionRequiredError();
+  if (opened.status === 404) {
+    throw new Error('This sync server only takes vaults up to 4 MB. Update the server or make the vault smaller.');
+  }
+  if (!opened.ok) throw new Error(`Sync server returned HTTP ${opened.status} on push.`);
+  const upload = (await opened.json()) as { upload_id?: unknown; part_bytes?: unknown; cap_bytes?: unknown };
+  const id = String(upload.upload_id);
+  const partBytes = Number(upload.part_bytes);
+  if (!/^[0-9a-f]{32}$/.test(id) || !Number.isInteger(partBytes) || partBytes < 1024 * 1024 || partBytes > SINGLE_REQUEST_MAX) {
+    throw new Error('Sync server answered the push with something unexpected. Nothing was changed.');
+  }
+  const cap = effectiveCap(upload.cap_bytes);
+  if (blob.length > cap) throw overLimit(blob.length, cap);
+
+  const parts = Math.ceil(blob.length / partBytes);
+  for (let n = 0; n < parts; n++) {
+    const res = await fetch(`${serverUrl}/api/blob/uploads/${id}/${n}`, {
+      method: 'PUT',
+      headers: { ...authHeaders(token), 'content-type': 'application/octet-stream' },
+      body: blob.subarray(n * partBytes, (n + 1) * partBytes),
+      redirect: 'error',
+      signal: AbortSignal.timeout(BLOB_TIMEOUT_MS),
+    });
+    if (res.status === 409) throw new UploadReplacedError();
+    if (res.status === 402) throw new SubscriptionRequiredError();
+    if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on push.`);
+    progress();
+  }
+  const committed = await post(
+    `${serverUrl}/api/blob/uploads/${id}/commit`,
+    JSON.stringify({ base: baseVersion, parts, size: blob.length, sha256: sha256Hex(blob) }),
+  );
+  if (committed.status === 409) {
+    const body = (await committed.json().catch(() => ({}))) as { version?: number; replaced?: boolean };
+    if (body.replaced) throw new UploadReplacedError();
+    return { ok: false, conflict: true, version: body.version ?? baseVersion };
+  }
+  if (committed.status === 413) throw overLimit(blob.length, cap);
+  if (committed.status === 402) throw new SubscriptionRequiredError();
+  if (!committed.ok) throw new Error(`Sync server returned HTTP ${committed.status} on push.`);
+  const body = (await committed.json()) as { version: number };
+  return { ok: true, conflict: false, version: body.version, capBytes: cap };
 }
 
 // --- helpers ---
@@ -196,6 +334,19 @@ export class SyncBusyError extends Error {
   constructor() {
     super('Another NorthKeep process is syncing this vault right now.');
     this.name = 'SyncBusyError';
+  }
+}
+
+/**
+ * Freshens the sync lock's age between parts (ADR 0078 D4): a transfer of
+ * many parts can outlast the stale window, and lock.ts steals by age.
+ */
+function touchSyncLock(vaultPath: string): void {
+  const now = new Date();
+  try {
+    fs.utimesSync(`${vaultPath}.sync.lock`, now, now);
+  } catch {
+    // No lock file: nothing to keep fresh.
   }
 }
 
@@ -349,7 +500,10 @@ export async function pushVault(options: {
     });
     // The upload holds no vault lock: a hung server must not take the vault
     // away from every other process on this machine (review 2026-09-03).
-    const result = { ...(await pushBlob(snapshot.config.serverUrl, token, snapshot.blob, snapshot.config.lastVersion)), size: vaultSizeReport(snapshot.blob.length) };
+    const pushed = await pushBlob(snapshot.config.serverUrl, token, snapshot.blob, snapshot.config.lastVersion, () =>
+      touchSyncLock(options.vaultPath),
+    );
+    const result = { ...pushed, size: vaultSizeReport(snapshot.blob.length, pushed.capBytes ?? MAX_BLOB_BYTES) };
     if (result.ok) {
       await withFileLock(options.vaultPath, () => {
         const latest = loadSyncConfig() ?? snapshot.config;
@@ -647,7 +801,7 @@ export async function pullVault(options: {
   const config = requireConfig();
   const { token } = deriveSyncCreds(options.deviceSecret);
   return withSyncLock(options.vaultPath, async () => {
-    const pulled = await pullBlob(config.serverUrl, token);
+    const pulled = await pullBlob(config.serverUrl, token, () => touchSyncLock(options.vaultPath));
     if (pulled === null) return { ok: false, reason: 'no-remote' };
     return installBlob({ ...options, config, pulled });
   });
@@ -667,7 +821,7 @@ export async function previewPull(options: { vaultPath: string; deviceSecret: Bu
   const config = requireConfig();
   const { token } = deriveSyncCreds(options.deviceSecret);
   return withSyncLock(options.vaultPath, async () => {
-    const pulled = await pullBlob(config.serverUrl, token);
+    const pulled = await pullBlob(config.serverUrl, token, () => touchSyncLock(options.vaultPath));
     if (pulled === null) return { ok: false, reason: 'no-remote' };
     checkDownload(pulled);
     return withFileLock(options.vaultPath, () => {
@@ -841,7 +995,7 @@ export async function syncState(options: {
   const remoteSha = /^[0-9a-f]{64}$/.test(remoteShaRaw) ? remoteShaRaw : null;
   const localBytes = fs.readFileSync(options.vaultPath);
   const localSha = createHash('sha256').update(localBytes).digest('hex');
-  const size = vaultSizeReport(localBytes.length);
+  const size = vaultSizeReport(localBytes.length, effectiveCap(remote.cap_bytes));
   const serverAdvanced = remote.version > config.lastVersion;
   // Did WE edit since our own last sync? A config written before lastSha
   // existed cannot prove the file is untouched, so it counts as edited: the

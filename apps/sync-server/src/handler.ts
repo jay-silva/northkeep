@@ -176,7 +176,7 @@ export async function handleSync(
     const result = await storage.put(tokenHash, blob, sha256Hex(blob), base);
     if (!result.ok) return json(409, { version: result.version });
     await storage.pruneUploads(tokenHash);
-    return json(200, { version: result.version });
+    return json(200, { version: result.version, cap_bytes: capBytes });
   }
 
   if (route.kind === 'upload-create') {
@@ -221,7 +221,7 @@ export async function handleSync(
         : json(409, { version: result.version });
     }
     await storage.pruneUploads(tokenHash);
-    return json(200, { version: result.version });
+    return json(200, { version: result.version, cap_bytes: capBytes });
   }
 
   if (route.kind === 'part-get') {

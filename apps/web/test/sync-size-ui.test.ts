@@ -38,12 +38,12 @@ function fakeEl(): FakeEl {
   return e;
 }
 
-function render(bytes: number | null): Record<string, FakeEl> {
+function render(bytes: number | null, cap = 4 * 1024 * 1024): Record<string, FakeEl> {
   const els: Record<string, FakeEl> = {};
   const ctx = vm.createContext({
     $: (id: string) => (els[id] ??= fakeEl()),
     devicePlace: () => 'this Mac',
-    size: bytes === null ? null : vaultSizeReport(bytes),
+    size: bytes === null ? null : vaultSizeReport(bytes, cap),
   });
   vm.runInContext(functionSource('sizeText') + functionSource('renderSyncSize'), ctx);
   vm.runInContext('renderSyncSize(size)', ctx);
@@ -52,7 +52,7 @@ function render(bytes: number | null): Record<string, FakeEl> {
 
 const MB = 1024 * 1024;
 
-describe('Sync page vault size card (ADR 0067 D4)', () => {
+describe('Sync page vault size card (ADR 0067 D4, ADR 0078 D2)', () => {
   it('stays hidden when there is no size to show', () => {
     expect(render(null).syncSizeCard.hidden).toBe(true);
   });
@@ -75,6 +75,29 @@ describe('Sync page vault size card (ADR 0067 D4)', () => {
     expect(els.syncSizeWarnLine.textContent).toContain('new changes stay on this Mac');
     expect(els.syncSizeMeter.classes.has('warn')).toBe(true);
     expect(els.syncSizeMeter.attrs['aria-valuenow']).toBe('75');
+    expect(els.syncSizeCapLine.textContent).toBe('of 4 MB sync limit');
+    expect(els.syncSizeWarnMark.textContent).toBe('3 MB warning');
+    expect(els.syncSizeParts.hidden).toBe(true);
+  });
+
+  it('reads every label from the server cap', () => {
+    const els = render(10 * MB, 32 * MB);
+    expect(els.syncSizeCapLine.textContent).toBe('of 32 MB sync limit');
+    expect(els.syncSizeWarnMark.textContent).toBe('24 MB warning');
+    expect(els.syncSizeCapMark.textContent).toBe('32 MB');
+    expect(els.syncSizeMeter.attrs['aria-label']).toBe('Vault size against the 32 MB sync limit');
+    expect(els.syncSizeMeter.attrs['aria-valuetext']).toBe('10 MB of 32 MB');
+    expect(els.syncSizeOk.textContent).toBe('Plenty of room. Your vault syncs normally.');
+  });
+
+  it('over 4 MB, tells the user their other devices need the latest NorthKeep', () => {
+    const els = render(5 * MB, 32 * MB);
+    expect(els.syncSizeParts.hidden).toBe(false);
+    expect(els.syncSizeWarn.hidden).toBe(true);
+    const near = render(25 * MB, 32 * MB);
+    expect(near.syncSizeParts.hidden).toBe(false);
+    expect(near.syncSizeWarnLine.textContent).toContain('Your vault is 25 MB of 32 MB. Sync still works. Once it reaches 32 MB');
+    expect(render(40 * MB, 32 * MB).syncSizeParts.hidden).toBe(true);
   });
 
   it('says plainly when the vault is over the limit, with the bar capped at full', () => {

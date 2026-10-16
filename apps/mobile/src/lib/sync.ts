@@ -1,9 +1,17 @@
 import { fetch } from 'expo/fetch';
 import * as Crypto from 'expo-crypto';
 import { Vault, VaultAuthError, VaultSyncGenerationError, getPlatform } from '@northkeep/core';
-import { MAX_BLOB_BYTES, SubscriptionRequiredError, deriveSyncCreds, describeVaultSize, vaultSizeReport } from '@northkeep/sync';
+import {
+  MAX_BLOB_BYTES,
+  SINGLE_REQUEST_MAX,
+  SubscriptionRequiredError,
+  deriveSyncCreds,
+  describeVaultSize,
+  vaultSizeReport,
+} from '@northkeep/sync';
 import { createDeadline, type DeadlineScope } from './deadline';
 import { autoPullBakPath, deleteIfExists, pulledTmpPath } from './paths';
+import { partsStatusOf, pullPartsMobile, pushPartsMobile, type PartsResponse, type PartsTransport } from './sync-parts';
 import { loadSyncBaseline, saveLocalDirty, savePendingStampSha, saveSyncBaseline } from './secure-store';
 import { localBytesMoved, nextPushGenerationWithPending, pulledBlobIsReplay } from './sync-flow';
 import { vaultGate } from './vault-gate';
@@ -46,6 +54,13 @@ const STALLED_MESSAGE = 'The sync server stopped responding partway through. Not
 
 /** See src/lib/deadline.ts for why a timeout here must be RACED, not just armed. */
 const deadlineScope = (): DeadlineScope => createDeadline(BLOB_TIMEOUT_MS, STALLED_MESSAGE);
+
+/** expo/fetch, one fresh deadline per request, and the device digest, for the parts transfers (ADR 0078). */
+const partsTransport: PartsTransport = {
+  fetch: (url, init) => fetch(url, init) as Promise<PartsResponse>,
+  deadline: deadlineScope,
+  sha256Hex: (bytes) => sha256Hex(bytes),
+};
 
 const NKV_MAGIC = 'NKV1';
 const NKV_HEADER_LENGTH = 52;
@@ -199,6 +214,48 @@ export async function fetchRemoteBlob(options: {
   const { token } = deriveSyncCreds(Buffer.from(options.deviceSecretHex, 'hex'));
   const serverUrl = options.serverUrl.replace(/\/+$/, '');
 
+  // A vault over 4 MB is held in parts and its single GET answers 409 (ADR 0078):
+  // read the status, then fetch that one upload's parts. A part the server no
+  // longer keeps (410), or a vault that changed shape in between, starts over,
+  // at most three times.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const single = await fetchSingleBlob(serverUrl, token);
+    if (single === null) return null;
+    if (single !== 'in-parts') return single;
+    const status = await fetchStatusBody(serverUrl, token);
+    if (status === null) return null;
+    const parts = partsStatusOf(status);
+    if (parts === null) continue;
+    const pulled = await pullPartsMobile(partsTransport, serverUrl, token, parts);
+    if (pulled === null) continue;
+    if (!isVaultBlob(pulled.blob)) {
+      throw new Error('Downloaded data is not a NorthKeep vault (corrupt download or wrong server).');
+    }
+    return pulled;
+  }
+  throw new Error('The server copy kept changing during the download. Nothing was changed; sync again.');
+}
+
+async function fetchStatusBody(serverUrl: string, token: string): Promise<Record<string, unknown> | null> {
+  const deadline = deadlineScope();
+  try {
+    const res = await deadline.race(
+      fetch(`${serverUrl}/api/status`, {
+        headers: { authorization: `Bearer ${token}` },
+        redirect: 'error',
+        signal: deadline.signal,
+      }),
+    );
+    if (res.status === 404) return null;
+    if (res.status === 402) throw new SubscriptionRequiredError();
+    if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on status.`);
+    return (await deadline.race(res.json())) as Record<string, unknown>;
+  } finally {
+    deadline.done();
+  }
+}
+
+async function fetchSingleBlob(serverUrl: string, token: string): Promise<VerifiedRemoteBlob | 'in-parts' | null> {
   const deadline = deadlineScope();
   try {
     const res = await deadline.race(
@@ -211,6 +268,7 @@ export async function fetchRemoteBlob(options: {
       }),
     );
     if (res.status === 404) return null;
+    if (res.status === 409) return 'in-parts';
     if (res.status === 402) throw new SubscriptionRequiredError();
     if (!res.ok) throw new Error(`Sync server returned HTTP ${res.status} on pull.`);
 
@@ -571,6 +629,10 @@ export async function uploadPreparedMobile(options: {
   const { token } = deriveSyncCreds(Buffer.from(options.deviceSecretHex, 'hex'));
   const serverUrl = options.serverUrl.replace(/\/+$/, '');
   const { body, sha256: uploadedSha, generation, baseVersion } = options.prepared;
+  if (body.length > SINGLE_REQUEST_MAX) {
+    const result = await pushPartsMobile(partsTransport, serverUrl, token, body, baseVersion, uploadedSha);
+    return result.ok ? { ...result, sha256: uploadedSha, generation } : result;
+  }
 
   const deadline = deadlineScope();
   try {
