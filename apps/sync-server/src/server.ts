@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 import { createHash } from 'node:crypto';
 import http from 'node:http';
-import { handleSync, MAX_BLOB_BYTES, parseAllowlist, type SyncRequest } from './handler.js';
+import { handleSync, parseAllowlist, type SyncRequest } from './handler.js';
+import { capFromEnv, SINGLE_REQUEST_MAX } from './parts.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
 import {
   AlreadySubscribedError,
@@ -25,8 +26,9 @@ import type { Storage } from './storage.js';
  * billing routes are absent and only the allowlist gates.
  */
 
-/** Per-account request cap per 5-minute window (per warm instance). */
-const RATE_LIMIT_DEFAULT = 120;
+/** Per-account request cap per 5-minute window (per warm instance). A 32 MiB
+ * push every 30 s is 130 requests (ADR 0078 D2). */
+const RATE_LIMIT_DEFAULT = 300;
 const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 /** The per-IP ceiling is a multiple of the account cap (several accounts can
  * legitimately share a NAT), but it must exist: keying by token alone is
@@ -39,6 +41,7 @@ export function createSyncServer(storage: Storage, billing: BillingDeps | null =
   // sync server will mint anonymous "active subscriber" attestations the desktop
   // forwards to the connector. Unset ⇒ the endpoint 404s (self-host / no bridge).
   const entitlementSecret = entitlementSecretFromEnv();
+  const capBytes = capFromEnv(process.env.NORTHKEEP_SYNC_MAX_BYTES);
   const rateLimit = rateLimitFromEnv(process.env.NORTHKEEP_SYNC_RATE_LIMIT, RATE_LIMIT_DEFAULT);
   const limiter: RateLimiter | null =
     rateLimit === null ? null : createRateLimiter({ limit: rateLimit, windowMs: RATE_LIMIT_WINDOW_MS });
@@ -142,11 +145,12 @@ export function createSyncServer(storage: Storage, billing: BillingDeps | null =
       path: url.pathname,
       token,
       baseVersion: baseVersion === null || Number.isNaN(baseVersion) ? null : baseVersion,
-      body: method === 'PUT' ? body : null,
+      body: method === 'PUT' || method === 'POST' ? body : null,
     };
     const result = await handleSync(request, storage, {
       allowedTokenHashes,
       subscriptionActive: billing ? (h) => subscriptionActive(h, storage) : undefined,
+      capBytes,
     });
     const isBuffer = result.body instanceof Buffer;
     res.writeHead(result.status, {
@@ -251,7 +255,7 @@ function readBody(req: http.IncomingMessage): Promise<Buffer> {
     let size = 0;
     req.on('data', (chunk: Buffer) => {
       size += chunk.length;
-      if (size > MAX_BLOB_BYTES + 1024) {
+      if (size > SINGLE_REQUEST_MAX + 1024) {
         reject(new Error('body too large'));
         req.destroy();
         return;

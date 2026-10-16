@@ -246,7 +246,7 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   request passes two throttles: a per-IP ceiling (4x the account cap: several
   accounts can share a NAT, but rotating random tokens can't mint fresh keys
   past it, and it caps an unauthenticated webhook flood) and, when a token is
-  presented, a per-account window (default 120 requests per 5 minutes). Over
+  presented, a per-account window (default 300 requests per 5 minutes, raised from 120 in ADR 0078 because a large vault pushes in up to 13 requests). Over
   either → 429 with `Retry-After`. Tune with `NORTHKEEP_SYNC_RATE_LIMIT`
   (account requests per 5-minute window; `0` disables both). Counters live in
   process memory, so on serverless hosting each warm instance counts

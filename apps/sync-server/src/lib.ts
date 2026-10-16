@@ -1,4 +1,5 @@
 export { handleSync, MAX_BLOB_BYTES, type SyncRequest, type SyncResponse } from './handler.js';
+export { DEFAULT_CAP_BYTES, PART_BYTES, SINGLE_REQUEST_MAX } from './parts.js';
 export {
   InMemoryStorage,
   type PutResult,
