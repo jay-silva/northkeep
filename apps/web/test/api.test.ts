@@ -397,7 +397,8 @@ describe('handleApi automatic sync (ADR 0044)', () => {
     const body = res.body as { configured: boolean; size: { bytes: number; cap_bytes: number; warning: boolean } };
     expect(body.configured).toBe(false);
     expect(body.size.bytes).toBe(fs.statSync(path.join(dir, 'vault.nkv')).size);
-    expect(body.size).toMatchObject({ cap_bytes: 4_194_304, warning: false });
+    // No server yet: measured against this build's 32 MiB ceiling (ADR 0078 D2).
+    expect(body.size).toMatchObject({ cap_bytes: 33_554_432, warning: false, over_single_request: false });
   });
 
   it('POST /api/sync/wake is 423 while locked (verification needs the key)', async () => {
@@ -432,7 +433,8 @@ describe('handleApi automatic sync (ADR 0044)', () => {
     expect(res.status).toBe(200);
     expect((res.body as { ok: boolean; version: number })).toMatchObject({ ok: true, version: 1 });
     expect(session.autoSync.status().phase).toBe('synced');
-    // ADR 0067 D4: push and status carry the size against the 4 MiB cap.
+    // ADR 0067 D4: push and status carry the size against the server's cap; this fake
+    // predates ADR 0078 and reports none, which means 4 MiB.
     const size = (res.body as { size: { bytes: number; cap_bytes: number; percent: number; warning: boolean; over_cap: boolean } }).size;
     expect(size).toMatchObject({ cap_bytes: 4_194_304, warning: false, over_cap: false });
     expect(size.bytes).toBeGreaterThan(0);

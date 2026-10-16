@@ -1319,10 +1319,11 @@
     <div id="syncSizeCard" hidden>
       <h3 class="sect">Vault size</h3>
       <div class="card">
-        <div><span class="size-num" id="syncSizeNum"></span> <span class="muted" style="font-size:13px">of 4 MB sync limit</span></div>
-        <div class="size-meter" id="syncSizeMeter" role="meter" aria-label="Vault size against the 4 MB sync limit" aria-valuemin="0" aria-valuemax="100"><i id="syncSizeBar"></i><b></b></div>
-        <div class="size-scale" aria-hidden="true"><span>0</span><span class="mark">3 MB warning</span><span>4 MB</span></div>
+        <div><span class="size-num" id="syncSizeNum"></span> <span class="muted" style="font-size:13px" id="syncSizeCapLine">of the sync limit</span></div>
+        <div class="size-meter" id="syncSizeMeter" role="meter" aria-label="Vault size against the sync limit" aria-valuemin="0" aria-valuemax="100"><i id="syncSizeBar"></i><b></b></div>
+        <div class="size-scale" aria-hidden="true"><span>0</span><span class="mark" id="syncSizeWarnMark"></span><span id="syncSizeCapMark"></span></div>
         <p class="muted" id="syncSizeOk" style="margin:0;font-size:13px"></p>
+        <p class="muted" id="syncSizeParts" style="margin:6px 0 0;font-size:13px" hidden>Your vault is over 4 MB, so your other devices need the latest NorthKeep to keep syncing.</p>
         <div class="size-warn" id="syncSizeWarn" role="status" hidden>
           <strong id="syncSizeWarnHead"></strong>
           <p id="syncSizeWarnLine"></p>
@@ -6677,7 +6678,7 @@
     return String(message).replace(/Review what would change with: northkeep sync pull\.?$/, 'Use Pull to review what would change on ' + devicePlace() + '.');
   }
 
-  // ADR 0067 D4: same units as the CLI (binary MB, so the cap reads "4 MB").
+  // ADR 0067 D4: same units as the CLI (binary MB, so a 4 MiB cap reads "4 MB").
   function sizeText(bytes) {
     if (bytes < 1024 * 1024) return Math.ceil(bytes / 1024) + ' KB';
     const mb = bytes / 1024 / 1024;
@@ -6689,26 +6690,33 @@
     if (!size) { card.hidden = true; return; }
     card.hidden = false;
     const pct = Math.min(100, size.percent);
+    // ADR 0078 D2: the cap comes from the server, so every label reads it from the report.
+    const cap = sizeText(size.cap_bytes);
     $('syncSizeNum').textContent = sizeText(size.bytes);
+    $('syncSizeCapLine').textContent = 'of ' + cap + ' sync limit';
+    $('syncSizeWarnMark').textContent = sizeText(size.cap_bytes * 3 / 4) + ' warning';
+    $('syncSizeCapMark').textContent = cap;
     $('syncSizeBar').style.width = pct + '%';
     const meter = $('syncSizeMeter');
+    meter.setAttribute('aria-label', 'Vault size against the ' + cap + ' sync limit');
     meter.setAttribute('aria-valuenow', String(pct));
-    meter.setAttribute('aria-valuetext', sizeText(size.bytes) + ' of 4 MB');
+    meter.setAttribute('aria-valuetext', sizeText(size.bytes) + ' of ' + cap);
     meter.classList.toggle('warn', size.warning && !size.over_cap);
     meter.classList.toggle('over', size.over_cap);
     const warn = $('syncSizeWarn');
     $('syncSizeOk').hidden = size.warning;
     warn.hidden = !size.warning;
     warn.classList.toggle('over', size.over_cap);
+    $('syncSizeParts').hidden = !size.over_single_request || size.over_cap;
     if (!size.warning) { $('syncSizeOk').textContent = 'Plenty of room. Your vault syncs normally.'; return; }
     const place = devicePlace();
     if (size.over_cap) {
       $('syncSizeWarnHead').textContent = 'Over the sync limit';
-      $('syncSizeWarnLine').textContent = 'Your vault is ' + sizeText(size.bytes) + ' of 4 MB. New changes stay on ' + place +
+      $('syncSizeWarnLine').textContent = 'Your vault is ' + sizeText(size.bytes) + ' of ' + cap + '. New changes stay on ' + place +
         ' and do not reach your other devices until it is smaller. Nothing is lost.';
     } else {
       $('syncSizeWarnHead').textContent = 'Getting close to the limit';
-      $('syncSizeWarnLine').textContent = 'Your vault is ' + sizeText(size.bytes) + ' of 4 MB. Sync still works. Once it reaches 4 MB, new changes stay on ' +
+      $('syncSizeWarnLine').textContent = 'Your vault is ' + sizeText(size.bytes) + ' of ' + cap + '. Sync still works. Once it reaches ' + cap + ', new changes stay on ' +
         place + ' and stop reaching your other devices until it is smaller. Nothing is lost.';
     }
   }

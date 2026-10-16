@@ -79,6 +79,7 @@ vi.mock('expo/fetch', () => ({
 
 vi.mock('@northkeep/sync', () => ({
   MAX_BLOB_BYTES: 50 * 1024 * 1024,
+  SINGLE_REQUEST_MAX: 4 * 1024 * 1024,
   deriveSyncCreds: () => ({ token: 'test-token' }),
   SubscriptionRequiredError: class SubscriptionRequiredError extends Error {},
 }));

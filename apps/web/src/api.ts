@@ -881,7 +881,7 @@ async function dispatch(
     const deviceSecret = deviceSecretOrError();
     const config = loadSyncConfig();
     if (!config) {
-      // The Sync page shows size before a server is set, so the 4 MB limit is no surprise later.
+      // The Sync page shows size before a server is set, so the limit is no surprise later.
       const bytes = fs.existsSync(session.vaultPath) ? fs.statSync(session.vaultPath).size : null;
       return ok({ configured: false, size: bytes === null ? null : vaultSizeReport(bytes) });
     }

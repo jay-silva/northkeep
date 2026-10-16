@@ -37,6 +37,7 @@ export {
   portalUrl,
   AlreadySubscribedError,
   SubscriptionRequiredError,
+  UploadReplacedError,
   LocalChangedError,
   SyncBusyError,
   isAutoSyncVault,
@@ -46,7 +47,14 @@ export {
   type SyncState,
   type SubscriptionStatus,
 } from './client.js';
-export { SIZE_WARNING_BYTES, describeVaultSize, vaultSizeReport, type VaultSizeReport } from './size.js';
+export {
+  SIZE_WARNING_BYTES,
+  SINGLE_REQUEST_MAX,
+  describeVaultSize,
+  effectiveCap,
+  vaultSizeReport,
+  type VaultSizeReport,
+} from './size.js';
 export {
   assertConnectorUrl,
   connectorConfigPath,

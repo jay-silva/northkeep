@@ -417,13 +417,20 @@ describe('sync round-trip (two vaults, shared device secret)', () => {
     expect(s.localChanged).toBe(false);
   });
 
-  it('push and status report the vault size against the cap (ADR 0067 D4)', async () => {
+  it('push and status report the vault size against the cap; a server without cap_bytes means 4 MiB (ADR 0067 D4, 0078 D2)', async () => {
     process.env.NORTHKEEP_HOME = homeA;
     createVault(homeA, 'x');
     setSyncServer(fake.url(), deriveSyncCreds(deviceSecret).accountId);
     const push = await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) });
     const bytes = fs.statSync(vaultPath(homeA)).size;
-    expect(push.size).toEqual({ bytes, cap_bytes: 4 * 1024 * 1024, percent: 0, warning: false, over_cap: false });
+    expect(push.size).toEqual({
+      bytes,
+      cap_bytes: 4 * 1024 * 1024,
+      percent: 0,
+      warning: false,
+      over_cap: false,
+      over_single_request: false,
+    });
     const s = await syncState({ vaultPath: vaultPath(homeA), deviceSecret });
     expect(s.size).toEqual(push.size);
   });
