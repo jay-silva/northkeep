@@ -31,6 +31,13 @@ function missingDbStorage(): Storage {
   return {
     get: fail,
     put: fail,
+    getMeta: fail,
+    createUpload: fail,
+    putPart: fail,
+    readOpenParts: fail,
+    commitUpload: fail,
+    getPart: fail,
+    pruneUploads: fail,
     getSubscription: fail,
     upsertSubscription: fail,
     updateSubscriptionByStripeId: fail,

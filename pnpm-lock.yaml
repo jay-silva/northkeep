@@ -214,6 +214,10 @@ importers:
       stripe:
         specifier: ^17.0.0
         version: 17.7.0
+    devDependencies:
+      '@electric-sql/pglite':
+        specifier: ^0.3.16
+        version: 0.3.16
 
   apps/web:
     dependencies:
