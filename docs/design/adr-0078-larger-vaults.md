@@ -1,6 +1,6 @@
 # Design record: ADR 0078, larger vaults
 
-Status: Proposed 2026-10-16. Short form: SPEC/decisions/0078-larger-vaults.md.
+Status: Accepted 2026-10-16 (Jay). Short form: SPEC/decisions/0078-larger-vaults.md.
 
 ## Measurements (2026-10-16, read-only)
 - Jay's `~/.northkeep/vault.nkv`: 2,265,156 B (2026-09-23 pre-migration copy), 2,601,028 B (2026-09-30 auto-pull backup), 3,444,804 B (2026-10-16, 82% of 4,194,304). 980 live memories; 35 live project documents total 235 KB.

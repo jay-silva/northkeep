@@ -1,6 +1,6 @@
 # ADR 0078: Larger vaults: sync in parts, 32 MB cap
 
-Status: Proposed 2026-10-16 · Review: round 1 NOT CLEARED (compression dropped, commit redesigned); round 2 CLEARED WITH WOUNDS (fixed below)
+Status: Accepted 2026-10-16 (Jay) · Review: round 1 NOT CLEARED (compression dropped, commit redesigned); round 2 CLEARED WITH WOUNDS (fixed below)
 
 ## Context
 Sync sends the whole `.nkv` in one request, capped at 4 MB by Vercel's 4.5 MB body limit (ADR 0051 D4). Jay's vault hit 4.37 MB on 2026-09-21 and, after ADR 0051, 3.44 MB on 2026-10-16, growing about 53 KB a day: past 4 MiB around 2026-10-30.
