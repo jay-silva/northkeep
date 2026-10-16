@@ -59,4 +59,10 @@ describe('Shorten this summary request', () => {
     expect(script).toContain("renderProjectAgentDetail(project.agent_detail)");
     expect(() => new Function(script)).not.toThrow();
   });
+
+  it('announces Copied and moves focus to it, since the button removes itself', () => {
+    const shorten = script.slice(script.indexOf("el('div', 'shorten-offer')"), script.indexOf('statusLinks.appendChild(shorten)'));
+    expect(shorten).toContain("offer.setAttribute('role', 'status')");
+    expect(shorten.indexOf('copied.focus()')).toBeGreaterThan(shorten.indexOf('shorten.remove()'));
+  });
 });
