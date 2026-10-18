@@ -10,7 +10,7 @@ Sync sends the whole `.nkv` in one request, capped at 4 MB by Vercel's 4.5 MB bo
 - D2: The cap becomes 32 MiB of ciphertext, set by server config, warning at 75%. Clients use the smaller of the server's cap and a compiled ceiling, so going past 32 MiB needs a client release. A fixed 4 MiB single-request limit stays. Status reads metadata only. The per-account limit rises to 300 requests per 5 minutes.
 - D3: Older builds keep syncing below 4 MiB. Above it they refuse locally and stop syncing; the newer device says the vault passed 4 MB and other devices need the update.
 - D4: The sync lock is refreshed after each part, so a slow transfer is never treated as abandoned.
-- D5: Before shipping, a 32 MiB vault opens, edits, pushes and pulls on Jay's iPhone, timed and recorded here.
+- D5 (Jay, 2026-10-18): no 32 MiB phone test; confirmed when his vault first syncs past 4 MiB.
 
 ## Consequences
 - Easier: 9.7 times today's vault; no format change.
