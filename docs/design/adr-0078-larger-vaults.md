@@ -43,9 +43,12 @@ Compression (oracle) and the Free up space button with keep 3 (it would falsify 
 - Server against real Postgres (new harness): a replacing upload during commit yields 409 with nothing installed; commit with stale base conflicts and leaves parts of the winning version intact; missing, extra or reordered parts fail the hash; cross-account part PUT refused; a second upload deletes the first; status never selects blob_b64; old single PUT and parts commits interleave on one counter.
 - Client: vaults at most 4 MiB use the single route; push and pull of a 20 MiB throwaway vault in parts; a pull spanning two pushes finishes on one version; lock is not stolen during a slow transfer (fake clock).
 - E2E: two throwaway devices sync a 20 MiB vault; a pre-0078 client against the new server syncs under 4 MiB and fails cleanly over it.
-- Device (D5): 32 MiB vault opens, edits, pushes and pulls on Jay's iPhone, timed, with memory noted, recorded in the ADR.
+- Device (D5): replaced 2026-10-18, see "D5 changed" below.
 
 ## Build notes (server, 2026-10-16)
 - Statements are in apps/sync-server/src/neon-storage.ts; the handler routes in apps/sync-server/src/handler.ts. Tests: apps/sync-server/test/parts.test.ts runs every case on the in-memory store and on NeonStorage over PGlite.
 - Races checked on PostgreSQL 16.15 with two psql sessions running the exact statements NeonStorage sends: a commit that waits on a replacing upload returns claimed 0 and installs nothing; a replace that waits on a commit leaves the upload committed and current; a commit whose blob row is held by a single PUT at the same base claims the upload but installs nothing (bumped null), and the single PUT's version stands.
 - Mutation check: removing the version condition from the commit makes the stale-base test fail on Postgres.
+
+## D5 changed (2026-10-18)
+Shipped in 0.27.0 (Mac and iPhone build 35). Jay chose not to run the 32 MiB iPhone test: it would mean moving his phone off his real vault and adding a second sync account (a subscription, or a change to the live server's free list). The parts path is covered by the 20 MiB client, phone-transport and e2e tests against the real handler. The device check becomes his own vault's first sync past 4 MiB on the iPhone (expected about 2026-10-30). Not checked on a device: memory use near 32 MiB.
