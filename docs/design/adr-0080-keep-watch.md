@@ -27,7 +27,7 @@ mk=/var/db/ai.northkeep.keepwatch
 t5() { /usr/bin/perl -e 'alarm shift; exec @ARGV or exit 127' 5 "$@"; }
 id=$(/usr/bin/stat -f %i:%m "$mk" 2>/dev/null) || id=x
 off() {
-  t5 /usr/bin/pmset -a disablesleep 0
+  if [ -x /usr/bin/perl ]; then t5 /usr/bin/pmset -a disablesleep 0; else /usr/bin/pmset -a disablesleep 0; fi
   s=$(t5 /usr/bin/pmset -g | /usr/bin/awk '/^System-wide power settings:/{f=1;next} /^[^ \t]/{f=0} f&&$1=="SleepDisabled"{print $2;exit}')
   [ "$s" = 0 ] && [ "$(/usr/bin/stat -f %i:%m "$mk" 2>/dev/null)" = "$id" ] && /bin/rm -f "$mk"
   exit 0
@@ -54,7 +54,7 @@ case "$t" in ''|*[!0-9]*) off ;; esac
 exit 0
 ```
 Rules the script keeps:
-- Every external call runs under a 5-second alarm; a timeout or error leads to `off`. The ceiling, which needs no external call, is checked first.
+- Every external call except the local `date` and marker `stat` runs under a 5-second perl alarm; a timeout or error leads to `off`. If `/usr/bin/perl` is ever missing, every check fails and `off` sends `disablesleep 0` without the alarm, so a future macOS without perl still turns off. Turn-on refuses when perl is missing. The ceiling, which needs no external call, is checked first.
 - Every path to "stay on" requires each check to read a well-formed passing value; anything else calls `off`.
 - `off` always runs `disablesleep 0`. It removes the marker only on positive evidence: `SleepDisabled 0` read from the System-wide section, and the marker's inode and mtime unchanged since this run read it, so a turn-on that rewrote the marker meanwhile keeps its marker. A bad read leaves the marker, and the next run tries again.
 - The script never reads `pmset -g` to decide whether to stay on, so a strange or empty read can only cause another `disablesleep 0`.
