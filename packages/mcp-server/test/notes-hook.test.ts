@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KDF_INTERACTIVE, NOTES_NOTICE, Vault, deriveMasterKey, deriveNotesKey, generateDeviceSecret, planNote, type NoteRequest, type NoteView, type NotesBlock } from '@northkeep/core';
 import { NotesFile, notesFilePath } from '../src/notes-store.js';
-import { notesOwnerView, parseHookInput, renderHook, runNotesHook } from '../src/notes-cli.js';
+import { HOOK_TEXT_MAX_CHARS, notesOwnerView, parseHookInput, renderHook, runNotesHook } from '../src/notes-cli.js';
 import { keychainSetMasterKey, resetMasterKeyStoreProbe } from '../src/keychain.js';
 
 const PASSPHRASE = 'adr 0079 notes hook passphrase';
@@ -133,6 +133,24 @@ describe('ADR 0079 hook output per host', () => {
     const output = `{"additional_context":${JSON.stringify(CONTEXT)}}`;
     expect(render('cursor', { conversation_id: 'conv-456', hook_event_name: 'sessionStart' })).toEqual({ output, shown: [] });
     expect(render('cursor', { conversation_id: 'conv-456', hook_event_name: 'postToolUse' })).toEqual({ output, shown: ['note-3', 'note-4', 'note-2'] });
+  });
+
+  it('cuts each claim and note to 280 characters with an ellipsis, and keeps the worst case under 7,500 characters', () => {
+    const request = parseHookInput('codex', stdin({ session_id: 'thr_123', hook_event_name: 'PostToolUse' }))!;
+    const long = `${'y'.repeat(278)}\u{1F600}tail${'z'.repeat(700)}`;
+    const one: NotesBlock = { notes: [{ ...note, text: long }], notes_count: 1, active_claims: [{ ...claim, text: long }], notes_notice: NOTES_NOTICE };
+    const lines = JSON.parse(renderHook(request, 'rental', one, roots).output).hookSpecificOutput.additionalContext.split('\n');
+    expect(HOOK_TEXT_MAX_CHARS).toBe(280);
+    expect(lines.slice(1, 3)).toEqual([
+      `- Claim: cursor holds "bug-1234" until 2026-10-21T13:00:00.000Z (${'y'.repeat(278)}\u{1F600}\u2026)`,
+      `- Note from codex: ${'y'.repeat(278)}\u{1F600}\u2026`,
+    ]);
+
+    const claims = Array.from({ length: 10 }, (_, i) => ({ ...claim, id: `c${i}`, from: 'claude-desktop', subject: 's'.repeat(80), text: 'x'.repeat(1000) }));
+    const replies = Array.from({ length: 5 }, (_, i) => ({ ...reply, id: `r${i}`, from: 'claude-desktop', to: 'claude-code', text: 'x'.repeat(1000) }));
+    const worst: NotesBlock = { notes: replies, notes_count: 200, active_claims: claims, notes_notice: NOTES_NOTICE };
+    const context: string = JSON.parse(renderHook(request, 'rental', worst, new Map([['note-1', 'q'.repeat(1000)]])).output).hookSpecificOutput.additionalContext;
+    expect(context.length).toBeLessThan(7_500);
   });
 
   it('quotes a root by code point, so an emoji at the cut is not split', () => {

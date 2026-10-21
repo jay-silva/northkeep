@@ -90,6 +90,13 @@ export function parseHookInput(host: string, stdin: string): HookRequest | null 
 }
 
 const ROOT_QUOTE_CHARS = 60;
+/** Per note in hook output, so ten claims and five notes stay under Codex's 2,500-token context limit; tool results keep full text. */
+export const HOOK_TEXT_MAX_CHARS = 280;
+
+function clip(text: string): string {
+  const points = Array.from(text);
+  return points.length <= HOOK_TEXT_MAX_CHARS ? text : `${points.slice(0, HOOK_TEXT_MAX_CHARS - 1).join('')}\u2026`;
+}
 
 function quoteRoot(text: string | undefined): string {
   if (text === undefined || text === '') return '';
@@ -111,10 +118,11 @@ function line(n: NoteView, rootText?: string): string {
  * best effort. `roots` maps note ids to their text, for reply context.
  */
 export function renderHook(request: HookRequest, project: string, block: NotesBlock, roots: ReadonlyMap<string, string>): { output: string; shown: string[] } {
+  const short = (n: NoteView): NoteView => ({ ...n, text: clip(n.text) });
   const context = [
     `NorthKeep notes for project "${project}":`,
-    ...block.active_claims.map((n) => line(n)),
-    ...block.notes.map((n) => line(n, n.thread === undefined ? undefined : roots.get(n.thread))),
+    ...block.active_claims.map((n) => line(short(n))),
+    ...block.notes.map((n) => line(short(n), n.thread === undefined ? undefined : roots.get(n.thread))),
     ...(block.notes_count > block.notes.length ? [`(${block.notes_count - block.notes.length} older unseen notes not shown)`] : []),
     NOTES_NOTICE,
   ].join('\n');
@@ -133,7 +141,7 @@ export interface NotesHookOptions {
   host: string;
   /** Raw hook input from stdin: JSON with the host's id field and hook_event_name. */
   stdin: string;
-  /** Skip when this reader showed notes less than this many seconds ago. */
+  /** Skip when this reader's last recorded check, with or without notes, was less than this many seconds ago. */
   minIntervalSeconds?: number;
   now?: Date;
 }
@@ -144,7 +152,7 @@ function stampPath(readerKey: string): string {
   return path.join(northkeepHome(), 'notes-hook', name);
 }
 
-/** True when the last showing was recent enough to skip. The stamp holds no content. */
+/** True when the last recorded check was recent enough to skip. The stamp holds no content. */
 function throttled(readerKey: string, seconds: number, now: Date): boolean {
   try {
     return now.getTime() - fs.statSync(stampPath(readerKey)).mtimeMs < seconds * 1000;
