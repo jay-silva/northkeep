@@ -613,7 +613,7 @@ describe('ADR 0079 replies, receipts and waits', () => {
     const read = await call(desk, 'project_get', { project: 'rental' });
     const waited = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
     expect([read.isError, read.text]).toEqual([true, 'Name masking failed (NORTHKEEP_REDACT_TIER=2); nothing was returned. Start the local model or use Tier 1 or 3.']);
-    expect([waited.isError, waited.json.timed_out, waited.json.notes, waited.json.notes_note]).toEqual([false, true, undefined, WITHHELD]);
+    expect([waited.isError, waited.json.timed_out, waited.json.notes, waited.json.withheld, waited.json.notes_note]).toEqual([false, true, undefined, { notes: 1, claims: 0 }, WITHHELD]);
     expect(shownRows()).toEqual([]);
 
     delete process.env.NORTHKEEP_REDACT_TIER;
@@ -690,7 +690,7 @@ describe('ADR 0079 replies, receipts and waits', () => {
   });
 });
 
-const WITHHELD = 'Notes from other AI apps were withheld because they could not be masked under the current redaction tier.';
+const WITHHELD = 'Some notes or claims from other AI apps were withheld because they could not be masked under the current redaction tier.';
 
 describe('ADR 0079 notes masked apart from the project they ride on', () => {
   const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -700,7 +700,7 @@ describe('ADR 0079 notes masked apart from the project they ride on', () => {
   });
 
   /** A loopback name model: finds `find(text)`, and gives a reply the strict reader refuses for any text holding POISON. */
-  async function startNameModel(find: (text: string) => string[] = () => []): Promise<void> {
+  async function startNameModel(find: (text: string) => string[] = () => [], delayMs: (text: string) => number = () => 0): Promise<void> {
     const model = http.createServer((req, res) => {
       let body = '';
       req.on('data', (chunk) => { body += chunk; });
@@ -710,7 +710,8 @@ describe('ADR 0079 notes masked apart from the project they ride on', () => {
         const prompt: string = JSON.parse(body).prompt ?? '';
         const text = prompt.slice(prompt.lastIndexOf('\nText:\n') + 7);
         const entities = find(text).map((name) => ({ text: name, kind: 'person' }));
-        res.end(JSON.stringify({ response: prompt.includes('POISON') ? '{"result":[]}' : JSON.stringify({ entities }) }));
+        const reply = JSON.stringify({ response: prompt.includes('POISON') ? '{"result":[]}' : JSON.stringify({ entities }) });
+        setTimeout(() => res.end(reply), delayMs(text));
       });
     });
     await new Promise<void>((resolve) => model.listen(0, '127.0.0.1', resolve));
@@ -734,7 +735,9 @@ describe('ADR 0079 notes masked apart from the project they ride on', () => {
     process.env.NORTHKEEP_REDACT_TIER = '2';
     for (const tool of ['project_get', 'project_resume', 'project_get']) {
       const read = await call(desk, tool, { project: 'rental' });
-      expect([tool, read.isError, read.text.includes('A first rental.'), read.json?.notes, read.json?.notes_note]).toEqual([tool, false, true, undefined, WITHHELD]);
+      expect([tool, read.isError, read.text.includes('A first rental.'), read.json?.notes, read.json?.notes_count, read.json?.withheld, read.json?.notes_note]).toEqual([
+        tool, false, true, [], 1, { notes: 1, claims: 0 }, WITHHELD,
+      ]);
     }
     expect(shownRows()).toEqual([]);
     const reads = callLog().filter((r) => r.tool === 'project_get' && r.phase === 'done');
@@ -768,7 +771,7 @@ describe('ADR 0079 notes masked apart from the project they ride on', () => {
 
     process.env.NORTHKEEP_REDACT_TIER = '2';
     const read = await call(desk, 'project_get', { project: 'rental' });
-    expect([read.isError, read.text.includes('A first rental.'), read.json?.active_claims, read.json?.notes_note]).toEqual([false, true, undefined, WITHHELD]);
+    expect([read.isError, read.text.includes('A first rental.'), read.json?.active_claims, read.json?.withheld, read.json?.notes_note]).toEqual([false, true, [], { notes: 0, claims: 1 }, WITHHELD]);
 
     delete process.env.NORTHKEEP_REDACT_TIER;
     const clean = await call(desk, 'project_get', { project: 'rental' });
@@ -783,11 +786,11 @@ describe('ADR 0079 notes masked apart from the project they ride on', () => {
 
     process.env.NORTHKEEP_REDACT_TIER = '2';
     const first = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
-    expect([first.isError, first.json.timed_out, first.json.notes, first.json.notes_note]).toEqual([false, true, undefined, WITHHELD]);
+    expect([first.isError, first.json.timed_out, first.json.notes, first.json.withheld, first.json.notes_note]).toEqual([false, true, undefined, { notes: 1, claims: 0 }, WITHHELD]);
     expect(first.json.waited_ms).toBeGreaterThanOrEqual(1000);
     expect(shownRows()).toEqual([]);
     const second = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
-    expect([second.isError, second.json.timed_out, second.json.notes_note]).toEqual([false, true, WITHHELD]);
+    expect([second.isError, second.json.timed_out, second.json.withheld, second.json.notes_note]).toEqual([false, true, { notes: 1, claims: 0 }, WITHHELD]);
     expect(second.json.waited_ms).toBeGreaterThanOrEqual(1000);
     expect(shownRows()).toEqual([]);
 
@@ -828,6 +831,158 @@ describe('ADR 0079 notes masked apart from the project they ride on', () => {
     const waited = await waiting;
     expect([waited.isError, waited.json.timed_out, waited.json.notes?.map((n: any) => n.text)]).toEqual([false, undefined, ['Tests are green.']]);
     expect(shownRows().map((r) => r.note_id)).toEqual([later.id]);
+  }, 15_000);
+});
+
+describe('ADR 0079 fix round 4: each note and claim masked on its own', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const SOME_WITHHELD = 'Some notes or claims from other AI apps were withheld because they could not be masked under the current redaction tier.';
+  const models: http.Server[] = [];
+  afterEach(async () => {
+    for (const m of models.splice(0)) await new Promise((resolve) => m.close(resolve));
+  });
+
+  /** Loopback name model: a reply the strict reader refuses for any text holding POISON, and a slow reply for SLOW. */
+  async function startNameModel(): Promise<void> {
+    const model = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        res.setHeader('content-type', 'application/json');
+        if (req.url === '/api/tags') return res.end(JSON.stringify({ models: [{ name: 'llama3.2:3b' }] }));
+        const prompt: string = JSON.parse(body).prompt ?? '';
+        const reply = JSON.stringify({ response: prompt.includes('POISON') ? '{"result":[]}' : JSON.stringify({ entities: [] }) });
+        setTimeout(() => res.end(reply), prompt.includes('SLOW') ? 2500 : 0);
+      });
+    });
+    await new Promise<void>((resolve) => model.listen(0, '127.0.0.1', resolve));
+    models.push(model);
+    process.env.NORTHKEEP_OLLAMA_URL = `http://127.0.0.1:${(model.address() as { port: number }).port}`;
+  }
+  const notesKey = () => deriveNotesKey(Buffer.from(process.env.NORTHKEEP_MASTER_KEY!, 'hex'));
+  const shownRows = () => {
+    const file = NotesFile.open(notesFilePath(vaultPath)!, notesKey());
+    try { return file.shownRows('rental').map((r) => [r.note_id, r.host]); } finally { file.close(); }
+  };
+  const callLog = (tool: string): any[] => fs.readFileSync(path.join(home, 'mcp-calls.log'), 'utf8').trim().split('\n')
+    .map((line) => JSON.parse(line)).filter((r) => r.tool === tool && r.phase === 'done');
+
+  it('a Tier 2 read with one unreadable note delivers the readable one, counts both, and records only it', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    await createProject(cursor);
+    const poison = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'POISON the name model' });
+    const clean = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Tests are green.' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const read = await call(desk, 'project_get', { project: 'rental' });
+    expect([read.isError, read.json.notes.map((n: any) => [n.id, n.text]), read.json.notes_count, read.json.withheld, read.json.notes_note]).toEqual([
+      false, [[clean.json.note.id, 'Tests are green.']], 2, { notes: 1, claims: 0 }, SOME_WITHHELD,
+    ]);
+    expect(read.text).not.toContain(poison.json.note.id);
+    expect(shownRows()).toEqual([[clean.json.note.id, 'claude-desktop']]);
+    expect(callLog('project_get').map((r) => r.result_ids)).toEqual([[clean.json.note.id]]);
+  });
+
+  it('a readable active claim is delivered beside an unreadable note', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    await createProject(cursor);
+    const claim = await call(cursor, 'project_note', { project: 'rental', kind: 'claim', subject: 'lock.ts', hours: 2 });
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'POISON the name model' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const read = await call(desk, 'project_get', { project: 'rental' });
+    expect([read.isError, read.json.notes, read.json.active_claims.map((c: any) => [c.id, c.subject]), read.json.withheld, read.json.notes_note]).toEqual([
+      false, [], [[claim.json.note.id, 'lock.ts']], { notes: 1, claims: 0 }, SOME_WITHHELD,
+    ]);
+    expect(shownRows()).toEqual([]);
+  });
+
+  it('an unreadable claim is withheld on its own, still counts, and still refuses a second claim', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'claim', subject: 'POISON subject', hours: 2 });
+    const clean = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Tests are green.' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const read = await call(desk, 'project_get', { project: 'rental' });
+    expect([read.isError, read.json.notes.map((n: any) => n.text), read.json.active_claims, read.json.withheld, read.json.notes_note]).toEqual([
+      false, ['Tests are green.'], [], { notes: 0, claims: 1 }, SOME_WITHHELD,
+    ]);
+    expect(shownRows()).toEqual([[clean.json.note.id, 'claude-desktop']]);
+
+    // Under any tier project_note refuses to save text, so the claim is checked at Tier 0.
+    delete process.env.NORTHKEEP_REDACT_TIER;
+    const second = await call(desk, 'project_note', { project: 'rental', kind: 'claim', subject: 'poison SUBJECT' });
+    expect([second.isError, second.json.error.code]).toEqual([true, 'claim_held']);
+    const note = await call(desk, 'project_note', { project: 'rental', kind: 'note', text: 'Leaving it alone.' });
+    expect(note.json.claims_active).toBe(1);
+  });
+
+  it('a wait skips an unreadable note and returns a readable reply that arrives 500 ms later', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'POISON the name model' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const waiting = call(waiter, 'project_wait', { project: 'rental', seconds: 5 });
+    await sleep(500);
+    const file = NotesFile.open(notesFilePath(vaultPath)!, notesKey());
+    const reply = file.insert('rental', randomUUID(), 'k-cursor', (existing) => planNote({ kind: 'note', text: 'Tests are green.' }, { host: 'cursor', sender_key: 'k-cursor' }, existing, new Date())).note;
+    file.close();
+    const waited = await waiting;
+    expect([waited.isError, waited.json.notes.map((n: any) => n.text), waited.json.notes_count, waited.json.withheld, waited.json.notes_note]).toEqual([
+      false, ['Tests are green.'], 2, { notes: 1, claims: 0 }, SOME_WITHHELD,
+    ]);
+    expect(waited.json.waited_ms).toBeGreaterThanOrEqual(400);
+    expect(waited.json.waited_ms).toBeLessThan(1500);
+    expect(shownRows()).toEqual([[reply.id, 'claude-code']]);
+    expect(callLog('project_wait').map((r) => r.result_ids)).toEqual([[reply.id]]);
+  }, 15_000);
+
+  it('a wait cancelled while its note is being masked leaves no receipt', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'SLOW to mask' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const controller = new AbortController();
+    const waiting = waiter.callTool({ name: 'project_wait', arguments: { project: 'rental', seconds: 10 } }, undefined, { signal: controller.signal });
+    await sleep(500);
+    controller.abort();
+    await expect(waiting).rejects.toThrow();
+    await sleep(3000);
+    expect(shownRows()).toEqual([]);
+    expect(callLog('project_wait').map((r) => [r.ok, r.error, r.result_ids])).toEqual([[false, 'project_error', undefined]]);
+  }, 15_000);
+
+  it('a project read cancelled while its note is being masked leaves no receipt, and the note comes up again', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    await createProject(cursor);
+    const sent = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'SLOW to mask' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const controller = new AbortController();
+    const reading = desk.callTool({ name: 'project_get', arguments: { project: 'rental' } }, undefined, { signal: controller.signal });
+    await sleep(500);
+    controller.abort();
+    await expect(reading).rejects.toThrow();
+    await sleep(3000);
+    expect(shownRows()).toEqual([]);
+
+    delete process.env.NORTHKEEP_REDACT_TIER;
+    expect((await call(desk, 'project_get', { project: 'rental' })).json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
   }, 15_000);
 });
 

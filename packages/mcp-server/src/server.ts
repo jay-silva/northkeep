@@ -71,6 +71,7 @@ import {
   maskReturnParts,
   maskReturnPayload,
   parseReturnRedactionTier,
+  type MaskOutcome,
   type ReturnTier,
 } from './return-mask.js';
 import { LOCKED_MESSAGE, resolveMasterKey } from './key.js';
@@ -399,10 +400,10 @@ interface RunOutcome {
   result_id?: string;
   result_ids?: string[];
   disclosed_scopes?: string[];
-  /** Notes recorded as shown for this result; run takes the record back if the app never receives it. */
-  delivered?: { project: string; ids: string[] };
-  /** Notes riding on a project result, masked apart from it so they never fail it (ADR 0072 D3). */
-  rider?: { block: NotesBlock; ids: string[] };
+  /** Rendered notes in the payload; run records them as shown once the call is logged. */
+  shown?: { project: string; ids: string[] };
+  /** Unseen notes and active claims riding on a project result, each masked on its own so none fails it (ADR 0072 D3). */
+  rider?: { project: string; block: NotesBlock };
   /** NorthKeep's own one-line notices about notes; no user text, so never masked. */
   notices?: { notes_note?: string; notes_reset_note?: string };
   /** The payload is already masked (project_wait masks each block it finds); degraded as for Tier 3. */
@@ -425,6 +426,8 @@ interface RunOptions {
    * envelope and before masking, so work that waits holds no other app up (ADR 0079 D3).
    */
   outside?: (checked: RunOutcome, tier: ReturnTier) => Promise<RunOutcome>;
+  /** The call's cancellation: a cancelled call records no note as shown. */
+  signal?: AbortSignal;
 }
 
 const LOG_UNWRITABLE = 'NorthKeep could not write its call log, so nothing was done.';
@@ -562,20 +565,18 @@ async function run(
   // row records the true outcome (a Tier-2 refusal is never logged as ok).
   let payload = outcome.payload;
   let degraded = outcome.premasked?.degraded ?? false;
-  let delivered = outcome.delivered;
+  let shown = outcome.shown;
   let resultIds = outcome.result_ids;
-  let notices = outcome.notices ?? {};
   const own = options.mask !== 'none' && outcome.premasked === undefined ? { payload, kind: options.mask } : null;
   const rider = outcome.rider;
+  // One call, so a name found in any part is masked in all of them (code review F2).
   const masked = await maskReturnParts(
-    [...(own ? [own] : []), ...(rider ? [{ payload: rider.block, kind: 'project' as const }] : [])],
+    [...(own ? [own] : []), ...(rider ? notesParts(rider.block) : [])],
     tier,
     returnPseudonyms,
   );
   const ownMasked = own ? masked.shift()! : null;
-  const riderMasked = rider ? masked.shift()! : null;
   if (ownMasked?.failed) {
-    undoShown(vaultPath, ctx, delivered);
     if (options.kind === 'write') {
       // The write landed (code review F3): say so, show nothing, and log
       // the true outcome, so an app does not retry a change that is saved.
@@ -597,18 +598,14 @@ async function run(
     payload = ownMasked.payload;
     degraded = ownMasked.degraded;
   }
-  if (rider && riderMasked) {
-    if (riderMasked.failed) {
-      // ADR 0072 D3: a note never fails the call it rides on. It is not shown, so it keeps no receipt.
-      undoShown(vaultPath, ctx, delivered);
-      delivered = undefined;
-      notices = { ...notices, notes_note: NOTES_WITHHELD_NOTE };
-    } else {
-      payload = { ...(payload as Record<string, unknown>), ...(riderMasked.payload as Record<string, unknown>) };
-      degraded ||= riderMasked.degraded;
-      resultIds = [...(resultIds ?? []), ...rider.ids];
-    }
+  if (rider) {
+    const delivered = renderNotes(rider.block, masked, 0);
+    payload = { ...(payload as Record<string, unknown>), ...delivered.fields };
+    degraded ||= delivered.degraded;
+    resultIds = [...(resultIds ?? []), ...delivered.ids];
+    shown = { project: rider.project, ids: delivered.noteIds };
   }
+  const notices = outcome.notices ?? {};
   if (Object.keys(notices).length > 0) payload = { ...(payload as Record<string, unknown>), ...notices };
   if (degraded) {
     payload = { ...(payload as Record<string, unknown>), redaction_note: TIER3_DEGRADED_NOTE };
@@ -627,7 +624,6 @@ async function run(
     ...(degraded ? { redaction_degraded: true } : {}),
   });
   if (!logged) {
-    undoShown(vaultPath, ctx, delivered);
     // A saved write says so, with no content: an error would invite a retry
     // of a write that landed, and content would be a disclosure with no
     // ledger row. A read discloses nothing (Jay decision 5).
@@ -639,6 +635,10 @@ async function run(
       });
     }
     return err(LOG_INCOMPLETE_READ);
+  }
+  if (shown !== undefined && !recordShown(vaultPath, ctx, shown, options.signal)) {
+    const fields = payload as Record<string, unknown>;
+    if (fields.notes_note === undefined) payload = { ...fields, notes_note: NOTES_UNRECORDED_NOTE };
   }
   return ok(payload);
 }
@@ -662,7 +662,8 @@ const NOTES_UNREADABLE_NOTE = 'Notes from other AI apps could not be read on thi
 const NOTES_RESET_NOTE = 'The notes file did not match this vault, so earlier notes and claims were cleared.';
 
 const NOTES_UNRECORDED_NOTE = 'These notes could not be marked as shown, so they may show again on your next read.';
-const NOTES_WITHHELD_NOTE = 'Notes from other AI apps were withheld because they could not be masked under the current redaction tier.';
+const NOTES_WITHHELD_NOTE =
+  'Some notes or claims from other AI apps were withheld because they could not be masked under the current redaction tier.';
 const NO_IDS: ReadonlySet<string> = new Set();
 
 /** Set when a note's address is neither all nor a short name, so the sender does not wait on an app that may not exist. */
@@ -671,53 +672,83 @@ function toNote(to: string): string | undefined {
   return `No known app is named "${to}"; only an app that reports that name will see this note.`;
 }
 
-interface Delivery {
-  /** Null when there is no unseen note and no active claim. */
-  block: NotesBlock | null;
-  /** Ids of the notes in block.notes; empty when only claims are new. */
-  shown: string[];
-  /** False when the shown rows could not be written; the notes then come up again. */
-  recorded: boolean;
-  /** A note in `skip` is still unseen by this session. */
-  skipped: boolean;
+/**
+ * This session's unseen notes, each with its receipts, and the active claims;
+ * nothing is recorded here. `skipped` counts unseen notes left out because
+ * they are in `skip`, and block.notes_count includes them.
+ */
+function unseenNotes(
+  file: NotesFile, project: string, ctx: ConnContext, thread: string | undefined, now: Date, skip: ReadonlySet<string> = NO_IDS,
+): { block: NotesBlock | null; skipped: number } {
+  const rows = file.read(project);
+  const receipts = file.shownRows(project);
+  const reader = { readerKey: ctx.session_id, host: canonicalHost(ctx.host), ...(thread !== undefined ? { thread } : {}) };
+  const mine = new Set(receipts.filter((r) => r.reader_key === ctx.session_id).map((r) => r.note_id));
+  const { block } = notesForReader(rows, { ...reader, shown: skip.size === 0 ? mine : new Set([...mine, ...skip]) }, now);
+  const unseen = skip.size === 0 ? (block?.notes_count ?? 0) : (notesForReader(rows, { ...reader, shown: mine }, now).block?.notes_count ?? 0);
+  const skipped = unseen - (block?.notes_count ?? 0);
+  if (block === null) return { block, skipped };
+  const byId = new Map(rows.map((n) => [n.id, n]));
+  const notes = block.notes.map((view) => ({ ...view, seen_by: seenBy(byId.get(view.id)!, receipts) }));
+  return { block: { ...block, notes, notes_count: unseen }, skipped };
+}
+
+/** One masking part per note and per claim, so each is withheld on its own. */
+function notesParts(block: NotesBlock): { payload: unknown; kind: 'project' }[] {
+  return [...block.notes, ...block.active_claims].map((payload) => ({ payload, kind: 'project' as const }));
+}
+
+/** What a notes block delivers once masked: only rendered items reach `fields`, `ids` and `noteIds`. */
+interface RenderedNotes {
+  fields: Record<string, unknown>;
+  /** Rendered notes, the only ones given a receipt. */
+  noteIds: string[];
+  /** Rendered notes and claims, for the call log's result_ids. */
+  ids: string[];
+  /** Notes whose masking failed, for the wait's skip set. */
+  failedNoteIds: string[];
+  failedClaimIds: string[];
+  degraded: boolean;
 }
 
 /**
- * This session's unseen notes, each with its receipts, recorded as shown. The
- * read and the record are two statements, not one transaction: markShown
- * skips a note pruned between them, and a failed record is reported, never fatal.
+ * Builds the rider from `masked`, the outcomes of notesParts(block) in order.
+ * notes_count, notes_notice, withheld and notes_note are NorthKeep's own and
+ * added unmasked. `skipped` notes count as withheld.
  */
-function deliverNotes(
-  file: NotesFile, project: string, ctx: ConnContext, thread: string | undefined, now: Date, skip: ReadonlySet<string> = NO_IDS,
-): Delivery {
-  const rows = file.read(project);
-  const receipts = file.shownRows(project);
-  const host = canonicalHost(ctx.host);
-  const mine = new Set(receipts.filter((r) => r.reader_key === ctx.session_id).map((r) => r.note_id));
-  const skipped = rows.some((n) => skip.has(n.id) && !mine.has(n.id));
-  const passed = skip.size === 0 ? mine : new Set([...mine, ...skip]);
-  const { block, shown } = notesForReader(rows, { readerKey: ctx.session_id, host, shown: passed, ...(thread !== undefined ? { thread } : {}) }, now);
-  if (block === null) return { block, shown, recorded: true, skipped };
-  const byId = new Map(rows.map((n) => [n.id, n]));
-  const notes = block.notes.map((view) => ({ ...view, seen_by: seenBy(byId.get(view.id)!, receipts) }));
-  let recorded = true;
-  try {
-    file.markShown(project, ctx.session_id, host, shown, now);
-  } catch {
-    recorded = false;
+function renderNotes(block: NotesBlock, masked: readonly MaskOutcome[], skipped: number): RenderedNotes {
+  const items = [...block.notes, ...block.active_claims];
+  const notes: unknown[] = [];
+  const claims: unknown[] = [];
+  const out: RenderedNotes = { fields: {}, noteIds: [], ids: [], failedNoteIds: [], failedClaimIds: [], degraded: false };
+  for (const [i, item] of items.entries()) {
+    const isNote = i < block.notes.length;
+    const outcome = masked[i]!;
+    if (outcome.failed) {
+      (isNote ? out.failedNoteIds : out.failedClaimIds).push(item.id);
+      continue;
+    }
+    (isNote ? notes : claims).push(outcome.payload);
+    if (isNote) out.noteIds.push(item.id);
+    out.ids.push(item.id);
+    out.degraded ||= outcome.degraded;
   }
-  return { block: { ...block, notes }, shown, recorded, skipped };
+  const withheld = { notes: out.failedNoteIds.length + skipped, claims: out.failedClaimIds.length };
+  out.fields = {
+    notes, notes_count: block.notes_count, active_claims: claims, notes_notice: block.notes_notice,
+    ...withheldFields(withheld),
+  };
+  return out;
 }
 
-/** The ids a notes block discloses, for the call log's result_ids. */
-function blockIds(block: NotesBlock | null): string[] {
-  return block === null ? [] : [...new Set([...block.notes, ...block.active_claims].map((n) => n.id))];
+function withheldFields(withheld: { notes: number; claims: number }): Record<string, unknown> {
+  return withheld.notes + withheld.claims === 0 ? {} : { withheld, notes_note: NOTES_WITHHELD_NOTE };
 }
 
 /**
  * Adds this session's unseen notes and the active claims to a successful
- * project result (ADR 0072 D3). Notes never fail the call they ride on: a
- * notes fault becomes a one-line note in the result.
+ * project result (ADR 0072 D3), unmasked and unrecorded: run masks each item
+ * and records the ones it delivers. A notes fault becomes a one-line note.
  */
 function attachNotes(outcome: RunOutcome, vault: Vault, notes: NotesAccess, project: string, ctx: ConnContext): RunOutcome {
   const payload = outcome.payload;
@@ -726,15 +757,11 @@ function attachNotes(outcome: RunOutcome, vault: Vault, notes: NotesAccess, proj
     const file = notes.open();
     const live = new Set(vault.scopes().map(parseProjectSlug).filter((slug): slug is string => slug !== null));
     file.keepOnly(live);
-    const { block, shown, recorded } = deliverNotes(file, project, ctx, undefined, new Date());
+    const { block } = unseenNotes(file, project, ctx, undefined, new Date());
     return {
       ...outcome,
-      ...(recorded && shown.length > 0 ? { delivered: { project, ids: shown } } : {}),
-      ...(block !== null ? { rider: { block, ids: blockIds(block) } } : {}),
-      notices: {
-        ...(recorded ? {} : { notes_note: NOTES_UNRECORDED_NOTE }),
-        ...(file.reset ? { notes_reset_note: NOTES_RESET_NOTE } : {}),
-      },
+      ...(block !== null ? { rider: { project, block } } : {}),
+      ...(file.reset ? { notices: { notes_reset_note: NOTES_RESET_NOTE } } : {}),
     };
   } catch {
     return { ...outcome, notices: { notes_note: NOTES_UNREADABLE_NOTE } };
@@ -760,7 +787,8 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
  * project_wait's work outside the vault lock (ADR 0079 Tools, steps 2 to 5).
  * The notes key is derived here and wiped on every exit. The file is opened
  * once, never reset: this key was not checked against the vault in this lock.
- * A cancelled call stops polling, so it cannot mark a note shown that no app receives.
+ * Each note and claim is masked on its own; the wait returns once a note is
+ * delivered. A call cancelled while polling or masking throws, so nothing is recorded.
  */
 async function waitForNotes(
   vaultPath: string, project: string, ctx: ConnContext, seconds: number, thread: string | undefined,
@@ -778,46 +806,41 @@ async function waitForNotes(
     file = NotesFile.open(filePath, notesKey, { resetOnMismatch: false });
     const deadline = started + seconds * 1000;
     let decryptedAt = -1;
-    let withheld = false;
+    let withheldNotes = 0;
+    const withheldClaims = new Set<string>();
     for (let first = true; ; first = false) {
       if (signal.aborted) throw new Error('The wait was cancelled.');
       const seq = file.maxSeq(project);
       if (seq !== decryptedAt) {
         decryptedAt = seq;
-        const ids = ctx.withheld.ids;
-        const { block, shown, recorded, skipped } = deliverNotes(file, project, ctx, thread, new Date(), ids);
-        withheld ||= skipped;
+        const { block, skipped } = unseenNotes(file, project, ctx, thread, new Date(), ctx.withheld.ids);
+        withheldNotes = skipped;
         // Active claims alone make a block but are not news.
-        if (block !== null && shown.length > 0) {
-          // Masked here, not in run, so a block that cannot be masked is withheld and the wait goes on.
-          const [masked] = await maskReturnParts([{ payload: block, kind: 'project' }], tier, returnPseudonyms);
-          if (!masked!.failed) {
+        if (block !== null && block.notes.length > 0) {
+          const masked = await maskReturnParts(notesParts(block), tier, returnPseudonyms);
+          if (signal.aborted) throw new Error('The wait was cancelled.');
+          const delivered = renderNotes(block, masked, skipped);
+          for (const id of delivered.failedNoteIds) ctx.withheld.ids.add(id);
+          for (const id of delivered.failedClaimIds) withheldClaims.add(id);
+          if (delivered.noteIds.length > 0) {
             return {
               ...checked,
-              payload: { ...(masked!.payload as Record<string, unknown>), waited_ms: first ? 0 : Date.now() - started },
-              premasked: { degraded: masked!.degraded },
-              ...(recorded ? {} : { notices: { notes_note: NOTES_UNRECORDED_NOTE } }),
-              result_ids: blockIds(block),
-              ...(recorded ? { delivered: { project, ids: shown } } : {}),
+              payload: { ...delivered.fields, waited_ms: first ? 0 : Date.now() - started },
+              premasked: { degraded: delivered.degraded },
+              result_ids: delivered.ids,
+              shown: { project, ids: delivered.noteIds },
             };
           }
-          if (recorded) {
-            try {
-              file.unmarkShown(project, ctx.session_id, shown);
-            } catch {
-              // The receipt stays, as in undoShown.
-            }
-          }
-          for (const id of shown) ids.add(id);
-          withheld = true;
+          withheldNotes += delivered.failedNoteIds.length;
         }
       }
       const left = deadline - Date.now();
       if (left <= 0) {
         return {
           ...checked,
-          payload: { timed_out: true, waited_ms: Date.now() - started },
-          ...(withheld ? { notices: { notes_note: NOTES_WITHHELD_NOTE } } : {}),
+          payload: { timed_out: true, waited_ms: Date.now() - started, ...withheldFields({ notes: withheldNotes, claims: withheldClaims.size }) },
+          // NorthKeep's own words only, so nothing to mask.
+          premasked: { degraded: false },
         };
       }
       await pause(Math.min(WAIT_POLL_MS, left), signal);
@@ -829,28 +852,31 @@ async function waitForNotes(
 }
 
 /**
- * Deletes the shown rows a result recorded when the app never got the result
- * (masking failed, or the done row could not be written), so no receipt is
- * false. Outside the vault lock, like waitForNotes; best effort, never throws.
+ * Records the notes an app is handed as shown, after they were rendered and
+ * the call was logged, so no receipt names a note the app never got. Outside
+ * the vault lock, like waitForNotes. False when the rows could not be written.
  */
-function undoShown(vaultPath: string, ctx: ConnContext, delivered: RunOutcome['delivered']): void {
-  if (delivered === undefined || delivered.ids.length === 0) return;
+function recordShown(vaultPath: string, ctx: ConnContext, shown: { project: string; ids: string[] }, signal: AbortSignal | undefined): boolean {
+  if (shown.ids.length === 0 || signal?.aborted) return true;
   let notesKey: Buffer | null = null;
   try {
     const resolved = resolveMasterKey(vaultPath);
-    if (resolved === null) return;
+    if (resolved === null) return false;
     notesKey = deriveNotesKey(resolved.key);
     memzero(resolved.key);
     const filePath = notesFilePath(vaultPath);
-    if (filePath === null) return;
+    if (filePath === null) return false;
     const file = NotesFile.open(filePath, notesKey, { resetOnMismatch: false });
     try {
-      file.unmarkShown(delivered.project, ctx.session_id, delivered.ids);
+      file.markShown(shown.project, ctx.session_id, canonicalHost(ctx.host), shown.ids, new Date());
+      // Cancelled while recording: the reply is dropped, so the receipt goes too.
+      if (signal?.aborted) file.unmarkShown(shown.project, ctx.session_id, shown.ids);
     } finally {
       file.close();
     }
+    return true;
   } catch {
-    // The receipt stays, as it did before this fix; the call's own error is what the app sees.
+    return false;
   } finally {
     if (notesKey !== null) memzero(notesKey);
   }
@@ -1225,8 +1251,8 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         revision: idSchema.optional().describe('Read this one earlier revision of the project in full, instead of the current document. Ids come from the revisions list in project_get or project_resume.'),
       },
     },
-    async ({ project, history, revision }) =>
-      run(ctx, 'project_get', { scope: `project:${project}`, id: revision }, vaultPath, { kind: 'read', mask: 'project', notesFor: project }, (vault, granted) => {
+    async ({ project, history, revision }, extra) =>
+      run(ctx, 'project_get', { scope: `project:${project}`, id: revision }, vaultPath, { kind: 'read', mask: 'project', notesFor: project, signal: extra.signal }, (vault, granted) => {
         if (!isValidProjectSlug(project)) {
           throw new Error(`Invalid project slug "${project}".`);
         }
@@ -1291,9 +1317,9 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           .describe('Also return prior working revisions and the Log archives for this project'),
       },
     },
-    async ({ project, history }) => {
+    async ({ project, history }, extra) => {
       const scope = `project:${project}`;
-      return run(ctx, 'project_resume', { scope }, vaultPath, { kind: 'read', mask: 'project', notesFor: project }, (vault, granted) => {
+      return run(ctx, 'project_resume', { scope }, vaultPath, { kind: 'read', mask: 'project', notesFor: project, signal: extra.signal }, (vault, granted) => {
         const view = getProjectView(vault, project, granted, { history });
         // After the view, so a denied or missing project never reads the mirror files.
         const mirror = mirrorStatus(vault, granted);
@@ -1681,6 +1707,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         mask: 'project',
         pre: async () => chargeBudget(ctx, 'wait'),
         outside: (checked, tier) => waitForNotes(vaultPath, project, ctx, seconds ?? 20, thread, extra.signal, checked, tier),
+        signal: extra.signal,
       }, (vault, granted) => {
         if (!isValidProjectSlug(project)) throw new Error(`Invalid project slug "${project}".`);
         const scope = projectScope(project);
