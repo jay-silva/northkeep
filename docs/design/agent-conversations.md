@@ -173,10 +173,14 @@ CLEARED WITH WOUNDS. Record: project files agent-messaging/adr-0079-recheck.md. 
 
 ### Review 2 (fresh eyes, 2026-10-21): CLEARED WITH WOUNDS
 
-Executed against the built core and store; scripts a1 to a8 beside the verdict. Backward compatibility with 0072 and every shown-table rule held. Three flesh wounds, all fixed with a test that fails on the old code:
+Executed against the built core and store with scripts a1 to a8; the verdict and scripts are to be filed in project files beside review 1. Backward compatibility with 0072 and every shown-table rule held. Three flesh wounds, all fixed with a test that fails on the old code:
 
 - False receipts when the reply is not delivered: `attachNotes` and `waitForNotes` wrote `shown` rows before `run` masked the result and wrote its done row, so a Tier 2 failure recorded a note as seen that the app never got. Fixed: `RunOutcome.delivered` names the rows, and `run` calls `undoShown` when masking fails or the done row cannot be written (Data).
 - `NotesFile.openReadOnly` on a file only 0072 builds have opened threw "no such table: shown". Fixed: the missing table is detected at open, and receipts read as empty (Conversation panel).
 - Short names were case sensitive: `Claude-Desktop`, `Northkeep` and `ALL` were stored as typed and reached nobody. Fixed: `canonicalHost` always lowercases, and an unknown `to` gets `to_note` (Canonical app names).
 
-Notes, all taken: the `claim_held` message names a 0072 row's app by its short name (the owner view already did, through `NoteView`); the throttle comment matches the stamp; hook output cuts each note to 280 characters (Hooks); a thread wait anchored on a pruned reply is stated (Tools); one reader per app server is stated (Data) and goes to KNOWN-LIMITS with the double delivery for Codex and Cursor. Still to verify on Jay's Mac: live Cursor and Codex hook runs, the command on Cursor's hook PATH, and whether Cursor's third-party hook loading runs the Claude Code recipe inside Cursor.
+Notes taken: the `claim_held` message names a 0072 row's app by its short name (the owner view already did, through `NoteView`); the throttle comment matches the stamp; hook output cuts each note to 280 characters (Hooks); a thread wait anchored on a pruned reply is stated (Tools); one reader per app server is stated (Data) and goes to KNOWN-LIMITS with the double delivery for Codex and Cursor.
+
+Open, not in this round: the 0072-reader compatibility test listed under Tests; a receipt lost to the 30-day trim while its note stays; Codex subagents sharing the parent's session id; a note over 280 characters retried after its server restarts on 0079 and refused as different; a wait reading for up to 25 s after the vault locks; threads with three or more apps; what an app should do after `timed_out`.
+
+Still to verify on Jay's Mac: live Cursor and Codex hook runs, the command on Cursor's hook PATH, and whether Cursor's third-party hook loading runs the Claude Code recipe inside Cursor.
