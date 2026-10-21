@@ -57,9 +57,16 @@ describe('GET /api/projects/<slug>/notes (ADR 0079 D6)', () => {
     expect(await getNotes()).toEqual({ status: 423, body: { error: 'Vault is locked.', code: 'locked' } });
   });
 
-  it('says the file cannot be read when no notes file exists, and does not create one', async () => {
-    expect(await getNotes()).toEqual({ status: 200, body: { unreadable: true } });
+  it('returns no messages when no notes file exists yet, and does not create one', async () => {
+    expect(await getNotes()).toEqual({ status: 200, body: { threads: [], active_claims: [], notice: NOTES_NOTICE } });
     expect(fs.existsSync(notesFilePath(vaultPath)!)).toBe(false);
+  });
+
+  it('says a zero-byte notes file cannot be read and leaves it empty', async () => {
+    const filePath = notesFilePath(vaultPath)!;
+    fs.writeFileSync(filePath, '');
+    expect(await getNotes()).toEqual({ status: 200, body: { unreadable: true } });
+    expect(fs.statSync(filePath).size).toBe(0);
   });
 
   it('returns one thread with the reply nested, canonical receipts, and the active claim apart', async () => {

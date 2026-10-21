@@ -65,7 +65,9 @@ const sqliteFailure = (error: unknown) => error instanceof Error && String((erro
  */
 function projectNotes(session: UiSession, project: string, now: Date): ProjectNotes {
   const file = notesFilePath(session.vaultPath);
-  if (file === null || !fs.existsSync(file)) return { unreadable: true };
+  if (file === null) return { unreadable: true };
+  // No app has written a note on this machine yet: the normal state, not a fault.
+  if (!fs.existsSync(file)) return { threads: [], active_claims: [], notice: NOTES_NOTICE };
   const key = session.notesKey();
   let reader: ReturnType<typeof NotesFile.openReadOnly> | null = null;
   try {
