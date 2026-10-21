@@ -62,14 +62,49 @@ export class NotesKeyMismatchError extends Error {
   }
 }
 
+/** What the Mac app's panel may do with the notes file: read, never write (ADR 0079 D6). */
+export type NotesReader = Pick<NotesFile, 'read' | 'shownRows' | 'shownFor' | 'maxSeq' | 'close' | 'unreadable'>;
+
 export class NotesFile {
   /** True when this open found a key-check mismatch and emptied the file. */
   readonly reset: boolean;
   /** Rows that did not open under this key on the last read; skipped, never fatal. */
   unreadable = 0;
 
-  private constructor(private readonly db: SqliteFile, private readonly key: Buffer, reset: boolean) {
+  private constructor(
+    private readonly db: SqliteFile,
+    private readonly key: Buffer,
+    reset: boolean,
+    private readonly writable = true,
+  ) {
     this.reset = reset;
+  }
+
+  /**
+   * Opens an existing file read only: no table creation, key-check write,
+   * retention delete or reset. Throws NotesKeyMismatchError when the key-check
+   * row is missing or written under another key.
+   */
+  static openReadOnly(filePath: string, key: Buffer): NotesReader {
+    const db = openSqliteFile(filePath, { readonly: true });
+    try {
+      let check: { v: Buffer } | undefined;
+      try {
+        check = db.prepare('SELECT v FROM meta WHERE k = ?').get('key_check') as { v: Buffer } | undefined;
+      } catch {
+        throw new NotesKeyMismatchError();
+      }
+      if (check === undefined || !keyCheckMatches(check.v, key)) throw new NotesKeyMismatchError();
+      return new NotesFile(db, key, false, false);
+    } catch (err) {
+      db.close();
+      throw err;
+    }
+  }
+
+  /** SQLite on a read-only handle still begins a write transaction, so refuse before one starts. */
+  private assertWritable(): void {
+    if (!this.writable) throw new Error('This notes file was opened read only.');
   }
 
   /**
@@ -181,6 +216,7 @@ export class NotesFile {
     now: Date = new Date(),
     sameRequest: (prior: NotePayload) => boolean = () => false,
   ): InsertResult {
+    this.assertWritable();
     this.db.exec('BEGIN IMMEDIATE');
     try {
       const prior = this.db.prepare('SELECT * FROM notes WHERE project = ? AND client_id = ?').get(project, clientId) as NoteRow | undefined;
@@ -223,6 +259,7 @@ export class NotesFile {
   }
 
   markSeen(readerKey: string, project: string, lastSeq: number): void {
+    this.assertWritable();
     this.db
       .prepare(`INSERT INTO seen (reader_key, project, last_seq, updated_at) VALUES (?, ?, ?, ?)
         ON CONFLICT (reader_key, project) DO UPDATE SET last_seq = MAX(last_seq, excluded.last_seq), updated_at = excluded.updated_at`)
@@ -237,6 +274,7 @@ export class NotesFile {
 
   /** Records that these notes were given to this reader. Ids not in the project are skipped; repeats are no-ops. */
   markShown(project: string, readerKey: string, host: string, ids: readonly string[], now: Date = new Date()): void {
+    this.assertWritable();
     if (ids.length === 0) return;
     const insert = this.db.prepare(
       'INSERT OR IGNORE INTO shown (note_id, reader_key, host, shown_at) SELECT id, ?, ?, ? FROM notes WHERE id = ? AND project = ?',
@@ -262,6 +300,7 @@ export class NotesFile {
 
   /** Removes notes and markers of projects that no longer exist in the vault. */
   keepOnly(liveProjects: ReadonlySet<string>): number {
+    this.assertWritable();
     const projects = (this.db.prepare('SELECT DISTINCT project FROM notes').all() as Array<{ project: string }>).map((r) => r.project);
     let removed = 0;
     for (const project of projects) {

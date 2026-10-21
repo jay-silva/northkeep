@@ -286,6 +286,49 @@ describe('ADR 0079 shown rows in the notes file', () => {
     expect(shownCount()).toBe(1);
   });
 
+  it('openReadOnly reads notes and receipts and refuses every write', () => {
+    const notes = NotesFile.open(file, KEY);
+    const n = notes.insert('rental', randomUUID(), 'k-cursor', note('read me'), T0).note;
+    notes.markShown('rental', 'k-claude', 'claude-code', [n.id], T0);
+    notes.close();
+    const before = fs.readFileSync(file);
+    const reader = NotesFile.openReadOnly(file, KEY);
+    try {
+      expect(reader.read('rental').map((r) => r.payload.text)).toEqual(['read me']);
+      expect(reader.shownRows('rental').map((r) => r.host)).toEqual(['claude-code']);
+      const writer = reader as unknown as NotesFile;
+      expect(() => writer.insert('rental', randomUUID(), 'k-x', note('no'), T1)).toThrow('read only');
+      expect(() => writer.markShown('rental', 'k-x', 'codex', [n.id], T1)).toThrow('read only');
+      expect(() => writer.markSeen('k-x', 'rental', 9)).toThrow('read only');
+      expect(() => writer.keepOnly(new Set())).toThrow('read only');
+    } finally { reader.close(); }
+    expect(fs.readFileSync(file).equals(before)).toBe(true);
+    expect(shownCount()).toBe(1);
+  });
+
+  it('openReadOnly refuses a missing file without creating it', () => {
+    expect(() => NotesFile.openReadOnly(file, KEY)).toThrow('unable to open database file');
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('openReadOnly refuses a mismatched key or an empty file and leaves the file as it was', () => {
+    const notes = NotesFile.open(file, KEY);
+    notes.insert('rental', randomUUID(), 'k-cursor', note('kept'), T0);
+    notes.close();
+    const before = fs.readFileSync(file);
+    expect(() => NotesFile.openReadOnly(file, Buffer.alloc(32, 6))).toThrow(NotesKeyMismatchError);
+    expect(fs.readFileSync(file).equals(before)).toBe(true);
+    const reopened = NotesFile.open(file, KEY);
+    try {
+      expect(reopened.reset).toBe(false);
+      expect(reopened.read('rental').map((r) => r.payload.text)).toEqual(['kept']);
+    } finally { reopened.close(); }
+    const empty = path.join(home, 'notes-empty.db');
+    fs.writeFileSync(empty, '');
+    expect(() => NotesFile.openReadOnly(empty, KEY)).toThrow(NotesKeyMismatchError);
+    expect(fs.statSync(empty).size).toBe(0);
+  });
+
   it('a key reset clears the shown rows with the notes', () => {
     const notes = NotesFile.open(file, KEY);
     const n = notes.insert('rental', randomUUID(), 'k-cursor', note('x'), T0).note;
