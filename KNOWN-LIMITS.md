@@ -6,7 +6,7 @@ every milestone; if a limit is removed, say when and how.*
 ## Keep Watch, lid-closed awake (ADR 0080), current
 
 - Mac laptops only, in the Mac app only. Turning it on asks for the Mac password every time. The first time also installs a small helper that runs as admin; Settings can remove it.
-- The helper can only turn Keep Watch off. It does so within about 15 seconds of NorthKeep stopping, at 12 hours after turn-on at the latest, and at 25% battery or heavy heat even if NorthKeep is frozen.
+- The helper can only turn Keep Watch off. It does so within about 15 seconds of NorthKeep stopping, at 12 hours after turn-on at the latest, and at 25% battery (unless charging) or heavy heat even if NorthKeep is frozen.
 - If the helper is switched off in System Settings, General, Login Items, while Keep Watch is on and NorthKeep is also closed, nothing turns it off until the helper is switched back on or someone runs `sudo pmset -a disablesleep 0`. NorthKeep refuses to turn on while the helper is off and warns if it goes off mid-session.
 - Another program running as you can keep an already-on Mac awake by touching the heartbeat file, up to the 12-hour cap and only above the battery and heat floors. It cannot turn Keep Watch on.
 - The heat check reads macOS thermal pressure. That reading has not yet been seen at "heavy" on a real Mac, and macOS reports "cool" for a key it does not know.
