@@ -61,8 +61,7 @@ const sqliteFailure = (error: unknown) => error instanceof Error && String((erro
 /**
  * ADR 0079 D6: the Conversation section. Read only and outside the vault lock;
  * writes no shown rows, since Jay reading is not an app seeing. Active claims
- * are listed apart, so a claim or release gets its own card only once
- * something replied to it; an ended claim keeps its card.
+ * are listed apart from the cards.
  */
 function projectNotes(session: UiSession, project: string, now: Date): ProjectNotes {
   const file = notesFilePath(session.vaultPath);
