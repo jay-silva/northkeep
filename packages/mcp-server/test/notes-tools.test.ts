@@ -906,7 +906,7 @@ describe('ADR 0079 fix round 4: each note and claim masked on its own', () => {
     const cursor = await connect('cursor-vscode');
     const desk = await connect('local-agent-mode-northkeep');
     await createProject(cursor);
-    await call(cursor, 'project_note', { project: 'rental', kind: 'claim', subject: 'POISON subject', hours: 2 });
+    const claim = await call(cursor, 'project_note', { project: 'rental', kind: 'claim', subject: 'POISON subject', hours: 2 });
     const clean = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Tests are green.' });
 
     process.env.NORTHKEEP_REDACT_TIER = '2';
@@ -914,6 +914,8 @@ describe('ADR 0079 fix round 4: each note and claim masked on its own', () => {
     expect([read.isError, read.json.notes.map((n: any) => n.text), read.json.active_claims, read.json.withheld, read.json.notes_note]).toEqual([
       false, ['Tests are green.'], [], { notes: 0, claims: 1 }, SOME_WITHHELD,
     ]);
+    expect(read.text).not.toContain(claim.json.note.id);
+    expect(callLog('project_get').map((r) => r.result_ids)).toEqual([[clean.json.note.id]]);
     expect(shownRows()).toEqual([[clean.json.note.id, 'claude-desktop']]);
 
     // Under any tier project_note refuses to save text, so the claim is checked at Tier 0.
@@ -945,6 +947,22 @@ describe('ADR 0079 fix round 4: each note and claim masked on its own', () => {
     expect(waited.json.waited_ms).toBeLessThan(1500);
     expect(shownRows()).toEqual([[reply.id, 'claude-code']]);
     expect(callLog('project_wait').map((r) => r.result_ids)).toEqual([[reply.id]]);
+  }, 15_000);
+
+  it('a wait that times out with an unreadable note and claim counts both as withheld', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'claim', subject: 'POISON subject', hours: 2 });
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'POISON the name model' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const waited = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect([waited.isError, waited.json.timed_out, waited.json.notes, waited.json.withheld, waited.json.notes_note]).toEqual([
+      false, true, undefined, { notes: 1, claims: 1 }, SOME_WITHHELD,
+    ]);
+    expect(shownRows()).toEqual([]);
   }, 15_000);
 
   it('a wait cancelled while its note is being masked leaves no receipt', async () => {
