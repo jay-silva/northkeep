@@ -71,6 +71,6 @@ All root steps run through `/usr/bin/osascript -e 'do shell script … with admi
 A tray menu reading the same route over the tokened local URL the shell already holds. Shown only on macOS.
 
 ## Known gaps
-- If the helper is disabled in Login Items while Keep Watch is on and NorthKeep is also not running, nothing turns the mode off until the helper is re-enabled or someone runs `sudo pmset -a disablesleep 0`.
+- If the helper is disabled in Login Items while Keep Watch is on and NorthKeep is also not running, nothing turns the mode off until the helper is re-enabled or someone runs `sudo pmset -a disablesleep 0`. Accepted as a known limit by Jay, 2026-10-21 ("accepted").
 - A same-user process can keep an already-on Mac awake by touching the heartbeat, up to the 12-hour ceiling and only above the battery and heat floors. It cannot turn the mode on or extend the ceiling.
 - Changing the clock needs admin rights, so clock steps are out of scope.
