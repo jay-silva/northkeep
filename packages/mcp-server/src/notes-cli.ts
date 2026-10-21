@@ -2,7 +2,7 @@
  * `northkeep notes` (ADR 0072 D5): the Claude Code hook path and the owner's
  * view. The hook reads only the OS key store, never prompts, prints nothing
  * when it cannot help or when a redaction tier is set, and writes only its
- * seen marker and one call-log row. It never opens the vault or its lock.
+ * shown rows and one call-log row. It never opens the vault or its lock.
  */
 import crypto, { randomUUID } from 'node:crypto';
 import fs from 'node:fs';

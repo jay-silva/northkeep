@@ -53,7 +53,7 @@ export interface NotePayload {
 
 export interface StoredNote {
   id: string;
-  /** Insertion order in the notes file; seen markers compare it. */
+  /** Insertion order in the notes file; newest first in results, and what a wait polls. */
   seq: number;
   project: string;
   client_id: string;
