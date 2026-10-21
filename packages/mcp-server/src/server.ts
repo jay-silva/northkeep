@@ -688,13 +688,28 @@ function attachNotes(outcome: RunOutcome, vault: Vault, notes: NotesAccess, proj
 
 const WAIT_POLL_MS = 500;
 
+/** Resolves after `ms`, or as soon as the call is cancelled. */
+function pause(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const done = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener('abort', done);
+      resolve();
+    };
+    const timer = setTimeout(done, ms);
+    signal.addEventListener('abort', done, { once: true });
+  });
+}
+
 /**
  * project_wait's work outside the vault lock (ADR 0079 Tools, steps 2 to 5).
  * The notes key is derived here and wiped on every exit. The file is opened
  * once, never reset: this key was not checked against the vault in this lock.
+ * A cancelled call stops polling, so it cannot mark a note shown that no app receives.
  */
 async function waitForNotes(
-  vaultPath: string, project: string, ctx: ConnContext, seconds: number, thread: string | undefined, checked: RunOutcome,
+  vaultPath: string, project: string, ctx: ConnContext, seconds: number, thread: string | undefined,
+  signal: AbortSignal, checked: RunOutcome,
 ): Promise<RunOutcome> {
   const started = Date.now();
   const resolved = resolveMasterKey(vaultPath);
@@ -709,6 +724,7 @@ async function waitForNotes(
     const deadline = started + seconds * 1000;
     let decryptedAt = -1;
     for (let first = true; ; first = false) {
+      if (signal.aborted) throw new Error('The wait was cancelled.');
       const seq = file.maxSeq(project);
       if (seq !== decryptedAt) {
         decryptedAt = seq;
@@ -724,7 +740,7 @@ async function waitForNotes(
       }
       const left = deadline - Date.now();
       if (left <= 0) return { ...checked, payload: { timed_out: true, waited_ms: Date.now() - started } };
-      await new Promise((resolve) => setTimeout(resolve, Math.min(WAIT_POLL_MS, left)));
+      await pause(Math.min(WAIT_POLL_MS, left), signal);
     }
   } finally {
     file?.close();
@@ -1548,12 +1564,12 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         thread: z.string().uuid().optional().describe('Wait only for notes in this conversation: its thread id, or the id of any note in it.'),
       },
     },
-    async ({ project, seconds, thread }) =>
+    async ({ project, seconds, thread }, extra) =>
       run(ctx, 'project_wait', { scope: `project:${project}`, ...(thread !== undefined ? { id: thread } : {}) }, vaultPath, {
         kind: 'read',
         mask: 'project',
         pre: async () => chargeBudget(ctx, 'wait'),
-        outside: (checked) => waitForNotes(vaultPath, project, ctx, seconds ?? 20, thread, checked),
+        outside: (checked) => waitForNotes(vaultPath, project, ctx, seconds ?? 20, thread, extra.signal, checked),
       }, (vault, granted) => {
         if (!isValidProjectSlug(project)) throw new Error(`Invalid project slug "${project}".`);
         const scope = projectScope(project);
