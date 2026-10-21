@@ -184,6 +184,7 @@ import { LockedError, type UiSession } from './session.js';
 import { handleCurationApi } from './curationApi.js';
 import { handleProjectsApi } from './projectsApi.js';
 import { handleLocalSearchApi, type LocalSearchStatus } from './local-search.js';
+import { handleKeepWatchApi } from './keep-watch.js';
 import { createSearchWarmer, type SearchWarmer } from './search-warm.js';
 
 // One process-wide embedding memo for Memories search. session.withVault opens
@@ -459,6 +460,8 @@ async function dispatch(
   if (curation !== null) return curation;
   const localSearch = await handleLocalSearchApi(session, method, route, body);
   if (localSearch !== null) return localSearch;
+  const keepWatch = await handleKeepWatchApi(method, route, body);
+  if (keepWatch !== null) return keepWatch;
   if (method === 'GET' && route === '/api/status') {
     const unlocked = session.isUnlocked();
     let counts: Record<string, number> = {};
