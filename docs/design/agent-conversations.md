@@ -70,7 +70,7 @@ Every name is lowercased after taming, so a short name in any case (`Claude-Desk
 ```
 project_wait({ project, seconds?: 1..25 (default 20), thread?: noteId })
 → { notes, notes_count, active_claims, notes_notice, waited_ms }
-   or { timed_out: true, waited_ms }
+   or { timed_out: true, waited_ms, notes_note? }   (notes_note when notes were withheld; see Masking)
 ```
 
 Steps:
@@ -81,6 +81,8 @@ Steps:
 5. The key is wiped on every exit path. If the `shown` insert hits `SQLITE_BUSY` (5 s busy timeout), the wait returns the notes anyway and logs `notes_note`; the notes come up again next time, which is the safe side.
 
 Redaction: `mask: 'project'`, like a project read, so under tier 1 or 2 the returned text is masked the same way and the hook stays silent. Nothing new is written under a tier (a `shown` row is bookkeeping, not content). When masking fails, the wait's `shown` rows are taken back like a read's (Data).
+
+Masking. The notes block (`notes` with their `seen_by`, `notes_count`, `active_claims`, `notes_notice`) rides on a project result as its own part, the rider, and is masked apart from the project text. `run` hands both parts to one `maskReturnParts` call: the name model reads both before either is rendered, so a name it finds in a note is still masked in the project text (code review F2), but each part fails on its own. A project part that cannot be masked fails the call, as before. A rider that cannot be masked is withheld, never fatal: the result carries the project and `notes_note: 'Notes from other AI apps were withheld because they could not be masked under the current redaction tier.'`, its `shown` rows are taken back (`undoShown`), and its ids stay out of the call log's `result_ids`. The rider is all or nothing: one note or claim the model cannot read withholds every note in that result, so a claim it cannot read keeps notes out of project reads for the claim's lifetime, and a note for its 24 hours, while the reads themselves succeed. `project_wait` masks each block it finds inside its poll loop. A block it cannot mask is taken back, its note ids join the session's in-memory `withheld` set, and the wait keeps polling. Waits in that session skip withheld ids, so a readable note that arrives later still ends a wait, and a wait that ends without one returns `timed_out` with the same `notes_note`. The set is cleared when the session's parsed tier changes, so a later clean run delivers those notes. Project reads do not skip withheld ids: each read tries them again, and they arrive once the model can mask them. `notes_note` and `notes_reset_note` are NorthKeep's own words and are added after masking.
 
 A thread wait anchored on a reply id that has since been pruned matches nothing: the anchor lookup falls back to the raw id, and no note carries a pruned reply's id as its `thread`. Waiting on the root id, or on any surviving note, still works.
 
@@ -184,3 +186,9 @@ Notes taken: the `claim_held` message names a 0072 row's app by its short name (
 Open, not in this round: the 0072-reader compatibility test listed under Tests; a receipt lost to the 30-day trim while its note stays; Codex subagents sharing the parent's session id; a note over 280 characters retried after its server restarts on 0079 and refused as different; a wait reading for up to 25 s after the vault locks; threads with three or more apps; what an app should do after `timed_out`.
 
 Still to verify on Jay's Mac: live Cursor and Codex hook runs, the command on Cursor's hook PATH, and whether Cursor's third-party hook loading runs the Claude Code recipe inside Cursor.
+
+### Fix round 3 (2026-10-21), on Jay's "fix"
+
+The recheck of review 2 found one flesh wound introduced by `undoShown`: under Tier 2 a note the local model cannot read (instruction-shaped text defeats `llama3.2:3b` every time) failed every `project_get`, `project_resume` and `project_wait` in that project, for every app, for up to 24 hours, because the undo put the note back and each failed wait still cost a wait. A claim the model cannot read did the same for its lifetime, before and after that round. The root cause was masking the notes inside the project payload, against ADR 0072 D3. Fixed: the rider is masked apart from the project and withheld, never fatal; waits skip what they withheld until the tier changes (Tools, Masking). Tests in `notes-tools.test.ts` use a loopback name model that refuses any text holding a trigger word, and each fails on the old code: a withheld note leaves the read succeeding with no receipt and no logged id, then arrives once the tier is cleared; a withheld claim does not fail a read; a wait with only a withheld note times out twice with `notes_note` and delivers after the tier changes; a readable note arriving during a wait ends it while the withheld one stays unread; a name found only in a note is masked in the project text of the same reply.
+
+Open: the rider is all or nothing, so one unreadable note or claim withholds every note in a result (masking each note on its own would hold back only that note).
