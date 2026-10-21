@@ -596,6 +596,23 @@ describe('ADR 0079 replies, receipts and waits', () => {
     expect(waited.text).not.toContain('someone@example.com');
   });
 
+  it('addresses fold case, and an address no known app reports carries to_note', async () => {
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    const codex = await connect('codex-mcp-client');
+    await createProject(cursor);
+    const toDesk = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'Claude-Desktop', text: 'Are you in vault.ts?' });
+    const toAll = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'ALL', text: 'Tests are green' });
+    const clientId = randomUUID();
+    const toNobody = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'Windsurf', text: 'Anyone there?', client_id: clientId });
+    const replayed = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'Windsurf', text: 'Anyone there?', client_id: clientId });
+    expect([toDesk.json.note.to, toAll.json.note.to, toNobody.json.note.to]).toEqual(['claude-desktop', 'all', 'windsurf']);
+    const unknown = 'No known app is named "windsurf"; only an app that reports that name will see this note.';
+    expect([toDesk.json.to_note, toAll.json.to_note, toNobody.json.to_note, replayed.json.to_note]).toEqual([undefined, undefined, unknown, unknown]);
+    expect((await call(desk, 'project_get', { project: 'rental' })).json.notes.map((n: any) => n.text)).toEqual(['Tests are green', 'Are you in vault.ts?']);
+    expect((await call(codex, 'project_get', { project: 'rental' })).json.notes.map((n: any) => n.text)).toEqual(['Tests are green']);
+  });
+
   it('when shown rows cannot be written, the notes still return with notes_note and come up again', async () => {
     const cursor = await connect('cursor');
     const claude = await connect('claude-code');

@@ -12,6 +12,8 @@ import {
   NOTE_SUBJECT_MAX_CHARS,
   NOTE_TEXT_MAX_CHARS,
   canonicalHost,
+  KNOWN_HOSTS,
+  NOTE_TO_ALL,
   MILESTONE_MAX_ITEMS,
   MilestoneError,
   PROJECT_FILE_ACCESS,
@@ -619,6 +621,12 @@ const NOTES_UNREADABLE_NOTE = 'Notes from other AI apps could not be read on thi
 const NOTES_RESET_NOTE = 'The notes file did not match this vault, so earlier notes and claims were cleared.';
 
 const NOTES_UNRECORDED_NOTE = 'These notes could not be marked as shown, so they may show again on your next read.';
+
+/** Set when a note's address is neither all nor a short name, so the sender does not wait on an app that may not exist. */
+function toNote(to: string): string | undefined {
+  if (to === NOTE_TO_ALL || KNOWN_HOSTS.has(to)) return undefined;
+  return `No known app is named "${to}"; only an app that reports that name will see this note.`;
+}
 
 interface Delivery {
   /** Null when there is no unseen note and no active claim. */
@@ -1527,6 +1535,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             planNote(request, { host: ctx.host ?? 'unknown', sender_key: ctx.session_id }, existing, now), now,
             (prior) => sameNoteRequest(prior, request));
           const claims = activeClaims(file.read(project), now);
+          const to_note = toNote(note.payload.to);
           return {
             payload: {
               saved: true,
@@ -1541,6 +1550,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
                 created_at: note.created_at,
               },
               claims_active: claims.length,
+              ...(to_note !== undefined ? { to_note } : {}),
             },
             result_id: note.id,
             disclosed_scopes: [scope],
