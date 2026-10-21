@@ -7,6 +7,7 @@ import { defaultVaultPath, onVaultSave, setPlatform } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import { handleApi } from './api.js';
 import { handleApprove, handleConverseStream } from './converse.js';
+import { keepWatch } from './keep-watch.js';
 import { UiSession } from './session.js';
 
 /**
@@ -139,9 +140,13 @@ export async function startUiServer(options: UiServerOptions = {}): Promise<Runn
   if (session.isUnlocked()) {
     session.autoSync.wake().catch(() => {});
   }
+  // ADR 0080: clear any Keep Watch an earlier run left on. A no-op outside the Mac app.
+  await keepWatch.start();
   return {
     url,
     close: async () => {
+      // First, before anything slow: the shell kills us two seconds after SIGTERM.
+      keepWatch.stop();
       // A write in the last five seconds may still be waiting on the debounce.
       // Give it one bounded chance to upload before the key is zeroed; a hung
       // server must not hold up quit.
