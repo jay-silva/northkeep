@@ -797,6 +797,21 @@ describe('ADR 0079 notes masked apart from the project they ride on', () => {
     expect(shownRows().map((r) => [r.note_id, r.host])).toEqual([[sent.json.note.id, 'claude-code']]);
   }, 15_000);
 
+  it('a Tier 3 wait without the name model returns the note and says names may be unmasked', async () => {
+    const cursor = await connect('cursor-vscode');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Tests are green.' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '3';
+    const waited = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect([waited.isError, waited.json.notes.map((n: any) => n.text), waited.json.redaction_note]).toEqual([
+      false, ['Tests are green.'], 'Tier 3 ran without the name model; names outside the built-in lists may be unmasked.',
+    ]);
+    const done = callLog().filter((r) => r.tool === 'project_wait' && r.phase === 'done');
+    expect(done.map((r) => [r.ok, r.redaction_degraded])).toEqual([[true, true]]);
+  });
+
   it('a wait skips a note it withheld, so a readable note that arrives later is delivered', async () => {
     await startNameModel();
     const cursor = await connect('cursor-vscode');
