@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KDF_INTERACTIVE, NOTES_NOTICE, Vault, deriveMasterKey, deriveNotesKey, planNote, type StoredNote } from '@northkeep/core';
 import { NotesFile, notesFilePath } from '@northkeep/mcp-server';
+import { openSqliteFile } from '@northkeep/platform-node';
 import { handleProjectsApi } from '../src/projectsApi.js';
 import { UiSession } from '../src/session.js';
 
@@ -104,6 +105,32 @@ describe('GET /api/projects/<slug>/notes (ADR 0079 D6)', () => {
     file.close();
     const before = sha(filePath);
     expect(await getNotes()).toEqual({ status: 200, body: { unreadable: true } });
+    expect(sha(filePath)).toBe(before);
+  });
+
+  it('shows the threads with no receipts from a file only 0072 builds have opened, and leaves it unchanged', async () => {
+    const filePath = notesFilePath(vaultPath)!;
+    const key = writerKey();
+    const file = NotesFile.open(filePath, key);
+    const sent = new Date(Date.now() - 60_000);
+    const note = send(file, { host: 'cursor-vscode', sender_key: 'session-cursor' }, { kind: 'note', text: 'Are you in vault.ts?', to: 'claude-ai' }, sent);
+    file.close();
+    key.fill(0);
+    const db = openSqliteFile(filePath);
+    db.exec('DROP TABLE shown');
+    expect((db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as Array<{ name: string }>).map((r) => r.name))
+      .toEqual(['meta', 'notes', 'seen', 'sqlite_sequence']);
+    db.close();
+    const before = sha(filePath);
+
+    expect(await getNotes()).toEqual({
+      status: 200,
+      body: {
+        threads: [{ root: { id: note.id, kind: 'note', from: 'cursor', to: 'claude-desktop', text: 'Are you in vault.ts?', seen_by: [], created_at: sent.toISOString() }, replies: [] }],
+        active_claims: [],
+        notice: NOTES_NOTICE,
+      },
+    });
     expect(sha(filePath)).toBe(before);
   });
 

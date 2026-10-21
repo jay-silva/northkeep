@@ -76,6 +76,7 @@ export class NotesFile {
     private readonly key: Buffer,
     reset: boolean,
     private readonly writable = true,
+    private readonly hasShownTable = true,
   ) {
     this.reset = reset;
   }
@@ -83,7 +84,8 @@ export class NotesFile {
   /**
    * Opens an existing file read only: no table creation, key-check write,
    * retention delete or reset. Throws NotesKeyMismatchError when the key-check
-   * row is missing or written under another key.
+   * row is missing or written under another key. Without a shown table there
+   * are no receipts yet, so shownRows and shownFor come back empty.
    */
   static openReadOnly(filePath: string, key: Buffer): NotesReader {
     const db = openSqliteFile(filePath, { readonly: true });
@@ -95,7 +97,9 @@ export class NotesFile {
         throw new NotesKeyMismatchError();
       }
       if (check === undefined || !keyCheckMatches(check.v, key)) throw new NotesKeyMismatchError();
-      return new NotesFile(db, key, false, false);
+      // A file only 0072 builds have opened has no shown table, and this handle may not create it.
+      const shown = db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'shown'").get() !== undefined;
+      return new NotesFile(db, key, false, false, shown);
     } catch (err) {
       db.close();
       throw err;
@@ -268,6 +272,7 @@ export class NotesFile {
 
   /** Ids of this project's notes already given to this reader. */
   shownFor(readerKey: string, project: string): Set<string> {
+    if (!this.hasShownTable) return new Set();
     const rows = this.db.prepare(`${SHOWN_IN_PROJECT} AND s.reader_key = ?`).all(project, readerKey) as ShownRow[];
     return new Set(rows.map((r) => r.note_id));
   }
@@ -290,6 +295,7 @@ export class NotesFile {
   }
 
   shownRows(project: string): ShownRow[] {
+    if (!this.hasShownTable) return [];
     return this.db.prepare(`${SHOWN_IN_PROJECT} ORDER BY s.shown_at, s.note_id`).all(project) as ShownRow[];
   }
 
