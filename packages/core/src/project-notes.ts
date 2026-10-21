@@ -357,3 +357,34 @@ export function threadsOf(notes: readonly StoredNote[], shown: readonly ShownRow
   });
   return threads.sort((a, b) => b.seq - a.seq).map((t) => t.thread);
 }
+
+export const BUDGET_WINDOW_MS = 60 * 60 * 1000;
+
+/** Per kind of charge: the hourly limit and the refusal it earns. Releases are absent, so never charged. */
+const BUDGETS = {
+  wait: { limit: 30, code: 'wait_budget_exhausted' },
+  note: { limit: 60, code: 'too_many_notes' },
+} as const;
+
+export type BudgetRefusal = (typeof BUDGETS)[keyof typeof BUDGETS]['code'];
+
+/**
+ * One MCP session's rolling-hour budget (ADR 0079 D3), counted in the server
+ * process, so two agents cannot loop at the user's cost. Claims count as notes;
+ * a release always passes, so a capped session can still free its claim.
+ */
+export class SessionBudget {
+  private readonly taken = { wait: [] as number[], note: [] as number[] };
+
+  take(kind: 'wait' | NoteKind, now: Date): { ok: true } | { ok: false; code: BudgetRefusal; resets_at: string } {
+    if (kind === 'release') return { ok: true };
+    const charge = kind === 'wait' ? 'wait' : 'note';
+    const t = now.getTime();
+    const live = this.taken[charge].filter((at) => at > t - BUDGET_WINDOW_MS);
+    this.taken[charge] = live;
+    const { limit, code } = BUDGETS[charge];
+    if (live.length >= limit) return { ok: false, code, resets_at: new Date(live[0]! + BUDGET_WINDOW_MS).toISOString() };
+    live.push(t);
+    return { ok: true };
+  }
+}

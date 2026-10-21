@@ -6,6 +6,7 @@ import {
   NOTES_NOTICE,
   OWNER_SENDER_KEY,
   ProjectNoteError,
+  SessionBudget,
   activeClaims,
   canonicalHost,
   notesForReader,
@@ -282,6 +283,28 @@ describe('receipts and threads', () => {
     ]);
     expect(threads[2]!.replies[0]!.seen_by).toEqual(['cursor']);
     expect(threads[2]!.root.seen_by).toEqual([]);
+  });
+});
+
+describe('SessionBudget', () => {
+  const at = (minutes: number) => new Date(NOW.getTime() + minutes * 60_000);
+
+  it('refuses the 31st wait in an hour and names when the budget resets', () => {
+    const budget = new SessionBudget();
+    for (let i = 0; i < 30; i++) expect(budget.take('wait', at(i))).toEqual({ ok: true });
+    expect(budget.take('wait', at(40))).toEqual({ ok: false, code: 'wait_budget_exhausted', resets_at: '2026-10-15T13:00:00.000Z' });
+    expect(budget.take('wait', at(60))).toEqual({ ok: true });
+    expect(budget.take('note', at(60))).toEqual({ ok: true });
+  });
+
+  it('refuses the 61st note or claim in an hour and never charges a release', () => {
+    const budget = new SessionBudget();
+    for (let i = 0; i < 60; i++) expect(budget.take(i % 2 === 0 ? 'note' : 'claim', at(i / 2))).toEqual({ ok: true });
+    for (let i = 0; i < 5; i++) expect(budget.take('release', at(31))).toEqual({ ok: true });
+    expect(budget.take('note', at(31))).toEqual({ ok: false, code: 'too_many_notes', resets_at: '2026-10-15T13:00:00.000Z' });
+    expect(budget.take('claim', at(59))).toEqual({ ok: false, code: 'too_many_notes', resets_at: '2026-10-15T13:00:00.000Z' });
+    expect(budget.take('note', at(60.25))).toEqual({ ok: true });
+    expect(budget.take('wait', at(31))).toEqual({ ok: true });
   });
 });
 
