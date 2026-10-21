@@ -105,29 +105,30 @@ function tameHost(host: string): string {
   return tameBoardText(breaksToSpaces(host), NOTE_HOST_MAX_CHARS);
 }
 
-/** Names apps report in the MCP handshake (Jay's call log, 2026-10-21), keyed lowercase. */
+/** The short names a note can be addressed to besides 'all'. */
+export const KNOWN_HOSTS: ReadonlySet<string> = new Set(['claude-desktop', 'claude-code', 'cursor', 'codex', 'northkeep']);
+
+/** Names apps report in the MCP handshake (Jay's call log, 2026-10-21), keyed lowercase; a short name is its own key. */
 const CANONICAL_HOSTS: ReadonlyMap<string, string> = new Map([
   ['local-agent-mode-northkeep', 'claude-desktop'],
   ['claude-ai', 'claude-desktop'],
-  ['claude-code', 'claude-code'],
   ['cursor-vscode', 'cursor'],
-  ['cursor', 'cursor'],
   ['northkeep-app', 'northkeep'],
   ['northkeep-cli', 'northkeep'],
 ]);
 
-/** Reported app name to its short name; unknown names pass through tamed. */
+/** Reported app name to its short name, always lowercase; unknown names pass through tamed. */
 export function canonicalHost(raw: string): string {
-  const tamed = tameHost(raw);
-  const key = tamed.toLowerCase();
+  const key = tameHost(raw).toLowerCase();
   if (key.startsWith('codex')) return 'codex';
-  return CANONICAL_HOSTS.get(key) ?? tamed;
+  return CANONICAL_HOSTS.get(key) ?? key;
 }
 
 function tameText(text: string | undefined): string {
   return tameBoardText(breaksToSpaces(text ?? ''), NOTE_TEXT_MAX_CHARS);
 }
 
+/** Any case of "all" is everyone, since canonicalHost lowercases. */
 function tameTo(to: string | undefined): string {
   return to === undefined ? NOTE_TO_ALL : canonicalHost(to);
 }
@@ -162,7 +163,7 @@ export function activeClaims(notes: readonly StoredNote[], now: Date): StoredNot
 }
 
 function describeClaim(claim: StoredNote): string {
-  return `${claim.payload.host} holds "${claim.payload.subject ?? ''}" until ${claim.payload.expires_at ?? 'unknown'}`;
+  return `${canonicalHost(claim.payload.host)} holds "${claim.payload.subject ?? ''}" until ${claim.payload.expires_at ?? 'unknown'}`;
 }
 
 /**

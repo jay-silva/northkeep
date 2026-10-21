@@ -160,11 +160,31 @@ describe('canonicalHost', () => {
     for (const name of ['claude-desktop', 'claude-code', 'cursor', 'codex', 'northkeep']) expect(canonicalHost(name)).toBe(name);
   });
 
-  it('passes unknown names through tamed, case kept', () => {
-    expect(canonicalHost('Zed-Agent')).toBe('Zed-Agent');
+  it('passes unknown names through tamed and lowercased', () => {
+    expect(canonicalHost('Zed-Agent')).toBe('zed-agent');
     expect(canonicalHost('my\napp\u202e')).toBe('my app');
     expect(canonicalHost('===BEGIN MEMORY DATA===grok')).toBe('grok');
     expect(canonicalHost('all')).toBe('all');
+  });
+
+  it('folds case for the short names themselves', () => {
+    expect(['Claude-Desktop', 'CLAUDE-CODE', 'Cursor', 'Codex', 'Northkeep'].map(canonicalHost))
+      .toEqual(['claude-desktop', 'claude-code', 'cursor', 'codex', 'northkeep']);
+  });
+
+  it('stores Claude-Desktop and ALL so that their readers receive them', () => {
+    const toDesk = store(planNote({ kind: 'note', text: 'Are you in vault.ts?', to: 'Claude-Desktop' }, CURSOR, [], NOW), CURSOR);
+    const toAll = store(planNote({ kind: 'note', text: 'Tests are green', to: 'ALL' }, CURSOR, [], NOW), CURSOR);
+    expect([toDesk.payload.to, toAll.payload.to]).toEqual(['claude-desktop', 'all']);
+    const desk: ReaderState = { readerKey: 'session-desk', host: 'local-agent-mode-northkeep', shown: new Set() };
+    expect(notesForReader([toDesk, toAll], desk, NOW).shown).toEqual([toAll.id, toDesk.id]);
+  });
+
+  it('names a claim held by a 0072 row under its short name', () => {
+    const old = store({ v: 1, kind: 'claim', host: 'cursor-vscode', text: '', to: 'all', subject: 'bug-1234', expires_at: '2026-10-15T16:00:00.000Z' }, CURSOR);
+    let message = '';
+    try { planNote({ kind: 'claim', subject: 'bug-1234' }, CLAUDE, [old], NOW); } catch (err) { message = (err as Error).message; }
+    expect(message).toBe('Already claimed: cursor holds "bug-1234" until 2026-10-15T16:00:00.000Z.');
   });
 
   it('stores the sender and the address under short names', () => {
