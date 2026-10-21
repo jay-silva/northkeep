@@ -1,6 +1,6 @@
 # ADR 0080: Keep Watch, lid-closed awake on the Mac
 
-Status: Proposed · Review: Reviews/adr-0080 (pending)
+Status: Proposed · Review: Reviews/adr-0080: review 1 and 2 NOT CLEARED (fixed); recheck CLEARED WITH WOUNDS (perl wound fixed after)
 
 ## Context
 Jay wants agent sessions to keep running with the MacBook lid shut. Idle-sleep assertions (`caffeinate`) do not cover a closed lid; only `pmset -a disablesleep 1` does, and it needs root. Verified on his Mac 2026-10-21. The setting outlives the app, so a crash could leave a Mac that never sleeps.
