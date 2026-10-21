@@ -1465,10 +1465,10 @@
     </div>
   </section>
   <section id="view-keepwatch" hidden>
-    <div class="page-head settings-intro"><div><h2>Keep Watch</h2><p class="muted">Keep this Mac running with the lid closed, so agent sessions keep working while you carry it or step away.</p></div></div>
+    <div class="page-head settings-intro"><div><h2>Keep Watch</h2><p class="muted">Keep <span data-place>this computer</span> running with the lid closed, so agent sessions keep working while you carry it or step away.</p></div></div>
     <div class="banner" id="kwProblem" role="alert" hidden><span id="kwProblemText"></span> <button class="btn" id="kwForceOff">Turn off now</button></div>
     <div class="card">
-      <label class="switch-row" for="kwSwitch"><span><strong>Run with the lid closed</strong><small id="kwHint" role="status" aria-live="polite">macOS asks for your Mac password each time you turn this on.</small></span><input type="checkbox" role="switch" id="kwSwitch"></label>
+      <label class="switch-row" for="kwSwitch"><span><strong>Run with the lid closed</strong><small id="kwHint" role="status" aria-live="polite">macOS asks for your login password each time you turn this on.</small></span><input type="checkbox" role="switch" id="kwSwitch"></label>
       <div class="kw-pills" id="kwPills" hidden></div>
       <div class="row" id="kwOnButtons" hidden><button class="btn" id="kwExtend">Add 1 hour</button><button class="btn primary" id="kwOff">Turn off now</button></div>
       <div class="err" id="kwErr"></div>
@@ -1488,8 +1488,8 @@
         <li>The battery reaches 25%, or the Mac starts running hot.</li>
         <li>You quit NorthKeep, or NorthKeep closes unexpectedly. A small helper NorthKeep installs the first time turns it off within two minutes even then.</li>
       </ul>
-      <div class="banner">Don't put the Mac in a bag while this is on. With the lid shut it cools less well, and it won't sleep to protect itself.</div>
-      <div class="row" id="kwHelperRow" hidden><button class="btn" id="kwRemoveHelper">Remove the helper</button><span class="muted" style="font-size:13px">Asks for your Mac password. Keep Watch installs it again the next time you turn it on.</span></div>
+      <div class="banner">Don't put the laptop in a bag while this is on. With the lid shut it cools less well, and it won't sleep to protect itself.</div>
+      <div class="row" id="kwHelperRow" hidden><button class="btn" id="kwRemoveHelper">Remove the helper</button><span class="muted" style="font-size:13px">Asks for your login password. Keep Watch installs it again the next time you turn it on.</span></div>
     </div>
   </section>
   <section id="view-about" hidden>
@@ -2186,7 +2186,7 @@
     $('kwSwitch').disabled = stopping;
     $('kwHint').textContent = on ? 'On. Close the lid whenever you like.'
       : stopping ? 'Turning off…'
-      : (k.last_off_reason ? 'Off. ' + k.last_off_reason + ' ' : '') + 'macOS asks for your Mac password each time you turn this on.';
+      : (k.last_off_reason ? 'Off. ' + k.last_off_reason + ' ' : '') + 'macOS asks for your login password each time you turn this on.';
     const pills = [];
     if (on) {
       pills.push('<span class="pill ok">Awake</span>', '<span class="pill">' + esc(kwLeft(k.ends_at)) + '</span>');
@@ -2221,7 +2221,7 @@
     catch (e) { if (!(e.data && e.data.canceled)) $('kwErr').textContent = e.message; loadKeepWatch(); }
   }
   $('kwSwitch').addEventListener('change', () => {
-    if ($('kwSwitch').checked) kwAction({ action: 'on', hours: kwHours, allow_battery: $('kwBattery').checked }, 'Waiting for your Mac password…');
+    if ($('kwSwitch').checked) kwAction({ action: 'on', hours: kwHours, allow_battery: $('kwBattery').checked }, 'Waiting for your login password…');
     else kwAction({ action: 'off' });
   });
   $('kwHours').addEventListener('click', (e) => {
@@ -2232,8 +2232,8 @@
   });
   $('kwExtend').addEventListener('click', () => kwAction({ action: 'extend' }));
   $('kwOff').addEventListener('click', () => kwAction({ action: 'off' }));
-  $('kwForceOff').addEventListener('click', () => kwAction({ action: 'force_off' }, 'Waiting for your Mac password…'));
-  $('kwRemoveHelper').addEventListener('click', () => kwAction({ action: 'remove_helper' }, 'Waiting for your Mac password…'));
+  $('kwForceOff').addEventListener('click', () => kwAction({ action: 'force_off' }, 'Waiting for your login password…'));
+  $('kwRemoveHelper').addEventListener('click', () => kwAction({ action: 'remove_helper' }, 'Waiting for your login password…'));
 
   function loadAbout() {
     $('aboutVersion').textContent = status.version || 'unknown';

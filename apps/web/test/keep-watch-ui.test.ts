@@ -70,7 +70,7 @@ describe('Keep Watch page', () => {
     const p = page();
     p.render({ ...base, state: 'off', ends_at: null, ceiling_at: null, last_off_reason: 'The charger was unplugged.' });
     expect(p.$('kwSwitch').checked).toBe(false);
-    expect(p.$('kwHint').textContent).toBe('Off. The charger was unplugged. macOS asks for your Mac password each time you turn this on.');
+    expect(p.$('kwHint').textContent).toBe('Off. The charger was unplugged. macOS asks for your login password each time you turn this on.');
     expect(p.$('kwHelperRow').hidden).toBe(false);
     expect(p.hourButtons[1]!.attrs['aria-pressed']).toBe('true');
   });
