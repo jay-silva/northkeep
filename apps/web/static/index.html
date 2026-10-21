@@ -731,6 +731,21 @@
   @media (prefers-reduced-motion:reduce) {
     .switch-row input, .switch-row input::after { transition:none; }
   }
+  /* Keep Watch (ADR 0080). */
+  #view-keepwatch .card { display:grid; gap:12px; padding:18px 20px; }
+  #view-keepwatch .card h3 { margin:0; font-size:15px; }
+  #view-keepwatch .switch-row { margin:0; }
+  .kw-pills { display:flex; flex-wrap:wrap; gap:8px; }
+  .kw-pills .pill { font-size:13px; color:var(--ink); font-variant-numeric:tabular-nums; }
+  .kw-pills .pill.ok { background:var(--accent); color:var(--accent-ink); }
+  .kw-seg { display:flex; flex-wrap:wrap; gap:6px; }
+  .kw-seg button { min-height:44px; padding:0 14px; border-radius:10px; border:1px solid var(--line); background:var(--panel); color:var(--ink); font:500 14px/1 var(--sans); cursor:pointer; }
+  .kw-seg button[aria-pressed="true"] { border-color:var(--accent); box-shadow:inset 0 0 0 1px var(--accent); font-weight:600; }
+  .kw-seg button:disabled { opacity:.5; cursor:not-allowed; }
+  .kw-check { display:flex; gap:12px; align-items:flex-start; min-height:44px; font-size:14px; cursor:pointer; }
+  .kw-check input { width:20px; height:20px; margin:2px 0 0; accent-color:var(--accent); flex:none; }
+  .kw-rules { margin:0; padding-left:20px; display:grid; gap:6px; font-size:14px; }
+  #view-keepwatch .banner { margin:0; }
   /* Connect-a-model wizard provider cards + the concierge suggestion tip. */
   .cwcard { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
     margin-bottom: 8px; padding: 12px 14px; }
@@ -923,6 +938,7 @@
   <button data-sub="activity">Activity</button>
   <button data-sub="mcp">Tools</button>
   <button data-sub="sync">Sync</button>
+  <button data-sub="keepwatch" id="keepWatchNav" hidden>Keep Watch</button>
   <button data-sub="about">About</button>
 </nav>
 </aside>
@@ -1446,6 +1462,34 @@
       <div class="err" id="shareSyncErr" role="alert"></div>
     </div>
   </section>
+  <section id="view-keepwatch" hidden>
+    <div class="page-head settings-intro"><div><h2>Keep Watch</h2><p class="muted">Keep this Mac running with the lid closed, so agent sessions keep working while you carry it or step away.</p></div></div>
+    <div class="banner" id="kwProblem" role="alert" hidden><span id="kwProblemText"></span> <button class="btn" id="kwForceOff">Turn off now</button></div>
+    <div class="card">
+      <label class="switch-row" for="kwSwitch"><span><strong>Run with the lid closed</strong><small id="kwHint" role="status" aria-live="polite">macOS asks for your Mac password each time you turn this on.</small></span><input type="checkbox" role="switch" id="kwSwitch"></label>
+      <div class="kw-pills" id="kwPills" hidden></div>
+      <div class="row" id="kwOnButtons" hidden><button class="btn" id="kwExtend">Add 1 hour</button><button class="btn primary" id="kwOff">Turn off now</button></div>
+      <div class="err" id="kwErr"></div>
+    </div>
+    <div class="card">
+      <div><h3>Turn off after</h3><p class="muted" style="margin:4px 0 0;font-size:13px">You can add time while it is on, up to 12 hours in all.</p></div>
+      <div class="kw-seg" role="group" aria-label="Turn off after" id="kwHours">
+        <button data-hours="1" aria-pressed="false">1 hour</button><button data-hours="2" aria-pressed="true">2 hours</button><button data-hours="4" aria-pressed="false">4 hours</button><button data-hours="8" aria-pressed="false">8 hours</button>
+      </div>
+      <label class="kw-check" for="kwBattery"><input type="checkbox" id="kwBattery"><span><strong>Allow on battery</strong><br><span class="muted" style="font-size:13px">Off by default. When on, it still turns off at 25% battery.</span></span></label>
+    </div>
+    <div class="card">
+      <h3>NorthKeep turns this off when</h3>
+      <ul class="kw-rules">
+        <li>The timer runs out.</li>
+        <li>You unplug the charger, unless you allowed battery above.</li>
+        <li>The battery reaches 25%, or the Mac starts running hot.</li>
+        <li>You quit NorthKeep, or NorthKeep closes unexpectedly. A small helper NorthKeep installs the first time turns it off within two minutes even then.</li>
+      </ul>
+      <div class="banner">Don't put the Mac in a bag while this is on. With the lid shut it cools less well, and it won't sleep to protect itself.</div>
+      <div class="row" id="kwHelperRow" hidden><button class="btn" id="kwRemoveHelper">Remove the helper</button><span class="muted" style="font-size:13px">Asks for your Mac password. Keep Watch installs it again the next time you turn it on.</span></div>
+    </div>
+  </section>
   <section id="view-about" hidden>
     <div class="page-head settings-intro"><div><h2>About</h2><p class="muted">Version and update information for this installation.</p></div></div>
     <h3 class="sect" style="margin-top:0">About NorthKeep</h3>
@@ -1754,7 +1798,7 @@
   });
 
   // --- views: top-level tabs, plus a Settings group.
-  const sections = ['memories', 'projects', 'curation', 'connect', 'sharing', 'models', 'import', 'activity', 'mcp', 'sync', 'about'];
+  const sections = ['memories', 'projects', 'curation', 'connect', 'sharing', 'models', 'import', 'activity', 'mcp', 'sync', 'keepwatch', 'about'];
   let currentSub = 'import';
   function runLoader(v) {
     if (v === 'activity') loadLog();
@@ -1767,6 +1811,7 @@
     else if (v === 'sharing') loadSharing();
     else if (v === 'mcp') loadMcp();
     else if (v === 'about') loadAbout();
+    else if (v === 'keepwatch') loadKeepWatch();
   }
   // The catalog (ADR 0034 Decision 1): one click, no typing, and the command
   // comes from OUR template rather than anything this page sends.
@@ -2125,6 +2170,69 @@
     }
   }
 
+  // --- Keep Watch (ADR 0080). The server owns every rule; this page shows its state.
+  let kwTimer = null;
+  let kwHours = 2;
+  function kwLeft(iso) {
+    const ms = Math.max(0, Date.parse(iso) - Date.now());
+    const h = Math.floor(ms / 3600000), m = Math.round((ms % 3600000) / 60000);
+    return (h ? h + ' h ' : '') + m + ' m left';
+  }
+  function renderKeepWatch(k) {
+    const on = k.state === 'on', stopping = k.state === 'turning_off';
+    $('kwSwitch').checked = on || stopping;
+    $('kwSwitch').disabled = stopping;
+    $('kwHint').textContent = on ? 'On. Close the lid whenever you like.'
+      : stopping ? 'Turning off…'
+      : (k.last_off_reason ? 'Off. ' + k.last_off_reason + ' ' : '') + 'macOS asks for your Mac password each time you turn this on.';
+    const pills = [];
+    if (on) {
+      pills.push('<span class="pill ok">Awake</span>', '<span class="pill">' + esc(kwLeft(k.ends_at)) + '</span>');
+      pills.push('<span class="pill">' + (k.power.source === 'ac' ? 'Plugged in' : 'On battery') + (k.power.percent !== null ? ' · ' + k.power.percent + '%' : '') + '</span>');
+      pills.push('<span class="pill">' + (k.thermal === 0 || k.thermal === 1 ? 'Temperature normal' : 'Running hot') + '</span>');
+    }
+    $('kwPills').innerHTML = pills.join('');
+    $('kwPills').hidden = !on;
+    $('kwOnButtons').hidden = !on;
+    $('kwExtend').disabled = !on || Date.parse(k.ends_at) >= Date.parse(k.ceiling_at) - 61000;
+    if (!on && !stopping) { kwHours = k.hours || kwHours; $('kwBattery').checked = !!k.allow_battery; }
+    document.querySelectorAll('#kwHours button').forEach((b) => {
+      b.setAttribute('aria-pressed', String(Number(b.dataset.hours) === kwHours));
+      b.disabled = on || stopping;
+    });
+    $('kwBattery').disabled = on || stopping;
+    $('kwProblem').hidden = !k.problem;
+    $('kwProblemText').textContent = k.problem || '';
+    $('kwHelperRow').hidden = !(k.helper === 'installed' && k.state === 'off');
+  }
+  async function loadKeepWatch() {
+    try { renderKeepWatch(await api('/api/keep-watch')); } catch (e) { $('kwErr').textContent = e.message; }
+    if (!kwTimer) kwTimer = setInterval(() => {
+      if ($('view-keepwatch').hidden) { clearInterval(kwTimer); kwTimer = null; return; }
+      api('/api/keep-watch').then(renderKeepWatch).catch(() => {});
+    }, 5000);
+  }
+  async function kwAction(json, busyText) {
+    $('kwErr').textContent = '';
+    if (busyText) $('kwHint').textContent = busyText;
+    try { renderKeepWatch(await api('/api/keep-watch', { method: 'POST', json })); }
+    catch (e) { if (!(e.data && e.data.canceled)) $('kwErr').textContent = e.message; loadKeepWatch(); }
+  }
+  $('kwSwitch').addEventListener('change', () => {
+    if ($('kwSwitch').checked) kwAction({ action: 'on', hours: kwHours, allow_battery: $('kwBattery').checked }, 'Waiting for your Mac password…');
+    else kwAction({ action: 'off' });
+  });
+  $('kwHours').addEventListener('click', (e) => {
+    const b = e.target.closest('button[data-hours]');
+    if (!b || b.disabled) return;
+    kwHours = Number(b.dataset.hours);
+    document.querySelectorAll('#kwHours button').forEach((x) => x.setAttribute('aria-pressed', String(x === b)));
+  });
+  $('kwExtend').addEventListener('click', () => kwAction({ action: 'extend' }));
+  $('kwOff').addEventListener('click', () => kwAction({ action: 'off' }));
+  $('kwForceOff').addEventListener('click', () => kwAction({ action: 'force_off' }, 'Waiting for your Mac password…'));
+  $('kwRemoveHelper').addEventListener('click', () => kwAction({ action: 'remove_helper' }, 'Waiting for your Mac password…'));
+
   function loadAbout() {
     $('aboutVersion').textContent = status.version || 'unknown';
     $('updateResult').textContent = '';
@@ -2243,6 +2351,7 @@
     $('ollamaPill').hidden = status.ollama_available;
     $('degradedBanner').hidden = status.ollama_available || !$('view-projects').hidden;
     $('envPill').hidden = !status.env_grant;
+    $('keepWatchNav').hidden = !(status.desktop && status.platform === 'darwin');
     updateSyncPill(status.sync_auto);
     $('lockBtn').hidden = !status.unlocked;
     applyKeyStore(status.key_store, status.keychain_available);
