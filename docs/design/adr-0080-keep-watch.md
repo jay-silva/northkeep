@@ -18,6 +18,7 @@ Label              ai.northkeep.keepwatch
 ProgramArguments   /bin/sh -c <SCRIPT>
 StartInterval      15
 RunAtLoad          true
+AssociatedBundleIdentifiers  ai.northkeep.desktop   (display name in Login Items only)
 ```
 
 ## Helper script

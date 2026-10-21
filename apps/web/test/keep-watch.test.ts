@@ -234,6 +234,18 @@ describe('Keep Watch controller', () => {
     expect((await kw.status()).state).toBe('off');
   });
 
+  it('shows off, not a problem, when the helper already turned the mode off', async () => {
+    const kw = controller();
+    await kw.turnOn(2, false);
+    mac.marker = false;
+    mac.sleepDisabled = 0;
+    await kw.tick();
+    const status = await kw.status();
+    expect(status).toMatchObject({ state: 'off', problem: null, last_off_reason: 'Its safety helper turned it off.' });
+    expect(mac.notices).toEqual([]);
+    expect(fs.existsSync(heartbeat())).toBe(false);
+  });
+
   it('adds time but never past the 12-hour ceiling', async () => {
     const kw = controller();
     await kw.turnOn(8, false);

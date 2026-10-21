@@ -72,6 +72,8 @@ export const HELPER_PLIST = [
   '  <integer>15</integer>',
   '  <key>RunAtLoad</key>',
   '  <true/>',
+  '  <key>AssociatedBundleIdentifiers</key>',
+  '  <string>ai.northkeep.desktop</string>',
   '</dict>',
   '</plist>',
   '',
@@ -231,6 +233,7 @@ const OFF_REASONS: Record<string, string> = {
   user: 'You turned it off.',
   quit: 'NorthKeep quit.',
   startup: 'NorthKeep found it left on from an earlier run.',
+  helper: 'Its safety helper turned it off.',
 };
 
 const HELPER_DISABLED =
@@ -347,9 +350,18 @@ export class KeepWatchController {
       if (reason) {
         this.beginTurningOff(reason);
       } else if ((await this.helperState()) !== 'installed' || !this.deps.exists(MARKER_PATH)) {
-        this.problem = CANNOT_SELF_OFF;
-        if (!this.notified) this.deps.notify(CANNOT_SELF_OFF);
-        this.notified = true;
+        // The helper reads on its own and fails closed, so it may already have turned the mode off.
+        const out = await this.read('/usr/bin/pmset', ['-g']);
+        if (out !== null && parseSleepDisabled(out) === 0) {
+          this.removeHeartbeat();
+          this.state = 'off';
+          this.lastOffReason = OFF_REASONS.helper ?? null;
+          this.problem = null;
+        } else {
+          this.problem = CANNOT_SELF_OFF;
+          if (!this.notified) this.deps.notify(CANNOT_SELF_OFF);
+          this.notified = true;
+        }
       }
     }
     if (this.state === 'turning_off') {
