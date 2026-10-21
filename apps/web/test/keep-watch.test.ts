@@ -139,6 +139,7 @@ describe('Keep Watch controller', () => {
     const kw = controller();
     expect(await kw.turnOn(2, false)).toEqual({ ok: true });
     expect(mac.adminCommands[0]).toContain('launchctl bootstrap system');
+    expect(mac.adminCommands[0]).toContain('with prompt "NorthKeep wants to turn on Keep Watch and install its helper');
     expect(fs.existsSync(heartbeat())).toBe(true);
     expect((await kw.status()).ends_at).toBe(new Date(now + 2 * 3_600_000).toISOString());
     kw.turnOff();

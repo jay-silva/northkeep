@@ -124,10 +124,18 @@ export const REMOVE_HELPER_COMMAND = [
 ].join('\n');
 
 /** `osascript` arguments that run a root shell command behind the macOS admin prompt. */
-export function adminScriptArgs(command: string): string[] {
-  const quoted = command.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  return ['-e', `do shell script "${quoted}" with administrator privileges`];
+export function adminScriptArgs(command: string, prompt: string): string[] {
+  const q = (text: string) => text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  // `with prompt` names NorthKeep in the dialog; without it macOS says only "osascript".
+  return ['-e', `do shell script "${q(command)}" with prompt "${q(prompt)}" with administrator privileges`];
 }
+
+const PROMPTS = {
+  on: 'NorthKeep wants to turn on Keep Watch, so this Mac stays awake with the lid closed.',
+  install: 'NorthKeep wants to turn on Keep Watch and install its helper, which turns Keep Watch off when NorthKeep stops.',
+  off: 'NorthKeep wants to turn off Keep Watch.',
+  remove: 'NorthKeep wants to turn off Keep Watch and remove its helper.',
+};
 
 export interface PowerReading {
   source: 'ac' | 'battery' | 'unknown';
@@ -394,8 +402,8 @@ export class KeepWatchController {
     };
   }
 
-  private async admin(command: string): Promise<ExecResult> {
-    return this.deps.exec('/usr/bin/osascript', adminScriptArgs(command), 5 * 60_000);
+  private async admin(command: string, prompt: string): Promise<ExecResult> {
+    return this.deps.exec('/usr/bin/osascript', adminScriptArgs(command, prompt), 5 * 60_000);
   }
 
   async turnOn(hours: number, allowBattery: boolean): Promise<{ ok: true } | { ok: false; status: number; error: string; canceled?: boolean }> {
@@ -417,7 +425,7 @@ export class KeepWatchController {
     this.busy = true;
     try {
       this.touchHeartbeat();
-      const r = await this.admin(turnOnCommand(hb, helper === 'missing'));
+      const r = await this.admin(turnOnCommand(hb, helper === 'missing'), helper === 'missing' ? PROMPTS.install : PROMPTS.on);
       if (r.code !== 0) {
         this.removeHeartbeat();
         if (/-128|User cancel/i.test(r.stderr)) return { ok: false, status: 409, error: 'Keep Watch stayed off.', canceled: true };
@@ -459,7 +467,7 @@ export class KeepWatchController {
     this.busy = true;
     try {
       this.beginTurningOff('user');
-      const r = await this.admin(FORCE_OFF_COMMAND);
+      const r = await this.admin(FORCE_OFF_COMMAND, PROMPTS.off);
       await this.tick();
       return r.code === 0;
     } finally {
@@ -472,7 +480,7 @@ export class KeepWatchController {
     this.busy = true;
     try {
       if (this.state === 'on') this.beginTurningOff('user');
-      const r = await this.admin(REMOVE_HELPER_COMMAND);
+      const r = await this.admin(REMOVE_HELPER_COMMAND, PROMPTS.remove);
       if (r.code === 0) {
         this.state = 'off';
         this.problem = null;

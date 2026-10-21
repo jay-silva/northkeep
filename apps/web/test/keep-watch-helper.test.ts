@@ -211,8 +211,9 @@ describe.skipIf(!darwin)('turn-on command', () => {
     const local = turnOnCommand(hb, false)
       .replaceAll(MARKER_PATH, path.join(dir, 'marker'))
       .replaceAll('/usr/bin/pmset', path.join(dir, 'pmset'));
-    const [flag, source] = adminScriptArgs(local);
-    execFileSync('/usr/bin/osascript', [flag!, source!.replace(' with administrator privileges', '')]);
+    const [flag, source] = adminScriptArgs(local, 'NorthKeep wants "quotes" \\ here.');
+    expect(source).toContain('with prompt "NorthKeep wants \\"quotes\\" \\\\ here." with administrator privileges');
+    execFileSync('/usr/bin/osascript', [flag!, source!.replace(/ with prompt ".*" with administrator privileges$/, '')]);
     expect(fs.readFileSync(path.join(dir, 'marker'), 'utf8').split('\n')[0]).toBe(hb);
   });
 });
