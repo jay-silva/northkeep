@@ -98,6 +98,40 @@ describe('planNote', () => {
   });
 });
 
+describe('replies', () => {
+  it('a reply takes the parent thread and addresses the parent sender by default', () => {
+    const root = store(planNote({ kind: 'note', text: 'are you in vault.ts?', to: 'claude-desktop' }, { host: 'cursor-vscode', sender_key: 'k-cursor' }, [], NOW), { sender_key: 'k-cursor' });
+    const desktop = { host: 'local-agent-mode-northkeep', sender_key: 'k-desktop' };
+    const reply = planNote({ kind: 'note', text: 'no, lock.ts', reply_to: root.id }, desktop, [root], NOW);
+    expect(reply).toEqual({ v: 1, kind: 'note', host: 'claude-desktop', text: 'no, lock.ts', to: 'cursor', reply_to: root.id, thread: root.id });
+    const stored = store(reply, desktop);
+    const second = planNote({ kind: 'note', text: 'thanks', reply_to: stored.id, to: 'all' }, { host: 'cursor', sender_key: 'k-cursor' }, [root, stored], NOW);
+    expect([second.reply_to, second.thread, second.to]).toEqual([stored.id, root.id, 'all']);
+  });
+
+  it('a reply may answer a claim; a claim or release may not be a reply', () => {
+    const claim = store(planNote({ kind: 'claim', subject: 'auth' }, CURSOR, [], NOW), CURSOR);
+    expect(planNote({ kind: 'note', text: 'how long?', reply_to: claim.id }, CLAUDE, [claim], NOW).thread).toBe(claim.id);
+    expect(code(() => planNote({ kind: 'claim', subject: 'billing', reply_to: claim.id }, CLAUDE, [claim], NOW))).toBe('invalid_request');
+    expect(code(() => planNote({ kind: 'release', releases: claim.id, reply_to: claim.id }, CURSOR, [claim], NOW))).toBe('invalid_request');
+  });
+
+  it('refuses a reply to a note that is not in the project', () => {
+    const root = store(planNote({ kind: 'note', text: 'hi' }, CURSOR, [], NOW), CURSOR);
+    expect(code(() => planNote({ kind: 'note', text: 'hello', reply_to: 'gone' }, CLAUDE, [root], NOW))).toBe('reply_target_missing');
+  });
+
+  it('a retried reply with a defaulted address matches; a different parent does not', () => {
+    const a = store(planNote({ kind: 'note', text: 'a' }, CURSOR, [], NOW), CURSOR);
+    const b = store(planNote({ kind: 'note', text: 'b' }, CURSOR, [], NOW), CURSOR);
+    const reply = planNote({ kind: 'note', text: 'ok', reply_to: a.id }, CLAUDE, [a, b], NOW);
+    expect(sameNoteRequest(reply, { kind: 'note', text: 'ok', reply_to: a.id })).toBe(true);
+    expect(sameNoteRequest(reply, { kind: 'note', text: 'ok', reply_to: b.id })).toBe(false);
+    expect(sameNoteRequest(reply, { kind: 'note', text: 'ok' })).toBe(false);
+    expect(sameNoteRequest(reply, { kind: 'note', text: 'ok', reply_to: a.id, to: 'codex' })).toBe(false);
+  });
+});
+
 describe('canonicalHost', () => {
   it('maps every reported name in the design table to its short name', () => {
     const table: Array<[string, string]> = [
@@ -192,6 +226,13 @@ describe('notes sealing', () => {
     expect(openNote(blob, { ...row, sender_key: 'forged' }, key)).toBeNull();
     expect(openNote(blob, row, deriveNotesKey(Buffer.alloc(32, 8)))).toBeNull();
     expect(blob.includes(Buffer.from('hello'))).toBe(false);
+  });
+
+  it('a reply sealed by this build opens unchanged through the version-1 reader', () => {
+    const key = deriveNotesKey(master);
+    const root = store(planNote({ kind: 'note', text: 'q' }, CURSOR, [], NOW), CURSOR);
+    const reply = planNote({ kind: 'note', text: 'a', reply_to: root.id }, CLAUDE, [root], NOW);
+    expect(openNote(sealNote(reply, row, key), row, key)).toEqual({ v: 1, kind: 'note', host: 'claude-code', text: 'a', to: 'cursor', reply_to: root.id, thread: root.id });
   });
 
   it('key check tells the right key from a wrong one', () => {

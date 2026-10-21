@@ -124,7 +124,10 @@ function tameTo(to: string | undefined): string {
 
 /** True when a stored note is what this request would store; a reused client_id must match. */
 export function sameNoteRequest(prior: NotePayload, request: NoteRequest): boolean {
-  if (prior.kind !== request.kind || prior.text !== tameText(request.text) || prior.to !== tameTo(request.to)) return false;
+  if (prior.kind !== request.kind || prior.text !== tameText(request.text) || prior.reply_to !== request.reply_to) return false;
+  // A reply without `to` was addressed to its parent's sender, which the same reply_to fixes.
+  const toDefaulted = request.to === undefined && request.reply_to !== undefined;
+  if (!toDefaulted && canonicalHost(prior.to) !== tameTo(request.to)) return false;
   if (request.kind === 'claim') return normalizeSubject(prior.subject ?? '') === normalizeSubject(tameBoardText(breaksToSpaces(request.subject ?? ''), NOTE_SUBJECT_MAX_CHARS));
   if (request.kind === 'release') return prior.releases === request.releases;
   return true;
@@ -164,12 +167,20 @@ export function planNote(
 ): NotePayload {
   const host = canonicalHost(sender.host) || 'unknown';
   const text = tameText(request.text);
-  const to = tameTo(request.to);
+  if (request.reply_to !== undefined && request.kind !== 'note') {
+    throw new ProjectNoteError('invalid_request', 'Only a note can reply; a claim or release cannot carry reply_to.');
+  }
+  const parent = request.reply_to === undefined ? undefined : existing.find((n) => n.id === request.reply_to);
+  if (request.reply_to !== undefined && parent === undefined) {
+    throw new ProjectNoteError('reply_target_missing', 'No note in this project has that id; it may have been pruned.');
+  }
+  const to = request.to === undefined && parent !== undefined ? canonicalHost(parent.payload.host) : tameTo(request.to);
   if (to === '') throw new ProjectNoteError('invalid_request', 'to must name a host, or be "all".');
   switch (request.kind) {
     case 'note': {
       if (text === '') throw new ProjectNoteError('invalid_request', 'A note needs text.');
-      return { v: 1, kind: 'note', host, text, to };
+      if (parent === undefined) return { v: 1, kind: 'note', host, text, to };
+      return { v: 1, kind: 'note', host, text, to, reply_to: parent.id, thread: parent.payload.thread ?? parent.id };
     }
     case 'claim': {
       const subject = tameBoardText(breaksToSpaces(request.subject ?? ''), NOTE_SUBJECT_MAX_CHARS);
