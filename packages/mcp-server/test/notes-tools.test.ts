@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { KDF_INTERACTIVE, MAX_NOTES_PER_PROJECT, NOTES_NOTICE, Vault, deriveMasterKey, deriveNotesKey, generateDeviceSecret, withFileLock } from '@northkeep/core';
+import { KDF_INTERACTIVE, MAX_NOTES_PER_PROJECT, NOTES_NOTICE, Vault, deriveMasterKey, deriveNotesKey, generateDeviceSecret, planNote, withFileLock } from '@northkeep/core';
 import { openSqliteFile } from '@northkeep/platform-node';
 import { createServer } from '../src/server.js';
 import { NotesFile, NotesKeyMismatchError, notesFilePath } from '../src/notes-store.js';
@@ -595,6 +595,53 @@ describe('ADR 0079 replies, receipts and waits', () => {
     expect(waited.json.notes[0].text).toBe('Write to [EMAIL_1] about the lease.');
     expect(waited.text).not.toContain('someone@example.com');
   });
+
+  it('a read or wait whose masking fails leaves no receipt, and the note arrives once masking works', async () => {
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    const clientId = randomUUID();
+    const sent = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Are you in vault.ts?', client_id: clientId });
+    const shownRows = () => {
+      const file = NotesFile.open(notesFilePath(vaultPath)!, deriveNotesKey(Buffer.from(process.env.NORTHKEEP_MASTER_KEY!, 'hex')));
+      try { return file.shownRows('rental'); } finally { file.close(); }
+    };
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const read = await call(desk, 'project_get', { project: 'rental' });
+    const waited = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect([read.isError, read.text]).toEqual([true, 'Name masking failed (NORTHKEEP_REDACT_TIER=2); nothing was returned. Start the local model or use Tier 1 or 3.']);
+    expect([waited.isError, waited.text]).toEqual([true, 'Name masking failed (NORTHKEEP_REDACT_TIER=2); nothing was returned. Start the local model or use Tier 1 or 3.']);
+    expect(shownRows()).toEqual([]);
+
+    delete process.env.NORTHKEEP_REDACT_TIER;
+    const replay = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Are you in vault.ts?', client_id: clientId });
+    expect([replay.json.replayed, replay.json.note.seen_by]).toEqual([true, []]);
+    expect((await call(desk, 'project_get', { project: 'rental' })).json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    expect((await call(waiter, 'project_wait', { project: 'rental', seconds: 1 })).json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    expect(shownRows().map((r) => r.host).sort()).toEqual(['claude-code', 'claude-desktop']);
+  });
+
+  it('a wait whose done row cannot be written returns nothing and leaves no receipt', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const key = () => deriveNotesKey(Buffer.from(process.env.NORTHKEEP_MASTER_KEY!, 'hex'));
+    const logFile = path.join(home, 'mcp-calls.log');
+    const waiting = call(claude, 'project_wait', { project: 'rental', seconds: 5 });
+    await sleep(300);
+    fs.chmodSync(logFile, 0o400);
+    const file = NotesFile.open(notesFilePath(vaultPath)!, key());
+    const note = file.insert('rental', randomUUID(), 'k-cursor', (existing) => planNote({ kind: 'note', text: 'Done with vault.ts.' }, { host: 'cursor', sender_key: 'k-cursor' }, existing, new Date())).note;
+    file.close();
+    const waited = await waiting;
+    fs.chmodSync(logFile, 0o600);
+    expect([waited.isError, waited.text]).toEqual([true, 'NorthKeep could not complete its call log, so nothing was returned.']);
+    const after = NotesFile.open(notesFilePath(vaultPath)!, key());
+    try { expect(after.shownRows('rental')).toEqual([]); } finally { after.close(); }
+    expect((await call(claude, 'project_get', { project: 'rental' })).json.notes.map((n: any) => n.id)).toEqual([note.id]);
+  }, 15_000);
 
   it('addresses fold case, and an address no known app reports carries to_note', async () => {
     const cursor = await connect('cursor-vscode');

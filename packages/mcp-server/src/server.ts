@@ -393,6 +393,8 @@ interface RunOutcome {
   result_id?: string;
   result_ids?: string[];
   disclosed_scopes?: string[];
+  /** Notes recorded as shown for this result; run takes the record back if the app never receives it. */
+  delivered?: { project: string; ids: string[] };
 }
 
 /**
@@ -550,6 +552,7 @@ async function run(
   if (options.mask !== 'none') {
     const masked = await maskReturnPayload(payload, options.mask, tier, returnPseudonyms);
     if (masked.failed) {
+      undoShown(vaultPath, ctx, outcome.delivered);
       if (options.kind === 'write') {
         // The write landed (code review F3): say so, show nothing, and log
         // the true outcome, so an app does not retry a change that is saved.
@@ -587,6 +590,7 @@ async function run(
     ...(degraded ? { redaction_degraded: true } : {}),
   });
   if (!logged) {
+    undoShown(vaultPath, ctx, outcome.delivered);
     // A saved write says so, with no content: an error would invite a retry
     // of a write that landed, and content would be a disclosure with no
     // ledger row. A read discloses nothing (Jay decision 5).
@@ -677,10 +681,11 @@ function attachNotes(outcome: RunOutcome, vault: Vault, notes: NotesAccess, proj
     const file = notes.open();
     const live = new Set(vault.scopes().map(parseProjectSlug).filter((slug): slug is string => slug !== null));
     file.keepOnly(live);
-    const { block, recorded } = deliverNotes(file, project, ctx, undefined, new Date());
+    const { block, shown, recorded } = deliverNotes(file, project, ctx, undefined, new Date());
     const ids = blockIds(block);
     return {
       ...outcome,
+      ...(recorded && shown.length > 0 ? { delivered: { project, ids: shown } } : {}),
       payload: {
         ...payload,
         ...(block ?? {}),
@@ -743,6 +748,7 @@ async function waitForNotes(
             ...checked,
             payload: { ...block, ...(recorded ? {} : { notes_note: NOTES_UNRECORDED_NOTE }), waited_ms: first ? 0 : Date.now() - started },
             result_ids: blockIds(block),
+            ...(recorded ? { delivered: { project, ids: shown } } : {}),
           };
         }
       }
@@ -753,6 +759,34 @@ async function waitForNotes(
   } finally {
     file?.close();
     memzero(notesKey);
+  }
+}
+
+/**
+ * Deletes the shown rows a result recorded when the app never got the result
+ * (masking failed, or the done row could not be written), so no receipt is
+ * false. Outside the vault lock, like waitForNotes; best effort, never throws.
+ */
+function undoShown(vaultPath: string, ctx: ConnContext, delivered: RunOutcome['delivered']): void {
+  if (delivered === undefined || delivered.ids.length === 0) return;
+  let notesKey: Buffer | null = null;
+  try {
+    const resolved = resolveMasterKey(vaultPath);
+    if (resolved === null) return;
+    notesKey = deriveNotesKey(resolved.key);
+    memzero(resolved.key);
+    const filePath = notesFilePath(vaultPath);
+    if (filePath === null) return;
+    const file = NotesFile.open(filePath, notesKey, { resetOnMismatch: false });
+    try {
+      file.unmarkShown(delivered.project, ctx.session_id, delivered.ids);
+    } finally {
+      file.close();
+    }
+  } catch {
+    // The receipt stays, as it did before this fix; the call's own error is what the app sees.
+  } finally {
+    if (notesKey !== null) memzero(notesKey);
   }
 }
 

@@ -294,6 +294,21 @@ export class NotesFile {
     }
   }
 
+  /** Takes back this reader's shown rows for notes it never received; ids outside the project are skipped. */
+  unmarkShown(project: string, readerKey: string, ids: readonly string[]): void {
+    this.assertWritable();
+    if (ids.length === 0) return;
+    const remove = this.db.prepare('DELETE FROM shown WHERE reader_key = ? AND note_id = ? AND note_id IN (SELECT id FROM notes WHERE project = ?)');
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const id of ids) remove.run(readerKey, id, project);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
   shownRows(project: string): ShownRow[] {
     if (!this.hasShownTable) return [];
     return this.db.prepare(`${SHOWN_IN_PROJECT} ORDER BY s.shown_at, s.note_id`).all(project) as ShownRow[];
