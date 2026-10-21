@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { KDF_INTERACTIVE, MAX_NOTES_PER_PROJECT, NOTES_NOTICE, Vault, deriveMasterKey, deriveNotesKey, generateDeviceSecret } from '@northkeep/core';
+import { KDF_INTERACTIVE, MAX_NOTES_PER_PROJECT, NOTES_NOTICE, Vault, deriveMasterKey, deriveNotesKey, generateDeviceSecret, withFileLock } from '@northkeep/core';
 import { openSqliteFile } from '@northkeep/platform-node';
 import { createServer } from '../src/server.js';
 import { NotesFile, NotesKeyMismatchError, notesFilePath } from '../src/notes-store.js';
@@ -548,6 +548,53 @@ describe('ADR 0079 replies, receipts and waits', () => {
     expect(woke.json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
     expect(woke.json.waited_ms).toBeGreaterThan(0);
   }, 15_000);
+
+  it('a wait still returns while another process holds the vault lock', async () => {
+    const cursor = await connect('cursor');
+    await createProject(cursor);
+    const waiting = call(cursor, 'project_wait', { project: 'rental', seconds: 10 });
+    await sleep(200);
+    const key = deriveNotesKey(Buffer.from(process.env.NORTHKEEP_MASTER_KEY!, 'hex'));
+    const woke = await withFileLock(vaultPath, async () => {
+      const file = NotesFile.open(notesFilePath(vaultPath)!, key);
+      try {
+        file.insert('rental', randomUUID(), 'k-other-process', () => ({ v: 1, kind: 'note', host: 'claude-code', text: 'Sent under the lock.', to: 'cursor' }));
+      } finally { file.close(); }
+      return waiting;
+    });
+    expect(woke.json.notes.map((n: any) => [n.from, n.text])).toEqual([['claude-code', 'Sent under the lock.']]);
+  }, 15_000);
+
+  it('a cancelled wait stops polling and leaves a later note unseen', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const controller = new AbortController();
+    const waiting = cursor.callTool({ name: 'project_wait', arguments: { project: 'rental', seconds: 10 } }, undefined, { signal: controller.signal });
+    await sleep(200);
+    controller.abort();
+    await expect(waiting).rejects.toThrow();
+    const sent = await call(claude, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: 'After you gave up.' });
+    await sleep(1200);
+    const got = await call(cursor, 'project_get', { project: 'rental' });
+    expect(got.json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    const done = callLog().filter((r) => r.tool === 'project_wait' && r.phase === 'done');
+    expect(done.map((r) => [r.ok, r.error])).toEqual([[false, 'project_error']]);
+  }, 15_000);
+
+  it('a wait masks note text under a redaction tier exactly as a project read does', async () => {
+    const cursor = await connect('cursor');
+    const reader = await connect('claude-code');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', text: 'Write to someone@example.com about the lease.' });
+    process.env.NORTHKEEP_REDACT_TIER = '1';
+    const read = await call(reader, 'project_get', { project: 'rental' });
+    const waited = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect(read.json.notes[0].text).toBe('Write to [EMAIL_1] about the lease.');
+    expect(waited.json.notes[0].text).toBe('Write to [EMAIL_1] about the lease.');
+    expect(waited.text).not.toContain('someone@example.com');
+  });
 
   it('when shown rows cannot be written, the notes still return with notes_note and come up again', async () => {
     const cursor = await connect('cursor');
