@@ -1,11 +1,13 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { KDF_INTERACTIVE, NOTES_NOTICE, Vault, deriveMasterKey, deriveNotesKey, generateDeviceSecret } from '@northkeep/core';
+import { KDF_INTERACTIVE, MAX_NOTES_PER_PROJECT, NOTES_NOTICE, Vault, deriveMasterKey, deriveNotesKey, generateDeviceSecret, planNote, withFileLock } from '@northkeep/core';
+import { openSqliteFile } from '@northkeep/platform-node';
 import { createServer } from '../src/server.js';
 import { NotesFile, NotesKeyMismatchError, notesFilePath } from '../src/notes-store.js';
 import { notesOwnerRelease, notesOwnerView, runNotesHook } from '../src/notes-cli.js';
@@ -224,6 +226,782 @@ describe('ADR 0072 notes and claims', () => {
     const fresh = await call(cursor, 'project_get', { project: 'other' });
     expect(fresh.json.active_claims).toBeUndefined();
   });
+});
+
+describe('ADR 0079 shown rows in the notes file', () => {
+  const KEY = Buffer.alloc(32, 4);
+  const T0 = new Date('2026-10-21T09:00:00.000Z');
+  const T1 = new Date('2026-10-21T09:05:00.000Z');
+  const note = (text: string) => () => ({ v: 1 as const, kind: 'note' as const, host: 'cursor', text, to: 'all' });
+  let file: string;
+  beforeEach(() => { file = path.join(home, 'notes-shown.db'); });
+
+  function shownCount(): number {
+    const db = openSqliteFile(file);
+    try { return (db.prepare('SELECT COUNT(*) AS n FROM shown').get() as { n: number }).n; } finally { db.close(); }
+  }
+
+  it('markShown records each note once per reader, and shownFor and shownRows read it back', () => {
+    const notes = NotesFile.open(file, KEY);
+    try {
+      const a = notes.insert('rental', randomUUID(), 'k-cursor', note('a'), T0).note;
+      const b = notes.insert('rental', randomUUID(), 'k-cursor', note('b'), T0).note;
+      const other = notes.insert('other', randomUUID(), 'k-cursor', note('c'), T0).note;
+      notes.markShown('rental', 'k-claude', 'claude-code', [a.id], T0);
+      notes.markShown('rental', 'k-claude', 'claude-code', [a.id, b.id, other.id, 'no-such-id'], T1);
+      expect([...notes.shownFor('k-claude', 'rental')].sort()).toEqual([a.id, b.id].sort());
+      expect(notes.shownFor('k-claude', 'other').size).toBe(0);
+      expect(notes.shownRows('rental')).toEqual([
+        { note_id: a.id, reader_key: 'k-claude', host: 'claude-code', shown_at: T0.toISOString() },
+        { note_id: b.id, reader_key: 'k-claude', host: 'claude-code', shown_at: T1.toISOString() },
+      ]);
+      expect(notes.maxSeq('rental')).toBe(b.seq);
+      expect(notes.maxSeq('empty')).toBe(0);
+    } finally { notes.close(); }
+    expect(shownCount()).toBe(2);
+  });
+
+  it('pruning a note in insert deletes its shown rows', () => {
+    const notes = NotesFile.open(file, KEY);
+    try {
+      const first = notes.insert('rental', randomUUID(), 'k-cursor', note('first'), T0).note;
+      const second = notes.insert('rental', randomUUID(), 'k-cursor', note('second'), T0).note;
+      notes.markShown('rental', 'k-claude', 'claude-code', [first.id, second.id], T0);
+      for (let i = 0; i < MAX_NOTES_PER_PROJECT - 1; i++) notes.insert('rental', randomUUID(), 'k-cursor', note(`n${i}`), T0);
+      expect(notes.read('rental').map((n) => n.id)).not.toContain(first.id);
+      expect([...notes.shownFor('k-claude', 'rental')]).toEqual([second.id]);
+    } finally { notes.close(); }
+    expect(shownCount()).toBe(1);
+  });
+
+  it('keepOnly deletes the shown rows of a dropped project and keeps the live one', () => {
+    const notes = NotesFile.open(file, KEY);
+    try {
+      const kept = notes.insert('rental', randomUUID(), 'k-cursor', note('kept'), T0).note;
+      const dropped = notes.insert('gone', randomUUID(), 'k-cursor', note('dropped'), T0).note;
+      notes.markShown('rental', 'k-claude', 'claude-code', [kept.id], T0);
+      notes.markShown('gone', 'k-claude', 'claude-code', [dropped.id], T0);
+      expect(notes.keepOnly(new Set(['rental']))).toBe(1);
+      expect([...notes.shownFor('k-claude', 'rental')]).toEqual([kept.id]);
+    } finally { notes.close(); }
+    expect(shownCount()).toBe(1);
+  });
+
+  it('openReadOnly reads notes and receipts and refuses every write', () => {
+    const notes = NotesFile.open(file, KEY);
+    const n = notes.insert('rental', randomUUID(), 'k-cursor', note('read me'), T0).note;
+    notes.markShown('rental', 'k-claude', 'claude-code', [n.id], T0);
+    notes.close();
+    const before = fs.readFileSync(file);
+    const reader = NotesFile.openReadOnly(file, KEY);
+    try {
+      expect(reader.read('rental').map((r) => r.payload.text)).toEqual(['read me']);
+      expect(reader.shownRows('rental').map((r) => r.host)).toEqual(['claude-code']);
+      const writer = reader as unknown as NotesFile;
+      expect(() => writer.insert('rental', randomUUID(), 'k-x', note('no'), T1)).toThrow('read only');
+      expect(() => writer.markShown('rental', 'k-x', 'codex', [n.id], T1)).toThrow('read only');
+      expect(() => writer.markSeen('k-x', 'rental', 9)).toThrow('read only');
+      expect(() => writer.keepOnly(new Set())).toThrow('read only');
+    } finally { reader.close(); }
+    expect(fs.readFileSync(file).equals(before)).toBe(true);
+    expect(shownCount()).toBe(1);
+  });
+
+  it('openReadOnly refuses a missing file without creating it', () => {
+    expect(() => NotesFile.openReadOnly(file, KEY)).toThrow('unable to open database file');
+    expect(fs.existsSync(file)).toBe(false);
+  });
+
+  it('openReadOnly refuses a mismatched key or an empty file and leaves the file as it was', () => {
+    const notes = NotesFile.open(file, KEY);
+    notes.insert('rental', randomUUID(), 'k-cursor', note('kept'), T0);
+    notes.close();
+    const before = fs.readFileSync(file);
+    expect(() => NotesFile.openReadOnly(file, Buffer.alloc(32, 6))).toThrow(NotesKeyMismatchError);
+    expect(fs.readFileSync(file).equals(before)).toBe(true);
+    const reopened = NotesFile.open(file, KEY);
+    try {
+      expect(reopened.reset).toBe(false);
+      expect(reopened.read('rental').map((r) => r.payload.text)).toEqual(['kept']);
+    } finally { reopened.close(); }
+    const empty = path.join(home, 'notes-empty.db');
+    fs.writeFileSync(empty, '');
+    expect(() => NotesFile.openReadOnly(empty, KEY)).toThrow(NotesKeyMismatchError);
+    expect(fs.statSync(empty).size).toBe(0);
+  });
+
+  it('a key reset clears the shown rows with the notes', () => {
+    const notes = NotesFile.open(file, KEY);
+    const n = notes.insert('rental', randomUUID(), 'k-cursor', note('x'), T0).note;
+    notes.markShown('rental', 'k-claude', 'claude-code', [n.id], T0);
+    notes.close();
+    NotesFile.open(file, Buffer.alloc(32, 5)).close();
+    expect(shownCount()).toBe(0);
+  });
+});
+
+describe('ADR 0079 replies, receipts and waits', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const brief = (n: any) => ({ from: n.from, to: n.to, text: n.text, reply_to: n.reply_to, thread: n.thread });
+
+  function callLog(): any[] {
+    return fs.readFileSync(path.join(home, 'mcp-calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  }
+
+  it('a reply threads under its parent, goes to the parent\'s app by default, and reaches that sender on its next read', async () => {
+    const cursor = await connect('cursor-vscode');
+    const claude = await connect('claude-code');
+    const codex = await connect('codex-mcp-client');
+    await createProject(cursor);
+    const ask = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'claude-code', text: 'Are you in vault.ts?' });
+    const askId: string = ask.json.note.id;
+    expect(ask.json.note.thread).toBe(askId);
+    expect(ask.json.note.seen_by).toEqual([]);
+
+    const got = await call(claude, 'project_get', { project: 'rental' });
+    expect(got.json.notes.map(brief)).toEqual([{ from: 'cursor', to: 'claude-code', text: 'Are you in vault.ts?', reply_to: undefined, thread: undefined }]);
+
+    const reply = await call(claude, 'project_note', { project: 'rental', kind: 'note', reply_to: askId, text: 'No, only auth.ts.' });
+    expect(reply.isError, reply.text).toBe(false);
+    expect(reply.json.note.to).toBe('cursor');
+    expect(reply.json.note.reply_to).toBe(askId);
+    expect(reply.json.note.thread).toBe(askId);
+
+    const back = await call(cursor, 'project_get', { project: 'rental' });
+    expect(back.json.notes.map(brief)).toEqual([{ from: 'claude-code', to: 'cursor', text: 'No, only auth.ts.', reply_to: askId, thread: askId }]);
+    expect(back.json.notes_notice).toBe(NOTES_NOTICE);
+    expect((await call(codex, 'project_get', { project: 'rental' })).json.notes).toBeUndefined();
+
+    const thanks = await call(cursor, 'project_note', { project: 'rental', kind: 'note', reply_to: reply.json.note.id, text: 'Thanks.' });
+    expect([thanks.json.note.to, thanks.json.note.reply_to, thanks.json.note.thread]).toEqual(['claude-code', reply.json.note.id, askId]);
+
+    const missing = await call(cursor, 'project_note', { project: 'rental', kind: 'note', reply_to: randomUUID(), text: 'to nobody' });
+    expect(missing.isError).toBe(true);
+    expect(missing.json.error.code).toBe('reply_target_missing');
+  });
+
+  it('seen_by lists the apps shown a note, never the sender\'s own app', async () => {
+    const cursor = await connect('cursor');
+    const cursorOther = await connect('cursor-vscode');
+    const claude = await connect('claude-code');
+    const codex = await connect('codex');
+    await createProject(cursor);
+    const clientId = randomUUID();
+    const request = { project: 'rental', kind: 'note', text: 'Deploy is frozen until noon.', client_id: clientId };
+    const sent = await call(cursor, 'project_note', request);
+    expect(sent.json.note.seen_by).toEqual([]);
+
+    expect((await call(cursorOther, 'project_get', { project: 'rental' })).json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    const afterOwnApp = await call(cursor, 'project_note', request);
+    expect(afterOwnApp.json.replayed).toBe(true);
+    expect(afterOwnApp.json.note.seen_by).toEqual([]);
+
+    const claudeRead = await call(claude, 'project_get', { project: 'rental' });
+    expect(claudeRead.json.notes[0].seen_by).toEqual([]);
+    const afterClaude = await call(cursor, 'project_note', request);
+    expect(afterClaude.json.note.seen_by).toEqual(['claude-code']);
+
+    const codexRead = await call(codex, 'project_get', { project: 'rental' });
+    expect(codexRead.json.notes[0].seen_by).toEqual(['claude-code']);
+    expect((await call(cursor, 'project_note', request)).json.note.seen_by).toEqual(['claude-code', 'codex']);
+  });
+
+  it('project_wait returns a reply posted by another session while it waits, inside the call log envelope', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const ask = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'claude-code', text: 'Which branch?' });
+    const waiting = call(cursor, 'project_wait', { project: 'rental', seconds: 10 });
+    await sleep(300);
+    const reply = await call(claude, 'project_note', { project: 'rental', kind: 'note', reply_to: ask.json.note.id, text: 'adr-0079-server.' });
+    const woke = await waiting;
+    expect(woke.isError, woke.text).toBe(false);
+    expect(woke.json.notes.map(brief)).toEqual([{ from: 'claude-code', to: 'cursor', text: 'adr-0079-server.', reply_to: ask.json.note.id, thread: ask.json.note.id }]);
+    expect(woke.json.notes_count).toBe(1);
+    expect(woke.json.notes_notice).toBe(NOTES_NOTICE);
+    expect(woke.json.waited_ms).toBeGreaterThanOrEqual(300);
+    expect(woke.json.waited_ms).toBeLessThan(2000);
+
+    const rows = callLog().filter((r) => r.tool === 'project_wait');
+    expect(rows.map((r) => [r.phase, r.ok])).toEqual([['pending', false], ['done', true]]);
+    expect(rows[1].result_ids).toEqual([reply.json.note.id]);
+    expect(rows[1].disclosed_scopes).toEqual(['project:rental']);
+    expect(JSON.stringify(rows)).not.toContain('adr-0079-server.');
+  }, 15_000);
+
+  it('project_wait times out after `seconds` when nothing new arrives, and an active claim is not news', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    await call(claude, 'project_note', { project: 'rental', kind: 'claim', subject: 'bug-77' });
+    const started = Date.now();
+    const waited = await call(cursor, 'project_wait', { project: 'rental', seconds: 1 });
+    expect(waited.isError, waited.text).toBe(false);
+    expect(Object.keys(waited.json).sort()).toEqual(['timed_out', 'waited_ms']);
+    expect(waited.json.timed_out).toBe(true);
+    expect(waited.json.waited_ms).toBeGreaterThanOrEqual(1000);
+    expect(waited.json.waited_ms).toBeLessThan(2000);
+    expect(Date.now() - started).toBeLessThan(2500);
+  });
+
+  it('a thread wait returns only that thread\'s reply and leaves an unrelated note for the next read', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    const codex = await connect('codex');
+    await createProject(cursor);
+    const ask = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'claude-code', text: 'Are the migrations done?' });
+    const aside = await call(codex, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: 'I am rebasing main.' });
+    const waiting = call(cursor, 'project_wait', { project: 'rental', seconds: 10, thread: ask.json.note.id });
+    await sleep(300);
+    const reply = await call(claude, 'project_note', { project: 'rental', kind: 'note', reply_to: ask.json.note.id, text: 'Yes, all three.' });
+    const woke = await waiting;
+    expect(woke.json.notes.map((n: any) => n.id)).toEqual([reply.json.note.id]);
+    expect(woke.json.notes_count).toBe(1);
+    expect(woke.json.waited_ms).toBeGreaterThanOrEqual(300);
+
+    const next = await call(cursor, 'project_get', { project: 'rental' });
+    expect(next.json.notes.map((n: any) => [n.id, n.text])).toEqual([[aside.json.note.id, 'I am rebasing main.']]);
+  }, 15_000);
+
+  it('project_wait returns at once when an unseen note is already waiting', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const sent = await call(claude, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: 'Tests are green.' });
+    const woke = await call(cursor, 'project_wait', { project: 'rental', seconds: 5 });
+    expect(woke.json.waited_ms).toBe(0);
+    expect(woke.json.notes.map((n: any) => [n.id, n.from, n.text])).toEqual([[sent.json.note.id, 'claude-code', 'Tests are green.']]);
+    expect((await call(cursor, 'project_wait', { project: 'rental', seconds: 1 })).json.timed_out).toBe(true);
+  });
+
+  it('project_wait refuses a missing project and a project outside the grant', async () => {
+    const cursor = await connect('cursor');
+    await createProject(cursor);
+    await createProject(cursor, 'other');
+    const missing = await call(cursor, 'project_wait', { project: 'nope', seconds: 1 });
+    expect(missing.isError).toBe(true);
+    expect(missing.json.error.code).toBe('not_found');
+    process.env.NORTHKEEP_SCOPES = 'project:other';
+    const denied = await call(cursor, 'project_wait', { project: 'rental', seconds: 1 });
+    expect(denied.isError).toBe(true);
+    expect(denied.json.error.code).toBe('scope_denied');
+  });
+
+  it('the 31st wait in an hour is refused with wait_budget_exhausted and when it resets; another session still waits', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const before = Date.now();
+    for (let i = 0; i < 30; i++) {
+      await call(claude, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: `update ${i}` });
+      const woke = await call(cursor, 'project_wait', { project: 'rental', seconds: 5 });
+      expect(woke.json.notes.map((n: any) => n.text), `wait ${i + 1}`).toEqual([`update ${i}`]);
+    }
+    const after = Date.now();
+    const refused = await call(cursor, 'project_wait', { project: 'rental', seconds: 1 });
+    expect(refused.isError).toBe(true);
+    expect(refused.json.error.code).toBe('wait_budget_exhausted');
+    const resets = Date.parse(refused.json.error.resets_at);
+    expect(resets).toBeGreaterThanOrEqual(before + 3_600_000);
+    expect(resets).toBeLessThanOrEqual(after + 3_600_000);
+    const done = callLog().filter((r) => r.tool === 'project_wait' && r.phase === 'done');
+    expect(done.at(-1).error).toBe('wait_budget_exhausted');
+    expect((await call(claude, 'project_wait', { project: 'rental', seconds: 1 })).json.timed_out).toBe(true);
+  }, 60_000);
+
+  it('the 61st note or claim in an hour is refused with too_many_notes, and a release still succeeds', async () => {
+    const cursor = await connect('cursor');
+    await createProject(cursor);
+    const before = Date.now();
+    const claim = await call(cursor, 'project_note', { project: 'rental', kind: 'claim', subject: 'auth' });
+    expect(claim.isError, claim.text).toBe(false);
+    for (let i = 1; i < 60; i++) {
+      const sent = await call(cursor, 'project_note', { project: 'rental', kind: 'note', text: `note ${i}` });
+      expect(sent.isError, `note ${i + 1}: ${sent.text}`).toBe(false);
+    }
+    const after = Date.now();
+    for (const args of [{ kind: 'note', text: 'one too many' }, { kind: 'claim', subject: 'billing' }]) {
+      const refused = await call(cursor, 'project_note', { project: 'rental', ...args });
+      expect(refused.isError).toBe(true);
+      expect(refused.json.error.code).toBe('too_many_notes');
+      const resets = Date.parse(refused.json.error.resets_at);
+      expect(resets).toBeGreaterThanOrEqual(before + 3_600_000);
+      expect(resets).toBeLessThanOrEqual(after + 3_600_000);
+    }
+    const released = await call(cursor, 'project_note', { project: 'rental', kind: 'release', releases: claim.json.note.id });
+    expect(released.isError, released.text).toBe(false);
+    expect(released.json.claims_active).toBe(0);
+  }, 60_000);
+
+  it('a waiting session does not hold the vault lock: another session reads and writes meanwhile', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const waiting = call(cursor, 'project_wait', { project: 'rental', seconds: 10 });
+    await sleep(200);
+    const started = Date.now();
+    const got = await call(claude, 'project_get', { project: 'rental' });
+    expect(got.isError, got.text).toBe(false);
+    expect(got.json.project).toBe('rental');
+    expect(Date.now() - started).toBeLessThan(2000);
+    const sent = await call(claude, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: 'Read it while you waited.' });
+    const woke = await waiting;
+    expect(woke.json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    expect(woke.json.waited_ms).toBeGreaterThan(0);
+  }, 15_000);
+
+  it('a wait still returns while another process holds the vault lock', async () => {
+    const cursor = await connect('cursor');
+    await createProject(cursor);
+    const waiting = call(cursor, 'project_wait', { project: 'rental', seconds: 10 });
+    await sleep(200);
+    const key = deriveNotesKey(Buffer.from(process.env.NORTHKEEP_MASTER_KEY!, 'hex'));
+    const woke = await withFileLock(vaultPath, async () => {
+      const file = NotesFile.open(notesFilePath(vaultPath)!, key);
+      try {
+        file.insert('rental', randomUUID(), 'k-other-process', () => ({ v: 1, kind: 'note', host: 'claude-code', text: 'Sent under the lock.', to: 'cursor' }));
+      } finally { file.close(); }
+      return waiting;
+    });
+    expect(woke.json.notes.map((n: any) => [n.from, n.text])).toEqual([['claude-code', 'Sent under the lock.']]);
+  }, 15_000);
+
+  it('a cancelled wait stops polling and leaves a later note unseen', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const controller = new AbortController();
+    const waiting = cursor.callTool({ name: 'project_wait', arguments: { project: 'rental', seconds: 10 } }, undefined, { signal: controller.signal });
+    await sleep(200);
+    controller.abort();
+    await expect(waiting).rejects.toThrow();
+    const sent = await call(claude, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: 'After you gave up.' });
+    await sleep(1200);
+    const got = await call(cursor, 'project_get', { project: 'rental' });
+    expect(got.json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    const done = callLog().filter((r) => r.tool === 'project_wait' && r.phase === 'done');
+    expect(done.map((r) => [r.ok, r.error])).toEqual([[false, 'project_error']]);
+  }, 15_000);
+
+  it('a wait masks note text under a redaction tier exactly as a project read does', async () => {
+    const cursor = await connect('cursor');
+    const reader = await connect('claude-code');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', text: 'Write to someone@example.com about the lease.' });
+    process.env.NORTHKEEP_REDACT_TIER = '1';
+    const read = await call(reader, 'project_get', { project: 'rental' });
+    const waited = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect(read.json.notes[0].text).toBe('Write to [EMAIL_1] about the lease.');
+    expect(waited.json.notes[0].text).toBe('Write to [EMAIL_1] about the lease.');
+    expect(waited.text).not.toContain('someone@example.com');
+  });
+
+  it('a read or wait whose masking fails leaves no receipt, and the note arrives once masking works', async () => {
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    const clientId = randomUUID();
+    const sent = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Are you in vault.ts?', client_id: clientId });
+    const shownRows = () => {
+      const file = NotesFile.open(notesFilePath(vaultPath)!, deriveNotesKey(Buffer.from(process.env.NORTHKEEP_MASTER_KEY!, 'hex')));
+      try { return file.shownRows('rental'); } finally { file.close(); }
+    };
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const read = await call(desk, 'project_get', { project: 'rental' });
+    const waited = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect([read.isError, read.text]).toEqual([true, 'Name masking failed (NORTHKEEP_REDACT_TIER=2); nothing was returned. Start the local model or use Tier 1 or 3.']);
+    expect([waited.isError, waited.json.timed_out, waited.json.notes, waited.json.withheld, waited.json.notes_note]).toEqual([false, true, undefined, { notes: 1, claims: 0 }, WITHHELD]);
+    expect(shownRows()).toEqual([]);
+
+    delete process.env.NORTHKEEP_REDACT_TIER;
+    const replay = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Are you in vault.ts?', client_id: clientId });
+    expect([replay.json.replayed, replay.json.note.seen_by]).toEqual([true, []]);
+    expect((await call(desk, 'project_get', { project: 'rental' })).json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    expect((await call(waiter, 'project_wait', { project: 'rental', seconds: 1 })).json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    expect(shownRows().map((r) => r.host).sort()).toEqual(['claude-code', 'claude-desktop']);
+  });
+
+  it('a wait whose done row cannot be written returns nothing and leaves no receipt', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const key = () => deriveNotesKey(Buffer.from(process.env.NORTHKEEP_MASTER_KEY!, 'hex'));
+    const logFile = path.join(home, 'mcp-calls.log');
+    const waiting = call(claude, 'project_wait', { project: 'rental', seconds: 5 });
+    await sleep(300);
+    fs.chmodSync(logFile, 0o400);
+    const file = NotesFile.open(notesFilePath(vaultPath)!, key());
+    const note = file.insert('rental', randomUUID(), 'k-cursor', (existing) => planNote({ kind: 'note', text: 'Done with vault.ts.' }, { host: 'cursor', sender_key: 'k-cursor' }, existing, new Date())).note;
+    file.close();
+    const waited = await waiting;
+    fs.chmodSync(logFile, 0o600);
+    expect([waited.isError, waited.text]).toEqual([true, 'NorthKeep could not complete its call log, so nothing was returned.']);
+    const after = NotesFile.open(notesFilePath(vaultPath)!, key());
+    try { expect(after.shownRows('rental')).toEqual([]); } finally { after.close(); }
+    expect((await call(claude, 'project_get', { project: 'rental' })).json.notes.map((n: any) => n.id)).toEqual([note.id]);
+  }, 15_000);
+
+  it('addresses fold case, and an address no known app reports carries to_note', async () => {
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    const codex = await connect('codex-mcp-client');
+    await createProject(cursor);
+    const toDesk = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'Claude-Desktop', text: 'Are you in vault.ts?' });
+    const toAll = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'ALL', text: 'Tests are green' });
+    const clientId = randomUUID();
+    const toNobody = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'Windsurf', text: 'Anyone there?', client_id: clientId });
+    const replayed = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'Windsurf', text: 'Anyone there?', client_id: clientId });
+    expect([toDesk.json.note.to, toAll.json.note.to, toNobody.json.note.to]).toEqual(['claude-desktop', 'all', 'windsurf']);
+    const unknown = 'No known app is named "windsurf"; only an app that reports that name will see this note.';
+    expect([toDesk.json.to_note, toAll.json.to_note, toNobody.json.to_note, replayed.json.to_note]).toEqual([undefined, undefined, unknown, unknown]);
+    expect((await call(desk, 'project_get', { project: 'rental' })).json.notes.map((n: any) => n.text)).toEqual(['Tests are green', 'Are you in vault.ts?']);
+    expect((await call(codex, 'project_get', { project: 'rental' })).json.notes.map((n: any) => n.text)).toEqual(['Tests are green']);
+  });
+
+  it('when shown rows cannot be written, the notes still return with notes_note and come up again', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const sent = await call(claude, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: 'Watch the build.' });
+    const db = openSqliteFile(notesFilePath(vaultPath)!);
+    db.exec("CREATE TRIGGER refuse_shown BEFORE INSERT ON shown BEGIN SELECT RAISE(ABORT, 'refused'); END;");
+    db.close();
+    const unmarkedRead = 'These notes could not be marked as shown, so they may show again on your next read.';
+
+    const read = await call(cursor, 'project_get', { project: 'rental' });
+    expect(read.isError, read.text).toBe(false);
+    expect(read.json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    expect(read.json.notes_note).toBe(unmarkedRead);
+    const waited = await call(cursor, 'project_wait', { project: 'rental', seconds: 1 });
+    expect(waited.json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    expect(waited.json.notes_note).toBe(unmarkedRead);
+    expect(waited.json.waited_ms).toBe(0);
+
+    const fix = openSqliteFile(notesFilePath(vaultPath)!);
+    fix.exec('DROP TRIGGER refuse_shown;');
+    fix.close();
+    const again = await call(cursor, 'project_get', { project: 'rental' });
+    expect(again.json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    expect(again.json.notes_note).toBeUndefined();
+    expect((await call(cursor, 'project_get', { project: 'rental' })).json.notes).toBeUndefined();
+  });
+});
+
+const WITHHELD = 'Some notes or claims from other AI apps were withheld because they could not be masked under the current redaction tier.';
+
+describe('ADR 0079 notes masked apart from the project they ride on', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const models: http.Server[] = [];
+  afterEach(async () => {
+    for (const m of models.splice(0)) await new Promise((resolve) => m.close(resolve));
+  });
+
+  /** A loopback name model: finds `find(text)`, and gives a reply the strict reader refuses for any text holding POISON. */
+  async function startNameModel(find: (text: string) => string[] = () => [], delayMs: (text: string) => number = () => 0): Promise<void> {
+    const model = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        res.setHeader('content-type', 'application/json');
+        if (req.url === '/api/tags') return res.end(JSON.stringify({ models: [{ name: 'llama3.2:3b' }] }));
+        const prompt: string = JSON.parse(body).prompt ?? '';
+        const text = prompt.slice(prompt.lastIndexOf('\nText:\n') + 7);
+        const entities = find(text).map((name) => ({ text: name, kind: 'person' }));
+        const reply = JSON.stringify({ response: prompt.includes('POISON') ? '{"result":[]}' : JSON.stringify({ entities }) });
+        setTimeout(() => res.end(reply), delayMs(text));
+      });
+    });
+    await new Promise<void>((resolve) => model.listen(0, '127.0.0.1', resolve));
+    models.push(model);
+    process.env.NORTHKEEP_OLLAMA_URL = `http://127.0.0.1:${(model.address() as { port: number }).port}`;
+  }
+  const notesKey = () => deriveNotesKey(Buffer.from(process.env.NORTHKEEP_MASTER_KEY!, 'hex'));
+  const shownRows = () => {
+    const file = NotesFile.open(notesFilePath(vaultPath)!, notesKey());
+    try { return file.shownRows('rental'); } finally { file.close(); }
+  };
+  const callLog = (): any[] => fs.readFileSync(path.join(home, 'mcp-calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+
+  it('a note the name model cannot read is withheld, and the project read still succeeds', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    await createProject(cursor);
+    const sent = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'POISON the name model' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    for (const tool of ['project_get', 'project_resume', 'project_get']) {
+      const read = await call(desk, tool, { project: 'rental' });
+      expect([tool, read.isError, read.text.includes('A first rental.'), read.json?.notes, read.json?.notes_count, read.json?.withheld, read.json?.notes_note]).toEqual([
+        tool, false, true, [], 1, { notes: 1, claims: 0 }, WITHHELD,
+      ]);
+    }
+    expect(shownRows()).toEqual([]);
+    const reads = callLog().filter((r) => r.tool === 'project_get' && r.phase === 'done');
+    expect(reads.map((r) => [r.ok, r.result_ids ?? []])).toEqual([[true, []], [true, []]]);
+
+    delete process.env.NORTHKEEP_REDACT_TIER;
+    const clean = await call(desk, 'project_get', { project: 'rental' });
+    expect([clean.json.notes.map((n: any) => n.text), clean.json.notes_note]).toEqual([['POISON the name model'], undefined]);
+    expect(shownRows().map((r) => [r.note_id, r.host])).toEqual([[sent.json.note.id, 'claude-desktop']]);
+  });
+
+  it('a name the model finds only in a note is masked in the project text of the same reply', async () => {
+    await startNameModel((text) => (text.includes('clinic') && text.includes('Zyler Okonkwo') ? ['Zyler Okonkwo'] : []));
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    const created = await call(cursor, 'project_create', { project: 'rental', what_why: 'A first rental.', status: 'Zyler Okonkwo signs on Friday.', milestones: PLAN });
+    expect(created.isError, created.text).toBe(false);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Met Zyler Okonkwo at the clinic.' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const read = await call(desk, 'project_get', { project: 'rental' });
+    expect([read.isError, read.json.notes.length, read.text.includes('signs on Friday.'), read.text.includes('Zyler')]).toEqual([false, 1, true, false]);
+  });
+
+  it('an active claim the name model cannot read does not fail a project read', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'claim', subject: 'POISON subject', hours: 2 });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const read = await call(desk, 'project_get', { project: 'rental' });
+    expect([read.isError, read.text.includes('A first rental.'), read.json?.active_claims, read.json?.withheld, read.json?.notes_note]).toEqual([false, true, [], { notes: 0, claims: 1 }, WITHHELD]);
+
+    delete process.env.NORTHKEEP_REDACT_TIER;
+    const clean = await call(desk, 'project_get', { project: 'rental' });
+    expect(clean.json.active_claims.map((n: any) => n.subject)).toEqual(['POISON subject']);
+  });
+
+  it('a wait with only an unmaskable note pending times out, leaves no receipt, and is not ended at once by it again', async () => {
+    const cursor = await connect('cursor-vscode');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    const sent = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Are you in vault.ts?' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const first = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect([first.isError, first.json.timed_out, first.json.notes, first.json.withheld, first.json.notes_note]).toEqual([false, true, undefined, { notes: 1, claims: 0 }, WITHHELD]);
+    expect(first.json.waited_ms).toBeGreaterThanOrEqual(1000);
+    expect(shownRows()).toEqual([]);
+    const second = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect([second.isError, second.json.timed_out, second.json.withheld, second.json.notes_note]).toEqual([false, true, { notes: 1, claims: 0 }, WITHHELD]);
+    expect(second.json.waited_ms).toBeGreaterThanOrEqual(1000);
+    expect(shownRows()).toEqual([]);
+
+    delete process.env.NORTHKEEP_REDACT_TIER;
+    const clean = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect([clean.json.notes.map((n: any) => n.id), clean.json.waited_ms, clean.json.notes_note]).toEqual([[sent.json.note.id], 0, undefined]);
+    expect(shownRows().map((r) => [r.note_id, r.host])).toEqual([[sent.json.note.id, 'claude-code']]);
+  }, 15_000);
+
+  it('a Tier 3 wait without the name model returns the note and says names may be unmasked', async () => {
+    const cursor = await connect('cursor-vscode');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Tests are green.' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '3';
+    const waited = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect([waited.isError, waited.json.notes.map((n: any) => n.text), waited.json.redaction_note]).toEqual([
+      false, ['Tests are green.'], 'Tier 3 ran without the name model; names outside the built-in lists may be unmasked.',
+    ]);
+    const done = callLog().filter((r) => r.tool === 'project_wait' && r.phase === 'done');
+    expect(done.map((r) => [r.ok, r.redaction_degraded])).toEqual([[true, true]]);
+  });
+
+  it('a wait skips a note it withheld, so a readable note that arrives later is delivered', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'POISON the name model' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const waiting = call(waiter, 'project_wait', { project: 'rental', seconds: 5 });
+    await sleep(800);
+    const file = NotesFile.open(notesFilePath(vaultPath)!, notesKey());
+    const later = file.insert('rental', randomUUID(), 'k-cursor', (existing) => planNote({ kind: 'note', text: 'Tests are green.' }, { host: 'cursor', sender_key: 'k-cursor' }, existing, new Date())).note;
+    file.close();
+    const waited = await waiting;
+    expect([waited.isError, waited.json.timed_out, waited.json.notes?.map((n: any) => n.text)]).toEqual([false, undefined, ['Tests are green.']]);
+    expect(shownRows().map((r) => r.note_id)).toEqual([later.id]);
+  }, 15_000);
+});
+
+describe('ADR 0079 fix round 4: each note and claim masked on its own', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const SOME_WITHHELD = 'Some notes or claims from other AI apps were withheld because they could not be masked under the current redaction tier.';
+  const models: http.Server[] = [];
+  afterEach(async () => {
+    for (const m of models.splice(0)) await new Promise((resolve) => m.close(resolve));
+  });
+
+  /** Loopback name model: a reply the strict reader refuses for any text holding POISON, and a slow reply for SLOW. */
+  async function startNameModel(): Promise<void> {
+    const model = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        res.setHeader('content-type', 'application/json');
+        if (req.url === '/api/tags') return res.end(JSON.stringify({ models: [{ name: 'llama3.2:3b' }] }));
+        const prompt: string = JSON.parse(body).prompt ?? '';
+        const reply = JSON.stringify({ response: prompt.includes('POISON') ? '{"result":[]}' : JSON.stringify({ entities: [] }) });
+        setTimeout(() => res.end(reply), prompt.includes('SLOW') ? 2500 : 0);
+      });
+    });
+    await new Promise<void>((resolve) => model.listen(0, '127.0.0.1', resolve));
+    models.push(model);
+    process.env.NORTHKEEP_OLLAMA_URL = `http://127.0.0.1:${(model.address() as { port: number }).port}`;
+  }
+  const notesKey = () => deriveNotesKey(Buffer.from(process.env.NORTHKEEP_MASTER_KEY!, 'hex'));
+  const shownRows = () => {
+    const file = NotesFile.open(notesFilePath(vaultPath)!, notesKey());
+    try { return file.shownRows('rental').map((r) => [r.note_id, r.host]); } finally { file.close(); }
+  };
+  const callLog = (tool: string): any[] => fs.readFileSync(path.join(home, 'mcp-calls.log'), 'utf8').trim().split('\n')
+    .map((line) => JSON.parse(line)).filter((r) => r.tool === tool && r.phase === 'done');
+
+  it('a Tier 2 read with one unreadable note delivers the readable one, counts both, and records only it', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    await createProject(cursor);
+    const poison = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'POISON the name model' });
+    const clean = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Tests are green.' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const read = await call(desk, 'project_get', { project: 'rental' });
+    expect([read.isError, read.json.notes.map((n: any) => [n.id, n.text]), read.json.notes_count, read.json.withheld, read.json.notes_note]).toEqual([
+      false, [[clean.json.note.id, 'Tests are green.']], 2, { notes: 1, claims: 0 }, SOME_WITHHELD,
+    ]);
+    expect(read.text).not.toContain(poison.json.note.id);
+    expect(shownRows()).toEqual([[clean.json.note.id, 'claude-desktop']]);
+    expect(callLog('project_get').map((r) => r.result_ids)).toEqual([[clean.json.note.id]]);
+  });
+
+  it('a readable active claim is delivered beside an unreadable note', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    await createProject(cursor);
+    const claim = await call(cursor, 'project_note', { project: 'rental', kind: 'claim', subject: 'lock.ts', hours: 2 });
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'POISON the name model' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const read = await call(desk, 'project_get', { project: 'rental' });
+    expect([read.isError, read.json.notes, read.json.active_claims.map((c: any) => [c.id, c.subject]), read.json.withheld, read.json.notes_note]).toEqual([
+      false, [], [[claim.json.note.id, 'lock.ts']], { notes: 1, claims: 0 }, SOME_WITHHELD,
+    ]);
+    expect(shownRows()).toEqual([]);
+  });
+
+  it('an unreadable claim is withheld on its own, still counts, and still refuses a second claim', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    await createProject(cursor);
+    const claim = await call(cursor, 'project_note', { project: 'rental', kind: 'claim', subject: 'POISON subject', hours: 2 });
+    const clean = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Tests are green.' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const read = await call(desk, 'project_get', { project: 'rental' });
+    expect([read.isError, read.json.notes.map((n: any) => n.text), read.json.active_claims, read.json.withheld, read.json.notes_note]).toEqual([
+      false, ['Tests are green.'], [], { notes: 0, claims: 1 }, SOME_WITHHELD,
+    ]);
+    expect(read.text).not.toContain(claim.json.note.id);
+    expect(callLog('project_get').map((r) => r.result_ids)).toEqual([[clean.json.note.id]]);
+    expect(shownRows()).toEqual([[clean.json.note.id, 'claude-desktop']]);
+
+    // Under any tier project_note refuses to save text, so the claim is checked at Tier 0.
+    delete process.env.NORTHKEEP_REDACT_TIER;
+    const second = await call(desk, 'project_note', { project: 'rental', kind: 'claim', subject: 'poison SUBJECT' });
+    expect([second.isError, second.json.error.code]).toEqual([true, 'claim_held']);
+    const note = await call(desk, 'project_note', { project: 'rental', kind: 'note', text: 'Leaving it alone.' });
+    expect(note.json.claims_active).toBe(1);
+  });
+
+  it('a wait skips an unreadable note and returns a readable reply that arrives 500 ms later', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'POISON the name model' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const waiting = call(waiter, 'project_wait', { project: 'rental', seconds: 5 });
+    await sleep(500);
+    const file = NotesFile.open(notesFilePath(vaultPath)!, notesKey());
+    const reply = file.insert('rental', randomUUID(), 'k-cursor', (existing) => planNote({ kind: 'note', text: 'Tests are green.' }, { host: 'cursor', sender_key: 'k-cursor' }, existing, new Date())).note;
+    file.close();
+    const waited = await waiting;
+    expect([waited.isError, waited.json.notes.map((n: any) => n.text), waited.json.notes_count, waited.json.withheld, waited.json.notes_note]).toEqual([
+      false, ['Tests are green.'], 2, { notes: 1, claims: 0 }, SOME_WITHHELD,
+    ]);
+    expect(waited.json.waited_ms).toBeGreaterThanOrEqual(400);
+    expect(waited.json.waited_ms).toBeLessThan(1500);
+    expect(shownRows()).toEqual([[reply.id, 'claude-code']]);
+    expect(callLog('project_wait').map((r) => r.result_ids)).toEqual([[reply.id]]);
+  }, 15_000);
+
+  it('a wait that times out with an unreadable note and claim counts both as withheld', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'claim', subject: 'POISON subject', hours: 2 });
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'POISON the name model' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const waited = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect([waited.isError, waited.json.timed_out, waited.json.notes, waited.json.withheld, waited.json.notes_note]).toEqual([
+      false, true, undefined, { notes: 1, claims: 1 }, SOME_WITHHELD,
+    ]);
+    expect(shownRows()).toEqual([]);
+  }, 15_000);
+
+  it('a wait cancelled while its note is being masked leaves no receipt', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'SLOW to mask' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const controller = new AbortController();
+    const waiting = waiter.callTool({ name: 'project_wait', arguments: { project: 'rental', seconds: 10 } }, undefined, { signal: controller.signal });
+    await sleep(500);
+    controller.abort();
+    await expect(waiting).rejects.toThrow();
+    await sleep(3000);
+    expect(shownRows()).toEqual([]);
+    expect(callLog('project_wait').map((r) => [r.ok, r.error, r.result_ids])).toEqual([[false, 'project_error', undefined]]);
+  }, 15_000);
+
+  it('a project read cancelled while its note is being masked leaves no receipt, and the note comes up again', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    await createProject(cursor);
+    const sent = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'SLOW to mask' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const controller = new AbortController();
+    const reading = desk.callTool({ name: 'project_get', arguments: { project: 'rental' } }, undefined, { signal: controller.signal });
+    await sleep(500);
+    controller.abort();
+    await expect(reading).rejects.toThrow();
+    await sleep(3000);
+    expect(shownRows()).toEqual([]);
+
+    delete process.env.NORTHKEEP_REDACT_TIER;
+    expect((await call(desk, 'project_get', { project: 'rental' })).json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+  }, 15_000);
 });
 
 // The stored-key cases use the Linux file store. On a Mac the same calls would

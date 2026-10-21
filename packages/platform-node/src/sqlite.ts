@@ -40,8 +40,13 @@ export interface SqliteFile {
  * Opens (creating if needed) a SQLite file with WAL and a busy timeout, so
  * several MCP server processes and the CLI can share it. Mode 0600 (SQLite
  * gives its WAL files the same): the readable columns name projects.
+ * `readonly` opens an existing file only and changes neither it nor its mode.
  */
-export function openSqliteFile(filePath: string, busyTimeoutMs = 5000): SqliteFile {
+export function openSqliteFile(filePath: string, options: { busyTimeoutMs?: number; readonly?: boolean } = {}): SqliteFile {
+  const busyTimeoutMs = options.busyTimeoutMs ?? 5000;
+  if (options.readonly === true) {
+    return new Database(filePath, { readonly: true, fileMustExist: true, timeout: busyTimeoutMs }) as unknown as SqliteFile;
+  }
   fs.closeSync(fs.openSync(filePath, 'a', 0o600));
   fs.chmodSync(filePath, 0o600);
   const db = new Database(filePath, { timeout: busyTimeoutMs });

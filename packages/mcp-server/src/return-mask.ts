@@ -147,18 +147,42 @@ export async function maskReturnPayload(
   tier: ReturnTier,
   pseudonyms: PseudonymMap,
 ): Promise<MaskOutcome> {
-  if (tier === 0) return { payload, degraded: false, failed: false };
+  const [outcome] = await maskReturnParts([{ payload, kind }], tier, pseudonyms);
+  return outcome!;
+}
+
+/**
+ * Masks the parts of one reply, each failing on its own, so a part the name
+ * model cannot read (a note riding on a project) does not fail the others.
+ * Detection runs over every part before any is rendered, so a name found in
+ * one part is masked in all of them (code review F2).
+ */
+export async function maskReturnParts(
+  parts: readonly { payload: unknown; kind: 'memory' | 'project' }[],
+  tier: ReturnTier,
+  pseudonyms: PseudonymMap,
+): Promise<MaskOutcome[]> {
+  if (tier === 0) return parts.map(({ payload }) => ({ payload, degraded: false, failed: false }));
   if (tier === 1) {
-    return {
+    return parts.map(({ payload, kind }) => ({
       payload: kind === 'project' ? maskProjectFields(payload, 1) : maskMemoryTier1(payload),
       degraded: false,
       failed: false,
-    };
+    }));
   }
-  const ctx: MaskContext = { tier: tier as Tier as 2 | 3, pseudonyms, degraded: false, failed: false };
-  // Two passes, so a name found in one field is masked in every field.
-  await walk(payload, kind, ctx, async (text) => { await detectText(text, ctx); return text; });
-  if (ctx.failed) return { payload: undefined, degraded: false, failed: true };
-  const masked = await walk(payload, kind, ctx, (text) => renderText(text, ctx));
-  return { payload: masked, degraded: ctx.degraded, failed: ctx.failed };
+  const ctxs: MaskContext[] = parts.map(() => ({ tier: tier as Tier as 2 | 3, pseudonyms, degraded: false, failed: false }));
+  for (const [i, { payload, kind }] of parts.entries()) {
+    const ctx = ctxs[i]!;
+    await walk(payload, kind, ctx, async (text) => { await detectText(text, ctx); return text; });
+  }
+  const out: MaskOutcome[] = [];
+  for (const [i, { payload, kind }] of parts.entries()) {
+    const ctx = ctxs[i]!;
+    if (ctx.failed) {
+      out.push({ payload: undefined, degraded: false, failed: true });
+      continue;
+    }
+    out.push({ payload: await walk(payload, kind, ctx, (text) => renderText(text, ctx)), degraded: ctx.degraded, failed: false });
+  }
+  return out;
 }

@@ -2,6 +2,7 @@ import { timingSafeEqual, randomBytes as nodeRandomBytes, randomUUID } from 'nod
 import {
   Vault,
   deriveMasterKey,
+  deriveNotesKey,
   loadDeviceSecret,
   withFileLock,
 } from '@northkeep/core';
@@ -143,6 +144,12 @@ export class UiSession {
   keyHex(): string {
     if (this.heldKey === null) throw new Error('locked');
     return this.heldKey.toString('hex');
+  }
+
+  /** The notes-file key (ADR 0072 D1), derived without the vault lock so a panel read never holds it. The caller wipes it with memzero. */
+  notesKey(): Buffer {
+    if (!this.isUnlocked()) throw new LockedError();
+    return deriveNotesKey(this.heldKey!);
   }
 
   lock(): void {
