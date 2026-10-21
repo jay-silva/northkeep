@@ -36,9 +36,9 @@ Local project saves and the hosted connector's project updates check the revisio
 
 ## Install
 
-**The Mac app (recommended).** The current release is **0.27.0**: download
+**The Mac app (recommended).** The current release is **0.28.0**: download
 the signed, notarized DMG from the
-[v0.27.0 release](https://github.com/jay-silva/northkeep/releases/tag/v0.27.0),
+[v0.28.0 release](https://github.com/jay-silva/northkeep/releases/tag/v0.28.0),
 drag NorthKeep to Applications, and open it, a native window wraps the whole
 thing, no terminal required. *Apple Silicon only, macOS 13.5 or later.* The
 app does not install the `northkeep` command and has no chat view; the
