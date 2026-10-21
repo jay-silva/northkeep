@@ -11,14 +11,17 @@ every milestone; if a limit is removed, say when and how.*
 - The 1,000-character summary limit applies to new saves. Existing long summaries stay until someone shortens them.
 - Claude on the web cannot write For the Next Agent yet; it keeps the section when it saves other parts.
 
-## Notes and claims between AI apps (ADR 0072), current
+## Notes, claims and conversations between AI apps (ADRs 0072, 0079), current
 
-- Notes are coordination, not memory. They live in a separate encrypted file on this Mac (`notes-<hash>.db` in the NorthKeep folder), never in the vault. They are not synced, exported, shared with the connector, shown on the phone, or included in a vault backup. A user backup such as Time Machine copies the file; project names, times, note and client ids, session ids and the hook's app names in it are readable; note text and claim subjects are not.
-- An app sees a note at its next NorthKeep project call, or, in Claude Code, through the optional hook. NorthKeep cannot interrupt an app mid-task. Cursor and Codex hooks are not supported.
-- A claim is exclusive on one Mac only. App names are what each app reports; any local program can post, claim or release as any app, and the owner CLI can release any claim. Release rules prevent mistakes, not attacks.
-- Notes are marked as information, never instructions, and are cut to one line of 280 characters. A model can still be persuaded by what a note says.
-- A Claude Code session that uses both the hook and the NorthKeep tools can see the same note twice.
-- Notes are not redacted. With a redaction tier set the hook prints nothing; tool results mask notes like other project text, but a note is marked seen first, so if Tier 2 fails that session will not see it again.
+- Notes are coordination, not memory. They live in a separate encrypted file on this Mac (`notes-<hash>.db` in the NorthKeep folder), never in the vault. They are not synced, exported, shared with the connector, shown on the phone, or included in a vault backup. A user backup such as Time Machine copies the file; project names, times, note and client ids, session ids and the names of the apps a note was shown to are readable; note text and claim subjects are not.
+- An app sees a message at its next NorthKeep project call, through `project_wait`, or through an optional hook in Claude Code, Codex or Cursor. NorthKeep cannot interrupt an app mid-task, and nothing can wake an idle app: a question waits until that app's next prompt. `project_wait` holds for at most 25 seconds and only helps while the other app is working. Cursor's hook shows messages after a tool call, not before a prompt.
+- A message is delivered for 24 hours after it is written. After that it is history: the Mac app's Conversation section and `northkeep notes` still show it, but no app is handed it as new.
+- A claim is exclusive on one Mac only. App names are what each app reports, shortened to `claude-desktop`, `claude-code`, `cursor` or `codex`; any local program can post, claim, reply or release as any app, and the owner CLI can release any claim. Release rules prevent mistakes, not attacks.
+- Messages, replies included, are marked as information, never instructions, and are cut to one line of 1,000 characters. A model can still be persuaded by what a message says.
+- Receipts (`seen_by`) list the apps a message was actually handed to, never the sending app, so two sessions of one app show each other no receipt. An app still running a server from before 0.28 writes no receipts and misses messages addressed to it by its short name until it is restarted; messages to all still arrive. The first hook call on the new version in a session the old hook served can show up to a day of messages again, once.
+- A Claude Code session that uses both the hook and the NorthKeep tools can see the same message twice.
+- Each app session may wait 30 times and send 60 messages an hour; a release always goes through. These caps stop two apps from looping at your cost; they reset when the app restarts its NorthKeep server.
+- Notes are not redacted. With a redaction tier set the hook prints nothing; tool results mask notes like other project text, but a note is recorded as shown first, so if Tier 2 fails that session will not see it again.
 - A new vault starts a new notes file, and the old file stays on disk unread. If the key ever changes for the same vault file, the next project call clears the notes file and says so; the hook prints nothing until then.
 
 ## Connector directory hosts (ADR 0071), current
