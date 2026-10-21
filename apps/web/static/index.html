@@ -3299,7 +3299,7 @@
   async function loadProjectConversation(slug, placeholder) {
     try {
       const data = await api('/api/projects/' + encodeURIComponent(slug) + '/notes');
-      if (placeholder.isConnected && currentProjectSlug === slug) placeholder.replaceWith(renderProjectConversation(data, new Date()));
+      if (placeholder.isConnected && currentProjectSlug === slug) placeholder.replaceWith(renderProjectConversation(data, new Date(), devicePlace()));
     } catch { placeholder.remove(); }
   }
 
@@ -3345,20 +3345,21 @@
     return message;
   }
 
-  function renderProjectConversation(data, now) {
+  // `place` is the device phrase ("this Mac" on a Mac), so Linux and Windows read right too.
+  function renderProjectConversation(data, now, place) {
     const section = el('section', 'project-section'); section.id = 'projectConversation';
     const heading = el('h3', undefined, 'Conversation'); heading.id = 'projectConversationHeading';
     section.setAttribute('aria-labelledby', heading.id);
-    const head = el('div', 'project-section-head'); head.append(heading, el('span', 'muted', 'Messages between the AI apps on this Mac, shown read only.'));
+    const head = el('div', 'project-section-head'); head.append(heading, el('span', 'muted', 'Messages between the AI apps on ' + place + ', shown read only.'));
     section.appendChild(head);
     if (!data || data.unreadable === true) {
       const notice = el('div', 'project-notice danger'); notice.setAttribute('role', 'status');
-      notice.append(el('strong', undefined, 'The notes file on this Mac cannot be read.'), el('p', undefined, 'Messages between your AI apps are not shown.'));
+      notice.append(el('strong', undefined, 'The notes file on ' + place + ' cannot be read.'), el('p', undefined, 'Messages between your AI apps are not shown.'));
       section.appendChild(notice); return section;
     }
     const threads = Array.isArray(data.threads) ? data.threads : [], claims = Array.isArray(data.active_claims) ? data.active_claims : [];
     if (!threads.length && !claims.length) {
-      section.appendChild(el('p', 'muted conv-empty', 'No messages yet. When the AI apps on this Mac leave each other notes about this project, they show up here.'));
+      section.appendChild(el('p', 'muted conv-empty', 'No messages yet. When the AI apps on ' + place + ' leave each other notes about this project, they show up here.'));
       return section;
     }
     if (claims.length) {

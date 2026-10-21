@@ -40,10 +40,10 @@ const NOW = new Date(2026, 9, 21, 16, 30);
 const at = (day: number, hour: number, minute: number) => new Date(2026, 9, day, hour, minute).toISOString();
 const clock = (iso: string) => new Date(iso).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 
-function render(data: unknown): Node {
+function render(data: unknown, place = 'this Mac'): Node {
   const context = vm.createContext({ ...fakeDom(), Date });
   vm.runInContext(RENDERERS.map(functionSource).join('\n'), context);
-  return (context.renderProjectConversation as (d: unknown, now: Date) => Node)(data, NOW);
+  return (context.renderProjectConversation as (d: unknown, now: Date, place: string) => Node)(data, NOW, place);
 }
 
 const note = (fields: Record<string, unknown>) => ({ kind: 'note', to: 'all', seen_by: [], ...fields });
@@ -140,6 +140,11 @@ describe('Conversation section (ADR 0079 D6)', () => {
       ['strong', 'The notes file on this Mac cannot be read.'],
       ['p', 'Messages between your AI apps are not shown.'],
     ]);
+  });
+
+  it('names the device the page runs on, so a Linux or Windows install never says Mac', () => {
+    expect(textOf(byClass(render({ unreadable: true }, 'this computer'), 'project-notice')[0]!)).toBe('The notes file on this computer cannot be read.Messages between your AI apps are not shown.');
+    expect(functionSource('loadProjectConversation')).toContain('devicePlace()');
   });
 
   it('holds nothing a keyboard can reach: no button, input, link or tabindex in any state', () => {
