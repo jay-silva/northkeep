@@ -339,6 +339,245 @@ describe('ADR 0079 shown rows in the notes file', () => {
   });
 });
 
+describe('ADR 0079 replies, receipts and waits', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const brief = (n: any) => ({ from: n.from, to: n.to, text: n.text, reply_to: n.reply_to, thread: n.thread });
+
+  function callLog(): any[] {
+    return fs.readFileSync(path.join(home, 'mcp-calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+  }
+
+  it('a reply threads under its parent, goes to the parent\'s app by default, and reaches that sender on its next read', async () => {
+    const cursor = await connect('cursor-vscode');
+    const claude = await connect('claude-code');
+    const codex = await connect('codex-mcp-client');
+    await createProject(cursor);
+    const ask = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'claude-code', text: 'Are you in vault.ts?' });
+    const askId: string = ask.json.note.id;
+    expect(ask.json.note.thread).toBe(askId);
+    expect(ask.json.note.seen_by).toEqual([]);
+
+    const got = await call(claude, 'project_get', { project: 'rental' });
+    expect(got.json.notes.map(brief)).toEqual([{ from: 'cursor', to: 'claude-code', text: 'Are you in vault.ts?', reply_to: undefined, thread: undefined }]);
+
+    const reply = await call(claude, 'project_note', { project: 'rental', kind: 'note', reply_to: askId, text: 'No, only auth.ts.' });
+    expect(reply.isError, reply.text).toBe(false);
+    expect(reply.json.note.to).toBe('cursor');
+    expect(reply.json.note.reply_to).toBe(askId);
+    expect(reply.json.note.thread).toBe(askId);
+
+    const back = await call(cursor, 'project_get', { project: 'rental' });
+    expect(back.json.notes.map(brief)).toEqual([{ from: 'claude-code', to: 'cursor', text: 'No, only auth.ts.', reply_to: askId, thread: askId }]);
+    expect(back.json.notes_notice).toBe(NOTES_NOTICE);
+    expect((await call(codex, 'project_get', { project: 'rental' })).json.notes).toBeUndefined();
+
+    const thanks = await call(cursor, 'project_note', { project: 'rental', kind: 'note', reply_to: reply.json.note.id, text: 'Thanks.' });
+    expect([thanks.json.note.to, thanks.json.note.reply_to, thanks.json.note.thread]).toEqual(['claude-code', reply.json.note.id, askId]);
+
+    const missing = await call(cursor, 'project_note', { project: 'rental', kind: 'note', reply_to: randomUUID(), text: 'to nobody' });
+    expect(missing.isError).toBe(true);
+    expect(missing.json.error.code).toBe('reply_target_missing');
+  });
+
+  it('seen_by lists the apps shown a note, never the sender\'s own app', async () => {
+    const cursor = await connect('cursor');
+    const cursorOther = await connect('cursor-vscode');
+    const claude = await connect('claude-code');
+    const codex = await connect('codex');
+    await createProject(cursor);
+    const clientId = randomUUID();
+    const request = { project: 'rental', kind: 'note', text: 'Deploy is frozen until noon.', client_id: clientId };
+    const sent = await call(cursor, 'project_note', request);
+    expect(sent.json.note.seen_by).toEqual([]);
+
+    expect((await call(cursorOther, 'project_get', { project: 'rental' })).json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    const afterOwnApp = await call(cursor, 'project_note', request);
+    expect(afterOwnApp.json.replayed).toBe(true);
+    expect(afterOwnApp.json.note.seen_by).toEqual([]);
+
+    const claudeRead = await call(claude, 'project_get', { project: 'rental' });
+    expect(claudeRead.json.notes[0].seen_by).toEqual([]);
+    const afterClaude = await call(cursor, 'project_note', request);
+    expect(afterClaude.json.note.seen_by).toEqual(['claude-code']);
+
+    const codexRead = await call(codex, 'project_get', { project: 'rental' });
+    expect(codexRead.json.notes[0].seen_by).toEqual(['claude-code']);
+    expect((await call(cursor, 'project_note', request)).json.note.seen_by).toEqual(['claude-code', 'codex']);
+  });
+
+  it('project_wait returns a reply posted by another session while it waits, inside the call log envelope', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const ask = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'claude-code', text: 'Which branch?' });
+    const waiting = call(cursor, 'project_wait', { project: 'rental', seconds: 10 });
+    await sleep(300);
+    const reply = await call(claude, 'project_note', { project: 'rental', kind: 'note', reply_to: ask.json.note.id, text: 'adr-0079-server.' });
+    const woke = await waiting;
+    expect(woke.isError, woke.text).toBe(false);
+    expect(woke.json.notes.map(brief)).toEqual([{ from: 'claude-code', to: 'cursor', text: 'adr-0079-server.', reply_to: ask.json.note.id, thread: ask.json.note.id }]);
+    expect(woke.json.notes_count).toBe(1);
+    expect(woke.json.notes_notice).toBe(NOTES_NOTICE);
+    expect(woke.json.waited_ms).toBeGreaterThanOrEqual(300);
+    expect(woke.json.waited_ms).toBeLessThan(2000);
+
+    const rows = callLog().filter((r) => r.tool === 'project_wait');
+    expect(rows.map((r) => [r.phase, r.ok])).toEqual([['pending', false], ['done', true]]);
+    expect(rows[1].result_ids).toEqual([reply.json.note.id]);
+    expect(rows[1].disclosed_scopes).toEqual(['project:rental']);
+    expect(JSON.stringify(rows)).not.toContain('adr-0079-server.');
+  }, 15_000);
+
+  it('project_wait times out after `seconds` when nothing new arrives, and an active claim is not news', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    await call(claude, 'project_note', { project: 'rental', kind: 'claim', subject: 'bug-77' });
+    const started = Date.now();
+    const waited = await call(cursor, 'project_wait', { project: 'rental', seconds: 1 });
+    expect(waited.isError, waited.text).toBe(false);
+    expect(Object.keys(waited.json).sort()).toEqual(['timed_out', 'waited_ms']);
+    expect(waited.json.timed_out).toBe(true);
+    expect(waited.json.waited_ms).toBeGreaterThanOrEqual(1000);
+    expect(waited.json.waited_ms).toBeLessThan(2000);
+    expect(Date.now() - started).toBeLessThan(2500);
+  });
+
+  it('a thread wait returns only that thread\'s reply and leaves an unrelated note for the next read', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    const codex = await connect('codex');
+    await createProject(cursor);
+    const ask = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'claude-code', text: 'Are the migrations done?' });
+    const aside = await call(codex, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: 'I am rebasing main.' });
+    const waiting = call(cursor, 'project_wait', { project: 'rental', seconds: 10, thread: ask.json.note.id });
+    await sleep(300);
+    const reply = await call(claude, 'project_note', { project: 'rental', kind: 'note', reply_to: ask.json.note.id, text: 'Yes, all three.' });
+    const woke = await waiting;
+    expect(woke.json.notes.map((n: any) => n.id)).toEqual([reply.json.note.id]);
+    expect(woke.json.notes_count).toBe(1);
+    expect(woke.json.waited_ms).toBeGreaterThanOrEqual(300);
+
+    const next = await call(cursor, 'project_get', { project: 'rental' });
+    expect(next.json.notes.map((n: any) => [n.id, n.text])).toEqual([[aside.json.note.id, 'I am rebasing main.']]);
+  }, 15_000);
+
+  it('project_wait returns at once when an unseen note is already waiting', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const sent = await call(claude, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: 'Tests are green.' });
+    const woke = await call(cursor, 'project_wait', { project: 'rental', seconds: 5 });
+    expect(woke.json.waited_ms).toBe(0);
+    expect(woke.json.notes.map((n: any) => [n.id, n.from, n.text])).toEqual([[sent.json.note.id, 'claude-code', 'Tests are green.']]);
+    expect((await call(cursor, 'project_wait', { project: 'rental', seconds: 1 })).json.timed_out).toBe(true);
+  });
+
+  it('project_wait refuses a missing project and a project outside the grant', async () => {
+    const cursor = await connect('cursor');
+    await createProject(cursor);
+    await createProject(cursor, 'other');
+    const missing = await call(cursor, 'project_wait', { project: 'nope', seconds: 1 });
+    expect(missing.isError).toBe(true);
+    expect(missing.json.error.code).toBe('not_found');
+    process.env.NORTHKEEP_SCOPES = 'project:other';
+    const denied = await call(cursor, 'project_wait', { project: 'rental', seconds: 1 });
+    expect(denied.isError).toBe(true);
+    expect(denied.json.error.code).toBe('scope_denied');
+  });
+
+  it('the 31st wait in an hour is refused with wait_budget_exhausted and when it resets; another session still waits', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const before = Date.now();
+    for (let i = 0; i < 30; i++) {
+      await call(claude, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: `update ${i}` });
+      const woke = await call(cursor, 'project_wait', { project: 'rental', seconds: 5 });
+      expect(woke.json.notes.map((n: any) => n.text), `wait ${i + 1}`).toEqual([`update ${i}`]);
+    }
+    const after = Date.now();
+    const refused = await call(cursor, 'project_wait', { project: 'rental', seconds: 1 });
+    expect(refused.isError).toBe(true);
+    expect(refused.json.error.code).toBe('wait_budget_exhausted');
+    const resets = Date.parse(refused.json.error.resets_at);
+    expect(resets).toBeGreaterThanOrEqual(before + 3_600_000);
+    expect(resets).toBeLessThanOrEqual(after + 3_600_000);
+    const done = callLog().filter((r) => r.tool === 'project_wait' && r.phase === 'done');
+    expect(done.at(-1).error).toBe('wait_budget_exhausted');
+    expect((await call(claude, 'project_wait', { project: 'rental', seconds: 1 })).json.timed_out).toBe(true);
+  }, 60_000);
+
+  it('the 61st note or claim in an hour is refused with too_many_notes, and a release still succeeds', async () => {
+    const cursor = await connect('cursor');
+    await createProject(cursor);
+    const before = Date.now();
+    const claim = await call(cursor, 'project_note', { project: 'rental', kind: 'claim', subject: 'auth' });
+    expect(claim.isError, claim.text).toBe(false);
+    for (let i = 1; i < 60; i++) {
+      const sent = await call(cursor, 'project_note', { project: 'rental', kind: 'note', text: `note ${i}` });
+      expect(sent.isError, `note ${i + 1}: ${sent.text}`).toBe(false);
+    }
+    const after = Date.now();
+    for (const args of [{ kind: 'note', text: 'one too many' }, { kind: 'claim', subject: 'billing' }]) {
+      const refused = await call(cursor, 'project_note', { project: 'rental', ...args });
+      expect(refused.isError).toBe(true);
+      expect(refused.json.error.code).toBe('too_many_notes');
+      const resets = Date.parse(refused.json.error.resets_at);
+      expect(resets).toBeGreaterThanOrEqual(before + 3_600_000);
+      expect(resets).toBeLessThanOrEqual(after + 3_600_000);
+    }
+    const released = await call(cursor, 'project_note', { project: 'rental', kind: 'release', releases: claim.json.note.id });
+    expect(released.isError, released.text).toBe(false);
+    expect(released.json.claims_active).toBe(0);
+  }, 60_000);
+
+  it('a waiting session does not hold the vault lock: another session reads and writes meanwhile', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const waiting = call(cursor, 'project_wait', { project: 'rental', seconds: 10 });
+    await sleep(200);
+    const started = Date.now();
+    const got = await call(claude, 'project_get', { project: 'rental' });
+    expect(got.isError, got.text).toBe(false);
+    expect(got.json.project).toBe('rental');
+    expect(Date.now() - started).toBeLessThan(2000);
+    const sent = await call(claude, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: 'Read it while you waited.' });
+    const woke = await waiting;
+    expect(woke.json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    expect(woke.json.waited_ms).toBeGreaterThan(0);
+  }, 15_000);
+
+  it('when shown rows cannot be written, the notes still return with notes_note and come up again', async () => {
+    const cursor = await connect('cursor');
+    const claude = await connect('claude-code');
+    await createProject(cursor);
+    const sent = await call(claude, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: 'Watch the build.' });
+    const db = openSqliteFile(notesFilePath(vaultPath)!);
+    db.exec("CREATE TRIGGER refuse_shown BEFORE INSERT ON shown BEGIN SELECT RAISE(ABORT, 'refused'); END;");
+    db.close();
+    const unmarkedRead = 'These notes could not be marked as shown, so they may show again on your next read.';
+
+    const read = await call(cursor, 'project_get', { project: 'rental' });
+    expect(read.isError, read.text).toBe(false);
+    expect(read.json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    expect(read.json.notes_note).toBe(unmarkedRead);
+    const waited = await call(cursor, 'project_wait', { project: 'rental', seconds: 1 });
+    expect(waited.json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    expect(waited.json.notes_note).toBe(unmarkedRead);
+    expect(waited.json.waited_ms).toBe(0);
+
+    const fix = openSqliteFile(notesFilePath(vaultPath)!);
+    fix.exec('DROP TRIGGER refuse_shown;');
+    fix.close();
+    const again = await call(cursor, 'project_get', { project: 'rental' });
+    expect(again.json.notes.map((n: any) => n.id)).toEqual([sent.json.note.id]);
+    expect(again.json.notes_note).toBeUndefined();
+    expect((await call(cursor, 'project_get', { project: 'rental' })).json.notes).toBeUndefined();
+  });
+});
+
 // The stored-key cases use the Linux file store. On a Mac the same calls would
 // write the real Keychain, so they run on Linux only (CI runs Linux).
 const linuxOnly = it.runIf(process.platform === 'linux');
