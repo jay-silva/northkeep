@@ -5,7 +5,8 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
-import { KDF_INTERACTIVE, NOTES_NOTICE, Vault, deriveMasterKey, deriveNotesKey, generateDeviceSecret } from '@northkeep/core';
+import { KDF_INTERACTIVE, MAX_NOTES_PER_PROJECT, NOTES_NOTICE, Vault, deriveMasterKey, deriveNotesKey, generateDeviceSecret } from '@northkeep/core';
+import { openSqliteFile } from '@northkeep/platform-node';
 import { createServer } from '../src/server.js';
 import { NotesFile, NotesKeyMismatchError, notesFilePath } from '../src/notes-store.js';
 import { notesOwnerRelease, notesOwnerView, runNotesHook } from '../src/notes-cli.js';
@@ -223,6 +224,77 @@ describe('ADR 0072 notes and claims', () => {
     await createProject(cursor, 'other');
     const fresh = await call(cursor, 'project_get', { project: 'other' });
     expect(fresh.json.active_claims).toBeUndefined();
+  });
+});
+
+describe('ADR 0079 shown rows in the notes file', () => {
+  const KEY = Buffer.alloc(32, 4);
+  const T0 = new Date('2026-10-21T09:00:00.000Z');
+  const T1 = new Date('2026-10-21T09:05:00.000Z');
+  const note = (text: string) => () => ({ v: 1 as const, kind: 'note' as const, host: 'cursor', text, to: 'all' });
+  let file: string;
+  beforeEach(() => { file = path.join(home, 'notes-shown.db'); });
+
+  function shownCount(): number {
+    const db = openSqliteFile(file);
+    try { return (db.prepare('SELECT COUNT(*) AS n FROM shown').get() as { n: number }).n; } finally { db.close(); }
+  }
+
+  it('markShown records each note once per reader, and shownFor and shownRows read it back', () => {
+    const notes = NotesFile.open(file, KEY);
+    try {
+      const a = notes.insert('rental', randomUUID(), 'k-cursor', note('a'), T0).note;
+      const b = notes.insert('rental', randomUUID(), 'k-cursor', note('b'), T0).note;
+      const other = notes.insert('other', randomUUID(), 'k-cursor', note('c'), T0).note;
+      expect(notes.firstShownAt('k-claude', 'rental')).toBeNull();
+      notes.markShown('rental', 'k-claude', 'claude-code', [a.id], T0);
+      notes.markShown('rental', 'k-claude', 'claude-code', [a.id, b.id, other.id, 'no-such-id'], T1);
+      expect([...notes.shownFor('k-claude', 'rental')].sort()).toEqual([a.id, b.id].sort());
+      expect(notes.shownFor('k-claude', 'other').size).toBe(0);
+      expect(notes.firstShownAt('k-claude', 'rental')).toBe(T0.toISOString());
+      expect(notes.shownRows('rental')).toEqual([
+        { note_id: a.id, reader_key: 'k-claude', host: 'claude-code', shown_at: T0.toISOString() },
+        { note_id: b.id, reader_key: 'k-claude', host: 'claude-code', shown_at: T1.toISOString() },
+      ]);
+      expect(notes.maxSeq('rental')).toBe(b.seq);
+      expect(notes.maxSeq('empty')).toBe(0);
+    } finally { notes.close(); }
+    expect(shownCount()).toBe(2);
+  });
+
+  it('pruning a note in insert deletes its shown rows', () => {
+    const notes = NotesFile.open(file, KEY);
+    try {
+      const first = notes.insert('rental', randomUUID(), 'k-cursor', note('first'), T0).note;
+      const second = notes.insert('rental', randomUUID(), 'k-cursor', note('second'), T0).note;
+      notes.markShown('rental', 'k-claude', 'claude-code', [first.id, second.id], T0);
+      for (let i = 0; i < MAX_NOTES_PER_PROJECT - 1; i++) notes.insert('rental', randomUUID(), 'k-cursor', note(`n${i}`), T0);
+      expect(notes.read('rental').map((n) => n.id)).not.toContain(first.id);
+      expect([...notes.shownFor('k-claude', 'rental')]).toEqual([second.id]);
+    } finally { notes.close(); }
+    expect(shownCount()).toBe(1);
+  });
+
+  it('keepOnly deletes the shown rows of a dropped project and keeps the live one', () => {
+    const notes = NotesFile.open(file, KEY);
+    try {
+      const kept = notes.insert('rental', randomUUID(), 'k-cursor', note('kept'), T0).note;
+      const dropped = notes.insert('gone', randomUUID(), 'k-cursor', note('dropped'), T0).note;
+      notes.markShown('rental', 'k-claude', 'claude-code', [kept.id], T0);
+      notes.markShown('gone', 'k-claude', 'claude-code', [dropped.id], T0);
+      expect(notes.keepOnly(new Set(['rental']))).toBe(1);
+      expect([...notes.shownFor('k-claude', 'rental')]).toEqual([kept.id]);
+    } finally { notes.close(); }
+    expect(shownCount()).toBe(1);
+  });
+
+  it('a key reset clears the shown rows with the notes', () => {
+    const notes = NotesFile.open(file, KEY);
+    const n = notes.insert('rental', randomUUID(), 'k-cursor', note('x'), T0).note;
+    notes.markShown('rental', 'k-claude', 'claude-code', [n.id], T0);
+    notes.close();
+    NotesFile.open(file, Buffer.alloc(32, 5)).close();
+    expect(shownCount()).toBe(0);
   });
 });
 

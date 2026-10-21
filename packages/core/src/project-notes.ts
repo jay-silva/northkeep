@@ -61,6 +61,15 @@ export interface StoredNote {
   payload: NotePayload;
 }
 
+/** One note included in one reader's result (ADR 0079 D4); receipts and unseen read these. */
+export interface ShownRow {
+  note_id: string;
+  reader_key: string;
+  /** The reader's canonical app name. */
+  host: string;
+  shown_at: string;
+}
+
 export interface NoteRequest {
   kind: NoteKind;
   text?: string;

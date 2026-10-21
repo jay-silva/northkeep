@@ -3,7 +3,8 @@
  * home folder, never synced, exported or shared. Rows are sealed under the
  * notes key; project, ids, sender key and times stay readable so the file can
  * be queried and pruned without decrypting. A key-check row tells a new vault
- * or a re-key apart from a damaged row, and resets the file visibly.
+ * or a re-key apart from a damaged row, and resets the file visibly. The
+ * `shown` table (ADR 0079 D4) records which notes each reader was given.
  */
 import crypto, { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -18,11 +19,13 @@ import {
   sealKeyCheck,
   sealNote,
   type NotePayload,
+  type ShownRow,
   type StoredNote,
 } from '@northkeep/core';
 import { openSqliteFile, type SqliteFile } from '@northkeep/platform-node';
 
 const SEEN_RETENTION_DAYS = 30;
+const SHOWN_IN_PROJECT = 'SELECT s.* FROM shown s JOIN notes n ON n.id = s.note_id WHERE n.project = ?';
 
 /** The vault's identity without its key, under a label of its own. Null when the header cannot be read. */
 export function notesFilePath(vaultPath: string): string | null {
@@ -102,6 +105,14 @@ export class NotesFile {
           updated_at TEXT NOT NULL,
           PRIMARY KEY (reader_key, project)
         );
+        CREATE TABLE IF NOT EXISTS shown (
+          note_id TEXT NOT NULL,
+          reader_key TEXT NOT NULL,
+          host TEXT NOT NULL,
+          shown_at TEXT NOT NULL,
+          PRIMARY KEY (note_id, reader_key)
+        );
+        CREATE INDEX IF NOT EXISTS shown_reader ON shown (reader_key, note_id);
       `);
       let reset = false;
       db.exec('BEGIN IMMEDIATE');
@@ -113,12 +124,13 @@ export class NotesFile {
           const hadRows = (db.prepare('SELECT COUNT(*) AS n FROM notes').get() as { n: number }).n > 0;
           reset = check !== undefined || hadRows;
           if (reset && options.resetOnMismatch === false) throw new NotesKeyMismatchError();
-          db.exec('DELETE FROM notes; DELETE FROM seen;');
+          db.exec('DELETE FROM notes; DELETE FROM seen; DELETE FROM shown;');
           db.prepare('INSERT OR REPLACE INTO meta (k, v) VALUES (?, ?)').run('key_check', sealKeyCheck(key));
         }
         if (options.proven !== false) {
           const cutoff = new Date(Date.now() - SEEN_RETENTION_DAYS * 86_400_000).toISOString();
           db.prepare('DELETE FROM seen WHERE updated_at < ?').run(cutoff);
+          db.prepare('DELETE FROM shown WHERE shown_at < ?').run(cutoff);
         }
         db.exec('COMMIT');
       } catch (err) {
@@ -192,7 +204,11 @@ export class NotesFile {
       const note: StoredNote = { ...fields, seq, payload };
       const drop = notesToPrune([...existing, note], now);
       const del = this.db.prepare('DELETE FROM notes WHERE id = ?');
-      for (const id of drop) del.run(id);
+      const delShown = this.db.prepare('DELETE FROM shown WHERE note_id = ?');
+      for (const id of drop) {
+        delShown.run(id);
+        del.run(id);
+      }
       this.db.exec('COMMIT');
       return { note, replayed: false };
     } catch (err) {
@@ -213,12 +229,52 @@ export class NotesFile {
       .run(readerKey, project, lastSeq, new Date().toISOString());
   }
 
+  /** Ids of this project's notes already given to this reader. */
+  shownFor(readerKey: string, project: string): Set<string> {
+    const rows = this.db.prepare(`${SHOWN_IN_PROJECT} AND s.reader_key = ?`).all(project, readerKey) as ShownRow[];
+    return new Set(rows.map((r) => r.note_id));
+  }
+
+  /** When this reader was first given a note of this project still in the file; null for a new reader. */
+  firstShownAt(readerKey: string, project: string): string | null {
+    const row = this.db
+      .prepare('SELECT MIN(s.shown_at) AS t FROM shown s JOIN notes n ON n.id = s.note_id WHERE n.project = ? AND s.reader_key = ?')
+      .get(project, readerKey) as { t: string | null };
+    return row.t;
+  }
+
+  /** Records that these notes were given to this reader. Ids not in the project are skipped; repeats are no-ops. */
+  markShown(project: string, readerKey: string, host: string, ids: readonly string[], now: Date = new Date()): void {
+    if (ids.length === 0) return;
+    const insert = this.db.prepare(
+      'INSERT OR IGNORE INTO shown (note_id, reader_key, host, shown_at) SELECT id, ?, ?, ? FROM notes WHERE id = ? AND project = ?',
+    );
+    this.db.exec('BEGIN IMMEDIATE');
+    try {
+      for (const id of ids) insert.run(readerKey, host, now.toISOString(), id, project);
+      this.db.exec('COMMIT');
+    } catch (err) {
+      this.db.exec('ROLLBACK');
+      throw err;
+    }
+  }
+
+  shownRows(project: string): ShownRow[] {
+    return this.db.prepare(`${SHOWN_IN_PROJECT} ORDER BY s.shown_at, s.note_id`).all(project) as ShownRow[];
+  }
+
+  /** The project's newest sequence number, 0 when it has no notes; cheap enough to poll. */
+  maxSeq(project: string): number {
+    return (this.db.prepare('SELECT COALESCE(MAX(seq), 0) AS m FROM notes WHERE project = ?').get(project) as { m: number }).m;
+  }
+
   /** Removes notes and markers of projects that no longer exist in the vault. */
   keepOnly(liveProjects: ReadonlySet<string>): number {
     const projects = (this.db.prepare('SELECT DISTINCT project FROM notes').all() as Array<{ project: string }>).map((r) => r.project);
     let removed = 0;
     for (const project of projects) {
       if (liveProjects.has(project)) continue;
+      this.db.prepare('DELETE FROM shown WHERE note_id IN (SELECT id FROM notes WHERE project = ?)').run(project);
       removed += this.db.prepare('DELETE FROM notes WHERE project = ?').run(project).changes;
       this.db.prepare('DELETE FROM seen WHERE project = ?').run(project);
     }
