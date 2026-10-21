@@ -12,9 +12,12 @@ import {
   notesToPrune,
   planNote,
   sameNoteRequest,
+  seenBy,
+  threadsOf,
   NOTES_SHOWN,
   type NotePayload,
   type ReaderState,
+  type ShownRow,
   type StoredNote,
 } from '../src/project-notes.js';
 import { keyCheckMatches, openNote, sealKeyCheck, sealNote, type NoteRowFields } from '../src/project-notes-crypto.js';
@@ -235,6 +238,50 @@ describe('notesForReader', () => {
     expect(notesForReader([claim], reader(), later)).toEqual({ block: null, shown: [] });
     const release = store(planNote({ kind: 'release', releases: claim.id, text: 'done' }, CURSOR, [claim], NOW), CURSOR);
     expect(notesForReader([claim, release], reader(), NOW).block?.notes.map((n) => [n.kind, n.subject])).toEqual([['release', 'x']]);
+  });
+});
+
+describe('receipts and threads', () => {
+  const row = (note: StoredNote, reader_key: string, host: string): ShownRow => ({ note_id: note.id, reader_key, host, shown_at: NOW.toISOString() });
+
+  it('seen_by lists the apps shown a note, once each, never the sender', () => {
+    const note = store(planNote({ kind: 'note', text: 'hi' }, CURSOR, [], NOW), CURSOR);
+    const other = store(planNote({ kind: 'note', text: 'other' }, CURSOR, [], NOW), CURSOR);
+    const rows = [row(note, 'k-claude-a', 'claude-code'), row(note, 'k-claude-b', 'claude-code'), row(note, 'k-codex', 'codex'), row(other, 'k-desktop', 'claude-desktop')];
+    expect(seenBy(note, rows)).toEqual(['claude-code', 'codex']);
+  });
+
+  it('two sessions of one app never produce a receipt for each other', () => {
+    const note = store(planNote({ kind: 'note', text: 'hi' }, CURSOR, [], NOW), CURSOR);
+    expect(seenBy(note, [row(note, 'k-cursor-2', 'cursor'), row(note, 'k-cursor-3', 'cursor-vscode')])).toEqual([]);
+    expect(seenBy(note, [row(note, 'k-cursor-2', 'cursor'), row(note, 'k-codex', 'codex')])).toEqual(['codex']);
+  });
+
+  it('a note given to another app is not delivered here and has no receipt from here', () => {
+    const toCodex = store(planNote({ kind: 'note', text: 'for codex', to: 'codex' }, CURSOR, [], NOW), CURSOR);
+    const out = notesForReader([toCodex], { readerKey: CLAUDE.sender_key, host: 'claude-code', shown: new Set() }, NOW);
+    expect(out).toEqual({ block: null, shown: [] });
+    const codexOut = notesForReader([toCodex], { readerKey: 'k-codex', host: 'codex-mcp-client', shown: new Set() }, NOW);
+    expect(codexOut.shown).toEqual([toCodex.id]);
+    expect(seenBy(toCodex, codexOut.shown.map((id) => ({ note_id: id, reader_key: 'k-codex', host: 'codex', shown_at: NOW.toISOString() })))).toEqual(['codex']);
+  });
+
+  it('groups replies under their root, newest root first, and keeps an orphaned reply as its own card', () => {
+    const q = store(planNote({ kind: 'note', text: 'q' }, CURSOR, [], NOW), CURSOR);
+    const lone = store(planNote({ kind: 'note', text: 'lone' }, CLAUDE, [], NOW), CLAUDE);
+    const a1 = store(planNote({ kind: 'note', text: 'a1', reply_to: q.id }, CLAUDE, [q], NOW), CLAUDE);
+    const a2 = store(planNote({ kind: 'note', text: 'a2', reply_to: a1.id }, CURSOR, [q, a1], NOW), CURSOR);
+    const gone = store(planNote({ kind: 'note', text: 'pruned root' }, CURSOR, [], NOW), CURSOR);
+    const o1 = store(planNote({ kind: 'note', text: 'o1', reply_to: gone.id }, CLAUDE, [gone], NOW), CLAUDE);
+    const o2 = store(planNote({ kind: 'note', text: 'o2', reply_to: o1.id }, CURSOR, [gone, o1], NOW), CURSOR);
+    const threads = threadsOf([o2, a2, q, lone, a1, o1], [row(a1, 'k-cursor', 'cursor')]);
+    expect(threads.map((t) => [t.root.text, t.replies.map((r) => r.text), t.orphan ?? false])).toEqual([
+      ['o1', ['o2'], true],
+      ['lone', [], false],
+      ['q', ['a1', 'a2'], false],
+    ]);
+    expect(threads[2]!.replies[0]!.seen_by).toEqual(['cursor']);
+    expect(threads[2]!.root.seen_by).toEqual([]);
   });
 });
 

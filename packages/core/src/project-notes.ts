@@ -323,3 +323,37 @@ export function notesForReader(
     shown: given.map((n) => n.id),
   };
 }
+
+/** Receipts: the apps shown this note, sorted, never the sender's own app (another session of it included). */
+export function seenBy(note: StoredNote, shown: readonly ShownRow[]): string[] {
+  const sender = canonicalHost(note.payload.host);
+  const hosts = new Set(shown.filter((r) => r.note_id === note.id).map((r) => canonicalHost(r.host)));
+  hosts.delete(sender);
+  return [...hosts].sort();
+}
+
+export interface ThreadView {
+  root: NoteView;
+  /** In the order they were written. */
+  replies: NoteView[];
+  /** The root was pruned; `root` is the earliest surviving reply. */
+  orphan?: true;
+}
+
+/** Every note of a project as threads, newest root first, each view with its receipts. */
+export function threadsOf(notes: readonly StoredNote[], shown: readonly ShownRow[]): ThreadView[] {
+  const groups = new Map<string, StoredNote[]>();
+  for (const n of [...notes].sort((a, b) => a.seq - b.seq)) {
+    const group = groups.get(threadOf(n));
+    if (group) group.push(n);
+    else groups.set(threadOf(n), [n]);
+  }
+  const withReceipts = (n: StoredNote): NoteView => ({ ...noteView(n), seen_by: seenBy(n, shown) });
+  const threads = [...groups].map(([rootId, members]) => {
+    const rootIndex = Math.max(0, members.findIndex((n) => n.id === rootId));
+    const root = members[rootIndex]!;
+    const thread: ThreadView = { root: withReceipts(root), replies: members.filter((n) => n !== root).map(withReceipts) };
+    return { seq: root.seq, thread: root.id === rootId ? thread : { ...thread, orphan: true as const } };
+  });
+  return threads.sort((a, b) => b.seq - a.seq).map((t) => t.thread);
+}
