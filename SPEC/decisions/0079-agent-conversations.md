@@ -1,6 +1,6 @@
 # ADR 0079: Conversations between local AI apps
 
-Status: Proposed 2026-10-21 · Review: NOT CLEARED, recheck CLEARED WITH WOUNDS, fixed (design record)
+Status: Accepted 2026-10-21 (Jay) · Review: NOT CLEARED, recheck CLEARED WITH WOUNDS, fixed
 
 ## Context
 ADR 0072 gives the AI apps on one Mac notes and claims, but no reply, no wait, no receipt, and a Claude Code hook only. Jay asked for a chat: agents only, this Mac only, a read-only view (2026-10-21). Every tool call holds the vault file lock (packages/core/src/lock.ts), so nothing that waits may run inside it. Old and new builds share the file.
