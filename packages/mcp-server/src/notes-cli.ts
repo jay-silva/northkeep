@@ -1,8 +1,9 @@
 /**
- * `northkeep notes` (ADR 0072 D5): the Claude Code hook path and the owner's
- * view. The hook reads only the OS key store, never prompts, prints nothing
- * when it cannot help or when a redaction tier is set, and writes only its
- * shown rows and one call-log row. It never opens the vault or its lock.
+ * `northkeep notes` (ADR 0072 D5, ADR 0079 D5): one hook command for Claude
+ * Code, Codex and Cursor, and the owner's view. The hook reads only the OS key
+ * store, never prompts, prints nothing when it cannot help or when a redaction
+ * tier is set, and writes only its shown rows and one call-log row. It never
+ * opens the vault or its lock.
  */
 import crypto, { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
@@ -11,40 +12,132 @@ import {
   NOTES_NOTICE,
   OWNER_SENDER_KEY,
   activeClaims,
-  canonicalHost,
   deriveNotesKey,
   isValidProjectSlug,
   memzero,
   northkeepHome,
   notesForReader,
   planNote,
-  tameOneLine,
+  threadsOf,
   type NoteView,
+  type NotesBlock,
+  type StoredNote,
 } from '@northkeep/core';
 import { keychainGetMasterKey, masterKeyStoreAvailable } from './keychain.js';
 import { appendCallLog } from './log.js';
 import { NotesFile, notesFilePath } from './notes-store.js';
 import { parseReturnRedactionTier } from './return-mask.js';
 
-const SESSION_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-const HOOK_EVENTS = new Set(['UserPromptSubmit', 'PostToolUse']);
+export type HookHost = 'claude-code' | 'codex' | 'cursor';
+
+interface HookHostSpec {
+  idField: 'session_id' | 'conversation_id';
+  idGate: RegExp;
+  /** Accepted events; false where delivery is best effort, so printing there records nothing. */
+  events: ReadonlyMap<string, boolean>;
+  output: (event: string, context: string) => unknown;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Codex and Cursor do not document their id format, so the gate is a bounded character class. */
+const VENDOR_ID = /^[A-Za-z0-9_.:-]{4,128}$/;
+const hookSpecificOutput = (event: string, context: string) => ({ hookSpecificOutput: { hookEventName: event, additionalContext: context } });
+
+/** The design record's host table (docs/design/agent-conversations.md, Hooks). */
+const HOOK_HOSTS: ReadonlyMap<string, HookHostSpec> = new Map<HookHost, HookHostSpec>([
+  ['claude-code', {
+    idField: 'session_id', idGate: UUID, output: hookSpecificOutput,
+    events: new Map([['UserPromptSubmit', true], ['PostToolUse', true]]),
+  }],
+  ['codex', {
+    idField: 'session_id', idGate: VENDOR_ID, output: hookSpecificOutput,
+    events: new Map([['SessionStart', true], ['UserPromptSubmit', true], ['PostToolUse', true]]),
+  }],
+  ['cursor', {
+    idField: 'conversation_id', idGate: VENDOR_ID, output: (_event, context) => ({ additional_context: context }),
+    // Cursor's sessionStart is fire and forget; postToolUse is the delivery path.
+    events: new Map([['sessionStart', false], ['postToolUse', true], ['postToolUseFailure', true]]),
+  }],
+]);
+
+/** One hook call that passed its host's gates. */
+export interface HookRequest {
+  host: HookHost;
+  event: string;
+  readerKey: string;
+  /** Whether what this call prints is recorded as shown. */
+  recordsShown: boolean;
+}
+
+/** Null for an unknown host, input that is not a JSON object, an id that fails the gate, or an event the host does not send. */
+export function parseHookInput(host: string, stdin: string): HookRequest | null {
+  const spec = HOOK_HOSTS.get(host);
+  if (spec === undefined) return null;
+  let input: unknown;
+  try {
+    input = JSON.parse(stdin);
+  } catch {
+    return null;
+  }
+  if (typeof input !== 'object' || input === null || Array.isArray(input)) return null;
+  const fields = input as Record<string, unknown>;
+  const id = fields[spec.idField];
+  const event = fields.hook_event_name;
+  if (typeof id !== 'string' || !spec.idGate.test(id) || typeof event !== 'string') return null;
+  const recordsShown = spec.events.get(event);
+  if (recordsShown === undefined) return null;
+  return { host: host as HookHost, event, readerKey: `hook:${host}:${id.toLowerCase()}`, recordsShown };
+}
+
+const ROOT_QUOTE_CHARS = 60;
+
+function quoteRoot(text: string | undefined): string {
+  if (text === undefined || text === '') return '';
+  return ` (re "${Array.from(text).slice(0, ROOT_QUOTE_CHARS).join('')}")`;
+}
+
+/** One line per note; `rootText` adds the thread root's opening words to a reply. */
+function line(n: NoteView, rootText?: string): string {
+  if (n.kind === 'claim') return `- Claim: ${n.from} holds "${n.subject ?? ''}" until ${n.expires_at ?? ''}${n.text ? ` (${n.text})` : ''}`;
+  if (n.kind === 'release') return `- ${n.from} released "${n.subject ?? ''}"${n.text ? ` (${n.text})` : ''}`;
+  const to = n.to === 'all' ? '' : ` to ${n.to}`;
+  if (n.reply_to !== undefined) return `- Reply from ${n.from}${to}${quoteRoot(rootText)}: ${n.text}`;
+  return `- Note from ${n.from}${to}: ${n.text}`;
+}
+
+/**
+ * What one hook call prints for a block, in its host's shape, and the note ids
+ * to record as shown: exactly the notes printed, or none where delivery is
+ * best effort. `roots` maps note ids to their text, for reply context.
+ */
+export function renderHook(request: HookRequest, project: string, block: NotesBlock, roots: ReadonlyMap<string, string>): { output: string; shown: string[] } {
+  const context = [
+    `NorthKeep notes for project "${project}":`,
+    ...block.active_claims.map((n) => line(n)),
+    ...block.notes.map((n) => line(n, n.thread === undefined ? undefined : roots.get(n.thread))),
+    ...(block.notes_count > block.notes.length ? [`(${block.notes_count - block.notes.length} older unseen notes not shown)`] : []),
+    NOTES_NOTICE,
+  ].join('\n');
+  const output = JSON.stringify(HOOK_HOSTS.get(request.host)!.output(request.event, context));
+  return { output, shown: request.recordsShown ? block.notes.map((n) => n.id) : [] };
+}
+
+function rootTexts(rows: readonly StoredNote[]): Map<string, string> {
+  return new Map(rows.map((r) => [r.id, r.payload.text || (r.payload.subject ?? '')]));
+}
 
 export interface NotesHookOptions {
   vaultPath: string;
   project: string;
+  /** claude-code, codex or cursor; any other value prints nothing. */
   host: string;
-  /** Raw hook input from stdin: Claude Code sends JSON with session_id and hook_event_name. */
+  /** Raw hook input from stdin: JSON with the host's id field and hook_event_name. */
   stdin: string;
   /** Skip when this reader showed notes less than this many seconds ago. */
   minIntervalSeconds?: number;
   now?: Date;
 }
 
-function line(n: NoteView): string {
-  if (n.kind === 'claim') return `- Claim: ${n.from} holds "${n.subject ?? ''}" until ${n.expires_at ?? ''}${n.text ? ` (${n.text})` : ''}`;
-  if (n.kind === 'release') return `- ${n.from} released "${n.subject ?? ''}"${n.text ? ` (${n.text})` : ''}`;
-  return `- Note from ${n.from}${n.to === 'all' ? '' : ` to ${n.to}`}: ${n.text}`;
-}
 
 function stampPath(readerKey: string): string {
   const name = crypto.createHash('sha256').update(readerKey).digest('hex').slice(0, 32);
@@ -67,8 +160,8 @@ function touchStamp(readerKey: string): void {
 }
 
 /**
- * Returns what the hook prints: Claude Code's JSON with additionalContext,
- * or '' when there is nothing to show or anything goes wrong.
+ * Returns what the hook prints, in its host's JSON shape, or '' when there is
+ * nothing to show or anything goes wrong.
  */
 export function runNotesHook(options: NotesHookOptions): string {
   try {
@@ -83,17 +176,9 @@ function hookOutput(options: NotesHookOptions): string {
   const tier = parseReturnRedactionTier();
   if (!tier.ok || tier.tier !== 0) return '';
   const now = options.now ?? new Date();
-  let input: { session_id?: unknown; hook_event_name?: unknown };
-  try {
-    input = JSON.parse(options.stdin) as typeof input;
-  } catch {
-    return '';
-  }
-  const session = typeof input.session_id === 'string' ? input.session_id : '';
-  const event = typeof input.hook_event_name === 'string' ? input.hook_event_name : '';
-  if (!SESSION_ID.test(session) || !HOOK_EVENTS.has(event) || !isValidProjectSlug(options.project)) return '';
-  const host = tameOneLine(options.host, 80) || 'claude-code';
-  const readerKey = `hook:${host}:${session.toLowerCase()}`;
+  const request = parseHookInput(options.host, options.stdin);
+  if (request === null || !isValidProjectSlug(options.project)) return '';
+  const { host, readerKey } = request;
   if (options.minIntervalSeconds !== undefined && throttled(readerKey, options.minIntervalSeconds, now)) return '';
   const file = notesFilePath(options.vaultPath);
   if (file === null || !fs.existsSync(file)) return '';
@@ -110,31 +195,35 @@ function hookOutput(options: NotesHookOptions): string {
   try {
     notes = NotesFile.open(file, key, { resetOnMismatch: false, proven: false });
     const rows = notes.read(options.project);
-    const { block, shown: given } = notesForReader(rows, { readerKey, host: canonicalHost(host), shown: notes.shownFor(readerKey, options.project) }, now);
-    notes.markShown(options.project, readerKey, canonicalHost(host), given, now);
-    if (options.minIntervalSeconds !== undefined) touchStamp(readerKey);
+    const { block } = notesForReader(rows, { readerKey, host, shown: notes.shownFor(readerKey, options.project) }, now);
+    const { output, shown } = block === null ? { output: '', shown: [] } : renderHook(request, options.project, block, rootTexts(rows));
+    // Recorded before printing: if this write fails the hook prints nothing and the notes stay unseen.
+    notes.markShown(options.project, readerKey, host, shown, now);
+    // A best-effort call must not throttle the call that actually delivers.
+    if (options.minIntervalSeconds !== undefined && request.recordsShown) touchStamp(readerKey);
     if (block === null) return '';
-    const shown = [...block.active_claims, ...block.notes];
+    const printed = [...block.active_claims, ...block.notes];
     appendCallLog({
       ts: now.toISOString(), tool: 'notes_hook', provider: `${host}-hook`, host, ok: true,
-      params: { scope: `project:${options.project}` }, result_count: shown.length,
-      result_ids: [...new Set(shown.map((n) => n.id))], disclosed_scopes: [`project:${options.project}`],
+      params: { scope: `project:${options.project}` }, result_count: printed.length,
+      result_ids: [...new Set(printed.map((n) => n.id))], disclosed_scopes: [`project:${options.project}`],
     });
-    const text = [
-      `NorthKeep notes for project "${options.project}":`,
-      ...block.active_claims.map(line),
-      ...block.notes.map(line),
-      ...(block.notes_count > block.notes.length ? [`(${block.notes_count - block.notes.length} older unseen notes not shown)`] : []),
-      NOTES_NOTICE,
-    ].join('\n');
-    return JSON.stringify({ hookSpecificOutput: { hookEventName: event, additionalContext: text } });
+    return output;
   } finally {
     notes?.close();
     memzero(key);
   }
 }
 
-/** The owner's view: active claims and the newest notes, read only. */
+const OWNER_VIEW_THREADS = 20;
+
+/** Claims are listed above with their ids and are never recorded as shown, so they carry no receipt. */
+function ownerLine(n: NoteView): string {
+  const receipt = n.kind === 'claim' ? '' : n.seen_by?.length ? ` | seen by ${n.seen_by.join(', ')}` : ' | not seen yet';
+  return `${n.created_at.slice(0, 16)} ${line(n)}${receipt}`;
+}
+
+/** The owner's view: active claims, then the newest threads with replies indented and receipts. */
 export function notesOwnerView(vaultPath: string, project: string, master: Buffer, now: Date = new Date()): string {
   const file = notesFilePath(vaultPath);
   if (file === null || !fs.existsSync(file)) return 'No notes on this machine yet.';
@@ -142,17 +231,15 @@ export function notesOwnerView(vaultPath: string, project: string, master: Buffe
   const notes = NotesFile.open(file, key, { resetOnMismatch: false });
   try {
     const rows = notes.read(project);
-    const claims = activeClaims(rows, now);
-    const recent = rows.slice(-20).reverse();
-    const view = (r: (typeof rows)[number]): NoteView => ({
-      id: r.id, kind: r.payload.kind, from: r.payload.host, to: r.payload.to, text: r.payload.text,
-      subject: r.payload.subject, expires_at: r.payload.expires_at, created_at: r.created_at,
-    });
+    const threads = threadsOf(rows, notes.shownRows(project));
+    const views = new Map(threads.flatMap((t) => [t.root, ...t.replies]).map((v) => [v.id, v]));
+    const claims = activeClaims(rows, now).map((c) => views.get(c.id)!);
+    const newest = threads.slice(0, OWNER_VIEW_THREADS);
     const out = [
       `Active claims (${claims.length}):`,
-      ...claims.map((c) => `${line(view(c))}  [id ${c.id}]`),
-      `Newest notes (${recent.length} of ${rows.length}):`,
-      ...recent.map((r) => `${r.created_at.slice(0, 16)} ${line(view(r))}`),
+      ...claims.map((c) => `${line(c)}  [id ${c.id}]`),
+      `Newest threads (${newest.length} of ${threads.length}):`,
+      ...newest.flatMap((t) => [ownerLine(t.root), ...t.replies.map((r) => `  ${ownerLine(r)}`)]),
     ];
     if (notes.unreadable > 0) out.push(`${notes.unreadable} notes could not be read and were skipped.`);
     return out.join('\n');
