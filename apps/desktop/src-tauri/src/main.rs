@@ -17,6 +17,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder};
 
+#[cfg(target_os = "macos")]
+mod keep_watch_tray;
+
 struct ServerProcess(Arc<Mutex<Option<Child>>>);
 
 /// Set when the app is quitting on purpose, so the child watcher doesn't
@@ -266,6 +269,9 @@ fn main() {
                 .inner_size(1020.0, 740.0)
                 .min_inner_size(560.0, 480.0)
                 .build()?;
+            // ADR 0080: the Keep Watch menu bar menu, only where the server supports it.
+            #[cfg(target_os = "macos")]
+            keep_watch_tray::install(app.handle(), &url)?;
             Ok(())
         })
         .build(tauri::generate_context!())
