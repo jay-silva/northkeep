@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { KDF_INTERACTIVE, NOTES_NOTICE, Vault, deriveMasterKey, deriveNotesKey, generateDeviceSecret, planNote, type NoteRequest, type NoteView, type NotesBlock } from '@northkeep/core';
 import { NotesFile, notesFilePath } from '../src/notes-store.js';
-import { HOOK_TEXT_MAX_CHARS, notesOwnerView, parseHookInput, renderHook, runNotesHook } from '../src/notes-cli.js';
+import { notesOwnerView, parseHookInput, renderHook, runNotesHook } from '../src/notes-cli.js';
 import { keychainSetMasterKey, resetMasterKeyStoreProbe } from '../src/keychain.js';
 
 const PASSPHRASE = 'adr 0079 notes hook passphrase';
@@ -140,7 +140,6 @@ describe('ADR 0079 hook output per host', () => {
     const long = `${'y'.repeat(278)}\u{1F600}tail${'z'.repeat(700)}`;
     const one: NotesBlock = { notes: [{ ...note, text: long }], notes_count: 1, active_claims: [{ ...claim, text: long }], notes_notice: NOTES_NOTICE };
     const lines = JSON.parse(renderHook(request, 'rental', one, roots).output).hookSpecificOutput.additionalContext.split('\n');
-    expect(HOOK_TEXT_MAX_CHARS).toBe(280);
     expect(lines.slice(1, 3)).toEqual([
       `- Claim: cursor holds "bug-1234" until 2026-10-21T13:00:00.000Z (${'y'.repeat(278)}\u{1F600}\u2026)`,
       `- Note from codex: ${'y'.repeat(278)}\u{1F600}\u2026`,

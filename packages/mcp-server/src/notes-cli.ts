@@ -91,7 +91,7 @@ export function parseHookInput(host: string, stdin: string): HookRequest | null 
 
 const ROOT_QUOTE_CHARS = 60;
 /** Per note in hook output, so ten claims and five notes stay under Codex's 2,500-token context limit; tool results keep full text. */
-export const HOOK_TEXT_MAX_CHARS = 280;
+const HOOK_TEXT_MAX_CHARS = 280;
 
 function clip(text: string): string {
   const points = Array.from(text);
