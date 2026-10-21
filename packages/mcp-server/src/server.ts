@@ -68,6 +68,7 @@ import {
   TIER2_FAILED_MESSAGE,
   TIER3_DEGRADED_NOTE,
   contentWriteRefusal,
+  maskReturnParts,
   maskReturnPayload,
   parseReturnRedactionTier,
   type ReturnTier,
@@ -133,6 +134,11 @@ interface ConnContext {
   session_id: string;
   /** This session's hourly waits and notes (ADR 0079 D3). */
   budget: SessionBudget;
+  /**
+   * Notes a wait could not mask at `tier`. Later waits skip them so they do not
+   * end every wait at once; reads still try them. Cleared when the tier changes.
+   */
+  withheld: { tier: ReturnTier; ids: Set<string> };
 }
 
 /**
@@ -395,6 +401,12 @@ interface RunOutcome {
   disclosed_scopes?: string[];
   /** Notes recorded as shown for this result; run takes the record back if the app never receives it. */
   delivered?: { project: string; ids: string[] };
+  /** Notes riding on a project result, masked apart from it so they never fail it (ADR 0072 D3). */
+  rider?: { block: NotesBlock; ids: string[] };
+  /** NorthKeep's own one-line notices about notes; no user text, so never masked. */
+  notices?: { notes_note?: string; notes_reset_note?: string };
+  /** The payload is already masked (project_wait masks each block it finds); degraded as for Tier 3. */
+  premasked?: { degraded: boolean };
 }
 
 /**
@@ -412,7 +424,7 @@ interface RunOptions {
    * Runs after the vault and its file lock are released, still inside the log
    * envelope and before masking, so work that waits holds no other app up (ADR 0079 D3).
    */
-  outside?: (checked: RunOutcome) => Promise<RunOutcome>;
+  outside?: (checked: RunOutcome, tier: ReturnTier) => Promise<RunOutcome>;
 }
 
 const LOG_UNWRITABLE = 'NorthKeep could not write its call log, so nothing was done.';
@@ -489,6 +501,7 @@ async function run(
     done({ ok: false, error: 'invalid_tier' });
     return err(parsedTier.message);
   }
+  if (ctx.withheld.tier !== tier) ctx.withheld = { tier, ids: new Set() };
   // Log before acting (ADR 0060 D7, Jay decision): no row, no call.
   if (!tryAppend({ ...base, phase: 'pending', ok: false, error: 'pending' })) {
     return err(LOG_UNWRITABLE);
@@ -501,7 +514,7 @@ async function run(
       const result = await fn(vault, granted, notes);
       return options.notesFor === undefined ? result : attachNotes(result, vault, notes, options.notesFor, ctx);
     });
-    if (options.outside) outcome = await options.outside(outcome);
+    if (options.outside) outcome = await options.outside(outcome, tier);
   } catch (error) {
     const denied = error instanceof ScopeDeniedError ||
       (error instanceof ProjectHandoffError && error.code === 'scope_denied');
@@ -548,36 +561,60 @@ async function run(
   // Masking runs after the vault closed and before the completion row, so the
   // row records the true outcome (a Tier-2 refusal is never logged as ok).
   let payload = outcome.payload;
-  let degraded = false;
-  if (options.mask !== 'none') {
-    const masked = await maskReturnPayload(payload, options.mask, tier, returnPseudonyms);
-    if (masked.failed) {
-      undoShown(vaultPath, ctx, outcome.delivered);
-      if (options.kind === 'write') {
-        // The write landed (code review F3): say so, show nothing, and log
-        // the true outcome, so an app does not retry a change that is saved.
-        const logged = done({
-          ok: true, result_id: outcome.result_id, result_ids: outcome.result_ids,
-          disclosed_scopes: outcome.disclosed_scopes, redaction_degraded: true,
-        });
-        return ok({
-          saved: true,
-          ...(outcome.result_id !== undefined ? { id: outcome.result_id } : {}),
-          masking_warning: MASKING_FAILED_WRITE,
-          ...(logged ? {} : { log_warning: LOG_INCOMPLETE_WRITE }),
-        });
-      }
-      done({ ok: false, error: 'tier2-unavailable' });
-      return err(TIER2_FAILED_MESSAGE);
+  let degraded = outcome.premasked?.degraded ?? false;
+  let delivered = outcome.delivered;
+  let resultIds = outcome.result_ids;
+  let notices = outcome.notices ?? {};
+  const own = options.mask !== 'none' && outcome.premasked === undefined ? { payload, kind: options.mask } : null;
+  const rider = outcome.rider;
+  const masked = await maskReturnParts(
+    [...(own ? [own] : []), ...(rider ? [{ payload: rider.block, kind: 'project' as const }] : [])],
+    tier,
+    returnPseudonyms,
+  );
+  const ownMasked = own ? masked.shift()! : null;
+  const riderMasked = rider ? masked.shift()! : null;
+  if (ownMasked?.failed) {
+    undoShown(vaultPath, ctx, delivered);
+    if (options.kind === 'write') {
+      // The write landed (code review F3): say so, show nothing, and log
+      // the true outcome, so an app does not retry a change that is saved.
+      const logged = done({
+        ok: true, result_id: outcome.result_id, result_ids: outcome.result_ids,
+        disclosed_scopes: outcome.disclosed_scopes, redaction_degraded: true,
+      });
+      return ok({
+        saved: true,
+        ...(outcome.result_id !== undefined ? { id: outcome.result_id } : {}),
+        masking_warning: MASKING_FAILED_WRITE,
+        ...(logged ? {} : { log_warning: LOG_INCOMPLETE_WRITE }),
+      });
     }
-    payload = masked.payload;
-    degraded = masked.degraded;
-    if (degraded) {
-      payload = { ...(payload as Record<string, unknown>), redaction_note: TIER3_DEGRADED_NOTE };
-      if (!degradedNoticeWritten) {
-        degradedNoticeWritten = true;
-        console.error(`northkeep MCP server: ${TIER3_DEGRADED_NOTE}`);
-      }
+    done({ ok: false, error: 'tier2-unavailable' });
+    return err(TIER2_FAILED_MESSAGE);
+  }
+  if (ownMasked) {
+    payload = ownMasked.payload;
+    degraded = ownMasked.degraded;
+  }
+  if (rider && riderMasked) {
+    if (riderMasked.failed) {
+      // ADR 0072 D3: a note never fails the call it rides on. It is not shown, so it keeps no receipt.
+      undoShown(vaultPath, ctx, delivered);
+      delivered = undefined;
+      notices = { ...notices, notes_note: NOTES_WITHHELD_NOTE };
+    } else {
+      payload = { ...(payload as Record<string, unknown>), ...(riderMasked.payload as Record<string, unknown>) };
+      degraded ||= riderMasked.degraded;
+      resultIds = [...(resultIds ?? []), ...rider.ids];
+    }
+  }
+  if (Object.keys(notices).length > 0) payload = { ...(payload as Record<string, unknown>), ...notices };
+  if (degraded) {
+    payload = { ...(payload as Record<string, unknown>), redaction_note: TIER3_DEGRADED_NOTE };
+    if (!degradedNoticeWritten) {
+      degradedNoticeWritten = true;
+      console.error(`northkeep MCP server: ${TIER3_DEGRADED_NOTE}`);
     }
   }
 
@@ -585,12 +622,12 @@ async function run(
     ok: true,
     result_count: outcome.result_count,
     result_id: outcome.result_id,
-    result_ids: outcome.result_ids,
+    result_ids: resultIds,
     disclosed_scopes: outcome.disclosed_scopes,
     ...(degraded ? { redaction_degraded: true } : {}),
   });
   if (!logged) {
-    undoShown(vaultPath, ctx, outcome.delivered);
+    undoShown(vaultPath, ctx, delivered);
     // A saved write says so, with no content: an error would invite a retry
     // of a write that landed, and content would be a disclosure with no
     // ledger row. A read discloses nothing (Jay decision 5).
@@ -625,6 +662,8 @@ const NOTES_UNREADABLE_NOTE = 'Notes from other AI apps could not be read on thi
 const NOTES_RESET_NOTE = 'The notes file did not match this vault, so earlier notes and claims were cleared.';
 
 const NOTES_UNRECORDED_NOTE = 'These notes could not be marked as shown, so they may show again on your next read.';
+const NOTES_WITHHELD_NOTE = 'Notes from other AI apps were withheld because they could not be masked under the current redaction tier.';
+const NO_IDS: ReadonlySet<string> = new Set();
 
 /** Set when a note's address is neither all nor a short name, so the sender does not wait on an app that may not exist. */
 function toNote(to: string): string | undefined {
@@ -639,6 +678,8 @@ interface Delivery {
   shown: string[];
   /** False when the shown rows could not be written; the notes then come up again. */
   recorded: boolean;
+  /** A note in `skip` is still unseen by this session. */
+  skipped: boolean;
 }
 
 /**
@@ -646,13 +687,17 @@ interface Delivery {
  * read and the record are two statements, not one transaction: markShown
  * skips a note pruned between them, and a failed record is reported, never fatal.
  */
-function deliverNotes(file: NotesFile, project: string, ctx: ConnContext, thread: string | undefined, now: Date): Delivery {
+function deliverNotes(
+  file: NotesFile, project: string, ctx: ConnContext, thread: string | undefined, now: Date, skip: ReadonlySet<string> = NO_IDS,
+): Delivery {
   const rows = file.read(project);
   const receipts = file.shownRows(project);
   const host = canonicalHost(ctx.host);
   const mine = new Set(receipts.filter((r) => r.reader_key === ctx.session_id).map((r) => r.note_id));
-  const { block, shown } = notesForReader(rows, { readerKey: ctx.session_id, host, shown: mine, ...(thread !== undefined ? { thread } : {}) }, now);
-  if (block === null) return { block, shown, recorded: true };
+  const skipped = rows.some((n) => skip.has(n.id) && !mine.has(n.id));
+  const passed = skip.size === 0 ? mine : new Set([...mine, ...skip]);
+  const { block, shown } = notesForReader(rows, { readerKey: ctx.session_id, host, shown: passed, ...(thread !== undefined ? { thread } : {}) }, now);
+  if (block === null) return { block, shown, recorded: true, skipped };
   const byId = new Map(rows.map((n) => [n.id, n]));
   const notes = block.notes.map((view) => ({ ...view, seen_by: seenBy(byId.get(view.id)!, receipts) }));
   let recorded = true;
@@ -661,7 +706,7 @@ function deliverNotes(file: NotesFile, project: string, ctx: ConnContext, thread
   } catch {
     recorded = false;
   }
-  return { block: { ...block, notes }, shown, recorded };
+  return { block: { ...block, notes }, shown, recorded, skipped };
 }
 
 /** The ids a notes block discloses, for the call log's result_ids. */
@@ -682,20 +727,17 @@ function attachNotes(outcome: RunOutcome, vault: Vault, notes: NotesAccess, proj
     const live = new Set(vault.scopes().map(parseProjectSlug).filter((slug): slug is string => slug !== null));
     file.keepOnly(live);
     const { block, shown, recorded } = deliverNotes(file, project, ctx, undefined, new Date());
-    const ids = blockIds(block);
     return {
       ...outcome,
       ...(recorded && shown.length > 0 ? { delivered: { project, ids: shown } } : {}),
-      payload: {
-        ...payload,
-        ...(block ?? {}),
+      ...(block !== null ? { rider: { block, ids: blockIds(block) } } : {}),
+      notices: {
         ...(recorded ? {} : { notes_note: NOTES_UNRECORDED_NOTE }),
         ...(file.reset ? { notes_reset_note: NOTES_RESET_NOTE } : {}),
       },
-      ...(ids.length > 0 ? { result_ids: [...(outcome.result_ids ?? []), ...ids] } : {}),
     };
   } catch {
-    return { ...outcome, payload: { ...payload, notes_note: NOTES_UNREADABLE_NOTE } };
+    return { ...outcome, notices: { notes_note: NOTES_UNREADABLE_NOTE } };
   }
 }
 
@@ -722,7 +764,7 @@ function pause(ms: number, signal: AbortSignal): Promise<void> {
  */
 async function waitForNotes(
   vaultPath: string, project: string, ctx: ConnContext, seconds: number, thread: string | undefined,
-  signal: AbortSignal, checked: RunOutcome,
+  signal: AbortSignal, checked: RunOutcome, tier: ReturnTier,
 ): Promise<RunOutcome> {
   const started = Date.now();
   const resolved = resolveMasterKey(vaultPath);
@@ -736,24 +778,48 @@ async function waitForNotes(
     file = NotesFile.open(filePath, notesKey, { resetOnMismatch: false });
     const deadline = started + seconds * 1000;
     let decryptedAt = -1;
+    let withheld = false;
     for (let first = true; ; first = false) {
       if (signal.aborted) throw new Error('The wait was cancelled.');
       const seq = file.maxSeq(project);
       if (seq !== decryptedAt) {
         decryptedAt = seq;
-        const { block, shown, recorded } = deliverNotes(file, project, ctx, thread, new Date());
+        const ids = ctx.withheld.ids;
+        const { block, shown, recorded, skipped } = deliverNotes(file, project, ctx, thread, new Date(), ids);
+        withheld ||= skipped;
         // Active claims alone make a block but are not news.
         if (block !== null && shown.length > 0) {
-          return {
-            ...checked,
-            payload: { ...block, ...(recorded ? {} : { notes_note: NOTES_UNRECORDED_NOTE }), waited_ms: first ? 0 : Date.now() - started },
-            result_ids: blockIds(block),
-            ...(recorded ? { delivered: { project, ids: shown } } : {}),
-          };
+          // Masked here, not in run, so a block that cannot be masked is withheld and the wait goes on.
+          const [masked] = await maskReturnParts([{ payload: block, kind: 'project' }], tier, returnPseudonyms);
+          if (!masked!.failed) {
+            return {
+              ...checked,
+              payload: { ...(masked!.payload as Record<string, unknown>), waited_ms: first ? 0 : Date.now() - started },
+              premasked: { degraded: masked!.degraded },
+              ...(recorded ? {} : { notices: { notes_note: NOTES_UNRECORDED_NOTE } }),
+              result_ids: blockIds(block),
+              ...(recorded ? { delivered: { project, ids: shown } } : {}),
+            };
+          }
+          if (recorded) {
+            try {
+              file.unmarkShown(project, ctx.session_id, shown);
+            } catch {
+              // The receipt stays, as in undoShown.
+            }
+          }
+          for (const id of shown) ids.add(id);
+          withheld = true;
         }
       }
       const left = deadline - Date.now();
-      if (left <= 0) return { ...checked, payload: { timed_out: true, waited_ms: Date.now() - started } };
+      if (left <= 0) {
+        return {
+          ...checked,
+          payload: { timed_out: true, waited_ms: Date.now() - started },
+          ...(withheld ? { notices: { notes_note: NOTES_WITHHELD_NOTE } } : {}),
+        };
+      }
       await pause(Math.min(WAIT_POLL_MS, left), signal);
     }
   } finally {
@@ -823,6 +889,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     host_version: null,
     session_id: randomUUID(),
     budget: new SessionBudget(),
+    withheld: { tier: 0, ids: new Set() },
   };
   // Capture the calling client's name once it completes the MCP handshake.
   server.server.oninitialized = () => {
@@ -1613,7 +1680,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         kind: 'read',
         mask: 'project',
         pre: async () => chargeBudget(ctx, 'wait'),
-        outside: (checked) => waitForNotes(vaultPath, project, ctx, seconds ?? 20, thread, extra.signal, checked),
+        outside: (checked, tier) => waitForNotes(vaultPath, project, ctx, seconds ?? 20, thread, extra.signal, checked, tier),
       }, (vault, granted) => {
         if (!isValidProjectSlug(project)) throw new Error(`Invalid project slug "${project}".`);
         const scope = projectScope(project);

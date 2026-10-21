@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -612,7 +613,7 @@ describe('ADR 0079 replies, receipts and waits', () => {
     const read = await call(desk, 'project_get', { project: 'rental' });
     const waited = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
     expect([read.isError, read.text]).toEqual([true, 'Name masking failed (NORTHKEEP_REDACT_TIER=2); nothing was returned. Start the local model or use Tier 1 or 3.']);
-    expect([waited.isError, waited.text]).toEqual([true, 'Name masking failed (NORTHKEEP_REDACT_TIER=2); nothing was returned. Start the local model or use Tier 1 or 3.']);
+    expect([waited.isError, waited.json.timed_out, waited.json.notes, waited.json.notes_note]).toEqual([false, true, undefined, WITHHELD]);
     expect(shownRows()).toEqual([]);
 
     delete process.env.NORTHKEEP_REDACT_TIER;
@@ -687,6 +688,132 @@ describe('ADR 0079 replies, receipts and waits', () => {
     expect(again.json.notes_note).toBeUndefined();
     expect((await call(cursor, 'project_get', { project: 'rental' })).json.notes).toBeUndefined();
   });
+});
+
+const WITHHELD = 'Notes from other AI apps were withheld because they could not be masked under the current redaction tier.';
+
+describe('ADR 0079 notes masked apart from the project they ride on', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const models: http.Server[] = [];
+  afterEach(async () => {
+    for (const m of models.splice(0)) await new Promise((resolve) => m.close(resolve));
+  });
+
+  /** A loopback name model: finds `find(text)`, and gives a reply the strict reader refuses for any text holding POISON. */
+  async function startNameModel(find: (text: string) => string[] = () => []): Promise<void> {
+    const model = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (chunk) => { body += chunk; });
+      req.on('end', () => {
+        res.setHeader('content-type', 'application/json');
+        if (req.url === '/api/tags') return res.end(JSON.stringify({ models: [{ name: 'llama3.2:3b' }] }));
+        const prompt: string = JSON.parse(body).prompt ?? '';
+        const text = prompt.slice(prompt.lastIndexOf('\nText:\n') + 7);
+        const entities = find(text).map((name) => ({ text: name, kind: 'person' }));
+        res.end(JSON.stringify({ response: prompt.includes('POISON') ? '{"result":[]}' : JSON.stringify({ entities }) }));
+      });
+    });
+    await new Promise<void>((resolve) => model.listen(0, '127.0.0.1', resolve));
+    models.push(model);
+    process.env.NORTHKEEP_OLLAMA_URL = `http://127.0.0.1:${(model.address() as { port: number }).port}`;
+  }
+  const notesKey = () => deriveNotesKey(Buffer.from(process.env.NORTHKEEP_MASTER_KEY!, 'hex'));
+  const shownRows = () => {
+    const file = NotesFile.open(notesFilePath(vaultPath)!, notesKey());
+    try { return file.shownRows('rental'); } finally { file.close(); }
+  };
+  const callLog = (): any[] => fs.readFileSync(path.join(home, 'mcp-calls.log'), 'utf8').trim().split('\n').map((line) => JSON.parse(line));
+
+  it('a note the name model cannot read is withheld, and the project read still succeeds', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    await createProject(cursor);
+    const sent = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'POISON the name model' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    for (const tool of ['project_get', 'project_resume', 'project_get']) {
+      const read = await call(desk, tool, { project: 'rental' });
+      expect([tool, read.isError, read.text.includes('A first rental.'), read.json?.notes, read.json?.notes_note]).toEqual([tool, false, true, undefined, WITHHELD]);
+    }
+    expect(shownRows()).toEqual([]);
+    const reads = callLog().filter((r) => r.tool === 'project_get' && r.phase === 'done');
+    expect(reads.map((r) => [r.ok, r.result_ids ?? []])).toEqual([[true, []], [true, []]]);
+
+    delete process.env.NORTHKEEP_REDACT_TIER;
+    const clean = await call(desk, 'project_get', { project: 'rental' });
+    expect([clean.json.notes.map((n: any) => n.text), clean.json.notes_note]).toEqual([['POISON the name model'], undefined]);
+    expect(shownRows().map((r) => [r.note_id, r.host])).toEqual([[sent.json.note.id, 'claude-desktop']]);
+  });
+
+  it('a name the model finds only in a note is masked in the project text of the same reply', async () => {
+    await startNameModel((text) => (text.includes('clinic') && text.includes('Zyler Okonkwo') ? ['Zyler Okonkwo'] : []));
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    const created = await call(cursor, 'project_create', { project: 'rental', what_why: 'A first rental.', status: 'Zyler Okonkwo signs on Friday.', milestones: PLAN });
+    expect(created.isError, created.text).toBe(false);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Met Zyler Okonkwo at the clinic.' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const read = await call(desk, 'project_get', { project: 'rental' });
+    expect([read.isError, read.json.notes.length, read.text.includes('signs on Friday.'), read.text.includes('Zyler')]).toEqual([false, 1, true, false]);
+  });
+
+  it('an active claim the name model cannot read does not fail a project read', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const desk = await connect('local-agent-mode-northkeep');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'claim', subject: 'POISON subject', hours: 2 });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const read = await call(desk, 'project_get', { project: 'rental' });
+    expect([read.isError, read.text.includes('A first rental.'), read.json?.active_claims, read.json?.notes_note]).toEqual([false, true, undefined, WITHHELD]);
+
+    delete process.env.NORTHKEEP_REDACT_TIER;
+    const clean = await call(desk, 'project_get', { project: 'rental' });
+    expect(clean.json.active_claims.map((n: any) => n.subject)).toEqual(['POISON subject']);
+  });
+
+  it('a wait with only an unmaskable note pending times out, leaves no receipt, and is not ended at once by it again', async () => {
+    const cursor = await connect('cursor-vscode');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    const sent = await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'Are you in vault.ts?' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const first = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect([first.isError, first.json.timed_out, first.json.notes, first.json.notes_note]).toEqual([false, true, undefined, WITHHELD]);
+    expect(first.json.waited_ms).toBeGreaterThanOrEqual(1000);
+    expect(shownRows()).toEqual([]);
+    const second = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect([second.isError, second.json.timed_out, second.json.notes_note]).toEqual([false, true, WITHHELD]);
+    expect(second.json.waited_ms).toBeGreaterThanOrEqual(1000);
+    expect(shownRows()).toEqual([]);
+
+    delete process.env.NORTHKEEP_REDACT_TIER;
+    const clean = await call(waiter, 'project_wait', { project: 'rental', seconds: 1 });
+    expect([clean.json.notes.map((n: any) => n.id), clean.json.waited_ms, clean.json.notes_note]).toEqual([[sent.json.note.id], 0, undefined]);
+    expect(shownRows().map((r) => [r.note_id, r.host])).toEqual([[sent.json.note.id, 'claude-code']]);
+  }, 15_000);
+
+  it('a wait skips a note it withheld, so a readable note that arrives later is delivered', async () => {
+    await startNameModel();
+    const cursor = await connect('cursor-vscode');
+    const waiter = await connect('claude-code');
+    await createProject(cursor);
+    await call(cursor, 'project_note', { project: 'rental', kind: 'note', to: 'all', text: 'POISON the name model' });
+
+    process.env.NORTHKEEP_REDACT_TIER = '2';
+    const waiting = call(waiter, 'project_wait', { project: 'rental', seconds: 5 });
+    await sleep(800);
+    const file = NotesFile.open(notesFilePath(vaultPath)!, notesKey());
+    const later = file.insert('rental', randomUUID(), 'k-cursor', (existing) => planNote({ kind: 'note', text: 'Tests are green.' }, { host: 'cursor', sender_key: 'k-cursor' }, existing, new Date())).note;
+    file.close();
+    const waited = await waiting;
+    expect([waited.isError, waited.json.timed_out, waited.json.notes?.map((n: any) => n.text)]).toEqual([false, undefined, ['Tests are green.']]);
+    expect(shownRows().map((r) => r.note_id)).toEqual([later.id]);
+  }, 15_000);
 });
 
 // The stored-key cases use the Linux file store. On a Mac the same calls would
