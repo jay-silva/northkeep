@@ -558,11 +558,11 @@ program
 
 program
   .command('notes')
-  .description('Notes and claims between AI apps on this machine: show them, release a stuck claim, or feed a Claude Code hook')
+  .description('Notes and claims between AI apps on this machine: show them, release a stuck claim, or feed a Claude Code, Codex or Cursor hook')
   .requiredOption('--project <slug>', 'project slug')
   .option('--release <claim-id>', 'release any claim, such as one whose app is gone')
-  .option('--hook', 'Claude Code hook mode: reads the hook input on stdin, prints context or nothing, never prompts')
-  .option('--host <name>', 'hook mode: the app this hook runs in', 'claude-code')
+  .option('--hook', 'hook mode for Claude Code, Codex or Cursor: reads the hook input on stdin, prints context or nothing, never prompts')
+  .option('--host <name>', 'hook mode: the app this hook runs in: claude-code, codex or cursor', 'claude-code')
   .option('--min-interval <seconds>', 'hook mode: skip if notes were shown this many seconds ago')
   .action(async (opts: { project: string; release?: string; hook?: boolean; host: string; minInterval?: string }) => {
     const vaultPath = vaultPathOpt();
