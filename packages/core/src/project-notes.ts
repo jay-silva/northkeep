@@ -17,7 +17,8 @@ export const CLAIM_DEFAULT_HOURS = 4;
 export const MAX_ACTIVE_CLAIMS = 10;
 export const MAX_NOTES_PER_PROJECT = 200;
 export const NOTES_SHOWN = 5;
-export const NEW_READER_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Only notes this young are delivered, to every reader, so no session can page through the backlog. */
+export const DELIVERY_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const NOTE_TO_ALL = 'all';
 /** The sender key the owner's CLI writes under; it may release any claim. */
 export const OWNER_SENDER_KEY = 'owner:cli';
@@ -237,6 +238,10 @@ export interface NoteView {
   text: string;
   subject?: string;
   expires_at?: string;
+  reply_to?: string;
+  thread?: string;
+  /** Apps other than the sender's that were shown this note. */
+  seen_by?: string[];
   created_at: string;
 }
 
@@ -247,49 +252,74 @@ export interface NotesBlock {
   notes_notice: string;
 }
 
-function view(n: StoredNote): NoteView {
+/** The reader this result is for (ADR 0079 D4). */
+export interface ReaderState {
+  readerKey: string;
+  host: string;
+  /** Ids of the notes already shown to this reader. */
+  shown: ReadonlySet<string>;
+  /** Restrict to this thread: its root id or the id of any note in it. */
+  thread?: string;
+}
+
+function threadOf(n: StoredNote): string {
+  return n.payload.thread ?? n.id;
+}
+
+/** Rows from 0072 builds may carry raw app names, so names are canonical on the way out too. */
+function noteView(n: StoredNote): NoteView {
   return {
     id: n.id,
     kind: n.payload.kind,
-    from: n.payload.host,
-    to: n.payload.to,
+    from: canonicalHost(n.payload.host),
+    to: canonicalHost(n.payload.to),
     text: n.payload.text,
     ...(n.payload.subject !== undefined ? { subject: n.payload.subject } : {}),
     ...(n.payload.expires_at !== undefined ? { expires_at: n.payload.expires_at } : {}),
+    ...(n.payload.reply_to !== undefined ? { reply_to: n.payload.reply_to } : {}),
+    ...(n.payload.thread !== undefined ? { thread: n.payload.thread } : {}),
     created_at: n.created_at,
   };
 }
 
 /**
- * What one reader is shown: unseen notes addressed to its host or to all,
- * never its own, newest NOTES_SHOWN of them; plus every active claim. Null
- * when there is nothing to show. `lastSeq` null means a new reader, who sees
- * the last 24 hours.
+ * What one reader is shown: notes from the last DELIVERY_WINDOW_MS addressed
+ * to its app or to all, not its own, not yet shown to it, inside `thread` when
+ * set; newest NOTES_SHOWN of them, the rest counted and left unseen. Claims are
+ * never notes here: active ones always show in active_claims, and an expired
+ * one is no news. `shown` is exactly the notes in the block, for the caller to
+ * record. Null block when there is nothing to show.
  */
 export function notesForReader(
   notes: readonly StoredNote[],
-  reader: { readerKey: string; host: string; lastSeq: number | null },
+  reader: ReaderState,
   now: Date,
-): { block: NotesBlock | null; maxSeq: number | null } {
-  const host = tameHost(reader.host);
-  const since = now.getTime() - NEW_READER_WINDOW_MS;
+): { block: NotesBlock | null; shown: string[] } {
+  const host = canonicalHost(reader.host);
+  const since = now.getTime() - DELIVERY_WINDOW_MS;
+  const anchor = reader.thread === undefined ? undefined : notes.find((n) => n.id === reader.thread);
+  const root = anchor === undefined ? reader.thread : threadOf(anchor);
   const claims = activeClaims(notes, now);
-  const claimIds = new Set(claims.map((c) => c.id));
   const unseen = notes
-    .filter((n) => !claimIds.has(n.id))
+    .filter((n) => n.payload.kind !== 'claim')
     .filter((n) => n.sender_key !== reader.readerKey)
-    .filter((n) => n.payload.to === NOTE_TO_ALL || n.payload.to === host)
-    .filter((n) => (reader.lastSeq === null ? Date.parse(n.created_at) >= since : n.seq > reader.lastSeq))
+    .filter((n) => !reader.shown.has(n.id))
+    .filter((n) => {
+      const to = canonicalHost(n.payload.to);
+      return to === NOTE_TO_ALL || to === host;
+    })
+    .filter((n) => Date.parse(n.created_at) >= since)
+    .filter((n) => root === undefined || threadOf(n) === root)
     .sort((a, b) => b.seq - a.seq);
-  const maxSeq = notes.reduce<number | null>((m, n) => (m === null || n.seq > m ? n.seq : m), null);
-  if (unseen.length === 0 && claims.length === 0) return { block: null, maxSeq };
+  if (unseen.length === 0 && claims.length === 0) return { block: null, shown: [] };
+  const given = unseen.slice(0, NOTES_SHOWN);
   return {
     block: {
-      notes: unseen.slice(0, NOTES_SHOWN).map(view),
+      notes: given.map(noteView),
       notes_count: unseen.length,
-      active_claims: claims.map(view),
+      active_claims: claims.map(noteView),
       notes_notice: NOTES_NOTICE,
     },
-    maxSeq,
+    shown: given.map((n) => n.id),
   };
 }

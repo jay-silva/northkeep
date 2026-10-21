@@ -11,6 +11,7 @@ import {
   MEMORY_TYPES,
   NOTE_SUBJECT_MAX_CHARS,
   NOTE_TEXT_MAX_CHARS,
+  canonicalHost,
   MILESTONE_MAX_ITEMS,
   MilestoneError,
   PROJECT_FILE_ACCESS,
@@ -595,8 +596,10 @@ function attachNotes(outcome: RunOutcome, vault: Vault, notes: NotesAccess, proj
     const live = new Set(vault.scopes().map(parseProjectSlug).filter((slug): slug is string => slug !== null));
     file.keepOnly(live);
     const rows = file.read(project);
-    const { block, maxSeq } = notesForReader(rows, { readerKey: ctx.session_id, host: ctx.host ?? 'unknown', lastSeq: file.lastSeen(ctx.session_id, project) }, new Date());
-    if (maxSeq !== null) file.markSeen(ctx.session_id, project, maxSeq);
+    const host = canonicalHost(ctx.host ?? 'unknown');
+    const now = new Date();
+    const { block, shown: given } = notesForReader(rows, { readerKey: ctx.session_id, host, shown: file.shownFor(ctx.session_id, project) }, now);
+    file.markShown(project, ctx.session_id, host, given, now);
     const shown = block === null ? [] : [...block.notes, ...block.active_claims].map((n) => n.id);
     return {
       ...outcome,

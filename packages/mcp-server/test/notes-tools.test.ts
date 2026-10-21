@@ -246,12 +246,10 @@ describe('ADR 0079 shown rows in the notes file', () => {
       const a = notes.insert('rental', randomUUID(), 'k-cursor', note('a'), T0).note;
       const b = notes.insert('rental', randomUUID(), 'k-cursor', note('b'), T0).note;
       const other = notes.insert('other', randomUUID(), 'k-cursor', note('c'), T0).note;
-      expect(notes.firstShownAt('k-claude', 'rental')).toBeNull();
       notes.markShown('rental', 'k-claude', 'claude-code', [a.id], T0);
       notes.markShown('rental', 'k-claude', 'claude-code', [a.id, b.id, other.id, 'no-such-id'], T1);
       expect([...notes.shownFor('k-claude', 'rental')].sort()).toEqual([a.id, b.id].sort());
       expect(notes.shownFor('k-claude', 'other').size).toBe(0);
-      expect(notes.firstShownAt('k-claude', 'rental')).toBe(T0.toISOString());
       expect(notes.shownRows('rental')).toEqual([
         { note_id: a.id, reader_key: 'k-claude', host: 'claude-code', shown_at: T0.toISOString() },
         { note_id: b.id, reader_key: 'k-claude', host: 'claude-code', shown_at: T1.toISOString() },

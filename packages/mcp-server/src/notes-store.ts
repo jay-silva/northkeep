@@ -235,14 +235,6 @@ export class NotesFile {
     return new Set(rows.map((r) => r.note_id));
   }
 
-  /** When this reader was first given a note of this project still in the file; null for a new reader. */
-  firstShownAt(readerKey: string, project: string): string | null {
-    const row = this.db
-      .prepare('SELECT MIN(s.shown_at) AS t FROM shown s JOIN notes n ON n.id = s.note_id WHERE n.project = ? AND s.reader_key = ?')
-      .get(project, readerKey) as { t: string | null };
-    return row.t;
-  }
-
   /** Records that these notes were given to this reader. Ids not in the project are skipped; repeats are no-ops. */
   markShown(project: string, readerKey: string, host: string, ids: readonly string[], now: Date = new Date()): void {
     if (ids.length === 0) return;

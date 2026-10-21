@@ -12,7 +12,9 @@ import {
   notesToPrune,
   planNote,
   sameNoteRequest,
+  NOTES_SHOWN,
   type NotePayload,
+  type ReaderState,
   type StoredNote,
 } from '../src/project-notes.js';
 import { keyCheckMatches, openNote, sealKeyCheck, sealNote, type NoteRowFields } from '../src/project-notes-crypto.js';
@@ -168,27 +170,71 @@ describe('canonicalHost', () => {
 });
 
 describe('notesForReader', () => {
-  it('shows unseen notes addressed to this host or all, never its own', () => {
+  const reader = (shown: Iterable<string> = [], extra: Partial<ReaderState> = {}): ReaderState =>
+    ({ readerKey: CLAUDE.sender_key, host: 'claude-code', shown: new Set(shown), ...extra });
+
+  it('shows notes addressed to this app or all, never its own or another app\'s, and only once', () => {
     const notes = [
       store(planNote({ kind: 'note', text: 'to all' }, CURSOR, [], NOW), CURSOR),
       store(planNote({ kind: 'note', text: 'to claude', to: 'claude-code' }, CURSOR, [], NOW), CURSOR),
       store(planNote({ kind: 'note', text: 'to codex', to: 'codex' }, CURSOR, [], NOW), CURSOR),
       store(planNote({ kind: 'note', text: 'mine' }, CLAUDE, [], NOW), CLAUDE),
     ];
-    const first = notesForReader(notes, { readerKey: CLAUDE.sender_key, host: 'claude-code', lastSeq: null }, NOW);
+    const first = notesForReader(notes, reader(), NOW);
     expect(first.block?.notes.map((n) => n.text)).toEqual(['to claude', 'to all']);
     expect(first.block?.notes_notice).toBe(NOTES_NOTICE);
-    const again = notesForReader(notes, { readerKey: CLAUDE.sender_key, host: 'claude-code', lastSeq: first.maxSeq }, NOW);
-    expect(again.block).toBeNull();
+    expect(first.shown).toEqual([notes[1]!.id, notes[0]!.id]);
+    expect(notesForReader(notes, reader(first.shown), NOW)).toEqual({ block: null, shown: [] });
   });
 
-  it('a new reader sees only the last 24 hours; active claims always show', () => {
-    const old = store(planNote({ kind: 'note', text: 'old' }, CURSOR, [], NOW), CURSOR, '2026-10-13T00:00:00.000Z');
-    const claim = store(planNote({ kind: 'claim', subject: 'x' }, CURSOR, [], NOW), CURSOR);
-    const out = notesForReader([old, claim], { readerKey: 'new', host: 'codex', lastSeq: claim.seq }, NOW);
-    expect(out.block?.notes).toHaveLength(0);
-    expect(out.block?.active_claims.map((c) => c.subject)).toEqual(['x']);
-    expect(notesForReader([old], { readerKey: 'new', host: 'codex', lastSeq: null }, NOW).block).toBeNull();
+  it('leaves a note cut off by NOTES_SHOWN unseen for the next read', () => {
+    const notes: StoredNote[] = [];
+    for (let i = 1; i <= NOTES_SHOWN + 2; i++) notes.push(store(planNote({ kind: 'note', text: `n${i}` }, CURSOR, [], NOW), CURSOR));
+    const first = notesForReader(notes, reader(), NOW);
+    expect(first.block?.notes.map((n) => n.text)).toEqual(['n7', 'n6', 'n5', 'n4', 'n3']);
+    expect(first.block?.notes_count).toBe(7);
+    const next = notesForReader(notes, reader(first.shown), NOW);
+    expect(next.block?.notes.map((n) => n.text)).toEqual(['n2', 'n1']);
+    expect(next.block?.notes_count).toBe(2);
+  });
+
+  it('delivers only the last 24 hours to every reader; active claims always show', () => {
+    const at = (hoursAgo: number) => new Date(NOW.getTime() - hoursAgo * 3600_000).toISOString();
+    const old = store(planNote({ kind: 'note', text: '25 hours' }, CURSOR, [], NOW), CURSOR, at(25));
+    const recent = store(planNote({ kind: 'note', text: '23 hours' }, CURSOR, [], NOW), CURSOR, at(23));
+    const claim = store(planNote({ kind: 'claim', subject: 'x', hours: 24 }, CURSOR, [], NOW), CURSOR, at(23.5));
+    const fresh = notesForReader([old, recent, claim], reader(), NOW);
+    expect(fresh.block?.notes.map((n) => n.text)).toEqual(['23 hours']);
+    expect(fresh.block?.active_claims.map((c) => c.subject)).toEqual(['x']);
+    const seasoned = notesForReader([old, recent, claim], reader([recent.id]), NOW);
+    expect(seasoned.block?.notes).toEqual([]);
+    expect(seasoned.shown).toEqual([]);
+  });
+
+  it('a thread read returns only that thread and leaves an unrelated note unseen', () => {
+    const root = store(planNote({ kind: 'note', text: 'question', to: 'claude-code' }, CURSOR, [], NOW), CURSOR);
+    const unrelated = store(planNote({ kind: 'note', text: 'from codex' }, { host: 'codex', sender_key: 'k-codex' }, [], NOW), { sender_key: 'k-codex' });
+    const mine = store(planNote({ kind: 'note', text: 'answer', reply_to: root.id }, CLAUDE, [root], NOW), CLAUDE);
+    const followUp = store(planNote({ kind: 'note', text: 'follow-up', reply_to: mine.id }, CURSOR, [root, mine], NOW), CURSOR);
+    const notes = [root, unrelated, mine, followUp];
+    const waited = notesForReader(notes, reader([root.id], { thread: mine.id }), NOW);
+    expect(waited.block?.notes.map((n) => [n.text, n.reply_to, n.thread])).toEqual([['follow-up', mine.id, root.id]]);
+    const later = notesForReader(notes, reader([root.id, ...waited.shown]), NOW);
+    expect(later.block?.notes.map((n) => n.text)).toEqual(['from codex']);
+  });
+
+  it('matches rows written with raw app names and shows them under short names', () => {
+    const legacy = store({ v: 1, kind: 'note', host: 'cursor-vscode', text: 'old build', to: 'local-agent-mode-northkeep' }, CURSOR);
+    const out = notesForReader([legacy], { readerKey: 'k-desktop', host: 'claude-ai', shown: new Set() }, NOW);
+    expect(out.block?.notes.map((n) => [n.from, n.to, n.text])).toEqual([['cursor', 'claude-desktop', 'old build']]);
+  });
+
+  it('never delivers a claim as a note, even after it lapses', () => {
+    const claim = store(planNote({ kind: 'claim', subject: 'x', hours: 1 }, CURSOR, [], NOW), CURSOR);
+    const later = new Date(NOW.getTime() + 2 * 3600_000);
+    expect(notesForReader([claim], reader(), later)).toEqual({ block: null, shown: [] });
+    const release = store(planNote({ kind: 'release', releases: claim.id, text: 'done' }, CURSOR, [claim], NOW), CURSOR);
+    expect(notesForReader([claim, release], reader(), NOW).block?.notes.map((n) => [n.kind, n.subject])).toEqual([['release', 'x']]);
   });
 });
 

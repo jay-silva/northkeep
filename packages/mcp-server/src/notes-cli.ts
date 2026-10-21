@@ -11,6 +11,7 @@ import {
   NOTES_NOTICE,
   OWNER_SENDER_KEY,
   activeClaims,
+  canonicalHost,
   deriveNotesKey,
   isValidProjectSlug,
   memzero,
@@ -109,8 +110,8 @@ function hookOutput(options: NotesHookOptions): string {
   try {
     notes = NotesFile.open(file, key, { resetOnMismatch: false, proven: false });
     const rows = notes.read(options.project);
-    const { block, maxSeq } = notesForReader(rows, { readerKey, host, lastSeq: notes.lastSeen(readerKey, options.project) }, now);
-    if (maxSeq !== null) notes.markSeen(readerKey, options.project, maxSeq);
+    const { block, shown: given } = notesForReader(rows, { readerKey, host: canonicalHost(host), shown: notes.shownFor(readerKey, options.project) }, now);
+    notes.markShown(options.project, readerKey, canonicalHost(host), given, now);
     if (options.minIntervalSeconds !== undefined) touchStamp(readerKey);
     if (block === null) return '';
     const shown = [...block.active_claims, ...block.notes];
