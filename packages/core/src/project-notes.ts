@@ -1,13 +1,14 @@
 /**
- * Notes and claims between local AI apps (ADR 0072). Pure rules over decrypted
- * rows: what a note may say, when a claim is active, which notes a reader has
- * not seen. Storage and encryption live with the callers; nothing here touches
+ * Notes, claims and replies between local AI apps (ADRs 0072, 0079). Pure rules
+ * over decrypted rows: what a note may say, when a claim is active, which notes
+ * a reader has not been shown, who was shown a note, how replies group into
+ * threads. Storage and encryption live with the callers; nothing here touches
  * the vault, because notes are coordination, not memory.
  */
 import { tameBoardText } from './project-board.js';
 import { tameOneLine } from './text-safe.js';
 
-export const NOTE_TEXT_MAX_CHARS = 280;
+export const NOTE_TEXT_MAX_CHARS = 1000;
 export const NOTE_SUBJECT_MAX_CHARS = 80;
 export const NOTE_HOST_MAX_CHARS = 80;
 export const CLAIM_MIN_HOURS = 1;
@@ -16,7 +17,8 @@ export const CLAIM_DEFAULT_HOURS = 4;
 export const MAX_ACTIVE_CLAIMS = 10;
 export const MAX_NOTES_PER_PROJECT = 200;
 export const NOTES_SHOWN = 5;
-export const NEW_READER_WINDOW_MS = 24 * 60 * 60 * 1000;
+/** Only notes this young are delivered, to every reader, so no session can page through the backlog. */
+export const DELIVERY_WINDOW_MS = 24 * 60 * 60 * 1000;
 export const NOTE_TO_ALL = 'all';
 /** The sender key the owner's CLI writes under; it may release any claim. */
 export const OWNER_SENDER_KEY = 'owner:cli';
@@ -32,10 +34,10 @@ export type NoteKind = 'note' | 'claim' | 'release';
 export interface NotePayload {
   v: 1;
   kind: NoteKind;
-  /** Sending host, tamed. */
+  /** Sending app, canonical (canonicalHost); rows from 0072 builds may hold the raw name. */
   host: string;
   text: string;
-  /** A host name, or 'all'. */
+  /** A canonical app name, or 'all'. */
   to: string;
   /** Claims only: as typed (tamed), compared through normalizeSubject. */
   subject?: string;
@@ -43,17 +45,30 @@ export interface NotePayload {
   expires_at?: string;
   /** Releases only: the id of the claim this ends. */
   releases?: string;
+  /** Notes only: the id of the note answered. */
+  reply_to?: string;
+  /** Notes only: the thread's root id. Optional fields keep v at 1, so 0072's openNote still reads the row. */
+  thread?: string;
 }
 
 export interface StoredNote {
   id: string;
-  /** Insertion order in the notes file; seen markers compare it. */
+  /** Insertion order in the notes file; newest first in results, and what a wait polls. */
   seq: number;
   project: string;
   client_id: string;
   created_at: string;
   sender_key: string;
   payload: NotePayload;
+}
+
+/** One note included in one reader's result (ADR 0079 D4); receipts and unseen read these. */
+export interface ShownRow {
+  note_id: string;
+  reader_key: string;
+  /** The reader's canonical app name. */
+  host: string;
+  shown_at: string;
 }
 
 export interface NoteRequest {
@@ -63,9 +78,16 @@ export interface NoteRequest {
   subject?: string;
   hours?: number;
   releases?: string;
+  reply_to?: string;
 }
 
-export type ProjectNoteErrorCode = 'invalid_request' | 'claim_held' | 'claim_not_active' | 'not_claim_holder' | 'too_many_claims';
+export type ProjectNoteErrorCode =
+  | 'invalid_request'
+  | 'claim_held'
+  | 'claim_not_active'
+  | 'not_claim_holder'
+  | 'too_many_claims'
+  | 'reply_target_missing';
 
 export class ProjectNoteError extends Error {
   constructor(readonly code: ProjectNoteErrorCode, message: string) {
@@ -83,17 +105,39 @@ function tameHost(host: string): string {
   return tameBoardText(breaksToSpaces(host), NOTE_HOST_MAX_CHARS);
 }
 
+/** Names apps report in the MCP handshake (Jay's call log, 2026-10-21), keyed lowercase. */
+const CANONICAL_HOSTS: ReadonlyMap<string, string> = new Map([
+  ['local-agent-mode-northkeep', 'claude-desktop'],
+  ['claude-ai', 'claude-desktop'],
+  ['claude-code', 'claude-code'],
+  ['cursor-vscode', 'cursor'],
+  ['cursor', 'cursor'],
+  ['northkeep-app', 'northkeep'],
+  ['northkeep-cli', 'northkeep'],
+]);
+
+/** Reported app name to its short name; unknown names pass through tamed. */
+export function canonicalHost(raw: string): string {
+  const tamed = tameHost(raw);
+  const key = tamed.toLowerCase();
+  if (key.startsWith('codex')) return 'codex';
+  return CANONICAL_HOSTS.get(key) ?? tamed;
+}
+
 function tameText(text: string | undefined): string {
   return tameBoardText(breaksToSpaces(text ?? ''), NOTE_TEXT_MAX_CHARS);
 }
 
 function tameTo(to: string | undefined): string {
-  return to === undefined ? NOTE_TO_ALL : tameHost(to);
+  return to === undefined ? NOTE_TO_ALL : canonicalHost(to);
 }
 
 /** True when a stored note is what this request would store; a reused client_id must match. */
 export function sameNoteRequest(prior: NotePayload, request: NoteRequest): boolean {
-  if (prior.kind !== request.kind || prior.text !== tameText(request.text) || prior.to !== tameTo(request.to)) return false;
+  if (prior.kind !== request.kind || prior.text !== tameText(request.text) || prior.reply_to !== request.reply_to) return false;
+  // A reply without `to` was addressed to its parent's sender, which the same reply_to fixes.
+  const toDefaulted = request.to === undefined && request.reply_to !== undefined;
+  if (!toDefaulted && canonicalHost(prior.to) !== tameTo(request.to)) return false;
   if (request.kind === 'claim') return normalizeSubject(prior.subject ?? '') === normalizeSubject(tameBoardText(breaksToSpaces(request.subject ?? ''), NOTE_SUBJECT_MAX_CHARS));
   if (request.kind === 'release') return prior.releases === request.releases;
   return true;
@@ -131,14 +175,22 @@ export function planNote(
   existing: readonly StoredNote[],
   now: Date,
 ): NotePayload {
-  const host = tameHost(sender.host) || 'unknown';
+  const host = canonicalHost(sender.host) || 'unknown';
   const text = tameText(request.text);
-  const to = tameTo(request.to);
+  if (request.reply_to !== undefined && request.kind !== 'note') {
+    throw new ProjectNoteError('invalid_request', 'Only a note can reply; a claim or release cannot carry reply_to.');
+  }
+  const parent = request.reply_to === undefined ? undefined : existing.find((n) => n.id === request.reply_to);
+  if (request.reply_to !== undefined && parent === undefined) {
+    throw new ProjectNoteError('reply_target_missing', 'No note in this project has that id; it may have been pruned.');
+  }
+  const to = request.to === undefined && parent !== undefined ? canonicalHost(parent.payload.host) : tameTo(request.to);
   if (to === '') throw new ProjectNoteError('invalid_request', 'to must name a host, or be "all".');
   switch (request.kind) {
     case 'note': {
       if (text === '') throw new ProjectNoteError('invalid_request', 'A note needs text.');
-      return { v: 1, kind: 'note', host, text, to };
+      if (parent === undefined) return { v: 1, kind: 'note', host, text, to };
+      return { v: 1, kind: 'note', host, text, to, reply_to: parent.id, thread: parent.payload.thread ?? parent.id };
     }
     case 'claim': {
       const subject = tameBoardText(breaksToSpaces(request.subject ?? ''), NOTE_SUBJECT_MAX_CHARS);
@@ -186,6 +238,10 @@ export interface NoteView {
   text: string;
   subject?: string;
   expires_at?: string;
+  reply_to?: string;
+  thread?: string;
+  /** Apps other than the sender's that were shown this note. */
+  seen_by?: string[];
   created_at: string;
 }
 
@@ -196,49 +252,139 @@ export interface NotesBlock {
   notes_notice: string;
 }
 
-function view(n: StoredNote): NoteView {
+/** The reader this result is for (ADR 0079 D4). */
+export interface ReaderState {
+  readerKey: string;
+  host: string;
+  /** Ids of the notes already shown to this reader. */
+  shown: ReadonlySet<string>;
+  /** Restrict to this thread: its root id or the id of any note in it. */
+  thread?: string;
+}
+
+function threadOf(n: StoredNote): string {
+  return n.payload.thread ?? n.id;
+}
+
+/** Rows from 0072 builds may carry raw app names, so names are canonical on the way out too. */
+function noteView(n: StoredNote): NoteView {
   return {
     id: n.id,
     kind: n.payload.kind,
-    from: n.payload.host,
-    to: n.payload.to,
+    from: canonicalHost(n.payload.host),
+    to: canonicalHost(n.payload.to),
     text: n.payload.text,
     ...(n.payload.subject !== undefined ? { subject: n.payload.subject } : {}),
     ...(n.payload.expires_at !== undefined ? { expires_at: n.payload.expires_at } : {}),
+    ...(n.payload.reply_to !== undefined ? { reply_to: n.payload.reply_to } : {}),
+    ...(n.payload.thread !== undefined ? { thread: n.payload.thread } : {}),
     created_at: n.created_at,
   };
 }
 
 /**
- * What one reader is shown: unseen notes addressed to its host or to all,
- * never its own, newest NOTES_SHOWN of them; plus every active claim. Null
- * when there is nothing to show. `lastSeq` null means a new reader, who sees
- * the last 24 hours.
+ * What one reader is shown: notes from the last DELIVERY_WINDOW_MS addressed
+ * to its app or to all, not its own, not yet shown to it, inside `thread` when
+ * set; newest NOTES_SHOWN of them, the rest counted and left unseen. Claims are
+ * never notes here: active ones always show in active_claims, and an expired
+ * one is no news. `shown` is exactly the notes in the block, for the caller to
+ * record. Null block when there is nothing to show.
  */
 export function notesForReader(
   notes: readonly StoredNote[],
-  reader: { readerKey: string; host: string; lastSeq: number | null },
+  reader: ReaderState,
   now: Date,
-): { block: NotesBlock | null; maxSeq: number | null } {
-  const host = tameHost(reader.host);
-  const since = now.getTime() - NEW_READER_WINDOW_MS;
+): { block: NotesBlock | null; shown: string[] } {
+  const host = canonicalHost(reader.host);
+  const since = now.getTime() - DELIVERY_WINDOW_MS;
+  const anchor = reader.thread === undefined ? undefined : notes.find((n) => n.id === reader.thread);
+  const root = anchor === undefined ? reader.thread : threadOf(anchor);
   const claims = activeClaims(notes, now);
-  const claimIds = new Set(claims.map((c) => c.id));
   const unseen = notes
-    .filter((n) => !claimIds.has(n.id))
+    .filter((n) => n.payload.kind !== 'claim')
     .filter((n) => n.sender_key !== reader.readerKey)
-    .filter((n) => n.payload.to === NOTE_TO_ALL || n.payload.to === host)
-    .filter((n) => (reader.lastSeq === null ? Date.parse(n.created_at) >= since : n.seq > reader.lastSeq))
+    .filter((n) => !reader.shown.has(n.id))
+    .filter((n) => {
+      const to = canonicalHost(n.payload.to);
+      return to === NOTE_TO_ALL || to === host;
+    })
+    .filter((n) => Date.parse(n.created_at) >= since)
+    .filter((n) => root === undefined || threadOf(n) === root)
     .sort((a, b) => b.seq - a.seq);
-  const maxSeq = notes.reduce<number | null>((m, n) => (m === null || n.seq > m ? n.seq : m), null);
-  if (unseen.length === 0 && claims.length === 0) return { block: null, maxSeq };
+  if (unseen.length === 0 && claims.length === 0) return { block: null, shown: [] };
+  const given = unseen.slice(0, NOTES_SHOWN);
   return {
     block: {
-      notes: unseen.slice(0, NOTES_SHOWN).map(view),
+      notes: given.map(noteView),
       notes_count: unseen.length,
-      active_claims: claims.map(view),
+      active_claims: claims.map(noteView),
       notes_notice: NOTES_NOTICE,
     },
-    maxSeq,
+    shown: given.map((n) => n.id),
   };
+}
+
+/** Receipts: the apps shown this note, sorted, never the sender's own app (another session of it included). */
+export function seenBy(note: StoredNote, shown: readonly ShownRow[]): string[] {
+  const sender = canonicalHost(note.payload.host);
+  const hosts = new Set(shown.filter((r) => r.note_id === note.id).map((r) => canonicalHost(r.host)));
+  hosts.delete(sender);
+  return [...hosts].sort();
+}
+
+export interface ThreadView {
+  root: NoteView;
+  /** In the order they were written. */
+  replies: NoteView[];
+  /** The root was pruned; `root` is the earliest surviving reply. */
+  orphan?: true;
+}
+
+/** Every note of a project as threads, newest root first, each view with its receipts. */
+export function threadsOf(notes: readonly StoredNote[], shown: readonly ShownRow[]): ThreadView[] {
+  const groups = new Map<string, StoredNote[]>();
+  for (const n of [...notes].sort((a, b) => a.seq - b.seq)) {
+    const group = groups.get(threadOf(n));
+    if (group) group.push(n);
+    else groups.set(threadOf(n), [n]);
+  }
+  const withReceipts = (n: StoredNote): NoteView => ({ ...noteView(n), seen_by: seenBy(n, shown) });
+  const threads = [...groups].map(([rootId, members]) => {
+    const rootIndex = Math.max(0, members.findIndex((n) => n.id === rootId));
+    const root = members[rootIndex]!;
+    const thread: ThreadView = { root: withReceipts(root), replies: members.filter((n) => n !== root).map(withReceipts) };
+    return { seq: root.seq, thread: root.id === rootId ? thread : { ...thread, orphan: true as const } };
+  });
+  return threads.sort((a, b) => b.seq - a.seq).map((t) => t.thread);
+}
+
+export const BUDGET_WINDOW_MS = 60 * 60 * 1000;
+
+/** Per kind of charge: the hourly limit and the refusal it earns. Releases are absent, so never charged. */
+const BUDGETS = {
+  wait: { limit: 30, code: 'wait_budget_exhausted' },
+  note: { limit: 60, code: 'too_many_notes' },
+} as const;
+
+export type BudgetRefusal = (typeof BUDGETS)[keyof typeof BUDGETS]['code'];
+
+/**
+ * One MCP session's rolling-hour budget (ADR 0079 D3), counted in the server
+ * process, so two agents cannot loop at the user's cost. Claims count as notes;
+ * a release always passes, so a capped session can still free its claim.
+ */
+export class SessionBudget {
+  private readonly taken = { wait: [] as number[], note: [] as number[] };
+
+  take(kind: 'wait' | NoteKind, now: Date): { ok: true } | { ok: false; code: BudgetRefusal; resets_at: string } {
+    if (kind === 'release') return { ok: true };
+    const charge = kind === 'wait' ? 'wait' : 'note';
+    const t = now.getTime();
+    const live = this.taken[charge].filter((at) => at > t - BUDGET_WINDOW_MS);
+    this.taken[charge] = live;
+    const { limit, code } = BUDGETS[charge];
+    if (live.length >= limit) return { ok: false, code, resets_at: new Date(live[0]! + BUDGET_WINDOW_MS).toISOString() };
+    live.push(t);
+    return { ok: true };
+  }
 }
