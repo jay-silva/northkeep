@@ -1,9 +1,9 @@
 /** Projects routes inherit server.ts session-token checks and require an unlocked vault. */
 import fs from 'node:fs';
-import { getProjectView, listProjectOverview, loadDeviceSecret, MilestoneError, northkeepHome, PROJECT_REVISION_SUMMARY_LIMIT, ProjectHandoffError, projectScope, readProjectProvenance, type ProjectCheckpointRequest, type ProjectUpdateRequest, type ProjectView, type Vault } from '@northkeep/core';
+import { activeClaims, getProjectView, listProjectOverview, loadDeviceSecret, memzero, MilestoneError, northkeepHome, NOTES_NOTICE, threadsOf, type NoteView, type ThreadView, PROJECT_REVISION_SUMMARY_LIMIT, ProjectHandoffError, projectScope, readProjectProvenance, type ProjectCheckpointRequest, type ProjectUpdateRequest, type ProjectView, type Vault } from '@northkeep/core';
 import { confirmPassInDocument } from '@northkeep/core/project-milestones-owner';
 import { loadConnectorConfig, unshareScope } from '@northkeep/sync';
-import { readMirrorSummary } from '@northkeep/mcp-server';
+import { NotesFile, NotesKeyMismatchError, notesFilePath, readMirrorSummary } from '@northkeep/mcp-server';
 import type { UiSession } from './session.js';
 import { milestoneRepairText, previewMilestoneRepair, restoreMilestoneChanges, type RestoreMilestoneChanges } from './project-milestones-view.js';
 
@@ -49,6 +49,41 @@ function milestoneFields(view: ProjectView) {
   const restore: Record<string, RestoreMilestoneChanges> = {};
   for (const revision of view.history) if (revision.content) restore[revision.id] = restoreMilestoneChanges(view.content, revision.content);
   return { milestones, restore_milestones: restore, ...(milestones.kind === 'malformed' ? { milestone_repair_text: milestoneRepairText(view.content) } : {}) };
+}
+
+/** ADR 0079 D6: the newest conversations the page shows. */
+const PANEL_THREADS = 50;
+
+type ProjectNotes = { threads: ThreadView[]; active_claims: NoteView[]; notice: string } | { unreadable: true };
+
+const sqliteFailure = (error: unknown) => error instanceof Error && String((error as { code?: unknown }).code ?? '').startsWith('SQLITE_');
+
+/**
+ * ADR 0079 D6: the Conversation section. Read only and outside the vault lock;
+ * writes no shown rows, since Jay reading is not an app seeing. Active claims
+ * are listed apart, so a claim or release gets its own card only once
+ * something replied to it; an ended claim keeps its card.
+ */
+function projectNotes(session: UiSession, project: string, now: Date): ProjectNotes {
+  const file = notesFilePath(session.vaultPath);
+  if (file === null || !fs.existsSync(file)) return { unreadable: true };
+  const key = session.notesKey();
+  let reader: ReturnType<typeof NotesFile.openReadOnly> | null = null;
+  try {
+    reader = NotesFile.openReadOnly(file, key);
+    const rows = reader.read(project);
+    const active = activeClaims(rows, now).map(claim => claim.id);
+    const all = threadsOf(rows, reader.shownRows(project));
+    const roots = new Map(all.map(thread => [thread.root.id, thread.root]));
+    const threads = all.filter(thread => thread.replies.length > 0 || !(thread.root.kind === 'release' || active.includes(thread.root.id)));
+    return { threads: threads.slice(0, PANEL_THREADS), active_claims: active.flatMap(id => roots.get(id) ?? []), notice: NOTES_NOTICE };
+  } catch (error) {
+    if (error instanceof NotesKeyMismatchError || sqliteFailure(error)) return { unreadable: true };
+    throw error;
+  } finally {
+    reader?.close();
+    memzero(key);
+  }
 }
 
 function jsonObject(body: Buffer, limit: number, what: string): { input: Record<string, unknown> } | { refused: Response } {
@@ -159,6 +194,16 @@ export async function handleProjectsApi(session: UiSession, method: string, rout
         // The vault is reopened per request and closed again, so a refusal here
         // left nothing behind: say what happened instead of advising a retry.
         return reply(500, { error: error instanceof Error ? error.message : 'Compaction failed.', code: 'compaction_failed' });
+      }
+    }
+    const notesRoute = /^\/api\/projects\/([a-z0-9-]{1,40})\/notes$/.exec(route);
+    if (notesRoute) {
+      if (method !== 'GET') return reply(405, { error: 'Method not allowed.', code: 'invalid_request' });
+      try {
+        return reply(200, projectNotes(session, notesRoute[1]!, new Date()));
+      } catch (error) {
+        if (error instanceof Error && error.name === 'LockedError') throw error;
+        return reply(500, { error: 'The messages between your AI apps could not be read.', code: 'notes_failed' });
       }
     }
     const milestoneRoute = /^\/api\/projects\/([a-z0-9-]{1,40})\/milestones\/(confirm|repair)$/.exec(route);
