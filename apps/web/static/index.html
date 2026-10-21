@@ -698,6 +698,34 @@
   .ms-test { margin:10px 0 14px; padding:12px 14px; border-radius:10px; background:var(--chip); font:500 17px/1.45 var(--serif); overflow-wrap:anywhere; }
   .ms-undo { margin:12px 0 0; padding-left:20px; }
   .ms-repair textarea { width:100%; min-height:150px; font:13px/1.5 var(--mono); resize:vertical; }
+  /* ADR 0079 D6: the Conversation section, read only. A filled dot is a receipt; a hollow one means no app was shown the message yet. */
+  .conv-group-label { margin:0 0 8px; font:600 12px/1 var(--sans); text-transform:uppercase; letter-spacing:.1em; color:var(--muted); }
+  .conv-holds { margin:0 0 20px; padding:4px 16px; list-style:none; border-radius:12px; background:var(--chip); }
+  .conv-holds li { display:flex; align-items:baseline; gap:10px; padding:9px 0; border-top:1px solid var(--line); overflow-wrap:anywhere; min-width:0; }
+  .conv-holds li:first-child { border-top:0; }
+  .conv-holds li::before { content:""; flex:none; width:8px; height:8px; border-radius:50%; background:var(--accent); transform:translateY(-1px); }
+  .conv-holds li > span { min-width:0; overflow-wrap:anywhere; }
+  .conv-holds .until { color:var(--muted); white-space:nowrap; }
+  .conv-thread { padding:16px 18px; }
+  .conv-msg { min-width:0; }
+  .conv-meta { display:flex; flex-wrap:wrap; align-items:baseline; gap:2px 8px; font-size:14px; }
+  .conv-meta strong { font-weight:600; overflow-wrap:anywhere; }
+  .conv-meta .to, .conv-meta time { color:var(--muted); font-size:13px; font-variant-numeric:tabular-nums; }
+  .conv-text { margin:4px 0 0; max-width:72ch; white-space:pre-wrap; overflow-wrap:anywhere; }
+  .conv-seen { display:flex; align-items:center; gap:7px; margin:6px 0 0; color:var(--muted); font-size:12px; line-height:1.4; }
+  .conv-seen::before { content:""; flex:none; width:7px; height:7px; border-radius:50%; background:var(--muted); }
+  .conv-seen.unseen::before { background:transparent; box-shadow:inset 0 0 0 1.5px var(--muted); }
+  .conv-hold-tag { display:inline-block; margin:6px 0 0; padding:3px 9px; border-radius:999px; background:var(--chip); color:var(--muted); font-size:12px; font-weight:600; overflow-wrap:anywhere; }
+  .conv-replies { margin:14px 0 0 2px; padding:0 0 0 16px; list-style:none; border-left:2px solid var(--line); }
+  .conv-replies > li + li { margin-top:14px; }
+  .conv-empty { margin:0; }
+  @media (max-width:600px) {
+    .conv-thread { padding:14px; }
+    .conv-replies { padding-left:12px; }
+    .conv-holds { padding:4px 14px; }
+    .conv-holds li { flex-wrap:wrap; column-gap:6px; }
+    .conv-holds li::before { display:none; }
+  }
   .ms-lines { margin:10px 0 0; padding:0; list-style:none; font:12px/1.5 var(--mono); }
   .ms-lines li { padding:4px 8px; border-radius:6px; overflow-wrap:anywhere; white-space:pre-wrap; }
   .ms-lines li.stamped { background:var(--warn-bg); color:var(--warn-ink); box-shadow:inset 3px 0 0 var(--warn-ink); }
@@ -3203,6 +3231,8 @@
     }
     facts.append(statusBox, next); root.appendChild(facts);
     root.appendChild(renderProjectMilestones(project));
+    const conversation = el('section', 'project-section'); conversation.hidden = true; root.appendChild(conversation);
+    loadProjectConversation(project.project, conversation);
     const decisions = projectLines(project.decisions), questions = projectLines(project.open_questions);
     const decisionSection = el('section', 'project-section');
     const decisionHead = el('div', 'project-section-head'); decisionHead.append(el('h3', undefined, 'Decisions and open questions'), el('span', 'muted', (decisions.length + questions.length) + ' items'));
@@ -3262,6 +3292,101 @@
       list.appendChild(row);
     }
     section.appendChild(list); return section;
+  }
+
+  // --- ADR 0079 D6: Conversation. Messages are text from other programs on
+  // this Mac, so they only ever enter text nodes; the section has no controls.
+  async function loadProjectConversation(slug, placeholder) {
+    try {
+      const data = await api('/api/projects/' + encodeURIComponent(slug) + '/notes');
+      if (placeholder.isConnected && currentProjectSlug === slug) placeholder.replaceWith(renderProjectConversation(data, new Date(), devicePlace()));
+    } catch { placeholder.remove(); }
+  }
+
+  function conversationWhen(value, now) {
+    const date = new Date(value || '');
+    if (Number.isNaN(date.getTime())) return { text:'Time unavailable', spoken:'at an unknown time', day:'' };
+    const clock = date.toLocaleTimeString([], { hour:'numeric', minute:'2-digit' });
+    const midnight = (d) => new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+    const days = Math.round((midnight(now) - midnight(date)) / 86400000);
+    const near = { '0':'Today', '1':'Yesterday', '-1':'Tomorrow' }[String(days)];
+    const day = near || date.toLocaleDateString([], { month:'short', day:'numeric' });
+    return { text: day + ' ' + clock, spoken: (near ? near.toLowerCase() : 'on ' + day) + ' at ' + clock, day, clock };
+  }
+
+  // A hold ends the day it began, so the mock's "until 4:15 PM" needs no day unless it runs past midnight.
+  function conversationUntil(expires, created, now) {
+    const end = conversationWhen(expires, now), start = conversationWhen(created, now);
+    if (!end.clock) return 'an unknown time';
+    return end.day === start.day ? end.clock : end.text.charAt(0).toLowerCase() + end.text.slice(1);
+  }
+
+  function conversationSeen(seenBy) {
+    const names = Array.isArray(seenBy) ? seenBy.map(String) : [];
+    if (!names.length) return el('p', 'conv-seen unseen', 'Not seen yet');
+    return el('p', 'conv-seen', 'Seen by ' + (names.length === 1 ? names[0] : names.slice(0, -1).join(', ') + ' and ' + names[names.length - 1]));
+  }
+
+  function renderConversationMessage(note, tag, activeIds, now, orphan) {
+    const message = el(tag, 'conv-msg'), meta = el('div', 'conv-meta');
+    const when = conversationWhen(note.created_at, now);
+    const time = el('time', undefined, when.text); time.setAttribute('datetime', String(note.created_at || ''));
+    const to = note.to === 'all' ? 'to everyone' : 'to ' + String(note.to || 'everyone');
+    meta.append(el('strong', undefined, String(note.from || 'unknown')), el('span', 'to', to + (orphan ? ', replying to an earlier message' : '')), time);
+    message.appendChild(meta);
+    if (note.text) message.appendChild(el('p', 'conv-text', String(note.text)));
+    const subject = '“' + String(note.subject || '') + '”';
+    if (note.kind === 'claim') {
+      const until = conversationUntil(note.expires_at, note.created_at, now);
+      message.appendChild(el('span', 'conv-hold-tag', activeIds.has(note.id) ? 'Holds ' + subject + ' until ' + until : 'Held ' + subject + ' until ' + until + ', now ended'));
+    }
+    if (note.kind === 'release') message.appendChild(el('span', 'conv-hold-tag', 'Ended the hold on ' + subject));
+    message.appendChild(conversationSeen(note.seen_by));
+    return message;
+  }
+
+  // `place` is the device phrase ("this Mac" on a Mac), so Linux and Windows read right too.
+  function renderProjectConversation(data, now, place) {
+    const section = el('section', 'project-section'); section.id = 'projectConversation';
+    const heading = el('h3', undefined, 'Conversation'); heading.id = 'projectConversationHeading';
+    section.setAttribute('aria-labelledby', heading.id);
+    const head = el('div', 'project-section-head'); head.append(heading, el('span', 'muted', 'Messages between the AI apps on ' + place + ', shown read only.'));
+    section.appendChild(head);
+    if (!data || data.unreadable === true) {
+      const notice = el('div', 'project-notice danger'); notice.setAttribute('role', 'status');
+      notice.append(el('strong', undefined, 'The notes file on ' + place + ' cannot be read.'), el('p', undefined, 'Messages between your AI apps are not shown.'));
+      section.appendChild(notice); return section;
+    }
+    const threads = Array.isArray(data.threads) ? data.threads : [], claims = Array.isArray(data.active_claims) ? data.active_claims : [];
+    if (!threads.length && !claims.length) {
+      section.appendChild(el('p', 'muted conv-empty', 'No messages yet. When the AI apps on ' + place + ' leave each other notes about this project, they show up here.'));
+      return section;
+    }
+    if (claims.length) {
+      section.appendChild(el('p', 'conv-group-label', 'Being worked on now'));
+      const holds = el('ul', 'conv-holds');
+      for (const claim of claims) {
+        const row = el('li'), what = el('span');
+        what.append(el('strong', undefined, String(claim.from || 'unknown')), document.createTextNode(' holds “' + String(claim.subject || '') + '”'));
+        row.append(what, el('span', 'until', 'until ' + conversationUntil(claim.expires_at, claim.created_at, now)));
+        holds.appendChild(row);
+      }
+      section.appendChild(holds);
+    }
+    const activeIds = new Set(claims.map((claim) => claim.id));
+    for (const thread of threads) {
+      const card = el('article', 'card conv-thread');
+      card.setAttribute('aria-label', 'Conversation started by ' + String(thread.root.from || 'unknown') + ' ' + conversationWhen(thread.root.created_at, now).spoken);
+      card.appendChild(renderConversationMessage(thread.root, 'div', activeIds, now, thread.orphan === true));
+      const replies = Array.isArray(thread.replies) ? thread.replies : [];
+      if (replies.length) {
+        const list = el('ol', 'conv-replies'); list.setAttribute('aria-label', 'Replies');
+        for (const reply of replies) list.appendChild(renderConversationMessage(reply, 'li', activeIds, now, false));
+        card.appendChild(list);
+      }
+      section.appendChild(card);
+    }
+    return section;
   }
 
   function confirmMilestone(project, item, returnTo) {
