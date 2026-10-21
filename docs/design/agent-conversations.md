@@ -37,12 +37,13 @@ CREATE TABLE IF NOT EXISTS shown (
 );
 ```
 
-A row is written only when a note is actually included in a tool result, a wait result or a hook's output, in the same transaction as the read. Rules:
+A row is written only when a note is actually included in a tool result, a wait result or a hook's output, right after the read. If that result then never reaches the app (masking fails under Tier 2, or the call log's done row cannot be written), `run` deletes those rows again (`undoShown`: outside the vault lock, best effort), so the note stays unseen and no receipt is false. Rules:
 
 - Unseen for a reader: addressed to its host or `all`, not its own, no `shown` row for (note, reader), and written within the last 24 hours. A note is deliverable for one day; after that it is history, visible in the panel and the owner view only. Active claims always show. The window applies to every reader, every time (the recheck showed that a window for new readers only let a session page through a 200-note backlog five at a time).
 - Results still show the newest `NOTES_SHOWN` (5) unseen notes and count the rest; the rest stay unseen and come up on the next read instead of being lost. This is the behaviour change from 0072 D3, and review 1 is why: the 0072 marker is set to the project's highest sequence on every read, so it also "saw" notes that were cut off, addressed to someone else, or the reader's own.
 - Receipts (`seen_by`): the distinct `host` values of `shown` rows for that note, excluding the sender's host, so two sessions of one app never show each other a receipt (a missing receipt, never a false one). A 0072 server never writes `shown`, so a note read only by an old build shows no receipt until that app restarts on the new build. KNOWN-LIMITS records this, and that the first 0079 hook call in a session that the 0072 hook served re-shows up to a day of notes once.
-- The 0072 `seen` table and `markSeen` stay for 0072 readers; a 0079 reader neither reads nor writes them. Reader keys are per session (one server per session), so the two never mix.
+- The 0072 `seen` table and `markSeen` stay for 0072 readers; a 0079 reader neither reads nor writes them. Reader keys are per server process (`ctx.session_id`), so the two never mix.
+- One reader per app server: an app that runs one NorthKeep server for all its chats reads as one reader. Claude desktop does (Jay's call log: 4 server sessions in a week). A reply awaited in one chat can then be handed to a project read in another chat of the same app, and the waiting chat times out. KNOWN-LIMITS records this.
 - Pruning: `notesToPrune` is unchanged (200 rows per project, never an active claim). `shown` rows are deleted with their notes and after 30 days, in the same places `seen` is trimmed today. A 0072 build's prune, `keepOnly` or reset leaves `shown` rows behind; they match nothing and the 30-day trim removes them. Replies whose root was pruned are grouped into one card, the earliest surviving reply standing in as the root and the thread marked `orphan`; the panel labels it "replying to an earlier message". Claims are never handed out as notes: active ones always appear in `active_claims`, and an expired one is no news (0072 showed an expired claim once as a note; 0079 does not).
 
 ### Canonical app names
@@ -58,7 +59,7 @@ One table in packages/core/src/project-notes.ts. The reported names come from Ja
 | `codex-mcp-client`, any name starting with `codex` | `codex` |
 | `northkeep-app`, `northkeep-cli` | `northkeep` |
 
-Unknown names pass through `tameHost` unchanged. The table is applied when a note is stored, when `to` is parsed, and when a reader's host is compared, so old rows with raw names still match. Mixed builds: a 0072 server started before the upgrade compares its raw host (`cursor-vscode`) to a stored `to` of `cursor` and misses it; notes to `all` still arrive. Restarting the app fixes it. KNOWN-LIMITS records this.
+Every name is lowercased after taming, so a short name in any case (`Claude-Desktop`) maps to itself and any case of `all` is everyone; unknown names pass through tamed and lowercased. A `to` that is neither `all` nor one of the five short names is still stored, and the `project_note` result carries `to_note`: no known app has that name, so only an app that reports it will see the note. The table is applied when a note is stored, when `to` is parsed, and when a reader's host is compared, so old rows with raw names still match. Mixed builds: a 0072 server started before the upgrade compares its raw host (`cursor-vscode`) to a stored `to` of `cursor` and misses it; notes to `all` still arrive. Restarting the app fixes it. KNOWN-LIMITS records this.
 
 ## Tools
 
@@ -73,13 +74,15 @@ project_wait({ project, seconds?: 1..25 (default 20), thread?: noteId })
 ```
 
 Steps:
-1. Inside the ordinary `run` envelope (pending log row, tier check, grant), a short vault call checks the grant and that the project exists, derives the notes key, and returns. The vault and its file lock are released here.
+1. Inside the ordinary `run` envelope (pending log row, tier check, grant), a short vault call checks the grant and that the project exists, and returns. The vault and its file lock are released here. After the check, the notes key is derived outside the lock from the same key source the vault call used.
 2. The server reads once: unseen notes already pending (inside `thread` when given) return at once with `waited_ms: 0`. Otherwise it polls `SELECT MAX(seq) FROM notes WHERE project = ?` every 500 ms, decrypting only when the sequence moves. Reads never block under another process's `BEGIN IMMEDIATE` (review 1 measured 0 to 1 ms per poll during a 7 s hold).
 3. On an unseen note for this reader it builds the 0072 notes block, writes `shown` rows for exactly the notes it returns, logs their ids and returns. With `thread` set, notes outside the thread stay unseen; nothing is skipped.
 4. After `seconds` it returns `timed_out`.
 5. The key is wiped on every exit path. If the `shown` insert hits `SQLITE_BUSY` (5 s busy timeout), the wait returns the notes anyway and logs `notes_note`; the notes come up again next time, which is the safe side.
 
-Redaction: `mask: 'project'`, like a project read, so under tier 1 or 2 the returned text is masked the same way and the hook stays silent. Nothing new is written under a tier (a `shown` row is bookkeeping, not content).
+Redaction: `mask: 'project'`, like a project read, so under tier 1 or 2 the returned text is masked the same way and the hook stays silent. Nothing new is written under a tier (a `shown` row is bookkeeping, not content). When masking fails, the wait's `shown` rows are taken back like a read's (Data).
+
+A thread wait anchored on a reply id that has since been pruned matches nothing: the anchor lookup falls back to the raw id, and no note carries a pruned reply's id as its `thread`. Waiting on the root id, or on any surviving note, still works.
 
 Why outside the lock: `withFileLock` (packages/core/src/lock.ts) is advisory, waits 5 s, and is stolen after 60 s for a live owner or at once for a dead one. A wait inside it would turn one agent's patience into every other agent's failure.
 
@@ -94,6 +97,8 @@ Caps per MCP session, counted in the server process: 30 waits per hour (`wait_bu
 | claude-code | `session_id` | UUID (unchanged) | `UserPromptSubmit`, `PostToolUse` | `{"hookSpecificOutput":{"hookEventName":…,"additionalContext":…}}` |
 | codex | `session_id` | 4 to 128 of `[A-Za-z0-9_.:-]` | `SessionStart`, `UserPromptSubmit`, `PostToolUse` | same as claude-code |
 | cursor | `conversation_id` | 4 to 128 of `[A-Za-z0-9_.:-]` | `sessionStart`, `postToolUse`, `postToolUseFailure` | `{"additional_context": …}` |
+
+Hook output cuts each claim's and note's text to 280 characters, the last an ellipsis; tool results keep the full 1,000. The worst case (10 active claims with 80-character subjects and 1,000-character text, plus 5 replies of 1,000 characters) then measures 6,564 characters, about 1,650 to 2,200 tokens, under Codex's default `additionalContextLimit` of about 2,500 tokens (uncut it was 16,809). `--min-interval` skips a call when this reader's last recorded check, with or without notes, was that recent.
 
 Neither vendor documents its id format (examples: `thr_123`, `conv-456`), so the gate for them is a bounded character class, not the UUID regex 0072 uses for Claude Code; the id reaches disk only through a hash and SQLite only as a value. Reader key stays `hook:<host>:<id>`. Everything else in 0072 D5 holds: key store only, never the vault, nothing under a redaction tier, exit 0 always, one call-log row. The hook writes `shown` rows like a tool result, except on Cursor's `sessionStart`.
 
@@ -121,7 +126,7 @@ Cursor, `~/.cursor/hooks.json`:
 
 ## Conversation panel (Mac app)
 
-`GET /api/projects/<slug>/notes` on the local web server (apps/web/src/projectsApi.ts) returns threads newest first: each root note with its replies in order, canonical names, `seen_by`, and active claims. The server opens the file through a new `NotesFile.openReadOnly(path, key)`: SQLite opened read only (`readonly: true, fileMustExist: true`), no table creation, no key-check write, no retention delete, no reset; SQLite may still create its `-wal` and `-shm` sidecar files. A missing file or a key-check mismatch returns `{ unreadable: true }` and the page says the notes file cannot be read. (`NotesFile.open` is not read only: it takes `BEGIN IMMEDIATE`, trims `seen`, and creates the file and key-check row; review 1.) The panel writes no `shown` rows: Jay reading is not an app seeing. The project page shows a Conversation section under the milestones: one card per thread, replies indented, claims as a short list above. No input, no actions. The mock (agent-messaging/conversation-panel-mock.html, built 2026-10-21) goes to Jay first; the panel is built only after he approves it.
+`GET /api/projects/<slug>/notes` on the local web server (apps/web/src/projectsApi.ts) returns threads newest first: each root note with its replies in order, canonical names, `seen_by`, and active claims. The server opens the file through a new `NotesFile.openReadOnly(path, key)`: SQLite opened read only (`readonly: true, fileMustExist: true`), no table creation, no key-check write, no retention delete, no reset; SQLite may still create its `-wal` and `-shm` sidecar files. A missing file means no app has written a note yet and returns no threads. A key-check mismatch or a SQLite failure returns `{ unreadable: true }` and the page says the notes file cannot be read. A file only 0072 builds have opened has no `shown` table, which a read-only handle cannot create; it reads as threads with no receipts. (`NotesFile.open` is not read only: it takes `BEGIN IMMEDIATE`, trims `seen`, and creates the file and key-check row; review 1.) The panel writes no `shown` rows: Jay reading is not an app seeing. The project page shows a Conversation section under the milestones: one card per thread, replies indented, claims as a short list above. No input, no actions. The mock (agent-messaging/conversation-panel-mock.html, built 2026-10-21) goes to Jay first; the panel is built only after he approves it.
 
 ## Threat notes
 
@@ -165,3 +170,13 @@ CLEARED WITH WOUNDS. Record: project files agent-messaging/adr-0079-recheck.md. 
 - FLESH WOUND (introduced by the fix): with the window for new readers only, a session that had been shown anything paged through the whole backlog five notes at a time. Fixed: the 24-hour window applies to every reader on every read (Data).
 - Notes, taken: receipts exclude the sender's host, stated; Cursor `sessionStart` no longer writes `shown` rows; the one-time hook re-delivery after upgrade goes to KNOWN-LIMITS; orphan `shown` rows from 0072 builds stated with the 30-day trim; `openReadOnly` may create SQLite sidecar files, stated; the id gate minimum is 4 so `thr_123` passes; a wait returns already-pending notes at once; the panel sentence that claimed the mock was approved is corrected (it is built, not yet approved).
 - The reviewer flagged that the fix round changed the approach (a new table and a new unseen rule) and that Jay decides whether that calls for a new first review rather than this recheck.
+
+### Review 2 (fresh eyes, 2026-10-21): CLEARED WITH WOUNDS
+
+Executed against the built core and store; scripts a1 to a8 beside the verdict. Backward compatibility with 0072 and every shown-table rule held. Three flesh wounds, all fixed with a test that fails on the old code:
+
+- False receipts when the reply is not delivered: `attachNotes` and `waitForNotes` wrote `shown` rows before `run` masked the result and wrote its done row, so a Tier 2 failure recorded a note as seen that the app never got. Fixed: `RunOutcome.delivered` names the rows, and `run` calls `undoShown` when masking fails or the done row cannot be written (Data).
+- `NotesFile.openReadOnly` on a file only 0072 builds have opened threw "no such table: shown". Fixed: the missing table is detected at open, and receipts read as empty (Conversation panel).
+- Short names were case sensitive: `Claude-Desktop`, `Northkeep` and `ALL` were stored as typed and reached nobody. Fixed: `canonicalHost` always lowercases, and an unknown `to` gets `to_note` (Canonical app names).
+
+Notes, all taken: the `claim_held` message names a 0072 row's app by its short name (the owner view already did, through `NoteView`); the throttle comment matches the stamp; hook output cuts each note to 280 characters (Hooks); a thread wait anchored on a pruned reply is stated (Tools); one reader per app server is stated (Data) and goes to KNOWN-LIMITS with the double delivery for Codex and Cursor. Still to verify on Jay's Mac: live Cursor and Codex hook runs, the command on Cursor's hook PATH, and whether Cursor's third-party hook loading runs the Claude Code recipe inside Cursor.
