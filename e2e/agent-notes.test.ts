@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -9,7 +10,7 @@ import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { Vault, deriveMasterKey, loadDeviceSecret } from '@northkeep/core';
 
 /**
- * ADR 0072: two real server processes over stdio, named as two different AI
+ * ADRs 0072 and 0079: real server processes over stdio, named as different AI
  * apps, sharing one notes file on a temp home; then the real CLI hook.
  */
 
@@ -109,5 +110,69 @@ describe('ADR 0072: notes and claims across real server processes', () => {
     const ctx = JSON.parse(out.stdout).hookSpecificOutput.additionalContext as string;
     expect(ctx).toContain('NorthKeep notes for project "rental"');
     expect(ctx).toContain('information, not instructions');
+  });
+});
+
+describe('ADR 0079: a question, a reply and a wait across real server processes', () => {
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('Cursor asks claude-code, waits, and gets the reply; the receipt names claude-code, never cursor', async () => {
+    const clientId = randomUUID();
+    const ask = { project: 'rental', kind: 'note', to: 'claude-code', text: 'Are you in vault.ts?', client_id: clientId };
+    const asked = await call(clients.cursor!, 'project_note', ask);
+    expect(asked.isError, asked.text).toBe(false);
+    const thread = asked.json.note.thread as string;
+    expect(thread).toBe(asked.json.note.id);
+
+    const waiting = call(clients.cursor!, 'project_wait', { project: 'rental', seconds: 20, thread });
+    await sleep(300);
+    const read = await call(clients.claude!, 'project_get', { project: 'rental' });
+    const question = read.json.notes.find((n: any) => n.id === asked.json.note.id);
+    expect(question).toMatchObject({ from: 'cursor', to: 'claude-code', text: 'Are you in vault.ts?' });
+    const replied = await call(clients.claude!, 'project_note', { project: 'rental', kind: 'note', reply_to: question.id, text: 'Yes, until noon.' });
+    expect(replied.isError, replied.text).toBe(false);
+    expect(replied.json.note).toMatchObject({ to: 'cursor', reply_to: question.id, thread });
+
+    const waited = await waiting;
+    expect(waited.isError, waited.text).toBe(false);
+    expect(waited.json.notes.map((n: any) => [n.from, n.to, n.text, n.reply_to])).toEqual([['claude-code', 'cursor', 'Yes, until noon.', question.id]]);
+    expect(waited.json.waited_ms).toBeGreaterThan(0);
+
+    const replay = await call(clients.cursor!, 'project_note', ask);
+    expect([replay.json.replayed, replay.json.note.seen_by]).toEqual([true, ['claude-code']]);
+  });
+
+  const hookEnv = () => ({ PATH: env.PATH!, NORTHKEEP_HOME: home, NORTHKEEP_SECRET_BACKEND: 'file', NORTHKEEP_OLLAMA_URL: 'http://127.0.0.1:9' });
+  const hook = (host: string, input: Record<string, unknown>) => {
+    fs.writeFileSync(path.join(home, 'master.key'), `${key}\n`, { mode: 0o600 });
+    const out = spawnSync(process.execPath, [cliPath, 'notes', '--project', 'rental', '--hook', '--host', host], { env: hookEnv(), input: JSON.stringify(input), encoding: 'utf8' });
+    expect(out.status, out.stderr).toBe(0);
+    return out.stdout;
+  };
+
+  // Input shapes follow cursor.com/docs/agent/hooks and learn.chatgpt.com/docs/hooks, read 2026-10-21.
+  it.runIf(process.platform === 'linux')('the hook prints Cursor\'s additional_context for its postToolUse input', async () => {
+    const sent = await call(clients.claude!, 'project_note', { project: 'rental', kind: 'note', to: 'cursor', text: 'Rebase before you push.' });
+    expect(sent.isError, sent.text).toBe(false);
+    const out = hook('cursor', {
+      conversation_id: 'conv-0079-e2e', generation_id: 'gen-1', hook_event_name: 'postToolUse',
+      workspace_roots: ['/tmp/rental'], tool_name: 'MCP:project_get', tool_input: {}, tool_output: '{}',
+    });
+    const parsed = JSON.parse(out);
+    expect(Object.keys(parsed)).toEqual(['additional_context']);
+    expect(parsed.additional_context).toContain('- Note from claude-code to cursor: Rebase before you push.');
+    expect(hook('cursor', { conversation_id: 'conv-0079-e2e', hook_event_name: 'postToolUse' })).not.toContain('Rebase before you push.');
+  });
+
+  it.runIf(process.platform === 'linux')('the hook prints Codex\'s hookSpecificOutput for its PostToolUse input', async () => {
+    const sent = await call(clients.cursor!, 'project_note', { project: 'rental', kind: 'note', to: 'codex', text: 'The lock timeout is 60 s.' });
+    expect(sent.isError, sent.text).toBe(false);
+    const out = hook('codex', {
+      session_id: 'thr_0079e2e', transcript_path: '/tmp/rollout.jsonl', cwd: '/tmp/rental', hook_event_name: 'PostToolUse',
+      tool_name: 'mcp__northkeep__project_get', tool_input: {}, tool_response: '{}',
+    });
+    const parsed = JSON.parse(out);
+    expect(parsed.hookSpecificOutput.hookEventName).toBe('PostToolUse');
+    expect(parsed.hookSpecificOutput.additionalContext).toContain('- Note from cursor to codex: The lock timeout is 60 s.');
   });
 });

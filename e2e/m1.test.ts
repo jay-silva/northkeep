@@ -95,6 +95,7 @@ describe('M1 acceptance — MCP server', () => {
       'project_note',
       'project_resume',
       'project_update',
+      'project_wait',
       'project_wrap',
     ]);
   });
