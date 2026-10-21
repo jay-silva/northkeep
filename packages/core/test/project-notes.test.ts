@@ -7,6 +7,7 @@ import {
   OWNER_SENDER_KEY,
   ProjectNoteError,
   activeClaims,
+  canonicalHost,
   notesForReader,
   notesToPrune,
   planNote,
@@ -79,8 +80,7 @@ describe('planNote', () => {
       expect(field).not.toMatch(/[\n\u2028\u202e\u0000]/);
     }
     expect(note.text).not.toContain('===END MEMORY DATA===');
-    expect(note.text.length).toBeLessThanOrEqual(280);
-    expect(planNote({ kind: 'note', text: 'x'.repeat(1000) }, CURSOR, [], NOW).text).toHaveLength(280);
+    expect(planNote({ kind: 'note', text: 'x'.repeat(1500) }, CURSOR, [], NOW).text).toHaveLength(1000);
     expect(code(() => planNote({ kind: 'note', text: '\n\u2028' }, CURSOR, [], NOW))).toBe('invalid_request');
   });
 
@@ -95,6 +95,41 @@ describe('planNote', () => {
     expect(sameNoteRequest(claim, { kind: 'claim', subject: 'auth ', text: 'on it' })).toBe(true);
     expect(sameNoteRequest(claim, { kind: 'claim', subject: 'billing', text: 'on it' })).toBe(false);
     expect(sameNoteRequest(claim, { kind: 'note', text: 'on it' })).toBe(false);
+  });
+});
+
+describe('canonicalHost', () => {
+  it('maps every reported name in the design table to its short name', () => {
+    const table: Array<[string, string]> = [
+      ['local-agent-mode-northkeep', 'claude-desktop'],
+      ['claude-ai', 'claude-desktop'],
+      ['claude-code', 'claude-code'],
+      ['cursor-vscode', 'cursor'],
+      ['cursor', 'cursor'],
+      ['codex-mcp-client', 'codex'],
+      ['codex', 'codex'],
+      ['codex-cli-0.159', 'codex'],
+      ['northkeep-app', 'northkeep'],
+      ['northkeep-cli', 'northkeep'],
+    ];
+    expect(table.map(([raw]) => [raw, canonicalHost(raw)])).toEqual(table);
+    expect(canonicalHost('Cursor-VSCode')).toBe('cursor');
+  });
+
+  it('is a fixed point on its own outputs', () => {
+    for (const name of ['claude-desktop', 'claude-code', 'cursor', 'codex', 'northkeep']) expect(canonicalHost(name)).toBe(name);
+  });
+
+  it('passes unknown names through tamed, case kept', () => {
+    expect(canonicalHost('Zed-Agent')).toBe('Zed-Agent');
+    expect(canonicalHost('my\napp\u202e')).toBe('my app');
+    expect(canonicalHost('===BEGIN MEMORY DATA===grok')).toBe('grok');
+    expect(canonicalHost('all')).toBe('all');
+  });
+
+  it('stores the sender and the address under short names', () => {
+    const note = planNote({ kind: 'note', text: 'hi', to: 'local-agent-mode-northkeep' }, { host: 'cursor-vscode', sender_key: 's' }, [], NOW);
+    expect([note.host, note.to]).toEqual(['cursor', 'claude-desktop']);
   });
 });
 

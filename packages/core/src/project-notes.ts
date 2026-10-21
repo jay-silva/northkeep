@@ -1,13 +1,14 @@
 /**
- * Notes and claims between local AI apps (ADR 0072). Pure rules over decrypted
- * rows: what a note may say, when a claim is active, which notes a reader has
- * not seen. Storage and encryption live with the callers; nothing here touches
+ * Notes, claims and replies between local AI apps (ADRs 0072, 0079). Pure rules
+ * over decrypted rows: what a note may say, when a claim is active, which notes
+ * a reader has not been shown, who was shown a note, how replies group into
+ * threads. Storage and encryption live with the callers; nothing here touches
  * the vault, because notes are coordination, not memory.
  */
 import { tameBoardText } from './project-board.js';
 import { tameOneLine } from './text-safe.js';
 
-export const NOTE_TEXT_MAX_CHARS = 280;
+export const NOTE_TEXT_MAX_CHARS = 1000;
 export const NOTE_SUBJECT_MAX_CHARS = 80;
 export const NOTE_HOST_MAX_CHARS = 80;
 export const CLAIM_MIN_HOURS = 1;
@@ -32,10 +33,10 @@ export type NoteKind = 'note' | 'claim' | 'release';
 export interface NotePayload {
   v: 1;
   kind: NoteKind;
-  /** Sending host, tamed. */
+  /** Sending app, canonical (canonicalHost); rows from 0072 builds may hold the raw name. */
   host: string;
   text: string;
-  /** A host name, or 'all'. */
+  /** A canonical app name, or 'all'. */
   to: string;
   /** Claims only: as typed (tamed), compared through normalizeSubject. */
   subject?: string;
@@ -43,6 +44,10 @@ export interface NotePayload {
   expires_at?: string;
   /** Releases only: the id of the claim this ends. */
   releases?: string;
+  /** Notes only: the id of the note answered. */
+  reply_to?: string;
+  /** Notes only: the thread's root id. Optional fields keep v at 1, so 0072's openNote still reads the row. */
+  thread?: string;
 }
 
 export interface StoredNote {
@@ -63,9 +68,16 @@ export interface NoteRequest {
   subject?: string;
   hours?: number;
   releases?: string;
+  reply_to?: string;
 }
 
-export type ProjectNoteErrorCode = 'invalid_request' | 'claim_held' | 'claim_not_active' | 'not_claim_holder' | 'too_many_claims';
+export type ProjectNoteErrorCode =
+  | 'invalid_request'
+  | 'claim_held'
+  | 'claim_not_active'
+  | 'not_claim_holder'
+  | 'too_many_claims'
+  | 'reply_target_missing';
 
 export class ProjectNoteError extends Error {
   constructor(readonly code: ProjectNoteErrorCode, message: string) {
@@ -83,12 +95,31 @@ function tameHost(host: string): string {
   return tameBoardText(breaksToSpaces(host), NOTE_HOST_MAX_CHARS);
 }
 
+/** Names apps report in the MCP handshake (Jay's call log, 2026-10-21), keyed lowercase. */
+const CANONICAL_HOSTS: ReadonlyMap<string, string> = new Map([
+  ['local-agent-mode-northkeep', 'claude-desktop'],
+  ['claude-ai', 'claude-desktop'],
+  ['claude-code', 'claude-code'],
+  ['cursor-vscode', 'cursor'],
+  ['cursor', 'cursor'],
+  ['northkeep-app', 'northkeep'],
+  ['northkeep-cli', 'northkeep'],
+]);
+
+/** Reported app name to its short name; unknown names pass through tamed. */
+export function canonicalHost(raw: string): string {
+  const tamed = tameHost(raw);
+  const key = tamed.toLowerCase();
+  if (key.startsWith('codex')) return 'codex';
+  return CANONICAL_HOSTS.get(key) ?? tamed;
+}
+
 function tameText(text: string | undefined): string {
   return tameBoardText(breaksToSpaces(text ?? ''), NOTE_TEXT_MAX_CHARS);
 }
 
 function tameTo(to: string | undefined): string {
-  return to === undefined ? NOTE_TO_ALL : tameHost(to);
+  return to === undefined ? NOTE_TO_ALL : canonicalHost(to);
 }
 
 /** True when a stored note is what this request would store; a reused client_id must match. */
@@ -131,7 +162,7 @@ export function planNote(
   existing: readonly StoredNote[],
   now: Date,
 ): NotePayload {
-  const host = tameHost(sender.host) || 'unknown';
+  const host = canonicalHost(sender.host) || 'unknown';
   const text = tameText(request.text);
   const to = tameTo(request.to);
   if (to === '') throw new ProjectNoteError('invalid_request', 'to must name a host, or be "all".');
