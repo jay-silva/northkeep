@@ -36,10 +36,10 @@ function harness(api: (route: string, options?: {json?: Record<string,unknown>})
     const status={unlocked:true};let projectLoadSequence=0,projectActionSequence=0,projectDecisionSequence=0;
     let projectIndex=[],currentProjectSlug='',currentProject=null,projectReview=null,projectReturnFocus=null,projectFocusDetail=false;
     let projectNavigation={mode:'home'},projectQuery='',projectSort='recent',projectFilter='all';
-    let projectDecisions=new Map(),projectDecisionsLoaded=true,pendingDecisionSlug='';const projectPendingOperations=new Map();
+    let projectDecisions=new Map(),projectDecisionsLoaded=true,pendingDecisionSlug='';let projectWaitingPlan=null,previewed=null;const openSyncPreview=plan=>{previewed=plan};const devicePlace=()=>'this Mac';const projectPendingOperations=new Map();
     const closeGuardDialog=()=>{};const projectAnnounce=()=>{};const projectFocusPanel=()=>{};const projectCloseButton=label=>el('button','btn',label);const renderProjectReceipt=()=>{projectReview=null};const renderProjectConflict=()=>{};
     const showProjectsMirror=()=>{};const renderProjectDetail=project=>$('projectDetail').replaceChildren(makeNode(project.status));const openProjectDecision=()=>{};
-    ${['keepTypedValue','projectLines','projectDate','projectName','projectPill','projectNeedsAttention','filteredProjects','invalidateProjectView','showProjectsHome','renderProjectsEmpty','renderProjectChoices','loadProject','loadProjects','openProjectFromList','noteProjectDecisions','refreshProjectDecisions','clearProjectsSensitive','updateProjectOverview','projectWriteViewCurrent','projectWriteCurrent','saveProjectDraft','renderProjectCorrection','projectOperation','projectField'].map(source).join('\n')}
+    ${['keepTypedValue','projectLines','projectDate','projectName','projectPill','projectNeedsAttention','filteredProjects','invalidateProjectView','showProjectsHome','renderProjectsEmpty','renderProjectChoices','renderWaitingProjects','loadProject','loadProjects','openProjectFromList','noteProjectDecisions','refreshProjectDecisions','clearProjectsSensitive','updateProjectOverview','projectWriteViewCurrent','projectWriteCurrent','saveProjectDraft','renderProjectCorrection','projectOperation','projectField'].map(source).join('\n')}
     this.draft=()=>{projectReview={mode:'checkpoint',slug:currentProjectSlug,vault_id:'vault',expected_revision:currentProject.revision,status:'Changed',completed:'Saved',next_actions:'New action',open_questions:'',decision:''}};
     this.save=()=>saveProjectDraft(makeNode(),makeNode());
     this.edit=()=>{renderProjectCorrection(currentProject);const panel=$('projectLive').children[0];panel.children[1].children[1].children[1].value='Changed';return panel.children[3].children[1].click()};
@@ -48,6 +48,7 @@ function harness(api: (route: string, options?: {json?: Record<string,unknown>})
     this.filter=(query,filter='all',sort='recent')=>{projectQuery=query;projectFilter=filter;projectSort=sort;renderProjectChoices()};
     this.state=()=>({navigation:projectNavigation,query:projectQuery,filter:projectFilter,sort:projectSort,index:projectIndex,decisions:[...projectDecisions]});
     this.needs=slug=>{projectDecisions.set(slug,1);renderProjectChoices()};
+    this.previewed=()=>previewed;
     this.slugs=()=>filteredProjects().map(item=>item.project);
   `, context);
   return context;
@@ -176,6 +177,30 @@ describe('Projects Portfolio navigation', () => {
       this.restore=async ${callbackSource("    restore.addEventListener('click', async ")};`,app);
     await app.restore();app.back(false);
     expect(app.state().index.find((project:{project:string})=>project.project==='zebra')).toMatchObject({revision:'restored',updated_at:'2026-09-04',imported:false});
+  });
+
+  it('shows a project a connected app made, and opens the sync preview from it', async () => {
+    const plan={preview:true,new_projects:['swole'],conflicts:[],additions:{count:0,by_scope:{}}};
+    const app=harness(async (route,options)=>{
+      if(route==='/api/projects')return {projects:rows};
+      if(route==='/api/share/status')return {configured:true,unlocked:true,paired:true,shared_scopes:[]};
+      if(route==='/api/share/sync'&&options?.json?.dry_run===undefined)return plan;
+      throw new Error('unexpected '+route);
+    });
+    await app.load();await app.refresh();
+    const notice=app.nodes.get('projectsWaiting');
+    expect(notice.hidden).toBe(false);
+    expect(notice.children.map((n:{text:string})=>n.text)).toEqual(['A connected app made a new project.','"swole" was created in Claude or another AI app and is not on this Mac yet. Nothing comes in until you review it.','Review and bring in']);
+    notice.children[2].click();
+    expect(app.previewed()).toBe(plan);
+    app.lock();
+    expect(app.nodes.get('projectsWaiting').hidden).toBe(true);
+  });
+
+  it('hides the waiting notice when no connected app made a project', async () => {
+    const app=harness(async route=>route==='/api/projects'?{projects:rows}:route==='/api/share/status'?{configured:true,unlocked:true,paired:true}:{new_projects:[],conflicts:[]});
+    await app.load();await app.refresh();
+    expect(app.nodes.get('projectsWaiting').hidden).toBe(true);
   });
 
   it('clears all portfolio data on lock and ignores late list and cloud decisions', async () => {

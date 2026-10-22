@@ -1001,3 +1001,11 @@ branch was merged into main as eabb35c on 2026-09-19 and ships first in
 0.22.0. Whether Jay ran the acceptance test and whether the connector was
 deployed with this code is not recorded in the repo; see the note under
 Status.
+
+**Visibility note 2026-10-22:** a created project sat unseen on the server
+until a manual Sync now, so the Mac's Projects page now reads the dry-run
+sync preview (`POST /api/share/sync` with no `dry_run: false`) and names
+each waiting project with a "Review and bring in" button that opens the
+same preview. It applies nothing on its own, keeps the Decision 5 gate
+(asks only on a Mac that shares a scope or has paired), and changes no
+fold rule. The iPhone has no notice yet.

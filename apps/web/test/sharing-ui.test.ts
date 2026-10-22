@@ -128,6 +128,7 @@ describe('Sync now preview (ADR 0063 D3)', () => {
     const context = vm.createContext({ $, api, calls, opened, document: { createTextNode: (t: string) => t } });
     vm.runInContext(`
       const loadSharing = async () => {};
+      const status = { unlocked: true };
       const noteProjectDecisions = () => {};
       const openSyncPreview = (plan) => opened.push(plan);
       const el = () => ({ style: {}, appendChild() {}, addEventListener() {} });

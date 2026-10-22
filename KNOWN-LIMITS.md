@@ -972,7 +972,10 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   new document from the app, on the hosted and the local server alike.
 - **A created project reaches the vault only on a share sync.** It lands
   when the user runs a share sync on a device that has paired with the
-  connector. Nothing arrives on its own.
+  connector. Nothing arrives on its own. The Mac's Projects page names a
+  waiting project and opens the sync preview for it, but only when the page
+  opens, and only on a Mac that shares a scope or has paired. The iPhone
+  shows no such notice yet.
 - **An empty project scope is marked Shared on arrival, with no dialog.**
   A project scope with no live entry on that device is marked Shared when
   the app's document arrives, and receives exactly the rows the app wrote.

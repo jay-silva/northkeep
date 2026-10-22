@@ -239,6 +239,7 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
         { project: 'field-notes', title: 'Field Notes', status: 'Ready', conflict: false, draft: true, last_writer_host: 'claude-code' },
         { project: 'trail-journal', title: 'Trail Journal', status: 'Ready', conflict: false, draft: false, last_writer_host: null },
       ];
+      const renderWaitingProjects = () => {};
       ${functionSource('renderProjectChoices')}`;
     const { rows, meta } = run(setup, 'renderProjectChoices(); return { rows: lists.projectList.children, meta: lists.projectsSummaryMeta.textContent };') as { rows: { children: unknown[] }[]; meta: string };
     expect(rows).toHaveLength(2);
@@ -274,6 +275,7 @@ describe('Projects provenance and draft state (ADR 0052)', () => {
         { project: 'shared-one', title: 'Shared One', status: 'Ready', updated_at: '2026-09-01', conflict: false, draft: false, shared: true },
         { project: 'paper-atlas', title: null, status: null, next_actions: null, updated_at: null, conflict: true, draft: false, shared: false },
       ];
+      const renderWaitingProjects = () => {};
       ${functionSource('renderProjectChoices')}`;
     const { rows, notice } = run(setup, 'renderProjectChoices(); return { rows: lists.projectList.children, notice: lists.projectsAttention };') as { rows: { children: unknown[] }[]; notice: { children: unknown[] } };
     const [conflict, privateRow, sharedRow] = rows.map(row => textOf(row));
