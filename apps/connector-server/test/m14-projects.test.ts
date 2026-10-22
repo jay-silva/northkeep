@@ -409,6 +409,11 @@ describe('M14 connector project tools (step 4)', () => {
     const neverShared = await mcpCall(token, 'project_update', { project: 'never-shared', expected_revision: 'none', status: 'nope' });
     expect(neverShared.isError).toBe(true);
     expect(neverShared.text).toMatch(/no live project document/);
+    expect(neverShared.text).toMatch(/different NorthKeep account: do not create it/);
+
+    const neverSharedGet = await mcpCall(token, 'project_get', { project: 'never-shared' });
+    expect(neverSharedGet.isError).toBe(true);
+    expect(neverSharedGet.text).toMatch(/different NorthKeep account: do not create it/);
 
     const empty = await mcpCall(token, 'project_update', { project: 'northkeep' });
     expect(empty.isError).toBe(true);
