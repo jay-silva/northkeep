@@ -113,6 +113,11 @@ function snippetOf(content: string): string {
 const SEVERAL_HEADS_MSG =
   'Project has multiple current documents. Nothing was saved. Ask the user to open NorthKeep and push again (Sync now).';
 const REVISION_MISSING_MSG = 'Nothing was saved: call project_get first and pass its revision as expected_revision.';
+// An app paired to another account sees "no document" for a real project; without this, agents recreated it there.
+const OTHER_ACCOUNT_HINT =
+  'This connection reaches one NorthKeep account. If the user expects this project to exist, it may not be shared ' +
+  'in NorthKeep, or this app may be connected to a different NorthKeep account: do not create it. Ask the user to ' +
+  'share it, or to reconnect this app with a pairing code from NorthKeep (Connect, then Cloud).';
 
 /** Shown instead of "no project" when the only cloud versions are waiting for the user (ADR 0063 D1). */
 function waitingForReviewMessage(project: string): string {
@@ -815,7 +820,7 @@ export function createMcpServer(
           'project_get',
           view.stale.size > 0
             ? `No live project document for "${project}": a cloud version is waiting for the user to review it in NorthKeep.`
-            : `No live project document for "${project}".`,
+            : `No live project document for "${project}". ${OTHER_ACCOUNT_HINT}`,
         );
       }
       const picked = view.head.row;
@@ -1067,7 +1072,8 @@ export function createMcpServer(
         return refuse(
           view.stale.size > 0
             ? waitingForReviewMessage(project)
-            : `Nothing was saved: no live project document for "${project}". Use project_create to start one, or ask the user to share the project from NorthKeep.`,
+            : `Nothing was saved: no live project document for "${project}". ${OTHER_ACCOUNT_HINT} ` +
+              'If the user asks for a new project, use project_create.',
         );
       }
       const head = view.head.row;
