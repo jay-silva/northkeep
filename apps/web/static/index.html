@@ -869,9 +869,9 @@
   .project-row-arrow svg { width:20px; height:20px; fill:none; stroke:currentColor; stroke-width:1.65; stroke-linecap:round; stroke-linejoin:round; }
   #view-projects .btn { min-height:44px; }
   .projects-back { min-height:44px; margin-bottom:22px; }
-  #projectsAttention { display:flex; flex-wrap:wrap; align-items:center; gap:10px 18px; }
-  #projectsAttention p { flex-basis:100%; margin:0; }
-  #projectsAttention .btn { margin:0 0 0 auto; min-height:44px; }
+  #projectsAttention, #projectsWaiting { display:flex; flex-wrap:wrap; align-items:center; gap:10px 18px; }
+  #projectsAttention p, #projectsWaiting p { flex-basis:100%; margin:0; }
+  #projectsAttention .btn, #projectsWaiting .btn { margin:0 0 0 auto; min-height:44px; }
   @media(max-width:1100px) { .project-choice { grid-template-columns:minmax(0,1fr) minmax(170px,.7fr); gap:12px 24px; } .project-row-updated { grid-column:1; } .project-row-arrow { position:static; transform:none; display:flex; flex:none; margin-top:2px; } }
   @media(max-width:600px) {
     .projects-toolbar { gap:8px; margin-top:18px; }
@@ -1160,6 +1160,7 @@
     <div class="page-head"><div><h2 id="projectsHeading" tabindex="-1">Projects</h2><p class="muted">Pick up where you left off.</p></div></div>
     <section id="contractOffer" class="contract-offer" hidden></section>
     <div id="projectsHome">
+      <div id="projectsWaiting" class="project-notice" role="status" hidden></div>
       <div id="projectsAttention" class="project-notice" hidden></div>
       <div class="projects-toolbar">
         <input id="projectSearch" type="text" aria-label="Search projects" placeholder="Search projects" autocomplete="off">
@@ -2952,6 +2953,8 @@
   // conflicts read, preview, or sync. pendingDecisionSlug opens the conflict view
   // once that project has loaded.
   let projectDecisions = new Map(), projectDecisionsLoaded = false, pendingDecisionSlug = '';
+  // The last sync preview, kept while it names projects a connected app made that are not here yet.
+  let projectWaitingPlan = null;
 
   function invalidateProjectView() {
     projectLoadSequence += 1;
@@ -2967,6 +2970,7 @@
   function clearProjectsSensitive() {
     invalidateProjectView();
     projectDecisions = new Map(); projectDecisionsLoaded = false; pendingDecisionSlug = '';
+    projectWaitingPlan = null; $('projectsWaiting').replaceChildren(); $('projectsWaiting').hidden = true;
     projectIndex = [];
     projectNavigation = { mode:'home' }; projectQuery = ''; projectSort = 'recent'; projectFilter = 'all';
     $('projectSearch').value = ''; $('projectSort').value = 'recent';
@@ -3153,6 +3157,18 @@
     if (!projectDecisionsLoaded) refreshProjectDecisions();
   }
 
+  function renderWaitingProjects() {
+    const slugs = projectWaitingPlan ? projectWaitingPlan.new_projects || [] : [];
+    const notice = $('projectsWaiting'); notice.replaceChildren(); notice.hidden = slugs.length === 0;
+    if (!slugs.length) return;
+    const names = slugs.map(slug => '"' + slug + '"').join(', ');
+    notice.append(el('strong', undefined, slugs.length === 1 ? 'A connected app made a new project.' : 'Connected apps made ' + slugs.length + ' new projects.'),
+      el('p', undefined, names + (slugs.length === 1 ? ' was' : ' were') + ' created in Claude or another AI app and ' + (slugs.length === 1 ? 'is' : 'are') + ' not on ' + devicePlace() + ' yet. Nothing comes in until you review it.'));
+    const review = el('button', 'btn primary', 'Review and bring in'); review.type = 'button';
+    review.addEventListener('click', () => openSyncPreview(projectWaitingPlan, review));
+    notice.appendChild(review);
+  }
+
   function projectNeedsAttention(item) { return Boolean(item.conflict) || projectDecisions.has(item.project); }
 
   function filteredProjects() {
@@ -3209,6 +3225,7 @@
     $('projectsAttentionCount').textContent = String(attention); $('projectsDraftCount').textContent = String(drafts);
     $('projectFilters').querySelectorAll('button').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.filter === projectFilter)));
     $('projectsSummaryMeta').textContent = rows.length + (rows.length === 1 ? ' project' : ' projects') + (rows.length !== projectIndex.length ? ' of ' + projectIndex.length : '');
+    renderWaitingProjects();
     const notice = $('projectsAttention'); notice.replaceChildren(); notice.hidden = attention === 0;
     if (attention) {
       notice.append(el('strong', undefined, attention === 1 ? '1 project needs you to choose a version' : attention + ' projects need you to choose a version'),
@@ -3852,9 +3869,12 @@
       const share = await api('/api/share/status');
       if (requestId !== projectDecisionSequence || !status.unlocked || $('view-projects').hidden) { projectDecisionsLoaded = false; return; }
       if (!share.configured || !share.unlocked || (!(share.shared_scopes || []).length && !share.paired)) return;
-      const data = await api('/api/share/conflicts');
+      // The dry-run preview carries the conflicts plus the projects connected apps made.
+      const data = await api('/api/share/sync', { method: 'POST', json: {} });
       if (requestId !== projectDecisionSequence || !status.unlocked || $('view-projects').hidden) { projectDecisionsLoaded = false; return; }
+      projectWaitingPlan = (data.new_projects || []).length ? data : null;
       noteProjectDecisions(data.conflicts);
+      renderWaitingProjects();
     } catch { /* the list still works without the pills */ }
   }
 
@@ -7941,7 +7961,7 @@
     return (plan.additions ? plan.additions.count : 0) + (plan.new_projects || []).length + approve.server_ids.length + approve.forget_ids.length;
   }
 
-  function openSyncPreview(plan) {
+  function openSyncPreview(plan, returnTo = $('shareSyncBtn')) {
     openGuardDialog('Review this sync', 'sync-dialog', (body) => {
       body.replaceChildren();
       body.appendChild(el('p', 'lead muted', 'Your AI apps made changes since ' + devicePlace() + ' last synced. Nothing on ' + devicePlace() + ' has changed yet.'));
@@ -8001,7 +8021,7 @@
         if (done) closeGuardDialog(); else { apply.disabled = false; cancel.disabled = false; }
       });
       actions.append(cancel, apply); foot.appendChild(actions); body.appendChild(foot);
-    }, $('shareSyncBtn'));
+    }, returnTo);
   }
 
   function shareSyncMessages(r) {
@@ -8050,6 +8070,7 @@
       return false;
     } finally {
       await loadSharing();
+      if (status.unlocked && !$('view-projects').hidden) { projectWaitingPlan = null; await loadProjects(); }
     }
   }
 
