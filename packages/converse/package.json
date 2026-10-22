@@ -19,6 +19,6 @@
     "@northkeep/librarian": "workspace:*",
     "@northkeep/mcp-server": "workspace:*",
     "@northkeep/redact": "workspace:*",
-    "@modelcontextprotocol/sdk": "1.29.0"
+    "@modelcontextprotocol/sdk": "1.32.0"
   }
 }
