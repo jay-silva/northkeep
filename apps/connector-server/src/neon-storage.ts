@@ -242,6 +242,30 @@ export class NeonConnectorStorage implements ConnectorStorage {
     `;
   }
 
+  async resetAccountKey(accountHash: string, deadWrap: string): Promise<number | null> {
+    await this.ensureSchema();
+    // ONE statement (ADR 0010). The deletes key off the UPDATE's RETURNING, not
+    // a snapshot read: the UPDATE locks the row and re-checks dek_wrap, so a
+    // wrap another request already replaced matches nothing and nothing goes.
+    const rows = (await this.sql`
+      WITH a AS (
+        UPDATE connector_accounts SET dek_wrap = NULL
+        WHERE account_hash = ${accountHash} AND dek_wrap = ${deadWrap} RETURNING account_hash
+      ), e AS (
+        DELETE FROM shared_entries WHERE account_hash IN (SELECT account_hash FROM a) RETURNING 1
+      ), p AS (
+        DELETE FROM pairing_codes WHERE account_hash IN (SELECT account_hash FROM a) RETURNING 1
+      ), c AS (
+        DELETE FROM oauth_codes WHERE account_hash IN (SELECT account_hash FROM a) RETURNING 1
+      ), t AS (
+        DELETE FROM oauth_tokens WHERE account_hash IN (SELECT account_hash FROM a) RETURNING 1
+      )
+      SELECT (SELECT count(*) FROM a)::int AS reset, (SELECT count(*) FROM e)::int AS removed
+    `) as unknown as Array<{ reset: number; removed: number }>;
+    const row = rows[0];
+    return row && Number(row.reset) > 0 ? Number(row.removed) : null;
+  }
+
   async putPairingCode(codeHash: string, accountHash: string, expiresAt: number, dekWrap: string): Promise<void> {
     await this.ensureSchema();
     await this.sql`

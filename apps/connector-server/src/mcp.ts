@@ -201,7 +201,7 @@ function toProjectUpdate(args: {
  */
 const REENCRYPT_MSG =
   'The shared memories for this account cannot be decrypted over this connection. ' +
-  'Ask the user to push their shared scopes again from NorthKeep (the vault is the source of truth), then retry.';
+  'Ask the user to check Cloud Connect in NorthKeep, then reconnect this app.';
 
 /**
  * `dek` is the per-account data-encryption key, unwrapped by the /mcp route
