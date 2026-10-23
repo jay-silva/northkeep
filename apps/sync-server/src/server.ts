@@ -2,6 +2,7 @@
 import { createHash } from 'node:crypto';
 import http from 'node:http';
 import { handleSync, parseAllowlist, type SyncRequest } from './handler.js';
+import { ipRateLimitKey } from './ip-key.js';
 import { capFromEnv, SINGLE_REQUEST_MAX } from './parts.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
 import {
@@ -22,8 +23,8 @@ import type { Storage } from './storage.js';
  * and a fake Stripe gateway). Production on Vercel uses the same code via the
  * listening entry in `index.ts`. No web framework (repo convention).
  *
- * `billing` is null when Stripe isn't configured (self-host / open); then the
- * billing routes are absent and only the allowlist gates.
+ * `billing` is null when Stripe isn't configured (self-host); then the billing
+ * routes are absent and only the allowlist gates, or NORTHKEEP_SYNC_OPEN=1.
  */
 
 /** Per-account request cap per 5-minute window (per warm instance). A 32 MiB
@@ -36,7 +37,12 @@ const RATE_LIMIT_WINDOW_MS = 5 * 60 * 1000;
 const IP_LIMIT_MULTIPLIER = 4;
 
 export function createSyncServer(storage: Storage, billing: BillingDeps | null = null): http.Server {
-  const allowedTokenHashes = parseAllowlist(process.env.NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES);
+  const parsedAllowlist = parseAllowlist(process.env.NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES);
+  // No allowlist and no billing is an open server only when the operator says so;
+  // otherwise a dropped env var would make paid sync free (review F2). Empty set ⇒ 403.
+  const explicitlyOpen = process.env.NORTHKEEP_SYNC_OPEN === '1';
+  const allowedTokenHashes =
+    parsedAllowlist ?? (billing === null && !explicitlyOpen ? new Set<string>() : null);
   // The connector entitlement bridge (ADR 0019 C3): when this secret is set, the
   // sync server will mint anonymous "active subscriber" attestations the desktop
   // forwards to the connector. Unset ⇒ the endpoint 404s (self-host / no bridge).
@@ -69,7 +75,7 @@ export function createSyncServer(storage: Storage, billing: BillingDeps | null =
     // scoping this to /api/ left non-API paths as an unthrottled bypass
     // (adversarial review H1).
     if (limiter && ipLimiter) {
-      let retryAfter = ipLimiter.check(`ip:${clientIp(req)}`);
+      let retryAfter = ipLimiter.check(`ip:${ipRateLimitKey(clientIp(req))}`);
       if (retryAfter === null && token) {
         const accountKey = createHash('sha256').update(token, 'utf8').digest('hex');
         retryAfter = limiter.check(accountKey);
@@ -242,11 +248,14 @@ async function handleBillingRoute(
   sendJson(404, { error: 'Not found.' });
 }
 
-/** Client IP: first hop of x-forwarded-for (set by Vercel), else the socket. */
+/**
+ * Client IP: the LAST x-forwarded-for hop, the one our proxy appended (Vercel
+ * sends one value). Earlier hops are client-chosen and spoofable (review F3).
+ */
 function clientIp(req: http.IncomingMessage): string {
   const fwd = req.headers['x-forwarded-for'];
-  const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim();
-  return first || req.socket.remoteAddress || 'unknown';
+  const last = (Array.isArray(fwd) ? fwd[fwd.length - 1] : fwd)?.split(',').pop()?.trim();
+  return last || req.socket.remoteAddress || 'unknown';
 }
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {
