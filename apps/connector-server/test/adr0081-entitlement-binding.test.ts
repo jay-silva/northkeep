@@ -1,5 +1,5 @@
 // ADR 0081: an entitlement attestation entitles only the first account that presents it.
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import crypto from 'node:crypto';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -8,6 +8,8 @@ import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage, type ConnectorStorage } from '../src/storage.js';
 import { NeonConnectorStorage } from '../src/neon-storage.js';
 import { pgliteAsNeon } from './adr0061-support.js';
+import { ENTITLEMENT_NONCE_WINDOW_MS } from '../src/entitlement.js';
+import { ENTITLEMENT_NONCE_WINDOW_SEC } from '../../sync-server/src/entitlement.js';
 
 const SECRET = 'adr0081-entitlement-secret-0123456789';
 const HOUR_MS = 60 * 60 * 1000;
@@ -25,6 +27,7 @@ const sha = (s: string): string => crypto.createHash('sha256').update(s, 'utf8')
 let server: Server | null = null;
 const saved = { ...process.env };
 afterEach(() => {
+  vi.useRealTimers();
   server?.close();
   server = null;
   process.env = { ...saved };
@@ -64,6 +67,18 @@ describe('ADR 0081 entitlement binding (HTTP)', () => {
     const a = attestation('nonce-shared');
     expect((await pairStart(base, bearer(), a)).status).toBe(200);
     expect((await pairStart(base, bearer(), a)).status).toBe(402);
+  });
+
+  it('a later same-day attestation finds the nonce still bound after the first expires', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    const base = await start(new InMemoryConnectorStorage());
+    expect((await pairStart(base, bearer(), attestation('nonce-day'))).status).toBe(200);
+    vi.setSystemTime(Date.now() + 20 * HOUR_MS);
+    expect((await pairStart(base, bearer(), attestation('nonce-day'))).status).toBe(402);
+  });
+
+  it('the connector keeps nonces at least as long as the sync server\'s nonce window', () => {
+    expect(ENTITLEMENT_NONCE_WINDOW_MS).toBeGreaterThanOrEqual(ENTITLEMENT_NONCE_WINDOW_SEC * 1000);
   });
 
   it('a fault in the nonce table skips the stamp and keeps an existing grace window', async () => {

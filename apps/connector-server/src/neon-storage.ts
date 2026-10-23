@@ -224,7 +224,13 @@ export class NeonConnectorStorage implements ConnectorStorage {
       RETURNING (xmax = 0) AS inserted
     `) as unknown as Array<{ inserted: boolean }>;
     if (rows.length === 0) return false;
-    if (rows[0]!.inserted) await this.sql`DELETE FROM entitlement_nonces WHERE expires_at <= ${nowMs}`;
+    if (rows[0]!.inserted) {
+      try {
+        await this.sql`DELETE FROM entitlement_nonces WHERE expires_at <= ${nowMs}`;
+      } catch {
+        // Pruning is housekeeping; the binding above already committed.
+      }
+    }
     return true;
   }
 

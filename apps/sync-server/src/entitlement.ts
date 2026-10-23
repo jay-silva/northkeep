@@ -75,13 +75,14 @@ export function entitlementNonce(nonceKey: string, tokenHash: string, nowSec: nu
     .slice(0, 32);
 }
 
-/** The sync-only nonce key: at least 32 characters and distinct from the shared secret, else null. */
+/** The sync-only nonce key: 32+ non-space characters, unrelated to the shared secret, else null. */
 export function entitlementNonceKeyFromEnv(
   env: NodeJS.ProcessEnv = process.env,
   sharedSecret: string | null = entitlementSecretFromEnv(env),
 ): string | null {
-  const key = env.NORTHKEEP_ENTITLEMENT_NONCE_KEY;
-  if (!key || key.length < 32 || key === sharedSecret) return null;
+  const key = env.NORTHKEEP_ENTITLEMENT_NONCE_KEY?.trim();
+  if (!key || key.replace(/\s/g, '').length < 32) return null;
+  if (sharedSecret && (key.includes(sharedSecret.trim()) || sharedSecret.includes(key))) return null;
   return key;
 }
 

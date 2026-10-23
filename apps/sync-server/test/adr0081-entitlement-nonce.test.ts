@@ -65,6 +65,9 @@ describe('ADR 0081 attestation nonces', () => {
   it('rejects a nonce key that is short or equal to the shared secret', () => {
     expect(entitlementNonceKeyFromEnv({ NORTHKEEP_ENTITLEMENT_NONCE_KEY: 'short' }, SECRET)).toBeNull();
     expect(entitlementNonceKeyFromEnv({ NORTHKEEP_ENTITLEMENT_NONCE_KEY: SECRET }, SECRET)).toBeNull();
+    expect(entitlementNonceKeyFromEnv({ NORTHKEEP_ENTITLEMENT_NONCE_KEY: ' '.repeat(40) }, SECRET)).toBeNull();
+    expect(entitlementNonceKeyFromEnv({ NORTHKEEP_ENTITLEMENT_NONCE_KEY: `${SECRET} ` }, SECRET)).toBeNull();
+    expect(entitlementNonceKeyFromEnv({ NORTHKEEP_ENTITLEMENT_NONCE_KEY: `${SECRET}x` }, SECRET)).toBeNull();
     expect(entitlementNonceKeyFromEnv({ NORTHKEEP_ENTITLEMENT_NONCE_KEY: KEY }, SECRET)).toBe(KEY);
   });
 });
