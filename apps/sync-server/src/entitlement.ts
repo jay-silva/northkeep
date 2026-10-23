@@ -46,17 +46,43 @@ function sign(canonicalJson: string, secret: string): string {
 /** Mint an entitlement token attesting the subscriber's current status. */
 export function signEntitlement(
   secret: string,
-  input: { active: boolean; periodEnd: number },
+  input: { active: boolean; periodEnd: number; nonce?: string },
   nowSec: number = Math.floor(Date.now() / 1000),
 ): string {
   const claims: EntitlementClaims = {
     active: input.active,
     period_end: input.active ? input.periodEnd : 0,
     exp: nowSec + ENTITLEMENT_TTL_SEC,
-    nonce: randomBytes(12).toString('hex'),
+    nonce: input.nonce ?? randomBytes(12).toString('hex'),
   };
   const body = canonical(claims);
   return `${Buffer.from(body, 'utf8').toString('base64url')}.${sign(body, secret)}`;
+}
+
+/**
+ * One attestation nonce per subscriber per window (ADR 0081). The connector binds
+ * each nonce to the first account presenting it, so a window yields one account.
+ * The connector keeps a nonce for at least this long after the attestation expires.
+ */
+export const ENTITLEMENT_NONCE_WINDOW_SEC = 24 * 60 * 60;
+
+/** HMAC under a key the connector never holds, so the connector cannot link nonces to subscribers. */
+export function entitlementNonce(nonceKey: string, tokenHash: string, nowSec: number): string {
+  const window = Math.floor(nowSec / ENTITLEMENT_NONCE_WINDOW_SEC);
+  return createHmac('sha256', nonceKey)
+    .update(`northkeep-entitlement-nonce\n${tokenHash}\n${window}`, 'utf8')
+    .digest('hex')
+    .slice(0, 32);
+}
+
+/** The sync-only nonce key: at least 32 characters and distinct from the shared secret, else null. */
+export function entitlementNonceKeyFromEnv(
+  env: NodeJS.ProcessEnv = process.env,
+  sharedSecret: string | null = entitlementSecretFromEnv(env),
+): string | null {
+  const key = env.NORTHKEEP_ENTITLEMENT_NONCE_KEY;
+  if (!key || key.length < 32 || key === sharedSecret) return null;
+  return key;
 }
 
 /**

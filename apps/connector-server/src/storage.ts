@@ -175,6 +175,12 @@ export interface ConnectorStorage {
   /** The account's entitled-until stamp (ms since epoch), or null if never set. */
   getEntitledUntil(accountHash: string): Promise<number | null>;
   /**
+   * Bind an attestation nonce hash to the first account presenting it (ADR 0081),
+   * atomically. True when bound to this account, now or before; false when
+   * another account holds it.
+   */
+  bindEntitlementNonce(nonceHash: string, accountHash: string, expiresAtMs: number, nowMs: number): Promise<boolean>;
+  /**
    * Race-safe create of the account's DEK wrap (ADR 0020): a SINGLE statement
    * `SET dek_wrap = COALESCE(dek_wrap, candidate) ... RETURNING dek_wrap`, so two
    * concurrent first-writers converge — whatever comes back IS the account wrap
@@ -449,6 +455,16 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
 
   async getEntitledUntil(accountHash: string): Promise<number | null> {
     return this.entitledUntil.get(accountHash) ?? null;
+  }
+
+  private readonly entitlementNonces = new Map<string, { accountHash: string; expiresAt: number }>();
+
+  async bindEntitlementNonce(nonceHash: string, accountHash: string, expiresAtMs: number, nowMs: number): Promise<boolean> {
+    const held = this.entitlementNonces.get(nonceHash);
+    if (held && held.expiresAt > nowMs) return held.accountHash === accountHash;
+    for (const [k, v] of this.entitlementNonces) if (v.expiresAt <= nowMs) this.entitlementNonces.delete(k);
+    this.entitlementNonces.set(nonceHash, { accountHash, expiresAt: expiresAtMs });
+    return true;
   }
 
   async putPairingCode(codeHash: string, accountHash: string, expiresAt: number, dekWrap: string): Promise<void> {

@@ -62,7 +62,12 @@ import { CONSENT_PAGE_HEADERS, renderConsentPage } from './consent.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
 import { sha256hex, generatePairingCode } from './hash.js';
 import { operatorBearerMatches, reviewerSeedSecretFromEnv, seedReviewerAccount } from './reviewer-seed.js';
-import { connectorGateFromEnv, verifyEntitlement, ENTITLEMENT_GRACE_MS } from './entitlement.js';
+import {
+  connectorGateFromEnv,
+  verifyEntitlement,
+  ENTITLEMENT_GRACE_MS,
+  ENTITLEMENT_NONCE_WINDOW_MS,
+} from './entitlement.js';
 import {
   ConnectorCryptoError,
   DEV_KEK_PEPPER,
@@ -222,7 +227,18 @@ export function createConnectorServer(
     const token = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw[0] : null;
     if (!token) return;
     const claims = verifyEntitlement(gate.entitlementSecret, token);
-    if (claims) await storage.setEntitledUntil(accountHash, Date.now() + ENTITLEMENT_GRACE_MS);
+    if (!claims || typeof claims.nonce !== 'string' || claims.nonce.length === 0) return;
+    const now = Date.now();
+    try {
+      // ADR 0081: an attestation entitles only the first account presenting it.
+      const expiresAt = claims.exp * 1000 + ENTITLEMENT_NONCE_WINDOW_MS;
+      if (!(await storage.bindEntitlementNonce(sha256hex(claims.nonce), accountHash, expiresAt, now))) return;
+      await storage.setEntitledUntil(accountHash, now + ENTITLEMENT_GRACE_MS);
+    } catch {
+      // A fault in the nonce table must not fail the push: fall through to the
+      // account's existing grace window.
+      return;
+    }
   }
 
   /** True if the account may use the gated routes. */
