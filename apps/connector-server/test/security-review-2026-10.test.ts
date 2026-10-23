@@ -7,6 +7,15 @@ import { createConnectorServer } from '../src/create-server.js';
 import { InMemoryConnectorStorage } from '../src/storage.js';
 import { isBlockedAddress } from '../src/cimd.js';
 
+const SECRET = 'redteam-entitlement-secret-0123456789';
+
+function signEntitlement(secret: string): string {
+  const nowSec = Math.floor(Date.now() / 1000);
+  const body = JSON.stringify({ active: true, period_end: nowSec + 86400, exp: nowSec + 3600, nonce: 'aa' });
+  const sig = crypto.createHmac('sha256', secret).update(body, 'utf8').digest('hex');
+  return `${Buffer.from(body, 'utf8').toString('base64url')}.${sig}`;
+}
+
 let server: Server | null = null;
 const saved = { ...process.env };
 afterEach(() => {
@@ -24,6 +33,24 @@ async function start(): Promise<string> {
 }
 
 describe('security review: connector', () => {
+  it('F1: one entitlement attestation must not entitle unrelated accounts', async () => {
+    process.env.CONNECTOR_ENTITLEMENT_SECRET = SECRET;
+    process.env.NORTHKEEP_CONNECTOR_RATE_LIMIT = '0';
+    const base = await start();
+    const attestation = signEntitlement(SECRET);
+    const statuses: number[] = [];
+    for (let i = 0; i < 5; i++) {
+      const stranger = crypto.randomBytes(32).toString('hex');
+      const r = await fetch(`${base}/pair/start`, {
+        method: 'POST',
+        headers: { authorization: `Bearer ${stranger}`, 'x-nb-entitlement': attestation, 'content-type': 'application/json' },
+        body: '{}',
+      });
+      statuses.push(r.status);
+    }
+    expect(statuses.filter((s) => s === 200).length).toBeLessThanOrEqual(1);
+  });
+
   it('F2: with no gate env set, an unknown bearer must not get a paid route', async () => {
     delete process.env.CONNECTOR_ENTITLEMENT_SECRET;
     delete process.env.NORTHKEEP_CONNECTOR_ALLOWED_TOKEN_HASHES;

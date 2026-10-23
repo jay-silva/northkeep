@@ -14,7 +14,12 @@ import {
   subscriptionActive,
   type BillingDeps,
 } from './billing.js';
-import { entitlementSecretFromEnv, signEntitlement } from './entitlement.js';
+import {
+  entitlementNonce,
+  entitlementNonceKeyFromEnv,
+  entitlementSecretFromEnv,
+  signEntitlement,
+} from './entitlement.js';
 import type { Storage } from './storage.js';
 
 /**
@@ -47,6 +52,7 @@ export function createSyncServer(storage: Storage, billing: BillingDeps | null =
   // sync server will mint anonymous "active subscriber" attestations the desktop
   // forwards to the connector. Unset ⇒ the endpoint 404s (self-host / no bridge).
   const entitlementSecret = entitlementSecretFromEnv();
+  const entitlementNonceKey = entitlementNonceKeyFromEnv(process.env, entitlementSecret);
   const capBytes = capFromEnv(process.env.NORTHKEEP_SYNC_MAX_BYTES);
   const rateLimit = rateLimitFromEnv(process.env.NORTHKEEP_SYNC_RATE_LIMIT, RATE_LIMIT_DEFAULT);
   const limiter: RateLimiter | null =
@@ -122,6 +128,12 @@ export function createSyncServer(storage: Storage, billing: BillingDeps | null =
         send(404, { error: 'Entitlement bridge is not configured on this server.' });
         return;
       }
+      // Random nonces would let one subscriber mint attestations for any number
+      // of accounts (ADR 0081), so a missing nonce key refuses to mint.
+      if (!entitlementNonceKey) {
+        send(503, { error: 'Entitlement bridge is misconfigured on this server.' });
+        return;
+      }
       if (!token || token.length < 16) {
         send(401, { error: 'Missing or malformed bearer token.' });
         return;
@@ -129,10 +141,16 @@ export function createSyncServer(storage: Storage, billing: BillingDeps | null =
       const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex');
       const active = await subscriptionActive(tokenHash, storage);
       const sub = await storage.getSubscription(tokenHash);
-      const entitlement = signEntitlement(entitlementSecret, {
-        active,
-        periodEnd: sub?.currentPeriodEnd ?? 0,
-      });
+      const nowSec = Math.floor(Date.now() / 1000);
+      const entitlement = signEntitlement(
+        entitlementSecret,
+        {
+          active,
+          periodEnd: sub?.currentPeriodEnd ?? 0,
+          nonce: entitlementNonce(entitlementNonceKey, tokenHash, nowSec),
+        },
+        nowSec,
+      );
       send(200, { entitlement, active });
       return;
     }

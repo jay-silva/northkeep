@@ -260,6 +260,12 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   `NORTHKEEP_CONNECTOR_OPEN=1`. An allowlist with no valid hash stays private.
   The size cap (32 MB by default) and rate limiting are the only guards on an
   open server, so don't expose one publicly.
+- **A connector subscription attestation entitles one account per day (ADR 0081).**
+  The sync server issues one attestation nonce per subscriber per day, keyed by
+  `NORTHKEEP_ENTITLEMENT_NONCE_KEY` (sync server only; without it the
+  attestation route returns 503), and the connector binds each nonce to the
+  first account presenting it. A subscriber who deliberately mints for a
+  different account each day can keep about seven accounts entitled.
 - **Rate limiting is per-instance, not a precise global quota.** Every `/api/*`
   request passes two throttles: a per-IP ceiling (4x the account cap: several
   accounts can share a NAT, but rotating random tokens can't mint fresh keys

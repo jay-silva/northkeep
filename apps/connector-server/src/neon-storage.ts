@@ -38,6 +38,13 @@ export const SCHEMA_STATEMENTS: readonly string[] = [
   // C3 billing grace window: ms-since-epoch through which this account is
   // entitled (stamped when the desktop forwards a valid entitlement). Idempotent.
   `ALTER TABLE connector_accounts ADD COLUMN IF NOT EXISTS entitled_until bigint`,
+  // ADR 0081: each attestation nonce (hashed) binds to the first account presenting it.
+  `CREATE TABLE IF NOT EXISTS entitlement_nonces (
+  nonce_hash   text PRIMARY KEY,
+  account_hash text NOT NULL,
+  expires_at   bigint NOT NULL
+)`,
+  `CREATE INDEX IF NOT EXISTS entitlement_nonces_expires_at ON entitlement_nonces (expires_at)`,
   `CREATE TABLE IF NOT EXISTS pairing_codes (
   code_hash    text PRIMARY KEY,
   account_hash text NOT NULL,
@@ -200,6 +207,31 @@ export class NeonConnectorStorage implements ConnectorStorage {
       ON CONFLICT (account_hash) DO UPDATE SET
         entitled_until = GREATEST(connector_accounts.entitled_until, EXCLUDED.entitled_until)
     `;
+  }
+
+  async bindEntitlementNonce(nonceHash: string, accountHash: string, expiresAtMs: number, nowMs: number): Promise<boolean> {
+    await this.ensureSchema();
+    // One statement: insert, or keep the row when this account already holds it
+    // (or it expired); another account's live row returns nothing.
+    const rows = (await this.sql`
+      INSERT INTO entitlement_nonces (nonce_hash, account_hash, expires_at)
+      VALUES (${nonceHash}, ${accountHash}, ${expiresAtMs})
+      ON CONFLICT (nonce_hash) DO UPDATE SET
+        account_hash = EXCLUDED.account_hash,
+        expires_at = GREATEST(entitlement_nonces.expires_at, EXCLUDED.expires_at)
+      WHERE entitlement_nonces.account_hash = EXCLUDED.account_hash
+         OR entitlement_nonces.expires_at <= ${nowMs}
+      RETURNING (xmax = 0) AS inserted
+    `) as unknown as Array<{ inserted: boolean }>;
+    if (rows.length === 0) return false;
+    if (rows[0]!.inserted) {
+      try {
+        await this.sql`DELETE FROM entitlement_nonces WHERE expires_at <= ${nowMs}`;
+      } catch {
+        // Pruning is housekeeping; the binding above already committed.
+      }
+    }
+    return true;
   }
 
   async getEntitledUntil(accountHash: string): Promise<number | null> {

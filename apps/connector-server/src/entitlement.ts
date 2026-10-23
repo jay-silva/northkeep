@@ -25,6 +25,13 @@ export interface EntitlementClaims {
 /** The grace window a valid entitlement buys, from the moment it is presented. */
 export const ENTITLEMENT_GRACE_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
 
+/**
+ * How long a bound nonce outlives its attestation: at least the sync server's
+ * nonce window, so every attestation minted in that window finds the nonce
+ * already bound (ADR 0081).
+ */
+export const ENTITLEMENT_NONCE_WINDOW_MS = 24 * 60 * 60 * 1000;
+
 function sign(canonicalJson: string, secret: string): string {
   return createHmac('sha256', secret).update(canonicalJson, 'utf8').digest('hex');
 }
