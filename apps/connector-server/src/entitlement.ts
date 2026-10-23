@@ -59,28 +59,31 @@ export function verifyEntitlement(
   return claims;
 }
 
-/** Parse the connector's free/comp allowlist (comma/space separated sha256 hashes). */
+/**
+ * Parse the connector's free/comp allowlist (comma/space separated sha256 hashes).
+ * Unset ⇒ null. Set but with no valid hash (an operator typo) ⇒ an EMPTY set, so
+ * the gate stays on and admits nobody rather than opening.
+ */
 export function parseConnectorAllowlist(raw: string | undefined): ReadonlySet<string> | null {
-  if (!raw) return null;
+  if (raw === undefined || raw.trim() === '') return null;
   const hashes = raw
     .split(/[,\s]+/)
     .map((h) => h.trim().toLowerCase())
     .filter((h) => /^[0-9a-f]{64}$/.test(h));
-  return hashes.length > 0 ? new Set(hashes) : null;
+  return new Set(hashes);
 }
 
 export interface ConnectorGate {
-  /** true when the gate is active (at least one env set); false ⇒ everything is allowed. */
+  /** false only when the operator explicitly opened the connector; true ⇒ 402 unless entitled. */
   on: boolean;
   allowlist: ReadonlySet<string> | null;
   entitlementSecret: string | null;
 }
 
 /**
- * Build the gate from env. Mirrors billingFromEnv's spirit: NEITHER var set ⇒
- * gate OFF (self-host / local dev, exactly like the C1/C2 tests). Either set ⇒
- * gate ON (allowlist alone = private connector; secret alone = paid connector;
- * both = paid with comps).
+ * Either var set ⇒ gate ON. Neither set ⇒ still ON, admitting nobody, unless
+ * NORTHKEEP_CONNECTOR_OPEN=1 marks a deliberate self-host or dev server. A
+ * dropped env var must never make the paid service free (review F2).
  */
 export function connectorGateFromEnv(env: NodeJS.ProcessEnv = process.env): ConnectorGate {
   const allowlist = parseConnectorAllowlist(env.NORTHKEEP_CONNECTOR_ALLOWED_TOKEN_HASHES);
@@ -88,5 +91,7 @@ export function connectorGateFromEnv(env: NodeJS.ProcessEnv = process.env): Conn
     env.CONNECTOR_ENTITLEMENT_SECRET && env.CONNECTOR_ENTITLEMENT_SECRET.length > 0
       ? env.CONNECTOR_ENTITLEMENT_SECRET
       : null;
-  return { on: allowlist !== null || entitlementSecret !== null, allowlist, entitlementSecret };
+  const configured = allowlist !== null || entitlementSecret !== null;
+  const explicitlyOpen = env.NORTHKEEP_CONNECTOR_OPEN === '1';
+  return { on: configured || !explicitlyOpen, allowlist, entitlementSecret };
 }

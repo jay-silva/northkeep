@@ -254,9 +254,12 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   a non-subscribed, non-allowlisted account gets a 402 and can't sync. The
   allowlist (`NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES`) is the free/comp list;
   `northkeep sync id` prints your allowlist hash. A **self-hosted** server sets
-  no Stripe env, so billing is off and only the allowlist gates; the size
-  cap (32 MB by default) and rate limiting are the only guards on an open (no-allowlist,
-  no-Stripe) server, so don't expose one publicly.
+  no Stripe env, so billing is off and only the allowlist gates. With no
+  allowlist and no Stripe env the server refuses every account (403) unless
+  you set `NORTHKEEP_SYNC_OPEN=1`; the connector works the same way with
+  `NORTHKEEP_CONNECTOR_OPEN=1`. An allowlist with no valid hash stays private.
+  The size cap (32 MB by default) and rate limiting are the only guards on an
+  open server, so don't expose one publicly.
 - **Rate limiting is per-instance, not a precise global quota.** Every `/api/*`
   request passes two throttles: a per-IP ceiling (4x the account cap: several
   accounts can share a NAT, but rotating random tokens can't mint fresh keys

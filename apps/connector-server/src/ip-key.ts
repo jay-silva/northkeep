@@ -11,7 +11,7 @@ import { isIPv6 } from 'node:net';
 export const IPV6_SUBNET_BITS = 56;
 
 /** Eight 16-bit groups of an IPv6 address, or null if it will not parse. */
-function hextets(ip: string): number[] | null {
+export function hextets(ip: string): number[] | null {
   const halves = ip.split('::');
   if (halves.length > 2) return null;
   const parse = (part: string): number[] | null => {

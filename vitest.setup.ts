@@ -61,3 +61,8 @@ function installRefusingTools(names: string[]): void {
   }
   process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ''}`;
 }
+
+// Connector and sync servers fail closed with no gate env (security review F2).
+// Tests run them as a deliberate open self-host server unless a test sets a gate.
+process.env.NORTHKEEP_CONNECTOR_OPEN ??= '1';
+process.env.NORTHKEEP_SYNC_OPEN ??= '1';

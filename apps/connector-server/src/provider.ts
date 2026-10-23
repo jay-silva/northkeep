@@ -37,7 +37,7 @@ import {
 } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import type { ConnectorStorage } from './storage.js';
 import { ClientSecretBinder, clientSecretState, scrubForStorage, secretMatchesHash } from './client-secrets.js';
-import { renderConsentPage } from './consent.js';
+import { CONSENT_PAGE_HEADERS, renderConsentPage } from './consent.js';
 import { sha256hex, randomToken } from './hash.js';
 import { resolveCimdClient, type CimdLookup } from './cimd.js';
 import {
@@ -171,7 +171,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
   // hidden field plus a pairing-code input; it POSTs to /consent, which does
   // the account binding + code minting. Fail-closed: no pairing code, no grant.
   async authorize(client: OAuthClientInformationFull, params: AuthorizationParams, res: Response): Promise<void> {
-    res.type('html').send(
+    res.set(CONSENT_PAGE_HEADERS).type('html').send(
       renderConsentPage({
         clientId: client.client_id,
         clientName: client.client_name,
