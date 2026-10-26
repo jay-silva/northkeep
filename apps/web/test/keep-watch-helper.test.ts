@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  HELPER_PLIST,
   HELPER_PROGRAM_PATH,
   HELPER_REQUIREMENT,
   HELPER_SCRIPT,
@@ -242,7 +243,7 @@ describe.skipIf(!hasClang)('signed helper install (ADR 0082)', () => {
 
   // The real install lines with root-only paths moved into the temp dir and
   // launchctl and chown stubbed; codesign and the file steps are real.
-  function runInstall(requirement: string): { code: number; leftovers: string[] } {
+  function runInstall(requirement: string, viaAppleScript = false): { code: number; stderr: string; leftovers: string[] } {
     for (const sub of ['pht', 'ld', 'db']) fs.mkdirSync(path.join(dir, sub), { recursive: true });
     fs.writeFileSync(path.join(dir, 'ld', path.basename(LEGACY_PLIST_PATH)), 'old');
     const launchctl = write('launchctl', `#!/bin/sh\necho "$*" >> "${dir}/launchctl.log"\n`, 0o755);
@@ -253,8 +254,11 @@ describe.skipIf(!hasClang)('signed helper install (ADR 0082)', () => {
       .replaceAll('/var/db/', `${path.join(dir, 'db')}/`)
       .replaceAll('/usr/sbin/chown root:wheel "$tp"', ':')
       .replaceAll('/bin/launchctl', launchctl);
-    const r = spawnSync('/bin/sh', ['-c', local]);
-    return { code: r.status ?? -1, leftovers: [...fs.readdirSync(path.join(dir, 'pht')), ...fs.readdirSync(path.join(dir, 'db'))].filter((f) => f.startsWith('.') || f.includes('XXXX') || /\.plist\.\w+$/.test(f)) };
+    // Production sends the command through AppleScript; that path is run as this user, without the admin prompt.
+    const r = viaAppleScript
+      ? spawnSync('/usr/bin/osascript', [adminScriptArgs(local, 'x')[0]!, adminScriptArgs(local, 'x')[1]!.replace(/ with prompt ".*" with administrator privileges$/, '')], { encoding: 'utf8' })
+      : spawnSync('/bin/sh', ['-c', local], { encoding: 'utf8' });
+    return { code: r.status ?? -1, stderr: r.stderr ?? '', leftovers: [...fs.readdirSync(path.join(dir, 'pht')), ...fs.readdirSync(path.join(dir, 'db'))].filter((f) => f.startsWith('.') || f.includes('XXXX') || /\.plist\.\w+$/.test(f)) };
   }
 
   beforeEach(() => {
@@ -284,6 +288,21 @@ describe.skipIf(!hasClang)('signed helper install (ADR 0082)', () => {
     expect(r.leftovers).toEqual([]);
     expect(fs.existsSync(path.join(dir, 'ld', path.basename(LEGACY_PLIST_PATH)))).toBe(false);
     expect(fs.readFileSync(path.join(dir, 'launchctl.log'), 'utf8')).toMatch(/bootstrap system .*ai\.northkeep\.keepwatch-helper\.plist/);
+  });
+
+  it('writes the plist byte for byte, so the next status reads installed rather than outdated', () => {
+    expect(runInstall('identifier "ai.northkeep.keepwatch-helper"').code).toBe(0);
+    expect(fs.readFileSync(path.join(dir, 'ld', 'ai.northkeep.keepwatch-helper.plist'), 'utf8')).toBe(HELPER_PLIST);
+  });
+
+  it('keeps the requirement intact through AppleScript quoting', () => {
+    expect(runInstall('identifier "ai.northkeep.keepwatch-helper"', true).code).toBe(0);
+    fs.rmSync(path.join(dir, 'pht'), { recursive: true });
+    const refused = runInstall(HELPER_REQUIREMENT, true);
+    // "Failed to satisfy" means codesign parsed the requirement; mangled quoting gives "invalid requirement".
+    expect(refused.stderr).toMatch(/failed to satisfy specified code requirement/);
+    expect(refused.stderr).not.toMatch(/invalid requirement/i);
+    expect(fs.existsSync(path.join(dir, 'pht', 'ai.northkeep.keepwatch-helper'))).toBe(false);
   });
 });
 

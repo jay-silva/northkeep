@@ -32,7 +32,7 @@ The bundle check is defence in depth. The root command is composed by the app's 
 
 ## Helper state (FW2)
 Order: outdated, missing, disabled, installed.
-- outdated: `/Library/LaunchDaemons/ai.northkeep.keepwatch.plist` exists, or the installed plist differs from the constant, or `codesign -d` cdhash of the installed program differs from the app copy's, or cannot be read. Byte comparison is wrong: each signature carries its own timestamp, so every release would look new.
+- outdated: `/Library/LaunchDaemons/ai.northkeep.keepwatch.plist` exists, or the installed plist differs from the constant, or the cdhash from `codesign -d -vvv` (plain `-v` omits it) of the installed program differs from the app copy's, or cannot be read. Byte comparison is wrong: each signature carries its own timestamp, so every release would look new.
 - `tick()` treats outdated as able to self-off when the new label is loaded or the old daemon is loaded (both are off-only and read the same marker), so replacing the app while Keep Watch is on raises no false alarm.
 - Settings shows Update (install prompt, no turn-on) and Remove whenever the state is outdated, so a user who never turns Keep Watch on again can still clear the "sh" row.
 
