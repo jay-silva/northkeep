@@ -5,8 +5,12 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   HELPER_PLIST,
+  HELPER_LABEL,
   HELPER_PLIST_PATH,
+  HELPER_PROGRAM_PATH,
   KeepWatchController,
+  LEGACY_LABEL,
+  LEGACY_PLIST_PATH,
   MARKER_PATH,
   createKeepWatchHandler,
   parseBattery,
@@ -23,7 +27,13 @@ interface FakeMac {
   sleepDisabled: 0 | 1;
   marker: boolean;
   plist: boolean;
+  plistText: string;
   loaded: boolean;
+  legacy: boolean;
+  legacyLoaded: boolean;
+  installedHash: string | null;
+  bundledHash: string;
+  signed: boolean;
   batt: string;
   thermal: number;
   cancel: boolean;
@@ -42,7 +52,17 @@ function controller(overrides: { desktop?: boolean; platform?: NodeJS.Platform; 
     home: () => home,
     now: () => now,
     exists: (file) =>
-      file === MARKER_PATH ? mac.marker : file === HELPER_PLIST_PATH ? mac.plist : file === '/usr/bin/perl' ? overrides.perl !== false : fs.existsSync(file),
+      file === MARKER_PATH
+        ? mac.marker
+        : file === HELPER_PLIST_PATH
+          ? mac.plist
+          : file === LEGACY_PLIST_PATH
+            ? mac.legacy
+            : file === '/usr/bin/perl'
+              ? overrides.perl !== false
+              : fs.existsSync(file),
+    readText: (file) => (file === HELPER_PLIST_PATH && mac.plist ? mac.plistText : null),
+    bundledHelper: () => BUNDLED,
     notify: (message) => mac.notices.push(message),
     exec: async (file, args): Promise<ExecResult> => {
       const ok = (stdout: string): ExecResult => ({ code: 0, stdout, stderr: '' });
@@ -50,14 +70,28 @@ function controller(overrides: { desktop?: boolean; platform?: NodeJS.Platform; 
       if (file === '/usr/bin/pmset' && args.join(' ') === '-g')
         return ok(`System-wide power settings:\n SleepDisabled\t\t${mac.sleepDisabled}\nCurrently in use:\n`);
       if (file === '/usr/bin/notifyutil') return ok(`com.apple.system.thermalpressurelevel ${mac.thermal}\n`);
-      if (file === '/bin/launchctl') return mac.loaded ? ok('state = running') : { code: 113, stdout: '', stderr: 'Could not find service' };
+      if (file === '/bin/launchctl') {
+        const up = args[1] === `system/${HELPER_LABEL}` ? mac.loaded : args[1] === `system/${LEGACY_LABEL}` ? mac.legacyLoaded : false;
+        return up ? ok('state = running') : { code: 113, stdout: '', stderr: 'Could not find service' };
+      }
+      if (file === '/usr/bin/codesign' && args[0] === '-d' && args[1] === '-vvv') {
+        const hash = args[2] === HELPER_PROGRAM_PATH ? mac.installedHash : args[2] === BUNDLED ? mac.bundledHash : null;
+        return hash === null ? { code: 1, stdout: '', stderr: 'not signed' } : { code: 0, stdout: '', stderr: `Identifier=x\nCDHash=${hash}\n` };
+      }
+      if (file === '/usr/bin/codesign' && args[0] === '--verify') return mac.signed && args[3] === BUNDLED ? ok('') : { code: 3, stdout: '', stderr: 'test-requirement' };
       if (file === '/usr/bin/osascript') {
         const source = args[1] ?? '';
         mac.adminCommands.push(source);
         if (mac.cancel) return { code: 1, stdout: '', stderr: 'execution error: User canceled. (-128)' };
         if (source.includes('launchctl bootstrap')) {
           mac.plist = true;
+          mac.plistText = HELPER_PLIST;
           mac.loaded = true;
+          mac.installedHash = mac.bundledHash;
+        }
+        if (source.includes(`rm -f ${LEGACY_PLIST_PATH}`)) {
+          mac.legacy = false;
+          mac.legacyLoaded = false;
         }
         if (source.includes('disablesleep 1')) {
           mac.marker = true;
@@ -70,6 +104,7 @@ function controller(overrides: { desktop?: boolean; platform?: NodeJS.Platform; 
         if (source.includes(`rm -f ${HELPER_PLIST_PATH}`)) {
           mac.plist = false;
           mac.loaded = false;
+          mac.installedHash = null;
         }
         return ok('');
       }
@@ -77,6 +112,8 @@ function controller(overrides: { desktop?: boolean; platform?: NodeJS.Platform; 
     },
   });
 }
+
+const BUNDLED = '/Applications/NorthKeep.app/Contents/Resources/keep-watch-helper/ai.northkeep.keepwatch-helper';
 
 const heartbeat = () => path.join(home, 'keep-watch', 'heartbeat');
 
@@ -93,7 +130,23 @@ function helperRuns(): void {
 beforeEach(() => {
   home = fs.mkdtempSync(path.join(os.tmpdir(), 'nk-keepwatch-home-'));
   now = Date.UTC(2026, 9, 21, 16, 0, 0);
-  mac = { sleepDisabled: 0, marker: false, plist: false, loaded: false, batt: AC, thermal: 0, cancel: false, adminCommands: [], notices: [] };
+  mac = {
+    sleepDisabled: 0,
+    marker: false,
+    plist: false,
+    plistText: HELPER_PLIST,
+    loaded: false,
+    legacy: false,
+    legacyLoaded: false,
+    installedHash: null,
+    bundledHash: 'aa11',
+    signed: true,
+    batt: AC,
+    thermal: 0,
+    cancel: false,
+    adminCommands: [],
+    notices: [],
+  };
 });
 afterEach(() => {
   fs.rmSync(home, { recursive: true, force: true });
@@ -121,7 +174,9 @@ describe('parsers', () => {
     if (process.platform === 'darwin') {
       expect(execFileSync('/usr/bin/plutil', ['-lint', file]).toString()).toContain('OK');
     }
-    expect(HELPER_PLIST).toContain('<string>ai.northkeep.keepwatch</string>');
+    expect(HELPER_PLIST).toContain('<string>ai.northkeep.keepwatch-helper</string>');
+    expect(HELPER_PLIST).toContain(`<array>\n    <string>${HELPER_PROGRAM_PATH}</string>\n  </array>`);
+    expect(HELPER_PLIST).not.toContain('/bin/sh');
     expect(HELPER_PLIST).not.toContain('<key>Program</key>');
   });
 });
@@ -155,7 +210,8 @@ describe('Keep Watch controller', () => {
     ['at the battery floor', { batt: ON_BATTERY(25) }, true, /25%/],
     ['when hot', { thermal: 2 }, false, /running hot/],
     ['without a battery', { batt: "Now drawing from 'AC Power'\n" }, false, /no battery/],
-    ['when the helper is disabled in Login Items', { plist: true, loaded: false }, false, /Login Items/],
+    ['when the helper is disabled in Login Items', { plist: true, loaded: false, installedHash: 'aa11' }, false, /Login Items/],
+    ['without a signed helper in the app', { signed: false }, false, /no signed Keep Watch helper/],
   ])('refuses to turn on %s', async (_name, state, allowBattery, message) => {
     Object.assign(mac, state);
     const r = await controller().turnOn(2, allowBattery);
@@ -275,6 +331,72 @@ describe('Keep Watch controller', () => {
     await kw.turnOn(2, false);
     expect(await kw.removeHelper()).toBe(true);
     expect(mac).toMatchObject({ plist: false, loaded: false, marker: false, sleepDisabled: 0 });
+    expect((await kw.status()).helper).toBe('missing');
+  });
+});
+
+describe('signed helper upgrade (ADR 0082)', () => {
+  it('replaces the old "sh" helper at the next turn-on, verifying the copy first', async () => {
+    Object.assign(mac, { legacy: true, legacyLoaded: true });
+    const kw = controller();
+    expect((await kw.status()).helper).toBe('outdated');
+    expect(await kw.turnOn(2, false)).toEqual({ ok: true });
+    const cmd = mac.adminCommands[0]!;
+    expect(cmd).toContain('with prompt "NorthKeep wants to turn on Keep Watch and install its helper');
+    expect(cmd.indexOf('/usr/bin/codesign --verify --strict')).toBeLessThan(cmd.indexOf(`/bin/mv -f \\"$tp\\" ${HELPER_PROGRAM_PATH}`));
+    expect(mac).toMatchObject({ legacy: false, legacyLoaded: false, loaded: true });
+    expect((await kw.status()).helper).toBe('installed');
+  });
+
+  it('treats an old helper switched off in Login Items as outdated, not disabled', async () => {
+    Object.assign(mac, { legacy: true, legacyLoaded: false });
+    const kw = controller();
+    expect((await kw.status()).helper).toBe('outdated');
+    expect(await kw.turnOn(2, false)).toEqual({ ok: true });
+  });
+
+  it.each<[string, Partial<FakeMac>]>([
+    ['the app carries a different helper', { installedHash: 'bb22' }],
+    ['the installed program cannot be read', { installedHash: null }],
+    ['the installed plist was changed', { installedHash: 'aa11', plistText: HELPER_PLIST.replace('15', '99') }],
+  ])('reports outdated when %s, and Update replaces it without turning on', async (_name, state) => {
+    Object.assign(mac, { plist: true, loaded: true }, state);
+    const kw = controller();
+    expect((await kw.status()).helper).toBe('outdated');
+    const handler = createKeepWatchHandler(kw);
+    const res = await handler('POST', '/api/keep-watch', Buffer.from('{"action":"update_helper"}'));
+    expect(res).toMatchObject({ status: 200, body: { helper: 'installed', state: 'off' } });
+    expect(mac.adminCommands).toHaveLength(1);
+    expect(mac.adminCommands[0]).toContain('NorthKeep wants to update the Keep Watch helper');
+    expect(mac.adminCommands[0]).not.toContain('disablesleep 1');
+    expect(mac.sleepDisabled).toBe(0);
+  });
+
+  it('refuses Update in a build without a signed helper, and while Keep Watch is on', async () => {
+    Object.assign(mac, { legacy: true, signed: false });
+    expect(await controller().updateHelper()).toMatchObject({ ok: false, error: expect.stringMatching(/no signed/) });
+    Object.assign(mac, { signed: true });
+    const kw = controller();
+    await kw.turnOn(2, false);
+    expect(await kw.updateHelper()).toMatchObject({ ok: false });
+    expect(mac.adminCommands).toHaveLength(1);
+  });
+
+  it('raises no alarm when the app is replaced while Keep Watch is on', async () => {
+    const kw = controller();
+    await kw.turnOn(2, false);
+    mac.bundledHash = 'cc33';
+    await kw.tick();
+    expect(mac.notices).toEqual([]);
+    expect((await kw.status())).toMatchObject({ state: 'on', problem: null, helper: 'outdated' });
+  });
+
+  it('removes both the new and the old helper', async () => {
+    Object.assign(mac, { legacy: true, legacyLoaded: true });
+    const kw = controller();
+    expect(await kw.removeHelper()).toBe(true);
+    expect(mac.adminCommands[0]).toContain(`/bin/rm -f ${HELPER_PLIST_PATH} ${HELPER_PROGRAM_PATH}`);
+    expect(mac).toMatchObject({ legacy: false, legacyLoaded: false, plist: false });
     expect((await kw.status()).helper).toBe('missing');
   });
 });

@@ -3,12 +3,25 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { HELPER_SCRIPT, MARKER_PATH, adminScriptArgs, turnOnCommand } from '../src/keep-watch.js';
+import {
+  HELPER_PLIST,
+  HELPER_PROGRAM_PATH,
+  HELPER_REQUIREMENT,
+  HELPER_SCRIPT,
+  LEGACY_PLIST_PATH,
+  MARKER_PATH,
+  adminScriptArgs,
+  parseCdhash,
+  turnOnCommand,
+  updateHelperCommand,
+} from '../src/keep-watch.js';
 
 // Runs the real helper script with its root-only paths pointed at a temp
 // directory and pmset/notifyutil replaced by stubs that read state files.
 const darwin = process.platform === 'darwin';
 const docPath = path.resolve(__dirname, '../../../docs/design/adr-0080-keep-watch.md');
+const cPath = path.resolve(__dirname, '../../desktop/keep-watch-helper/main.c');
+const hasClang = darwin && spawnSync('/usr/bin/xcrun', ['--find', 'clang']).status === 0;
 
 let dir: string;
 
@@ -105,6 +118,24 @@ describe('helper script text', () => {
     expect(block).toBe(HELPER_SCRIPT);
   });
 
+  it('pins the install check: team, Developer ID, strict verify, quarantine-free copy, absolute source', () => {
+    expect(HELPER_REQUIREMENT).toBe(
+      'anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "8VZPFY6BDP" and identifier "ai.northkeep.keepwatch-helper"',
+    );
+    const cmd = updateHelperCommand('/Applications/NorthKeep.app/x');
+    expect(cmd).toContain(`/usr/bin/codesign --verify --strict -R='${HELPER_REQUIREMENT}' "$tp"`);
+    expect(cmd).toContain('/bin/cat "$src" > "$tp"');
+    expect(cmd).not.toMatch(/\/bin\/cp /);
+    expect(cmd).toContain('case "$src" in /*) ;; *) exit 5 ;; esac');
+  });
+
+  it('matches the signed program\'s C source word for word', () => {
+    const src = fs.readFileSync(cPath, 'utf8');
+    const body = /static const char SCRIPT\[\] =\n([\s\S]*?);\n/.exec(src)?.[1] ?? '';
+    const lines = body.split('\n').map((l) => JSON.parse(l.trim()) as string);
+    expect(lines.join('')).toBe(HELPER_SCRIPT);
+  });
+
   it('writes nothing privileged except turning the mode off and removing its own marker', () => {
     expect(HELPER_SCRIPT).not.toMatch(/disablesleep 1/);
     const writes = HELPER_SCRIPT.match(/pmset -a [a-z]+ \d/g) ?? [];
@@ -179,7 +210,7 @@ describe.skipIf(!darwin)('helper script behaviour', () => {
 describe.skipIf(!darwin)('turn-on command', () => {
   function runTurnOn(hb: string): { code: number; marker: string | null } {
     stubs({ sleepDisabled: 0 });
-    const local = turnOnCommand(hb, false).replaceAll(MARKER_PATH, path.join(dir, 'marker')).replaceAll('/usr/bin/pmset', path.join(dir, 'pmset'));
+    const local = turnOnCommand(hb).replaceAll(MARKER_PATH, path.join(dir, 'marker')).replaceAll('/usr/bin/pmset', path.join(dir, 'pmset'));
     const r = spawnSync('/bin/sh', ['-c', local]);
     const m = path.join(dir, 'marker');
     return { code: r.status ?? -1, marker: fs.existsSync(m) ? fs.readFileSync(m, 'utf8') : null };
@@ -208,7 +239,7 @@ describe.skipIf(!darwin)('turn-on command', () => {
   it('survives AppleScript quoting unchanged', () => {
     const hb = `/tmp/q"uo\\te's/hb`;
     stubs({ sleepDisabled: 0 });
-    const local = turnOnCommand(hb, false)
+    const local = turnOnCommand(hb)
       .replaceAll(MARKER_PATH, path.join(dir, 'marker'))
       .replaceAll('/usr/bin/pmset', path.join(dir, 'pmset'));
     const [flag, source] = adminScriptArgs(local, 'NorthKeep wants "quotes" \\ here.');
@@ -217,3 +248,72 @@ describe.skipIf(!darwin)('turn-on command', () => {
     expect(fs.readFileSync(path.join(dir, 'marker'), 'utf8').split('\n')[0]).toBe(hb);
   });
 });
+
+describe.skipIf(!hasClang)('signed helper install (ADR 0082)', () => {
+  let program: string;
+
+  // The real install lines with root-only paths moved into the temp dir and
+  // launchctl and chown stubbed; codesign and the file steps are real.
+  function runInstall(requirement: string, viaAppleScript = false): { code: number; stderr: string; leftovers: string[] } {
+    for (const sub of ['pht', 'ld', 'db']) fs.mkdirSync(path.join(dir, sub), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'ld', path.basename(LEGACY_PLIST_PATH)), 'old');
+    const launchctl = write('launchctl', `#!/bin/sh\necho "$*" >> "${dir}/launchctl.log"\n`, 0o755);
+    const local = updateHelperCommand(program)
+      .replaceAll(HELPER_REQUIREMENT, requirement)
+      .replaceAll('/Library/PrivilegedHelperTools', path.join(dir, 'pht'))
+      .replaceAll('/Library/LaunchDaemons', path.join(dir, 'ld'))
+      .replaceAll('/var/db/', `${path.join(dir, 'db')}/`)
+      .replaceAll('/usr/sbin/chown root:wheel "$tp"', ':')
+      .replaceAll('/bin/launchctl', launchctl);
+    // Production sends the command through AppleScript; that path is run as this user, without the admin prompt.
+    const r = viaAppleScript
+      ? spawnSync('/usr/bin/osascript', [adminScriptArgs(local, 'x')[0]!, adminScriptArgs(local, 'x')[1]!.replace(/ with prompt ".*" with administrator privileges$/, '')], { encoding: 'utf8' })
+      : spawnSync('/bin/sh', ['-c', local], { encoding: 'utf8' });
+    return { code: r.status ?? -1, stderr: r.stderr ?? '', leftovers: [...fs.readdirSync(path.join(dir, 'pht')), ...fs.readdirSync(path.join(dir, 'db'))].filter((f) => f.startsWith('.') || f.includes('XXXX') || /\.plist\.\w+$/.test(f)) };
+  }
+
+  beforeEach(() => {
+    program = path.join(dir, 'bundle helper');
+    execFileSync('/usr/bin/xcrun', ['clang', '-O2', '-mmacosx-version-min=13.5', '-o', program, cPath]);
+    execFileSync('/usr/bin/codesign', ['--force', '--sign', '-', '--identifier', 'ai.northkeep.keepwatch-helper', program]);
+  });
+
+  it('reads the code hash the way the controller asks for it', () => {
+    const r = spawnSync('/usr/bin/codesign', ['-d', '-vvv', program], { encoding: 'utf8' });
+    expect(parseCdhash(r.stderr)).toMatch(/^[0-9a-f]{40}$/);
+  });
+
+  it('refuses a copy that is not signed by NorthKeep and leaves nothing behind', () => {
+    const r = runInstall(HELPER_REQUIREMENT);
+    expect(r.code).not.toBe(0);
+    expect(fs.existsSync(path.join(dir, 'pht', path.basename(HELPER_PROGRAM_PATH)))).toBe(false);
+    expect(r.leftovers).toEqual([]);
+    expect(fs.existsSync(path.join(dir, 'ld', path.basename(LEGACY_PLIST_PATH)))).toBe(true);
+  });
+
+  it('installs an executable copy, the plist, and removes the old helper', () => {
+    const r = runInstall('identifier "ai.northkeep.keepwatch-helper"');
+    expect(r.code).toBe(0);
+    const installed = path.join(dir, 'pht', path.basename(HELPER_PROGRAM_PATH));
+    expect(fs.statSync(installed).mode & 0o777).toBe(0o755);
+    expect(r.leftovers).toEqual([]);
+    expect(fs.existsSync(path.join(dir, 'ld', path.basename(LEGACY_PLIST_PATH)))).toBe(false);
+    expect(fs.readFileSync(path.join(dir, 'launchctl.log'), 'utf8')).toMatch(/bootstrap system .*ai\.northkeep\.keepwatch-helper\.plist/);
+  });
+
+  it('writes the plist byte for byte, so the next status reads installed rather than outdated', () => {
+    expect(runInstall('identifier "ai.northkeep.keepwatch-helper"').code).toBe(0);
+    expect(fs.readFileSync(path.join(dir, 'ld', 'ai.northkeep.keepwatch-helper.plist'), 'utf8')).toBe(HELPER_PLIST);
+  });
+
+  it('keeps the requirement intact through AppleScript quoting', () => {
+    expect(runInstall('identifier "ai.northkeep.keepwatch-helper"', true).code).toBe(0);
+    fs.rmSync(path.join(dir, 'pht'), { recursive: true });
+    const refused = runInstall(HELPER_REQUIREMENT, true);
+    // "Failed to satisfy" means codesign parsed the requirement; mangled quoting gives "invalid requirement".
+    expect(refused.stderr).toMatch(/failed to satisfy specified code requirement/);
+    expect(refused.stderr).not.toMatch(/invalid requirement/i);
+    expect(fs.existsSync(path.join(dir, 'pht', 'ai.northkeep.keepwatch-helper'))).toBe(false);
+  });
+});
+

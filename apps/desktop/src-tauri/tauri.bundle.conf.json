@@ -11,7 +11,7 @@
       "icons/icon.ico"
     ],
     "externalBin": ["binaries/northkeep-server"],
-    "resources": { "server-tree/": "server/" },
+    "resources": { "server-tree/": "server/", "keep-watch-helper/": "keep-watch-helper/" },
     "category": "Productivity",
     "macOS": {
       "minimumSystemVersion": "13.5",

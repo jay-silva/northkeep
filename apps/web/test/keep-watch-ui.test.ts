@@ -75,6 +75,17 @@ describe('Keep Watch page', () => {
     expect(p.hourButtons[1]!.attrs['aria-pressed']).toBe('true');
   });
 
+  it('offers Update and Remove for an outdated helper, only while off', () => {
+    const p = page();
+    p.render({ ...base, helper: 'outdated', state: 'off', ends_at: null, ceiling_at: null });
+    expect(p.$('kwUpdateRow').hidden).toBe(false);
+    expect(p.$('kwHelperRow').hidden).toBe(false);
+    p.render({ ...base, helper: 'outdated', state: 'on', ends_at: new Date().toISOString(), ceiling_at: new Date().toISOString() });
+    expect(p.$('kwUpdateRow').hidden).toBe(true);
+    p.render({ ...base, state: 'off', ends_at: null, ceiling_at: null });
+    expect(p.$('kwUpdateRow').hidden).toBe(true);
+  });
+
   it('shows the problem banner with Turn off now', () => {
     const p = page();
     p.render({ ...base, state: 'on', ends_at: new Date().toISOString(), ceiling_at: new Date().toISOString(), problem: 'Keep Watch can’t turn itself off.' });

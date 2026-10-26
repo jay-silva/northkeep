@@ -48,4 +48,12 @@ for node_bin in "$BIN_DIR"/northkeep-server-*; do
   echo "presign: signed $(basename "$node_bin")"
 done
 
+# The Keep Watch helper keeps its own identifier and no entitlements: root
+# installs it only if it matches that exact requirement (ADR 0082).
+helper="$REPO_ROOT/apps/desktop/src-tauri/keep-watch-helper/ai.northkeep.keepwatch-helper"
+if [ -f "$helper" ]; then
+  codesign --force --sign "$APPLE_SIGNING_IDENTITY" --identifier ai.northkeep.keepwatch-helper --options runtime --timestamp "$helper"
+  echo "presign: signed the Keep Watch helper"
+fi
+
 echo "presign: done (identity from APPLE_SIGNING_IDENTITY; value not shown)"
