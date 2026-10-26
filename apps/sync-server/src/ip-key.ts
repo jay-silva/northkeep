@@ -1,7 +1,7 @@
 /**
- * Rate-limit key for a client address: IPv4 as is, IPv6 with an embedded IPv4
- * tail as that IPv4, other IPv6 masked to its /56 so one user cannot rotate
- * past the limit. Copy of apps/connector-server/src/ip-key.ts (separate bundles).
+ * Rate-limit key for a client address: IPv4 as is, IPv4-mapped (::ffff:) or
+ * dotted IPv4-compatible (::a.b.c.d) IPv6 as that IPv4, other IPv6 masked to
+ * its /56 so one user cannot rotate past the limit. Copy of apps/connector-server/src/ip-key.ts (separate bundles).
  */
 
 import { isIPv6 } from 'node:net';
@@ -34,10 +34,18 @@ export function ipRateLimitKey(ip: string | undefined): string {
   if (!ip) return 'unknown';
   const bare = ip.split('%')[0] ?? ip;
   if (!isIPv6(bare)) return ip;
-  const v4 = /(\d{1,3}(?:\.\d{1,3}){3})$/.exec(bare);
-  if (v4) return v4[1]!;
-  const h = hextets(bare.toLowerCase());
+  const v4 = /:(\d{1,3}(?:\.\d{1,3}){3})$/.exec(bare);
+  let hex = bare.toLowerCase();
+  if (v4) {
+    const o = v4[1]!.split('.').map(Number);
+    hex = `${hex.slice(0, v4.index + 1)}${((o[0]! << 8) | o[1]!).toString(16)}:${((o[2]! << 8) | o[3]!).toString(16)}`;
+  }
+  const h = hextets(hex);
   if (!h) return bare.toLowerCase();
+  const zero5 = h.slice(0, 5).every((n) => n === 0);
+  if (zero5 && (h[5] === 0xffff || (v4 && h[5] === 0))) {
+    return [h[6]! >> 8, h[6]! & 0xff, h[7]! >> 8, h[7]! & 0xff].join('.');
+  }
   const masked = [h[0]!, h[1]!, h[2]!, h[3]! & 0xff00].map((n) => n.toString(16)).join(':');
   return `${masked}::/${IPV6_SUBNET_BITS}`;
 }

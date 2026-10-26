@@ -179,11 +179,10 @@ describe('F1: real rule violations are refused by name', () => {
     const mcp = await setup();
     const type = await checkpoint(mcp, { files: [{ ...OK_FILE, type: 'document' }] }, 'project_wrap');
     expect(type.isError).toBe(true);
-    expect(type.text).toContain('"path": [\n      "files",\n      0,\n      "type"\n    ]');
-    expect(type.text).toContain('type must be one of local_path, url, memory');
+    // SDK 1.32 formats schema refusals as "<message> at <path>".
+    expect(type.text).toContain('type must be one of local_path, url, memory at files[0].type');
     const label = await checkpoint(mcp, { files: [OK_FILE, OK_FILE, { ...OK_FILE, label: 'y'.repeat(240) }] });
-    expect(label.text).toContain('label is limited to 200 characters');
-    expect(label.text).toContain('"path": [\n      "files",\n      2,\n      "label"\n    ]');
+    expect(label.text).toContain('label is limited to 200 characters at files[2].label');
   });
 
   it('file rules only core knows name the file index and the rule', async () => {
