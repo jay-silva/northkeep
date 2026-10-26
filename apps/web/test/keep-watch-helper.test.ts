@@ -118,6 +118,17 @@ describe('helper script text', () => {
     expect(block).toBe(HELPER_SCRIPT);
   });
 
+  it('pins the install check: team, Developer ID, strict verify, quarantine-free copy, absolute source', () => {
+    expect(HELPER_REQUIREMENT).toBe(
+      'anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "8VZPFY6BDP" and identifier "ai.northkeep.keepwatch-helper"',
+    );
+    const cmd = updateHelperCommand('/Applications/NorthKeep.app/x');
+    expect(cmd).toContain(`/usr/bin/codesign --verify --strict -R='${HELPER_REQUIREMENT}' "$tp"`);
+    expect(cmd).toContain('/bin/cat "$src" > "$tp"');
+    expect(cmd).not.toMatch(/\/bin\/cp /);
+    expect(cmd).toContain('case "$src" in /*) ;; *) exit 5 ;; esac');
+  });
+
   it('matches the signed program\'s C source word for word', () => {
     const src = fs.readFileSync(cPath, 'utf8');
     const body = /static const char SCRIPT\[\] =\n([\s\S]*?);\n/.exec(src)?.[1] ?? '';
