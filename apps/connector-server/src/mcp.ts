@@ -69,6 +69,8 @@ import { TOMBSTONE_USER_MESSAGE } from './tombstones.js';
 const MAX_RESULTS = 20;
 const MAX_REMEMBER_BYTES = 8 * 1024; // mirrors the ordinary push per-entry content cap
 const MAX_SHARED_ENTRIES = 5000; // per-account row cap, mirrors create-server.ts push cap
+// Every tool takes a few string fields. Caps array elements and object keys so one call cannot exhaust memory during validation (GHSA-46jr-4wx8-v453); the SDK leaves it off by default.
+const MAX_TOOL_INPUT_ELEMENTS = 1000;
 /** Vault memory types, kept local. Project-doc helpers are the pure copy in ./project-doc.ts (no sqlite or sodium). */
 const MEMORY_TYPES = new Set(['episodic', 'semantic', 'procedural', 'working', 'identity']);
 const projectSlugSchema = z
@@ -256,7 +258,7 @@ export function createMcpServer(
 ): McpServer {
   const server = new McpServer(
     { name: 'northkeep-connector', version: '0.1.0' },
-    { capabilities: { tools: {} }, instructions: MILESTONE_INSTRUCTION },
+    { capabilities: { tools: {} }, instructions: MILESTONE_INSTRUCTION, maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS },
   );
 
   /**
