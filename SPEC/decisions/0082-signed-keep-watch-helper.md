@@ -1,6 +1,6 @@
 # ADR 0082: A signed program runs the Keep Watch helper
 
-Status: Proposed · Review: Reviews/adr-0082: review 1 CLEARED WITH WOUNDS (three wounds, fixed below; recheck pending)
+Status: Proposed · Review: Reviews/adr-0082: review 1 CLEARED WITH WOUNDS (three wounds, fixed); recheck closed all three, capped by the unverified Login Items rename
 
 ## Context
 The ADR 0080 helper is `/bin/sh -c <script>`, so Login Items lists it as "sh, Item from unidentified developer" (Jay, 0.28.0). A do-nothing test daemon, signed and notarized under our Developer ID at a new label, was listed as NorthKeep on 2026-10-26, pending Jay's confirmation that the row was the test.
