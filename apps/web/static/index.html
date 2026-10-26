@@ -1518,6 +1518,7 @@
         <li>You quit NorthKeep, or NorthKeep closes unexpectedly. A small helper NorthKeep installs the first time turns it off within two minutes even then.</li>
       </ul>
       <div class="banner">Don't put the laptop in a bag while this is on. With the lid shut it cools less well, and it won't sleep to protect itself.</div>
+      <div class="row" id="kwUpdateRow" hidden><button class="btn" id="kwUpdateHelper">Update the helper</button><span class="muted" style="font-size:13px">An older version of the helper is installed, which Login Items lists as "sh". Updating asks for your login password, and Login Items then lists it as NorthKeep.</span></div>
       <div class="row" id="kwHelperRow" hidden><button class="btn" id="kwRemoveHelper">Remove the helper</button><span class="muted" style="font-size:13px">Asks for your login password. Keep Watch installs it again the next time you turn it on.</span></div>
     </div>
   </section>
@@ -2234,7 +2235,8 @@
     $('kwBattery').disabled = on || stopping;
     $('kwProblem').hidden = !k.problem;
     $('kwProblemText').textContent = k.problem || '';
-    $('kwHelperRow').hidden = !(k.helper === 'installed' && k.state === 'off');
+    $('kwHelperRow').hidden = !((k.helper === 'installed' || k.helper === 'outdated') && k.state === 'off');
+    $('kwUpdateRow').hidden = !(k.helper === 'outdated' && k.state === 'off');
   }
   async function loadKeepWatch() {
     try { renderKeepWatch(await api('/api/keep-watch')); } catch (e) { $('kwErr').textContent = e.message; }
@@ -2263,6 +2265,7 @@
   $('kwOff').addEventListener('click', () => kwAction({ action: 'off' }));
   $('kwForceOff').addEventListener('click', () => kwAction({ action: 'force_off' }, 'Waiting for your login password…'));
   $('kwRemoveHelper').addEventListener('click', () => kwAction({ action: 'remove_helper' }, 'Waiting for your login password…'));
+  $('kwUpdateHelper').addEventListener('click', () => kwAction({ action: 'update_helper' }, 'Waiting for your login password…'));
 
   function loadAbout() {
     $('aboutVersion').textContent = status.version || 'unknown';

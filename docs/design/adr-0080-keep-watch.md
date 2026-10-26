@@ -2,6 +2,8 @@
 
 Status: Proposed. Short form: SPEC/decisions/0080-keep-watch.md.
 
+ADR 0082 replaces how the helper runs: a signed program, label `ai.northkeep.keepwatch-helper`, runs the script below instead of `/bin/sh -c` in the plist. The plist, install and remove steps below describe 0.28.0; the current ones are in docs/design/adr-0082-signed-keep-watch-helper.md. The script and the marker are unchanged.
+
 ## Measurements (2026-10-21, Jay's MacBook Pro, Mac17,8, macOS 26)
 - `sudo pmset -a disablesleep 1`, lid closed with no display: `date` every 10 s ran unbroken 12:04:49 to 12:08:30; `pmset -g log` shows `com.apple.powermanagement.lidopen` at 12:07:41. Before that, every lid close logged `Entering Sleep state due to 'Clamshell Sleep'`.
 - `notifyutil -g com.apple.system.thermalpressurelevel` prints `0` at rest. Levels follow `NSProcessInfoThermalState`-style pressure: 0 nominal, 1 moderate, 2 heavy, 3 trapping, 4 sleeping.

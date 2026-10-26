@@ -2,7 +2,8 @@
 // controller runs here in the local server; the root helper it installs can
 // only ever turn the mode off, and does so whenever this server stops
 // refreshing the heartbeat. The helper script below must match
-// docs/design/adr-0080-keep-watch.md word for word (a test checks).
+// docs/design/adr-0080-keep-watch.md and the signed program's C source
+// (ADR 0082) word for word (tests check).
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -42,17 +43,19 @@ export const HELPER_SCRIPT = [
   "exit 0",
 ].join("\n");
 
-export const HELPER_LABEL = 'ai.northkeep.keepwatch';
+export const HELPER_LABEL = 'ai.northkeep.keepwatch-helper';
 export const HELPER_PLIST_PATH = `/Library/LaunchDaemons/${HELPER_LABEL}.plist`;
-export const MARKER_PATH = `/var/db/${HELPER_LABEL}`;
+export const HELPER_PROGRAM_PATH = `/Library/PrivilegedHelperTools/${HELPER_LABEL}`;
+// The 0.28.0 helper ran /bin/sh itself, so Login Items called it "sh" (ADR 0082).
+export const LEGACY_LABEL = 'ai.northkeep.keepwatch';
+export const LEGACY_PLIST_PATH = `/Library/LaunchDaemons/${LEGACY_LABEL}.plist`;
+export const MARKER_PATH = '/var/db/ai.northkeep.keepwatch';
+export const HELPER_REQUIREMENT =
+  'anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists and certificate leaf[field.1.2.840.113635.100.6.1.13] exists and certificate leaf[subject.OU] = "8VZPFY6BDP" and identifier "ai.northkeep.keepwatch-helper"';
 export const TIMER_HOURS = [1, 2, 4, 8] as const;
 export const CEILING_MS = 12 * 60 * 60 * 1000;
 export const BATTERY_FLOOR = 25;
 export const TICK_MS = 15_000;
-
-function xmlEscape(text: string): string {
-  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
 
 // A constant: nothing from the user's side is ever spliced in (ADR 0080 D4).
 export const HELPER_PLIST = [
@@ -64,9 +67,7 @@ export const HELPER_PLIST = [
   `  <string>${HELPER_LABEL}</string>`,
   '  <key>ProgramArguments</key>',
   '  <array>',
-  '    <string>/bin/sh</string>',
-  '    <string>-c</string>',
-  `    <string>${xmlEscape(HELPER_SCRIPT)}</string>`,
+  `    <string>${HELPER_PROGRAM_PATH}</string>`,
   '  </array>',
   '  <key>StartInterval</key>',
   '  <integer>15</integer>',
@@ -83,21 +84,44 @@ function b64(text: string): string {
   return Buffer.from(text, 'utf8').toString('base64');
 }
 
+/**
+ * Root lines that install the signed helper from the app bundle. The copy is
+ * verified after it is root-owned, so swapping the bundle file mid-install
+ * gains nothing; `cat` drops the download quarantine tag that `cp` keeps.
+ */
+function installLines(helperSource: string): string[] {
+  return [
+    `src=$(printf %s '${b64(helperSource)}' | /usr/bin/base64 -D)`,
+    'case "$src" in /*) ;; *) exit 5 ;; esac',
+    '/bin/mkdir -p /Library/PrivilegedHelperTools',
+    'tp=$(/usr/bin/mktemp /Library/PrivilegedHelperTools/.keepwatch-helper.XXXXXX)',
+    `trap '/bin/rm -f "$tp"' EXIT`,
+    '/bin/cat "$src" > "$tp"',
+    '/usr/sbin/chown root:wheel "$tp"',
+    '/bin/chmod 755 "$tp"',
+    `/usr/bin/codesign --verify --strict -R='${HELPER_REQUIREMENT}' "$tp"`,
+    `/bin/mv -f "$tp" ${HELPER_PROGRAM_PATH}`,
+    `pl=$(printf %s '${b64(HELPER_PLIST)}' | /usr/bin/base64 -D)`,
+    `tp=$(/usr/bin/mktemp /var/db/${HELPER_LABEL}.plist.XXXXXX)`,
+    `printf '%s\\n' "$pl" > "$tp"`,
+    '/usr/sbin/chown root:wheel "$tp"',
+    '/bin/chmod 644 "$tp"',
+    `/bin/mv -f "$tp" ${HELPER_PLIST_PATH}`,
+    `/bin/launchctl bootout system/${LEGACY_LABEL} 2>/dev/null || true`,
+    `/bin/rm -f ${LEGACY_PLIST_PATH}`,
+    `/bin/launchctl bootout system/${HELPER_LABEL} 2>/dev/null || true`,
+    `/bin/launchctl bootstrap system ${HELPER_PLIST_PATH}`,
+  ];
+}
+
+export function updateHelperCommand(helperSource: string): string {
+  return ['set -e', ...installLines(helperSource)].join('\n');
+}
+
 /** Root shell for turn-on. The heartbeat path travels as base64; the ceiling comes from root's own clock. */
-export function turnOnCommand(heartbeatPath: string, installHelper: boolean): string {
+export function turnOnCommand(heartbeatPath: string, helperSource?: string): string {
   const lines = ['set -e'];
-  if (installHelper) {
-    lines.push(
-      `pl=$(printf %s '${b64(HELPER_PLIST)}' | /usr/bin/base64 -D)`,
-      `tp=$(/usr/bin/mktemp /var/db/${HELPER_LABEL}.plist.XXXXXX)`,
-      `printf '%s\\n' "$pl" > "$tp"`,
-      '/usr/sbin/chown root:wheel "$tp"',
-      '/bin/chmod 644 "$tp"',
-      `/bin/mv -f "$tp" ${HELPER_PLIST_PATH}`,
-      `/bin/launchctl bootout system/${HELPER_LABEL} 2>/dev/null || true`,
-      `/bin/launchctl bootstrap system ${HELPER_PLIST_PATH}`,
-    );
-  }
+  if (helperSource !== undefined) lines.push(...installLines(helperSource));
   lines.push(
     `hb=$(printf %s '${b64(heartbeatPath)}' | /usr/bin/base64 -D)`,
     'case "$hb" in /*) ;; *) exit 3 ;; esac',
@@ -120,7 +144,9 @@ export const REMOVE_HELPER_COMMAND = [
   '/usr/bin/pmset -a disablesleep 0',
   `/bin/rm -f ${MARKER_PATH}`,
   `/bin/launchctl bootout system/${HELPER_LABEL} 2>/dev/null || true`,
-  `/bin/rm -f ${HELPER_PLIST_PATH}`,
+  `/bin/rm -f ${HELPER_PLIST_PATH} ${HELPER_PROGRAM_PATH}`,
+  `/bin/launchctl bootout system/${LEGACY_LABEL} 2>/dev/null || true`,
+  `/bin/rm -f ${LEGACY_PLIST_PATH}`,
 ].join('\n');
 
 /** `osascript` arguments that run a root shell command behind the macOS admin prompt. */
@@ -135,6 +161,7 @@ const PROMPTS = {
   install: 'NorthKeep wants to turn on Keep Watch and install its helper, which turns Keep Watch off when NorthKeep stops.',
   off: 'NorthKeep wants to turn off Keep Watch.',
   remove: 'NorthKeep wants to turn off Keep Watch and remove its helper.',
+  update: 'NorthKeep wants to update the Keep Watch helper, which turns Keep Watch off when NorthKeep stops.',
 };
 
 export interface PowerReading {
@@ -178,6 +205,11 @@ export function parseSleepDisabled(out: string): 0 | 1 | null {
   return null;
 }
 
+/** `codesign -d -vvv` prints the code hash on stderr; plain `-v` leaves it out. */
+export function parseCdhash(out: string): string | null {
+  return /^CDHash=([0-9a-f]+)$/m.exec(out)?.[1] ?? null;
+}
+
 export interface ExecResult {
   code: number;
   stdout: string;
@@ -191,6 +223,9 @@ export interface KeepWatchDependencies {
   now: () => number;
   exec: (file: string, args: string[], timeoutMs: number) => Promise<ExecResult>;
   exists: (file: string) => boolean;
+  readText: (file: string) => string | null;
+  /** The signed helper inside the app bundle (ADR 0082). */
+  bundledHelper: () => string;
   notify: (message: string) => void;
 }
 
@@ -210,6 +245,15 @@ const defaults: KeepWatchDependencies = {
   now: () => Date.now(),
   exec: defaultExec,
   exists: (file) => fs.existsSync(file),
+  readText: (file) => {
+    try {
+      return fs.readFileSync(file, 'utf8');
+    } catch {
+      return null;
+    }
+  },
+  // The server runs as NorthKeep.app/Contents/MacOS/northkeep-server.
+  bundledHelper: () => path.resolve(path.dirname(process.execPath), '..', 'Resources', 'keep-watch-helper', HELPER_LABEL),
   notify: (message) => {
     const text = message.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
     execFile('/usr/bin/osascript', ['-e', `display notification "${text}" with title "NorthKeep"`], { timeout: 5000 }, () => {});
@@ -217,7 +261,7 @@ const defaults: KeepWatchDependencies = {
 };
 
 export type KeepWatchState = 'off' | 'on' | 'turning_off';
-export type HelperState = 'installed' | 'missing' | 'disabled';
+export type HelperState = 'installed' | 'missing' | 'disabled' | 'outdated';
 
 export interface KeepWatchStatus {
   supported: boolean;
@@ -246,6 +290,7 @@ const OFF_REASONS: Record<string, string> = {
 
 const HELPER_DISABLED =
   'Keep Watch’s helper is turned off in System Settings, General, Login Items. Turn on NorthKeep there, then try again.';
+const UNSIGNED_BUILD = 'This copy of NorthKeep has no signed Keep Watch helper. Install NorthKeep from the download to use Keep Watch.';
 const CANNOT_SELF_OFF =
   'Keep Watch can’t turn itself off: its helper stopped running. Use Turn off now and enter your Mac password.';
 
@@ -326,10 +371,35 @@ export class KeepWatchController {
     this.thermal = therm === null ? null : parseThermal(therm);
   }
 
+  private async cdhash(file: string): Promise<string | null> {
+    const r = await this.deps.exec('/usr/bin/codesign', ['-d', '-vvv', file], 5000);
+    return r.code === 0 ? parseCdhash(r.stderr) : null;
+  }
+
+  private async bundledHelperSigned(): Promise<boolean> {
+    const r = await this.deps.exec('/usr/bin/codesign', ['--verify', '--strict', `-R=${HELPER_REQUIREMENT}`, this.deps.bundledHelper()], 5000);
+    return r.code === 0;
+  }
+
+  private async loaded(label: string): Promise<boolean> {
+    return (await this.deps.exec('/bin/launchctl', ['print', `system/${label}`], 5000)).code === 0;
+  }
+
+  /** Outdated outranks disabled, so a user who switched off the old "sh" item can still replace it. */
   private async helperState(): Promise<HelperState> {
+    if (this.deps.exists(LEGACY_PLIST_PATH)) return 'outdated';
     if (!this.deps.exists(HELPER_PLIST_PATH)) return 'missing';
-    const r = await this.deps.exec('/bin/launchctl', ['print', `system/${HELPER_LABEL}`], 5000);
-    return r.code === 0 ? 'installed' : 'disabled';
+    if (this.deps.readText(HELPER_PLIST_PATH) !== HELPER_PLIST) return 'outdated';
+    const installed = await this.cdhash(HELPER_PROGRAM_PATH);
+    if (installed === null) return 'outdated';
+    const bundled = await this.cdhash(this.deps.bundledHelper());
+    if (bundled !== null && bundled !== installed) return 'outdated';
+    return (await this.loaded(HELPER_LABEL)) ? 'installed' : 'disabled';
+  }
+
+  /** Either label's daemon is off-only and reads the same marker, so either can turn the mode off. */
+  private async helperRunning(): Promise<boolean> {
+    return (await this.loaded(HELPER_LABEL)) || (await this.loaded(LEGACY_LABEL));
   }
 
   /** Why Keep Watch must not be on right now, or null. Unknown readings count as a reason. */
@@ -357,7 +427,7 @@ export class KeepWatchController {
       const reason = this.offReason();
       if (reason) {
         this.beginTurningOff(reason);
-      } else if ((await this.helperState()) !== 'installed' || !this.deps.exists(MARKER_PATH)) {
+      } else if (!(await this.helperRunning()) || !this.deps.exists(MARKER_PATH)) {
         // The helper reads on its own and fails closed, so it may already have turned the mode off.
         const out = await this.read('/usr/bin/pmset', ['-g']);
         if (out !== null && parseSleepDisabled(out) === 0) {
@@ -422,10 +492,12 @@ export class KeepWatchController {
     if (reason) return { ok: false, status: 409, error: refuseMessage(reason) };
     const helper = await this.helperState();
     if (helper === 'disabled') return { ok: false, status: 409, error: HELPER_DISABLED };
+    const install = helper !== 'installed';
+    if (install && !(await this.bundledHelperSigned())) return { ok: false, status: 409, error: UNSIGNED_BUILD };
     this.busy = true;
     try {
       this.touchHeartbeat();
-      const r = await this.admin(turnOnCommand(hb, helper === 'missing'), helper === 'missing' ? PROMPTS.install : PROMPTS.on);
+      const r = await this.admin(turnOnCommand(hb, install ? this.deps.bundledHelper() : undefined), install ? PROMPTS.install : PROMPTS.on);
       if (r.code !== 0) {
         this.removeHeartbeat();
         if (/-128|User cancel/i.test(r.stderr)) return { ok: false, status: 409, error: 'Keep Watch stayed off.', canceled: true };
@@ -470,6 +542,19 @@ export class KeepWatchController {
       const r = await this.admin(FORCE_OFF_COMMAND, PROMPTS.off);
       await this.tick();
       return r.code === 0;
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  /** Replaces an outdated helper without turning Keep Watch on (ADR 0082 D5). */
+  async updateHelper(): Promise<{ ok: true } | { ok: false; error: string }> {
+    if (this.busy || this.state !== 'off') return { ok: false, error: 'Turn Keep Watch off first.' };
+    if (!(await this.bundledHelperSigned())) return { ok: false, error: UNSIGNED_BUILD };
+    this.busy = true;
+    try {
+      const r = await this.admin(updateHelperCommand(this.deps.bundledHelper()), PROMPTS.update);
+      return r.code === 0 ? { ok: true } : { ok: false, error: 'The helper was not updated.' };
     } finally {
       this.busy = false;
     }
@@ -537,6 +622,11 @@ export function createKeepWatchHandler(controller: KeepWatchController) {
       case 'force_off':
         if (!(await controller.forceOff())) return { status: 409, body: { error: 'Keep Watch stayed on. Try again and enter your Mac password.' } };
         break;
+      case 'update_helper': {
+        const r = await controller.updateHelper();
+        if (!r.ok) return { status: 409, body: { error: r.error } };
+        break;
+      }
       case 'remove_helper':
         if (!(await controller.removeHelper())) return { status: 409, body: { error: 'The helper was not removed.' } };
         break;

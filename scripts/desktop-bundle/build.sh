@@ -49,6 +49,10 @@ echo "==> [2/5] Fetching the pinned Node sidecar"
 echo "==> [3/5] Staging the production server tree"
 "$HERE/stage-server.sh"
 
+if [ "$(uname -s)" = "Darwin" ]; then
+  "$HERE/build-keep-watch-helper.sh"
+fi
+
 echo "==> [4/5] Pre-signing native binaries (skips when unsigned)"
 "$HERE/presign.sh"
 
@@ -94,6 +98,17 @@ case "$(uname -s)" in
     ;;
 esac
 ./node_modules/.bin/tauri build --config "$BUNDLE_CONFIG" "$@"
+
+# Root installs the Keep Watch helper only if it passes this requirement, so a
+# signed build whose copy fails it would ship a Keep Watch that cannot turn on.
+if [ "$(uname -s)" = "Darwin" ] && [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+  APP_BUILT="$(ls -d "$REPO_ROOT/apps/desktop/src-tauri/target/release/bundle/macos/"*.app 2>/dev/null | head -1)"
+  if [ -n "$APP_BUILT" ]; then
+    REQ="$(node -e "import('$REPO_ROOT/apps/web/dist/keep-watch.js').then((m) => process.stdout.write(m.HELPER_REQUIREMENT))")"
+    codesign --verify --strict -R="$REQ" "$APP_BUILT/Contents/Resources/keep-watch-helper/ai.northkeep.keepwatch-helper"
+    echo "==> Keep Watch helper passes its install requirement"
+  fi
+fi
 
 # Staple the notarization tickets (verified 2026-07-11: Tauri notarizes the
 # .app but staples NEITHER the .app nor the DMG). Stapling embeds the ticket
