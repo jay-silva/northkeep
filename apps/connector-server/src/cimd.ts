@@ -11,6 +11,7 @@
 
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { hextets } from './ip-key.js';
 import type { OAuthClientInformationFull } from '@modelcontextprotocol/sdk/shared/auth.js';
 
 const MAX_DOCUMENT_BYTES = 16 * 1024;
@@ -79,12 +80,38 @@ function isBlockedV6(ip: string): boolean {
     const mapped = s.slice('::ffff:'.length);
     return isIP(mapped) === 4 ? isBlockedV4(mapped) : true;
   }
+  const h = expandV6(s);
+  if (!h) return true;
+  const embedded = embeddedV4(h);
+  if (embedded) return isBlockedV4(embedded);
+  if (h[0] === 0x64 && h[1] === 0xff9b) return true; // NAT64 local-use 64:ff9b:1::/48
+  if (h[0] === 0x2001 && h[1] === 0) return true; // Teredo tunnels to an embedded IPv4
   const head = s.split(':')[0] ?? '';
   if (head.startsWith('fc') || head.startsWith('fd')) return true;
   if (/^fe[89ab]/.test(head) || head.startsWith('fec')) return true;
   if (head.startsWith('ff')) return true;
   if (s.startsWith('2001:db8')) return true;
   return false;
+}
+
+/** Eight hextets, with a dotted IPv4 tail folded into the last two; null if unparseable. */
+function expandV6(ip: string): number[] | null {
+  const tail = /(\d{1,3}(?:\.\d{1,3}){3})$/.exec(ip);
+  if (!tail) return hextets(ip);
+  const o = tail[1]!.split('.').map(Number);
+  if (o.some((n) => n > 255)) return null;
+  const hex = `${((o[0]! << 8) | o[1]!).toString(16)}:${((o[2]! << 8) | o[3]!).toString(16)}`;
+  return hextets(ip.slice(0, tail.index) + hex);
+}
+
+/** The IPv4 address an IPv4-compatible (::/96), NAT64 (64:ff9b::/96) or 6to4 (2002::/16) address carries. */
+function embeddedV4(h: number[]): string | null {
+  const v4 = (hi: number, lo: number) => `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+  const zeroHead = h.slice(0, 6).every((x) => x === 0);
+  if (zeroHead && (h[6] !== 0 || h[7]! > 1)) return v4(h[6]!, h[7]!);
+  if (h[0] === 0x64 && h[1] === 0xff9b && h.slice(2, 6).every((x) => x === 0)) return v4(h[6]!, h[7]!);
+  if (h[0] === 0x2002) return v4(h[1]!, h[2]!);
+  return null;
 }
 
 export function isBlockedAddress(ip: string): boolean {

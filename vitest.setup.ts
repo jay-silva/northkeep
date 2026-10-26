@@ -61,3 +61,10 @@ function installRefusingTools(names: string[]): void {
   }
   process.env.PATH = `${bin}${path.delimiter}${process.env.PATH ?? ''}`;
 }
+
+// Connector and sync servers fail closed with no gate env (security review F2).
+// Tests run them as a deliberate open self-host server unless a test sets a gate.
+process.env.NORTHKEEP_CONNECTOR_OPEN ??= '1';
+process.env.NORTHKEEP_SYNC_OPEN ??= '1';
+// The sync server refuses to mint attestations without its nonce key (ADR 0081).
+process.env.NORTHKEEP_ENTITLEMENT_NONCE_KEY ??= "test-entitlement-nonce-key-0123456789abcdef";

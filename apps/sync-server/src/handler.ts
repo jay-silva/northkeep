@@ -109,7 +109,8 @@ export async function handleSync(
   // Access gate (ADR 0009/0010): allowlisted accounts sync FREE. Otherwise, if
   // billing is on, an active subscription is required (402); if billing is off
   // but an allowlist exists, a non-listed account is a private-server 403;
-  // with neither, the server is open.
+  // with neither, the server is open (server.ts passes an empty allowlist
+  // unless NORTHKEEP_SYNC_OPEN=1).
   const inAllowlist = options.allowedTokenHashes?.has(tokenHash) ?? false;
   if (!inAllowlist) {
     if (options.subscriptionActive) {
@@ -284,12 +285,15 @@ function hasVaultMagic(blob: Buffer): boolean {
   return blob.subarray(0, 4).equals(NKV_MAGIC);
 }
 
-/** Parse `NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES` (comma/space separated) → set. */
+/**
+ * Parse `NORTHKEEP_SYNC_ALLOWED_TOKEN_HASHES` (comma/space separated) → set.
+ * Set but with no valid hash (a typo) ⇒ an EMPTY set: private, not open.
+ */
 export function parseAllowlist(raw: string | undefined): ReadonlySet<string> | null {
-  if (!raw) return null;
+  if (raw === undefined || raw.trim() === '') return null;
   const hashes = raw
     .split(/[,\s]+/)
     .map((h) => h.trim().toLowerCase())
     .filter((h) => /^[0-9a-f]{64}$/.test(h));
-  return hashes.length > 0 ? new Set(hashes) : null;
+  return new Set(hashes);
 }

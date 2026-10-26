@@ -28,6 +28,20 @@ function esc(s: string | undefined): string {
     .replace(/'/g, '&#39;');
 }
 
+/** No framing (clickjacking), no scripts or remote assets; inline styles only. */
+export const CONSENT_PAGE_HEADERS: Readonly<Record<string, string>> = {
+  'X-Frame-Options': 'DENY',
+  'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'",
+};
+
+function redirectHost(uri: string): string {
+  try {
+    return new URL(uri).host || uri;
+  } catch {
+    return uri;
+  }
+}
+
 function hidden(name: string, value: string | undefined): string {
   if (value === undefined) return '';
   return `<input type="hidden" name="${esc(name)}" value="${esc(value)}">`;
@@ -44,7 +58,8 @@ export function renderConsentPage(p: ConsentParams, opts: { error?: string } = {
 <body style="font-family:system-ui,-apple-system,sans-serif;max-width:30rem;margin:8vh auto;padding:0 1.5rem;color:#24221c;background:#f6f4ef;line-height:1.5">
   <h1 style="font-weight:600;font-size:1.4rem">Connect ${who} to NorthKeep</h1>
   <p style="color:#6b665a">${who} wants to read the memory scopes you have marked <b>Shared</b>. Enter the pairing code from NorthKeep to allow it. It never sees your private scopes.</p>
-  <p style="color:#6b665a">The app address is <code>${esc(p.clientId)}</code>. Check it before you enter a code. The name above comes from the app.</p>
+  <p style="color:#6b665a">After you allow it, NorthKeep sends you to <b>${esc(redirectHost(p.redirectUri))}</b>. If that is not the app you meant to connect, stop here. The name above comes from the app and is not verified.</p>
+  <p style="color:#8a8477;font-size:.85rem">App ID <code>${esc(p.clientId)}</code></p>
   ${errorBanner}
   <form method="POST" action="/consent">
     ${hidden('client_id', p.clientId)}

@@ -35,6 +35,8 @@ process.env.CONNECTOR_KEK_PEPPER = crypto.randomBytes(32).toString('base64');
 process.env.CONNECTOR_TOMBSTONE_ENFORCE = '1';
 process.env.NORTHKEEP_CONNECTOR_RATE_LIMIT = '0';
 process.env.NORTHKEEP_SYNC_RATE_LIMIT = '0';
+process.env.NORTHKEEP_CONNECTOR_OPEN = '1';
+process.env.NORTHKEEP_SYNC_OPEN = '1';
 
 /**
  * The Neon HTTP driver's call shapes over one PGlite database, numbers as

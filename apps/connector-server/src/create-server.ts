@@ -58,11 +58,16 @@ import type { ClientSecretBinder } from './client-secrets.js';
 import { maintenanceConfigFromEnv, runMaintenance, type MaintenanceConfig } from './maintenance.js';
 import { ipRateLimitKey } from './ip-key.js';
 import { createMcpServer } from './mcp.js';
-import { renderConsentPage } from './consent.js';
+import { CONSENT_PAGE_HEADERS, renderConsentPage } from './consent.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
 import { sha256hex, generatePairingCode } from './hash.js';
 import { operatorBearerMatches, reviewerSeedSecretFromEnv, seedReviewerAccount } from './reviewer-seed.js';
-import { connectorGateFromEnv, verifyEntitlement, ENTITLEMENT_GRACE_MS } from './entitlement.js';
+import {
+  connectorGateFromEnv,
+  verifyEntitlement,
+  ENTITLEMENT_GRACE_MS,
+  ENTITLEMENT_NONCE_WINDOW_MS,
+} from './entitlement.js';
 import {
   ConnectorCryptoError,
   DEV_KEK_PEPPER,
@@ -210,9 +215,9 @@ export function createConnectorServer(
   );
 
   // ---- billing gate (C3) -------------------------------------------------
-  // Gate OFF (both envs unset) ⇒ every account is allowed (self-host / the
-  // C1/C2 tests). Gate ON ⇒ allow an allowlisted account free, or one carrying a
-  // live entitlement grace window; otherwise 402 on the gated routes.
+  // Gate OFF only with NORTHKEEP_CONNECTOR_OPEN=1 and no gate env (self-host,
+  // tests). Gate ON ⇒ allow an allowlisted account free, or one carrying a live
+  // entitlement grace window; otherwise 402 on the gated routes.
   const gate = connectorGateFromEnv(process.env);
 
   /** Stamp a grace window when the desktop forwards a valid X-NB-Entitlement. */
@@ -222,7 +227,18 @@ export function createConnectorServer(
     const token = typeof raw === 'string' ? raw : Array.isArray(raw) ? raw[0] : null;
     if (!token) return;
     const claims = verifyEntitlement(gate.entitlementSecret, token);
-    if (claims) await storage.setEntitledUntil(accountHash, Date.now() + ENTITLEMENT_GRACE_MS);
+    if (!claims || typeof claims.nonce !== 'string' || claims.nonce.length === 0) return;
+    const now = Date.now();
+    try {
+      // ADR 0081: an attestation entitles only the first account presenting it.
+      const expiresAt = claims.exp * 1000 + ENTITLEMENT_NONCE_WINDOW_MS;
+      if (!(await storage.bindEntitlementNonce(sha256hex(claims.nonce), accountHash, expiresAt, now))) return;
+      await storage.setEntitledUntil(accountHash, now + ENTITLEMENT_GRACE_MS);
+    } catch {
+      // A fault in the nonce table must not fail the push: fall through to the
+      // account's existing grace window.
+      return;
+    }
   }
 
   /** True if the account may use the gated routes. */
@@ -330,7 +346,7 @@ export function createConnectorServer(
     if (!THROTTLED_PREFIXES.some((p) => req.path === p || req.path.startsWith(`${p}/`))) return next();
     const auth = req.headers['authorization'];
     const token = typeof auth === 'string' && auth.startsWith('Bearer ') ? auth.slice(7) : null;
-    let retryAfter = ipLimiter.check(`ip:${clientIp(req)}`);
+    let retryAfter = ipLimiter.check(`ip:${ipRateLimitKey(req.ip)}`);
     if (retryAfter === null && token) retryAfter = limiter.check(`tok:${sha256hex(token)}`);
     if (retryAfter !== null) {
       res.set('retry-after', String(retryAfter));
@@ -586,7 +602,7 @@ export function createConnectorServer(
     }
 
     const rerenderError = (msg: string): void => {
-      res.status(200).type('html').send(
+      res.status(200).set(CONSENT_PAGE_HEADERS).type('html').send(
         renderConsentPage(
           { clientId, clientName: client.client_name, redirectUri, codeChallenge, state, scope, resource },
           { error: msg },
@@ -1316,11 +1332,4 @@ function ackBodyHasNul(body: unknown): boolean {
 function isClientAuthPath(path: string): boolean {
   const p = path.toLowerCase().replace(/\/+$/, '') || '/';
   return CLIENT_AUTH_PATHS.some((c) => p === c || p.startsWith(`${c}/`));
-}
-
-/** Client IP: first hop of x-forwarded-for (set by Vercel), else the socket. */
-function clientIp(req: Request): string {
-  const fwd = req.headers['x-forwarded-for'];
-  const first = (Array.isArray(fwd) ? fwd[0] : fwd)?.split(',')[0]?.trim();
-  return first || req.socket.remoteAddress || 'unknown';
 }
