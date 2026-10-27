@@ -55,7 +55,7 @@ import { ConnectorOAuthProvider } from './provider.js';
 import type { CimdLookup } from './cimd.js';
 import { acceptedConnectorOrigins, originOf, resourceForOrigin, selectRequestOrigin } from './public-origin.js';
 import type { ClientSecretBinder } from './client-secrets.js';
-import { maintenanceConfigFromEnv, runMaintenance, type MaintenanceConfig } from './maintenance.js';
+import { maintenanceConfigFromEnv, parseFlag, runMaintenance, type MaintenanceConfig } from './maintenance.js';
 import { ipRateLimitKey } from './ip-key.js';
 import { createMcpServer } from './mcp.js';
 import { CONSENT_PAGE_HEADERS, renderConsentPage } from './consent.js';
@@ -70,6 +70,7 @@ import {
 } from './entitlement.js';
 import {
   ConnectorCryptoError,
+  DeadAccountKeyError,
   DEV_KEK_PEPPER,
   KEK_LABEL_CONNECTOR_TOKEN,
   KEK_LABEL_PAIRING_CODE,
@@ -272,9 +273,14 @@ export function createConnectorServer(
     const connKek = await deriveKek(KEK_LABEL_CONNECTOR_TOKEN, connToken, kekPepper);
     const existing = await storage.getAccountDekWrap(accountHash);
     if (existing) {
-      const { dek, usedPrevious } = await unwrapDekRotating(
-        existing, KEK_LABEL_CONNECTOR_TOKEN, connToken, kekPepper, previousKekPepper,
-      );
+      let opened: { dek: Uint8Array; usedPrevious: boolean };
+      try {
+        opened = await unwrapDekRotating(existing, KEK_LABEL_CONNECTOR_TOKEN, connToken, kekPepper, previousKekPepper);
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError) throw new DeadAccountKeyError(existing);
+        throw err;
+      }
+      const { dek, usedPrevious } = opened;
       // Re-lock under the current pepper so the previous one can be retired.
       if (usedPrevious) await storage.replaceAccountDekWrap(accountHash, existing, await wrapDek(dek, connKek));
       return dek;
@@ -287,15 +293,23 @@ export function createConnectorServer(
 
   /**
    * The server cannot unwrap this account's key material with the presented
-   * credential. The desktop client heals this by re-pushing the shared scopes
-   * (the vault is the source of truth); see connector-client.ts.
+   * credential. `rebuild` tells the client whether this server will accept
+   * `northkeep share push --rebuild` (ADR 0074); see connector-client.ts.
    */
   function deny409(res: Response): void {
     res.status(409).json({
       error: 'reencrypt_required',
-      message: 'Stored data cannot be decrypted for this account. Re-push your shared scopes from NorthKeep.',
+      rebuild: allowRebuild ? 'available' : 'unavailable',
+      message: allowRebuild
+        ? 'Stored data cannot be unlocked for this account. Rebuild it from a device with this vault: northkeep share push --rebuild.'
+        : 'Stored data cannot be unlocked for this account right now. Nothing was changed.',
     });
   }
+
+  // ADR 0074: rebuilds only while the operator says the pepper setting is
+  // right everywhere. Off by default, so a misconfigured, rolling or rolled-back
+  // deploy that cannot open a key never invites a user to wipe it.
+  const allowRebuild = parseFlag(process.env.NORTHKEEP_CONNECTOR_ALLOW_REBUILD) === 'on';
 
   const app = express();
   app.disable('x-powered-by');
@@ -850,11 +864,34 @@ export function createConnectorServer(
     try {
       dek = await resolveAccountDek(accountHash, connToken);
     } catch (err) {
-      if (err instanceof ConnectorCryptoError) {
+      if (!(err instanceof ConnectorCryptoError)) throw err;
+      // Rebuild only on the device's explicit request and the operator's
+      // switch: a misconfigured pepper fails every account at once, and an
+      // automatic reset would then wipe rows a corrected setting could open.
+      if (!(err instanceof DeadAccountKeyError) || !allowRebuild || (req.body as { rebuild?: unknown }).rebuild !== true) {
         deny409(res);
         return;
       }
-      throw err;
+      const deadWrap = err.wrap;
+      const removed = await storage.resetAccountKey(accountHash, deadWrap);
+      if (removed !== null) {
+        await storage.appendAudit({
+          ts: now,
+          accountHash,
+          tool: 'client_rebuild',
+          params: { limit: 0 },
+          ok: true,
+          resultCount: removed,
+          resultIds: [],
+        });
+      }
+      try {
+        dek = await resolveAccountDek(accountHash, connToken);
+      } catch (retryErr) {
+        if (!(retryErr instanceof ConnectorCryptoError)) throw retryErr;
+        deny409(res);
+        return;
+      }
     }
     const encrypted: SharedEntry[] = await Promise.all(
       entries.map(async (e) => ({

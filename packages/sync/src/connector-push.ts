@@ -129,6 +129,7 @@ export async function pushSnapshot(opts: {
   snapshot: SharedSnapshot;
   vaultStamp?: VaultStamp;
   reset?: boolean;
+  rebuild?: boolean;
 }): Promise<PushSharedResult> {
   const result = await pushSharedScopes({
     server: opts.server,
@@ -138,6 +139,7 @@ export async function pushSnapshot(opts: {
     ...(opts.entitlement ? { entitlement: opts.entitlement } : {}),
     ...(opts.vaultStamp ? { vaultStamp: opts.vaultStamp } : {}),
     ...(opts.reset ? { reset: true } : {}),
+    ...(opts.rebuild ? { rebuild: true } : {}),
   });
   markConnectorPushed(new Date(), opts.snapshot.fingerprint);
   return result;
@@ -155,6 +157,7 @@ export async function manualConnectorPush(opts: {
   masterKey: Buffer;
   entitlement?: string;
   reset?: boolean;
+  rebuild?: boolean;
   withVault: <T>(fn: (vault: Vault) => T | Promise<T>) => Promise<T>;
   runVaultPush?: (push: () => Promise<PushResult>) => Promise<PushResult>;
 }): Promise<PushSharedResult | null> {
