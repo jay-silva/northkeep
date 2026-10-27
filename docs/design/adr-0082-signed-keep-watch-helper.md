@@ -1,6 +1,6 @@
 # ADR 0082 design: the signed Keep Watch helper
 
-Status: Proposed. Review: Reviews/adr-0082/review-1.md (CLEARED WITH WOUNDS; FW1 to FW3 addressed here and in the ADR); review-1-recheck.md (all three closed; quarantine note adopted below).
+Status: Accepted 2026-10-27: Jay's acceptance steps 1 to 3 passed on a signed, notarized build. Review: Reviews/adr-0082/review-1.md (CLEARED WITH WOUNDS; FW1 to FW3 addressed here and in the ADR); review-1-recheck.md (all three closed; quarantine note adopted below).
 
 ## Program
 `apps/desktop/keep-watch-helper/main.c`: a single `execve("/bin/sh", {"sh", "-c", SCRIPT, NULL}, {"PATH=/usr/bin:/bin:/usr/sbin:/sbin", NULL})`. It never reads `argv` or the inherited environment. `SCRIPT` is the ADR 0080 script; a test extracts it from the C source and compares it with `HELPER_SCRIPT` and with the script block in docs/design/adr-0080-keep-watch.md. Built arm64 and x86_64, minimum macOS 13.5.
@@ -45,5 +45,5 @@ Order: outdated, missing, disabled, installed.
 3. Remove helper; the NorthKeep row for it disappears.
 
 ## Known gaps
-- Whether deleting the old plist removes its Login Items row immediately is unverified; step 1 checks it.
+- Deleting the old plist removed its "sh" row from Login Items (acceptance step 1, 2026-10-27).
 - Downgrading to 0.28.0 reinstalls the old helper beside the new one. Both are off-only; harmless.
