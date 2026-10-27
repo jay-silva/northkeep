@@ -1,9 +1,9 @@
 # ADR 0082: A signed program runs the Keep Watch helper
 
-Status: Proposed · Review: Reviews/adr-0082: review 1 CLEARED WITH WOUNDS (three wounds, fixed); recheck closed all three, capped by the unverified Login Items rename
+Status: Accepted 2026-10-27 (Jay, acceptance on a signed build) · Review: Reviews/adr-0082: review 1 CLEARED WITH WOUNDS (three wounds, fixed); recheck closed all three; code review found no defects
 
 ## Context
-The ADR 0080 helper is `/bin/sh -c <script>`, so Login Items lists it as "sh, Item from unidentified developer" (Jay, 0.28.0). A do-nothing test daemon, signed and notarized under our Developer ID at a new label, was listed as NorthKeep on 2026-10-26, pending Jay's confirmation that the row was the test.
+The ADR 0080 helper is `/bin/sh -c <script>`, so Login Items lists it as "sh, Item from unidentified developer" (Jay, 0.28.0). A do-nothing test daemon, signed and notarized under our Developer ID at a new label, was listed as NorthKeep on 2026-10-26.
 
 ## Decision
 - D1: The helper becomes a small C program that ignores its arguments and environment and runs the unchanged ADR 0080 script, compiled in, through `/bin/sh -c`. A test checks the C source, the TypeScript constant and the design doc match word for word.
