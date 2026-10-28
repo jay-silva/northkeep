@@ -262,6 +262,13 @@ export function billingFromEnv(env: NodeJS.ProcessEnv = process.env): BillingDep
   };
 }
 
+// Shown beside Checkout's pay button so the renewal terms sit next to the
+// action that starts billing. No price here: Checkout shows the live one.
+const RENEWAL_NOTICE =
+  'Your subscription renews automatically every month at the price shown until you cancel. ' +
+  'You can cancel any time in the billing portal: choose Manage billing in the NorthKeep app for Mac, ' +
+  'or run northkeep sync billing.';
+
 /** Production gateway backed by the Stripe SDK. */
 export function createStripeGateway(secretKey: string, webhookSecret: string): StripeGateway {
   // Pin the API version to the one this SDK's types describe (adversarial review
@@ -280,6 +287,7 @@ export function createStripeGateway(secretKey: string, webhookSecret: string): S
         ...(customerId ? { customer: customerId } : {}),
         success_url: successUrl,
         cancel_url: cancelUrl,
+        custom_text: { submit: { message: RENEWAL_NOTICE } },
       }).catch((err: unknown) => {
         if (isMissing(err, 'customer')) throw new CustomerMissingError();
         throw err;
