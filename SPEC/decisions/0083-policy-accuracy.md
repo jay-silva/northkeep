@@ -1,6 +1,6 @@
 # ADR 0083: Privacy policy and terms state only what the code does today
 
-Status: Proposed 2026-10-28 · Review: first review CLEARED WITH WOUNDS; findings and fixes in the design record
+Status: Proposed 2026-10-28 · Review: CLEARED on recheck; findings and fixes in the design record
 
 ## Context
 A 2026-10-28 audit read PRIVACY.md and TERMS.md against the code. Several published claims promised more than the system enforces: a stored record of auto-renewal consent, contributor terms that do not exist, "Self-hosting is fully anonymous" while the iPhone app defaults to hosted servers, a GDPR sentence merging the 72-hour regulator rule with user notice, a visible-fields list missing connector metadata, an update check that did not name GitHub, and "the Privacy Policy lists all of it". Under the review gate, a false claim is a defect.

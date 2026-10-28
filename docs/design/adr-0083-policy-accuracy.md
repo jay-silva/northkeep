@@ -36,6 +36,8 @@ First review (fresh eyes, isolated worktree, pglite only): **CLEARED WITH WOUNDS
 - Note, accepted: the notice says "every month", which assumes the configured Stripe price is monthly ($10 per month, per TERMS).
 - Unverified against reality (no Stripe or Vercel access): how `custom_text.submit` renders on a live checkout, the price interval, the portal's cancellation setting, the four dashboard-dependent promises, and Vercel deploy settings.
 
+Recheck: `check-drift.mjs` passes, and the reviewer's own md-versus-html script shows only the expected "Last updated" line. The fix round changed no code. **CLEARED.**
+
 ## Not changed, and why
 
 - The Cloudflare hosting sentence: the founder is checking the DNS proxy status for `mcp.` and `sync.`.
