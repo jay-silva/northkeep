@@ -1,9 +1,9 @@
 # ADR 0083: Privacy policy and terms state only what the code does today
 
-Status: Proposed 2026-10-28 · Review: pending
+Status: Proposed 2026-10-28 · Review: first review CLEARED WITH WOUNDS; findings and fixes in the design record
 
 ## Context
-A 2026-10-28 audit read PRIVACY.md and TERMS.md against the code. Several published claims promised more than the system enforces: a stored record of auto-renewal consent, contributor terms that do not exist, "Self-hosting is fully anonymous" while the iPhone app defaults to hosted servers, a GDPR sentence merging the 72-hour regulator rule with user notice, a visible-fields list missing connector metadata, an undisclosed GitHub update check, and "the Privacy Policy lists all of it". Under the review gate, a false claim is a defect.
+A 2026-10-28 audit read PRIVACY.md and TERMS.md against the code. Several published claims promised more than the system enforces: a stored record of auto-renewal consent, contributor terms that do not exist, "Self-hosting is fully anonymous" while the iPhone app defaults to hosted servers, a GDPR sentence merging the 72-hour regulator rule with user notice, a visible-fields list missing connector metadata, an update check that did not name GitHub, and "the Privacy Policy lists all of it". Under the review gate, a false claim is a defect.
 
 ## Decision
 - D1: Every published claim is narrowed to what the code does now. Where a promise is not kept, the promise is narrowed or removed; no feature is built to meet it.
@@ -24,7 +24,7 @@ A 2026-10-28 audit read PRIVACY.md and TERMS.md against the code. Several publis
 - Replacing vendor names with categories only: the stack is public in this repo; accuracy is the exposure, not naming.
 
 ## What leaves the machine
-No new recipient and no new data. Stripe receives one fixed sentence of checkout text. The policy now discloses the existing GitHub update check (click only) and existing connector metadata.
+No new recipient and no new data. Stripe receives a fixed two-sentence checkout notice. The policy now discloses the existing GitHub update check (click only) and existing connector metadata.
 
 ## Links
-Design: docs/design/adr-0083-policy-accuracy.md · Audit: ~/Claude/Reports/Privacy and terms audit 2026-10-28.md · Extends: ADR 0060
+Design and review findings: docs/design/adr-0083-policy-accuracy.md · Extends: ADR 0060

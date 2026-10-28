@@ -185,10 +185,8 @@ memories you choose. You can use it from the Mac app and from the iPhone app
   shared scopes, unshares a scope, or confirms a download (the action, the time,
   and how many entries or scopes, never their names or content); the name of
   each scope you unshare and when; the date through which your account may
-  use the connector; and other technical details, such as the address of the
-  sync server you use, version and sequence numbers, the identifiers of entries
-  an app has forgotten that your device has not yet removed, and one-time codes
-  used to check your subscription.
+  use the connector; and other technical details, such as a short fingerprint of the address of the sync server you use, version and sequence numbers, the identifiers of entries
+  an app has forgotten that your device has not yet removed, and fingerprints of one-time codes used to check your subscription.
 - **What we do not derive from it:** no embeddings, no content logs, no analytics.
   We never store your keys, your passphrase, or your device secret on the
   connector.

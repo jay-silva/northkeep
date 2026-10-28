@@ -8,8 +8,8 @@ Each changed published claim, the wording it now has, and the code it rests on. 
 |---|---|
 | "You subscribe on a checkout page hosted by Stripe. Before you pay, that page shows the monthly price and states that your subscription renews automatically each month at that price until you cancel, and that you can cancel at any time in the billing portal." (:40) | `apps/sync-server/src/billing.ts` `custom_text.submit.message`; `apps/sync-server/test/checkout-session.test.ts` |
 | Contributions: "you confirm you have the right to do so. We may ask you to agree to separate terms before we accept a contribution." (:29) | No CONTRIBUTING, CLA or DCO file exists; git authors are the founder, Claude and dependabot |
-| "the Privacy Policy describes them" (:85), was "lists all of it" | Privacy lists now read "such as" |
-| "We remind you of this in the app" (:163), was "when you subscribe and in the app" | The subscribe card (`apps/web/static/index.html`) shows no backup reminder; onboarding backup prompts exist |
+| "the Privacy Policy describes them" (:86), was "lists all of it" | Privacy lists now read "such as" |
+| "We remind you of this in the app" (:164), was "when you subscribe and in the app" | The subscribe card (`apps/web/static/index.html`) shows no backup reminder; onboarding backup prompts exist |
 | "Not legal advice." removed (:3) | Drafting note that rendered on the public page |
 
 ## Privacy
@@ -18,11 +18,23 @@ Each changed published claim, the wording it now has, and the code it rests on. 
 |---|---|
 | Update check "asks GitHub, where we publish releases, for the latest version" (:28) | `apps/web/src/api.ts` calls `api.github.com` on click |
 | "If you self-host and point every NorthKeep app you use at your own servers, no account data reaches us. The iPhone app is set to our hosted servers until you change it." (:40) | `apps/mobile` sync setup pre-fills the hosted URL; vault session falls back to the hosted connector |
-| Connector records include "the address of the sync server you use, version and sequence numbers, the identifiers of entries an app has forgotten that your device has not yet removed, and one-time codes used to check your subscription" (:188) | `apps/connector-server/src/neon-storage.ts` columns `vault_server`, `vault_version`, `scope_seq`, `pending_forgets`, `entitlement_nonces` |
+| Connector records include "a short fingerprint of the address of the sync server you use, version and sequence numbers, the identifiers of entries an app has forgotten that your device has not yet removed, and fingerprints of one-time codes used to check your subscription" (:188) | `apps/connector-server/src/neon-storage.ts` columns `vault_server` (16-hex sha256 prefix, `create-server.ts:148`), `vault_version`, `scope_seq`, `pending_forgets`, `entitlement_nonces` (stored as `nonce_hash`) |
 | "Pointing every app at a connector you host yourself, or never sharing a scope…" (:214) | Same defaults as :40 |
 | "Never turning tools on or connecting a server means none…" (:367), dropped "Self-hosting" | Self-hosting does not stop Brave or MCP traffic |
 | Breach: "notify affected users without undue delay where applicable law requires it, and notify regulators where the law requires that" (:379) | GDPR Art. 33 (regulator, 72 hours) and Art. 34 (users, without undue delay) are separate duties |
 | "In practice we hold very little, such as:" | The old list omitted the encrypted vault |
+
+## Adversarial review, 2026-10-28
+
+First review (fresh eyes, isolated worktree, pglite only): **CLEARED WITH WOUNDS.** It confirmed that every changed claim matches the code, that the .md and .html pairs match word for word, and that the checkout test fails when the notice is removed. The notice is 217 of 1,200 characters, static, and sent without `consent_collection`.
+
+- FLESH WOUND: the ADR linked a path outside the repo, so `scripts/check-drift.mjs` failed. Fixed: the link is removed.
+- Note: the connector stores a fingerprint of the sync-server address and hashes of the one-time codes, not the values themselves. Fixed in PRIVACY.md and privacy.html.
+- Note: KNOWN-LIMITS still said "Self-hosting stays fully anonymous". Fixed to match the conditional wording.
+- Note: line references were off by one, and the ADR said "one sentence" when the notice is two. Fixed.
+- Note, left for the founder: whether dropping the consent-record promise counts as a material change that needs advance notice under TERMS and PRIVACY "Changes".
+- Note, accepted: the notice says "every month", which assumes the configured Stripe price is monthly ($10 per month, per TERMS).
+- Unverified against reality (no Stripe or Vercel access): how `custom_text.submit` renders on a live checkout, the price interval, the portal's cancellation setting, the four dashboard-dependent promises, and Vercel deploy settings.
 
 ## Not changed, and why
 
