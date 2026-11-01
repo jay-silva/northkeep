@@ -212,6 +212,7 @@
   /* feature grid, seven items */
   .feat.wide{grid-column:span 2}
   @media(max-width:760px){.feat.wide{grid-column:auto}}
+  .feat.full{grid-column:1/-1}
 </style>
 </head>
 <body>
@@ -370,6 +371,7 @@
       <div class="feat"><h3><span class="dot"></span>Any model</h3><p>Run memory review on a local model via Ollama, or with your own key on Claude Sonnet 5.5, Opus 5.5 or Fable 5.1, or on an OpenAI-compatible endpoint. Near-duplicate checks still need Ollama with nomic-embed-text on this Mac. You pay the provider directly.</p></div>
       <div class="feat"><h3><span class="dot"></span>Encrypted sync</h3><p>Move your vault between machines. The server only ever holds ciphertext it cannot decrypt, never a key, never plaintext. We could not read it if we wanted to.</p></div>
       <div class="feat wide"><h3><span class="dot"></span>Cloud Connect (Beta)</h3><p>Share the scopes you choose to the AI apps you already use, so Claude and ChatGPT remember you on your phone too. Stored encrypted at rest with no key kept in that database; decrypted only for the moment it takes to answer your app. Opt-in per scope (a new project an app you connected creates arrives shared), reversible.</p></div>
+      <div class="feat full"><h3><span class="dot"></span>Keep Watch (Mac)</h3><p>Close your MacBook’s lid and a long agent job keeps running. Turn it on from Settings or the menu bar for up to 12 hours, and confirm with your Mac password each time. It turns itself off when the time is up, when you unplug the charger (unless you allow battery), at 25% battery, if the Mac runs hot, or when you quit NorthKeep. A small helper signed by NorthKeep can only turn it off, and Settings can remove it.</p></div>
     </div>
   </div>
 </section>
