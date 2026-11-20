@@ -9,8 +9,8 @@ Milestone 3 of relaunch step 1. Overflow for the ADR, plus the review log.
 | Device agent replaces a memory | `memory_edit` (editMemory guards; Tier 1 text refusal in the handler) | the same, plus `replaces` on save with the same guards and a same-scope rule |
 | Cloud app replaces a memory | not possible (the connector has no `memory_edit`; forgets wait for the user) | the new memory lands; the replace waits for the user, like a forget |
 | Identical save | a second row | no row; the existing id is returned |
-| Close save (4+ words, high overlap) | a second row | held; the agent chooses `replaces` or `distinct` |
-| Other save | saved | saved, with up to three possible updates listed |
+| Save sharing 2+ key words with a live memory in its scope | a second row | held; up to three listed; the agent chooses `replaces` or `distinct` |
+| Other save | saved | saved |
 | Which memory wins | nobody | still nobody (plan, question 19) |
 | App name on a save | `mcp` or `connector:<host>` | the app's own name, labelled self-reported; on a replace, the replacing app's |
 
@@ -21,14 +21,14 @@ Milestone 3 of relaunch step 1. Overflow for the ADR, plus the review log.
 ## D3 details
 
 - Normalize: Unicode NFKC, lower case, collapse whitespace, strip punctuation at word edges.
-- Hold: both texts have four or more words and the Jaccard overlap of non-stopword sets is at or above 0.6 (start value).
-- Possible updates: memories in the same scope sharing at least two non-stopword words, or one capitalized word, ranked by overlap, top three. This is where reworded updates ("is now at Pier 9") get caught. The agent reads the list and decides.
+- Hold: the save shares two or more non-stopword words with a live memory in its scope. The reply lists the top three by overlap, with ids. Nothing is saved until the agent calls again with `replaces` (one row, old marked replaced) or `distinct: true`. This is where reworded updates ("is now at Pier 9") get caught. An earlier save-then-list version left two live rows when the agent followed its advice (recheck R-D3).
+- A capitalized-word rule was dropped: any memory naming the user matched everything.
 - Words only on both surfaces. Review 1 measured local meaning match at a 0.9 cosine: it never fired, and no threshold separated updates from distinct facts. The no-local-model rule removes it anyway.
 - The reply is built through the return-masking path, never as a thrown error.
 
 ## D4 protocol
 
-`RowPlain` gains an optional `replaces`. The connector serves a row that carries `replaces` only to a client that announces it can hold replaces for confirmation (the ADR 0063 `?v=` pattern). The phone and older builds don't see it, so they never ack it and drop the link. The desktop plan lists it beside connector forgets, which already need confirmation (`connector-client.ts:432`).
+`RowPlain` gains an optional `replaces`. The new memory is delivered as an ordinary addition. The replace goes into a connector queue of its own, modelled on `pending_forgets`, because a pending row is acked or deduped on the next sync and would lose the link (recheck R-D4). Only clients that announce support (the ADR 0063 `?v=` pattern) read the queue. The desktop lists each entry beside connector forgets, which already need confirmation (`connector-client.ts:431-433`). Applying one needs a primitive that does not exist today: mark an existing row `superseded_by` another existing row. `supersedeEntry` always creates a new row. The phone and older builds never see the queue.
 
 ## Open questions for Jay
 
@@ -39,9 +39,9 @@ Milestone 3 of relaunch step 1. Overflow for the ADR, plus the review log.
 
 On a throwaway vault and home, with two local MCP clients (for example Claude Code and Codex):
 
-1. Run `export NORTHKEEP_HOME=$(mktemp -d)`, init a vault there, and point both clients at it.
+1. Run `export NORTHKEEP_HOME=$(mktemp -d) NK=$NORTHKEEP_HOME/vault.nkv`, run `northkeep --vault $NK init`, and point both clients at it.
 2. Tell client A: "Remember that the harbor office is at Pier 4." Say it again. The vault holds one row.
-3. Tell client B: "The harbor office is now at Pier 9." Client B is shown the Pier 4 memory as a possible update and saves with `replaces`.
+3. Tell client B: "The harbor office is now at Pier 9." Client B's first save is held with the Pier 4 memory listed, and client B saves again with `replaces`.
 4. Run `northkeep --vault $NK export`. The Pier 4 row has `superseded_by` set to the Pier 9 row. The Pier 9 row's `source` names client B.
 5. A fresh client A session, asked "where is the harbor office?", answers Pier 9.
 
@@ -58,3 +58,11 @@ Review 1 (fresh eyes, 2026-11-20): NOT CLEARED.
   - Connector app names were unchecked. Now they are tamed.
   - The acceptance step could not show a replaced row. It now uses export.
 - Accepted scar tissue: reworded updates that share no key words still save as a second row. Milestone 5's conflict check is the backstop.
+
+Recheck (2026-11-20): CLEARED WITH WOUNDS. The kill shot and the prior wounds are closed. The fix introduced two wounds, both fixed after the recheck and not yet rechecked:
+- Save-then-list duplicated rows. D3 now holds the save instead.
+- A held cloud replace had no store. D4 now gives it its own connector queue.
+
+Build notes:
+- The connector needs its own copy of `tameOneLine`, since core's text-safe module cannot be imported there.
+- The cloud path of the save test is not exercised while O2 holds cloud replaces.

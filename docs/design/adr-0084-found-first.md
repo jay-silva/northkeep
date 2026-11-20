@@ -60,3 +60,8 @@ Review 1 (fresh eyes, 2026-11-20): CLEARED WITH WOUNDS. What changed:
 - Instruction delivery was unverified for Codex, ChatGPT and Grok Bot. D0 adds the live check, with Muse included.
 - The acceptance test set no `NORTHKEEP_HOME`. It does now.
 - Recorded as accepted scar tissue: a shell-capable agent can run `northkeep confirm`, the same limit KNOWN-LIMITS accepts for milestones.
+
+Recheck (2026-11-20): CLEARED WITH WOUNDS. All prior wounds closed except D5. The boost no longer flips rankings, but the stopword-only match was still admitted, so the fixture and the acceptance test asserted an exclusion the decision did not make. Fixed after the recheck: D5 now gates admission as well, so a keyword match needs a non-stopword word on both surfaces. Not yet rechecked. Build notes from the recheck:
+- The connector keeps its own `isProjectLogArchive` (apps/connector-server/src/project-doc.ts:322). "One detector" therefore means one rule, with a test keeping the two copies identical.
+- Changing `CONTRACT_TEXT` means appending the new render's hash to `RELEASED_CONTRACT_RENDER_SHA256`. Otherwise existing installs read as edited and are never offered the update.
+- Instruction delivery stays unverified against reality until D0 runs.
