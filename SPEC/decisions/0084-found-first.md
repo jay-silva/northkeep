@@ -3,7 +3,7 @@
 Status: Proposed 2026-11-20 (relaunch step 1, milestone 2) · Review 1: CLEARED WITH WOUNDS, fixed; recheck: CLEARED WITH WOUNDS, D5 fixed after it and not yet rechecked · Merge waits for the milestone 1 baseline score
 
 ## Context
-The relaunch test asks fresh Claude, Grok Bot and Codex sessions 25 questions without telling them to use NorthKeep. The MCP connect-time text is only the milestone rule, in two hand-kept copies (server.ts:909, connector mcp.ts:261); `northkeep contract install` writes a third standing text into app files. `memory_retrieve` ranks project documents and log archives beside facts. Nothing marks a memory the user confirmed.
+The relaunch test asks fresh Claude, Grok Bot, Codex and Muse sessions 25 questions without telling them to use NorthKeep. The MCP connect-time text is only the milestone rule, in two hand-kept copies (server.ts:909, connector mcp.ts:261); `northkeep contract install` writes a third standing text into app files. `memory_retrieve` ranks project documents and log archives beside facts. Nothing marks a memory the user confirmed.
 
 ## Decision
 - D0: Before building, a live check records, for Claude, Grok Bot, Codex and Muse, whether each passes server instructions to its model. Apps that do not get D2.
@@ -17,7 +17,7 @@ The relaunch test asks fresh Claude, Grok Bot and Codex sessions 25 questions wi
 
 ## Consequences
 - Easier: one wording; confirmed facts outrank agent guesses.
-- Harder: an envelope field; a confirm writes a row.
+- Harder: a confirm writes a row.
 - Committed to: KNOWN-LIMITS says the instruction is advisory, that a shell-capable agent can run `confirm` (as with milestones), and which apps D0 found pass instructions.
 
 ## Rejected
