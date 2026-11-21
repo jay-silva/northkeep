@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KDF_INTERACTIVE, NOTES_NOTICE, Vault, deriveMasterKey, deriveNotesKey, generateDeviceSecret, planNote, type NoteRequest, type NoteView, type NotesBlock } from '@northkeep/core';
 import { NotesFile, notesFilePath } from '../src/notes-store.js';
 import { notesOwnerView, parseHookInput, renderHook, runNotesHook } from '../src/notes-cli.js';
@@ -162,6 +162,12 @@ describe('ADR 0079 hook output per host', () => {
 
 describe('ADR 0079 owner view', () => {
   const at = (minute: number) => new Date(`2026-10-21T09:${String(minute).padStart(2, '0')}:00.000Z`);
+  // NotesFile.open purges receipts older than 30 days by the real clock; pin it so these fixed dates stay recent.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(at(30));
+  });
+  afterEach(() => vi.useRealTimers());
 
   function write(rows: Array<{ host: string; sender: string; request: NoteRequest; at: Date }>): string[] {
     const notes = NotesFile.open(notesFilePath(vaultPath)!, deriveNotesKey(Buffer.from(process.env.NORTHKEEP_MASTER_KEY!, 'hex')));
