@@ -1399,11 +1399,22 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   for pairing codes and app sign-ins are not re-locked; they expire or are
   replaced at the next refresh (refresh tokens last up to 30 days). Nothing
   shows how many accounts are still on the old pepper. Retiring it early
-  makes a device that has not pushed since get "re-push your shared scopes",
-  and an app that has not refreshed must reconnect. Rolling the
+  leaves an account that has not pushed since unable to open; its device
+  must rebuild it (below), and an app that has not refreshed must
+  reconnect. Rolling the
   deployment back to before the rotation strands every account already
   re-locked. A sensitive Vercel variable cannot be read back, so the new
   pepper must be saved elsewhere before it is set.
+- **An account Cloud Connect can no longer open is rebuilt by hand, and
+  cloud-only edits are lost (ADR 0074).** A normal push to such an account is
+  refused every time. `northkeep share push --rebuild` replaces the cloud
+  copy with this device's shared scopes under a fresh key, but only while the
+  operator has `NORTHKEEP_CONNECTOR_ALLOW_REBUILD` on (off by default; turn it
+  on only once every server instance runs the right pepper, never during a
+  pepper rotation, rollover or rollback, and off again after). It drops edits AI
+  apps made in the cloud that had not reached a device, and every connected
+  app must pair again. It never runs on its own, and the Mac app has no button
+  for it yet.
 - **Automatic push to a self-hosted connector needs
   `CONNECTOR_TOMBSTONE_ENFORCE=1`.** Without it the connector does not refuse
   pushes to a scope unshared elsewhere, so automatic push stays off and says

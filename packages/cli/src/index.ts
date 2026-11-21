@@ -1218,7 +1218,8 @@ share
   .command('push')
   .description('Re-push your shared scopes to the connector server (syncs the vault first when this device is ahead)')
   .option('--reset-order', 'tell Cloud Connect to take this device as the newest copy (after your sync server was reset)')
-  .action(async (options: { resetOrder?: boolean }) => {
+  .option('--rebuild', "if Cloud Connect can't unlock your account, replace its copy with this device's shared scopes (cloud-only edits are lost; apps must reconnect)")
+  .action(async (options: { resetOrder?: boolean; rebuild?: boolean }) => {
     await withShareDeps((deps) => sharePushCmd(options, deps, fail));
   });
 

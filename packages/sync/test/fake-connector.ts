@@ -46,7 +46,9 @@ export interface FakeConnector {
   failNext: (path: string, status: number, body?: unknown) => void;
 }
 
-export async function startFakeConnector(options: { tombstoneEnforce?: boolean; requireEntitlement?: string } = {}): Promise<FakeConnector> {
+export async function startFakeConnector(
+  options: { tombstoneEnforce?: boolean; requireEntitlement?: string; cannotUnlock?: 'available' | 'unavailable' } = {},
+): Promise<FakeConnector> {
   const rows = new Map<string, FakeRow>();
   const scopeSeq = new Map<string, number>();
   const forgetQueue: string[] = [];
@@ -156,6 +158,11 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
         const vault = body.vault as { server: string; version: number } | undefined;
         const reset = body.reset === true;
         const log = (status: number) => pushLog.push({ scopes, ...(vault ? { vault } : {}), ...(reset ? { reset } : {}), status });
+        if (options.cannotUnlock) {
+          log(409);
+          send(409, { error: 'reencrypt_required', rebuild: options.cannotUnlock });
+          return;
+        }
         if (pair !== null && !reset) {
           if (!vault || (vault.server === pair.server && vault.version < pair.version)) {
             log(428);

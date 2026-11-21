@@ -103,6 +103,7 @@ async function pushNow(
   entitlement: string | undefined,
   deps: ShareDeps,
   reset = false,
+  rebuild = false,
 ): Promise<PushSharedResult | null> {
   const masterKey = loadSyncConfig() === null ? Buffer.alloc(0) : await deps.masterKey();
   try {
@@ -114,6 +115,7 @@ async function pushNow(
       withVault: deps.withVault,
       ...(entitlement ? { entitlement } : {}),
       ...(reset ? { reset: true } : {}),
+      ...(rebuild ? { rebuild: true } : {}),
     });
   } finally {
     masterKey.fill(0);
@@ -188,14 +190,14 @@ export async function shareAddCmd(
   console.log('  Connect an AI app: northkeep share code');
 }
 
-export async function sharePushCmd(options: { resetOrder?: boolean }, deps: ShareDeps, fail: (m: string) => never): Promise<void> {
+export async function sharePushCmd(options: { resetOrder?: boolean; rebuild?: boolean }, deps: ShareDeps, fail: (m: string) => never): Promise<void> {
   const cfg = requireConfig(fail);
   const deviceSecret = deviceSecretOrFail(fail);
   const entitlement = await maybeEntitlement(deviceSecret);
   await deps.withVault((vault) => foldSidecarScopesIntoVault(vault)); // saves the vault itself when it folds
   let result: PushSharedResult | null;
   try {
-    result = await pushNow(cfg, deviceSecret, entitlement, deps, options.resetOrder === true);
+    result = await pushNow(cfg, deviceSecret, entitlement, deps, options.resetOrder === true, options.rebuild === true);
   } catch (err) {
     fail(message(err));
   }
@@ -205,6 +207,7 @@ export async function sharePushCmd(options: { resetOrder?: boolean }, deps: Shar
   }
   console.log(`✓ Pushed ${result.pushed} memories across ${result.scopes.length} shared scope(s) to ${cfg.server}.`);
   if (options.resetOrder) console.log("  Cloud Connect now treats this device's copy as the newest.");
+  if (options.rebuild) console.log('  If Cloud Connect could not unlock your account, it was rebuilt from this device. Reconnect your AI apps: northkeep share code');
 }
 
 const NOTHING_SHARED = 'No scopes are shared yet. Run: northkeep share add <scope>';
