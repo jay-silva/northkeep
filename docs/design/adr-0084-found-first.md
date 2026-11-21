@@ -72,3 +72,9 @@ Baseline finding (2026-11-21, from the planning thread): Claude scored 19 or 20 
 - D3 now also skips rows marked `archive` in metadata. Only NorthKeep's own writers set that marker, the same rule as `confirmed`. The trim gets a proper path (a `project_update` option that moves old Decisions into a marked archive), and the two existing rows are re-saved with the marker when milestone 2 ships.
 - Long rows win keyword overlap, because a several-KB row matches most query words. The build adds a fixture: a long unrelated row must not outrank a short exact answer, and the overlap score is normalized for length if that fixture fails.
 - Several baseline misses (family and pet names, favorite food) are not in the vault at all. Those are capture failures for milestone 3 and the Welcome interview, not search failures.
+
+Third baseline (2026-11-21, likely Muse, scored 12 to 14): it checked NorthKeep unprompted for about 10 answers and scored lowest, with four confident wrong or incomplete answers traced to what NorthKeep served. Personal details stay out of the repo; the patterns:
+- A months-old agent session note answered an ownership question wrongly and contradicted a newer fact. Session notes need to rank below confirmed facts, which D4 gives only once the fact is confirmed.
+- A project document was served as the description of a company. D3 covers this on `memory_retrieve` and `search`.
+- Two answers left out facts that exist as memories (a second property, a second pet). Recall, not ranking: the build adds a fixture where the answer is split across two short memories and both must come back within the default limit.
+- Conclusion: getting agents to look is necessary but not enough. Whether agent-written session notes should rank below other agent facts by default is an open question for the next review round, which needs Jay's ask.
