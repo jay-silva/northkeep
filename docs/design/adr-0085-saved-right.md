@@ -30,10 +30,10 @@ Milestone 3 of relaunch step 1. Overflow for the ADR, plus the review log.
 
 `RowPlain` gains an optional `replaces`. The new memory is delivered as an ordinary addition. The replace goes into a connector queue of its own, modelled on `pending_forgets`, because a pending row is acked or deduped on the next sync and would lose the link (recheck R-D4). Only clients that announce support (the ADR 0063 `?v=` pattern) read the queue. The desktop lists each entry beside connector forgets, which already need confirmation (`connector-client.ts:431-433`). Applying one needs a primitive that does not exist today: mark an existing row `superseded_by` another existing row. `supersedeEntry` always creates a new row. The phone and older builds never see the queue.
 
-## Open questions for Jay
+## Jay's answers (2026-11-21)
 
-- O1: replacing a confirmed memory from a device agent. Recommended: allow, with an unconfirmed successor. The alternative is to refuse until milestone 5.
-- O2: cloud replaces of unconfirmed, agent-written rows. Recommended: hold them in milestone 3 and revisit with milestone 5's phone confirmations. Because Jay rarely opens the app, held replaces will queue until then.
+- O1, replacing a confirmed memory from a device agent: allowed, with an unconfirmed successor ("O1 , yes").
+- O2, cloud replaces of unconfirmed, agent-written rows: always wait for confirmation ("O2, no"). Held replaces queue until milestone 5's phone confirmations.
 
 ## Acceptance test (draft; the final commands land with the code)
 
