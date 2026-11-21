@@ -67,3 +67,8 @@ Recheck (2026-11-20): CLEARED WITH WOUNDS. All prior wounds closed except D5. Th
 - Instruction delivery stays unverified against reality until D0 runs.
 
 Second recheck (2026-11-21, Jay asked for it): CLEARED WITH WOUNDS. The D5 fix is closed in keyword mode, semantic mode and on the connector, and the revised acceptance fixture passes in all three. The verdict stays capped only because instruction delivery is unverified until D0 runs.
+
+Baseline finding (2026-11-21, from the planning thread): Claude scored 19 or 20 of 25 and never called NorthKeep. Two "Decisions archive" memories, saved by an agent on 2026-11-21 when the project record was trimmed, now rank first in `memory_retrieve` for unrelated personal questions ("names of Jay's dogs"). Changes:
+- D3 now also skips rows marked `archive` in metadata. Only NorthKeep's own writers set that marker, the same rule as `confirmed`. The trim gets a proper path (a `project_update` option that moves old Decisions into a marked archive), and the two existing rows are re-saved with the marker when milestone 2 ships.
+- Long rows win keyword overlap, because a several-KB row matches most query words. The build adds a fixture: a long unrelated row must not outrank a short exact answer, and the overlap score is normalized for length if that fixture fails.
+- Several baseline misses (family and pet names, favorite food) are not in the vault at all. Those are capture failures for milestone 3 and the Welcome interview, not search failures.
