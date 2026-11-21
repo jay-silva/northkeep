@@ -419,8 +419,8 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
   touch NorthKeep**: they live only in Stripe, and Checkout is Stripe-hosted
   (no card data, no PCI scope on us). The honest cost: the operator can now
   correlate *which paying customer owns which encrypted vault*, never its
-  contents (still ciphertext-only). **Self-hosting stays fully anonymous** (no
-  Stripe, allowlist only).
+  contents (still ciphertext-only). **Self-hosting keeps account data away from us** when every app points at
+  your own servers (no Stripe, allowlist only); the iPhone app defaults to ours.
 - **The gate leans on Stripe webhooks.** A cancelled subscription flips your
   account off when Stripe delivers the `subscription.deleted` webhook; if that's
   delayed, the `current_period_end` time check is the backstop (you keep syncing

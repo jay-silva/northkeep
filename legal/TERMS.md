@@ -1,10 +1,8 @@
 # NorthKeep Terms of Service
 
-> Not legal advice.
-
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** support@northkeep.ai · **Effective date:** 2026-09-24
+**Contact:** support@northkeep.ai · **Effective date:** 2026-10-28
 
 These Terms govern your use of the NorthKeep software and the optional hosted
 sync service (together, the "Service"). By installing the software or using the
@@ -28,12 +26,9 @@ Corresponding Source of the exact version we run. We publish that source,
 including our modifications, at https://github.com/jay-silva/northkeep, and you
 may also request it at support@northkeep.ai.
 
-**Contributions.** Contributions to NorthKeep are accepted under the Developer
-Certificate of Origin and our contributor terms, under which contributors license
-their contributions to us on terms that permit both the AGPL release and the
-separate commercial license described above. If you contribute, you confirm you
-have the right to do so; if you have not agreed to those terms, please do not
-submit contributions.
+**Contributions.** If you contribute to NorthKeep, you confirm you have the
+right to do so. We may ask you to agree to separate terms before we accept a
+contribution.
 
 ## 2. The hosted sync service
 
@@ -42,11 +37,11 @@ your devices.
 
 - **Price:** $10.00 USD per month, billed through Stripe. Subscriptions renew
   automatically each month until cancelled.
-- **Your consent to automatic renewal.** Before your first charge, we present the
-  automatic-renewal terms (that your subscription continues and renews until you
-  cancel, the recurring price, the billing frequency, and how to cancel) clearly
-  and conspicuously at checkout, and we begin billing only after you give express
-  affirmative consent to those terms. We keep a record of that consent.
+- **Automatic renewal.** You subscribe on a checkout page hosted by Stripe.
+  Before you pay, that page shows the monthly price and states that your
+  subscription renews automatically each month at that price until you cancel,
+  and that you can cancel at any time in the billing portal. Your subscription
+  starts when you complete checkout.
 - **Renewal reminders.** We send you a confirmation when you subscribe and, for
   any subscription that continues for a year or more, at least one renewal
   reminder per year. Each reminder states that the subscription auto-renews, the
@@ -60,8 +55,9 @@ your devices.
   notice by email to the address associated with your subscription before the new
   price takes effect. The new price applies only to renewals after that notice,
   and you may cancel before it takes effect.
-- **What it stores:** an encrypted copy of your vault that we cannot decrypt, and
-  a subscription record. See the Privacy Policy.
+- **What it stores:** an encrypted copy of your vault that we cannot decrypt, a
+  subscription record, and the technical details described in the Privacy
+  Policy.
 - **Free alternative:** you can self-host the sync server at no charge instead.
 
 ## 3. Shared scopes (optional connector)
@@ -87,7 +83,7 @@ them. It is part of the hosted subscription.
   operation. Some information about your shared content, such as scope names,
   entry identifiers, and timestamps, remains visible to the server, and the
   connector keeps some records about your account and the apps you connect; the
-  Privacy Policy lists all of it.
+  Privacy Policy describes them.
 - **Your responsibility for what you share.** You are responsible for the content
   you choose to share and for having the right to share it. Do not share content
   you are not permitted to place on a third-party server, and do not use the
@@ -165,8 +161,8 @@ is permanently inaccessible, and we cannot recover it, reset it, or access your
 data for you.** This is a deliberate security property, not a limitation we can
 waive. **The hosted sync service is not a backup service** and does not protect
 you against a lost passphrase or device secret: keep your own backups of your
-device secret and, if you wish, your vault file. We remind you of this when you
-subscribe and in the app so that the choice to rely on it is an informed one.
+device secret and, if you wish, your vault file. We remind you of this in the
+app so that the choice to rely on it is an informed one.
 
 ## 7. Acceptable use
 

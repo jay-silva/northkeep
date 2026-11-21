@@ -2,7 +2,7 @@
 
 **Provider:** Silva Peak Labs, LLC d/b/a NorthKeep ("we," "us"), a Massachusetts
 limited liability company.
-**Contact:** support@northkeep.ai · **Effective date:** 2026-09-28
+**Contact:** support@northkeep.ai · **Effective date:** 2026-10-28
 
 NorthKeep is built on a simple promise: **your AI memory lives on your device,
 encrypted, and we never see its contents** (the exceptions are content you
@@ -25,19 +25,21 @@ this policy and, for material changes, tell you before the change takes effect
   makes no network connection except the ones you initiate or enable: syncing
   your encrypted vault, sharing a scope with the connector, reaching an AI
   provider you connect, or, on the Mac, a local model download you click
-  (performed by Ollama), an update check when you click "Check for updates,"
-  or (each off by default until you turn it on) a web search or fetch you
+  (performed by Ollama), an update check when you click "Check for updates"
+  (which asks GitHub, where we publish releases, for the latest version), or (each off by default until you turn it on) a web search or fetch you
   approve, or an MCP server, local or remote, that you connect. We do not collect usage data, and there are no
   third-party trackers in it.
 - If you use our **optional hosted sync**, our server stores an **encrypted
-  blob it cannot decrypt** plus the bookkeeping needed to serve it (a version
-  number, its size, a checksum, and when it last changed), never a key, never
-  plaintext.
+  blob it cannot decrypt** plus the bookkeeping needed to serve it (such as a
+  version number, its size, a checksum, and when it last changed), never a key,
+  never plaintext.
 - If you **subscribe**, payment is handled by Stripe; your card and email live
   with Stripe, not us. We store your Stripe customer and subscription IDs, your
   subscription's status, and its current period end, linked to your hashed
   account identifier.
-- **Self-hosting is fully anonymous**, no data reaches us at all.
+- **If you self-host** and point every NorthKeep app you use at your own
+  servers, no account data reaches us. The iPhone app is set to our hosted
+  servers until you change it.
 
 ## What we collect
 
@@ -66,8 +68,8 @@ transmitted to us. There is no account to create to use NorthKeep locally.
 - an **opaque, client-side-encrypted copy of your vault** (ciphertext bytes we
   cannot decrypt, because we never receive your key; the file's short
   unencrypted header holds only the non-secret settings needed to decrypt it),
-  together with a version number, its size, a checksum of the ciphertext, and
-  the time it last changed;
+  together with technical details such as a version number, its size, a
+  checksum of the ciphertext, and the time it last changed;
 - an **account identifier derived from your device secret** (a one-way hash,
   of which our server stores only a further hash), so your encrypted vault can
   be matched to your account. It is not linked to your name, email, or device
@@ -182,8 +184,9 @@ memories you choose. You can use it from the Mac app and from the iPhone app
   returned, never their content) and each time your own Mac or iPhone uploads
   shared scopes, unshares a scope, or confirms a download (the action, the time,
   and how many entries or scopes, never their names or content); the name of
-  each scope you unshare and when; and the date through which your account may
-  use the connector.
+  each scope you unshare and when; the date through which your account may
+  use the connector; and other technical details, such as a short fingerprint of the address of the sync server you use, version and sequence numbers, the identifiers of entries
+  an app has forgotten that your device has not yet removed, and fingerprints of one-time codes used to check your subscription.
 - **What we do not derive from it:** no embeddings, no content logs, no analytics.
   We never store your keys, your passphrase, or your device secret on the
   connector.
@@ -206,8 +209,9 @@ memories you choose. You can use it from the Mac app and from the iPhone app
   app writes that your device holds back without adding (for example, into a
   project that already exists on your device but is not shared).
 
-Self-hosting the connector, or simply never sharing a scope and never
-connecting an app to it, means no shared memory ever transits our server.
+Pointing every app at a connector you host yourself, or simply never sharing a
+scope and never connecting an app to ours, means no shared memory transits our
+server.
 
 ## What we do not do
 
@@ -358,8 +362,8 @@ There are two kinds, with different exposure.
   call. That means your model provider can learn which services you've
   connected, separately from anything a call's results return.
 
-Self-hosting, or simply never turning tools on or connecting a server, means
-none of the data flows in this section happen.
+Never turning tools on or connecting a server means none of the data flows in
+this section happen.
 
 ## How we protect the little data we hold
 
@@ -371,11 +375,11 @@ we describe the honest limits of our connector design above and in
 `KNOWN-LIMITS.md`.
 
 **Breach notification.** If we discover a security incident that compromises
-personal data we hold or the shared content on the connector, we will investigate
-promptly and notify affected users, and any regulators, as and when required by
-applicable law, for example the Massachusetts data-breach statute (M.G.L.
-c. 93H), other U.S. state breach-notification laws, and, for users in the EU or
-UK, the GDPR's 72-hour notification rule, without undue delay.
+personal data we hold or the shared content on the connector, we will notify
+affected users without undue delay where applicable law requires it, and notify
+regulators where the law requires that, for example under the Massachusetts
+data-breach statute (M.G.L. c. 93H), other U.S. state breach-notification laws,
+and, for users in the EU or UK, the GDPR.
 
 ## Data retention and deletion
 
@@ -399,7 +403,7 @@ UK, the GDPR's 72-hour notification rule, without undue delay.
 
 Depending on where you live (for example under GDPR or the CCPA), you may have
 rights to access, correct, delete, or export the personal data we hold about you.
-In practice we hold very little: a hashed account identifier; only if you
+In practice we hold very little, such as: a hashed account identifier; only if you
 subscribe, the Stripe billing mapping described above; only if you use the
 connector, your shared content and the connector records described above; and
 any email you send us or submit through the waitlist form. To exercise any
