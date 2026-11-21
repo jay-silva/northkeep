@@ -702,7 +702,7 @@ export function createMcpServer(
     return {
       content: [{ type: 'text' as const, text }],
       isError: true as const,
-      ...(structuredContent ? { structuredContent } : {}),
+      ...(structuredContent ? { structuredContent: { message: text, ...structuredContent } } : {}),
     };
   }
 
@@ -852,7 +852,8 @@ export function createMcpServer(
             text: `${body}${note}\n\nRevision: ${picked.entryId} (pass it as expected_revision to project_update)`,
           },
         ],
-        structuredContent: { project, revision: picked.entryId },
+        // Some clients show only structuredContent, so it must carry the document, not just the revision.
+        structuredContent: { project, revision: picked.entryId, document: body, ...(noPlan ? { note: NO_MILESTONES_NOTE } : {}) },
       };
     },
   );
@@ -970,15 +971,8 @@ export function createMcpServer(
         resultCount: 1,
         resultIds: [entryId],
       });
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Created project "${project}". It will sync into the vault. (id: ${entryId}) Revision: ${entryId}.`,
-          },
-        ],
-        structuredContent: { project, revision: entryId },
-      };
+      const text = `Created project "${project}". It will sync into the vault. (id: ${entryId}) Revision: ${entryId}.`;
+      return { content: [{ type: 'text', text }], structuredContent: { project, revision: entryId, message: text } };
     },
   );
 
@@ -1143,15 +1137,8 @@ export function createMcpServer(
       const rolledNote = archiveId
         ? ` Archived ${archivedEntries.length} older log entries to ${archiveId}; project_get with history: true shows them.`
         : '';
-      return {
-        content: [
-          {
-            type: 'text',
-            text: `Updated project "${project}". It will sync into the vault. (id: ${entryId}) Revision: ${entryId}.${rolledNote}`,
-          },
-        ],
-        structuredContent: { project, revision: entryId },
-      };
+      const text = `Updated project "${project}". It will sync into the vault. (id: ${entryId}) Revision: ${entryId}.${rolledNote}`;
+      return { content: [{ type: 'text', text }], structuredContent: { project, revision: entryId, message: text } };
     },
   );
 
