@@ -10,6 +10,7 @@ every milestone; if a limit is removed, say when and how.*
 - Memory search skips project documents, project log archives, and rows marked as archives. Read those with `project_get`. Anyone who can write a scope can make a row look like a log archive and so hide it from search; the same writer can already edit or forget it.
 - A confirmed memory ranks above unconfirmed ones but is never added to results that do not match the question. For now only the command line confirms; the Mac app has no confirm button yet. An AI app that can run commands on your Mac, as Claude Code can, can run the confirm command too, the same limit as milestones.
 - An AI app's edit of a confirmed memory makes the new version unconfirmed.
+- On your Mac, an unconfirmed episodic memory an AI app saved more than 30 days ago is listed after every other match, since old session notes are often out of date. It still appears. The Cloud connector cannot tell who wrote a row, so cloud apps see those notes in plain score order.
 - The Cloud connector can read whether each shared memory is confirmed or marked as an archive: two flags inside the encrypted row, nothing more.
 
 ## Keep Watch, lid-closed awake (ADR 0080), current

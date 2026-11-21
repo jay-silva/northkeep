@@ -97,3 +97,4 @@ What was built, and where it departs from the decisions above:
 - Session notes ranking below other memories is not built; it waits for Jay.
 
 Acceptance test as run on throwaway data (keyword mode, no local model): the confirmed director line ranked first, the 2019 line second, the window-seat line absent.
+- D8 (Jay, 2026-11-21, "Old agent session notes rank below other memories"): `isOldAgentNote` and `compareSearchResults` in core search-rules. An episodic row whose source is `mcp`, `mcp:<host>` or `connector:<host>`, older than 30 days and unconfirmed, sorts after every other match on both the keyword and meaning paths. It is a sort tier, not a score cut, so a note that is the only match still comes back. Rows imported from an app's own memory (`import:*`) are not notes and are unaffected. The connector does not apply D8: pushed rows carry no source, and their timestamp is the push time.

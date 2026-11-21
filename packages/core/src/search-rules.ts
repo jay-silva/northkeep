@@ -41,6 +41,33 @@ export function lengthPenalty(distinctWords: number): number {
   return Math.min(0.3, 0.1 * Math.log2(Math.max(1, distinctWords / 64)));
 }
 
+/** An AI app's session note older than this ranks below every other match (D8). */
+export const OLD_NOTE_DAYS = 30;
+
+/**
+ * D8: an episodic memory an AI app wrote ("mcp", "mcp:<host>", "connector:<host>")
+ * more than OLD_NOTE_DAYS ago. Old notes are often stale, so search lists them
+ * after every other match instead of dropping them. A confirmed one is not demoted.
+ */
+export function isOldAgentNote(
+  row: { type: string; source: string; created_at: string; metadata?: Record<string, unknown> | null },
+  now: number,
+): boolean {
+  if (row.type !== 'episodic' || isConfirmed(row.metadata)) return false;
+  if (!(row.source === 'mcp' || row.source.startsWith('mcp:') || row.source.startsWith('connector:'))) return false;
+  return now - Date.parse(row.created_at) > OLD_NOTE_DAYS * 86_400_000;
+}
+
+/** Search order: old agent notes last, then by score. */
+export function compareSearchResults(
+  a: { entry: { type: string; source: string; created_at: string; metadata?: Record<string, unknown> | null }; score: number },
+  b: { entry: { type: string; source: string; created_at: string; metadata?: Record<string, unknown> | null }; score: number },
+  now: number,
+): number {
+  const tier = Number(isOldAgentNote(a.entry, now)) - Number(isOldAgentNote(b.entry, now));
+  return tier !== 0 ? tier : b.score - a.score;
+}
+
 /** Metadata key for a memory the user confirmed (D4). Only the app and CLI write it. */
 export const CONFIRMED_METADATA_KEY = 'confirmed';
 /** Metadata key NorthKeep's own writers set on a row moved out of a project document. */

@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KDF_INTERACTIVE, generateDeviceSecret } from '../src/crypto.js';
 import type { Embedder } from '../src/types.js';
 import { Vault } from '../src/vault.js';
@@ -119,5 +119,25 @@ describe('ADR 0084 baseline fixtures', () => {
     const found = contents(vault.retrieve('what are the names of my beagles dogs', { skipProjectPaperwork: true }));
     expect(found).toContain('Jay has a beagle named Biscuit born in 2021');
     expect(found).toContain('Jay has a second beagle named Pepper born in 2026');
+  });
+});
+
+describe('ADR 0084 D8: old AI session notes rank below other matches', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('lists a three-month-old agent note after a weaker fact, keeps a recent note in score order, and spares a confirmed one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-08-20T12:00:00.000Z'));
+    vault.remember({ content: 'Session note: the half share of Example Holdings belongs to Alpha LLC', type: 'episodic', scope: 'conversations', source: 'mcp' });
+    vault.remember({ content: 'Old checked note: Example Holdings half share is disputed', type: 'episodic', scope: 'conversations', source: 'mcp', metadata: confirmedMeta });
+    vi.setSystemTime(new Date('2026-11-21T12:00:00.000Z'));
+    vault.remember({ content: 'Example Holdings is a rental company', type: 'semantic', source: 'cli' });
+    vault.remember({ content: 'Session note today: Example Holdings half share talk', type: 'episodic', scope: 'conversations', source: 'mcp:claude-code' });
+    const order = contents(vault.retrieve('Example Holdings half share'));
+    expect(order.at(-1)).toBe('Session note: the half share of Example Holdings belongs to Alpha LLC');
+    expect(order.indexOf('Example Holdings is a rental company')).toBeLessThan(order.length - 1);
+    const sem = contents((await vault.retrieveSemantic('Example Holdings half share', flatEmbedder)).results);
+    expect(sem.at(-1)).toBe('Session note: the half share of Example Holdings belongs to Alpha LLC');
+    expect(order).toContain('Old checked note: Example Holdings half share is disputed');
   });
 });

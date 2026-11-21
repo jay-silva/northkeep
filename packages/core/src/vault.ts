@@ -83,7 +83,7 @@ import {
   type SemanticRetrieval,
   type VaultExport,
 } from './types.js';
-import { ARCHIVE_METADATA_KEY, CONFIRMED_BOOST, CONFIRMED_METADATA_KEY, isConfirmed, isMarkedArchive, isProjectPaperwork, lengthPenalty, searchTerms } from './search-rules.js';
+import { ARCHIVE_METADATA_KEY, CONFIRMED_BOOST, CONFIRMED_METADATA_KEY, isConfirmed, isMarkedArchive, isProjectPaperwork, lengthPenalty, searchTerms, compareSearchResults } from './search-rules.js';
 
 /**
  * Vault file format (.nkv) — see SPEC/security-model.md and ADR 0001:
@@ -1733,7 +1733,7 @@ export class Vault {
       const confirmed = isConfirmed(entry.metadata) ? CONFIRMED_BOOST : 0;
       scored.push({ entry, score: overlap + recency + typeBoost + confirmed });
     }
-    scored.sort((a, b) => b.score - a.score);
+    scored.sort((a, b) => compareSearchResults(a, b, now));
     return scored.slice(0, limit);
   }
 
@@ -1841,7 +1841,7 @@ export class Vault {
       const score = SEMANTIC_WEIGHT * sem + overlap + recency + typeBoost + confirmed;
       scored.push({ entry, score });
     }
-    scored.sort((a, b) => b.score - a.score);
+    scored.sort((a, b) => compareSearchResults(a, b, now));
     return scored.slice(0, limit);
   }
 
