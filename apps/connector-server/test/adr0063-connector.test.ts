@@ -148,8 +148,8 @@ for (const kind of ['memory', 'pglite'] as const) {
       const w = await world();
       const r1 = w.head().revision;
       const got = await w.mcp('project_get', { project: 'a' });
-      expect(got.structured).toEqual({ project: 'a', revision: r1 });
-      expect(got.text.endsWith(`Revision: ${r1} (pass it as expected_revision to project_update)`)).toBe(true);
+      expect(got.structured).toEqual({ project: 'a', revision: r1, document: expect.stringContaining('## Current Status') });
+      expect(got.text).toBe(`${got.structured!.document as string}\n\nRevision: ${r1} (pass it as expected_revision to project_update)`);
       const up = await w.mcp('project_update', { project: 'a', expected_revision: r1, status: 'CLOUD TEXT.' });
       expect(up.isError).toBe(false);
       const cloudId = up.structured!.revision as string;
@@ -180,7 +180,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       // (c) R2 reaches the connector: it serves R2, the row is stale and hidden from every read tool.
       await w.push();
       const after = await w.mcp('project_get', { project: 'a' });
-      expect(after.structured).toEqual({ project: 'a', revision: r2 });
+      expect(after.structured).toMatchObject({ project: 'a', revision: r2 });
       expect(after.text).toContain('R2 LOCAL SAVE.');
       expect(after.text).not.toContain('CLOUD TEXT.');
       const flagged = (await w.pending(true)).entries.filter((e) => e.scope === 'project:a');
@@ -219,7 +219,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       const ack = await w.post('/client/ack', { acked: [{ server_id: c2, local_entry_id: 'H2-local-id' }], forgets: [] });
       expect(ack.status).toBe(200);
       const got = await w.mcp('project_get', { project: 'a' });
-      expect(got.structured).toEqual({ project: 'a', revision: 'H2-local-id' });
+      expect(got.structured).toMatchObject({ project: 'a', revision: 'H2-local-id' });
       expect(got.text).toContain('CLOUD FF TWO.');
       const byId = Object.fromEntries((await w.rows()).map((e) => [e.entryId, { pending: e.pending === true, seq: e.writeSeq }]));
       expect(byId).toEqual({ [r1]: { pending: false, seq: 1 }, 'H2-local-id': { pending: false, seq: 4 } });
@@ -239,7 +239,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       expect(approved.replaced).toBe(1);
       const h2 = w.head().revision;
       expect(w.head().content).toContain('CLOUD FORWARD.');
-      expect((await w.mcp('project_get', { project: 'a' })).structured).toEqual({ project: 'a', revision: h2 });
+      expect((await w.mcp('project_get', { project: 'a' })).structured).toMatchObject({ project: 'a', revision: h2 });
 
       const moved = (await w.mcp('project_update', { project: 'a', expected_revision: h2, status: 'CLOUD AGAIN.' })).structured!.revision as string;
       w.vault.editMemory(h2, { content: doc('LOCAL AFTER FORWARD.') }, { actor: 'owner' });
@@ -285,7 +285,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       const x = up.structured!.revision as string;
       await w.demoteToLegacy(x);
       expect((await storage.getEntry(w.account, x))?.baseRevision).toBeUndefined();
-      expect((await w.mcp('project_get', { project: 'b' })).structured).toEqual({ project: 'b', revision: r1 });
+      expect((await w.mcp('project_get', { project: 'b' })).structured).toMatchObject({ project: 'b', revision: r1 });
       const v2 = (await w.pending(true)).entries.filter((e) => e.scope === 'project:b');
       expect(v2).toHaveLength(1);
       expect(v2[0]!.server_id).toBe(x);
@@ -325,7 +325,7 @@ for (const kind of ['memory', 'pglite'] as const) {
       expect(await res.json()).toEqual({ ok: true, discarded: 1 });
       expect((await w.rows()).map((e) => ({ id: e.entryId, pending: e.pending === true }))).toEqual([{ id: h, pending: false }]);
       expect(await storage.readScopeSeq(w.account, 'project:a')).toBe(seqBefore + 1);
-      expect((await w.mcp('project_get', { project: 'a' })).structured).toEqual({ project: 'a', revision: h });
+      expect((await w.mcp('project_get', { project: 'a' })).structured).toMatchObject({ project: 'a', revision: h });
     });
 
     it('/client/discard refuses a malformed body and a missing token', async () => {

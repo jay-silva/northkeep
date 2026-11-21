@@ -845,14 +845,16 @@ export function createMcpServer(
         : `${picked.content}\n\n---\n\n${archives.map((a) => a.content).join('\n\n---\n\n')}`;
       const noPlan = parseMilestones(picked.content).kind === 'absent' && !isProjectStatusDone(getProjectSection(parseProjectDoc(picked.content), 'Current Status'));
       const note = noPlan ? `\n\n${NO_MILESTONES_NOTE}` : '';
+      // Some clients show structuredContent in place of the text, so it must carry the document too.
+      const document = `${body}${note}`;
       return {
         content: [
           {
             type: 'text',
-            text: `${body}${note}\n\nRevision: ${picked.entryId} (pass it as expected_revision to project_update)`,
+            text: `${document}\n\nRevision: ${picked.entryId} (pass it as expected_revision to project_update)`,
           },
         ],
-        structuredContent: { project, revision: picked.entryId },
+        structuredContent: { project, revision: picked.entryId, document },
       };
     },
   );
@@ -977,7 +979,7 @@ export function createMcpServer(
             text: `Created project "${project}". It will sync into the vault. (id: ${entryId}) Revision: ${entryId}.`,
           },
         ],
-        structuredContent: { project, revision: entryId },
+        structuredContent: { project, revision: entryId, message: `Created project "${project}". It will sync into the vault.` },
       };
     },
   );
@@ -1150,7 +1152,7 @@ export function createMcpServer(
             text: `Updated project "${project}". It will sync into the vault. (id: ${entryId}) Revision: ${entryId}.${rolledNote}`,
           },
         ],
-        structuredContent: { project, revision: entryId },
+        structuredContent: { project, revision: entryId, message: `Updated project "${project}". It will sync into the vault.${rolledNote}` },
       };
     },
   );
