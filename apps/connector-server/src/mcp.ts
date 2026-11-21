@@ -710,10 +710,8 @@ export function createMcpServer(
   async function staleProject(tool: string, project: string, scope: string) {
     const view = projectScopeView((await visibleEntries()).filter((e) => e.scope === scope));
     if (view.head.kind !== 'head') {
-      return refuseProject(tool, 'Project changed after it was read. Nothing was saved. Call project_get again.', {
-        code: 'stale_project',
-        project,
-      });
+      const message = 'Project changed after it was read. Nothing was saved. Call project_get again.';
+      return refuseProject(tool, message, { code: 'stale_project', project, message });
     }
     const current = view.head.row;
     return refuseProject(
