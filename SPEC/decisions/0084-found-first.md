@@ -12,11 +12,11 @@ The relaunch test asks fresh Claude, Grok Bot, Codex and Muse sessions 25 questi
 - D3: `memory_retrieve` (device and connector) and the connector's `search` skip a live project document and any archive: a log archive (`isProjectLogArchive`) or a row NorthKeep marks `archive` (moved-out Decisions). Other project-scope memories stay searchable.
 - D4: A memory is confirmed when its metadata holds `confirmed: {by: "user", at}`. Only the app and CLI set it; confirming supersedes the memory with the same content plus the marker. Any agent write that supersedes a confirmed memory drops the marker: `supersedeEntry` copies metadata today and must strip it for actor agent.
 - D5: A keyword match needs a word that is not a stopword, word-bounded on the connector; this gates admission and the boost. The boost only reorders.
-- D6: Pushes carry `confirmed: true` inside the encrypted row. The connector deploys before clients send it.
+- D6: Pushes carry `confirmed` and `archive` flags inside the encrypted row. The connector deploys before clients send it.
 - D7: CLI `northkeep confirm <id>` and `remember --confirmed`. Jay confirms core facts with commands the agent hands him, since he rarely opens the app.
 
 ## Consequences
-- Easier: one wording; confirmed facts outrank agent guesses.
+- Easier: one wording; confirmed facts outrank guesses.
 - Harder: a confirm writes a row.
 - Committed to: KNOWN-LIMITS says the instruction is advisory, that a shell-capable agent can run `confirm` (as with milestones), and which apps D0 found pass instructions.
 
@@ -26,7 +26,7 @@ The relaunch test asks fresh Claude, Grok Bot, Codex and Muse sessions 25 questi
 - Letting agents confirm: an agent could promote its own memories.
 
 ## What leaves the machine
-To each connected app: the instruction text, no vault content. To the connector, shared scopes only: one boolean per row inside the existing ciphertext.
+To each connected app: the instruction text. To the connector, shared scopes only: two flags per row (confirmed, archive) inside the existing ciphertext.
 
 ## Links
 Design and review log: docs/design/adr-0084-found-first.md · Extends: ADRs 0039, 0067

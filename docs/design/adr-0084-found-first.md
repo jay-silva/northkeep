@@ -84,3 +84,16 @@ Full baseline (2026-11-21, provisional until Jay rules on his answer key): no ag
 - A trap is passed by a rule, not a fact. A confirmed entry that says a fact is disputed and to ask the user would let every agent pass; the Welcome interview should offer that kind of entry.
 - A search for a pet returned only a project whose name contains the word, and missed a personal-scope memory. Another retrieval miss; the split-answer fixture gains a case where a project name matches the query and the personal memory must still come back.
 - One agent-written memory conflicts with Jay's key. It is left alone until Jay confirms which is right.
+
+## Build notes (2026-11-21, branch claude/m2-found-first)
+
+What was built, and where it departs from the decisions above:
+- D0: Claude Code passes server instructions to its model (seen in a live session's own instructions). Codex could not be tested from the build session: its configured model is refused on Jay's ChatGPT account. claude.ai, Codex, Grok Bot and Muse wait for a run with Jay.
+- D1: `FOUND_FIRST_INSTRUCTION` in packages/mcp-server/src/project-recipe.ts, a copy in apps/connector-server/src/mcp.ts, a test that the copies and both handshakes match, and the contract gains the sentence (three new render hashes).
+- D2 is not built. The sentence is in KNOWN-LIMITS; the Connect help text and copy button wait for the mock.
+- D3: `isProjectPaperwork` (core and connector copies) behind `skipProjectPaperwork`, which `memory_retrieve` and CLI search pass. Other callers, such as Converse, are unchanged. The archive marker needs a writer, so the CLI gains `mark-archive <id>`; the `project_update` option that moves Decisions out is not built yet.
+- D5 plus two additions the baseline asked for: a plain trailing "s" is folded ("dogs" finds "dog"), and a row with more than 64 distinct words loses up to 0.3 of keyword score. The long-row fixture fails without that cut. On the connector a word found only in a row's scope or type counts half.
+- D6 carries a second flag, `archive`, beside `confirmed`, so the connector skips marked archives too.
+- Session notes ranking below other memories is not built; it waits for Jay.
+
+Acceptance test as run on throwaway data (keyword mode, no local model): the confirmed director line ranked first, the 2019 line second, the window-seat line absent.
