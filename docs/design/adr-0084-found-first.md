@@ -98,3 +98,9 @@ What was built, and where it departs from the decisions above:
 
 Acceptance test as run on throwaway data (keyword mode, no local model): the confirmed director line ranked first, the 2019 line second, the window-seat line absent.
 - D8 (Jay, 2026-11-21, "Old agent session notes rank below other memories"): `isOldAgentNote` and `compareSearchResults` in core search-rules. An episodic row whose source is `mcp`, `mcp:<host>` or `connector:<host>`, older than 30 days and unconfirmed, sorts after every other match on both the keyword and meaning paths. It is a sort tier, not a score cut, so a note that is the only match still comes back. Rows imported from an app's own memory (`import:*`) are not notes and are unaffected. The connector does not apply D8: pushed rows carry no source, and their timestamp is the push time.
+
+Build recheck (2026-11-21, fresh eyes on the code): CLEARED WITH WOUNDS. No path lets an AI app set or keep `confirmed` or `archive`, and the flags stay inside the ciphertext. Wound, fixed after the recheck: the connector drift test compared too little and failed once D8 landed; it now compares the shared word rules verbatim and checks the boost and the paperwork rule by running both copies on the same rows. Also fixed: a long row's keyword score is floored at zero, so a weak keyword hit never ranks below no hit. Accepted and recorded:
+- Plural folding admits some false matches ("news" matches "new").
+- An agent edit keeps an `archive` marker, so a rewritten archive stays out of search.
+- An edit resets a row's age, so an agent's edit of an old note restarts the 30 days.
+- The verdict stays capped until D0 shows which apps pass the instruction.

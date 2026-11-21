@@ -8,6 +8,9 @@ import { createMcpServer, FOUND_FIRST_INSTRUCTION, MILESTONE_INSTRUCTION } from 
 import { InMemoryConnectorStorage } from '../src/storage.js';
 import { decryptRow, encryptRow } from '../src/crypto.js';
 import { seedEncryptedEntry, testAccountDek } from './helpers.js';
+import * as hostedRules from '../src/search-rules.js';
+import * as deviceRules from '../../../packages/core/src/search-rules.js';
+import { PROJECT_LOG_ARCHIVE_HEADING } from '../src/project-doc.js';
 import {
   FOUND_FIRST_INSTRUCTION as LOCAL_FOUND_FIRST,
   MILESTONE_INSTRUCTION as LOCAL_MILESTONE,
@@ -53,12 +56,28 @@ describe('ADR 0084 D1: one wording on both servers', () => {
     expect((await client()).getInstructions()).toBe(LOCAL_SERVER_INSTRUCTIONS);
   });
 
-  it('the stopword list and search rules match the device copy', () => {
+  it('the stopword list, word rules, boost and paperwork rule match the device copy', () => {
     const read = (p: string): string => fs.readFileSync(path.join(here, p), 'utf8');
-    const words = (src: string): string => src.slice(src.indexOf('export const SEARCH_STOPWORDS'), src.indexOf('/** Metadata key') > 0 ? src.indexOf('/** Metadata key') : src.indexOf('/** How much a confirmed'));
+    // Source from the stopword list through lengthPenalty, which both files share verbatim.
+    const shared = (src: string): string => {
+      const start = src.indexOf('export const SEARCH_STOPWORDS');
+      const end = src.indexOf('}\n', src.indexOf('export function lengthPenalty')) + 2;
+      return src.slice(start, end);
+    };
     const device = read('../../../packages/core/src/search-rules.ts');
-    const hosted = read('../src/search-rules.ts');
-    expect(words(hosted)).toBe(words(device));
+    expect(shared(read('../src/search-rules.ts'))).toBe(shared(device));
+    expect(hostedRules.CONFIRMED_BOOST).toBe(deviceRules.CONFIRMED_BOOST);
+    const rows = [
+      { type: 'working', scope: 'project:harbor', content: 'doc' },
+      { type: 'episodic', scope: 'project:harbor', content: `${PROJECT_LOG_ARCHIVE_HEADING}: old entries` },
+      { type: 'episodic', scope: 'project:harbor', content: 'Decisions moved out', archive: true },
+      { type: 'semantic', scope: 'project:harbor', content: 'The movers come Friday' },
+      { type: 'working', scope: 'personal', content: 'Current context' },
+    ];
+    for (const row of rows) {
+      const metadata = row.archive ? { archive: { by: 'user', at: 'x' } } : null;
+      expect(hostedRules.isProjectPaperwork(row)).toBe(deviceRules.isProjectPaperwork({ ...row, metadata }));
+    }
   });
 });
 

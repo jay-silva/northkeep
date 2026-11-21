@@ -1726,7 +1726,7 @@ export class Vault {
       let matched = 0;
       for (const term of queryTerms) if (entryTerms.has(term)) matched += 1;
       if (matched === 0) continue;
-      const overlap = matched / queryTerms.size - lengthPenalty(entryTerms.size);
+      const overlap = Math.max(0, matched / queryTerms.size - lengthPenalty(entryTerms.size));
       const ageDays = Math.max(0, now - Date.parse(entry.created_at)) / 86_400_000;
       const recency = 0.3 * Math.exp(-ageDays / 30);
       const typeBoost = TYPE_PRIORITY[entry.type] ?? 0;
@@ -1829,7 +1829,7 @@ export class Vault {
       const entryTerms = searchTerms(entry.content);
       let matched = 0;
       for (const term of queryTerms) if (entryTerms.has(term)) matched += 1;
-      const overlap = matched === 0 ? 0 : matched / queryTerms.size - lengthPenalty(entryTerms.size);
+      const overlap = matched === 0 ? 0 : Math.max(0, matched / queryTerms.size - lengthPenalty(entryTerms.size));
       // Relevance gate: keep an entry only if it shares a keyword OR is
       // genuinely close in meaning, so a query that matches nothing doesn't
       // drag in unrelated filler.
