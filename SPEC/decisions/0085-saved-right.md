@@ -1,6 +1,6 @@
 # ADR 0085: Saved right: near-match check at save, a "replaces" field, every save stamped with its app
 
-Status: Proposed 2026-11-20 (relaunch step 1, milestone 3) · Review 1: NOT CLEARED, fixed; recheck: CLEARED WITH WOUNDS, two wounds fixed after it and not yet rechecked · Merge waits for the milestone 1 baseline score
+Status: Proposed 2026-11-20 (relaunch step 1, milestone 3) · Review 1: NOT CLEARED, fixed; recheck 2: CLEARED WITH WOUNDS (D3 hold rule too broad, fix proposed) · Merge waits for the milestone 1 baseline score
 
 ## Context
 Save test: Jay tells one agent a fact, a fresh session of another knows it, and the vault holds it once with the old version marked replaced. `memory_remember` has no duplicate check and stamps `mcp` (server.ts:1047), though the schema says `mcp:<client>`. Connector saves carry no app name, and its retrieve and list print no ids.

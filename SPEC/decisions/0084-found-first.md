@@ -1,6 +1,6 @@
 # ADR 0084: Found first: agents told to check NorthKeep, search skips project paperwork, confirmed memories rank first
 
-Status: Proposed 2026-11-20 (relaunch step 1, milestone 2) · Review 1: CLEARED WITH WOUNDS, fixed; recheck: CLEARED WITH WOUNDS, D5 fixed after it and not yet rechecked · Merge waits for the milestone 1 baseline score
+Status: Proposed 2026-11-20 (relaunch step 1, milestone 2) · Review 1: CLEARED WITH WOUNDS, fixed; recheck 2: CLEARED WITH WOUNDS (only D0 open) · Merge waits for the milestone 1 baseline score
 
 ## Context
 The relaunch test asks fresh Claude, Grok Bot, Codex and Muse sessions 25 questions without telling them to use NorthKeep. The MCP connect-time text is only the milestone rule, in two hand-kept copies (server.ts:909, connector mcp.ts:261); `northkeep contract install` writes a third standing text into app files. `memory_retrieve` ranks project documents and log archives beside facts. Nothing marks a memory the user confirmed.

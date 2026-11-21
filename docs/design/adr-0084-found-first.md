@@ -65,3 +65,5 @@ Recheck (2026-11-20): CLEARED WITH WOUNDS. All prior wounds closed except D5. Th
 - The connector keeps its own `isProjectLogArchive` (apps/connector-server/src/project-doc.ts:322). "One detector" therefore means one rule, with a test keeping the two copies identical.
 - Changing `CONTRACT_TEXT` means appending the new render's hash to `RELEASED_CONTRACT_RENDER_SHA256`. Otherwise existing installs read as edited and are never offered the update.
 - Instruction delivery stays unverified against reality until D0 runs.
+
+Second recheck (2026-11-21, Jay asked for it): CLEARED WITH WOUNDS. The D5 fix is closed in keyword mode, semantic mode and on the connector, and the revised acceptance fixture passes in all three. The verdict stays capped only because instruction delivery is unverified until D0 runs.

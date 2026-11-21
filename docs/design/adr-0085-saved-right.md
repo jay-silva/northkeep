@@ -66,3 +66,8 @@ Recheck (2026-11-20): CLEARED WITH WOUNDS. The kill shot and the prior wounds ar
 Build notes:
 - The connector needs its own copy of `tameOneLine`, since core's text-safe module cannot be imported there.
 - The cloud path of the save test is not exercised while O2 holds cloud replaces.
+
+Second recheck (2026-11-21, Jay asked for it): CLEARED WITH WOUNDS. The duplicate-row and held-replace wounds are closed. Still open, and introduced by the D3 fix: the hold rule (any two shared non-stopword words) holds most ordinary saves. A two-word name is enough to trigger it, and a project document matches most notes in its scope, though it can never be replaced. Proposed fix, not yet applied, since another round needs Jay's ask: drop project documents and archives from the candidates, as ADR 0084 D3 already does for search, and require the shared words to make up most of the new save's distinctive words, instead of any two. Notes:
+- "What leaves the machine" must add that the connector can read the replace queue's entry ids.
+- D4 must say whether the old row stays visible to cloud apps while its replace waits.
+- The stopword list must be named in code, with a test.
