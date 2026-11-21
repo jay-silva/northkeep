@@ -10,7 +10,7 @@ KNOWN-LIMITS already says Codex, ChatGPT and Claude Desktop are not verified to 
 
 It is sent as the MCP `instructions` string by both servers and placed in `CONTRACT_TEXT`, before the milestone rule:
 
-> NorthKeep is this user's own record of their life and work: the people, organizations, properties and projects in it, and how they like things done. When the conversation names a person, organization or property you have no facts about yet, search NorthKeep with memory_retrieve before you answer; when it names a project, read it with project_get. What you remember about this user from elsewhere is not their record. NorthKeep is, because the user keeps it across all of their AI apps and corrects it there. When the user tells you a durable new fact, save it with memory_remember.
+> NorthKeep is this user's own record of their life and work: the people, organizations, properties and projects in it, and how they like things done. When the conversation names a person, organization or property you have no facts about yet, search NorthKeep with memory_retrieve before you answer; when it names a project, read it with project_get. What you remember about this user from elsewhere is not their record. NorthKeep is, because the user keeps it across all of their AI apps and corrects it there. When the user tells you a durable new fact, or you find their record is missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.
 
 Today the connector keeps its own copy of the milestone rule (apps/connector-server/src/mcp.ts:130) rather than importing packages/mcp-server/src/project-recipe.ts:53. If the build keeps separate copies, a test compares them word for word (the ADR 0082 D1 pattern).
 
@@ -78,3 +78,9 @@ Third baseline (2026-11-21, likely Muse, scored 12 to 14): it checked NorthKeep 
 - A project document was served as the description of a company. D3 covers this on `memory_retrieve` and `search`.
 - Two answers left out facts that exist as memories (a second property, a second pet). Recall, not ranking: the build adds a fixture where the answer is split across two short memories and both must come back within the default limit.
 - Conclusion: getting agents to look is necessary but not enough. Whether agent-written session notes should rank below other agent facts by default is an open question for the next review round, which needs Jay's ask.
+
+Full baseline (2026-11-21, provisional until Jay rules on his answer key): no agent passes. Cursor scored 16 to 17 and passed the trap through Jay's rules file, not memory. Findings for the build:
+- Agents default to their own store. Asked about gaps, Cursor offered to write to its own notes file and Claude to its own memory; neither offered NorthKeep. The D1 draft above now names saving to NorthKeep instead of the agent's own store.
+- A trap is passed by a rule, not a fact. A confirmed entry that says a fact is disputed and to ask the user would let every agent pass; the Welcome interview should offer that kind of entry.
+- A search for a pet returned only a project whose name contains the word, and missed a personal-scope memory. Another retrieval miss; the split-answer fixture gains a case where a project name matches the query and the personal memory must still come back.
+- One agent-written memory conflicts with Jay's key. It is left alone until Jay confirms which is right.
