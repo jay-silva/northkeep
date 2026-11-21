@@ -52,6 +52,7 @@ import { z } from 'zod';
 import { BASE_NEW, type ConnectorStorage, type SharedEntry } from './storage.js';
 import { projectScopeView, staleProjectRowIds } from './project-head.js';
 import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
+import { isProjectPaperwork, scoreSharedEntry } from './search-rules.js';
 import { HOSTED_SECTION_TEXT_RULES, firstProjectTextError, isProjectStatusDone, projectStatusTooLongMessage, STATUS_TEXT_RULES } from './project-text.js';
 import {
   MILESTONES_HEADING,
@@ -86,14 +87,6 @@ function tokenize(text: string): string[] {
   return [...seen];
 }
 
-function scoreEntry(entry: SharedEntry, terms: string[]): number {
-  if (terms.length === 0) return 1;
-  const hay = `${entry.content} ${entry.scope} ${entry.type}`.toLowerCase();
-  let score = 0;
-  for (const t of terms) if (hay.includes(t)) score++;
-  return score;
-}
-
 // ---- ChatGPT search/fetch presentation helpers (C4) ----------------------
 const SEARCH_SNIPPET_MAX = 240;
 const SEARCH_TITLE_MAX = 72;
@@ -125,6 +118,15 @@ const OTHER_ACCOUNT_HINT =
 function waitingForReviewMessage(project: string): string {
   return `Nothing was saved: a cloud version of project "${project}" is waiting for the user to review it in NorthKeep. Ask them to resolve it there, then call project_get.`;
 }
+
+/** ADR 0084 D1: copy of the local server's FOUND_FIRST_INSTRUCTION; a test keeps them identical. */
+export const FOUND_FIRST_INSTRUCTION =
+  'NorthKeep is this user\'s own record of their life and work: the people, organizations, properties and projects in it, ' +
+  'and how they like things done. When the conversation names a person, organization or property you have no facts about yet, ' +
+  'search NorthKeep with memory_retrieve before you answer; when it names a project, read it with project_get. ' +
+  'What you remember about this user from elsewhere is not their record. NorthKeep is, because the user keeps it across ' +
+  'all of their AI apps and corrects it there. When the user tells you a durable new fact, or you find their record is ' +
+  'missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.';
 
 /** ADR 0065 Decision 4, layer 2: the same standing instruction the local server sends. */
 export const MILESTONE_INSTRUCTION =
@@ -258,7 +260,7 @@ export function createMcpServer(
 ): McpServer {
   const server = new McpServer(
     { name: 'northkeep-connector', version: '0.1.0' },
-    { capabilities: { tools: {} }, instructions: MILESTONE_INSTRUCTION, maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS },
+    { capabilities: { tools: {} }, instructions: `${FOUND_FIRST_INSTRUCTION} ${MILESTONE_INSTRUCTION}`, maxToolInputElements: MAX_TOOL_INPUT_ELEMENTS },
   );
 
   /**
@@ -268,7 +270,7 @@ export function createMcpServer(
   async function decryptEntry(e: SharedEntry): Promise<SharedEntry | null> {
     if (!isEncryptedRow(e.content)) return allowLegacyPlaintext ? e : null;
     const plain = await decryptRow(e.content, accountHash, dek);
-    return { ...e, type: plain.type, content: plain.content };
+    return { ...e, type: plain.type, content: plain.content, confirmed: plain.confirmed === true, archive: plain.archive === true };
   }
 
   /**
@@ -339,7 +341,8 @@ export function createMcpServer(
         throw err;
       }
       const ranked = all
-        .map((e) => ({ e, s: scoreEntry(e, terms) }))
+        .filter((e) => !isProjectPaperwork(e))
+        .map((e) => ({ e, s: scoreSharedEntry(e, query ?? '') }))
         .filter((x) => x.s > 0)
         .sort((a, b) => b.s - a.s)
         .slice(0, MAX_RESULTS)
@@ -595,7 +598,8 @@ export function createMcpServer(
         throw err;
       }
       const ranked = all
-        .map((e) => ({ e, s: scoreEntry(e, terms) }))
+        .filter((e) => !isProjectPaperwork(e))
+        .map((e) => ({ e, s: scoreSharedEntry(e, query ?? '') }))
         .filter((x) => x.s > 0)
         .sort((a, b) => b.s - a.s)
         .slice(0, MAX_RESULTS)

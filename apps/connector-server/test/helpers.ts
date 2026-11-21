@@ -48,10 +48,11 @@ export async function seedEncryptedEntry(
   entry: SharedEntry,
 ): Promise<void> {
   const dek = await testAccountDek(storage, accountHash, connToken);
+  const { confirmed, archive, ...row } = entry;
   await storage.putEntry(accountHash, {
-    ...entry,
+    ...row,
     type: '',
-    content: await encryptRow({ accountHash, type: entry.type, content: entry.content }, dek),
+    content: await encryptRow({ accountHash, type: entry.type, content: entry.content, confirmed, archive }, dek),
   });
 }
 

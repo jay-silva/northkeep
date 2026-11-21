@@ -839,6 +839,8 @@ export function createConnectorServer(
         content: e.content,
         entryHash: typeof e.entry_hash === 'string' ? e.entry_hash : '',
         createdAt: now,
+        ...(e.confirmed === true ? { confirmed: true } : {}),
+        ...(e.archive === true ? { archive: true } : {}),
       });
     }
     // ADR 0020: every row lands as ciphertext. Resolve the account DEK from the
@@ -857,10 +859,11 @@ export function createConnectorServer(
       throw err;
     }
     const encrypted: SharedEntry[] = await Promise.all(
-      entries.map(async (e) => ({
+      // The flags ride inside the ciphertext only (ADR 0084 D6), never as stored columns.
+      entries.map(async ({ confirmed, archive, ...e }) => ({
         ...e,
         type: '',
-        content: await encryptRow({ accountHash, type: e.type, content: e.content }, dek),
+        content: await encryptRow({ accountHash, type: e.type, content: e.content, confirmed, archive }, dek),
       })),
     );
     const sharedAt = parseSharedAtMap(body.shared_at);

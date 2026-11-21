@@ -165,7 +165,9 @@ afterAll(async () => {
 describe('ADR 0065 K4: milestones through the Cloud connector, end to end', () => {
   it('sends the standing milestone instruction in the handshake', async () => {
     const init = await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'k4-e2e', version: '0.0.0' } });
-    expect(init.result.instructions).toBe(INSTRUCTION);
+    // ADR 0084 D1 puts the lookup instruction first, then this pinned rule.
+    expect(init.result.instructions).toMatch(/^NorthKeep is this user's own record /);
+    expect(init.result.instructions.endsWith(` ${INSTRUCTION}`)).toBe(true);
   });
 
   it('refuses a cloud project without milestones or with a pass, then creates one with the agreed plan', async () => {

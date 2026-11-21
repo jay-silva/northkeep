@@ -20,6 +20,8 @@ import {
   withFileLock,
   type MemoryEntry,
   type MemoryType,
+  CONFIRMED_METADATA_KEY,
+  isConfirmed,
 } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import {
@@ -254,7 +256,8 @@ program
   .option('--source <source>', 'origin of this memory', 'cli')
   .option('--source-model <model>', 'model that produced this memory, if any')
   .option('--confidence <n>', 'confidence 0.0–1.0', parseConfidence, 1.0)
-  .action(async (content: string, options: RememberOptions) => {
+  .option('--confirmed', 'mark it as a fact you have checked, so it ranks first in search')
+  .action(async (content: string, options: RememberOptions & { confirmed?: boolean }) => {
     const projectWorking = projectWorkingMemoryMessage(options.type, options.scope);
     if (projectWorking !== null) fail(projectWorking);
     await withVault(async (vault) => {
@@ -265,9 +268,34 @@ program
         source: options.source,
         sourceModel: options.sourceModel ?? null,
         confidence: options.confidence,
+        metadata: options.confirmed === true ? { [CONFIRMED_METADATA_KEY]: { by: 'user', at: new Date().toISOString() } } : null,
       });
       vault.save();
-      console.log(`✓ Remembered [${entry.type} / ${entry.scope}] ${entry.id}`);
+      console.log(`✓ Remembered [${entry.type} / ${entry.scope}]${options.confirmed === true ? ' confirmed' : ''} ${entry.id}`);
+    });
+  });
+
+program
+  .command('confirm')
+  .description('Mark a memory as a fact you have checked, so search ranks it above unchecked ones (full id or unique prefix)')
+  .argument('<id>', 'memory id from "northkeep list" or "northkeep search"')
+  .action(async (id: string) => {
+    await withVault(async (vault) => {
+      const entry = vault.confirmMemory(id);
+      vault.save();
+      console.log(`✓ Confirmed ${entry.id}`);
+    });
+  });
+
+program
+  .command('mark-archive')
+  .description('Mark old project paperwork saved as a memory so search skips it; it stays readable by id and in exports')
+  .argument('<id>', 'memory id from "northkeep list"')
+  .action(async (id: string) => {
+    await withVault(async (vault) => {
+      const entry = vault.markArchive(id);
+      vault.save();
+      console.log(`✓ Marked as archive ${entry.id}; search now skips it`);
     });
   });
 
@@ -356,6 +384,7 @@ program
         type: options.type as MemoryType | undefined,
         scope: options.scope,
         limit: options.limit,
+        skipProjectPaperwork: true,
       });
       // Degrade loudly (invariant #6): say plainly when semantic wasn't available.
       console.log(
@@ -1552,7 +1581,8 @@ async function withVault<T>(fn: (vault: Vault) => Promise<T> | T): Promise<T> {
 function printEntry(entry: MemoryEntry): void {
   const shortId = entry.id.slice(0, 8);
   const superseded = entry.superseded_at ? `  (superseded ${entry.superseded_at})` : '';
-  console.log(`[${entry.type}] ${entry.content}`);
+  const confirmed = isConfirmed(entry.metadata) ? ' confirmed' : '';
+  console.log(`[${entry.type}${confirmed}] ${entry.content}`);
   console.log(
     `  id ${shortId}  scope ${entry.scope}  source ${entry.source}` +
       `  confidence ${entry.confidence}  at ${entry.created_at}${superseded}`,

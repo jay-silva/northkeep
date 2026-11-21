@@ -85,7 +85,8 @@ const PASSED_M1 = '- [x] M1 Define the buy box | test: buy box written and agree
 describe('server instructions (ADR 0065 Decision 4)', () => {
   it('sends the pinned instruction text in the handshake', async () => {
     const mcp = await connect();
-    expect(mcp.getInstructions()).toBe('When the user asks to create a project, propose its milestones and create it only after the user agrees to them. Report a milestone passed only when the user says its acceptance test passed. Never mark a milestone passed on your own judgment.');
+    // ADR 0084 D1 sends the lookup instruction first, then this pinned rule.
+    expect(mcp.getInstructions()).toMatch(/^NorthKeep is this user's own record of their life and work: .* When the user asks to create a project, propose its milestones and create it only after the user agrees to them\. Report a milestone passed only when the user says its acceptance test passed\. Never mark a milestone passed on your own judgment\.$/);
   });
 });
 
@@ -330,5 +331,25 @@ describe('source rules', () => {
       // Code only: the connector's byte-identical copy of the module names confirmPass in a doc comment (K4).
       for (const text of read(root)) expect(withoutComments(text)).not.toMatch(/project-milestones-owner|confirmPass/);
     }
+  });
+});
+
+describe('ADR 0084 D3: memory_retrieve leaves project paperwork to the project tools', () => {
+  it('returns a project fact but not the project document, and a confirmed memory ranks first', async () => {
+    const mcp = await connect();
+    await create(mcp);
+    const v = openVault();
+    try {
+      v.remember({ content: 'The rental lender is Example Credit Union', type: 'semantic', scope: 'project:rental' });
+      v.remember({ content: 'The rental lender was Sample Bank before', type: 'episodic', scope: 'project:rental' });
+      v.remember({ content: 'Rental lender is Example Credit Union, checked', type: 'semantic', metadata: { confirmed: { by: 'user', at: '2026-11-21T00:00:00.000Z' } } });
+      v.save();
+    } finally { v.close(); }
+    const r = await call(mcp, 'memory_retrieve', { query: 'rental lender' });
+    expect(r.isError, r.text).toBe(false);
+    const found = (r.json.results as Array<{ content: string; type: string }>);
+    expect(found.some((e) => e.type === 'working')).toBe(false);
+    expect(found[0]!.content).toBe('Rental lender is Example Credit Union, checked');
+    expect(found.map((e) => e.content)).toContain('The rental lender is Example Credit Union');
   });
 });

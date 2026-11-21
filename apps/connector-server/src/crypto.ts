@@ -186,6 +186,10 @@ export async function unwrapDekRotating(
 export interface RowPlain {
   type: string;
   content: string;
+  /** ADR 0084 D6: the user confirmed this memory. Present only when true. */
+  confirmed?: true;
+  /** ADR 0084 D3: project paperwork search skips. Present only when true. */
+  archive?: true;
 }
 
 /**
@@ -194,12 +198,17 @@ export interface RowPlain {
  * AAD-bound to the account (NOT the entry id — ack's id-remap stays metadata-only).
  */
 export async function encryptRow(
-  row: { accountHash: string; type: string; content: string },
+  row: { accountHash: string; type: string; content: string; confirmed?: boolean; archive?: boolean },
   dek: Uint8Array,
 ): Promise<string> {
   const s = await sodium();
   const nonce = s.randombytes_buf(s.crypto_aead_xchacha20poly1305_ietf_NPUBBYTES);
-  const plain: RowPlain = { type: row.type, content: row.content };
+  const plain: RowPlain = {
+    type: row.type,
+    content: row.content,
+    ...(row.confirmed === true ? { confirmed: true as const } : {}),
+    ...(row.archive === true ? { archive: true as const } : {}),
+  };
   const ct = s.crypto_aead_xchacha20poly1305_ietf_encrypt(
     s.from_string(JSON.stringify(plain)),
     rowAad(row.accountHash),
@@ -225,7 +234,12 @@ export async function decryptRow(stored: string, accountHash: string, dek: Uint8
     if (typeof parsed.type !== 'string' || typeof parsed.content !== 'string') {
       throw new Error('bad envelope');
     }
-    return { type: parsed.type, content: parsed.content };
+    return {
+      type: parsed.type,
+      content: parsed.content,
+      ...(parsed.confirmed === true ? { confirmed: true as const } : {}),
+      ...(parsed.archive === true ? { archive: true as const } : {}),
+    };
   } catch {
     throw new ConnectorCryptoError('Row envelope is not valid JSON {type, content}');
   }

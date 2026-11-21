@@ -2,6 +2,8 @@ import {
   ProjectHandoffError,
   thisDevicePhrase,
   getProjectView,
+  isConfirmed,
+  isMarkedArchive,
   isMemoryType,
   parseMilestones,
   parseProjectSlug,
@@ -63,6 +65,10 @@ export interface PushEntry {
   scope: string;
   type: string;
   content: string;
+  /** ADR 0084 D6: the user confirmed it. Sent only when true; it travels inside the connector's ciphertext. */
+  confirmed?: true;
+  /** ADR 0084 D3: old project paperwork search skips. Sent only when true, same envelope. */
+  archive?: true;
 }
 
 export interface ManifestEntry {
@@ -271,6 +277,8 @@ export async function pushSharedScopes(opts: {
         scope: e.scope,
         type: e.type,
         content: e.content,
+        ...(isConfirmed(e.metadata) ? { confirmed: true as const } : {}),
+        ...(isMarkedArchive(e.metadata) ? { archive: true as const } : {}),
       });
     }
   }
