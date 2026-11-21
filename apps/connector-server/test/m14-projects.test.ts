@@ -185,7 +185,7 @@ async function mcpCall(
   token: string,
   name: string,
   args: Record<string, unknown>,
-): Promise<{ text: string; isError: boolean }> {
+): Promise<{ text: string; isError: boolean; structured: Record<string, unknown> | undefined }> {
   const resp = await fetch(`${base}/mcp`, {
     method: 'POST',
     headers: {
@@ -199,6 +199,7 @@ async function mcpCall(
   return {
     text: call?.result?.content?.[0]?.text || call?.error?.message || '',
     isError: call?.result?.isError === true || Boolean(call?.error),
+    structured: call?.result?.structuredContent,
   };
 }
 
@@ -489,6 +490,20 @@ describe('M14 connector project tools (step 4)', () => {
     const got = await mcpCall(token, 'project_get', { project: 'roll', history: true });
     expect(got.isError).toBeFalsy();
     expect(got.text).toContain('## Log archive: roll');
+  });
+
+  it('structuredContent alone carries the document, so a client that shows only it is not left with a bare revision', async () => {
+    const token = await connectAiApp();
+    const got = await mcpCall(token, 'project_get', { project: 'roll', history: true });
+    expect(got.isError).toBeFalsy();
+    const doc = got.structured?.document as string;
+    expect(doc).toContain('Rolling.');
+    expect(doc).toContain('## Log archive: roll');
+    expect(got.structured?.revision).toBe(/Revision: (\S+)/.exec(got.text)?.[1]);
+
+    const up = await mcpCall(token, 'project_update', { project: 'roll', expected_revision: got.structured!.revision, status: 'Still rolling.' });
+    expect(up.isError).toBeFalsy();
+    expect(up.structured?.message).toBe(up.text);
   });
 
   it('memory_remember stays at 8 KiB even in a project scope', async () => {

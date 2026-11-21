@@ -828,16 +828,19 @@ wire shapes, so the client build and the reviewers can check against them.
 
 **Hosted tools.**
 - `project_get` text ends with `Revision: <id> (pass it as expected_revision
-  to project_update)`. `structuredContent` is `{ project, revision }`.
+  to project_update)`. `structuredContent` is `{ project, revision, document }`
+  (plus `note` when there are no milestones): some clients show only
+  `structuredContent`, so it carries the document too (2026-11-21).
 - `project_update` keeps `expected_revision` optional in the schema, so a
   missing one gets the design's sentence and not the SDK's generic error. It
   is checked after the slug, empty-update, text-rule and tombstone checks.
   `stale_project` is an error whose text starts "Project changed after it was
   read. Nothing was saved. The current document follows; its revision is
   <id>." followed by the document. Its `structuredContent` is
-  `{ code: 'stale_project', project, revision, document }`. A lost
+  `{ message, code: 'stale_project', project, revision, document }`. A lost
   compare-and-swap answers the same way. Success keeps `(id: X)` in the
-  text, adds `Revision: X.`, and returns `{ project, revision }`.
+  text, adds `Revision: X.`, and returns `{ project, revision, message }`,
+  where `message` repeats the text.
 - `project_create` ids are now `conn_<uuid>`. The deterministic
   `conn_create_<sha>` id is retired because the compare-and-swap closes the
   concurrent-create race (recheck R-S3). The loser gets "Project already
