@@ -91,6 +91,10 @@ export interface SharedEntry {
   /** ADR 0063: the scope counter at the write that last touched this row. Rows written before it read 0. */
   writeSeq?: number;
   createdAt: string;
+  /** ADR 0084: decrypted view only, read from inside the ciphertext. Never stored as a column. */
+  confirmed?: boolean;
+  /** ADR 0084: decrypted view only, like confirmed. */
+  archive?: boolean;
 }
 
 /** The base_revision of a document created on the connector, where no base exists (ADR 0063). */

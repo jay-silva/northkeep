@@ -60,6 +60,7 @@ import {
   type ProjectWriter,
   sharedEntryTooLargeMessage,
   PROJECT_STATUS_AGENT_MAX_CHARS,
+  isProjectPaperwork,
 } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
 import { createCachedEmbedder, createOllamaEmbedder } from '@northkeep/librarian';
@@ -79,7 +80,7 @@ import { NotesFile, notesFilePath } from './notes-store.js';
 import { createStandaloneAutoSync, flushBounded, type StandaloneAutoSync } from './auto-sync.js';
 import { appendCallLog, readCallLogStrict, type CallLogEntry } from './log.js';
 import { tameOneLine } from './text-safe.js';
-import { MILESTONE_INSTRUCTION, NO_MILESTONES_NOTE } from './project-recipe.js';
+import { NO_MILESTONES_NOTE, SERVER_INSTRUCTIONS } from './project-recipe.js';
 import { readMirrorSummary } from './project-export-run.js';
 import { collectBoard } from './project-board-run.js';
 import type { OpenSession } from './open-sessions.js';
@@ -312,7 +313,7 @@ async function preEmbedForRetrieve(
     try {
       contents = await withVault(vaultPath, (vault) =>
         vault.list({ type: filter.type, scope: filter.scope, allowedScopes: grantedScopes() })
-          .filter((entry) => entry.superseded_at === null)
+          .filter((entry) => entry.superseded_at === null && !isProjectPaperwork(entry))
           .map((entry) => entry.content));
     } catch { return; }
     for (const text of contents) {
@@ -906,7 +907,7 @@ function writerFor(ctx: ConnContext): ProjectWriter {
 }
 
 export function createServer(vaultPath: string = defaultVaultPath()): McpServer {
-  const server = new McpServer({ name: 'northkeep', version: '0.5.0' }, { instructions: MILESTONE_INSTRUCTION });
+  const server = new McpServer({ name: 'northkeep', version: '0.5.0' }, { instructions: SERVER_INSTRUCTIONS });
   // One server per session here, so this is "once per project per session" (ADR 0065 Decision 4).
   const notedNoMilestones = new Set<string>();
   const ctx: ConnContext = {
@@ -971,6 +972,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             scope,
             limit,
             allowedScopes: granted,
+            skipProjectPaperwork: true,
           });
           const results = r.results;
           const entries = results.map((s) => ({ ...publicEntry(s.entry), relevance: Number(s.score.toFixed(3)) }));

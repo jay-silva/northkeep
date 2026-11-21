@@ -60,6 +60,8 @@ export interface RetrieveOptions {
   limit?: number;
   /** Capability allowlist — see ListFilter.allowedScopes. */
   allowedScopes?: string[];
+  /** Leave out project documents and archives, which the project tools serve (ADR 0084 D3). */
+  skipProjectPaperwork?: boolean;
 }
 
 /** True when `scope` is permitted by an allowlist (undefined allowlist = all). */

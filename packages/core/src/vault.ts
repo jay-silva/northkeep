@@ -83,6 +83,7 @@ import {
   type SemanticRetrieval,
   type VaultExport,
 } from './types.js';
+import { ARCHIVE_METADATA_KEY, CONFIRMED_BOOST, CONFIRMED_METADATA_KEY, isConfirmed, isMarkedArchive, isProjectPaperwork, lengthPenalty, searchTerms } from './search-rules.js';
 
 /**
  * Vault file format (.nkv) — see SPEC/security-model.md and ADR 0001:
@@ -676,8 +677,33 @@ export class Vault {
           if (long !== null) throw new Error(long);
         }
       }
-      return this.supersedeEntry(old, changes);
+      return this.supersedeEntry(old, changes, actor);
     })();
+  }
+
+  /**
+   * ADR 0084 D4/D7: the user vouches for a memory. Supersedes it with the same
+   * content plus the confirmed marker; a no-op if it is already confirmed.
+   * Only the app and CLI call this; no agent tool reaches it.
+   */
+  confirmMemory(idOrPrefix: string): MemoryEntry {
+    this.assertOpen();
+    const old = this.resolveEditable(idOrPrefix);
+    if (isConfirmed(old.metadata)) return old;
+    if (isLiveProjectDocument(old)) throw new Error('A project document cannot be confirmed; confirm the facts in it as separate memories.');
+    return this.supersedeEntry(old, {}, 'owner', { [CONFIRMED_METADATA_KEY]: { by: 'user', at: new Date().toISOString() } });
+  }
+
+  /**
+   * ADR 0084 D3: marks old project paperwork saved as an ordinary memory (such
+   * as Decisions moved out of a full project document) so search skips it.
+   * The row stays readable by id and in exports. CLI and app only.
+   */
+  markArchive(idOrPrefix: string): MemoryEntry {
+    this.assertOpen();
+    const old = this.resolveEditable(idOrPrefix);
+    if (isMarkedArchive(old.metadata)) return old;
+    return this.supersedeEntry(old, {}, 'owner', { [ARCHIVE_METADATA_KEY]: { by: 'user', at: new Date().toISOString() } });
   }
 
   /** Atomic revision-bound project update used by the legacy local project tool. */
@@ -1608,6 +1634,8 @@ export class Vault {
   private supersedeEntry(
     old: MemoryEntry,
     patch: { content?: string; scope?: string; type?: MemoryType },
+    actor: WriteActor = 'owner',
+    addMetadata: Record<string, unknown> | null = null,
   ): MemoryEntry {
     const now = new Date().toISOString();
     const next: MemoryEntry = {
@@ -1635,6 +1663,12 @@ export class Vault {
       delete next.metadata[PROJECT_PROVENANCE_METADATA_KEY];
       if (Object.keys(next.metadata).length === 0) next.metadata = null;
     }
+    // ADR 0084 D4: only the user can vouch for text; an agent's rewrite starts unconfirmed.
+    if (actor === 'agent' && next.metadata !== null && CONFIRMED_METADATA_KEY in next.metadata) {
+      delete next.metadata[CONFIRMED_METADATA_KEY];
+      if (Object.keys(next.metadata).length === 0) next.metadata = null;
+    }
+    if (addMetadata !== null) next.metadata = { ...(next.metadata ?? {}), ...addMetadata };
     next.entry_hash = computeEntryHash(next, this.platform.crypto);
     this.autoCompaction = null;
     let auto: AutoCompaction | null = null;
@@ -1665,6 +1699,15 @@ export class Vault {
     return next;
   }
 
+  /** Live rows a search ranks; with skipProjectPaperwork, project documents and archives are left out (ADR 0084 D3). */
+  private searchCandidates(options: RetrieveOptions): MemoryEntry[] {
+    return this.list({
+      type: options.type,
+      scope: options.scope,
+      allowedScopes: options.allowedScopes,
+    }).filter((entry) => entry.superseded_at === null && !(options.skipProjectPaperwork === true && isProjectPaperwork(entry)));
+  }
+
   /**
    * Keyword retrieval: term overlap + recency + type priority. Honest about
    * what it is — semantic (embedding) retrieval arrives with the local-model
@@ -1673,25 +1716,22 @@ export class Vault {
   retrieve(query: string, options: RetrieveOptions = {}): ScoredEntry[] {
     this.assertOpen();
     const limit = options.limit ?? 8;
-    const queryTerms = tokenize(query);
+    const queryTerms = searchTerms(query);
     if (queryTerms.size === 0) return [];
-    const candidates = this.list({
-      type: options.type,
-      scope: options.scope,
-      allowedScopes: options.allowedScopes,
-    }).filter((entry) => entry.superseded_at === null);
+    const candidates = this.searchCandidates(options);
     const now = Date.now();
     const scored: ScoredEntry[] = [];
     for (const entry of candidates) {
-      const entryTerms = tokenize(entry.content);
+      const entryTerms = searchTerms(entry.content);
       let matched = 0;
       for (const term of queryTerms) if (entryTerms.has(term)) matched += 1;
       if (matched === 0) continue;
-      const overlap = matched / queryTerms.size;
+      const overlap = matched / queryTerms.size - lengthPenalty(entryTerms.size);
       const ageDays = Math.max(0, now - Date.parse(entry.created_at)) / 86_400_000;
       const recency = 0.3 * Math.exp(-ageDays / 30);
       const typeBoost = TYPE_PRIORITY[entry.type] ?? 0;
-      scored.push({ entry, score: overlap + recency + typeBoost });
+      const confirmed = isConfirmed(entry.metadata) ? CONFIRMED_BOOST : 0;
+      scored.push({ entry, score: overlap + recency + typeBoost + confirmed });
     }
     scored.sort((a, b) => b.score - a.score);
     return scored.slice(0, limit);
@@ -1723,9 +1763,9 @@ export class Vault {
     // Always compute the keyword baseline first: it's our guaranteed fallback
     // and never worse than what retrieve() would have returned on its own.
     const keyword = this.retrieve(query, options);
-    const queryTerms = tokenize(query);
+    const queryTerms = searchTerms(query);
     if (queryTerms.size === 0) {
-      // Empty/token-less query — retrieve() already returns []; nothing to embed.
+      // Empty or stopword-only query — retrieve() already returns []; nothing to embed.
       return { results: keyword, mode: 'keyword', semanticAvailable: false, reason: 'empty query' };
     }
     let queryVec: Float32Array;
@@ -1772,11 +1812,7 @@ export class Vault {
     options: RetrieveOptions,
   ): Promise<ScoredEntry[]> {
     const limit = options.limit ?? 8;
-    const candidates = this.list({
-      type: options.type,
-      scope: options.scope,
-      allowedScopes: options.allowedScopes,
-    }).filter((entry) => entry.superseded_at === null);
+    const candidates = this.searchCandidates(options);
     const now = Date.now();
     const dim = queryVec.length;
     const scored: ScoredEntry[] = [];
@@ -1790,18 +1826,19 @@ export class Vault {
       const sem = Math.max(0, cosineSimilarity(queryVec, vec));
       // Keyword component: identical formula to retrieve(), but overlap may be 0
       // (a purely-semantic hit like "car" ~ "vehicle" contributes via `sem`).
-      const entryTerms = tokenize(entry.content);
+      const entryTerms = searchTerms(entry.content);
       let matched = 0;
       for (const term of queryTerms) if (entryTerms.has(term)) matched += 1;
-      const overlap = matched / queryTerms.size;
+      const overlap = matched === 0 ? 0 : matched / queryTerms.size - lengthPenalty(entryTerms.size);
       // Relevance gate: keep an entry only if it shares a keyword OR is
       // genuinely close in meaning, so a query that matches nothing doesn't
       // drag in unrelated filler.
-      if (overlap === 0 && sem < SEMANTIC_FLOOR) continue;
+      if (matched === 0 && sem < SEMANTIC_FLOOR) continue;
       const ageDays = Math.max(0, now - Date.parse(entry.created_at)) / 86_400_000;
       const recency = 0.3 * Math.exp(-ageDays / 30);
       const typeBoost = TYPE_PRIORITY[entry.type] ?? 0;
-      const score = SEMANTIC_WEIGHT * sem + overlap + recency + typeBoost;
+      const confirmed = isConfirmed(entry.metadata) ? CONFIRMED_BOOST : 0;
+      const score = SEMANTIC_WEIGHT * sem + overlap + recency + typeBoost + confirmed;
       scored.push({ entry, score });
     }
     scored.sort((a, b) => b.score - a.score);
@@ -2239,14 +2276,6 @@ export function parseSyncGeneration(raw: string): number {
     );
   }
   return n;
-}
-
-function tokenize(text: string): Set<string> {
-  const terms = new Set<string>();
-  for (const match of text.toLowerCase().normalize('NFC').matchAll(/[a-z0-9]{2,}/g)) {
-    terms.add(match[0]);
-  }
-  return terms;
 }
 
 function vectorKey(memoryId: string, model: string): string {

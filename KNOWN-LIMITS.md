@@ -3,6 +3,15 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
+## Found first: search and the lookup instruction (ADR 0084), current
+
+- The instruction to check NorthKeep before answering about a person, organization, property or project is advisory. Each AI app decides whether its model sees it. Verified: Claude Code shows it (NorthKeep's connect-time text appears in the session's instructions, 2026-11-21). Not verified: claude.ai, Codex, Grok Bot, Muse, Cursor, ChatGPT. For an app that ignores it, put the sentence from ADR 0084 D2 in that app's own instructions.
+- Search is by words, not meaning, unless the optional local search model is running. A memory that uses different words from the question ("dachshund" for "dog") is not found by words. Plurals ending in a plain "s" are folded; other word forms are not.
+- Memory search skips project documents, project log archives, and rows marked as archives. Read those with `project_get`. Anyone who can write a scope can make a row look like a log archive and so hide it from search; the same writer can already edit or forget it.
+- A confirmed memory ranks above unconfirmed ones but is never added to results that do not match the question. For now only the command line confirms; the Mac app has no confirm button yet. An AI app that can run commands on your Mac, as Claude Code can, can run the confirm command too, the same limit as milestones.
+- An AI app's edit of a confirmed memory makes the new version unconfirmed.
+- The Cloud connector can read whether each shared memory is confirmed or marked as an archive: two flags inside the encrypted row, nothing more.
+
 ## Keep Watch, lid-closed awake (ADR 0080), current
 
 - Mac laptops only, in the Mac app only. Turning it on asks for the Mac password every time. The first time also installs a small helper that runs as admin; Settings can remove it.

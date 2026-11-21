@@ -1,4 +1,5 @@
 export * from './types.js';
+export * from './search-rules.js';
 export * from './canonical.js';
 export * from './consolidation.js';
 export * from './project-handoff.js';

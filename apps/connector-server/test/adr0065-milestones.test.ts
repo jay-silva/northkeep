@@ -99,12 +99,12 @@ describe('ADR 0065 copied module', () => {
 });
 
 describe('ADR 0065 hosted tools', () => {
-  it('sends the standing milestone instruction', async () => {
+  it('sends the standing milestone instruction, after the ADR 0084 lookup instruction', async () => {
     const c = await client();
-    expect(c.getInstructions()).toBe(
+    expect(MILESTONE_INSTRUCTION).toBe(
       'When the user asks to create a project, propose its milestones and create it only after the user agrees to them. Report a milestone passed only when the user says its acceptance test passed. Never mark a milestone passed on your own judgment.',
     );
-    expect(MILESTONE_INSTRUCTION).toBe(c.getInstructions());
+    expect(c.getInstructions()?.endsWith(` ${MILESTONE_INSTRUCTION}`)).toBe(true);
   });
 
   it('project_create refuses without milestones and stores nothing', async () => {

@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { atomicWrite, backupOnce } from './fs-safe.js';
-import { MILESTONE_INSTRUCTION, PROJECT_BOOTSTRAP_INSTRUCTION, PROJECT_STANDING_INSTRUCTION } from './project-recipe.js';
+import { FOUND_FIRST_INSTRUCTION, MILESTONE_INSTRUCTION, PROJECT_BOOTSTRAP_INSTRUCTION, PROJECT_STANDING_INSTRUCTION } from './project-recipe.js';
 
 /**
  * M16 contract installer (ADR 0042). Writes the standing project instruction
@@ -77,6 +77,7 @@ export const CONTRACT_TEXT =
   'Do not claim a project was updated unless the project_wrap, project_checkpoint, or project_update call succeeded. ' +
   'Never write secrets, credentials, PHI, or personal identifying information into a project document. ' +
   'Create a project with project_create only when the user asks for one; never create one to hold notes that belong in an existing project or in a memory. ' +
+  FOUND_FIRST_INSTRUCTION + ' ' +
   MILESTONE_INSTRUCTION + ' ' +
   CONTRACT_GRACEFUL_DEGRADATION +
   '\n\n' +
@@ -141,6 +142,10 @@ export const RELEASED_CONTRACT_RENDER_SHA256: ReadonlySet<string> = new Set([
   'e70a6c3f81023e5238a4895416f2bd3e0588947acdf2c5571d2c1c77bfe1ce1b',
   '0a0d6263954b3194a1150cfceb7be79dcc01adde5d338d4a537b9e449e41ab07',
   '0cff6d32b1201a214a38f4b315f49dcba1e259059c9e87c0bc3d24818516d660',
+  // ADR 0084 D1: the lookup and save instruction joins the contract.
+  'c47a2d2a0e58c13e3da8b24b4d6061a09ec51453700af526f7cb397fcaf322c5',
+  '56b4187493d51cf5eb847ff432ae6cdaf2839f35c437a8fcbc61f7171c1e74e6',
+  '3ca8b5982763d2e33f150fd2ae8b48fea14246e5ef1a406cb8be4a021b13c692',
 ]);
 
 function classifyReplaced(existing: string, rendered: string): ReplacedContract {
