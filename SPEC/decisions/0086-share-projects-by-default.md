@@ -1,31 +1,33 @@
 # ADR 0086: Share projects by default
 
-Status: Proposed 2026-11-22 · Review: not yet run
+Status: Proposed 2026-11-22 · Review 1: NOT CLEARED (10 findings), revised · Recheck: not yet run
 
 ## Context
-Every project is private until Jay shares it, one at a time, from the app. On 2026-11-22 Gemini in Antigravity, reaching NorthKeep through the Cloud connector, could not find the bourne-fire project because it was never shared. Jay wants his projects shared unless he says otherwise, and rarely opens the app. Invariant #1(b) requires each shared scope to be individually marked, loudly confirmed, badge-visible and reversible.
+Every project is private until Jay shares it, one at a time. On 2026-11-22 Gemini in Antigravity, on the Cloud connector, could not see the unshared bourne-fire project. Jay wants projects shared unless he says otherwise, and rarely opens the app. Invariant #1 names ADR 0050 as its only no-dialog share; this adds a second.
 
 ## Decision
-- D1: A vault setting, `share_projects_by_default`, in `vault_meta`, off in every vault. Like a scope mark (ADR 0038 D3), it applies on every device that syncs this vault. Only the app and the CLI change it.
-- D2: Turning it on lists every unshared `project:*` scope with a box each, all ticked, and asks once. Each ticked scope is marked Shared, the same as a manual share. Unticked ones stay private.
-- D3: While it is on, creating a project on this Mac (app, CLI or local `project_create`) marks its scope Shared in the same save. Projects created through the Cloud connector are already shared (ADR 0050).
-- D4: Local `project_create` gains `private: true`. The contract tells the agent, when the setting is on, to say the new project will be shared and to ask whether to keep it private. With `private: true` the scope is not marked.
-- D5: A local agent may unshare a project (a `project_unshare` tool, the same server-side delete and tombstone as the app). No agent can share a scope or change the setting.
-- D6: A project Jay unshares stays unshared while the setting is on; D2 runs only at switch-on.
-- D7: Turning the setting off shares and unshares nothing.
+- D1: A `vault_meta` setting, `share_projects_by_default`, off in every vault, exported and imported. It travels with vault sync; builds older than this ignore it and share nothing. Only the app, or a CLI command that needs an interactive terminal and ignores `--yes` and `NORTHKEEP_ASSUME_YES`, changes it.
+- D2: Turning it on lists each unshared project scope with exactly one live project document, ticked, except scopes in D5's list (unticked). Each line shows how many memories and held app rows go with it. One confirmation; ticked scopes are marked as a manual share.
+- D3: While on, the creation branch of core `writeProject` (no current document, owner or agent) marks the scope Shared in the same transaction, unless the request says `private: true` or the scope is in D5's list. That covers `project_create` and creating through `project_update`, on any device whose build has this. The ADR 0050/0065 fold and restore paths keep their own rules.
+- D4: `project_create` and `project_update` accept `private: true`. When a create marks the scope, the result says `shared: true`, how many existing memories in that scope go with it, and whether the connector push is running or paused. The contract tells the agent to ask first and to relay that line.
+- D5: Unsharing a project from the app or CLI adds its scope to `kept_private_projects` in `vault_meta` (exported). D2 and D3 skip that list; sharing again removes it.
+- D6: No new agent tool shares, unshares or changes the setting.
+- D7: Turning it off changes no scope.
+- D8: The app badges projects shared by default since Jay last opened it.
 
 ## Consequences
-- Easier: new projects reach cloud apps with no trip to the app.
-- Harder: every memory saved into a shared project scope is pushed, so a fact an agent files under a project leaves the Mac. Turning it on can push many projects at once.
-- Committed to: KNOWN-LIMITS says the setting syncs across devices, that agents can make a project private but never shared, and that an agent which skips the question shares the new project.
+- Easier: new projects reach cloud apps without opening the app.
+- Harder: memories filed under a project leave the Mac; switch-on can push many projects and release held app rows at once. A mark only reaches the cloud while the push runs (subscription, tombstone, switched off can pause it).
+- Committed to: CLAUDE.md invariant #1 names this exception (needs Jay's OK); KNOWN-LIMITS says an agent that skips the question shares the project, that shell-capable agents can already run `share add --yes`, and that phone-created projects are covered only once the phone ships this.
 
 ## Rejected
-- An agent-callable share: a prompt-injected agent could send a private project off the Mac.
-- Asking in the app at each create: Jay rarely opens it.
-- Sharing all scopes, not just projects: memories outside projects stay private.
+- An agent unshare tool: the server's unshare deletes app writes this Mac has not pulled.
+- Agent-callable share: injection could send a private project off the Mac.
+- Asking in the app per project: Jay rarely opens it.
+- Sharing non-project scopes.
 
 ## What leaves the machine
-With the setting on: every ticked project at switch-on, and each project created on this Mac afterwards, go to the same account's connector store, encrypted as any shared scope. No new recipient or content class.
+With the setting on: ticked projects at switch-on and later-created projects, with every memory in their scopes, go to the same account's connector store, encrypted as any shared scope. No new recipient or content class.
 
 ## Links
-Extends: ADRs 0038, 0050 · Design record: to follow in docs/design/
+Extends: ADRs 0038, 0050, 0065 · Review record: docs/design/adr-0086-share-projects-by-default.md
