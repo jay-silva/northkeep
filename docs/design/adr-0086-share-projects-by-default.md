@@ -17,5 +17,11 @@ Jay, 2026-11-22: "I always want my projects shared"; "the switch should be there
 
 Clean: checkpoint and wrap cannot create; `project_note` refuses unknown projects; `memory_forget` cannot delete a project document; `memory_remember` never marks; re-share after a tombstone passes the 412 check by fresh `shared_at`; auto-push never marks; D7 matches code.
 
-## Recheck
-Not yet run.
+## Recheck (2026-11-22): CLEARED WITH WOUNDS, wounds fixed
+1. No NorthKeep importer exists (vault.ts:2087 export only; `import` reads ChatGPT and Claude). D1 now says export only.
+2. `setScopeShared(false)` is also a failed-share rollback (api.ts:1108, shareCmd.ts:178); delete-project unshares (projectsApi.ts:239); the phone unshares via `saveMarks`. D5 names its writers, adds deletes, excludes rollbacks; phone gap in KNOWN-LIMITS.
+3. The fold and take-theirs mark Shared with no list check (connector-client.ts:843, 948). D5: the fold holds listed scopes; any share by Jay clears the entry.
+4. `projects import` creates through `importProject` (vault.ts:806), outside `writeProject`. D3: import stays private.
+5. Held-row counts need the network (connector-client.ts:509). D2: "unknown" offline.
+
+Clean: fold, restore and take-theirs use `replaceProjectContent`, not the creation branch; `writeProject` creation callers are exactly project_update, project_create, the app and the CLI; the mark shares the SQLite transaction; whole-blob vault sync gives the list no merge conflict.
