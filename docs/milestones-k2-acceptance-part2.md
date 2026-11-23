@@ -4,7 +4,7 @@ Continue from [part 1](milestones-k2-acceptance.md) in the same app window, afte
 
 ## 6. Restore warning
 
-Open **Session history**, then **Restore this version** on the oldest version. The box says "This restore changes your milestones." Under "Changes 1 passed milestone": M2, now passed today, you confirmed; after the restore passed Oct 5, agent says you confirmed. Under "Undoes 1 passed milestone": M3. Click **Cancel**.
+Open **Session history**, then **Restore this version** on the oldest version. The box says "This restore changes your milestones." Under "Changes 1 passed milestone": M2, now passed today, you confirmed; after the restore passed Oct 5, reported by an AI app. Under "Undoes 1 passed milestone": M3. Click **Cancel**.
 
 ## 7. Repair
 
