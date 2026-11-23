@@ -26,14 +26,19 @@ consequential technical choices in plain language before implementing.
    redaction floor before they are sent, and only per call or under a grant the
    user created at a live prompt and can revoke. Default is private; sharing is
    per-scope, opt-in, loudly confirmed, badge-visible, and reversible with
-   server-side deletion. One named exception to "loudly confirmed" (ADR
-   0050): an unshared project scope with no live entry on this device, when
+   server-side deletion. Two named exceptions to "loudly confirmed". First
+   (ADR 0050): an unshared project scope with no live entry on this device, when
    a connected app's rows for it arrive and exactly one of them is the
    project document, is marked Shared without a dialog and receives exactly
    those rows; from then on it is an ordinary shared scope (everything later
    written into it is pushed, badge-visible, unshare revokes it). Any other
    rows a connected app sends to an unshared project scope are held,
-   unapplied, until the user shares the scope.
+   unapplied, until the user shares the scope. Second (ADR 0086): while the
+   user's "share projects by default" setting is on, a project created on
+   this device is marked Shared in the same save unless the creator asks
+   for it to stay private or the user kept that project private before.
+   Only the user turns the setting on, after one confirmation listing the
+   projects it shares.
    Under (c) NorthKeep sends only those arguments: never the vault, never
    the transcript. This invariant bounds what NORTHKEEP
    transmits — a tool server running on this machine is outside that boundary
