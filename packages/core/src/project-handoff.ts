@@ -20,8 +20,8 @@ import type { MemoryEntry } from './types.js';
 import {
   MILESTONES_HEADING,
   MilestoneError,
-  carriesPassStamp,
   formatMilestones,
+  looksLikePass,
   parseMilestones,
   recordAgentPass,
   replacePlan,
@@ -186,14 +186,14 @@ export function projectTextProblem(value:string, field:string, allowEmpty:boolea
   if (value.length>0 && value.trim().length===0) return `${field} cannot contain only whitespace; send an empty string to clear it.`;
   return null;
 }
-/** ADR 0088: evidence is one line and only travels with milestone_passed. */
+/** ADR 0088: evidence is one line and only travels with milestone_passed. It gets its own Log line, so it never meets text in completed. */
 export function projectEvidenceProblem(request:{evidence?:unknown;milestone_passed?:unknown}):string|null {
   const evidence=request.evidence; if(evidence===undefined)return null;
   if(request.milestone_passed===undefined)return 'evidence goes with milestone_passed: send both, or leave evidence out.';
   if(typeof evidence!=='string')return 'evidence must be a string.';
   if(evidence.length>PROJECT_EVIDENCE_MAX_CHARS)return `evidence is ${evidence.length} characters; the limit is ${PROJECT_EVIDENCE_MAX_CHARS}.`;
-  if(UNSAFE_WRITER_CHARS.test(evidence))return 'evidence must be one line of plain text, without control or invisible formatting characters.';
-  if(carriesPassStamp(evidence))return 'evidence cannot contain a "passed <date>" or "(agent)" stamp, which would read as a forged milestone line; leave that part out.';
+  if(unsafeWriterText(evidence))return 'evidence must be one line of plain text, without control or invisible formatting characters.';
+  if(looksLikePass(evidence))return 'evidence cannot contain a checkbox, a "passed <date>" or an "(agent)" stamp, which would read as a milestone line; leave that part out.';
   return projectTextProblem(evidence,'evidence',false);
 }
 export function assertProjectText(value:string, field:string, allowEmpty:boolean):void {

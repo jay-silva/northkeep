@@ -71,7 +71,7 @@ export function looksLikePass(text: string): boolean {
   return CHECKBOX.test(skeleton) || AUTHOR_STAMP.test(skeleton) || PASSED_DATE.test(skeleton);
 }
 /** A line carrying an author stamp or a pass date. No id is required: a reader takes such a line as a pass whatever it is numbered (K1 review finding A). */
-export function carriesPassStamp(line: string): boolean {
+function carriesPassStamp(line: string): boolean {
   const skeleton = milestoneSkeleton(line);
   return AUTHOR_STAMP.test(skeleton) || PASSED_DATE.test(skeleton);
 }
