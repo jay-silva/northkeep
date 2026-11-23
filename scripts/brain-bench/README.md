@@ -2,7 +2,7 @@
 
 A scoring test for how well an AI app answers from NorthKeep. It asks 100 questions about a fictional person and compares designs, so a design can be judged by a number before it is built.
 
-Everything here is invented. The bench builds its own throwaway vault, and its server refuses any folder the bench did not create.
+Everything here is invented. The bench builds its own throwaway vault and refuses any other.
 
 ## The designs
 
@@ -25,19 +25,19 @@ Build first (`pnpm build`) and sign in to the `claude` command. Each question is
 node scripts/brain-bench/run.mjs --sample 1
 ```
 
-That asks one question of each kind: 78 sessions, a few minutes. The full run is 600 sessions:
+That is 78 sessions. The full run is 600:
 
 ```bash
 node scripts/brain-bench/run.mjs
 ```
 
-It prints a report and saves it in an `out` folder here, with one transcript per question: the question, the answer, every lookup, and the verdict. Reports worth keeping are copied into `results`.
+It prints a report and saves it in an `out` folder here, with a transcript per question. Reports worth keeping are copied into `results`.
 
 The options are listed at the top of `run.mjs`.
 
 ## How it scores
 
-Two graders mark every answer against the key in `world.mjs`: plain text rules, and a second model that sees the key but not which design answered. The second grader's verdict is the score. The report lists every answer the two marked differently.
+Two graders mark every answer against the key in `world.mjs`: plain text rules, and a second model that sees the key but not which design answered. The second grader's verdict is the score.
 
 - **Correct**: the right fact. For a fact that is nowhere, or one marked disputed, the right answer is to say so.
 - **Incomplete**: part of a two-part answer.
@@ -58,6 +58,5 @@ The report gives each score a likely range and says whether each step's change c
 
 - Reading only. Whether agents keep the record tidy as facts change is not measured yet.
 - The agent is a bare chat app whose only tools are NorthKeep's. A real app looks in NorthKeep less often. `--app coding` is a step closer.
-- Claude Code showed only the first 4,000 or so characters of a server's instructions (measured 2026-11-23). A longer brief would be cut off.
-- Search runs by words, as it does with no local model.
+- Claude Code showed only the first 4,000 or so characters of a server's instructions. A longer brief would be cut off.
 - One agent, one model, one fictional life, and wording one author chose.
