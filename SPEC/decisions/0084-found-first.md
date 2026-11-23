@@ -1,6 +1,6 @@
 # ADR 0084: Found first: agents told to check NorthKeep, search skips project paperwork, confirmed memories rank first
 
-Status: Proposed 2026-11-20 (relaunch step 1, milestone 2) · Review 1: CLEARED WITH WOUNDS, fixed; recheck 2: CLEARED WITH WOUNDS; D8 added 2026-11-21 · Baseline recorded 2026-11-21
+Status: Accepted 2026-11-22 (Jay: "Passed."), shipped in 0.29.0 · Review 1: CLEARED WITH WOUNDS, fixed; recheck 2: CLEARED WITH WOUNDS · D8 added 2026-11-21 · D0 has run for Claude Code only
 
 ## Context
 The relaunch test asks fresh agent sessions 25 questions without naming NorthKeep. The connect-time text is only the milestone rule, in two hand-kept copies; the contract installer writes a third. `memory_retrieve` ranks project documents and log archives beside facts. Nothing marks a memory the user confirmed. The baseline found stale agent session notes outranking facts.
