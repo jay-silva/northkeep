@@ -96,10 +96,14 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     const total = base.length + (extra ? extra.length + 1 : 0);
     if (total > INSTRUCTION_BUDGET) throw new Error(`The "${arm}" instructions are ${total} characters; the agent would cut them off past ${INSTRUCTION_BUDGET}.`);
     extraFiles[arm] = path.join(out, `instructions-added-${arm}.txt`);
-    fs.writeFileSync(extraFiles[arm], extra);
-    if (base !== SERVER_INSTRUCTIONS) {
-      baseFiles[arm] = path.join(out, `instructions-base-${arm}.txt`);
-      fs.writeFileSync(baseFiles[arm], base);
+    baseFiles[arm] = path.join(out, `instructions-base-${arm}.txt`);
+    // Continuing a run must not mix answers given under different instructions into one score.
+    // Older runs saved the base text only when a design rewrote it, so a missing base file means the shipped text.
+    for (const [file, text, whenMissing] of [[extraFiles[arm], extra, null], [baseFiles[arm], base, SERVER_INSTRUCTIONS]]) {
+      if (fs.existsSync(path.join(out, arm)) && (fs.existsSync(file) ? fs.readFileSync(file, 'utf8') : whenMissing) !== text) {
+        throw new Error(`${out} already holds "${arm}" answers given under different instructions (${path.basename(file)}). Use a new --out folder.`);
+      }
+      fs.writeFileSync(file, text);
     }
   }
 
@@ -114,7 +118,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       const home = path.join(work, `${arm}-${question.id}-${repeat}`);
       fs.cpSync(path.join(work, usesTidyVault(arm) ? 'tidy' : 'plain'), home, { recursive: true });
       const env = { NORTHKEEP_HOME: home, NORTHKEEP_PASSPHRASE: PASSPHRASE, NORTHKEEP_NO_KEYCHAIN: '1', BENCH_ARM: arm, BENCH_EXTRA_FILE: extraFiles[arm], BENCH_PAGES_FILE: PAGES_FILE };
-      if (baseFiles[arm]) env.BENCH_BASE_FILE = baseFiles[arm];
+      env.BENCH_BASE_FILE = baseFiles[arm];
       // A closed port: the server falls back to keyword search, as it does with no local model.
       if (search === 'keyword') env.NORTHKEEP_OLLAMA_URL = 'http://127.0.0.1:9';
       const run = await runClaude({

@@ -14,8 +14,8 @@ export const SIDE_ARMS = ['look'];
  */
 export const PROPOSED_FOUND_FIRST =
   'NorthKeep is this user\'s own record of their life and work: the people, organizations, properties and projects in it, and how they like things done. ' +
-  'Before you answer a question about this user, or about a person, organization, property or project in their life, search NorthKeep with memory_retrieve, ' +
-  'even when your own notes or memory seem to answer it: they may be out of date, and NorthKeep is where the user corrects things across all of their AI apps. ' +
+  'Before you answer a question or act on a request about this user, or about a person, organization, property or project in their life, search NorthKeep with memory_retrieve, ' +
+  'even when your own saved notes or memories about the user seem to answer it: they may be out of date, and NorthKeep is where the user corrects things across all of their AI apps. ' +
   'When the conversation names a project, read it with project_get. ' +
   'When the user tells you a durable new fact, or you find their record is missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.';
 

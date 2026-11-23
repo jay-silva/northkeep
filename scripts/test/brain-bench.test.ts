@@ -282,7 +282,7 @@ describe('brain-bench reworded instruction', () => {
   it('replaces the shipped first paragraph and keeps the milestone rule', () => {
     const text = baseInstructions('look', { shipped: 'SHIPPED', milestoneRule: 'RULE' }) as string;
     expect(text).toBe(`${PROPOSED_FOUND_FIRST} RULE`);
-    expect(text).toContain('even when your own notes or memory seem to answer it');
+    expect(text).toContain('even when your own saved notes or memories about the user seem to answer it');
     expect(baseInstructions('search', { shipped: 'SHIPPED', milestoneRule: 'RULE' })).toBe('SHIPPED');
   });
 });

@@ -3,6 +3,8 @@
 Agent: Claude Code as a chat app, model `sonnet`, keyword search, one new session per question. Fictional data only.
 Scored by a second model that sees the answer key; plain text rules mark every answer too.
 
+This run measured a first draft of the reworded text, which is no longer the one in `designs.mjs`. Its second sentence read: "Before you answer a question about this user, or about a person, organization, property or project in their life, search NorthKeep with memory_retrieve, even when your own notes or memory seem to answer it: they may be out of date, and NorthKeep is where the user corrects things across all of their AI apps." The final text is scored in `2026-11-23-reworded-instruction-final.md`.
+
 | Design | What it adds | Correct | Likely range | Wrong | Incomplete | Said it did not know | Looked in NorthKeep |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | Today's search | NorthKeep as shipped | 81 of 100 | 72 to 87 | 7 | 5 | 7 | 90 of 100 |
