@@ -165,7 +165,7 @@ const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', '
 export function passedLine(on: string, by: 'you' | 'agent', thisYear: number): string {
   const [year, month, day] = on.split('-').map(Number) as [number, number, number];
   const date = `${MONTHS[month - 1]} ${day}${year === thisYear ? '' : `, ${year}`}`;
-  return `Passed ${date} · ${by === 'you' ? 'you confirmed' : 'agent says you confirmed'}`;
+  return `Passed ${date} · ${by === 'you' ? 'you confirmed' : 'reported by an AI app'}`;
 }
 
 export function milestonesView(plan: MilestonePlan, thisYear: number): MilestonesView {

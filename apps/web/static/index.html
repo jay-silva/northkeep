@@ -3384,7 +3384,7 @@
     return Number.isNaN(date.getTime()) ? String(on) : date.toLocaleDateString([], { month:'short', day:'numeric', timeZone:'UTC' });
   }
 
-  function milestoneWho(by) { return by === 'you' ? 'you confirmed' : 'agent says you confirmed'; }
+  function milestoneWho(by) { return by === 'you' ? 'you confirmed' : 'reported by an AI app'; }
 
   function renderProjectMilestones(project) {
     const section = el('section', 'project-section'); section.id = 'projectMilestones';
@@ -3523,7 +3523,7 @@
   function confirmMilestone(project, item, returnTo) {
     const agent = item.state === 'passed';
     openGuardDialog((agent ? 'Confirm ' : 'Mark ') + item.id + ' passed?', 'milestone-dialog', (body) => {
-      body.appendChild(el('p', 'lead', agent ? 'An AI app recorded ' + item.id + ' ' + item.title + ' as passed on ' + milestoneDay(item.on) + ', saying you confirmed it. Did you run this test, and did it pass?' : 'Did you run this test, and did it pass?'));
+      body.appendChild(el('p', 'lead', agent ? 'An AI app recorded ' + item.id + ' ' + item.title + ' as passed on ' + milestoneDay(item.on) + '. The Log may say where its evidence is. Did this test pass?' : 'Did you run this test, and did it pass?'));
       body.appendChild(el('blockquote', 'ms-test', item.test));
       body.appendChild(el('p', 'muted', 'NorthKeep records ' + item.id + ' as passed today, confirmed by you. AI apps cannot change it after that.'));
       const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);

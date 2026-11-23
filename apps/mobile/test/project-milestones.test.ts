@@ -78,7 +78,7 @@ describe('phone milestones', () => {
       nowOn: 'M3',
       lines: [
         { id: 'M1', title: 'Define the buy box', mark: 'you', sub: 'Passed Sep 28 · you confirmed', label: 'M1 Define the buy box. Passed Sep 28, you confirmed.' },
-        { id: 'M2', title: 'Shortlist 3 markets', mark: 'agent', sub: 'Passed Oct 9, 2025 · agent says you confirmed', label: 'M2 Shortlist 3 markets. Passed Oct 9, 2025, agent says you confirmed.' },
+        { id: 'M2', title: 'Shortlist 3 markets', mark: 'agent', sub: 'Passed Oct 9, 2025 · reported by an AI app', label: 'M2 Shortlist 3 markets. Passed Oct 9, 2025, reported by an AI app.' },
         {
           id: 'M3',
           title: 'Underwrite top 5 listings',
@@ -109,7 +109,7 @@ describe('phone milestones', () => {
     expect(progressLine(null)).toBe('No plan yet');
     expect(progressLine({ passed: 0, total: 5, current: { id: 'M1', title: 'Design and review' } })).toBe('0 of 5 · M1 Design and review');
     expect(passedLine('2026-01-02', 'you', 2026)).toBe('Passed Jan 2 · you confirmed');
-    expect(passedLine('2026-12-31', 'agent', 2027)).toBe('Passed Dec 31, 2026 · agent says you confirmed');
+    expect(passedLine('2026-12-31', 'agent', 2027)).toBe('Passed Dec 31, 2026 · reported by an AI app');
   });
 });
 

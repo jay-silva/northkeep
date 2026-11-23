@@ -20,6 +20,7 @@ import type { MemoryEntry } from './types.js';
 import {
   MILESTONES_HEADING,
   MilestoneError,
+  carriesPassStamp,
   formatMilestones,
   parseMilestones,
   recordAgentPass,
@@ -191,7 +192,8 @@ export function projectEvidenceProblem(request:{evidence?:unknown;milestone_pass
   if(request.milestone_passed===undefined)return 'evidence goes with milestone_passed: send both, or leave evidence out.';
   if(typeof evidence!=='string')return 'evidence must be a string.';
   if(evidence.length>PROJECT_EVIDENCE_MAX_CHARS)return `evidence is ${evidence.length} characters; the limit is ${PROJECT_EVIDENCE_MAX_CHARS}.`;
-  if(/[\r\n]/.test(evidence))return 'evidence must be one line.';
+  if(UNSAFE_WRITER_CHARS.test(evidence))return 'evidence must be one line of plain text, without control or invisible formatting characters.';
+  if(carriesPassStamp(evidence))return 'evidence cannot contain a "passed <date>" or "(agent)" stamp, which would read as a forged milestone line; leave that part out.';
   return projectTextProblem(evidence,'evidence',false);
 }
 export function assertProjectText(value:string, field:string, allowEmpty:boolean):void {
