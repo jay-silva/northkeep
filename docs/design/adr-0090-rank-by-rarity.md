@@ -1,6 +1,6 @@
-# ADR 0089 design record: rank by rarity
+# ADR 0090 design record: rank by rarity
 
-This decision was first drafted as "ADR 0088" on PR 88. Another open PR had taken that number, so it was renumbered before review 1's fixes went in.
+This decision was first drafted as "ADR 0088" on PR 88, then briefly numbered 0089. Another open PR (89) was taking those numbers at the same time, so it settled on 0090, the number of its own PR. The reviews below call it by the number it had then.
 
 ## Where it came from
 The brain bench (PR 84) found that a search holding the user's name returned only confirmed memories on 0.29.0. Two narrower fixes were built and both failed review (PR 85, ADR 0087): dropping common words lost "Morgan employer", and listing common-only matches last lost an answer made of common words. Jay, 2026-11-23: "What is honestly the best solution to this name bug?" and then "Build the ranking fix."

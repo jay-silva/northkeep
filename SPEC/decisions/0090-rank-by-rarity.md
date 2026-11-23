@@ -1,4 +1,4 @@
-# ADR 0089: Search weighs words by rarity, and bonuses scale with the match
+# ADR 0090: Search weighs words by rarity, and bonuses scale with the match
 
 Status: Proposed 2026-11-23 (Jay: "Build the ranking fix.") · Review 1: NOT CLEARED, revised; recheck: CLEARED WITH WOUNDS, fixed · Not built
 
@@ -33,4 +33,4 @@ Status: Proposed 2026-11-23 (Jay: "Build the ranking fix.") · Review 1: NOT CLE
 Nothing new. The connector counts, in memory for one request and never kept, how many rows it already decrypts hold each query word.
 
 ## Links
-Supersedes: parked ADR 0087 (PR 85) · Amends: ADR 0084 D5, Consequences · Record: docs/design/adr-0089-rank-by-rarity.md
+Supersedes: parked ADR 0087 (PR 85) · Amends: ADR 0084 D5, Consequences · Record: docs/design/adr-0090-rank-by-rarity.md
