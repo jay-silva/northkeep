@@ -8,6 +8,8 @@ KNOWN-LIMITS already says Codex, ChatGPT and Claude Desktop are not verified to 
 
 ## D1 wording (draft for Jay)
 
+This is the wording 0.29.0 shipped. It was reworded on 2026-11-23; see "D1 reworded: look first" at the end.
+
 It is sent as the MCP `instructions` string by both servers and placed in `CONTRACT_TEXT`, before the milestone rule:
 
 > NorthKeep is this user's own record of their life and work: the people, organizations, properties and projects in it, and how they like things done. When the conversation names a person, organization or property you have no facts about yet, search NorthKeep with memory_retrieve before you answer; when it names a project, read it with project_get. What you remember about this user from elsewhere is not their record. NorthKeep is, because the user keeps it across all of their AI apps and corrects it there. When the user tells you a durable new fact, or you find their record is missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.
@@ -107,17 +109,27 @@ Build recheck (2026-11-21, fresh eyes on the code): CLEARED WITH WOUNDS. No path
 
 ## D1 reworded: look first (2026-11-23)
 
-Jay, 2026-11-23: "Okay, the wording." The first paragraph of the instruction now reads:
+Jay, 2026-11-23: "Okay, the wording." A review then changed two phrases (below), so the final text needs his word again at merge. The first paragraph of the instruction now reads:
 
-> NorthKeep is this user's own record of their life and work: the people, organizations, properties and projects in it, and how they like things done. Before you answer a question about this user, or about a person, organization, property or project in their life, search NorthKeep with memory_retrieve, even when your own notes or memory seem to answer it: they may be out of date, and NorthKeep is where the user corrects things across all of their AI apps. When the conversation names a project, read it with project_get. When the user tells you a durable new fact, or you find their record is missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.
+> NorthKeep is this user's own record of their life and work: the people, organizations, properties and projects in it, and how they like things done. Before you answer a question or act on a request about this user, or about a person, organization, property or project in their life, search NorthKeep with memory_retrieve, even when your own saved notes or memories about the user seem to answer it: they may be out of date, and NorthKeep is where the user corrects things across all of their AI apps. When the conversation names a project, read it with project_get. When the user tells you a durable new fact, or you find their record is missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.
 
 What changed from 0.29.0:
-- The trigger was "a person, organization or property you have no facts about yet". An agent that had its own, out-of-date note about the user had facts, so it did not look. The trigger is now any question about the user or the people, organizations, properties and projects in their life, with "even when your own notes or memory seem to answer it".
+- The trigger was "a person, organization or property you have no facts about yet". An agent that had its own, out-of-date note about the user had facts, so it did not look. The trigger is now any question or request about the user or the people, organizations, properties and projects in their life, with "even when your own saved notes or memories about the user seem to answer it".
 - The two sentences "What you remember about this user from elsewhere is not their record. NorthKeep is, because the user keeps it across all of their AI apps and corrects it there." are folded into that sentence's reason.
 - Reading a named project with project_get is its own sentence. The save sentence and the milestone rule are unchanged.
 
-Why: the brain bench (PR 84), 100 questions on a fictional vault, Claude Code with Sonnet, word search. In one 200-session run the 0.29.0 wording scored 81 and this wording 87. The agent looked in NorthKeep in 90 sessions against 99, and confident wrong answers fell from 7 to 3. Seven answers became right and one became wrong; a split that uneven would come from two equal wordings about 7% of the time, so it is likely but not proven at this size. An earlier run, where the same idea was one sentence added after a brief, gave five newly right and none newly wrong. The reworded text cost about a sixth more tool calls (142 against 122).
+Why: the brain bench (PR 84), 100 questions on a fictional vault, Claude Code with Sonnet, word search. The 0.29.0 wording scored 81 and this wording 89. The agent looked in NorthKeep in 90 sessions with the old wording and in all 100 with the new. Confident wrong answers fell from 7 to 4. Ten answers became right and two became wrong; a split that uneven would come from two equal wordings about 4% of the time. The new wording cost about an eighth more tool calls (122 with the old wording, 137 with the new).
 
-Not measured: any app other than Claude Code, and a real vault. Only Claude Code is known to show this text to its model (D0).
+Not measured: any app other than Claude Code, a real vault, and requests that are not questions (every bench item is a question).
 
-The contract text changes with it, so three new render hashes are appended to `RELEASED_CONTRACT_RENDER_SHA256`. A test installs the 0.29.0 Claude file and checks it reads as stale, not edited, and is replaced without a backup.
+Review (2026-11-23, fresh eyes, against code): CLEARED WITH WOUNDS.
+1. "Not yet in a release" was half true: merging redeploys the connector, so cloud apps get the text at merge. Fixed in KNOWN-LIMITS.
+2. The first draft said "Before you answer a question about", which read literally leaves out a task such as "email Carol about the lease". Fixed: "answer a question or act on a request about". The first draft had scored 87 against 81.
+3. "Your own notes or memory" could be read in Claude Code as the user's instruction files. Fixed: "your own saved notes or memories about the user".
+4. Not changed, and older than this rewording: the contract's standing instruction says to start a named project with project_resume, and this paragraph says project_get. The connector has no project_resume. A question about a project now also triggers a memory search, which skips project documents (D3), so it costs two calls.
+5. Not changed: a coding session about a tracked project will search more often than the bench's questions did.
+6. The test covered only the 0.29.0 Claude file. Fixed: the Cursor rule and the Codex block are checked against their 0.29.0 hashes too.
+
+Clean: the three appended hashes are the three current renders; every 0.29.0 render still reads as an earlier release and is replaced without a backup; the local text, the connector's copy and the contract's copy are identical and a test enforces it; nothing else in the repo quotes the old wording as current; nothing new leaves the machine.
+
+The contract text changes with the wording, so three new render hashes are appended to `RELEASED_CONTRACT_RENDER_SHA256`.
