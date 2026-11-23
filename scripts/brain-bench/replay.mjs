@@ -114,7 +114,7 @@ export function makeRules(core) {
     'Rarity, prior of 10, absent words counted': rarity(core, { prior: 10, slope: 0.15, cap: 0.5, cutMultiplies: false, countAbsent: true }),
     'Bonuses multiply, equal weights': rarity(core, { prior: null, slope: 0.1, cap: 0.3, cutMultiplies: false, countAbsent: true }),
     'Rarity, long confirmed memories cut too': rarity(core, { prior: 10, slope: 0.15, cap: 0.5, cutMultiplies: true, countAbsent: false }),
-    'ADR 0089: rank by rarity': rarity(core, { prior: 10, slope: 0.15, cap: 0.5, cutMultiplies: true, countAbsent: false, cutConfirmed: false }),
+    'ADR 0090: rank by rarity': rarity(core, { prior: 10, slope: 0.15, cap: 0.5, cutMultiplies: true, countAbsent: false, cutConfirmed: false }),
   };
 }
 

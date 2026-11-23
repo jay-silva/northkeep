@@ -247,7 +247,7 @@ describe('brain-bench replay', () => {
   it('shows the shipped rule losing the answer to confirmed rows that match only the name', () => {
     expect(top('As shipped (0.29.0)', 'car vehicle Pat drives')).not.toContain("Pat's car is a blue hatchback");
     expect(top('Fix 2: common-only matches last', 'car vehicle Pat drives')[0]).toBe("Pat's car is a blue hatchback");
-    expect(top('ADR 0089: rank by rarity', 'car vehicle Pat drives')[0]).toBe("Pat's car is a blue hatchback");
+    expect(top('ADR 0090: rank by rarity', 'car vehicle Pat drives')[0]).toBe("Pat's car is a blue hatchback");
   });
 
   it('counts an answer as found only when every part of it came back', () => {
@@ -288,15 +288,15 @@ describe('brain-bench ranking cases', () => {
     expect(lost('Rarity, long confirmed memories cut too')).toEqual(['a long confirmed answer against fresh notes that repeat the question']);
   });
 
-  it('the ADR 0089 rule finds the answer in all twelve', () => {
+  it('the ADR 0090 rule finds the answer in all twelve', () => {
     expect((RANKING_CASES as unknown[]).length).toBe(12);
-    expect(lost('ADR 0089: rank by rarity')).toEqual([]);
+    expect(lost('ADR 0090: rank by rarity')).toEqual([]);
   });
 
   it('and keeps three checks the product already makes, which rarity without a prior does not', () => {
     const failed = (rule: string): string[] => (KEPT_CASES as { name: string }[]).filter((c) => !passes(rules[rule], searchRules, c)).map((c) => c.name);
     expect(failed('As shipped (0.29.0)')).toEqual([]);
-    expect(failed('ADR 0089: rank by rarity')).toEqual([]);
+    expect(failed('ADR 0090: rank by rarity')).toEqual([]);
     expect(failed('Rarity, no prior')).toEqual(['a long row against a short exact answer, two memories', 'an answer split across two memories among project chatter']);
   });
 });
