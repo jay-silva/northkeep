@@ -1,6 +1,6 @@
 # ADR 0086: Share projects by default
 
-Status: Proposed 2026-11-22 · Review 1: NOT CLEARED, revised · Recheck: CLEARED WITH WOUNDS, wounds fixed
+Status: Accepted 2026-11-23 (Jay: "accepted, rule change allowed"), not built · Review 1: NOT CLEARED, revised · Recheck: CLEARED WITH WOUNDS, wounds fixed
 
 ## Context
 Projects are private until Jay shares each one. On 2026-11-22 Gemini, on the Cloud connector, could not see the unshared bourne-fire project. Jay wants projects shared by default and rarely opens the app.
@@ -17,7 +17,7 @@ Projects are private until Jay shares each one. On 2026-11-22 Gemini, on the Clo
 
 ## Consequences
 - Harder: memories filed under a project leave the Mac; switch-on can push many projects and release held app rows at once. A mark reaches the cloud only while the push runs.
-- Committed to: CLAUDE.md invariant #1 names this second no-dialog exception (needs Jay's OK); KNOWN-LIMITS says an agent that skips the question shares the project, that shell-capable agents can already run `share add --yes`, and that the phone's creates and unshares are covered only once it ships this.
+- Committed to: CLAUDE.md invariant #1 names this second no-dialog exception (Jay allowed it 2026-11-23); KNOWN-LIMITS says an agent that skips the question shares the project, that shell-capable agents can already run `share add --yes`, and that the phone's creates and unshares are covered only once it ships this.
 
 ## Rejected
 - An agent unshare tool: the server's unshare deletes app writes this Mac has not pulled.
