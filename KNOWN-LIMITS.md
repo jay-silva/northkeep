@@ -10,6 +10,8 @@ every milestone; if a limit is removed, say when and how.*
 - Memory search skips project documents, project log archives, and rows marked as archives. Read those with `project_get`. Anyone who can write a scope can make a row look like a log archive and so hide it from search; the same writer can already edit or forget it.
 - A confirmed memory ranks above unconfirmed ones but is never added to results that do not match the question. For now only the command line confirms; the Mac app has no confirm button yet. An AI app that can run commands on your Mac, as Claude Code can, can run the confirm command too, the same limit as milestones.
 - An AI app's edit of a confirmed memory makes the new version unconfirmed.
+- A search that includes a word found in most of your confirmed memories, such as your own name, can return only confirmed memories and miss the answer: each matches that one word, takes the confirmed boost, and fills the results (8 by default for AI apps on your Mac, 20 on the Cloud connector). Reproduced on 0.29.0; two fixes were tried and rejected in review (PR 85, parked).
+- A confirmed memory can rank above an unconfirmed one that matches more of the question. Confirmed memories that share a word with the question, such as a property or street name, can fill every result the same way.
 - On your Mac, an unconfirmed episodic memory an AI app saved more than 30 days ago is listed after every other match, since old session notes are often out of date. It still appears. The Cloud connector cannot tell who wrote a row, so cloud apps see those notes in plain score order.
 - The Cloud connector can read whether each shared memory is confirmed or marked as an archive: two flags inside the encrypted row, nothing more.
 
