@@ -1,6 +1,6 @@
 # ADR 0090: Search weighs words by rarity, and bonuses scale with the match
 
-Status: Accepted 2026-11-23 (Jay: "except the ranking ADR", read as accept) · Design reviews: NOT CLEARED, then CLEARED WITH WOUNDS · Build review: NOT CLEARED, then CLEARED WITH WOUNDS · Built, unreleased
+Status: Accepted 2026-11-23 (Jay: "except the ranking ADR", read as accept) · Design reviews: NOT CLEARED, then CLEARED WITH WOUNDS · Build review: NOT CLEARED, then CLEARED WITH WOUNDS · Released in 0.30.0
 
 ## Context
 0.29.0 adds up to 0.95 for recency, type and confirmation to the share of query words a memory holds, and the extras outweigh the match. A query with the user's name returned eight confirmed memories, not the answer.
