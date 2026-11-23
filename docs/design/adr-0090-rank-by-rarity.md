@@ -65,3 +65,26 @@ Clean: the long-row check is no longer a knife edge (0.973 against 0.845); a que
 - A correction saved as a new memory, worded differently from the old fact, can rank just below the year-old fact that matches one more word (1.001 against 1.100). A correction made by editing the memory replaces the old one and is not affected.
 
 In each case both memories are returned; what changes is which is first.
+
+## Build notes (2026-11-23, PR 90)
+Jay accepted the ADR on 2026-11-23. Asked to reply "accept the ranking ADR", he wrote "except the ranking ADR", read as accept.
+
+What was built:
+- `wordWeights`, `weightedMatch` and the new `lengthPenalty` in both search-rules files, inside the block the drift test compares.
+- Device: `Vault.retrieve` and the meaning path score `keywordMatch × bonusFactor` and `(0.7 × similarity + keywordMatch) × bonusFactor` (packages/core/src/vault.ts). A row is admitted exactly as before.
+- Connector: `rankSharedEntries` replaces `scoreSharedEntry`, and both search tools call it. The connector had no long-row cut before; it now applies the same one, so the rule is the same in both places.
+- Converse is not changed. Its floor is a ratio of the first result's score, so it keeps working; it keeps fewer weak matches.
+
+Tests:
+- The twelve hard cases run against a real vault by word and by meaning (packages/core/test/adr0090-rank-by-rarity.test.ts, cases in ranking-cases.ts), and against the connector's scorer. The answer must rank first in eleven of them; in "Pat employer" it must be in the first eight. Before the change, 16 of these tests failed.
+- By meaning, two cases are skipped and recorded as not fixed: the 300-word answer and the long confirmed answer against fresh notes. Both pad the answer with made-up words. The stand-in for the search model in the tests treats two texts as close when they share words, so the padding makes the answer look unlike the question, and short rows that echo the question score closer. 0.29.0 loses both by meaning as well. Both pass by word. The ADR's "ready when" line was changed to say so; that is a weaker bar than the one Jay accepted, and it is called out in the PR for him.
+- New: a filter case with 60 matching rows outside the filter; the cut's values; a long confirmed memory scoring as a short one; the two trades (both memories come back); on the connector, a search by scope name, text against name, an empty query and a stopword query; and one case through both connector tools.
+- The three kept checks are the existing ADR 0084 tests, unchanged and passing.
+
+Checks run on the built code:
+- Leak gate and the full suite: 3,324 passed. End-to-end: 166 passed; the two that fail are the long-standing milestones-k4 failures on macOS that pass in CI.
+- Replay of the 348 recorded searches through the real `vault.retrieve` from the build: 275 return the answer, none gained and none lost against 0.29.0, and all 348 result lists are identical to the bench's "ADR 0090" rule, so the bench models the product exactly.
+- The acceptance test below, on a throwaway vault, by meaning and by word: the answer is listed first.
+
+## Acceptance test (Jay's Mac, throwaway vault)
+Twelve confirmed memories that name Pat, one unconfirmed memory with the answer, then a search that names Pat. Success: "Pat's car is a blue hatchback" is the first result.
