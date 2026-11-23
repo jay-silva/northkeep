@@ -14,6 +14,9 @@ import { ARMS, INSTRUCTION_BUDGET, extraInstructions, findPage, tidyMemories } f
 import { assertThrowawayHome, seedHome } from '../brain-bench/seed.mjs';
 // @ts-expect-error plain Node script without type declarations
 import { pickQuestions } from '../brain-bench/run.mjs';
+// @ts-expect-error plain Node script without type declarations
+import { holdsAnswer, makeRules } from '../brain-bench/replay.mjs';
+import * as searchRules from '../../packages/core/src/search-rules.js';
 
 type Question = { id: string; cat: string; q: string; expect: string; must: string[][]; must_not: string[]; both?: string[] };
 const question = (id: string): Question => (QUESTIONS as Question[]).find((x) => x.id === id)!;
@@ -214,5 +217,31 @@ describe('brain-bench seed', () => {
     const tidy = found.find((r: { entry: { content: string } }) => r.entry.content === 'Heron Cabin: Sleeps eight.');
     expect(tidy?.entry.source).toBe('mcp:curator');
     expect(Date.now() - Date.parse(tidy.entry.created_at)).toBeLessThan(2 * 86_400_000);
+  });
+});
+
+describe('brain-bench replay', () => {
+  const now = Date.parse('2026-11-23T12:00:00.000Z');
+  const row = (content: string, confirmed = false) => ({
+    entry: { content, type: confirmed ? 'identity' : 'semantic', source: 'cli', created_at: '2026-11-10T12:00:00.000Z', metadata: confirmed ? { confirmed: { by: 'user', at: 'x' } } : null },
+    terms: searchRules.searchTerms(content),
+  });
+  const rows = [
+    row("Pat's car is a blue hatchback"),
+    ...Array.from({ length: 12 }, (_, i) => row(`Pat keeps ledger ${i} in the harbor office`, true)),
+    ...Array.from({ length: 12 }, (_, i) => row(`Tide table ${i} is pinned by the door`)),
+  ];
+  const top = (rule: string, query: string): string[] => (makeRules(searchRules)[rule](rows, searchRules.searchTerms(query), now) as { row: { entry: { content: string } } }[]).slice(0, 8).map((s) => s.row.entry.content);
+
+  it('shows the shipped rule losing the answer to confirmed rows that match only the name', () => {
+    expect(top('As shipped (0.29.0)', 'car vehicle Pat drives')).not.toContain("Pat's car is a blue hatchback");
+    expect(top('Fix 2: common-only matches last', 'car vehicle Pat drives')[0]).toBe("Pat's car is a blue hatchback");
+    expect(top('Fix 4: weigh words by rarity', 'car vehicle Pat drives')[0]).toBe("Pat's car is a blue hatchback");
+  });
+
+  it('counts an answer as found only when every part of it came back', () => {
+    const split = question('split-01');
+    expect(holdsAnswer(split, ["Morgan's dog Biscuit is a corgi born in 2021."])).toBe(false);
+    expect(holdsAnswer(split, ["Morgan's dog Biscuit is a corgi born in 2021.", "Pepper is Morgan's second corgi."])).toBe(true);
   });
 });
