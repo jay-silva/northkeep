@@ -2212,8 +2212,9 @@ function isStringArray(value: unknown): value is string[] {
 }
 
 /**
- * ADR 0090 D1, D3: the share of the query's weight this row holds, marked down
- * for length unless the user confirmed it. 0 when it holds none of the words.
+ * ADR 0090 D3: a confirmed memory is not marked down for length. Cut, it lost
+ * half its confirmed boost too and fell behind fresh notes that only repeated
+ * the question.
  */
 function keywordMatch(weights: ReadonlyMap<string, number>, entry: MemoryEntry, entryTerms: ReadonlySet<string>): number {
   const share = weightedMatch(weights, entryTerms);

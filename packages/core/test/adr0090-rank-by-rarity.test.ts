@@ -109,11 +109,11 @@ describe('ADR 0090 D1: words weigh by how rare they are among the rows searched'
 });
 
 describe('ADR 0090 D3: long memories are marked down by a share, confirmed ones not at all', () => {
-  it('takes 15% off per doubling past 64 distinct words, up to half', () => {
+  it('takes 10% off per doubling past 64 distinct words, up to 30%', () => {
     expect(lengthPenalty(64)).toBe(0);
-    expect(lengthPenalty(128)).toBeCloseTo(0.15, 5);
-    expect(lengthPenalty(256)).toBeCloseTo(0.3, 5);
-    expect(lengthPenalty(100_000)).toBe(0.5);
+    expect(lengthPenalty(128)).toBeCloseTo(0.1, 5);
+    expect(lengthPenalty(256)).toBeCloseTo(0.2, 5);
+    expect(lengthPenalty(100_000)).toBe(0.3);
   });
 
   it('a long confirmed memory scores as if it were short', () => {
@@ -145,6 +145,16 @@ describe('ADR 0090: the trade it makes on purpose', () => {
     const found = contents(vault.retrieve('Pat dispatcher job Harbor Rescue')).slice(0, 2);
     expect(found.some((c) => c.startsWith('Correction:'))).toBe(true);
     expect(found.some((c) => c.startsWith('Pat is a dispatcher'))).toBe(true);
+  });
+});
+
+describe('ADR 0090, not fixed: two memories are too few to tell a common word from a rare one', () => {
+  it('a long row holding every query word can lead a short answer that lacks one, and both come back', () => {
+    const long = Array.from({ length: 400 }, (_, i) => `line ${i} about the harbor schedule, office supplies, staff names and directors meeting notes`).join('\n');
+    seed([{ content: 'Pat Example is the harbor office director' }, { content: long }]);
+    const found = contents(vault.retrieve('what is the name of the harbor office director'));
+    expect(found).toHaveLength(2);
+    expect(found).toContain('Pat Example is the harbor office director');
   });
 });
 

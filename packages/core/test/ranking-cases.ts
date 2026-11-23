@@ -66,6 +66,10 @@ export const RANKING_CASES: RankingCase[] = [
   longAnswerCase(300, false),
   longAnswerCase(450, true),
   longAnswerCase(700, true),
+  // Unconfirmed, so it is marked down for length: a cut of half put eight one-word matches ahead of it.
+  { name: 'a long unconfirmed answer holding every query word', query: 'Alder septic', want: 'septic design report', first: true, byMeaning: false,
+    memories: [{ content: `Alder Hill septic design report. ${many(600, (i) => `xword${i}`).join(' ')}`, daysAgo: 200 },
+      ...many(9, (i) => fact(`Septic pumped at rental unit ${i}`)), ...many(40, (i) => fact(`Alder Hill note ${i}`)), ...filler(140)] },
   // A long memory the user confirmed over a year ago, against eight fresh AI notes that only repeat the question.
   { name: 'a long confirmed answer against fresh notes that repeat the question', query: 'septic test pit results', want: 'passed at four feet', first: true, byMeaning: false,
     memories: [{ content: `The septic test pit results: the pit passed at four feet. ${many(450, (i) => `xword${i}`).join(' ')}`, confirmed: true, daysAgo: 400 },

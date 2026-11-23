@@ -49,6 +49,14 @@ describe('ADR 0090 D5: the connector weighs words the way the device does', () =
     expect(top(rows, 'harbor crew').slice(0, 2)).toEqual(['The harbor crew list is on the wall', 'The crew meets on Friday']);
   });
 
+  it('a word in a memory and in its scope name never counts for less than the scope name alone', () => {
+    const rows = [row('Crew roster is on the wall', { scope: 'project:harbor' }), row('Harbor crew meets Friday', { scope: 'project:harbor' }),
+      ...Array.from({ length: 20 }, (_, i) => row(`Harbor log ${i} is filed`)), ...Array.from({ length: 24 }, (_, i) => row(`Tide table ${i} is pinned by the door`))];
+    const found = top(rows, 'harbor', 30);
+    expect(found[0]).toBe('Harbor crew meets Friday');
+    expect(found.indexOf('Crew roster is on the wall')).toBe(found.length - 1);
+  });
+
   it('a query with no words lists everything, and one of stopwords alone finds nothing', () => {
     const rows = [row('One'), row('Two'), row('Three')];
     expect(top(rows, '  ', 2)).toEqual(['One', 'Two']);

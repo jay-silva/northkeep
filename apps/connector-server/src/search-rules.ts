@@ -33,9 +33,9 @@ export function searchTerms(text: string): Set<string> {
 }
 
 /**
- * How much each query word counts (ADR 0090 D1): a word rare among the rows
- * searched counts for more, and one no row holds counts for nothing. The 10
- * keeps weights close together until a vault is big enough to tell.
+ * ADR 0090 D1. Counting every query word the same let a row that shared only
+ * the user's name outrank the answer. The 10 keeps a tiny vault from calling
+ * a word rare on two rows' evidence.
  */
 export function wordWeights(queryTerms: ReadonlySet<string>, rows: ReadonlyArray<ReadonlySet<string>>): Map<string, number> {
   const weights = new Map<string, number>();
@@ -47,7 +47,7 @@ export function wordWeights(queryTerms: ReadonlySet<string>, rows: ReadonlyArray
   return weights;
 }
 
-/** The share of the query's weight a row holds; 0 when it holds none of the query's words. */
+/** Zero exactly when the row holds none of the query's words, so it doubles as the admission test. */
 export function weightedMatch(weights: ReadonlyMap<string, number>, rowTerms: ReadonlySet<string>): number {
   let matched = 0;
   let total = 0;
@@ -59,12 +59,12 @@ export function weightedMatch(weights: ReadonlyMap<string, number>, rowTerms: Re
 }
 
 /**
- * A long row matches many query words by sheer size, so its match is marked
- * down by this share: 15% per doubling past 64 distinct words, up to half
- * (ADR 0090 D3). A memory the user confirmed is not marked down.
+ * A long row matches many query words by sheer size. The share taken off is
+ * capped at 30%: at half, a long memory that held every word of the question
+ * fell behind short ones holding one (ADR 0090 D3).
  */
 export function lengthPenalty(distinctWords: number): number {
-  return Math.min(0.5, 0.15 * Math.log2(Math.max(1, distinctWords / 64)));
+  return Math.min(0.3, 0.1 * Math.log2(Math.max(1, distinctWords / 64)));
 }
 
 /** How much a confirmed memory rises once admitted. It never admits a row on its own. */
@@ -79,10 +79,9 @@ export function isProjectPaperwork(row: { type: string; scope: string; content: 
 }
 
 /**
- * What both search tools return, best match first (ADR 0084 D5, ADR 0090 D5).
- * A query word counts by how rare it is among the rows; a word found only in a
- * scope or type name counts at half its weight among those names. A query with
- * no words lists everything; one made only of stopwords finds nothing.
+ * One ranker for both search tools, so they cannot drift (ADR 0090 D5). A
+ * word found only in a scope or type name counts half, as before, so a
+ * memory that says the word always outranks one merely filed under it.
  */
 export function rankSharedEntries<T extends { type: string; scope: string; content: string; confirmed?: boolean; archive?: boolean }>(
   entries: readonly T[],
@@ -93,18 +92,14 @@ export function rankSharedEntries<T extends { type: string; scope: string; conte
     .map((entry) => ({ entry, text: searchTerms(entry.content), names: searchTerms(`${entry.scope} ${entry.type}`) }));
   if (!/[a-z0-9]{2,}/i.test(query)) return rows.slice(0, limit).map((row) => row.entry);
   const terms = searchTerms(query);
-  const inText = wordWeights(terms, rows.map((row) => row.text));
-  const inNames = wordWeights(terms, rows.map((row) => row.names));
+  const weights = wordWeights(terms, rows.map((row) => new Set([...row.text, ...row.names])));
   let total = 0;
-  for (const term of terms) total += Math.max(inText.get(term) ?? 0, 0.5 * (inNames.get(term) ?? 0));
+  for (const weight of weights.values()) total += weight;
   if (total === 0) return [];
   return rows
     .map(({ entry, text, names }) => {
       let matched = 0;
-      for (const term of terms) {
-        if (text.has(term)) matched += inText.get(term) ?? 0;
-        else if (names.has(term)) matched += 0.5 * (inNames.get(term) ?? 0);
-      }
+      for (const [term, weight] of weights) matched += text.has(term) ? weight : names.has(term) ? 0.5 * weight : 0;
       // The connector knows no recency or source, so confirmed is the only bonus (ADR 0090 D2, D3).
       const kept = entry.confirmed === true ? 1 + CONFIRMED_BOOST : 1 - lengthPenalty(text.size);
       return { entry, score: (matched / total) * kept };

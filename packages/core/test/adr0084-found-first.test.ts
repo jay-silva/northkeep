@@ -107,6 +107,8 @@ describe('ADR 0084 baseline fixtures', () => {
     // The answer is older, so recency favours the long row.
     vault.remember({ content: 'Pat Example is the harbor office director', type: 'semantic' });
     vault.remember({ content: filler, type: 'semantic', scope: 'conversations' });
+    // ADR 0090 weighs a word by how many memories hold it, so "name" has to be common here, as it is in a real vault.
+    for (let i = 0; i < 20; i += 1) vault.remember({ content: `The name on parcel ${i} is on file`, type: 'semantic' });
     // The long row matches every query word, the answer all but "name".
     expect(contents(vault.retrieve('what is the name of the harbor office director'))[0]).toBe('Pat Example is the harbor office director');
   });

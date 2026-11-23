@@ -34,9 +34,9 @@ export function searchTerms(text: string): Set<string> {
 }
 
 /**
- * How much each query word counts (ADR 0090 D1): a word rare among the rows
- * searched counts for more, and one no row holds counts for nothing. The 10
- * keeps weights close together until a vault is big enough to tell.
+ * ADR 0090 D1. Counting every query word the same let a row that shared only
+ * the user's name outrank the answer. The 10 keeps a tiny vault from calling
+ * a word rare on two rows' evidence.
  */
 export function wordWeights(queryTerms: ReadonlySet<string>, rows: ReadonlyArray<ReadonlySet<string>>): Map<string, number> {
   const weights = new Map<string, number>();
@@ -48,7 +48,7 @@ export function wordWeights(queryTerms: ReadonlySet<string>, rows: ReadonlyArray
   return weights;
 }
 
-/** The share of the query's weight a row holds; 0 when it holds none of the query's words. */
+/** Zero exactly when the row holds none of the query's words, so it doubles as the admission test. */
 export function weightedMatch(weights: ReadonlyMap<string, number>, rowTerms: ReadonlySet<string>): number {
   let matched = 0;
   let total = 0;
@@ -60,12 +60,12 @@ export function weightedMatch(weights: ReadonlyMap<string, number>, rowTerms: Re
 }
 
 /**
- * A long row matches many query words by sheer size, so its match is marked
- * down by this share: 15% per doubling past 64 distinct words, up to half
- * (ADR 0090 D3). A memory the user confirmed is not marked down.
+ * A long row matches many query words by sheer size. The share taken off is
+ * capped at 30%: at half, a long memory that held every word of the question
+ * fell behind short ones holding one (ADR 0090 D3).
  */
 export function lengthPenalty(distinctWords: number): number {
-  return Math.min(0.5, 0.15 * Math.log2(Math.max(1, distinctWords / 64)));
+  return Math.min(0.3, 0.1 * Math.log2(Math.max(1, distinctWords / 64)));
 }
 
 /** An AI app's session note older than this ranks below every other match (D8). */
