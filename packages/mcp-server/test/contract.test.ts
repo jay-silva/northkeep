@@ -80,7 +80,7 @@ describe('CONTRACT_TEXT', () => {
     );
     // ADR 0065 Decision 4: the same text as the local server's instructions.
     expect(CONTRACT_TEXT).toContain(
-      'When the user asks to create a project, propose its milestones and create it only after the user agrees to them. Report a milestone passed only when the user says its acceptance test passed. Never mark a milestone passed on your own judgment.',
+      'When the user asks to create a project, propose its milestones and create it only after the user agrees to them. Report a milestone passed only when the user says its acceptance test passed, or, if the user\'s own instructions allow it, when you ran that exact acceptance test yourself on the real thing, not a stand-in, and send evidence naming where you saved what you saw. Never mark a milestone passed on your own judgment; reading code or running other tests does not count.',
     );
     expect(CONTRACT_TEXT).not.toContain('On a hosted surface');
     expect(CONTRACT_TEXT).not.toContain('never create a project there');

@@ -188,7 +188,7 @@ describe('recordAgentPass and confirmPass', () => {
   });
 
   it('refuses any id but the current one, and plans with nothing to pass', () => {
-    expect(refusal(() => recordAgentPass(current, 'M2', '2026-10-14T00:00:00.000Z'))).toBe('Only the current milestone, M3, can be reported passed. Report a milestone passed only when the user says its acceptance test passed.');
+    expect(refusal(() => recordAgentPass(current, 'M2', '2026-10-14T00:00:00.000Z'))).toBe('Only the current milestone, M3, can be reported passed, and only after its acceptance test passed.');
     expect(refusal(() => recordAgentPass({ kind: 'none', reason: 'x' }, 'M1', '2026-10-14T00:00:00.000Z'))).toBe('This project has no milestone plan, so there is no milestone to report passed.');
     expect(refusal(() => recordAgentPass({ kind: 'malformed', reason: 'x' }, 'M1', '2026-10-14T00:00:00.000Z'))).toBe('The Milestones section does not follow the milestone format, so it cannot be changed here. Ask the user to repair it in the NorthKeep app.');
   });
@@ -223,12 +223,12 @@ describe('assertAgentWriteKeepsPasses', () => {
   it('accepts the one (agent) pass it was given, and no other new pass', () => {
     const passed = doc(PLAN.replace(open3, `${open3.replace('- [ ]', '- [x]')} | passed 2026-10-14 (agent)`));
     expect(() => assertAgentWriteKeepsPasses(before, passed, allowed)).not.toThrow();
-    expect(refusal(() => assertAgentWriteKeepsPasses(before, passed))).toBe('An AI app cannot mark M3 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after the user says its test passed.');
-    expect(refusal(() => assertAgentWriteKeepsPasses(before, passed.replace('2026-10-14 (agent)', '2026-10-14 (you)'), { ...allowed, by: 'you' }))).toBe('An AI app cannot mark M3 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after the user says its test passed.');
+    expect(refusal(() => assertAgentWriteKeepsPasses(before, passed))).toBe('An AI app cannot mark M3 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after its acceptance test passed.');
+    expect(refusal(() => assertAgentWriteKeepsPasses(before, passed.replace('2026-10-14 (agent)', '2026-10-14 (you)'), { ...allowed, by: 'you' }))).toBe('An AI app cannot mark M3 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after its acceptance test passed.');
   });
 
   it.each([
-    ['ticking an open line as (you)', doc(PLAN.replace(open3, `${open3.replace('- [ ]', '- [x]')} | passed 2026-10-14 (you)`)), 'An AI app cannot mark M3 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after the user says its test passed.'],
+    ['ticking an open line as (you)', doc(PLAN.replace(open3, `${open3.replace('- [ ]', '- [x]')} | passed 2026-10-14 (you)`)), 'An AI app cannot mark M3 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after its acceptance test passed.'],
     ['restamping an (agent) pass as (you)', doc(PLAN.replace('(agent)', '(you)')), 'M2 has passed, so its line cannot be changed, moved out of Milestones or removed.'],
     ['removing a passed line', doc(PLAN.split('\n').slice(1).join('\n')), 'M1 has passed, so its line cannot be changed, moved out of Milestones or removed.'],
     ['editing a passed title', doc(PLAN.replace('Define the buy box', 'Define the box')), 'M1 has passed, so its line cannot be changed, moved out of Milestones or removed.'],
@@ -248,8 +248,8 @@ describe('assertAgentWriteKeepsPasses', () => {
     for (const forged of ['- [x] M1 A | test: B | passed 2026-10-01 (you) ', '- [x] M1 A | test: B | passed 2026-10-01 (You)']) {
       expect(refusal(() => assertAgentWriteKeepsPasses(open, doc(forged)))).toMatch(/^This change would leave the Milestones section unreadable, so nothing was saved: /);
     }
-    expect(refusal(() => assertAgentWriteKeepsPasses(doc('none: errand'), doc('- [x] M1 A | test: B | passed 2026-10-01 (you)')))).toBe('An AI app cannot mark M1 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after the user says its test passed.');
-    expect(refusal(() => assertAgentWriteKeepsPasses(null, doc('- [x] M1 A | test: B | passed 2026-10-01 (you)')))).toBe('An AI app cannot mark M1 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after the user says its test passed.');
+    expect(refusal(() => assertAgentWriteKeepsPasses(doc('none: errand'), doc('- [x] M1 A | test: B | passed 2026-10-01 (you)')))).toBe('An AI app cannot mark M1 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after its acceptance test passed.');
+    expect(refusal(() => assertAgentWriteKeepsPasses(null, doc('- [x] M1 A | test: B | passed 2026-10-01 (you)')))).toBe('An AI app cannot mark M1 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after its acceptance test passed.');
   });
 
   it('keeps a malformed section byte-identical: other sections can change, the section cannot', () => {

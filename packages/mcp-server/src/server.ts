@@ -17,6 +17,7 @@ import {
   MILESTONE_MAX_ITEMS,
   MilestoneError,
   PROJECT_FILE_ACCESS,
+  PROJECT_EVIDENCE_MAX_CHARS,
   PROJECT_FILE_CONTEXT_MAX_CHARS,
   PROJECT_FILE_LABEL_MAX_CHARS,
   PROJECT_FILE_LIMIT,
@@ -1571,7 +1572,13 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
     files: projectFilesSchema,
     milestone_passed: z.string().regex(/^M[1-9][0-9]{0,2}$/, 'a milestone id such as M3').optional().describe(
       'The id of the current milestone (the first one not yet passed), only when the user has said its acceptance ' +
-      'test passed. It is recorded as passed by an AI app, with today\'s date, until the user confirms it. Any other id is refused.',
+      'test passed, or when the user\'s own instructions let you run that exact test yourself and you did, with evidence. ' +
+      'It is recorded as passed by an AI app, with today\'s date, until the user confirms it. Any other id is refused.',
+    ),
+    evidence: z.string().min(1).max(PROJECT_EVIDENCE_MAX_CHARS).optional().describe(
+      'Only with milestone_passed, when you ran the acceptance test yourself: where you saved what you saw, such as ' +
+      `a report file path. One line, up to ${PROJECT_EVIDENCE_MAX_CHARS} characters. It is added to the Log entry as ` +
+      '"Evidence for M3: ...". Leave it out when the user told you the test passed.',
     ),
   };
   const HANDOFF_DESCRIPTION = {

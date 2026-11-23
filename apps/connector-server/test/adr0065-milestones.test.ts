@@ -102,7 +102,7 @@ describe('ADR 0065 hosted tools', () => {
   it('sends the standing milestone instruction, after the ADR 0084 lookup instruction', async () => {
     const c = await client();
     expect(MILESTONE_INSTRUCTION).toBe(
-      'When the user asks to create a project, propose its milestones and create it only after the user agrees to them. Report a milestone passed only when the user says its acceptance test passed. Never mark a milestone passed on your own judgment.',
+      'When the user asks to create a project, propose its milestones and create it only after the user agrees to them. Report a milestone passed only when the user says its acceptance test passed, or, if the user\'s own instructions allow it, when you ran that exact acceptance test yourself on the real thing, not a stand-in, and send evidence naming where you saved what you saw. Never mark a milestone passed on your own judgment; reading code or running other tests does not count.',
     );
     expect(c.getInstructions()?.endsWith(` ${MILESTONE_INSTRUCTION}`)).toBe(true);
   });
