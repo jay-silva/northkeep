@@ -447,7 +447,7 @@ describe('reinstall over an earlier release', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe(renderContract('claude'));
   });
 
-  it('reports a copy installed by 0.29.0 as stale, not edited, and install replaces it without a backup', () => {
+  describe('a copy installed by 0.29.0', () => {
     // 0.29.0's wording of the lookup paragraph, before it was reworded to say look first.
     const paragraph029 =
       "NorthKeep is this user's own record of their life and work: the people, organizations, properties and projects in it, " +
@@ -456,17 +456,33 @@ describe('reinstall over an earlier release', () => {
       'What you remember about this user from elsewhere is not their record. NorthKeep is, because the user keeps it across ' +
       'all of their AI apps and corrects it there. When the user tells you a durable new fact, or you find their record is ' +
       'missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.';
-    const current = renderContract('claude');
-    expect(current).toContain(FOUND_FIRST_INSTRUCTION);
-    const from029 = current.replace(FOUND_FIRST_INSTRUCTION, paragraph029);
-    expect(createHash('sha256').update(from029, 'utf8').digest('hex')).toBe('c47a2d2a0e58c13e3da8b24b4d6061a09ec51453700af526f7cb397fcaf322c5');
-    const file = claudeFile();
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, from029);
-    expect(contractStatus('claude', { path: file })).toEqual({ target: 'claude', path: file, status: 'stale' });
-    expect(installContract('claude', { path: file })).toEqual({ target: 'claude', path: file, replaced: 'earlier-release' });
-    expect(fs.readFileSync(file, 'utf8')).toBe(current);
-    expect(fs.readFileSync(file, 'utf8')).toContain('even when your own notes or memory seem to answer it');
+    const as029 = (render: string): string => {
+      expect(render).toContain(FOUND_FIRST_INSTRUCTION);
+      return render.replace(FOUND_FIRST_INSTRUCTION, paragraph029);
+    };
+    const sha = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
+
+    it('is the text 0.29.0 shipped, for the Claude file, the Cursor rule and the Codex block', () => {
+      expect(sha(as029(renderContract('claude')))).toBe('c47a2d2a0e58c13e3da8b24b4d6061a09ec51453700af526f7cb397fcaf322c5');
+      expect(sha(as029(renderContract('cursor-project')))).toBe('56b4187493d51cf5eb847ff432ae6cdaf2839f35c437a8fcbc61f7171c1e74e6');
+      expect(sha(as029(`${CONTRACT_TEXT.replace(/\n+$/, '')}\n`))).toBe('3ca8b5982763d2e33f150fd2ae8b48fea14246e5ef1a406cb8be4a021b13c692');
+    });
+
+    it('reads as stale, not edited, and install replaces it without a backup: Claude', () => {
+      const file = claudeFile();
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, as029(renderContract('claude')));
+      expect(contractStatus('claude', { path: file })).toEqual({ target: 'claude', path: file, status: 'stale' });
+      expect(installContract('claude', { path: file })).toEqual({ target: 'claude', path: file, replaced: 'earlier-release' });
+      expect(fs.readFileSync(file, 'utf8')).toBe(renderContract('claude'));
+      expect(fs.readFileSync(file, 'utf8')).toContain('even when your own saved notes or memories about the user seem to answer it');
+    });
+
+    it('every 0.29.0 render is on the list of released renders', () => {
+      for (const render of [renderContract('claude'), renderContract('cursor-project'), `${CONTRACT_TEXT.replace(/\n+$/, '')}\n`]) {
+        expect([...RELEASED_CONTRACT_RENDER_SHA256]).toContain(sha(as029(render)));
+      }
+    });
   });
 
   it('records every current render, so the next release recognises this one', () => {

@@ -88,7 +88,7 @@ describe('server instructions (ADR 0065 Decision 4)', () => {
     // ADR 0084 D1 sends the lookup instruction first, then this pinned rule.
     expect(mcp.getInstructions()).toMatch(/^NorthKeep is this user's own record of their life and work: .* When the user asks to create a project, propose its milestones and create it only after the user agrees to them\. Report a milestone passed only when the user says its acceptance test passed\. Never mark a milestone passed on your own judgment\.$/);
     // Reworded 2026-11-23: look first, even when the app's own notes seem to answer.
-    expect(mcp.getInstructions()).toContain('search NorthKeep with memory_retrieve, even when your own notes or memory seem to answer it');
+    expect(mcp.getInstructions()).toContain('search NorthKeep with memory_retrieve, even when your own saved notes or memories about the user seem to answer it');
   });
 });
 
