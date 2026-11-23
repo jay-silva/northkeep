@@ -33,8 +33,35 @@ export function searchTerms(text: string): Set<string> {
 }
 
 /**
- * A long row matches many query words by sheer size, so its keyword score is
- * cut by up to 0.3 once it holds more than 64 distinct words.
+ * ADR 0090 D1. Counting every query word the same let a row that shared only
+ * the user's name outrank the answer. The 10 keeps a tiny vault from calling
+ * a word rare on two rows' evidence.
+ */
+export function wordWeights(queryTerms: ReadonlySet<string>, rows: ReadonlyArray<ReadonlySet<string>>): Map<string, number> {
+  const weights = new Map<string, number>();
+  for (const term of queryTerms) {
+    let holding = 0;
+    for (const row of rows) if (row.has(term)) holding += 1;
+    weights.set(term, holding === 0 ? 0 : Math.log((rows.length + 10.5) / (holding + 0.5)));
+  }
+  return weights;
+}
+
+/** Zero exactly when the row holds none of the query's words, so it doubles as the admission test. */
+export function weightedMatch(weights: ReadonlyMap<string, number>, rowTerms: ReadonlySet<string>): number {
+  let matched = 0;
+  let total = 0;
+  for (const [term, weight] of weights) {
+    total += weight;
+    if (rowTerms.has(term)) matched += weight;
+  }
+  return total === 0 ? 0 : matched / total;
+}
+
+/**
+ * A long row matches many query words by sheer size. The share taken off is
+ * capped at 30%: at half, a long memory that held every word of the question
+ * fell behind short ones holding one (ADR 0090 D3).
  */
 export function lengthPenalty(distinctWords: number): number {
   return Math.min(0.3, 0.1 * Math.log2(Math.max(1, distinctWords / 64)));
@@ -52,24 +79,33 @@ export function isProjectPaperwork(row: { type: string; scope: string; content: 
 }
 
 /**
- * D5: whole-word matches on non-stopwords. A word in the memory counts 1, a
- * word only in its scope or type counts half. A query of stopwords alone
- * scores 0; an empty query keeps the old list-everything behaviour.
+ * One ranker for both search tools, so they cannot drift (ADR 0090 D5). A
+ * word found only in a scope or type name counts half, as before, so filing
+ * a memory under a word never counts for more than saying it.
  */
-export function scoreSharedEntry(
-  entry: { type: string; scope: string; content: string; confirmed?: boolean },
+export function rankSharedEntries<T extends { type: string; scope: string; content: string; confirmed?: boolean; archive?: boolean }>(
+  entries: readonly T[],
   query: string,
-): number {
-  if (!/[a-z0-9]{2,}/i.test(query)) return 1;
+  limit: number,
+): T[] {
+  const rows = entries.filter((entry) => !isProjectPaperwork(entry))
+    .map((entry) => ({ entry, text: searchTerms(entry.content), names: searchTerms(`${entry.scope} ${entry.type}`) }));
+  if (!/[a-z0-9]{2,}/i.test(query)) return rows.slice(0, limit).map((row) => row.entry);
   const terms = searchTerms(query);
-  if (terms.size === 0) return 0;
-  const body = searchTerms(entry.content);
-  const label = searchTerms(`${entry.scope} ${entry.type}`);
-  let score = 0;
-  for (const t of terms) {
-    if (body.has(t)) score += 1;
-    else if (label.has(t)) score += 0.5;
-  }
-  if (score === 0) return 0;
-  return score + (entry.confirmed === true ? CONFIRMED_BOOST : 0);
+  const weights = wordWeights(terms, rows.map((row) => new Set([...row.text, ...row.names])));
+  let total = 0;
+  for (const weight of weights.values()) total += weight;
+  if (total === 0) return [];
+  return rows
+    .map(({ entry, text, names }) => {
+      let matched = 0;
+      for (const [term, weight] of weights) matched += text.has(term) ? weight : names.has(term) ? 0.5 * weight : 0;
+      // The connector knows no recency or source, so confirmed is the only bonus (ADR 0090 D2, D3).
+      const kept = entry.confirmed === true ? 1 + CONFIRMED_BOOST : 1 - lengthPenalty(text.size);
+      return { entry, score: (matched / total) * kept };
+    })
+    .filter((row) => row.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, limit)
+    .map((row) => row.entry);
 }
