@@ -151,6 +151,8 @@ const CAT_LABELS = {
   conflict: 'Two records disagree', own_stale: 'App\'s own notes out of date', own_only: 'Only in app\'s own notes',
   project: 'In a project', same_name: 'Two people, one first name',
 };
+/** A paired comparison in words: the percentage is how often two equal designs would split this unevenly. */
+const chanceWords = (c) => (c.onlyBefore + c.onlyAfter === 0 ? 'no change' : c.chance < 0.05 ? `unlikely (${c.chance < 0.001 ? 'under 0.1' : (c.chance * 100).toFixed(1)}%)` : `yes (${Math.round(c.chance * 100)}%)`);
 const table = (head, rows) => [`| ${head.join(' | ')} |`, `| ${head.map(() => '---').join(' | ')} |`, ...rows.map((row) => `| ${row.join(' | ')} |`)];
 
 /** The report, in Markdown. `arms` maps each design to its graded rows, in ladder order. */
@@ -177,9 +179,13 @@ export function renderReport({ model, app, search, date, arms }) {
       ['Step', 'Adds', 'Newly right', 'Newly not right', 'Could this be chance?'],
       names.slice(1).map((arm, i) => {
         const c = compare(arms[names[i]], arms[arm]);
-        const verdict = c.onlyBefore + c.onlyAfter === 0 ? 'no change' : c.chance < 0.05 ? `unlikely (${(c.chance * 100).toFixed(1)}%)` : `yes (${Math.round(c.chance * 100)}%)`;
-        return [`${label(names[i])} to ${label(arm)}`, ADDS[arm] ?? '', c.onlyAfter, c.onlyBefore, verdict];
+        return [`${label(names[i])} to ${label(arm)}`, ADDS[arm] ?? '', c.onlyAfter, c.onlyBefore, chanceWords(c)];
       }),
+    ), '');
+    out.push(`## Against ${label(names[0]).toLowerCase()}`, '', 'One step can be too small to tell from chance while several together are not.', '');
+    out.push(...table(
+      ['Design', 'Newly right', 'Newly not right', 'Could this be chance?'],
+      names.slice(1).map((arm) => { const c = compare(arms[names[0]], arms[arm]); return [label(arm), c.onlyAfter, c.onlyBefore, chanceWords(c)]; }),
     ), '');
   }
   out.push('## Where the misses came from', '', ...table(

@@ -31,7 +31,7 @@ That asks one question of each kind: 78 sessions, a few minutes. The full run is
 node scripts/brain-bench/run.mjs
 ```
 
-It prints a report and saves it in an `out` folder here, with one transcript per question: the question, the answer, every lookup, and the verdict.
+It prints a report and saves it in an `out` folder here, with one transcript per question: the question, the answer, every lookup, and the verdict. Reports worth keeping are copied into `results`.
 
 The options are listed at the top of `run.mjs`.
 

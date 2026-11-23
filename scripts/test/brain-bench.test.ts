@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 // @ts-expect-error plain Node script without type declarations
-import { chanceOfSplit, compare, gradeAnswer, range95, summarize } from '../brain-bench/grade.mjs';
+import { chanceOfSplit, compare, gradeAnswer, range95, renderReport, summarize } from '../brain-bench/grade.mjs';
 // @ts-expect-error plain Node script without type declarations
 import { describeKey } from '../brain-bench/judge.mjs';
 // @ts-expect-error plain Node script without type declarations
@@ -87,6 +87,15 @@ describe('brain-bench grader', () => {
     expect(range95(50, 100)).toEqual([40, 60]);
     const rows = (right: boolean[]) => right.map((ok, i) => ({ id: `q${i}`, rule_verdict: ok ? 'correct' : 'wrong', error: null }));
     expect(compare(rows([true, false, false, true]), rows([true, true, true, false]))).toMatchObject({ onlyBefore: 1, onlyAfter: 2 });
+  });
+
+  it('reports each step, and each design against the first', () => {
+    const rows = (right: boolean[]) => right.map((ok, i) => ({ id: `q${i}`, cat: 'core', q: 'Q?', answer: 'A', rule_verdict: ok ? 'correct' : 'wrong', looked: true, stale: false, tool_calls: [], cost_usd: 0, error: null }));
+    const none = Array.from({ length: 12 }, () => false);
+    const report = renderReport({ model: 'm', app: 'chat', search: 'keyword', date: '2026-11-23', arms: { search: rows(none), nudge: rows(none.map((_, i) => i < 3)), pages: rows(none.map(() => true)) } }) as string;
+    expect(report).toContain('| Today\'s search to Look-first | a firmer "look it up first" sentence | 3 | 0 | yes (25%) |');
+    expect(report).toContain('## Against today\'s search');
+    expect(report).toContain('| Pages | 12 | 0 | unlikely (under 0.1%) |');
   });
 
   it('tells the second grader what the record holds', () => {
