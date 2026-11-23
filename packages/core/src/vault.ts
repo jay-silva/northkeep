@@ -83,7 +83,7 @@ import {
   type SemanticRetrieval,
   type VaultExport,
 } from './types.js';
-import { ARCHIVE_METADATA_KEY, CONFIRMED_BOOST, CONFIRMED_METADATA_KEY, isConfirmed, isMarkedArchive, isProjectPaperwork, lengthPenalty, searchTerms, compareSearchResults } from './search-rules.js';
+import { ARCHIVE_METADATA_KEY, CONFIRMED_BOOST, CONFIRMED_METADATA_KEY, isConfirmed, isMarkedArchive, isProjectPaperwork, lengthPenalty, rareTerms, searchTerms, compareSearchResults } from './search-rules.js';
 
 /**
  * Vault file format (.nkv) — see SPEC/security-model.md and ADR 0001:
@@ -1718,23 +1718,38 @@ export class Vault {
     const limit = options.limit ?? 8;
     const queryTerms = searchTerms(query);
     if (queryTerms.size === 0) return [];
-    const candidates = this.searchCandidates(options);
+    const rows = this.searchCandidates(options).map((entry) => ({ entry, entryTerms: searchTerms(entry.content) }));
+    const rare = rareTerms(queryTerms, this.rowsForCommonness(options, rows));
     const now = Date.now();
-    const scored: ScoredEntry[] = [];
-    for (const entry of candidates) {
-      const entryTerms = searchTerms(entry.content);
+    const scored: Array<ScoredEntry & { weak: boolean }> = [];
+    for (const { entry, entryTerms } of rows) {
       let matched = 0;
-      for (const term of queryTerms) if (entryTerms.has(term)) matched += 1;
+      let matchedRare = 0;
+      for (const term of queryTerms) {
+        if (!entryTerms.has(term)) continue;
+        matched += 1;
+        if (rare.has(term)) matchedRare += 1;
+      }
       if (matched === 0) continue;
       const overlap = Math.max(0, matched / queryTerms.size - lengthPenalty(entryTerms.size));
       const ageDays = Math.max(0, now - Date.parse(entry.created_at)) / 86_400_000;
       const recency = 0.3 * Math.exp(-ageDays / 30);
       const typeBoost = TYPE_PRIORITY[entry.type] ?? 0;
       const confirmed = isConfirmed(entry.metadata) ? CONFIRMED_BOOST : 0;
-      scored.push({ entry, score: overlap + recency + typeBoost + confirmed });
+      scored.push({ entry, score: overlap + recency + typeBoost + confirmed, weak: matchedRare === 0 });
     }
     scored.sort((a, b) => compareSearchResults(a, b, now));
-    return scored.slice(0, limit);
+    return scored.slice(0, limit).map(({ entry, score }) => ({ entry, score }));
+  }
+
+  /**
+   * The rows a word's commonness is measured over. A type or scope filter can
+   * leave too few rows to tell, so those searches measure the wider vault.
+   */
+  private rowsForCommonness(options: RetrieveOptions, rows: Array<{ entryTerms: Set<string> }>): Array<Set<string>> {
+    if (options.type === undefined && options.scope === undefined) return rows.map((row) => row.entryTerms);
+    return this.searchCandidates({ allowedScopes: options.allowedScopes, skipProjectPaperwork: options.skipProjectPaperwork })
+      .map((entry) => searchTerms(entry.content));
   }
 
   /**
@@ -1812,11 +1827,12 @@ export class Vault {
     options: RetrieveOptions,
   ): Promise<ScoredEntry[]> {
     const limit = options.limit ?? 8;
-    const candidates = this.searchCandidates(options);
+    const rows = this.searchCandidates(options).map((entry) => ({ entry, entryTerms: searchTerms(entry.content) }));
+    const rare = rareTerms(queryTerms, this.rowsForCommonness(options, rows));
     const now = Date.now();
     const dim = queryVec.length;
-    const scored: ScoredEntry[] = [];
-    for (const entry of candidates) {
+    const scored: Array<ScoredEntry & { weak: boolean }> = [];
+    for (const { entry, entryTerms } of rows) {
       let vec = this.getCachedEmbedding(entry.id, embedder.model, dim);
       if (vec === null) {
         const raw = await embedder.embed(entry.content);
@@ -1826,9 +1842,13 @@ export class Vault {
       const sem = Math.max(0, cosineSimilarity(queryVec, vec));
       // Keyword component: identical formula to retrieve(), but overlap may be 0
       // (a purely-semantic hit like "car" ~ "vehicle" contributes via `sem`).
-      const entryTerms = searchTerms(entry.content);
       let matched = 0;
-      for (const term of queryTerms) if (entryTerms.has(term)) matched += 1;
+      let matchedRare = 0;
+      for (const term of queryTerms) {
+        if (!entryTerms.has(term)) continue;
+        matched += 1;
+        if (rare.has(term)) matchedRare += 1;
+      }
       const overlap = matched === 0 ? 0 : Math.max(0, matched / queryTerms.size - lengthPenalty(entryTerms.size));
       // Relevance gate: keep an entry only if it shares a keyword OR is
       // genuinely close in meaning, so a query that matches nothing doesn't
@@ -1839,10 +1859,11 @@ export class Vault {
       const typeBoost = TYPE_PRIORITY[entry.type] ?? 0;
       const confirmed = isConfirmed(entry.metadata) ? CONFIRMED_BOOST : 0;
       const score = SEMANTIC_WEIGHT * sem + overlap + recency + typeBoost + confirmed;
-      scored.push({ entry, score });
+      // A row close in meaning earned its place; one here only for a common word did not.
+      scored.push({ entry, score, weak: matchedRare === 0 && sem < SEMANTIC_FLOOR });
     }
     scored.sort((a, b) => compareSearchResults(a, b, now));
-    return scored.slice(0, limit);
+    return scored.slice(0, limit).map(({ entry, score }) => ({ entry, score }));
   }
 
   /**

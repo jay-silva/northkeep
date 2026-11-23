@@ -52,7 +52,7 @@ import { z } from 'zod';
 import { BASE_NEW, type ConnectorStorage, type SharedEntry } from './storage.js';
 import { projectScopeView, staleProjectRowIds } from './project-head.js';
 import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
-import { isProjectPaperwork, scoreSharedEntry } from './search-rules.js';
+import { rankSharedEntries } from './search-rules.js';
 import { HOSTED_SECTION_TEXT_RULES, firstProjectTextError, isProjectStatusDone, projectStatusTooLongMessage, STATUS_TEXT_RULES } from './project-text.js';
 import {
   MILESTONES_HEADING,
@@ -340,13 +340,7 @@ export function createMcpServer(
         if (err instanceof ConnectorCryptoError) return reencryptResult('memory_retrieve');
         throw err;
       }
-      const ranked = all
-        .filter((e) => !isProjectPaperwork(e))
-        .map((e) => ({ e, s: scoreSharedEntry(e, query ?? '') }))
-        .filter((x) => x.s > 0)
-        .sort((a, b) => b.s - a.s)
-        .slice(0, MAX_RESULTS)
-        .map((x) => x.e);
+      const ranked = rankSharedEntries(all, query ?? '', MAX_RESULTS);
 
       await storage.appendAudit({
         ts: new Date().toISOString(),
@@ -597,13 +591,7 @@ export function createMcpServer(
         if (err instanceof ConnectorCryptoError) return reencryptResult('search');
         throw err;
       }
-      const ranked = all
-        .filter((e) => !isProjectPaperwork(e))
-        .map((e) => ({ e, s: scoreSharedEntry(e, query ?? '') }))
-        .filter((x) => x.s > 0)
-        .sort((a, b) => b.s - a.s)
-        .slice(0, MAX_RESULTS)
-        .map((x) => x.e);
+      const ranked = rankSharedEntries(all, query ?? '', MAX_RESULTS);
 
       await storage.appendAudit({
         ts: new Date().toISOString(),

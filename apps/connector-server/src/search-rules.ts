@@ -32,6 +32,27 @@ export function searchTerms(text: string): Set<string> {
   return terms;
 }
 
+/** A query word found in more than this share of the rows searched says little about any one of them. */
+export const COMMON_WORD_SHARE = 0.1;
+/** With fewer rows than this, no word is treated as common. */
+export const COMMON_WORD_MIN_ROWS = 20;
+
+/**
+ * The query words that are not common. A row that matches none of them, only
+ * a word such as the user's own name, is listed after rows that do: every
+ * confirmed memory matched the name and crowded out the answer (ADR 0087).
+ */
+export function rareTerms(queryTerms: ReadonlySet<string>, rows: ReadonlyArray<ReadonlySet<string>>): Set<string> {
+  if (rows.length < COMMON_WORD_MIN_ROWS) return new Set(queryTerms);
+  const rare = new Set<string>();
+  for (const term of queryTerms) {
+    let found = 0;
+    for (const row of rows) if (row.has(term)) found += 1;
+    if (found <= rows.length * COMMON_WORD_SHARE) rare.add(term);
+  }
+  return rare;
+}
+
 /**
  * A long row matches many query words by sheer size, so its keyword score is
  * cut by up to 0.3 once it holds more than 64 distinct words.
@@ -72,4 +93,32 @@ export function scoreSharedEntry(
   }
   if (score === 0) return 0;
   return score + (entry.confirmed === true ? CONFIRMED_BOOST : 0);
+}
+
+/**
+ * What both search tools return: paperwork skipped, best match first. A row
+ * that matched only common words, in its text or its scope and type names, is
+ * listed after every row that matched something rarer (ADR 0087).
+ */
+export function rankSharedEntries<T extends { type: string; scope: string; content: string; confirmed?: boolean; archive?: boolean }>(
+  entries: readonly T[],
+  query: string,
+  limit: number,
+): T[] {
+  const rows = entries.filter((entry) => !isProjectPaperwork(entry))
+    .map((entry) => ({ entry, body: searchTerms(entry.content), label: searchTerms(`${entry.scope} ${entry.type}`) }));
+  const terms = searchTerms(query);
+  const rareInText = rareTerms(terms, rows.map((row) => row.body));
+  // Measured apart from the text: "personal" can be on most rows while one project scope is on a few.
+  const rareInLabel = rareTerms(terms, rows.map((row) => row.label));
+  return rows
+    .map(({ entry, body, label }) => {
+      let strong = false;
+      for (const term of terms) if ((rareInText.has(term) && body.has(term)) || (rareInLabel.has(term) && label.has(term))) strong = true;
+      return { entry, score: scoreSharedEntry(entry, query), weak: !strong };
+    })
+    .filter((row) => row.score > 0)
+    .sort((a, b) => Number(a.weak) - Number(b.weak) || b.score - a.score)
+    .slice(0, limit)
+    .map((row) => row.entry);
 }

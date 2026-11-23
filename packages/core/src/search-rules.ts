@@ -33,6 +33,27 @@ export function searchTerms(text: string): Set<string> {
   return terms;
 }
 
+/** A query word found in more than this share of the rows searched says little about any one of them. */
+export const COMMON_WORD_SHARE = 0.1;
+/** With fewer rows than this, no word is treated as common. */
+export const COMMON_WORD_MIN_ROWS = 20;
+
+/**
+ * The query words that are not common. A row that matches none of them, only
+ * a word such as the user's own name, is listed after rows that do: every
+ * confirmed memory matched the name and crowded out the answer (ADR 0087).
+ */
+export function rareTerms(queryTerms: ReadonlySet<string>, rows: ReadonlyArray<ReadonlySet<string>>): Set<string> {
+  if (rows.length < COMMON_WORD_MIN_ROWS) return new Set(queryTerms);
+  const rare = new Set<string>();
+  for (const term of queryTerms) {
+    let found = 0;
+    for (const row of rows) if (row.has(term)) found += 1;
+    if (found <= rows.length * COMMON_WORD_SHARE) rare.add(term);
+  }
+  return rare;
+}
+
 /**
  * A long row matches many query words by sheer size, so its keyword score is
  * cut by up to 0.3 once it holds more than 64 distinct words.
@@ -58,12 +79,17 @@ export function isOldAgentNote(
   return now - Date.parse(row.created_at) > OLD_NOTE_DAYS * 86_400_000;
 }
 
-/** Search order: old agent notes last, then by score. */
-export function compareSearchResults(
-  a: { entry: { type: string; source: string; created_at: string; metadata?: Record<string, unknown> | null }; score: number },
-  b: { entry: { type: string; source: string; created_at: string; metadata?: Record<string, unknown> | null }; score: number },
-  now: number,
-): number {
+type RankedRow = {
+  entry: { type: string; source: string; created_at: string; metadata?: Record<string, unknown> | null };
+  score: number;
+  /** True when the row matched only common words (ADR 0087). */
+  weak?: boolean;
+};
+
+/** Search order: rows that matched only common words last, then old agent notes, then by score. */
+export function compareSearchResults(a: RankedRow, b: RankedRow, now: number): number {
+  const weak = Number(a.weak === true) - Number(b.weak === true);
+  if (weak !== 0) return weak;
   const tier = Number(isOldAgentNote(a.entry, now)) - Number(isOldAgentNote(b.entry, now));
   return tier !== 0 ? tier : b.score - a.score;
 }

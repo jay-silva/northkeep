@@ -119,3 +119,52 @@ describe('ADR 0084 D6: the confirmed flag rides inside the ciphertext', () => {
     expect(out.indexOf('is the harbor office director')).toBeLessThan(out.indexOf('was the harbor office director'));
   });
 });
+
+describe('ADR 0087 on the connector: a memory that matches only a common word is listed after one that matches a rarer word', () => {
+  async function seedPat(): Promise<void> {
+    await seed('personal', 'semantic', 'The car is a blue hatchback');
+    for (let i = 0; i < 24; i += 1) await seed('personal', 'identity', `Pat keeps ledger ${i} in the harbor office`, { confirmed: true });
+    for (let i = 0; i < 24; i += 1) await seed('personal', 'semantic', `Tide table ${i} is pinned by the door`);
+  }
+
+  it('a query that includes the name lists the answer first on both search tools', async () => {
+    await seedPat();
+    for (const tool of ['memory_retrieve', 'search'] as const) {
+      const out = await retrieve(tool, 'car Pat');
+      expect(out.indexOf('blue hatchback'), tool).toBeGreaterThan(-1);
+      expect(out.indexOf('blue hatchback'), tool).toBeLessThan(out.indexOf('ledger'));
+    }
+  });
+
+  it('keeps the name\'s memories when another row holds the rarer word, or no row does', async () => {
+    await seedPat();
+    await seed('personal', 'semantic', "Robin's employer is Southcoast Marine");
+    const out = await retrieve('memory_retrieve', 'Pat employer');
+    expect(out.indexOf('Southcoast Marine')).toBeGreaterThan(-1);
+    expect(out.indexOf('Southcoast Marine')).toBeLessThan(out.indexOf('ledger'));
+    expect(await retrieve('memory_retrieve', 'Pat')).toContain('ledger');
+    expect(await retrieve('search', 'Pat birthday')).toContain('ledger');
+  });
+
+  it('a scope name on few rows counts as a rarer match even when the word is common in memory text', async () => {
+    for (let i = 0; i < 24; i += 1) await seed('personal', 'semantic', `Harbor note ${i} about the pier`);
+    await seed('project:harbor', 'semantic', 'The crew meets on Friday');
+    const out = await retrieve('memory_retrieve', 'harbor');
+    expect(out.indexOf('crew meets on Friday')).toBeGreaterThan(-1);
+    expect(out.indexOf('crew meets on Friday')).toBeLessThan(out.indexOf('Harbor note'));
+  });
+
+  it('a scope name on most rows does not: "personal" in the query cannot bring the crowding back', async () => {
+    await seedPat();
+    const out = await retrieve('memory_retrieve', 'Pat personal car');
+    expect(out.indexOf('blue hatchback')).toBeGreaterThan(-1);
+    expect(out.indexOf('blue hatchback')).toBeLessThan(out.indexOf('ledger'));
+  });
+
+  it('the rule is the device copy, run on the same rows', () => {
+    const rows = Array.from({ length: 20 }, (_, i) => new Set(i < 3 ? ['pat', `w${i}`] : [`w${i}`]));
+    const query = new Set(['pat', 'car']);
+    expect([...hostedRules.rareTerms(query, rows)]).toEqual([...deviceRules.rareTerms(query, rows)]);
+    expect([...hostedRules.rareTerms(query, rows)]).toEqual(['car']);
+  });
+});

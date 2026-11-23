@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { KDF_INTERACTIVE, generateDeviceSecret } from '../src/crypto.js';
 import type { Embedder } from '../src/types.js';
 import { Vault } from '../src/vault.js';
-import { SEARCH_STOPWORDS, isConfirmed } from '../src/search-rules.js';
+import { SEARCH_STOPWORDS, isConfirmed, rareTerms } from '../src/search-rules.js';
 import { PROJECT_LOG_ARCHIVE_HEADING } from '../src/project-doc.js';
 
 // ADR 0084 fixtures. Every fact here is fictional.
@@ -139,5 +139,76 @@ describe('ADR 0084 D8: old AI session notes rank below other matches', () => {
     const sem = contents((await vault.retrieveSemantic('Example Holdings half share', flatEmbedder)).results);
     expect(sem.at(-1)).toBe('Session note: the half share of Example Holdings belongs to Alpha LLC');
     expect(order).toContain('Old checked note: Example Holdings half share is disputed');
+  });
+});
+
+describe('ADR 0087: a memory that matches only a common word is listed after one that matches a rarer word', () => {
+  /** Twelve confirmed facts that name Pat, twelve rows that do not, and the one answer. */
+  function seedPat(): void {
+    vault.remember({ content: "Pat's car is a blue hatchback", type: 'semantic', source: 'mcp' });
+    for (let i = 0; i < 12; i += 1) vault.remember({ content: `Pat keeps ledger ${i} in the harbor office`, type: 'identity', metadata: confirmedMeta });
+    for (let i = 0; i < 12; i += 1) vault.remember({ content: `Tide table ${i} is pinned by the door`, type: 'semantic' });
+  }
+  const isLedger = (text: string): boolean => text.includes('ledger');
+
+  it('a query that includes the name lists the answer first, by keyword and by meaning', async () => {
+    seedPat();
+    const byWord = contents(vault.retrieve('car vehicle Pat drives'));
+    expect(byWord[0]).toBe("Pat's car is a blue hatchback");
+    expect(byWord.slice(1).every(isLedger)).toBe(true);
+    // The ledgers are only loosely like the question: here for the name, not the meaning.
+    const loose: Embedder = { model: 'loose', async embed(t) { return /car|hatchback/.test(t) ? [1, 0, 0] : t.includes('ledger') ? [0.5, 0.87, 0] : [0, 1, 0]; } };
+    const r = await vault.retrieveSemantic('car vehicle Pat drives', loose);
+    expect(r.mode).toBe('semantic');
+    expect(contents(r.results)[0]).toBe("Pat's car is a blue hatchback");
+    expect(contents(r.results).slice(1).every(isLedger)).toBe(true);
+  });
+
+  it('keeps the name\'s memories when another row holds the rarer word', () => {
+    seedPat();
+    vault.remember({ content: "Robin's employer is Southcoast Marine", type: 'semantic' });
+    const found = contents(vault.retrieve('Pat employer'));
+    expect(found[0]).toBe("Robin's employer is Southcoast Marine");
+    expect(found.length).toBe(8);
+    expect(found.slice(1).every(isLedger)).toBe(true);
+  });
+
+  it('the name still counts when it is the only word, or the only word that matches anything', () => {
+    seedPat();
+    for (const query of ['Pat', 'Pat birthday']) {
+      const found = vault.retrieve(query);
+      expect(found.length, query).toBe(8);
+      expect(isConfirmed(found[0].entry.metadata), query).toBe(true);
+    }
+  });
+
+  it('measures commonness on the whole vault, so a scope filter does not bring the crowding back', () => {
+    seedPat();
+    vault.remember({ content: 'The spare car key hangs by the door', type: 'semantic', scope: 'garage' });
+    for (let i = 0; i < 9; i += 1) vault.remember({ content: `Pat parks trailer ${i} in the garage`, type: 'identity', scope: 'garage', metadata: confirmedMeta });
+    const found = contents(vault.retrieve('Pat car', { scope: 'garage' }));
+    expect(found[0]).toBe('The spare car key hangs by the door');
+    expect(found.length).toBe(8);
+  });
+
+  it('an old AI session note that matches a rarer word is listed before fresh rows that match only the name', () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      vi.setSystemTime(new Date('2026-08-01T12:00:00.000Z'));
+      vault.remember({ content: 'Session note: Pat asked about the ferry timetable', type: 'episodic', scope: 'conversations', source: 'mcp' });
+      vi.setSystemTime(new Date('2026-11-21T12:00:00.000Z'));
+      seedPat();
+      expect(contents(vault.retrieve('Pat ferry timetable'))[0]).toBe('Session note: Pat asked about the ferry timetable');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats no word as common in a small vault, and a word in over a tenth of a larger one as common', () => {
+    const rows = (n: number, withPat: number) => Array.from({ length: n }, (_, i) => new Set(i < withPat ? ['pat', `w${i}`] : [`w${i}`]));
+    expect([...rareTerms(new Set(['pat', 'car']), rows(19, 19))]).toEqual(['pat', 'car']);
+    expect([...rareTerms(new Set(['pat', 'car']), rows(20, 3))]).toEqual(['car']);
+    expect([...rareTerms(new Set(['pat', 'car']), rows(20, 2))]).toEqual(['pat', 'car']);
+    expect([...rareTerms(new Set(['pat']), rows(20, 20))]).toEqual([]);
   });
 });
