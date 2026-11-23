@@ -146,10 +146,14 @@ export const RELEASED_CONTRACT_RENDER_SHA256: ReadonlySet<string> = new Set([
   'c47a2d2a0e58c13e3da8b24b4d6061a09ec51453700af526f7cb397fcaf322c5',
   '56b4187493d51cf5eb847ff432ae6cdaf2839f35c437a8fcbc61f7171c1e74e6',
   '3ca8b5982763d2e33f150fd2ae8b48fea14246e5ef1a406cb8be4a021b13c692',
+  // ADR 0084 D1 reworded 2026-11-23: look in NorthKeep first, even when the app's own notes seem to answer.
+  '1d2690702411562d92c8062f9876e131d5a4d2469263791f06f787884b3b2c58',
+  '015824c70808891ab9729d987e6f2ce01c5c6b7223131dbe89b7633f543c08fb',
+  '061f7639d9fb61d16fe8bb980849cc7b8794a1e9930ad5524abafc9f23eef747',
   // ADR 0088: an agent may report a pass after running the test itself, with evidence.
-  'f83c19c9345aec249c2a182f4b1e53510c7a45e617b41364634e9674e98f4f14',
-  '32abc9a7c4b1967cad7225da9c6275659b91e8bdd9270b59a05484bf4fe77f9d',
-  'bfa6b5d77cf1c07f2bde77e31804ccfe049b221a54a82104d6aa87ea2a839764',
+  '639c7a6f933cca0480882364c819d88ff07b0905bbad6d15700966bf9823a9d0',
+  'e3fc82603cb21967d047831eba9ac7de20ef91bf51573acf3a61b16e966aac0f',
+  '9226f0fa596affe0743a5da8deaa4ce77623db5c99ec1876da5d5cea57d0ccfe',
 ]);
 
 function classifyReplaced(existing: string, rendered: string): ReplacedContract {

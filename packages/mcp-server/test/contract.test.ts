@@ -16,10 +16,7 @@ import {
   renderContract,
   uninstallContract,
 } from '../src/contract.js';
-import {
-  PROJECT_BOOTSTRAP_INSTRUCTION,
-  PROJECT_STANDING_INSTRUCTION,
-} from '../src/project-recipe.js';
+import { FOUND_FIRST_INSTRUCTION, MILESTONE_INSTRUCTION, PROJECT_BOOTSTRAP_INSTRUCTION, PROJECT_STANDING_INSTRUCTION } from '../src/project-recipe.js';
 
 let dir: string;
 let prevClaudeRules: string | undefined;
@@ -449,6 +446,50 @@ describe('reinstall over an earlier release', () => {
     expect(contractStatus('claude', { path: file })).toEqual({ target: 'claude', path: file, status: 'stale' });
     expect(installContract('claude', { path: file })).toEqual({ target: 'claude', path: file, replaced: 'earlier-release' });
     expect(fs.readFileSync(file, 'utf8')).toBe(renderContract('claude'));
+  });
+
+  describe('a copy installed by 0.29.0', () => {
+    // 0.29.0's wording of the lookup paragraph, before it was reworded to say look first.
+    const paragraph029 =
+      "NorthKeep is this user's own record of their life and work: the people, organizations, properties and projects in it, " +
+      'and how they like things done. When the conversation names a person, organization or property you have no facts about yet, ' +
+      'search NorthKeep with memory_retrieve before you answer; when it names a project, read it with project_get. ' +
+      'What you remember about this user from elsewhere is not their record. NorthKeep is, because the user keeps it across ' +
+      'all of their AI apps and corrects it there. When the user tells you a durable new fact, or you find their record is ' +
+      'missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.';
+    // 0.29.0's milestone rule, before ADR 0088.
+    const milestone029 =
+      'When the user asks to create a project, propose its milestones and create it only after the user agrees to them. ' +
+      'Report a milestone passed only when the user says its acceptance test passed. ' +
+      'Never mark a milestone passed on your own judgment.';
+    const as029 = (render: string): string => {
+      expect(render).toContain(FOUND_FIRST_INSTRUCTION);
+      expect(render).toContain(MILESTONE_INSTRUCTION);
+      return render.replace(FOUND_FIRST_INSTRUCTION, paragraph029).replace(MILESTONE_INSTRUCTION, milestone029);
+    };
+    const sha = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
+
+    it('is the text 0.29.0 shipped, for the Claude file, the Cursor rule and the Codex block', () => {
+      expect(sha(as029(renderContract('claude')))).toBe('c47a2d2a0e58c13e3da8b24b4d6061a09ec51453700af526f7cb397fcaf322c5');
+      expect(sha(as029(renderContract('cursor-project')))).toBe('56b4187493d51cf5eb847ff432ae6cdaf2839f35c437a8fcbc61f7171c1e74e6');
+      expect(sha(as029(`${CONTRACT_TEXT.replace(/\n+$/, '')}\n`))).toBe('3ca8b5982763d2e33f150fd2ae8b48fea14246e5ef1a406cb8be4a021b13c692');
+    });
+
+    it('reads as stale, not edited, and install replaces it without a backup: Claude', () => {
+      const file = claudeFile();
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, as029(renderContract('claude')));
+      expect(contractStatus('claude', { path: file })).toEqual({ target: 'claude', path: file, status: 'stale' });
+      expect(installContract('claude', { path: file })).toEqual({ target: 'claude', path: file, replaced: 'earlier-release' });
+      expect(fs.readFileSync(file, 'utf8')).toBe(renderContract('claude'));
+      expect(fs.readFileSync(file, 'utf8')).toContain('even when your own saved notes or memories about the user seem to answer it');
+    });
+
+    it('every 0.29.0 render is on the list of released renders', () => {
+      for (const render of [renderContract('claude'), renderContract('cursor-project'), `${CONTRACT_TEXT.replace(/\n+$/, '')}\n`]) {
+        expect([...RELEASED_CONTRACT_RENDER_SHA256]).toContain(sha(as029(render)));
+      }
+    });
   });
 
   it('records every current render, so the next release recognises this one', () => {
