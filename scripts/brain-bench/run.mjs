@@ -16,7 +16,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { APP_NOTES, QUESTIONS } from './world.mjs';
-import { ARMS, INSTRUCTION_BUDGET, extraInstructions, tidyMemories, usesTidyVault } from './designs.mjs';
+import { ARMS, INSTRUCTION_BUDGET, SIDE_ARMS, baseInstructions, extraInstructions, tidyMemories, usesTidyVault } from './designs.mjs';
 import { PASSPHRASE, seedHome } from './seed.mjs';
 import { runClaude } from './agent.mjs';
 import { gradeAnswer, renderReport } from './grade.mjs';
@@ -77,7 +77,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
   const out = path.resolve(option('out', path.join(HERE, 'out', stamp)));
   const questions = pickQuestions({ only: option('only', null), sample: Number(option('sample', '0')) });
-  for (const arm of arms) if (!ARMS.includes(arm)) throw new Error(`Unknown design "${arm}". Use: ${ARMS.join(', ')}.`);
+  for (const arm of arms) if (![...ARMS, ...SIDE_ARMS].includes(arm)) throw new Error(`Unknown design "${arm}". Use: ${[...ARMS, ...SIDE_ARMS].join(', ')}.`);
   if (!fs.existsSync(PAGES_FILE)) throw new Error('No pages yet. Run: node scripts/brain-bench/build-pages.mjs');
   const { pages } = read(PAGES_FILE);
 
@@ -86,15 +86,21 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const now = Date.now();
   const seeded = await seedHome(path.join(work, 'plain'), now);
   if (arms.some(usesTidyVault)) await seedHome(path.join(work, 'tidy'), now, tidyMemories(pages));
-  const { SERVER_INSTRUCTIONS } = await import('../../packages/mcp-server/dist/project-recipe.js');
+  const { SERVER_INSTRUCTIONS, MILESTONE_INSTRUCTION } = await import('../../packages/mcp-server/dist/project-recipe.js');
 
   const extraFiles = {};
+  const baseFiles = {};
   for (const arm of arms) {
-    const extra = extraInstructions(arm, { baseLength: SERVER_INSTRUCTIONS.length, ...seeded, pages });
-    const total = SERVER_INSTRUCTIONS.length + (extra ? extra.length + 1 : 0);
+    const base = baseInstructions(arm, { shipped: SERVER_INSTRUCTIONS, milestoneRule: MILESTONE_INSTRUCTION });
+    const extra = extraInstructions(arm, { baseLength: base.length, ...seeded, pages });
+    const total = base.length + (extra ? extra.length + 1 : 0);
     if (total > INSTRUCTION_BUDGET) throw new Error(`The "${arm}" instructions are ${total} characters; the agent would cut them off past ${INSTRUCTION_BUDGET}.`);
     extraFiles[arm] = path.join(out, `instructions-added-${arm}.txt`);
     fs.writeFileSync(extraFiles[arm], extra);
+    if (base !== SERVER_INSTRUCTIONS) {
+      baseFiles[arm] = path.join(out, `instructions-base-${arm}.txt`);
+      fs.writeFileSync(baseFiles[arm], base);
+    }
   }
 
   const prompt = systemPrompt();
@@ -108,6 +114,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
       const home = path.join(work, `${arm}-${question.id}-${repeat}`);
       fs.cpSync(path.join(work, usesTidyVault(arm) ? 'tidy' : 'plain'), home, { recursive: true });
       const env = { NORTHKEEP_HOME: home, NORTHKEEP_PASSPHRASE: PASSPHRASE, NORTHKEEP_NO_KEYCHAIN: '1', BENCH_ARM: arm, BENCH_EXTRA_FILE: extraFiles[arm], BENCH_PAGES_FILE: PAGES_FILE };
+      if (baseFiles[arm]) env.BENCH_BASE_FILE = baseFiles[arm];
       // A closed port: the server falls back to keyword search, as it does with no local model.
       if (search === 'keyword') env.NORTHKEEP_OLLAMA_URL = 'http://127.0.0.1:9';
       const run = await runClaude({

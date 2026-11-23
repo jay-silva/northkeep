@@ -143,7 +143,7 @@ export function compare(before, after) {
   return { onlyBefore, onlyAfter, chance: chanceOfSplit(onlyBefore, onlyAfter) };
 }
 
-const LABELS = { search: 'Today\'s search', brief: 'Brief', nudge: 'Look-first', tidy: 'Cleanup', pages: 'Pages', 'pages-index': 'Pages with index' };
+const LABELS = { search: 'Today\'s search', look: 'Reworded instruction', brief: 'Brief', nudge: 'Look-first', tidy: 'Cleanup', pages: 'Pages', 'pages-index': 'Pages with index' };
 const label = (arm) => LABELS[arm] ?? arm;
 const CAT_LABELS = {
   core: 'Confirmed core facts', direct: 'Plain facts', paraphrase: 'Different wording', stale: 'Old note vs newer fact',

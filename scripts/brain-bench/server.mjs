@@ -28,6 +28,7 @@ const server = createServer(path.join(home, 'vault.nkv'));
 const arm = process.env.BENCH_ARM ?? 'search';
 const extra = process.env.BENCH_EXTRA_FILE ? fs.readFileSync(process.env.BENCH_EXTRA_FILE, 'utf8') : '';
 // The SDK keeps the handshake text in a private field; a prototype may reach in.
+if (process.env.BENCH_BASE_FILE) server.server._instructions = fs.readFileSync(process.env.BENCH_BASE_FILE, 'utf8');
 if (extra) server.server._instructions = `${server.server._instructions}\n${extra}`;
 
 if (servesPages(arm)) {

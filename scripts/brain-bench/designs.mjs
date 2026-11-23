@@ -4,9 +4,30 @@
 
 export const ARMS = ['search', 'brief', 'nudge', 'tidy', 'pages', 'pages-index'];
 
+/** Designs outside the ladder, run only when named with --arms. */
+export const SIDE_ARMS = ['look'];
+
+/**
+ * "look": the connect-time text rewritten to say look first, and nothing else
+ * added. It replaces the shipped first paragraph, so the bench scores the
+ * exact words that would ship.
+ */
+export const PROPOSED_FOUND_FIRST =
+  'NorthKeep is this user\'s own record of their life and work: the people, organizations, properties and projects in it, and how they like things done. ' +
+  'Before you answer a question about this user, or about a person, organization, property or project in their life, search NorthKeep with memory_retrieve, ' +
+  'even when your own notes or memory seem to answer it: they may be out of date, and NorthKeep is where the user corrects things across all of their AI apps. ' +
+  'When the conversation names a project, read it with project_get. ' +
+  'When the user tells you a durable new fact, or you find their record is missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.';
+
+/** The whole connect-time text a design starts from: the shipped one, unless the design rewrites it. */
+export function baseInstructions(arm, { shipped, milestoneRule }) {
+  return arm === 'look' ? `${PROPOSED_FOUND_FIRST} ${milestoneRule}` : shipped;
+}
+
 /** What each design adds to the one before it, for the report. */
 export const ADDS = {
   search: 'NorthKeep as shipped',
+  look: 'the connect-time text reworded to say look first',
   brief: 'the confirmed facts, pushed at connect',
   nudge: 'a firmer "look it up first" sentence',
   tidy: 'a one-time cleanup, searched the usual way',
@@ -50,7 +71,7 @@ function briefLines(facts, projects) {
  * mid-line.
  */
 export function extraInstructions(arm, { baseLength, facts, projects, pages }) {
-  if (arm === 'search') return '';
+  if (arm === 'search' || arm === 'look') return '';
   const head = [];
   if (arm !== 'brief') head.push(LOOK_FIRST);
   if (servesPages(arm)) head.push(PAGES_RULE);

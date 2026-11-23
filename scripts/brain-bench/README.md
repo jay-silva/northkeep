@@ -15,7 +15,7 @@ Each adds one thing to the one before, so a change in score has one cause.
 5. **Pages**: serves that same tidy result as one page per person, organization and property.
 6. **Pages with index**: adds the list of page names to the instructions.
 
-Steps 2 to 6 are prototypes in this folder. Nothing in the product changes.
+Steps 2 to 6 are prototypes in this folder. Nothing in the product changes. One more design, `look`, runs only when named: the connect-time text reworded to say look first.
 
 ## Run it
 
@@ -45,6 +45,10 @@ Two graders mark every answer against the key in `world.mjs`: plain text rules, 
 - **Wrong**: anything else. This number matters most.
 
 The report gives each score a likely range and says whether each step's change could be chance.
+
+## Ranking rules
+
+`replay.mjs` reruns the searches agents made in a finished run against a ranking rule, with no model usage. `ranking-cases.mjs` holds eight hard cases a rule must also pass.
 
 ## Where the cleanup comes from
 

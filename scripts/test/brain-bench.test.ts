@@ -16,6 +16,10 @@ import { assertThrowawayHome, seedHome } from '../brain-bench/seed.mjs';
 import { pickQuestions } from '../brain-bench/run.mjs';
 // @ts-expect-error plain Node script without type declarations
 import { holdsAnswer, makeRules } from '../brain-bench/replay.mjs';
+// @ts-expect-error plain Node script without type declarations
+import { RANKING_CASES, answerRank } from '../brain-bench/ranking-cases.mjs';
+// @ts-expect-error plain Node script without type declarations
+import { PROPOSED_FOUND_FIRST, baseInstructions } from '../brain-bench/designs.mjs';
 import * as searchRules from '../../packages/core/src/search-rules.js';
 
 type Question = { id: string; cat: string; q: string; expect: string; must: string[][]; must_not: string[]; both?: string[] };
@@ -250,5 +254,35 @@ describe('brain-bench replay', () => {
     const split = question('split-01');
     expect(holdsAnswer(split, ["Morgan's dog Biscuit is a corgi born in 2021."])).toBe(false);
     expect(holdsAnswer(split, ["Morgan's dog Biscuit is a corgi born in 2021.", "Pepper is Morgan's second corgi."])).toBe(true);
+  });
+});
+
+describe('brain-bench ranking cases', () => {
+  const rules = makeRules(searchRules) as Record<string, unknown>;
+  const lost = (rule: string): string[] => (RANKING_CASES as { name: string }[]).filter((c) => answerRank(rules[rule], searchRules, c) === 0).map((c) => c.name);
+
+  it('the shipped rule loses the answer in five of the eight hard cases', () => {
+    expect(lost('As shipped (0.29.0)')).toEqual([
+      'the name is in every confirmed memory', 'the name is in a fifth of the memories', 'ten memories left after a scope filter',
+      'nine confirmed memories share a street name', 'a nickname in a tenth of the memories',
+    ]);
+  });
+
+  it('both rejected fixes still lose answers', () => {
+    expect(lost('Fix 1: drop common words').length).toBeGreaterThan(0);
+    expect(lost('Fix 2: common-only matches last')).toContain('a padding word, and an answer made of common words');
+  });
+
+  it('weighing words by rarity finds the answer in all eight', () => {
+    expect(lost('Fix 4: weigh words by rarity')).toEqual([]);
+  });
+});
+
+describe('brain-bench reworded instruction', () => {
+  it('replaces the shipped first paragraph and keeps the milestone rule', () => {
+    const text = baseInstructions('look', { shipped: 'SHIPPED', milestoneRule: 'RULE' }) as string;
+    expect(text).toBe(`${PROPOSED_FOUND_FIRST} RULE`);
+    expect(text).toContain('even when your own notes or memory seem to answer it');
+    expect(baseInstructions('search', { shipped: 'SHIPPED', milestoneRule: 'RULE' })).toBe('SHIPPED');
   });
 });
