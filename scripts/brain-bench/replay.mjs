@@ -25,6 +25,32 @@ function shares(queryTerms, rows) {
 }
 
 /**
+ * The rarity family of rules. A query word weighs ln((N + prior + 0.5) / (n + 0.5)),
+ * with N rows searched and n holding the word (equal weights when prior is null).
+ * Recency, type and the confirmed boost multiply the match. `countAbsent` keeps a
+ * word no row holds in the total; `cutMultiplies` applies the long-row cut as a factor.
+ */
+function rarity(core, { prior, slope, cap, cutMultiplies, countAbsent }) {
+  return (rows, q, now) => {
+    const weight = new Map([...q].map((term) => {
+      const holding = rows.filter((row) => row.terms.has(term)).length;
+      return [term, !countAbsent && holding === 0 ? 0 : prior === null ? 1 : Math.log((rows.length + prior + 0.5) / (holding + 0.5))];
+    }));
+    const total = [...weight.values()].reduce((sum, w) => sum + w, 0) || 1;
+    return rows.flatMap((row) => {
+      const hit = [...q].filter((term) => row.terms.has(term));
+      if (hit.length === 0) return [];
+      const cut = Math.min(cap, slope * Math.log2(Math.max(1, row.terms.size / 64)));
+      const share = hit.reduce((sum, term) => sum + weight.get(term), 0) / total;
+      const overlap = cutMultiplies ? share * (1 - cut) : Math.max(0, share - cut);
+      const recency = 0.3 * Math.exp(-Math.max(0, now - Date.parse(row.entry.created_at)) / DAY / 30);
+      const bonus = recency + (TYPE_PRIORITY[row.entry.type] ?? 0) + (core.isConfirmed(row.entry.metadata) ? core.CONFIRMED_BOOST : 0);
+      return [{ row, score: overlap * (1 + bonus) }];
+    }).sort((a, b) => Number(core.isOldAgentNote(a.row.entry, now)) - Number(core.isOldAgentNote(b.row.entry, now)) || b.score - a.score);
+  };
+}
+
+/**
  * One ranking rule: given the rows and a query, the rows it would return.
  * `core` is NorthKeep's own search-rules module, so the shipped pieces are
  * the real ones and only the idea under test is written here.
@@ -82,19 +108,10 @@ export function makeRules(core) {
       }), now);
     },
 
-    // Every word counts by how rare it is, and the bonuses scale with the match instead of adding to it.
-    'Fix 4: weigh words by rarity': (rows, q, now) => {
-      const share = shares(q, rows);
-      const weight = (term) => Math.log(1 + (1 - share.get(term) + 0.5 / rows.length) / (share.get(term) + 0.5 / rows.length));
-      const total = [...q].reduce((sum, term) => sum + weight(term), 0);
-      return order(rows.flatMap((row) => {
-        const hit = matches(row, q);
-        if (hit.length === 0) return [];
-        const b = base(row, hit.length, q.size, now);
-        const overlap = Math.max(0, hit.reduce((sum, term) => sum + weight(term), 0) / total - core.lengthPenalty(row.terms.size));
-        return [{ row, score: overlap * (1 + b.bonus + (b.confirmed ? core.CONFIRMED_BOOST : 0)) }];
-      }), now);
-    },
+    'Rarity, no prior': rarity(core, { prior: 0, slope: 0.1, cap: 0.3, cutMultiplies: false, countAbsent: true }),
+    'Rarity, prior of 10, absent words counted': rarity(core, { prior: 10, slope: 0.15, cap: 0.5, cutMultiplies: false, countAbsent: true }),
+    'Bonuses multiply, equal weights': rarity(core, { prior: null, slope: 0.1, cap: 0.3, cutMultiplies: false, countAbsent: true }),
+    'ADR 0089: rank by rarity': rarity(core, { prior: 10, slope: 0.15, cap: 0.5, cutMultiplies: true, countAbsent: false }),
   };
 }
 

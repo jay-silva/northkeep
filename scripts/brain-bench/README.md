@@ -48,7 +48,7 @@ The report gives each score a likely range and says whether each step's change c
 
 ## Ranking rules
 
-`replay.mjs` reruns the searches agents made in a finished run against a ranking rule, with no model usage. `ranking-cases.mjs` holds eight hard cases a rule must also pass.
+`replay.mjs` reruns the searches agents made in a finished run against a ranking rule, with no model usage. `ranking-cases.mjs` holds the hard cases a rule must also pass.
 
 ## Where the cleanup comes from
 

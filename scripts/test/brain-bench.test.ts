@@ -17,7 +17,7 @@ import { pickQuestions } from '../brain-bench/run.mjs';
 // @ts-expect-error plain Node script without type declarations
 import { holdsAnswer, makeRules } from '../brain-bench/replay.mjs';
 // @ts-expect-error plain Node script without type declarations
-import { RANKING_CASES, answerRank } from '../brain-bench/ranking-cases.mjs';
+import { KEPT_CASES, RANKING_CASES, answerRank, passes } from '../brain-bench/ranking-cases.mjs';
 // @ts-expect-error plain Node script without type declarations
 import { PROPOSED_FOUND_FIRST, baseInstructions } from '../brain-bench/designs.mjs';
 import * as searchRules from '../../packages/core/src/search-rules.js';
@@ -247,7 +247,7 @@ describe('brain-bench replay', () => {
   it('shows the shipped rule losing the answer to confirmed rows that match only the name', () => {
     expect(top('As shipped (0.29.0)', 'car vehicle Pat drives')).not.toContain("Pat's car is a blue hatchback");
     expect(top('Fix 2: common-only matches last', 'car vehicle Pat drives')[0]).toBe("Pat's car is a blue hatchback");
-    expect(top('Fix 4: weigh words by rarity', 'car vehicle Pat drives')[0]).toBe("Pat's car is a blue hatchback");
+    expect(top('ADR 0089: rank by rarity', 'car vehicle Pat drives')[0]).toBe("Pat's car is a blue hatchback");
   });
 
   it('counts an answer as found only when every part of it came back', () => {
@@ -261,7 +261,7 @@ describe('brain-bench ranking cases', () => {
   const rules = makeRules(searchRules) as Record<string, unknown>;
   const lost = (rule: string): string[] => (RANKING_CASES as { name: string }[]).filter((c) => answerRank(rules[rule], searchRules, c) === 0).map((c) => c.name);
 
-  it('the shipped rule loses the answer in five of the eight hard cases', () => {
+  it('the shipped rule loses the answer in five of the eleven hard cases', () => {
     expect(lost('As shipped (0.29.0)')).toEqual([
       'the name is in every confirmed memory', 'the name is in a fifth of the memories', 'ten memories left after a scope filter',
       'nine confirmed memories share a street name', 'a nickname in a tenth of the memories',
@@ -273,8 +273,25 @@ describe('brain-bench ranking cases', () => {
     expect(lost('Fix 2: common-only matches last')).toContain('a padding word, and an answer made of common words');
   });
 
-  it('weighing words by rarity finds the answer in all eight', () => {
-    expect(lost('Fix 4: weigh words by rarity')).toEqual([]);
+  it('each simpler rarity rule loses something the chosen one keeps', () => {
+    expect(lost('Bonuses multiply, equal weights')).toEqual(['ten memories left after a scope filter']);
+    expect(lost('Rarity, prior of 10, absent words counted')).toEqual([
+      'a 300-word answer and a query word no memory holds',
+      'a 450-word answer, confirmed, and a query word no memory holds',
+      'a 700-word answer, confirmed, and a query word no memory holds',
+    ]);
+  });
+
+  it('the ADR 0089 rule finds the answer in all eleven', () => {
+    expect((RANKING_CASES as unknown[]).length).toBe(11);
+    expect(lost('ADR 0089: rank by rarity')).toEqual([]);
+  });
+
+  it('and keeps three checks the product already makes, which rarity without a prior does not', () => {
+    const failed = (rule: string): string[] => (KEPT_CASES as { name: string }[]).filter((c) => !passes(rules[rule], searchRules, c)).map((c) => c.name);
+    expect(failed('As shipped (0.29.0)')).toEqual([]);
+    expect(failed('ADR 0089: rank by rarity')).toEqual([]);
+    expect(failed('Rarity, no prior')).toEqual(['a long row against a short exact answer, two memories', 'an answer split across two memories among project chatter']);
   });
 });
 
