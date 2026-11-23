@@ -39,3 +39,6 @@ apps/desktop/src-tauri/binaries/
 apps/desktop/src-tauri/server-tree/
 apps/desktop/src-tauri/keep-watch-helper/
 sync.json
+
+# Brain bench runs (fictional data; reports are copied out by hand when kept)
+scripts/brain-bench/out/
