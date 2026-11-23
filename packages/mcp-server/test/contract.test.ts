@@ -59,7 +59,7 @@ describe('CONTRACT_TEXT', () => {
   it('has no em dash, is under 4608 bytes, contains P6 and standing-instruction tools', () => {
     expect(CONTRACT_TEXT).not.toMatch(/[—–]/);
     // ADR 0042 pinned 2048 for one paragraph; ADR 0052 Decision 5 adds the
-    // bootstrap paragraph, so the bound is doubled rather than removed. ADR 0088
+    // bootstrap paragraph, so the bound is doubled rather than removed. ADR 0089
     // D5 raises it to 4608 for the longer milestone sentence.
     expect(Buffer.byteLength(CONTRACT_TEXT, 'utf8')).toBeLessThan(4608);
     expect(CONTRACT_TEXT).toContain(CONTRACT_GRACEFUL_DEGRADATION);
@@ -457,7 +457,7 @@ describe('reinstall over an earlier release', () => {
       'What you remember about this user from elsewhere is not their record. NorthKeep is, because the user keeps it across ' +
       'all of their AI apps and corrects it there. When the user tells you a durable new fact, or you find their record is ' +
       'missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.';
-    // 0.29.0's milestone rule, before ADR 0088.
+    // 0.29.0's milestone rule, before ADR 0089.
     const milestone029 =
       'When the user asks to create a project, propose its milestones and create it only after the user agrees to them. ' +
       'Report a milestone passed only when the user says its acceptance test passed. ' +

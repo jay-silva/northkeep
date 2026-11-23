@@ -129,7 +129,7 @@ export const FOUND_FIRST_INSTRUCTION =
   'When the conversation names a project, read it with project_get. When the user tells you a durable new fact, or you find ' +
   'their record is missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.';
 
-/** ADR 0065 Decision 4, layer 2, as amended by ADR 0088: the same standing instruction the local server sends. */
+/** ADR 0065 Decision 4, layer 2, as amended by ADR 0089: the same standing instruction the local server sends. */
 export const MILESTONE_INSTRUCTION =
   'When the user asks to create a project, propose its milestones and create it only after the user agrees to them. ' +
   'Report a milestone passed only when the user says its acceptance test passed, or, if instructions the user wrote allow it ' +

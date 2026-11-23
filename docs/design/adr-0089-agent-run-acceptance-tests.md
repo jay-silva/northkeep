@@ -1,6 +1,6 @@
-# ADR 0088 review record
+# ADR 0089 review record
 
-The decision is SPEC/decisions/0088-agent-run-acceptance-tests.md. This file keeps the reviews, verified against the code on branch `claude/adr-0088-evidence-pass`.
+The decision is SPEC/decisions/0089-agent-run-acceptance-tests.md. This file keeps the reviews, verified against the code on branch `claude/adr-0088-evidence-pass`.
 
 ## Why the review gate applied
 
@@ -17,7 +17,7 @@ A fresh reviewer read the first commit against the code and ran probes and the t
 5. **Wound. The evidence line can be changed later.** An AI app can edit or remove that Log line, and it moves to an archive as the Log rolls. Fixed: KNOWN-LIMITS says so, and the ADR no longer claims the Log keeps the evidence.
 6. **Wound. A natural file name lost the whole save with an unrelated refusal.** `M1-passed-2026-11-23.txt` or `M1 (agent).txt` tripped the forged-line check with a message about the Milestones section. Fixed: `projectEvidenceProblem` checks `carriesPassStamp` first and names the field; the description warns about it. Tested.
 7. **Nit. Only `\r` and `\n` were refused.** U+2028 and U+202E passed. Fixed: evidence uses the writer check for control and invisible formatting characters. Tested.
-8. **Nit. Word counts.** 0088 is under 500 by `wc -w`; the 0065 amendment shrank to four words.
+8. **Nit. Word counts.** 0089 is under 500 by `wc -w`; the 0065 amendment shrank to four words.
 9. **Nits.** This record now exists; the description shows the Log form "(Evidence for M3: ...)"; `content_chars` counts evidence; the description asks for `~` paths so a Shared project does not carry the account name; the design record's premise notes the change.
 10. **Not caused by this change.** `e2e/milestones-k4.test.ts` step 3 uses the Linux form of `script` and fails on macOS; CI runs on Ubuntu.
 

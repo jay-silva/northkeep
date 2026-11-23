@@ -57,7 +57,7 @@ export const PROJECT_HANDOFF_METADATA_VERSION = 1;
 export const PROJECT_HISTORY_LIMIT = 20;
 export const PROJECT_FILE_LIMIT = 40;
 export const PROJECT_FIELD_MAX_CHARS = PROJECT_DOC_MAX_CHARS;
-/** ADR 0088: where an agent saved what it saw when it ran the acceptance test itself. */
+/** ADR 0089: where an agent saved what it saw when it ran the acceptance test itself. */
 export const PROJECT_EVIDENCE_MAX_CHARS = 300;
 
 export type ProjectHandoffMode = 'checkpoint' | 'wrap';
@@ -120,7 +120,7 @@ export interface ProjectCheckpointRequest {
   writer?:ProjectWriter;
   /** ADR 0065: report the current milestone passed; stamped (agent). */
   milestone_passed?:string;
-  /** ADR 0088: only with milestone_passed; appended to the Log entry. */
+  /** ADR 0089: only with milestone_passed; appended to the Log entry. */
   evidence?:string;
 }
 /** ADR 0063: whole-text write of a project head, bound to the head the caller read (null creates). */
@@ -186,7 +186,7 @@ export function projectTextProblem(value:string, field:string, allowEmpty:boolea
   if (value.length>0 && value.trim().length===0) return `${field} cannot contain only whitespace; send an empty string to clear it.`;
   return null;
 }
-/** ADR 0088: evidence is one line and only travels with milestone_passed. It gets its own Log line, so it never meets text in completed. */
+/** ADR 0089: evidence is one line and only travels with milestone_passed. It gets its own Log line, so it never meets text in completed. */
 export function projectEvidenceProblem(request:{evidence?:unknown;milestone_passed?:unknown}):string|null {
   const evidence=request.evidence; if(evidence===undefined)return null;
   if(request.milestone_passed===undefined)return 'evidence goes with milestone_passed: send both, or leave evidence out.';

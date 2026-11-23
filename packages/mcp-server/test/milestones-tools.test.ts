@@ -172,7 +172,7 @@ describe('project_checkpoint and project_wrap: milestone_passed', () => {
     expect(wrap.json.error.message).toBe('Only the current milestone, M2, can be reported passed, and only after its acceptance test passed.');
   });
 
-  it('ADR 0088: evidence goes into the Log entry beside an (agent) pass, and replay binds it', async () => {
+  it('ADR 0089: evidence goes into the Log entry beside an (agent) pass, and replay binds it', async () => {
     const mcp = await connect();
     const created = await create(mcp);
     const base = { project: 'rental', vault_id: created.vault_id, expected_revision: created.revision, status: 'Buy box agreed.', completed: 'Ran the buy box test.', next_actions: '' };
@@ -188,7 +188,7 @@ describe('project_checkpoint and project_wrap: milestone_passed', () => {
     expect(other.json.error.code).toBe('operation_conflict');
   });
 
-  it('ADR 0088: evidence sits on its own Log line, so checkboxes in completed or a half-open bracket do not turn into a milestone line', async () => {
+  it('ADR 0089: evidence sits on its own Log line, so checkboxes in completed or a half-open bracket do not turn into a milestone line', async () => {
     const mcp = await connect();
     const created = await create(mcp);
     const completed = 'Ran the acceptance test ✅ green:\n- [x] app opens\n- [x] buy box saved';
@@ -199,7 +199,7 @@ describe('project_checkpoint and project_wrap: milestone_passed', () => {
     expect(saved.json.current.milestones.items[0]).toMatchObject({ id: 'M1', state: 'passed', by: 'agent' });
   });
 
-  it('ADR 0088: evidence without a pass, on two lines, with hidden characters or a pass stamp is refused and saves nothing', async () => {
+  it('ADR 0089: evidence without a pass, on two lines, with hidden characters or a pass stamp is refused and saves nothing', async () => {
     const mcp = await connect();
     const created = await create(mcp);
     const base = { project: 'rental', vault_id: created.vault_id, expected_revision: created.revision, status: 'Going.', completed: 'Ran it.', next_actions: '' };

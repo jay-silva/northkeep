@@ -1,4 +1,4 @@
-# ADR 0088: An agent that ran the acceptance test may report the pass
+# ADR 0089: An agent that ran the acceptance test may report the pass
 
 Status: Proposed 2026-11-23, awaiting Jay · Review 1: NOT CLEARED, fixed · Recheck: CLEARED WITH WOUNDS, wounds fixed
 
@@ -27,4 +27,4 @@ ADR 0065 tells agents to report a milestone passed only when the user says its a
 Nothing new. Evidence is text in the project's Log and goes where that document already goes.
 
 ## Links
-Amends: ADR 0065 D4 · Review record: docs/design/adr-0088-agent-run-acceptance-tests.md
+Amends: ADR 0065 D4 · Review record: docs/design/adr-0089-agent-run-acceptance-tests.md

@@ -60,7 +60,7 @@ export const FOUND_FIRST_INSTRUCTION =
   'their record is missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.';
 
 /**
- * ADR 0065 Decision 4 as amended by ADR 0088, pinned verbatim: the local
+ * ADR 0065 Decision 4 as amended by ADR 0089, pinned verbatim: the local
  * server's instructions and the contract sentence. Whether a host shows it to
  * its model is up to the host.
  */
