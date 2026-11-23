@@ -148,8 +148,8 @@ describe('ADR 0090: the trade it makes on purpose', () => {
   });
 });
 
-describe('ADR 0090, not fixed: two memories are too few to tell a common word from a rare one', () => {
-  it('a long row holding every query word can lead a short answer that lacks one, and both come back', () => {
+describe('ADR 0090, lost against 0.29.0: an answer that lacks a rare query word', () => {
+  it('a long row holding every query word can lead a short answer that lacks the rarest one, and both come back', () => {
     const long = Array.from({ length: 400 }, (_, i) => `line ${i} about the harbor schedule, office supplies, staff names and directors meeting notes`).join('\n');
     seed([{ content: 'Pat Example is the harbor office director' }, { content: long }]);
     const found = contents(vault.retrieve('what is the name of the harbor office director'));

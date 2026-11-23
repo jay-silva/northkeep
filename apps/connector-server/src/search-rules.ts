@@ -80,8 +80,8 @@ export function isProjectPaperwork(row: { type: string; scope: string; content: 
 
 /**
  * One ranker for both search tools, so they cannot drift (ADR 0090 D5). A
- * word found only in a scope or type name counts half, as before, so a
- * memory that says the word always outranks one merely filed under it.
+ * word found only in a scope or type name counts half, as before, so filing
+ * a memory under a word never counts for more than saying it.
  */
 export function rankSharedEntries<T extends { type: string; scope: string; content: string; confirmed?: boolean; archive?: boolean }>(
   entries: readonly T[],
