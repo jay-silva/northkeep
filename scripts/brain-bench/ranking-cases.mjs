@@ -44,6 +44,10 @@ export const RANKING_CASES = [
   longAnswerCase(300, false),
   longAnswerCase(450, true),
   longAnswerCase(700, true),
+  // Unconfirmed, so it is marked down for length: a cut of up to half put eight one-word matches ahead of it.
+  { name: 'a long unconfirmed answer holding every query word', query: 'Alder septic', want: 'septic design report',
+    memories: [{ content: `Alder Hill septic design report. ${many(600, (i) => `xword${i}`).join(' ')}`, at: '2026-05-07T12:00:00.000Z' },
+      ...many(9, (i) => fact(`Septic pumped at rental unit ${i}`)), ...many(40, (i) => fact(`Alder Hill note ${i}`)), ...filler(140)] },
   // A long memory the user confirmed over a year ago, against eight fresh AI notes that only repeat the question.
   { name: 'a long confirmed answer against fresh notes that repeat the question', query: 'septic test pit results', want: 'passed at four feet',
     memories: [{ content: `The septic test pit results: the pit passed at four feet. ${many(450, (i) => `xword${i}`).join(' ')}`, confirmed: true, at: '2025-10-19T12:00:00.000Z' },
@@ -52,10 +56,20 @@ export const RANKING_CASES = [
 
 const longRow = many(400, (i) => `line ${i} about the harbor schedule, office supplies, staff names and directors meeting notes`).join('\n');
 
+const longRowPair = [{ content: 'Pat Example is the harbor office director', at: '2026-11-23T11:59:59.000Z' }, { content: longRow, at: '2026-11-23T12:00:00.000Z' }];
+
+/**
+ * The same check as the product first wrote it: two memories, and the long one
+ * is the only one holding "name". Two memories cannot show that "name" is a
+ * common word, so rarity lets the long row lead (ADR 0090, Not fixed).
+ */
+export const TWO_MEMORY_CASE = { name: 'a long row against a short exact answer, two memories', query: 'what is the name of the harbor office director',
+  want: 'Pat Example is the harbor office director', first: true, memories: longRowPair };
+
 /** Three checks the product already makes, as rows. `first` means the answer must lead; `wants` means all must come back. */
 export const KEPT_CASES = [
-  { name: 'a long row against a short exact answer, two memories', query: 'what is the name of the harbor office director', want: 'Pat Example is the harbor office director', first: true,
-    memories: [{ content: 'Pat Example is the harbor office director', at: '2026-11-23T11:59:59.000Z' }, { content: longRow, at: '2026-11-23T12:00:00.000Z' }] },
+  { name: 'a long row against a short exact answer, where "name" is a common word', query: 'what is the name of the harbor office director', want: 'Pat Example is the harbor office director', first: true,
+    memories: [...longRowPair, ...many(20, (i) => ({ content: `The name on parcel ${i} is on file`, at: '2026-11-23T12:00:00.000Z' }))] },
   { name: 'a confirmed memory against a newer near-copy', query: 'harbor office director', want: 'Pat Example is the harbor office director', first: true,
     memories: [{ content: 'Pat Example is the harbor office director', confirmed: true, type: 'semantic', at: '2026-10-14T12:00:00.000Z' },
       { content: 'Pat Example was the harbor office director last year', type: 'episodic', source: 'cli', at: '2026-11-23T12:00:00.000Z' }] },

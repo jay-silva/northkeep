@@ -17,7 +17,7 @@ import { pickQuestions } from '../brain-bench/run.mjs';
 // @ts-expect-error plain Node script without type declarations
 import { holdsAnswer, makeRules } from '../brain-bench/replay.mjs';
 // @ts-expect-error plain Node script without type declarations
-import { KEPT_CASES, RANKING_CASES, answerRank, passes } from '../brain-bench/ranking-cases.mjs';
+import { KEPT_CASES, RANKING_CASES, TWO_MEMORY_CASE, answerRank, passes } from '../brain-bench/ranking-cases.mjs';
 // @ts-expect-error plain Node script without type declarations
 import { PROPOSED_FOUND_FIRST, baseInstructions } from '../brain-bench/designs.mjs';
 import * as searchRules from '../../packages/core/src/search-rules.js';
@@ -261,7 +261,7 @@ describe('brain-bench ranking cases', () => {
   const rules = makeRules(searchRules) as Record<string, unknown>;
   const lost = (rule: string): string[] => (RANKING_CASES as { name: string }[]).filter((c) => answerRank(rules[rule], searchRules, c) === 0).map((c) => c.name);
 
-  it('the shipped rule loses the answer in five of the twelve hard cases', () => {
+  it('the shipped rule loses the answer in five of the thirteen hard cases', () => {
     expect(lost('As shipped (0.29.0)')).toEqual([
       'the name is in every confirmed memory', 'the name is in a fifth of the memories', 'ten memories left after a scope filter',
       'nine confirmed memories share a street name', 'a nickname in a tenth of the memories',
@@ -280,16 +280,20 @@ describe('brain-bench ranking cases', () => {
       'a 300-word answer and a query word no memory holds',
       'a 450-word answer, confirmed, and a query word no memory holds',
       'a 700-word answer, confirmed, and a query word no memory holds',
-      septic,
+      'a long unconfirmed answer holding every query word', septic,
     ]);
   });
 
   it('cutting long confirmed memories loses one to fresh notes that repeat the question', () => {
-    expect(lost('Rarity, long confirmed memories cut too')).toEqual(['a long confirmed answer against fresh notes that repeat the question']);
+    expect(lost('Rarity, long confirmed memories cut too')).toEqual(['a long unconfirmed answer holding every query word', 'a long confirmed answer against fresh notes that repeat the question']);
   });
 
-  it('the ADR 0090 rule finds the answer in all twelve', () => {
-    expect((RANKING_CASES as unknown[]).length).toBe(12);
+  it('cutting long memories by up to half loses a long unconfirmed answer that holds every query word', () => {
+    expect(lost('Rarity, long memories cut by up to half')).toEqual(['a long unconfirmed answer holding every query word']);
+  });
+
+  it('the ADR 0090 rule finds the answer in all thirteen', () => {
+    expect((RANKING_CASES as unknown[]).length).toBe(13);
     expect(lost('ADR 0090: rank by rarity')).toEqual([]);
   });
 
@@ -297,7 +301,15 @@ describe('brain-bench ranking cases', () => {
     const failed = (rule: string): string[] => (KEPT_CASES as { name: string }[]).filter((c) => !passes(rules[rule], searchRules, c)).map((c) => c.name);
     expect(failed('As shipped (0.29.0)')).toEqual([]);
     expect(failed('ADR 0090: rank by rarity')).toEqual([]);
-    expect(failed('Rarity, no prior')).toEqual(['a long row against a short exact answer, two memories', 'an answer split across two memories among project chatter']);
+    expect(failed('Rarity, no prior')).toEqual(['an answer split across two memories among project chatter']);
+  });
+
+  it('but in a vault of two memories it lets a long row lead, where the cut of up to half and the shipped rule do not', () => {
+    const leads = (rule: string): boolean => passes(rules[rule], searchRules, TWO_MEMORY_CASE);
+    expect(leads('As shipped (0.29.0)')).toBe(true);
+    expect(leads('Rarity, long memories cut by up to half')).toBe(true);
+    expect(leads('ADR 0090: rank by rarity')).toBe(false);
+    expect(answerRank(rules['ADR 0090: rank by rarity'], searchRules, TWO_MEMORY_CASE)).toBe(2);
   });
 });
 
