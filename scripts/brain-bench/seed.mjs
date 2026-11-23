@@ -28,10 +28,11 @@ function atTime(at, fn) {
 }
 
 /**
- * Create `home` and fill its vault with the world, oldest first. Returns what
- * the designs need to build their instructions.
+ * Create `home` and fill its vault with the world, oldest first. `tidy` is a
+ * list of cleaned-up facts to add as fresh memories, as a cleanup pass by an
+ * AI app would leave them. Returns what the designs need for their instructions.
  */
-export async function seedHome(home, now = Date.now()) {
+export async function seedHome(home, now = Date.now(), tidy = []) {
   if (fs.existsSync(home)) throw new Error(`${home} already exists; the bench only writes to a new directory.`);
   fs.mkdirSync(home, { recursive: true });
   fs.writeFileSync(path.join(home, MARKER), 'Fictional data for scripts/brain-bench. Safe to delete.\n');
@@ -68,6 +69,9 @@ export async function seedHome(home, now = Date.now()) {
     content: entry.content, type: entry.type, scope: entry.scope, source: entry.source,
     saved: entry.created_at.slice(0, 10), confirmed: core.isConfirmed(entry.metadata),
   }));
+  tidy.forEach((content, i) => {
+    atTime(now - DAY + i, () => vault.remember({ content, type: 'semantic', scope: 'personal', source: 'mcp:curator' }));
+  });
   vault.save();
   vault.close();
   return { facts, projects: PROJECTS.map(({ slug, title }) => ({ slug, title })) };

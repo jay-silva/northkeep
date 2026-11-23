@@ -44,9 +44,9 @@ export const MEMORIES = [
   m(190, CURSOR, 'semantic', 'personal', 'Morgan has a corgi called Biscuit.'),
   m(230, GROK, 'semantic', 'personal', 'Pepper is Morgan\'s second corgi, adopted in March 2026.'),
   m(400, IMPORT, 'semantic', 'personal', 'Morgan drives a 2015 Honda CR-V.'),
-  m(150, CLAUDE, 'semantic', 'personal', 'Morgan traded the CR-V for a 2019 Subaru Outback in June 2026.'),
+  m(150, CLAUDE, 'semantic', 'personal', 'Morgan\'s car is a 2019 Subaru Outback, bought in June 2026 to replace the CR-V.'),
   m(420, IMPORT, 'semantic', 'personal', 'Morgan\'s accountant is Leo Marsh at Marsh Tax.'),
-  m(95, GROK, 'semantic', 'personal', 'Morgan moved the books to Priya Shah at Shah & Lowe in August 2026. Leo Marsh no longer does them.'),
+  m(95, GROK, 'semantic', 'personal', 'Morgan\'s accountant is now Priya Shah at Shah & Lowe, since August 2026. Leo Marsh no longer does the books.'),
   m(180, CURSOR, 'semantic', 'personal', 'Morgan\'s attorney is Tom Brandt at Brandt Law. He handles the LLC filings.'),
   m(210, GROK, 'semantic', 'personal', 'Morgan\'s physician is Dr. Lena Ortiz at Eastbrook Family Practice.'),
   m(170, CLAUDE, 'semantic', 'personal', 'Riley Vale is a pediatric nurse at Eastbrook General.'),
@@ -194,11 +194,20 @@ export const APP_NOTES = [
  * every group. `must_not` phrases are the out-of-date value. `expect` is
  * "answer" (default), "abstain" (the fact is nowhere), or "flag" (the record
  * says the fact is disputed, or two records disagree); a flag answer either
- * says so or names every value in `both`.
+ * says so or names every value in `both`. `note` tells the second grader
+ * what the record holds.
  */
+/** Every common way to write a month and day. */
+const MONTHS = ['january', 'february', 'march', 'april', 'may', 'june', 'july', 'august', 'september', 'october', 'november', 'december'];
+const day = (month, d) => {
+  const name = MONTHS[month - 1];
+  const short = name.slice(0, 3);
+  const th = `${d}${d % 10 === 1 && d !== 11 ? 'st' : d % 10 === 2 && d !== 12 ? 'nd' : d % 10 === 3 && d !== 13 ? 'rd' : 'th'}`;
+  return [...new Set([name, short].flatMap((mm) => [`${mm} ${d}`, `${mm} ${th}`, `${d} ${mm}`, `${th} ${mm}`, `${th} of ${mm}`])), `${month}/${d}`];
+};
 const q = (id, cat, text, must, extra = {}) => ({ id, cat, q: text, must, expect: 'answer', must_not: [], ...extra });
 const absent = (id, text, extra = {}) => ({ id, cat: 'absent', q: text, must: [], must_not: [], expect: 'abstain', ...extra });
-const flag = (id, cat, text, both) => ({ id, cat, q: text, must: [], must_not: [], expect: 'flag', both });
+const flag = (id, cat, text, both, note) => ({ id, cat, q: text, must: [], must_not: [], expect: 'flag', both, note });
 
 export const QUESTIONS = [
   // core: the user confirmed these.
@@ -207,7 +216,7 @@ export const QUESTIONS = [
   q('core-03', 'core', 'Which of my companies owns the cabin?', [['larkspur cabins']]),
   q('core-04', 'core', 'Who is my partner in Quarry Road Partners?', [['okafor']]),
   q('core-05', 'core', 'What\'s my spouse\'s name?', [['riley']]),
-  q('core-06', 'core', 'When is Juno\'s birthday?', [['march 9', 'march 9th', '3/9', '2012-03-09', '9 march', '9th of march']]),
+  q('core-06', 'core', 'When is Juno\'s birthday?', [[...day(3, 9), '2012-03-09']]),
   q('core-07', 'core', 'How do I sign a formal letter?', [['morgan a vale']]),
   q('core-08', 'core', 'Do I have any food allergies?', [['shellfish']]),
   q('core-09', 'core', 'Who is my boss?', [['calder']]),
@@ -218,21 +227,21 @@ export const QUESTIONS = [
   q('core-14', 'core', 'How long should a report for me be?', [['400']]),
 
   // direct: one clean fact, saved by an AI app, in the words of the question.
-  q('direct-01', 'direct', 'When does my 100-ton master license expire?', [['may 1', 'may 1st', '2027-05-01', '5/1', '1 may', 'may 2027'], ['2027']]),
+  q('direct-01', 'direct', 'When does my 100-ton master license expire?', [[...day(5, 1), '2027-05-01', 'may 2027'], ['2027', '2027-05-01']]),
   q('direct-02', 'direct', 'Who cleans Heron Cabin?', [['marisol', 'pena']]),
-  q('direct-03', 'direct', 'How many people does Heron Cabin sleep?', [['eight', '8']]),
+  q('direct-03', 'direct', 'How many people does Heron Cabin sleep?', [['eight', '8 people', '8 guests', 'sleeps 8', 'up to 8']]),
   q('direct-04', 'direct', 'Who rents 12 Quarry Road?', [['abara']]),
   q('direct-05', 'direct', 'Which boat is the spare at Tidewater?', [['kestrel']]),
-  q('direct-06', 'direct', 'When is the Coast Guard inspection for the Osprey due?', [['february 12', 'feb 12', '2/12', '2027-02-12', '12 february', 'february 12th']]),
+  q('direct-06', 'direct', 'When is the Coast Guard inspection for the Osprey due?', [[...day(2, 12), '2027-02-12']]),
   q('direct-07', 'direct', 'Who is the union steward for the deck crews?', [['lindqvist']]),
   q('direct-08', 'direct', 'What seat do I prefer on flights?', [['aisle']]),
   q('direct-09', 'direct', 'Who insures Heron Cabin?', [['alder mutual']]),
-  q('direct-10', 'direct', 'When does the Heron Cabin insurance policy renew?', [['january 15', 'jan 15', '1/15', '15 january', 'january 15th']]),
-  q('direct-11', 'direct', 'When is my anniversary?', [['june 14', 'jun 14', '6/14', '14 june', 'june 14th']]),
+  q('direct-10', 'direct', 'When does the Heron Cabin insurance policy renew?', [day(1, 15)]),
+  q('direct-11', 'direct', 'When is my anniversary?', [day(6, 14)]),
   q('direct-12', 'direct', 'What instrument does Juno play?', [['cello']]),
-  q('direct-13', 'direct', 'When does my TWIC card expire?', [['2028']]),
+  q('direct-13', 'direct', 'When does my TWIC card expire?', [[...day(8, 30), '2028-08-30', 'august 2028'], ['2028', '2028-08-30']]),
   q('direct-14', 'direct', 'Where does Quarry Road Partners bank?', [['granite savings']]),
-  q('direct-15', 'direct', 'When is Anne Vale\'s birthday?', [['february 2', 'feb 2', '2/2', '2 february', 'february 2nd']]),
+  q('direct-15', 'direct', 'When is Anne Vale\'s birthday?', [day(2, 2)]),
   q('direct-16', 'direct', 'How do I like meeting notes written?', [['bullet']]),
 
   // paraphrase: the record uses different words from the question.
@@ -251,10 +260,10 @@ export const QUESTIONS = [
   q('stale-01', 'stale', 'What interest rate did the Quarry Road refinance close at?', [['6.75']], { must_not: ['7.10', '7.1'] }),
   q('stale-02', 'stale', 'Who is my deputy at the ferry?', [['whitlock']]),
   q('stale-03', 'stale', 'What\'s the minimum stay at Heron Cabin on an ordinary weekend?', [['two night', '2 night', 'two-night', '2-night', 'two nights', '2 nights']]),
-  q('stale-04', 'stale', 'Who rents the downstairs unit at 8 Alder Lane?', [['vacant', 'empty', 'no one', 'nobody', 'unoccupied', 'moved out', 'no tenant']]),
+  q('stale-04', 'stale', 'Who rents the downstairs unit at 8 Alder Lane?', [['vacant', 'empty', 'no one', 'nobody', 'unoccupied', 'no tenant']]),
   q('stale-05', 'stale', 'What day is Juno\'s cello lesson?', [['tuesday', 'tuesdays']]),
   q('stale-06', 'stale', 'What does the Heron Cabin cleaner charge per changeover?', [['165']]),
-  q('stale-07', 'stale', 'Is the MV Tern in service right now?', [['returned', 'back in service', 'is in service', 'yes']], { must_not: ['out of service', 'not in service', 'still out', 'until further notice'] }),
+  q('stale-07', 'stale', 'Is the MV Tern in service right now?', [['returned to service', 'back in service', 'is in service', 'in service since', 'yes']], { must_not: ['out of service', 'not in service', 'still out', 'until further notice'] }),
   q('stale-08', 'stale', 'What day is Felix\'s soccer practice?', [['thursday', 'thursdays']]),
   q('stale-09', 'stale', 'What percentage does Staylark take from me as host?', [['15']]),
   q('stale-10', 'stale', 'Where do I park at the terminal?', [['a4']]),
@@ -292,11 +301,11 @@ export const QUESTIONS = [
   absent('absent-10', 'Which frequent flyer program am I in?'),
 
   // trap: the confirmed record says the fact is disputed and to ask.
-  flag('trap-01', 'trap', 'Which entity holds my half of Quarry Road Partners?', ['larkspur holdings', 'larkspur cabins']),
-  flag('trap-02', 'trap', 'Is the hot tub covered by the cabin\'s insurance?', []),
+  flag('trap-01', 'trap', 'Which entity holds my half of Quarry Road Partners?', ['larkspur holdings', 'larkspur cabins'], 'The confirmed record says this is disputed between Larkspur Holdings LLC (operating agreement) and Larkspur Cabins LLC (loan papers), and to ask the user.'),
+  flag('trap-02', 'trap', 'Is the hot tub covered by the cabin\'s insurance?', [], 'The confirmed record says this is unresolved: the agent said yes by phone, the policy wording excludes it, and to ask the user before saying it is covered.'),
   // conflict: two records disagree and nothing says which is right.
-  flag('conflict-01', 'conflict', 'How much is the security deposit on 8 Alder Lane upstairs?', ['1700', '2000']),
-  flag('conflict-02', 'conflict', 'Who is on call Christmas Day?', []),
+  flag('conflict-01', 'conflict', 'How much is the security deposit on 8 Alder Lane upstairs?', ['1700', '2000'], 'Two records saved the same day disagree: $1,700 and $2,000. Nothing says which is right.'),
+  flag('conflict-02', 'conflict', 'Who is on call Christmas Day?', [], 'Two roster records saved the same day disagree: one says the user (Morgan) covers Christmas Day, the other says Sam Whitlock does. Nothing says which is right.'),
 
   // own_stale: the chat app's own notes are out of date; the record is right.
   q('own-stale-01', 'own_stale', 'Which gym do I go to?', [['harbor athletic']], { must_not: ['ironworks'] }),
@@ -315,7 +324,7 @@ export const QUESTIONS = [
   // project: the answer is in a project document.
   q('project-01', 'project', 'Where does the ferry crew app stand?', [['build 14']]),
   q('project-02', 'project', 'What\'s the next step on the Heron Cabin winter campaign?', [['wood stove']]),
-  q('project-03', 'project', 'Did the Quarry Road refinance close, and when?', [['september 18', 'sept 18', 'sep 18', '9/18', '2026-09-18', '18 september', 'september 18th']]),
+  q('project-03', 'project', 'Did the Quarry Road refinance close, and when?', [[...day(9, 18), 'sept 18', '2026-09-18']]),
   q('project-04', 'project', 'What milestone is Corgi Dash on?', [['leaderboard']]),
   q('project-05', 'project', 'What is the winter schedule project waiting on?', [['union']]),
   q('project-06', 'project', 'What is the ferry crew app built with?', [['react native'], ['supabase']]),
@@ -324,5 +333,5 @@ export const QUESTIONS = [
   q('name-01', 'same_name', 'What is Dana\'s job at the ferry?', [['finance director']]),
   q('name-02', 'same_name', 'Which Dana takes the tenant calls?', [['okafor']]),
   q('name-03', 'same_name', 'Who signs off on the ferry\'s operating budget?', [['reyes']]),
-  q('name-04', 'same_name', 'Is the Dana at the ferry the same person as my rental partner?', [['different', 'not the same', 'two people', 'separate people', 'two different']]),
+  q('name-04', 'same_name', 'Is the Dana at the ferry the same person as my rental partner?', [['different', 'not the same', 'two people', 'separate people', 'is not dana', 'isnt dana', 'not dana okafor']]),
 ];

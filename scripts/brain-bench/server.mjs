@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 import { pathToFileURL } from 'node:url';
 import { assertThrowawayHome } from './seed.mjs';
-import { findPage } from './designs.mjs';
+import { findPage, servesPages } from './designs.mjs';
 
 const home = process.env.NORTHKEEP_HOME ?? '';
 assertThrowawayHome(home);
@@ -30,7 +30,7 @@ const extra = process.env.BENCH_EXTRA_FILE ? fs.readFileSync(process.env.BENCH_E
 // The SDK keeps the handshake text in a private field; a prototype may reach in.
 if (extra) server.server._instructions = `${server.server._instructions}\n${extra}`;
 
-if (arm === 'pages') {
+if (servesPages(arm)) {
   const { pages } = JSON.parse(fs.readFileSync(process.env.BENCH_PAGES_FILE, 'utf8'));
   const text = (value) => ({ content: [{ type: 'text', text: JSON.stringify(value) }] });
   server.registerTool(

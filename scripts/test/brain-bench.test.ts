@@ -3,11 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 // @ts-expect-error plain Node script without type declarations
-import { gradeAnswer, summarize } from '../brain-bench/grade.mjs';
+import { chanceOfSplit, compare, gradeAnswer, range95, summarize } from '../brain-bench/grade.mjs';
+// @ts-expect-error plain Node script without type declarations
+import { describeKey } from '../brain-bench/judge.mjs';
 // @ts-expect-error plain Node script without type declarations
 import { APP_NOTES, MEMORIES, QUESTIONS } from '../brain-bench/world.mjs';
 // @ts-expect-error plain Node script without type declarations
-import { INSTRUCTION_BUDGET, extraInstructions, findPage } from '../brain-bench/designs.mjs';
+import { ARMS, INSTRUCTION_BUDGET, extraInstructions, findPage, tidyMemories } from '../brain-bench/designs.mjs';
 // @ts-expect-error plain Node script without type declarations
 import { assertThrowawayHome, seedHome } from '../brain-bench/seed.mjs';
 // @ts-expect-error plain Node script without type declarations
@@ -24,12 +26,17 @@ describe('brain-bench grader', () => {
     expect(verdict('para-08', 'You hold a 100-ton master license.')).toBe('correct');
     expect(verdict('direct-02', 'Marisol Peña cleans it.')).toBe('correct');
     expect(verdict('stale-01', 'It closed at 6.75% fixed.')).toBe('correct');
+    expect(verdict('stale-06', 'She charges $165/changeover.')).toBe('correct');
+    expect(verdict('name-02', "Tenant calls are Dana Okafor's job.")).toBe('correct');
+    expect(verdict('direct-06', 'It is due 12 Feb 2027.')).toBe('correct');
   });
 
   it('matches whole words and whole numbers only', () => {
     expect(verdict('direct-03', 'It has 18 beds.')).toBe('wrong');
     expect(verdict('stale-09', 'Staylark takes 12%.')).toBe('wrong');
     expect(verdict('changed-05', 'Rent is $24,500 a year.')).toBe('wrong');
+    expect(verdict('direct-03', 'I only see 8 Alder Lane in your record.')).not.toBe('correct');
+    expect(verdict('direct-13', 'Probably some time in 2028.')).not.toBe('correct');
   });
 
   it('calls the out-of-date value wrong and marks it stale', () => {
@@ -48,6 +55,9 @@ describe('brain-bench grader', () => {
   it('wants "not recorded" when the fact is nowhere', () => {
     expect(verdict('absent-01', "I couldn't find your favorite food in your record.")).toBe('correct');
     expect(verdict('absent-01', 'Your favorite food is lobster rolls.')).toBe('wrong');
+    for (const honest of ["Your record doesn't mention a favorite food.", 'NorthKeep returned no matching memories.', "That isn't something NorthKeep has on file."]) {
+      expect(verdict('absent-01', honest), honest).toBe('correct');
+    }
   });
 
   it('wants a disputed fact flagged, not picked', () => {
@@ -55,12 +65,34 @@ describe('brain-bench grader', () => {
     expect(verdict('trap-01', 'Larkspur Holdings LLC holds your half.')).toBe('wrong');
     expect(verdict('conflict-01', 'One record says $1,700 and another says $2,000.')).toBe('correct');
     expect(verdict('conflict-02', 'Sam Whitlock is on call Christmas Day.')).toBe('wrong');
+    expect(verdict('conflict-02', 'The two roster entries differ, so I cannot say.')).toBe('correct');
+    expect(verdict('trap-01', 'As for which entity holds your half: Larkspur Holdings LLC.')).toBe('wrong');
   });
 
   it('counts misses by whether the agent looked', () => {
-    const row = (v: string, looked: boolean) => ({ cat: 'core', verdict: v, looked, stale: false, tool_calls: looked ? [{}] : [], cost_usd: 0.01, error: null });
-    const s = summarize([row('correct', true), row('wrong', false), row('abstained', true), { error: 'no answer', tool_calls: [] }]);
+    const row = (id: string, v: string, looked: boolean) => ({ id, cat: 'core', rule_verdict: v, looked, stale: false, tool_calls: looked ? [{}] : [], cost_usd: 0.01, error: null });
+    const s = summarize([row('a', 'correct', true), row('b', 'wrong', false), row('c', 'abstained', true), { error: 'no answer', tool_calls: [] }]);
     expect(s).toMatchObject({ total: 3, errors: 1, correct: 1, wrong: 1, abstained: 1, looked: 2, missed_without_looking: 1, missed_after_looking: 1 });
+  });
+
+  it('scores by the second grader when it ran, and counts the disagreement', () => {
+    const row = { id: 'a', cat: 'stale', rule_verdict: 'correct', judge_verdict: 'wrong', looked: true, stale: true, tool_calls: [], cost_usd: 0, error: null };
+    expect(summarize([row])).toMatchObject({ correct: 0, wrong: 1, graders_disagree: 1, stale_repeated: 1 });
+  });
+
+  it('tells a real gap from chance', () => {
+    expect(chanceOfSplit(0, 3)).toBeCloseTo(0.25, 5);
+    expect(chanceOfSplit(1, 12)).toBeLessThan(0.05);
+    expect(chanceOfSplit(0, 0)).toBe(1);
+    expect(range95(50, 100)).toEqual([40, 60]);
+    const rows = (right: boolean[]) => right.map((ok, i) => ({ id: `q${i}`, rule_verdict: ok ? 'correct' : 'wrong', error: null }));
+    expect(compare(rows([true, false, false, true]), rows([true, true, true, false]))).toMatchObject({ onlyBefore: 1, onlyAfter: 2 });
+  });
+
+  it('tells the second grader what the record holds', () => {
+    expect(describeKey(question('absent-01'))).toMatch(/not recorded anywhere/);
+    expect(describeKey(question('conflict-01'))).toMatch(/\$1,700 and \$2,000/);
+    expect(describeKey(question('own-stale-01'))).toMatch(/"harbor athletic".*out-of-date value is "ironworks"/);
   });
 });
 
@@ -96,13 +128,23 @@ describe('brain-bench designs', () => {
   const projects = [{ slug: 'alpha', title: 'Alpha' }];
   const pages = [{ name: 'Pat Example', also: ['Pat'], kind: 'person', summary: 's', body: 'b' }];
 
-  it('adds nothing to today\'s search, confirmed facts to the brief, and the page list to pages', () => {
-    expect(extraInstructions('search', { baseLength: 900, facts, projects, pages })).toBe('');
-    const brief = extraInstructions('brief', { baseLength: 900, facts, projects, pages });
-    expect(brief).toContain('A confirmed fact.');
-    expect(brief).not.toContain('An unconfirmed fact.');
-    expect(brief).toContain('alpha');
-    expect(extraInstructions('pages', { baseLength: 900, facts, projects, pages })).toContain('Pages: Pat Example.');
+  it('adds one thing at each step of the ladder', () => {
+    const text = Object.fromEntries((ARMS as string[]).map((arm) => [arm, extraInstructions(arm, { baseLength: 900, facts, projects, pages }) as string]));
+    expect(text.search).toBe('');
+    expect(text.brief).toContain('A confirmed fact.');
+    expect(text.brief).not.toContain('An unconfirmed fact.');
+    expect(text.brief).toContain('alpha');
+    expect(text.brief).not.toContain('look it up in NorthKeep first');
+    expect(text.nudge).toBe(`${text.nudge.split('\n')[0]}\n${text.brief}`);
+    expect(text.nudge).toContain('look it up in NorthKeep first');
+    expect(text.tidy).toBe(text.nudge);
+    expect(text.pages).toContain('page_get');
+    expect(text.pages).not.toContain('Pat Example');
+    expect(text['pages-index']).toContain('Pages: Pat Example.');
+  });
+
+  it('turns each line of a page into one ordinary memory led by the page name', () => {
+    expect(tidyMemories([{ name: 'Heron Cabin', body: '- Sleeps eight.\n- Insured with Alder Mutual.\n' }])).toEqual(['Heron Cabin: Sleeps eight.', 'Heron Cabin: Insured with Alder Mutual.']);
   });
 
   it('drops whole lines rather than exceed what the agent will show', () => {
@@ -147,5 +189,21 @@ describe('brain-bench seed', () => {
     expect(seeded.projects.length).toBe(6);
     expect(() => assertThrowawayHome(home)).not.toThrow();
     await expect(seedHome(home, now)).rejects.toThrow(/already exists/);
+  });
+
+  it('adds the cleaned-up facts as fresh memories for the cleanup design', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nk-bench-'));
+    dirs.push(dir);
+    const home = join(dir, 'home');
+    await seedHome(home, Date.now(), ['Heron Cabin: Sleeps eight.']);
+    process.env.NORTHKEEP_HOME = home;
+    // @ts-expect-error built output without a path mapping here
+    const core = await import('../../packages/core/dist/index.js');
+    const vault = core.Vault.open({ path: join(home, 'vault.nkv'), passphrase: 'brain-bench-throwaway', deviceSecret: core.loadDeviceSecret() });
+    const found = vault.retrieve('Heron Cabin sleeps', { skipProjectPaperwork: true });
+    vault.close();
+    const tidy = found.find((r: { entry: { content: string } }) => r.entry.content === 'Heron Cabin: Sleeps eight.');
+    expect(tidy?.entry.source).toBe('mcp:curator');
+    expect(Date.now() - Date.parse(tidy.entry.created_at)).toBeLessThan(2 * 86_400_000);
   });
 });
