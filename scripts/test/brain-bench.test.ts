@@ -109,6 +109,13 @@ describe('brain-bench grader', () => {
 });
 
 describe('brain-bench world', () => {
+  it('names the old value for every question about a fact that changed', () => {
+    const changed = (QUESTIONS as Question[]).filter((x) => x.cat === 'changed' || x.cat === 'own_stale');
+    for (const x of changed) expect(x.must_not.length, x.id).toBeGreaterThan(0);
+    expect(gradeAnswer(question('changed-03'), 'The provider is Pinecone Wireless.')).toEqual({ verdict: 'wrong', stale: true });
+    expect(gradeAnswer(question('changed-03'), 'Greenline Fiber, since May 2026. It was Pinecone Wireless before.')).toEqual({ verdict: 'correct', stale: true });
+  });
+
   it('has 100 questions with unique ids and a usable answer key', () => {
     const all = QUESTIONS as Question[];
     expect(all.length).toBe(100);

@@ -143,7 +143,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
     });
   }
 
-  const rows = Object.fromEntries(arms.map((arm) => [arm, jobs.filter((job) => job.arm === arm).map((job) => read(fileFor(arm, job.question, job.repeat)))]));
+  // The rules are re-applied on every report, so a corrected answer key reaches old transcripts too.
+  const regrade = (question, row) => (row.error ? row : { ...row, ...(({ verdict, stale }) => ({ rule_verdict: verdict, stale }))(gradeAnswer(question, row.answer)) });
+  const rows = Object.fromEntries(arms.map((arm) => [arm, jobs.filter((job) => job.arm === arm).map((job) => regrade(job.question, read(fileFor(arm, job.question, job.repeat))))]));
   const report = renderReport({ model, app, search, date: stamp.slice(0, 10), arms: rows });
   fs.writeFileSync(path.join(out, 'report.md'), `${report}\n`);
   console.log(`\n${report}\n\nReport: ${path.join(out, 'report.md')}\nTranscripts: ${out}/<design>/<question>.json`);
