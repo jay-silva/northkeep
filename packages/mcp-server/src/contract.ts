@@ -146,6 +146,10 @@ export const RELEASED_CONTRACT_RENDER_SHA256: ReadonlySet<string> = new Set([
   'c47a2d2a0e58c13e3da8b24b4d6061a09ec51453700af526f7cb397fcaf322c5',
   '56b4187493d51cf5eb847ff432ae6cdaf2839f35c437a8fcbc61f7171c1e74e6',
   '3ca8b5982763d2e33f150fd2ae8b48fea14246e5ef1a406cb8be4a021b13c692',
+  // ADR 0084 D1 reworded 2026-11-23: look in NorthKeep first, even when the app's own notes seem to answer.
+  '2b828f8b9a1a5fee48721cc6b57d658ab5b51ad59e7c83a60bfc1824a13c4477',
+  '0453915237e826a4f95391227ec74d4120bc9b831f2509645479c6270d6087e6',
+  '1ef3e7a5f74ad24a45ba40824f14dad47aeb495861606d1a92277ddcfa78b42f',
 ]);
 
 function classifyReplaced(existing: string, rendered: string): ReplacedContract {

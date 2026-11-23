@@ -104,3 +104,20 @@ Build recheck (2026-11-21, fresh eyes on the code): CLEARED WITH WOUNDS. No path
 - An agent edit keeps an `archive` marker, so a rewritten archive stays out of search.
 - An edit resets a row's age, so an agent's edit of an old note restarts the 30 days.
 - The verdict stays capped until D0 shows which apps pass the instruction.
+
+## D1 reworded: look first (2026-11-23)
+
+Jay, 2026-11-23: "Okay, the wording." The first paragraph of the instruction now reads:
+
+> NorthKeep is this user's own record of their life and work: the people, organizations, properties and projects in it, and how they like things done. Before you answer a question about this user, or about a person, organization, property or project in their life, search NorthKeep with memory_retrieve, even when your own notes or memory seem to answer it: they may be out of date, and NorthKeep is where the user corrects things across all of their AI apps. When the conversation names a project, read it with project_get. When the user tells you a durable new fact, or you find their record is missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.
+
+What changed from 0.29.0:
+- The trigger was "a person, organization or property you have no facts about yet". An agent that had its own, out-of-date note about the user had facts, so it did not look. The trigger is now any question about the user or the people, organizations, properties and projects in their life, with "even when your own notes or memory seem to answer it".
+- The two sentences "What you remember about this user from elsewhere is not their record. NorthKeep is, because the user keeps it across all of their AI apps and corrects it there." are folded into that sentence's reason.
+- Reading a named project with project_get is its own sentence. The save sentence and the milestone rule are unchanged.
+
+Why: the brain bench (PR 84), 100 questions on a fictional vault, Claude Code with Sonnet, word search. In one 200-session run the 0.29.0 wording scored 81 and this wording 87. The agent looked in NorthKeep in 90 sessions against 99, and confident wrong answers fell from 7 to 3. Seven answers became right and one became wrong; a split that uneven would come from two equal wordings about 7% of the time, so it is likely but not proven at this size. An earlier run, where the same idea was one sentence added after a brief, gave five newly right and none newly wrong. The reworded text cost about a sixth more tool calls (142 against 122).
+
+Not measured: any app other than Claude Code, and a real vault. Only Claude Code is known to show this text to its model (D0).
+
+The contract text changes with it, so three new render hashes are appended to `RELEASED_CONTRACT_RENDER_SHA256`. A test installs the 0.29.0 Claude file and checks it reads as stale, not edited, and is replaced without a backup.

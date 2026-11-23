@@ -16,10 +16,7 @@ import {
   renderContract,
   uninstallContract,
 } from '../src/contract.js';
-import {
-  PROJECT_BOOTSTRAP_INSTRUCTION,
-  PROJECT_STANDING_INSTRUCTION,
-} from '../src/project-recipe.js';
+import { FOUND_FIRST_INSTRUCTION, PROJECT_BOOTSTRAP_INSTRUCTION, PROJECT_STANDING_INSTRUCTION } from '../src/project-recipe.js';
 
 let dir: string;
 let prevClaudeRules: string | undefined;
@@ -448,6 +445,28 @@ describe('reinstall over an earlier release', () => {
     expect(contractStatus('claude', { path: file })).toEqual({ target: 'claude', path: file, status: 'stale' });
     expect(installContract('claude', { path: file })).toEqual({ target: 'claude', path: file, replaced: 'earlier-release' });
     expect(fs.readFileSync(file, 'utf8')).toBe(renderContract('claude'));
+  });
+
+  it('reports a copy installed by 0.29.0 as stale, not edited, and install replaces it without a backup', () => {
+    // 0.29.0's wording of the lookup paragraph, before it was reworded to say look first.
+    const paragraph029 =
+      "NorthKeep is this user's own record of their life and work: the people, organizations, properties and projects in it, " +
+      'and how they like things done. When the conversation names a person, organization or property you have no facts about yet, ' +
+      'search NorthKeep with memory_retrieve before you answer; when it names a project, read it with project_get. ' +
+      'What you remember about this user from elsewhere is not their record. NorthKeep is, because the user keeps it across ' +
+      'all of their AI apps and corrects it there. When the user tells you a durable new fact, or you find their record is ' +
+      'missing or wrong, save it to NorthKeep with memory_remember rather than to your own memory or notes files.';
+    const current = renderContract('claude');
+    expect(current).toContain(FOUND_FIRST_INSTRUCTION);
+    const from029 = current.replace(FOUND_FIRST_INSTRUCTION, paragraph029);
+    expect(createHash('sha256').update(from029, 'utf8').digest('hex')).toBe('c47a2d2a0e58c13e3da8b24b4d6061a09ec51453700af526f7cb397fcaf322c5');
+    const file = claudeFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, from029);
+    expect(contractStatus('claude', { path: file })).toEqual({ target: 'claude', path: file, status: 'stale' });
+    expect(installContract('claude', { path: file })).toEqual({ target: 'claude', path: file, replaced: 'earlier-release' });
+    expect(fs.readFileSync(file, 'utf8')).toBe(current);
+    expect(fs.readFileSync(file, 'utf8')).toContain('even when your own notes or memory seem to answer it');
   });
 
   it('records every current render, so the next release recognises this one', () => {

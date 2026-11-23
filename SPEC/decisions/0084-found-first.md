@@ -7,7 +7,7 @@ The relaunch test asks fresh agent sessions 25 questions without naming NorthKee
 
 ## Decision
 - D0: Before building, a live check records, for Claude, Grok Bot, Codex and Muse, whether each passes server instructions to its model. Apps that do not get D2.
-- D1: One wording, sent by both servers and placed in the contract text: a trigger (a named person, organization or property the agent has no facts about: `memory_retrieve`; a named project: `project_get`), that the agent's own memory is not the user's record, the reason, then the milestone rule. A test fails if any copy differs.
+- D1: One wording, sent by both servers and placed in the contract text: search with `memory_retrieve` before answering about the user or a person, organization, property or project in their life, even when the agent's own notes seem to answer (reworded 2026-11-23); read a named project with `project_get`; then the milestone rule. A test fails if any copy differs.
 - D2: One stable sentence for apps that ignore server instructions, behind a copy button once Jay approves its mock.
 - D3: `memory_retrieve` (device and connector) and the connector's `search` skip a live project document and any archive: a log archive (`isProjectLogArchive`) or a row NorthKeep marks `archive` (moved-out Decisions). Other project-scope memories stay searchable.
 - D4: A memory is confirmed when its metadata holds `confirmed: {by: "user", at}`. Only the app and CLI set it; confirming supersedes the memory with the same content plus the marker. An agent write that supersedes a confirmed memory drops the marker.
