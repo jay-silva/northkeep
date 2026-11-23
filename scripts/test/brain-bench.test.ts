@@ -261,7 +261,7 @@ describe('brain-bench ranking cases', () => {
   const rules = makeRules(searchRules) as Record<string, unknown>;
   const lost = (rule: string): string[] => (RANKING_CASES as { name: string }[]).filter((c) => answerRank(rules[rule], searchRules, c) === 0).map((c) => c.name);
 
-  it('the shipped rule loses the answer in five of the eleven hard cases', () => {
+  it('the shipped rule loses the answer in five of the twelve hard cases', () => {
     expect(lost('As shipped (0.29.0)')).toEqual([
       'the name is in every confirmed memory', 'the name is in a fifth of the memories', 'ten memories left after a scope filter',
       'nine confirmed memories share a street name', 'a nickname in a tenth of the memories',
@@ -274,16 +274,22 @@ describe('brain-bench ranking cases', () => {
   });
 
   it('each simpler rarity rule loses something the chosen one keeps', () => {
-    expect(lost('Bonuses multiply, equal weights')).toEqual(['ten memories left after a scope filter']);
+    const septic = 'a long confirmed answer against fresh notes that repeat the question';
+    expect(lost('Bonuses multiply, equal weights')).toEqual(['ten memories left after a scope filter', septic]);
     expect(lost('Rarity, prior of 10, absent words counted')).toEqual([
       'a 300-word answer and a query word no memory holds',
       'a 450-word answer, confirmed, and a query word no memory holds',
       'a 700-word answer, confirmed, and a query word no memory holds',
+      septic,
     ]);
   });
 
-  it('the ADR 0089 rule finds the answer in all eleven', () => {
-    expect((RANKING_CASES as unknown[]).length).toBe(11);
+  it('cutting long confirmed memories loses one to fresh notes that repeat the question', () => {
+    expect(lost('Rarity, long confirmed memories cut too')).toEqual(['a long confirmed answer against fresh notes that repeat the question']);
+  });
+
+  it('the ADR 0089 rule finds the answer in all twelve', () => {
+    expect((RANKING_CASES as unknown[]).length).toBe(12);
     expect(lost('ADR 0089: rank by rarity')).toEqual([]);
   });
 

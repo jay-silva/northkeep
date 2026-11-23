@@ -28,9 +28,10 @@ function shares(queryTerms, rows) {
  * The rarity family of rules. A query word weighs ln((N + prior + 0.5) / (n + 0.5)),
  * with N rows searched and n holding the word (equal weights when prior is null).
  * Recency, type and the confirmed boost multiply the match. `countAbsent` keeps a
- * word no row holds in the total; `cutMultiplies` applies the long-row cut as a factor.
+ * word no row holds in the total; `cutMultiplies` applies the long-row cut as a factor;
+ * `cutConfirmed` applies it to memories the user confirmed as well.
  */
-function rarity(core, { prior, slope, cap, cutMultiplies, countAbsent }) {
+function rarity(core, { prior, slope, cap, cutMultiplies, countAbsent, cutConfirmed = true }) {
   return (rows, q, now) => {
     const weight = new Map([...q].map((term) => {
       const holding = rows.filter((row) => row.terms.has(term)).length;
@@ -40,11 +41,12 @@ function rarity(core, { prior, slope, cap, cutMultiplies, countAbsent }) {
     return rows.flatMap((row) => {
       const hit = [...q].filter((term) => row.terms.has(term));
       if (hit.length === 0) return [];
-      const cut = Math.min(cap, slope * Math.log2(Math.max(1, row.terms.size / 64)));
+      const confirmed = core.isConfirmed(row.entry.metadata);
+      const cut = confirmed && !cutConfirmed ? 0 : Math.min(cap, slope * Math.log2(Math.max(1, row.terms.size / 64)));
       const share = hit.reduce((sum, term) => sum + weight.get(term), 0) / total;
       const overlap = cutMultiplies ? share * (1 - cut) : Math.max(0, share - cut);
       const recency = 0.3 * Math.exp(-Math.max(0, now - Date.parse(row.entry.created_at)) / DAY / 30);
-      const bonus = recency + (TYPE_PRIORITY[row.entry.type] ?? 0) + (core.isConfirmed(row.entry.metadata) ? core.CONFIRMED_BOOST : 0);
+      const bonus = recency + (TYPE_PRIORITY[row.entry.type] ?? 0) + (confirmed ? core.CONFIRMED_BOOST : 0);
       return [{ row, score: overlap * (1 + bonus) }];
     }).sort((a, b) => Number(core.isOldAgentNote(a.row.entry, now)) - Number(core.isOldAgentNote(b.row.entry, now)) || b.score - a.score);
   };
@@ -111,7 +113,8 @@ export function makeRules(core) {
     'Rarity, no prior': rarity(core, { prior: 0, slope: 0.1, cap: 0.3, cutMultiplies: false, countAbsent: true }),
     'Rarity, prior of 10, absent words counted': rarity(core, { prior: 10, slope: 0.15, cap: 0.5, cutMultiplies: false, countAbsent: true }),
     'Bonuses multiply, equal weights': rarity(core, { prior: null, slope: 0.1, cap: 0.3, cutMultiplies: false, countAbsent: true }),
-    'ADR 0089: rank by rarity': rarity(core, { prior: 10, slope: 0.15, cap: 0.5, cutMultiplies: true, countAbsent: false }),
+    'Rarity, long confirmed memories cut too': rarity(core, { prior: 10, slope: 0.15, cap: 0.5, cutMultiplies: true, countAbsent: false }),
+    'ADR 0089: rank by rarity': rarity(core, { prior: 10, slope: 0.15, cap: 0.5, cutMultiplies: true, countAbsent: false, cutConfirmed: false }),
   };
 }
 

@@ -44,6 +44,10 @@ export const RANKING_CASES = [
   longAnswerCase(300, false),
   longAnswerCase(450, true),
   longAnswerCase(700, true),
+  // A long memory the user confirmed over a year ago, against eight fresh AI notes that only repeat the question.
+  { name: 'a long confirmed answer against fresh notes that repeat the question', query: 'septic test pit results', want: 'passed at four feet',
+    memories: [{ content: `The septic test pit results: the pit passed at four feet. ${many(450, (i) => `xword${i}`).join(' ')}`, confirmed: true, at: '2025-10-19T12:00:00.000Z' },
+      ...many(8, (i) => ({ content: `User asked where the septic test pit results are, time ${i}`, type: 'episodic', at: '2026-11-18T12:00:00.000Z' })), ...filler(300)] },
 ];
 
 const longRow = many(400, (i) => `line ${i} about the harbor schedule, office supplies, staff names and directors meeting notes`).join('\n');
