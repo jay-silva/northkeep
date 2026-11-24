@@ -18,7 +18,15 @@ Today the connector keeps its own copy of the milestone rule (apps/connector-ser
 
 ## D2 the stable sentence
 
-> Before answering about a person, organization, property or project, check NorthKeep: it is my own record and outranks what you remember about me.
+> Before you answer a question about me, or about a person, organization, property or project in my life, search NorthKeep first, even when your own notes seem to answer. It is my own record and it outranks what you remember about me.
+
+Reworded and built on 2026-11-24. The first wording ("Before answering about a person, organization, property or project, check NorthKeep: it is my own record and outranks what you remember about me.") left out questions about the user and did not say the app's own notes may be wrong, the two things the D1 rewording added.
+
+The check D0 asked for was run on Jay's own account on 2026-11-24, as part of the 25-question rerun on 0.30.0. Claude searched NorthKeep unprompted in 19 of 25 chats and scored 24. Grok Bot never searched and scored 17, its baseline; with this sentence in its instructions it searched every time and scored 24. Muse answered from what it remembered of earlier searches and scored 13, its baseline; with the sentence it scored 21. Codex searched on about half the questions.
+
+Where it is shown (Jay approved the mock, "both is good", 2026-11-24):
+- The page an app opens when it connects, above the Allow button, because that page closes on Allow. As first built (PR 92) that page forbade every script (`default-src 'none'`), so the sentence selects whole on a tap (`user-select: all`) and the person copies it. The mock showed a Copy button there; a button needs a script, and loosening that page's policy was a separate decision, made the same day as ADR 0091.
+- The Cloud page in the Mac app, with a Copy button.
 
 ## D3 rows skipped by search
 
@@ -92,7 +100,7 @@ Full baseline (2026-11-21, provisional until Jay rules on his answer key): no ag
 What was built, and where it departs from the decisions above:
 - D0: Claude Code passes server instructions to its model (seen in a live session's own instructions). Codex could not be tested from the build session: its configured model is refused on Jay's ChatGPT account. claude.ai, Codex, Grok Bot and Muse wait for a run with Jay.
 - D1: `FOUND_FIRST_INSTRUCTION` in packages/mcp-server/src/project-recipe.ts, a copy in apps/connector-server/src/mcp.ts, a test that the copies and both handshakes match, and the contract gains the sentence (three new render hashes).
-- D2 is not built. The sentence is in KNOWN-LIMITS; the Connect help text and copy button wait for the mock.
+- D2 was built on 2026-11-24; see "D2 the stable sentence" above.
 - D3: `isProjectPaperwork` (core and connector copies) behind `skipProjectPaperwork`, which `memory_retrieve` and CLI search pass. Other callers, such as Converse, are unchanged. The archive marker needs a writer, so the CLI gains `mark-archive <id>`; the `project_update` option that moves Decisions out is not built yet.
 - D5 plus two additions the baseline asked for: a plain trailing "s" is folded ("dogs" finds "dog"), and a row with more than 64 distinct words loses up to 0.3 of keyword score. The long-row fixture fails without that cut. On the connector a word found only in a row's scope or type counts half.
 - D6 carries a second flag, `archive`, beside `confirmed`, so the connector skips marked archives too.

@@ -1,6 +1,6 @@
 # ADR 0084: Found first: agents told to check NorthKeep, search skips project paperwork, confirmed memories rank first
 
-Status: Accepted 2026-11-22 (Jay: "Passed."), shipped in 0.29.0 · Review 1: CLEARED WITH WOUNDS, fixed; recheck 2: CLEARED WITH WOUNDS · D8 added 2026-11-21; D1 reworded 2026-11-23, after 0.29.0 · D0 run for Claude Code only
+Status: Accepted 2026-11-22 (Jay: "Passed."), shipped in 0.29.0 · Review 1: CLEARED WITH WOUNDS, fixed; recheck 2: CLEARED WITH WOUNDS · D8 added 2026-11-21; D1 reworded 2026-11-23, after 0.29.0 · D0 run, D2 built 2026-11-24
 
 ## Context
 The relaunch test asks fresh agent sessions 25 questions without naming NorthKeep. The connect-time text is only the milestone rule, in two hand-kept copies; the contract installer writes a third. `memory_retrieve` ranks project documents and log archives beside facts. Nothing marks a memory the user confirmed. Stale agent session notes outranked facts.
@@ -8,7 +8,7 @@ The relaunch test asks fresh agent sessions 25 questions without naming NorthKee
 ## Decision
 - D0: Before building, a live check records, for Claude, Grok Bot, Codex and Muse, whether each passes server instructions to its model. Apps that do not get D2.
 - D1: One wording, sent by both servers and placed in the contract text: search with `memory_retrieve` before answering or acting on anything about the user or a person, organization, property or project in their life, even when the agent's own notes seem to answer; read a named project with `project_get`; then the milestone rule. A test fails if a copy differs.
-- D2: One stable sentence for apps that ignore server instructions, behind a copy button once Jay approves its mock.
+- D2: One stable sentence for apps ignoring server instructions, on the connect page and in the Mac app.
 - D3: `memory_retrieve` (device and connector) and the connector's `search` skip a live project document and any archive: a log archive (`isProjectLogArchive`) or a row NorthKeep marks `archive` (moved-out Decisions). Other project-scope memories stay searchable.
 - D4: A memory is confirmed when its metadata holds `confirmed: {by: "user", at}`. Only the app and CLI set it; confirming supersedes the memory with the same content plus the marker. An agent write that supersedes a confirmed memory drops the marker.
 - D5: A keyword match needs a word that is not a stopword, word-bounded on the connector; this gates admission and the boost. The boost only reorders (ADR 0090).

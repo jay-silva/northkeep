@@ -52,7 +52,7 @@ import { z } from 'zod';
 import { BASE_NEW, type ConnectorStorage, type SharedEntry } from './storage.js';
 import { projectScopeView, staleProjectRowIds } from './project-head.js';
 import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
-import { rankSharedEntries } from './search-rules.js';
+import { excerptFor, rankSharedEntries } from './search-rules.js';
 import { HOSTED_SECTION_TEXT_RULES, firstProjectTextError, isProjectStatusDone, projectStatusTooLongMessage, STATUS_TEXT_RULES } from './project-text.js';
 import {
   MILESTONES_HEADING,
@@ -97,6 +97,14 @@ function titleFor(entry: SharedEntry): string {
   const clipped =
     firstLine.length > SEARCH_TITLE_MAX ? `${firstLine.slice(0, SEARCH_TITLE_MAX - 1)}…` : firstLine;
   return clipped ? `[${entry.scope}] ${clipped}` : `[${entry.scope}] (shared memory)`;
+}
+
+/** One memory as a list line; a long one is cut, with the id that reads the rest. */
+function memoryLine(entry: SharedEntry, query: string): string {
+  const { text, cut } = excerptFor(entry.content, query);
+  return cut
+    ? `- [${entry.scope}] ${text} (part of a longer memory; read all of it with fetch, id ${entry.entryId})`
+    : `- [${entry.scope}] ${text}`;
 }
 
 /** A one-line snippet of the content, whitespace-collapsed and clipped. */
@@ -331,7 +339,7 @@ export function createMcpServer(
       title: 'Retrieve shared memories',
       annotations: CONNECTOR_TOOL_ANNOTATIONS.memory_retrieve,
       description:
-        'Search the memories the user has explicitly shared with this app and return the ones relevant to a query. Only shared scopes are visible; private memories are never returned.',
+        'Search the memories the user has explicitly shared with this app and return the ones relevant to a query. A long memory is shown in part, with an id: pass it to `fetch` to read all of it. Only shared scopes are visible; private memories are never returned.',
       inputSchema: { query: z.string().describe('What to search the shared memory for') },
     },
     async ({ query }) => {
@@ -356,7 +364,7 @@ export function createMcpServer(
       });
 
       const text = ranked.length
-        ? `Shared memories for "${query}":\n` + ranked.map((e) => `- [${e.scope}] ${e.content}`).join('\n')
+        ? `Shared memories for "${query}":\n` + ranked.map((e) => memoryLine(e, query ?? '')).join('\n')
         : `No shared memories matched "${query}".`;
       return { content: [{ type: 'text', text }] };
     },
@@ -391,7 +399,7 @@ export function createMcpServer(
       });
 
       const text = all.length
-        ? 'Shared memories:\n' + all.map((e) => `- [${e.scope}] ${e.content}`).join('\n')
+        ? 'Shared memories:\n' + all.map((e) => memoryLine(e, '')).join('\n')
         : 'No shared memories yet.';
       return { content: [{ type: 'text', text }] };
     },
