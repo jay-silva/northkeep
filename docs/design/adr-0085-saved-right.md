@@ -71,3 +71,14 @@ Second recheck (2026-11-21, Jay asked for it): CLEARED WITH WOUNDS. The duplicat
 - "What leaves the machine" must add that the connector can read the replace queue's entry ids.
 - D4 must say whether the old row stays visible to cloud apps while its replace waits.
 - The stopword list must be named in code, with a test.
+
+## D3 and D4 revised (2026-11-24)
+Jay asked for milestone 3 to start and approved a third review ("Review 85"). The revision applies the fix recheck 2 proposed, with a measured threshold.
+
+The rule. A save is compared with live memories in its own scope, leaving out project documents, log archives and rows marked as archives, the same rows ADR 0084 D3 keeps out of search. Words are the search terms of ADR 0084 (`searchTerms`, with the named `SEARCH_STOPWORDS` list, which already has a test), weighed by rarity among those rows as in ADR 0090, except that a word no other memory holds counts at the highest weight, because in a save the new word is the new information. The save is held when it shares at least two words with a memory and the shared words carry at least 60% of the weight of either the new save or that memory. Either direction counts because an update is often longer than the fact it replaces: "the accountant is now Priya Shah at Shah & Lowe, since August" covers most of "the accountant is Leo Marsh", not the reverse.
+
+Measured on the brain bench's fictional vault (130 memories, each tried as a new save against the others in its scope, one direction): any two shared words holds most saves, as recheck 2 found. At 40% of weight, 38 are held; at 50%, 27; at 60%, 22; at 70%, 17. At 60% the real updates in that vault are all held: a rent change, a deposit change, a new accountant, a changed holiday roster, a dog recorded twice, a job recorded twice. So are some that are not updates: two boats on the same route, two companies that share a first name, a nine-item series of near-identical build notes, and a short fact whose words all sit inside a longer unrelated one. A hold costs the agent one more call with `distinct: true`; a missed hold leaves two copies. The threshold favours the hold. It is a constant in one place and is expected to move once real saves are seen.
+
+Not solved by words: an update that shares no distinctive word with the fact it replaces. Milestone 5 is the backstop, as before.
+
+D4 now says the old memory stays visible to cloud apps, beside the new one, while a cloud replace waits for the user. "What leaves the machine" now says the connector can read the replace queue's entry ids.
