@@ -247,7 +247,7 @@ NorthKeep cannot hear the user. It hears an agent saying what the user said. The
 
 This design reads the two together: a chat answer to a question NorthKeep asked **is** the owner's confirmation at level 1, for everyday facts, with guard 6. "O2, no" keeps governing replaces a cloud app proposes on its own, which stay level 2.
 
-That reading is mine, not Jay's. It is decision 1 below. If he says no, the fallback is already in the design: every cloud answer becomes `answered_waiting`, nothing else changes, and cloud users settle nothing until a device or the phone confirms.
+Jay agreed to that reading on 2026-11-24 ("Chat counts", and "Yes" in the project chat). It was decision 1 below. Had he said no, the fallback was already in the design: every cloud answer becomes `answered_waiting`, nothing else changes, and cloud users settle nothing until a device or the phone confirms.
 
 ## 5. The ration
 
@@ -369,7 +369,7 @@ I did not run any of this. None of it can run until the code exists.
 
 ## Decisions for the owner
 
-1. **Does a chat answer through a cloud app count as your confirmation for everyday facts?** Recommended yes, with the guard that a cloud app cannot settle in favour of its own memory. It narrows "O2, no" to replaces a cloud app proposes itself. If no, cloud answers all wait for a device or the phone.
+1. Answered 2026-11-24, Jay: "Chat counts." **Does a chat answer through a cloud app count as your confirmation for everyday facts?** Recommended yes, with the guard that a cloud app cannot settle in favour of its own memory. It narrows "O2, no" to replaces a cloud app proposes itself. If no, cloud answers all wait for a device or the phone.
 2. **Second-level confirmations on the phone.** The rule says "as a phone notification". The phone app has no notifications. Sending one needs a new networked service, which invariant 7 reserves for you, and its own decision record. Choose: (a) milestone 5 ships level 2 through the CLI and Mac app, with the agent telling you a confirmation is waiting, and the notification follows in its own ADR; or (b) milestone 5 waits for the notification.
 3. **The sensitive word list.** The proposed list is in section 4. You know which words mark ownership, money and legal facts in your world better than a list I made up.
 4. **How far a level 1 confirmation lifts a memory in search.** Level 2 multiplies by 1.5 on the connector and adds 0.5 on the device today. Proposed: half of that for level 1. No rule states a number.

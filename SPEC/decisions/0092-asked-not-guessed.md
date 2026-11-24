@@ -1,6 +1,6 @@
 # ADR 0092: Asked, not guessed: conflicts noticed, asked through the agent in use, answered at two levels
 
-Status: Proposed 2026-11-24 (milestone 5) · Draft: not reviewed, not accepted · D5 needs Jay's word
+Status: Proposed 2026-11-24 (milestone 5) · Draft: not reviewed, not accepted · D5: Jay, 2026-11-24, "Chat counts"
 
 ## Context
 Two live memories can state different facts, and search serves both. The plan: the agent asks once at the moment of use, cleanup comes through that agent under a daily ration, NorthKeep never picks. Grok Bot and Muse ignore connect-time instructions and reach NorthKeep only through the Cloud connector. Jay rarely opens the Mac app; no local model.

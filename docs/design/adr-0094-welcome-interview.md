@@ -176,7 +176,7 @@ Pass: all twelve as stated. The 25 questions are then rerun, as after every mile
 ## Decisions for the owner
 
 1. **Six questions per chunk, seven chunks.** Proposed as "five minutes". Yours to set.
-2. **Everyday interview answers count as confirmed in conversation**, set by this tool alone, changing ADR 0084 D4. Yes or no. If no, every answer waits for you in the app.
+2. Answered 2026-11-24, Jay: "Chat counts." **Everyday interview answers count as confirmed in conversation**, set by this tool alone, changing ADR 0084 D4. Yes or no. If no, every answer waits for you in the app.
 3. **Do conversation-confirmed answers rank the same as ones confirmed in NorthKeep?** Proposed: yes for now.
 4. **Which topics are second level in the interview.** Proposed: who owns a company or property, money and accounts, anything legal. Everything else is everyday.
 5. **The interview's scope and sharing it at setup.** Proposed: `personal`, shared after one loud confirmation in setup. The alternative is a new scope just for the basics.
