@@ -1480,6 +1480,19 @@
         </div>
       </div>
       <div class="err" id="sharePairErr"></div>
+      <div style="margin-top:16px;border-top:1px solid var(--line);padding-top:14px">
+        <p style="margin:0 0 4px;font-weight:600">Tell the app to look here first</p>
+        <p class="muted" style="margin:0 0 8px;font-size:13px">Some apps do not look in NorthKeep unless you ask them to. Paste this into the app's instructions once.</p>
+        <p id="lookFirstSentence" style="margin:0 0 8px;font-size:13px;background:var(--bg);border:1px solid var(--line);border-radius:8px;padding:10px 12px">Before you answer a question about me, or about a person, organization, property or project in my life, search NorthKeep first, even when your own notes seem to answer. It is my own record and it outranks what you remember about me.</p>
+        <div class="row" style="align-items:center">
+          <button class="btn" id="lookFirstCopy" type="button" style="min-height:44px">Copy sentence</button>
+        </div>
+        <ul class="muted" style="font-size:13px;margin:10px 0 0;padding-left:20px;line-height:1.6">
+          <li><strong>Needs it:</strong> Grok Bot, Muse.</li>
+          <li><strong>Not needed:</strong> Claude.</li>
+          <li><strong>Not yet checked:</strong> ChatGPT, Cursor, Gemini. Pasting it does no harm.</li>
+        </ul>
+      </div>
     </div>
     <h3 class="sect">Sync now</h3>
     <div class="card">
@@ -7871,6 +7884,7 @@
   }
   $('shareCopyUrl').addEventListener('click', (e) => copyToClipboard($('shareMcpUrl').textContent, e.currentTarget));
   $('shareCopyCode').addEventListener('click', (e) => copyToClipboard($('sharePairCode').textContent, e.currentTarget));
+  $('lookFirstCopy').addEventListener('click', (e) => copyToClipboard($('lookFirstSentence').textContent, e.currentTarget));
 
   function startPairCountdown(seconds) {
     if (sharePairTimer) clearInterval(sharePairTimer);
