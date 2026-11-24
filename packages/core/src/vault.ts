@@ -84,7 +84,7 @@ import {
   type SemanticRetrieval,
   type VaultExport,
 } from './types.js';
-import { ARCHIVE_METADATA_KEY, CONFIRMED_BOOST, CONFIRMED_METADATA_KEY, isConfirmed, isMarkedArchive, isProjectPaperwork, lengthPenalty, searchTerms, compareSearchResults } from './search-rules.js';
+import { ARCHIVE_METADATA_KEY, CONFIRMED_BOOST, CONFIRMED_METADATA_KEY, isConfirmed, isMarkedArchive, isProjectPaperwork, lengthPenalty, searchTerms, compareSearchResults, weightedMatch, wordWeights } from './search-rules.js';
 
 /**
  * Vault file format (.nkv) — see SPEC/security-model.md and ADR 0001:
@@ -1722,20 +1722,14 @@ export class Vault {
     const limit = options.limit ?? 8;
     const queryTerms = searchTerms(query);
     if (queryTerms.size === 0) return [];
-    const candidates = this.searchCandidates(options);
+    const rows = this.searchCandidates(options).map((entry) => ({ entry, entryTerms: searchTerms(entry.content) }));
+    const weights = wordWeights(queryTerms, rows.map((row) => row.entryTerms));
     const now = Date.now();
     const scored: ScoredEntry[] = [];
-    for (const entry of candidates) {
-      const entryTerms = searchTerms(entry.content);
-      let matched = 0;
-      for (const term of queryTerms) if (entryTerms.has(term)) matched += 1;
-      if (matched === 0) continue;
-      const overlap = Math.max(0, matched / queryTerms.size - lengthPenalty(entryTerms.size));
-      const ageDays = Math.max(0, now - Date.parse(entry.created_at)) / 86_400_000;
-      const recency = 0.3 * Math.exp(-ageDays / 30);
-      const typeBoost = TYPE_PRIORITY[entry.type] ?? 0;
-      const confirmed = isConfirmed(entry.metadata) ? CONFIRMED_BOOST : 0;
-      scored.push({ entry, score: overlap + recency + typeBoost + confirmed });
+    for (const { entry, entryTerms } of rows) {
+      const match = keywordMatch(weights, entry, entryTerms);
+      if (match === 0) continue;
+      scored.push({ entry, score: match * bonusFactor(entry, now) });
     }
     scored.sort((a, b) => compareSearchResults(a, b, now));
     return scored.slice(0, limit);
@@ -1816,11 +1810,12 @@ export class Vault {
     options: RetrieveOptions,
   ): Promise<ScoredEntry[]> {
     const limit = options.limit ?? 8;
-    const candidates = this.searchCandidates(options);
+    const rows = this.searchCandidates(options).map((entry) => ({ entry, entryTerms: searchTerms(entry.content) }));
+    const weights = wordWeights(queryTerms, rows.map((row) => row.entryTerms));
     const now = Date.now();
     const dim = queryVec.length;
     const scored: ScoredEntry[] = [];
-    for (const entry of candidates) {
+    for (const { entry, entryTerms } of rows) {
       let vec = this.getCachedEmbedding(entry.id, embedder.model, dim);
       if (vec === null) {
         const raw = await embedder.embed(entry.content);
@@ -1828,22 +1823,14 @@ export class Vault {
         this.putCachedEmbedding(entry.id, embedder.model, vec);
       }
       const sem = Math.max(0, cosineSimilarity(queryVec, vec));
-      // Keyword component: identical formula to retrieve(), but overlap may be 0
+      // Keyword component: the same match as retrieve(), which may be 0 here
       // (a purely-semantic hit like "car" ~ "vehicle" contributes via `sem`).
-      const entryTerms = searchTerms(entry.content);
-      let matched = 0;
-      for (const term of queryTerms) if (entryTerms.has(term)) matched += 1;
-      const overlap = matched === 0 ? 0 : Math.max(0, matched / queryTerms.size - lengthPenalty(entryTerms.size));
+      const match = keywordMatch(weights, entry, entryTerms);
       // Relevance gate: keep an entry only if it shares a keyword OR is
       // genuinely close in meaning, so a query that matches nothing doesn't
       // drag in unrelated filler.
-      if (matched === 0 && sem < SEMANTIC_FLOOR) continue;
-      const ageDays = Math.max(0, now - Date.parse(entry.created_at)) / 86_400_000;
-      const recency = 0.3 * Math.exp(-ageDays / 30);
-      const typeBoost = TYPE_PRIORITY[entry.type] ?? 0;
-      const confirmed = isConfirmed(entry.metadata) ? CONFIRMED_BOOST : 0;
-      const score = SEMANTIC_WEIGHT * sem + overlap + recency + typeBoost + confirmed;
-      scored.push({ entry, score });
+      if (match === 0 && sem < SEMANTIC_FLOOR) continue;
+      scored.push({ entry, score: (SEMANTIC_WEIGHT * sem + match) * bonusFactor(entry, now) });
     }
     scored.sort((a, b) => compareSearchResults(a, b, now));
     return scored.slice(0, limit);
@@ -2226,6 +2213,26 @@ function isProvenanceOnlyMetadata(metadata: Record<string, unknown>): boolean {
 
 function isStringArray(value: unknown): value is string[] {
   return Array.isArray(value) && value.every((item) => typeof item === 'string');
+}
+
+/**
+ * ADR 0090 D3: a confirmed memory is not marked down for length. Cut, it lost
+ * half its confirmed boost too and fell behind fresh notes that only repeated
+ * the question.
+ */
+function keywordMatch(weights: ReadonlyMap<string, number>, entry: MemoryEntry, entryTerms: ReadonlySet<string>): number {
+  const share = weightedMatch(weights, entryTerms);
+  return isConfirmed(entry.metadata) ? share : share * (1 - lengthPenalty(entryTerms.size));
+}
+
+/**
+ * ADR 0090 D2: recency, type and the confirmed boost multiply the match. Added
+ * to it, they outweighed it, and any row that touched the query could win.
+ */
+function bonusFactor(entry: MemoryEntry, now: number): number {
+  const ageDays = Math.max(0, now - Date.parse(entry.created_at)) / 86_400_000;
+  const recency = 0.3 * Math.exp(-ageDays / 30);
+  return 1 + recency + (TYPE_PRIORITY[entry.type] ?? 0) + (isConfirmed(entry.metadata) ? CONFIRMED_BOOST : 0);
 }
 
 const TYPE_PRIORITY: Record<string, number> = {

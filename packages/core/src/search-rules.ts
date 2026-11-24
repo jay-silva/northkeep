@@ -34,8 +34,35 @@ export function searchTerms(text: string): Set<string> {
 }
 
 /**
- * A long row matches many query words by sheer size, so its keyword score is
- * cut by up to 0.3 once it holds more than 64 distinct words.
+ * ADR 0090 D1. Counting every query word the same let a row that shared only
+ * the user's name outrank the answer. The 10 keeps a tiny vault from calling
+ * a word rare on two rows' evidence.
+ */
+export function wordWeights(queryTerms: ReadonlySet<string>, rows: ReadonlyArray<ReadonlySet<string>>): Map<string, number> {
+  const weights = new Map<string, number>();
+  for (const term of queryTerms) {
+    let holding = 0;
+    for (const row of rows) if (row.has(term)) holding += 1;
+    weights.set(term, holding === 0 ? 0 : Math.log((rows.length + 10.5) / (holding + 0.5)));
+  }
+  return weights;
+}
+
+/** Zero exactly when the row holds none of the query's words, so it doubles as the admission test. */
+export function weightedMatch(weights: ReadonlyMap<string, number>, rowTerms: ReadonlySet<string>): number {
+  let matched = 0;
+  let total = 0;
+  for (const [term, weight] of weights) {
+    total += weight;
+    if (rowTerms.has(term)) matched += weight;
+  }
+  return total === 0 ? 0 : matched / total;
+}
+
+/**
+ * A long row matches many query words by sheer size. The share taken off is
+ * capped at 30%: at half, a long memory that held every word of the question
+ * fell behind short ones holding one (ADR 0090 D3).
  */
 export function lengthPenalty(distinctWords: number): number {
   return Math.min(0.3, 0.1 * Math.log2(Math.max(1, distinctWords / 64)));

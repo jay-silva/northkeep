@@ -11,23 +11,23 @@ The relaunch test asks fresh agent sessions 25 questions without naming NorthKee
 - D2: One stable sentence for apps that ignore server instructions, behind a copy button once Jay approves its mock.
 - D3: `memory_retrieve` (device and connector) and the connector's `search` skip a live project document and any archive: a log archive (`isProjectLogArchive`) or a row NorthKeep marks `archive` (moved-out Decisions). Other project-scope memories stay searchable.
 - D4: A memory is confirmed when its metadata holds `confirmed: {by: "user", at}`. Only the app and CLI set it; confirming supersedes the memory with the same content plus the marker. An agent write that supersedes a confirmed memory drops the marker.
-- D5: A keyword match needs a word that is not a stopword, word-bounded on the connector; this gates admission and the boost. The boost only reorders.
+- D5: A keyword match needs a word that is not a stopword, word-bounded on the connector; this gates admission and the boost. The boost only reorders (ADR 0090).
 - D6: Pushes carry `confirmed` and `archive` flags inside the encrypted row. The connector deploys before clients send it.
 - D7: CLI `northkeep confirm <id>` and `remember --confirmed`, as Jay rarely opens the app.
 - D8: An unconfirmed episodic memory an AI app wrote over 30 days ago ranks after every other match (Jay, 2026-11-21). The connector cannot see who wrote a row, so it does not apply this.
 
 ## Consequences
-- Easier: one wording; confirmed facts outrank guesses.
+- Easier: one wording; confirmed facts outrank equal guesses.
 - Harder: a confirm writes a row.
 - Committed to: KNOWN-LIMITS says the instruction is advisory, a shell-capable agent can run `confirm`, and which apps pass instructions.
 
 ## Rejected
 - Excluding all `project:*` scopes: drops facts agents need.
-- A mutable confirmed column: only bookkeeping may change after creation.
-- Letting agents confirm: an agent could promote its own memories.
+- A mutable confirmed column: only bookkeeping changes after creation.
+- Letting agents confirm: an agent could promote its own.
 
 ## What leaves the machine
-To each connected app: the instruction text. To the connector, shared scopes only: two flags per row (confirmed, archive) inside the ciphertext.
+To each connected app: the instruction. To the connector, shared scopes only: two flags per row (confirmed, archive) inside the ciphertext.
 
 ## Links
 Design and review log: docs/design/adr-0084-found-first.md · Extends: ADRs 0039, 0067
