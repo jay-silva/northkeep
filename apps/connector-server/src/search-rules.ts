@@ -109,3 +109,34 @@ export function rankSharedEntries<T extends { type: string; scope: string; conte
     .slice(0, limit)
     .map((row) => row.entry);
 }
+
+export const EXCERPT_OVER = 500;
+const EXCERPT_LENGTH = 400;
+
+/**
+ * Long session notes filled a cloud app's context: one search returned
+ * twenty memories, several of them pages long. A long memory is cut to the
+ * stretch holding the most query words; `fetch` still returns all of it.
+ */
+export function excerptFor(content: string, query: string): { text: string; cut: boolean } {
+  const flat = content.replace(/\s+/g, ' ').trim();
+  if (flat.length <= EXCERPT_OVER) return { text: content, cut: false };
+  const wanted = searchTerms(query);
+  const words = [...flat.matchAll(/\S+/g)].map((m) => ({ at: m.index, end: m.index + m[0].length, terms: searchTerms(m[0]) }));
+  let best = 0;
+  let bestHits = 0;
+  if (wanted.size > 0) {
+    for (let i = 0; i < words.length; i += 1) {
+      const hits = new Set<string>();
+      for (let j = i; j < words.length && words[j].end - words[i].at <= EXCERPT_LENGTH; j += 1) {
+        for (const term of words[j].terms) if (wanted.has(term)) hits.add(term);
+      }
+      // The latest such start, so the excerpt opens on the matching words, not 400 characters before them.
+      if (hits.size > 0 && hits.size >= bestHits) { bestHits = hits.size; best = i; }
+    }
+  }
+  const from = words[best].at;
+  let to = from;
+  for (let j = best; j < words.length && words[j].end - from <= EXCERPT_LENGTH; j += 1) to = words[j].end;
+  return { text: `${from > 0 ? '… ' : ''}${flat.slice(from, to)}${to < flat.length ? ' …' : ''}`, cut: true };
+}
