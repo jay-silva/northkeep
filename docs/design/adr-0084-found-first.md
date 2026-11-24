@@ -25,7 +25,7 @@ Reworded and built on 2026-11-24. The first wording ("Before answering about a p
 The check D0 asked for was run on Jay's own account on 2026-11-24, as part of the 25-question rerun on 0.30.0. Claude searched NorthKeep unprompted in 19 of 25 chats and scored 24. Grok Bot never searched and scored 17, its baseline; with this sentence in its instructions it searched every time and scored 24. Muse answered from what it remembered of earlier searches and scored 13, its baseline; with the sentence it scored 21. Codex searched on about half the questions.
 
 Where it is shown (Jay approved the mock, "both is good", 2026-11-24):
-- The page an app opens when it connects, above the Allow button, because that page closes on Allow. That page forbids scripts (`default-src 'none'`), and the build keeps it that way: the sentence selects whole on a tap (`user-select: all`) and the person copies it. The mock showed a Copy button there; a button needs a script, and loosening that page's policy is a separate decision.
+- The page an app opens when it connects, above the Allow button, because that page closes on Allow. That page forbids scripts (`default-src 'none'`), and the build keeps it that way: the sentence selects whole on a tap (`user-select: all`) and the person copies it. The mock showed a Copy button there; a button needs a script, and loosening that page's policy was a separate decision, made the same day as ADR 0091.
 - The Cloud page in the Mac app, with a Copy button.
 
 ## D3 rows skipped by search

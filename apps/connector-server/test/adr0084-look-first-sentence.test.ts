@@ -1,7 +1,8 @@
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { CONSENT_PAGE_HEADERS, LOOK_FIRST_SENTENCE, renderConsentPage } from '../src/consent.js';
+import { createHash } from 'node:crypto';
+import { CONSENT_COPY_SCRIPT, CONSENT_PAGE_HEADERS, LOOK_FIRST_SENTENCE, renderConsentPage } from '../src/consent.js';
 
 // ADR 0084 D2: the sentence a person pastes into an app that ignores NorthKeep's connect-time instruction.
 
@@ -16,10 +17,30 @@ describe('ADR 0084 D2: the look-first sentence', () => {
     expect(page).toContain('user-select:all');
   });
 
-  it('adds no script to the connect page, which still forbids them', () => {
-    expect(page).not.toMatch(/<script/i);
-    expect(CONSENT_PAGE_HEADERS['Content-Security-Policy']).toContain("default-src 'none'");
-    expect(CONSENT_PAGE_HEADERS['Content-Security-Policy']).not.toContain('script-src');
+  it('runs exactly one script, pinned by its hash, and nothing else may run (ADR 0091)', () => {
+    const scripts = [...page.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
+    expect(scripts).toEqual([CONSENT_COPY_SCRIPT]);
+    expect(page).not.toMatch(/\son[a-z]+=/i);
+    const hash = createHash('sha256').update(CONSENT_COPY_SCRIPT, 'utf8').digest('base64');
+    const csp = CONSENT_PAGE_HEADERS['Content-Security-Policy'];
+    expect(csp).toBe(`default-src 'none'; style-src 'unsafe-inline'; script-src 'sha256-${hash}'; frame-ancestors 'none'; base-uri 'none'`);
+    expect(csp).not.toMatch(/unsafe-eval|unsafe-hashes|script-src[^;]*unsafe-inline|script-src[^;]*https?:/);
+  });
+
+  it('the script reads no form field and makes no request', () => {
+    expect(CONSENT_COPY_SCRIPT).not.toMatch(/pairing|fetch|XMLHttpRequest|sendBeacon|WebSocket|location|cookie|innerHTML|eval|import|src\s*=|\.value/);
+    expect(CONSENT_COPY_SCRIPT).not.toContain('</');
+  });
+
+  it('a script smuggled in through the app name is shown as text, not run', () => {
+    const hostile = renderConsentPage({ clientId: 'c', clientName: '<script>alert(1)</script>', redirectUri: 'https://example.com/cb', codeChallenge: 'c', state: 's', scope: 'memory' } as never);
+    expect([...hostile.matchAll(/<script>/g)]).toHaveLength(1);
+    expect(hostile).toContain('&lt;script&gt;alert(1)&lt;/script&gt;');
+  });
+
+  it('the copy button stays hidden until the script runs, and the sentence still selects on a tap', () => {
+    expect(page).toMatch(/<button type="button" id="nk-copy" hidden/);
+    expect(page).toContain('user-select:all');
   });
 
   it('is the same sentence in the Mac app, the known-limits file and the design record', () => {
