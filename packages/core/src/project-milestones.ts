@@ -329,7 +329,7 @@ export function recordAgentPass(current: MilestonePlan, id: string, savedAt: str
     case 'plan': {
       const open = currentMilestone(current);
       if (open === null) throw new MilestoneError('Every milestone in this project has already passed.');
-      if (open.id !== id) throw new MilestoneError(`Only the current milestone, ${open.id}, can be reported passed. Report a milestone passed only when the user says its acceptance test passed.`);
+      if (open.id !== id) throw new MilestoneError(`Only the current milestone, ${open.id}, can be reported passed, and only after its acceptance test passed.`);
       const passed: PassedMilestone = { id: open.id, title: open.title, test: open.test, state: 'passed', on: passDate(savedAt), by: 'agent' };
       const items = current.items.map((item) => (item.id === open.id ? passed : item));
       assertPlanFits(items);
@@ -441,7 +441,7 @@ function assertSectionKeepsPasses(before: string | null, after: string, allowedP
   }
   for (const item of now.values()) {
     if (allowedPass === undefined || allowedPass.by !== 'agent' || item.id !== allowedPass.id || formatMilestone(item) !== formatMilestone(allowedPass)) {
-      throw new MilestoneError(`An AI app cannot mark ${item.id} passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after the user says its test passed.`);
+      throw new MilestoneError(`An AI app cannot mark ${item.id} passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after its acceptance test passed.`);
     }
   }
   const order = [...kept.map((item) => item.id), ...now.keys()];

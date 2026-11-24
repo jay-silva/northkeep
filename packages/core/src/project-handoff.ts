@@ -21,6 +21,7 @@ import {
   MILESTONES_HEADING,
   MilestoneError,
   formatMilestones,
+  looksLikePass,
   parseMilestones,
   recordAgentPass,
   replacePlan,
@@ -56,6 +57,8 @@ export const PROJECT_HANDOFF_METADATA_VERSION = 1;
 export const PROJECT_HISTORY_LIMIT = 20;
 export const PROJECT_FILE_LIMIT = 40;
 export const PROJECT_FIELD_MAX_CHARS = PROJECT_DOC_MAX_CHARS;
+/** ADR 0089: where an agent saved what it saw when it ran the acceptance test itself. */
+export const PROJECT_EVIDENCE_MAX_CHARS = 300;
 
 export type ProjectHandoffMode = 'checkpoint' | 'wrap';
 export type ProjectFileAccess = 'reported_available' | 'unavailable' | 'unverified';
@@ -117,6 +120,8 @@ export interface ProjectCheckpointRequest {
   writer?:ProjectWriter;
   /** ADR 0065: report the current milestone passed; stamped (agent). */
   milestone_passed?:string;
+  /** ADR 0089: only with milestone_passed; appended to the Log entry. */
+  evidence?:string;
 }
 /** ADR 0063: whole-text write of a project head, bound to the head the caller read (null creates). */
 export interface ProjectReplaceRequest { project:string; expected_revision:string|null; content:string; source:string; metadata?:Record<string,unknown>; writer?:ProjectWriter }
@@ -180,6 +185,16 @@ export function projectTextProblem(value:string, field:string, allowEmpty:boolea
   if (!allowEmpty && value.trim().length===0) return `${field} must not be empty.`;
   if (value.length>0 && value.trim().length===0) return `${field} cannot contain only whitespace; send an empty string to clear it.`;
   return null;
+}
+/** ADR 0089: evidence is one line and only travels with milestone_passed. It gets its own Log line, so it never meets text in completed. */
+export function projectEvidenceProblem(request:{evidence?:unknown;milestone_passed?:unknown}):string|null {
+  const evidence=request.evidence; if(evidence===undefined)return null;
+  if(request.milestone_passed===undefined)return 'evidence goes with milestone_passed: send both, or leave evidence out.';
+  if(typeof evidence!=='string')return 'evidence must be a string.';
+  if(evidence.length>PROJECT_EVIDENCE_MAX_CHARS)return `evidence is ${evidence.length} characters; the limit is ${PROJECT_EVIDENCE_MAX_CHARS}.`;
+  if(unsafeWriterText(evidence))return 'evidence must be one line of plain text, without control or invisible formatting characters.';
+  if(looksLikePass(evidence))return 'evidence cannot contain a checkbox, a "passed <date>" or an "(agent)" stamp, which would read as a milestone line; leave that part out.';
+  return projectTextProblem(evidence,'evidence',false);
 }
 export function assertProjectText(value:string, field:string, allowEmpty:boolean):void {
   const problem=projectTextProblem(value,field,allowEmpty); if(problem!==null) fail(problem);

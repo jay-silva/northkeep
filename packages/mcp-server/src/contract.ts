@@ -150,6 +150,10 @@ export const RELEASED_CONTRACT_RENDER_SHA256: ReadonlySet<string> = new Set([
   '1d2690702411562d92c8062f9876e131d5a4d2469263791f06f787884b3b2c58',
   '015824c70808891ab9729d987e6f2ce01c5c6b7223131dbe89b7633f543c08fb',
   '061f7639d9fb61d16fe8bb980849cc7b8794a1e9930ad5524abafc9f23eef747',
+  // ADR 0089: an agent may report a pass after running the test itself, with evidence.
+  '639c7a6f933cca0480882364c819d88ff07b0905bbad6d15700966bf9823a9d0',
+  'e3fc82603cb21967d047831eba9ac7de20ef91bf51573acf3a61b16e966aac0f',
+  '9226f0fa596affe0743a5da8deaa4ce77623db5c99ec1876da5d5cea57d0ccfe',
 ]);
 
 function classifyReplaced(existing: string, rendered: string): ReplacedContract {

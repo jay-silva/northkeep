@@ -23,7 +23,7 @@ Open **K2 test project**. Between the summary and "Decisions and open questions"
 
 - "Milestones" and "2 of 4 passed".
 - M1 with a solid check: "Passed Oct 1 · you confirmed".
-- M2 with an outlined check: "agent says you confirmed", and a **Confirm** button.
+- M2 with an outlined check: "reported by an AI app", and a **Confirm** button.
 - M3 marked as current, its test shown, and a **Mark passed** button.
 
 ## 3. Mark passed

@@ -58,7 +58,7 @@ describe('the agent write rule inside the vault', () => {
   it('replaceProjectContent: an agent create carrying a pass is refused and nothing is written', () => {
     const v = open();
     const doc = `## Current Status\n\nCloud.\n\n## Milestones\n\n${PASSED}`;
-    expect(() => v.replaceProjectContent({ project: 'held', expected_revision: null, content: doc, source: 'connector:test' }, AGENT)).toThrowError(expect.objectContaining({ code: 'invalid_request', message: 'An AI app cannot mark M1 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after the user says its test passed.' }));
+    expect(() => v.replaceProjectContent({ project: 'held', expected_revision: null, content: doc, source: 'connector:test' }, AGENT)).toThrowError(expect.objectContaining({ code: 'invalid_request', message: 'An AI app cannot mark M1 passed this way. Report the current milestone passed with milestone_passed at a checkpoint or wrap, after its acceptance test passed.' }));
     expect(v.list({ scope: 'project:held' })).toEqual([]);
     expect(v.replaceProjectContent({ project: 'held', expected_revision: null, content: doc, source: 'take-theirs' }, OWNER).milestones.kind).toBe('plan');
     v.close();

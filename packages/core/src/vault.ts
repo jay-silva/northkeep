@@ -44,6 +44,7 @@ import {
   projectDocProblem,
   writeActor,
   projectProvenanceBlock,
+  projectEvidenceProblem,
   projectTextProblem,
   readProjectHandoffMetadata,
   readProjectOperations,
@@ -1027,6 +1028,8 @@ export class Vault {
     if(request.writer!==undefined)validateProjectWriter(request.writer);
     const completedProblem=projectTextProblem(request.completed,'completed',false);
     if(completedProblem!==null)throw new ProjectHandoffError('invalid_request',completedProblem);
+    const evidenceProblem=projectEvidenceProblem(request);
+    if(evidenceProblem!==null)throw new ProjectHandoffError('invalid_request',evidenceProblem);
     const logical = {
       vault_id: request.vault_id, project: request.project, mode: request.mode,
       expected_revision: request.expected_revision, status: request.status, completed: request.completed,
@@ -1036,10 +1039,11 @@ export class Vault {
       ...(request.agent_detail !== undefined ? { agent_detail: request.agent_detail } : {}),
       ...(request.files !== undefined ? { files: request.files } : {}),
       ...(request.milestone_passed !== undefined ? { milestone_passed: request.milestone_passed } : {}),
+      ...(request.evidence !== undefined ? { evidence: request.evidence } : {}),
     };
     const fingerprint = blake2bHex(exactCanonicalJson(logical), this.platform.crypto);
     // draft:false is derived from the mode, so replay rebuilds the same content.
-    const update:ProjectUpdateRequest={project:request.project,expected_revision:request.expected_revision,status:request.status,next_actions:request.next_actions,log_entry:`${request.mode==='checkpoint'?'Checkpoint':'Wrap up'}: ${request.completed}`,...(request.decision!==undefined?{decision:request.decision}:{}),...(request.open_questions!==undefined?{open_questions:request.open_questions}:{}),...(request.agent_detail!==undefined?{agent_detail:request.agent_detail}:{}),...(request.files!==undefined?{files:request.files}:{}),...(request.mode==='wrap'?{draft:false}:{}),...(request.writer!==undefined?{writer:request.writer}:{}),...(request.milestone_passed!==undefined?{milestone_passed:request.milestone_passed}:{})};
+    const update:ProjectUpdateRequest={project:request.project,expected_revision:request.expected_revision,status:request.status,next_actions:request.next_actions,log_entry:`${request.mode==='checkpoint'?'Checkpoint':'Wrap up'}: ${request.completed}${request.evidence!==undefined?`\n  Evidence for ${request.milestone_passed}: ${request.evidence}`:''}`,...(request.decision!==undefined?{decision:request.decision}:{}),...(request.open_questions!==undefined?{open_questions:request.open_questions}:{}),...(request.agent_detail!==undefined?{agent_detail:request.agent_detail}:{}),...(request.files!==undefined?{files:request.files}:{}),...(request.mode==='wrap'?{draft:false}:{}),...(request.writer!==undefined?{writer:request.writer}:{}),...(request.milestone_passed!==undefined?{milestone_passed:request.milestone_passed}:{})};
     const matches: Array<{entry:MemoryEntry;meta:ProjectHandoffMetadata}> = []; const copied:Array<{entry:MemoryEntry;raw:Record<string,unknown>}>=[];
     const ledgerHits:Array<{scope:string;fingerprint:string}>=[]; let malformedLedger=false;
     for (const entry of this.list({ includeForgotten:true, includeSuperseded:true, allowedScopes })) {

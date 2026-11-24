@@ -57,7 +57,7 @@ Tap k3-phone-check. Passing on the page:
 ## Step 5 (optional): a pass the agent recorded
 
 Tell Claude Code: `I planted the seeds, M2 passed. Record it.` Sync the phone again. M2 now
-has an outlined check and `agent says you confirmed`, and the list reads `2 of 3 · M3 First
+has an outlined check and `reported by an AI app`, and the list reads `2 of 3 · M3 First
 harvest`.
 
 ## Clean up

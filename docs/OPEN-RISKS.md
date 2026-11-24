@@ -24,7 +24,7 @@ Open questions where a record contradicts itself, contradicts the code, or may m
 
 ## Already fixed (dropped)
 
-- ADR 0042: now states the 4096-byte limit (originally 2048).
+- ADR 0042: now states the byte limit (2048, then 4096, 4608 since ADR 0089).
 - ADR 0050: D4 now says every row in the group is applied, including the semantic row a review found.
 - ADR 0059: D2 now names the AWS exact-length exception.
 - ADR 0061: no decisions listed as pending.

@@ -63,7 +63,7 @@ describe('Milestones block (ADR 0065 Decision 5, desktop)', () => {
     const rows = all(block, (n) => n.tag === 'li');
     expect(rows.map((r) => r.className)).toEqual(['ms-row done', 'ms-row said', 'ms-row cur', 'ms-row']);
     expect(textOf(rows[0]!)).toBe('✓M1 Define the buy boxPassed Sep 28 · you confirmed');
-    expect(textOf(rows[1]!)).toBe('✓M2 Shortlist 3 marketsPassed Oct 9 · agent says you confirmedConfirm');
+    expect(textOf(rows[1]!)).toBe('✓M2 Shortlist 3 marketsPassed Oct 9 · reported by an AI appConfirm');
     expect(textOf(rows[2]!)).toBe('M3 Underwrite top 5 listings, current milestoneTest: each has a pro formaMark passed');
     const buttons = all(block, (n) => n.tag === 'button');
     expect(buttons.map((b) => [b.text, b.attrs['aria-label']])).toEqual([['Confirm', 'Confirm M2 passed'], ['Mark passed', 'Mark M3 passed']]);
@@ -81,6 +81,7 @@ describe('Milestones block (ADR 0065 Decision 5, desktop)', () => {
     expect(confirm).toContain("'/milestones/confirm', { method:'POST', json:{ id:item.id, expected_revision:project.revision } }");
     expect(confirm).toContain("ex.code === 'stale_project'");
     expect(confirm).toContain("'Did you run this test, and did it pass?'");
+    expect(confirm).toContain("' as passed on ' + milestoneDay(item.on) + '. The Log may say where its evidence is. Did this test pass?'");
     expect(confirm).toContain("el('blockquote', 'ms-test', item.test)");
     expect(confirm).toContain("cancel.dataset.autofocus = ''");
     const save = functionSource('renderMilestoneRepairReview');
@@ -108,7 +109,7 @@ describe('Milestones block (ADR 0065 Decision 5, desktop)', () => {
     ]);
     expect(all(notice, (n) => n.tag === 'li').map(textOf)).toEqual([
       'M1 Agree the plan, passed Oct 1, you confirmed',
-      'M2 Draft the outline: now passed Oct 14, you confirmed. After the restore: passed Oct 5, agent says you confirmed',
+      'M2 Draft the outline: now passed Oct 14, you confirmed. After the restore: passed Oct 5, reported by an AI app',
       'M3 Write the draft, passed Oct 14, you confirmed',
     ]);
     const downgrade = run({ adds: [], changes: [{ from: mine, to: said }], undoes: [], unreadable: false })!;
