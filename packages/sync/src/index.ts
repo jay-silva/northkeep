@@ -75,6 +75,7 @@ export {
 export {
   applyDownSync,
   BASE_NEW,
+  cloudReplaceLine,
   ConnectorStalePushError,
   ConnectorOversizeError,
   oversizeSharedEntries,
@@ -103,7 +104,9 @@ export {
   type PendingRow,
   type PendingSnapshot,
   type PlannedAddition,
+  type PlannedCloudReplace,
   type PlannedForget,
+  type QueuedReplace,
   type PlannedReplacement,
   type PushEntry,
   type PushSharedResult,

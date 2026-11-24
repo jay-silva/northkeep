@@ -372,9 +372,10 @@ describe('source rules', () => {
 
   it('every vault write in server.ts says it is for an agent', () => {
     const source = fs.readFileSync(path.join(here, '../src/server.ts'), 'utf8');
-    const calls = [...source.matchAll(/vault\.(editMemory|forget|updateProject|checkpointProject|replaceProjectContent)\(([^;]*?)\);/gs)];
-    expect(calls.map((m) => m[1]).sort()).toEqual(['checkpointProject', 'editMemory', 'forget', 'updateProject', 'updateProject']);
-    for (const m of calls) expect(m[2]).toContain("{ actor: 'agent' }");
+    const calls = [...source.matchAll(/vault\.(editMemory|replaceMemory|forget|updateProject|checkpointProject|replaceProjectContent)\(([^;]*?)\);/gs)];
+    expect(calls.map((m) => m[1]).sort()).toEqual(['checkpointProject', 'editMemory', 'forget', 'replaceMemory', 'updateProject', 'updateProject']);
+    // ADR 0085: memory writes also carry the app's name beside the actor.
+    for (const m of calls) expect(m[2]).toMatch(/\{ actor: 'agent'[,} ]/);
     expect(source).not.toContain("actor: 'owner'");
   });
 

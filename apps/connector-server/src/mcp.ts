@@ -52,7 +52,8 @@ import { z } from 'zod';
 import { BASE_NEW, type ConnectorStorage, type SharedEntry } from './storage.js';
 import { projectScopeView, staleProjectRowIds } from './project-head.js';
 import { ConnectorCryptoError, decryptRow, encryptRow, isEncryptedRow } from './crypto.js';
-import { excerptFor, rankSharedEntries } from './search-rules.js';
+import { checkSave, excerptFor, isProjectPaperwork, rankSharedEntries, saveNormalForm } from './search-rules.js';
+import { tameAppName } from './text-safe.js';
 import { HOSTED_SECTION_TEXT_RULES, firstProjectTextError, isProjectStatusDone, projectStatusTooLongMessage, STATUS_TEXT_RULES } from './project-text.js';
 import {
   MILESTONES_HEADING,
@@ -99,13 +100,18 @@ function titleFor(entry: SharedEntry): string {
   return clipped ? `[${entry.scope}] ${clipped}` : `[${entry.scope}] (shared memory)`;
 }
 
-/** One memory as a list line; a long one is cut, with the id that reads the rest. */
+/** One memory as a list line, with its id (ADR 0085 D4: `replaces` and memory_forget need it); a long one is cut. */
 function memoryLine(entry: SharedEntry, query: string): string {
   const { text, cut } = excerptFor(entry.content, query);
   return cut
     ? `- [${entry.scope}] ${text} (part of a longer memory; read all of it with fetch, id ${entry.entryId})`
-    : `- [${entry.scope}] ${text}`;
+    : `- [${entry.scope}] ${text} (id ${entry.entryId})`;
 }
+
+/** ADR 0085 D3: the device's hold advice, word for word. The connector has no masking tier, so replaces is always offered. */
+export const SAVE_HOLD_ADVICE =
+  'Nothing was saved: this mostly repeats a memory already stored. If it updates one of the memories listed, save it ' +
+  'again with replaces set to that id. If it is a separate fact, save it again with distinct set to true.';
 
 /** A one-line snippet of the content, whitespace-collapsed and clipped. */
 function snippetOf(content: string): string {
@@ -263,11 +269,21 @@ export const CONNECTOR_TOOL_ANNOTATIONS = {
   project_update: WRITE_ANNOTATIONS,
 } as const;
 
+/** Per-request extras the /mcp route supplies. */
+export interface McpRequestContext {
+  /**
+   * ADR 0085 D1: the connected app's OAuth client_name, read only when a save
+   * is stamped, so a read never triggers a client lookup.
+   */
+  appName?: () => Promise<string | undefined>;
+}
+
 export function createMcpServer(
   storage: ConnectorStorage,
   accountHash: string,
   dek: Uint8Array,
   allowLegacyPlaintext = false,
+  context: McpRequestContext = {},
 ): McpServer {
   const server = new McpServer(
     { name: 'northkeep-connector', version: '0.1.0' },
@@ -416,14 +432,26 @@ export function createMcpServer(
       title: 'Remember a new shared memory',
       annotations: CONNECTOR_TOOL_ANNOTATIONS.memory_remember,
       description:
-        'Save a new memory into one of the scopes the user has already shared with this app. It flows back into the user’s NorthKeep vault. You cannot create a new scope; only add to a scope that is already shared.',
+        'Save a new memory into one of the scopes the user has already shared with this app. It flows back into the user’s NorthKeep vault. You cannot create a new scope; only add to a scope that is already shared. ' +
+        'A save that repeats a memory word for word is not stored again; the existing id comes back. ' +
+        'A save that mostly repeats a memory in the same scope is held: nothing is stored, and the reply lists ' +
+        'up to three memories it may update, with their ids. Save again with replaces set to the id of the one it updates, or ' +
+        'with distinct set to true if it is a separate fact. NorthKeep never picks for you. ' +
+        'A replacement is saved at once, but the old memory is only marked replaced after the user confirms it in NorthKeep; ' +
+        'until then this app sees both.',
       inputSchema: {
         content: z.string().describe('The memory to remember'),
         type: z.string().describe('One of: episodic, semantic, procedural, working, identity'),
         scope: z.string().describe('An already-shared scope to save into'),
+        replaces: z
+          .string()
+          .max(256)
+          .optional()
+          .describe('The id of the one memory this save updates, from memory_retrieve or memory_list, in the same scope. The user confirms the replacement in NorthKeep'),
+        distinct: z.boolean().optional().describe('Set true to save a separate fact even though it resembles a memory already stored'),
       },
     },
-    async ({ content, type, scope }) => {
+    async ({ content, type, scope, replaces, distinct }) => {
       const body = (content ?? '').trim();
       const auditFail = async (): Promise<void> => {
         await storage.appendAudit({
@@ -502,14 +530,108 @@ export function createMcpServer(
           content: [{ type: 'text', text: `Nothing was saved: this account is at the shared-memory cap (${MAX_SHARED_ENTRIES}). Ask the user to remove some shared memories in NorthKeep first.` }],
         };
       }
+      // ADR 0085 D3/D4 run last, so a hold never lists rows for a save the checks above refuse.
+      let visible: SharedEntry[];
+      try {
+        visible = await visibleEntries();
+      } catch (err) {
+        if (err instanceof ConnectorCryptoError) return reencryptResult('memory_remember');
+        throw err;
+      }
+      const refuse = async (text: string) => {
+        await auditFail();
+        return { content: [{ type: 'text' as const, text }] };
+      };
+      const alreadySaved = async (row: SharedEntry) => {
+        await storage.appendAudit({
+          ts: new Date().toISOString(),
+          accountHash,
+          tool: 'memory_remember',
+          params: {},
+          ok: true,
+          resultCount: 1,
+          resultIds: [row.entryId],
+        });
+        const text = `Already saved: this repeats memory ${row.entryId} word for word, so nothing new was stored. (id: ${row.entryId})`;
+        return {
+          content: [{ type: 'text' as const, text }],
+          structuredContent: { stored: { id: row.entryId, scope: row.scope }, already_saved: true, message: text },
+        };
+      };
+      let target: SharedEntry | null = null;
+      if (replaces !== undefined) {
+        const targetId = replaces.trim();
+        target = visible.find((e) => e.entryId === targetId) ?? null;
+        if (target === null) {
+          return refuse(`Nothing was saved: no shared memory this app can read has the id "${targetId}". Use an id from memory_retrieve or memory_list.`);
+        }
+        if (isProjectPaperwork(target)) {
+          return refuse('Nothing was saved: that id is a project document or its log, which changes only through project_get and project_update.');
+        }
+        if (target.scope !== targetScope) {
+          return refuse(
+            `Nothing was saved: memory ${target.entryId} is in scope "${target.scope}", not "${targetScope}". A replacement is saved in the scope of the memory it replaces.`,
+          );
+        }
+        const oldId = target.entryId;
+        // Only an entry whose new memory is still here counts; a dead one must not block the user's next replace.
+        const visibleIds = new Set(visible.map((e) => e.entryId));
+        if ((await storage.listPendingReplaces(accountHash)).some((r) => r.oldId === oldId && visibleIds.has(r.newId))) {
+          return refuse(`Nothing was saved: a replacement for memory ${oldId} is already waiting for the user to confirm it in NorthKeep.`);
+        }
+        // Saving the same text would leave the device asked to replace a memory with itself.
+        if (saveNormalForm(body) === saveNormalForm(target.content)) return alreadySaved(target);
+      } else {
+        // Pending cloud rows count too, so two identical saves before a sync still make one row.
+        const candidates = visible.filter((e) => e.scope === targetScope && !isProjectPaperwork(e));
+        const check = checkSave(body, candidates);
+        if (check.identical !== null) return alreadySaved(check.identical);
+        if (check.held.length > 0 && distinct !== true) {
+          await storage.appendAudit({
+            ts: new Date().toISOString(),
+            accountHash,
+            tool: 'memory_remember',
+            params: {},
+            ok: true,
+            resultCount: check.held.length,
+            resultIds: check.held.map((e) => e.entryId),
+          });
+          const text = `${SAVE_HOLD_ADVICE}\nMemories it may update:\n${check.held.map((e) => memoryLine(e, body)).join('\n')}`;
+          return {
+            content: [{ type: 'text' as const, text }],
+            structuredContent: {
+              held: true,
+              saved: false,
+              next: SAVE_HOLD_ADVICE,
+              possible_updates: check.held.map((e) => ({ id: e.entryId, scope: e.scope, type: e.type, content: excerptFor(e.content, body).text })),
+              message: text,
+            },
+          };
+        }
+      }
+      // A failed name lookup costs the stamp, never the save.
+      let app: string | undefined;
+      try {
+        app = tameAppName(await context.appName?.());
+      } catch {
+        app = undefined;
+      }
       const entryId = `conn_${randomUUID().replace(/-/g, '')}`;
       // ADR 0020: the row lands as ciphertext — the {type, content} envelope
       // encrypted under this request's DEK; the stored type column is ''.
       await storage.writeConnectorRows(accountHash, targetScope, {
         expectedSeq: null,
-        rows: [{ entryId, content: await encryptRow({ accountHash, type: memType, content: body }, dek), baseRevision: null }],
+        rows: [{ entryId, content: await encryptRow({ accountHash, type: memType, content: body, app }, dek), baseRevision: null }],
         replacedId: null,
       });
+      if (target !== null) {
+        await storage.enqueueReplace(accountHash, {
+          replaceId: `rep_${randomUUID().replace(/-/g, '')}`,
+          scope: targetScope,
+          oldId: target.entryId,
+          newId: entryId,
+        });
+      }
       await storage.appendAudit({
         ts: new Date().toISOString(),
         accountHash,
@@ -517,10 +639,18 @@ export function createMcpServer(
         params: {},
         ok: true,
         resultCount: 1,
-        resultIds: [entryId],
+        resultIds: target !== null ? [entryId, target.entryId] : [entryId],
       });
+      const text = target !== null
+        ? `Saved to shared scope "${targetScope}". It will sync into the vault. (id: ${entryId}) It replaces memory ${target.entryId} once the user confirms it in NorthKeep; until then both memories are visible here.`
+        : `Saved to shared scope "${targetScope}". It will sync into the vault. (id: ${entryId})`;
       return {
-        content: [{ type: 'text', text: `Saved to shared scope "${targetScope}". It will sync into the vault. (id: ${entryId})` }],
+        content: [{ type: 'text', text }],
+        structuredContent: {
+          stored: { id: entryId, scope: targetScope },
+          ...(target !== null ? { replaces: target.entryId, replace_waits_for_user: true } : {}),
+          message: text,
+        },
       };
     },
   );

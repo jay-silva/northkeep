@@ -112,4 +112,20 @@ A script drives two MCP clients against one throwaway vault, with no AI app in t
 3. Client B saves "The harbor office is now at Pier 9." Held; the reply lists the Pier 4 memory with its id.
 4. Client B saves again with `replaces` set to that id. One live row; the Pier 4 row is marked replaced by it; the new row's source names client B.
 5. Client B saves "The harbor office closes at five." with `distinct: true`. Saved as a second live row.
-6. Client A retrieves "where is the harbor office". The Pier 9 memory comes first and the Pier 4 memory does not appear.
+6. Client A retrieves "which pier is the harbor office at". The Pier 9 memory comes first and the Pier 4 memory does not appear. (As first written the question was "where is the harbor office"; that names no word the Pier 9 memory holds and the closing-time memory lacks, so the newer of the two led. The question was changed during the build, 2026-11-24, and the first wording is recorded here.)
+
+## Build (2026-11-24)
+Jay said "Build 3". Choices made where the record was silent:
+- The reply shapes are the same on both surfaces: `stored` with `already_saved` for an identical save; `held`, `saved: false`, `next` and `possible_updates` for a held one.
+- On the device the stamp is `mcp:<name>`; an unnamed client stays `mcp`. `memory_edit` carries the editing app's stamp too. The owner's own edits keep the first writer.
+- `replaces` skips the save check, since the app has already answered it. A replace whose text equals the target's answers "already saved".
+- On the connector each queued replace has its own id, which the device acks. A second replace of a memory that already has one waiting is refused. The new row is written first and queued second; if the queue write fails, the new memory stays as an ordinary addition.
+- The connector drops a queued replace when its scope is unshared, and when a device reads the queue and finds either memory gone or the two in different scopes. An entry whose old or new memory has a forget waiting is kept but not sent.
+- The device asks `/client/pending?v=3` and falls back to `v=2` against an older connector. The phone asks `v=2` and never sees the queue.
+- On the device a replace is settled without a question, and acked, when either side is gone, is a project document, or the two are in different scopes. It waits when the device has not yet seen one side. An approved one calls `markReplaced`, then acks.
+- The app name is stamped on connector memory saves only, not on project writes.
+- Text an AI app wrote is cut to one printable line of 120 characters before the sync review shows it in the Mac app or the command line.
+- The connector's save now decrypts the rows it can read, so a row that cannot be decrypted fails a save with the same re-encrypt message search already gives.
+- The source rule test that requires every vault write in the device server to say it is for an AI app now covers `replaceMemory` and allows the app stamp beside the actor.
+
+Not built: the phone says nothing about a waiting replacement. The existing forget preview's first lines are not cut to one printable line the way the new replace lines are.

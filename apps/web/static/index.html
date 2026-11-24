@@ -2699,7 +2699,7 @@
       try {
         const list = (await api('/api/memories')).memories || [];
         if (!seen) { seen = new Set(list.map((m) => m.id)); return; }
-        const fresh = list.find((m) => !seen.has(m.id) && m.source === 'mcp');
+        const fresh = list.find((m) => !seen.has(m.id) && (m.source === 'mcp' || String(m.source).startsWith('mcp:')));
         if (fresh && !$('setupStepTry').hidden) showSetupArrival(fresh, app);
       } catch { /* keep waiting; the Skip link is the way out */ }
     };
@@ -4389,7 +4389,9 @@
               : ''}
             ${String(m.source).startsWith('connector')
               ? `<span class="badge shared" title="A connected AI app wrote this memory through Cloud Connect. You own the final say: edit or forget it any time.">APP-WRITTEN${m.source.includes(':') ? ' · ' + esc(m.source.split(':')[1]) : ''}</span>`
-              : `<span>${esc(m.source)}</span>`}
+              : String(m.source).startsWith('mcp:')
+                ? `<span title="The app gave this name itself. NorthKeep cannot check it.">Saved by ${esc(m.source.slice(4))}, as the app reported</span>`
+                : `<span>${esc(m.source)}</span>`}
             ${String(m.source).startsWith('connector') && m.type === 'procedural'
               ? `<span class="badge auto" title="This memory INSTRUCTS your AI apps how to behave in future conversations. Review it carefully. Forget it to revoke the instruction everywhere.">STANDING INSTRUCTION</span>`
               : ''}
@@ -7975,7 +7977,7 @@
 
   // How many changes Apply makes: every addition, plus the checked updates and removals.
   function syncApplyCount(plan, approve) {
-    return (plan.additions ? plan.additions.count : 0) + (plan.new_projects || []).length + approve.server_ids.length + approve.forget_ids.length;
+    return (plan.additions ? plan.additions.count : 0) + (plan.new_projects || []).length + approve.server_ids.length + approve.forget_ids.length + (approve.replace_ids || []).length;
   }
 
   function openSyncPreview(plan, returnTo = $('shareSyncBtn')) {
@@ -8021,6 +8023,17 @@
         }
         body.appendChild(group);
       }
+      // ADR 0085 D4: an AI app said a new memory updates an old one. Both stay until this is applied.
+      const swaps = [];
+      if ((plan.cloud_replaces || []).length) {
+        const group = planGroup('Will replace', plan.cloud_replaces.length);
+        group.appendChild(el('p', 'plan-note muted', 'An AI app saved a newer version of these memories. The old one stays in history. Uncheck any you want to keep as they are. An unchecked one asks again next time.'));
+        for (const r of plan.cloud_replaces) {
+          const pick = planPick(scopeLabel(r.scope), r.line, '', true);
+          swaps.push({ id: r.replace_id, box: pick.box }); group.appendChild(pick.item);
+        }
+        body.appendChild(group);
+      }
       for (const message of plan.held_messages || []) body.appendChild(el('p', 'plan-held muted', message));
       const err = el('div', 'err'); err.setAttribute('role', 'alert'); body.appendChild(err);
       const foot = el('div', 'plan-foot'); foot.appendChild(el('p', 'muted', 'Anything that arrives after this preview waits for the next Sync now.'));
@@ -8028,9 +8041,9 @@
       const cancel = el('button', 'btn', 'Cancel'); cancel.type = 'button'; cancel.dataset.autofocus = '';
       cancel.addEventListener('click', () => { closeGuardDialog(); $('shareSyncResult').textContent = 'Nothing changed. Sync now again when you are ready.'; });
       const apply = el('button', 'btn primary'); apply.type = 'button';
-      const approve = () => ({ server_ids: updates.filter((u) => u.box.checked).map((u) => u.id), forget_ids: removes.filter((r) => r.box.checked).map((r) => r.id) });
+      const approve = () => ({ server_ids: updates.filter((u) => u.box.checked).map((u) => u.id), forget_ids: removes.filter((r) => r.box.checked).map((r) => r.id), replace_ids: swaps.filter((r) => r.box.checked).map((r) => r.id) });
       const label = () => { const n = syncApplyCount(plan, approve()); apply.textContent = 'Apply ' + n + (n === 1 ? ' change' : ' changes'); };
-      for (const pick of [...updates, ...removes]) pick.box.addEventListener('change', label);
+      for (const pick of [...updates, ...removes, ...swaps]) pick.box.addEventListener('change', label);
       label();
       apply.addEventListener('click', async () => {
         apply.disabled = true; cancel.disabled = true; err.textContent = '';
@@ -8047,9 +8060,10 @@
     if (r.added) changed.push('added ' + plural(r.added, 'new item', 'new items'));
     if (r.replaced) changed.push('updated ' + plural(r.replaced, 'project', 'projects'));
     if (r.forgotten) changed.push('removed ' + plural(r.forgotten, 'memory', 'memories'));
+    if (r.cloud_replaced) changed.push('replaced ' + plural(r.cloud_replaced, 'memory', 'memories') + ' with a newer version');
     lines.push((changed.length ? 'Done. ' + changed.join(', ').replace(/^./, (c) => c.toUpperCase()) + '.' : 'Done. Nothing new from your AI apps.') +
       (r.push_error ? '' : ' Sent ' + plural(r.pushed || 0, 'memory', 'memories') + ' to Cloud Connect.'));
-    const waiting = ((r.needs_review && r.needs_review.replacements) || []).length + ((r.needs_review && r.needs_review.forgets) || []).length;
+    const waiting = ((r.needs_review && r.needs_review.replacements) || []).length + ((r.needs_review && r.needs_review.forgets) || []).length + ((r.needs_review && r.needs_review.cloud_replaces) || []).length;
     if (waiting) lines.push(plural(waiting, 'change you left unchecked waits', 'changes you left unchecked wait') + ' for the next Sync now.');
     if (r.push_error) lines.push('Saved on ' + devicePlace() + ', but Cloud Connect was not updated: ' + pushErrorText(r.push_error, r.push_oversize));
     for (const m of r.held_messages || []) lines.push(m);

@@ -46,6 +46,7 @@ import {
   connectorPaired,
   applyDownSync,
   assertDeviceCanPush,
+  cloudReplaceLine,
   ConnectorPushBlockedError,
   ConnectorStalePushError,
   fetchEntitlement,
@@ -1167,18 +1168,22 @@ async function dispatch(
 
   // Sync now (ADR 0063 D3). Preview by default: what the connected apps
   // changed, with no vault write. { dry_run: false, approve } applies the
-  // additions plus only the replacements (server_ids) and forgets (forget_ids)
-  // the user approved, then pushes. Conflicts are never applied here.
+  // additions plus only the replacements (server_ids), forgets (forget_ids)
+  // and memory updates from apps (replace_ids, ADR 0085 D4) the user approved,
+  // then pushes. Conflicts are never applied here.
   if (method === 'POST' && route === '/api/share/sync') {
     const config = loadConnectorConfig();
     if (!config) return bad(400, 'Set a connector server first.');
-    const input = parseJson<{ dry_run?: unknown; approve?: { server_ids?: unknown; forget_ids?: unknown } }>(body);
+    const input = parseJson<{ dry_run?: unknown; approve?: { server_ids?: unknown; forget_ids?: unknown; replace_ids?: unknown } }>(body);
     if (input.dry_run !== undefined && typeof input.dry_run !== 'boolean') return bad(400, 'dry_run must be true or false.');
     const approve = {
       server_ids: stringList(input.approve?.server_ids),
       forget_ids: stringList(input.approve?.forget_ids),
+      replace_ids: stringList(input.approve?.replace_ids),
     };
-    if (approve.server_ids === null || approve.forget_ids === null) return bad(400, 'approve.server_ids and approve.forget_ids must be lists of ids.');
+    if (approve.server_ids === null || approve.forget_ids === null || approve.replace_ids === null) {
+      return bad(400, 'approve.server_ids, approve.forget_ids and approve.replace_ids must be lists of ids.');
+    }
     const deviceSecret = deviceSecretOrError();
     const before = await session.withVault((vault) => {
       foldSidecarScopesIntoVault(vault); // saves the vault itself when it folds
@@ -1198,7 +1203,11 @@ async function dispatch(
       }));
     }
     await assertDeviceCanPush({ vaultPath: session.vaultPath, deviceSecret });
-    const down = await session.withVault((vault) => applyDownSync({ ...conn, vault, approve: { server_ids: approve.server_ids!, forget_ids: approve.forget_ids! } }));
+    const down = await session.withVault((vault) => applyDownSync({
+      ...conn,
+      vault,
+      approve: { server_ids: approve.server_ids!, forget_ids: approve.forget_ids!, replace_ids: approve.replace_ids! },
+    }));
     const after = await session.withVault((vault) => vault.sharedScopes());
     // The apply is saved either way; a failed push must not hide what it did.
     let push: PushSharedResult | null = null;
@@ -1210,7 +1219,7 @@ async function dispatch(
       pushError = err instanceof Error ? err.message : String(err);
       if (err instanceof ConnectorOversizeError) pushOversize = err.entries[0] ?? null;
     }
-    const review = down.needs_review.replacements.length + down.needs_review.forgets.length;
+    const review = down.needs_review.replacements.length + down.needs_review.forgets.length + down.needs_review.cloud_replaces.length;
     const reviewParts: string[] = [];
     if (review > 0) reviewParts.push(`${review} change${review === 1 ? '' : 's'} need${review === 1 ? 's' : ''} your review before ${review === 1 ? 'it is' : 'they are'} applied. Run: northkeep share sync`);
     for (const c of down.conflicts) reviewParts.push(`Project ${c.project} has a cloud version that was not applied. Run: northkeep share conflicts --show ${c.project}`);
@@ -1218,6 +1227,7 @@ async function dispatch(
       added: down.added,
       replaced: down.replaced,
       forgotten: down.forgotten,
+      cloud_replaced: down.cloud_replaced,
       deduped: down.deduped,
       discarded: down.discarded,
       held: down.held,
@@ -2761,6 +2771,14 @@ function describePlanForPage(plan: DownSyncPlan, times: Map<string, string>): Re
     new_projects: plan.additions.filter((a) => a.kind === 'project').map((a) => heldSlug(a.scope)),
     replacements: plan.replacements.map((r) => ({ project: r.project, server_id: r.server_id, local_revision: r.local_revision, local_updated_at: times.get(r.local_revision) ?? null })),
     forgets: plan.forgets,
+    // ADR 0085 D4: each needs the user's yes, like a forget. `line` is the plain-words summary.
+    cloud_replaces: (plan.cloud_replaces ?? []).map((r) => ({
+      replace_id: r.replace_id,
+      scope: r.scope,
+      old_first_line: r.old_first_line,
+      new_first_line: r.new_first_line,
+      line: cloudReplaceLine(r),
+    })),
     conflicts: plan.conflicts.map(({ content: _content, ...c }) => ({
       ...c,
       base_updated_at: baseTime(times, c.base_revision),

@@ -10,6 +10,7 @@ import {
   type ConnectorAuditEntry,
   type ConnectorStorage,
   type OAuthGcResult,
+  type PendingReplace,
   type ScopeTombstone,
   type StoredClientRow,
   type SharedEntry,
@@ -152,6 +153,17 @@ ON scope_tombstones (account_hash, scope)`,
 )`,
   `ALTER TABLE connector_accounts ADD COLUMN IF NOT EXISTS vault_server text`,
   `ALTER TABLE connector_accounts ADD COLUMN IF NOT EXISTS vault_version bigint`,
+  // ADR 0085 D4: a cloud replace waiting for the user. Ids and scope only,
+  // never content; its own table because an ack renames the rows it names.
+  `CREATE TABLE IF NOT EXISTS pending_replaces (
+  account_hash text NOT NULL,
+  replace_id   text NOT NULL,
+  scope        text NOT NULL,
+  old_id       text NOT NULL,
+  new_id       text NOT NULL,
+  created_at   timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (account_hash, replace_id)
+)`,
 ];
 
 /** Human-readable schema (for self-hosters running psql by hand). */
@@ -645,6 +657,8 @@ export class NeonConnectorStorage implements ConnectorStorage {
         DELETE FROM shared_entries WHERE account_hash = ${accountHash} AND scope = ${scope} RETURNING 1
       ), b AS (
         UPDATE scope_seq SET seq = seq + 1 WHERE account_hash = ${accountHash} AND scope = ${scope} RETURNING 1
+      ), r AS (
+        DELETE FROM pending_replaces WHERE account_hash = ${accountHash} AND scope = ${scope} RETURNING 1
       ), t AS (
         INSERT INTO scope_tombstones (account_hash, scope, unshared_at)
         SELECT ${accountHash}, ${scope}, now()
@@ -836,7 +850,46 @@ export class NeonConnectorStorage implements ConnectorStorage {
         ON CONFLICT (account_hash, entry_id) DO NOTHING
       `,
       this.sql`DELETE FROM pending_forgets WHERE account_hash = ${accountHash} AND entry_id = ${serverId}`,
+      // ADR 0085 D4: either side of a queued replace may be the renamed row.
+      this.sql`UPDATE pending_replaces SET old_id = ${localEntryId} WHERE account_hash = ${accountHash} AND old_id = ${serverId}`,
+      this.sql`UPDATE pending_replaces SET new_id = ${localEntryId} WHERE account_hash = ${accountHash} AND new_id = ${serverId}`,
     ]);
+  }
+
+  async enqueueReplace(accountHash: string, replace: { replaceId: string; scope: string; oldId: string; newId: string }): Promise<void> {
+    await this.ensureSchema();
+    await this.sql`
+      INSERT INTO pending_replaces (account_hash, replace_id, scope, old_id, new_id)
+      VALUES (${accountHash}, ${replace.replaceId}, ${replace.scope}, ${replace.oldId}, ${replace.newId})
+      ON CONFLICT (account_hash, replace_id) DO NOTHING
+    `;
+  }
+
+  async listPendingReplaces(accountHash: string): Promise<PendingReplace[]> {
+    await this.ensureSchema();
+    const rows = (await this.sql`
+      SELECT replace_id, scope, old_id, new_id, created_at FROM pending_replaces
+      WHERE account_hash = ${accountHash} ORDER BY created_at ASC, replace_id ASC
+    `) as unknown as Array<{ replace_id: string; scope: string; old_id: string; new_id: string; created_at: string }>;
+    return rows.map((r) => ({
+      replaceId: r.replace_id,
+      scope: r.scope,
+      oldId: r.old_id,
+      newId: r.new_id,
+      createdAt: new Date(r.created_at).toISOString(),
+    }));
+  }
+
+  async dropReplaces(accountHash: string, replaceIds: string[]): Promise<number> {
+    await this.ensureSchema();
+    const ids = [...new Set(replaceIds)];
+    if (ids.length === 0) return 0;
+    const rows = (await this.sql`
+      WITH d AS (
+        DELETE FROM pending_replaces WHERE account_hash = ${accountHash} AND replace_id = ANY(${ids}::text[]) RETURNING 1
+      ) SELECT count(*)::int AS n FROM d
+    `) as unknown as Array<{ n: number | string }>;
+    return Number(rows[0]?.n ?? 0);
   }
 
   async applyForget(accountHash: string, entryId: string): Promise<void> {

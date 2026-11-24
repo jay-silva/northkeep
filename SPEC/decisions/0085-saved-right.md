@@ -1,6 +1,6 @@
 # ADR 0085: Saved right: near-match check at save, a "replaces" field, every save stamped with its app
 
-Status: Proposed 2026-11-20 (relaunch step 1, milestone 3) · Reviews 1 to 3 in the record (review 3: CLEARED WITH WOUNDS, fixed)
+Status: Accepted 2026-11-24, Jay ("Build 3"); built (relaunch step 1, milestone 3) · Reviews in the record
 
 ## Context
 Save test: Jay tells one agent a fact, another agent knows it, and the vault holds it once with the old version marked replaced. `memory_remember` has no duplicate check and stamps `mcp`, though the schema says `mcp:<client>`. Connector saves carry no app name, and its retrieve and list print no ids.

@@ -37,6 +37,7 @@ import {
   PROJECT_RESTORE_BLANKED_MESSAGE,
   PROJECT_RESTORE_METADATA_KEY,
   PROJECT_DOCUMENT_FORGET_MESSAGE,
+  PROJECT_DOCUMENT_REPLACE_MESSAGE,
   PROJECT_DOCUMENT_RETYPE_MESSAGE,
   ProjectHandoffError,
   applyProjectUpdate,
@@ -59,6 +60,7 @@ import {
   type ProjectView,
   type WriteActor,
   type WriteActorOptions,
+  type WriterStamp,
 } from './project-handoff.js';
 import { MilestoneError, assertAgentWriteKeepsPasses } from './project-milestones.js';
 import { emptyProjectDoc, formatLogArchive, getProjectSection, parseProjectDoc, parseProjectSlug, projectScope, serializeProjectDoc } from './project-doc.js';
@@ -618,7 +620,7 @@ export class Vault {
   editMemory(
     idOrPrefix: string,
     patch: { content?: string; scope?: string; type?: MemoryType },
-    options: WriteActorOptions,
+    options: WriteActorOptions & WriterStamp,
     allowedScopes?: string[],
   ): MemoryEntry {
     this.assertOpen();
@@ -678,8 +680,46 @@ export class Vault {
           if (long !== null) throw new Error(long);
         }
       }
-      return this.supersedeEntry(old, changes, actor);
+      return this.supersedeEntry(old, changes, actor, null, options);
     })();
+  }
+
+  /**
+   * ADR 0085 D2: save new text as the replacement of one live memory, under
+   * every editMemory guard. A project document changes through the project
+   * tools, and a scope named with the save must be the old memory's own, so
+   * text cannot land in a scope the caller did not name.
+   */
+  replaceMemory(
+    idOrPrefix: string,
+    input: { content: string; type: MemoryType; scope?: string },
+    options: WriteActorOptions & WriterStamp,
+    allowedScopes?: string[],
+  ): MemoryEntry {
+    this.assertOpen();
+    const old = this.resolveEditable(idOrPrefix, allowedScopes);
+    if (isProjectPaperwork(old)) throw new Error(PROJECT_DOCUMENT_REPLACE_MESSAGE);
+    if (input.scope !== undefined && (input.scope.trim() || 'personal') !== old.scope) {
+      throw new Error(`The memory to replace is in the "${old.scope}" scope, not "${input.scope.trim() || 'personal'}". Nothing was saved.`);
+    }
+    return this.editMemory(old.id, { content: input.content, type: input.type }, options, allowedScopes);
+  }
+
+  /**
+   * ADR 0085 D4: mark one live memory as replaced by another that already
+   * exists, for a replace a cloud app asked for and the user confirmed.
+   * supersedeEntry cannot do this: it always writes a new row.
+   */
+  markReplaced(oldId: string, newId: string): MemoryEntry {
+    this.assertOpen();
+    const old = this.resolveEditable(oldId);
+    const next = this.resolveEditable(newId);
+    if (old.id === next.id) throw new Error('A memory cannot replace itself.');
+    if (isProjectPaperwork(old) || isProjectPaperwork(next)) throw new Error(PROJECT_DOCUMENT_REPLACE_MESSAGE);
+    if (old.scope !== next.scope) throw new Error('A memory can only replace one in its own scope.');
+    const now = new Date().toISOString();
+    this.db.prepare('UPDATE memories SET superseded_at = ?, superseded_by = ? WHERE id = ?').run(now, next.id, old.id);
+    return { ...old, superseded_at: now, superseded_by: next.id };
   }
 
   /**
@@ -1640,15 +1680,18 @@ export class Vault {
     patch: { content?: string; scope?: string; type?: MemoryType },
     actor: WriteActor = 'owner',
     addMetadata: Record<string, unknown> | null = null,
+    stamp: WriterStamp = {},
   ): MemoryEntry {
     const now = new Date().toISOString();
+    // ADR 0085 D1: the row an AI app writes names that app, not the first writer.
+    const stamped = actor === 'agent' && stamp.source !== undefined && stamp.source.trim() !== '';
     const next: MemoryEntry = {
       id: uuidv4(this.platform.crypto),
       type: patch.type ?? old.type,
       content: patch.content ?? old.content,
       scope: patch.scope ?? old.scope,
-      source: old.source,
-      source_model: old.source_model,
+      source: stamped ? stamp.source!.trim() : old.source,
+      source_model: stamped ? stamp.sourceModel ?? null : old.source_model,
       confidence: old.confidence,
       created_at: now,
       valid_from: old.valid_from,

@@ -190,6 +190,8 @@ export interface RowPlain {
   confirmed?: true;
   /** ADR 0084 D3: project paperwork search skips. Present only when true. */
   archive?: true;
+  /** ADR 0085 D1: the connected app's self-reported name, tamed. Inside the ciphertext, never a column. */
+  app?: string;
 }
 
 /**
@@ -198,7 +200,7 @@ export interface RowPlain {
  * AAD-bound to the account (NOT the entry id — ack's id-remap stays metadata-only).
  */
 export async function encryptRow(
-  row: { accountHash: string; type: string; content: string; confirmed?: boolean; archive?: boolean },
+  row: { accountHash: string; type: string; content: string; confirmed?: boolean; archive?: boolean; app?: string },
   dek: Uint8Array,
 ): Promise<string> {
   const s = await sodium();
@@ -208,6 +210,7 @@ export async function encryptRow(
     content: row.content,
     ...(row.confirmed === true ? { confirmed: true as const } : {}),
     ...(row.archive === true ? { archive: true as const } : {}),
+    ...(row.app ? { app: row.app } : {}),
   };
   const ct = s.crypto_aead_xchacha20poly1305_ietf_encrypt(
     s.from_string(JSON.stringify(plain)),
@@ -239,6 +242,7 @@ export async function decryptRow(stored: string, accountHash: string, dek: Uint8
       content: parsed.content,
       ...(parsed.confirmed === true ? { confirmed: true as const } : {}),
       ...(parsed.archive === true ? { archive: true as const } : {}),
+      ...(typeof parsed.app === 'string' && parsed.app !== '' ? { app: parsed.app } : {}),
     };
   } catch {
     throw new ConnectorCryptoError('Row envelope is not valid JSON {type, content}');
