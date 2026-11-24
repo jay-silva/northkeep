@@ -123,20 +123,23 @@ export function excerptFor(content: string, query: string): { text: string; cut:
   if (flat.length <= EXCERPT_OVER) return { text: content, cut: false };
   const wanted = searchTerms(query);
   const words = [...flat.matchAll(/\S+/g)].map((m) => ({ at: m.index, end: m.index + m[0].length, terms: searchTerms(m[0]) }));
+  const span = (i: number): number => {
+    const start = words[i]?.at ?? 0;
+    let j = i;
+    while (j + 1 < words.length && (words[j + 1]?.end ?? 0) - start <= EXCERPT_LENGTH) j += 1;
+    return j;
+  };
   let best = 0;
   let bestHits = 0;
   if (wanted.size > 0) {
     for (let i = 0; i < words.length; i += 1) {
       const hits = new Set<string>();
-      for (let j = i; j < words.length && words[j].end - words[i].at <= EXCERPT_LENGTH; j += 1) {
-        for (const term of words[j].terms) if (wanted.has(term)) hits.add(term);
-      }
+      for (const word of words.slice(i, span(i) + 1)) for (const term of word.terms) if (wanted.has(term)) hits.add(term);
       // The latest such start, so the excerpt opens on the matching words, not 400 characters before them.
       if (hits.size > 0 && hits.size >= bestHits) { bestHits = hits.size; best = i; }
     }
   }
-  const from = words[best].at;
-  let to = from;
-  for (let j = best; j < words.length && words[j].end - from <= EXCERPT_LENGTH; j += 1) to = words[j].end;
+  const from = words[best]?.at ?? 0;
+  const to = words[span(best)]?.end ?? flat.length;
   return { text: `${from > 0 ? '… ' : ''}${flat.slice(from, to)}${to < flat.length ? ' …' : ''}`, cut: true };
 }
