@@ -20,6 +20,7 @@ every milestone; if a limit is removed, say when and how.*
 - When search by meaning is on, short memories that repeat the question's words can outrank a long memory that answers it. 0.29.0 does this too.
 - The app's chat, on the Mac and the phone, keeps only memories scoring within 60% of the best match. For a question with two parts, a memory that fully answers one part can fall below that line and be left out, even one you confirmed.
 - On your Mac, an unconfirmed episodic memory an AI app saved more than 30 days ago is listed after every other match, since old session notes are often out of date. It still appears. The Cloud connector cannot tell who wrote a row, so cloud apps see those notes in plain score order.
+- On the Cloud connector, a memory longer than 500 characters comes back from a search or a list as one stretch of about 400 characters, chosen for holding the most words of the question, with its id. The app has to make a second call, `fetch`, to read the rest, and an app that does not make it answers from the part it saw. Before this change one search could return twenty memories in full, several of them pages long. This is on the connector once merged; the Mac app's own search still returns memories whole.
 - The Cloud connector can read whether each shared memory is confirmed or marked as an archive: two flags inside the encrypted row, nothing more.
 
 ## Keep Watch, lid-closed awake (ADR 0080), current
