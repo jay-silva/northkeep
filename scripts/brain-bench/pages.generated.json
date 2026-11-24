@@ -1,0 +1,230 @@
+{
+  "built_by": {
+    "model": "sonnet",
+    "date": "2026-11-23",
+    "from_memories": 130
+  },
+  "pages": [
+    {
+      "name": "Morgan Vale",
+      "also": [
+        "Morgan A. Vale",
+        "Mo"
+      ],
+      "kind": "person",
+      "summary": "Operations Manager at Tidewater Ferry Authority; owns Larkspur LLCs; lives in Eastbrook.",
+      "body": "- Operations Manager at Tidewater Ferry Authority. Also teaches the Saturday deckhand course at Marlow Maritime School (enrollment capped at twelve). Do not schedule calls before noon on Saturdays.\n- Lives in Eastbrook. Spouse: Riley Vale. Children: Juno (b. March 9, 2012) and Felix (b. November 21, 2015). Mother: Anne Vale. Anniversary with Riley: June 14.\n- Allergic to shellfish.\n- Holding company: Larkspur Holdings LLC (owns Larkspur Cabins LLC and Larkspur Works LLC). Half owner of Quarry Road Partners LLC with Dana Okafor. DISPUTED: which entity holds Morgan's half of Quarry Road Partners. Ask Morgan which entity to name on any legal, tax or bank document.\n- Accountant: Priya Shah at Shah & Lowe (was Leo Marsh until August 2026). Attorney: Tom Brandt, Brandt Law. Physician: Dr. Lena Ortiz, Eastbrook Family Practice. Umbrella policy with Keystone.\n- 100-ton master license expires May 1, 2027; TWIC card expires August 30, 2028.\n- Drives a 2019 Subaru Outback (was a 2015 Honda CR-V until June 2026). Dogs: Biscuit and Pepper.\n- Signs formal documents \"Morgan A. Vale\", casual notes \"Mo\". Never use em dashes in anything public. Reports: 400 words max, answer first. Meeting notes as bullets with owner and date.\n- Prefers aisle seats and morning flights for work. Gym: Harbor Athletic Club since October 2026. LLC records are in the shared drive folder Larkspur Records."
+    },
+    {
+      "name": "Riley Vale",
+      "also": [
+        "Riley"
+      ],
+      "kind": "person",
+      "summary": "Morgan's spouse; pediatric nurse at Eastbrook General.",
+      "body": "- Morgan's spouse (confirmed).\n- Pediatric nurse at Eastbrook General.\n- Anniversary with Morgan: June 14.\n- Has a sister, Tess, who lives in Portland."
+    },
+    {
+      "name": "Juno Vale",
+      "also": [
+        "Juno"
+      ],
+      "kind": "person",
+      "summary": "Morgan's older child, born March 9, 2012; plays cello.",
+      "body": "- Morgan's child, born March 9, 2012.\n- Plays cello and is in the school orchestra.\n- Cello lesson is Tuesdays at 4:30 from September 2026 (was Wednesdays at 5 earlier)."
+    },
+    {
+      "name": "Felix Vale",
+      "also": [
+        "Felix"
+      ],
+      "kind": "person",
+      "summary": "Morgan's younger child, born November 21, 2015; plays soccer.",
+      "body": "- Morgan's child, born November 21, 2015.\n- Started at Eastbrook Middle School in September 2026 (attended Birchwood Elementary before).\n- Plays for the Eastbrook Otters. Practice is Thursdays at 5:30 this season. Wants to try out for goalkeeper.\n- A session note says games are Saturday mornings, which clash with Morgan's deckhand course; Morgan planned to ask Riley to cover."
+    },
+    {
+      "name": "Anne Vale",
+      "also": [],
+      "kind": "person",
+      "summary": "Morgan's mother; lives in Camden.",
+      "body": "- Morgan's mother (confirmed).\n- Lives in Camden.\n- Birthday: February 2."
+    },
+    {
+      "name": "Dana Okafor",
+      "also": [],
+      "kind": "person",
+      "summary": "50/50 co-owner of Quarry Road Partners with Morgan; handles tenant calls.",
+      "body": "- Owns half of Quarry Road Partners LLC with Morgan (confirmed).\n- Takes the tenant calls for the Quarry Road rentals.\n- Not the same person as Dana Reyes of Tidewater.\n- Disputed: which Larkspur entity holds Morgan's half of Quarry Road Partners. Ask Morgan which entity to name on any legal, tax or bank document."
+    },
+    {
+      "name": "Dana Reyes",
+      "also": [],
+      "kind": "person",
+      "summary": "Finance Director at Tidewater Ferry Authority.",
+      "body": "- Finance Director at Tidewater Ferry Authority (confirmed).\n- Not Dana Okafor.\n- Signs off on the Tidewater operating budget each March."
+    },
+    {
+      "name": "Ines Calder",
+      "also": [],
+      "kind": "person",
+      "summary": "Harbor Master at Tidewater Ferry Authority and Morgan's boss.",
+      "body": "- Harbor Master at Tidewater Ferry Authority and Morgan's boss (confirmed).\n- A staffing memo for the ferry was to go to her for sign-off (session note, July 2026)."
+    },
+    {
+      "name": "Sam Whitlock",
+      "also": [],
+      "kind": "person",
+      "summary": "Deputy operations manager at Tidewater since September 2026.",
+      "body": "- Replaced Carla Mendez as deputy operations manager in September 2026.\n- Holiday on-call roster: two notes saved the same day disagree. One says Morgan covers Christmas Day. The other says Sam covers Christmas Day and Morgan covers New Year's Day. Nothing says which is right."
+    },
+    {
+      "name": "Marisol Peña",
+      "also": [
+        "Marisol"
+      ],
+      "kind": "person",
+      "summary": "Cleans Heron Cabin on changeover days.",
+      "body": "- Cleans Heron Cabin on changeover days.\n- Changeover fee is $165 since October 2026 (was $140)."
+    },
+    {
+      "name": "Priya Shah",
+      "also": [
+        "Shah & Lowe"
+      ],
+      "kind": "person",
+      "summary": "Morgan's accountant at Shah & Lowe since August 2026.",
+      "body": "- Morgan's accountant at Shah & Lowe since August 2026.\n- Replaced Leo Marsh of Marsh Tax, who no longer does the books."
+    },
+    {
+      "name": "Tom Brandt",
+      "also": [
+        "Brandt Law"
+      ],
+      "kind": "person",
+      "summary": "Morgan's attorney at Brandt Law; handles LLC filings.",
+      "body": "- Morgan's attorney at Brandt Law.\n- Handles the LLC filings."
+    },
+    {
+      "name": "Tidewater Ferry Authority",
+      "also": [
+        "Tidewater"
+      ],
+      "kind": "organization",
+      "summary": "Ferry operator where Morgan is Operations Manager.",
+      "body": "- Morgan is Operations Manager. Ines Calder is Harbor Master. Dana Reyes is Finance Director. Sam Whitlock is deputy operations manager since September 2026 (replaced Carla Mendez).\n- Boats: MV Osprey (main route mornings), MV Tern (main route afternoons), MV Kestrel (spare).\n- Weekly ops meeting is Tuesdays at 7:30 since October 2026.\n- Terminal ticket office opens at 5:30 on weekdays. Fuel deliveries to the dock are Wednesdays. Winter schedule cuts the last weekday evening sailing.\n- Morgan's terminal parking is spot A4 (was B12 before the lot was repaved).\n- Coast Guard annual inspection for the MV Osprey is due February 12, 2027.\n- Holiday on-call roster: sources disagree about who covers Christmas Day and New Year's Day (see Sam Whitlock)."
+    },
+    {
+      "name": "MV Osprey",
+      "also": [
+        "Osprey"
+      ],
+      "kind": "vehicle",
+      "summary": "Ferry on the main route in the mornings.",
+      "body": "- Runs the main route in the mornings.\n- Coast Guard annual inspection due February 12, 2027."
+    },
+    {
+      "name": "MV Tern",
+      "also": [
+        "Tern"
+      ],
+      "kind": "vehicle",
+      "summary": "Ferry on the main route in the afternoons.",
+      "body": "- Runs the main route in the afternoons.\n- Was out for an engine overhaul; returned to service November 3, 2026. The Kestrel covered afternoons meanwhile."
+    },
+    {
+      "name": "MV Kestrel",
+      "also": [
+        "Kestrel"
+      ],
+      "kind": "vehicle",
+      "summary": "Tidewater's spare boat.",
+      "body": "- Tidewater's spare boat.\n- Covered afternoons while the MV Tern was out for its overhaul."
+    },
+    {
+      "name": "Larkspur Holdings LLC",
+      "also": [
+        "Larkspur Holdings"
+      ],
+      "kind": "organization",
+      "summary": "Morgan's holding company.",
+      "body": "- Morgan's holding company (confirmed). Owns Larkspur Cabins LLC and Larkspur Works LLC.\n- DISPUTED: whether it holds Morgan's half of Quarry Road Partners. The operating agreement says Larkspur Holdings LLC; the Granite Savings loan papers say Larkspur Cabins LLC. Ask Morgan which entity to name on any legal, tax or bank document."
+    },
+    {
+      "name": "Larkspur Cabins LLC",
+      "also": [
+        "Larkspur Cabins"
+      ],
+      "kind": "organization",
+      "summary": "Owns Heron Cabin; subsidiary of Larkspur Holdings.",
+      "body": "- Owned by Larkspur Holdings LLC. Owns Heron Cabin in Pine Hollow, Vermont.\n- DISPUTED: the Granite Savings loan papers name it as holder of Morgan's half of Quarry Road Partners, while the operating agreement says Larkspur Holdings LLC. Ask Morgan which entity to name on any legal, tax or bank document.\n- Heron Cabin hot tub coverage under the Alder Mutual policy is unresolved. Ask Morgan before telling anyone it is covered."
+    },
+    {
+      "name": "Larkspur Works LLC",
+      "also": [
+        "Larkspur Works"
+      ],
+      "kind": "organization",
+      "summary": "Morgan's software company, owned by Larkspur Holdings.",
+      "body": "- Morgan's software company (confirmed).\n- Owned by Larkspur Holdings LLC."
+    },
+    {
+      "name": "Quarry Road Partners LLC",
+      "also": [
+        "Quarry Road Partners"
+      ],
+      "kind": "organization",
+      "summary": "Rental-property LLC owned 50/50 by Morgan and Dana Okafor.",
+      "body": "- Owned 50/50 by Morgan and Dana Okafor (confirmed).\n- DISPUTED: which entity holds Morgan's half. The operating agreement says Larkspur Holdings LLC; the Granite Savings loan papers say Larkspur Cabins LLC. Ask Morgan which entity to name on any legal, tax or bank document.\n- Owns 12 Quarry Road (bought 2019) and the duplex at 8 Alder Lane (bought 2022).\n- Banks with Granite Savings. The Quarry Road refinance closed at 6.75% fixed for five years on $380,000 (an earlier commitment letter said 7.10%).\n- Dana Okafor takes tenant calls. Eastbrook Heating & Oil services the boilers at both rentals and has a 24-hour line."
+    },
+    {
+      "name": "12 Quarry Road",
+      "also": [
+        "Quarry Road rental"
+      ],
+      "kind": "property",
+      "summary": "Single-family rental owned by Quarry Road Partners, bought 2019.",
+      "body": "- Owned by Quarry Road Partners LLC, bought in 2019.\n- Rented to the Abara family through June 2027.\n- Rent is $2,450 a month since the June 2026 renewal (was $2,300).\n- Boiler serviced by Eastbrook Heating & Oil. Dana Okafor takes tenant calls.\n- Disputed: which entity holds Morgan's half of the owner, Quarry Road Partners. Ask Morgan which entity to name on any legal, tax or bank document."
+    },
+    {
+      "name": "8 Alder Lane",
+      "also": [
+        "Alder Lane duplex"
+      ],
+      "kind": "property",
+      "summary": "Duplex owned by Quarry Road Partners, bought 2022.",
+      "body": "- Duplex owned by Quarry Road Partners LLC, bought in 2022.\n- Upstairs: Colm Reddy took over the lease in July 2026 (earlier rented to the Vasquez family). Security deposit: two notes disagree, $1,700 versus $2,000 held at Granite Savings; nothing says which is right.\n- Downstairs: Nell Park moved out October 15, 2026; the unit is vacant.\n- Boiler serviced by Eastbrook Heating & Oil. Dana Okafor takes tenant calls.\n- Disputed: which entity holds Morgan's half of the owner, Quarry Road Partners. Ask Morgan which entity to name on any legal, tax or bank document."
+    },
+    {
+      "name": "Heron Cabin",
+      "also": [
+        "the cabin"
+      ],
+      "kind": "property",
+      "summary": "Short-term rental in Pine Hollow, Vermont, owned by Larkspur Cabins LLC.",
+      "body": "- Owned by Larkspur Cabins LLC. Listed through Staylark, whose host fee is 15% since October 1, 2026 (was 12%).\n- Sleeps eight in three bedrooms. Check-in 4pm, check-out 10am. Base rate $285 a night since September 2026. Minimum stay two nights, three on holiday weekends, since September 2026 (was three nights).\n- Internet: Greenline Fiber since May 2026 (was Pinecone Wireless). Hot tub: Summit Pools (was ClearSpa, which closed).\n- Operating account moved to Northfield Credit Union in 2026 (was Granite Savings).\n- Insured with Alder Mutual; policy renews January 15. Hot tub coverage is unresolved: the agent said yes by phone, the policy wording excludes it. Ask Morgan before telling anyone it is covered.\n- Marisol Peña cleans ($165 per changeover). Hale Plumbing does plumbing. Dunmore Plowing plows the driveway. Firewood is delivered by the cord in October."
+    },
+    {
+      "name": "Biscuit",
+      "also": [],
+      "kind": "pet",
+      "summary": "Morgan's corgi, born 2021.",
+      "body": "- Morgan's corgi, born in 2021."
+    },
+    {
+      "name": "Pepper",
+      "also": [],
+      "kind": "pet",
+      "summary": "Morgan's second corgi, adopted March 2026.",
+      "body": "- Morgan's second corgi, adopted in March 2026."
+    },
+    {
+      "name": "2019 Subaru Outback",
+      "also": [
+        "Outback"
+      ],
+      "kind": "vehicle",
+      "summary": "Morgan's car, bought June 2026.",
+      "body": "- Morgan's car, bought in June 2026 to replace the 2015 Honda CR-V.\n- Due for service every 6,000 miles."
+    }
+  ]
+}
