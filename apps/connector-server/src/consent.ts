@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto';
  *
  * The page is a plain self-submitting form: every OAuth param the SDK validated
  * is carried as a hidden field, plus the pairing-code input, POSTing to
- * /consent (which the server owns — see server.ts). No JS, no external assets.
+ * /consent (which the server owns — see server.ts). One hash-pinned script (ADR 0091), no external assets.
  */
 
 export interface ConsentParams {
