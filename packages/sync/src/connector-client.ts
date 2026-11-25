@@ -737,12 +737,29 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
     heldScopes.add(scope);
   }
 
+  // A row this vault already took in, whose acknowledgement never landed. Without this a memory
+  // the user edited or forgot since would be added again as if it were new.
+  const pulled = new Map<string, { live: string | null }>();
+  for (const entry of vault.list({ includeForgotten: true, includeSuperseded: true })) {
+    const serverId = (entry.metadata?.connector as { server_id?: unknown } | undefined)?.server_id;
+    if (typeof serverId !== 'string') continue;
+    const isLive = entry.forgotten_at === null && entry.superseded_at === null;
+    const seen = pulled.get(serverId);
+    if (seen === undefined) pulled.set(serverId, { live: isLive ? entry.id : null });
+    else if (isLive) seen.live = entry.id;
+  }
+  for (const serverId of vault.forgottenConnectorIds()) if (!pulled.has(serverId)) pulled.set(serverId, { live: null });
+
   const heads = new Map<string, LocalHead>();
   for (const row of applicable) {
     const project = parseProjectSlug(row.scope);
     if (project === null || row.type !== 'working') {
       const dup = vault.list({ scope: row.scope }).find((v) => v.content === row.content);
+      const before = pulled.get(row.server_id);
       if (dup) plan.dedupes.push({ server_id: row.server_id, local_entry_id: dup.id });
+      else if (before !== undefined && before.live !== null) plan.dedupes.push({ server_id: row.server_id, local_entry_id: before.live });
+      // Forgotten or replaced here since: the connector's copy is deleted, never acked back into service.
+      else if (before !== undefined) plan.discards.push({ server_id: row.server_id, scope: row.scope });
       else {
         plan.additions.push({
           server_id: row.server_id,

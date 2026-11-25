@@ -591,9 +591,17 @@ export class Vault {
     const row = matches[0]!;
     if (actor === 'agent' && isLiveProjectDocument(row)) throw new Error(PROJECT_DOCUMENT_FORGET_MESSAGE);
     const forgottenAt = new Date().toISOString();
-    this.db
-      .prepare("UPDATE memories SET content = '', metadata = NULL, forgotten_at = ? WHERE id = ?")
-      .run(forgottenAt, row.id);
+    const serverId = connectorRowId(rowToEntry(row).metadata);
+    this.db.transaction(() => {
+      this.db
+        .prepare("UPDATE memories SET content = '', metadata = NULL, forgotten_at = ? WHERE id = ?")
+        .run(forgottenAt, row.id);
+      if (serverId !== null) {
+        const ids = this.forgottenConnectorIds().filter((id) => id !== serverId);
+        ids.push(serverId);
+        this.setMeta(FORGOTTEN_CONNECTOR_IDS_KEY, JSON.stringify(ids.slice(-FORGOTTEN_CONNECTOR_IDS_KEPT)));
+      }
+    })();
     return { ...rowToEntry(row), content: '', metadata: null, forgotten_at: forgottenAt };
   }
 
@@ -709,7 +717,7 @@ export class Vault {
     input: { content: string; type: MemoryType; scope?: string },
     options: WriteActorOptions & WriterStamp,
     allowedScopes?: string[],
-  ): MemoryEntry {
+  ): { entry: MemoryEntry; changed: boolean } {
     this.assertOpen();
     const old = this.resolveEditable(idOrPrefix, allowedScopes);
     if (isProjectPaperwork(old)) throw new Error(PROJECT_DOCUMENT_REPLACE_MESSAGE);
@@ -717,8 +725,10 @@ export class Vault {
       throw new Error(`The memory to replace is in the "${old.scope}" scope, not "${input.scope.trim() || 'personal'}". Nothing was saved.`);
     }
     // The same text, give or take outer whitespace and one closing full stop, is not a new version.
-    if (saveNormalForm(input.content) === saveNormalForm(old.content) && input.type === old.type) return old;
-    return this.editMemory(old.id, { content: input.content, type: input.type }, options, allowedScopes);
+    if (saveNormalForm(input.content) === saveNormalForm(old.content) && input.type === old.type) return { entry: old, changed: false };
+    const entry = this.editMemory(old.id, { content: input.content, type: input.type }, options, allowedScopes);
+    // Said by identity: the caller must not guess from an id prefix or a clock whether a row was written.
+    return { entry, changed: entry.id !== old.id };
   }
 
   /**
@@ -1764,6 +1774,24 @@ export class Vault {
     return next;
   }
 
+  /**
+   * Cloud Connect row ids of memories forgotten here. A forget blanks the row,
+   * so without this list a pull whose acknowledgement failed could not tell a
+   * forgotten memory from a new one and added it again. Kept in vault settings,
+   * which older builds ignore and vault sync carries to other devices.
+   */
+  forgottenConnectorIds(): string[] {
+    this.assertOpen();
+    const raw = this.getMetaOptional(FORGOTTEN_CONNECTOR_IDS_KEY);
+    if (raw === undefined) return [];
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed.filter((id): id is string => typeof id === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+
   /** Live rows a search ranks; with skipProjectPaperwork, project documents and archives are left out (ADR 0084 D3). */
   private searchCandidates(options: RetrieveOptions): MemoryEntry[] {
     return this.list({
@@ -2218,6 +2246,17 @@ export function computeEntryHash(entry: MemoryEntry, provider?: CryptoProvider):
  * no byte-exact contract to preserve, only the v4 shape).
  */
 /** The live project document: the one working row in a valid project scope. */
+const FORGOTTEN_CONNECTOR_IDS_KEY = 'forgotten_connector_ids';
+/** Enough for any backlog of unacknowledged rows; old ids fall off the front. */
+const FORGOTTEN_CONNECTOR_IDS_KEPT = 2000;
+
+/** The Cloud Connect row a memory was pulled from, if any. The id is random and says nothing about the memory. */
+function connectorRowId(metadata: Record<string, unknown> | null): string | null {
+  const connector = metadata?.connector;
+  const serverId = typeof connector === 'object' && connector !== null ? (connector as { server_id?: unknown }).server_id : undefined;
+  return typeof serverId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(serverId) ? serverId : null;
+}
+
 function isLiveProjectDocument(row: { type: string; scope: string; superseded_at: string | null; forgotten_at: string | null }): boolean {
   return row.type === 'working' && parseProjectSlug(row.scope) !== null && row.superseded_at === null && row.forgotten_at === null;
 }
