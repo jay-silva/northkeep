@@ -3,6 +3,20 @@
 *Honesty about limits is a product feature. This file is kept current with
 every milestone; if a limit is removed, say when and how.*
 
+## The vault lock and the save check (ADR 0097), current
+
+What it does, on the Mac (the Mac app, the app in a browser, the command line and the helper AI apps start): an app that is still running keeps the vault for as long as it needs; another app waits a short time (5 seconds unless the action sets its own wait) and is then told the vault is locked, with the process that holds it. Before any save, the app checks that the vault file is the one it opened or last saved; if it is not, the save is refused with "The vault changed while this was running. Nothing was saved. Try again." What it does not do:
+
+- **An app that is running but stuck or paused keeps the vault until it is quit.** Nothing clears it. Before this change another app took the vault over after 60 seconds.
+- **Long work under the lock makes every other app say the vault is locked for that long.** That includes a sync with a slow Cloud Connect (each call may take 30 seconds), stopping sharing a collection, resolving a project conflict, and a meaning search that has to prepare many memories first (up to 60 seconds for each one). Saves from other apps, including an AI app saving a memory, fail with that message in the meantime and are not retried for you.
+- **A lock left by a crashed app can look owned.** If its process number is now used by another program since the Mac last started, or belongs to another user's process, the lock is not taken over. The message names that process; the lock file then has to be deleted by hand, or the Mac restarted. On a system other than macOS or Linux the app cannot tell one start of the machine from another, so there a restart does not clear it either.
+- **An app from before this change can still cause a silent loss.** An older NorthKeep app or helper that is still running takes over a lock older than 60 seconds and saves without the check. While one is running, a save can be lost with no message, in either direction. It ends when every NorthKeep app and every AI app's helper has been restarted on the new version.
+- **The save check and the write are two steps.** When no lock is in force (a lock file deleted by hand, or an older app), two saves within the same few milliseconds can both go through, and the later one wins.
+- **The phone does not make the save check.** Its actions already wait in one line, and it has no lock file.
+- **The lock only works between apps on one Mac.** A vault file in a folder that two Macs both write is not protected by it; the save check applies only once the other Mac's file has arrived.
+- **Two actions change Cloud Connect before they save here.** Stopping sharing a collection, and deleting a shared project from the command line, delete Cloud Connect's copy first. If the vault is then locked or the save is refused, Cloud Connect's copy is gone while this Mac still shows the collection as shared, or still has the project. Run the action again.
+- **The separate lock around vault sync transfers is unchanged.** It is still taken over after about three minutes without progress.
+
 ## Found first: search and the lookup instruction (ADR 0084), current
 
 - The instruction to search NorthKeep before answering about you, or about a person, organization, property or project in your life, even when the app's own notes seem to answer, is advisory. The Cloud connector sends it, and the Mac app from 0.30.0. Each AI app decides whether its model sees it. Checked on the owner's own account on 2026-11-24: Claude (claude.ai) and Claude Code act on it; Codex acts on it for about half of questions and otherwise reads its own context file first; Grok Bot and Muse do not act on it at all. Not checked: ChatGPT, Cursor, Gemini.

@@ -21,6 +21,8 @@ export function mobilePlatform(): Platform {
     crypto: mobileCryptoProvider(),
     sqlite: mobileSqliteDriver(),
     storage: mobileVaultStorage(),
+    // ADR 0097 D4: off on the phone until the save check is tested on a device.
+    checkFileBeforeSave: false,
   };
 }
 

@@ -21,6 +21,12 @@ export interface Platform {
   crypto: CryptoProvider;
   sqlite: SqliteDriver;
   storage: VaultStorage;
+  /**
+   * ADR 0097 D3: `false` turns off the check that the vault file is unchanged
+   * before a save. On unless a platform opts out; only the phone does, where
+   * every vault action already waits in one line.
+   */
+  checkFileBeforeSave?: boolean;
 }
 
 let defaultPlatform: Platform | null = null;

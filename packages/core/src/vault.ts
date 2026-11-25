@@ -15,6 +15,7 @@ import {
   NONCE_BYTES,
   SALT_BYTES,
   VaultAuthError,
+  VaultChangedError,
   VaultSchemaError,
   blake2bHex,
   decrypt,
@@ -230,6 +231,8 @@ export class Vault {
   private readonly platform: Platform;
   readonly path: string;
   private closed = false;
+  /** ADR 0097 D3: the nonce of the file this handle opened or last wrote; null when it expects no file yet. */
+  private fileNonce: Buffer | null;
   private autoCompaction: AutoCompaction | null = null;
   /** ADR 0067 D1: vectors live in RAM for this handle only, never in the image. */
   private readonly vectors = new Map<string, Float32Array>();
@@ -241,7 +244,9 @@ export class Vault {
     salt: Buffer,
     kdf: KdfParams,
     platform: Platform,
+    fileNonce: Buffer | null,
   ) {
+    this.fileNonce = fileNonce;
     this.path = vaultPath;
     this.db = db;
     this.key = key;
@@ -276,7 +281,7 @@ export class Vault {
       setMeta.run('chain_head', GENESIS_HASH);
       setMeta.run('created_at', new Date().toISOString());
       setMeta.run('sync_generation', '0');
-      const vault = new Vault(options.path, db, key, salt, kdf, platform);
+      const vault = new Vault(options.path, db, key, salt, kdf, platform, null);
       vault.save();
       return vault;
     } catch (err) {
@@ -373,7 +378,8 @@ export class Vault {
       db.pragma('foreign_keys = ON');
       // Zeroize freed pages on delete/overwrite (defense-in-depth for forget()).
       db.pragma('secure_delete = ON');
-      const vault = new Vault(vaultPath, db, key, header.salt, header.kdf, platform);
+      // The nonce read at open, before migrate() saves: that save must find the file it read.
+      const vault = new Vault(vaultPath, db, key, header.salt, header.kdf, platform, header.nonce);
       vault.migrate();
       return vault;
     } catch (err) {
@@ -489,8 +495,10 @@ export class Vault {
     const nonce = randomBytes(NONCE_BYTES, this.platform.crypto);
     nonce.copy(header, MAGIC.length + SALT_BYTES + 8);
     const ciphertext = encryptWithNonce(image, this.key, nonce, header, this.platform.crypto);
+    this.assertFileUnchanged();
     // Atomic replace (temp + fsync + rename + .bak) lives behind the storage seam.
     this.platform.storage.writeAtomic(this.path, Buffer.concat([header, ciphertext]));
+    this.fileNonce = nonce;
     for (const listener of saveListeners) {
       try {
         listener(this.path);
@@ -498,6 +506,24 @@ export class Vault {
         // An observer must never turn a completed save into a failure.
       }
     }
+  }
+
+  /**
+   * ADR 0097 D3: refuse to write over a file someone else wrote. Every save
+   * stamps a fresh nonce in the header, so a different one, or a file that
+   * appeared or vanished, means another writer.
+   */
+  private assertFileUnchanged(): void {
+    if (this.platform.checkFileBeforeSave === false) return;
+    const storage = this.platform.storage;
+    let onDisk: Buffer | null = null;
+    if (storage.exists(this.path)) {
+      const head = storage.readHead ? storage.readHead(this.path, HEADER_LENGTH) : storage.readBytes(this.path);
+      const at = MAGIC.length + SALT_BYTES + 8;
+      onDisk = head.length >= HEADER_LENGTH ? Buffer.from(head.subarray(at, at + NONCE_BYTES)) : Buffer.alloc(0);
+    }
+    const same = onDisk === null || this.fileNonce === null ? onDisk === this.fileNonce : Buffer.compare(onDisk, this.fileNonce) === 0;
+    if (!same) throw new VaultChangedError();
   }
 
   remember(input: RememberInput): MemoryEntry {

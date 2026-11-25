@@ -20,6 +20,7 @@ export {
   AEAD_OVERHEAD,
   KEY_BYTES,
   VaultAuthError,
+  VaultChangedError,
   VaultSchemaError,
   generateDeviceSecret,
   deriveNotesKey,
