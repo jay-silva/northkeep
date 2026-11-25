@@ -1411,6 +1411,7 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
 
 ## Connector for shared scopes, ADR 0019 + ADR 0020 (current)
 
+- **A sync with a very slow Cloud Connect can cost another app's save (Mac app and command line).** Sync now in the Mac app and the share sync command hold the vault while they download waiting changes from Cloud Connect, apply them and confirm them. That is up to four calls to Cloud Connect, each allowed 30 seconds, and working out what to apply takes several seconds when thousands of changes are waiting. A vault held for more than 60 seconds is taken over by the next app that needs it. When that happens during a sync, the other app's save goes through and the sync then writes the vault over it: that save is lost, with no message. It takes Cloud Connect being slow for more than a minute in total within one sync. The phone is not affected this way: it has no takeover, so other actions wait behind its sync. A fix was written and closed unmerged on 2026-11-25 (pull request 99, branch `claude/sync-lock`).
 - **Cloud Connect's copy updates automatically only while this Mac is in
   sync with your other devices (ADR 0063 D5).** After automatic sync pushes
   or pulls the vault, or finds this Mac exactly in sync, the Mac compares its
