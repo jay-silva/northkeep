@@ -12,10 +12,11 @@ const rows = (...contents: string[]): Array<{ content: string }> => contents.map
 const held = (save: string, ...memories: string[]): string[] => checkSave(save, rows(...memories)).held.map((row) => row.content);
 
 describe('ADR 0085 D3: the save check', () => {
-  it('compares text without case, spacing or punctuation at word edges', () => {
-    expect(saveNormalForm('  "The HARBOR   office," is at Pier 4. ')).toBe('the harbor office is at pier 4');
-    expect(saveNormalForm("Pat's e-mail")).toBe("pat's e-mail");
-    expect(saveNormalForm('!!!')).toBe('');
+  it('compares the same characters, give or take outer whitespace and one closing full stop', () => {
+    expect(saveNormalForm('  The harbor office is at Pier 4. \n')).toBe('The harbor office is at Pier 4');
+    expect(saveNormalForm('Steps:\r\n  1. Open the gate')).toBe('Steps:\n  1. Open the gate');
+    expect(saveNormalForm('and so on...')).toBe('and so on...');
+    expect(saveNormalForm('.')).toBe('');
   });
 
   it('never calls two saves identical when a sign or symbol differs', () => {
@@ -36,28 +37,34 @@ describe('ADR 0085 D3: the save check', () => {
       ["Ceiling is 8'", 'Ceiling is 8'],
       ['Answer is 5!', 'Answer is 5'],
       ['Due June 3?', 'Due June 3.'],
+      ['The wifi password is HarborLight42', 'The wifi password is harborlight42'],
+      ['The pump draws 10 mW', 'The pump draws 10 MW'],
+      ['The link is 500 Mb', 'The link is 500 MB'],
+      ['Docs live at example.test/Harbor', 'Docs live at example.test/harbor'],
+      ['Steps:\n  check the gate\n  log it', 'Steps:\ncheck the gate\nlog it'],
+      ['Pat is allergic to nuts?', 'Pat is allergic to nuts.'],
+      ['The harbor  office', 'The harbor office'],
     ];
     for (const [first, second] of pairs) {
       expect(checkSave(second, rows(first)).identical, `${first} / ${second}`).toBeNull();
     }
   });
 
-  it('still calls a save identical across case, spacing, quotes and a closing full stop', () => {
-    expect(checkSave('the "harbor office" is at Pier 4', rows('The Harbor  office is at Pier 4.')).identical).not.toBeNull();
-    expect(checkSave('Rent is $1,450 a month', rows('Rent is $1,450 a month.')).identical).not.toBeNull();
+  it('calls a save identical for the same text with outer whitespace or one closing full stop', () => {
     expect(checkSave('The harbor office is at Pier 4', rows('The harbor office is at Pier 4.')).identical).not.toBeNull();
-    expect(checkSave('Is the office open?', rows('is the office open')).identical).not.toBeNull();
+    expect(checkSave('  Rent is $1,450 a month.\n', rows('Rent is $1,450 a month')).identical).not.toBeNull();
   });
 
-  it('stays fast on a long run of punctuation inside a word', () => {
-    const started = Date.now();
-    expect(saveNormalForm(`a${'!'.repeat(64_000)}b ${'"'.repeat(64_000)}`)).toBe(`a${'!'.repeat(64_000)}b`);
-    expect(Date.now() - started).toBeLessThan(200);
+  it('a save that differs only by case is held for the app to decide, never called identical', () => {
+    const check = checkSave('the harbor office is at pier 4', rows('The harbor office is at Pier 4.'));
+    expect(check.identical).toBeNull();
+    expect(check.held).toEqual([{ content: 'The harbor office is at Pier 4.' }]);
   });
 
   it('calls a save identical only when some text is left to compare', () => {
-    expect(checkSave('The harbor office is at Pier 4', rows('the harbor office is at pier 4.')).identical).toEqual({ content: 'the harbor office is at pier 4.' });
-    expect(checkSave('!!!', rows('???')).identical).toBeNull();
+    expect(checkSave('The harbor office is at Pier 4', rows('The harbor office is at Pier 4.')).identical).toEqual({ content: 'The harbor office is at Pier 4.' });
+    expect(checkSave('.', rows('.')).identical).toBeNull();
+    expect(checkSave('  ', rows('')).identical).toBeNull();
   });
 
   it('holds an update that repeats the old fact and adds one word', () => {

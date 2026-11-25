@@ -175,6 +175,9 @@ export type VaultSaveListener = (vaultPath: string) => void;
 const saveListeners = new Set<VaultSaveListener>();
 
 /** Register a save listener; returns the unsubscribe function. */
+/** The source stamped on a memory restored from a consolidation. */
+export const RESTORED_COPY_SOURCE = 'northkeep:consolidation-recovery';
+
 export function onVaultSave(listener: VaultSaveListener): () => void {
   saveListeners.add(listener);
   return () => {
@@ -719,6 +722,8 @@ export class Vault {
     if (old.id === next.id) throw new Error('A memory cannot replace itself.');
     if (isProjectPaperwork(old) || isProjectPaperwork(next)) throw new Error(PROJECT_DOCUMENT_REPLACE_MESSAGE);
     if (old.scope !== next.scope) throw new Error('A memory can only replace one in its own scope.');
+    // A restored copy's history check expects an edit, not a link to an older row: marking it breaks the consolidation screen.
+    if (old.source === RESTORED_COPY_SOURCE || next.source === RESTORED_COPY_SOURCE) throw new Error('A memory restored from a consolidation cannot be replaced this way.');
     const now = new Date().toISOString();
     this.db.prepare('UPDATE memories SET superseded_at = ?, superseded_by = ? WHERE id = ?').run(now, next.id, old.id);
     return { ...old, superseded_at: now, superseded_by: next.id };
@@ -1285,7 +1290,7 @@ export class Vault {
         type: source.type,
         content: source.content,
         scope: source.scope,
-        source: 'northkeep:consolidation-recovery',
+        source: RESTORED_COPY_SOURCE,
         source_model: source.source_model,
         confidence: source.confidence,
         created_at: now,
@@ -1618,7 +1623,7 @@ export class Vault {
       }
       if (forgottenOriginalOkay) continue;
       const supersededOkay = allowSuperseded && entry.superseded_at !== null && entry.superseded_by !== null;
-      if (entry.type !== original.type || entry.content !== original.content || entry.scope !== original.scope || entry.source !== 'northkeep:consolidation-recovery' || entry.source_model !== original.source_model || entry.confidence !== original.confidence || entry.valid_from !== original.valid_from || entry.forgotten_at !== null || (!supersededOkay && (entry.superseded_at !== null || entry.superseded_by !== null)) || entry.created_at !== entries[0]!.created_at || exactCanonicalJson(meta.original_metadata) !== exactCanonicalJson(original.metadata)) {
+      if (entry.type !== original.type || entry.content !== original.content || entry.scope !== original.scope || entry.source !== RESTORED_COPY_SOURCE || entry.source_model !== original.source_model || entry.confidence !== original.confidence || entry.valid_from !== original.valid_from || entry.forgotten_at !== null || (!supersededOkay && (entry.superseded_at !== null || entry.superseded_by !== null)) || entry.created_at !== entries[0]!.created_at || exactCanonicalJson(meta.original_metadata) !== exactCanonicalJson(original.metadata)) {
         throw new Error('Persisted restored entry does not reproduce its original source.');
       }
       if (supersededOkay) {
