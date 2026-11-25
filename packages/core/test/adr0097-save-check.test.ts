@@ -99,6 +99,28 @@ describe('Vault.save checks the file first', () => {
     a.close();
   });
 
+  it('a write that fails after the new file is in place does not make the next save refuse', () => {
+    const base = getPlatform();
+    let failNext = true;
+    const storage = {
+      ...base.storage,
+      writeAtomic: (p: string, bytes: Uint8Array) => {
+        base.storage.writeAtomic(p, bytes);
+        if (failNext) {
+          failNext = false;
+          throw new Error('directory fsync failed');
+        }
+      },
+    };
+    const a = Vault.open({ path: vaultPath, passphrase, deviceSecret, platform: { ...base, storage } });
+    add(a, 'Landed although the write reported a failure');
+    expect(() => a.save()).toThrow('directory fsync failed');
+    add(a, 'Saved normally afterwards');
+    a.save();
+    a.close();
+    expect(onDisk()).toEqual(['Landed although the write reported a failure', 'Saved normally afterwards']);
+  });
+
   it('a platform that opts out saves over the newer file, as the phone does today', () => {
     const base = getPlatform();
     const a = Vault.open({ path: vaultPath, passphrase, deviceSecret, platform: { ...base, checkFileBeforeSave: false } });

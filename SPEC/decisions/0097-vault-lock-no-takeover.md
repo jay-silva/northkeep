@@ -7,7 +7,7 @@ Every Mac app that changes the vault takes a lock file first, because a save rep
 
 ## Decision
 - D1: A vault lock whose owner is still running is never taken over. Another app waits, then gets the vault-is-locked message, naming the holder.
-- D2: A lock is dead when its owner has exited, or when it names an earlier start of the machine (an identity in the lock, not a clock). A lock with no readable owner is dead after 60 seconds. Dead locks are taken one stealer at a time, re-read first. Locks are written whole.
+- D2: A lock is dead when its owner has exited, or when it names an earlier start of the machine (an identity in the lock, not a clock). A lock with no readable owner is dead after 60 seconds. Dead locks are taken one stealer at a time, re-read first. Locks are written whole where the filesystem has hard links.
 - D3: On the Mac, a save first checks that the vault file is the one this handle opened or last saved, by the mark every save already stamps. If not: "The vault changed while this was running. Nothing was saved. Try again." The check is on unless a platform opts out.
 - D4: The phone opts out, in one place, until tested on a device.
 - D5: An app from before this change can still cause the loss while it runs. That is a listed limit; older apps are not locked out (Jay: "Limit").
@@ -17,7 +17,7 @@ Every Mac app that changes the vault takes a lock file first, because a save rep
 - Easier: between current apps, a lost save becomes a visible "locked" or "try again" on every Mac path.
 - Harder: a stuck or paused app holds the vault until it is quit. Long work under the lock blocks other apps for as long.
 - Harder: a crashed app's lock can look owned (process number reused) and must be deleted by hand.
-- Harder: stopping sharing, and deleting a shared project from the command line, change Cloud Connect before the local save.
+- Harder: stopping sharing, and deleting a shared project, change Cloud Connect before the local save.
 
 ## Rejected
 - A longer limit: the loss stays, only rarer.

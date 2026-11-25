@@ -497,7 +497,17 @@ export class Vault {
     const ciphertext = encryptWithNonce(image, this.key, nonce, header, this.platform.crypto);
     this.assertFileUnchanged();
     // Atomic replace (temp + fsync + rename + .bak) lives behind the storage seam.
-    this.platform.storage.writeAtomic(this.path, Buffer.concat([header, ciphertext]));
+    try {
+      this.platform.storage.writeAtomic(this.path, Buffer.concat([header, ciphertext]));
+    } catch (err) {
+      // A write can fail after the new file is in place (the directory fsync): then it is ours.
+      try {
+        if (this.diskNonce()?.equals(nonce) === true) this.fileNonce = nonce;
+      } catch {
+        // The caller needs the write's own error, not this read's.
+      }
+      throw err;
+    }
     this.fileNonce = nonce;
     for (const listener of saveListeners) {
       try {
@@ -515,15 +525,18 @@ export class Vault {
    */
   private assertFileUnchanged(): void {
     if (this.platform.checkFileBeforeSave === false) return;
-    const storage = this.platform.storage;
-    let onDisk: Buffer | null = null;
-    if (storage.exists(this.path)) {
-      const head = storage.readHead ? storage.readHead(this.path, HEADER_LENGTH) : storage.readBytes(this.path);
-      const at = MAGIC.length + SALT_BYTES + 8;
-      onDisk = head.length >= HEADER_LENGTH ? Buffer.from(head.subarray(at, at + NONCE_BYTES)) : Buffer.alloc(0);
-    }
+    const onDisk = this.diskNonce();
     const same = onDisk === null || this.fileNonce === null ? onDisk === this.fileNonce : Buffer.compare(onDisk, this.fileNonce) === 0;
     if (!same) throw new VaultChangedError();
+  }
+
+  /** The nonce in the file's header now: null with no file, empty when the file is too short to be a vault. */
+  private diskNonce(): Buffer | null {
+    const storage = this.platform.storage;
+    if (!storage.exists(this.path)) return null;
+    const head = storage.readHead ? storage.readHead(this.path, HEADER_LENGTH) : storage.readBytes(this.path);
+    const at = MAGIC.length + SALT_BYTES + 8;
+    return head.length >= HEADER_LENGTH ? Buffer.from(head.subarray(at, at + NONCE_BYTES)) : Buffer.alloc(0);
   }
 
   remember(input: RememberInput): MemoryEntry {

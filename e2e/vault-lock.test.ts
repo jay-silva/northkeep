@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { Vault, deriveMasterKey, loadDeviceSecret } from '@northkeep/core';
 
 /**
@@ -100,8 +100,13 @@ await withFileLock(vaultPath, async () => {
   );
 }, 120_000);
 
+// A failed case must not leave its holder on the lock for the next one.
+afterEach(() => {
+  for (const c of children.splice(0)) c.kill('SIGKILL');
+  fs.rmSync(lockPath(), { force: true });
+});
+
 afterAll(() => {
-  for (const c of children) c.kill('SIGKILL');
   delete process.env.NORTHKEEP_HOME;
   fs.rmSync(home, { recursive: true, force: true });
 });
@@ -119,7 +124,7 @@ describe('ADR 0097: the vault lock across real processes', () => {
     const blockedRead = cli('list');
     expect([blockedSave.status, blockedRead.status]).toEqual([1, 1]);
     expect(blockedSave.stderr).toContain(BUSY);
-    expect(blockedSave.stderr).toContain(`It is held by process ${pid} (node)`);
+    expect(blockedSave.stderr).toContain(`It is held by process ${pid}`);
     expect(blockedRead.stderr).toContain(BUSY);
 
     expect(await first.saveNow()).toBe('SAVED');

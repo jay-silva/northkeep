@@ -120,6 +120,14 @@ describe('withFileLock', () => {
     fs.rmdirSync(`${target}.lock`);
   });
 
+  it('gives up at the deadline when the lock path is a link to nothing', async () => {
+    fs.symlinkSync(path.join(dir, 'nowhere'), `${target}.lock`);
+    const err = await withFileLock(target, () => undefined, { timeoutMs: 200 }).then(() => null, (e: Error) => e);
+    expect(err instanceof FileLockTimeoutError).toBe(true);
+    expect(fs.lstatSync(`${target}.lock`).isSymbolicLink()).toBe(true);
+    fs.rmSync(`${target}.lock`);
+  });
+
   it('writes its lock complete, pid first, with this start of the machine, and leaves no stray files', async () => {
     let token = '';
     await withFileLock(target, () => void (token = fs.readFileSync(`${target}.lock`, 'utf8')));

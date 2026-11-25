@@ -19,7 +19,7 @@ export class FileLockTimeoutError extends Error {
       `Vault is locked by another NorthKeep process (${lockPath}). ` +
         (holder === ''
           ? 'Quit the other NorthKeep app and try again.'
-          : `It is held by ${holder}. Quit that app and try again. If it is not a NorthKeep app, delete the lock file and retry.`),
+          : `It is held by ${holder}. Quit that app and try again. If you are sure no NorthKeep app or AI app helper is running, delete the lock file and retry.`),
     );
     this.name = 'FileLockTimeoutError';
   }
@@ -76,6 +76,16 @@ function ownerState(text: string): 'alive' | 'dead' | 'unknown' {
   } catch (err) {
     // ESRCH: no such process. EPERM: it exists but is not ours; treat as alive.
     return (err as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'alive';
+  }
+}
+
+/** True when something sits at the path, even a link to nothing. */
+function pathTaken(filePath: string): boolean {
+  try {
+    fs.lstatSync(filePath);
+    return true;
+  } catch {
+    return false;
   }
 }
 
@@ -218,21 +228,22 @@ export async function withFileLock<T>(
       seen = fs.readFileSync(lockPath);
     } catch (err) {
       // Released between the create and the read: retry at once. Anything else
-      // (a lock we may not read, a directory) must still reach the deadline below.
-      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      // (a lock we may not read, a directory, a dangling link) must still reach the deadline below.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT' && !pathTaken(lockPath)) continue;
     }
     const state = seen === null ? 'unknown' : ownerState(seen.toString('utf8'));
     let dead = state === 'dead';
     if (!dead && (state === 'unknown' || options.takeOverLiveOwner === true)) {
       try {
-        dead = Date.now() - fs.statSync(lockPath).mtimeMs > staleMs;
+        // lstat: a link to nothing still has an age, and must not loop here.
+        dead = Date.now() - fs.lstatSync(lockPath).mtimeMs > staleMs;
       } catch {
-        continue;
+        if (!pathTaken(lockPath)) continue;
       }
     }
     if (dead && seen !== null) {
       removeDeadLock(lockPath, seen, token);
-      if (!fs.existsSync(lockPath)) continue;
+      if (!pathTaken(lockPath)) continue;
     }
     if (Date.now() > deadline) throw new FileLockTimeoutError(lockPath, describeHolder(seen));
     await new Promise((resolve) => setTimeout(resolve, RETRY_MS));
