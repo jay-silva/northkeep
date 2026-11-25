@@ -128,6 +128,18 @@ describe('ADR 0085: replace primitives in the vault', () => {
     expect(vault.verifyChain().ok).toBe(true);
   });
 
+  it('a forget blanks the whole row and remembers only the Cloud Connect row id, apart from the row', () => {
+    const saved = vault.remember({ content: 'The ferry leaves at nine', type: 'semantic', metadata: { connector: { server_id: 'conn_abc123', app: 'Example Assistant' }, note: 'private' } });
+    const gone = vault.forget(saved.id, { actor: 'owner' });
+    expect(gone.content).toBe('');
+    expect(gone.metadata).toBeNull();
+    expect(vault.list({ includeForgotten: true }).find((row) => row.id === saved.id)!.metadata).toBeNull();
+    const plain = vault.remember({ content: 'The ferry returns at five', type: 'semantic', metadata: { note: 'private' } });
+    vault.forget(plain.id, { actor: 'owner' });
+    expect(vault.forgottenConnectorIds()).toEqual(['conn_abc123']);
+    expect(vault.verifyChain().ok).toBe(true);
+  });
+
   it('markReplaced links two existing memories and leaves one live', () => {
     const old = vault.remember({ content: 'The harbor office is at Pier 4', type: 'semantic' });
     const next = vault.remember({ content: 'The harbor office is at Pier 9', type: 'semantic' });

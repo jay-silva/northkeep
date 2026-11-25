@@ -1054,9 +1054,11 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           if (replaces !== undefined) {
             // As memory_edit: the app only saw masked text, so its rewrite could overwrite a real value.
             refuseMemoryWriteUnderMasking(1);
+            const askedAt = new Date().toISOString();
             const replaced = vault.replaceMemory(replaces, { content, type: type as MemoryType, scope }, { actor: 'agent', ...stamp }, granted);
-            // replaceMemory hands back the old row itself when the text is the same.
-            if (replaced.id.startsWith(replaces.trim().toLowerCase())) {
+            // replaceMemory hands back the old row itself when the text is the same. Told by its age, not by
+            // the id prefix the app sent: a new row's random id can begin with the same characters.
+            if (replaced.created_at < askedAt) {
               return { payload: { stored: publicEntry(replaced), already_saved: true }, result_id: replaced.id, disclosed_scopes: [replaced.scope] };
             }
             vault.save();

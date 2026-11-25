@@ -117,6 +117,34 @@ describe('ADR 0085 cloud replace on the device', () => {
     expect(vault.consolidationHistory()).toHaveLength(1);
   });
 
+  it('does not bring back a memory the user forgot after a pull whose acknowledgement failed', async () => {
+    await sharedPier4();
+    fake.cloudRemember('harbor', 'The ferry leaves at nine.');
+    fake.failNext('/client/ack', 500);
+    await expect(applyDownSync(conn())).rejects.toThrow();
+    const saved = vault.list({ scope: 'harbor' }).find((e) => e.content === 'The ferry leaves at nine.')!;
+    vault.forget(saved.id, { actor: 'owner' });
+    vault.save();
+    const result = await applyDownSync(conn());
+    expect(result.added).toBe(0);
+    expect(result.discarded).toBe(1);
+    expect(liveTexts()).toEqual([PIER_4]);
+    expect((await fetchPending(conn())).entries).toEqual([]);
+  });
+
+  it('does not add a second copy of a memory the user edited after a pull whose acknowledgement failed', async () => {
+    await sharedPier4();
+    fake.cloudRemember('harbor', 'The ferry leaves at nine.');
+    fake.failNext('/client/ack', 500);
+    await expect(applyDownSync(conn())).rejects.toThrow();
+    const saved = vault.list({ scope: 'harbor' }).find((e) => e.content === 'The ferry leaves at nine.')!;
+    vault.editMemory(saved.id, { content: 'The ferry leaves at ten.' }, { actor: 'owner' });
+    vault.save();
+    const result = await applyDownSync(conn());
+    expect(result.added).toBe(0);
+    expect(liveTexts()).toEqual(['The ferry leaves at ten.', PIER_4]);
+  });
+
   it('a first line of invisible characters does not show the user an empty quote', async () => {
     const old = await sharedPier4();
     fake.cloudReplace('harbor', '\u202E\u200B\nThe harbor office is now at Pier 9.\nMore', old.id);
