@@ -64,11 +64,14 @@ export const SAVE_HOLD_COVER = 0.6;
 /** How many near matches a held save lists. */
 export const SAVE_HOLD_LIST = 3;
 
-/** Text as the identical-save test compares it: case, spacing and punctuation at word edges do not count. */
+/**
+ * Text as the identical-save test compares it: the same characters, give or
+ * take outer whitespace and one closing full stop. Case, symbols and layout
+ * all carry facts (a password, mW and MW, nested steps); a looser test lost saves.
+ */
 export function saveNormalForm(text: string): string {
-  return text.normalize('NFKC').toLowerCase().split(/\s+/)
-    .map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
-    .filter((word) => word.length > 0).join(' ');
+  const trimmed = text.normalize('NFC').replace(/\r\n/g, '\n').trim();
+  return trimmed.endsWith('.') && !trimmed.endsWith('..') ? trimmed.slice(0, -1).trimEnd() : trimmed;
 }
 
 /**

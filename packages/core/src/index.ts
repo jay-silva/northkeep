@@ -38,6 +38,7 @@ export {
   cosineSimilarity,
   parseSyncGeneration,
   projectScopeInUse,
+  isRestoredCopy,
   type VaultHeader,
   type VaultOptions,
 } from './vault.js';

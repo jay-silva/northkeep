@@ -20,7 +20,7 @@ Milestone 3 of relaunch step 1. Overflow for the ADR, plus the review log.
 
 ## D3 details
 
-- Normalize: Unicode NFKC, lower case, collapse whitespace, strip punctuation at word edges.
+- Identical means the same characters after NFC and with one kind of line ending, give or take outer whitespace and one closing full stop (narrowed twice after merge; see the last section). As first built it folded case, spacing and edge punctuation.
 - Hold (rule superseded on 2026-11-24, see the end of this record; the first version held on any two shared non-stopword words): the reply lists the top three by overlap, with ids. Nothing is saved until the agent calls again with `replaces` (one row, old marked replaced) or `distinct: true`. This is where reworded updates ("is now at Pier 9") get caught. An earlier save-then-list version left two live rows when the agent followed its advice (recheck R-D3).
 - A capitalized-word rule was dropped: any memory naming the user matched everything.
 - Words only on both surfaces. Review 1 measured local meaning match at a 0.9 cosine: it never fired, and no threshold separated updates from distinct facts. The no-local-model rule removes it anyway.
@@ -57,7 +57,7 @@ Review 1 (fresh eyes, 2026-11-20): NOT CLEARED.
   - Phone and old builds would have acked and lost the replace. Now the protocol version gate covers them.
   - Connector app names were unchecked. Now they are tamed.
   - The acceptance step could not show a replaced row. It now uses export.
-- Accepted scar tissue: reworded updates that share no key words still save as a second row. Milestone 5's conflict check is the backstop.
+- Accepted scar tissue: reworded updates that share no key words still save as a second row. Milestone 5's conflict check was named as the backstop; see the correction under "What it misses".
 
 Recheck (2026-11-20): CLEARED WITH WOUNDS. The kill shot and the prior wounds are closed. The fix introduced two wounds, both fixed after the recheck and not yet rechecked:
 - Save-then-list duplicated rows. D3 now holds the save instead.
@@ -83,7 +83,7 @@ What it misses, by design and by measurement:
 - An update that shares fewer than two distinctive words with the old fact. "Rent is $2,450" against "Rent is $2,300" shares only "rent"; "My accountant is now Priya Shah" against "My accountant is Leo Marsh" shares only "accountant". Both save as second copies. One shared word cannot be the rule: it would hold almost every save about a known person or place.
 - A long update of a short fact, since only the save's side is measured.
 - Text with no Latin letters or digits yields no words, so it is saved unchecked.
-Milestone 5's conflict check is the backstop for all three.
+A later conflict check was meant as the backstop for all three; as drafted on 2026-11-25 (ADR 0092) it does not catch the first, so nothing does today.
 
 How an agent gets through a hold. `distinct: true` always saves; there is no loop. An identical save returns the existing id whether or not `distinct` is set. At privacy Tier 1 a save is allowed but a replace is refused, as `memory_edit` is today, so the hold reply says that `replaces` is not available and offers `distinct` only.
 
@@ -145,3 +145,12 @@ Wounds 1 and 3 closed; nothing new from the fix commit. Still open, and fixed af
 2. Two published sentences were false: KNOWN-LIMITS said an exact repeat is never stored again without saying "in the same collection", and D1 said every surface labels the app name when only the Mac app does. Both corrected.
 Notes taken up: a Cloud retry that sets `replaces` again no longer stores the same text twice; KNOWN-LIMITS says confirming or editing either memory drops a waiting replacement, and that replacing the new memory first drops the older one.
 Still not checked: the new table against real hosted Postgres.
+
+## Found after merge (2026-11-25)
+The review of ADR 0093 ran the identical-save test on pairs that differ by a symbol. As merged in PR 96 it stripped every non-letter at a word's edges, folded compatibility forms, lower-cased and collapsed whitespace, so "O+" and "O-", "-500" and "500", "$1,450" and "€1,450", and "< 5 mg" and "> 5 mg" compared equal: the second save was answered "already saved" and never stored. Neither build review tried it.
+
+First fix (PR 97, two commits): drop only sentence punctuation at word edges, keep unit marks after a digit. Two merge reviews cleared it. The recheck of ADR 0093 then showed the same loss through case and layout: a password that differs only by capitals, "10 mW" and "10 MW", a path, and nested steps whose line breaks collapse.
+
+Final rule (PR 97, third commit): identical means the same characters, give or take whitespace at either end and one closing full stop. Nothing else is folded. A save that differs only by case, a symbol or layout is no longer called identical. If it shares two counted words with the old memory the hold rule catches it and the app decides; a very short save, or one with no unaccented Latin letters, is stored as a second memory with no question. Either way it is never dropped on a guess. The cost is that a retyped repeat with different capitals is held where it used to be recognised.
+
+Also fixed here: `markReplaced` refused nothing for a memory restored from a consolidation, and marking one made the Mac app's consolidation history fail for every consolidation (reproduced by the ADR 0093 recheck by direct call; the only caller is an approved Cloud replacement). It now refuses for that one row, the copy the restore wrote (its restore record names its own id), and the sync plan settles such a replacement without asking; an edited version of a restored memory is replaced as before. A merge review held the first form of this guard, which tested the row's source and so also dropped replacements of edited versions. This does not repair a vault already in that state.

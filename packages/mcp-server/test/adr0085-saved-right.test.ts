@@ -99,14 +99,27 @@ describe('the acceptance test: one fact, two apps, one live row', () => {
 });
 
 describe('what counts as the same save', () => {
-  it('ignores case, spacing and edge punctuation', async () => {
+  it('ignores outer whitespace and one closing full stop', async () => {
     h = createHarness();
     const a = await app('app-alpha');
     const first = await save(a, { content: 'The harbor office is at Pier 4.' });
-    const again = await save(a, { content: '  the HARBOR office is at   pier 4' });
+    const again = await save(a, { content: '  The harbor office is at Pier 4\n' });
     expect(again.json.already_saved).toBe(true);
     expect(again.json.stored?.id).toBe(first.json.stored?.id);
     expect(rows()).toHaveLength(1);
+  });
+
+  it('holds a save that differs only by case, since case can be the fact', async () => {
+    h = createHarness();
+    const a = await app('app-alpha');
+    const first = await save(a, { content: 'The wifi password is HarborLight42' });
+    const again = await save(a, { content: 'The wifi password is harborlight42' });
+    expect(again.json.already_saved).toBeUndefined();
+    expect(again.json.held).toBe(true);
+    expect(again.json.possible_updates?.map((m) => m.id)).toEqual([first.json.stored?.id]);
+    const kept = await save(a, { content: 'The wifi password is harborlight42', distinct: true });
+    expect(live()).toEqual(['The wifi password is HarborLight42', 'The wifi password is harborlight42']);
+    expect(kept.json.stored?.content).toBe('The wifi password is harborlight42');
   });
 
   it('returns the existing memory for an identical save even with distinct set', async () => {
@@ -193,15 +206,24 @@ describe('replaces', () => {
     expect(live('project:harbor')).toEqual([doc.content]);
   });
 
-  it('answers already saved when the replacement is the same text in other casing', async () => {
+  it('answers already saved when the replacement is the same text', async () => {
     h = createHarness();
     const a = await app('app-alpha');
     const first = await save(a, { content: 'The harbor office is at Pier 4.' });
-    const r = await save(a, { content: 'the harbor office is at PIER 4', replaces: first.json.stored?.id });
+    const r = await save(a, { content: 'The harbor office is at Pier 4', replaces: first.json.stored?.id });
     expect(r.json.already_saved).toBe(true);
     expect(r.json.replaced).toBeUndefined();
     expect(r.json.stored?.id).toBe(first.json.stored?.id);
     expect(rows()).toHaveLength(1);
+  });
+
+  it('a replacement that changes only the case is a real replacement', async () => {
+    h = createHarness();
+    const a = await app('app-alpha');
+    const first = await save(a, { content: 'The wifi password is HarborLight42' });
+    const r = await save(a, { content: 'The wifi password is harborlight42', replaces: first.json.stored?.id });
+    expect(r.json.replaced).toBe(first.json.stored?.id);
+    expect(live()).toEqual(['The wifi password is harborlight42']);
   });
 
   it('refuses a memory marked as a project archive', async () => {

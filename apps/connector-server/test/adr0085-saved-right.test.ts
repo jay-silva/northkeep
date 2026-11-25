@@ -157,9 +157,9 @@ for (const kind of ['memory', 'pglite'] as const) {
       return { newId, replaceId: entry!.replaceId };
     }
 
-    it('an identical save writes nothing and returns the existing id, even with different case and punctuation', async () => {
+    it('an identical save writes nothing and returns the existing id, with or without the closing full stop', async () => {
       const w = await world();
-      const res = await w.mcp('memory_remember', { content: 'the HARBOR office is at pier 4', type: 'semantic', scope: 'harbor' });
+      const res = await w.mcp('memory_remember', { content: PIER_4.replace(/\.$/, ''), type: 'semantic', scope: 'harbor' });
       expect(res.text).toBe(`Already saved: this repeats memory ${w.old.id} word for word, so nothing new was stored. (id: ${w.old.id})`);
       expect(res.structured).toEqual({ stored: { id: w.old.id, scope: 'harbor' }, already_saved: true, message: res.text });
       expect(await w.cloudRows()).toEqual([]);
@@ -232,7 +232,7 @@ for (const kind of ['memory', 'pglite'] as const) {
 
     it('a replace with the same text answers already saved; a second replace of the same memory is refused', async () => {
       const w = await world();
-      const same = await w.mcp('memory_remember', { content: 'the harbor office is AT pier 4', type: 'semantic', scope: 'harbor', replaces: w.old.id });
+      const same = await w.mcp('memory_remember', { content: `  ${PIER_4}\n`, type: 'semantic', scope: 'harbor', replaces: w.old.id });
       expect(same.structured).toMatchObject({ stored: { id: w.old.id, scope: 'harbor' }, already_saved: true });
       expect(await w.cloudRows()).toEqual([]);
       const { newId } = await replaceWith(w);

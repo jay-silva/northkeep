@@ -80,6 +80,43 @@ describe('ADR 0085 cloud replace on the device', () => {
     );
   });
 
+  async function sharedRestoredCopy(): Promise<MemoryEntry> {
+    const sources = ['The ferry leaves at nine.', 'The ferry returns at five.'].map((content) => vault.remember({ content, type: 'semantic', scope: 'harbor' }));
+    const made = vault.consolidateMemories({ vault_id: vault.getVaultId(), operation_id: '11111111-1111-4111-8111-111111111111', sources, content: 'The ferry leaves at nine and returns at five.' });
+    const restored = vault.restoreConsolidation({ vault_id: vault.getVaultId(), operation_id: '22222222-2222-4222-8222-222222222222', result_id: made.result.id, expected_result: made.result });
+    vault.setScopeShared('harbor', true);
+    vault.save();
+    await pushSharedScopes({ ...conn(), scopes: ['harbor'] });
+    return restored.restored_entries[0]!;
+  }
+
+  it('settles a queued replace of a memory restored from a consolidation without asking, and the history still loads', async () => {
+    const copy = await sharedRestoredCopy();
+    const { replaceId } = fake.cloudReplace('harbor', 'The ferry leaves at ten.', copy.id);
+    const plan = planDownSync({ vault, pending: await fetchPending(conn()) });
+    expect(plan.cloud_replaces).toEqual([]);
+    expect(plan.settled_replaces).toEqual([replaceId]);
+    const result = await applyDownSync(conn());
+    expect(result.cloud_replaced).toBe(0);
+    expect(fake.replaceQueue()).toEqual([]);
+    expect(liveTexts()).toEqual(['The ferry leaves at nine.', 'The ferry leaves at ten.', 'The ferry returns at five.']);
+    expect(vault.consolidationHistory()).toHaveLength(1);
+  });
+
+  it('still offers a replace of an edited version of a restored memory, and applies it when approved', async () => {
+    const copy = await sharedRestoredCopy();
+    const edited = vault.editMemory(copy.id, { content: 'The ferry leaves at nine sharp.' }, { actor: 'owner' });
+    vault.save();
+    await pushSharedScopes({ ...conn(), scopes: ['harbor'] });
+    const { replaceId } = fake.cloudReplace('harbor', 'The ferry leaves at ten.', edited.id);
+    const plan = planDownSync({ vault, pending: await fetchPending(conn()) });
+    expect(plan.cloud_replaces.map((r) => r.replace_id)).toEqual([replaceId]);
+    const result = await applyDownSync({ ...conn(), approve: { replace_ids: [replaceId] } });
+    expect(result.cloud_replaced).toBe(1);
+    expect(liveTexts()).toEqual(['The ferry leaves at ten.', 'The ferry returns at five.']);
+    expect(vault.consolidationHistory()).toHaveLength(1);
+  });
+
   it('a first line of invisible characters does not show the user an empty quote', async () => {
     const old = await sharedPier4();
     fake.cloudReplace('harbor', '\u202E\u200B\nThe harbor office is now at Pier 9.\nMore', old.id);

@@ -162,6 +162,31 @@ describe('guided consolidation core', () => {
     vault.close();
   });
 
+  it('refuses to mark a restored copy replaced by an existing memory, which would break the history screen', () => {
+    const vault = createVault();
+    const sources = seed(vault);
+    const consolidated = vault.consolidateMemories({ vault_id: vault.getVaultId(), operation_id: OP1, sources, content: 'Combined.' });
+    const restored = vault.restoreConsolidation({ vault_id: vault.getVaultId(), operation_id: OP2, result_id: consolidated.result.id, expected_result: consolidated.result });
+    const newer = vault.remember({ content: 'A newer fact', type: 'semantic', scope: 'personal' });
+    expect(() => vault.markReplaced(restored.restored_entries[0]!.id, newer.id)).toThrow('restored from a consolidation');
+    expect(vault.consolidationHistory()).toHaveLength(1);
+    expect(vault.list().map((entry) => entry.content)).toEqual(['First exact source', 'Second exact source', 'A newer fact']);
+    vault.close();
+  });
+
+  it('lets an edited version of a restored copy be replaced, with the history screen still working', () => {
+    const vault = createVault();
+    const sources = seed(vault);
+    const consolidated = vault.consolidateMemories({ vault_id: vault.getVaultId(), operation_id: OP1, sources, content: 'Combined.' });
+    const restored = vault.restoreConsolidation({ vault_id: vault.getVaultId(), operation_id: OP2, result_id: consolidated.result.id, expected_result: consolidated.result });
+    const edited = vault.editMemory(restored.restored_entries[0]!.id, { content: 'First exact source, corrected' }, { actor: 'owner' });
+    const newer = vault.remember({ content: 'A newer fact', type: 'semantic', scope: 'personal' });
+    vault.markReplaced(edited.id, newer.id);
+    expect(vault.consolidationHistory()).toHaveLength(1);
+    expect(vault.list().map((entry) => entry.content)).toEqual(['Second exact source', 'A newer fact']);
+    vault.close();
+  });
+
   it('restores complete metadata-bearing copies and makes restore retries exact', () => {
     const vault = createVault();
     const sources = seed(vault);
