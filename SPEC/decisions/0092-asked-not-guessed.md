@@ -1,34 +1,32 @@
-# ADR 0092: Asked, not guessed: conflicts noticed, asked through the agent in use, answered at two levels
+# ADR 0092: Asked, not guessed: the app raises a disagreement it sees, NorthKeep records the answer under trust rules
 
-Status: Proposed 2026-11-24 (milestone 5) · Draft: review 1 NOT CLEARED 2026-11-25, revised, recheck pending
+Status: Proposed 2026-11-24 (milestone 5) · Draft: approach changed 2026-11-25 on Jay's word ("The app raises it"); two reviews logged; third review pending
 
 ## Context
-Two live memories can disagree, and search serves both. The plan: the app in use asks once, cleanup is rationed, NorthKeep never picks. Grok Bot and Muse ignore connect-time instructions. Jay: "Chat counts" for everyday facts; "O1, yes"; "O2, no". Today a Cloud row loses its writer after one sync, and nothing undoes a replace.
+Search returns memories that disagree. A word rule to find them raised 2 questions on the 130-memory bench, none real, and missed six real ones. Jay: "The app raises it"; "Chat counts"; "O1, yes"; "O2, no". Today a Cloud row loses its writer after one sync.
 
 ## Decision
-- D1: Notice, words only, one collection. The newer memory must meet ADR 0085's 60% rule against the older; then their whole-word `saveNormalForm` lists must differ, add a negation, or, for a newer longer memory containing the other, add a name or number. Never two episodic memories.
-- D2: Writer. A Cloud save records a hash of its OAuth client id inside the row ciphertext; the vault keeps it in `metadata.connector.writer`; pushes carry it back. An unknown writer counts as the answering app.
-- D3: Queue. A `questions` table (schema 0.4 to 0.5), keyed by a hash of both texts, exported. Shared pairs mirror to the connector as ciphertext and travel like rows.
-- D4: Delivery. A separate NorthKeep block or field on search and save results, memory text folded to one fenced line; one tool, `memory_resolve`.
-- D5: Levels. `confirmed: {by: "chat"}` ranks between none and `by: "user"`. Money, ownership, accounts, legal words, a user-confirmed memory, or a waiting Cloud replacement make level 2: only NorthKeep itself settles it.
-- D6: Level 1 on the device applies at once; the chosen memory gets the chat mark unless the answering app wrote it. A Cloud answer applies at the next pull, rechecked, without a further yes; never for the app's own memory. "Neither" saves the fact unconfirmed and waits.
-- D7: Undo ships first: a command and a Mac app action.
-- D8: Ration. One sitting a day, three questions, per account.
+- D1: Invite, not detect. Each search result with two or more memories carries one fixed NorthKeep note, apart from saved text: if two disagree and the user is here, ask, then call `memory_resolve`. It lists answered pairs by id.
+- D2: `memory_resolve` takes two ids, the user's words, and first, second, both, or neither with the right fact. Both must be live, readable by this app, in one collection, unanswered.
+- D3: NorthKeep sets the level by the shared rule. Level 2 (a user-confirmed memory, a waiting Cloud replacement, a digit among the differing words, a listed word) waits for ADR 0095's phone list.
+- D4: An answer favouring a memory the answering app or an unknown writer wrote waits; so do answers past three applied a day, and "neither". Otherwise the winner gets `confirmed: {by: "chat", app, at, question}` and the other is marked replaced, never forgotten.
+- D5: A Cloud save records a hash of its OAuth client id in the row ciphertext; the vault keeps it; pushes carry it back.
+- D6: A Cloud answer changes nothing on the connector. The device applies it at a pull (ADR 0096 included) after re-checking it against its own rows, at most three a pull.
+- D7: Undo ships first: `undo-answer`, `unmark`, the phone list.
 
 ## Consequences
-- Easier: disagreements surface where Jay already is.
-- Harder: a schema step retires running older servers.
-- Committed to: re-measuring on the bench vault before shipping; KNOWN-LIMITS on word-only misses, reported answers, Cloud answers waiting for a pull, renamed device apps.
+- Easier: no word rule to be wrong; the note quotes no app text.
+- Harder: a disagreement no app raises stays; schema 0.4 to 0.5 retires older servers and phones, so a phone release ships with it; pending version 4.
+- Committed to: KNOWN-LIMITS lines; trusting the connector to relay answers honestly (Jay's call).
 
 ## Rejected
-- Questions in connect-time instructions: two apps ignore them.
-- NorthKeep preferring the newer memory: the plan forbids it.
-- A background pull: changes who decides; deferred.
-- Cloud replacements in the queue: they stay in ADR 0085's review.
-- `searchTerms` for differences: drops single digits and "not".
+- NorthKeep's word rule, or a "these share most words" hint: 2 raised, 0 real, 6 missed.
+- A daily sitting: no queue left to ration.
+- Quoting both memories in the note: saved text in NorthKeep's voice.
+- Checking the app was shown both ids: one search shows any.
 
 ## What leaves the machine
-To the connected app: the question block, quoting two memories it can read. To the connector, Shared scopes only, inside ciphertext: question records (pair hash, ids, state, answer, quoted words, answering app and client hash), each row's writer kind, the chat mark. In the clear: a random question id, timestamps, the ration day, the device's UTC offset.
+To the connected app: the note, and ids of answered pairs among its results. To the connector, Shared scopes only, inside ciphertext: each row's writer, the chat mark (app name, date), each answered pair's hash, state and date, a Cloud answer's words until the device takes them. In the clear: a record id, timestamps, a pending flag.
 
 ## Links
-Design and review log: docs/design/adr-0092-asked-not-guessed.md · Depends on: ADRs 0084, 0085, 0090 · Shares decisions with 0093, 0094
+Design and review log: docs/design/adr-0092-asked-not-guessed.md · Depends on: ADRs 0085, 0095, 0096 · Shares decisions with 0094
