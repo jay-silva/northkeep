@@ -1,6 +1,6 @@
 # ADR 0097: A running app keeps the vault, and a save checks it still has it
 
-Status: Draft for Jay, 2026-11-25 (Jay: "Speed it up and fix the lock") · Review: not yet run
+Status: Accepted 2026-11-25 (Jay: "Accept 97") · Review: running
 
 ## Context
 Every app that changes the vault takes a lock file first, because a save replaces the whole vault file. Today a lock older than 60 seconds is taken over by the next action, even when its owner is still running. The owner then saves anyway. One side's changes are lost and nothing shows a message. Seven merge reviews on 2026-11-25 (PRs 99 and 100, both closed) reproduced the loss and kept finding new paths. The fault is in the lock.
