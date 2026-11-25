@@ -4388,7 +4388,7 @@
               ? `<span class="badge project" title="Live project document. Agents read this at session start and update it when a session ends.">LIVE PROJECT</span>`
               : ''}
             ${String(m.source).startsWith('connector')
-              ? `<span class="badge shared" title="A connected AI app wrote this memory through Cloud Connect. You own the final say: edit or forget it any time.">APP-WRITTEN${m.source.includes(':') ? ' · ' + esc(m.source.split(':')[1]) : ''}</span>`
+              ? `<span class="badge shared" title="A connected AI app wrote this memory through Cloud Connect. You own the final say: edit or forget it any time.">APP-WRITTEN${m.source.includes(':') ? ' · ' + esc(m.source.split(':')[1]) : ''}</span>${m.reported_app ? `<span title="The app gave this name itself. NorthKeep cannot check it.">Saved by ${esc(m.reported_app)}, as the app reported</span>` : ''}`
               : String(m.source).startsWith('mcp:')
                 ? `<span title="The app gave this name itself. NorthKeep cannot check it.">Saved by ${esc(m.source.slice(4))}, as the app reported</span>`
                 : `<span>${esc(m.source)}</span>`}

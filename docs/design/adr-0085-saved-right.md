@@ -128,4 +128,13 @@ Jay said "Build 3". Choices made where the record was silent:
 - The connector's save now decrypts the rows it can read, so a row that cannot be decrypted fails a save with the same re-encrypt message search already gives.
 - The source rule test that requires every vault write in the device server to say it is for an AI app now covers `replaceMemory` and allows the app stamp beside the actor.
 
-Not built: the phone says nothing about a waiting replacement. The existing forget preview's first lines are not cut to one printable line the way the new replace lines are.
+Not built: the phone says nothing about a waiting replacement, and the phone and the command line do not show a Cloud app's name. The existing forget preview's first lines are not cut to one printable line the way the new replace lines are.
+
+## Build review (2026-11-24, fresh eyes, against commit 9b40b34, with executed probes): CLEARED WITH WOUNDS
+Before it, two checks during the build found and fixed: `replaces` on the device refused a live project document but not an archive; and a second device's ack landing in the middle of a queue read could drop a waiting replace. Each has a test.
+1. The Cloud app's name was stored but shown nowhere, so KNOWN-LIMITS claimed a label that did not exist for Cloud saves. Fixed: the Mac app's memory list shows it; KNOWN-LIMITS says where it is and is not shown.
+2. A replacement whose first line was invisible characters showed the user an empty quote, pre-checked. Fixed: each line is cut to printable text before one is chosen, and text with nothing readable says "(no readable text)".
+3. If the queue write failed after the new memory was saved, the app was told the save failed and a retry stored it twice. Fixed: the reply says the memory is saved as a separate one and not to save it again.
+Notes taken up: a device replace with the same text, in any casing, answers "already saved" as the connector does; the source rule test again accepts only the exact forms used; `--yes` help names memory replacements; KNOWN-LIMITS says a waiting replacement is dropped when the old memory is confirmed, edited or forgotten, and that only unaccented letters and digits count as words.
+Left as they are: nothing in the database stops two waiting replaces for one memory (the save refuses the second); a dead queue entry is cleared only when a device reads the queue or the scope is unshared; a compromised connector could queue a replace between two memories in an unshared scope, the same gap the forget plan already has.
+Not checked: the new table against real hosted Postgres (tests use an in-process Postgres); the names real AI apps report; the 22-of-130 bench figure, since the bench vault is not on this branch.

@@ -80,6 +80,20 @@ describe('ADR 0085 cloud replace on the device', () => {
     );
   });
 
+  it('a first line of invisible characters does not show the user an empty quote', async () => {
+    const old = await sharedPier4();
+    fake.cloudReplace('harbor', '\u202E\u200B\nThe harbor office is now at Pier 9.\nMore', old.id);
+    const plan = planDownSync({ vault, pending: await fetchPending(conn()) });
+    expect(plan.cloud_replaces[0]!.new_first_line).toBe('The harbor office is now at Pier 9.');
+  });
+
+  it('a replacement with nothing readable says so in place of an empty quote', async () => {
+    const old = await sharedPier4();
+    fake.cloudReplace('harbor', '\u202E\u200B\n\u200B', old.id);
+    const plan = planDownSync({ vault, pending: await fetchPending(conn()) });
+    expect(cloudReplaceLine(plan.cloud_replaces[0]!)).toBe('Replace "The harbor office is at Pier 4." with "(no readable text)"');
+  });
+
   it('an unapproved replace adds the new memory, keeps both live, and stays queued against the renamed id', async () => {
     const old = await sharedPier4();
     const { replaceId } = fake.cloudReplace('harbor', PIER_9, old.id);

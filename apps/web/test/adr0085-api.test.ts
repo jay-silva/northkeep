@@ -91,6 +91,21 @@ describe('POST /api/share/sync with a replace queued by an AI app', () => {
     expect(fake.replaceQueue()).toEqual([]);
   });
 
+  it('the memory list names the cloud app that saved a memory, as that app reported it', async () => {
+    await session.withVault(async (v) => {
+      v.remember({ content: PIER_4, type: 'semantic', scope: 'harbor' });
+      v.setScopeShared('harbor', true);
+      v.save();
+      await pushSharedScopes({ server: fake.url(), deviceSecret, scopes: v.sharedScopes(), vault: v });
+    });
+    fake.cloudRemember('harbor', 'The ferry leaves at nine.', 'semantic', 'Example\u202E Assistant');
+    await call('POST', '/api/share/sync', { dry_run: false, approve: {} });
+    const res = await call('GET', '/api/memories');
+    const list = res.body.memories as Array<{ content: string; reported_app?: string }>;
+    expect(list.find((m) => m.content === 'The ferry leaves at nine.')?.reported_app).toBe('Example Assistant');
+    expect(list.find((m) => m.content === PIER_4)?.reported_app).toBeUndefined();
+  });
+
   it('refuses replace_ids that is not a list of ids', async () => {
     await queuedReplace();
     const res = await call('POST', '/api/share/sync', { dry_run: false, approve: { replace_ids: 'rep_1' } });

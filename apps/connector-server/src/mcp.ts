@@ -624,13 +624,19 @@ export function createMcpServer(
         rows: [{ entryId, content: await encryptRow({ accountHash, type: memType, content: body, app }, dek), baseRevision: null }],
         replacedId: null,
       });
+      let queued = target !== null;
       if (target !== null) {
-        await storage.enqueueReplace(accountHash, {
-          replaceId: `rep_${randomUUID().replace(/-/g, '')}`,
-          scope: targetScope,
-          oldId: target.entryId,
-          newId: entryId,
-        });
+        try {
+          await storage.enqueueReplace(accountHash, {
+            replaceId: `rep_${randomUUID().replace(/-/g, '')}`,
+            scope: targetScope,
+            oldId: target.entryId,
+            newId: entryId,
+          });
+        } catch {
+          // The memory is saved; an error here would invite a retry that stores it twice.
+          queued = false;
+        }
       }
       await storage.appendAudit({
         ts: new Date().toISOString(),
@@ -641,14 +647,17 @@ export function createMcpServer(
         resultCount: 1,
         resultIds: target !== null ? [entryId, target.entryId] : [entryId],
       });
-      const text = target !== null
+      const text = target !== null && queued
         ? `Saved to shared scope "${targetScope}". It will sync into the vault. (id: ${entryId}) It replaces memory ${target.entryId} once the user confirms it in NorthKeep; until then both memories are visible here.`
-        : `Saved to shared scope "${targetScope}". It will sync into the vault. (id: ${entryId})`;
+        : target !== null
+          ? `Saved to shared scope "${targetScope}" as a separate memory. (id: ${entryId}) The replacement of memory ${target.entryId} could not be recorded, so both memories stay. Do not save this again; tell the user both are there.`
+          : `Saved to shared scope "${targetScope}". It will sync into the vault. (id: ${entryId})`;
       return {
         content: [{ type: 'text', text }],
         structuredContent: {
           stored: { id: entryId, scope: targetScope },
-          ...(target !== null ? { replaces: target.entryId, replace_waits_for_user: true } : {}),
+          ...(target !== null && queued ? { replaces: target.entryId, replace_waits_for_user: true } : {}),
+          ...(target !== null && !queued ? { replace_not_recorded: true } : {}),
           message: text,
         },
       };

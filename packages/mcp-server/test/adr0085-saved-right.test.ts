@@ -193,6 +193,17 @@ describe('replaces', () => {
     expect(live('project:harbor')).toEqual([doc.content]);
   });
 
+  it('answers already saved when the replacement is the same text in other casing', async () => {
+    h = createHarness();
+    const a = await app('app-alpha');
+    const first = await save(a, { content: 'The harbor office is at Pier 4.' });
+    const r = await save(a, { content: 'the harbor office is at PIER 4', replaces: first.json.stored?.id });
+    expect(r.json.already_saved).toBe(true);
+    expect(r.json.replaced).toBeUndefined();
+    expect(r.json.stored?.id).toBe(first.json.stored?.id);
+    expect(rows()).toHaveLength(1);
+  });
+
   it('refuses a memory marked as a project archive', async () => {
     h = createHarness();
     const a = await app('app-alpha');

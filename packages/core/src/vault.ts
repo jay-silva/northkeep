@@ -86,7 +86,7 @@ import {
   type SemanticRetrieval,
   type VaultExport,
 } from './types.js';
-import { ARCHIVE_METADATA_KEY, CONFIRMED_BOOST, CONFIRMED_METADATA_KEY, isConfirmed, isMarkedArchive, isProjectPaperwork, lengthPenalty, searchTerms, compareSearchResults, weightedMatch, wordWeights } from './search-rules.js';
+import { ARCHIVE_METADATA_KEY, CONFIRMED_BOOST, CONFIRMED_METADATA_KEY, isConfirmed, isMarkedArchive, isProjectPaperwork, lengthPenalty, saveNormalForm, searchTerms, compareSearchResults, weightedMatch, wordWeights } from './search-rules.js';
 
 /**
  * Vault file format (.nkv) — see SPEC/security-model.md and ADR 0001:
@@ -702,6 +702,8 @@ export class Vault {
     if (input.scope !== undefined && (input.scope.trim() || 'personal') !== old.scope) {
       throw new Error(`The memory to replace is in the "${old.scope}" scope, not "${input.scope.trim() || 'personal'}". Nothing was saved.`);
     }
+    // The same text in other casing or spacing is not a new version.
+    if (saveNormalForm(input.content) === saveNormalForm(old.content) && input.type === old.type) return old;
     return this.editMemory(old.id, { content: input.content, type: input.type }, options, allowedScopes);
   }
 

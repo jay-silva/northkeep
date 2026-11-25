@@ -20,6 +20,7 @@ import {
   readProjectProvenance,
   type MemoryEntry,
   type MemoryType,
+  tameOneLine,
 } from '@northkeep/core';
 import {
   checkoutUrl,
@@ -2685,8 +2686,13 @@ function publicEntry(entry: {
   source_model: string | null;
   confidence: number;
   created_at: string;
+  metadata?: Record<string, unknown> | null;
 }): Record<string, unknown> {
+  // ADR 0085 D1: the name a cloud app gave itself, shown as reported, never trusted.
+  const connector = entry.metadata?.connector;
+  const app = typeof connector === 'object' && connector !== null ? (connector as { app?: unknown }).app : undefined;
   return {
+    ...(typeof app === 'string' && app !== '' ? { reported_app: tameOneLine(app, 80) } : {}),
     id: entry.id,
     type: entry.type,
     content: entry.content,

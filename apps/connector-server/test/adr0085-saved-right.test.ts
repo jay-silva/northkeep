@@ -335,6 +335,24 @@ for (const kind of ['memory', 'pglite'] as const) {
       expect((await w.pending('?v=3')).replaces).toEqual([{ replace_id: replaceId, scope: 'harbor', old_id: w.old.id, new_id: renamed }]);
     });
 
+    it('a replace that cannot be recorded says the memory is saved, so the app does not save it twice', async () => {
+      const w = await world();
+      const real = storage.enqueueReplace.bind(storage);
+      storage.enqueueReplace = async () => { throw new Error('store unavailable'); };
+      let reply: Call;
+      try {
+        reply = await w.mcp('memory_remember', { content: PIER_9, type: 'semantic', scope: 'harbor', replaces: w.old.id });
+      } finally {
+        storage.enqueueReplace = real;
+      }
+      expect(reply.isError).toBe(false);
+      expect(reply.text).toContain('as a separate memory');
+      expect(reply.text).toContain('Do not save this again');
+      expect(reply.structured?.replace_not_recorded).toBe(true);
+      expect(await w.cloudRows()).toHaveLength(1);
+      expect(await w.queue()).toEqual([]);
+    });
+
     it('unsharing the scope drops the queued replace', async () => {
       const w = await world();
       await replaceWith(w);

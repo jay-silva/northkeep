@@ -375,7 +375,7 @@ describe('source rules', () => {
     const calls = [...source.matchAll(/vault\.(editMemory|replaceMemory|forget|updateProject|checkpointProject|replaceProjectContent)\(([^;]*?)\);/gs)];
     expect(calls.map((m) => m[1]).sort()).toEqual(['checkpointProject', 'editMemory', 'forget', 'replaceMemory', 'updateProject', 'updateProject']);
     // ADR 0085: memory writes also carry the app's name beside the actor.
-    for (const m of calls) expect(m[2]).toMatch(/\{ actor: 'agent'[,} ]/);
+    for (const m of calls) expect(m[2]).toMatch(/\{ actor: 'agent'(, source: saveSource\(ctx\), sourceModel: 'mcp-client'|, \.\.\.stamp)? \}/);
     expect(source).not.toContain("actor: 'owner'");
   });
 

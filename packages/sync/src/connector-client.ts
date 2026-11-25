@@ -890,8 +890,16 @@ function planCloudReplaces(vault: Vault, queued: QueuedReplace[], plan: DownSync
 
 /** An AI app wrote this text, and a terminal or review screen shows it: no escapes, bidi or line breaks get through. */
 function reviewLine(text: string): string {
-  return tameOneLine(firstLine(text), 120);
+  // Tamed before choosing: a first line of invisible characters must not show the user an empty quote.
+  for (const line of text.split('\n')) {
+    const shown = tameOneLine(line, 120).trim();
+    if (shown.length > 0) return shown;
+  }
+  return NO_READABLE_TEXT;
 }
+
+/** Shown in place of a memory whose text has nothing a person can read. */
+export const NO_READABLE_TEXT = '(no readable text)';
 
 function firstLine(text: string): string {
   const line = text.split('\n').find((l) => l.trim().length > 0) ?? '';
