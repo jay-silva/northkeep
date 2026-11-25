@@ -1,6 +1,6 @@
 # ADR 0096: Background pull: the Mac helper brings in what cloud apps wrote
 
-Status: Proposed 2026-11-25 (prerequisite for milestones 5 and 8) · Draft: not reviewed, not accepted
+Status: Withdrawn 2026-11-25, not built · One review, and why, in the record
 
 ## Context
 A cloud app's memory reaches the vault only when a person pulls; the automatic engine only pushes (`connector-auto.ts:10-21`). No always-running process holds the vault key: the Keep Watch helper only re-enables sleep, and the Mac app's server quits with the app. What runs most is the NorthKeep server each local AI app starts.

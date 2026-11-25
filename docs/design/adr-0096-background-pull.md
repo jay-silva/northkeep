@@ -304,3 +304,10 @@ The four records were written side by side. Where one disagrees with this sectio
 - "Listed word" means a word that begins with a listed stem, after splitting on anything that is not a letter or digit and dropping a trailing 's; the whole text is checked, not only the differing words; any digit waits.
 - The background pull of 0096 may apply new memories and acknowledge items already settled in the vault. It never approves a replacement, a forget, a waiting answer or anything about a project.
 - Nothing on the Mac runs all the time with the vault key. A pull happens only while a local AI app's NorthKeep server or the Mac app is running and unlocked, or when the phone syncs. A person who runs none of those gets nothing from 0096. That limit is a decision for Jay in each record that depends on it.
+
+## Withdrawn (2026-11-25)
+Reviewed once: CLEARED WITH WOUNDS (W1 the "saved, not yet acknowledged" rule could leave a forgotten memory served to cloud apps; W2 its list lived in a file other code rewrites with no lock; W3 the cap of 50 did not bound lock time). The review's larger point was that nothing on the Mac runs all the time with the vault key, so this only helps a person who already runs a local AI app or the Mac app, and the first outside customer runs neither. The lead told Jay so and recommended dropping it; he answered "Fix the bugs".
+
+What survives from it:
+- Its two reports of defects in today's code were both reproduced. A failed acknowledgement could bring back a forgotten memory: fixed in pull request 98. A person-started pull holds the vault lock across network calls: being fixed separately.
+- For a person with only a phone, the phone is the device that pulls (ADR 0095).
