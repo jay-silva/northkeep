@@ -750,11 +750,23 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
   }
   for (const serverId of vault.forgottenConnectorIds()) if (!pulled.has(serverId)) pulled.set(serverId, { live: null });
 
+  // Listed once per scope, not once per row: a backlog of thousands of rows held the vault lock for most of a minute.
+  const liveByText = new Map<string, Map<string, MemoryEntry>>();
+  const liveWithText = (scope: string, content: string): MemoryEntry | undefined => {
+    let texts = liveByText.get(scope);
+    if (texts === undefined) {
+      texts = new Map();
+      for (const v of vault.list({ scope })) if (!texts.has(v.content)) texts.set(v.content, v);
+      liveByText.set(scope, texts);
+    }
+    return texts.get(content);
+  };
+
   const heads = new Map<string, LocalHead>();
   for (const row of applicable) {
     const project = parseProjectSlug(row.scope);
     if (project === null || row.type !== 'working') {
-      const dup = vault.list({ scope: row.scope }).find((v) => v.content === row.content);
+      const dup = liveWithText(row.scope, row.content);
       const before = pulled.get(row.server_id);
       if (dup) plan.dedupes.push({ server_id: row.server_id, local_entry_id: dup.id });
       else if (before !== undefined && before.live !== null) plan.dedupes.push({ server_id: row.server_id, local_entry_id: before.live });
