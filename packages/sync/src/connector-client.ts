@@ -893,7 +893,8 @@ function reviewLine(text: string): string {
   // Tamed before choosing: a first line of invisible characters must not show the user an empty quote.
   for (const line of text.split('\n')) {
     const shown = tameOneLine(line, 120).trim();
-    if (shown.length > 0) return shown;
+    // Filler letters, blank braille and bare accents draw as nothing: a line needs a real letter or digit.
+    if (/[\p{L}\p{N}]/u.test(shown.replace(/[\u115F\u1160\u3164\uFFA0]/g, ''))) return shown;
   }
   return NO_READABLE_TEXT;
 }

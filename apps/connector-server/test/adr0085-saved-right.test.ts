@@ -351,6 +351,9 @@ for (const kind of ['memory', 'pglite'] as const) {
       expect(reply.structured?.replace_not_recorded).toBe(true);
       expect(await w.cloudRows()).toHaveLength(1);
       expect(await w.queue()).toEqual([]);
+      const retry = await w.mcp('memory_remember', { content: PIER_9, type: 'semantic', scope: 'harbor', replaces: w.old.id });
+      expect(retry.structured?.already_saved).toBe(true);
+      expect(await w.cloudRows()).toHaveLength(1);
     });
 
     it('unsharing the scope drops the queued replace', async () => {

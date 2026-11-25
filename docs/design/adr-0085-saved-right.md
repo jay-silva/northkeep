@@ -138,3 +138,10 @@ Before it, two checks during the build found and fixed: `replaces` on the device
 Notes taken up: a device replace with the same text, in any casing, answers "already saved" as the connector does; the source rule test again accepts only the exact forms used; `--yes` help names memory replacements; KNOWN-LIMITS says a waiting replacement is dropped when the old memory is confirmed, edited or forgotten, and that only unaccented letters and digits count as words.
 Left as they are: nothing in the database stops two waiting replaces for one memory (the save refuses the second); a dead queue entry is cleared only when a device reads the queue or the scope is unshared; a compromised connector could queue a replace between two memories in an unshared scope, the same gap the forget plan already has.
 Not checked: the new table against real hosted Postgres (tests use an in-process Postgres); the names real AI apps report; the 22-of-130 bench figure, since the bench vault is not on this branch.
+
+## Recheck (2026-11-24, a new reviewer, against commit 3c72617): CLEARED WITH WOUNDS
+Wounds 1 and 3 closed; nothing new from the fix commit. Still open, and fixed after this recheck without a further review:
+1. A first line of filler letters, blank braille or bare accents still showed as a blank quote. Now a line must hold a real letter or digit to be shown.
+2. Two published sentences were false: KNOWN-LIMITS said an exact repeat is never stored again without saying "in the same collection", and D1 said every surface labels the app name when only the Mac app does. Both corrected.
+Notes taken up: a Cloud retry that sets `replaces` again no longer stores the same text twice; KNOWN-LIMITS says confirming or editing either memory drops a waiting replacement, and that replacing the new memory first drops the older one.
+Still not checked: the new table against real hosted Postgres.

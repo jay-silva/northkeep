@@ -581,6 +581,9 @@ export function createMcpServer(
         }
         // Saving the same text would leave the device asked to replace a memory with itself.
         if (saveNormalForm(body) === saveNormalForm(target.content)) return alreadySaved(target);
+        // A retry after a reply the app did not trust must not store the same text again.
+        const twin = checkSave(body, visible.filter((e) => e.scope === targetScope && e.entryId !== oldId && !isProjectPaperwork(e))).identical;
+        if (twin !== null) return alreadySaved(twin);
       } else {
         // Pending cloud rows count too, so two identical saves before a sync still make one row.
         const candidates = visible.filter((e) => e.scope === targetScope && !isProjectPaperwork(e));

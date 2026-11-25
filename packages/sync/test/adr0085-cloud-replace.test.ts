@@ -87,6 +87,13 @@ describe('ADR 0085 cloud replace on the device', () => {
     expect(plan.cloud_replaces[0]!.new_first_line).toBe('The harbor office is now at Pier 9.');
   });
 
+  it('skips lines of filler letters, blank braille or bare accents, which draw as nothing', async () => {
+    const old = await sharedPier4();
+    fake.cloudReplace('harbor', '\u3164\u3164\u3164\n\u2800\u2800\n\u0301\u0301\nThe harbor office is now at Pier 9.', old.id);
+    const plan = planDownSync({ vault, pending: await fetchPending(conn()) });
+    expect(plan.cloud_replaces[0]!.new_first_line).toBe('The harbor office is now at Pier 9.');
+  });
+
   it('a replacement with nothing readable says so in place of an empty quote', async () => {
     const old = await sharedPier4();
     fake.cloudReplace('harbor', '\u202E\u200B\n\u200B', old.id);
