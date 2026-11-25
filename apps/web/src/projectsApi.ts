@@ -308,6 +308,8 @@ export async function handleProjectsApi(session: UiSession, method: string, rout
     }
     if (error instanceof MilestoneError) return reply(409, { error: error.message, code: 'milestone_refused' });
     if (error instanceof Error && error.name === 'LockedError') return reply(423, { error: 'Vault is locked.', code: 'locked' });
+    // ADR 0097 D3: a refused save wrote nothing, so this is certain, not 'could not be confirmed'.
+    if (error instanceof Error && error.name === 'VaultChangedError') return reply(409, { error: error.message, code: 'vault_changed' });
     return reply(500, { error: 'The save could not be confirmed. Retry the same update to check its result.', code: 'save_uncertain' });
   }
 }

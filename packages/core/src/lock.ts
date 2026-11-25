@@ -17,9 +17,8 @@ export class FileLockTimeoutError extends Error {
   constructor(lockPath: string, holder = '') {
     super(
       `Vault is locked by another NorthKeep process (${lockPath}). ` +
-        (holder === ''
-          ? 'Quit the other NorthKeep app and try again.'
-          : `It is held by ${holder}. Quit that app and try again. If you are sure no NorthKeep app or AI app helper is running, delete the lock file and retry.`),
+        (holder === '' ? 'Quit the other NorthKeep app and try again. ' : `It is held by ${holder}. Quit that app and try again. `) +
+        'If you are sure no NorthKeep app or AI app helper is running, delete the lock file and retry.',
     );
     this.name = 'FileLockTimeoutError';
   }
@@ -37,7 +36,7 @@ function bootId(): string {
   let id = '';
   try {
     if (process.platform === 'darwin') {
-      id = execFileSync('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', timeout: 2_000 }).trim();
+      id = execFileSync('/usr/sbin/sysctl', ['-n', 'kern.bootsessionuuid'], { encoding: 'utf8', timeout: 2_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     } else if (process.platform === 'linux') {
       id = fs.readFileSync('/proc/sys/kernel/random/boot_id', 'utf8').trim();
     }
@@ -63,7 +62,7 @@ function parseToken(text: string): LockToken | null {
   return { pid, since: fields[1] ?? '', boot: /^[0-9A-Fa-f-]{8,64}$/.test(boot) ? boot : '' };
 }
 
-/** 'unknown' is a token we cannot read as ours (empty, foreign): only age can free it. */
+/** 'unknown' is an owner we cannot tell (an empty or foreign token, a pid the system rejects): only age can free it. */
 function ownerState(text: string): 'alive' | 'dead' | 'unknown' {
   const token = parseToken(text);
   if (token === null) return 'unknown';
@@ -75,7 +74,8 @@ function ownerState(text: string): 'alive' | 'dead' | 'unknown' {
     return 'alive';
   } catch (err) {
     // ESRCH: no such process. EPERM: it exists but is not ours; treat as alive.
-    return (err as NodeJS.ErrnoException).code === 'ESRCH' ? 'dead' : 'alive';
+    const code = (err as NodeJS.ErrnoException).code;
+    return code === 'ESRCH' ? 'dead' : code === 'EPERM' ? 'alive' : 'unknown';
   }
 }
 
@@ -117,8 +117,7 @@ function createComplete(target: string, token: string): boolean {
     } catch (err) {
       const code = (err as NodeJS.ErrnoException).code;
       if (code === 'EEXIST') return false;
-      // A filesystem without hard links: create in place, as before ADR 0097.
-      if (code !== 'EPERM' && code !== 'ENOTSUP' && code !== 'EOPNOTSUPP' && code !== 'ENOSYS') throw err;
+      // Any other failure (a filesystem without hard links): create in place, as before ADR 0097.
     }
   } finally {
     fs.rmSync(tmp, { force: true });
@@ -165,11 +164,23 @@ function removeDeadLock(lockPath: string, seen: Buffer, token: string): void {
   const guardPath = `${lockPath}.steal`;
   if (!createComplete(guardPath, token)) {
     const guard = readIfThere(guardPath);
-    if (guard === null) return;
     let old = false;
     try {
-      old = Date.now() - fs.statSync(guardPath).mtimeMs > GUARD_STALE_MS;
+      old = Date.now() - fs.lstatSync(guardPath).mtimeMs > GUARD_STALE_MS;
     } catch {
+      return;
+    }
+    if (guard === null) {
+      // A guard we cannot read (another user's, a directory) cannot be compared: once old, move it away whole.
+      if (old) {
+        const grave = `${guardPath}.stale-${process.pid}-${Math.random().toString(36).slice(2)}`;
+        try {
+          fs.renameSync(guardPath, grave);
+          fs.rmSync(grave, { recursive: true, force: true });
+        } catch {
+          // Not ours to move: the caller reaches its deadline and says so.
+        }
+      }
       return;
     }
     if (old || ownerState(guard.toString('utf8')) === 'dead') removeIfStill(guardPath, guard);
@@ -190,7 +201,7 @@ function describeHolder(seen: Buffer | null): string {
   if (token === null) return '';
   let name = '';
   try {
-    name = (execFileSync('/bin/ps', ['-p', String(token.pid), '-o', 'comm='], { encoding: 'utf8', timeout: 2_000 }).trim().split('/').pop() ?? '');
+    name = (execFileSync('/bin/ps', ['-p', String(token.pid), '-o', 'comm='], { encoding: 'utf8', timeout: 2_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim().split('/').pop() ?? '');
   } catch {
     name = '';
   }
@@ -201,7 +212,7 @@ function describeHolder(seen: Buffer | null): string {
 export interface FileLockOptions {
   /** How long to wait for the lock before giving up (default 5 s). */
   timeoutMs?: number;
-  /** Age after which a lock with no readable owner is presumed abandoned and taken (default 60 s). */
+  /** Age after which a lock whose owner cannot be told is presumed abandoned and taken (default 60 s). A lock that cannot be read at all is never taken. */
   staleMs?: number;
   /**
    * Also take a lock older than `staleMs` from an owner that is still running.

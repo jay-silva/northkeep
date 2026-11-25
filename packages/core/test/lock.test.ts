@@ -101,7 +101,7 @@ describe('withFileLock', () => {
     fs.writeFileSync(`${target}.lock`, '');
     const err = await withFileLock(target, () => undefined, { timeoutMs: 200 }).then(() => null, (e: Error) => e);
     expect(err instanceof FileLockTimeoutError).toBe(true);
-    expect(err!.message).toContain('Quit the other NorthKeep app and try again.');
+    expect(err!.message).toContain('Quit the other NorthKeep app and try again. If you are sure no NorthKeep app or AI app helper is running, delete the lock file and retry.');
     expect(fs.readFileSync(`${target}.lock`, 'utf8')).toBe('');
   });
 
@@ -126,6 +126,31 @@ describe('withFileLock', () => {
     expect(err instanceof FileLockTimeoutError).toBe(true);
     expect(fs.lstatSync(`${target}.lock`).isSymbolicLink()).toBe(true);
     fs.rmSync(`${target}.lock`);
+  });
+
+  it('a lock naming a pid the system rejects is taken by age, not held forever', async () => {
+    fs.writeFileSync(`${target}.lock`, `99999999999 ${new Date().toISOString()} abc -\n`);
+    const fresh = await withFileLock(target, () => undefined, { timeoutMs: 200 }).then(() => null, (e: Error) => e);
+    expect(fresh instanceof FileLockTimeoutError).toBe(true);
+    age(61_000);
+    let ran = false;
+    await withFileLock(target, () => void (ran = true), { timeoutMs: 200 });
+    expect(ran).toBe(true);
+  });
+
+  it('a leftover takeover guard that cannot be read is moved away once it is 10 seconds old, and the dead lock is then taken', async () => {
+    const gone = spawnSync(process.execPath, ['-e', '']).pid;
+    fs.writeFileSync(`${target}.lock`, `${gone} ${new Date().toISOString()} abc -\n`);
+    fs.mkdirSync(`${target}.lock.steal`);
+    const blocked = await withFileLock(target, () => undefined, { timeoutMs: 200 }).then(() => null, (e: Error) => e);
+    expect(blocked instanceof FileLockTimeoutError).toBe(true);
+
+    const old = (Date.now() - 11_000) / 1000;
+    fs.utimesSync(`${target}.lock.steal`, old, old);
+    let ran = false;
+    await withFileLock(target, () => void (ran = true), { timeoutMs: 1_000 });
+    expect(ran).toBe(true);
+    expect(fs.readdirSync(dir)).toEqual([]);
   });
 
   it('writes its lock complete, pid first, with this start of the machine, and leaves no stray files', async () => {
