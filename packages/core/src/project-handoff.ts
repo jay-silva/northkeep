@@ -165,6 +165,9 @@ export function writeActor(options:WriteActorOptions):WriteActor {
   return actor;
 }
 export const PROJECT_DOCUMENT_FORGET_MESSAGE='This memory is a project document. An AI app cannot forget it; the user can delete the project in the NorthKeep app or with northkeep projects delete.';
+export const PROJECT_DOCUMENT_REPLACE_MESSAGE='This memory is a project document or an archive of one. A memory cannot replace it; change the project with project_update.';
+/** ADR 0085 D1: the app writing a row, recorded on the row it writes. */
+export interface WriterStamp { source?: string; sourceModel?: string | null }
 export const PROJECT_DOCUMENT_RETYPE_MESSAGE='This memory is a project document, so an AI app cannot change its type or move it. Change the project with project_update.';
 
 export class ProjectHandoffError extends Error {

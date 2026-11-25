@@ -77,9 +77,9 @@ function stubConnector(entries: Array<{ server_id: string; scope: string; type: 
   vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = String(input);
     calls.push(url);
-    if (url.endsWith('/client/pending?v=2')) {
-      // Post-ADR 0063 hosted creates carry base "new".
-      return new Response(JSON.stringify({ entries: entries.map((e) => ({ ...e, base_revision: 'new', stale: false })), forgets: [] }), { status: 200 });
+    if (url.endsWith('/client/pending?v=3')) {
+      // Post-ADR 0063 hosted creates carry base "new"; ADR 0085 adds the replace queue.
+      return new Response(JSON.stringify({ entries: entries.map((e) => ({ ...e, base_revision: 'new', stale: false })), forgets: [], replaces: [] }), { status: 200 });
     }
     if (url.endsWith('/client/ack')) return new Response(JSON.stringify({ ok: true }), { status: 200 });
     if (url.endsWith('/client/entries')) {
@@ -117,7 +117,7 @@ describe('shareSyncCmd (ADR 0050 Decision 5)', () => {
       },
     ]);
     await shareSyncCmd({}, depsOf(vault), failHard);
-    expect(calls.some((u) => u.endsWith('/client/pending?v=2'))).toBe(true);
+    expect(calls.some((u) => u.endsWith('/client/pending?v=3'))).toBe(true);
     // The fold marked the scope, and this same run pushed it: the old code read
     // the shared list once, before the fold, and pushed nothing.
     expect(vault.sharedScopes()).toContain('project:hosted-thing');

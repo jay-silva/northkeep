@@ -10,8 +10,11 @@ import {
   passedMilestones,
   projectScope,
   sharedEntryCapBytes,
+  tameOneLine,
+  type MemoryEntry,
   type MemoryType,
   type Vault,
+  isProjectPaperwork,
 } from '@northkeep/core';
 import { deriveConnectorToken } from './creds.js';
 import { assertConnectorUrl } from './connector-config.js';
@@ -380,12 +383,26 @@ export interface PendingRow {
   base_revision: string | null;
   /** True when the connector no longer serves this row as the head (D2). */
   stale: boolean;
+  /** ADR 0085 D1: the writing app's own name, as it reported it, tamed again here. */
+  app?: string;
+}
+
+/** ADR 0085 D4: a connected app asked that `new_id` replace `old_id`; it waits for the user. */
+export interface QueuedReplace {
+  /** Stable across id renames: what the approval and the ack name. */
+  replace_id: string;
+  scope: string;
+  /** A vault entry id, or the server id of a row in this same snapshot. */
+  old_id: string;
+  new_id: string;
 }
 
 export interface PendingSnapshot {
   entries: PendingRow[];
   /** Entry ids a connected app asked to forget. */
   forgets: string[];
+  /** ADR 0085 D4: empty or absent unless fetched from a connector that has the queue, by a device that confirms them. */
+  replaces?: QueuedReplace[];
 }
 
 /**
@@ -418,6 +435,8 @@ export interface PlannedAddition {
   content: string;
   /** `project` creates a project document from a base-`new` row. */
   kind: 'memory' | 'project';
+  /** ADR 0085 D1: kept as `metadata.connector.app`. */
+  app?: string;
 }
 
 /** A fast-forward: the cloud document replaces the local head it was written against. */
@@ -438,8 +457,23 @@ export interface PlannedForget {
 }
 
 /**
+ * ADR 0085 D4: a connected app's "this updates that memory". Applying it marks
+ * the old memory replaced by the new one; it always needs the user's yes (D5).
+ */
+export interface PlannedCloudReplace {
+  replace_id: string;
+  scope: string;
+  /** Vault id, or the server id of a memory this same sync adds. */
+  old_id: string;
+  new_id: string;
+  old_first_line: string;
+  new_first_line: string;
+}
+
+/**
  * What a down-sync would do, computed without writing anything (D3). Additions,
- * dedupes and discards need no confirmation; replacements and forgets do.
+ * dedupes and discards need no confirmation; replacements, forgets and cloud
+ * replaces do.
  */
 export interface DownSyncPlan {
   additions: PlannedAddition[];
@@ -451,6 +485,10 @@ export interface DownSyncPlan {
   discards: Array<{ server_id: string; scope: string }>;
   /** Forgets for entries not live here: acked, nothing to change. */
   settled_forgets: string[];
+  /** ADR 0085 D4: replaces waiting for the user's yes. */
+  cloud_replaces: PlannedCloudReplace[];
+  /** Replaces that can no longer apply (a side was edited or forgotten here): acked, nothing changes. */
+  settled_replaces: string[];
   conflicts: DownSyncConflict[];
   /** Rows left pending because their unshared project scope is not accepting them (ADR 0050). */
   held: number;
@@ -463,9 +501,14 @@ export interface DownSyncPlan {
   to_mark: string[];
 }
 
-/** A plan with a replacement or a forget must be confirmed before it is applied (D3). */
-export function planNeedsConfirmation(plan: Pick<DownSyncPlan, 'replacements' | 'forgets'>): boolean {
-  return plan.replacements.length > 0 || plan.forgets.length > 0;
+/** A plan with a replacement, a forget or a cloud replace must be confirmed before it is applied (D3, ADR 0085 D5). */
+export function planNeedsConfirmation(plan: Pick<DownSyncPlan, 'replacements' | 'forgets'> & { cloud_replaces?: unknown[] }): boolean {
+  return plan.replacements.length > 0 || plan.forgets.length > 0 || (plan.cloud_replaces?.length ?? 0) > 0;
+}
+
+/** What every surface shows for a waiting cloud replace (ADR 0085 D4). */
+export function cloudReplaceLine(r: Pick<PlannedCloudReplace, 'old_first_line' | 'new_first_line'>): string {
+  return `Replace "${r.old_first_line}" with "${r.new_first_line}"`;
 }
 
 export interface DownSyncResult {
@@ -484,8 +527,10 @@ export interface DownSyncResult {
   skipped: number;
   deferred: number;
   conflicts: DownSyncConflict[];
-  /** Replacements and forgets that were not approved; they stay pending. */
-  needs_review: { replacements: PlannedReplacement[]; forgets: PlannedForget[] };
+  /** Memories marked replaced by an approved cloud replace (ADR 0085 D4). */
+  cloud_replaced: number;
+  /** Replacements, forgets and cloud replaces that were not approved; they stay pending. */
+  needs_review: { replacements: PlannedReplacement[]; forgets: PlannedForget[]; cloud_replaces: PlannedCloudReplace[] };
 }
 
 /**
@@ -505,10 +550,28 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' ? value : null;
 }
 
-/** Fetch the pending rows (ADR 0063 `?v=2`). Side effects on the server are idempotent and touch no vault. */
-export async function fetchPending(opts: { server: string; deviceSecret: Buffer; entitlement?: string }): Promise<PendingSnapshot> {
+/** ADR 0085 D1: an app name as the device keeps it. */
+const APP_NAME_MAX = 80;
+
+/**
+ * Fetch the pending rows. `?v=3` (ADR 0085 D4) adds the queued cloud replaces;
+ * `replaces: false` asks for `?v=2`, so a device that cannot confirm them (the
+ * phone) never sees one. Side effects on the server are idempotent and touch no vault.
+ */
+export async function fetchPending(opts: { server: string; deviceSecret: Buffer; entitlement?: string; replaces?: boolean }): Promise<PendingSnapshot> {
+  const wantReplaces = opts.replaces !== false;
+  const first = await fetchPendingVersion(opts, wantReplaces ? 3 : 2);
+  // A connector from before v3 reads `v=3` as no version and withholds project documents; ask again as v2.
+  if (wantReplaces && first.replaces === null) return { ...(await fetchPendingVersion(opts, 2)), replaces: [] };
+  return { ...first, replaces: first.replaces ?? [] };
+}
+
+async function fetchPendingVersion(
+  opts: { server: string; deviceSecret: Buffer; entitlement?: string },
+  version: 2 | 3,
+): Promise<{ entries: PendingRow[]; forgets: string[]; replaces: QueuedReplace[] | null }> {
   const server = normalizeServer(opts.server);
-  const res = await fetch(`${server}/client/pending?v=2`, {
+  const res = await fetch(`${server}/client/pending?v=${version}`, {
     headers: authHeaders(opts.deviceSecret, opts.entitlement),
     redirect: 'error',
     signal: timeoutSignal(TIMEOUT_MS),
@@ -519,7 +582,7 @@ export async function fetchPending(opts: { server: string; deviceSecret: Buffer;
   }
   if (res.status === 409) throw reencryptError();
   if (!res.ok) throw httpError(res.status, 'pending');
-  const body = (await res.json()) as { entries?: unknown; forgets?: unknown };
+  const body = (await res.json()) as { entries?: unknown; forgets?: unknown; replaces?: unknown };
   const entries: PendingRow[] = [];
   for (const raw of Array.isArray(body.entries) ? body.entries : []) {
     if (raw === null || typeof raw !== 'object') continue;
@@ -532,14 +595,36 @@ export async function fetchPending(opts: { server: string; deviceSecret: Buffer;
     if (!server_id || !content || !scope) continue;
     // Anything but a non-empty string is a legacy row: no base is ever inferred.
     const base = asString(r.base_revision);
-    entries.push({ server_id, scope, type: asString(r.type) ?? '', content, base_revision: base === '' ? null : base, stale: r.stale === true });
+    const app = tameOneLine(asString(r.app) ?? '', APP_NAME_MAX);
+    entries.push({
+      server_id,
+      scope,
+      type: asString(r.type) ?? '',
+      content,
+      base_revision: base === '' ? null : base,
+      stale: r.stale === true,
+      ...(app !== '' ? { app } : {}),
+    });
   }
   const forgets: string[] = [];
   for (const f of Array.isArray(body.forgets) ? body.forgets : []) {
     const id = f && typeof f === 'object' ? asString((f as Record<string, unknown>).entry_id) : null;
     if (id) forgets.push(id);
   }
-  return { entries, forgets };
+  let replaces: QueuedReplace[] | null = null;
+  if (version === 3 && Array.isArray(body.replaces)) {
+    replaces = [];
+    for (const raw of body.replaces) {
+      if (raw === null || typeof raw !== 'object') continue;
+      const r = raw as Record<string, unknown>;
+      const replace_id = asString(r.replace_id);
+      const old_id = asString(r.old_id);
+      const new_id = asString(r.new_id);
+      const scope = asString(r.scope)?.trim() ?? '';
+      if (replace_id && old_id && new_id && scope) replaces.push({ replace_id, scope, old_id, new_id });
+    }
+  }
+  return { entries, forgets, replaces };
 }
 
 type LocalHead = { kind: 'none' } | { kind: 'one'; id: string; content: string } | { kind: 'several' };
@@ -595,6 +680,8 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
     dedupes: [],
     discards: [],
     settled_forgets: [],
+    cloud_replaces: [],
+    settled_replaces: [],
     conflicts: [],
     held: 0,
     held_scopes: [],
@@ -655,7 +742,16 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
     if (project === null || row.type !== 'working') {
       const dup = vault.list({ scope: row.scope }).find((v) => v.content === row.content);
       if (dup) plan.dedupes.push({ server_id: row.server_id, local_entry_id: dup.id });
-      else plan.additions.push({ server_id: row.server_id, scope: row.scope, type: row.type as MemoryType, content: row.content, kind: 'memory' });
+      else {
+        plan.additions.push({
+          server_id: row.server_id,
+          scope: row.scope,
+          type: row.type as MemoryType,
+          content: row.content,
+          kind: 'memory',
+          ...(row.app ? { app: row.app } : {}),
+        });
+      }
       continue;
     }
     let head = heads.get(project);
@@ -707,7 +803,7 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
         conflict('deleted_here');
         continue;
       }
-      plan.additions.push({ server_id: row.server_id, scope: row.scope, type: 'working', content: row.content, kind: 'project' });
+      plan.additions.push({ server_id: row.server_id, scope: row.scope, type: 'working', content: row.content, kind: 'project', ...(row.app ? { app: row.app } : {}) });
       continue;
     }
     conflict('moved');
@@ -730,9 +826,81 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
       plan.forgets.push(forget);
     }
   }
+  planCloudReplaces(vault, pending.replaces ?? [], plan, additiveOnly);
   plan.held_scopes = [...heldScopes].sort();
   return plan;
 }
+
+/** Where a replace's id points on this device, after this sync's additions and dedupes. */
+type ReplaceSide =
+  | { kind: 'live'; id: string; entry: MemoryEntry }
+  | { kind: 'adding'; server_id: string; content: string; scope: string }
+  | { kind: 'gone' }
+  | { kind: 'unknown' };
+
+/**
+ * ADR 0085 D4. A side that was edited or forgotten here settles the replace
+ * (the new memory stays an ordinary addition). A side not on this device yet
+ * (held, skipped, or not synced) leaves it waiting, unacked.
+ */
+function planCloudReplaces(vault: Vault, queued: QueuedReplace[], plan: DownSyncPlan, additiveOnly: boolean): void {
+  if (queued.length === 0) return;
+  if (additiveOnly) {
+    plan.deferred += queued.length;
+    return;
+  }
+  const everything = new Map(vault.list({ includeForgotten: true, includeSuperseded: true }).map((e) => [e.id, e]));
+  const adding = new Map(plan.additions.filter((a) => a.kind === 'memory').map((a) => [a.server_id, a]));
+  const deduped = new Map(plan.dedupes.map((d) => [d.server_id, d.local_entry_id]));
+  const side = (id: string): ReplaceSide => {
+    const localId = deduped.get(id) ?? id;
+    const entry = everything.get(localId);
+    if (entry !== undefined) {
+      return entry.forgotten_at === null && entry.superseded_at === null ? { kind: 'live', id: localId, entry } : { kind: 'gone' };
+    }
+    const add = adding.get(id);
+    return add !== undefined ? { kind: 'adding', server_id: id, content: add.content, scope: add.scope } : { kind: 'unknown' };
+  };
+  for (const r of queued) {
+    const oldSide = side(r.old_id);
+    const newSide = side(r.new_id);
+    if (oldSide.kind === 'gone' || newSide.kind === 'gone') {
+      plan.settled_replaces.push(r.replace_id);
+      continue;
+    }
+    if (oldSide.kind === 'unknown' || newSide.kind === 'unknown') continue;
+    const scopeOf = (s: ReplaceSide & { kind: 'live' | 'adding' }): string => (s.kind === 'live' ? s.entry.scope : s.scope);
+    const isDocument = (oldSide.kind === 'live' && isProjectPaperwork(oldSide.entry)) || (newSide.kind === 'live' && isProjectPaperwork(newSide.entry));
+    const sameRow = oldSide.kind === 'live' && newSide.kind === 'live' && oldSide.id === newSide.id;
+    // vault.markReplaced refuses each of these, every time: settle rather than ask the user about it forever.
+    if (sameRow || isDocument || scopeOf(oldSide) !== r.scope || scopeOf(newSide) !== r.scope) {
+      plan.settled_replaces.push(r.replace_id);
+      continue;
+    }
+    plan.cloud_replaces.push({
+      replace_id: r.replace_id,
+      scope: r.scope,
+      old_id: oldSide.kind === 'live' ? oldSide.id : oldSide.server_id,
+      new_id: newSide.kind === 'live' ? newSide.id : newSide.server_id,
+      old_first_line: reviewLine(oldSide.kind === 'live' ? oldSide.entry.content : oldSide.content),
+      new_first_line: reviewLine(newSide.kind === 'live' ? newSide.entry.content : newSide.content),
+    });
+  }
+}
+
+/** An AI app wrote this text, and a terminal or review screen shows it: no escapes, bidi or line breaks get through. */
+function reviewLine(text: string): string {
+  // Tamed before choosing: a first line of invisible characters must not show the user an empty quote.
+  for (const line of text.split('\n')) {
+    const shown = tameOneLine(line, 120).trim();
+    // Filler letters, blank braille and bare accents draw as nothing: a line needs a real letter or digit.
+    if (/[\p{L}\p{N}]/u.test(shown.replace(/[\u115F\u1160\u3164\uFFA0]/g, ''))) return shown;
+  }
+  return NO_READABLE_TEXT;
+}
+
+/** Shown in place of a memory whose text has nothing a person can read. */
+export const NO_READABLE_TEXT = '(no readable text)';
 
 function firstLine(text: string): string {
   const line = text.split('\n').find((l) => l.trim().length > 0) ?? '';
@@ -768,15 +936,17 @@ export async function applyDownSync(opts: {
   deviceSecret: Buffer;
   vault: Vault;
   entitlement?: string;
-  approve?: { server_ids?: string[]; forget_ids?: string[] };
-  /** The phone (ADR 0063 D1): additions only, never a replace, a forget or a forget ack. */
+  /** `replace_ids`: the cloud replaces (ADR 0085 D4) the user approved, by replace_id. */
+  approve?: { server_ids?: string[]; forget_ids?: string[]; replace_ids?: string[] };
+  /** The phone (ADR 0063 D1): additions only, never a replace, a forget or a forget ack; it never fetches the replace queue. */
   additiveOnly?: boolean;
 }): Promise<DownSyncResult> {
   const clientLabel = new URL(normalizeServer(opts.server)).hostname;
-  const pending = await fetchPending(opts);
+  const pending = await fetchPending({ ...opts, replaces: opts.additiveOnly !== true });
   const plan = planDownSync({ vault: opts.vault, pending, additiveOnly: opts.additiveOnly === true });
   const approvedRows = new Set(opts.additiveOnly ? [] : (opts.approve?.server_ids ?? []));
   const approvedForgets = new Set(opts.additiveOnly ? [] : (opts.approve?.forget_ids ?? []));
+  const approvedReplaces = new Set(opts.additiveOnly ? [] : (opts.approve?.replace_ids ?? []));
   const acked: Array<{ server_id: string; local_entry_id: string }> = [...plan.dedupes];
   const conflicts = [...plan.conflicts];
   let wrote = false;
@@ -789,7 +959,7 @@ export async function applyDownSync(opts: {
   const createdScopes = new Set<string>();
   const additions = [...plan.additions].sort((x, y) => Number(y.kind === 'project') - Number(x.kind === 'project'));
   for (const a of additions) {
-    const metadata = { connector: { server_id: a.server_id } };
+    const metadata = { connector: { server_id: a.server_id, ...(a.app ? { app: a.app } : {}) } };
     if (a.kind === 'project') {
       const project = parseProjectSlug(a.scope)!;
       try {
@@ -858,10 +1028,48 @@ export async function applyDownSync(opts: {
     wrote = true;
   }
 
+  // ADR 0085 D4/D5: after the additions, so a replace can name a memory this sync just added, and after forgets.
+  const ackedReplaces = [...plan.settled_replaces];
+  const unapprovedReplaces: PlannedCloudReplace[] = [];
+  const localIds = new Map(acked.map((a) => [a.server_id, a.local_entry_id]));
+  const addedIds = new Set(plan.additions.map((a) => a.server_id));
+  let cloudReplaced = 0;
+  for (const r of plan.cloud_replaces) {
+    if (!approvedReplaces.has(r.replace_id)) {
+      unapprovedReplaces.push(r);
+      continue;
+    }
+    // An addition this run did not apply (a fold scope not taken): the replace waits for it, unacked.
+    if ([r.old_id, r.new_id].some((id) => addedIds.has(id) && !localIds.has(id))) continue;
+    const oldId = localIds.get(r.old_id) ?? r.old_id;
+    const newId = localIds.get(r.new_id) ?? r.new_id;
+    const liveIds = new Set(opts.vault.list({ scope: r.scope }).map((e) => e.id));
+    // Live at plan time, gone now (a forget approved in this run): it can never apply.
+    if (!liveIds.has(oldId) || !liveIds.has(newId)) {
+      ackedReplaces.push(r.replace_id);
+      continue;
+    }
+    try {
+      opts.vault.markReplaced(oldId, newId);
+    } catch {
+      // markReplaced's refusals do not change on a retry, so asking again would loop.
+      ackedReplaces.push(r.replace_id);
+      continue;
+    }
+    ackedReplaces.push(r.replace_id);
+    cloudReplaced++;
+    wrote = true;
+  }
+
   if (wrote) opts.vault.save();
   await discardPending({ ...opts, server_ids: plan.discards.map((d) => d.server_id) });
-  if (acked.length > 0 || ackedForgets.length > 0) {
-    await postJson(opts, '/client/ack', { acked, forgets: ackedForgets }, 'ack');
+  if (acked.length > 0 || ackedForgets.length > 0 || ackedReplaces.length > 0) {
+    await postJson(
+      opts,
+      '/client/ack',
+      { acked, forgets: ackedForgets, ...(ackedReplaces.length > 0 ? { replaces: ackedReplaces } : {}) },
+      'ack',
+    );
   }
 
   return {
@@ -875,7 +1083,8 @@ export async function applyDownSync(opts: {
     skipped: plan.skipped,
     deferred: plan.deferred,
     conflicts,
-    needs_review: { replacements: unapprovedReplacements, forgets: unapprovedForgets },
+    cloud_replaced: cloudReplaced,
+    needs_review: { replacements: unapprovedReplacements, forgets: unapprovedForgets, cloud_replaces: unapprovedReplaces },
   };
 }
 

@@ -27,8 +27,8 @@
  *     GET    /client/manifest    (Bearer connector_token -> [{entry_id,entry_hash,scope,pending}])
  *     PUT    /client/entries     (Bearer; "make these scopes match" batch push)
  *     DELETE /client/scope/:scope (Bearer; unshare -> delete rows + tombstone)
- *     GET    /client/pending     (Bearer; connector-born rows to down-sync; ?v=2 adds ADR 0063 fields)
- *     POST   /client/ack         (Bearer; applied rows -> vault ids)
+ *     GET    /client/pending     (Bearer; connector-born rows to down-sync; ?v=2 adds ADR 0063 fields; ?v=3 adds ADR 0085 replaces)
+ *     POST   /client/ack         (Bearer; applied rows -> vault ids, applied or dead replaces)
  *     POST   /client/discard     (Bearer; delete named pending rows, ADR 0063)
  *     POST /debug/seed           (test-only, env-gated; seed shared rows)
  *     GET  /.well-known/oauth-protected-resource   (PRM root, compat)
@@ -58,6 +58,7 @@ import type { ClientSecretBinder } from './client-secrets.js';
 import { maintenanceConfigFromEnv, runMaintenance, type MaintenanceConfig } from './maintenance.js';
 import { ipRateLimitKey } from './ip-key.js';
 import { createMcpServer } from './mcp.js';
+import { tameAppName } from './text-safe.js';
 import { CONSENT_PAGE_HEADERS, renderConsentPage } from './consent.js';
 import { createRateLimiter, rateLimitFromEnv, type RateLimiter } from './rate-limit.js';
 import { sha256hex, generatePairingCode } from './hash.js';
@@ -604,7 +605,7 @@ export function createConnectorServer(
     const rerenderError = (msg: string): void => {
       res.status(200).set(CONSENT_PAGE_HEADERS).type('html').send(
         renderConsentPage(
-          { clientId, clientName: client.client_name, redirectUri, codeChallenge, state, scope, resource },
+          { clientId, clientName: tameAppName(client.client_name), redirectUri, codeChallenge, state, scope, resource },
           { error: msg },
         ),
       );
@@ -710,7 +711,12 @@ export function createConnectorServer(
       });
       return;
     }
-    const server = createMcpServer(storage, accountHash, dek, allowLegacyPlaintext);
+    // ADR 0085 D1: looked up only when a save is stamped. A client registered
+    // by metadata URL may be fetched again on a cold instance (cached 10 minutes).
+    const clientId = req.auth?.clientId ?? '';
+    const appName = async (): Promise<string | undefined> =>
+      clientId ? tameAppName((await provider.clientsStore.getClient(clientId))?.client_name) : undefined;
+    const server = createMcpServer(storage, accountHash, dek, allowLegacyPlaintext, { appName });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined });
     res.on('close', () => {
       transport.close();
@@ -975,6 +981,9 @@ export function createConnectorServer(
   // one: pending working rows in project scopes are withheld from it. With
   // ?v=2 every entry carries base_revision (absent for a legacy row) and
   // stale, which is true for a project document D2 would not serve.
+  // ADR 0085 D4: ?v=3 is v2 plus `replaces`, the queued cloud replaces. Only a
+  // client that confirms them asks for v3, so the phone and older builds never
+  // see, apply or ack one.
   app.get('/client/pending', asyncRoute(async (req: Request, res: Response) => {
     const connToken = bearerToken(req);
     const accountHash = connToken ? sha256hex(connToken) : null;
@@ -982,7 +991,8 @@ export function createConnectorServer(
       res.status(401).json({ error: 'Missing or malformed bearer connector token.' });
       return;
     }
-    const v2 = req.query.v === '2';
+    const version = typeof req.query.v === 'string' && /^[0-9]{1,3}$/.test(req.query.v) ? Number(req.query.v) : 1;
+    const v2 = version >= 2;
     await stampEntitlement(req, accountHash);
     if (!(await isEntitled(accountHash))) {
       deny402(res);
@@ -997,6 +1007,7 @@ export function createConnectorServer(
     await opts.betweenPendingReads?.();
     const tombstonedScopes = new Set((await storage.listTombstones(accountHash)).map((t) => t.scope));
     const forgets = await storage.listPendingForgets(accountHash);
+    const queuedReplaces = version >= 3 ? await storage.listPendingReplaces(accountHash) : [];
     // Unshare deletes every row in the scope, so a pending row still sitting in
     // a tombstoned one was written after the revoke: withhold it and drain it.
     const purged = pending.filter((e) => tombstonedScopes.has(e.scope));
@@ -1018,17 +1029,18 @@ export function createConnectorServer(
     let entriesOut: Array<Record<string, unknown>>;
     try {
       let dek: Promise<Uint8Array> | null = null;
-      const open = async (e: SharedEntry): Promise<SharedEntry> => {
+      const open = async (e: SharedEntry): Promise<SharedEntry & { app?: string }> => {
         if (!isEncryptedRow(e.content)) return e; // only reached when allowLegacyPlaintext is on
         dek ??= resolveAccountDek(accountHash, connToken);
         const plain = await decryptRow(e.content, accountHash, await dek);
-        return { ...e, type: plain.type, content: plain.content };
+        return { ...e, type: plain.type, content: plain.content, ...(plain.app ? { app: plain.app } : {}) };
       };
+      const appField = (e: SharedEntry & { app?: string }) => (e.app ? { app: e.app } : {});
       const opened = await Promise.all(deliverable.map(open));
       if (!v2) {
         entriesOut = opened
           .filter((e) => !isDocument(e))
-          .map((e) => ({ server_id: e.entryId, scope: e.scope, type: e.type, content: e.content }));
+          .map((e) => ({ server_id: e.entryId, scope: e.scope, type: e.type, content: e.content, ...appField(e) }));
       } else {
         // D2 over a fresh read of the scopes that have a document to deliver,
         // with the same visibility the MCP tools use.
@@ -1051,6 +1063,7 @@ export function createConnectorServer(
           content: e.content,
           ...(e.baseRevision === undefined ? {} : { base_revision: e.baseRevision }),
           stale: isDocument(e) && headByScope.get(e.scope) !== e.entryId,
+          ...appField(e),
         }));
       }
     } catch (err) {
@@ -1060,9 +1073,27 @@ export function createConnectorServer(
       }
       throw err;
     }
+    let replacesOut: Array<{ replace_id: string; scope: string; old_id: string; new_id: string }> | null = null;
+    if (version >= 3) {
+      // ADR 0085 D4: an entry whose old or new memory is gone (edited or
+      // forgotten on a device, then pushed; or discarded) is dropped, and the
+      // new memory stays an ordinary addition. One that waits on a forget is
+      // kept but not sent, since the user may still decline the forget.
+      const rowScopes = new Map((await storage.listEntries(accountHash)).map((e) => [e.entryId, e.scope]));
+      const alive = (id: string, scope: string): boolean => rowScopes.get(id) === scope && !tombstonedScopes.has(scope);
+      // Another device's ack can rename ids between these reads; an entry whose ids moved is left for the next read, never dropped.
+      const after = new Map((await storage.listPendingReplaces(accountHash)).map((r) => [r.replaceId, r]));
+      const settledIds = queuedReplaces.filter((r) => after.get(r.replaceId)?.oldId === r.oldId && after.get(r.replaceId)?.newId === r.newId);
+      const dead = settledIds.filter((r) => !alive(r.oldId, r.scope) || !alive(r.newId, r.scope));
+      if (dead.length > 0) await storage.dropReplaces(accountHash, dead.map((r) => r.replaceId));
+      replacesOut = settledIds
+        .filter((r) => !dead.includes(r) && !forgottenSet.has(r.oldId) && !forgottenSet.has(r.newId))
+        .map((r) => ({ replace_id: r.replaceId, scope: r.scope, old_id: r.oldId, new_id: r.newId }));
+    }
     res.status(200).json({
       entries: entriesOut,
       forgets: forgets.map((entry_id) => ({ entry_id })),
+      ...(replacesOut !== null ? { replaces: replacesOut } : {}),
     });
   }));
 
@@ -1087,15 +1118,17 @@ export function createConnectorServer(
       return;
     }
     await storage.upsertAccount(accountHash);
-    const body = req.body as { acked?: unknown; forgets?: unknown };
+    const body = req.body as { acked?: unknown; forgets?: unknown; replaces?: unknown };
     const acked = Array.isArray(body.acked) ? body.acked : [];
     const forgets = Array.isArray(body.forgets) ? body.forgets : [];
+    // ADR 0085 D4: queue entries a v3 device applied or found dead, by replace_id.
+    const replaceAcks = Array.isArray(body.replaces) ? body.replaces.filter((r): r is string => typeof r === 'string') : [];
     // Cap the batch: each item is a multi-statement Neon transaction run in a
     // sequential loop, so an unbounded array would amplify one authed request
     // into tens of thousands of serial round-trips (pool exhaustion / timeout).
-    if (acked.length + forgets.length > MAX_SHARED_ENTRIES) {
+    if (acked.length + forgets.length + replaceAcks.length > MAX_SHARED_ENTRIES) {
       res.status(413).json({
-        error: `Too many items in one ack (${acked.length + forgets.length}). The cap is ${MAX_SHARED_ENTRIES}.`,
+        error: `Too many items in one ack (${acked.length + forgets.length + replaceAcks.length}). The cap is ${MAX_SHARED_ENTRIES}.`,
       });
       return;
     }
@@ -1112,16 +1145,18 @@ export function createConnectorServer(
       await storage.applyForget(accountHash, raw);
       forgottenCount++;
     }
+    // After the renames above, which never touch replace_id.
+    const replacedCount = await storage.dropReplaces(accountHash, replaceAcks);
     await storage.appendAudit({
       ts: new Date().toISOString(),
       accountHash,
       tool: 'client_ack',
-      params: { limit: ackedCount + forgottenCount },
+      params: { limit: ackedCount + forgottenCount + replacedCount },
       ok: true,
-      resultCount: ackedCount + forgottenCount,
+      resultCount: ackedCount + forgottenCount + replacedCount,
       resultIds: [],
     });
-    res.status(200).json({ ok: true, acked: ackedCount, forgotten: forgottenCount });
+    res.status(200).json({ ok: true, acked: ackedCount, forgotten: forgottenCount, replaces: replacedCount });
   }));
 
   // POST /client/discard -> ADR 0063: delete exactly these pending rows by id
@@ -1188,7 +1223,7 @@ export function createConnectorServer(
   <li><code>POST /mcp</code>: MCP streamable HTTP (bearer-protected, stateless). Tools: <code>memory_retrieve</code>, <code>memory_list</code>, <code>memory_remember</code>, <code>memory_forget</code>, <code>project_list</code>, <code>project_get</code>, <code>project_create</code>, <code>project_update</code>, and ChatGPT's <code>search</code> + <code>fetch</code></li>
   <li><code>POST /pair/start</code>: pairing code from a connector token</li>
   <li><code>GET /client/manifest</code>, <code>PUT /client/entries</code>, <code>DELETE /client/scope/:scope</code>: desktop push of shared scopes</li>
-  <li><code>GET /client/pending</code>, <code>POST /client/ack</code>, <code>POST /client/discard</code>: desktop down-sync of what connected apps wrote</li>
+  <li><code>GET /client/pending</code>, <code>POST /client/ack</code>, <code>POST /client/discard</code>: desktop down-sync of what connected apps wrote, and the replacements waiting for confirmation</li>
   <li><code>GET /.well-known/oauth-authorization-server</code>: RFC 8414 AS metadata</li>
   <li><code>GET /.well-known/oauth-protected-resource/mcp</code>: RFC 9728 PRM</li>
 </ul>`);
@@ -1320,8 +1355,9 @@ function putBodyHasNul(body: unknown): boolean {
 
 /** Any id in an ack body that storage could not hold. */
 function ackBodyHasNul(body: unknown): boolean {
-  const b = (body ?? {}) as { acked?: unknown; forgets?: unknown };
+  const b = (body ?? {}) as { acked?: unknown; forgets?: unknown; replaces?: unknown };
   if (Array.isArray(b.forgets) && b.forgets.some(hasNul)) return true;
+  if (Array.isArray(b.replaces) && b.replaces.some(hasNul)) return true;
   if (Array.isArray(b.acked)) {
     for (const raw of b.acked) {
       const a = (raw ?? {}) as Record<string, unknown>;

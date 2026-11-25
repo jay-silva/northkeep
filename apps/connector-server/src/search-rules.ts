@@ -58,6 +58,54 @@ export function weightedMatch(weights: ReadonlyMap<string, number>, rowTerms: Re
   return total === 0 ? 0 : matched / total;
 }
 
+/** ADR 0085 D3: the share of a save's word weight a memory must already hold for the save to be held. */
+export const SAVE_HOLD_COVER = 0.6;
+/** How many near matches a held save lists. */
+export const SAVE_HOLD_LIST = 3;
+
+/** Text as the identical-save test compares it: case, spacing and punctuation at word edges do not count. */
+export function saveNormalForm(text: string): string {
+  return text.normalize('NFKC').toLowerCase().split(/\s+/)
+    .map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
+    .filter((word) => word.length > 0).join(' ');
+}
+
+/**
+ * ADR 0085 D3. A word no memory holds weighs most here, where wordWeights
+ * gives it nothing: in a save the new word is the new information. Only the
+ * save's side is measured, or a short memory would hold every later fact.
+ */
+export function checkSave<T extends { content: string }>(content: string, candidates: readonly T[]): { identical: T | null; held: T[] } {
+  const normal = saveNormalForm(content);
+  const identical = normal === '' ? undefined : candidates.find((row) => saveNormalForm(row.content) === normal);
+  if (identical !== undefined) return { identical, held: [] };
+  const terms = searchTerms(content);
+  const rows = candidates.map((row) => ({ row, terms: searchTerms(row.content) }));
+  const weights = new Map<string, number>();
+  let total = 0;
+  for (const term of terms) {
+    let holding = 0;
+    for (const row of rows) if (row.terms.has(term)) holding += 1;
+    const weight = Math.log((rows.length + 10.5) / (holding + 0.5));
+    weights.set(term, weight);
+    total += weight;
+  }
+  if (total === 0) return { identical: null, held: [] };
+  const held: Array<{ row: T; cover: number }> = [];
+  for (const row of rows) {
+    let shared = 0;
+    let matched = 0;
+    for (const [term, weight] of weights) {
+      if (!row.terms.has(term)) continue;
+      shared += 1;
+      matched += weight;
+    }
+    if (shared >= 2 && matched / total >= SAVE_HOLD_COVER) held.push({ row: row.row, cover: matched / total });
+  }
+  held.sort((a, b) => b.cover - a.cover);
+  return { identical: null, held: held.slice(0, SAVE_HOLD_LIST).map((entry) => entry.row) };
+}
+
 /**
  * A long row matches many query words by sheer size. The share taken off is
  * capped at 30%: at half, a long memory that held every word of the question

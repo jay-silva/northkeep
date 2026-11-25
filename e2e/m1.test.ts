@@ -108,7 +108,7 @@ describe('M1 acceptance — MCP server', () => {
     expect(result.isError).toBeFalsy();
     const payload = JSON.parse(toolText(result)) as { stored: { id: string; source: string } };
     expect(payload.stored.id).toMatch(/^[0-9a-f-]{36}$/);
-    expect(payload.stored.source).toBe('mcp');
+    expect(payload.stored.source).toBe('mcp:northkeep-e2e');
     storedId = payload.stored.id;
   });
 

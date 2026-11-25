@@ -2,6 +2,7 @@ import { devicePhrase, loadDeviceSecret, projectScope, type Vault } from '@north
 import {
   applyDownSync,
   assertDeviceCanPush,
+  cloudReplaceLine,
   connectorAutoPushEnabled,
   connectorPaired,
   deriveConnectorToken,
@@ -256,6 +257,12 @@ export function describePlan(plan: DownSyncPlan): string[] {
       if (f.passed && f.passed.length > 0) lines.push(`      Passed milestones it removes: ${f.passed.join(', ')}`);
     }
   }
+  // ADR 0085 D4: an app said a new memory updates an old one. The old one stays in history.
+  const cloudReplaces = plan.cloud_replaces ?? [];
+  if (cloudReplaces.length > 0) {
+    lines.push(`  ${plural(cloudReplaces.length, 'memory', 'memories')} would be replaced by a newer one from your apps (the old one stays in history):`);
+    for (const r of cloudReplaces) lines.push(`    ${r.scope}: ${cloudReplaceLine(r)}`);
+  }
   if (plan.conflicts.length > 0) {
     lines.push(`  ${plural(plan.conflicts.length, 'conflict', 'conflicts')}, not applied (see "northkeep share conflicts"):`);
     for (const c of plan.conflicts) lines.push(`    ${conflictLine(c)}`);
@@ -302,19 +309,23 @@ export async function shareSyncCmd(options: { yes?: boolean }, deps: ShareDeps, 
     for (const line of described) console.log(line);
   }
   if (planNeedsConfirmation(plan) && !assumeYes) {
-    const answer = await deps.ask('Apply the replacements and forgets listed above? [y/N] ');
+    const answer = await deps.ask('Apply the replacements, forgets and memory updates listed above? [y/N] ');
     if (answer === null) fail('These changes need your confirmation and there is no terminal to ask on. Nothing was changed. Run again with --yes to apply them.');
     if (!/^y(es)?$/i.test(answer.trim())) fail('Cancelled. Nothing was changed.');
   }
-  const approve = { server_ids: plan.replacements.map((r) => r.server_id), forget_ids: plan.forgets.map((f) => f.entry_id) };
+  const approve = {
+    server_ids: plan.replacements.map((r) => r.server_id),
+    forget_ids: plan.forgets.map((f) => f.entry_id),
+    replace_ids: plan.cloud_replaces.map((r) => r.replace_id),
+  };
   const down = await deps.withVault((vault) => applyDownSync({ ...conn, vault, approve }));
   console.log(
-    `✓ Down-synced: ${down.added} added, ${down.replaced} replaced, ${down.forgotten} forgotten, ${down.deduped} already present, ${down.held} held, ${down.skipped} skipped.`,
+    `✓ Down-synced: ${down.added} added, ${down.replaced} replaced, ${down.forgotten} forgotten, ${plural(down.cloud_replaced, 'memory', 'memories')} marked replaced, ${down.deduped} already present, ${down.held} held, ${down.skipped} skipped.`,
   );
   if (down.skipped > 0) {
     console.log('  Skipped memories had a type NorthKeep does not store; the app that wrote them can forget them.');
   }
-  const unshown = down.needs_review.replacements.length + down.needs_review.forgets.length;
+  const unshown = down.needs_review.replacements.length + down.needs_review.forgets.length + down.needs_review.cloud_replaces.length;
   if (unshown > 0) console.log(`  ${plural(unshown, 'change', 'changes')} arrived after the preview and wait for the next sync.`);
   for (const c of down.conflicts) {
     console.log(`  Conflict, not applied: ${conflictLine(c)}. Resolve it with: northkeep share resolve ${c.project} --take-theirs | --keep-mine`);

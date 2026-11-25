@@ -1261,7 +1261,7 @@ share
 share
   .command('sync')
   .description('Show what your AI apps changed, ask before replacing or forgetting anything, apply it, then re-push')
-  .option('--yes', 'apply replacements and forgets without asking (scripting)')
+  .option('--yes', 'apply project replacements, memory replacements and forgets without asking (scripting)')
   .action(async (options: { yes?: boolean }) => {
     await withShareDeps((deps) => shareSyncCmd(options, deps, fail));
   });

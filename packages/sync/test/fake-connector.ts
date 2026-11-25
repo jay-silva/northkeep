@@ -20,6 +20,8 @@ export interface FakeRow {
   /** A vault id, 'new', or null for a legacy row. */
   base_revision: string | null;
   write_seq: number;
+  /** ADR 0085 D1: the writing app's name, as the real connector carries it inside the ciphertext. */
+  app?: string;
 }
 
 export interface FakeConnector {
@@ -34,10 +36,14 @@ export interface FakeConnector {
   cloudCreate: (scope: string, content: string) => string;
   /** A row as a pre-ADR connector wrote it: no base. */
   seedLegacy: (scope: string, content: string, type?: string) => string;
-  /** Hosted memory_remember: a non-working pending row. */
-  cloudRemember: (scope: string, content: string, type?: string) => string;
+  /** Hosted memory_remember: a non-working pending row, stamped with the app's name when given. */
+  cloudRemember: (scope: string, content: string, type?: string, app?: string) => string;
   /** Hosted memory_forget of a pushed entry. */
   cloudForget: (entryId: string) => void;
+  /** ADR 0085 D4: hosted memory_remember with `replaces`: a pending row plus a queued replace. Returns both ids. */
+  cloudReplace: (scope: string, content: string, oldId: string, type?: string) => { newId: string; replaceId: string };
+  /** The queued replaces, as the connector holds them. */
+  replaceQueue: () => Array<{ replace_id: string; scope: string; old_id: string; new_id: string }>;
   vaultPair: () => { server: string; version: number } | null;
   pushes: () => Array<{ scopes: string[]; vault?: { server: string; version: number }; reset?: boolean; status: number }>;
   requests: () => string[];
@@ -50,6 +56,7 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
   const rows = new Map<string, FakeRow>();
   const scopeSeq = new Map<string, number>();
   const forgetQueue: string[] = [];
+  const replaceQueue: Array<{ replace_id: string; scope: string; old_id: string; new_id: string }> = [];
   const tombstones = new Set<string>();
   let enforce = options.tombstoneEnforce ?? true;
   let pair: { server: string; version: number } | null = null;
@@ -104,7 +111,8 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
       const body = chunks.length ? (JSON.parse(Buffer.concat(chunks).toString('utf8')) as Record<string, unknown>) : {};
 
       if (req.method === 'GET' && url.pathname === '/client/pending') {
-        const v2 = url.searchParams.get('v') === '2';
+        const version = Number(url.searchParams.get('v') ?? '1');
+        const v2 = version >= 2;
         const entries = [...rows.values()]
           .filter((r) => r.pending)
           .filter((r) => v2 || !(r.type === 'working' && r.scope.startsWith('project:')))
@@ -115,8 +123,13 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
             content: r.content,
             ...(v2 && r.base_revision !== null ? { base_revision: r.base_revision } : {}),
             ...(v2 ? { stale: r.type === 'working' && r.scope.startsWith('project:') && !isCurrent(r) } : {}),
+            ...(r.app !== undefined ? { app: r.app } : {}),
           }));
-        send(200, { entries, forgets: forgetQueue.map((entry_id) => ({ entry_id })) });
+        send(200, {
+          entries,
+          forgets: forgetQueue.map((entry_id) => ({ entry_id })),
+          ...(version >= 3 ? { replaces: replaceQueue.filter((r) => rows.has(r.old_id) && rows.has(r.new_id)) } : {}),
+        });
         return;
       }
       if (req.method === 'POST' && url.pathname === '/client/ack') {
@@ -125,6 +138,14 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
           if (!row || !row.pending) continue;
           rows.delete(a.server_id);
           rows.set(a.local_entry_id, { ...row, entry_id: a.local_entry_id, pending: false, write_seq: bump(row.scope) });
+          for (const r of replaceQueue) {
+            if (r.old_id === a.server_id) r.old_id = a.local_entry_id;
+            if (r.new_id === a.server_id) r.new_id = a.local_entry_id;
+          }
+        }
+        for (const id of (body.replaces as string[]) ?? []) {
+          const i = replaceQueue.findIndex((r) => r.replace_id === id);
+          if (i >= 0) replaceQueue.splice(i, 1);
         }
         for (const id of (body.forgets as string[]) ?? []) {
           const i = forgetQueue.indexOf(id);
@@ -217,10 +238,21 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
     },
     cloudCreate: (scope, content) => addPending(scope, content, 'working', 'new'),
     seedLegacy: (scope, content, type = 'working') => addPending(scope, content, type, null),
-    cloudRemember: (scope, content, type = 'semantic') => addPending(scope, content, type, null),
+    cloudRemember: (scope, content, type = 'semantic', app) => {
+      const id = addPending(scope, content, type, null);
+      if (app !== undefined) rows.set(id, { ...rows.get(id)!, app });
+      return id;
+    },
     cloudForget: (entryId) => {
       forgetQueue.push(entryId);
     },
+    cloudReplace: (scope, content, oldId, type = 'semantic') => {
+      const newId = addPending(scope, content, type, null);
+      const replaceId = `rep_${randomUUID()}`;
+      replaceQueue.push({ replace_id: replaceId, scope, old_id: oldId, new_id: newId });
+      return { newId, replaceId };
+    },
+    replaceQueue: () => replaceQueue.map((r) => ({ ...r })),
     vaultPair: () => pair,
     pushes: () => pushLog,
     requests: () => requestLog,

@@ -40,6 +40,7 @@ import { ClientSecretBinder, clientSecretState, scrubForStorage, secretMatchesHa
 import { CONSENT_PAGE_HEADERS, renderConsentPage } from './consent.js';
 import { sha256hex, randomToken } from './hash.js';
 import { resolveCimdClient, type CimdLookup } from './cimd.js';
+import { tameAppName } from './text-safe.js';
 import {
   ConnectorCryptoError,
   KEK_LABEL_AUTH_CODE,
@@ -80,9 +81,13 @@ class ConnectorClientsStore implements OAuthRegisteredClientsStore {
   // RFC 7591 DCR. The SDK echoes the returned client (secret included) once;
   // storage gets the sentinel JSON and the hash only.
   async registerClient(client: OAuthClientInformationFull): Promise<OAuthClientInformationFull> {
-    const { stored, hash } = await scrubForStorage(client);
+    // ADR 0085 D1: the name lands on the consent page and on every save, so it is tamed before it is kept.
+    const { client_name: rawName, ...rest } = client;
+    const name = tameAppName(rawName);
+    const tamed: OAuthClientInformationFull = name === undefined ? rest : { ...rest, client_name: name };
+    const { stored, hash } = await scrubForStorage(tamed);
     await this.storage.registerClient(stored, hash);
-    return client;
+    return tamed;
   }
 
   /**
@@ -174,7 +179,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     res.set(CONSENT_PAGE_HEADERS).type('html').send(
       renderConsentPage({
         clientId: client.client_id,
-        clientName: client.client_name,
+        clientName: tameAppName(client.client_name),
         redirectUri: params.redirectUri,
         codeChallenge: params.codeChallenge,
         state: params.state,

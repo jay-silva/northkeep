@@ -138,9 +138,9 @@ describe('ADR 0063 fast-forward and D3 approval', () => {
     expect((await fetchPending(conn())).forgets).toEqual([]);
   });
 
-  it('asks for rows with ?v=2', async () => {
+  it('asks for rows with ?v=3 (ADR 0085), a superset of ?v=2, and never falls back when the connector answers it', async () => {
     await applyDownSync(conn());
-    expect(fake.requests()).toContain('GET /client/pending?v=2');
+    expect(fake.requests().filter((r) => r.startsWith('GET /client/pending'))).toEqual(['GET /client/pending?v=3']);
   });
 });
 

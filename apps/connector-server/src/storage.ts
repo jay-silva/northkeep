@@ -97,6 +97,19 @@ export interface SharedEntry {
   archive?: boolean;
 }
 
+/**
+ * ADR 0085 D4: a connected app asked that `newId` replace `oldId`. It waits
+ * here until the user confirms it on a device. Ids only, never content.
+ */
+export interface PendingReplace {
+  /** Stable for the life of the entry: row ids are renamed by an ack, this never is. */
+  replaceId: string;
+  scope: string;
+  oldId: string;
+  newId: string;
+  createdAt: string;
+}
+
 /** The base_revision of a document created on the connector, where no base exists (ADR 0063). */
 export const BASE_NEW = 'new';
 
@@ -344,6 +357,16 @@ export interface ConnectorStorage {
   ackEntry(accountHash: string, serverId: string, localEntryId: string): Promise<void>;
   /** Apply an acked forget: delete BOTH the pending_forgets row and the shared_entries row, moving its scope counter. */
   applyForget(accountHash: string, entryId: string): Promise<void>;
+  /**
+   * ADR 0085 D4: queue a cloud replace for the user to confirm. Idempotent on
+   * replaceId. ackEntry re-points both of its ids; unshareScope drops the
+   * scope's entries.
+   */
+  enqueueReplace(accountHash: string, replace: Omit<PendingReplace, 'createdAt'>): Promise<void>;
+  /** Every queued replace for the account, oldest first. The caller decides which are still live. */
+  listPendingReplaces(accountHash: string): Promise<PendingReplace[]>;
+  /** Delete these queue entries by replaceId (applied, refused or dead). Returns how many went. */
+  dropReplaces(accountHash: string, replaceIds: string[]): Promise<number>;
 
   // --- audit ---
   appendAudit(entry: ConnectorAuditEntry): Promise<void>;
@@ -394,6 +417,8 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
   private tombstones = new Map<string, ScopeTombstone[]>();
   /** accountHash -> set of entry ids queued to be forgotten by the client (C3). */
   private pendingForgets = new Map<string, Set<string>>();
+  /** accountHash -> (replaceId -> queued replace), ADR 0085 D4. */
+  private pendingReplaces = new Map<string, Map<string, PendingReplace>>();
   /** `${accountHash}\0${scope}` -> write counter (ADR 0063). NUL never reaches storage, so the key is unambiguous. */
   private scopeSeq = new Map<string, number>();
   /** accountHash -> the vault order last accepted (ADR 0063 D5). */
@@ -633,6 +658,9 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
         }
       }
     }
+    // ADR 0085 D4: a re-share pushes the same ids back, so the replace must go now, not when its rows vanish.
+    const replaces = this.pendingReplaces.get(accountHash);
+    for (const [id, r] of [...(replaces?.entries() ?? [])]) if (r.scope === scope) replaces!.delete(id);
     // Moves an existing counter only: a lapsed account's unshare of an unknown
     // name must not create rows (the ADR 0061 caps).
     if (this.scopeSeq.has(this.seqKey(accountHash, scope))) this.bumpSeq(accountHash, scope);
@@ -773,6 +801,11 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
       forgets.delete(serverId);
       forgets.add(localEntryId);
     }
+    // ADR 0085 D4: either side of a queued replace may be an undelivered row.
+    for (const r of this.pendingReplaces.get(accountHash)?.values() ?? []) {
+      if (r.oldId === serverId) r.oldId = localEntryId;
+      if (r.newId === serverId) r.newId = localEntryId;
+    }
     const byId = this.entries.get(accountHash);
     const row = byId?.get(serverId);
     if (!byId || !row) return;
@@ -787,6 +820,27 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
     const row = this.entries.get(accountHash)?.get(entryId);
     if (row) this.bumpSeq(accountHash, row.scope);
     this.entries.get(accountHash)?.delete(entryId);
+  }
+
+  async enqueueReplace(accountHash: string, replace: Omit<PendingReplace, 'createdAt'>): Promise<void> {
+    let byId = this.pendingReplaces.get(accountHash);
+    if (!byId) {
+      byId = new Map();
+      this.pendingReplaces.set(accountHash, byId);
+    }
+    if (!byId.has(replace.replaceId)) byId.set(replace.replaceId, { ...replace, createdAt: new Date().toISOString() });
+  }
+
+  async listPendingReplaces(accountHash: string): Promise<PendingReplace[]> {
+    // A Map keeps insertion order, which is queue order.
+    return [...(this.pendingReplaces.get(accountHash)?.values() ?? [])].map((r) => ({ ...r }));
+  }
+
+  async dropReplaces(accountHash: string, replaceIds: string[]): Promise<number> {
+    const byId = this.pendingReplaces.get(accountHash);
+    let n = 0;
+    for (const id of new Set(replaceIds)) if (byId?.delete(id)) n++;
+    return n;
   }
 
   async appendAudit(entry: ConnectorAuditEntry): Promise<void> {
@@ -845,6 +899,7 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
       entries: [...this.entries.entries()].map(([a, m]) => [a, [...m.entries()]]),
       tombstones: [...this.tombstones.entries()],
       pendingForgets: [...this.pendingForgets.entries()].map(([a, s]) => [a, [...s]]),
+      pendingReplaces: [...this.pendingReplaces.entries()].map(([a, m]) => [a, [...m.values()]]),
       scopeSeq: [...this.scopeSeq.entries()],
       vaultOrder: [...this.vaultOrder.entries()],
       audit: this.audit,

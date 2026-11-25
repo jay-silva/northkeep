@@ -61,6 +61,7 @@ import {
   type ProjectWriter,
   sharedEntryTooLargeMessage,
   PROJECT_STATUS_AGENT_MAX_CHARS,
+  checkSave,
   isProjectPaperwork,
 } from '@northkeep/core';
 import { nodePlatform } from '@northkeep/platform-node';
@@ -655,6 +656,20 @@ function refuseProjectWriteUnderMasking(): void {
   if (tier >= 1) throw new MaskingRefusal(contentWriteRefusal(tier));
 }
 
+/** ADR 0085 D1: the app's own name from the handshake, so it is reported by the app and nothing more. */
+function saveSource(ctx: ConnContext): string {
+  return ctx.host === '' || ctx.host === 'unknown' ? 'mcp' : `mcp:${ctx.host}`;
+}
+
+/** At Tier 1 a replace is refused as an edit is, so the hold must not offer one. */
+function saveHoldAdvice(): string {
+  const separate = 'If it is a separate fact, save it again with distinct set to true.';
+  if (returnRedactionTier() >= 1) {
+    return `Nothing was saved: this mostly repeats a memory already stored. Replacing a memory is not available while returned text is masked. ${separate}`;
+  }
+  return `Nothing was saved: this mostly repeats a memory already stored. If it updates one of the memories listed, save it again with replaces set to that id. ${separate}`;
+}
+
 function refuseMemoryWriteUnderMasking(minTier: 1 | 2): void {
   const tier = returnRedactionTier();
   if (tier >= minTier) throw new MaskingRefusal(contentWriteRefusal(tier));
@@ -1006,7 +1021,11 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         'document, and a second one makes the project show as a conflict with no title. Change ' +
         'the project with project_create or project_update. Detail in a project scope belongs in ' +
         'episodic, semantic, or procedural memories. In a scope the user shares with their connected apps, ' +
-        'a memory over 8 KB (64 KB in a project scope), counted in bytes, is refused; shorten or split it.',
+        'a memory over 8 KB (64 KB in a project scope), counted in bytes, is refused; shorten or split it. ' +
+        'A save that repeats a memory word for word is not stored again; the existing id comes back. ' +
+        'A save that mostly repeats a memory in the same scope is held: nothing is stored, and the reply lists ' +
+        'up to three memories it may update. Save again with replaces set to the id of the one it updates, or ' +
+        'with distinct set to true if it is a separate fact. NorthKeep never picks for you.',
       inputSchema: {
         content: z
           .string()
@@ -1016,19 +1035,37 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
         type: typeEnum.describe('Memory type'),
         scope: scopeSchema.optional().describe('Scope tag (default "personal")'),
         confidence: z.number().min(0).max(1).optional().describe('Confidence 0-1 (default 0.9 for model-stored)'),
+        replaces: idSchema.optional().describe('The id of the one memory this save updates. That memory is marked replaced and this text becomes the live version, in the same scope'),
+        distinct: z.boolean().optional().describe('Set true to save a separate fact even though it resembles a memory already stored'),
       },
     },
-    async ({ content, type, scope, confidence }) =>
+    async ({ content, type, scope, confidence, replaces, distinct }) =>
       run(
         ctx,
         'memory_remember',
-        { content_chars: content.length, type, scope },
+        { content_chars: content.length, type, scope, id: replaces },
         vaultPath,
         { kind: 'write', mask: 'memory' },
         (vault, granted) => {
           // Tiers 2 and 3 only: the app read Person-N pseudonyms whose map lives
           // in this process's RAM (ADR 0060 F5). Tier 1 stays allowed (O1).
           refuseMemoryWriteUnderMasking(2);
+          const stamp = { source: saveSource(ctx), sourceModel: 'mcp-client' };
+          if (replaces !== undefined) {
+            // As memory_edit: the app only saw masked text, so its rewrite could overwrite a real value.
+            refuseMemoryWriteUnderMasking(1);
+            const replaced = vault.replaceMemory(replaces, { content, type: type as MemoryType, scope }, { actor: 'agent', ...stamp }, granted);
+            // replaceMemory hands back the old row itself when the text is the same.
+            if (replaced.id.startsWith(replaces.trim().toLowerCase())) {
+              return { payload: { stored: publicEntry(replaced), already_saved: true }, result_id: replaced.id, disclosed_scopes: [replaced.scope] };
+            }
+            vault.save();
+            return {
+              payload: { stored: publicEntry(replaced), replaced: replaces },
+              result_id: replaced.id,
+              disclosed_scopes: [replaced.scope],
+            };
+          }
           const targetScope = scope ?? 'personal';
           // Capability enforcement: can't write outside the granted scopes.
           if (granted !== undefined && !granted.includes(targetScope)) {
@@ -1043,12 +1080,29 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
             const tooLarge = sharedEntryTooLargeMessage(storedScope, content);
             if (tooLarge !== null) throw new Error(tooLarge);
           }
+          // ADR 0085 D3: the same rows search ranks, in this scope only, so a hold never reaches past the grant.
+          const candidates = vault.list({ scope: storedScope, allowedScopes: granted }).filter((row) => !isProjectPaperwork(row));
+          const check = checkSave(content, candidates);
+          if (check.identical !== null) {
+            return {
+              payload: { stored: publicEntry(check.identical), already_saved: true },
+              result_id: check.identical.id,
+              disclosed_scopes: [check.identical.scope],
+            };
+          }
+          if (check.held.length > 0 && distinct !== true) {
+            return {
+              payload: { held: true, saved: false, next: saveHoldAdvice(), possible_updates: check.held.map(publicEntry) },
+              result_count: check.held.length,
+              result_ids: check.held.map((row) => row.id),
+              disclosed_scopes: [storedScope],
+            };
+          }
           const entry = vault.remember({
             content,
             type: type as MemoryType,
             scope,
-            source: 'mcp',
-            sourceModel: 'mcp-client',
+            ...stamp,
             confidence: confidence ?? 0.9,
           });
           vault.save();
@@ -1156,7 +1210,7 @@ export function createServer(vaultPath: string = defaultVaultPath()): McpServer 
           const patch: { content?: string; type?: MemoryType } = {};
           if (content !== undefined) patch.content = content;
           if (type !== undefined) patch.type = type as MemoryType;
-          const edited = vault.editMemory(id, patch, { actor: 'agent' }, granted);
+          const edited = vault.editMemory(id, patch, { actor: 'agent', source: saveSource(ctx), sourceModel: 'mcp-client' }, granted);
           vault.save();
           return {
             payload: { edited: publicEntry(edited) },
