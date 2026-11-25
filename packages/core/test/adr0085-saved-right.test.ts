@@ -140,6 +140,16 @@ describe('ADR 0085: replace primitives in the vault', () => {
     expect(vault.verifyChain().ok).toBe(true);
   });
 
+  it('replaceMemory says by identity whether it wrote a new version', () => {
+    const first = vault.remember({ content: 'The harbor office is at Pier 4.', type: 'semantic' });
+    const same = vault.replaceMemory(first.id, { content: 'The harbor office is at Pier 4', type: 'semantic' }, { actor: 'agent', source: 'mcp:app-beta' });
+    expect(same).toEqual({ entry: first, changed: false });
+    const next = vault.replaceMemory(first.id.slice(0, 4), { content: 'The harbor office is at Pier 9.', type: 'semantic' }, { actor: 'agent', source: 'mcp:app-beta' });
+    expect(next.changed).toBe(true);
+    expect(next.entry.id).not.toBe(first.id);
+    expect(vault.list().map((row) => row.content)).toEqual(['The harbor office is at Pier 9.']);
+  });
+
   it('markReplaced links two existing memories and leaves one live', () => {
     const old = vault.remember({ content: 'The harbor office is at Pier 4', type: 'semantic' });
     const next = vault.remember({ content: 'The harbor office is at Pier 9', type: 'semantic' });

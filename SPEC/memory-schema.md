@@ -53,7 +53,10 @@ Five types, adopted from the Portable Agent Memory pattern (arXiv:2605.11032):
 | `metadata` | object \| null | no | Open extension point (JSON object) |
 
 **Deletion is real, and visible.** `forget` irrecoverably blanks the entry's
-`content` and `metadata` and sets `forgotten_at`. The row itself — with its
+`content` and `metadata` and sets `forgotten_at`. One thing outlives the row's
+metadata: when the memory came from Cloud Connect, its random row id there is
+kept in the vault's settings (`forgotten_connector_ids`, newest 2,000, no text),
+so a sync whose acknowledgement failed cannot add the memory again. The row itself — with its
 original hashes — remains as a tombstone, so (a) the provenance chain stays
 intact and verifiable, and (b) the deletion itself is auditable: "an entry in
 this scope was forgotten on this date" without revealing what it said. Chain

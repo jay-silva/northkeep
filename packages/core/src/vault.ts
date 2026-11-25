@@ -717,7 +717,7 @@ export class Vault {
     input: { content: string; type: MemoryType; scope?: string },
     options: WriteActorOptions & WriterStamp,
     allowedScopes?: string[],
-  ): MemoryEntry {
+  ): { entry: MemoryEntry; changed: boolean } {
     this.assertOpen();
     const old = this.resolveEditable(idOrPrefix, allowedScopes);
     if (isProjectPaperwork(old)) throw new Error(PROJECT_DOCUMENT_REPLACE_MESSAGE);
@@ -725,8 +725,10 @@ export class Vault {
       throw new Error(`The memory to replace is in the "${old.scope}" scope, not "${input.scope.trim() || 'personal'}". Nothing was saved.`);
     }
     // The same text, give or take outer whitespace and one closing full stop, is not a new version.
-    if (saveNormalForm(input.content) === saveNormalForm(old.content) && input.type === old.type) return old;
-    return this.editMemory(old.id, { content: input.content, type: input.type }, options, allowedScopes);
+    if (saveNormalForm(input.content) === saveNormalForm(old.content) && input.type === old.type) return { entry: old, changed: false };
+    const entry = this.editMemory(old.id, { content: input.content, type: input.type }, options, allowedScopes);
+    // Said by identity: the caller must not guess from an id prefix or a clock whether a row was written.
+    return { entry, changed: entry.id !== old.id };
   }
 
   /**
