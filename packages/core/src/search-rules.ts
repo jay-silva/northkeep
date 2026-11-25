@@ -70,9 +70,24 @@ export const SAVE_HOLD_LIST = 3;
  * mark, brackets round an amount) changes the fact; calling those identical lost the save.
  */
 export function saveNormalForm(text: string): string {
-  return text.normalize('NFC').toLowerCase().split(/\s+/)
-    .map((word) => word.replace(/^["'“”‘’]+|[.,;:!?"'“”‘’]+$/gu, ''))
-    .filter((word) => word.length > 0).join(' ');
+  return text.normalize('NFC').toLowerCase().split(/\s+/).map(saveWord).filter((word) => word.length > 0).join(' ');
+}
+
+const SAVE_STOPS = '.,;:';
+const SAVE_QUOTES = `"'“”‘’`;
+
+/** A loop, not a regex: a long run of punctuation inside a word made the regex quadratic. */
+function saveWord(word: string): string {
+  let start = 0;
+  while (start < word.length && SAVE_QUOTES.includes(word[start]!)) start += 1;
+  let end = word.length;
+  while (end > start && (SAVE_STOPS + SAVE_QUOTES + '!?').includes(word[end - 1]!)) end -= 1;
+  const body = word.slice(start, end);
+  // After a digit a quote is a unit (6' and 6") and ! or ? can change the value, so those stay.
+  if (!/[0-9]$/.test(body)) return body;
+  let kept = '';
+  for (const mark of word.slice(end)) if (!SAVE_STOPS.includes(mark)) kept += mark;
+  return body + kept;
 }
 
 /**

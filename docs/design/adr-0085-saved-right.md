@@ -57,7 +57,7 @@ Review 1 (fresh eyes, 2026-11-20): NOT CLEARED.
   - Phone and old builds would have acked and lost the replace. Now the protocol version gate covers them.
   - Connector app names were unchecked. Now they are tamed.
   - The acceptance step could not show a replaced row. It now uses export.
-- Accepted scar tissue: reworded updates that share no key words still save as a second row. Milestone 5's conflict check is the backstop.
+- Accepted scar tissue: reworded updates that share no key words still save as a second row. Milestone 5's conflict check was named as the backstop; see the correction under "What it misses".
 
 Recheck (2026-11-20): CLEARED WITH WOUNDS. The kill shot and the prior wounds are closed. The fix introduced two wounds, both fixed after the recheck and not yet rechecked:
 - Save-then-list duplicated rows. D3 now holds the save instead.
@@ -83,7 +83,7 @@ What it misses, by design and by measurement:
 - An update that shares fewer than two distinctive words with the old fact. "Rent is $2,450" against "Rent is $2,300" shares only "rent"; "My accountant is now Priya Shah" against "My accountant is Leo Marsh" shares only "accountant". Both save as second copies. One shared word cannot be the rule: it would hold almost every save about a known person or place.
 - A long update of a short fact, since only the save's side is measured.
 - Text with no Latin letters or digits yields no words, so it is saved unchecked.
-Milestone 5's conflict check is the backstop for all three.
+A later conflict check was meant as the backstop for all three; as drafted on 2026-11-25 (ADR 0092) it does not catch the first, so nothing does today.
 
 How an agent gets through a hold. `distinct: true` always saves; there is no loop. An identical save returns the existing id whether or not `distinct` is set. At privacy Tier 1 a save is allowed but a replace is refused, as `memory_edit` is today, so the hold reply says that `replaces` is not available and offers `distinct` only.
 
@@ -147,4 +147,4 @@ Notes taken up: a Cloud retry that sets `replaces` again no longer stores the sa
 Still not checked: the new table against real hosted Postgres.
 
 ## Found after merge (2026-11-25)
-The review of ADR 0093 ran the identical-save test on pairs that differ by a symbol. As merged in PR 96 it stripped every non-letter at a word's edges and folded compatibility forms, so "O+" and "O-", "-500" and "500", "$1,450" and "€1,450", and "< 5 mg" and "> 5 mg" compared equal: the second save was answered "already saved" and never stored. Neither build review tried it. Fixed: only full stops, commas, colons, semicolons, question and exclamation marks and quotation marks are dropped at word edges (brackets stay: "(500)" is minus 500 in accounts), and the form is NFC, so a superscript is not a digit. Twelve differing pairs are a test on both surfaces' shared rule.
+The review of ADR 0093 ran the identical-save test on pairs that differ by a symbol. As merged in PR 96 it stripped every non-letter at a word's edges and folded compatibility forms, so "O+" and "O-", "-500" and "500", "$1,450" and "€1,450", and "< 5 mg" and "> 5 mg" compared equal: the second save was answered "already saved" and never stored. Neither build review tried it. Fixed: only full stops, commas, colons, semicolons, question and exclamation marks and quotation marks are dropped at word edges (brackets stay: "(500)" is minus 500 in accounts), and the form is NFC, so a superscript is not a digit. Sixteen differing pairs are a test on both surfaces' shared rule. After a digit a quote, a question mark or an exclamation mark is kept, so 6' and 6" differ, and the rule is a loop so a long run of punctuation cannot slow a save.

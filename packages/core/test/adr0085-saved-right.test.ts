@@ -32,6 +32,10 @@ describe('ADR 0085 D3: the save check', () => {
       ['Version 2', 'Version ²'],
       ['Balance is (500).', 'Balance is 500.'],
       ['Pat owes [nothing]', 'Pat owes nothing'],
+      ["Board is 6' long", 'Board is 6" long'],
+      ["Ceiling is 8'", 'Ceiling is 8'],
+      ['Answer is 5!', 'Answer is 5'],
+      ['Due June 3?', 'Due June 3.'],
     ];
     for (const [first, second] of pairs) {
       expect(checkSave(second, rows(first)).identical, `${first} / ${second}`).toBeNull();
@@ -39,8 +43,16 @@ describe('ADR 0085 D3: the save check', () => {
   });
 
   it('still calls a save identical across case, spacing, quotes and a closing full stop', () => {
-    expect(checkSave('the harbor office is at "Pier 4"', rows('The Harbor  office is at Pier 4.')).identical).not.toBeNull();
+    expect(checkSave('the "harbor office" is at Pier 4', rows('The Harbor  office is at Pier 4.')).identical).not.toBeNull();
     expect(checkSave('Rent is $1,450 a month', rows('Rent is $1,450 a month.')).identical).not.toBeNull();
+    expect(checkSave('The harbor office is at Pier 4', rows('The harbor office is at Pier 4.')).identical).not.toBeNull();
+    expect(checkSave('Is the office open?', rows('is the office open')).identical).not.toBeNull();
+  });
+
+  it('stays fast on a long run of punctuation inside a word', () => {
+    const started = Date.now();
+    expect(saveNormalForm(`a${'!'.repeat(64_000)}b ${'"'.repeat(64_000)}`)).toBe(`a${'!'.repeat(64_000)}b`);
+    expect(Date.now() - started).toBeLessThan(200);
   });
 
   it('calls a save identical only when some text is left to compare', () => {
