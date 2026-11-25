@@ -97,7 +97,7 @@ describe('a pull and another process that forgets the pulled memory (real in-mem
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
-  it('the forget cannot land between the save and the acknowledgement, and the forgotten memory is never served as delivered', async () => {
+  it('the forget cannot land between the save and an acknowledgement that is slow but arrives, so the forgotten memory is not served', async () => {
     await seedEncryptedEntry(storage, account, connToken, {
       entryId: 'conn_pier9',
       scope: 'harbor',

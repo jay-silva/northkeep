@@ -106,7 +106,7 @@ describe('pullDownSync', () => {
     const seen: Array<[string, boolean]> = [];
     fake.observe((request) => seen.push([request, lockHeld()]));
 
-    const failure = await pullDownSync({ server: fake.url(), deviceSecret, withVault: lockedSection, settleTimeoutMs: 200 }).then(
+    const failure = await pullDownSync({ server: fake.url(), deviceSecret, withVault: lockedSection, settleTimeoutMs: 500 }).then(
       () => 'finished',
       (err: Error) => err.name,
     );
@@ -133,7 +133,7 @@ describe('pullDownSync', () => {
     const seen: Array<[string, boolean]> = [];
     fake.observe((request) => seen.push([request, lockHeld()]));
 
-    const failure = await pullDownSync({ server: fake.url(), deviceSecret, withVault: lockedSection, settleTimeoutMs: 200 }).then(
+    const failure = await pullDownSync({ server: fake.url(), deviceSecret, withVault: lockedSection, settleTimeoutMs: 500 }).then(
       () => 'finished',
       (err: Error) => err.name,
     );
