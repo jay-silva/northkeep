@@ -1,34 +1,34 @@
-# ADR 0093: Tidies itself: four changes made alone, a cold tier, a list an agent can undo
+# ADR 0093: Tidies itself: exact repeats merged, unused private memories shelved, a list an agent can undo
 
-Status: Proposed 2026-11-24 (relaunch milestone 6) · Draft: not reviewed, not accepted; the gate applies
+Status: Proposed 2026-11-24 (milestone 6) · Draft: review 1 NOT CLEARED 2026-11-25, revised, recheck pending
 
 ## Context
-Rule 19 lets NorthKeep, alone, merge near-identical memories, apply a declared replacement, move a memory unretrieved for 90 days to cold, and hold one that reads like an instruction, all listed and reversible. ADR 0043 D4 forbids automatic writes. No memory records its last use.
+Rule 19 lets NorthKeep merge near-identical memories and move one unretrieved for 90 days to cold, alone, listed and reversible. ADR 0043 D4 forbids automatic writes. No memory records its last use. The instruction hold is cut pending Jay.
 
 ## Decision
-- D1: Merge only memories with the same words in the same order, in one scope and type, ignoring case, punctuation, spacing and a/an/the. ADR 0085 holds a save at 60% shared weight; this needs every word and digit.
-- D2: A merge copies nothing. The newest survives, or the confirmed one; the others are marked replaced and kept. Undo clears the mark. A confirmed memory is never merged away, moved or held.
-- D3: Use comes from existing content-free logs: the device call log and the connector's audit table, folded into a last-used day per memory. Reads still write nothing.
-- D4: Cold is a bookkeeping date, like "replaced". Search skips cold memories unless fewer than three others match; then they follow, labelled. One returned comes back at the next pass.
-- D5: Held: a memory from an AI app or import that matches a fixed pattern list is saved, shown to no agent, and not sent to the connector. Only the owner reads or releases it.
-- D6: Each change is a row in a new vault table, exported and synced. Device tools: `memory_tidy`, `memory_changes`, `memory_undo`. The connector offers the last two; a cloud undo waits for the owner ("O2, no").
-- D7: The pass runs inside a save already under way, at most daily, or on request. No timer, no model.
-- D8: ADR 0043 D4 and its "Rejected" line narrow: the model review still writes nothing alone; this pass may.
+- D1: Merge only texts equal after lower-casing, collapsing whitespace and dropping one final full stop, in one scope and type. "O+" and "O-" never merge.
+- D2: A merge copies nothing. A row with any confirmed mark is never merged away; one survives, two leave the group alone; otherwise the newest survives. The core step skips rows with consolidation lineage.
+- D3: Nothing in a Shared scope is merged or shelved.
+- D4: Use comes from the device call log: `memory_retrieve` results and `memory_list` by one id. An appended cold row counts only when it was the sole result. Only use logged after a memory went cold brings it back.
+- D5: Cold is its own vault table, never a column on memories. Confirmed, identity and procedural memories never go cold. Search appends the best cold match, labelled in a separate field.
+- D6: Each change is a vault row (ids, scope, kind, time, app), exported. Device tools `memory_changes`, `memory_undo`, `memory_tidy` filter by grant; out-of-grant ids read as not found. Undo uses ADR 0092's clear-replaced step. No connector tools.
+- D7: Per rolling 24 hours, all triggers: at most 50 memories taken out of service, one automatic pass. An agent's acting `memory_tidy` takes ADR 0092's daily sitting.
+- D8: The pass rides only a writing device save from an unscoped connection, with a 250 ms budget for linear work. Over budget or failing, it writes nothing and the save succeeds. `northkeep tidy` has no budget.
+- D9: Schema 0.5 to 0.6 adds three tables. ADR 0043 D4 narrows: the model review still writes nothing alone.
 
 ## Consequences
-- Easier: repeats and unused memories stop crowding search; any agent can show and undo changes.
-- Harder: a schema step; every device updates first.
-- Committed to: KNOWN-LIMITS says merging catches only exact repeats, the hold list is a tripwire, and notes that keep being returned never go cold.
-- Unproven: the bench's 91 to 95 came from facts an agent rewrote; D1 merges nothing there.
+- Easier: repeats and unused private memories stop crowding search.
+- Harder: a schema step; devices update first.
+- Committed to: KNOWN-LIMITS says merging catches only exact repeats, Shared scopes are untouched, and only AI-app use on the device running the pass counts.
 
 ## Rejected
-- Merging on shared search words: nine build notes differing by one digit match.
-- Stamping last use on each search: every read becomes a save.
-- Markers in metadata: each change copies the row.
-- Choosing between memories that differ: milestone 5 asks.
+- The 0085 normal form or NFKC: both fold symbols that change a fact.
+- A `cold_at` column: it enters consolidation snapshot hashes.
+- Cold in Shared scopes: pushes skip flag-only changes.
+- The hold: held 10 of 12 honest rules, missed 4 of 4 reworded attacks.
 
 ## What leaves the machine
-To the connector, shared scopes only, inside the ciphertext: a cold flag, and change records (ids, kind, day, app name). Held memories stop being sent. From the connector to the owner's device: memory ids with last-used days. To a connected app: changes to memories it can read, never held text.
+To the connected device app: change rows (ids, kinds, times, app names) and one-line excerpts of memories it can already read. To the connector, when on: ADR 0092's sitting claim, no content. New tables stay inside the encrypted vault.
 
 ## Links
-Design: docs/design/adr-0093-tidies-itself.md · Changes: ADR 0043 · Extends: ADRs 0084, 0085, 0090 · Meets: milestone 5
+Design and review log: docs/design/adr-0093-tidies-itself.md · Changes: ADR 0043 · Depends on: ADR 0092 · Extends: ADR 0085
