@@ -22,7 +22,7 @@ import {
   type ScoredEntry,
 } from '@northkeep/core';
 import {
-  applyDownSync,
+  pullDownSync,
   deriveSyncCreds,
   fetchEntitlement,
   pushSharedScopes,
@@ -1404,24 +1404,25 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     let result: DownSyncResult;
     try {
       const entitlement = await maybeConnectorEntitlement(secret);
-      // DELIBERATE EXCEPTION to "network outside the gate": applyDownSync
-      // lives in @northkeep/sync and interleaves its own HTTP with vault
-      // saves, so the two halves cannot be split from here (this change is
-      // apps/mobile only). The whole call takes the gate instead. The trade is
-      // the safe one: an UNGATED save during a pull install corrupts, while a
-      // save queued behind a user-initiated down-sync is merely slow.
-      result = await vaultGate.run(async () => {
-        const vault = vaultRef.current;
-        if (!vault) throw new Error('Unlock the vault before syncing app-written memories.');
-        // applyDownSync saves the vault inside this section, so the flag is
-        // set here, before it, like every other mutation (see addMemory).
-        await saveLocalDirty(true);
-        // ADR 0063 D1 (founder decision): the phone applies additions only
-        // (new memories, new projects) until it has a preview screen. It never
-        // replaces a project document, never forgets, and never acks a forget,
-        // so the Mac still sees every one. It saves BEFORE acking, so a failure
-        // after the save is retried as a no-op (dedupe).
-        return applyDownSync({ server, deviceSecret: secret, vault, entitlement, additiveOnly: true });
+      // Network outside the gate, like every other sync call here: the fetch
+      // runs before the gated section and the ack after it, so a save never
+      // queues behind Cloud Connect.
+      result = await pullDownSync({
+        server,
+        deviceSecret: secret,
+        entitlement,
+        // ADR 0063 D1 (founder decision): additions only until the phone has a
+        // preview screen, so the Mac still sees every replace and forget.
+        additiveOnly: true,
+        withVault: (apply) =>
+          vaultGate.run(async () => {
+            // Read inside the gate: a pull install may have reopened the vault while the rows downloaded.
+            const vault = vaultRef.current;
+            if (!vault) throw new Error('Unlock the vault before syncing app-written memories.');
+            // The section may save, so the flag is set before it, like every other mutation (see addMemory).
+            await saveLocalDirty(true);
+            return apply(vault);
+          }),
       });
     } finally {
       memzero(secret);

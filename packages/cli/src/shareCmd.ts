@@ -1,6 +1,5 @@
 import { devicePhrase, loadDeviceSecret, projectScope, type Vault } from '@northkeep/core';
 import {
-  applyDownSync,
   assertDeviceCanPush,
   cloudReplaceLine,
   connectorAutoPushEnabled,
@@ -17,6 +16,7 @@ import {
   markConnectorPaired,
   planDownSync,
   planNeedsConfirmation,
+  pullDownSync,
   resolveConflict,
   setConnectorAutoPush,
   setConnectorServer,
@@ -318,7 +318,8 @@ export async function shareSyncCmd(options: { yes?: boolean }, deps: ShareDeps, 
     forget_ids: plan.forgets.map((f) => f.entry_id),
     replace_ids: plan.cloud_replaces.map((r) => r.replace_id),
   };
-  const down = await deps.withVault((vault) => applyDownSync({ ...conn, vault, approve }));
+  // The pull takes the vault lock only around its vault work, never across a connector call.
+  const down = await pullDownSync({ ...conn, withVault: deps.withVault, approve });
   console.log(
     `✓ Down-synced: ${down.added} added, ${down.replaced} replaced, ${down.forgotten} forgotten, ${plural(down.cloud_replaced, 'memory', 'memories')} marked replaced, ${down.deduped} already present, ${down.held} held, ${down.skipped} skipped.`,
   );

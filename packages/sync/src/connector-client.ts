@@ -750,11 +750,23 @@ export function planDownSync(opts: { vault: Vault; pending: PendingSnapshot; add
   }
   for (const serverId of vault.forgottenConnectorIds()) if (!pulled.has(serverId)) pulled.set(serverId, { live: null });
 
+  // Listed once per scope, not once per row: a backlog of 2,500 rows held the vault lock for seconds.
+  const liveByText = new Map<string, Map<string, MemoryEntry>>();
+  const liveWithText = (scope: string, content: string): MemoryEntry | undefined => {
+    let texts = liveByText.get(scope);
+    if (texts === undefined) {
+      texts = new Map();
+      for (const v of vault.list({ scope })) if (!texts.has(v.content)) texts.set(v.content, v);
+      liveByText.set(scope, texts);
+    }
+    return texts.get(content);
+  };
+
   const heads = new Map<string, LocalHead>();
   for (const row of applicable) {
     const project = parseProjectSlug(row.scope);
     if (project === null || row.type !== 'working') {
-      const dup = vault.list({ scope: row.scope }).find((v) => v.content === row.content);
+      const dup = liveWithText(row.scope, row.content);
       const before = pulled.get(row.server_id);
       if (dup) plan.dedupes.push({ server_id: row.server_id, local_entry_id: dup.id });
       else if (before !== undefined && before.live !== null) plan.dedupes.push({ server_id: row.server_id, local_entry_id: before.live });
@@ -943,26 +955,51 @@ export async function discardPending(opts: { server: string; deviceSecret: Buffe
   await postJson(opts, '/client/discard', { server_ids: opts.server_ids }, 'discard');
 }
 
-/**
- * D3 apply: fetch the pending rows again, re-plan, and apply the additions
- * plus only the replacements (by server_id) and forgets (by entry_id) the user
- * approved. Anything new since the preview stays pending. Saves before any
- * ack or discard, so a failure after the save is retried as a no-op. The
- * caller pushes afterwards.
- */
-export async function applyDownSync(opts: {
+export interface DownSyncOptions {
   server: string;
   deviceSecret: Buffer;
-  vault: Vault;
   entitlement?: string;
   /** `replace_ids`: the cloud replaces (ADR 0085 D4) the user approved, by replace_id. */
   approve?: { server_ids?: string[]; forget_ids?: string[]; replace_ids?: string[] };
   /** The phone (ADR 0063 D1): additions only, never a replace, a forget or a forget ack; it never fetches the replace queue. */
   additiveOnly?: boolean;
-}): Promise<DownSyncResult> {
+}
+
+/** Runs `fn` on the open vault while holding the caller's vault lock or gate. */
+export type VaultSection = <T>(fn: (vault: Vault) => T | Promise<T>) => Promise<T>;
+
+/**
+ * D3 apply. Connector calls stay outside `withVault`, because a slow connector
+ * under the vault lock let another process steal it and lose a save. Planning
+ * inside sees the vault as it is now; a lost ack is settled by the next pull.
+ */
+export async function pullDownSync(opts: DownSyncOptions & { withVault: VaultSection }): Promise<DownSyncResult> {
   const clientLabel = new URL(normalizeServer(opts.server)).hostname;
   const pending = await fetchPending({ ...opts, replaces: opts.additiveOnly !== true });
-  const plan = planDownSync({ vault: opts.vault, pending, additiveOnly: opts.additiveOnly === true });
+  const applied = await opts.withVault((vault) => applyPendingRows(vault, pending, clientLabel, opts));
+  await discardPending({ ...opts, server_ids: applied.discards });
+  if (applied.ack !== null) await postJson(opts, '/client/ack', applied.ack, 'ack');
+  return applied.result;
+}
+
+/**
+ * pullDownSync on a vault the caller already holds open. It makes network
+ * calls, so never call it while holding the vault file lock; tests use it.
+ */
+export async function applyDownSync(opts: DownSyncOptions & { vault: Vault }): Promise<DownSyncResult> {
+  const { vault, ...rest } = opts;
+  return pullDownSync({ ...rest, withVault: async (fn) => fn(vault) });
+}
+
+interface AppliedRows {
+  result: DownSyncResult;
+  discards: string[];
+  ack: { acked: Array<{ server_id: string; local_entry_id: string }>; forgets: string[]; replaces?: string[] } | null;
+}
+
+/** The vault half of a pull: plan, apply, save. No network. */
+function applyPendingRows(vault: Vault, pending: PendingSnapshot, clientLabel: string, opts: DownSyncOptions): AppliedRows {
+  const plan = planDownSync({ vault, pending, additiveOnly: opts.additiveOnly === true });
   const approvedRows = new Set(opts.additiveOnly ? [] : (opts.approve?.server_ids ?? []));
   const approvedForgets = new Set(opts.additiveOnly ? [] : (opts.approve?.forget_ids ?? []));
   const approvedReplaces = new Set(opts.additiveOnly ? [] : (opts.approve?.replace_ids ?? []));
@@ -983,19 +1020,19 @@ export async function applyDownSync(opts: {
       const project = parseProjectSlug(a.scope)!;
       try {
         // An AI app wrote this row (ADR 0065): the agent write rule runs, and a refusal is held below as a conflict.
-        const view = opts.vault.replaceProjectContent({ project, expected_revision: null, content: a.content, source: `connector:${clientLabel}`, metadata }, { actor: 'agent' });
+        const view = vault.replaceProjectContent({ project, expected_revision: null, content: a.content, source: `connector:${clientLabel}`, metadata }, { actor: 'agent' });
         acked.push({ server_id: a.server_id, local_entry_id: view.revision });
         createdScopes.add(a.scope);
         added++;
         wrote = true;
       } catch (err) {
         if (!(err instanceof ProjectHandoffError)) throw err;
-        conflicts.push(heldConflict({ ...a, base_revision: BASE_NEW }, project, localHead(opts.vault, project), 'moved', !toMark.has(a.scope)));
+        conflicts.push(heldConflict({ ...a, base_revision: BASE_NEW }, project, localHead(vault, project), 'moved', !toMark.has(a.scope)));
       }
       continue;
     }
     if (toMark.has(a.scope) && !createdScopes.has(a.scope)) continue;
-    const created = opts.vault.remember({ content: a.content, type: a.type, scope: a.scope, source: `connector:${clientLabel}`, metadata });
+    const created = vault.remember({ content: a.content, type: a.type, scope: a.scope, source: `connector:${clientLabel}`, metadata });
     acked.push({ server_id: a.server_id, local_entry_id: created.id });
     added++;
     wrote = true;
@@ -1008,7 +1045,7 @@ export async function applyDownSync(opts: {
       continue;
     }
     try {
-      const view = opts.vault.replaceProjectContent({
+      const view = vault.replaceProjectContent({
         project: r.project,
         expected_revision: r.local_revision,
         content: r.content,
@@ -1021,7 +1058,7 @@ export async function applyDownSync(opts: {
     } catch (err) {
       if (!(err instanceof ProjectHandoffError)) throw err;
       // A local save landed between the plan and the write: hold, never overwrite.
-      conflicts.push({ ...heldConflict({ ...r, base_revision: r.local_revision }, r.project, localHead(opts.vault, r.project), 'moved', true), local_revision: null });
+      conflicts.push({ ...heldConflict({ ...r, base_revision: r.local_revision }, r.project, localHead(vault, r.project), 'moved', true), local_revision: null });
     }
   }
 
@@ -1029,7 +1066,7 @@ export async function applyDownSync(opts: {
   // would leave a crash window whose residual never heals (ADR 0050).
   for (const scope of plan.to_mark) {
     if (!createdScopes.has(scope)) continue;
-    opts.vault.setScopeShared(scope, true);
+    vault.setScopeShared(scope, true);
     wrote = true;
   }
 
@@ -1041,7 +1078,7 @@ export async function applyDownSync(opts: {
       continue;
     }
     // The user approved this forget in the review; cloud forgets still apply until K4 (ADR 0065 Decision 3).
-    opts.vault.forget(f.entry_id, { actor: 'owner' });
+    vault.forget(f.entry_id, { actor: 'owner' });
     ackedForgets.push(f.entry_id);
     forgotten++;
     wrote = true;
@@ -1062,14 +1099,14 @@ export async function applyDownSync(opts: {
     if ([r.old_id, r.new_id].some((id) => addedIds.has(id) && !localIds.has(id))) continue;
     const oldId = localIds.get(r.old_id) ?? r.old_id;
     const newId = localIds.get(r.new_id) ?? r.new_id;
-    const liveIds = new Set(opts.vault.list({ scope: r.scope }).map((e) => e.id));
+    const liveIds = new Set(vault.list({ scope: r.scope }).map((e) => e.id));
     // Live at plan time, gone now (a forget approved in this run): it can never apply.
     if (!liveIds.has(oldId) || !liveIds.has(newId)) {
       ackedReplaces.push(r.replace_id);
       continue;
     }
     try {
-      opts.vault.markReplaced(oldId, newId);
+      vault.markReplaced(oldId, newId);
     } catch {
       // markReplaced's refusals do not change on a retry, so asking again would loop.
       ackedReplaces.push(r.replace_id);
@@ -1080,18 +1117,10 @@ export async function applyDownSync(opts: {
     wrote = true;
   }
 
-  if (wrote) opts.vault.save();
-  await discardPending({ ...opts, server_ids: plan.discards.map((d) => d.server_id) });
-  if (acked.length > 0 || ackedForgets.length > 0 || ackedReplaces.length > 0) {
-    await postJson(
-      opts,
-      '/client/ack',
-      { acked, forgets: ackedForgets, ...(ackedReplaces.length > 0 ? { replaces: ackedReplaces } : {}) },
-      'ack',
-    );
-  }
-
-  return {
+  // Saved before the section ends, so the discard and ack that follow it are retried as a no-op after a failure.
+  if (wrote) vault.save();
+  const needsAck = acked.length > 0 || ackedForgets.length > 0 || ackedReplaces.length > 0;
+  const result: DownSyncResult = {
     added,
     replaced,
     forgotten,
@@ -1104,6 +1133,11 @@ export async function applyDownSync(opts: {
     conflicts,
     cloud_replaced: cloudReplaced,
     needs_review: { replacements: unapprovedReplacements, forgets: unapprovedForgets, cloud_replaces: unapprovedReplaces },
+  };
+  return {
+    result,
+    discards: plan.discards.map((d) => d.server_id),
+    ack: needsAck ? { acked, forgets: ackedForgets, ...(ackedReplaces.length > 0 ? { replaces: ackedReplaces } : {}) } : null,
   };
 }
 

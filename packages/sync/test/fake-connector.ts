@@ -50,6 +50,10 @@ export interface FakeConnector {
   setTombstoneEnforce: (on: boolean) => void;
   /** Answer the next request to this path with this status. */
   failNext: (path: string, status: number, body?: unknown) => void;
+  /** Called as each request arrives, before it is answered, so a test can see the vault lock at that moment. */
+  observe: (fn: ((request: string) => void) | null) => void;
+  /** Park a later request to this path (after letting `skip` through) until `release()`; `arrived` resolves once it is parked. */
+  hold: (path: string, skip?: number) => { arrived: Promise<void>; release: () => void };
 }
 
 export async function startFakeConnector(options: { tombstoneEnforce?: boolean; requireEntitlement?: string } = {}): Promise<FakeConnector> {
@@ -63,6 +67,8 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
   const pushLog: Array<{ scopes: string[]; vault?: { server: string; version: number }; reset?: boolean; status: number }> = [];
   const requestLog: string[] = [];
   const failures = new Map<string, { status: number; body?: unknown }>();
+  let observer: ((request: string) => void) | null = null;
+  const holds = new Map<string, { skip: number; arrive: () => void; released: Promise<void> }>();
 
   const bump = (scope: string) => {
     const next = (scopeSeq.get(scope) ?? 0) + 1;
@@ -88,9 +94,22 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
   };
 
   const server: Server = createServer((req, res) => {
+    const arrivedAt = new URL(req.url ?? '/', 'http://x');
+    observer?.(`${req.method} ${arrivedAt.pathname}${arrivedAt.search}`);
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
+      const held = holds.get(arrivedAt.pathname);
+      if (held === undefined) return handle();
+      if (held.skip > 0) {
+        held.skip--;
+        return handle();
+      }
+      holds.delete(arrivedAt.pathname);
+      held.arrive();
+      void held.released.then(handle);
+    });
+    function handle(): void {
       const url = new URL(req.url ?? '/', 'http://x');
       requestLog.push(`${req.method} ${url.pathname}${url.search}`);
       const send = (status: number, body?: unknown) => {
@@ -220,7 +239,7 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
         return;
       }
       send(404, { error: 'not_found' });
-    });
+    }
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
 
@@ -261,6 +280,17 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
     },
     failNext: (path, status, body) => {
       failures.set(path, { status, body });
+    },
+    observe: (fn) => {
+      observer = fn;
+    },
+    hold: (path, skip = 0) => {
+      let arrive = () => {};
+      let release = () => {};
+      const arrived = new Promise<void>((r) => (arrive = r));
+      const released = new Promise<void>((r) => (release = r));
+      holds.set(path, { skip, arrive, released });
+      return { arrived, release };
     },
   };
 }

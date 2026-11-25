@@ -45,7 +45,7 @@ import {
   // secret inside them and is never returned to the page.
   foldSidecarScopesIntoVault,
   connectorPaired,
-  applyDownSync,
+  pullDownSync,
   assertDeviceCanPush,
   cloudReplaceLine,
   ConnectorPushBlockedError,
@@ -1204,11 +1204,12 @@ async function dispatch(
       }));
     }
     await assertDeviceCanPush({ vaultPath: session.vaultPath, deviceSecret });
-    const down = await session.withVault((vault) => applyDownSync({
+    // The pull takes the vault lock only around its vault work, never across a connector call.
+    const down = await pullDownSync({
       ...conn,
-      vault,
+      withVault: (fn) => session.withVault(fn),
       approve: { server_ids: approve.server_ids!, forget_ids: approve.forget_ids!, replace_ids: approve.replace_ids! },
-    }));
+    });
     const after = await session.withVault((vault) => vault.sharedScopes());
     // The apply is saved either way; a failed push must not hide what it did.
     let push: PushSharedResult | null = null;
