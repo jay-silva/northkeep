@@ -39,3 +39,6 @@ apps/desktop/src-tauri/binaries/
 apps/desktop/src-tauri/server-tree/
 apps/desktop/src-tauri/keep-watch-helper/
 sync.json
+
+# Throwaway attack tests from adversarial reviews; never commit.
+.adversarial/

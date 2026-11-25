@@ -20,7 +20,7 @@ Milestone 3 of relaunch step 1. Overflow for the ADR, plus the review log.
 
 ## D3 details
 
-- Normalize: Unicode NFKC, lower case, collapse whitespace, strip punctuation at word edges.
+- Normalize: Unicode NFC, lower case, collapse whitespace, strip sentence punctuation at word edges (changed after merge; see the last section).
 - Hold (rule superseded on 2026-11-24, see the end of this record; the first version held on any two shared non-stopword words): the reply lists the top three by overlap, with ids. Nothing is saved until the agent calls again with `replaces` (one row, old marked replaced) or `distinct: true`. This is where reworded updates ("is now at Pier 9") get caught. An earlier save-then-list version left two live rows when the agent followed its advice (recheck R-D3).
 - A capitalized-word rule was dropped: any memory naming the user matched everything.
 - Words only on both surfaces. Review 1 measured local meaning match at a 0.9 cosine: it never fired, and no threshold separated updates from distinct facts. The no-local-model rule removes it anyway.
@@ -145,3 +145,6 @@ Wounds 1 and 3 closed; nothing new from the fix commit. Still open, and fixed af
 2. Two published sentences were false: KNOWN-LIMITS said an exact repeat is never stored again without saying "in the same collection", and D1 said every surface labels the app name when only the Mac app does. Both corrected.
 Notes taken up: a Cloud retry that sets `replaces` again no longer stores the same text twice; KNOWN-LIMITS says confirming or editing either memory drops a waiting replacement, and that replacing the new memory first drops the older one.
 Still not checked: the new table against real hosted Postgres.
+
+## Found after merge (2026-11-25)
+The review of ADR 0093 ran the identical-save test on pairs that differ by a symbol. As merged in PR 96 it stripped every non-letter at a word's edges and folded compatibility forms, so "O+" and "O-", "-500" and "500", "$1,450" and "€1,450", and "< 5 mg" and "> 5 mg" compared equal: the second save was answered "already saved" and never stored. Neither build review tried it. Fixed: only full stops, commas, colons, semicolons, question and exclamation marks and quotation marks are dropped at word edges (brackets stay: "(500)" is minus 500 in accounts), and the form is NFC, so a superscript is not a digit. Twelve differing pairs are a test on both surfaces' shared rule.

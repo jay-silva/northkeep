@@ -64,10 +64,14 @@ export const SAVE_HOLD_COVER = 0.6;
 /** How many near matches a held save lists. */
 export const SAVE_HOLD_LIST = 3;
 
-/** Text as the identical-save test compares it: case, spacing and punctuation at word edges do not count. */
+/**
+ * Text as the identical-save test compares it. Only sentence punctuation at
+ * word edges is dropped: a sign or symbol there ("O+", "-500", a currency
+ * mark, brackets round an amount) changes the fact; calling those identical lost the save.
+ */
 export function saveNormalForm(text: string): string {
-  return text.normalize('NFKC').toLowerCase().split(/\s+/)
-    .map((word) => word.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, ''))
+  return text.normalize('NFC').toLowerCase().split(/\s+/)
+    .map((word) => word.replace(/^["'“”‘’]+|[.,;:!?"'“”‘’]+$/gu, ''))
     .filter((word) => word.length > 0).join(' ');
 }
 

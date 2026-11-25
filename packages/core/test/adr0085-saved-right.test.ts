@@ -18,6 +18,31 @@ describe('ADR 0085 D3: the save check', () => {
     expect(saveNormalForm('!!!')).toBe('');
   });
 
+  it('never calls two saves identical when a sign or symbol differs', () => {
+    const pairs: Array<[string, string]> = [
+      ['Morgan blood type is O+.', 'Morgan blood type is O-.'],
+      ['Account balance is -500 dollars.', 'Account balance is 500 dollars.'],
+      ['Rent is $1,450 a month.', 'Rent is €1,450 a month.'],
+      ['Keep the dose < 5 mg.', 'Keep the dose > 5 mg.'],
+      ['Loan rate is 3.5 percent.', 'Loan rate is 3-5 percent.'],
+      ['The deposit was paid: ✅', 'The deposit was paid: ❌'],
+      ['Grade A+', 'Grade A-'],
+      ['Morgan takes vitamin A daily.', 'Morgan takes vitamin daily.'],
+      ['The fee is 10%', 'The fee is 10'],
+      ['Version 2', 'Version ²'],
+      ['Balance is (500).', 'Balance is 500.'],
+      ['Pat owes [nothing]', 'Pat owes nothing'],
+    ];
+    for (const [first, second] of pairs) {
+      expect(checkSave(second, rows(first)).identical, `${first} / ${second}`).toBeNull();
+    }
+  });
+
+  it('still calls a save identical across case, spacing, quotes and a closing full stop', () => {
+    expect(checkSave('the harbor office is at "Pier 4"', rows('The Harbor  office is at Pier 4.')).identical).not.toBeNull();
+    expect(checkSave('Rent is $1,450 a month', rows('Rent is $1,450 a month.')).identical).not.toBeNull();
+  });
+
   it('calls a save identical only when some text is left to compare', () => {
     expect(checkSave('The harbor office is at Pier 4', rows('the harbor office is at pier 4.')).identical).toEqual({ content: 'the harbor office is at pier 4.' });
     expect(checkSave('!!!', rows('???')).identical).toBeNull();
