@@ -399,6 +399,8 @@ Checked against 0092's and 0094's files in the clone as of 06:51 on 2026-11-25, 
 
 ## Decisions waiting for Jay
 
+Answered in part, 2026-11-25. Jay: "C yes", to the question as the lead put it to him: the phone tells Cloud Connect itself after a Yes or an Undo, and the connector can then tell when the phone app is open. The second half below (the phone accepts an everyday answer with no tap, ending the additions-only rule for those answers) follows from his "answer the agent and then accept that" for a person with only a phone; the lead stated it back to him the same day and asked him to say no if he did not mean it. Treat the first half as decided and the second as decided unless he objects.
+
 1. **May the phone tell Cloud Connect itself after a Yes or an Undo, and read the connector when the app opens, so a person with only a phone is served?** A yes allows two things. First, the phone sends your shared memories to Cloud Connect after you tap Yes or Undo, and checks Cloud Connect each time you open the app, so the connector can tell when the phone app is open. Second, when the phone checks, it accepts an everyday answer an AI app reported, with no tap, as the Mac does at Sync now; that ends ADR 0063's rule that the phone only adds memories, for these answers only. Every accepted answer is listed with an Undo. Recommend yes: the first outside customer may never run anything on a Mac.
    - Yes, with a Mac and a phone: your AI apps see a phone Yes or Undo within seconds; everyday answers are accepted by whichever device checks first.
    - Yes, with only a phone: the phone does everything the Mac would; answers are accepted when you open the app and reach your AI apps within seconds.
