@@ -12,22 +12,26 @@ import { startServer } from './adr0061-support.js';
 import { decryptedEntries, seedEncryptedEntry } from './helpers.js';
 
 /**
- * Merge review of the defect B fix: an acknowledgement sent after the vault
- * lock is released can land after another process forgot the pulled memory and
- * pushed, renaming the still-waiting row into a delivered one. Real in-memory
- * connector storage; a proxy slows the ack. Temp files, fictional data.
+ * Two merge reviews of the defect B fix. An acknowledgement sent after the lock
+ * is released, or a fetch made before it is taken, lets another process forget
+ * the memory in between and the pull then revives it. Real in-memory connector
+ * storage behind a slowing proxy. Temp files, fictional data.
  */
 
 const FROM_APP = 'The harbor office moved to Pier 9.';
 const ACK_DELAY_MS = 400;
 
-/** Forwards every request to the connector, holding POST /client/ack back for ACK_DELAY_MS. */
-async function slowAckProxy(target: string): Promise<{ url: string; close: () => Promise<void> }> {
+/** Forwards every request to the connector, holding POST /client/ack back for ACK_DELAY_MS, or one path until `gate` settles. */
+async function slowAckProxy(target: string, park?: { path: string; arrived: () => void; gate: Promise<void> }): Promise<{ url: string; close: () => Promise<void> }> {
   const server: Server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', async () => {
-      if (req.method === 'POST' && req.url === '/client/ack') await new Promise((r) => setTimeout(r, ACK_DELAY_MS));
+      if (park === undefined && req.method === 'POST' && req.url === '/client/ack') await new Promise((r) => setTimeout(r, ACK_DELAY_MS));
+      if (park !== undefined && req.url?.startsWith(park.path)) {
+        park.arrived();
+        await park.gate;
+      }
       const headers: Record<string, string> = {};
       for (const name of ['authorization', 'content-type', 'x-nb-entitlement']) {
         const value = req.headers[name];
@@ -131,6 +135,59 @@ describe('a pull and another process that forgets the pulled memory (real in-mem
       expect(await withVault((v) => v.list({ scope: 'harbor' }).map((e) => e.content))).toEqual(['The boatyard opens at seven.']);
     } finally {
       stop();
+      await proxy.close();
+    }
+  });
+
+  it('a second pull, a forget and a push cannot run while a pull waits for its rows, so the forgotten memory is not put back', async () => {
+    const TEXT = 'The ferry leaves at noon.';
+    const ferryRows = async () => (await decryptedEntries(storage, account, connToken)).filter((e) => e.content === TEXT).map((e) => e.pending === true);
+    const live = () => withVault((v) => v.list({ scope: 'harbor' }).map((e) => e.content).sort());
+    // The same words saved here and by a cloud app: the local copy carries no connector id.
+    await withVault((v) => {
+      v.remember({ content: TEXT, type: 'semantic', scope: 'harbor' });
+      v.save();
+    });
+    await seedEncryptedEntry(storage, account, connToken, {
+      entryId: 'conn_ferry',
+      scope: 'harbor',
+      type: 'semantic',
+      content: TEXT,
+      origin: 'connector',
+      pending: true,
+      createdAt: new Date().toISOString(),
+    });
+    let arrived = (): void => {};
+    let release = (): void => {};
+    const parked = new Promise<void>((r) => (arrived = r));
+    const gate = new Promise<void>((r) => (release = r));
+    const proxy = await slowAckProxy(base, { path: '/client/pending', arrived, gate });
+    const forgetAndPush = (timeoutMs: number) =>
+      withVault(async (v) => {
+        const copy = v.list({ scope: 'harbor' }).find((e) => e.content === TEXT);
+        if (copy !== undefined) v.forget(copy.id, { actor: 'owner' });
+        v.save();
+        await pushSharedScopes({ server: base, deviceSecret, scopes: ['harbor'], vault: v });
+      }, { timeoutMs }).then(() => 'done', (err: Error) => err.name);
+    try {
+      const first = pullDownSync({ server: proxy.url, deviceSecret, withVault: (fn) => withVault(fn) });
+      await parked;
+      // The reviewer's order: another pull settles the row, then the user forgets the memory and it is pushed.
+      const secondPull = await pullDownSync({ server: base, deviceSecret, withVault: (fn) => withVault(fn, { timeoutMs: 300 }) }).then(() => 'done', (err: Error) => err.name);
+      const forgetDuring = await forgetAndPush(300);
+      release();
+      const result = await first;
+      expect([secondPull, forgetDuring]).toEqual(['FileLockTimeoutError', 'FileLockTimeoutError']);
+      expect([result.added, result.deduped]).toEqual([0, 1]);
+
+      expect(await forgetAndPush(5_000)).toBe('done');
+      expect(await ferryRows()).toEqual([]);
+      const again = await pullDownSync({ server: base, deviceSecret, withVault: (fn) => withVault(fn) });
+      expect(again.added).toBe(0);
+      expect(await live()).toEqual(['The boatyard opens at seven.']);
+      expect(await ferryRows()).toEqual([]);
+    } finally {
+      release();
       await proxy.close();
     }
   });

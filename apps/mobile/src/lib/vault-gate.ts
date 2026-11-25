@@ -24,9 +24,9 @@
  * `uploadPreparedMobile` (ungated: the PUT), and the pull downloads before it
  * takes the gate.
  *
- * ONE BOUNDED EXCEPTION. A Cloud Connect pull sends its discard and its
- * acknowledgement inside the gate, each capped at 15 s, so nothing can change
- * the rows it just saved before the connector hears of them.
+ * ONE BOUNDED EXCEPTION. A Cloud Connect pull makes its fetch, its discard and
+ * its acknowledgement inside the gate, each capped at 15 s, so nothing can
+ * change the vault between what the connector sent and what it hears back.
  *
  * Deliberately pure TypeScript: no React Native, no Expo, no @northkeep
  * imports, so it runs unmodified under Node in apps/mobile/test/vault-gate.test.ts.

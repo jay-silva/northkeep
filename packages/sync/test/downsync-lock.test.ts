@@ -7,9 +7,9 @@ import { planDownSync, pullDownSync, pushSharedScopes, type PendingRow } from '.
 import { startFakeConnector, type FakeConnector } from './fake-connector.js';
 
 /**
- * The pull's network calls run outside the caller's vault section (defect B,
- * ADR 0096 design review), and the per-scope lookup plans exactly as the
- * per-row search did. Temp home and fictional data only.
+ * The pull's connector calls all run inside the caller's vault section, each
+ * capped (defect B, two merge reviews), and the per-scope lookup plans exactly
+ * as the per-row search did. Temp home and fictional data only.
  */
 
 const deviceSecret = generateDeviceSecret();
@@ -52,7 +52,7 @@ const lockedSection = <T>(fn: (v: Vault) => T | Promise<T>): Promise<T> => withF
 const lockHeld = () => fs.existsSync(`${vault.path}.lock`);
 
 describe('pullDownSync', () => {
-  it('fetches before the vault section and sends the discard and acknowledgement inside it, after the save', async () => {
+  it('fetches inside the vault section and sends the discard and acknowledgement there too, after the save', async () => {
     vault.setScopeShared('work', true);
     const pushed = vault.remember({ content: 'Pushed memory', type: 'semantic', scope: 'work' });
     vault.save();
@@ -68,24 +68,24 @@ describe('pullDownSync', () => {
 
     const result = await pullDownSync({ server: fake.url(), deviceSecret, withVault: loggedSection(log), approve: { forget_ids: [pushed.id] } });
 
-    expect(log).toEqual(['GET /client/pending?v=3', 'vault section starts', 'vault saved', 'POST /client/discard', 'POST /client/ack', 'vault section ends']);
+    expect(log).toEqual(['vault section starts', 'GET /client/pending?v=3', 'vault saved', 'POST /client/discard', 'POST /client/ack', 'vault section ends']);
     expect([result.added, result.forgotten, result.discarded, result.deduped]).toEqual([1, 1, 1, 0]);
     expect(vault.list({ scope: 'work' }).map((e) => e.content)).toEqual(['From the app']);
     expect(fake.rows().filter((r) => r.pending)).toEqual([]);
     expect(fake.rows().map((r) => r.entry_id)).not.toContain(fromApp);
   });
 
-  it('the phone asks with ?v=2 and sends its acknowledgement inside the vault section, after the save', async () => {
+  it('the phone asks with ?v=2 inside the vault section and sends its acknowledgement there, after the save', async () => {
     vault.setScopeShared('work', true);
     fake.cloudRemember('work', 'From the app');
     const log: string[] = [];
     fake.observe((request) => log.push(request));
     const result = await pullDownSync({ server: fake.url(), deviceSecret, withVault: loggedSection(log), additiveOnly: true });
-    expect(log).toEqual(['GET /client/pending?v=2', 'vault section starts', 'vault saved', 'POST /client/ack', 'vault section ends']);
+    expect(log).toEqual(['vault section starts', 'GET /client/pending?v=2', 'vault saved', 'POST /client/ack', 'vault section ends']);
     expect(result.added).toBe(1);
   });
 
-  it('sends nothing after a vault section that fails, and the rows stay waiting', async () => {
+  it('sends nothing at all when the vault section is refused, and the rows stay waiting', async () => {
     vault.setScopeShared('work', true);
     const fromApp = fake.cloudRemember('work', 'From the app');
     const log: string[] = [];
@@ -94,7 +94,7 @@ describe('pullDownSync', () => {
       throw new Error('Vault is locked by another NorthKeep process.');
     };
     await expect(pullDownSync({ server: fake.url(), deviceSecret, withVault: refused })).rejects.toThrow('Vault is locked by another NorthKeep process.');
-    expect(log).toEqual(['GET /client/pending?v=3']);
+    expect(log).toEqual([]);
     expect(fake.rows().filter((r) => r.pending).map((r) => r.entry_id)).toEqual([fromApp]);
   });
 
@@ -113,7 +113,7 @@ describe('pullDownSync', () => {
     const heldAfter = lockHeld();
 
     expect([failure, heldAfter]).toEqual(['TimeoutError', false]);
-    expect(seen).toEqual([['GET /client/pending?v=3', false], ['POST /client/ack', true]]);
+    expect(seen).toEqual([['GET /client/pending?v=3', true], ['POST /client/ack', true]]);
     const onDisk = Vault.open({ path: vault.path, passphrase: 'synthetic passphrase', deviceSecret });
     expect(onDisk.list({ scope: 'work' }).map((e) => e.content)).toEqual(['From the app']);
     onDisk.close();
@@ -125,7 +125,26 @@ describe('pullDownSync', () => {
     expect(vault.list({ scope: 'work' }).map((e) => e.content)).toEqual(['From the app']);
   });
 
-  it('plans against the vault as it is inside the section, not as it was when the rows were fetched', async () => {
+  it('gives up on a hanging fetch at settleTimeoutMs, frees the lock, saves nothing, and the rows stay waiting', async () => {
+    vault.setScopeShared('work', true);
+    vault.save();
+    const fromApp = fake.cloudRemember('work', 'From the app');
+    fake.hold('/client/pending'); // never released: this fetch hangs
+    const seen: Array<[string, boolean]> = [];
+    fake.observe((request) => seen.push([request, lockHeld()]));
+
+    const failure = await pullDownSync({ server: fake.url(), deviceSecret, withVault: lockedSection, settleTimeoutMs: 200 }).then(
+      () => 'finished',
+      (err: Error) => err.name,
+    );
+
+    expect([failure, lockHeld()]).toEqual(['TimeoutError', false]);
+    expect(seen).toEqual([['GET /client/pending?v=3', true]]);
+    expect(vault.list({ scope: 'work' }).map((e) => e.content)).toEqual([]);
+    expect(fake.rows().filter((r) => r.pending).map((r) => r.entry_id)).toEqual([fromApp]);
+  });
+
+  it('plans against the vault as it is when the rows arrive, not as it was when the fetch started', async () => {
     vault.setScopeShared('work', true);
     fake.cloudRemember('work', 'Written in both places');
     const parked = fake.hold('/client/pending');

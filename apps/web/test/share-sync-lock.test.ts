@@ -10,8 +10,8 @@ import { UiSession } from '../src/session.js';
 import { startFakeConnector, type FakeConnector } from '../../../packages/sync/test/fake-connector.js';
 
 /**
- * Sync now fetches before it takes the vault lock (defect B, ADR 0096 design
- * review) and settles under it (merge review). Temp home and fictional data only.
+ * Sync now fetches, applies and settles under the vault lock, each connector
+ * call capped (defect B, two merge reviews). Temp home and fictional data only.
  */
 
 const passphrase = 'web lock passphrase';
@@ -90,14 +90,14 @@ afterEach(async () => {
 });
 
 describe('POST /api/share/sync: what runs under the vault lock', () => {
-  it('the fetch starts with the lock free, the acknowledgement under it, and the push after is not under it', async () => {
+  it('the fetch and the acknowledgement start under the lock, and the push after is not under it', async () => {
     const fromApp = fake.cloudRemember('work', 'From the app');
     fake.cloudForget(pushedId);
     const seen = watchLock();
     const res = await call('POST', '/api/share/sync', { dry_run: false, approve: { forget_ids: [pushedId] } });
     expect([res.status, res.body.added, res.body.forgotten, res.body.deduped]).toEqual([200, 1, 1, 0]);
     expect(seen).toEqual([
-      ['GET /client/pending?v=3', false],
+      ['GET /client/pending?v=3', true],
       ['POST /client/ack', true],
       ['PUT /client/entries', false],
     ]);
@@ -106,17 +106,17 @@ describe('POST /api/share/sync: what runs under the vault lock', () => {
     expect(fake.rows().map((r) => r.entry_id)).not.toContain(fromApp);
   });
 
-  it('another process that steals the lock while the pull waits for its rows keeps its write', async () => {
+  it('another process is told the vault is busy while the pull waits for its rows, and its later save is kept', async () => {
     fake.cloudRemember('work', 'From the app');
     const parked = fake.hold('/client/pending');
     const sync = syncNow();
     await parked.arrived;
-    // A stale age this short is what a 30 s connector wait looks like to the 60 s steal rule.
-    const other = await otherProcessSaves('Saved by another app while the pull waited', { staleMs: 200, timeoutMs: 2000 });
+    const during = await otherProcessSaves('Saved by another app', { timeoutMs: 300 });
     parked.release();
     const res = await sync;
-    expect([other, res.status, res.body.added]).toEqual(['saved', 200, 1]);
-    expect(onDisk()).toEqual(['personal: Saved by another app while the pull waited', 'work: From the app', 'work: Pushed memory']);
+    const after = await otherProcessSaves('Saved by another app', { timeoutMs: 2000 });
+    expect([during, res.status, res.body.added, after]).toEqual(['FileLockTimeoutError', 200, 1, 'saved']);
+    expect(onDisk()).toEqual(['personal: Saved by another app', 'work: From the app', 'work: Pushed memory']);
   });
 });
 
@@ -127,7 +127,7 @@ describe('a failed acknowledgement', () => {
     const seen = watchLock();
     const first = await syncNow();
     expect([first.status, first.body.error]).toEqual([500, 'Connector server returned HTTP 500 on ack.']);
-    expect(seen).toEqual([['GET /client/pending?v=3', false], ['POST /client/ack', true]]);
+    expect(seen).toEqual([['GET /client/pending?v=3', true], ['POST /client/ack', true]]);
     expect(fs.existsSync(lockPath())).toBe(false);
     expect(onDisk()).toEqual(['work: From the app', 'work: Pushed memory']);
     expect(pendingIds()).toEqual([fromApp]);
@@ -151,7 +151,7 @@ describe('a failed acknowledgement', () => {
     const seen = watchLock();
     const next = await syncNow();
     expect([next.status, next.body.added, next.body.discarded]).toEqual([200, 0, 1]);
-    expect(seen).toEqual([['GET /client/pending?v=3', false], ['POST /client/discard', true], ['PUT /client/entries', false]]);
+    expect(seen).toEqual([['GET /client/pending?v=3', true], ['POST /client/discard', true], ['PUT /client/entries', false]]);
     expect(fake.rows().map((r) => r.entry_id)).not.toContain(fromApp);
     expect(onDisk()).toEqual(['work: Pushed memory']);
   });

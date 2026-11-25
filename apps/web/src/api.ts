@@ -1204,7 +1204,7 @@ async function dispatch(
       }));
     }
     await assertDeviceCanPush({ vaultPath: session.vaultPath, deviceSecret });
-    // The fetch runs before the vault lock; the discard and ack run under it, bounded by SETTLE_TIMEOUT_MS.
+    // The fetch, discard and ack all run under the vault lock, each bounded by SETTLE_TIMEOUT_MS.
     const down = await pullDownSync({
       ...conn,
       withVault: (fn) => session.withVault(fn),

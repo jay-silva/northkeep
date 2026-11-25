@@ -8,8 +8,8 @@ import { shareSyncCmd, type ShareDeps } from '../src/shareCmd.js';
 import { startFakeConnector, type FakeConnector } from '../../sync/test/fake-connector.js';
 
 /**
- * `northkeep share sync` fetches before it takes the vault lock (defect B,
- * ADR 0096 design review) and settles under it (merge review). Each vault section takes the real
+ * `northkeep share sync` previews with no lock, then fetches, applies and settles
+ * under it, each call capped (defect B, two merge reviews). Each vault section takes the real
  * file lock and opens the vault fresh, as index.ts does. Temp home only.
  */
 
@@ -87,13 +87,13 @@ afterEach(async () => {
 });
 
 describe('share sync: what runs under the vault lock', () => {
-  it('both fetches start with the lock free, the acknowledgement under it, and the push after is not under it', async () => {
+  it('the preview fetch starts with the lock free, the apply fetch and acknowledgement under it, and the push after is not under it', async () => {
     fake.cloudRemember('work', 'From the app');
     const seen = watchLock();
     await shareSyncCmd({ yes: true }, lockedDeps(), fail);
     expect(seen).toEqual([
       ['GET /client/pending?v=3', false],
-      ['GET /client/pending?v=3', false],
+      ['GET /client/pending?v=3', true],
       ['POST /client/ack', true],
       ['PUT /client/entries', false],
     ]);
@@ -102,21 +102,23 @@ describe('share sync: what runs under the vault lock', () => {
     expect(pendingIds()).toEqual([]);
   });
 
-  it('another process that steals the lock while the apply waits for its rows keeps its write', async () => {
+  it('another process is told the vault is busy while the apply waits for its rows, and its later save is kept', async () => {
     fake.cloudRemember('work', 'From the app');
     const parked = fake.hold('/client/pending', 1); // the preview's fetch goes through; the apply's waits
     const sync = shareSyncCmd({ yes: true }, lockedDeps(), fail);
     await parked.arrived;
-    const other = await withFileLock(vaultPath(), () => {
-      const w = Vault.openWithKey(vaultPath(), key());
-      w.remember({ content: 'Saved by another app while the pull waited', type: 'semantic', scope: 'personal' });
-      w.save();
-      w.close();
-    }, { staleMs: 200, timeoutMs: 2000 }).then(() => 'saved', (err: Error) => err.name);
+    const otherSaves = (timeoutMs: number) =>
+      withFileLock(vaultPath(), () => {
+        const w = Vault.openWithKey(vaultPath(), key());
+        w.remember({ content: 'Saved by another app', type: 'semantic', scope: 'personal' });
+        w.save();
+        w.close();
+      }, { timeoutMs }).then(() => 'saved', (err: Error) => err.name);
+    const during = await otherSaves(300);
     parked.release();
     await sync;
-    expect(other).toBe('saved');
-    expect(onDisk()).toEqual(['personal: Saved by another app while the pull waited', 'work: From the app', 'work: Pushed memory']);
+    expect([during, await otherSaves(2000)]).toEqual(['FileLockTimeoutError', 'saved']);
+    expect(onDisk()).toEqual(['personal: Saved by another app', 'work: From the app', 'work: Pushed memory']);
   });
 
   it('a failed acknowledgement leaves the memory saved once, and the next share sync settles it', async () => {

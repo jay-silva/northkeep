@@ -559,23 +559,26 @@ const APP_NAME_MAX = 80;
  * `replaces: false` asks for `?v=2`, so a device that cannot confirm them (the
  * phone) never sees one. Side effects on the server are idempotent and touch no vault.
  */
-export async function fetchPending(opts: { server: string; deviceSecret: Buffer; entitlement?: string; replaces?: boolean }): Promise<PendingSnapshot> {
+export async function fetchPending(opts: { server: string; deviceSecret: Buffer; entitlement?: string; replaces?: boolean; timeoutMs?: number }): Promise<PendingSnapshot> {
   const wantReplaces = opts.replaces !== false;
-  const first = await fetchPendingVersion(opts, wantReplaces ? 3 : 2);
+  // One signal for both tries, so the v2 fallback cannot double the wait.
+  const signal = timeoutSignal(opts.timeoutMs ?? TIMEOUT_MS);
+  const first = await fetchPendingVersion(opts, wantReplaces ? 3 : 2, signal);
   // A connector from before v3 reads `v=3` as no version and withholds project documents; ask again as v2.
-  if (wantReplaces && first.replaces === null) return { ...(await fetchPendingVersion(opts, 2)), replaces: [] };
+  if (wantReplaces && first.replaces === null) return { ...(await fetchPendingVersion(opts, 2, signal)), replaces: [] };
   return { ...first, replaces: first.replaces ?? [] };
 }
 
 async function fetchPendingVersion(
   opts: { server: string; deviceSecret: Buffer; entitlement?: string },
   version: 2 | 3,
+  signal: AbortSignal,
 ): Promise<{ entries: PendingRow[]; forgets: string[]; replaces: QueuedReplace[] | null }> {
   const server = normalizeServer(opts.server);
   const res = await fetch(`${server}/client/pending?v=${version}`, {
     headers: authHeaders(opts.deviceSecret, opts.entitlement),
     redirect: 'error',
-    signal: timeoutSignal(TIMEOUT_MS),
+    signal,
   });
   if (res.status === 401) throw new Error('The connector server rejected the connector token (401).');
   if (res.status === 402) {
@@ -962,8 +965,8 @@ export async function discardPending(opts: { server: string; deviceSecret: Buffe
 }
 
 /**
- * The discard and the ack run under the vault lock. The fetch is outside it and
- * planning is fast, so the lock is held for the vault work plus at most 30
+ * The fetch, the discard and the ack all run under the vault lock, each capped.
+ * Planning is fast, so the lock is held for the vault work plus at most 45
  * seconds, under the 60 second takeover.
  */
 export const SETTLE_TIMEOUT_MS = 15_000;
@@ -976,7 +979,7 @@ export interface DownSyncOptions {
   approve?: { server_ids?: string[]; forget_ids?: string[]; replace_ids?: string[] };
   /** The phone (ADR 0063 D1): additions only, never a replace, a forget or a forget ack; it never fetches the replace queue. */
   additiveOnly?: boolean;
-  /** Overrides SETTLE_TIMEOUT_MS for the discard and the ack, each. */
+  /** Overrides SETTLE_TIMEOUT_MS for the fetch, the discard and the ack, each. */
   settleTimeoutMs?: number;
 }
 
@@ -984,15 +987,15 @@ export interface DownSyncOptions {
 export type VaultSection = <T>(fn: (vault: Vault) => T | Promise<T>) => Promise<T>;
 
 /**
- * D3 apply. The fetch runs before `withVault`: a slow one under the lock let
- * another process steal it and lose a save. The ack stays inside, or a forget
- * and push could land first and the ack would revive the row.
+ * D3 apply. Every connector call runs inside `withVault`: a fetch made before
+ * the lock plans on rows another pull may have settled, and re-adds a memory
+ * the user then forgot. Caps keep the lock under the takeover.
  */
 export async function pullDownSync(opts: DownSyncOptions & { withVault: VaultSection }): Promise<DownSyncResult> {
   const clientLabel = new URL(normalizeServer(opts.server)).hostname;
-  const pending = await fetchPending({ ...opts, replaces: opts.additiveOnly !== true });
   const timeoutMs = opts.settleTimeoutMs ?? SETTLE_TIMEOUT_MS;
   return opts.withVault(async (vault) => {
+    const pending = await fetchPending({ ...opts, replaces: opts.additiveOnly !== true, timeoutMs });
     const applied = applyPendingRows(vault, pending, clientLabel, opts);
     // After the save: a failed or timed-out discard or ack throws, and the next pull settles it.
     await discardPending({ ...opts, server_ids: applied.discards, timeoutMs });
