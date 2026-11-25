@@ -12,7 +12,7 @@ Code references are to main at 1089445, read on 2026-11-25 with `git show origin
 - No drops the request from the connector's queue: a replace with today's ack, a forget with one new ack field, `keep_forgets`. Not now hides the item on this phone until local midnight.
 - Undo of a replace is `clearReplaced(id, expectedBy)`, a new core step built here. A forget has no undo, and the card says so before the tap.
 - The fix for the review's main wound: a Mac or the command line acknowledges a cloud replace only after the vault push that carries it has landed. If the push loses, the request stays queued and asks again. What remains: after that push has landed, a phone that saves while behind still wins the vault, and a retired memory can come back without a question.
-- Notice: a count row inside the app and a number on the app icon, both set only while NorthKeep runs. No push service.
+- Notice: a Review tab in the bottom bar with a red count, and a number on the app icon, both set only while NorthKeep runs. No push service.
 - One open question for Jay, with two halves: may the phone tell Cloud Connect itself after a Yes or an Undo and read it when the app opens (so the connector can tell when the phone app is open), and may the phone accept an everyday answer an app reported without a tap (which changes ADR 0063's rule that the phone only adds memories)? Section 6 gives what each person gets under each answer.
 - No schema step. No new pending protocol version: the phone moves from version 2 to the existing version 3.
 
@@ -102,13 +102,14 @@ What 0092 and 0094 provide, and this list reads: one place in the vault, 0092's 
 
 ## 2. The screen (for the mock)
 
-One screen. A mock goes to Jay before build, as for every new screen; this is the text to mock.
+One screen. Jay approved the mock on 2026-11-25 ("Mock ok"), after asking for the list to "live in the bar on the bottom with its own tab" with "one of those little red notification numbers". Mock: https://claude.ai/artifact/EQ6BJjpYKEH4KdaH2hqzdX.
 
 Entry:
-- On the Projects screen (where the app opens, apps/mobile/app/index.tsx:18) and on the Memories screen, one row at the top: "3 need your yes · 2 accepted in chat since you last looked", with a chevron. Each half is hidden at zero; the row is hidden when both are.
+- A fourth tab in the bottom bar (apps/mobile/src/BottomNav.tsx), in the order Projects, Memories, Review, Settings. The Review tab carries a red number: the "need your yes" count, hidden at zero. Answers accepted in chat do not add to it. The app still opens on Projects (apps/mobile/app/index.tsx:18).
+- On the screen, above the sections, one line when chat answers arrived since the person last looked: "2 answers were accepted in chat since you last looked. They are under Accepted lately, each with an Undo." Hidden at zero.
 - The app icon shows the "need your yes" count (section 8).
 
-Header: "Needs your yes". Under it, small: "Checked 3:12 PM". Pull down to check again.
+Header: "Review". Under it, small: "Checked 3:12 PM". Pull down to check again.
 
 Section 1, "Needs your yes", open by default. One card per item, oldest first. Card, top to bottom:
 1. A heading in NorthKeep's words, fixed per kind: "Replace a memory?", "Forget a memory?", "Settle a disagreement?", "Confirm a fact?".
@@ -120,7 +121,7 @@ Section 1, "Needs your yes", open by default. One card per item, oldest first. C
 
 "Forget" opens a dialog that holds focus until answered: "Forget this memory on all your devices? This cannot be undone." Buttons "Forget" and "Cancel".
 
-Section 2, "Accepted lately", open by default when the entry row's second count is above zero, otherwise collapsed. Newest first, 20 lines, then "Show more", which loads older lines; nothing is dropped. Each line:
+Section 2, "Accepted lately", open by default when the accepted-since-you-last-looked count is above zero, otherwise collapsed. Newest first, 20 lines, then "Show more", which loads older lines; nothing is dropped. Each line:
 - A fixed lead per kind: "Accepted in chat", "Both kept in chat", "You said yes on this phone", "Undone", "Declined".
 - The app as a value where there is one ("Pier Helper (as the app reported)"), and the date.
 - A box with the text that won (for a pair) or the memory (for a confirm, replace or forget), one line, cut at 120 characters; tapping it opens the memory's own screen (apps/mobile/app/memory/[id].tsx).
@@ -223,7 +224,7 @@ Under "yes" the push removes from the connector every row of those collections t
 
 ## 8. The notice
 
-**A. Count row and app-icon badge, set while NorthKeep runs (built).** The count is computed at each refresh. The badge is set by a small local native module beside the two the app already ships, calling iOS's own badge API (`setBadgeCount` from iOS 16, the older `applicationIconBadgeNumber` before it). One permission prompt (iOS ties the badge to the notification permission). No third-party dependency, no network, nothing leaves the phone. Limit: the badge shows what the phone knew when NorthKeep last ran.
+**A. Tab count and app-icon badge, set while NorthKeep runs (built).** The count is computed at each refresh. The badge is set by a small local native module beside the two the app already ships, calling iOS's own badge API (`setBadgeCount` from iOS 16, the older `applicationIconBadgeNumber` before it). One permission prompt (iOS ties the badge to the notification permission). No third-party dependency, no network, nothing leaves the phone. Limit: the badge shows what the phone knew when NorthKeep last ran.
 
 **B. A local notification from a background refresh.** iOS wakes the app on its own schedule; the vault key is out of reach in the background (secure-store.ts:60), so it could count only the connector's queues and would overcount. Not built.
 
@@ -368,8 +369,8 @@ Fresh Opus reviewer, design at 5b51535 against main 1089445; report at ~/Claude/
 
 ## Settled here, with the reason
 
-- The mock of the screen goes to Jay before build; it is a standing gate, not a question.
-- Notice: count row and badge only. A push service adds Apple as a recipient for little gain.
+- The mock of the screen went to Jay and he approved it on 2026-11-25, with the list moved to its own bottom tab.
+- Notice: the Review tab's count and the icon badge only. A push service adds Apple as a recipient for little gain.
 - `clearReplaced` is built here, because this is the first milestone with an undo and milestone 5 needs the same step.
 - "Keep it" for a cloud forget exists on the phone only in this milestone: the smallest change; the Mac can gain it later.
 - A forget request names no app and no time: the connector never recorded them, and adding them needs a new pending version for a label.

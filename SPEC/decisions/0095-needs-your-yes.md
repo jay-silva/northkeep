@@ -12,7 +12,7 @@ Cloud replaces and forgets wait for the Mac's sync review; milestones 5 and 8 ac
 - D4: No drops the request: today's ack for a replace, a new `keep_forgets` for a forget. Not now hides an item until midnight.
 - D5: `clearReplaced(id, expectedBy)` undoes a replace, built here. A forget has no undo.
 - D6: A Mac or command line acknowledges a cloud replace only after the vault push carrying it has landed.
-- D7: Notice: a count row and an icon badge, set while NorthKeep runs.
+- D7: Notice: a Review tab with a red count, and an icon badge.
 - D8: Open for Jay: may the phone tell Cloud Connect itself after a Yes or an Undo and read it when the app opens, and there accept an everyday reported answer without a tap, ending ADR 0063's additions-only rule for those? Either answer works.
 
 ## Consequences
