@@ -13,7 +13,7 @@ A new brain is empty; on 2026-11-24 an agent scored 24 of 25 only after ten fact
 - D5: Answers pass ADR 0085's save check; a held answer leaves its question open.
 - D6: NorthKeep's own text travels in its own block. Connector memory lines are flattened. An answer is one line of at most 300 characters, not opening with "NorthKeep".
 - D7: It starts from a line the person sends (shown in setup and on the connect page) or a note on an empty `memory_retrieve` result. NorthKeep never asks an app to change its instructions.
-- D8: Connector rows carry the mark as `chat` inside the ciphertext, on push and on ADR 0092's `/client/pending?v=4`. The connector deploys first and withholds marked rows and records from older clients.
+- D8: Connector rows carry `chat` inside the ciphertext, on push and pending v4 (ADR 0092). The connector deploys first and withholds marked rows and records from older clients.
 
 ## Consequences
 - Easier: a person fills the core in any connected app.
@@ -27,7 +27,7 @@ A new brain is empty; on 2026-11-24 an agent scored 24 of 25 only after ten fact
 - An import path inside the tool; reading mail.
 
 ## What leaves the machine
-To each connected app: fixed questions, ids and counts. To the connector, once `about-me` is shared: answers, records, and the app name and date of each chat-marked row, inside the ciphertext.
+To each connected app: fixed questions, ids and counts. To the connector, once `about-me` is shared: answers, records, and app and date per marked row, inside the ciphertext.
 
 ## Links
 Design and review log: docs/design/adr-0094-welcome-interview.md · Depends on: ADRs 0084, 0085, 0092 (undo, chat mark) · Amends: 0084 D4
