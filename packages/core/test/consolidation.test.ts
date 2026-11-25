@@ -174,6 +174,19 @@ describe('guided consolidation core', () => {
     vault.close();
   });
 
+  it('lets an edited version of a restored copy be replaced, with the history screen still working', () => {
+    const vault = createVault();
+    const sources = seed(vault);
+    const consolidated = vault.consolidateMemories({ vault_id: vault.getVaultId(), operation_id: OP1, sources, content: 'Combined.' });
+    const restored = vault.restoreConsolidation({ vault_id: vault.getVaultId(), operation_id: OP2, result_id: consolidated.result.id, expected_result: consolidated.result });
+    const edited = vault.editMemory(restored.restored_entries[0]!.id, { content: 'First exact source, corrected' }, { actor: 'owner' });
+    const newer = vault.remember({ content: 'A newer fact', type: 'semantic', scope: 'personal' });
+    vault.markReplaced(edited.id, newer.id);
+    expect(vault.consolidationHistory()).toHaveLength(1);
+    expect(vault.list().map((entry) => entry.content)).toEqual(['Second exact source', 'A newer fact']);
+    vault.close();
+  });
+
   it('restores complete metadata-bearing copies and makes restore retries exact', () => {
     const vault = createVault();
     const sources = seed(vault);

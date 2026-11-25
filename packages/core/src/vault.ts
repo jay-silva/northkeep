@@ -174,10 +174,21 @@ type CurationMetadata = ConsolidationMetadata | RestoreMetadata;
 export type VaultSaveListener = (vaultPath: string) => void;
 const saveListeners = new Set<VaultSaveListener>();
 
-/** Register a save listener; returns the unsubscribe function. */
 /** The source stamped on a memory restored from a consolidation. */
 export const RESTORED_COPY_SOURCE = 'northkeep:consolidation-recovery';
 
+/**
+ * The copy a restore wrote, not a later edit of it: its restore record names
+ * its own id. Only this row's history check breaks when it is marked replaced.
+ */
+export function isRestoredCopy(row: { id: string; metadata?: Record<string, unknown> | null }): boolean {
+  const record = row.metadata?.[CONSOLIDATION_METADATA_KEY];
+  if (typeof record !== 'object' || record === null) return false;
+  const { kind, result_id: resultId } = record as { kind?: unknown; result_id?: unknown };
+  return kind === 'restore' && resultId === row.id;
+}
+
+/** Register a save listener; returns the unsubscribe function. */
 export function onVaultSave(listener: VaultSaveListener): () => void {
   saveListeners.add(listener);
   return () => {
@@ -705,7 +716,7 @@ export class Vault {
     if (input.scope !== undefined && (input.scope.trim() || 'personal') !== old.scope) {
       throw new Error(`The memory to replace is in the "${old.scope}" scope, not "${input.scope.trim() || 'personal'}". Nothing was saved.`);
     }
-    // The same text in other casing or spacing is not a new version.
+    // The same text, give or take outer whitespace and one closing full stop, is not a new version.
     if (saveNormalForm(input.content) === saveNormalForm(old.content) && input.type === old.type) return old;
     return this.editMemory(old.id, { content: input.content, type: input.type }, options, allowedScopes);
   }
@@ -723,7 +734,7 @@ export class Vault {
     if (isProjectPaperwork(old) || isProjectPaperwork(next)) throw new Error(PROJECT_DOCUMENT_REPLACE_MESSAGE);
     if (old.scope !== next.scope) throw new Error('A memory can only replace one in its own scope.');
     // A restored copy's history check expects an edit, not a link to an older row: marking it breaks the consolidation screen.
-    if (old.source === RESTORED_COPY_SOURCE || next.source === RESTORED_COPY_SOURCE) throw new Error('A memory restored from a consolidation cannot be replaced this way.');
+    if (isRestoredCopy(old)) throw new Error('A memory restored from a consolidation cannot be replaced this way.');
     const now = new Date().toISOString();
     this.db.prepare('UPDATE memories SET superseded_at = ?, superseded_by = ? WHERE id = ?').run(now, next.id, old.id);
     return { ...old, superseded_at: now, superseded_by: next.id };

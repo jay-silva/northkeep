@@ -15,7 +15,7 @@ import {
   type MemoryType,
   type Vault,
   isProjectPaperwork,
-  RESTORED_COPY_SOURCE,
+  isRestoredCopy,
 } from '@northkeep/core';
 import { deriveConnectorToken } from './creds.js';
 import { assertConnectorUrl } from './connector-config.js';
@@ -872,10 +872,10 @@ function planCloudReplaces(vault: Vault, queued: QueuedReplace[], plan: DownSync
     if (oldSide.kind === 'unknown' || newSide.kind === 'unknown') continue;
     const scopeOf = (s: ReplaceSide & { kind: 'live' | 'adding' }): string => (s.kind === 'live' ? s.entry.scope : s.scope);
     const isDocument = (oldSide.kind === 'live' && isProjectPaperwork(oldSide.entry)) || (newSide.kind === 'live' && isProjectPaperwork(newSide.entry));
-    const isRestoredCopy = (oldSide.kind === 'live' && oldSide.entry.source === RESTORED_COPY_SOURCE) || (newSide.kind === 'live' && newSide.entry.source === RESTORED_COPY_SOURCE);
+    const restoredCopy = oldSide.kind === 'live' && isRestoredCopy(oldSide.entry);
     const sameRow = oldSide.kind === 'live' && newSide.kind === 'live' && oldSide.id === newSide.id;
     // vault.markReplaced refuses each of these, every time: settle rather than ask the user about it forever.
-    if (sameRow || isDocument || isRestoredCopy || scopeOf(oldSide) !== r.scope || scopeOf(newSide) !== r.scope) {
+    if (sameRow || isDocument || restoredCopy || scopeOf(oldSide) !== r.scope || scopeOf(newSide) !== r.scope) {
       plan.settled_replaces.push(r.replace_id);
       continue;
     }

@@ -38,7 +38,7 @@ export {
   cosineSimilarity,
   parseSyncGeneration,
   projectScopeInUse,
-  RESTORED_COPY_SOURCE,
+  isRestoredCopy,
   type VaultHeader,
   type VaultOptions,
 } from './vault.js';
