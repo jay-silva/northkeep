@@ -8,8 +8,8 @@ import { shareSyncCmd, type ShareDeps } from '../src/shareCmd.js';
 import { startFakeConnector, type FakeConnector } from '../../sync/test/fake-connector.js';
 
 /**
- * `northkeep share sync` never waits on Cloud Connect while it holds the vault
- * lock (defect B, design review of ADR 0096). Each vault section takes the real
+ * `northkeep share sync` fetches before it takes the vault lock (defect B,
+ * ADR 0096 design review) and settles under it (merge review). Each vault section takes the real
  * file lock and opens the vault fresh, as index.ts does. Temp home only.
  */
 
@@ -86,15 +86,15 @@ afterEach(async () => {
   fs.rmSync(home, { recursive: true, force: true });
 });
 
-describe('share sync holds the vault lock only for vault work', () => {
-  it('no Cloud Connect request starts while the vault lock is held, preview or apply', async () => {
+describe('share sync: what runs under the vault lock', () => {
+  it('both fetches start with the lock free, the acknowledgement under it, and the push after is not under it', async () => {
     fake.cloudRemember('work', 'From the app');
     const seen = watchLock();
     await shareSyncCmd({ yes: true }, lockedDeps(), fail);
     expect(seen).toEqual([
       ['GET /client/pending?v=3', false],
       ['GET /client/pending?v=3', false],
-      ['POST /client/ack', false],
+      ['POST /client/ack', true],
       ['PUT /client/entries', false],
     ]);
     expect(lines).toContain('✓ Down-synced: 1 added, 0 replaced, 0 forgotten, 0 memories marked replaced, 0 already present, 0 held, 0 skipped.');
@@ -124,7 +124,7 @@ describe('share sync holds the vault lock only for vault work', () => {
     fake.failNext('/client/ack', 500);
     const seen = watchLock();
     await expect(shareSyncCmd({ yes: true }, lockedDeps(), fail)).rejects.toThrow('Connector server returned HTTP 500 on ack.');
-    expect(seen.find(([request]) => request === 'POST /client/ack')).toEqual(['POST /client/ack', false]);
+    expect(seen.find(([request]) => request === 'POST /client/ack')).toEqual(['POST /client/ack', true]);
     expect(fs.existsSync(lockPath())).toBe(false);
     expect(onDisk()).toEqual(['work: From the app', 'work: Pushed memory']);
     expect(pendingIds()).toEqual([fromApp]);

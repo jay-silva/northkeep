@@ -1204,7 +1204,7 @@ async function dispatch(
       }));
     }
     await assertDeviceCanPush({ vaultPath: session.vaultPath, deviceSecret });
-    // The pull takes the vault lock only around its vault work, never across a connector call.
+    // The fetch runs before the vault lock; the discard and ack run under it, bounded by SETTLE_TIMEOUT_MS.
     const down = await pullDownSync({
       ...conn,
       withVault: (fn) => session.withVault(fn),

@@ -1404,9 +1404,9 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     let result: DownSyncResult;
     try {
       const entitlement = await maybeConnectorEntitlement(secret);
-      // Network outside the gate, like every other sync call here: the fetch
-      // runs before the gated section and the ack after it, so a save never
-      // queues behind Cloud Connect.
+      // The fetch runs before the gated section. The discard and ack run inside
+      // it, after the save, each capped at 15 s (SETTLE_TIMEOUT_MS), so a save
+      // queues behind Cloud Connect for at most about 30 s.
       result = await pullDownSync({
         server,
         deviceSecret: secret,

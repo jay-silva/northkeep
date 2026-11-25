@@ -92,6 +92,7 @@ export {
   planNeedsConfirmation,
   pullDownSync,
   pushSharedScopes,
+  SETTLE_TIMEOUT_MS,
   resolveConflict,
   startPairing,
   unshareScope,

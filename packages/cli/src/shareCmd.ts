@@ -318,7 +318,7 @@ export async function shareSyncCmd(options: { yes?: boolean }, deps: ShareDeps, 
     forget_ids: plan.forgets.map((f) => f.entry_id),
     replace_ids: plan.cloud_replaces.map((r) => r.replace_id),
   };
-  // The pull takes the vault lock only around its vault work, never across a connector call.
+  // The fetch runs before the vault lock; the discard and ack run under it, bounded by SETTLE_TIMEOUT_MS.
   const down = await pullDownSync({ ...conn, withVault: deps.withVault, approve });
   console.log(
     `✓ Down-synced: ${down.added} added, ${down.replaced} replaced, ${down.forgotten} forgotten, ${plural(down.cloud_replaced, 'memory', 'memories')} marked replaced, ${down.deduped} already present, ${down.held} held, ${down.skipped} skipped.`,

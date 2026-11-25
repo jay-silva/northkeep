@@ -938,22 +938,35 @@ function firstLine(text: string): string {
   return line.length > 120 ? `${line.slice(0, 117)}...` : line;
 }
 
-async function postJson(opts: { server: string; deviceSecret: Buffer; entitlement?: string }, route: string, body: unknown, op: string): Promise<void> {
+async function postJson(
+  opts: { server: string; deviceSecret: Buffer; entitlement?: string },
+  route: string,
+  body: unknown,
+  op: string,
+  timeoutMs = TIMEOUT_MS,
+): Promise<void> {
   const res = await fetch(`${normalizeServer(opts.server)}${route}`, {
     method: 'POST',
     headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
     body: JSON.stringify(body),
     redirect: 'error',
-    signal: timeoutSignal(TIMEOUT_MS),
+    signal: timeoutSignal(timeoutMs),
   });
   if (!res.ok) throw httpError(res.status, op);
 }
 
 /** Delete exactly these pending rows by id (ADR 0063 `/client/discard`). */
-export async function discardPending(opts: { server: string; deviceSecret: Buffer; entitlement?: string; server_ids: string[] }): Promise<void> {
+export async function discardPending(opts: { server: string; deviceSecret: Buffer; entitlement?: string; server_ids: string[]; timeoutMs?: number }): Promise<void> {
   if (opts.server_ids.length === 0) return;
-  await postJson(opts, '/client/discard', { server_ids: opts.server_ids }, 'discard');
+  await postJson(opts, '/client/discard', { server_ids: opts.server_ids }, 'discard', opts.timeoutMs);
 }
+
+/**
+ * The discard and the ack run under the vault lock. The fetch is outside it and
+ * planning is fast, so the lock is held for the vault work plus at most 30
+ * seconds, under the 60 second takeover.
+ */
+export const SETTLE_TIMEOUT_MS = 15_000;
 
 export interface DownSyncOptions {
   server: string;
@@ -963,29 +976,32 @@ export interface DownSyncOptions {
   approve?: { server_ids?: string[]; forget_ids?: string[]; replace_ids?: string[] };
   /** The phone (ADR 0063 D1): additions only, never a replace, a forget or a forget ack; it never fetches the replace queue. */
   additiveOnly?: boolean;
+  /** Overrides SETTLE_TIMEOUT_MS for the discard and the ack, each. */
+  settleTimeoutMs?: number;
 }
 
 /** Runs `fn` on the open vault while holding the caller's vault lock or gate. */
 export type VaultSection = <T>(fn: (vault: Vault) => T | Promise<T>) => Promise<T>;
 
 /**
- * D3 apply. Connector calls stay outside `withVault`, because a slow connector
- * under the vault lock let another process steal it and lose a save. Planning
- * inside sees the vault as it is now; a lost ack is settled by the next pull.
+ * D3 apply. The fetch runs before `withVault`: a slow one under the lock let
+ * another process steal it and lose a save. The ack stays inside, or a forget
+ * and push could land first and the ack would revive the row.
  */
 export async function pullDownSync(opts: DownSyncOptions & { withVault: VaultSection }): Promise<DownSyncResult> {
   const clientLabel = new URL(normalizeServer(opts.server)).hostname;
   const pending = await fetchPending({ ...opts, replaces: opts.additiveOnly !== true });
-  const applied = await opts.withVault((vault) => applyPendingRows(vault, pending, clientLabel, opts));
-  await discardPending({ ...opts, server_ids: applied.discards });
-  if (applied.ack !== null) await postJson(opts, '/client/ack', applied.ack, 'ack');
-  return applied.result;
+  const timeoutMs = opts.settleTimeoutMs ?? SETTLE_TIMEOUT_MS;
+  return opts.withVault(async (vault) => {
+    const applied = applyPendingRows(vault, pending, clientLabel, opts);
+    // After the save: a failed or timed-out discard or ack throws, and the next pull settles it.
+    await discardPending({ ...opts, server_ids: applied.discards, timeoutMs });
+    if (applied.ack !== null) await postJson(opts, '/client/ack', applied.ack, 'ack', timeoutMs);
+    return applied.result;
+  });
 }
 
-/**
- * pullDownSync on a vault the caller already holds open. It makes network
- * calls, so never call it while holding the vault file lock; tests use it.
- */
+/** pullDownSync on a vault the caller already holds open; tests use it. */
 export async function applyDownSync(opts: DownSyncOptions & { vault: Vault }): Promise<DownSyncResult> {
   const { vault, ...rest } = opts;
   return pullDownSync({ ...rest, withVault: async (fn) => fn(vault) });
@@ -1117,7 +1133,7 @@ function applyPendingRows(vault: Vault, pending: PendingSnapshot, clientLabel: s
     wrote = true;
   }
 
-  // Saved before the section ends, so the discard and ack that follow it are retried as a no-op after a failure.
+  // Saved before any discard or ack, so a failure after it is retried as a no-op.
   if (wrote) vault.save();
   const needsAck = acked.length > 0 || ackedForgets.length > 0 || ackedReplaces.length > 0;
   const result: DownSyncResult = {

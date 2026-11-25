@@ -10,8 +10,8 @@ import { UiSession } from '../src/session.js';
 import { startFakeConnector, type FakeConnector } from '../../../packages/sync/test/fake-connector.js';
 
 /**
- * Sync now never waits on Cloud Connect while it holds the vault lock (defect B,
- * design review of ADR 0096). Temp home and fictional data only.
+ * Sync now fetches before it takes the vault lock (defect B, ADR 0096 design
+ * review) and settles under it (merge review). Temp home and fictional data only.
  */
 
 const passphrase = 'web lock passphrase';
@@ -89,8 +89,8 @@ afterEach(async () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
-describe('POST /api/share/sync holds the vault lock only for vault work', () => {
-  it('no Cloud Connect request starts while the vault lock is held', async () => {
+describe('POST /api/share/sync: what runs under the vault lock', () => {
+  it('the fetch starts with the lock free, the acknowledgement under it, and the push after is not under it', async () => {
     const fromApp = fake.cloudRemember('work', 'From the app');
     fake.cloudForget(pushedId);
     const seen = watchLock();
@@ -98,7 +98,7 @@ describe('POST /api/share/sync holds the vault lock only for vault work', () => 
     expect([res.status, res.body.added, res.body.forgotten, res.body.deduped]).toEqual([200, 1, 1, 0]);
     expect(seen).toEqual([
       ['GET /client/pending?v=3', false],
-      ['POST /client/ack', false],
+      ['POST /client/ack', true],
       ['PUT /client/entries', false],
     ]);
     expect(pendingIds()).toEqual([]);
@@ -118,28 +118,16 @@ describe('POST /api/share/sync holds the vault lock only for vault work', () => 
     expect([other, res.status, res.body.added]).toEqual(['saved', 200, 1]);
     expect(onDisk()).toEqual(['personal: Saved by another app while the pull waited', 'work: From the app', 'work: Pushed memory']);
   });
-
-  it('another process saves at once while the acknowledgement is in flight', async () => {
-    fake.cloudRemember('work', 'From the app');
-    const parked = fake.hold('/client/ack');
-    const sync = syncNow();
-    await parked.arrived;
-    const other = await otherProcessSaves('Saved while the acknowledgement was in flight', { timeoutMs: 1000 });
-    parked.release();
-    const res = await sync;
-    expect([other, res.status, res.body.added]).toEqual(['saved', 200, 1]);
-    expect(onDisk()).toEqual(['personal: Saved while the acknowledgement was in flight', 'work: From the app', 'work: Pushed memory']);
-  });
 });
 
-describe('a failed acknowledgement after the lock is released', () => {
+describe('a failed acknowledgement', () => {
   it('leaves the memory saved once, and the next Sync now settles it without a duplicate', async () => {
     const fromApp = fake.cloudRemember('work', 'From the app');
     fake.failNext('/client/ack', 500);
     const seen = watchLock();
     const first = await syncNow();
     expect([first.status, first.body.error]).toEqual([500, 'Connector server returned HTTP 500 on ack.']);
-    expect(seen).toEqual([['GET /client/pending?v=3', false], ['POST /client/ack', false]]);
+    expect(seen).toEqual([['GET /client/pending?v=3', false], ['POST /client/ack', true]]);
     expect(fs.existsSync(lockPath())).toBe(false);
     expect(onDisk()).toEqual(['work: From the app', 'work: Pushed memory']);
     expect(pendingIds()).toEqual([fromApp]);
@@ -163,7 +151,7 @@ describe('a failed acknowledgement after the lock is released', () => {
     const seen = watchLock();
     const next = await syncNow();
     expect([next.status, next.body.added, next.body.discarded]).toEqual([200, 0, 1]);
-    expect(seen).toEqual([['GET /client/pending?v=3', false], ['POST /client/discard', false], ['PUT /client/entries', false]]);
+    expect(seen).toEqual([['GET /client/pending?v=3', false], ['POST /client/discard', true], ['PUT /client/entries', false]]);
     expect(fake.rows().map((r) => r.entry_id)).not.toContain(fromApp);
     expect(onDisk()).toEqual(['work: Pushed memory']);
   });
