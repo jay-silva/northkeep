@@ -213,9 +213,15 @@ export async function withFileLock<T>(
   const deadline = Date.now() + timeoutMs;
   for (;;) {
     if (createComplete(lockPath, token)) break;
-    const seen = readIfThere(lockPath);
-    if (seen === null) continue; // released between the create and the read: retry at once
-    const state = ownerState(seen.toString('utf8'));
+    let seen: Buffer | null = null;
+    try {
+      seen = fs.readFileSync(lockPath);
+    } catch (err) {
+      // Released between the create and the read: retry at once. Anything else
+      // (a lock we may not read, a directory) must still reach the deadline below.
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+    }
+    const state = seen === null ? 'unknown' : ownerState(seen.toString('utf8'));
     let dead = state === 'dead';
     if (!dead && (state === 'unknown' || options.takeOverLiveOwner === true)) {
       try {
@@ -224,7 +230,7 @@ export async function withFileLock<T>(
         continue;
       }
     }
-    if (dead) {
+    if (dead && seen !== null) {
       removeDeadLock(lockPath, seen, token);
       if (!fs.existsSync(lockPath)) continue;
     }

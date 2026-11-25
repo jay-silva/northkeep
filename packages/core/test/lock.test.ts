@@ -105,6 +105,21 @@ describe('withFileLock', () => {
     expect(fs.readFileSync(`${target}.lock`, 'utf8')).toBe('');
   });
 
+  it('gives up at the deadline, and does not spin, when the lock path cannot be read', async () => {
+    fs.mkdirSync(`${target}.lock`);
+    const started = Date.now();
+    const err = await withFileLock(target, () => undefined, { timeoutMs: 200 }).then(() => null, (e: Error) => e);
+    expect(err instanceof FileLockTimeoutError).toBe(true);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    expect(fs.statSync(`${target}.lock`).isDirectory()).toBe(true);
+
+    // Aged past the stale limit it still cannot be compared, so it is still not taken.
+    age(300_000);
+    const again = await withFileLock(target, () => undefined, { timeoutMs: 200 }).then(() => null, (e: Error) => e);
+    expect(again instanceof FileLockTimeoutError).toBe(true);
+    fs.rmdirSync(`${target}.lock`);
+  });
+
   it('writes its lock complete, pid first, with this start of the machine, and leaves no stray files', async () => {
     let token = '';
     await withFileLock(target, () => void (token = fs.readFileSync(`${target}.lock`, 'utf8')));
