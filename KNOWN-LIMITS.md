@@ -1411,6 +1411,8 @@ These claims hold only on devices running a K1 or later build. Vault sync replac
 
 ## Connector for shared scopes, ADR 0019 + ADR 0020 (current)
 
+- Sync now in the Mac app, the share sync command and the phone's Cloud sync no longer hold the vault while they talk to Cloud Connect: they fetch first, change the vault, then acknowledge. Two actions still hold it across a Cloud Connect call: resolving a project conflict (take theirs or keep mine) and stopping sharing a collection. During those, a very slow connector can make other apps' saves wait or fail, and a vault lock older than 60 seconds is still taken over by the next app that needs it.
+- If the acknowledgement after a sync fails, the next sync settles it without a second copy. Until then a Cloud app may see that memory twice. This holds for memories; a Cloud app's update to a project document whose acknowledgement failed, followed by an edit here, still comes back as a conflict to resolve.
 - **Cloud Connect's copy updates automatically only while this Mac is in
   sync with your other devices (ADR 0063 D5).** After automatic sync pushes
   or pulls the vault, or finds this Mac exactly in sync, the Mac compares its
