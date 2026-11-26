@@ -44,6 +44,8 @@ export interface FakeConnector {
   cloudReplace: (scope: string, content: string, oldId: string, type?: string) => { newId: string; replaceId: string };
   /** Entry ids with a forget request still queued. */
   forgetQueue: () => string[];
+  /** Called as each `/client/ack` arrives, before it is applied, so a test can see what else was true at that moment. */
+  onAck: (fn: ((body: Record<string, unknown>) => void) | null) => void;
   /** Every `/client/ack` body received, in order. */
   acks: () => Array<Record<string, unknown>>;
   /** The queued replaces, as the connector holds them. */
@@ -58,6 +60,7 @@ export interface FakeConnector {
 
 export async function startFakeConnector(options: { tombstoneEnforce?: boolean; requireEntitlement?: string; olderThanKeepForgets?: boolean } = {}): Promise<FakeConnector> {
   const ackBodies: Array<Record<string, unknown>> = [];
+  let ackObserver: ((body: Record<string, unknown>) => void) | null = null;
   const rows = new Map<string, FakeRow>();
   const scopeSeq = new Map<string, number>();
   const forgetQueue: string[] = [];
@@ -149,6 +152,7 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
           }
         }
         ackBodies.push(body);
+        ackObserver?.(body);
         let replaced = 0;
         for (const id of (body.replaces as string[]) ?? []) {
           const i = replaceQueue.findIndex((r) => r.replace_id === id);
@@ -276,6 +280,9 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
     replaceQueue: () => replaceQueue.map((r) => ({ ...r })),
     forgetQueue: () => [...forgetQueue],
     acks: () => ackBodies.map((b) => ({ ...b })),
+    onAck: (fn) => {
+      ackObserver = fn;
+    },
     vaultPair: () => pair,
     pushes: () => pushLog,
     requests: () => requestLog,

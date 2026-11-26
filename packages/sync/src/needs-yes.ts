@@ -198,7 +198,8 @@ export interface YesRecord {
 }
 
 export type YesOutcome =
-  | { status: 'gone' }
+  /** `applied` is set when the vault refused the request but this run still saved additions: acknowledge those. */
+  | { status: 'gone'; applied?: AppliedPending }
   | { status: 'changed'; item: NeedsYesItem }
   | { status: 'applied'; applied: AppliedPending; record: YesRecord };
 
@@ -225,10 +226,10 @@ export function applyYesToVault(opts: {
     const replaceId = item.request.replace_id;
     const done = applied.applied_replaces.find((r) => r.replace_id === replaceId);
     // The vault refused the mark (it can never apply): the request is settled, and nothing was replaced.
-    if (done === undefined) return { status: 'gone' };
+    if (done === undefined) return { status: 'gone', applied };
     return { status: 'applied', applied, record: { id: item.id, kind: 'replace', at, old_id: done.old_id, new_id: done.new_id } };
   }
-  if (!applied.applied_forgets.includes(item.request.entry_id)) return { status: 'gone' };
+  if (!applied.applied_forgets.includes(item.request.entry_id)) return { status: 'gone', applied };
   return { status: 'applied', applied, record: { id: item.id, kind: 'forget', at, entry_id: item.request.entry_id } };
 }
 

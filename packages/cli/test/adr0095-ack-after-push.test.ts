@@ -96,16 +96,17 @@ describe('share sync with a vault sync server', () => {
   it('acknowledges an approved replace only after the vault push lands', async () => {
     const replaceId = await waitingReplace();
     expect((await pushVault({ vaultPath: vaultPath(), deviceSecret, masterKey: key() })).ok).toBe(true);
+    expect(sync.version()).toBe(1);
+    // The sync server's version at the moment each acknowledgement arrives: 2 means the vault push had landed.
+    const versionAtAck: Array<[boolean, number]> = [];
+    fake.onAck((body) => versionAtAck.push([Array.isArray(body.replaces) && body.replaces.length > 0, sync.version()]));
 
     await shareSyncCmd({ yes: true }, deps(), fail);
 
     expect(await rowsOf()).toEqual([[PIER_4, true], [PIER_9, false]]);
     expect(fake.replaceQueue()).toEqual([]);
     expect(replaceAcks()).toEqual([{ acked: [], forgets: [], replaces: [replaceId] }]);
-    // The vault push came first: the acknowledgement is the last request but the Cloud Connect push.
-    const requests = fake.requests();
-    expect(requests.indexOf('POST /client/ack')).toBeLessThan(requests.lastIndexOf('PUT /client/entries'));
-    expect(sync.version()).toBe(2);
+    expect(versionAtAck).toEqual([[true, 2]]);
   });
 
   it('when the vault push loses, the mark is saved here but the request stays queued, and the next run settles it', async () => {
@@ -160,6 +161,51 @@ describe('share sync with a vault sync server', () => {
     const plan = await withVault((v) => planDownSync({ vault: v, pending }));
     expect(plan.cloud_replaces.map((r) => r.replace_id)).toEqual([replaceId]);
     expect(plan.settled_replaces).toEqual([]);
+  });
+});
+
+describe('share sync of a vault that is not the one this Mac syncs', () => {
+  let sync: ReturnType<typeof fakeServer>;
+  beforeEach(async () => {
+    sync = fakeServer();
+    await new Promise<void>((r) => sync.server.listen(0, '127.0.0.1', r));
+    setSyncServer(sync.url(), deriveSyncCreds(deviceSecret).accountId);
+  });
+  afterEach(async () => {
+    await new Promise((r) => sync.server.close(r));
+  });
+
+  it('is refused before anything changes, so no acknowledgement can be left held', async () => {
+    // The synced vault is $NORTHKEEP_HOME/vault.nkv; this command runs on a copy elsewhere.
+    const replaceId = await waitingReplace();
+    const elsewhere = path.join(home, 'elsewhere', 'other.nkv');
+    fs.mkdirSync(path.dirname(elsewhere));
+    fs.copyFileSync(vaultPath(), elsewhere);
+    const otherKey = () => {
+      const header = Vault.readHeader(elsewhere);
+      return deriveMasterKey(PASS, deviceSecret, header.salt, header.kdf);
+    };
+    const otherDeps: ShareDeps = {
+      vaultPath: elsewhere,
+      masterKey: async () => otherKey(),
+      ask: async () => null,
+      withVault: async (fn) => {
+        const v = Vault.openWithKey(elsewhere, otherKey());
+        try {
+          return await fn(v);
+        } finally {
+          v.close();
+        }
+      },
+    };
+
+    const before = fs.readFileSync(elsewhere);
+
+    await expect(shareSyncCmd({ yes: true }, otherDeps, fail)).rejects.toThrow('Nothing was changed. Cloud Connect is updated from your main vault only, and this command used another vault file.');
+
+    expect(fs.readFileSync(elsewhere).equals(before)).toBe(true);
+    expect(fake.replaceQueue().map((r) => r.replace_id)).toEqual([replaceId]);
+    expect(replaceAcks()).toEqual([]);
   });
 });
 

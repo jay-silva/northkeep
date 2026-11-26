@@ -47,6 +47,7 @@ import {
   connectorPaired,
   ackCloudReplaces,
   applyDownSync,
+  isAutoSyncVault,
   assertDeviceCanPush,
   cloudReplaceLine,
   ConnectorPushBlockedError,
@@ -1209,8 +1210,9 @@ async function dispatch(
       ...conn,
       vault,
       approve: { server_ids: approve.server_ids!, forget_ids: approve.forget_ids!, replace_ids: approve.replace_ids! },
-      // ADR 0095 section 5: with a vault sync server, a replace is acknowledged only after the vault push below lands.
-      holdReplaceAcks: loadSyncConfig() !== null,
+      // ADR 0095 section 5: when this vault syncs through a server, a replace is acknowledged only after the vault push
+      // below lands. Any other vault is never pushed from here, so holding would never be released.
+      holdReplaceAcks: loadSyncConfig() !== null && isAutoSyncVault(session.vaultPath),
     }));
     const after = await session.withVault((vault) => vault.sharedScopes());
     // The apply is saved either way; a failed push must not hide what it did.

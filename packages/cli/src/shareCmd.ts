@@ -2,6 +2,7 @@ import { devicePhrase, loadDeviceSecret, projectScope, type Vault } from '@north
 import {
   ackCloudReplaces,
   applyDownSync,
+  isAutoSyncVault,
   assertDeviceCanPush,
   cloudReplaceLine,
   connectorAutoPushEnabled,
@@ -321,8 +322,10 @@ export async function shareSyncCmd(options: { yes?: boolean }, deps: ShareDeps, 
     forget_ids: plan.forgets.map((f) => f.entry_id),
     replace_ids: plan.cloud_replaces.map((r) => r.replace_id),
   };
-  // ADR 0095 section 5: with a vault sync server, a replace is acknowledged only after the vault push below lands.
-  const down = await deps.withVault((vault) => applyDownSync({ ...conn, vault, approve, holdReplaceAcks: loadSyncConfig() !== null }));
+  // ADR 0095 section 5: when this vault syncs through a server, a replace is acknowledged only after the vault push below
+  // lands. Any other vault is never pushed from here (manualVaultStamp refuses it), so holding would never be released.
+  const holdReplaceAcks = loadSyncConfig() !== null && isAutoSyncVault(deps.vaultPath);
+  const down = await deps.withVault((vault) => applyDownSync({ ...conn, vault, approve, holdReplaceAcks }));
   console.log(
     `✓ Down-synced: ${down.added} added, ${down.replaced} replaced, ${down.forgotten} forgotten, ${plural(down.cloud_replaced, 'memory', 'memories')} marked replaced, ${down.deduped} already present, ${down.held} held, ${down.skipped} skipped.`,
   );
