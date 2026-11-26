@@ -1509,7 +1509,12 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
           memzero(secret);
         }
       },
-      fetchPending: () => withConnector((conn) => fetchPending(conn)),
+      fetchPending: async () => {
+        // The same gate as "Sync app-written memories": a phone that shares nothing and never paired has no account to ask.
+        const sharesSomething = await vaultGate.run(() => openVault().sharedScopes().length > 0);
+        if (!sharesSomething && (await loadConnectorPairedAt()) === null) return { entries: [], forgets: [], replaces: [] };
+        return withConnector((conn) => fetchPending(conn));
+      },
       list: (pending) => vaultGate.run(() => listNeedsYes({ vault: openVault(), pending })),
       accepted: (records) => vaultGate.run(() => listAccepted({ vault: openVault(), records })),
       applyYes: async (pending, itemId, shownHash) => {
@@ -1581,8 +1586,9 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     [reviewPorts],
   );
 
-  // On unlock: show the count this phone last saw at once, with no network. Then, on a
-  // paired phone, read Cloud Connect at most every 15 minutes (ADR 0095 D8, Jay: "C yes").
+  // On unlock: show the count this phone last saw at once, with no network. Then read
+  // Cloud Connect at most every 15 minutes (ADR 0095 D8, Jay: "C yes"); the fetch port
+  // makes no call on a phone that shares nothing and never paired.
   useEffect(() => {
     if (status !== 'unlocked' || isDemo) {
       if (status !== 'unlocked') setReviewCount(0);
@@ -1593,7 +1599,6 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       try {
         const kept = countReview(await loadReviewState(), new Date());
         if (active) setReviewCount(kept);
-        if ((await loadConnectorPairedAt()) === null) return;
         if (Date.now() - reviewRefreshedAtRef.current < 15 * 60 * 1000) return;
         if (active) await review.refresh();
       } catch {
