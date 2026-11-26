@@ -3,6 +3,7 @@ import {
   acceptedLead,
   buttonLabels,
   checkedLine,
+  retiredLabel,
   clockTime,
   dayLabel,
   hiddenLine,
@@ -62,5 +63,10 @@ describe('the Review tab copy', () => {
     expect([tabBadge(0), tabBadge(-2), tabBadge(3), tabBadge(120), tabBadge(Number.NaN)]).toEqual([null, null, '3', '99+', null]);
     expect([tabLabel(0), tabLabel(1), tabLabel(3)]).toEqual(['Review', 'Review, 1 needs your yes', 'Review, 3 need your yes']);
     expect([badgeNumber(0), badgeNumber(-1), badgeNumber(4.9), badgeNumber(5000), badgeNumber(Number.NaN)]).toEqual([0, 0, 4, 999, 0]);
+  });
+
+  it('labels the old text of an undone yes as brought back, not retired', () => {
+    expect(retiredLabel({ state: 'undone' })).toBe('Brought back');
+    expect(retiredLabel({ state: 'applied' })).toBe('Retired');
   });
 });

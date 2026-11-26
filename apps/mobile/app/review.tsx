@@ -13,12 +13,12 @@ import {
   REVIEW_NOTHING_ACCEPTED,
   REVIEW_SECTION_ACCEPTED,
   REVIEW_SECTION_NEEDS,
-  REVIEW_TITLE,
   REVIEW_UNDO_CONFIRM_BODY,
   REVIEW_UNDO_CONFIRM_TITLE,
   acceptedLead,
   buttonLabels,
   checkedLine,
+  retiredLabel,
   dayLabel,
   hiddenLine,
   reviewHeading,
@@ -115,7 +115,6 @@ export default function Review() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => void onPull()} tintColor={colors.muted} />}
     >
       <View style={styles.header}>
-        <Text style={styles.title} accessibilityRole="header">{REVIEW_TITLE}</Text>
         <Text style={styles.small}>{checkedLine(view?.checked_at ?? null)}</Text>
       </View>
       <ErrorNote message={error} />
@@ -175,13 +174,15 @@ export default function Review() {
                 <Button
                   title={labels.yes}
                   kind={item.kind === 'forget' ? 'danger' : 'primary'}
-                  style={styles.buttonWide}
+                  style={styles.buttonYes}
                   disabled={busyId !== null || (cut && !isOpen)}
                   busy={busy}
                   onPress={() => onYes(item)}
                 />
-                <Button title={labels.no} kind="secondary" style={styles.button} disabled={busyId !== null} onPress={() => void act(item.id, () => session.review.no(item))} />
-                <Button title={labels.later} kind="secondary" style={styles.button} disabled={busyId !== null} onPress={() => void act(item.id, () => session.review.notNow(item))} />
+                <View style={styles.buttonRow}>
+                  <Button title={labels.no} kind="secondary" style={styles.button} disabled={busyId !== null} onPress={() => void act(item.id, () => session.review.no(item))} />
+                  <Button title={labels.later} kind="secondary" style={styles.button} disabled={busyId !== null} onPress={() => void act(item.id, () => session.review.notNow(item))} />
+                </View>
               </View>
             </View>
           );
@@ -212,7 +213,7 @@ export default function Review() {
             ) : null}
             {line.retired ? (
               <View style={styles.boxWrap}>
-                <Text style={styles.boxLabel}>Retired</Text>
+                <Text style={styles.boxLabel}>{retiredLabel(line)}</Text>
                 <View style={styles.box}>
                   <Text style={styles.boxText} numberOfLines={3}>{line.retired.length > 120 ? `${line.retired.slice(0, 120)} …` : line.retired}</Text>
                 </View>
@@ -232,7 +233,6 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: colors.bg },
   content: { padding: 16, paddingBottom: 32, gap: 18 },
   header: { gap: 4 },
-  title: { ...type.title, color: colors.text },
   small: { ...type.footnote, color: colors.muted },
   section: { gap: 12 },
   sectionLabel: { ...type.caption, color: colors.muted, letterSpacing: 1, textTransform: 'uppercase' },
@@ -245,8 +245,9 @@ const styles = StyleSheet.create({
   showAll: { alignSelf: 'flex-start', minHeight: 44, justifyContent: 'center', paddingRight: 12 },
   showAllText: { ...type.callout, color: colors.accent },
   warnLine: { ...type.footnote, color: colors.removed, fontWeight: '600' },
-  buttons: { flexDirection: 'row', gap: 8 },
-  buttonWide: { flex: 1.3, minHeight: 44 },
+  buttons: { gap: 8 },
+  buttonRow: { flexDirection: 'row', gap: 8 },
+  buttonYes: { minHeight: 44 },
   button: { flex: 1, minHeight: 44 },
   undo: { alignSelf: 'flex-start', minHeight: 44, paddingHorizontal: 18 },
   lineHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 },

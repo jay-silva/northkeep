@@ -12,8 +12,8 @@ export const REVIEW_SECTION_NEEDS = 'Needs your yes';
 export const REVIEW_SECTION_ACCEPTED = 'Accepted lately';
 export const REVIEW_EMPTY_TITLE = 'Nothing needs your yes.';
 export const REVIEW_EMPTY_BODY =
-  'When an AI app asks to change or remove a memory, or a fact about money, ownership, accounts, legal matters or numbers needs you, it shows here.';
-export const REVIEW_EMPTY_ACCEPTED = 'Answers your AI apps settle in chat are listed under Accepted lately.';
+  'When an AI app on Cloud Connect asks to replace or forget one of your memories, it shows here.';
+export const REVIEW_EMPTY_ACCEPTED = 'Each Yes you give on this phone is listed under Accepted lately.';
 export const REVIEW_NOTHING_ACCEPTED = 'Nothing accepted yet.';
 export const REVIEW_FORGET_NO_APP = 'Asked by a connected app. NorthKeep does not record which one or when.';
 export const REVIEW_FORGET_NOT_SHARED = 'Asked while this collection was shared with your apps. It is not shared now.';
@@ -69,6 +69,11 @@ export function buttonLabels(kind: NeedsYesItem['kind']): { yes: string; no: str
 
 export function acceptedLead(line: Pick<AcceptedLine, 'state'>): string {
   return line.state === 'undone' ? 'Undone' : 'You said yes on this phone';
+}
+
+/** After an undo the old memory is live again, so it is not "Retired". */
+export function retiredLabel(line: Pick<AcceptedLine, 'state'>): string {
+  return line.state === 'undone' ? 'Brought back' : 'Retired';
 }
 
 export function checkedLine(checkedAt: string | null): string {
