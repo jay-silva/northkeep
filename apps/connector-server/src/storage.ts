@@ -367,6 +367,11 @@ export interface ConnectorStorage {
   listPendingReplaces(accountHash: string): Promise<PendingReplace[]>;
   /** Delete these queue entries by replaceId (applied, refused or dead). Returns how many went. */
   dropReplaces(accountHash: string, replaceIds: string[]): Promise<number>;
+  /**
+   * ADR 0095 D4: the user declined a cloud forget. Delete only the queue rows;
+   * the shared rows stay and cloud apps see them again. Returns how many went.
+   */
+  keepForgets(accountHash: string, entryIds: string[]): Promise<number>;
 
   // --- audit ---
   appendAudit(entry: ConnectorAuditEntry): Promise<void>;
@@ -840,6 +845,13 @@ export class InMemoryConnectorStorage implements ConnectorStorage {
     const byId = this.pendingReplaces.get(accountHash);
     let n = 0;
     for (const id of new Set(replaceIds)) if (byId?.delete(id)) n++;
+    return n;
+  }
+
+  async keepForgets(accountHash: string, entryIds: string[]): Promise<number> {
+    const queued = this.pendingForgets.get(accountHash);
+    let n = 0;
+    for (const id of new Set(entryIds)) if (queued?.delete(id)) n++;
     return n;
   }
 

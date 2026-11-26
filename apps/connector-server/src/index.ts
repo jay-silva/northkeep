@@ -101,6 +101,7 @@ function missingDbStorage(): ConnectorStorage {
     enqueueReplace: fail,
     listPendingReplaces: fail,
     dropReplaces: fail,
+    keepForgets: fail,
     appendAudit: fail,
     purgeLegacyPlaintext: fail,
     gcOAuth: fail,

@@ -892,6 +892,18 @@ export class NeonConnectorStorage implements ConnectorStorage {
     return Number(rows[0]?.n ?? 0);
   }
 
+  async keepForgets(accountHash: string, entryIds: string[]): Promise<number> {
+    await this.ensureSchema();
+    const ids = [...new Set(entryIds)];
+    if (ids.length === 0) return 0;
+    const rows = (await this.sql`
+      WITH d AS (
+        DELETE FROM pending_forgets WHERE account_hash = ${accountHash} AND entry_id = ANY(${ids}::text[]) RETURNING 1
+      ) SELECT count(*)::int AS n FROM d
+    `) as unknown as Array<{ n: number | string }>;
+    return Number(rows[0]?.n ?? 0);
+  }
+
   async applyForget(accountHash: string, entryId: string): Promise<void> {
     await this.ensureSchema();
     await this.orderedTransaction([
