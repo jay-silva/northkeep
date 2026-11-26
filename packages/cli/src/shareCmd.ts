@@ -1,5 +1,6 @@
 import { devicePhrase, loadDeviceSecret, projectScope, type Vault } from '@northkeep/core';
 import {
+  ackCloudReplaces,
   applyDownSync,
   assertDeviceCanPush,
   cloudReplaceLine,
@@ -104,6 +105,7 @@ async function pushNow(
   entitlement: string | undefined,
   deps: ShareDeps,
   reset = false,
+  onVaultLanded?: () => Promise<void>,
 ): Promise<PushSharedResult | null> {
   const masterKey = loadSyncConfig() === null ? Buffer.alloc(0) : await deps.masterKey();
   try {
@@ -115,6 +117,7 @@ async function pushNow(
       withVault: deps.withVault,
       ...(entitlement ? { entitlement } : {}),
       ...(reset ? { reset: true } : {}),
+      ...(onVaultLanded ? { onVaultLanded } : {}),
     });
   } finally {
     masterKey.fill(0);
@@ -318,7 +321,8 @@ export async function shareSyncCmd(options: { yes?: boolean }, deps: ShareDeps, 
     forget_ids: plan.forgets.map((f) => f.entry_id),
     replace_ids: plan.cloud_replaces.map((r) => r.replace_id),
   };
-  const down = await deps.withVault((vault) => applyDownSync({ ...conn, vault, approve }));
+  // ADR 0095 section 5: with a vault sync server, a replace is acknowledged only after the vault push below lands.
+  const down = await deps.withVault((vault) => applyDownSync({ ...conn, vault, approve, holdReplaceAcks: loadSyncConfig() !== null }));
   console.log(
     `✓ Down-synced: ${down.added} added, ${down.replaced} replaced, ${down.forgotten} forgotten, ${plural(down.cloud_replaced, 'memory', 'memories')} marked replaced, ${down.deduped} already present, ${down.held} held, ${down.skipped} skipped.`,
   );
@@ -340,7 +344,9 @@ export async function shareSyncCmd(options: { yes?: boolean }, deps: ShareDeps, 
   for (const scope of down.held_scopes) console.log(`  ${holdMessage(heldSlug(scope))}`);
   let push: PushSharedResult | null;
   try {
-    push = await pushNow(cfg, deviceSecret, entitlement, deps);
+    push = await pushNow(cfg, deviceSecret, entitlement, deps, false, async () => {
+      await ackCloudReplaces({ ...conn, replace_ids: down.held_replace_acks });
+    });
   } catch (err) {
     fail(`The changes above were saved on this device, but Cloud Connect was not updated: ${message(err)}`);
   }

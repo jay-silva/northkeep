@@ -178,6 +178,14 @@ const saveListeners = new Set<VaultSaveListener>();
 /** The source stamped on a memory restored from a consolidation. */
 export const RESTORED_COPY_SOURCE = 'northkeep:consolidation-recovery';
 
+/** ADR 0095 D5: why a replaced mark could not be cleared. `reason` completes "This can't be undone here: ". */
+export class ClearReplacedError extends Error {
+  constructor(readonly reason: string) {
+    super(`This can't be undone here: ${reason}.`);
+    this.name = 'ClearReplacedError';
+  }
+}
+
 /**
  * The copy a restore wrote, not a later edit of it: its restore record names
  * its own id. Only this row's history check breaks when it is marked replaced.
@@ -787,6 +795,27 @@ export class Vault {
     const now = new Date().toISOString();
     this.db.prepare('UPDATE memories SET superseded_at = ?, superseded_by = ? WHERE id = ?').run(now, next.id, old.id);
     return { ...old, superseded_at: now, superseded_by: next.id };
+  }
+
+  /**
+   * ADR 0095 D5: undo markReplaced. Clears the mark on `id` only while it still
+   * says `expectedBy`; never guesses whether an edit or a consolidation set it.
+   * Both columns are outside the row hash, so the chain stays valid.
+   */
+  clearReplaced(id: string, expectedBy: string): MemoryEntry {
+    this.assertOpen();
+    const rows = new Map(this.list({ includeSuperseded: true, includeForgotten: true }).map((e) => [e.id, e]));
+    const old = rows.get(id);
+    const next = rows.get(expectedBy);
+    if (old === undefined || next === undefined) throw new ClearReplacedError('one of the two memories is not in this vault');
+    if (old.forgotten_at !== null) throw new ClearReplacedError('the memory was forgotten');
+    if (next.forgotten_at !== null) throw new ClearReplacedError('the memory that replaced it was forgotten');
+    if (old.superseded_by !== next.id) throw new ClearReplacedError('it was changed since');
+    // A combined memory or a restored copy: clearing its source would leave both live and break the restore.
+    if (next.metadata && Object.hasOwn(next.metadata, CONSOLIDATION_METADATA_KEY)) throw new ClearReplacedError('it was combined with other memories');
+    if (old.scope !== next.scope || isProjectPaperwork(old) || isProjectPaperwork(next)) throw new ClearReplacedError('it was not replaced this way');
+    this.db.prepare('UPDATE memories SET superseded_at = NULL, superseded_by = NULL WHERE id = ? AND superseded_by = ?').run(old.id, next.id);
+    return { ...old, superseded_at: null, superseded_by: null };
   }
 
   /**

@@ -9,7 +9,7 @@ export * from './project-notes.js';
 export * from './project-notes-crypto.js';
 export * from './project-export.js';
 export * from './project-import.js';
-export { tameOneLine } from './text-safe.js';
+export { flatLine, tameOneLine } from './text-safe.js';
 export * from './project-board.js';
 export {
   KDF_INTERACTIVE,
@@ -40,6 +40,7 @@ export {
   parseSyncGeneration,
   projectScopeInUse,
   isRestoredCopy,
+  ClearReplacedError,
   type VaultHeader,
   type VaultOptions,
 } from './vault.js';
