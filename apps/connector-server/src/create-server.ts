@@ -1098,10 +1098,11 @@ export function createConnectorServer(
   }));
 
   // POST /client/ack -> the desktop reports what it applied. Body:
-  //   { acked: [{ server_id, local_entry_id }], forgets: [entry_id] }
+  //   { acked: [{ server_id, local_entry_id }], forgets: [entry_id], replaces: [replace_id], keep_forgets: [entry_id] }
   // Per acked: remap the connector row's id -> the vault-local id and clear
   // pending (so the next push rehashes it as a normal row). Per forget: delete
-  // the queue row AND the shared_entries row.
+  // the queue row AND the shared_entries row. Per keep_forgets (ADR 0095 D4):
+  // delete only the queue row, so the memory shows to cloud apps again.
   app.post('/client/ack', express.json({ limit: CLIENT_BODY_LIMIT }), asyncRoute(async (req: Request, res: Response) => {
     const accountHash = bearerAccount(req);
     if (!accountHash) {
@@ -1118,17 +1119,23 @@ export function createConnectorServer(
       return;
     }
     await storage.upsertAccount(accountHash);
-    const body = req.body as { acked?: unknown; forgets?: unknown; replaces?: unknown };
+    const body = req.body as { acked?: unknown; forgets?: unknown; replaces?: unknown; keep_forgets?: unknown };
     const acked = Array.isArray(body.acked) ? body.acked : [];
     const forgets = Array.isArray(body.forgets) ? body.forgets : [];
     // ADR 0085 D4: queue entries a v3 device applied or found dead, by replace_id.
     const replaceAcks = Array.isArray(body.replaces) ? body.replaces.filter((r): r is string => typeof r === 'string') : [];
+    const keepForgets = Array.isArray(body.keep_forgets) ? body.keep_forgets.filter((r): r is string => typeof r === 'string') : [];
+    // One id cannot be both forgotten and kept: refuse rather than let the order decide.
+    if (keepForgets.some((id) => forgets.includes(id))) {
+      res.status(400).json({ error: 'The same id is in forgets and keep_forgets.' });
+      return;
+    }
     // Cap the batch: each item is a multi-statement Neon transaction run in a
     // sequential loop, so an unbounded array would amplify one authed request
     // into tens of thousands of serial round-trips (pool exhaustion / timeout).
-    if (acked.length + forgets.length + replaceAcks.length > MAX_SHARED_ENTRIES) {
+    if (acked.length + forgets.length + replaceAcks.length + keepForgets.length > MAX_SHARED_ENTRIES) {
       res.status(413).json({
-        error: `Too many items in one ack (${acked.length + forgets.length + replaceAcks.length}). The cap is ${MAX_SHARED_ENTRIES}.`,
+        error: `Too many items in one ack (${acked.length + forgets.length + replaceAcks.length + keepForgets.length}). The cap is ${MAX_SHARED_ENTRIES}.`,
       });
       return;
     }
@@ -1147,16 +1154,18 @@ export function createConnectorServer(
     }
     // After the renames above, which never touch replace_id.
     const replacedCount = await storage.dropReplaces(accountHash, replaceAcks);
+    const keptCount = await storage.keepForgets(accountHash, keepForgets);
     await storage.appendAudit({
       ts: new Date().toISOString(),
       accountHash,
       tool: 'client_ack',
-      params: { limit: ackedCount + forgottenCount + replacedCount },
+      params: { limit: ackedCount + forgottenCount + replacedCount + keptCount },
       ok: true,
-      resultCount: ackedCount + forgottenCount + replacedCount,
+      resultCount: ackedCount + forgottenCount + replacedCount + keptCount,
       resultIds: [],
     });
-    res.status(200).json({ ok: true, acked: ackedCount, forgotten: forgottenCount, replaces: replacedCount });
+    // `kept` is how a device knows this connector understands keep_forgets: an older one omits it.
+    res.status(200).json({ ok: true, acked: ackedCount, forgotten: forgottenCount, replaces: replacedCount, kept: keptCount });
   }));
 
   // POST /client/discard -> ADR 0063: delete exactly these pending rows by id
@@ -1355,8 +1364,9 @@ function putBodyHasNul(body: unknown): boolean {
 
 /** Any id in an ack body that storage could not hold. */
 function ackBodyHasNul(body: unknown): boolean {
-  const b = (body ?? {}) as { acked?: unknown; forgets?: unknown; replaces?: unknown };
+  const b = (body ?? {}) as { acked?: unknown; forgets?: unknown; replaces?: unknown; keep_forgets?: unknown };
   if (Array.isArray(b.forgets) && b.forgets.some(hasNul)) return true;
+  if (Array.isArray(b.keep_forgets) && b.keep_forgets.some(hasNul)) return true;
   if (Array.isArray(b.replaces) && b.replaces.some(hasNul)) return true;
   if (Array.isArray(b.acked)) {
     for (const raw of b.acked) {
