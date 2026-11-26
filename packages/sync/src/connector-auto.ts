@@ -2,7 +2,7 @@ import { thisDevicePhrase, loadDeviceSecret as coreLoadDeviceSecret, memzero, Va
 import { PAUSE_RETRY_MS, type AutoSyncClock, type AutoSyncStatus } from './auto.js';
 import { isAutoSyncVault, syncState } from './client.js';
 import { loadSyncConfig } from './config.js';
-import { ConnectorStalePushError, ConnectorTombstoneError, fetchEntitlement, getConnectorManifest } from './connector-client.js';
+import { ConnectorReencryptError, ConnectorStalePushError, ConnectorTombstoneError, fetchEntitlement, getConnectorManifest } from './connector-client.js';
 import { deriveSyncCreds } from './creds.js';
 import { connectorAutoPushEnabled, connectorLastPushedAt, connectorPushFingerprint, loadConnectorConfig } from './connector-config.js';
 import { connectorHoldsSnapshot, pushSnapshot, snapshotSharedScopes, vaultServerHash, type SharedSnapshot } from './connector-push.js';
@@ -73,7 +73,7 @@ export function connectorAutoPushMessage(reason: ConnectorAutoPushReason): strin
     case 'pull_refused': return 'A pull from your other devices is waiting for your review, so Cloud Connect waits too.';
     case 'tombstone_off': return 'Cloud Connect is not refusing pushes to unshared scopes, so automatic push is off. You can still push by hand.';
     case 'subscription': return 'Cloud Connect needs an active subscription, so automatic updates are paused.';
-    case 'reencrypt': return 'Cloud Connect cannot read this account\'s shared data. Run "northkeep share push" to re-encrypt it.';
+    case 'reencrypt': return "Cloud Connect can't unlock this account's shared data, so automatic updates are paused.";
     case 'tombstone': return 'Cloud Connect refused a scope you unshared elsewhere. Re-share it deliberately if you want it back.';
     case 'stale_push':
       return (
@@ -321,9 +321,9 @@ export class ConnectorAutoPush {
     } catch (err) {
       if (err instanceof ConnectorStalePushError) return this.pause('stale_push');
       if (err instanceof ConnectorTombstoneError) return this.pause('tombstone', err.message);
+      if (err instanceof ConnectorReencryptError) return this.pause('reencrypt', err.message);
       const message = err instanceof Error ? err.message : String(err);
       if (/HTTP 402/.test(message)) return this.pause('subscription');
-      if (/\(409\)/.test(message)) return this.pause('reencrypt');
       this.set('error', 'error', message);
       this.opts.onEvent?.({ type: 'error', message });
     } finally {

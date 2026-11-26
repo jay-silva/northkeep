@@ -250,6 +250,22 @@ describe('ADR 0063 D5: automatic push to Cloud Connect', () => {
     expect(pushedToConnector().map((p) => [p.scopes, p.vault])).toEqual([[['work'], undefined]]);
   });
 
+  it('an account Cloud Connect cannot unlock pauses automatic push instead of retrying', async () => {
+    await setup();
+    await conn.close();
+    conn = await startFakeConnector({ cannotUnlock: 'unavailable' });
+    setConnectorServer(conn.url());
+    write(homeA, 'change to send', 'work');
+    expect((await pushVault({ vaultPath: vaultPath(homeA), deviceSecret, masterKey: keyFor(homeA) })).ok).toBe(true);
+    const cap = new ConnectorAutoPush({ vaultPath: vaultPath(homeA), getMasterKey: () => keyFor(homeA), loadDeviceSecret: () => Buffer.from(deviceSecret), allowAnyVault: true });
+    stops.push(() => cap.stop());
+    const status = await cap.runOnce();
+    expect([status.phase, status.reason]).toEqual(['paused', 'reencrypt']);
+    const tried = conn.pushes().length;
+    expect((await cap.runOnce()).reason).toBe('reencrypt');
+    expect(conn.pushes()).toHaveLength(tried);
+  });
+
   it('forwards the sync server entitlement, which the hosted billing gate requires on every /client call', async () => {
     await setup();
     await conn.close();

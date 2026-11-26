@@ -93,6 +93,14 @@ export class ConnectorCryptoError extends Error {
   }
 }
 
+/** The stored account wrap that would not open, so a rebuild resets exactly that wrap (ADR 0074). */
+export class DeadAccountKeyError extends ConnectorCryptoError {
+  constructor(readonly wrap: string) {
+    super('Account key wrap does not open under any configured pepper');
+    this.name = 'DeadAccountKeyError';
+  }
+}
+
 let sodiumReady: Promise<typeof sodiumLib> | null = null;
 
 /** Lazy one-time wasm init; every exported function awaits this. */
