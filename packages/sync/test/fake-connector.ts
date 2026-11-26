@@ -42,6 +42,12 @@ export interface FakeConnector {
   cloudForget: (entryId: string) => void;
   /** ADR 0085 D4: hosted memory_remember with `replaces`: a pending row plus a queued replace. Returns both ids. */
   cloudReplace: (scope: string, content: string, oldId: string, type?: string) => { newId: string; replaceId: string };
+  /** Entry ids with a forget request still queued. */
+  forgetQueue: () => string[];
+  /** Called as each `/client/ack` arrives, before it is applied, so a test can see what else was true at that moment. */
+  onAck: (fn: ((body: Record<string, unknown>) => void) | null) => void;
+  /** Every `/client/ack` body received, in order. */
+  acks: () => Array<Record<string, unknown>>;
   /** The queued replaces, as the connector holds them. */
   replaceQueue: () => Array<{ replace_id: string; scope: string; old_id: string; new_id: string }>;
   vaultPair: () => { server: string; version: number } | null;
@@ -52,7 +58,9 @@ export interface FakeConnector {
   failNext: (path: string, status: number, body?: unknown) => void;
 }
 
-export async function startFakeConnector(options: { tombstoneEnforce?: boolean; requireEntitlement?: string } = {}): Promise<FakeConnector> {
+export async function startFakeConnector(options: { tombstoneEnforce?: boolean; requireEntitlement?: string; olderThanKeepForgets?: boolean } = {}): Promise<FakeConnector> {
+  const ackBodies: Array<Record<string, unknown>> = [];
+  let ackObserver: ((body: Record<string, unknown>) => void) | null = null;
   const rows = new Map<string, FakeRow>();
   const scopeSeq = new Map<string, number>();
   const forgetQueue: string[] = [];
@@ -143,9 +151,15 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
             if (r.new_id === a.server_id) r.new_id = a.local_entry_id;
           }
         }
+        ackBodies.push(body);
+        ackObserver?.(body);
+        let replaced = 0;
         for (const id of (body.replaces as string[]) ?? []) {
           const i = replaceQueue.findIndex((r) => r.replace_id === id);
-          if (i >= 0) replaceQueue.splice(i, 1);
+          if (i >= 0) {
+            replaceQueue.splice(i, 1);
+            replaced++;
+          }
         }
         for (const id of (body.forgets as string[]) ?? []) {
           const i = forgetQueue.indexOf(id);
@@ -156,7 +170,18 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
             bump(row.scope);
           }
         }
-        send(200, { ok: true });
+        // ADR 0095 D4: drop only the request. A connector from before it ignores the field and answers no `kept`.
+        let kept = 0;
+        if (options.olderThanKeepForgets !== true) {
+          for (const id of (body.keep_forgets as string[]) ?? []) {
+            const i = forgetQueue.indexOf(id);
+            if (i >= 0) {
+              forgetQueue.splice(i, 1);
+              kept++;
+            }
+          }
+        }
+        send(200, { ok: true, replaces: replaced, ...(options.olderThanKeepForgets === true ? {} : { kept }) });
         return;
       }
       if (req.method === 'POST' && url.pathname === '/client/discard') {
@@ -253,6 +278,11 @@ export async function startFakeConnector(options: { tombstoneEnforce?: boolean; 
       return { newId, replaceId };
     },
     replaceQueue: () => replaceQueue.map((r) => ({ ...r })),
+    forgetQueue: () => [...forgetQueue],
+    acks: () => ackBodies.map((b) => ({ ...b })),
+    onAck: (fn) => {
+      ackObserver = fn;
+    },
     vaultPair: () => pair,
     pushes: () => pushLog,
     requests: () => requestLog,

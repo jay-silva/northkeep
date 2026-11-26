@@ -157,8 +157,22 @@ export async function manualConnectorPush(opts: {
   reset?: boolean;
   withVault: <T>(fn: (vault: Vault) => T | Promise<T>) => Promise<T>;
   runVaultPush?: (push: () => Promise<PushResult>) => Promise<PushResult>;
+  /**
+   * ADR 0095 section 5: called once the vault is known to be on the sync
+   * server (pushed now, or already in sync), or at once with no sync server.
+   * A caller acknowledges held cloud replaces here. Its failure is ignored:
+   * an unacknowledged replace settles at the next sync.
+   */
+  onVaultLanded?: () => Promise<void>;
 }): Promise<PushSharedResult | null> {
   const vaultStamp = await manualVaultStamp(opts);
+  if (opts.onVaultLanded) {
+    try {
+      await opts.onVaultLanded();
+    } catch {
+      // Still queued on the connector; the next sync finds the mark and settles it.
+    }
+  }
   const snapshot = await opts.withVault((vault) => snapshotSharedScopes(vault));
   if (snapshot.scopes.length === 0) return null;
   return pushSnapshot({ ...opts, snapshot, ...(vaultStamp ? { vaultStamp } : {}) });

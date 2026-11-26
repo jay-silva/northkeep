@@ -532,6 +532,8 @@ export interface DownSyncResult {
   cloud_replaced: number;
   /** Replacements, forgets and cloud replaces that were not approved; they stay pending. */
   needs_review: { replacements: PlannedReplacement[]; forgets: PlannedForget[]; cloud_replaces: PlannedCloudReplace[] };
+  /** ADR 0095 section 5: replace acks not sent yet (applied or settled); empty unless `holdReplaceAcks` was set. */
+  held_replace_acks: string[];
 }
 
 /**
@@ -938,7 +940,7 @@ function firstLine(text: string): string {
   return line.length > 120 ? `${line.slice(0, 117)}...` : line;
 }
 
-async function postJson(opts: { server: string; deviceSecret: Buffer; entitlement?: string }, route: string, body: unknown, op: string): Promise<void> {
+async function postJson(opts: { server: string; deviceSecret: Buffer; entitlement?: string }, route: string, body: unknown, op: string): Promise<Record<string, unknown>> {
   const res = await fetch(`${normalizeServer(opts.server)}${route}`, {
     method: 'POST',
     headers: { ...authHeaders(opts.deviceSecret, opts.entitlement), 'content-type': 'application/json' },
@@ -947,6 +949,12 @@ async function postJson(opts: { server: string; deviceSecret: Buffer; entitlemen
     signal: timeoutSignal(TIMEOUT_MS),
   });
   if (!res.ok) throw httpError(res.status, op);
+  try {
+    const reply: unknown = await res.json();
+    return reply !== null && typeof reply === 'object' ? (reply as Record<string, unknown>) : {};
+  } catch {
+    return {};
+  }
 }
 
 /** Delete exactly these pending rows by id (ADR 0063 `/client/discard`). */
@@ -971,10 +979,103 @@ export async function applyDownSync(opts: {
   approve?: { server_ids?: string[]; forget_ids?: string[]; replace_ids?: string[] };
   /** The phone (ADR 0063 D1): additions only, never a replace, a forget or a forget ack; it never fetches the replace queue. */
   additiveOnly?: boolean;
+  /**
+   * ADR 0095 section 5: with a vault sync server, a replace is acknowledged
+   * only after the vault push carrying its mark has landed. The ids come back
+   * in `held_replace_acks` for the caller to send with ackCloudReplaces.
+   */
+  holdReplaceAcks?: boolean;
 }): Promise<DownSyncResult> {
   const clientLabel = new URL(normalizeServer(opts.server)).hostname;
   const pending = await fetchPending({ ...opts, replaces: opts.additiveOnly !== true });
-  const plan = planDownSync({ vault: opts.vault, pending, additiveOnly: opts.additiveOnly === true });
+  const applied = applyPendingToVault({ vault: opts.vault, pending, clientLabel, approve: opts.approve, additiveOnly: opts.additiveOnly });
+  await discardPending({ ...opts, server_ids: applied.discards });
+  const replaces = opts.holdReplaceAcks === true ? [] : applied.replaces;
+  if (applied.acked.length > 0 || applied.forgets.length > 0 || replaces.length > 0) {
+    await postJson(opts, '/client/ack', { acked: applied.acked, forgets: applied.forgets, ...(replaces.length > 0 ? { replaces } : {}) }, 'ack');
+  }
+  return { ...applied.result, held_replace_acks: opts.holdReplaceAcks === true ? applied.replaces : [] };
+}
+
+/** One acknowledgement, for a caller that applied to the vault itself (ADR 0095): rows added, and requests settled. */
+export async function ackPending(opts: {
+  server: string;
+  deviceSecret: Buffer;
+  entitlement?: string;
+  acked?: Array<{ server_id: string; local_entry_id: string }>;
+  forgets?: string[];
+  replaces?: string[];
+}): Promise<void> {
+  const acked = opts.acked ?? [];
+  const forgets = opts.forgets ?? [];
+  const replaces = opts.replaces ?? [];
+  if (acked.length === 0 && forgets.length === 0 && replaces.length === 0) return;
+  await postJson(opts, '/client/ack', { acked, forgets, ...(replaces.length > 0 ? { replaces } : {}) }, 'ack');
+}
+
+/** Send replace acknowledgements applyDownSync held back, once the vault push has landed. Returns how many the connector dropped. */
+export async function ackCloudReplaces(opts: { server: string; deviceSecret: Buffer; entitlement?: string; replace_ids: string[] }): Promise<number> {
+  if (opts.replace_ids.length === 0) return 0;
+  const reply = await postJson(opts, '/client/ack', { acked: [], forgets: [], replaces: opts.replace_ids }, 'ack');
+  return typeof reply.replaces === 'number' ? reply.replaces : 0;
+}
+
+/** The connector is older than ADR 0095 and ignored `keep_forgets`: nothing changed. */
+export class OlderConnectorError extends Error {
+  constructor() {
+    super("NorthKeep's server could not record that yet. Nothing changed; try again later.");
+    this.name = 'OlderConnectorError';
+  }
+}
+
+/**
+ * ADR 0095 D4, "No": drop one request from the connector's queue. The vault is
+ * untouched. `settled` is false when another device already answered it.
+ */
+export async function declineCloudRequest(opts: {
+  server: string;
+  deviceSecret: Buffer;
+  entitlement?: string;
+  request: { kind: 'replace'; replace_id: string } | { kind: 'forget'; entry_id: string };
+}): Promise<{ settled: boolean }> {
+  if (opts.request.kind === 'replace') {
+    const reply = await postJson(opts, '/client/ack', { acked: [], forgets: [], replaces: [opts.request.replace_id] }, 'ack');
+    return { settled: reply.replaces === 1 };
+  }
+  const reply = await postJson(opts, '/client/ack', { acked: [], forgets: [], keep_forgets: [opts.request.entry_id] }, 'ack');
+  if (typeof reply.kept !== 'number') throw new OlderConnectorError();
+  return { settled: reply.kept === 1 };
+}
+
+/** What one apply did to the vault, and what the connector still has to be told. */
+export interface AppliedPending {
+  result: Omit<DownSyncResult, 'held_replace_acks'>;
+  /** Stale or legacy rows to delete by id. */
+  discards: string[];
+  acked: Array<{ server_id: string; local_entry_id: string }>;
+  /** Forgets applied here or already settled. */
+  forgets: string[];
+  /** Forgets applied to the vault in this run (a subset of `forgets`). */
+  applied_forgets: string[];
+  /** Replaces applied here or settled, by replace_id. */
+  replaces: string[];
+  /** Replaces applied to the vault in this run, with the vault ids marked. */
+  applied_replaces: Array<{ replace_id: string; old_id: string; new_id: string }>;
+}
+
+/**
+ * The vault half of applyDownSync: plan against `pending`, apply, and save.
+ * No network. The caller holds the vault and tells the connector afterwards.
+ */
+export function applyPendingToVault(opts: {
+  vault: Vault;
+  pending: PendingSnapshot;
+  clientLabel: string;
+  approve?: { server_ids?: string[]; forget_ids?: string[]; replace_ids?: string[] };
+  additiveOnly?: boolean;
+}): AppliedPending {
+  const clientLabel = opts.clientLabel;
+  const plan = planDownSync({ vault: opts.vault, pending: opts.pending, additiveOnly: opts.additiveOnly === true });
   const approvedRows = new Set(opts.additiveOnly ? [] : (opts.approve?.server_ids ?? []));
   const approvedForgets = new Set(opts.additiveOnly ? [] : (opts.approve?.forget_ids ?? []));
   const approvedReplaces = new Set(opts.additiveOnly ? [] : (opts.approve?.replace_ids ?? []));
@@ -1046,6 +1147,7 @@ export async function applyDownSync(opts: {
   }
 
   const ackedForgets = [...plan.settled_forgets];
+  const appliedForgets: string[] = [];
   const unapprovedForgets: PlannedForget[] = [];
   for (const f of plan.forgets) {
     if (!approvedForgets.has(f.entry_id)) {
@@ -1055,12 +1157,14 @@ export async function applyDownSync(opts: {
     // The user approved this forget in the review; cloud forgets still apply until K4 (ADR 0065 Decision 3).
     opts.vault.forget(f.entry_id, { actor: 'owner' });
     ackedForgets.push(f.entry_id);
+    appliedForgets.push(f.entry_id);
     forgotten++;
     wrote = true;
   }
 
   // ADR 0085 D4/D5: after the additions, so a replace can name a memory this sync just added, and after forgets.
   const ackedReplaces = [...plan.settled_replaces];
+  const appliedReplaces: Array<{ replace_id: string; old_id: string; new_id: string }> = [];
   const unapprovedReplaces: PlannedCloudReplace[] = [];
   const localIds = new Map(acked.map((a) => [a.server_id, a.local_entry_id]));
   const addedIds = new Set(plan.additions.map((a) => a.server_id));
@@ -1088,34 +1192,33 @@ export async function applyDownSync(opts: {
       continue;
     }
     ackedReplaces.push(r.replace_id);
+    appliedReplaces.push({ replace_id: r.replace_id, old_id: oldId, new_id: newId });
     cloudReplaced++;
     wrote = true;
   }
 
   if (wrote) opts.vault.save();
-  await discardPending({ ...opts, server_ids: plan.discards.map((d) => d.server_id) });
-  if (acked.length > 0 || ackedForgets.length > 0 || ackedReplaces.length > 0) {
-    await postJson(
-      opts,
-      '/client/ack',
-      { acked, forgets: ackedForgets, ...(ackedReplaces.length > 0 ? { replaces: ackedReplaces } : {}) },
-      'ack',
-    );
-  }
-
   return {
-    added,
-    replaced,
-    forgotten,
-    deduped: plan.dedupes.length,
-    discarded: plan.discards.length,
-    held: plan.held,
-    held_scopes: plan.held_scopes,
-    skipped: plan.skipped,
-    deferred: plan.deferred,
-    conflicts,
-    cloud_replaced: cloudReplaced,
-    needs_review: { replacements: unapprovedReplacements, forgets: unapprovedForgets, cloud_replaces: unapprovedReplaces },
+    result: {
+      added,
+      replaced,
+      forgotten,
+      deduped: plan.dedupes.length,
+      discarded: plan.discards.length,
+      held: plan.held,
+      held_scopes: plan.held_scopes,
+      skipped: plan.skipped,
+      deferred: plan.deferred,
+      conflicts,
+      cloud_replaced: cloudReplaced,
+      needs_review: { replacements: unapprovedReplacements, forgets: unapprovedForgets, cloud_replaces: unapprovedReplaces },
+    },
+    discards: plan.discards.map((d) => d.server_id),
+    acked,
+    forgets: ackedForgets,
+    applied_forgets: appliedForgets,
+    replaces: ackedReplaces,
+    applied_replaces: appliedReplaces,
   };
 }
 

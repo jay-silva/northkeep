@@ -45,7 +45,9 @@ import {
   // secret inside them and is never returned to the page.
   foldSidecarScopesIntoVault,
   connectorPaired,
+  ackCloudReplaces,
   applyDownSync,
+  isAutoSyncVault,
   assertDeviceCanPush,
   cloudReplaceLine,
   ConnectorPushBlockedError,
@@ -1208,6 +1210,9 @@ async function dispatch(
       ...conn,
       vault,
       approve: { server_ids: approve.server_ids!, forget_ids: approve.forget_ids!, replace_ids: approve.replace_ids! },
+      // ADR 0095 section 5: when this vault syncs through a server, a replace is acknowledged only after the vault push
+      // below lands. Any other vault is never pushed from here, so holding would never be released.
+      holdReplaceAcks: loadSyncConfig() !== null && isAutoSyncVault(session.vaultPath),
     }));
     const after = await session.withVault((vault) => vault.sharedScopes());
     // The apply is saved either way; a failed push must not hide what it did.
@@ -1215,7 +1220,9 @@ async function dispatch(
     let pushError: string | null = null;
     let pushOversize: OversizeSharedEntry | null = null;
     try {
-      push = await manualPush(session, config.server, deviceSecret, entitlement);
+      push = await manualPush(session, config.server, deviceSecret, entitlement, false, async () => {
+        await ackCloudReplaces({ ...conn, replace_ids: down.held_replace_acks });
+      });
     } catch (err) {
       pushError = err instanceof Error ? err.message : String(err);
       if (err instanceof ConnectorOversizeError) pushOversize = err.entries[0] ?? null;
@@ -2802,7 +2809,14 @@ function describePlanForPage(plan: DownSyncPlan, times: Map<string, string>): Re
  * new write), and a Mac that is behind or diverged is refused. A manual push
  * is a user action, so it lifts a paused automatic push.
  */
-async function manualPush(session: UiSession, server: string, deviceSecret: Buffer, entitlement: string | undefined, reset = false): Promise<PushSharedResult | null> {
+async function manualPush(
+  session: UiSession,
+  server: string,
+  deviceSecret: Buffer,
+  entitlement: string | undefined,
+  reset = false,
+  onVaultLanded?: () => Promise<void>,
+): Promise<PushSharedResult | null> {
   const masterKey = Buffer.from(session.keyHex(), 'hex');
   try {
     const result = await manualConnectorPush({
@@ -2814,6 +2828,7 @@ async function manualPush(session: UiSession, server: string, deviceSecret: Buff
       runVaultPush: (push) => session.autoSync.runManual(push),
       ...(entitlement ? { entitlement } : {}),
       ...(reset ? { reset: true } : {}),
+      ...(onVaultLanded ? { onVaultLanded } : {}),
     });
     session.connectorAutoPush.resume();
     return result;

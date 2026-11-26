@@ -18,6 +18,20 @@ const UNPAIRED_SURROGATE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBF
  * eye still reads as a break. Caps in UTF-16 units, the unit core's writer
  * validation counts, without splitting a pair.
  */
+/**
+ * ADR 0095 section 3: the whole of a text an AI app may have written, as one
+ * line. Whitespace becomes a space BEFORE the unsafe characters go, so a line
+ * break never joins two words, which tameOneLine's order allows.
+ */
+export function flatLine(input: string): string {
+  return input
+    .replace(/[\s\u0085\u2028\u2029]+/gu, ' ')
+    .replace(UNSAFE_CODE_POINTS, '')
+    .replace(UNPAIRED_SURROGATE, '')
+    .replace(/ {2,}/g, ' ')
+    .trim();
+}
+
 export function tameOneLine(input: string, max: number): string {
   const stripped = input
     .replace(UNSAFE_CODE_POINTS, '')
