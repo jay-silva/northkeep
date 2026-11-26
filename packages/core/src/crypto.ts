@@ -59,6 +59,14 @@ export function kdfParamsInBounds(kdf: KdfParams): boolean {
   );
 }
 
+/** ADR 0097 D3: the vault file is not the one this handle opened or last saved, so saving would write over someone else's changes. */
+export class VaultChangedError extends Error {
+  constructor() {
+    super('The vault changed while this was running. Nothing was saved. Try again.');
+    this.name = 'VaultChangedError';
+  }
+}
+
 /** Thrown when decryption fails: wrong passphrase, wrong device secret, or a tampered/corrupted file. */
 export class VaultAuthError extends Error {
   constructor(message = 'Could not unlock vault: wrong passphrase, wrong device secret, or corrupted file.') {

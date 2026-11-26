@@ -21,4 +21,6 @@ export interface VaultStorage {
    * (and fsync the directory) so a crash never leaves a torn vault.
    */
   writeAtomic(path: string, bytes: Uint8Array): void;
+  /** Optional: the first `length` bytes only, so a save can check the header without reading the whole vault. */
+  readHead?(path: string, length: number): Buffer;
 }

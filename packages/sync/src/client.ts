@@ -359,7 +359,7 @@ async function withSyncLock<T>(vaultPath: string, fn: () => Promise<T>, waitMs =
         acquired = true;
         return fn();
       },
-      { timeoutMs: waitMs, staleMs: SYNC_LOCK_STALE_MS },
+      { timeoutMs: waitMs, staleMs: SYNC_LOCK_STALE_MS, takeOverLiveOwner: true },
     );
   } catch (err) {
     if (!acquired && err instanceof FileLockTimeoutError) throw new SyncBusyError();

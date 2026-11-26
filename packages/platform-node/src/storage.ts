@@ -17,6 +17,16 @@ export function nodeVaultStorage(): VaultStorage {
       return fs.readFileSync(filePath);
     },
 
+    readHead(filePath: string, length: number): Buffer {
+      const fd = fs.openSync(filePath, 'r');
+      try {
+        const head = Buffer.alloc(length);
+        return head.subarray(0, fs.readSync(fd, head, 0, length, 0));
+      } finally {
+        fs.closeSync(fd);
+      }
+    },
+
     writeAtomic(filePath: string, bytes: Uint8Array): void {
       // Write THROUGH a symlink, never over it. The old code renamed the temp
       // file onto the given path, which replaced the link with a regular file

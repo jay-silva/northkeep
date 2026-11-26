@@ -237,6 +237,9 @@ describe('manual pushes (D5) and the pull report (D6)', () => {
     expect(log).toEqual(['↑ synced (version 1)', '↑ Cloud Connect updated']);
     expect(fake.pushes().map((p) => p.vault?.version)).toEqual([1]);
 
+    // The push stamped and saved the file through its own handle (ADR 0097 D3): open it again.
+    vault.close();
+    vault = Vault.openWithKey(vaultPath(), key());
     vault.remember({ content: 'private', type: 'semantic', scope: 'private' });
     vault.save();
     log.length = 0;
@@ -265,6 +268,9 @@ describe('manual pushes (D5) and the pull report (D6)', () => {
       process.env.NORTHKEEP_HOME = home;
       fs.rmSync(other, { recursive: true, force: true });
     }
+    // The first push stamped and saved the file through its own handle (ADR 0097 D3): open it again.
+    vault.close();
+    vault = Vault.openWithKey(vaultPath(), key());
     vault.remember({ content: 'only on this Mac', type: 'semantic' });
     vault.save();
     vault.close();
