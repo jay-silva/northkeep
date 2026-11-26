@@ -33,6 +33,7 @@ export const REVIEW_CHANGED = 'This changed since you looked, so nothing changed
 export const REVIEW_SETTLED = 'Already decided on another device.';
 export const REVIEW_SHOW_ALL_FIRST = 'Open "Show all" to read the whole text first.';
 export const REVIEW_OLDER_CONNECTOR = "NorthKeep's server could not record that yet. Nothing changed; try again later.";
+export const REVIEW_SAVED_NOT_LISTED = 'Saved on this phone, but this phone could not list it under Accepted lately, so it cannot be undone here.';
 export const REVIEW_SAVED_NOT_SENT = 'Saved on this phone. Your AI apps will see it after your devices next sync.';
 export const reviewUndoRefused = (reason: string): string => `This can't be undone here: ${reason}.`;
 
@@ -137,9 +138,16 @@ export type ReviewResult =
   | { kind: 'changed'; message: string; item?: NeedsYesItem };
 
 /** Steps 6 and 7 of ADR 0095 section 4: push the vault, then tell Cloud Connect only when that was clean. */
-async function pushAfterDecision(ports: ReviewPorts, hasSyncServer: boolean, later: { forgets: string[]; replaces: string[] } | null): Promise<string | undefined> {
-  const pushed = await ports.pushVault();
+async function pushAfterDecision(
+  ports: ReviewPorts,
+  hasSyncServer: boolean,
+  later: { forgets: string[]; replaces: string[] } | null,
+  tellCloud = true,
+): Promise<string | undefined> {
   try {
+    // The vault is already saved, so its push runs whatever failed before it.
+    const pushed = await ports.pushVault();
+    if (!tellCloud) return REVIEW_SAVED_NOT_SENT;
     if (hasSyncServer) {
       if (pushed.kind !== 'clean') return REVIEW_SAVED_NOT_SENT;
       await ports.pushCloud(pushed.version);
@@ -166,17 +174,31 @@ export async function yesReview(ports: ReviewPorts, item: Pick<NeedsYesItem, 'id
   if (out.status === 'gone') {
     // The run may still have saved additions: acknowledge those, and push the vault that now holds them.
     if (out.applied !== undefined && out.applied.acked.length > 0) {
-      await ports.ack({ acked: out.applied.acked, forgets: [], replaces: [] });
-      await ports.pushVault();
+      // An acknowledgement that fails only makes the connector offer those additions again.
+      await ports.ack({ acked: out.applied.acked, forgets: [], replaces: [] }).catch(() => undefined);
+      await ports.pushVault().catch(() => undefined);
     }
     return { kind: 'refused', message: REVIEW_SETTLED };
   }
-  const state = await ports.loadState();
-  await ports.saveState({ ...state, records: [out.record, ...state.records.filter((r) => r.id !== out.record.id)] });
+  // From here the vault holds the decision. Nothing below may throw past the vault push,
+  // or the screen would report a failure for a change that is saved.
+  const listed = await keepRecords(ports, (records) => [out.record, ...records.filter((r) => r.id !== out.record.id)]);
   const acks = splitYesAcks(out.applied, hasSyncServer);
-  await ports.ack(acks.now);
-  const note = await pushAfterDecision(ports, hasSyncServer, acks.later);
+  const acked = await ports.ack(acks.now).then(() => true, () => false);
+  const note = await pushAfterDecision(ports, hasSyncServer, acks.later, acked);
+  if (!listed) return { kind: 'done', note: REVIEW_SAVED_NOT_LISTED };
   return note === undefined ? { kind: 'done' } : { kind: 'done', note };
+}
+
+/** Rewrites the Yes records on the state as it is now, so a refresh that ran meanwhile keeps its Not now and ids. */
+async function keepRecords(ports: ReviewPorts, change: (records: YesRecord[]) => YesRecord[]): Promise<boolean> {
+  try {
+    const state = await ports.loadState();
+    await ports.saveState({ ...state, records: change(state.records) });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /** One Undo of a Yes given on this phone, as careful as the Yes. */
@@ -190,8 +212,9 @@ export async function undoReview(ports: ReviewPorts, line: Pick<AcceptedLine, 'i
   if (out.status === 'changed') return { kind: 'changed', message: REVIEW_CHANGED };
   if (out.status === 'refused') return { kind: 'refused', message: reviewUndoRefused(out.reason) };
   const undoneAt = ports.now().toISOString();
-  await ports.saveState({ ...state, records: state.records.map((r) => (r === record ? { ...r, undone_at: undoneAt } : r)) });
+  const listed = await keepRecords(ports, (records) => records.map((r) => (r.id === record.id && r.undone_at === undefined ? { ...r, undone_at: undoneAt } : r)));
   const note = await pushAfterDecision(ports, sync === 'in-sync', null);
+  if (!listed) return { kind: 'done', note: REVIEW_SAVED_NOT_LISTED };
   return note === undefined ? { kind: 'done' } : { kind: 'done', note };
 }
 

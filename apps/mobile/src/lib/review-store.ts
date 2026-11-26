@@ -8,7 +8,7 @@ import { EMPTY_REVIEW_STATE, parseReviewState, type ReviewState } from './review
  * documents directory is enough. Not in SecureStore: the list grows, and a
  * keychain item is the wrong place for it.
  *
- * NEEDS ON-DEVICE VALIDATION: the File API is not run from this environment.
+ * Run in the iOS simulator (2026-11-26): the file survives an app reload. Not yet run on an iPhone.
  */
 
 const REVIEW_STATE_FILENAME = 'review-state.json';

@@ -1498,6 +1498,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       loadState: loadReviewState,
       saveState: saveReviewState,
       syncCheck: async () => {
+        if (isDemoRef.current) throw new Error('The demo vault never connects to the cloud.');
         const syncServerUrl = await loadSyncServerUrl();
         if (!syncServerUrl) return 'no-server';
         const { secret } = await connectorContext();
@@ -1522,17 +1523,26 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         memzero(secret);
         const out = await vaultGate.run(async () => {
           const vault = openVault();
+          const wasDirty = await loadLocalDirty();
           await saveLocalDirty(true); // under the gate, before the save (see addMemory)
-          return applyYesToVault({ vault, pending, clientLabel: new URL(server).hostname, itemId, shownHash });
+          const res = applyYesToVault({ vault, pending, clientLabel: new URL(server).hostname, itemId, shownHash });
+          // Nothing was saved: put the flag back, or the phone would look ahead of the server.
+          const savedNothing = res.status === 'gone' && (res.applied === undefined || (res.applied.acked.length === 0 && res.applied.applied_forgets.length === 0));
+          if (res.status === 'changed' || savedNothing) await saveLocalDirty(wasDirty);
+          return res;
         });
         reloadEntries();
         return out;
       },
       applyUndo: async (record, shownHash) => {
+        if (isDemoRef.current) throw new Error('The demo vault never connects to the cloud.');
         const out = await vaultGate.run(async () => {
           const vault = openVault();
+          const wasDirty = await loadLocalDirty();
           await saveLocalDirty(true);
-          return applyUndoToVault({ vault, record, shownHash });
+          const res = applyUndoToVault({ vault, record, shownHash });
+          if (res.status !== 'undone') await saveLocalDirty(wasDirty);
+          return res;
         });
         reloadEntries();
         return out;
@@ -1628,6 +1638,8 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     closeSession();
     await wipeAllSecrets();
     await clearReviewState();
+    setReviewCount(0);
+    await setAppBadge(0);
     deleteIfExists(vaultPath());
     // Every copy beside the vault too: the wipe alert promises the vault copy
     // is gone, and the auto-pull and pre-import copies are vault ciphertext.

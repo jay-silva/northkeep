@@ -5,6 +5,7 @@ import {
   REVIEW_CHANGED,
   REVIEW_NOT_IN_SYNC,
   REVIEW_OLDER_CONNECTOR,
+  REVIEW_SAVED_NOT_LISTED,
   REVIEW_SAVED_NOT_SENT,
   REVIEW_SETTLED,
   REVIEW_SHOW_ALL_FIRST,
@@ -267,5 +268,41 @@ describe('Not now, the list and the count', () => {
       lastItemIds: ['a'],
     });
     expect(nextMidnight(new Date(2026, 10, 26, 15, 0, 0)).getTime()).toBe(new Date(2026, 10, 27, 0, 0, 0).getTime());
+  });
+});
+
+describe('after the vault is saved', () => {
+  it('still pushes the vault, and reports the yes as saved, when the phone cannot write its list', async () => {
+    const w = world();
+    w.ports.saveState = async () => {
+      throw new Error('disk full');
+    };
+    const out = await yesReview(w.ports, item('replace:r1'), true);
+    expect(out).toEqual({ kind: 'done', note: REVIEW_SAVED_NOT_LISTED });
+    expect(w.calls).toContain('pushVault');
+  });
+
+  it('still pushes the vault, and tells Cloud Connect nothing, when the acknowledgement fails', async () => {
+    const w = world({ sync: 'no-server', push: { kind: 'no-server' } });
+    w.ports.ack = async () => {
+      throw new Error('Cloud Connect is unreachable');
+    };
+    const out = await yesReview(w.ports, item('replace:r1'), true);
+    expect(out).toEqual({ kind: 'done', note: REVIEW_SAVED_NOT_SENT });
+    expect(w.calls.filter((c) => c === 'pushVault' || c.startsWith('pushCloud'))).toEqual(['pushVault']);
+    expect(w.state().records.map((r) => r.id)).toEqual(['replace:r1']);
+  });
+
+  it('keeps a Not now that was saved while an undo ran', async () => {
+    const w = world({ state: { records: [replaceRecord], notNow: {}, lastItemIds: [] } });
+    const undo = w.ports.applyUndo;
+    w.ports.applyUndo = async (record, hash) => {
+      await w.ports.saveState({ ...w.state(), notNow: { 'forget:m2': '2026-11-27T05:00:00.000Z' }, lastItemIds: ['forget:m2'] });
+      return undo(record, hash);
+    };
+    expect(await undoReview(w.ports, { id: 'replace:r1', hash: 'line replace:r1' })).toEqual({ kind: 'done' });
+    expect(w.state().notNow).toEqual({ 'forget:m2': '2026-11-27T05:00:00.000Z' });
+    expect(w.state().lastItemIds).toEqual(['forget:m2']);
+    expect(w.state().records[0]?.undone_at).toBeDefined();
   });
 });
