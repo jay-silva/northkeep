@@ -5,6 +5,8 @@ import { router, usePathname } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, type } from './ui';
 import { MAX_SCALE_TABBAR } from './lib/type-scale';
+import { tabBadge, tabLabel } from './lib/review-view';
+import { useVaultSession } from './lib/vault-session';
 
 type Tab = {
   route: string;
@@ -20,6 +22,8 @@ type Tab = {
 const TABS: Tab[] = [
   { route: '/projects', label: 'Projects', icon: 'folder-open-outline', activeIcon: 'folder-open' },
   { route: '/memories', label: 'Memories', icon: 'albums-outline', activeIcon: 'albums' },
+  // ADR 0095: what needs a yes, with a red count.
+  { route: '/review', label: 'Review', icon: 'checkmark-circle-outline', activeIcon: 'checkmark-circle' },
   { route: '/settings', label: 'Settings', icon: 'settings-outline', activeIcon: 'settings' },
 ];
 
@@ -38,6 +42,7 @@ function isActive(pathname: string, route: string): boolean {
 export function BottomNav() {
   const pathname = usePathname();
   const insets = useSafeAreaInsets();
+  const { reviewCount } = useVaultSession();
   const onMain = TABS.some((t) => isActive(pathname, t.route));
   if (!onMain) return null;
   return (
@@ -45,6 +50,7 @@ export function BottomNav() {
       {TABS.map((t) => {
         const active = isActive(pathname, t.route);
         const tint = active ? colors.accent : colors.muted;
+        const badge = t.route === '/review' ? tabBadge(reviewCount) : null;
         return (
           <Pressable
             key={t.route}
@@ -54,9 +60,16 @@ export function BottomNav() {
             }}
             accessibilityRole="button"
             accessibilityState={{ selected: active }}
-            accessibilityLabel={t.label}
+            accessibilityLabel={t.route === '/review' ? tabLabel(reviewCount) : t.label}
           >
-            <Ionicons name={active ? t.activeIcon : t.icon} size={23} color={tint} />
+            <View>
+              <Ionicons name={active ? t.activeIcon : t.icon} size={23} color={tint} />
+              {badge !== null ? (
+                <View style={styles.badge} accessibilityElementsHidden importantForAccessibility="no">
+                  <Text style={styles.badgeText} maxFontSizeMultiplier={MAX_SCALE_TABBAR}>{badge}</Text>
+                </View>
+              ) : null}
+            </View>
             <Text style={[styles.label, { color: tint }]} maxFontSizeMultiplier={MAX_SCALE_TABBAR}>
               {t.label}
             </Text>
@@ -77,4 +90,18 @@ const styles = StyleSheet.create({
   },
   tab: { flex: 1, alignItems: 'center', gap: 3, minHeight: 44 },
   label: { ...type.caption, fontWeight: '600' },
+  badge: {
+    position: 'absolute',
+    top: -5,
+    left: 13,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 5,
+    borderRadius: 9,
+    backgroundColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  // White on the danger red is 4.6:1; the 12pt floor is the type scale's minimum.
+  badgeText: { fontSize: 12, lineHeight: 16, fontWeight: '700', color: '#ffffff' },
 });

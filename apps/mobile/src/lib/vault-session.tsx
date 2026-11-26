@@ -22,16 +22,38 @@ import {
   type ScoredEntry,
 } from '@northkeep/core';
 import {
+  ackPending,
   applyDownSync,
+  applyUndoToVault,
+  applyYesToVault,
+  declineCloudRequest,
   deriveSyncCreds,
   fetchEntitlement,
+  fetchPending,
+  listAccepted,
+  listNeedsYes,
   pushSharedScopes,
   startPairing,
   unshareScope,
+  type AcceptedLine,
   type DownSyncResult,
+  type NeedsYesItem,
   type VaultStamp,
 } from '@northkeep/sync';
-import { DEFAULT_CONNECTOR_SERVER_URL, allowlistHashFromToken, phoneVaultStamp } from './connect-flow';
+import { setAppBadge } from './app-badge';
+import { DEFAULT_CONNECTOR_SERVER_URL, allowlistHashFromToken, phoneVaultStamp, vaultServerHashForPhone } from './connect-flow';
+import {
+  noReview,
+  notNowReview,
+  refreshReview,
+  reviewCount as countReview,
+  undoReview,
+  yesReview,
+  type ReviewPorts,
+  type ReviewResult,
+  type ReviewView,
+} from './review-flow';
+import { clearReviewState, loadReviewState, saveReviewState } from './review-store';
 import { DEMO_PASSPHRASE, seedDemoVault } from './demo-vault';
 import { deleteIfExists, demoVaultPath, recoverVaultFileIfMissing, vaultPath, vaultSidecarPaths } from './paths';
 import {
@@ -41,6 +63,7 @@ import {
   clearLegacyConnectorSharedScopes,
   loadConnectorServerUrl,
   loadDeviceSecretHex,
+  loadConnectorPairedAt,
   loadLegacyConnectorSharedScopes,
   loadLastSyncSha,
   loadLastSyncVersion,
@@ -255,6 +278,24 @@ export interface VaultSession {
   connectorDownSync(): Promise<DownSyncResult>;
   /** POST /pair/start: the 8-char single-use code for the AI app's consent page. */
   connectorStartPairing(): Promise<string>;
+  /**
+   * ADR 0095: how many things need a yes and are not hidden by "Not now", as of
+   * the last read. Drives the Review tab's red count and the app icon.
+   */
+  reviewCount: number;
+  /**
+   * ADR 0095, the Review tab. `refresh` reads Cloud Connect's queues and the
+   * vault and writes to neither. `yes` and `undo` change the vault only when
+   * this phone is in sync and the item is what was shown. `no` and `notNow`
+   * never touch the vault.
+   */
+  review: {
+    refresh(): Promise<ReviewView>;
+    yes(item: NeedsYesItem, opened: boolean): Promise<ReviewResult>;
+    undo(line: AcceptedLine): Promise<ReviewResult>;
+    no(item: NeedsYesItem): Promise<ReviewResult>;
+    notNow(item: NeedsYesItem): Promise<void>;
+  };
 }
 
 const SessionContext = createContext<VaultSession | null>(null);
@@ -1433,6 +1474,137 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
     return result;
   }, [connectorContext, maybeConnectorEntitlement, reloadEntries, pushAfterSave]);
 
+  // ADR 0095: the Review tab. Every vault read and write below runs under the
+  // vault gate with the handle read inside it; every network call runs outside.
+  const [reviewCount, setReviewCount] = useState(0);
+  const reviewRefreshedAtRef = useRef(0);
+  const reviewPorts = useMemo((): ReviewPorts => {
+    const withConnector = async <T,>(fn: (conn: { server: string; deviceSecret: Buffer; entitlement?: string }) => Promise<T>): Promise<T> => {
+      const { secret, server } = await connectorContext();
+      try {
+        const entitlement = await maybeConnectorEntitlement(secret);
+        return await fn({ server, deviceSecret: secret, ...(entitlement ? { entitlement } : {}) });
+      } finally {
+        memzero(secret);
+      }
+    };
+    const openVault = (): Vault => {
+      const vault = vaultRef.current;
+      if (!vault) throw new Error('Unlock the vault first.');
+      return vault;
+    };
+    return {
+      now: () => new Date(),
+      loadState: loadReviewState,
+      saveState: saveReviewState,
+      syncCheck: async () => {
+        const syncServerUrl = await loadSyncServerUrl();
+        if (!syncServerUrl) return 'no-server';
+        const { secret } = await connectorContext();
+        try {
+          const status = await fetchRemoteStatus({ serverUrl: syncServerUrl, deviceSecretHex: secret.toString('hex') });
+          const localSha = await vaultGate.run(() => hashVaultFile(vaultPath()));
+          return status !== null && status.sha256 === localSha ? 'in-sync' : 'behind';
+        } finally {
+          memzero(secret);
+        }
+      },
+      fetchPending: () => withConnector((conn) => fetchPending(conn)),
+      list: (pending) => vaultGate.run(() => listNeedsYes({ vault: openVault(), pending })),
+      accepted: (records) => vaultGate.run(() => listAccepted({ vault: openVault(), records })),
+      applyYes: async (pending, itemId, shownHash) => {
+        const { secret, server } = await connectorContext();
+        memzero(secret);
+        const out = await vaultGate.run(async () => {
+          const vault = openVault();
+          await saveLocalDirty(true); // under the gate, before the save (see addMemory)
+          return applyYesToVault({ vault, pending, clientLabel: new URL(server).hostname, itemId, shownHash });
+        });
+        reloadEntries();
+        return out;
+      },
+      applyUndo: async (record, shownHash) => {
+        const out = await vaultGate.run(async () => {
+          const vault = openVault();
+          await saveLocalDirty(true);
+          return applyUndoToVault({ vault, record, shownHash });
+        });
+        reloadEntries();
+        return out;
+      },
+      ack: (body) => withConnector((conn) => ackPending({ ...conn, ...body })),
+      decline: (request) => withConnector((conn) => declineCloudRequest({ ...conn, request })),
+      pushVault: () =>
+        trackPush(async () => {
+          if (isDemoRef.current) return { kind: 'no-server' as const };
+          const secretHex = await loadDeviceSecretHex();
+          const serverUrl = await loadSyncServerUrl();
+          if (!secretHex || !serverUrl) return { kind: 'no-server' as const };
+          setSyncState((s) => reduceSync(s, { type: 'start' }));
+          try {
+            const event = await runPushSequence(serverUrl, secretHex);
+            setSyncState((s) => reduceSync(s, event));
+            if (event.type === 'synced') return { kind: 'clean' as const, version: event.version };
+            return event.type === 'conflict-recovered' ? { kind: 'recovered' as const } : { kind: 'failed' as const };
+          } catch (err) {
+            const friendly = classifySyncError(err);
+            setSyncState((s) => reduceSync(s, { type: 'error', message: friendly.message, kind: friendly.kind }));
+            return { kind: 'failed' as const };
+          }
+        }),
+      pushCloud: async (vaultVersion) => {
+        const scopes = await vaultGate.run(() => openVault().sharedScopes());
+        if (scopes.length === 0) return;
+        const syncServerUrl = await loadSyncServerUrl();
+        const stamp = vaultVersion !== null && syncServerUrl ? { server: vaultServerHashForPhone(syncServerUrl), version: vaultVersion } : undefined;
+        await connectorPushScopes(scopes, stamp);
+      },
+      setBadge: async (count) => {
+        setReviewCount(count);
+        await setAppBadge(count);
+      },
+    };
+  }, [connectorContext, maybeConnectorEntitlement, reloadEntries, trackPush, runPushSequence, connectorPushScopes]);
+
+  const review = useMemo(
+    () => ({
+      refresh: async (): Promise<ReviewView> => {
+        const view = await refreshReview(reviewPorts);
+        reviewRefreshedAtRef.current = Date.now();
+        return view;
+      },
+      yes: (item: NeedsYesItem, opened: boolean) => yesReview(reviewPorts, item, opened),
+      undo: (line: AcceptedLine) => undoReview(reviewPorts, line),
+      no: (item: NeedsYesItem) => noReview(reviewPorts, item),
+      notNow: (item: NeedsYesItem) => notNowReview(reviewPorts, item),
+    }),
+    [reviewPorts],
+  );
+
+  // On unlock: show the count this phone last saw at once, with no network. Then, on a
+  // paired phone, read Cloud Connect at most every 15 minutes (ADR 0095 D8, Jay: "C yes").
+  useEffect(() => {
+    if (status !== 'unlocked' || isDemo) {
+      if (status !== 'unlocked') setReviewCount(0);
+      return;
+    }
+    let active = true;
+    void (async () => {
+      try {
+        const kept = countReview(await loadReviewState(), new Date());
+        if (active) setReviewCount(kept);
+        if ((await loadConnectorPairedAt()) === null) return;
+        if (Date.now() - reviewRefreshedAtRef.current < 15 * 60 * 1000) return;
+        if (active) await review.refresh();
+      } catch {
+        // A read that fails leaves the last count; the Review tab says why when opened.
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [status, isDemo, review]);
+
   const connectorStartPairing = useCallback(async (): Promise<string> => {
     const { secret, server } = await connectorContext();
     try {
@@ -1450,6 +1622,7 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
   const signOutWipe = useCallback(async () => {
     closeSession();
     await wipeAllSecrets();
+    await clearReviewState();
     deleteIfExists(vaultPath());
     // Every copy beside the vault too: the wipe alert promises the vault copy
     // is gone, and the auto-pull and pre-import copies are vault ciphertext.
@@ -1509,6 +1682,8 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       connectorScopeStore,
       connectorDownSync,
       connectorStartPairing,
+      reviewCount,
+      review,
     }),
     [
       status,
@@ -1545,6 +1720,8 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       connectorScopeStore,
       connectorDownSync,
       connectorStartPairing,
+      reviewCount,
+      review,
     ],
   );
 
