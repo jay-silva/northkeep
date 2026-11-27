@@ -23,6 +23,8 @@ export function mobilePlatform(): Platform {
     storage: mobileVaultStorage(),
     // ADR 0097 D4: off on the phone until the save check is tested on a device.
     checkFileBeforeSave: false,
+    // ADR 0092: the Mac makes the 0.5 step; the phone only reads it.
+    makeSchemaSteps: false,
   };
 }
 

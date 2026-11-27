@@ -131,7 +131,7 @@ export function isOldAgentNote(
   row: { type: string; source: string; created_at: string; metadata?: Record<string, unknown> | null },
   now: number,
 ): boolean {
-  if (row.type !== 'episodic' || isConfirmed(row.metadata)) return false;
+  if (row.type !== 'episodic' || confirmationLevel(row.metadata) > 0) return false;
   if (!(row.source === 'mcp' || row.source.startsWith('mcp:') || row.source.startsWith('connector:'))) return false;
   return now - Date.parse(row.created_at) > OLD_NOTE_DAYS * 86_400_000;
 }
@@ -157,6 +157,16 @@ export const CONFIRMED_BOOST = 0.5;
 export function isConfirmed(metadata: Record<string, unknown> | null | undefined): boolean {
   const value = metadata?.[CONFIRMED_METADATA_KEY];
   return typeof value === 'object' && value !== null && (value as { by?: unknown }).by === 'user';
+}
+
+/**
+ * ADR 0092 section 4: 0 never checked, 1 the user said so in a conversation an
+ * app reported (`by: "chat"`), 2 the user confirmed it in NorthKeep.
+ */
+export function confirmationLevel(metadata: Record<string, unknown> | null | undefined): 0 | 1 | 2 {
+  if (isConfirmed(metadata)) return 2;
+  const value = metadata?.[CONFIRMED_METADATA_KEY];
+  return typeof value === 'object' && value !== null && (value as { by?: unknown }).by === 'chat' ? 1 : 0;
 }
 
 export function isMarkedArchive(metadata: Record<string, unknown> | null | undefined): boolean {
