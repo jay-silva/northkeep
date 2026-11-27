@@ -87,13 +87,33 @@ class ExpoSqliteDb implements SqliteDb {
     return undefined;
   }
 
+  private depth = 0;
+
+  /**
+   * Nests like better-sqlite3: inner calls use savepoints. expo's
+   * withTransactionSync issues a second BEGIN, whose ROLLBACK ends the outer
+   * transaction and hides the first error.
+   */
   transaction<T>(fn: () => T): () => T {
     return () => {
-      let result!: T;
-      this.native.withTransactionSync(() => {
-        result = fn();
-      });
-      return result;
+      const outer = this.depth === 0;
+      const name = `nk_sp_${this.depth}`;
+      this.native.execSync(outer ? 'BEGIN' : `SAVEPOINT ${name}`);
+      this.depth += 1;
+      try {
+        const result = fn();
+        this.native.execSync(outer ? 'COMMIT' : `RELEASE ${name}`);
+        return result;
+      } catch (err) {
+        try {
+          this.native.execSync(outer ? 'ROLLBACK' : `ROLLBACK TO ${name}; RELEASE ${name}`);
+        } catch {
+          // The first error is the one worth reporting.
+        }
+        throw err;
+      } finally {
+        this.depth -= 1;
+      }
     };
   }
 
