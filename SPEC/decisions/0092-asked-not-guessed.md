@@ -1,6 +1,6 @@
 # ADR 0092: Asked, not guessed: the app raises a disagreement it sees, NorthKeep records the answer under trust rules
 
-Status: Proposed 2026-11-24 (milestone 5) · Three reviews logged; revised 2026-11-25 to Jay's "answer the agent and then accept that" · Built 2026-11-27 on draft PRs, awaiting Jay's answers
+Status: Accepted 2026-11-27 (milestone 5) · Jay, 2026-11-27: "allow the sim, yes on trust accept the gaps release as suggested skip the review yes move the vault. accept the limits" · Three reviews logged
 
 ## Context
 A word rule to find disagreeing memories raised 2 bench questions, none real, and missed six. Jay: "The app raises it"; "O2, no"; on 2026-11-25, "just answer the agent and then accept that". His hand test passed with Grok Bot ("He asked me, and I answered") and Muse ("muse asked which one it was as well").
