@@ -1511,6 +1511,8 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         }
       },
       fetchPending: async () => {
+        // First port every Review action calls: stopping here keeps the demo out of the real vault's kept list and badge.
+        if (isDemoRef.current) throw new Error('The demo vault never connects to the cloud.');
         // The same gate as "Sync app-written memories": a phone that shares nothing and never paired has no account to ask.
         const sharesSomething = await vaultGate.run(() => openVault().sharedScopes().length > 0);
         if (!sharesSomething && (await loadConnectorPairedAt()) === null) return { entries: [], forgets: [], replaces: [] };

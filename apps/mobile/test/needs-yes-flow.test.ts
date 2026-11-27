@@ -306,3 +306,17 @@ describe('after the vault is saved', () => {
     expect(w.state().records[0]?.undone_at).toBeDefined();
   });
 });
+
+describe('a Yes the vault refused', () => {
+  it('still pushes the vault when the run applied a deletion', async () => {
+    const w = world({ yes: { status: 'gone', applied: applied({ applied_forgets: ['m9'] }) } });
+    expect(await yesReview(w.ports, item('replace:r1'), true)).toEqual({ kind: 'refused', message: REVIEW_SETTLED });
+    expect(w.calls.filter((c) => c === 'pushVault' || c.startsWith('ack'))).toEqual(['pushVault']);
+  });
+
+  it('pushes nothing when the run saved nothing', async () => {
+    const w = world({ yes: { status: 'gone', applied: applied() } });
+    await yesReview(w.ports, item('replace:r1'), true);
+    expect(w.calls).not.toContain('pushVault');
+  });
+});
