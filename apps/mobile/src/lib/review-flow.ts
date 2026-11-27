@@ -172,10 +172,11 @@ export async function yesReview(ports: ReviewPorts, item: Pick<NeedsYesItem, 'id
   const out = await ports.applyYes(pending, item.id, item.hash);
   if (out.status === 'changed') return { kind: 'changed', message: REVIEW_CHANGED, item: out.item };
   if (out.status === 'gone') {
-    // The run may still have saved additions: acknowledge those, and push the vault that now holds them.
-    if (out.applied !== undefined && out.applied.acked.length > 0) {
+    // The run may still have saved something: acknowledge its additions, and push the vault that now holds it.
+    const a = out.applied;
+    if (a !== undefined && a.acked.length + a.applied_forgets.length + a.applied_replaces.length > 0) {
       // An acknowledgement that fails only makes the connector offer those additions again.
-      await ports.ack({ acked: out.applied.acked, forgets: [], replaces: [] }).catch(() => undefined);
+      if (a.acked.length > 0) await ports.ack({ acked: a.acked, forgets: [], replaces: [] }).catch(() => undefined);
       await ports.pushVault().catch(() => undefined);
     }
     return { kind: 'refused', message: REVIEW_SETTLED };
