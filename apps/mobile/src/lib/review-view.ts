@@ -5,15 +5,18 @@
  * values the screen draws inside labelled boxes or after "App:".
  */
 
-import type { AcceptedLine, NeedsYesItem } from '@northkeep/sync';
+import type { AcceptedLine, AnswerReport, NeedsYesItem } from '@northkeep/sync';
 
 export const REVIEW_TITLE = 'Review';
 export const REVIEW_SECTION_NEEDS = 'Needs your yes';
 export const REVIEW_SECTION_ACCEPTED = 'Accepted lately';
 export const REVIEW_EMPTY_TITLE = 'Nothing needs your yes.';
 export const REVIEW_EMPTY_BODY =
-  'When an AI app on Cloud Connect asks to replace or forget one of your memories, it shows here.';
-export const REVIEW_EMPTY_ACCEPTED = 'Each Yes you give on this phone is listed under Accepted lately.';
+  'When an AI app asks to change or remove a memory, or a fact about money, ownership, accounts, legal matters or numbers needs you, it shows here.';
+export const REVIEW_EMPTY_ACCEPTED = 'Answers your AI apps settle in chat, and each Yes you give on this phone, are listed under Accepted lately.';
+export const REVIEW_REPORTED_WORDS = 'Reported words';
+export const REVIEW_REPORTED_FACT = 'Reported fact';
+export const REVIEW_VOID_LINE = "An app's answer could not be used, so nothing changed.";
 export const REVIEW_NOTHING_ACCEPTED = 'Nothing accepted yet.';
 export const REVIEW_FORGET_NO_APP = 'Asked by a connected app. NorthKeep does not record which one or when.';
 export const REVIEW_FORGET_NOT_SHARED = 'Asked while this collection was shared with your apps. It is not shared now.';
@@ -21,11 +24,46 @@ export const REVIEW_FORGET_CONFIRM_TITLE = 'Forget this memory on all your devic
 export const REVIEW_FORGET_CONFIRM_BODY = 'This cannot be undone.';
 export const REVIEW_UNDO_CONFIRM_TITLE = 'Undo this?';
 export const REVIEW_UNDO_CONFIRM_BODY = 'The memory it retired comes back and the mark is removed.';
+export const REVIEW_UNDO_BOTH_BODY = 'Both memories stay as they are, and a later answer about them waits for you.';
 export const REVIEW_FORGOTTEN_LINE = 'A memory was forgotten, as a connected app asked. Its text is gone, so this cannot be undone.';
 export const REVIEW_NOT_PAIRED = 'No AI app is connected through Cloud Connect yet, so nothing can be waiting.';
 
 export function reviewHeading(kind: NeedsYesItem['kind']): string {
+  if (kind === 'answer') return 'Settle a disagreement?';
   return kind === 'replace' ? 'Replace a memory?' : 'Forget a memory?';
+}
+
+/** The fixed lead before the reported words: the app is a value, never NorthKeep's voice. */
+export function reportedLead(app: string | null): string {
+  return `${app ?? 'a connected app'} (as the app reported) reported you said:`;
+}
+
+/** The reported answer as a fixed phrase. */
+export function reportedAnswer(answer: AnswerReport['answer']): string {
+  switch (answer) {
+    case 'first': return 'Reported answer: 1 is right.';
+    case 'second': return 'Reported answer: 2 is right.';
+    case 'both': return 'Reported answer: both are right.';
+    case 'neither': return 'Reported answer: neither; it reported the right fact as:';
+  }
+}
+
+/** What Yes does to an answer, in NorthKeep's words. */
+export function answerYesLine(answer: AnswerReport['answer']): string {
+  switch (answer) {
+    case 'first': return 'Yes marks 1 as confirmed by you and 2 as replaced by it. You can undo this.';
+    case 'second': return 'Yes marks 2 as confirmed by you and 1 as replaced by it. You can undo this.';
+    case 'both': return 'Yes marks both as confirmed by you. You can undo this.';
+    case 'neither': return 'Yes marks the reported fact as confirmed by you and both memories as replaced by it. You can undo this.';
+  }
+}
+
+/** The line above the sections, hidden at zero (ADR 0095 section 2). */
+export function chatSinceLine(count: number): string | null {
+  if (!Number.isFinite(count) || count <= 0) return null;
+  return count === 1
+    ? '1 answer was accepted in chat since you last looked. It is under Accepted lately, with an Undo.'
+    : `${count} answers were accepted in chat since you last looked. They are under Accepted lately, each with an Undo.`;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -64,11 +102,22 @@ export function yesLine(kind: NeedsYesItem['kind']): string {
 }
 
 export function buttonLabels(kind: NeedsYesItem['kind']): { yes: string; no: string; later: string } {
+  if (kind === 'answer') return { yes: 'Yes, apply it', no: 'No', later: 'Not now' };
   return kind === 'replace' ? { yes: 'Replace', no: 'Keep both', later: 'Not now' } : { yes: 'Forget', no: 'Keep it', later: 'Not now' };
 }
 
-export function acceptedLead(line: Pick<AcceptedLine, 'state'>): string {
-  return line.state === 'undone' ? 'Undone' : 'You said yes on this phone';
+export function acceptedLead(line: Pick<AcceptedLine, 'state'> & Partial<Pick<AcceptedLine, 'kind' | 'by'>>): string {
+  if (line.state === 'undone') return 'Undone';
+  if (line.state === 'declined') return 'Declined';
+  if (line.state === 'void') return 'Not used';
+  const chat = line.kind === 'answer' && line.by === 'chat';
+  if (line.state === 'both') return chat ? 'Both kept in chat' : 'You said yes on this phone';
+  return chat ? 'Accepted in chat' : 'You said yes on this phone';
+}
+
+/** An answer's app as a value on its line. */
+export function answerAppLine(app: string | undefined): string {
+  return `App: ${app ?? 'a connected app'} (as the app reported)`;
 }
 
 /** After an undo the old memory is live again, so it is not "Retired". */

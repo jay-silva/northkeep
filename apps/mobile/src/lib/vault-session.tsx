@@ -24,6 +24,7 @@ import {
 import {
   ackPending,
   applyDownSync,
+  applyAnswerToVault,
   applyUndoToVault,
   applyYesToVault,
   declineCloudRequest,
@@ -34,6 +35,7 @@ import {
   listNeedsYes,
   pushSharedScopes,
   startPairing,
+  undoAnswerInVault,
   unshareScope,
   type AcceptedLine,
   type DownSyncResult,
@@ -286,11 +288,11 @@ export interface VaultSession {
   /**
    * ADR 0095, the Review tab. `refresh` reads Cloud Connect's queues and the
    * vault and writes to neither. `yes` and `undo` change the vault only when
-   * this phone is in sync and the item is what was shown. `no` and `notNow`
-   * never touch the vault.
+   * this phone is in sync and the item is what was shown. `notNow` never
+   * touches the vault; `no` does only for an answer an app reported (ADR 0092).
    */
   review: {
-    refresh(): Promise<ReviewView>;
+    refresh(opts?: { looked?: boolean }): Promise<ReviewView>;
     yes(item: NeedsYesItem, opened: boolean): Promise<ReviewResult>;
     undo(line: AcceptedLine): Promise<ReviewResult>;
     no(item: NeedsYesItem): Promise<ReviewResult>;
@@ -1493,6 +1495,24 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
       if (!vault) throw new Error('Unlock the vault first.');
       return vault;
     };
+    // Marks the phone ahead before the save, and puts the mark back when nothing was saved.
+    const vaultChange = async <T,>(run: () => T, saved: (r: T) => boolean): Promise<T> => {
+      if (isDemoRef.current) throw new Error('The demo vault never connects to the cloud.');
+      const out = await vaultGate.run(async () => {
+        const wasDirty = await loadLocalDirty();
+        await saveLocalDirty(true);
+        try {
+          const res = run();
+          if (!saved(res)) await saveLocalDirty(wasDirty);
+          return res;
+        } catch (err) {
+          await saveLocalDirty(wasDirty);
+          throw err;
+        }
+      });
+      reloadEntries();
+      return out;
+    };
     return {
       now: () => new Date(),
       loadState: loadReviewState,
@@ -1549,6 +1569,9 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
         reloadEntries();
         return out;
       },
+      // ADR 0092: an answer's Yes, No or Undo writes the vault alone; the vault push tells Cloud Connect.
+      applyAnswer: (itemId, shownHash, decision) => vaultChange(() => applyAnswerToVault({ vault: openVault(), itemId, shownHash, decision }), (r) => r.status === 'done'),
+      undoAnswer: (lineId, shownHash) => vaultChange(() => undoAnswerInVault({ vault: openVault(), lineId, shownHash }), (r) => r.status === 'undone'),
       ack: (body) => withConnector((conn) => ackPending({ ...conn, ...body })),
       decline: (request) => withConnector((conn) => declineCloudRequest({ ...conn, request })),
       pushVault: () =>
@@ -1585,8 +1608,8 @@ export function VaultSessionProvider({ children }: { children: React.ReactNode }
 
   const review = useMemo(
     () => ({
-      refresh: async (): Promise<ReviewView> => {
-        const view = await refreshReview(reviewPorts);
+      refresh: async (opts: { looked?: boolean } = {}): Promise<ReviewView> => {
+        const view = await refreshReview(reviewPorts, opts);
         reviewRefreshedAtRef.current = Date.now();
         return view;
       },

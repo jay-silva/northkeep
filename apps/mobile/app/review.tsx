@@ -11,13 +11,22 @@ import {
   REVIEW_FORGET_CONFIRM_TITLE,
   REVIEW_FORGOTTEN_LINE,
   REVIEW_NOTHING_ACCEPTED,
+  REVIEW_REPORTED_FACT,
+  REVIEW_REPORTED_WORDS,
   REVIEW_SECTION_ACCEPTED,
   REVIEW_SECTION_NEEDS,
+  REVIEW_UNDO_BOTH_BODY,
   REVIEW_UNDO_CONFIRM_BODY,
   REVIEW_UNDO_CONFIRM_TITLE,
+  REVIEW_VOID_LINE,
   acceptedLead,
+  answerAppLine,
+  answerYesLine,
   buttonLabels,
+  chatSinceLine,
   checkedLine,
+  reportedAnswer,
+  reportedLead,
   retiredLabel,
   dayLabel,
   hiddenLine,
@@ -45,12 +54,16 @@ export default function Review() {
   const [notice, setNotice] = useState<string | null>(null);
   /** Cards whose "Show all" has been opened. */
   const [opened, setOpened] = useState<Record<string, boolean>>({});
+  const [since, setSince] = useState(0);
   useAnnounce(notice);
 
   const refresh = useCallback(async () => {
     setError(null);
     try {
-      setView(await session.review.refresh());
+      const next = await session.review.refresh({ looked: true });
+      setView(next);
+      // The first look on this visit sets the line; later refreshes here keep it.
+      setSince((n) => Math.max(n, next.chat_since));
     } catch (err) {
       const outcome = classifyConnectorError(err);
       setError(outcome.message);
@@ -98,7 +111,7 @@ export default function Review() {
   }
 
   function onUndo(line: AcceptedLine) {
-    Alert.alert(REVIEW_UNDO_CONFIRM_TITLE, REVIEW_UNDO_CONFIRM_BODY, [
+    Alert.alert(REVIEW_UNDO_CONFIRM_TITLE, line.state === 'both' ? REVIEW_UNDO_BOTH_BODY : REVIEW_UNDO_CONFIRM_BODY, [
       { text: 'Cancel', style: 'cancel' },
       { text: 'Undo', onPress: () => void act(line.id, () => session.review.undo(line)) },
     ]);
@@ -107,6 +120,7 @@ export default function Review() {
   const now = new Date();
   const macLine = waitingOnMacLine(view?.waiting_on_mac ?? 0);
   const laterLine = hiddenLine(view?.hidden ?? 0);
+  const sinceLine = chatSinceLine(since);
 
   return (
     <ScrollView
@@ -123,6 +137,7 @@ export default function Review() {
           <Text style={styles.noticeText}>{notice}</Text>
         </View>
       ) : null}
+      {sinceLine ? <Text style={styles.sinceLine}>{sinceLine}</Text> : null}
 
       <View style={styles.section}>
         <Text style={styles.sectionLabel} accessibilityRole="header">
@@ -169,7 +184,27 @@ export default function Review() {
                   <Text style={styles.showAllText}>Show all</Text>
                 </Pressable>
               ) : null}
-              <Text style={item.kind === 'forget' ? styles.warnLine : styles.small}>{yesLine(item.kind)}</Text>
+              {item.report ? (
+                <>
+                  <Text style={styles.small}>{reportedLead(item.app)}</Text>
+                  <View style={styles.boxWrap}>
+                    <Text style={styles.boxLabel}>{REVIEW_REPORTED_WORDS}</Text>
+                    <View style={styles.box} accessible accessibilityLabel={`${REVIEW_REPORTED_WORDS}: ${item.report.said}`}>
+                      <Text style={styles.boxText}>{item.report.said}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.reportLine}>{reportedAnswer(item.report.answer)}</Text>
+                  {item.report.fact ? (
+                    <View style={styles.boxWrap}>
+                      <Text style={styles.boxLabel}>{REVIEW_REPORTED_FACT}</Text>
+                      <View style={styles.box} accessible accessibilityLabel={`${REVIEW_REPORTED_FACT}: ${item.report.fact.text}`}>
+                        <Text style={styles.boxText}>{item.report.fact.text}</Text>
+                      </View>
+                    </View>
+                  ) : null}
+                </>
+              ) : null}
+              <Text style={item.kind === 'forget' ? styles.warnLine : styles.small}>{item.report ? answerYesLine(item.report.answer) : yesLine(item.kind)}</Text>
               <View style={styles.buttons}>
                 <Button
                   title={labels.yes}
@@ -200,7 +235,9 @@ export default function Review() {
               <Text style={styles.lineLead}>{acceptedLead(line)}</Text>
               <Text style={styles.small}>{dayLabel(line.at, now)}</Text>
             </View>
+            {line.kind === 'answer' ? <Text style={styles.small}>{answerAppLine(line.app)}</Text> : null}
             {line.kind === 'forget' ? <Text style={styles.small}>{REVIEW_FORGOTTEN_LINE}</Text> : null}
+            {line.state === 'void' ? <Text style={styles.small}>{REVIEW_VOID_LINE}</Text> : null}
             {line.box ? (
               <Pressable
                 style={styles.box}
@@ -252,6 +289,8 @@ const styles = StyleSheet.create({
   undo: { alignSelf: 'flex-start', minHeight: 44, paddingHorizontal: 18 },
   lineHead: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 },
   lineLead: { ...type.callout, color: colors.text },
+  reportLine: { ...type.callout, color: colors.text },
+  sinceLine: { ...type.callout, color: colors.text },
   notice: { backgroundColor: colors.warnBg, borderRadius: 8, padding: 12 },
   noticeText: { ...type.footnote, color: colors.warnText },
 });
